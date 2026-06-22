@@ -38,7 +38,7 @@ cat > "$CH/settings.json" <<JSON
 }
 JSON
 
-export CLAUDE_HOME="$CH" SYNC_REPO="$REPO" SYNC_NO_GIT=1
+export CLAUDE_HOME="$CH" SYNC_REPO="$REPO" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1
 
 echo "== push =="
 bash "$SCRIPT" push >/dev/null 2>&1
@@ -122,6 +122,29 @@ sleep 1
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
 after_mtime="$(stat -f %m "$CI/settings.json")"
 check "settings.json untouched on no-op sync" "[ '$before_mtime' = '$after_mtime' ]"
+
+echo "== a background failure fires a desktop notification (issue #1) =="
+REC="$WORK/notify.rec"
+NOTIFIER="$WORK/fake-notifier"
+cat > "$NOTIFIER" <<EOS
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$REC"
+EOS
+chmod +x "$NOTIFIER"
+# a sync that hits the merge-conflict path should notify when run non-interactively.
+# Build divergent histories on a shared remote so the rebase fails.
+CBARE="$WORK/cbare.git"; git init -q --bare "$CBARE"
+CR1="$WORK/cr1"; git clone -q "$CBARE" "$CR1"; CC1="$WORK/cc1"; mkdir -p "$CC1"
+echo '{"hooks":{}}' > "$CC1/settings.json"; mkdir -p "$CC1/hooks"; echo one > "$CC1/hooks/h.sh"
+CLAUDE_HOME="$CC1" SYNC_REPO="$CR1" bash "$SCRIPT" sync >/dev/null 2>&1
+CR2="$WORK/cr2"; git clone -q "$CBARE" "$CR2"; CC2="$WORK/cc2"; mkdir -p "$CC2/hooks"
+echo '{"hooks":{}}' > "$CC2/settings.json"
+# both sides change the same tracked file differently, without pulling
+echo TWO_a > "$CC1/hooks/h.sh"; CLAUDE_HOME="$CC1" SYNC_REPO="$CR1" bash "$SCRIPT" sync >/dev/null 2>&1
+echo TWO_b > "$CC2/hooks/h.sh"
+SYNC_NOTIFIER="$NOTIFIER" SYNC_NO_NOTIFY=0 CLAUDE_HOME="$CC2" SYNC_REPO="$CR2" bash "$SCRIPT" sync >/dev/null 2>&1
+check "conflict fired a notification"  "[ -s '$REC' ]"
+check "notification mentions conflict"  "grep -qi 'merge\\|conflict\\|reconcile' '$REC'"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

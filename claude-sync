@@ -33,7 +33,15 @@ MIRROR_DIRS=(hooks agents commands)   # full mirror (no overlap with plugins)
 # never copy nested VCS/OS cruft (some skills are git clones with their own .git)
 COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store)
 
-die(){ echo "claude-sync: $*" >&2; exit 1; }
+# desktop alert (no-op if disabled or the notifier isn't installed)
+notify(){
+  [ "${SYNC_NO_NOTIFY:-0}" = "1" ] && return 0
+  local n="${SYNC_NOTIFIER:-terminal-notifier}"
+  command -v "$n" >/dev/null 2>&1 && "$n" -title "claude-sync" -message "$1" >/dev/null 2>&1 || true
+}
+# On failure, notify ONLY when run non-interactively (the background auto-sync job),
+# so the silent log-only failure becomes visible; interactive users see stderr.
+die(){ echo "claude-sync: $*" >&2; [ -t 2 ] || notify "$*"; exit 1; }
 have_git(){ [ "${SYNC_NO_GIT:-0}" != "1" ]; }
 
 skill_excludes(){ for s in "${PLUGIN_SKILLS[@]}"; do printf -- "--exclude=%s\n" "$s"; done; }
