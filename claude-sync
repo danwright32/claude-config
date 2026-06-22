@@ -66,6 +66,32 @@ stage_local_to_payload(){
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
     jq '{hooks}' "$CLAUDE_HOME/settings.json" | tok > "$PAYLOAD/settings.hooks.json"
   fi
+  scan_secrets   # never let a credential reach the shared remote
+}
+
+# Block obvious credentials from being published. Uses gitleaks if installed,
+# else a conservative set of distinctive token shapes (low false-positive).
+# Override with SYNC_SKIP_SECRET_SCAN=1 if it ever flags a legitimate string.
+scan_secrets(){
+  [ "${SYNC_SKIP_SECRET_SCAN:-0}" = "1" ] && return 0
+  [ -d "$PAYLOAD" ] || return 0
+  local allow="$SYNC_REPO/.secret-allowlist"
+  local q="[\"']?" pat apat
+  pat='BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|gh[posru]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|sk_live_[A-Za-z0-9]{20,}'
+  apat="(secret|token|api[_-]?key|password|passwd)${q}[[:space:]]*[:=][[:space:]]*${q}[A-Za-z0-9_+/-]{24,}"
+  local line file match fp findings=""
+  # each grep -o hit is "path:matchedtext"; accept it if its fingerprint is allowlisted
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    file="${line%%:*}"; match="${line#*:}"
+    fp="$(printf '%s' "$match" | shasum -a 256 | cut -d' ' -f1)"
+    [ -f "$allow" ] && grep -q "^$fp" "$allow" && continue
+    findings+="${file#$PAYLOAD/}
+"
+  done < <(grep -rIoE "$pat|$apat" "$PAYLOAD" 2>/dev/null || true)
+  findings="$(printf '%s' "$findings" | sort -u | tr '\n' ' ')"
+  [ -z "${findings// }" ] && return 0
+  die "possible secret found in: ${findings}— remove it, allowlist its fingerprint in .secret-allowlist, or set SYNC_SKIP_SECRET_SCAN=1 to override"
 }
 
 # copy repo payload -> local config, merging the hooks block (no git)

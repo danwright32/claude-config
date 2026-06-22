@@ -146,6 +146,36 @@ SYNC_NOTIFIER="$NOTIFIER" SYNC_NO_NOTIFY=0 CLAUDE_HOME="$CC2" SYNC_REPO="$CR2" b
 check "conflict fired a notification"  "[ -s '$REC' ]"
 check "notification mentions conflict"  "grep -qi 'merge\\|conflict\\|reconcile' '$REC'"
 
+echo "== secret scan blocks sending a credential (issue #3) =="
+SS="$WORK/sshome"; mkdir -p "$SS/hooks"
+echo '{"hooks":{}}' > "$SS/settings.json"
+echo 'export AWS_KEY=AKIAIOSFODNN7EXAMPLE' > "$SS/hooks/leak.sh"
+SR="$WORK/ssrepo"; mkdir -p "$SR"
+out="$(CLAUDE_HOME="$SS" SYNC_REPO="$SR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"; rc=$?
+check "push aborts on detected secret"   "[ $rc -ne 0 ]"
+check "message names offending file"     "printf '%s' \"\$out\" | grep -q 'leak.sh'"
+# override lets it through if the user insists
+SYNC_SKIP_SECRET_SCAN=1 CLAUDE_HOME="$SS" SYNC_REPO="$SR" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
+check "override bypasses the scan"       "[ -f '$SR/payload/hooks/leak.sh' ]"
+# clean content is unaffected
+SS2="$WORK/sshome2"; mkdir -p "$SS2/hooks"; echo '{"hooks":{}}' > "$SS2/settings.json"; echo 'echo hello world' > "$SS2/hooks/ok.sh"
+SR2="$WORK/ssrepo2"; mkdir -p "$SR2"
+CLAUDE_HOME="$SS2" SYNC_REPO="$SR2" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
+check "clean payload pushes fine"        "[ -f '$SR2/payload/hooks/ok.sh' ]"
+
+echo "== allowlist accepts a known secret by fingerprint; new ones still blocked (issue #3) =="
+SA="$WORK/sahome"; mkdir -p "$SA/hooks"; echo '{"hooks":{}}' > "$SA/settings.json"
+echo 'KEY=AKIAIOSFODNN7EXAMPLE' > "$SA/hooks/known.sh"
+SAR="$WORK/sarepo"; mkdir -p "$SAR"
+fp="$(printf '%s' 'AKIAIOSFODNN7EXAMPLE' | shasum -a 256 | cut -d' ' -f1)"
+printf '%s  # accepted test key\n' "$fp" > "$SAR/.secret-allowlist"
+CLAUDE_HOME="$SA" SYNC_REPO="$SAR" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
+check "allowlisted secret passes"        "[ -f '$SAR/payload/hooks/known.sh' ]"
+echo '-----BEGIN RSA PRIVATE KEY-----' > "$SA/hooks/new.sh"
+out3="$(CLAUDE_HOME="$SA" SYNC_REPO="$SAR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"; rc3=$?
+check "non-allowlisted secret blocks"     "[ $rc3 -ne 0 ]"
+check "block names the new file"          "printf '%s' \"\$out3\" | grep -q 'new.sh'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
