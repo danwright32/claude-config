@@ -81,6 +81,34 @@ check "plist sets a PATH for the job" "grep -q '<key>PATH</key>' '$PL'"
 check "PATH includes Homebrew bin"    "grep -q '/opt/homebrew/bin' '$PL'"
 check "schedule is monthly (Day key)" "grep -q '<key>Day</key>' '$PL'"
 
+echo "== sync (two-way) over a local fake remote =="
+unset SYNC_NO_GIT   # this section exercises the real git round-trip
+BARE="$WORK/bare.git"; git init -q --bare "$BARE"
+# Mac A: has a custom skill, syncs it up
+RA="$WORK/repoA"; git clone -q "$BARE" "$RA"
+CA="$WORK/homeA"; mkdir -p "$CA/skills/alpha"
+echo '{"model":"opus","hooks":{}}' > "$CA/settings.json"
+echo 'ALPHA' > "$CA/skills/alpha/SKILL.md"
+CLAUDE_HOME="$CA" SYNC_REPO="$RA" bash "$SCRIPT" sync >/dev/null 2>&1
+# Mac B: empty, syncs and should receive A's skill
+RB="$WORK/repoB"; git clone -q "$BARE" "$RB"
+CB="$WORK/homeB"; mkdir -p "$CB"
+echo '{"model":"opus","permissions":{"allow":["B-LOCAL"]},"hooks":{}}' > "$CB/settings.json"
+CLAUDE_HOME="$CB" SYNC_REPO="$RB" bash "$SCRIPT" sync >/dev/null 2>&1
+check "sync pushed+committed from A"   "[ -n \"\$(git -C '$RA' log --oneline 2>/dev/null)\" ]"
+check "B received A's skill via sync"  "[ -f '$CB/skills/alpha/SKILL.md' ]"
+check "B kept its local permissions"   "jq -e '.permissions.allow[0]==\"B-LOCAL\"' '$CB/settings.json' >/dev/null"
+
+echo "== install-autosync plist (event + timer, with PATH) =="
+PLDIR2="$WORK/la2"; mkdir -p "$PLDIR2"
+SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync >/dev/null 2>&1
+PL2="$PLDIR2/com.claudesync.auto.plist"
+check "autosync plist written"         "[ -f '$PL2' ]"
+check "autosync watches config paths"  "grep -q 'WatchPaths' '$PL2'"
+check "autosync has a timer"           "grep -q 'StartInterval' '$PL2'"
+check "autosync sets Homebrew PATH"     "grep -q '/opt/homebrew/bin' '$PL2'"
+check "autosync runs the sync command"  "grep -q '<string>sync</string>' '$PL2'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

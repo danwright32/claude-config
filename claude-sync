@@ -41,8 +41,8 @@ skill_excludes(){ for s in "${PLUGIN_SKILLS[@]}"; do printf -- "--exclude=%s\n" 
 tok(){ sed "s|$CLAUDE_HOME|$TOKEN|g"; }   # real home -> placeholder
 detok(){ sed "s|$TOKEN|$CLAUDE_HOME|g"; } # placeholder -> this Mac's home
 
-# ---------- push ----------
-do_push(){
+# copy local config -> repo payload (no git)
+stage_local_to_payload(){
   [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
   mkdir -p "$PAYLOAD"
   for d in "${MIRROR_DIRS[@]}"; do
@@ -58,22 +58,10 @@ do_push(){
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
     jq '{hooks}' "$CLAUDE_HOME/settings.json" | tok > "$PAYLOAD/settings.hooks.json"
   fi
-  echo "Staged config into $PAYLOAD"
-  if have_git; then
-    git -C "$SYNC_REPO" add -A
-    if git -C "$SYNC_REPO" diff --cached --quiet; then
-      echo "Nothing changed — repo already up to date."
-    else
-      git -C "$SYNC_REPO" commit -m "sync from $(hostname -s) $(date +%Y-%m-%d)" >/dev/null
-      git -C "$SYNC_REPO" push
-      echo "Pushed."
-    fi
-  fi
 }
 
-# ---------- pull ----------
-do_pull(){
-  if have_git; then git -C "$SYNC_REPO" pull --ff-only; fi
+# copy repo payload -> local config, merging the hooks block (no git)
+apply_payload_to_local(){
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
   for d in "${MIRROR_DIRS[@]}"; do
@@ -86,10 +74,8 @@ do_pull(){
     # same excludes => plugin skills on THIS Mac are never deleted by the mirror
     rsync -a --delete "${COMMON_EXCLUDES[@]}" $(skill_excludes) "$PAYLOAD/skills/" "$CLAUDE_HOME/skills/"
   fi
-  # make scripts executable again (rsync preserves, but be safe)
   chmod +x "$CLAUDE_HOME"/hooks/*.sh "$CLAUDE_HOME"/hooks/*.py 2>/dev/null || true
   find "$CLAUDE_HOME/skills" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
-  # merge the hooks block into local settings.json, keeping everything else
   if [ -f "$PAYLOAD/settings.hooks.json" ]; then
     local frag settings tmp
     settings="$CLAUDE_HOME/settings.json"
@@ -99,7 +85,53 @@ do_pull(){
     tmp="$(mktemp)"
     jq --argjson frag "$frag" '.hooks = $frag.hooks' "$settings" > "$tmp" && mv "$tmp" "$settings"
   fi
+}
+
+# commit any staged payload changes (identity baked in so it works headless)
+commit_if_changed(){
+  git -C "$SYNC_REPO" add -A
+  git -C "$SYNC_REPO" diff --cached --quiet && return 1
+  git -C "$SYNC_REPO" -c user.name="claude-config-sync" -c user.email="sync@localhost" \
+    commit -m "sync from $(hostname -s)" >/dev/null
+  return 0
+}
+
+# ---------- push ----------
+do_push(){
+  stage_local_to_payload
+  echo "Staged config into $PAYLOAD"
+  if have_git; then
+    if commit_if_changed; then git -C "$SYNC_REPO" push && echo "Pushed."
+    else echo "Nothing changed — repo already up to date."; fi
+  fi
+}
+
+# ---------- pull ----------
+do_pull(){
+  if have_git; then git -C "$SYNC_REPO" pull --ff-only; fi
+  apply_payload_to_local
   echo "Pulled shared config onto this Mac (memory/permissions untouched)."
+}
+
+# ---------- sync (two-way, used by the background job) ----------
+do_sync(){
+  stage_local_to_payload
+  local pushed=0 branch
+  if have_git; then
+    commit_if_changed && pushed=1
+    branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+    git -C "$SYNC_REPO" fetch -q origin 2>/dev/null || true
+    # integrate the other Mac's changes (only if the remote branch exists yet)
+    if git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1; then
+      if ! git -C "$SYNC_REPO" pull --rebase --autostash -q origin "$branch"; then
+        git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
+        die "both Macs changed the same config and it couldn't auto-merge — run 'claude-sync status' and reconcile by hand"
+      fi
+    fi
+    [ "$pushed" -eq 1 ] && git -C "$SYNC_REPO" push -u origin "$branch" -q
+  fi
+  apply_payload_to_local
+  echo "Synced (sent local changes, pulled remote; memory/permissions untouched)."
 }
 
 # ---------- status ----------
@@ -143,12 +175,58 @@ PL
   echo "To change cadence, edit StartCalendarInterval in: $plist"
 }
 
+# ---------- install-autosync (event-driven push + timed two-way sync) ----------
+# Replaces the pull-only schedule with a job that runs `sync` whenever a synced
+# file changes (near-instant send) AND every SYNC_INTERVAL seconds (receive).
+do_install_autosync(){
+  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  local plist="$agentdir/com.claudesync.auto.plist"
+  local oldpull="$agentdir/com.claudesync.pull.plist"
+  local self; self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-sync"
+  local jobpath="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  local interval="${SYNC_INTERVAL:-604800}"   # default weekly
+  mkdir -p "$agentdir"
+  # retire the old pull-only agent if present
+  if [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ] && [ -f "$oldpull" ]; then
+    launchctl unload "$oldpull" 2>/dev/null || true; rm -f "$oldpull"
+  fi
+  local watch=""
+  for d in "${MIRROR_DIRS[@]}" skills; do watch+="    <string>$CLAUDE_HOME/$d</string>
+"; done
+  watch+="    <string>$CLAUDE_HOME/settings.json</string>"
+  cat > "$plist" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claudesync.auto</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>$self</string><string>sync</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>$jobpath</string></dict>
+  <key>WatchPaths</key>
+  <array>
+$watch
+  </array>
+  <key>StartInterval</key><integer>$interval</integer>
+  <key>StandardOutPath</key><string>$HOME/.claude-sync.log</string>
+  <key>StandardErrorPath</key><string>$HOME/.claude-sync.log</string>
+</dict></plist>
+PL
+  if [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ]; then
+    launchctl unload "$plist" 2>/dev/null || true
+    launchctl load "$plist"
+  fi
+  echo "Installed auto-sync: sends on change, checks for incoming every $((interval/86400)) day(s). Log: $HOME/.claude-sync.log"
+  echo "To change the incoming-check interval: SYNC_INTERVAL=<seconds> ./claude-sync install-autosync"
+}
+
 cmd="${1:-help}"
 case "$cmd" in
   push) do_push ;;
   pull) do_pull ;;
+  sync) do_sync ;;
   status) do_status ;;
   install-schedule) do_install_schedule ;;
+  install-autosync) do_install_autosync ;;
   help|-h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, status, install-schedule, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, status, install-autosync, help)" ;;
 esac
