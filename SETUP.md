@@ -13,7 +13,7 @@ GitHub username.
 gh auth status
 
 # create the empty private repo under the other account
-gh repo create claude-config-sync --private
+gh repo create claude-config --private
 
 # give this Mac's account write access
 gh api -X PUT repos/danwright32/claude-config/collaborators/dwright-pennie \
@@ -30,7 +30,7 @@ Then tell me the username `danwright32`. I'll finish Step 2 from this Mac.
 
 ```bash
 # accept the collaborator invite
-inv=$(gh api user/repository_invitations --jq '.[] | select(.repository.name=="claude-config-sync") | .id')
+inv=$(gh api user/repository_invitations --jq '.[] | select(.repository.name=="claude-config") | .id')
 gh api -X PATCH "user/repository_invitations/$inv"
 
 # wire up the remote and push the already-built repo
