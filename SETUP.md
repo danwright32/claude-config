@@ -1,7 +1,7 @@
 # Setup — shared between two GitHub accounts
 
 The repo is **owned by the OTHER Mac's account** and this Mac (`dwright-pennie`)
-is added as a collaborator. Replace `OTHER_USER` below with the other account's
+is added as a collaborator. Replace `danwright32` below with the other account's
 GitHub username.
 
 ---
@@ -16,11 +16,11 @@ gh auth status
 gh repo create claude-config-sync --private
 
 # give this Mac's account write access
-gh api -X PUT repos/OTHER_USER/claude-config-sync/collaborators/dwright-pennie \
+gh api -X PUT repos/danwright32/claude-config/collaborators/dwright-pennie \
   -f permission=push
 ```
 
-Then tell me the username `OTHER_USER`. I'll finish Step 2 from this Mac.
+Then tell me the username `danwright32`. I'll finish Step 2 from this Mac.
 
 ---
 
@@ -36,7 +36,7 @@ gh api -X PATCH "user/repository_invitations/$inv"
 # wire up the remote and push the already-built repo
 cd ~/claude-config-sync
 git branch -M main
-git remote add origin https://github.com/OTHER_USER/claude-config-sync.git
+git remote add origin https://github.com/danwright32/claude-config.git
 git push -u origin main
 
 # turn on monthly auto-pull on this Mac
@@ -55,7 +55,7 @@ git push -u origin main
 > skip straight to pull.
 
 ```bash
-git clone https://github.com/OTHER_USER/claude-config-sync.git ~/claude-config-sync
+git clone https://github.com/danwright32/claude-config.git ~/claude-config-sync
 cd ~/claude-config-sync
 ./claude-sync pull               # brings shared config onto the other Mac
 ./claude-sync install-schedule   # monthly auto-pull there too
