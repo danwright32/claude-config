@@ -198,6 +198,19 @@ out3="$(CLAUDE_HOME="$SA" SYNC_REPO="$SAR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "
 check "non-allowlisted secret blocks"     "[ $rc3 -ne 0 ]"
 check "block names the new file"          "printf '%s' \"\$out3\" | grep -q 'new.sh'"
 
+echo "== send (watcher path) propagates a delete and never re-applies to home (issue #2) =="
+SDBARE="$WORK/sdbare.git"; git init -q --bare "$SDBARE"
+SDR="$WORK/sdrepo"; git clone -q "$SDBARE" "$SDR"
+SDC="$WORK/sdhome"; mkdir -p "$SDC/skills/plan-council"; echo '{"hooks":{}}' > "$SDC/settings.json"
+echo deep > "$SDC/skills/plan-council/.nested"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SDC" SYNC_REPO="$SDR" bash "$SCRIPT" send >/dev/null 2>&1
+check "send pushed the nested add"      "[ -n \"\$(git -C '$SDR' ls-files | grep nested)\" ]"
+# delete it locally and send again
+rm -f "$SDC/skills/plan-council/.nested"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SDC" SYNC_REPO="$SDR" bash "$SCRIPT" send >/dev/null 2>&1
+check "send removed it from the repo"    "[ -z \"\$(git -C '$SDR' ls-files | grep nested)\" ]"
+check "send did NOT resurrect it locally" "[ ! -e '$SDC/skills/plan-council/.nested' ]"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

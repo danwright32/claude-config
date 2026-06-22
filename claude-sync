@@ -179,6 +179,19 @@ do_sync(){
   echo "Synced (sent local changes, pulled remote; memory/permissions untouched)."
 }
 
+# ---------- send (one-way, used by the change watcher) ----------
+# Sends local changes only. Deliberately NO apply step: writing the payload back
+# onto ~/.claude is what (a) let a sync resurrect a file deleted mid-run and
+# (b) self-triggered the watcher. Receiving stays the timer's job (do_sync). If
+# the remote moved on, fall back to a full reconcile so our commit still rides up.
+do_send(){
+  stage_local_to_payload
+  have_git || return 0
+  commit_if_changed || return 0          # nothing changed -> nothing to send
+  git -C "$SYNC_REPO" push -q 2>/dev/null && { echo "Sent."; return 0; }
+  do_sync                                # behind remote: reconcile (pull+apply+push)
+}
+
 # ---------- status ----------
 do_status(){
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
@@ -234,7 +247,7 @@ do_watch(){
   # -o coalesces a burst into one event; run each sync in a subshell so a
   # conflict's die() can't kill the watch loop.
   "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" | while IFS= read -r _; do
-    ( do_sync ) >/dev/null 2>&1 || true
+    ( do_send ) >/dev/null 2>&1 || true
   done
 }
 
@@ -297,6 +310,7 @@ case "$cmd" in
   push) do_push ;;
   pull) do_pull ;;
   sync) do_sync ;;
+  send) do_send ;;
   watch) do_watch ;;
   status) do_status ;;
   install-schedule) do_install_schedule ;;
