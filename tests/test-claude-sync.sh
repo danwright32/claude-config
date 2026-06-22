@@ -72,6 +72,15 @@ check "no token left in settings"           "! grep -q '__CLAUDE_HOME__' '$CH2/s
 check "Mac 2 model preserved"               "jq -e '.model==\"opus\"' '$CH2/settings.json' >/dev/null"
 check "Mac 2 LOCAL permissions preserved"   "jq -e '.permissions.allow[0]==\"MAC2-ONLY-KEEP-ME\"' '$CH2/settings.json' >/dev/null"
 
+echo "== install-schedule plist content (background job must find Homebrew tools) =="
+PLDIR="$WORK/launchagents"; mkdir -p "$PLDIR"
+SYNC_LAUNCHAGENTS="$PLDIR" SYNC_NO_LAUNCHCTL=1 bash "$SCRIPT" install-schedule >/dev/null 2>&1
+PL="$PLDIR/com.claudesync.pull.plist"
+check "plist written"                 "[ -f '$PL' ]"
+check "plist sets a PATH for the job" "grep -q '<key>PATH</key>' '$PL'"
+check "PATH includes Homebrew bin"    "grep -q '/opt/homebrew/bin' '$PL'"
+check "schedule is monthly (Day key)" "grep -q '<key>Day</key>' '$PL'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

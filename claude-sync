@@ -115,9 +115,13 @@ do_status(){
 
 # ---------- install-schedule ----------
 do_install_schedule(){
-  local plist="$HOME/Library/LaunchAgents/com.claudesync.pull.plist"
+  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  local plist="$agentdir/com.claudesync.pull.plist"
   local self; self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-sync"
-  mkdir -p "$HOME/Library/LaunchAgents"
+  # launchd jobs get a minimal PATH that excludes Homebrew, so jq/gh/rsync the
+  # sync depends on go missing. Give the job the same PATH a login shell has.
+  local jobpath="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  mkdir -p "$agentdir"
   cat > "$plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -125,13 +129,16 @@ do_install_schedule(){
   <key>Label</key><string>com.claudesync.pull</string>
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>$self</string><string>pull</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>$jobpath</string></dict>
   <key>StartCalendarInterval</key><dict><key>Day</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
   <key>StandardOutPath</key><string>$HOME/.claude-sync.log</string>
   <key>StandardErrorPath</key><string>$HOME/.claude-sync.log</string>
 </dict></plist>
 PL
-  launchctl unload "$plist" 2>/dev/null || true
-  launchctl load "$plist"
+  if [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ]; then
+    launchctl unload "$plist" 2>/dev/null || true
+    launchctl load "$plist"
+  fi
   echo "Installed monthly auto-pull (1st of each month, 9:00am). Log: $HOME/.claude-sync.log"
   echo "To change cadence, edit StartCalendarInterval in: $plist"
 }
