@@ -9,11 +9,14 @@
 # Usage:
 #   claude-sync push              # send THIS Mac's config to the shared repo
 #   claude-sync pull              # bring the shared repo's config onto THIS Mac
+#   claude-sync sync              # two-way: send local changes, then receive remote
+#   claude-sync watch             # foreground: sync on every change (needs fswatch)
 #   claude-sync status            # show what differs, no changes
-#   claude-sync install-schedule  # set up the daily auto-pull background job
+#   claude-sync install-autosync  # background: fswatch watcher + periodic receive-timer
 #   claude-sync help
 #
-# Env overrides (mainly for tests): CLAUDE_HOME, SYNC_REPO, SYNC_NO_GIT=1
+# Env overrides (mainly for tests): CLAUDE_HOME, SYNC_REPO, SYNC_NO_GIT=1,
+#   SYNC_INTERVAL, SYNC_FSWATCH, SYNC_SKIP_SECRET_SCAN, SYNC_NO_NOTIFY
 set -euo pipefail
 
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
@@ -217,38 +220,39 @@ PL
   echo "To change cadence, edit StartCalendarInterval in: $plist"
 }
 
-# ---------- install-autosync (event-driven push + timed two-way sync) ----------
-# Replaces the pull-only schedule with a job that runs `sync` whenever a synced
-# file changes (near-instant send) AND every SYNC_INTERVAL seconds (receive).
-do_install_autosync(){
+# ---------- watch (long-lived): run a two-way sync on every file change ----------
+# Recursively watches the synced folders via fswatch and syncs per change batch,
+# so even an edit buried deep inside a skill folder is pushed immediately.
+do_watch(){
+  local fs="${SYNC_FSWATCH:-fswatch}"
+  command -v "$fs" >/dev/null 2>&1 || \
+    die "fswatch not installed — run: brew install fswatch, then: claude-sync install-autosync"
+  local paths=() d
+  for d in "${MIRROR_DIRS[@]}" skills; do [ -d "$CLAUDE_HOME/$d" ] && paths+=("$CLAUDE_HOME/$d"); done
+  [ -f "$CLAUDE_HOME/settings.json" ] && paths+=("$CLAUDE_HOME/settings.json")
+  echo "Watching ${#paths[@]} path(s) for changes (fswatch)…"
+  # -o coalesces a burst into one event; run each sync in a subshell so a
+  # conflict's die() can't kill the watch loop.
+  "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" | while IFS= read -r _; do
+    ( do_sync ) >/dev/null 2>&1 || true
+  done
+}
+
+writeplist(){ # label  arg  extra-keys-xml
   local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
-  local plist="$agentdir/com.claudesync.auto.plist"
-  local oldpull="$agentdir/com.claudesync.pull.plist"
   local self; self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-sync"
   local jobpath="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-  local interval="${SYNC_INTERVAL:-604800}"   # default weekly
+  local plist="$agentdir/$1.plist"
   mkdir -p "$agentdir"
-  # retire the old pull-only agent if present
-  if [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ] && [ -f "$oldpull" ]; then
-    launchctl unload "$oldpull" 2>/dev/null || true; rm -f "$oldpull"
-  fi
-  local watch=""
-  for d in "${MIRROR_DIRS[@]}" skills; do watch+="    <string>$CLAUDE_HOME/$d</string>
-"; done
-  watch+="    <string>$CLAUDE_HOME/settings.json</string>"
   cat > "$plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.claudesync.auto</string>
+  <key>Label</key><string>$1</string>
   <key>ProgramArguments</key>
-  <array><string>/bin/bash</string><string>$self</string><string>sync</string></array>
+  <array><string>/bin/bash</string><string>$self</string><string>$2</string></array>
   <key>EnvironmentVariables</key><dict><key>PATH</key><string>$jobpath</string></dict>
-  <key>WatchPaths</key>
-  <array>
-$watch
-  </array>
-  <key>StartInterval</key><integer>$interval</integer>
+$3
   <key>StandardOutPath</key><string>$HOME/.claude-sync.log</string>
   <key>StandardErrorPath</key><string>$HOME/.claude-sync.log</string>
 </dict></plist>
@@ -257,8 +261,35 @@ PL
     launchctl unload "$plist" 2>/dev/null || true
     launchctl load "$plist"
   fi
-  echo "Installed auto-sync: sends on change, checks for incoming every $((interval/86400)) day(s). Log: $HOME/.claude-sync.log"
-  echo "To change the incoming-check interval: SYNC_INTERVAL=<seconds> ./claude-sync install-autosync"
+}
+
+# ---------- install-autosync: receive-timer + (if available) fswatch watcher ----------
+do_install_autosync(){
+  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  local interval="${SYNC_INTERVAL:-604800}"   # default weekly
+  local legacy lp
+  # retire superseded agents (old monthly pull, old WatchPaths auto)
+  for legacy in com.claudesync.pull com.claudesync.auto; do
+    lp="$agentdir/$legacy.plist"
+    [ -f "$lp" ] || continue
+    [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ] && { launchctl unload "$lp" 2>/dev/null || true; }
+    rm -f "$lp"
+  done
+  # receive-timer: two-way sync on a schedule (catches the other Mac's changes when idle)
+  writeplist com.claudesync.timer sync \
+    "  <key>StartInterval</key><integer>$interval</integer>"
+  echo "Installed receive-timer: two-way sync every $((interval/86400)) day(s)."
+  # change-watcher: instant push on any edit, however deep (needs fswatch)
+  if command -v "${SYNC_FSWATCH:-fswatch}" >/dev/null 2>&1; then
+    writeplist com.claudesync.watch watch \
+      "  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>"
+    echo "Installed change-watcher (fswatch): pushes instantly on any edit."
+  else
+    rm -f "$agentdir/com.claudesync.watch.plist"
+    echo "fswatch not found — instant push disabled. For instant sync: brew install fswatch, then re-run: claude-sync install-autosync"
+  fi
+  echo "Log: $HOME/.claude-sync.log   (change interval: SYNC_INTERVAL=<seconds> claude-sync install-autosync)"
 }
 
 cmd="${1:-help}"
@@ -266,9 +297,10 @@ case "$cmd" in
   push) do_push ;;
   pull) do_pull ;;
   sync) do_sync ;;
+  watch) do_watch ;;
   status) do_status ;;
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
   help|-h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, status, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, install-autosync, help)" ;;
 esac

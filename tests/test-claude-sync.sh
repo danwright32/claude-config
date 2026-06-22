@@ -99,15 +99,37 @@ check "sync pushed+committed from A"   "[ -n \"\$(git -C '$RA' log --oneline 2>/
 check "B received A's skill via sync"  "[ -f '$CB/skills/alpha/SKILL.md' ]"
 check "B kept its local permissions"   "jq -e '.permissions.allow[0]==\"B-LOCAL\"' '$CB/settings.json' >/dev/null"
 
-echo "== install-autosync plist (event + timer, with PATH) =="
+echo "== install-autosync writes a receive-timer; adds an fswatch watcher when available =="
 PLDIR2="$WORK/la2"; mkdir -p "$PLDIR2"
-SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync >/dev/null 2>&1
-PL2="$PLDIR2/com.claudesync.auto.plist"
-check "autosync plist written"         "[ -f '$PL2' ]"
-check "autosync watches config paths"  "grep -q 'WatchPaths' '$PL2'"
-check "autosync has a timer"           "grep -q 'StartInterval' '$PL2'"
-check "autosync sets Homebrew PATH"     "grep -q '/opt/homebrew/bin' '$PL2'"
-check "autosync runs the sync command"  "grep -q '<string>sync</string>' '$PL2'"
+# no fswatch -> timer only, plus a hint
+FAKEFS="$WORK/fake-fswatch"
+outA="$(SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync 2>&1)"
+TPL="$PLDIR2/com.claudesync.timer.plist"; WPL="$PLDIR2/com.claudesync.watch.plist"
+check "timer plist written"            "[ -f '$TPL' ]"
+check "timer has StartInterval"        "grep -q 'StartInterval' '$TPL'"
+check "timer sets Homebrew PATH"        "grep -q '/opt/homebrew/bin' '$TPL'"
+check "timer runs sync"                 "grep -q '<string>sync</string>' '$TPL'"
+check "no watcher without fswatch"      "[ ! -f '$WPL' ]"
+check "hints to install fswatch"        "printf '%s' \"\$outA\" | grep -qi fswatch"
+# with fswatch present -> also a watcher agent that runs 'watch' and stays alive
+printf '#!/usr/bin/env bash\ntrue\n' > "$FAKEFS"; chmod +x "$FAKEFS"
+SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync >/dev/null 2>&1
+check "watcher plist written"          "[ -f '$WPL' ]"
+check "watcher runs the watch command"  "grep -q '<string>watch</string>' '$WPL'"
+check "watcher stays alive"            "grep -q 'KeepAlive' '$WPL'"
+check "watcher sets Homebrew PATH"      "grep -q '/opt/homebrew/bin' '$WPL'"
+
+echo "== watch: errors without fswatch; runs a sync per event when present =="
+out_nofs="$(SYNC_FSWATCH="$WORK/nope" CLAUDE_HOME="$CA" SYNC_REPO="$RA" bash "$SCRIPT" watch 2>&1)"; rcw=$?
+check "watch fails without fswatch"     "[ $rcw -ne 0 ]"
+check "watch error mentions fswatch"    "printf '%s' \"\$out_nofs\" | grep -qi fswatch"
+# fake fswatch that emits one batch then exits; the watch loop should fire one sync
+WBARE="$WORK/wbare.git"; git init -q --bare "$WBARE"
+WR="$WORK/wrepo"; git clone -q "$WBARE" "$WR"
+WC="$WORK/wchome"; mkdir -p "$WC/skills/zeta"; echo Z > "$WC/skills/zeta/SKILL.md"; echo '{"hooks":{}}' > "$WC/settings.json"
+EMIT="$WORK/emit-fswatch"; printf '#!/usr/bin/env bash\necho 1\n' > "$EMIT"; chmod +x "$EMIT"
+SYNC_FSWATCH="$EMIT" CLAUDE_HOME="$WC" SYNC_REPO="$WR" bash "$SCRIPT" watch >/dev/null 2>&1
+check "watch pushed a commit on event"  "[ -n \"\$(git -C '$WR' log --oneline 2>/dev/null)\" ]"
 
 echo "== apply is idempotent (no-op sync must not rewrite settings.json -> no watch loop) =="
 CI="$WORK/idem"; mkdir -p "$CI/skills/keep"; echo K > "$CI/skills/keep/SKILL.md"

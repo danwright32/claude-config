@@ -24,12 +24,32 @@ turnstile-spin, web-perf, workers-best-practices, wrangler, plannotator-compound
 
 ```bash
 ./claude-sync push              # send this Mac's config up
-./claude-sync pull              # bring shared config down (auto-runs on schedule)
+./claude-sync pull              # bring shared config down
+./claude-sync sync              # two-way: send local, then receive remote
 ./claude-sync status            # show differences, no changes
-./claude-sync install-schedule  # set up the daily auto-pull
+./claude-sync install-autosync  # background auto-sync (see below)
 ```
 
-`pull` happens automatically on a schedule; run `push` by hand after a big change.
+## Automatic sync
+
+`install-autosync` sets up two launchd agents (and retires older ones):
+
+- **`com.claudesync.watch`** — an fswatch process that runs a two-way `sync` on
+  every change to a synced folder, however deep, so edits push within seconds.
+  Requires fswatch: `brew install fswatch` (then re-run `install-autosync`).
+- **`com.claudesync.timer`** — a periodic two-way `sync` (default weekly,
+  `SYNC_INTERVAL=<seconds>`) so the other Mac's changes arrive even when this Mac
+  makes no local edits.
+
+Sending is automatic on change; receiving is automatic on the timer. A no-op sync
+writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
+conflict the background job stops and fires a desktop notification.
+
+## Secret scan
+
+Every push/sync scans the payload and aborts if it finds a credential shape.
+Accept a known string by adding the sha256 of the matched text to
+`.secret-allowlist`, or bypass once with `SYNC_SKIP_SECRET_SCAN=1`.
 
 ## Tests
 
