@@ -125,15 +125,15 @@ do_install_schedule(){
   <key>Label</key><string>com.claudesync.pull</string>
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>$self</string><string>pull</string></array>
-  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StartCalendarInterval</key><dict><key>Day</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
   <key>StandardOutPath</key><string>$HOME/.claude-sync.log</string>
   <key>StandardErrorPath</key><string>$HOME/.claude-sync.log</string>
 </dict></plist>
 PL
   launchctl unload "$plist" 2>/dev/null || true
   launchctl load "$plist"
-  echo "Installed daily auto-pull (9:00am). Log: $HOME/.claude-sync.log"
-  echo "To change to monthly, edit StartCalendarInterval in: $plist"
+  echo "Installed monthly auto-pull (1st of each month, 9:00am). Log: $HOME/.claude-sync.log"
+  echo "To change cadence, edit StartCalendarInterval in: $plist"
 }
 
 cmd="${1:-help}"
