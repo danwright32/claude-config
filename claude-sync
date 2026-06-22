@@ -80,10 +80,18 @@ apply_payload_to_local(){
     local frag settings tmp
     settings="$CLAUDE_HOME/settings.json"
     [ -f "$settings" ] || echo '{}' > "$settings"
-    cp "$settings" "$settings.syncbak"
     frag="$(detok < "$PAYLOAD/settings.hooks.json")"
     tmp="$(mktemp)"
-    jq --argjson frag "$frag" '.hooks = $frag.hooks' "$settings" > "$tmp" && mv "$tmp" "$settings"
+    jq --argjson frag "$frag" '.hooks = $frag.hooks' "$settings" > "$tmp"
+    # Only replace settings.json when the result actually differs. settings.json
+    # is a WatchPath; rewriting it on every sync would re-trigger the auto-sync
+    # job forever. A no-op sync must leave the file (and its mtime) untouched.
+    if cmp -s "$tmp" "$settings"; then
+      rm -f "$tmp"
+    else
+      cp "$settings" "$settings.syncbak"
+      mv "$tmp" "$settings"
+    fi
   fi
 }
 

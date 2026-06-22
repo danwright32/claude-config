@@ -109,6 +109,20 @@ check "autosync has a timer"           "grep -q 'StartInterval' '$PL2'"
 check "autosync sets Homebrew PATH"     "grep -q '/opt/homebrew/bin' '$PL2'"
 check "autosync runs the sync command"  "grep -q '<string>sync</string>' '$PL2'"
 
+echo "== apply is idempotent (no-op sync must not rewrite settings.json -> no watch loop) =="
+CI="$WORK/idem"; mkdir -p "$CI/skills/keep"; echo K > "$CI/skills/keep/SKILL.md"
+echo '{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}' > "$CI/settings.json"
+RI="$WORK/repoI"; mkdir -p "$RI"
+# first pull-style apply establishes canonical form
+CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
+CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
+before_mtime="$(stat -f %m "$CI/settings.json")"
+sleep 1
+# second apply with identical payload must NOT touch settings.json
+CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
+after_mtime="$(stat -f %m "$CI/settings.json")"
+check "settings.json untouched on no-op sync" "[ '$before_mtime' = '$after_mtime' ]"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
