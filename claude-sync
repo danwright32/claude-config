@@ -132,10 +132,13 @@ apply_payload_to_local(){
   fi
 }
 
-# commit any staged payload changes (identity baked in so it works headless)
+# Commit synced config changes (identity baked in so it works headless). Scoped to
+# payload/ ONLY: the auto-sync must never sweep up an in-progress edit to the tool
+# itself (claude-sync/tests/README) — those are committed deliberately by hand and
+# ride up on the next push.
 commit_if_changed(){
-  git -C "$SYNC_REPO" add -A
-  git -C "$SYNC_REPO" diff --cached --quiet && return 1
+  git -C "$SYNC_REPO" add -A -- payload
+  git -C "$SYNC_REPO" diff --cached --quiet -- payload && return 1
   git -C "$SYNC_REPO" -c user.name="claude-config-sync" -c user.email="sync@localhost" \
     commit -m "sync from $(hostname -s)" >/dev/null
   return 0

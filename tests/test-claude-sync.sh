@@ -211,6 +211,16 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SDC" SYNC_REPO="$SDR" bash "$SCRIPT" send >/dev/n
 check "send removed it from the repo"    "[ -z \"\$(git -C '$SDR' ls-files | grep nested)\" ]"
 check "send did NOT resurrect it locally" "[ ! -e '$SDC/skills/plan-council/.nested' ]"
 
+echo "== auto-commit is scoped to payload; uncommitted tool edits aren't swept (issue 1.1) =="
+WB11="$WORK/w11bare.git"; git init -q --bare "$WB11"
+WR11="$WORK/w11repo"; git clone -q "$WB11" "$WR11"
+WC11="$WORK/w11home"; mkdir -p "$WC11/skills/s"; echo '{"hooks":{}}' > "$WC11/settings.json"; echo a > "$WC11/skills/s/f"
+echo 'half-finished tool edit' > "$WR11/claude-sync.wip"   # simulates WIP in the repo
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$WC11" SYNC_REPO="$WR11" bash "$SCRIPT" sync >/dev/null 2>&1
+check "payload change committed"        "[ -n \"\$(git -C '$WR11' ls-files | grep 'payload/skills/s/f')\" ]"
+check "WIP tool file NOT committed"      "[ -z \"\$(git -C '$WR11' ls-files | grep 'claude-sync.wip')\" ]"
+check "WIP still present on disk"        "[ -f '$WR11/claude-sync.wip' ]"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
