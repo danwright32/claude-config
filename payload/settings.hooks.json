@@ -1,0 +1,126 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/rtk-rewrite.sh",
+            "if": "Bash(git *)|Bash(npm *)|Bash(ls *)|Bash(cat *)|Bash(grep *)|Bash(find *)"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/require-tests-before-push.sh",
+            "timeout": 120,
+            "statusMessage": "Checking pushed changes include tests"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "terminal-notifier -title 'Claude Code' -message \"What's next?\""
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "terminal-notifier -title 'Claude Code' -message 'Permission needed' -sound Glass"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 __CLAUDE_HOME__/hooks/no-ai-tells-detect.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/session-namer.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/tdd-nudge.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/post-compact.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "afplay /System/Library/Sounds/Blow.aiff"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/feature-issue-review.sh",
+            "timeout": 15,
+            "statusMessage": "Reviewing session for issue-worthy ideas"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/session-reflection.sh",
+            "timeout": 15,
+            "statusMessage": "Reflecting on uncertainties"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/checkpoint-save.sh",
+            "timeout": 15,
+            "statusMessage": "Saving session checkpoint to memory"
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/teammate-challenge-gate.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

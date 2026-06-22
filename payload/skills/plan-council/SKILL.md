@@ -1,0 +1,88 @@
+---
+name: plan-council
+description: Plan a big or ambiguous feature with a panel of independent expert role-agents (architect, frontend, backend, data, security, …) that each propose an approach, distill into 2-3 rival whole options, champion and red-team them, score against criteria set up front, and synthesize the BEST (not merely doable) plan — then reality-check it against the real codebase and post the debate + plan to a GitHub Discussion. Use for large, ambiguous, or architectural features worth deep planning. User-invoked only (spawns many agents).
+disable-model-invocation: true
+allowed-tools: Read, Glob, Grep, Bash, WebFetch, AskUserQuestion, Workflow, Agent
+---
+
+# plan-council
+
+A heavyweight, robust planner for big features. A panel of independent specialist agents debate rival approaches and converge on the **best** plan — not the most agreeable one. The real multi-agent debate runs through the **Workflow engine** (genuinely independent subagents, so the anti-groupthink design actually holds); this skill handles the framing conversation, the GitHub record, and presenting decisions to the user.
+
+Use for: large, ambiguous, or architectural features. NOT for small or mechanical changes — use normal planning there.
+
+Gates marked 👤 require the user before continuing.
+
+## 1. Frame the problem  👤
+**First, a gate — does this even need the panel?** Research shows a single strong pass beats a multi-agent panel on most tasks. Only run plan-council when the feature is genuinely big: multiple defensible approaches worth scoring against each other, cross-cutting impact, or real architectural uncertainty. If it is only medium, recommend `/plan-lite`; if small, just plan inline. Don't reach for the panel out of habit.
+
+Then, in conversation with the user, establish:
+- The **feature** (one or two sentences), the **target project directory** (so agents read the right repo), and its **GitHub repo** (owner/name).
+- **Hard constraints** (stack, deadlines, must-not-break, compliance).
+- **Success criteria** — what "done well" means.
+- The **roles that matter for THIS feature** — pick 3-6; do not use a fixed cast. Reusable definitions live in `~/.claude/agents/` (plan-architect, plan-product, plan-backend, plan-frontend, plan-ux, plan-data, plan-security, plan-redteam). Pass each chosen role in `args.roles` as `{ key, brief, agentType: 'plan-<role>' }` so the workflow spawns the real definition; add an ad-hoc role (key + brief, no agentType) when none fits.
+- The **weighted criteria that define "best"** — always include **cost / recurring spend** (default stance: prefer free; a paid option must clearly earn its bill), plus e.g. correctness & robustness, user impact, maintainability, risk/reversibility. Do NOT include build time / effort as a criterion — the user's standing rule is "right is always better than fast." SET THESE NOW, before any option exists, so "best" cannot be bent toward the easy option later.
+
+**Interview the user to close context gaps — BEFORE the panel disperses.** Once the workflow launches, the specialist agents run in parallel and CANNOT ask you anything; whatever context they're missing, they'll guess. So the main agent's job at this gate is to surface and fill those gaps now. First take a quick read of the repo so your questions are sharp and specific, not generic. Then ask — via **AskUserQuestion** (batch up to 4 per call; run more than one round if needed) — the things the panel would otherwise be blocked on:
+- What problem are we really solving, and for whom? (the intent behind the feature, not just the feature)
+- What is explicitly IN and OUT of scope?
+- Known constraints or landmines — things that must not break, past attempts that failed, hard deadlines, the budget ceiling.
+- Existing code/work to reuse vs. replace (name the specific things you found in the repo).
+- What does "done well" look like, and do you already hold a strong preference on the approach?
+
+Ask only what you genuinely cannot determine from the code yourself — don't quiz the user on what a quick read answers. Keep going until you could hand the panel a brief with no critical unknowns left.
+
+Then present the full framing (roles + criteria + scope + what you learned in the interview) with **AskUserQuestion** for approval or edits. Do not skip this gate — it is what keeps the run grounded and cheap-to-correct, and it is the user's last input before the panel runs autonomously.
+
+## 2. Run the debate (Workflow engine)
+Call the **Workflow** tool with:
+
+    {
+      scriptPath: "/Users/danhankins-wright/.claude/skills/plan-council/panel.workflow.js",
+      args: {
+        feature: "<the feature>",
+        constraints: "<hard constraints>",
+        weightedCriteria: "<criteria + weights agreed above>",
+        roles: [ { key: "architect", brief: "…" }, { key: "backend", brief: "…" } ],
+        projectDir: "<absolute path to the repo>",
+        repo: "<owner/name>"
+      }
+    }
+
+It starts with a **preflight** that confirms it can actually reach your code and database, then runs with real independent subagents: independent first-passes → distill to 2-3 rival whole options → champion + red-team each → score against the criteria and pick the survivor → synthesize the winner (grafting the runner-up's best ideas, recording overruled dissent and the ideal-vs-doable gap) → reality-check against the actual codebase/schema → **fix-and-reverify**: if the check finds broken file paths or claims, it corrects the plan *inline* and re-checks (up to 2 rounds), so the plan you read doesn't contain known-wrong citations. The rival options always span a **cost spread** (at least one free/cheapest; a paid option only when clearly better), and every product / scope / cost trade-off — including free-vs-paid — is **escalated to you, not locked by the panel**. It returns `{ plan, selection, options, advocacy, realityCheck, preflight, rcRounds, … }`.
+
+## 3. Record to GitHub (the audit surface)
+Build a markdown body (final plan, rival options + scores, overruled dissent, ideal-vs-doable gap, open risks, reality-check verdict) and write it to a temp file. Then run the bundled helper, which handles every fallback for you:
+
+    bash /Users/danhankins-wright/.claude/skills/plan-council/post-discussion.sh "<owner/name>" "<title>" <body-file>
+
+It tries a GitHub Discussion first, then a tracking issue, then a local `PLAN-<slug>.md`, and prints one line: `DISCUSSION <url>`, `ISSUE <url>`, or `FILE <path>`. Tell the user which happened (and, if it fell back, that enabling Discussions on the repo would give a nicer home next time).
+
+## 4. Present + decide  👤
+Open with any CAVEATS before the summary — the user must never mistake a partly-checked plan for a clean one:
+- **If the plan is still unverified, say so LOUDLY first.** The workflow auto-corrects wrong references but only tries twice (see `rcRounds`). If the returned `realityCheck.verdict` is still `needs-fixes` or `realityCheck.broken` is non-empty, LEAD your reply with a prominent warning that the plan still contains unverified or wrong claims, and list them. Do not bury this below the summary.
+- **Check grounding next:** if `preflight` reported `repoReadable:false` or `schemaReachable:false`, lead with that too — warn the user the plan may be partly ungrounded and name the unreachable source (e.g. "Supabase wasn't connected for this project, so the data parts are best-effort"). A confident plan built blind is the main risk.
+- Give a plain-language summary: the recommended plan, why it won over the alternatives, the ideal-vs-doable gap, and the reality-check verdict — especially anything the reality-check found **broken**.
+- If the workflow returned **escalatedDecisions** (genuine values trade-offs only the user should make), present them with **AskUserQuestion** — never bury them in prose.
+- Link the GitHub Discussion (or note the fallback artifact).
+
+## 5. Offer a tracking milestone  👤
+Once the plan is approved, offer to turn it into a GitHub milestone with one issue per plan phase — this is how big features get tracked. Ask with **AskUserQuestion** ("Create a GitHub milestone + one issue per phase for this plan?"); skip silently if the user declines. On yes:
+1. Build a temp JSON file: `title` = the feature, `description` = a short summary plus the Discussion/issue link from step 3, `issues` = one `{title, body}` per phase of the synthesized plan (phase name as title, the phase's scope as body).
+2. Preview with a dry run, then create:
+
+       DRY_RUN=1 bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>   # preview
+       bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>             # create
+
+3. Relay the `MILESTONE <url>` it prints. Same helper backs `/plan-lite` and `/milestone`, so milestones look identical across all three paths.
+
+## Revise mode — fold in the user's GitHub comments
+When the user has commented on the Discussion and wants the plan updated (e.g. "revise the plan-council plan from <discussion-url>"):
+1. Fetch the discussion body + comments for that URL with `gh api graphql` (or `gh` REST).
+2. Call the **Workflow** tool with the same `scriptPath` and args, plus `mode: "revise"`, `priorPlan: "<original plan text>"`, and `comments: "<fetched comments>"`. It runs a lighter revise → reality-check path and returns `{ revised: { plan, responses, openRisks }, realityCheck }`.
+3. Post the revised plan back as an update/comment on the same Discussion (reuse the helper or `gh`), and show the user the point-by-point `responses` for how each comment was handled.
+
+## Notes
+- **Cost is intended.** At full rigor this spawns many agents per run (independent passes + a champion and red-team per option + judge + synthesizer + verifier). That depth is the point; it is why this is user-invoked only.
+- **Grounding is mandatory.** Every agent is told to read the real code, CLAUDE.md, and the Supabase schema (MCP) and to verify files/APIs/tables exist. A plan that is internally agreed but wrong about the codebase is exactly the failure the reality-check phase exists to catch.
+- **First run = the prototype.** Expect to tune the roles, criteria, and phase prompts after seeing it work once on a real feature.

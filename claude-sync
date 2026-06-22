@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+#
+# claude-sync — two-way sync of selected ~/.claude config between Macs via git.
+#
+# Syncs ONLY: hooks/, skills/ (minus plugin-managed), agents/, commands/, and the
+# `hooks` block of settings.json. NEVER touches: your memory store, session
+# history, caches, model/effort/plugins, or your local permission list.
+#
+# Usage:
+#   claude-sync push              # send THIS Mac's config to the shared repo
+#   claude-sync pull              # bring the shared repo's config onto THIS Mac
+#   claude-sync status            # show what differs, no changes
+#   claude-sync install-schedule  # set up the daily auto-pull background job
+#   claude-sync help
+#
+# Env overrides (mainly for tests): CLAUDE_HOME, SYNC_REPO, SYNC_NO_GIT=1
+set -euo pipefail
+
+CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+SYNC_REPO="${SYNC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+PAYLOAD="$SYNC_REPO/payload"
+TOKEN="__CLAUDE_HOME__"
+
+# Skills that the plugins install & manage — excluded so the repo stays clean
+# and plugin updates don't create churn. Edit this list if you install one of
+# these standalone and want it synced.
+PLUGIN_SKILLS=(agents-sdk cloudflare cloudflare-email-service durable-objects \
+  sandbox-sdk turnstile-spin web-perf workers-best-practices wrangler \
+  plannotator-compound)
+
+MIRROR_DIRS=(hooks agents commands)   # full mirror (no overlap with plugins)
+
+# never copy nested VCS/OS cruft (some skills are git clones with their own .git)
+COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store)
+
+die(){ echo "claude-sync: $*" >&2; exit 1; }
+have_git(){ [ "${SYNC_NO_GIT:-0}" != "1" ]; }
+
+skill_excludes(){ for s in "${PLUGIN_SKILLS[@]}"; do printf -- "--exclude=%s\n" "$s"; done; }
+
+tok(){ sed "s|$CLAUDE_HOME|$TOKEN|g"; }   # real home -> placeholder
+detok(){ sed "s|$TOKEN|$CLAUDE_HOME|g"; } # placeholder -> this Mac's home
+
+# ---------- push ----------
+do_push(){
+  [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
+  mkdir -p "$PAYLOAD"
+  for d in "${MIRROR_DIRS[@]}"; do
+    [ -d "$CLAUDE_HOME/$d" ] || continue
+    mkdir -p "$PAYLOAD/$d"
+    rsync -a --delete "${COMMON_EXCLUDES[@]}" "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
+  done
+  if [ -d "$CLAUDE_HOME/skills" ]; then
+    mkdir -p "$PAYLOAD/skills"
+    rsync -a --delete "${COMMON_EXCLUDES[@]}" $(skill_excludes) "$CLAUDE_HOME/skills/" "$PAYLOAD/skills/"
+  fi
+  # hooks block of settings.json, with this Mac's home path tokenized
+  if [ -f "$CLAUDE_HOME/settings.json" ]; then
+    jq '{hooks}' "$CLAUDE_HOME/settings.json" | tok > "$PAYLOAD/settings.hooks.json"
+  fi
+  echo "Staged config into $PAYLOAD"
+  if have_git; then
+    git -C "$SYNC_REPO" add -A
+    if git -C "$SYNC_REPO" diff --cached --quiet; then
+      echo "Nothing changed — repo already up to date."
+    else
+      git -C "$SYNC_REPO" commit -m "sync from $(hostname -s) $(date +%Y-%m-%d)" >/dev/null
+      git -C "$SYNC_REPO" push
+      echo "Pushed."
+    fi
+  fi
+}
+
+# ---------- pull ----------
+do_pull(){
+  if have_git; then git -C "$SYNC_REPO" pull --ff-only; fi
+  [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
+  mkdir -p "$CLAUDE_HOME"
+  for d in "${MIRROR_DIRS[@]}"; do
+    [ -d "$PAYLOAD/$d" ] || continue
+    mkdir -p "$CLAUDE_HOME/$d"
+    rsync -a --delete "${COMMON_EXCLUDES[@]}" "$PAYLOAD/$d/" "$CLAUDE_HOME/$d/"
+  done
+  if [ -d "$PAYLOAD/skills" ]; then
+    mkdir -p "$CLAUDE_HOME/skills"
+    # same excludes => plugin skills on THIS Mac are never deleted by the mirror
+    rsync -a --delete "${COMMON_EXCLUDES[@]}" $(skill_excludes) "$PAYLOAD/skills/" "$CLAUDE_HOME/skills/"
+  fi
+  # make scripts executable again (rsync preserves, but be safe)
+  chmod +x "$CLAUDE_HOME"/hooks/*.sh "$CLAUDE_HOME"/hooks/*.py 2>/dev/null || true
+  find "$CLAUDE_HOME/skills" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
+  # merge the hooks block into local settings.json, keeping everything else
+  if [ -f "$PAYLOAD/settings.hooks.json" ]; then
+    local frag settings tmp
+    settings="$CLAUDE_HOME/settings.json"
+    [ -f "$settings" ] || echo '{}' > "$settings"
+    cp "$settings" "$settings.syncbak"
+    frag="$(detok < "$PAYLOAD/settings.hooks.json")"
+    tmp="$(mktemp)"
+    jq --argjson frag "$frag" '.hooks = $frag.hooks' "$settings" > "$tmp" && mv "$tmp" "$settings"
+  fi
+  echo "Pulled shared config onto this Mac (memory/permissions untouched)."
+}
+
+# ---------- status ----------
+do_status(){
+  if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
+  echo "--- local config vs repo payload (dry run) ---"
+  for d in "${MIRROR_DIRS[@]}" skills; do
+    [ -d "$CLAUDE_HOME/$d" ] || continue
+    local ex=""; [ "$d" = skills ] && ex="$(skill_excludes)"
+    rsync -an --delete $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' | sed "s|^|$d: |" || true
+  done
+}
+
+# ---------- install-schedule ----------
+do_install_schedule(){
+  local plist="$HOME/Library/LaunchAgents/com.claudesync.pull.plist"
+  local self; self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-sync"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$plist" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claudesync.pull</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>$self</string><string>pull</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardOutPath</key><string>$HOME/.claude-sync.log</string>
+  <key>StandardErrorPath</key><string>$HOME/.claude-sync.log</string>
+</dict></plist>
+PL
+  launchctl unload "$plist" 2>/dev/null || true
+  launchctl load "$plist"
+  echo "Installed daily auto-pull (9:00am). Log: $HOME/.claude-sync.log"
+  echo "To change to monthly, edit StartCalendarInterval in: $plist"
+}
+
+cmd="${1:-help}"
+case "$cmd" in
+  push) do_push ;;
+  pull) do_pull ;;
+  status) do_status ;;
+  install-schedule) do_install_schedule ;;
+  help|-h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$cmd' (try: push, pull, status, install-schedule, help)" ;;
+esac
