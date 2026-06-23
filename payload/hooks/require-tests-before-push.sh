@@ -113,8 +113,32 @@ if [ "$commit_in_chain" -eq 1 ]; then
   pending="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
   if [ "$add_in_chain" -eq 1 ]; then
     pending="$pending
-$(git diff --name-only --diff-filter=ACMR 2>/dev/null)
+$(git diff --name-only --diff-filter=ACMR 2>/dev/null)"
+    # Untracked files count ONLY if the `git add` in THIS command will actually
+    # stage them. Counting every untracked file (the old behavior) let a stray
+    # untracked test that isn't being added satisfy the gate yet never reach the
+    # commit -- so a change could ship with its test left only on disk.
+    add_args="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[&|;[:space:]])git[[:space:]]+add[[:space:]]+([^&|;]*).*@\2@p' | head -1)"
+    add_all=0
+    for a in $add_args; do
+      case "$a" in -A|--all|.) add_all=1; break ;; esac
+    done
+    if [ "$add_all" -eq 1 ]; then
+      pending="$pending
 $(git ls-files --others --exclude-standard 2>/dev/null)"
+    else
+      while IFS= read -r u; do
+        [ -z "$u" ] && continue
+        for a in $add_args; do
+          case "$a" in -*) continue ;; esac
+          ad="${a%/}"
+          if [ "$u" = "$ad" ]; then pending="$pending
+$u"; break; fi
+          case "$u" in "$ad"/*) pending="$pending
+$u"; break ;; esac
+        done
+      done < <(git ls-files --others --exclude-standard 2>/dev/null)
+    fi
   fi
 fi
 
