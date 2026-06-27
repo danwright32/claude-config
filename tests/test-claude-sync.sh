@@ -25,6 +25,8 @@ echo 'SKILL custom' > "$CH/skills/plan-council/SKILL.md"
 echo 'SKILL plugin-owned' > "$CH/skills/wrangler/SKILL.md"   # should be EXCLUDED from sync
 echo 'AGENT' > "$CH/agents/plan-redteam.md"
 echo 'CMD' > "$CH/commands/plannotator-last.md"
+echo '# global rules v1' > "$CH/CLAUDE.md"
+echo '# rtk notes' > "$CH/RTK.md"
 cat > "$CH/settings.json" <<JSON
 {
   "model": "opus",
@@ -50,6 +52,8 @@ check "payload has the command"             "[ -f '$REPO/payload/commands/planno
 check "hooks fragment written"              "[ -f '$REPO/payload/settings.hooks.json' ]"
 check "fragment path is tokenized"          "grep -q '__CLAUDE_HOME__/hooks/tdd-nudge.sh' '$REPO/payload/settings.hooks.json'"
 check "fragment does NOT leak real home"    "! grep -q '$CH' '$REPO/payload/settings.hooks.json'"
+check "payload has CLAUDE.md"               "[ -f '$REPO/payload/CLAUDE.md' ]"
+check "payload has RTK.md"                  "[ -f '$REPO/payload/RTK.md' ]"
 
 echo "== pull into a DIFFERENT home (simulates other Mac) =="
 CH2="$WORK/dot-claude-2"
@@ -71,6 +75,9 @@ check "hook path rewritten to Mac2 home"    "jq -r '.hooks.UserPromptSubmit[0].h
 check "no token left in settings"           "! grep -q '__CLAUDE_HOME__' '$CH2/settings.json'"
 check "Mac 2 model preserved"               "jq -e '.model==\"opus\"' '$CH2/settings.json' >/dev/null"
 check "Mac 2 LOCAL permissions preserved"   "jq -e '.permissions.allow[0]==\"MAC2-ONLY-KEEP-ME\"' '$CH2/settings.json' >/dev/null"
+check "CLAUDE.md arrived on Mac 2"          "[ -f '$CH2/CLAUDE.md' ]"
+check "RTK.md arrived on Mac 2"             "[ -f '$CH2/RTK.md' ]"
+check "CLAUDE.md content matches source"    "grep -q 'global rules v1' '$CH2/CLAUDE.md'"
 
 echo "== install-schedule plist content (background job must find Homebrew tools) =="
 PLDIR="$WORK/launchagents"; mkdir -p "$PLDIR"
@@ -133,17 +140,21 @@ check "watch pushed a commit on event"  "[ -n \"\$(git -C '$WR' log --oneline 2>
 
 echo "== apply is idempotent (no-op sync must not rewrite settings.json -> no watch loop) =="
 CI="$WORK/idem"; mkdir -p "$CI/skills/keep"; echo K > "$CI/skills/keep/SKILL.md"
+echo '# rules' > "$CI/CLAUDE.md"
 echo '{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}' > "$CI/settings.json"
 RI="$WORK/repoI"; mkdir -p "$RI"
 # first pull-style apply establishes canonical form
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
 before_mtime="$(stat -f %m "$CI/settings.json")"
+before_cl="$(stat -f %m "$CI/CLAUDE.md")"
 sleep 1
-# second apply with identical payload must NOT touch settings.json
+# second apply with identical payload must NOT touch settings.json or CLAUDE.md
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
 after_mtime="$(stat -f %m "$CI/settings.json")"
+after_cl="$(stat -f %m "$CI/CLAUDE.md")"
 check "settings.json untouched on no-op sync" "[ '$before_mtime' = '$after_mtime' ]"
+check "CLAUDE.md untouched on no-op sync"      "[ '$before_cl' = '$after_cl' ]"
 
 echo "== a background failure fires a desktop notification (issue #1) =="
 REC="$WORK/notify.rec"

@@ -32,6 +32,7 @@ PLUGIN_SKILLS=(agents-sdk cloudflare cloudflare-email-service durable-objects \
   plannotator-compound)
 
 MIRROR_DIRS=(hooks agents commands)   # full mirror (no overlap with plugins)
+TOP_FILES=(CLAUDE.md RTK.md)          # top-level global rule files, synced verbatim
 
 # never copy nested VCS/OS cruft (some skills are git clones with their own .git)
 COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store)
@@ -69,6 +70,10 @@ stage_local_to_payload(){
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
     jq '{hooks}' "$CLAUDE_HOME/settings.json" | tok > "$PAYLOAD/settings.hooks.json"
   fi
+  # top-level global rule files (CLAUDE.md + RTK.md), copied verbatim
+  for f in "${TOP_FILES[@]}"; do
+    [ -f "$CLAUDE_HOME/$f" ] && cp "$CLAUDE_HOME/$f" "$PAYLOAD/$f"
+  done
   scan_secrets   # never let a credential reach the shared remote
 }
 
@@ -113,6 +118,14 @@ apply_payload_to_local(){
   fi
   chmod +x "$CLAUDE_HOME"/hooks/*.sh "$CLAUDE_HOME"/hooks/*.py 2>/dev/null || true
   find "$CLAUDE_HOME/skills" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
+  # top-level global rule files: only rewrite when changed, so a no-op sync leaves
+  # mtime untouched (CLAUDE.md is a WatchPath; rewriting would re-trigger the watcher)
+  for f in "${TOP_FILES[@]}"; do
+    [ -f "$PAYLOAD/$f" ] || continue
+    if [ -f "$CLAUDE_HOME/$f" ] && cmp -s "$PAYLOAD/$f" "$CLAUDE_HOME/$f"; then continue; fi
+    [ -f "$CLAUDE_HOME/$f" ] && cp "$CLAUDE_HOME/$f" "$CLAUDE_HOME/$f.syncbak"
+    cp "$PAYLOAD/$f" "$CLAUDE_HOME/$f"
+  done
   if [ -f "$PAYLOAD/settings.hooks.json" ]; then
     local frag settings tmp
     settings="$CLAUDE_HOME/settings.json"
@@ -204,6 +217,10 @@ do_status(){
     local ex=""; [ "$d" = skills ] && ex="$(skill_excludes)"
     rsync -an --delete $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' | sed "s|^|$d: |" || true
   done
+  for f in "${TOP_FILES[@]}"; do
+    [ -f "$CLAUDE_HOME/$f" ] || continue
+    cmp -s "$CLAUDE_HOME/$f" "$PAYLOAD/$f" 2>/dev/null || echo "$f: differs"
+  done
 }
 
 # ---------- install-schedule ----------
@@ -246,6 +263,7 @@ do_watch(){
   local paths=() d
   for d in "${MIRROR_DIRS[@]}" skills; do [ -d "$CLAUDE_HOME/$d" ] && paths+=("$CLAUDE_HOME/$d"); done
   [ -f "$CLAUDE_HOME/settings.json" ] && paths+=("$CLAUDE_HOME/settings.json")
+  for f in "${TOP_FILES[@]}"; do [ -f "$CLAUDE_HOME/$f" ] && paths+=("$CLAUDE_HOME/$f"); done
   echo "Watching ${#paths[@]} path(s) for changes (fswatch)…"
   # -o coalesces a burst into one event; run each sync in a subshell so a
   # conflict's die() can't kill the watch loop.

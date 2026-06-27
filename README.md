@@ -9,6 +9,7 @@ Two-way sync of selected `~/.claude` config between my Macs.
 - `payload/agents/` — the `plan-*` agents
 - `payload/commands/` — slash commands
 - `payload/settings.hooks.json` — **only** the `hooks` block of `settings.json`, with the home path stored as `__CLAUDE_HOME__` so it works on any Mac
+- `payload/CLAUDE.md` and `payload/RTK.md` — your global rules files, synced verbatim (standing cross-project instructions travel here)
 
 ## What NEVER syncs (stays private to each Mac)
 

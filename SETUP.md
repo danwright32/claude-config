@@ -72,9 +72,9 @@ cd ~/claude-config-sync
 ./claude-sync status   # preview differences, changes nothing
 ```
 
-## Note — this only syncs skills/hooks/agents/commands
+## Note — scope
 
-It does NOT install plugins, `rtk`, `terminal-notifier`, the `cc` alias, MCP servers,
-or your global `CLAUDE.md`. For a brand-new Mac, do those once from the transfer
-bundle (`~/Downloads/claude-setup-INSTRUCTIONS.txt`), then use this repo for ongoing
-sync of the parts you chose.
+It syncs skills, hooks, agents, commands, and your global `CLAUDE.md` / `RTK.md`.
+It does NOT install plugins, `rtk`, `terminal-notifier`, the `cc` alias, or MCP servers,
+and it never touches your memory store or `settings.local.json`. For a brand-new Mac,
+install the base tools once, then use this repo for ongoing sync of the parts above.
