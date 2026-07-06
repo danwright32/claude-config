@@ -232,6 +232,21 @@ check "payload change committed"        "[ -n \"\$(git -C '$WR11' ls-files | gre
 check "WIP tool file NOT committed"      "[ -z \"\$(git -C '$WR11' ls-files | grep 'claude-sync.wip')\" ]"
 check "WIP still present on disk"        "[ -f '$WR11/claude-sync.wip' ]"
 
+echo "== watch: a failed sync leaves a durable log line, not just a transient notification =="
+# Regression for the 2026-07-06 incident: a secret-scan false positive blocked
+# the real watcher for 4 days with nothing but an (easily-missed) notification
+# -- ~/.claude-sync.log itself stayed silent the whole time.
+WLBARE="$WORK/wlbare.git"; git init -q --bare "$WLBARE"
+WLR="$WORK/wlrepo"; git clone -q "$WLBARE" "$WLR"
+WLC="$WORK/wlhome"; mkdir -p "$WLC/hooks"
+echo '-----BEGIN RSA PRIVATE KEY-----' > "$WLC/hooks/leak.sh"
+echo '{"hooks":{}}' > "$WLC/settings.json"
+WLEMIT="$WORK/wl-emit-fswatch"; printf '#!/usr/bin/env bash\necho 1\n' > "$WLEMIT"; chmod +x "$WLEMIT"
+WLNOTIFIER="$WORK/wl-fake-notifier"; printf '#!/usr/bin/env bash\ntrue\n' > "$WLNOTIFIER"; chmod +x "$WLNOTIFIER"
+wl_out="$(SYNC_FSWATCH="$WLEMIT" SYNC_NOTIFIER="$WLNOTIFIER" CLAUDE_HOME="$WLC" SYNC_REPO="$WLR" bash "$SCRIPT" watch 2>&1)"
+check "watch output logs the failure"     "printf '%s' \"\$wl_out\" | grep -qi 'FAILED'"
+check "logged failure names the file"     "printf '%s' \"\$wl_out\" | grep -q 'leak.sh'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

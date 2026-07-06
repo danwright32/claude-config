@@ -265,10 +265,25 @@ do_watch(){
   [ -f "$CLAUDE_HOME/settings.json" ] && paths+=("$CLAUDE_HOME/settings.json")
   for f in "${TOP_FILES[@]}"; do [ -f "$CLAUDE_HOME/$f" ] && paths+=("$CLAUDE_HOME/$f"); done
   echo "Watching ${#paths[@]} path(s) for changes (fswatch)…"
-  # -o coalesces a burst into one event; run each sync in a subshell so a
-  # conflict's die() can't kill the watch loop.
+  # -o coalesces a burst into one event; `$(...)` runs do_send in its own
+  # subshell so a conflict's or scan_secrets' die() can't kill the watch loop.
+  # A failure already triggers die()'s own desktop notification, but that is
+  # transient and easy to miss (e.g. overnight) -- also write a timestamped
+  # line to this command's own output, which the launchd plist already sends
+  # to ~/.claude-sync.log, so a silently-broken sync leaves a durable trail
+  # instead of just a notification nobody saw.
   "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" | while IFS= read -r _; do
-    ( do_send ) >/dev/null 2>&1 || true
+    # `if var=$(cmd)` (not a bare assignment) is the one form `set -e` does not
+    # abort on when cmd fails -- a bare `out="$(do_send)"; rc=$?` would exit
+    # the whole watch loop on failure before the check below ever ran.
+    if out="$( do_send 2>&1 )"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+      echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: sync FAILED (exit $rc): ${out:-<no output>}"
+    fi
   done
 }
 
