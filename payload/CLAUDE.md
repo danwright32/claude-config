@@ -87,6 +87,7 @@ Global hooks and skills in `~/.claude` fire in every project:
 
 - Never include "Co-Authored-By: Claude" or any Claude attribution in commit messages, PR descriptions, code comments, file headers, or any other output. Commits should appear as if the user wrote them.
 - Never run `gh auth switch` (or otherwise change the active `gh` CLI account) without asking first, even to fix a "wrong account" symptom. Dan runs concurrent sessions on the same machine under different GitHub accounts; force-switching the shared keyring's active account would silently break whatever else is using it. If a `gh` command needs a specific account, scope the call instead (e.g. `GH_TOKEN=$(gh auth token -u <account>) gh ...`) or ask before switching globally.
+- Never weaken a security control (a secret scanner's allowlist, an auth check, a permission gate, a rate limit) and then apply, push, or deploy that change without the user's explicit sign-off for that specific fix, even after verifying the flagged content or behavior is a false positive. Diagnose and verify first, then stop and ask before applying and shipping the fix. A 2026-07-06 push was correctly blocked by the platform's own safety classifier for exactly this: Claude had added a secret-scanner allowlist entry and attempted to push it before asking, even though the entry was a genuine false positive.
 
 ## Skills
 
