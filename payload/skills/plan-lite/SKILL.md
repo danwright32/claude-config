@@ -1,7 +1,6 @@
 ---
 name: plan-lite
-description: Quick, mid-weight planner for a feature that needs more rigor than a normal plan but doesn't warrant the full plan-council panel. Drafts a grounded plan, has ONE independent red-team agent attack it, then revises and reality-checks. Use for medium features; use /plan-council for large/ambiguous/architectural ones, and just plan inline for small changes.
-disable-model-invocation: true
+description: Quick, mid-weight planner for a feature that needs more rigor than a normal plan but doesn't warrant the full plan-council panel. Drafts a grounded plan, has ONE independent red-team agent attack it, then revises and reality-checks. Use for medium features; use /plan-council for large/ambiguous/architectural ones, and just plan inline for small changes. Invoke ONLY when the user explicitly asks for plan-lite (slash command or by name in prose); NEVER unprompted.
 allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent
 ---
 

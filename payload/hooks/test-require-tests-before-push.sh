@@ -15,6 +15,8 @@ pass=0
 fail=0
 want_test()    { if is_test "$1";    then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: expected TEST: $1"; fi; }
 want_nottest() { if is_test "$1";    then fail=$((fail+1)); echo "FAIL: expected NOT-test: $1"; else pass=$((pass+1)); fi; }
+want_source()    { if is_source "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: expected SOURCE: $1"; fi; }
+want_notsource() { if is_source "$1"; then fail=$((fail+1)); echo "FAIL: expected NOT-source: $1"; else pass=$((pass+1)); fi; }
 
 # --- the reported gap: scripts/test-*.ts convention ---
 want_test "scripts/test-cron-routes.ts"
@@ -34,6 +36,18 @@ want_nottest "scripts/deploy.ts"
 want_nottest "scripts/test-utils.ts"        # helper, not a runnable test
 want_nottest "src/test-helpers.ts"
 want_nottest "scripts/testimonials.ts"      # 'test' substring, not a test file
+
+# --- one-off analysis scripts in scripts/ are exempt from the gate ---
+want_notsource "scripts/check-menjivar.js"
+want_notsource "scripts/check-menjivar-beyond.js"
+want_notsource "scripts/check_enrollment_gaps.py"
+want_notsource "apps/worker/scripts/check-export-state.ts"
+
+# --- but the exemption must not leak beyond scripts/check-* ---
+want_source "src/app/api/check-email/route.ts"   # real route, not a script
+want_source "scripts/checkout.ts"                # 'check' substring only
+want_source "scripts/deploy.ts"
+want_source "lib/check-utils.ts"                 # not under scripts/
 
 echo
 echo "passed: $pass, failed: $fail"

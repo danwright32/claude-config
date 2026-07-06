@@ -1,7 +1,6 @@
 ---
 name: plan-council
-description: Plan a big or ambiguous feature with a panel of independent expert role-agents (architect, frontend, backend, data, security, …) that each propose an approach, distill into 2-3 rival whole options, champion and red-team them, score against criteria set up front, and synthesize the BEST (not merely doable) plan — then reality-check it against the real codebase and post the debate + plan to a GitHub Discussion. Use for large, ambiguous, or architectural features worth deep planning. User-invoked only (spawns many agents).
-disable-model-invocation: true
+description: Plan a big or ambiguous feature with a panel of independent expert role-agents (architect, frontend, backend, data, security, …) that each propose an approach, distill into 2-3 rival whole options, champion and red-team them, score against criteria set up front, and synthesize the BEST (not merely doable) plan — then reality-check it against the real codebase and post the debate + plan to a GitHub Discussion. Use for large, ambiguous, or architectural features worth deep planning. Invoke ONLY when the user explicitly asks for plan-council (slash command or by name in prose); NEVER unprompted (spawns many agents).
 allowed-tools: Read, Glob, Grep, Bash, WebFetch, AskUserQuestion, Workflow, Agent
 ---
 

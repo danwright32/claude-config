@@ -25,49 +25,11 @@ transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/nul
 [ -n "$transcript" ] || exit 0
 [ -f "$transcript" ] || exit 0
 
-# Did the latest turn (since the last genuine user message) use any tool other
-# than AskUserQuestion? If not, it was a trivial chat or a question turn -> skip.
-worked=$(python3 - "$transcript" <<'PY'
-import sys, json
-
-path = sys.argv[1]
-SKIP_TOOLS = {"AskUserQuestion"}
-
-try:
-    with open(path, "r", encoding="utf-8") as f:
-        lines = [ln for ln in f if ln.strip()]
-except Exception:
-    print("no"); sys.exit(0)
-
-def is_genuine_user(obj):
-    # A real human turn: type "user" carrying text, not a tool_result-only entry.
-    if obj.get("type") != "user":
-        return False
-    content = (obj.get("message") or {}).get("content")
-    if isinstance(content, str):
-        return content.strip() != ""
-    if isinstance(content, list):
-        return any(isinstance(it, dict) and it.get("type") == "text" for it in content)
-    return False
-
-used_work_tool = False
-for ln in reversed(lines):
-    try:
-        obj = json.loads(ln)
-    except Exception:
-        continue
-    if obj.get("type") == "assistant":
-        for it in ((obj.get("message") or {}).get("content") or []):
-            if isinstance(it, dict) and it.get("type") == "tool_use" and it.get("name") not in SKIP_TOOLS:
-                used_work_tool = True
-        continue
-    if is_genuine_user(obj):
-        break
-    # tool_result-bearing user messages sit between assistant tool calls -> keep scanning
-
-print("yes" if used_work_tool else "no")
-PY
-)
+# Did the latest turn (since the last genuine user message) use a MUTATING tool
+# (Edit/Write/Bash/Agent/...)? Chat-only and read-only Q&A turns -> skip, so the
+# reflection doesn't crowd out short question turns (shared helper, also used by
+# feature-issue-review.sh).
+worked=$(python3 "$(dirname "${BASH_SOURCE[0]}")/turn-worked.py" "$transcript" 2>/dev/null)
 
 [ "$worked" = "yes" ] || exit 0
 

@@ -14,6 +14,14 @@ input=$(cat)
 stop_active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false')
 [ "$stop_active" = "true" ] && exit 0
 
+# Only after turns that actually changed something (Edit/Write/Bash/Agent/...):
+# chat-only and read-only Q&A turns skip, and skips do NOT consume the cooldown
+# stamp below (shared helper, also used by session-reflection.sh).
+transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
+[ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
+worked=$(python3 "$(dirname "${BASH_SOURCE[0]}")/turn-worked.py" "$transcript" 2>/dev/null)
+[ "$worked" = "yes" ] || exit 0
+
 # Throttle: only re-prompt once per cooldown window, tracked per project.
 COOLDOWN_SECONDS=1800  # 30 minutes
 proj="${CLAUDE_PROJECT_DIR:-$PWD}"
