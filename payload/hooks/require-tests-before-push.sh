@@ -172,6 +172,9 @@ is_source() {
   printf '%s' "$f" | grep -Eiq '(^|/)(node_modules|vendor|dist|build|out|coverage|\.next|__generated__|generated|migrations?)/' && return 1
   printf '%s' "$f" | grep -Eiq '\.d\.ts$' && return 1
   printf '%s' "$f" | grep -Eiq '(^|/)[^/]*\.(config|setup|conf)\.[a-z0-9]+$' && return 1
+  # One-off analysis scripts (scripts/check-*.js etc.) are throwaway
+  # investigation tools, not shipped behavior -> exempt from the gate.
+  printf '%s' "$f" | grep -Eiq '(^|/)scripts/check[-_][^/]+\.(ts|tsx|js|jsx|mjs|cjs|py)$' && return 1
   return 0
 }
 
@@ -303,6 +306,12 @@ For each distinct change, decide:
   change exercises the behavior, NOT by whether the test file is new. The test
   files in this push are listed explicitly below; trust that list even if a
   given test diff hunk looks truncated.
+  SPECIAL CASE: if the change touches error handling, a retry, a background or
+  scheduled job, or a call to an external API/service, hasTest is true ONLY if
+  at least one of the tests exercises a failure or edge case for that change
+  (a rejected/erroring call, a timeout, a duplicate/concurrent invocation, a
+  malformed response) -- a test that only exercises the happy path does not
+  satisfy hasTest for that change, even if a happy-path test exists.
 
 Output STRICT JSON on a single line, no prose and no code fence:
 {"verdict":"pass"|"block","changes":[{"summary":"...","needsTest":true,"hasTest":false}],"missing":["..."]}

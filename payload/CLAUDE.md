@@ -4,14 +4,38 @@
 
 - When given a multi-part request, read and acknowledge the FULL request before starting work. Do not launch parallel agents or begin executing until the complete scope is understood. Always outline a numbered plan and wait for approval before starting, even when the steps are small.
 - Whenever you ask what to do next, or offer a choice between options, present it as an AskUserQuestion clickable picker, not as a prose list. The user wants to answer by selecting.
+- Ask AskUserQuestion questions ONE at a time (one question per call). Multi-question calls have lost answers mid-selection.
 
 ## Progress & Feedback (UI)
 
 - **Time-taking actions must always show working / still-alive / failed as visibly distinct states.** Any action that does not return instantly (network calls, sends, detached AI or background runs, long computations) must never present a bare indefinite spinner. The user has to be able to tell, at a glance, three things apart: it actually started, it is still alive (elapsed time, a heartbeat, streamed progress, or a count), and it failed or stalled (a timeout that converts the in-progress state into an actionable error/retry). A spinner that looks identical whether the work is progressing, hung, or dead is a defect. Apply this to every such surface by default, not just the one a bug was reported on. (Dan, 2026-06-28: "that's a principle we should apply everywhere.")
 
+## Build-Time Reliability Rules
+
+These come from a 2026-07-06 audit of roughly 850 historical GitHub issues across all 4 active projects: the same handful of root causes kept recurring, self-discovered by Claude only after the fact instead of being caught while building. Apply these by default, not just retroactively.
+
+- **Fail loud, not silent.** Any error path (a catch block, a background or scheduled job, a retry, a fetch against an external API) must surface failure by throwing, logging and alerting, or returning a real error, instead of silently defaulting to a blank result or a fake success. A catch block that swallows an error and returns "it worked" or an empty result is a defect, not defensive coding.
+- **Assume it runs twice.** Any multi step write (reschedule, cancel, retry, background job, an operation spanning a database write plus an external API call) must be designed assuming it can run concurrently with itself, be retried, or crash mid way. Use a database constraint, a lock, or an idempotency key. Do not rely on careful ordering in application code alone.
+- **Security scoping by default.** Before considering a new API route or endpoint done, explicitly state and enforce two things: who is allowed to call it (authentication) and whose data it can touch (tenant or org scoping). Do not treat authorization and data scoping as a later security pass; build them in with the route.
+- **Check platform limits, not just schema.** The existing rule to read the full database schema before writing SQL also covers the platform's real operational limits: default row caps (for example Supabase PostgREST's 1,000 row cap), pagination defaults, and rate limits. Verify these before writing code that depends on a query returning everything or a request always succeeding.
+
 ## Code Editing Rules
 
 - Before editing any file, verify you are editing the CORRECT file. If multiple files could share the same name, use Grep/Glob to find all copies and confirm which one is actively used by the project before making changes.
+
+## Shell Commands
+
+- Always use absolute paths in Bash commands. The working directory can reset between calls, so relative `cd apps/web` style commands fail repeatedly. Project paths may contain spaces; quote them.
+- Quote glob patterns (zsh errors on unmatched globs like `--include=*.tsx`). Use `rg` or `grep -r`, not `fd` (not installed).
+- Never run a command that will show an interactive prompt (wrangler, supabase, npx installers). Find the non-interactive form (flags, piped values) first; a raw y/n prompt handed to the user has derailed sessions.
+
+## Hand-offs to Dan (manual steps)
+
+Dan does not write code or live in the terminal. When a step genuinely requires him:
+- FIRST check whether it is already done (query the system, look at the state). Do not ask him to redo something he already did.
+- Give numbered steps with exactly ONE copy-paste command per code block. Nothing goes inside a block that should not be copied verbatim, no placeholders he has to notice and edit inline.
+- For a manual file edit: put the find text in one code block and the replacement text in a second block, so he can cmd+F (his spec, 2026-06-25).
+- NEVER put a secret value inside a command, code block, or anything that echoes to the terminal (a GitHub token was leaked this way once). For secrets: open the target env file in BBEdit with a named placeholder for him to fill in, then verify the secret landed afterward.
 
 ## Code Standards
 
@@ -28,13 +52,18 @@
 ## Testing & Data
 
 - Before writing any test data, seeder code, or mock data, read the full database schema for all tables involved. List every NOT NULL constraint, check constraint, foreign key, and enum type. Write data that satisfies ALL constraints on the first attempt.
+- Before ANY SQL against a real database (queries, migrations, backfills, not just test data), read the actual schema of every table involved first. Never guess a column name: guessed columns have failed dozens of times. Every data-modifying statement must report how many rows it affected.
+- To run SQL or migrations, use the `/db-apply` skill (`~/.claude/skills/db-apply/SKILL.md`) instead of handing SQL to the user to run and paste back.
 
 ## Claude Code Automation (all projects)
 
 Global hooks and skills in `~/.claude` fire in every project:
 - **Test first:** when writing or changing code, use TDD. Invoke `superpowers:test-driven-development` and write a failing test before the implementation. A pre push gate blocks `git push` unless each distinct change carries a test. Override a false positive with `SKIP_TEST_CHECK=1 <push command>`.
-- **End of turn:** after substantive turns a reflection runs, an issue review offers any actionable items as an AskUserQuestion picker, and a memory checkpoint saves durable facts silently (no banner, no narration).
+- **The test comes in the same commit as the change.** A PUSH BLOCKED message from the gate means the process already failed upstream: stop, write the missing test, then push. Do not retry the push hoping it passes, and do not bolt tests on as an afterthought. A skip approval from the user applies to that ONE push only, never as standing permission (Dan, 2026-06-24).
+- **End of turn:** after turns that changed something (edits, commands, agents), a reflection runs, an issue review offers any actionable items as an AskUserQuestion picker, and a memory checkpoint saves durable facts silently (no banner, no narration). Chat-only and read-only Q&A turns skip the reflection and issue review.
 - **Plain language:** when summarizing work, explaining decisions, or flagging risks, default to plain language for a product manager. Describe technical things by what they affect.
+- **Style-guide enforcement:** a pre push hook (`check-style-guide.sh`) blocks a push that introduces an em dash, en dash, or emoji in new lines, matching the Writing Style rule below. This exists because those written rules were violated repeatedly across projects even after being stated. Override with `SKIP_STYLE_CHECK=1 <push command>` for the same one time only reason as the test gate: explain to the user first, never silently.
+- **Failure path test requirement:** the pre push test gate's model judge also requires that a test for code touching error handling, retries, background jobs, or external API calls exercises a failure or edge case, not only the happy path, before it counts as coverage.
 
 ## Memory
 
@@ -49,6 +78,10 @@ Global hooks and skills in `~/.claude` fire in every project:
 - **Track big features as milestones:** `/plan-council` and `/plan-lite` offer, on approval, to create a GitHub milestone with one issue per plan phase. For a feature that did NOT start from a plan (already in flight), use `/milestone` directly. All three share `~/.claude/skills/milestone/create-milestone.sh`.
 - **Cost aware planning:** when planning anything, default to the free or cheapest approach that does the job. Only propose a paid option when it is clearly, materially better, and when you do, present it alongside the free one as the user's choice. Never silently pick the paid path.
 - **Right over fast:** when weighing how to build something, never favor an approach for being quicker or easier to build. Correctness and robustness win. Build time and effort is not a deciding factor (recurring cost still is). "Right is always better than fast."
+- **Keep the issue loop moving:** when work on a GitHub issue is finished, do not stop and wait. Merge the green PR yourself (verify with `gh`, never ask Dan to merge or to confirm something you can check), run the project's post-merge deploy step if it has one, and immediately present the next recommended open issues as an AskUserQuestion picker (the `/next-issue` skill). Never end a working session with "we're done" while open issues remain. Dan's spec, stated seven times before it stuck: "You can merge and then always suggest next issues."
+- **End every implementation turn with explicit git status:** pushed and merged, pushed and awaiting CI, blocked by the test gate, or intentionally local. Dan should never have to ask "did you push?".
+- **Scope a readiness check to each feature, not just a big sweep.** At the end of any non trivial feature, before calling it done, run a quick self check against the categories the `/production-ready` skill covers (error handling paths, auth and tenant scoping, a failure path test) scoped to just the files touched. Do not wait for an occasional large retrospective sweep to catch these; that lets gaps accumulate for a long time before anyone notices.
+- **Keep docs in sync with architecture changes.** If a change touches deploy process, auth, or infrastructure, check whether the README, deploy docs, or the project's own CLAUDE.md need updating in the same PR. Docs describing a system that no longer exists have repeatedly cost time across every project audited.
 
 ## Git & Authorship
 
@@ -58,6 +91,9 @@ Global hooks and skills in `~/.claude` fire in every project:
 ## Skills
 
 - **graphify** (`~/.claude/skills/graphify/SKILL.md`): any input (code, PDFs, markdown, screenshots) to knowledge graph. Trigger: `/graphify`
+- **next-issue** (`~/.claude/skills/next-issue/SKILL.md`): settle finished work (merge, deploy) and present the next GitHub issues as a picker. Use automatically when an issue finishes.
+- **db-apply** (`~/.claude/skills/db-apply/SKILL.md`): apply migrations and SQL directly with a confirmation gate and row counts, instead of relaying through Dan.
+- **audit-sessions** (`~/.claude/skills/audit-sessions/SKILL.md`): audit recent sessions for friction with parallel agents, cluster, propose fixes. Trigger: `/audit-sessions [days]`
 
 ## Projects
 
@@ -71,3 +107,4 @@ Active projects. Each has its own CLAUDE.md with stack details:
 
 - No dashes as punctuation: never use em dashes, and never use hyphens or regular dashes as parenthetical breaks or sentence connectors, anywhere (conversation, code comments, file content, commit messages, any output). Hyphens are allowed only inside a word ("self-aware", "well-known", "twenty-one"); write connector phrases as separate words ("new booking", not "new-booking") or rephrase.
 - Use parentheses, commas, colons, or new sentences instead.
+- These rules apply to ALL generated output, not just conversation: HTML mockups, app copy, alert and email templates, Slack messages, reports, and test data. No emojis in user-facing copy or alerts unless Dan asks for them.
