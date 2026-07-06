@@ -247,6 +247,42 @@ wl_out="$(SYNC_FSWATCH="$WLEMIT" SYNC_NOTIFIER="$WLNOTIFIER" CLAUDE_HOME="$WLC" 
 check "watch output logs the failure"     "printf '%s' \"\$wl_out\" | grep -qi 'FAILED'"
 check "logged failure names the file"     "printf '%s' \"\$wl_out\" | grep -q 'leak.sh'"
 
+echo "== pull/sync auto-restarts the watch daemon when claude-sync itself changed =="
+# The watch daemon (launchd KeepAlive) keeps the old script loaded until
+# restarted -- a pulled edit to claude-sync itself must trigger a restart
+# automatically, not rely on a manual launchctl step on each Mac (issue #5).
+RSBARE="$WORK/rsbare.git"; git init -q --bare "$RSBARE"
+RSA="$WORK/rsrepoA"; git clone -q "$RSBARE" "$RSA"
+cp "$SCRIPT" "$RSA/claude-sync"
+mkdir -p "$RSA/payload/hooks"; echo '#!/bin/sh' > "$RSA/payload/hooks/dummy.sh"   # non-empty payload, or apply dies with "no payload in repo"
+git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$RSA" push -q -u origin main
+
+RSB="$WORK/rsrepoB"; git clone -q "$RSBARE" "$RSB"
+RSBHOME="$WORK/rsbhome"; mkdir -p "$RSBHOME"; echo '{"hooks":{}}' > "$RSBHOME/settings.json"
+RSPLDIR="$WORK/rs-launchagents"; mkdir -p "$RSPLDIR"
+touch "$RSPLDIR/com.claudesync.watch.plist"   # simulates the watcher being installed
+
+# Mac A edits the script itself and pushes.
+echo '# a harmless comment appended' >> "$RSA/claude-sync"
+git -C "$RSA" add claude-sync && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "edit script" && git -C "$RSA" push -q
+
+out_restart="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$RSBHOME" SYNC_REPO="$RSB" bash "$SCRIPT" pull 2>&1)"
+check "pull restarts the watch daemon on a script change" "printf '%s' \"\$out_restart\" | grep -qi 'watch daemon'"
+
+# Control: a payload-only change must NOT claim a restart happened.
+mkdir -p "$RSA/payload/skills/ctrl"; echo x > "$RSA/payload/skills/ctrl/SKILL.md"
+git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "payload only" && git -C "$RSA" push -q
+out_nowatch="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$RSBHOME" SYNC_REPO="$RSB" bash "$SCRIPT" pull 2>&1)"
+check "payload-only pull does not restart the daemon" "! printf '%s' \"\$out_nowatch\" | grep -qi 'watch daemon'"
+
+# sync (two-way) must do the same self-change detection as pull.
+RSC="$WORK/rsrepoC"; git clone -q "$RSBARE" "$RSC"
+RSCHOME="$WORK/rschome"; mkdir -p "$RSCHOME"; echo '{"hooks":{}}' > "$RSCHOME/settings.json"
+echo '# another edit' >> "$RSA/claude-sync"
+git -C "$RSA" add claude-sync && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "edit script again" && git -C "$RSA" push -q
+out_sync_restart="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RSCHOME" SYNC_REPO="$RSC" bash "$SCRIPT" sync 2>&1)"
+check "sync also restarts the watch daemon on a script change" "printf '%s' \"\$out_sync_restart\" | grep -qi 'watch daemon'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -167,20 +167,51 @@ do_push(){
   fi
 }
 
+# ---------- self-change detection + watch-daemon restart ----------
+# The watch daemon (launchd KeepAlive) loads this script once at process
+# start and keeps running that code for its whole lifetime -- a pulled edit
+# to claude-sync itself does NOT take effect until the daemon restarts.
+# Detect that case around every git pull and restart it automatically so a
+# script fix from either Mac always takes effect without a manual step.
+repo_head(){ git -C "$SYNC_REPO" rev-parse HEAD 2>/dev/null || true; }
+script_changed_between(){
+  local before="$1" after="$2"
+  [ -n "$before" ] && [ -n "$after" ] && [ "$before" != "$after" ] || return 1
+  git -C "$SYNC_REPO" diff --name-only "$before" "$after" 2>/dev/null | grep -qx "claude-sync"
+}
+restart_watch_daemon_if_installed(){
+  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  [ -f "$agentdir/com.claudesync.watch.plist" ] || return 0
+  if [ "${SYNC_NO_LAUNCHCTL:-0}" = "1" ]; then
+    echo "claude-sync script changed: would restart the watch daemon (SYNC_NO_LAUNCHCTL=1, skipped)."
+    return 0
+  fi
+  if launchctl kickstart -k "gui/$(id -u)/com.claudesync.watch" 2>/dev/null; then
+    echo "claude-sync script changed: restarted the watch daemon to pick it up."
+  fi
+}
+
 # ---------- pull ----------
 do_pull(){
-  if have_git; then git -C "$SYNC_REPO" pull --ff-only; fi
+  local before="" after=""
+  if have_git; then
+    before="$(repo_head)"
+    git -C "$SYNC_REPO" pull --ff-only
+    after="$(repo_head)"
+  fi
   apply_payload_to_local
+  script_changed_between "$before" "$after" && restart_watch_daemon_if_installed
   echo "Pulled shared config onto this Mac (memory/permissions untouched)."
 }
 
 # ---------- sync (two-way, used by the background job) ----------
 do_sync(){
   stage_local_to_payload
-  local pushed=0 branch
+  local pushed=0 branch before="" after=""
   if have_git; then
     commit_if_changed && pushed=1
     branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+    before="$(repo_head)"
     git -C "$SYNC_REPO" fetch -q origin 2>/dev/null || true
     # integrate the other Mac's changes (only if the remote branch exists yet)
     if git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1; then
@@ -189,9 +220,11 @@ do_sync(){
         die "both Macs changed the same config and it couldn't auto-merge — run 'claude-sync status' and reconcile by hand"
       fi
     fi
+    after="$(repo_head)"
     [ "$pushed" -eq 1 ] && git -C "$SYNC_REPO" push -u origin "$branch" -q
   fi
   apply_payload_to_local
+  script_changed_between "$before" "$after" && restart_watch_daemon_if_installed
   echo "Synced (sent local changes, pulled remote; memory/permissions untouched)."
 }
 
