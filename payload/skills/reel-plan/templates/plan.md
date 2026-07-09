@@ -74,9 +74,16 @@ Material for a beginning and an end, whether or not this structure uses it. It c
 
 **Lens and timing detail for anything non obvious:**
 
-| Shot | Lens | When | Job in the edit | Cost if missed |
-|---|---|---|---|---|
-| | | | | |
+| Shot | Size | Lens | Hands free or parked | When | Job in the edit | Cost if missed |
+|---|---|---|---|---|---|---|
+| | | | | | | |
+
+**Stills obligations.** List the moments when he is contractually shooting photographs and cannot hold a video camera. Any video needed at those moments must come from a parked, rolling body.
+
+| Stills moment | Video still needed? | Where the parked camera sits |
+|---|---|---|
+| The bow | | |
+| | | |
 
 ### Cutaways. Shoot three times more than seems reasonable.
 
