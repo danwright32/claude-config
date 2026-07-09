@@ -95,7 +95,8 @@ Rolling before the bow. Do not touch it.
 
 ---
 
-## {VENUE HAZARD, if any}
+## {VENUE HAZARD}
+OPTIONAL. Delete if the room has no trap.
 
 - [ ] {check}
 - [ ] {check}
