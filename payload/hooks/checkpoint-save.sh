@@ -75,7 +75,7 @@ if not worked:
 # lives directly under it. This matches the dir Claude auto-loads for the
 # project, whatever the sanitization rules. Fall back to the home store.
 home = os.path.expanduser("~")
-fallback = os.path.join(home, ".claude", "projects", "-Users-danhankins-wright", "memory")
+fallback = os.path.join(home, ".claude", "projects", "-Users-danielhankins-wright", "memory")
 m = re.search(r"(.*/\.claude/projects/[^/]+)/", transcript)
 memdir = (m.group(1) + "/memory") if m else fallback
 
