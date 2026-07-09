@@ -4,14 +4,45 @@ Filled in after the shoot, before the edit. The point is that the next plan is b
 
 ---
 
+## The parked window
+
+The most consequential decision in the plan. Interrogate it first.
+
+- **Did the window open at all?** {yes / no, and why not}
+- **Where was the camera parked?** {tripod / chair arm / railing / windowsill / it never happened}
+- **What did it point at**, and did the frame hold both the performers and the evidence? {}
+- **How long did it roll?** {planned N minutes, actual N}
+- **Was it knocked, blocked, or sat in front of?** {}
+- **What did it cost in photographs?** Be specific. Which lens, which minutes, what did he miss. {}
+- **Was it worth the cost?** {}
+- **Did the crops hold up?** A parked frame should give three clean sizes. Did it? {}
+
+**The window was spent on:** {the number} **It should have been spent on:** {the same / this instead}
+
+---
+
 ## Planned versus captured
 
-| Shot | Planned | Got it? | Why not |
-|---|---|---|---|
-| | | | |
+Mark each **●** hands free or **◆** parked, as the plan did.
+
+| Shot | Mark | Planned | Got it? | Why not |
+|---|---|---|---|---|
+| | | | | |
 
 **Safety shots banked:** {N of N}
 **Ambitious shots attempted:** {N} **Landed:** {N}
+**Photographs lost to video:** {his real answer, not a reassuring one}
+
+---
+
+## The vertical payoff
+
+Only if a hero cut or a vertical story piece was planned. Delete otherwise.
+
+- **The planned payoff was:** {}
+- **Describe what you actually got, to someone who cannot hear it.** If the description needs the words *sounds*, *sings*, *says*, or *plays*, the shot failed the mute test on the day even if the plan passed it at the desk. {}
+- **Does it survive muted?** {yes / no}
+- **Did the room do the visible thing the plan assumed it would?** {}
 
 ---
 
