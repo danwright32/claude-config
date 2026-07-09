@@ -52,7 +52,11 @@ Shoot all of it, always, even when the structure you have chosen will not use it
 
 Each of these is a legitimate way to reveal a change. Pick the one that fits the event, not the one that worked last time.
 
+**Trailer.** The borrowed film grammar, and the default for anything sold as a promo. Cold open on one high energy moment that needs no context. Drop back and introduce the world. Escalate, with the music and the cuts intensifying. Peak, and cut to the **title card** (show, dates, venue). One striking shot after the card as the button. Note where the title lands: at the end, not the front.
+
 **Bookend.** Empty stage, the event, empty stage again. The same frame at the start and the end, meaning something different the second time. Reliable, clean, and the one that becomes formula fastest. Roughly fifteen, seventy, fifteen percent.
+
+A warning about the bookend, because it collides with the hook. **A slow empty room opener is documentary grammar, not trailer grammar.** The first six seconds decide whether anyone stays. On a two or three minute master, watched deliberately, the quiet open is right. On a sixty second social piece it can lose the room before the story starts. Capture the empty room material always, then decide where it goes: often as a breath immediately after the cold open, rather than as frame one.
 
 **In medias res.** Open at the peak, at full intensity, then drop back and show how it was arrived at. Steals from the middle to buy the opening. Excellent when the peak is extraordinary and the build is slow.
 
