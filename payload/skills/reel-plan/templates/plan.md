@@ -66,11 +66,11 @@ Beats come from the chosen structure, not from a fixed template. Every beat need
 
 Material for a beginning and an end, whether or not this structure uses it. It cannot be manufactured later.
 
-- [ ] Empty stage, lit, before anyone arrives
-- [ ] Arrival, doors, the room filling, a performer waiting
-- [ ] The silence after the last note. Keep rolling.
-- [ ] Bow, applause, faces
-- [ ] The room emptying, the empty stage again
+- [ ] Empty stage, lit, before anyone arrives. Hands free.
+- [ ] Arrival, doors, the room filling, a performer waiting. Hands free.
+- [ ] The silence after the last note. Parked, because stills.
+- [ ] Bow and applause. Parked, because stills.
+- [ ] The audience leaving. Hands free, thirty seconds. **Never plan around waiting for an empty room.** He goes home.
 
 **Lens and timing detail for anything non obvious:**
 
