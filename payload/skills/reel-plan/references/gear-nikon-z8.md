@@ -25,15 +25,29 @@ The locked wide is a 24-70 shooting 8K. **Crop that frame to 4K and the effectiv
 
 So the tight shots come from the fixed camera, pre stabilized because it is bolted down, at no cost in resolution. The 70-200 in hand exists for **angles the fixed wide cannot give you**, not for reach.
 
-## The parked camera
+## Both cameras are shooting stills
 
-A Z8 cannot record video and shoot stills at the same time. Since Dan is hired to photograph the event, at the moments that matter most his hands are on stills, and the video has to come from somewhere else.
+Start here, because everything else is downstream of it. **Dan photographs the event on both bodies**, a 24-70 on one and a 70-200 on the other, working between them for the length of the performance. A Z8 cannot record video and shoot stills at once. Therefore:
 
-**The second body, rolling unattended.** Frame it wide, lock everything, start it rolling, walk away.
+- **There is no spare camera.**
+- **There is no safety shot rolling through a show.** Not with a tripod, not without one.
+- **Video during a performance is stolen from stills time**, in short handheld takes of six to ten seconds, and then he goes back to photographing.
 
-This is not a compromise. It is how the bow, the curtain call, and the applause get shot at all, because those are precisely the moments he is being paid to photograph. Plan the parked camera's position before doors, and plan what it is pointed at.
+Any plan that assumes a camera is free is fiction.
 
-**Bring the tripod to roaming venues too, wherever one is permitted.** He used to leave it behind when he could move, reasoning that it cost him a body. That reasoning died with the stills first rule: his hands are on stills at the bow regardless, so a body has to be parked anyway. Set the tripod before doors, use it when his hands are full, roam the rest of the time.
+## The parked window
+
+He will park a body, rolling unattended, for **a bounded window**: one number, three to five minutes, or a stretch where he would not be photographing anyway. Never the whole show.
+
+The window is the scarcest resource in the plan. Spend it deliberately.
+
+**A typical event affords two.** One number, chosen because it holds the moment the reel is built around. And the bow with the applause, where his hands are on stills and the reel wants the footage. Park before the bow, let it run, collect it after.
+
+**Free windows, costing nothing:** before doors, the empty room, the audience arriving, the room emptying. No photographs are required, so both bodies are available.
+
+**The cost of a window** is one focal length for those minutes. Name it in the plan. If the 24-70 is parked, he is shooting stills on the 70-200 only, and that is a real constraint on his paid work, not a footnote.
+
+Inside a window, a locked 8K frame crops into a wide, a medium, and a tight, all in sync, because it is the same frame. That is what a window buys, and it is a great deal for five minutes of one lens.
 
 ### A couch is a tripod
 
