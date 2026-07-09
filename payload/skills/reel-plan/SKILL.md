@@ -118,6 +118,10 @@ The subject never changes. What changes is how much of the room shares the frame
 
 The hero cut runs exactly as long as the payoff needs and not one beat longer. Ten seconds fits a single visual beat. A musical phrase needs closer to twenty five. Never clip the payoff to hit a number.
 
+**The payoff must pass the mute test.** Describe it to someone who cannot hear. If the description needs the words *sounds*, *sings*, *says*, or *plays*, it is not a payoff, it is a theatrical event, and the reel plays silent. A high note, a key change, a spoken line becoming a sung one: on a muted screen all of these are a person standing still with their mouth open.
+
+What passes: something moves, or something stops. A body arriving at a shape. A face changing. A room going still. Arms going up. Find the visible effect of the audible cause, and shoot that.
+
 The vertical is not cropped out of the finished horizontal as an afterthought. It is composed for during the shoot.
 
 ## Writing the plan
