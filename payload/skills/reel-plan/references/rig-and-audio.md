@@ -2,9 +2,9 @@
 
 Two things to settle before writing a shot list.
 
-# Part 2. Rig modes
+# Part 1. Rig modes
 
-You have two bodies, two lenses, and a tripod. The venue decides how they are arranged, and the arrangement is inverse to your freedom.
+You have two Z8 bodies, a 24-70, a 70-200, and a tripod. The venue decides how they are arranged, and the arrangement is inverse to your freedom.
 
 ## Pinned
 
