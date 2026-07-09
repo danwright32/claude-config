@@ -112,13 +112,21 @@ Consider a hybrid: park a body on the tripod for the one number that matters mos
 
 ## Passes
 
-**Default to one pass, forever.** Then ask, always, whether a second exists:
+**Default to one pass, forever.** Then ask, always, whether a second exists.
 
-- **A dress rehearsal or photo call.** In professional theatre this is the norm, not a favor. Companies routinely hold a final dress designated for photographers, full costume, full tech, no audience, and photographers shoot it in preference to the performance. It is the single most valuable access you can ask for. It costs the company nothing, and most photographers new to theatre do not know to ask.
-- **A repeated performance the same day.** Then pass one is coverage and reconnaissance, and pass two is where every ambitious shot goes, because by then you know the blocking, the laughs, and the light.
-- **A soundcheck.** Free, unlit, unpeopled, but you can walk anywhere, test the shutter against the LED fixtures, find your positions, and shoot the room empty.
+**The correction that matters most: you cannot intercut two performances.** Actors are not robots. Blocking shifts, laughs land differently, lines change, tempi move. The archival guidance is blunt about this: editing two different performances into one is a nightmare. A second pass gives you **alternative** material, not material that cuts together with the first inside a single moment. Choose one performance as the spine and use the other for shots that stand alone.
 
-The rehearsal has no audience, which means it cannot give you the thing that is often the actual story. Shoot the rehearsal for the stage, and the performance for the room.
+Given that, here is what a second pass is actually worth:
+
+- **A dress or tech rehearsal.** In professional theatre and concert work this is the norm rather than a favor, and it is what promo videographers shoot in preference to the performance. Full costume, full tech, no audience. You can move anywhere, get close, test exposure against the real light cues, rehearse a camera move, and fail without consequence. It is the single most valuable access you can ask for, it costs the company nothing, and most photographers new to theatre do not know to ask. Note that rehearsal footage may need its own consent, separate from the performance.
+
+- **A photo call, also called a press call.** A formal, scheduled theatre institution, and it is **posed and restaged**, not a run. The cast recreates specific moments and holds the positions while photographers work. The stage manager runs it from a shot list built with the director, naming the light cue, the cast, and the props for each shot. It is union regulated, typically one call a week, thirty to ninety minutes, with a day's notice to the actors, and video at a photo call can carry stricter rules than stills. It gives the cleanest images and it can look frozen in motion. Most videographers prefer a dress run for movement and use the photo call for posed pickups.
+
+- **A repeated performance the same day.** Useful, but remember it does not intercut. Treat it as a second, independent take of the whole thing.
+
+- **A soundcheck.** Free, unlit, unpeopled. Walk anywhere, test the shutter against the LED fixtures, find your positions, shoot the room empty.
+
+The rehearsal has no audience, which means it cannot give you the thing that is often the actual story. **Shoot the rehearsal for the stage, and the performance for the room.**
 
 ---
 
