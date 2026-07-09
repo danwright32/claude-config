@@ -30,15 +30,23 @@ One sentence, naming what changes. If it describes a montage, it is not finished
 
 **The subject is:** {performers / the audience / one person / the room}
 
-### The story test
+### Structure
 
-Answer all five, or the plan is a shot list for a montage.
+**Chosen structure:** {bookend / in medias res / the single moment / portrait / reverse / parallel / question and answer / accumulation}
+
+**Why this one, argued from this event:** {}
+
+**Previous three reels used:** {structures} | **Previous opening devices:** {}
+
+This structure is not among them. This opening device is not among them.
+
+### The story test
 
 | | |
 |---|---|
 | **What changes?** | |
-| **First shot** (before the performance begins) | |
-| **Last shot** (after the performance ends) | |
+| **First shot,** and what it makes the viewer want to know | |
+| **Last shot,** and what it leaves behind | |
 | **The turn** (the beat where the change becomes visible) | |
 | **Every beat covered wide, medium, tight?** | {yes / the gaps are ...} |
 
