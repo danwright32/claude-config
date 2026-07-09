@@ -64,7 +64,7 @@ Multiple passes (a second performance, a dress rehearsal, a soundcheck) are a bo
 
    Find it by walking up from the working directory until you hit `reel-log.md`. If it does not exist, create it from the shape in the existing one, and say so on the plan: there is no history, so no structure is forbidden.
 
-   Note every structure and opening device it lists. This is not optional and it happens before the interview. Also read the previous plans themselves if they are nearby and cheap to open, but the log is the authority.
+   **Read the table, and only the table.** Take the Structure and Opening device columns of the most recent three rows. Never trust a summary line, in the log or on a plan, because a hand maintained second copy of the same fact drifts and the stale copy is the one you will believe. This is not optional and it happens before the interview. Also read the previous plans themselves if they are nearby and cheap to open, but the log's table is the authority.
 2. Run the interview. Ask questions one at a time as pickers where the answer is a choice.
 3. Read the reference files that apply. Do not read all of them.
 4. **Write the plan and the field card into the current working directory**, as `<event-slug>.md` and `<event-slug>-card.md`. That is where the user is standing, and it is where he expects to find them. Do not invent a subfolder.
