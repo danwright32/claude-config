@@ -77,9 +77,13 @@ A parked 8K wide also crops into three framings, so an unattended camera in the 
 
 ## Lens assignment
 
-**Pinned.** The **24-70 goes on the tripod** as the locked 8K safety shot, which crops into wide, medium, and tight. The **70-200 stays in hand**, braced, between 70 and 135, for a second angle on the moments that deserve one.
+In both modes, both bodies are photographing. What follows is where the 24-70 goes **when the parked window opens**, and where it is the rest of the time.
 
-**Roaming.** 24-70 on one body, 70-200 on the other, both on you. Heavy, and the long lens is the one that will disappoint you. Consider parking the 24-70 in 8K on the tripod for the single most important number and collecting it afterward.
+**Pinned.** Outside the window, both bodies are in hand and photographing, the 24-70 and the 70-200. **Inside the window**, the 24-70 goes on the tripod in 8K, framed to hold the stage with a little air, locked off, and its one frame crops into wide, medium, and tight. He photographs on the 70-200 alone for those minutes. The tripod stands idle the rest of the show, and that is not waste. It is the price of a stable place to put a camera in a room where he cannot move.
+
+**Roaming.** Both bodies on him, photographing. **Inside the window**, the 24-70 goes on a surface: a chair arm, a railing, a windowsill. Same 8K frame, same three crops, same cost. He collects it afterward.
+
+**In neither mode is a camera free.** A shot that assumes one is fiction.
 
 ---
 
