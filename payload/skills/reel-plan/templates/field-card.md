@@ -9,10 +9,10 @@
 
 ---
 
-## STILLS FIRST. VIDEO SECOND.
+## BOTH CAMERAS ARE SHOOTING STILLS
 
-**◆ PARKED** = camera rolling by itself. You shoot stills.
-**● IN HAND** = you are holding it.
+**● IN HAND** = stop stills. 6 to 10 sec. Back to stills.
+**◆ PARKED** = rolling alone, inside a window below.
 
 Never miss a photo for a shot.
 
