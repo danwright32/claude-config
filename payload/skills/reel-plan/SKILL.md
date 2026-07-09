@@ -188,6 +188,9 @@ Then mark each one:
 - **STATED.** Dan said it in this interview, or it is in the event's own material. Trustworthy.
 - **INHERITED.** It came from a reference file in this skill. **Treat as suspect.**
 - **DERIVED.** Reasoned from a STATED fact. Check the reasoning.
+- **RESEARCH.** Read off the internet about a room, a venue, or a piece that **neither of you has seen.** Architecture coverage, a program note, a press release. Not suspect the way an inherited claim is suspect, because it is usually true. Suspect in a different way: it may be out of date, it may describe a different room in the same building, and it is describing something Dan will be standing inside in a few hours. **Always checkable on arrival, and therefore always belongs on the field card as a thing to confirm, not as a fact to rely on.**
+
+The fourth category exists because a plan once carried "the lobby has furniture you can park a camera on" as though it were reasoning. It was a sentence from an architecture review. The whole reel depended on it.
 
 Then, for every INHERITED premise the structure rests on, ask the question that would have saved the last plan: **what would have to be true for this to be wrong, and can Dan tell me?** If it can be checked by asking him, ask. If it cannot, say so on the plan and mark the structure as resting on an unverified claim.
 
