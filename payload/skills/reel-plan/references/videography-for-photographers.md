@@ -39,6 +39,20 @@ Since shutter is spoken for, exposure is controlled with **aperture and ISO**, a
 
 The trap: **slowed footage has no usable sound.** Never shoot a line of dialogue, a punchline, or a musical passage you need to hear at 60 frames per second. Slow motion is for moments you will cover with music.
 
+The second trap is in the next section, and it is the reason slow motion under stage lights often comes back ruined.
+
+## 4b. LED stage lighting will band your footage
+
+Modern stage fixtures and LED video walls dim by switching on and off very fast, a technique called PWM. Your eye reads it as steady light. Your sensor reads it as flicker, and it shows up as rolling horizontal bands across the frame, or as brightness pulsing between frames. It is not fixable in post.
+
+Three things protect you.
+
+- **Use a slower shutter.** A slow shutter averages across many switching cycles and smooths the banding out. This is one more reason to hold the 180 degree rule instead of reaching for a fast shutter.
+- **Be suspicious of slow motion under LED wash.** Typical stage and rental LED fixtures switch somewhere around 2,000 to 4,000 times a second, which is barely enough at normal frame rates and frequently not enough at 60 frames per second or above. Dimmed fixtures are worse, because the switching pulses get very short. If you plan a slow motion shot, plan it under tungsten, daylight, or a fixture you have tested.
+- **Test before the house opens.** Point the camera at the lit stage during setup, at the frame rate and shutter you intend to use, and look at the back of the camera. Thirty seconds of testing beats discovering it in the edit.
+
+If you see banding and cannot change the light, change the shutter first, then the frame rate. Do not change the aperture and hope.
+
 ## 5. Lock everything automatic
 
 Auto white balance drifts mid shot and cannot be repaired. Auto ISO pumps the exposure up and down as a performer crosses a spotlight. Autofocus hunts, and a focus hunt in the middle of the best moment of the night is a shot in the bin.
