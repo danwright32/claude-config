@@ -43,15 +43,15 @@ The horizontal master does not need any of this. It is watched with intent.
 
 A proscenium stage is a horizontal composition. It has been one since the seventeenth century. Cropping it to nine by sixteen throws away roughly forty four percent of the frame and was never composed to survive that.
 
-You will read that this also destroys resolution. **For your gear, that part is false, and it matters.** Shoot 4K horizontal, which is 3840 by 2160. Crop a nine by sixteen slice from it and you get 1215 by 2160, which is *larger* than the 1080 by 1920 that a vertical deliverable needs. You lose no resolution at all.
+You will read that this also destroys resolution. **On a Z8, that part is simply false.** Shoot 8K, which is 7680 by 4320. A nine by sixteen crop out of it is 2430 by 4320, roughly four times the pixels a 1080 by 1920 vertical deliverable needs. Even a 4K source gives you 1215 by 2160, still larger than required. You lose no resolution at all.
 
 What you lose is **composition**, and that is the real cost. So the fix is compositional, not technical:
 
-- **Shoot 4K, and compose center safe** on any shot you intend to use vertically. Keep the subject that matters near the middle third, knowing a vertical crop is coming.
+- **Compose center safe** on any shot you intend to use vertically. Keep the subject that matters near the middle third, knowing a vertical crop is coming.
 - **Shoot some frames for the crop deliberately.** A tight shot on a single performer survives a vertical crop beautifully. A full company on a wide stage never will.
 - **Accept that some material is horizontal only.** A full orchestra, a corps de ballet, a company bow. Those belong to the archival master. For the vertical, feature one soloist, one section, one face. Do not try to squeeze ninety choristers into a phone screen.
 
-The professional answer, shooting oversized and cropping both from one high resolution source, is exactly what a 4K camera already lets you do. You do not need a second vertical camera. You need to remember, while framing, that a vertical crop is coming.
+The professional answer, shooting oversized and cropping both formats from one high resolution source, is exactly what the 8K wide already gives you. You do not need a second vertical camera. You need to remember, while framing, that a vertical crop is coming. See `references/gear-nikon-z8.md`.
 
 ---
 
