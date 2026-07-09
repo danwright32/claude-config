@@ -14,11 +14,15 @@ The old failure is a montage. The new failure, the one that arrives after you le
 
 ## Part 1. Story: what has to be true every time
 
-**A montage** is a collection of good moments arranged by rhythm. It has no beginning, because any moment could be first. It has no end, because it stops rather than concludes. It is pleasant, competent, forgettable, and it is what most event highlight reels are.
+First, a correction to how this is usually said. **A sizzle reel is a montage.** So is a film trailer. Montage is the form, not the failure, and anyone in the trade will tell you so.
 
-**A story** requires a change of state. How things were, what happened, how things are now. Those are not three equal slices of running time. They are three conditions, and a reel can imply two of them while showing only one.
+**The failure is a montage with no arc.** Good moments, all weighted the same, in an order that could be shuffled without loss. No hook, no escalation, nothing at stake, and it stops rather than concludes. That is what most event highlight reels are.
 
-If you cannot name what changed, you have a montage. Cut it however you like.
+**The fix is a change of state.** How things were, what happened, how things are now. Those are not three equal slices of running time. They are three conditions, and a reel can imply two of them while showing only one.
+
+If you cannot name what changed, you have a shuffle. Cut it however you like.
+
+There is a second, related law, from trailer editing: **energy must be modulated, not constant.** Hook hard, then drop back, then build. In Derek Lieu's formulation, if a trailer feels high energy all the time, then none of it will feel high energy. A reel that is loud from the first frame to the last has no peak, because a peak is defined by what precedes it.
 
 ### Where the change comes from
 
