@@ -63,7 +63,7 @@ OPTIONAL. Delete if nothing is unknown.
 ---
 
 ## VERTICAL
-Subject centered. One person.
+OPTIONAL. Subject centered. One person.
 
 - [ ] {shot}
 - [ ] {shot}
