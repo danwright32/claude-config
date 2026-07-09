@@ -52,7 +52,7 @@ A note that applies to all of them: **the highest engagement material in perform
 
 **Peak.** The climax of the plot, which you can find in advance by reading the script or asking the director one question: where does it turn?
 
-**What goes wrong.** Two things, and both are fatal. **The rights,** because a licensed play usually forbids recording outright. And **the dialogue,** because a camera microphone in a reverberant house will not give you an intelligible line. Pick two or three lines that must be heard and solve those specifically.
+**What goes wrong.** The dialogue. A camera microphone in a reverberant house will not give you an intelligible line, because reverb destroys consonants and leaves music intact. Pick the two or three lines that must be heard, and solve those specifically: get close, get a feed, or cut the line. Everything else rides on the bed.
 
 **The access you should ask for.** Professional theatre companies routinely hold a final dress rehearsal designated as a photo call: full costume, full tech, no audience. Photographers shoot it in preference to the performance. It is standard, it costs the company nothing, and asking for it is the single highest leverage thing a photographer new to theatre can do. Shoot the dress for the stage, and the performance for the room.
 
