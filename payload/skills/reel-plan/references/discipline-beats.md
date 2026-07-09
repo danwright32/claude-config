@@ -94,7 +94,7 @@ A note that applies to all of them: **the highest engagement material in perform
 
 **Slow motion earns its keep here**, at 60 frames per second, on the accents, with sound covered by music. But test the frame rate against the stage lights first, because dance is lit with LED fixtures and slow motion is where they band.
 
-**What goes wrong.** Rights, again, and worse. Dance is usually set to recorded commercial music played over the house speakers. Your camera captures it, the platform hears it, the reel is muted. Establish this before you shoot, because if the audio is unpostable you have lost sync entirely and need far more coverage and far more slow motion than you planned.
+**What goes wrong.** Playback. Dance is usually set to recorded music over the house speakers, which means the room's audio is a bed rather than a source, and **you have lost sync**. Establish this before you shoot. Without sync you need far more coverage, far more cutaway material, and far more slow motion than a live sound event needs, and no shot may depend on a sound landing exactly when it looks like it lands.
 
 ---
 
