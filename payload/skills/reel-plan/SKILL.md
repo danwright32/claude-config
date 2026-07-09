@@ -56,7 +56,21 @@ Ask in this order. The early answers reorganize the later ones.
 
 ## Writing the plan
 
-**Story spine.** One sentence. Not "a highlight reel of the concert." Something like: "Four actors talk a lobby full of toddlers into believing a soccer field is the Aegean, and you watch it happen on the toddlers' faces." If the spine is generic, the reel will be too. Push until it is specific to this event.
+**Story spine.** Read `references/story-structure.md` first. This is the part that matters.
+
+One sentence, and it must name **what changes.** Not "a highlight reel of the concert," which describes a montage. Something like: "Four actors talk a lobby full of restless toddlers into believing a soccer field is the Aegean, and you watch the room go still."
+
+Then answer the five questions at the end of that file, in writing, on the plan:
+
+- What changes?
+- What is the first shot, and does it happen before the performance begins?
+- What is the last shot, and does it happen after the performance ends?
+- Which beat carries the turn?
+- Does every beat have a wide, a medium, and a tight?
+
+If those cannot be answered, stop and fix the spine. A plan that fails this test is a shot list for a montage, and no amount of good footage will rescue it in the edit.
+
+**The beginning is not on stage and it does not happen during the show.** The empty lit room, the doors, a performer waiting. The end is not the last note either: it is the bow, the applause, the room emptying. Both are mandatory, both cost twenty minutes, and neither can be manufactured afterward.
 
 **Grammar.** Pick from `references/edit-grammars.md`. Driven by music, by speech, by movement, or hybrid. This determines what a cut lands on, and therefore what coverage is mandatory.
 
