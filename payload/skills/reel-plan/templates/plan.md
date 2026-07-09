@@ -18,7 +18,7 @@ One sentence, naming what changes. If it describes a montage, it is not finished
 
 ### Structure
 
-**Chosen structure:** {bookend / in medias res / the single moment / portrait / reverse / parallel / question and answer / accumulation}
+**Chosen structure:** {trailer / bookend / in medias res / the single moment / portrait / reverse / parallel / question and answer / accumulation}
 
 **Why this one, argued from this event:** {}
 

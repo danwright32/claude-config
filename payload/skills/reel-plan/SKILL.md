@@ -151,7 +151,7 @@ One sentence, and it must name **what changes.** Not "a highlight reel of the co
 
 Note where the subject sits in that sentence. The actors do the thing. The faces prove it. Reverse them and you have made a reel about an audience, which nobody will book you for.
 
-**Structure is a separate decision, and it is chosen, not inherited.** Bookend, in medias res, the single moment, portrait, reverse, parallel, question and answer, accumulation. Argue for one from the facts of this event. Then check it against the previous plans and **do not reuse the last plan's structure or its opening device.** If the last three reels opened on an empty stage, this one does not, whatever its structure. Name the previous structures on the plan so the choice is visibly deliberate.
+**Structure is a separate decision, and it is chosen, not inherited.** Trailer, bookend, in medias res, the single moment, portrait, reverse, parallel, question and answer, accumulation. Nine, and all nine are selectable. Argue for one from the facts of this event. Then check it against the previous plans and **do not reuse the last plan's structure or its opening device.** If the last three reels opened on an empty stage, this one does not, whatever its structure. Name the previous structures on the plan so the choice is visibly deliberate.
 
 Story is mandatory. Structure is a choice. A skill that always produces the same shape produces a portfolio of one reel.
 
