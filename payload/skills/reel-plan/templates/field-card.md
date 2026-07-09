@@ -101,4 +101,4 @@ at roughly **{when}**
 - Never cut a size to itself. Change size or angle.
 - Do not stop rolling at the last note. The silence is the shot.
 - Long lens needs a brace.
-- {consent constraint, if any}
+- Never cut inside a gesture. Let it finish.
