@@ -160,6 +160,30 @@ The hero cut has no acts. It is a hook, tension, and a payoff. Write it separate
 
 **Risks.** What most likely goes wrong at this specific event, and the cheap mitigation.
 
+## The premise audit
+
+Run this before finishing the plan. It is not optional, and it exists because the first plan this skill ever wrote was rigorous, well argued, and built on three premises that were false.
+
+**List every claim the structure depends on.** Not the shot list. The structure: the reason this reel is shaped the way it is, and the reason it is not shaped some other way.
+
+Then mark each one:
+
+- **STATED.** Dan said it in this interview, or it is in the event's own material. Trustworthy.
+- **INHERITED.** It came from a reference file in this skill. **Treat as suspect.**
+- **DERIVED.** Reasoned from a STATED fact. Check the reasoning.
+
+Then, for every INHERITED premise the structure rests on, ask the question that would have saved the last plan: **what would have to be true for this to be wrong, and can Dan tell me?** If it can be checked by asking him, ask. If it cannot, say so on the plan and mark the structure as resting on an unverified claim.
+
+Three real examples, all from one plan:
+
+- *"There is no tripod, therefore no safety shot."* DERIVED, and the reasoning was wrong. A chair arm is locked.
+- *"The 8K wide gives you three angles."* INHERITED, and true only for a locked camera, which the plan did not have.
+- *"The story of a musical lives in the transition from speech into song."* INHERITED, and false in a silent medium. It was the payoff of the entire hero cut.
+
+Each was invisible because a premise from a file does not feel like an assumption. It feels like knowledge. The audit is what makes it feel like an assumption again.
+
+**If the structure rests on an INHERITED premise that cannot be checked, say so in one line on the plan.** Dan can then overrule it in ten seconds, which is what happened to all three of the above.
+
 ## Writing the field card
 
 The card is read in a dark or crowded room, on a phone, with a camera in the other hand, by someone who has not reread the plan. These rules are absolute.
