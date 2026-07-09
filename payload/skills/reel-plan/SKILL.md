@@ -66,7 +66,19 @@ Multiple passes (a second performance, a dress rehearsal, a soundcheck) are a bo
 4. **Write the plan and the field card into the current working directory**, as `<event-slug>.md` and `<event-slug>-card.md`. That is where the user is standing, and it is where he expects to find them. Do not invent a subfolder.
 
    Exception: if a `plans/` folder already exists in the working directory, write there instead, because he has clearly chosen to organize that way.
-5. After the shoot, run the debrief with `templates/debrief.md` and save it beside the plan.
+5. After the shoot, run the debrief with `templates/debrief.md` and save it beside the plan. **Then apply its corrections to the reference files.** See below.
+
+## The debrief writes back
+
+A debrief that only writes a note is worthless. The skill's reference files contain claims about the camera, the rooms, the gear, and the craft, and several of them have already turned out to be wrong. They will not fix themselves.
+
+So the last step of every debrief is:
+
+1. **Find every claim the shoot disproved.** The flicker menu was or was not available in video mode. The 70-200 handheld was better or worse than the file says. The parked window lasted longer or shorter than planned. A discipline's "must not miss" shot turned out to be impossible from a house seat.
+2. **Edit the reference file.** Not the debrief. The file. Change the sentence that was wrong, and note what corrected it and when.
+3. **Tell Dan what changed**, in one line per correction, so he can veto it.
+
+Never edit a reference file from a guess. Only from something that happened at a shoot.
 
 ## The interview
 
