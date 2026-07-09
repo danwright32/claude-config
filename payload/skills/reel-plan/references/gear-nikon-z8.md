@@ -93,7 +93,9 @@ In both modes, both bodies are photographing. What follows is where the 24-70 go
 
 **Record limits.** Roughly ninety minutes in 8K at 30p, roughly one hundred twenty five minutes in 4K at 60p. A forty minute show is comfortably inside both.
 
-**Card capacity, which is the limit that actually bites.** Shoot the long locked off take in **H.265, not N-RAW.** H.265 tops out around 400 megabits per second, which is roughly three gigabytes per minute, so a forty minute continuous take is about 120 GB and fits a 256 GB card with room. N-RAW and ProRes RAW are several times larger and will end the take partway through the second number. Save the RAW codecs for short deliberate shots, if at all. Nothing in these reels needs them.
+**Card capacity, and the honest version of it.** Shoot the parked take in **H.265, not N-RAW.** H.265 runs roughly three gigabytes per minute, so a **five minute parked window is about fifteen gigabytes**, which is nothing. N-RAW and ProRes RAW are several times larger and buy you nothing here.
+
+Record limits and card capacity are therefore **not** the constraint on this rig, and it is worth saying why, because the numbers above invite the wrong conclusion. A Z8 will happily roll 8K for ninety minutes. The reason it does not is that **the camera is needed for photographs**, not that the card fills. The window is three to five minutes because Dan is being paid to shoot stills, and the whole show version of this take does not exist. Do not reason from storage to duration. Reason from the prime directive.
 
 **Rolling shutter** measures around 14.4 milliseconds in most modes, fast enough to ignore. Note that this is a different problem from LED banding, which is about the light switching, not the sensor scanning.
 
