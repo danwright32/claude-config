@@ -28,14 +28,16 @@ This structure is not among them. This opening device is not among them.
 
 ### Premise audit
 
-Everything this structure depends on. **STATED** (Dan said it), **INHERITED** (came from a skill reference file, treat as suspect), **DERIVED** (reasoned from a stated fact).
+Everything this structure depends on. **STATED** (Dan said it), **INHERITED** (came from a skill reference file, treat as suspect), **DERIVED** (reasoned from a stated fact), **RESEARCH** (read off the internet about a room neither of you has seen).
 
-| Premise the structure rests on | Source | If inherited: can Dan check it? |
+| Premise the structure rests on | Source | How it gets checked |
 |---|---|---|
 | | | |
 | | | |
 
 **Resting on an unverified inherited claim:** {none / name it in one line so Dan can overrule it}
+
+**Resting on unverified research:** {none / name it, and put it on the field card as the first thing to confirm on arrival}
 
 ### The story test
 
