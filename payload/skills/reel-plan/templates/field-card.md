@@ -56,12 +56,16 @@ Subject: {the cast}. Proof: {the kids}.
       {No answer? Park the finale. It catches the bow too.}
 - [ ] ★ ● {A performer mid ridiculous thing} · MEDIUM
 - [ ] ★ ● {One kid's face} · TIGHT
+## SPARE SHOTS · anything that is not the performance
+Six seconds each. They let you join two clips that would otherwise clash. You will run out.
+
 - [ ] ● {A kid copying a gesture} · TIGHT
 - [ ] ● {A parent watching their own kid} · MEDIUM
 - [ ] ● {Small hands, shoes on the floor} · TIGHT
 - [ ] ● {Kids' faces, many} · ALL SIZES
+- [ ] ● {The room, the stairs, the windows} · WIDE
 
-**Cutaways: you will not have enough. Every one rescues a cut. Take more.**
+**Take twice as many as feels sensible.**
 
 # {1:35} · THE END
 
