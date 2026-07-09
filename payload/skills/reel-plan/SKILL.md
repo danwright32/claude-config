@@ -148,6 +148,20 @@ The card is read in a dark or crowded room, on a phone, with a camera in the oth
 
 **Each shot names its framing size.** Wide, medium, or tight, on the shot itself, not in a reminder box at the bottom. Keep a short reminder box too, but the sizes belong on the shots.
 
+### The card is scanned, not read
+
+He is glancing at it between numbers, on a phone, in bad light. Length is the enemy.
+
+- **Under seventy lines.** If it is longer, something belongs in the plan instead.
+- **No paragraphs anywhere.** A line is a shot, a setting, or a rule. Nothing else.
+- **No sentence over ten words.** Most should be four.
+- **No explanation.** The card says what to do. The plan says why. He read the plan at his desk.
+- **Every shot is one line**: marker, shot, size. `● Doors, room filling · WIDE`
+- **Markers, not words.** `●` in hand, `◆` parked. Legible at a glance, no reading.
+- Anything he cannot act on while holding a camera does not belong on the card.
+
+The plan document may be long and argued. The card may not. When they conflict, cut the card.
+
 ## Rules that do not bend
 
 - Every shot on the list is achievable with two bodies, two lenses, a tripod, and no gimbal.
