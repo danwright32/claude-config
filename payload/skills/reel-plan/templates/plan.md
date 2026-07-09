@@ -10,7 +10,9 @@ One sentence, naming what changes. If it describes a montage, it is not finished
 
 > {The spine.}
 
-**The subject is:** {performers / the audience / one person / the room}
+**The subject is:** {the performers / one performer / the ensemble} — whoever the client is paying for. Never the audience.
+
+**The evidence is:** {the reaction that proves it worked}
 
 ### Structure
 
