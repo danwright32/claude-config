@@ -1,130 +1,107 @@
-# {EVENT} field card
+# {EVENT}
 
-{venue}. Doors {time}. Show {time}. {contact name and number, if known.}
+{Venue}. Doors {time}. Show {time}. {Name}, {phone}.
 
----
-
-## SETTINGS
-
-**{8K}** | **{30}p** | **{H.265}** | **{1/60}** | **WB LOCKED** | **ISO LOCKED**
-
-{Second body: 4K.}
-
-Test for LED banding before the house opens.
+**8K · 30p · H.265 · 1/60 · WB LOCK · ISO LOCK**
+{Second body 4K. Levels manual.}
 
 ---
 
-## STILLS COME FIRST
+## STILLS FIRST. VIDEO SECOND.
 
-You are paid for the photographs. Video is second, always.
+**◆ PARKED** = camera rolling by itself. You shoot stills.
+**● IN HAND** = you are holding it.
 
-Shots below are marked:
-
-**HANDS FREE** you are holding the camera
-**PARKED** the camera is rolling by itself on a tripod, railing, or chair arm, and you are shooting stills
-
-Never miss a photograph for a video shot.
+Never miss a photo for a shot.
 
 ---
 
 ## THE STORY
 
-> {one sentence, no jargon}
+**{One sentence. Ten words.}**
 
-**Subject: {the performers, named}** {The audience is the proof.}
-
-**What changes: {the change}**
+Subject: {the cast}. Proof: {the kids' faces}.
 
 ---
 
-## ASK ON ARRIVAL
-{Only if something is genuinely unknown. Name who to ask.}
+## ASK {NAME} ON ARRIVAL
 
 - {question}
 - {question}
-
----
-
-## SHOOT THESE NO MATTER WHAT
-Cannot be made later. Twenty minutes.
-
-- [ ] {Empty performance area, lit, before anyone arrives.} WIDE. HANDS FREE
-- [ ] {Doors opening, the room filling.} WIDE and TIGHT. HANDS FREE
-- [ ] {A performer waiting, before they are a performer.} TIGHT. HANDS FREE
-- [ ] {The silence after the last note. Keep rolling.} PARKED
-- [ ] {Bow and applause.} PARKED, because your hands are on stills
-- [ ] {The audience leaving.} WIDE. HANDS FREE. Thirty seconds, then go home
-
----
-
-## SYNC
-
-**{ALLOWED / NOT ALLOWED}**
-
-{If allowed: mouths may sing, lines may land. Protect the audio.}
-{If not allowed: no visible mouths, no visible bows, no punchlines. Cutaways and slow motion only.}
 
 ---
 
 ## BANK THESE FIRST
 
-- [ ] {S1, written out in plain words} {SIZE}. {HANDS FREE / PARKED}
-- [ ] {S2} {SIZE}. {HANDS FREE / PARKED}
-- [ ] {S3} {SIZE}. {HANDS FREE / PARKED}
+- [ ] ● {shot} · {SIZE}
+- [ ] ● {shot} · {SIZE}
+- [ ] ◆ {shot} · {SIZE}
 
-**Nothing ambitious until these are in.**
-
----
-
-## THEN, IF THERE IS TIME
-
-- [ ] {A1, naming the person, not "his face"} {SIZE}. {HANDS FREE / PARKED}
-- [ ] {A2} {SIZE}. {HANDS FREE / PARKED}
+**Nothing else until these are in.**
 
 ---
 
-## VERTICAL SAFE
-Subject in the middle third. Tight on one person.
+## CANNOT BE MADE LATER
 
-- [ ] {V1} {HANDS FREE / PARKED}
-- [ ] {V2} {HANDS FREE / PARKED}
-- [ ] {V3} {HANDS FREE / PARKED}
-
----
-
-## CUTAWAYS
-Get more. Then get more.
-
-- [ ] {list, each with a size}
+- [ ] ● Empty room, lit · WIDE
+- [ ] ● Doors, room filling · WIDE + TIGHT
+- [ ] ● {Performer waiting} · TIGHT
+- [ ] ◆ Silence after last note. Keep rolling.
+- [ ] ◆ Bow, applause
+- [ ] ● Audience leaving · WIDE · 30 sec, then go
 
 ---
 
-## SHOT SIZES
+## IF THERE IS TIME
 
-**WIDE** where are we
-**MEDIUM** who is doing what
-**TIGHT** what it feels like
+- [ ] ● {shot, person named} · {SIZE}
+- [ ] ● {shot} · {SIZE}
 
-Any cut needs a full step of size, or a real change of angle.
+---
 
-You are short of tights. You always are.
+## VERTICAL
+Subject centered. One person.
+
+- [ ] {shot}
+- [ ] {shot}
+
+---
+
+## CUTAWAYS · get 3x more
+
+- [ ] {shot} · {SIZE}
+- [ ] {shot} · {SIZE}
+- [ ] {shot} · {SIZE}
 
 ---
 
 ## DO NOT MISS
 
-# {the one moment, described in plain words, no jargon}
+# {The moment, in plain words}
 
-{When, only if actually known. Otherwise: "Nobody has told you when. Ask {name} on arrival." Never invent a time.}
+{Known time, or: "Ask {name}." Never guess.}
 
 ---
 
-## REMINDERS
+## {VENUE HAZARD, if any}
 
-- Six seconds minimum. Roll before, roll after.
-- Never reframe while rolling. Stop, reframe, roll.
-- Never cut a size to itself. Change size or angle.
-- Do not stop rolling at the last note. The silence is the shot.
-- Long lens needs a brace. Stay 70 to 135 handheld.
-- Never cut inside a gesture. Let it finish.
-- {event specific reminder}
+- [ ] {check}
+- [ ] {check}
+
+---
+
+## SYNC {ALLOWED / NO}
+
+{Mouths may sing. Protect audio.}
+{or: No mouths, no bows. Cutaways and slow-mo only.}
+
+---
+
+## RULES
+
+Roll 6 sec before and after.
+Reframe? Stop, reframe, roll.
+Cut needs a full size step.
+70-135 handheld. Brace it.
+Never cut inside a gesture.
+Kids can't be directed. Hold. Wait.
