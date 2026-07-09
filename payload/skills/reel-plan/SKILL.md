@@ -49,7 +49,7 @@ Ask in this order. The early answers reorganize the later ones.
 **5. Audio.** Read `references/rig-and-audio.md`. Establish three separate things, in order:
 - What sound does the event make: music, speech, laughter, movement, silence.
 - What can he actually capture: camera microphone, his own recorder in the room, a board feed, a clean recording supplied afterward by the client.
-- **Can he legally post it.** This question is asked before the shoot, never after. See the rights section.
+- **Whether the music is live or played back.** Playback means the room's audio cannot carry sync, and the shot list changes.
 
 **6. Playback.** Will recorded music play over the house speakers rather than being performed live? If so the room's audio is unusable, you are in audio tier D, sync is gone, and the shot list needs far more coverage, cutaways, and slow motion. This is a capture question only.
 
