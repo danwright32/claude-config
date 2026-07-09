@@ -49,6 +49,7 @@ Three things protect you.
 
 - **Use a slower shutter.** A slow shutter averages across many switching cycles and smooths the banding out. This is one more reason to hold the 180 degree rule instead of reaching for a fast shutter.
 - **Be suspicious of slow motion under LED wash.** Typical stage and rental LED fixtures switch somewhere around 2,000 to 4,000 times a second, which is barely enough at normal frame rates and frequently not enough at 60 frames per second or above. Dimmed fixtures are worse, because the switching pulses get very short. If you plan a slow motion shot, plan it under tungsten, daylight, or a fixture you have tested.
+- **Use the camera's flicker tools.** The Z8 has high frequency flicker reduction with shutter fine tuning and selectable frequency presets. See `references/gear-nikon-z8.md`, including the honest caveat about whether the fine tuning is offered while recording video.
 - **Test before the house opens.** Point the camera at the lit stage during setup, at the frame rate and shutter you intend to use, and look at the back of the camera. Thirty seconds of testing beats discovering it in the edit.
 
 If you see banding and cannot change the light, change the shutter first, then the frame rate. Do not change the aperture and hope.
