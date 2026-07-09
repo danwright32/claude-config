@@ -64,7 +64,9 @@ A note that applies to all of them: **the highest engagement material in perform
 
 **Where the story lives.** In the theatre, in the transition from speech into song. **On a muted screen, nowhere**, because a person talking and a person singing look the same. This is the trap of the form, and it catches everyone.
 
-Do not build a reel around the moment speech becomes song. It is inaudible to most viewers and invisible to all of them. What you build around is whatever **moves** when the song starts: bodies changing shape, the company arriving together, the room reacting. The song is the cause. Find the visible effect and shoot that.
+Do not build a **vertical** cut around the moment speech becomes song. It is inaudible to most viewers there and invisible to all of them. Build it around whatever **moves** when the song starts: bodies changing shape, the company arriving together, the room reacting. The song is the cause. Find the visible effect and shoot that.
+
+In the horizontal master, watched with sound, the transition is fair game and it is beautiful.
 
 **Must not miss.** The first bar of the opening number, when four people who were standing still start moving as one. The held pose at the end of a big number, arms up, before the applause. A face in the audience during a quiet song.
 
