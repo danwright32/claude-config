@@ -10,7 +10,11 @@ A caveat on the evidence: most of what follows comes from social media marketing
 
 **1. The archival master.** Horizontal, two to three minutes, for the client's website and YouTube. Watched deliberately, with sound, by people who already care. This is the thing that feels like the deliverable, and it is the least contested part of the plan.
 
-**2. The hero cut.** Vertical, **fifteen to thirty seconds.** This is the lead social asset and the one that actually travels. Reels under fifteen seconds get meaningfully more replays than reels over sixty, and completion rate, not length, is what the platform rewards. A twenty second piece finished by seventy percent of viewers beats a ninety second piece finished by twenty five percent.
+**2. The hero cut.** Vertical, **ten to twenty five seconds.** This is the lead social asset and the one that actually travels.
+
+The governing rule is not the number. **The hero cut runs exactly as long as the payoff needs, and not one beat longer.** The range is a sanity check on that judgement, not a target to hit.
+
+Short reels get meaningfully more replays than long ones, and completion rate rather than length is what the platform rewards: a twenty second piece finished by seventy percent of viewers beats a ninety second piece finished by twenty five percent. But that data comes from generic social content, where the payoff is a punchline or a reveal that lands instantly. **In performing arts the payoff is usually a musical or emotional phrase, and phrases need room to breathe.** A held final chord, a face opening, a laugh cresting. Clipping any of those to chase a statistic optimizes for the wrong thing. Ten seconds is right when the payoff is a single visual beat. It is wrong when the payoff is a phrase.
 
 **3. The story piece.** Vertical, sixty to ninety seconds, when there is a genuine arc worth that long. Expect lower completion. Make it because the story deserves it, not because it is the default.
 
