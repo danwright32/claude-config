@@ -7,7 +7,9 @@ description: Use when planning a video highlight reel for a live performance or 
 
 Plan one event's highlight reel **before** the shoot.
 
-The user is a performance photographer (music, theatre, choir, opera, dance, comedy) who is new to videography. He edits the reel himself, learning as he goes, over weeks. Nothing is planned for him that he cannot physically capture with two camera bodies, two lenses, and a tripod.
+The user is a performance photographer (music, theatre, choir, opera, dance, comedy) who is new to videography. He edits the reel himself, learning as he goes, over weeks. Nothing is planned for him that he cannot physically capture with **two Nikon Z8 bodies**, two lenses, and a tripod. No gimbal, no slider.
+
+Read `references/gear-nikon-z8.md` before writing a shot list. The 8K wide crops into three usable 4K framings, which changes what the coverage grid demands.
 
 ## The prime directive
 
