@@ -99,16 +99,18 @@ In both modes, both bodies are photographing. What follows is where the 24-70 go
 
 ---
 
-## The 8K wide is three cameras
+## The parked 8K frame is three cameras
 
-This is the most important consequence, and it changes the rig doctrine.
+This is the most important consequence, and it is what a window buys.
 
-Shoot the locked off safety wide in 8K. In the edit, crop a wide, a medium, and a tight out of that single continuous take, each still delivering a full 4K image. One tripod, one body, three usable framings of every moment, all perfectly in sync because they are literally the same frame.
+Shoot the parked frame in 8K. In the edit, crop a wide, a medium, and a tight out of that single continuous take, each still delivering a full 4K image. One body, three usable framings of every moment inside the window, all perfectly in sync because they are literally the same frame.
+
+It applies **for the minutes the window is open**, and not one second longer. There is no whole show version of this.
 
 What this buys:
 
-- **Every beat gets wide, medium, and tight coverage from the safety camera alone.** The coverage grid stops being a race.
-- **Roaming mode gets less punishing.** Park a body in 8K on the one number that matters, and it still yields three angles.
+- **Every beat inside the window gets wide, medium, and tight coverage from one body.** For those minutes, the coverage grid stops being a race.
+- **The window is worth its cost.** Five minutes of one lens buys three synchronised angles of the moment the reel is built around.
 - **Reframing is free.** A slightly wrong composition is fixable, once, in post.
 
 What it does not buy:
