@@ -29,9 +29,19 @@ So the tight shots come from the fixed camera, pre stabilized because it is bolt
 
 A Z8 cannot record video and shoot stills at the same time. Since Dan is hired to photograph the event, at the moments that matter most his hands are on stills, and the video has to come from somewhere else.
 
-**The second body, rolling unattended.** On the tripod when one is allowed. Otherwise on a railing, a chair arm, a windowsill, a stack of programs, a speaker cabinet. Frame it wide, lock everything, start it rolling, walk away.
+**The second body, rolling unattended.** Frame it wide, lock everything, start it rolling, walk away.
 
 This is not a compromise. It is how the bow, the curtain call, and the applause get shot at all, because those are precisely the moments he is being paid to photograph. Plan the parked camera's position before doors, and plan what it is pointed at.
+
+**Bring the tripod to roaming venues too, wherever one is permitted.** He used to leave it behind when he could move, reasoning that it cost him a body. That reasoning died with the stills first rule: his hands are on stills at the bow regardless, so a body has to be parked anyway. Set the tripod before doors, use it when his hands are full, roam the rest of the time.
+
+**When tripods are banned**, and they are in some halls and lobbies, furniture is the fallback. A railing, a chair arm, a windowsill, a stack of programs, a speaker cabinet. Then say so on the plan, and name three things:
+
+1. **Which surface**, chosen before doors, pointed at the performance area.
+2. **Who will sit in front of it.** Pick a position nobody walks past.
+3. **That it cannot be reframed** once the room fills. Frame wider than feels right.
+
+An unsecured camera on furniture can be knocked, blocked, or taken. That is the cost of a venue that bans tripods, and it is worth paying, because a parked wide is the only way the bow exists on video at all.
 
 A parked 8K wide also crops into three framings, so an unattended camera in the right place is worth more than a handheld one in the wrong place.
 
