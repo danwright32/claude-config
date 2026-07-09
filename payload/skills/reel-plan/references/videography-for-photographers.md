@@ -78,6 +78,12 @@ Cutaways solve every editing problem you will have. They cover a jump cut. They 
 
 Shoot three times as many as you think you need. You will still run out. Get them during applause, during pauses, before the show, after the show, during anything that is not the moment you must not miss.
 
+**One cutaway that is not a cutaway, and it is the most repeated mistake in music video work.** A tight shot of a specific note being fingered, a specific chord being struck, a specific bow stroke, is useless as filler. You cannot lay it over a different moment, because the viewer hears one note and watches a different one being played, and everybody notices. Shoot hands doing something unspecific: waiting, turning a page, resting on the keys, lifting away. Those cut anywhere. A recognizable note does not.
+
+Two more, from concert directors. **Do not linger on the wrong performer**, holding on a face while somebody else is singing. And **do not cut too often.** Switching angles rapidly, and giving every shot the same length, reads as mechanical. Cut on the phrasing, not on the beat.
+
+**Never cut inside a gesture.** A cut placed in the middle of a movement, or in the middle of a spoken beat, jars every time. Wait for the gesture to complete.
+
 ## 8. Handheld has a focal length limit
 
 Braced properly, elbows in, two hands, breathing out, a wide lens handheld is fine. Past about 50mm, handheld footage shakes in a way that is visible and irreparable, and the longer the lens the worse it is exponentially.
