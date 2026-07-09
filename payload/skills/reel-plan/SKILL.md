@@ -61,17 +61,13 @@ Ask in this order. The early answers reorganize the later ones.
 
 One sentence, and it must name **what changes.** Not "a highlight reel of the concert," which describes a montage. Something like: "Four actors talk a lobby full of restless toddlers into believing a soccer field is the Aegean, and you watch the room go still."
 
-Then answer the five questions at the end of that file, in writing, on the plan:
+**Structure is a separate decision, and it is chosen, not inherited.** Bookend, in medias res, the single moment, portrait, reverse, parallel, question and answer, accumulation. Argue for one from the facts of this event. Then check it against the previous plans and **do not reuse the last plan's structure or its opening device.** If the last three reels opened on an empty stage, this one does not, whatever its structure. Name the previous structures on the plan so the choice is visibly deliberate.
 
-- What changes?
-- What is the first shot, and does it happen before the performance begins?
-- What is the last shot, and does it happen after the performance ends?
-- Which beat carries the turn?
-- Does every beat have a wide, a medium, and a tight?
+Story is mandatory. Structure is a choice. A skill that always produces the same shape produces a portfolio of one reel.
 
-If those cannot be answered, stop and fix the spine. A plan that fails this test is a shot list for a montage, and no amount of good footage will rescue it in the edit.
+Answer the test at the end of that file, in writing, on the plan. If it cannot be answered, stop and fix the spine.
 
-**The beginning is not on stage and it does not happen during the show.** The empty lit room, the doors, a performer waiting. The end is not the last note either: it is the bow, the applause, the room emptying. Both are mandatory, both cost twenty minutes, and neither can be manufactured afterward.
+**Whatever structure is chosen, the raw material for a beginning and an end must still be shot.** The empty lit room, the doors, a performer waiting, the silence after the last note, the bow, the room emptying. Shoot all of it every time, even when the chosen structure will not use it. It costs twenty minutes and it cannot be manufactured afterward. What gets used is a later decision. What exists is decided on the day.
 
 **Grammar.** Pick from `references/edit-grammars.md`. Driven by music, by speech, by movement, or hybrid. This determines what a cut lands on, and therefore what coverage is mandatory.
 
