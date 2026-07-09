@@ -68,7 +68,7 @@ To cut cleanly between two shots of the same subject, change **either the size o
 
 This has a consequence that governs the entire shot list. **For any moment you want to appear in the reel, you need either two cameras on it, or two genuinely different framings of it captured at different times.** A single continuous performance shot from a single position gives you exactly one usable piece of that moment, and it must run uncut for as long as you want to use it.
 
-This is why the locked off wide, rolling continuously on a tripod, is worth more than any other shot you can get. It is the angle you can always cut back to.
+This is why a locked off camera, rolling untouched, is worth more than any other shot you can get. It is the angle you can always cut back to. It is also why the parked window exists, and why choosing where to spend it decides what the reel can be.
 
 ## 7. Cutaways are the currency
 
