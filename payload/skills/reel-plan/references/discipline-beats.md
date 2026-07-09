@@ -82,7 +82,7 @@ The other failure is missing the transition into song. It is the shot the form e
 
 **Must not miss.** The laugh, and specifically the audience during the laugh. Faces mid laugh, someone hitting a friend's arm, a person doubled over. The performer waiting out the laugh, which is the shot that proves it landed.
 
-**Peak.** The biggest laugh of the set. You cannot know it in advance, which means you must be rolling continuously and shooting far more than you use.
+**Peak.** The biggest laugh of the set, and you cannot know it in advance. This is the hardest discipline to plan, because the moment worth having is unpredictable and you are photographing. Spend the parked window on the stretch of the set the comedian says is strongest, park it wide enough to hold both the stage and the front rows, and accept that the best laugh may land outside it.
 
 **What goes wrong.** Cutting the laugh short to save time. Never. The laugh is the payoff and it must be allowed to run. Also: intelligible dialogue is the whole game here, so proximity matters more than composition.
 
