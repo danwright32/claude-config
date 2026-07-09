@@ -222,6 +222,8 @@ The card is read in a dark or crowded room, on a phone, with a camera in the oth
 
 **No preamble.** No line telling him how to read the card. He knows.
 
+**No compression that costs meaning.** "Get 3x more" is not shorter than "you will not have enough, take more," it is merely less legible. "Sync is legal" is skill vocabulary. Write the sentence out. The card is short because it omits whole ideas, never because it squeezes them.
+
 **Each shot names its framing size.** Wide, medium, or tight, on the shot itself, not in a reminder box at the bottom. Keep a short reminder box too, but the sizes belong on the shots.
 
 ### The card is ordered by the clock, not by category
