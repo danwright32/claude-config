@@ -120,4 +120,4 @@ A show for very young children is an experiment in whether four adults can convi
 
 **Peak.** Whenever the room breaks: laughing, shouting back, standing up.
 
-**What goes wrong.** Consent. Identifiable children in footage you use to market your own business is commercial use of a minor's likeness, and it requires a guardian's release. Plan for it: shoot the audience from behind, hands, silhouettes, backs of heads with the stage sharp beyond them, a wide where no face reads. Give the client the version with the faces. Keep the unidentifiable version for yourself.
+**What goes wrong.** Shooting the stage. The performers are doing their job and it is not interesting on its own; the interest is entirely in whether it worked. Point one camera at the room and keep it there. Also: children move unpredictably and cannot be directed, so hold shots longer than feels comfortable and let the moment arrive rather than chasing it.
