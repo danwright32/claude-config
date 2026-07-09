@@ -53,9 +53,17 @@ The rehearsal has no audience, which means it cannot give you the thing that is 
 
 Establish which tier you are in **before** planning shots, because the tier decides whether you are allowed to show a face making a sound.
 
-## Tier A. A recording of this performance
+**The tiers answer one question and one only: is this sound a recording of the performance you filmed?** That decides whether a mouth may be seen making it. How *good* the sound is, is a separate axis, and it lives inside Tier A. An earlier version of this file cut the tiers by capture device, which put camera audio in two tiers at once and made an amplified live show unclassifiable.
+
+## Tier A. A recording of this performance. Sync is legal.
 
 Your camera's audio, your own recorder placed in the room, or the venue's board feed. **Only these can carry sync.** Only in this tier may you show a mouth singing, a bow drawing, a punchline landing.
+
+Every source here is sync legal. They differ in quality, not in permission, and they rank like this.
+
+**Best, usually: your own recorder.** See below.
+**Best at an amplified event: the board feed.** See below.
+**Always available, and the floor: the camera's own microphone.** Fine for music in a decent room. Fine anywhere for texture: applause, laughter, a rustling audience, a hall going quiet. **Rarely usable for dialogue from a house seat**, because reverberation destroys consonants while leaving music intact. If a line must be heard, get close or cut the line. Note that "the camera mic is the only thing I have" restricts your *quality*, never your *permission*. Sync is still legal. Keep camera audio rolling on every body regardless, as a scratch track, because waveform sync needs something to match against.
 
 **Your own recorder is the classical standard, and the board feed usually is not.** This is the opposite of what instinct suggests. If an instrument is not going through a microphone, it does not exist on the mixing desk, and an unamplified choir or orchestra is almost entirely not going through a microphone. A house mix is balanced for the room, skewed toward whatever is reinforced, and heavy on vocals. Ask for a board feed at an **amplified** event, where it is the cleanest source available. At an unamplified classical concert it will give you very little.
 
