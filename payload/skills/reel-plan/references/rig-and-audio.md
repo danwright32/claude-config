@@ -74,6 +74,16 @@ Sounds like the best of all worlds and is a trap. It is a different take at a di
 
 ## Tier D. A licensed library track
 
-Same sync constraint as tier C, and no rights problem. Choose it before the shoot so you can plan the cut against its build. Instrumental. Cleared for commercial use. Matched to the event's dignity.
+Same sync constraint as tier C. Choose it before the shoot so you can plan the cut against its build. Instrumental. Matched to the event's dignity.
 
 Most reels are a blend: a licensed bed carrying the montage, punctured by two or three pockets of tier A sync sound where a line, a laugh, or a final chord lands.
+
+---
+
+## The question that changes the shot list
+
+**Will recorded music play over the house speakers?** Dance and movement work usually run to playback rather than to live musicians.
+
+If yes, treat the room's audio as unusable and plan a silent cut against a licensed bed. That drops you into tier D, which means **you lose sync entirely**, which means no visible mouths, no visible bows, no punchlines. The shot list has to compensate with far more coverage, far more cutaway material, and far more slow motion than a live-sound event needs.
+
+Ask this before the shoot. It is a capture decision, and finding out on the day costs you the reel.
