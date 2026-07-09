@@ -22,11 +22,12 @@ Multiple passes (a second performance, a dress rehearsal, a soundcheck) are a bo
 
 ## Process
 
-1. Run the interview. Ask questions one at a time as pickers where the answer is a choice.
-2. Read the reference files that apply. Do not read all of them.
-3. Write the plan to `<project>/plans/<event-slug>.md` using `templates/plan.md`.
-4. Write the field card to `<project>/plans/<event-slug>-card.md` using `templates/field-card.md`.
-5. After the shoot, run the debrief with `templates/debrief.md` and save it beside the plan.
+1. **Read the previous plans** in `<project>/plans/`. Note the structure and the opening device of each. This is not optional, and it happens before the interview.
+2. Run the interview. Ask questions one at a time as pickers where the answer is a choice.
+3. Read the reference files that apply. Do not read all of them.
+4. Write the plan to `<project>/plans/<event-slug>.md` using `templates/plan.md`.
+5. Write the field card to `<project>/plans/<event-slug>-card.md` using `templates/field-card.md`.
+6. After the shoot, run the debrief with `templates/debrief.md` and save it beside the plan.
 
 ## The interview
 
