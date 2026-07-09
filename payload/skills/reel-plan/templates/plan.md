@@ -133,4 +133,3 @@ The same structure, compressed. Silent first: burned in text carries the meaning
 
 - [ ] {gear}
 - [ ] Arrive {N} minutes early for the empty room
-- [ ] Written clearances in hand or explicitly waived
