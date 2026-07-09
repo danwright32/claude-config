@@ -37,7 +37,7 @@ Then present the full framing (roles + criteria + scope + what you learned in th
 Call the **Workflow** tool with:
 
     {
-      scriptPath: "/Users/danhankins-wright/.claude/skills/plan-council/panel.workflow.js",
+      scriptPath: "/Users/danielhankins-wright/.claude/skills/plan-council/panel.workflow.js",
       args: {
         feature: "<the feature>",
         constraints: "<hard constraints>",
