@@ -130,9 +130,13 @@ Establish which tier you are in **before** planning shots, because the tier deci
 
 Your camera's audio, your own recorder placed in the room, or the venue's board feed. **Only these can carry sync.** Only in this tier may you show a mouth singing, a bow drawing, a punchline landing.
 
-If you place your own recorder: a small stereo recorder in front of the ensemble, above the heads of the back row and a few metres out, gets you far more than a camera microphone will. Err toward too close rather than too far, because you can add reverb later and you can never remove it. Remember that a separate recorder's clock drifts against the camera's, so align the waveforms at the moment you are using, not at the head of the file.
+**Your own recorder is the classical standard, and the board feed usually is not.** This is the opposite of what instinct suggests. If an instrument is not going through a microphone, it does not exist on the mixing desk, and an unamplified choir or orchestra is almost entirely not going through a microphone. A house mix is balanced for the room, skewed toward whatever is reinforced, and heavy on vocals. Ask for a board feed at an **amplified** event, where it is the cleanest source available. At an unamplified classical concert it will give you very little.
 
-A board feed is often mono and mixed for the room rather than for a recording, which is not the same as mixed for you. Ask early, take it, and treat it as one ingredient rather than the answer.
+So place your own recorder. A small stereo recorder, roughly three to four feet from the ensemble and above the heads of the back row, widening as the group grows and the room gets more reverberant. The standard technique is ORTF: two cardioids at 110 degrees, 17 centimetres apart, which gives a natural wide image while rejecting excess room. A Zoom H4n or H5, or a Tascam of that class, recording uncompressed, is genuinely adequate for a highlight reel. It is not an album master and does not need to be.
+
+Err toward too close rather than too far. You can add reverb later. You can never remove it.
+
+Two practical notes. A separate recorder's clock drifts against the camera's, so align the waveforms at the moment you are using, not at the head of the file. And keep camera audio rolling on every body as a scratch track, because waveform sync needs something to match against. A sharp clap at the top of a piece gives the algorithm a spike to find.
 
 ## Tier B. Camera audio only
 
