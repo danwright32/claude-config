@@ -20,16 +20,16 @@ Test for LED banding before the house opens.
 
 **What changes: {the change}**
 
+**Structure: {chosen structure}**
+
 ---
 
-## THE BEGINNING IS BEFORE THE SHOW
+## SHOOT THESE NO MATTER WHAT
+Cannot be made later.
 
 - [ ] Empty stage, lit
 - [ ] {arrival, doors, waiting}
-
-## THE END IS AFTER THE LAST NOTE
-
-- [ ] The silence. Keep rolling.
+- [ ] The silence after the last note. Keep rolling.
 - [ ] Bow, applause, faces
 - [ ] Empty stage again
 
