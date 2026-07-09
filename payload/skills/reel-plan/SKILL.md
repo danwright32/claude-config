@@ -24,6 +24,12 @@ Multiple passes (a second performance, a dress rehearsal, a soundcheck) are a bo
 
 ## Process
 
+0. **Check that the shoot has not already happened.** This skill plans before a shoot. Everything it produces is advice about spending a moment that has not been spent yet, and none of it is actionable against footage already on a card.
+
+   Before anything else, look at the event date (usually encoded in the project folder name) and at `<project>/RAW/`. If the date has passed, or `RAW/` already contains video or stills, **stop and say so.** Do not run the interview. Offer the debrief in step 6 instead, or, if the user confirms a genuine second pass is still ahead, continue with that stated explicitly.
+
+   The user may deliberately choose to plan a past event as an exercise. That is fine, but it must be their explicit choice, not an oversight you failed to notice.
+
 1. **Read the previous plans** in `<project>/plans/`. Note the structure and the opening device of each. This is not optional, and it happens before the interview.
 2. Run the interview. Ask questions one at a time as pickers where the answer is a choice.
 3. Read the reference files that apply. Do not read all of them.
