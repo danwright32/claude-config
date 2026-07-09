@@ -68,7 +68,9 @@ A note that applies to all of them: **the highest engagement material in perform
 
 **Peak.** The eleven o'clock number, or in a short piece, the last song.
 
-**What goes wrong.** Treating the whole show as one grammar. A musical cut entirely to music loses every joke; cut entirely to dialogue it never lifts. Mark the blocks in advance and switch grammar with them. The other failure is missing the transition into song, which is the shot the form exists for and which nobody expects, so nobody is rolling.
+**What goes wrong.** Treating the whole show as one grammar. A musical cut entirely to music loses every joke; cut entirely to dialogue it never lifts. Mark the blocks in advance and switch grammar with them.
+
+The other failure is missing the transition into song. It is the shot the form exists for, and it arrives without warning: the dialogue is running, and then a line turns into a phrase. **You will not be rolling when it happens** unless you roll from the top of every block of dialogue and accept that most of that footage is waste. The audience knows a song is coming. You do not know which line it starts on.
 
 ---
 
