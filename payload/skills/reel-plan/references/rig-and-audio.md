@@ -95,6 +95,8 @@ Most reels are a blend: a licensed bed carrying the montage, punctured by two or
 
 **Will recorded music play over the house speakers?** Dance and movement work usually run to playback rather than to live musicians.
 
-If yes, treat the room's audio as unusable and plan a silent cut against a licensed bed. That drops you into tier D, which means **you lose sync entirely**, which means no visible mouths, no visible bows, no punchlines. The shot list has to compensate with far more coverage, far more cutaway material, and far more slow motion than a live-sound event needs.
+If yes, treat the room's audio as unusable and plan a silent cut against a licensed bed. That drops you into Tier B, which means **you lose sync entirely**, which means no visible mouths, no visible bows, no punchlines. The shot list has to compensate with far more coverage, far more cutaway material, and far more slow motion than a live-sound event needs.
+
+Note what this question is not. **Amplified is not playback.** A cast singing live through a sound system is Tier A: the sound was made in the room you filmed, at the moment you filmed it, and the loudspeaker only made it louder. Lip syncing to a recorded track is Tier B. Ask which one is happening, in those words, because "is it live" gets answered "yes" either way.
 
 Ask this before the shoot. It is a capture decision, and finding out on the day costs you the reel.
