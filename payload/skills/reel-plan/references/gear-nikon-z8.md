@@ -12,15 +12,22 @@ In photography you shoot the 70-200 at its long end around 1/500 and never think
 
 Handheld, at 200mm, at 1/50, in a dark hall, the shake is severe and unfixable. It looks nothing like a slightly soft photograph. Stabilization helps. It does not save you.
 
-Three responses, in order of cost:
+Two responses, and no monopod (his decision, July 2026, and it turns out to be the right one):
 
 1. **Brace, always.** Seat back, knee, railing, wall, elbow on a thigh. Exhale before rolling.
 2. **Stay between 70 and 135 when genuinely handheld.** Save 200mm for moments you can plant.
-3. **Buy a monopod.** Under a hundred dollars, needs no floor space, permitted where tripods often are not. It is the single highest value purchase available, well ahead of a gimbal, because it converts the 70-200 from decorative to usable at 1/50.
+
+## Reach comes from the sensor, not the lens
+
+This is the answer to the long lens problem, and it makes the monopod unnecessary.
+
+The locked wide is a 24-70 shooting 8K. **Crop that frame to 4K and the effective focal length doubles.** A 70mm lens on the tripod yields a tight shot framed like 140mm. Crop to a 1080 vertical and it is framed like 280mm.
+
+So the tight shots come from the fixed camera, pre stabilized because it is bolted down, at no cost in resolution. The 70-200 in hand exists for **angles the fixed wide cannot give you**, not for reach.
 
 ## Lens assignment
 
-**Pinned.** The **24-70 goes on the tripod** as the locked 8K wide, which crops into wide, medium, and tight anyway. The **70-200 stays in hand** for real tight shots from the seat, braced.
+**Pinned.** The **24-70 goes on the tripod** as the locked 8K safety shot, which crops into wide, medium, and tight. The **70-200 stays in hand**, braced, between 70 and 135, for a second angle on the moments that deserve one.
 
 **Roaming.** 24-70 on one body, 70-200 on the other, both on you. Heavy, and the long lens is the one that will disappoint you. Consider parking the 24-70 in 8K on the tripod for the single most important number and collecting it afterward.
 
