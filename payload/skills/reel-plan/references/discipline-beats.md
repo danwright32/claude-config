@@ -74,7 +74,7 @@ A note that applies to all of them: **the highest engagement material in perform
 
 ## Comedy
 
-**Where the story lives.** In the room, not on the stage. A joke without a laugh is a person talking.
+**Where the story lives.** On the stage, and it is proven in the room. A joke without a laugh is a person talking, so you need the room. But the comedian is the subject, because the comedian is the client. The laugh is how you show the joke landed.
 
 **Must not miss.** The laugh, and specifically the audience during the laugh. Faces mid laugh, someone hitting a friend's arm, a person doubled over. The performer waiting out the laugh, which is the shot that proves it landed.
 
