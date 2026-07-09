@@ -11,9 +11,19 @@ The user is a performance photographer (music, theatre, choir, opera, dance, com
 
 Read `references/gear-nikon-z8.md` before writing a shot list. The 8K wide crops into three usable 4K framings, which changes what the coverage grid demands.
 
-## The prime directive
+## The prime directive: stills come first
 
-**Assume one pass, forever.** A live performance happens once. Every ambitious shot spends a moment that cannot be recovered, and it spends the safe coverage of that moment too, because the camera was busy being clever.
+**He is hired to photograph the event. Video is always second.** He is paid for the stills, the client expects the stills, and no reel is worth a missed photograph. This is not a preference, it is the job.
+
+The consequence governs every shot list. **At the moments that matter most, his hands are full.** The bow, the curtain call, the peak of the big number, the moment a child's face opens: those are exactly when he must be shooting stills, and exactly when the reel most wants video.
+
+So any video that must exist at a stills moment comes from **a camera that is not in his hands.** A Z8 cannot record video and shoot stills at once, so the answer is always the second body, rolling unattended: on the tripod, or set on a railing, a chair arm, a windowsill, a stack of programs. Frame it wide, start it rolling, walk away, shoot stills.
+
+When writing the plan, mark every shot as **hands free** (he is holding the camera) or **unattended** (the camera is parked and rolling while he photographs). Any must get shot that collides with a stills obligation is unattended, or it does not happen. Do not plan a handheld video shot during the bow. He will not take it, and he should not.
+
+## Also: assume one pass, forever
+
+A live performance happens once. Every ambitious shot spends a moment that cannot be recovered, and it spends the safe coverage of that moment too, because the camera was busy being clever.
 
 So the shot list is always split in two:
 
