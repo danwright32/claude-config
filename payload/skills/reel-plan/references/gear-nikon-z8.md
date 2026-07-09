@@ -1,8 +1,28 @@
-# The gear: two Nikon Z8 bodies
+# The gear: two Nikon Z8 bodies, 24-70 and 70-200
 
-Verified July 2026. Two identical bodies, two lenses, a tripod, no gimbal.
+Verified July 2026. Two identical bodies, a 24-70 and a 70-200, a tripod. No gimbal, no monopod.
 
 Two identical bodies is worth stating plainly: the color matches, so footage from both cuts together without grading them into agreement. Most people shooting two cameras do not have this.
+
+---
+
+## The long lens problem, which stills never taught you
+
+In photography you shoot the 70-200 at its long end around 1/500 and never think about it. In video the shutter is nailed near 1/50 by the 180 degree rule. **Your longest lens is now locked to your slowest shutter**, roughly four stops below what the old reciprocal rule demands at 200mm.
+
+Handheld, at 200mm, at 1/50, in a dark hall, the shake is severe and unfixable. It looks nothing like a slightly soft photograph. Stabilization helps. It does not save you.
+
+Three responses, in order of cost:
+
+1. **Brace, always.** Seat back, knee, railing, wall, elbow on a thigh. Exhale before rolling.
+2. **Stay between 70 and 135 when genuinely handheld.** Save 200mm for moments you can plant.
+3. **Buy a monopod.** Under a hundred dollars, needs no floor space, permitted where tripods often are not. It is the single highest value purchase available, well ahead of a gimbal, because it converts the 70-200 from decorative to usable at 1/50.
+
+## Lens assignment
+
+**Pinned.** The **24-70 goes on the tripod** as the locked 8K wide, which crops into wide, medium, and tight anyway. The **70-200 stays in hand** for real tight shots from the seat, braced.
+
+**Roaming.** 24-70 on one body, 70-200 on the other, both on you. Heavy, and the long lens is the one that will disappoint you. Consider parking the 24-70 in 8K on the tripod for the single most important number and collecting it afterward.
 
 ---
 
