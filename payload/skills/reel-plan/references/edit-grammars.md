@@ -18,6 +18,12 @@ Concert, recital, orchestra, choir, opera, chamber ensemble.
 
 **The advance move.** If you know the repertoire, listen to it beforehand. Mark where the peak is, where the quiet is, where the piece resolves. That is your paper edit, handed to you by a composer.
 
+**The trap that ruins this grammar.** A studio recording of the same piece **will not sync to your footage.** It is a different take at a different tempo, so the singers' mouths and the players' bows drift against the sound within seconds and the whole thing looks dubbed. A clean studio track is only usable as a bed laid under material that is not sync critical: cutaways, audience faces, slow motion, hands seen from behind, empty stage. The moment a mouth or a bow is visible and the sound is from a different take, the reel is dead.
+
+Only a recording **of the performance you filmed** can carry sync: your camera audio, your own recorder in the room, or the venue's board feed. Establish which one you have before you plan a single shot, because it decides whether you are allowed to show a face singing.
+
+The professional method, when you do use a supplied track, is the music video method: lay one continuous piece of audio down as the master, and splice picture over it. You never cut the audio. You only cut picture.
+
 **Where reels fail.** Cutting on a visual impulse instead of a musical one. The music tells you when to cut. Obey it.
 
 ---
