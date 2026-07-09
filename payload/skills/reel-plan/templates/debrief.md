@@ -56,7 +56,7 @@ Only if a hero cut or a vertical story piece was planned. Delete otherwise.
 
 - **Chosen:** {} **Did it hold?** {}
 - **Does this reel look like the last one?** Be honest. {}
-- **Structures now used, most recent first:** {list, so the next plan can avoid them}
+- **Structures now used, most recent first:** see `<events-root>/reel-log.md`, which the plan step already appended to. Confirm the entry is there and correct. If the reel ended up with a different structure than the plan chose, **fix the log**, because the log is what the next plan reads.
 
 ---
 
