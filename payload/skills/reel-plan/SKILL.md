@@ -30,12 +30,13 @@ Multiple passes (a second performance, a dress rehearsal, a soundcheck) are a bo
 
    The user may deliberately choose to plan a past event as an exercise. That is fine, but it must be their explicit choice, not an oversight you failed to notice.
 
-1. **Read the previous plans** in `<project>/plans/`. Note the structure and the opening device of each. This is not optional, and it happens before the interview.
+1. **Read the previous plans.** Look in the current working directory, and in `plans/` if one exists. Note the structure and the opening device of each. This is not optional, and it happens before the interview.
 2. Run the interview. Ask questions one at a time as pickers where the answer is a choice.
 3. Read the reference files that apply. Do not read all of them.
-4. Write the plan to `<project>/plans/<event-slug>.md` using `templates/plan.md`.
-5. Write the field card to `<project>/plans/<event-slug>-card.md` using `templates/field-card.md`.
-6. After the shoot, run the debrief with `templates/debrief.md` and save it beside the plan.
+4. **Write the plan and the field card into the current working directory**, as `<event-slug>.md` and `<event-slug>-card.md`. That is where the user is standing, and it is where he expects to find them. Do not invent a subfolder.
+
+   Exception: if a `plans/` folder already exists in the working directory, write there instead, because he has clearly chosen to organize that way.
+5. After the shoot, run the debrief with `templates/debrief.md` and save it beside the plan.
 
 ## The interview
 
