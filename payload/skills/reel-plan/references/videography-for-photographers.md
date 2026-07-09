@@ -91,6 +91,8 @@ Camera microphones are usable for music in a good room, and for ambient texture 
 
 Applause and laughter are not noise. They are the sound of the event working, and they are frequently the best audio you will capture all night.
 
+If you record audio on a separate device rather than into the camera, the two machines have different clocks, and they drift. Sync will look perfect at the start of a forty minute take and be visibly wrong by the end. Line the waveforms up at the moment you actually need, not at the head of the file, and expect to re line them up for each shot you use.
+
 ## 10. Picture profile
 
 If you do not yet know how to color grade, do not shoot in a flat or log profile because a forum told you to. Flat footage that is never graded looks worse than a neutral profile straight out of camera. Shoot a standard or neutral profile, slightly under contrast, and grade lightly later. Add log to your life when you have edited five reels, not before.
