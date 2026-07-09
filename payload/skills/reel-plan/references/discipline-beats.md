@@ -112,12 +112,14 @@ A note that applies to all of them: **the highest engagement material in perform
 
 ## Children's programming, family shows
 
-**Where the story lives.** Not on the stage. On the faces in the first three rows.
+**Where the story lives.** On the stage, and it is proven in the first three rows.
 
-A show for very young children is an experiment in whether four adults can convince a room of toddlers of something impossible. The reel is the record of that experiment succeeding, and the evidence is on the children, not the performers. Shoot the stage for coverage, and shoot the room for the story.
+A show for very young children is an experiment in whether a few adults can convince a room of toddlers of something impossible. **The performers are the subject. The children are the evidence.** Get this backwards and you have made a charming reel about somebody else's children, which the producer cannot use, the presenter will not watch, and no client will book you from.
 
-**Must not miss.** A child's face at the moment of belief. A child copying a gesture from the stage. A parent watching their child rather than the show.
+The sentence the reel says is: *these performers held this room.* The performers do the holding. The faces prove it happened.
 
-**Peak.** Whenever the room breaks: laughing, shouting back, standing up.
+**Must not miss.** A performer working the room, seen from inside the room, with children in the foreground. That single frame carries both halves of the sentence and it is the shot the whole reel is built around. Then: the performer's face committing to something ridiculous, and the moment of belief on a child watching.
+
+**Peak.** Whenever the room breaks: laughing, shouting back, standing up. Cut to the performer causing it, not away from them.
 
 **What goes wrong.** Shooting the stage. The performers are doing their job and it is not interesting on its own; the interest is entirely in whether it worked. Point one camera at the room and keep it there. Also: children move unpredictably and cannot be directed, so hold shots longer than feels comfortable and let the moment arrive rather than chasing it.
