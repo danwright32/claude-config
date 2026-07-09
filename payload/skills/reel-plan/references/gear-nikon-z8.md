@@ -10,7 +10,9 @@ Two identical bodies is worth stating plainly: the color matches, so footage fro
 
 **8K internally, up to 60p. 4K up to 120p, no crop.** Codecs include 12 bit N-RAW, 12 bit ProRes RAW HQ, and 10 bit ProRes 422 HQ. Picture profiles include N-Log, HLG, and Flat.
 
-**Record limits.** Roughly ninety minutes in 8K at 30p, roughly one hundred twenty five minutes in 4K at 60p. A forty minute show is comfortably inside both. Card capacity and heat are the practical limits, not the camera's willingness.
+**Record limits.** Roughly ninety minutes in 8K at 30p, roughly one hundred twenty five minutes in 4K at 60p. A forty minute show is comfortably inside both.
+
+**Card capacity, which is the limit that actually bites.** Shoot the long locked off take in **H.265, not N-RAW.** H.265 tops out around 400 megabits per second, which is roughly three gigabytes per minute, so a forty minute continuous take is about 120 GB and fits a 256 GB card with room. N-RAW and ProRes RAW are several times larger and will end the take partway through the second number. Save the RAW codecs for short deliberate shots, if at all. Nothing in these reels needs them.
 
 **Rolling shutter** measures around 14.4 milliseconds in most modes, fast enough to ignore. Note that this is a different problem from LED banding, which is about the light switching, not the sensor scanning.
 
