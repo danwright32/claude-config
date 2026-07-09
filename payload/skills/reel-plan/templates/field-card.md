@@ -83,6 +83,15 @@ Subject centered. One person.
 
 ---
 
+## PARK THE SECOND BODY
+
+{Tripod, set before doors.}
+{or, if tripod banned: the surface you chose, named. Nobody sits in front of it. Frame wider than feels right. It cannot be moved once the room fills.}
+
+Rolling before the bow. Do not touch it.
+
+---
+
 ## {VENUE HAZARD, if any}
 
 - [ ] {check}
