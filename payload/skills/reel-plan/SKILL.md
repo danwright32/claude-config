@@ -156,6 +156,8 @@ The card is read in a dark or crowded room, on a phone, with a camera in the oth
 - Never plan a slow motion shot for a moment whose sound matters. Slowed footage has no usable sync audio.
 - Never plan a sync shot when the audio is not from this performance. A supplied studio track will not match the tempo of the take you filmed, so no mouth and no bow may be visible over it.
 - Never plan a specific note being fingered as a cutaway. The viewer hears one note and watches another being played. Hands doing something unspecific cut anywhere.
+- **Never invent a fact.** Not a clock time, not a running order, not a claim about what "usually" happens at a show that has not been performed yet. An unknown goes on the list of things to ask on arrival, named to a person who can answer it. A guess printed in bold will be believed and acted on.
+- **Never write jargon into a document he reads in a venue.** The turn, the button, the peak, the single moment, the safety shot, brace. All of it is vocabulary from these files. Write out what he should physically do, or define the word in the same sentence.
 - Arrive at least ninety minutes early. Test for LED banding at the intended frame rate and shutter before the house opens. Shoot the empty lit stage, the room before it fills, the performers before they become performers. Highest engagement material, lowest competition, near zero cost.
 - The plan tells him what to do with his hands, not what to feel.
 
