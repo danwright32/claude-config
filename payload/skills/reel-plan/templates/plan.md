@@ -125,9 +125,11 @@ The same structure, compressed. Silent first: burned in text carries the meaning
 2. {}
 3. {}
 
-### Hero cut, vertical, 15 to 30 seconds
+### Hero cut, vertical, 10 to 25 seconds
 
 **Not three acts.** A hook, tension, a payoff. Open on the peak or on a question. Deliver. Stop.
+
+**The payoff is:** {} **It needs {N} seconds to land.** That, not the range, sets the length.
 
 | Time | Picture | Text on screen | Sound |
 |---|---|---|---|
