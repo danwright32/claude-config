@@ -18,6 +18,21 @@ Test for LED banding before the house opens.
 
 **Subject: {who}**
 
+**What changes: {the change}**
+
+---
+
+## THE BEGINNING IS BEFORE THE SHOW
+
+- [ ] Empty stage, lit
+- [ ] {arrival, doors, waiting}
+
+## THE END IS AFTER THE LAST NOTE
+
+- [ ] The silence. Keep rolling.
+- [ ] Bow, applause, faces
+- [ ] Empty stage again
+
 ---
 
 ## SYNC
