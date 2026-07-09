@@ -53,7 +53,7 @@ It starts with a **preflight** that confirms it can actually reach your code and
 ## 3. Record to GitHub (the audit surface)
 Build a markdown body (final plan, rival options + scores, overruled dissent, ideal-vs-doable gap, open risks, reality-check verdict) and write it to a temp file. Then run the bundled helper, which handles every fallback for you:
 
-    bash /Users/danhankins-wright/.claude/skills/plan-council/post-discussion.sh "<owner/name>" "<title>" <body-file>
+    bash /Users/danielhankins-wright/.claude/skills/plan-council/post-discussion.sh "<owner/name>" "<title>" <body-file>
 
 It tries a GitHub Discussion first, then a tracking issue, then a local `PLAN-<slug>.md`, and prints one line: `DISCUSSION <url>`, `ISSUE <url>`, or `FILE <path>`. Tell the user which happened (and, if it fell back, that enabling Discussions on the repo would give a nicer home next time).
 
