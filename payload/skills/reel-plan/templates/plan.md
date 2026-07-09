@@ -56,53 +56,73 @@ Answer all five, or the plan is a shot list for a montage.
 
 ---
 
-## Shot list
+## Coverage grid
 
-### Safety. Bank these first. The reel is deliverable with only these.
+Every beat needs all three sizes, or it cannot be cut. Mark each shot **S** for safety or **A** for ambitious. An empty cell is a beat you will not be able to edit.
 
-| # | Shot | Lens | When | Job in the edit |
+| Story beat | Wide | Medium | Tight |
+|---|---|---|---|
+| **ACT ONE, the before** | | | |
+| {empty room} | | | |
+| {arrival, waiting} | | | |
+| **ACT TWO, the event** | | | |
+| {opening} | | | |
+| {build} | | | |
+| **{the turn}** | | | |
+| {peak} | | | |
+| **ACT THREE, the after** | | | |
+| {the last note, the silence} | | | |
+| {bow, applause, faces} | | | |
+| {room emptying, empty stage} | | | |
+
+**Lens and timing detail for anything non obvious:**
+
+| Shot | Lens | When | Job in the edit | Cost if missed |
 |---|---|---|---|---|
-| S1 | | | | |
-| S2 | | | | |
-| S3 | | | | |
-
-### Ambitious. Attempt only once the safety shot for that beat is banked.
-
-| # | Shot | Lens | When | Job in the edit | What it costs if missed |
-|---|---|---|---|---|---|
-| A1 | | | | | |
-| A2 | | | | | |
+| | | | | |
 
 ### Cutaways. Shoot three times more than seems reasonable.
 
 - {list}
 
-### Vertical safe. Composed center safe, tight on a single subject, for the hero cut.
+### Vertical safe. Center safe, tight on a single subject, for the hero cut.
 
-- {list, at least three, one of which is the hero cut's payoff}
+- {at least three, one of which is the hero cut's payoff}
+
+**You will be short of tight shots. Everyone is. Over collect them.**
 
 ---
 
 ## Paper edit
 
+### Archival master, horizontal, 2 to 3 minutes
+
+Three acts. Something changes, and the change is visible.
+
+1. **Act one, the before** (~15%). {empty room, arrival, the held breath}
+2. **Act two, the event** (~70%). {the performance, with its own build}
+3. **The turn.** {the moment the change becomes visible}
+4. **Act three, the after** (~15%). {the silence, the bow, the faces, the empty stage again, now different}
+
+**What changed, restated:** {}
+
+### Story piece, vertical, 60 to 90 seconds
+
+The same three acts, compressed. Silent first: burned in text carries the meaning, sound on invitation before the payoff.
+
+1. {}
+2. {}
+3. {}
+
 ### Hero cut, vertical, 15 to 30 seconds
 
-Silent first. Text carries the meaning. Sound on invitation before the payoff.
+**Not three acts.** A hook, tension, a payoff. Open on the peak or on a question. Deliver. Stop.
 
 | Time | Picture | Text on screen | Sound |
 |---|---|---|---|
-| 0:00 | {the hook, opening on the peak, never the setup} | | |
-| 0:0X | | | |
-| 0:XX | {the payoff} | | |
-
-### Archival master, horizontal, 2 to 3 minutes
-
-1. **Cold open.** {}
-2. **Establish.** {}
-3. **Build.** {}
-4. **Peak.** {}
-5. **Release.** {}
-6. **Button.** {}
+| 0:00 | {the hook, never the setup} | | |
+| 0:0X | {tension} | | |
+| 0:XX | {the payoff} | | unmute cue before this |
 
 ---
 
