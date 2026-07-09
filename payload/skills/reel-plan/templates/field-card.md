@@ -27,6 +27,7 @@ Subject: {the cast}. Proof: {the kids' faces}.
 ---
 
 ## ASK {NAME} ON ARRIVAL
+OPTIONAL. Delete if nothing is unknown.
 
 - {question}
 - {question}
