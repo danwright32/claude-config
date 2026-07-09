@@ -78,7 +78,7 @@ Musical theatre, opera with spoken dialogue, a concert with introductions, a com
 
 ## Choosing the bed when you get to choose
 
-When the grammar is speech or the audio is unpostable, you pick the music. Rules:
+When the grammar is speech, or the music was played back rather than performed, you pick the bed. Rules:
 
 - Pick it before the shoot, not after. The whole point is to plan against it.
 - Instrumental. Lyrics fight dialogue and they fight the event.
