@@ -62,6 +62,22 @@ What it does not buy:
 - **Cropping changes size, not angle.** Two shots from the same 8K frame differ by framing alone. A full step of size change (wide to tight) cuts cleanly. A half step does not. And a real angle change, from the second body somewhere else in the room, still cuts better than any crop.
 - **A slow push in from a crop is fake.** It can look fine. It can also look like what it is. Use sparingly.
 
+### The whole doctrine depends on the body being locked
+
+Read the first line of this section again: **shoot the locked off safety wide in 8K.** The tight crops are usable because the camera is bolted to a tripod and therefore already stabilized. That is not a detail. It is the load bearing assumption, and it fails silently.
+
+Cropping handheld 8K to a tight framing magnifies every tremor by exactly the factor it magnifies the subject. A crop that doubles the effective focal length doubles the shake with it. At 1/60, where the 180 degree rule puts you, the result is unusable, and it will look fine on the camera's screen and wrong on a timeline.
+
+**This matters most in the venues that need it most.** Union halls, church lobbies, and any room that bans tripods are exactly where you have no locked wide and are most tempted to crop your way out of it.
+
+So, when no tripod is allowed:
+
+1. **Brace anything you intend to crop tight.** A column, a chair back, a railing, an elbow on a knee. Exhale, then roll.
+2. **If you cannot brace, plan two sizes, not three.** A braced wide and one full step tight cut cleanly together. Two legal sizes beat three where one is unusable.
+3. **Take genuine tights on the 70-200 as separate shots**, between 70 and 135, braced. In pinned mode the long lens exists for angles rather than reach. In tripod banned mode it goes back to being your only real tight.
+
+Stated plainly: **without a tripod, the 8K wide is roughly one and a half cameras, not three.**
+
 **Vertical is solved.** A nine by sixteen crop out of 8K is 2430 by 4320, roughly four times what a 1080 by 1920 vertical deliverable needs. Frame the wide with the subject near the center third and both the horizontal master and the native quality vertical come out of the same take. This is the professional "shoot oversized, crop both" workflow, and the camera hands it to you.
 
 ---
