@@ -70,7 +70,9 @@ Multiple passes (a second performance, a dress rehearsal, a soundcheck) are a bo
 4. **Write the plan and the field card into the current working directory**, as `<event-slug>.md` and `<event-slug>-card.md`. That is where the user is standing, and it is where he expects to find them. Do not invent a subfolder.
 
    Exception: if a `plans/` folder already exists in the working directory, write there instead, because he has clearly chosen to organize that way.
-5. **Append one line to the reel log**, naming this event's date, discipline, structure, and opening device, and update its "structures used, most recent first" line. Do this when the plan is written, not after the shoot. The structure is chosen at the desk, and that is the thing the next plan must avoid. A plan that does not update the log has disarmed the rule that keeps every reel from looking the same.
+4b. **Write the card a second time, as `<event-slug>-card.html`.** The markdown card is the source of truth and the thing you edit. It is also unreadable on a phone, which is the only device it will ever be read on, because a phone renders it as raw text with hash marks and brackets where the card most needs clarity. So emit both. See `templates/field-card.html`: one self contained file, no network, large type, light and dark, checkboxes that persist so shots can be ticked off as they are banked. He AirDrops it and taps once.
+
+5. **Append one row to the reel log's table**, naming this event's date, discipline, structure, and opening device. Do not write a summary line anywhere. Do this when the plan is written, not after the shoot. The structure is chosen at the desk, and that is the thing the next plan must avoid. A plan that does not update the log has disarmed the rule that keeps every reel from looking the same.
 6. After the shoot, run the debrief with `templates/debrief.md` and save it beside the plan. **Then apply its corrections to the reference files.** See below.
 
 ## The debrief writes back
