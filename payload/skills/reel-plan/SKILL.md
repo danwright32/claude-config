@@ -51,13 +51,9 @@ Ask in this order. The early answers reorganize the later ones.
 - What can he actually capture: camera microphone, his own recorder in the room, a board feed, a clean recording supplied afterward by the client.
 - **Can he legally post it.** This question is asked before the shoot, never after. See the rights section.
 
-**6. Rights and consent.** Ask once, in a single question: is anything about rights, venue authorization, or consent unresolved for this event?
+**6. Playback.** Will recorded music play over the house speakers rather than being performed live? If so the room's audio is unusable, you are in audio tier D, sync is gone, and the shot list needs far more coverage, cutaways, and slow motion. This is a capture question only.
 
-**Dan handles rights himself and does not want help with them.** If he says it is handled, it is handled. Record the answer on the plan and move on. Do not interrogate, do not re-raise it later in the session, and do not treat it as a gate.
-
-The one exception worth a single sentence, because it changes what gets shot rather than what gets published: if commercial recorded music will play over the house speakers, the event's audio is unusable, which means no sync, and the shot list needs far more coverage and slow motion. That is a capture decision, not a legal one.
-
-`references/rig-and-audio.md` has the full detail if he ever asks for it.
+**Never raise rights, licensing, venue authorization, consent, releases, or publishing permission.** Dan handles all of it himself and has said so explicitly. Do not ask, do not warn, do not add it to the plan, do not mention it in passing. `references/rights-appendix.md` exists if he ever goes looking, and the skill never opens it.
 
 **7. The subject.** Who is the reel about? Sometimes it is the performers. At a children's show it is the faces in the first three rows. At a comedy set it is the laugh. At a concerto it is the soloist's hands. Name the subject in one sentence before writing a single shot.
 
