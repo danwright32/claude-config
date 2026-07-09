@@ -14,6 +14,8 @@ One sentence, naming what changes. If it describes a montage, it is not finished
 
 **The evidence is:** {the reaction that proves it worked}
 
+**The venue is:** {a credential, so the room shares the frame and establishing shots are safety / wallpaper, so frame it out and go tight}
+
 ### Structure
 
 **Chosen structure:** {bookend / in medias res / the single moment / portrait / reverse / parallel / question and answer / accumulation}
