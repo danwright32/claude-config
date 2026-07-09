@@ -26,6 +26,17 @@ One sentence, naming what changes. If it describes a montage, it is not finished
 
 This structure is not among them. This opening device is not among them.
 
+### Premise audit
+
+Everything this structure depends on. **STATED** (Dan said it), **INHERITED** (came from a skill reference file, treat as suspect), **DERIVED** (reasoned from a stated fact).
+
+| Premise the structure rests on | Source | If inherited: can Dan check it? |
+|---|---|---|
+| | | |
+| | | |
+
+**Resting on an unverified inherited claim:** {none / name it in one line so Dan can overrule it}
+
 ### The story test
 
 | | |
