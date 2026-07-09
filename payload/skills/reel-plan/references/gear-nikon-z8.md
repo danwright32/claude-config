@@ -51,13 +51,15 @@ Inside a window, a locked 8K frame crops into a wide, a medium, and a tight, all
 
 ### A couch is a tripod
 
-**"No tripod" does not mean "no safety shot."** This is the mistake that will be made every time, because the two feel like the same sentence.
+**A tripod ban does not remove the parked window.** The two feel like the same sentence and they are not.
 
-A camera resting on a chair arm, a railing, or a windowsill is **locked**. It is as stable as a tripod, its 8K crops are as clean, and it will roll continuously for as long as the card and battery allow. A Z8 shooting 8K at 30p in H.265 uses roughly three gigabytes a minute, so a thirty five minute show is about 105 GB, inside a 256 GB card and inside the ninety minute record limit. Check the battery, which is the real limit on a long unattended take.
+A camera resting on a chair arm, a railing, or a windowsill is **locked**. As stable as a tripod, and its 8K crops are as clean. Five minutes of 8K H.265 is about fifteen gigabytes, which is nothing.
 
-**Braced is not locked.** A braced camera is held in a hand that is resting on something. It still shakes, and cropping an 8K braced shot to a tight framing magnifies the tremor by exactly the factor it magnifies the subject. A parked camera does not shake at all.
+**Braced is not locked.** A braced camera is held in a hand that is resting on something. It still shakes, and cropping a braced 8K frame to a tight framing magnifies the tremor by exactly the factor it magnifies the subject. A parked camera does not shake at all.
 
-So in a venue that bans tripods, the safety shot is not gone. It moved to the furniture. Never write a plan that concludes there is no safety shot merely because there is no tripod. Ask first whether there is a surface.
+So in a venue that bans tripods, the parked window survives. It moved to the furniture. Never write a plan that abandons the window merely because there is no tripod. Ask whether there is a surface.
+
+What a tripod ban **does** remove is nothing else, because there was never a whole show safety shot to lose. Both cameras were always photographing.
 
 **When tripods are banned**, furniture is where the parked body goes. A railing, a chair arm, a windowsill, a stack of programs, a speaker cabinet. Say so on the plan, and name three things:
 
