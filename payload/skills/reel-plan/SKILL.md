@@ -152,7 +152,8 @@ The card is read in a dark or crowded room, on a phone, with a camera in the oth
 
 He is glancing at it between numbers, on a phone, in bad light. Length is the enemy.
 
-- **Under seventy lines.** If it is longer, something belongs in the plan instead.
+- **Under one hundred lines, and shorter is better.** After writing the card, count the lines. If it is over one hundred, do not ship it: delete sections that do not apply to this event, then cut words. Report the final line count so the limit is enforced rather than hoped for.
+- **Drop sections that do not apply.** The template is a menu, not a checklist. No venue hazard, no venue hazard section. No vertical cut planned, no vertical section.
 - **No paragraphs anywhere.** A line is a shot, a setting, or a rule. Nothing else.
 - **No sentence over ten words.** Most should be four.
 - **No explanation.** The card says what to do. The plan says why. He read the plan at his desk.
