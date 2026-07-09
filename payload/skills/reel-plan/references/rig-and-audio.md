@@ -71,13 +71,13 @@ So place your own recorder. A small stereo recorder, roughly three to four feet 
 
 Err toward too close rather than too far. You can add reverb later. You can never remove it.
 
-Two practical notes. A separate recorder's clock drifts against the camera's, so align the waveforms at the moment you are using, not at the head of the file. And keep camera audio rolling on every body as a scratch track, because waveform sync needs something to match against. A sharp clap at the top of a piece gives the algorithm a spike to find.
+Two practical notes. A separate recorder's clock drifts against the camera's, so align the waveforms at the moment you are using, not at the head of the file. And a sharp clap at the top of a piece gives the algorithm a spike to find.
 
-## Tier B. Camera audio only
+## Tier B. Not a recording of this performance. Sync is illegal.
 
-Fine for music in a decent room. Fine anywhere for texture: applause, laughter, a rustling audience, a hall going quiet. **Rarely usable for dialogue from a house seat**, because reverberation destroys consonants while leaving music intact. If a line must be heard, get close or cut the line.
+No mouth, no bow, no punchline may be visible. Cutaways, faces, hands from behind, slow motion, an empty room. Two kinds, and they fail the same way.
 
-## Tier C. A supplied studio recording of the same piece
+### B1. A supplied studio recording of the same piece
 
 Sounds like the best of all worlds and is a trap. It is a different take at a different tempo, so **it will not sync to your picture.** Usable only as a bed under material that is not sync critical: cutaways, faces in the audience, slow motion, hands from behind, an empty stage. Never over a visible mouth or bow.
 
