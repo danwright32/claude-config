@@ -74,6 +74,14 @@ Stated properly: the reel says *these four people held a room*, and the proof is
 
 Same logic everywhere. At a comedy set the subject is the comedian and the laugh is the proof. At a concerto the subject is the soloist. At a choir concert the subject is the ensemble and the conductor.
 
+**Then ask how much the venue is worth to this client.** Atmosphere is not a fixed weight, it scales with the room.
+
+- **A room that is a credential.** Carnegie, Lincoln Center, a cathedral, anywhere the client will name in their own marketing. The venue is close to co-equal with the performers, because "we played Carnegie" is half of what the reel is for. Establishing shots, the marquee, the room's architecture, the house filling: these become **safety shots that must be banked**, not cutaways collected if time allows. The reel should place the performers inside a room the viewer recognizes.
+- **A room that is wallpaper.** A church basement, a black box, a school gym. The venue is texture at best and a liability at worst. Frame it out. Go tighter. Let the performers fill the frame and let the audience prove it. Atmosphere shots here are cutaways, gathered opportunistically.
+- **When unsure**, ask directly: would the client mention this venue by name to a funder or a presenter? If yes, it is a credential. If no, it is wallpaper.
+
+The subject never changes. What changes is how much of the room shares the frame with it.
+
 **7. The deliverable.** Read `references/deliverables-and-social.md`. Three products, not one: a horizontal archival master of two to three minutes, a vertical **hero cut of ten to twenty five seconds** which is the asset that actually travels, and optionally a vertical story piece of sixty to ninety seconds when the arc earns it.
 
 The hero cut runs exactly as long as the payoff needs and not one beat longer. Ten seconds fits a single visual beat. A musical phrase needs closer to twenty five. Never clip the payoff to hit a number.
