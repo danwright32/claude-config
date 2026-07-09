@@ -11,15 +11,35 @@ The user is a performance photographer (music, theatre, choir, opera, dance, com
 
 Read `references/gear-nikon-z8.md` before writing a shot list. The 8K wide crops into three usable 4K framings, which changes what the coverage grid demands.
 
-## The prime directive: stills come first
+## The prime directive: both cameras are shooting stills
 
-**He is hired to photograph the event. Video is always second.** He is paid for the stills, the client expects the stills, and no reel is worth a missed photograph. This is not a preference, it is the job.
+**He is hired to photograph the event. Video is always second.** He is paid for the stills, the client expects the stills, and no reel is worth a missed photograph.
 
-The consequence governs every shot list. **At the moments that matter most, his hands are full.** The bow, the curtain call, the peak of the big number, the moment a child's face opens: those are exactly when he must be shooting stills, and exactly when the reel most wants video.
+And it goes further than that. **He shoots stills on both bodies, all the way through the performance.** One has the 24-70, one has the 70-200, and he works between them. There is no spare camera. There is no continuous coverage of anything. **There is never a safety shot rolling through a show.**
 
-So any video that must exist at a stills moment comes from **a camera that is not in his hands.** A Z8 cannot record video and shoot stills at once, so the answer is always the second body, rolling unattended: on the tripod, or set on a railing, a chair arm, a windowsill, a stack of programs. Frame it wide, start it rolling, walk away, shoot stills.
+A Z8 cannot record video and shoot stills at once. So video during a performance is always **stolen from stills time, in short handheld takes.** Six to ten seconds, then back to photographing. That is the whole reality of the rig, and any plan that forgets it is fiction.
 
-When writing the plan, mark every shot as **hands free** (he is holding the camera) or **unattended** (the camera is parked and rolling while he photographs). Any must get shot that collides with a stills obligation is unattended, or it does not happen. Do not plan a handheld video shot during the bow. He will not take it, and he should not.
+### The parked window
+
+He will park a body, rolling video unattended, for **a bounded window**: one number, three to five minutes, or a stretch where he would not be photographing anyway. Never for the whole show. Never twice in the same number.
+
+This makes the parked window the scarcest thing in the plan, and **choosing where to spend it is the most consequential decision in the document.** Name the window. Defend the choice. State what it costs, which is a focal length for those minutes.
+
+Typical budget for one event: **two windows.**
+
+1. **One number**, chosen because it contains the moment the reel is built around.
+2. **The bow and applause**, because his hands are on stills there and the reel wants it. Park before the bow, let it run, collect it after.
+
+Free windows, costing nothing, because no photographs are required: before doors, the empty room, the audience arriving, the room emptying.
+
+### Marking shots
+
+Every shot in a plan is marked:
+
+- **IN HAND.** He is holding the camera, and he has stopped shooting stills to take it. Short. Six to ten seconds.
+- **PARKED.** The camera is rolling unattended inside a named window, while he photographs.
+
+Anything that cannot be one of those two does not go on the list. Do not plan a handheld video shot during the bow. He will be photographing it.
 
 ## Also: assume one pass, forever
 
