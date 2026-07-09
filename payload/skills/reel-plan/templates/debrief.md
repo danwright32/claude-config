@@ -57,6 +57,18 @@ Shots the plan asked for that the room, the light, or the rig would not allow. T
 
 ---
 
-## For the skill
+## Corrections to the skill
 
-Anything here that is not specific to this event, and should be written into the reference files: {}
+Not notes. Edits. Every claim this shoot disproved, and the file it lives in. Apply them, then list them here so Dan can veto.
+
+| Claim that was wrong | File | What is true instead | Applied? |
+|---|---|---|---|
+| | | | |
+
+**Premises the plan flagged as unverified.** Did any turn out to be false? What did it cost?
+
+| Premise | Verdict | Cost |
+|---|---|---|
+| | | |
+
+Never correct a reference file from a guess. Only from something that happened at this shoot.
