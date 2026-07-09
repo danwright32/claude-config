@@ -60,7 +60,11 @@ Multiple passes (a second performance, a dress rehearsal, a soundcheck) are a bo
 
    The user may deliberately choose to plan a past event as an exercise. That is fine, but it must be their explicit choice, not an oversight you failed to notice.
 
-1. **Read the previous plans.** Look in the current working directory, and in `plans/` if one exists. Note the structure and the opening device of each. This is not optional, and it happens before the interview.
+1. **Read the reel log.** It lives at the root of the events directory, one level above the event folders: `<events-root>/reel-log.md`. Each event has its own folder, so the current working directory contains only this event's plan and can never tell you what the last three reels did. The log is the only thing that can.
+
+   Find it by walking up from the working directory until you hit `reel-log.md`. If it does not exist, create it from the shape in the existing one, and say so on the plan: there is no history, so no structure is forbidden.
+
+   Note every structure and opening device it lists. This is not optional and it happens before the interview. Also read the previous plans themselves if they are nearby and cheap to open, but the log is the authority.
 2. Run the interview. Ask questions one at a time as pickers where the answer is a choice.
 3. Read the reference files that apply. Do not read all of them.
 4. **Write the plan and the field card into the current working directory**, as `<event-slug>.md` and `<event-slug>-card.md`. That is where the user is standing, and it is where he expects to find them. Do not invent a subfolder.
