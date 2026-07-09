@@ -21,6 +21,12 @@ Filled in after the shoot, before the edit. The point is that the next plan is b
 - **Happened and was not predicted:** {}
 - **The story spine was:** {right / wrong, and the real story was ...}
 
+## Structure
+
+- **Chosen:** {} **Did it hold?** {}
+- **Does this reel look like the last one?** Be honest. {}
+- **Structures now used, most recent first:** {list, so the next plan can avoid them}
+
 ---
 
 ## What was physically impossible
