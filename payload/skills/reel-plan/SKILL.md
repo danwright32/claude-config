@@ -70,7 +70,17 @@ Multiple passes (a second performance, a dress rehearsal, a soundcheck) are a bo
 4. **Write the plan and the field card into the current working directory**, as `<event-slug>.md` and `<event-slug>-card.md`. That is where the user is standing, and it is where he expects to find them. Do not invent a subfolder.
 
    Exception: if a `plans/` folder already exists in the working directory, write there instead, because he has clearly chosen to organize that way.
-4b. **Write the card a second time, as `<event-slug>-card.html`.** The markdown card is the source of truth and the thing you edit. It is also unreadable on a phone, which is the only device it will ever be read on, because a phone renders it as raw text with hash marks and brackets where the card most needs clarity. So emit both. See `templates/field-card.html`: one self contained file, no network, large type, light and dark, checkboxes that persist so shots can be ticked off as they are banked. He AirDrops it and taps once.
+4b. **Generate the phone card. Never write it by hand.**
+
+   ```
+   python3 ~/.claude/skills/reel-plan/scripts/render_card.py <event-slug>-card.md
+   ```
+
+   This reads the markdown card and writes `<event-slug>-card.html` beside it, injecting the content into the styled shell at `templates/field-card.html`. Self contained, no network, large type, light and dark, checkboxes that persist so shots get ticked off as they are banked. He AirDrops it and taps once.
+
+   **The markdown card is the only source of truth.** Authoring the HTML separately is how the two documents drift, and the one he reads in the lobby is the one that goes stale. It has already happened once. Edit the markdown, re-run the script.
+
+   The shell holds styles and the checkbox script and a `<!--CARD-->` placeholder. Touch it only to change how the card looks, never what it says. Tests live in `scripts/test_render_card.py`; run them after any change to either file.
 
 5. **Append one row to the reel log's table**, naming this event's date, discipline, structure, and opening device. Do not write a summary line anywhere. Do this when the plan is written, not after the shoot. The structure is chosen at the desk, and that is the thing the next plan must avoid. A plan that does not update the log has disarmed the rule that keeps every reel from looking the same.
 6. After the shoot, run the debrief with `templates/debrief.md` and save it beside the plan. **Then apply its corrections to the reference files.** See below.
