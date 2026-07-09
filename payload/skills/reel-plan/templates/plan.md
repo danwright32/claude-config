@@ -24,11 +24,23 @@ Answer before anything else. A red answer stops the video shoot.
 
 ## The story
 
-One sentence. Specific to this event, not to the genre.
+One sentence, naming what changes. If it describes a montage, it is not finished.
 
 > {The spine.}
 
 **The subject is:** {performers / the audience / one person / the room}
+
+### The story test
+
+Answer all five, or the plan is a shot list for a montage.
+
+| | |
+|---|---|
+| **What changes?** | |
+| **First shot** (before the performance begins) | |
+| **Last shot** (after the performance ends) | |
+| **The turn** (the beat where the change becomes visible) | |
+| **Every beat covered wide, medium, tight?** | {yes / the gaps are ...} |
 
 ---
 
