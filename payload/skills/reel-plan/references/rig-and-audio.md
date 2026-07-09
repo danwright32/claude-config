@@ -13,19 +13,20 @@ Formal halls, assigned positions, Carnegie. You cannot move, so the tripod costs
 - **Body one, on the tripod: the safety shot.** That is the actual trade name, also called the master or the fail safe. Framed to hold the full stage with a little air, locked off, rolling continuously through entire numbers. Do not touch it. This is the most valuable footage you will shoot, and professional concert crews confirm it: it is the angle you can always cut back to, and the only thing that lets you cut two views of the same musical moment.
 
   It only works if the body genuinely records continuously. The classic failure is a camera hitting a clip limit or overheating partway through. A Z8 shooting 8K at 30p in H.265 runs roughly ninety minutes, which covers any single concert or play. Confirm the card has room before the house opens.
-- **Body two, in hand: stills, and tight video from the one position.** Long lens, braced on a knee or a seat back, because handheld past about 50mm shakes.
+  Shot in 8K, this one camera crops into a wide, a medium, and a tight, each still a full 4K image. Your tight shots come off the tripod, already stable, at double the lens's focal length. See `references/gear-nikon-z8.md`.
+- **Body two, in hand: stills, and a second angle.** The 70-200, braced on a knee or a seat back, between 70 and 135. It exists for angles the fixed wide cannot give you, not for reach, because the crop already gave you reach.
 
-You get real cutting ability and one angle of view. The reel will feel composed and slightly distant. Cutaways must come from where you sit.
+You get real cutting ability and two angles of view. Cutaways must come from where you sit.
 
 ## Roaming
 
 Churches, lobbies, black boxes, anywhere you can walk. Movement is worth more than the tripod, so both bodies come with you on two focal lengths.
 
-- No safety wide. **This is the cost, and it is severe.** Without a continuous wide, you can never cut two angles of the same moment, so each passage appears exactly once, uncut, from wherever you were standing when it happened.
+- No safety shot. **This is the cost.** Without a continuous wide, each passage appears once, from wherever you were standing when it happened, and you cannot cut back to anything.
 - Coverage comes from walking, and from banking a large number of cutaways during applause and pauses.
 - Plan your positions in advance against the running order. Decide where you will be for the peak before the peak arrives, because you cannot be crossing the room when it lands.
 
-Consider a hybrid: park a body on the tripod for the one number that matters most, roam for the rest. You lose the second lens for six minutes and gain the ability to cut the climax.
+**Strongly consider the hybrid.** Park the 24-70 on the tripod in 8K for the one number that matters most, and roam with the 70-200. You lose a lens for six minutes and gain three croppable angles of the climax plus a real second angle. Given what 8K crops buy you, this is usually the right call.
 
 ## Passes
 
