@@ -108,18 +108,18 @@ Material for a beginning and an end, whether or not this structure uses it. It c
 
 ### Archival master, horizontal, 2 to 3 minutes
 
-Three acts. Something changes, and the change is visible.
+Beats follow the chosen structure. Something changes, and the change is visible.
 
-1. **Act one, the before** (~15%). {empty room, arrival, the held breath}
-2. **Act two, the event** (~70%). {the performance, with its own build}
-3. **The turn.** {the moment the change becomes visible}
-4. **Act three, the after** (~15%). {the silence, the bow, the faces, the empty stage again, now different}
+1. {}
+2. {}
+3. **The turn.** {}
+4. {}
 
 **What changed, restated:** {}
 
 ### Story piece, vertical, 60 to 90 seconds
 
-The same three acts, compressed. Silent first: burned in text carries the meaning, sound on invitation before the payoff.
+The same structure, compressed. Silent first: burned in text carries the meaning, sound on invitation before the payoff.
 
 1. {}
 2. {}
