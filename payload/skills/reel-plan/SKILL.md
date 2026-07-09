@@ -81,15 +81,17 @@ Answer the test at the end of that file, in writing, on the plan. If it cannot b
 
 **Grammar.** Pick from `references/edit-grammars.md`. Driven by music, by speech, by movement, or hybrid. This determines what a cut lands on, and therefore what coverage is mandatory.
 
-**Shot list.** Built as a **grid of story beats by shot size.** Every beat gets a wide, a medium, and a tight, because two adjacent shots of the same size cannot be cut together. An empty cell in the grid is a beat that will be uncuttable, and it must be visible on the page before he leaves the house.
+**Shot list.** Built as a **grid of story beats by shot size.** Every beat needs a wide, a medium, and a tight **available**, so that any cut he makes changes size or angle enough to be legal under the 30 degree rule. An empty cell is a beat he will not be able to cut.
+
+**Carrying three sizes is not a licence to cut three times.** Over cutting is a named error: switching angles too often, and giving every shot the same length, reads as mechanical. Cut on the phrasing, not on the beat, and less often than instinct says.
 
 Within the grid, mark each shot **safety** or **ambitious**. Safety shots are banked first and the reel is deliverable with only those. For each shot: framing, lens, roughly when in the running order, and what it is *for* in the edit. A shot with no job in the paper edit does not belong on the list.
 
 Expect to be short of tight shots. Everyone comes home with too many wides. Over collect tights deliberately.
 
-**Paper edit.** The shape of the cut, written before the shoot, in three acts: the before, the event, the after. Roughly fifteen, seventy, and fifteen percent. Name what goes where, and name the turn. Without this he will sit in front of forty minutes of footage with no idea where to start.
+**Paper edit.** The shape of the cut, written before the shoot, following **the structure chosen above**, not a fixed template. Name what goes where, and name the turn. Without this he will sit in front of forty minutes of footage with no idea where to start.
 
-The hero cut is not three acts. It is a hook and a payoff. Write it separately.
+The hero cut has no acts. It is a hook, tension, and a payoff. Write it separately.
 
 **Risks.** What most likely goes wrong at this specific event, and the cheap mitigation.
 
