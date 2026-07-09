@@ -47,7 +47,7 @@ The rehearsal has no audience, which means it cannot give you the thing that is 
 
 ---
 
-# Part 3. Audio tiers
+# Part 2. Audio tiers
 
 Establish which tier you are in **before** planning shots, because the tier decides whether you are allowed to show a face making a sound.
 
