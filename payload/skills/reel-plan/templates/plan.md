@@ -4,24 +4,6 @@
 
 ---
 
-## Clearance check
-
-Answer before anything else. A red answer stops the video shoot.
-
-| Question | Answer | Status |
-|---|---|---|
-| Original work, or licensed from a rights house? | | |
-| If licensed: written promotional video permission exists? | | |
-| Cast under an Equity contract? Media agreement in place? | | |
-| Recorded commercial music played in performance? | | |
-| Venue authorized this videographer in writing? | | |
-| Minors identifiable? Guardian consent covering my marketing use? | | |
-| Written grant to use the reel in my own portfolio? | | |
-
-**Verdict:** {clear to shoot video / stills only / clear with restrictions, namely ...}
-
----
-
 ## The story
 
 One sentence, naming what changes. If it describes a montage, it is not finished.
