@@ -54,7 +54,8 @@ Everything this structure depends on. **STATED** (Dan said it), **INHERITED** (c
 - **Grammar:** {music / speech / movement / hybrid}
 - **Rig mode:** {pinned / roaming / mixed, and why}
 - **Passes available:** {one / rehearsal + performance / two performances}
-- **Audio tier:** {A, this performance, syncs / B, camera only / C, supplied studio track, no sync / D, licensed bed}
+- **Audio tier:** {A, a recording of this performance, sync legal / B, not this performance, sync illegal}
+- **Best source available, inside tier A:** {own recorder / board feed / camera microphone} and what that costs in quality
 - **Sync allowed?** {yes, mouths and bows may be shown / no, cutaways and slow motion only}
 - **Camera:** 4K, {24 or 60} fps, shutter {1/50 or 1/125}, white balance and ISO locked
 - **LED flicker check:** test at frame rate and shutter during setup
