@@ -21,9 +21,9 @@ Two responses, and no monopod (his decision, July 2026, and it turns out to be t
 
 This is the answer to the long lens problem, and it makes the monopod unnecessary.
 
-The locked wide is a 24-70 shooting 8K. **Crop that frame to 4K and the effective focal length doubles.** A 70mm lens on the tripod yields a tight shot framed like 140mm. Crop to a 1080 vertical and it is framed like 280mm.
+Inside a parked window, the 24-70 shoots 8K. **Crop that frame to 4K and the effective focal length doubles.** A 70mm lens, parked, yields a tight shot framed like 140mm. Crop to a 1080 vertical and it is framed like 280mm.
 
-So the tight shots come from the fixed camera, pre stabilized because it is bolted down, at no cost in resolution. The 70-200 in hand exists for **angles the fixed wide cannot give you**, not for reach.
+So the clean tight shots come from the parked camera, stable because nobody is holding it, at no cost in resolution. This is why the window is worth what it costs. The 70-200 in hand exists for **angles the parked frame cannot give you**, and for the tights he needs during the rest of the show, when nothing is parked.
 
 ## Both cameras are shooting stills
 
