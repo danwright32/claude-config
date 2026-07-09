@@ -1,3 +1,5 @@
+<!-- Sections marked OPTIONAL get deleted when they do not apply. Count lines before shipping. Under 100. -->
+
 # {EVENT}
 
 {Venue}. Doors {time}. Show {time}. {Name}, {phone}.
