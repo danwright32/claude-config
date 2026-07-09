@@ -35,6 +35,10 @@ This is not a compromise. It is how the bow, the curtain call, and the applause 
 
 A parked 8K wide also crops into three framings, so an unattended camera in the right place is worth more than a handheld one in the wrong place.
 
+**Confirmed:** the Z8 cannot take a still while recording video. The Z6 could; Nikon removed it on the Z8 and Z9. There is no setting, no workaround, and no accessory that changes this. Two bodies is the answer because it is the only answer.
+
+**One useful consolation.** 8K footage frame grabs to a 33 megapixel JPEG in camera. At a 1/60 shutter those frames carry motion blur and are not client grade photographs, so this is a safety net rather than a plan. But a parked 8K wide rolling through the bow means a missed photograph is recoverable.
+
 ## Lens assignment
 
 **Pinned.** The **24-70 goes on the tripod** as the locked 8K safety shot, which crops into wide, medium, and tight. The **70-200 stays in hand**, braced, between 70 and 135, for a second angle on the moments that deserve one.
