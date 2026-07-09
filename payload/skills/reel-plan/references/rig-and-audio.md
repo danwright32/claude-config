@@ -81,11 +81,13 @@ No mouth, no bow, no punchline may be visible. Cutaways, faces, hands from behin
 
 Sounds like the best of all worlds and is a trap. It is a different take at a different tempo, so **it will not sync to your picture.** Usable only as a bed under material that is not sync critical: cutaways, faces in the audience, slow motion, hands from behind, an empty stage. Never over a visible mouth or bow.
 
-## Tier D. A licensed library track
+### B2. A licensed library track
 
-Same sync constraint as tier C. Choose it before the shoot so you can plan the cut against its build. Instrumental. Matched to the event's dignity.
+Same sync constraint as B1. Choose it before the shoot so you can plan the cut against its build. Instrumental. Matched to the event's dignity.
 
-Most reels are a blend: a licensed bed carrying the montage, punctured by two or three pockets of tier A sync sound where a line, a laugh, or a final chord lands.
+Most reels are a blend: a licensed bed carrying the montage, punctured by two or three pockets of Tier A sync sound where a line, a laugh, or a final chord lands.
+
+**So there are two tiers, not four.** Ask only: was this sound made in the room I filmed, at the moment I filmed it? If yes, you may show the mouth, and your remaining problem is quality. If no, you may not, and no amount of quality fixes it.
 
 ---
 
