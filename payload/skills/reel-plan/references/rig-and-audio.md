@@ -38,13 +38,52 @@ Practical answers, in order of preference:
 - Shoot the audience so that children are **not identifiable**: from behind, over a shoulder, hands, feet, silhouettes against the stage, a wide of the whole room where no face reads, focus on the backs of heads with the stage sharp beyond them.
 - Feature the performers, who are adults and under contract, in the version that goes on your site, and give the client the version with the children's faces in it.
 
+## The single most useful move: re-score
+
+Replacing the room's audio with music you have licensed yourself sidesteps **both** music copyrights at once, the composition and the sound recording. It does not help with grand rights, because there the staging itself is the licensed work, and it does not help with union or likeness problems. But for any event where the only obstacle is the music in the room, re-scoring is the fix, and it is cheap.
+
+What re-scoring costs you is sync. Once the audio is not from this performance, you may not show a mouth, a bow, or a punchline. See Part 3.
+
+## What a platform claim actually does
+
+Two different things get claimed, and they behave differently.
+
+- **A composition claim** (the song exists, whoever recorded it) usually results in the rights holder choosing to monetize or track rather than block, and it varies by country, so the same reel can play in the United States and be blocked in Germany. On YouTube it is not a strike and your channel stays in good standing.
+- **A sound recording claim** (you captured someone's commercial master through the room) is the one labels frequently set to block.
+
+Instagram's blanket music licensing covers personal, non commercial use. A reel that promotes your business is not that, which weakens every "but the platform let me use the song" argument.
+
 ## Venue rules
 
-Carnegie Hall, Lincoln Center, and most major halls have published policies on recording, and a hired photographer's permissions come from the presenter, not from the venue's general public policy. Ask the presenter what they cleared with the venue, and whether it covers video as well as stills. Do not assume your stills credential extends to motion.
+At flagship halls, being hired by the performing group is **not** sufficient. The venue must authorize you as well, and it may claim rights over the resulting imagery.
 
-## The one paragraph to send before every shoot
+- **Carnegie Hall** states that photographic, sound, or video recording of any performance without Carnegie Hall's written permission is strictly prohibited, and that unauthorized recordings may be deleted at its discretion.
+- **Lincoln Center** takes an interesting position: by entering, patrons consent to be recorded by an **authorized Lincoln Center media professional**, and Lincoln Center may use that footage promotionally. Read that carefully. The venue reserves media rights to itself and its own authorized people. A photographer hired by the presenting company is not automatically authorized, and media coverage is arranged in advance through the press office.
 
-Ask the client, in writing, for: confirmation the work is original or that recording rights exist, confirmation that any recorded music used in performance is cleared or absent, confirmation of Equity status and media permission if applicable, confirmation of the venue's video permission, and confirmation that you may use the finished reel in your own portfolio and marketing. If children will be identifiable, ask what consent the presenter collects at the door.
+Neither hall publishes a policy page aimed at a hired third party videographer. That permission is handled case by case, which means the honest instruction is: get it in writing from the presenter and confirm the presenter got it from the venue. Do not assume a stills credential extends to motion.
+
+## What to put in writing before every shoot
+
+Ask the client to warrant, in writing:
+
+1. The work is original, or written promotional video permission exists from the licensing house, and it covers a hired videographer publishing excerpts.
+2. If the cast is under an Equity contract, an executed media agreement or contract clause covers promotional web and social use of footage by a hired videographer.
+3. Any recorded music used in the performance is cleared, or the reel will be re-scored with music you license yourself.
+4. The venue has authorized you in writing, and places no restriction on your promotional use.
+5. The organization holds photo and video consent from featured participants, and from a parent or guardian for any minor, **including consent for the photographer to use the footage to market the photographer's own business.** That last clause is the one everyone forgets.
+
+And put in your own contract:
+
+6. The client is responsible for all third party clearances, and indemnifies you against claims arising from missing ones.
+7. An explicit written grant that you may publish the reel on your own site and social channels as a portfolio and marketing piece. Do not assume this. Many performing arts agreements restrict you to the client's use only, and this project's entire purpose is the opposite.
+
+## The three stop signs
+
+Any one of these, and you get written permission and an indemnity before you shoot video, or you shoot stills only.
+
+- It is a **licensed musical or opera**. Grand rights exclude video entirely, and re-scoring does not save you, because the staging is the licensed work.
+- The cast is **union**, with no media agreement in place.
+- **Minors** will be identifiable in a piece you use to market your business.
 
 ---
 
