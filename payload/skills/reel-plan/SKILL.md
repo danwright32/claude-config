@@ -106,7 +106,7 @@ The hero cut is not three acts. It is a hook and a payoff. Write it separately.
 - `references/story-structure.md`. **Read for every plan, before anything else.** Montage versus story, where the change comes from, the eight structures, the anti formula rule, and wide, medium, tight coverage.
 - `references/gear-nikon-z8.md`. Read for every plan. What the camera can do, and the 8K wide that crops into three angles.
 - `references/videography-for-photographers.md`. Read this once with the user if he has never shot video. It is the bridge from stills.
-- `references/rig-and-audio.md`. Read for every plan. Rights first, because rights can cancel the shoot.
+- `references/rig-and-audio.md`. Read for every plan. Pinned versus roaming, passes, and the four audio tiers.
 - `references/edit-grammars.md`. Read when picking the grammar.
 - `references/discipline-beats.md`. Read the section for this event's discipline only.
 - `references/deliverables-and-social.md`. Read when specifying the outputs and whenever framing decisions are being made.
