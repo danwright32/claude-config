@@ -41,7 +41,7 @@ Shots the plan asked for that the room, the light, or the rig would not allow. T
 
 - **Tier expected:** {} **Tier actually got:** {}
 - **Sync usable?** {}
-- **Anything unpostable?** {}
+- **Was the music live or played back?** {}
 
 ---
 
