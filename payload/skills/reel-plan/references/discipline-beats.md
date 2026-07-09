@@ -62,9 +62,11 @@ A note that applies to all of them: **the highest engagement material in perform
 
 **Hybrid grammar.** Get the running order and mark each block: song, dialogue, dance. Each block obeys its own grammar. Applying one grammar to the whole piece produces a reel that either loses every joke or has no lift.
 
-**Where the story lives.** In the transition from speech into song. That moment, where a person stops talking and starts singing, is what the form is for, and it is the shot the reel is built around.
+**Where the story lives.** In the theatre, in the transition from speech into song. **On a muted screen, nowhere**, because a person talking and a person singing look the same. This is the trap of the form, and it catches everyone.
 
-**Must not miss.** The first bar of the opening number with the full company on stage. The button at the end of a big number, arms up, held, before the applause. One face during a quiet song.
+Do not build a reel around the moment speech becomes song. It is inaudible to most viewers and invisible to all of them. What you build around is whatever **moves** when the song starts: bodies changing shape, the company arriving together, the room reacting. The song is the cause. Find the visible effect and shoot that.
+
+**Must not miss.** The first bar of the opening number, when four people who were standing still start moving as one. The held pose at the end of a big number, arms up, before the applause. A face in the audience during a quiet song.
 
 **Peak.** The eleven o'clock number, or in a short piece, the last song.
 
