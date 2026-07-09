@@ -45,9 +45,9 @@ Shots the plan asked for that the room, the light, or the rig would not allow. T
 
 ---
 
-## Rights, in hindsight
+## Discovered on the day
 
-- Anything discovered on the day that should have been settled in advance: {}
+- Anything about the room, the light, the sound, or the running order that should have been known in advance: {}
 
 ---
 
