@@ -99,10 +99,11 @@ The hero cut has no acts. It is a hook, tension, and a payoff. Write it separate
 
 - Every shot on the list is achievable with two bodies, two lenses, a tripod, and no gimbal.
 - Cutaways are the currency of the edit. Always ask for three times more than feels necessary. They rescue every cut.
-- Nothing gets planned that requires cutting between two shots of the same subject at the same size from the same angle. That is a jump cut and it is unusable. Changing size or angle meaningfully is mandatory. See `references/videography-for-photographers.md`.
+- Nothing gets planned that requires cutting between two shots of the same subject at the same size from the same angle. That is a jump cut. The 30 degree rule: change angle by roughly thirty degrees, or change shot size by a full step. See `references/videography-for-photographers.md`.
 - Never plan a slow motion shot for a moment whose sound matters. Slowed footage has no usable sync audio.
 - Never plan a sync shot when the audio is not from this performance. A supplied studio track will not match the tempo of the take you filmed, so no mouth and no bow may be visible over it.
-- Twenty minutes early. The empty lit stage, the room before it fills, the performers before they become performers. Highest engagement material, lowest competition, near zero cost.
+- Never plan a specific note being fingered as a cutaway. The viewer hears one note and watches another being played. Hands doing something unspecific cut anywhere.
+- Arrive at least ninety minutes early. Test for LED banding at the intended frame rate and shutter before the house opens. Shoot the empty lit stage, the room before it fills, the performers before they become performers. Highest engagement material, lowest competition, near zero cost.
 - The plan tells him what to do with his hands, not what to feel.
 
 ## Reference files
