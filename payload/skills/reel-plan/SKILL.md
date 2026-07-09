@@ -224,6 +224,22 @@ The card is read in a dark or crowded room, on a phone, with a camera in the oth
 
 **Each shot names its framing size.** Wide, medium, or tight, on the shot itself, not in a reminder box at the bottom. Keep a short reminder box too, but the sizes belong on the shots.
 
+### The card is ordered by the clock, not by category
+
+He reads it in the order he lives it. So the card runs in **chronological phases**, each headed with a time: alone in the room, doors, the show, the end, the alarm. A shot appears under the moment he takes it, and nowhere else.
+
+**Priority is a mark on a line, not a section of the page.** Use `★` for the shot to get before any other shot in that block. A heading like "bank these first" fights the clock and loses, because he cannot bank a shot of the empty room after the room has filled.
+
+**Traps go where they bite.** The flicker test belongs under "alone in the room," not in a hazards box at the bottom. The exposure recheck belongs under "doors," because that is when the light changes.
+
+### Every line is something he can do alone
+
+He is at a venue with a camera. There is nobody to consult, nothing to look up, no plan to consult, and no way to reach the person who wrote the card.
+
+So **no line may ask him to report, escalate, decide-and-tell, or flag anything.** "No surface? Say so now" is meaningless: say it to whom? A contingency is written as **what to do instead**: "No surface? Then nothing parks. The bow is stills only. Accept it and move on."
+
+Every branch resolves on the card, into an action.
+
 ### The card is scanned, not read
 
 He is glancing at it between numbers, on a phone, in bad light. Length is the enemy.
