@@ -128,4 +128,6 @@ The sentence the reel says is: *these performers held this room.* The performers
 
 **Peak.** Whenever the room breaks: laughing, shouting back, standing up. Cut to the performer causing it, not away from them.
 
-**What goes wrong.** Shooting the stage. The performers are doing their job and it is not interesting on its own; the interest is entirely in whether it worked. Point one camera at the room and keep it there. Also: children move unpredictably and cannot be directed, so hold shots longer than feels comfortable and let the moment arrive rather than chasing it.
+**What goes wrong.** Shooting the performers alone, with the room outside the frame. They are doing their job and it is not interesting on its own; the interest is entirely in whether it worked. The fix is **not** a second camera pointed at the audience. There is no second camera, both bodies are photographing, and the audience is not the subject. The fix is one frame holding both: the performers seen from inside the room, children in the foreground, cause and proof sharing the image. That is what the parked window is for.
+
+Also: children move unpredictably and cannot be directed, so hold shots longer than feels comfortable and let the moment arrive rather than chasing it.
