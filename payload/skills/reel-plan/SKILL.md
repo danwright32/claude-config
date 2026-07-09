@@ -72,11 +72,14 @@ Ask in this order. The early answers reorganize the later ones.
 - Cutaways are the currency of the edit. Always ask for three times more than feels necessary. They rescue every cut.
 - Nothing gets planned that requires cutting between two shots of the same subject at the same size from the same angle. That is a jump cut and it is unusable. Changing size or angle meaningfully is mandatory. See `references/videography-for-photographers.md`.
 - Never plan a slow motion shot for a moment whose sound matters. Slowed footage has no usable sync audio.
+- Never plan a sync shot when the audio is not from this performance. A supplied studio track will not match the tempo of the take you filmed, so no mouth and no bow may be visible over it.
+- Twenty minutes early. The empty lit stage, the room before it fills, the performers before they become performers. Highest engagement material, lowest competition, near zero cost.
 - The plan tells him what to do with his hands, not what to feel.
 
 ## Reference files
 
 - `references/videography-for-photographers.md`. Read this once with the user if he has never shot video. It is the bridge from stills.
+- `references/rig-and-audio.md`. Read for every plan. Rights first, because rights can cancel the shoot.
 - `references/edit-grammars.md`. Read when picking the grammar.
 - `references/discipline-beats.md`. Read the section for this event's discipline only.
-- `references/rig-and-audio.md`. Read for every plan.
+- `references/deliverables-and-social.md`. Read when specifying the outputs and whenever framing decisions are being made.
