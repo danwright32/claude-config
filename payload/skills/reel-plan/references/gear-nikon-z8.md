@@ -25,6 +25,16 @@ The locked wide is a 24-70 shooting 8K. **Crop that frame to 4K and the effectiv
 
 So the tight shots come from the fixed camera, pre stabilized because it is bolted down, at no cost in resolution. The 70-200 in hand exists for **angles the fixed wide cannot give you**, not for reach.
 
+## The parked camera
+
+A Z8 cannot record video and shoot stills at the same time. Since Dan is hired to photograph the event, at the moments that matter most his hands are on stills, and the video has to come from somewhere else.
+
+**The second body, rolling unattended.** On the tripod when one is allowed. Otherwise on a railing, a chair arm, a windowsill, a stack of programs, a speaker cabinet. Frame it wide, lock everything, start it rolling, walk away.
+
+This is not a compromise. It is how the bow, the curtain call, and the applause get shot at all, because those are precisely the moments he is being paid to photograph. Plan the parked camera's position before doors, and plan what it is pointed at.
+
+A parked 8K wide also crops into three framings, so an unattended camera in the right place is worth more than a handheld one in the wrong place.
+
 ## Lens assignment
 
 **Pinned.** The **24-70 goes on the tripod** as the locked 8K safety shot, which crops into wide, medium, and tight. The **70-200 stays in hand**, braced, between 70 and 135, for a second angle on the moments that deserve one.
