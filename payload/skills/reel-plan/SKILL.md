@@ -82,9 +82,10 @@ The pass worth asking for is a **dress rehearsal**, which in professional theatr
 
 **3. Rig mode.** See `references/rig-and-audio.md`.
 - **Pinned.** He cannot move (Carnegie, a formal hall, an assigned seat). The tripod costs nothing, so the 24-70 goes on it in 8K as the safety shot, rolling continuously through whole numbers. That one frame crops into a wide, a medium, and a tight, each a full 4K image. The 70-200 is in hand, braced, for a second angle.
-- **Roaming.** He can move (a church, a lobby, a black box). He roams with the 70-200 and the second body is parked.
-- **Tripods banned.** **This does not mean there is no safety shot.** A camera resting on a chair arm, a railing, or a windowsill is locked, and its 8K crops are as clean as a tripod's. Never conclude that a passage cannot be covered from two sizes merely because a tripod is forbidden. Ask whether the room has a surface. It always does.
-- **In every mode, one body is parked and rolling.** His hands are on stills at the moments that matter, so the safety shot is never in his hands. Decide before doors where the parked body sits and what it points at.
+- **Roaming.** He can move (a church, a lobby, a black box). He carries both bodies and photographs.
+- **In no mode is there a continuous safety shot.** Both cameras are photographing. The only continuous video is inside a parked window, and a parked window is minutes long, not a whole show.
+- **A tripod ban does not remove the parked window.** A camera on a chair arm, a railing, or a windowsill is **locked**, and its 8K crops are as clean as a tripod's. Braced is not locked: a braced camera is held in a hand and still shakes, and cropping a braced 8K frame to a tight framing magnifies the tremor. If the room has a surface, the parked window works. It always has a surface.
+- **Decide before doors** where the parked body sits, what it points at, which number it covers, and who might sit in front of it.
 
 **4. Program detail.** Full running order, rough shape, or nothing. Degrade gracefully. With a full program, name specific moments and where the cuts land. With nothing, plan against the discipline's beat sheet and tell him what to find out in the first five minutes on site.
 
