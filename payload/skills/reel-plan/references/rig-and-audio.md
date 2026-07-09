@@ -6,27 +6,28 @@ Two things to settle before writing a shot list.
 
 You have two Z8 bodies, a 24-70, a 70-200, and a tripod. The venue decides how they are arranged, and the arrangement is inverse to your freedom.
 
+**In both modes, both bodies are photographing.** There is no continuous video of anything. What changes between the modes is where he can stand and where the parked window can sit.
+
 ## Pinned
 
-Formal halls, assigned positions, Carnegie. You cannot move, so the tripod costs you nothing.
+Formal halls, assigned positions, Carnegie. He cannot move, and photographs from the one position on both bodies.
 
-- **Body one, on the tripod: the safety shot.** That is the actual trade name, also called the master or the fail safe. Framed to hold the full stage with a little air, locked off, rolling continuously through entire numbers. Do not touch it. This is the most valuable footage you will shoot, and professional concert crews confirm it: it is the angle you can always cut back to, and the only thing that lets you cut two views of the same musical moment.
+- **A tripod, if permitted,** is where the parked window sits when it opens. The rest of the show it stands idle. That is not waste. It is the price of a stable place to put a camera in a room where he cannot move.
+- **Inside the window**, the 24-70 goes on it in 8K, framed to hold the full stage with a little air, locked off. Do not touch it. One frame crops into a wide, a medium, and a tight, all in sync, at double the lens's focal length. Concert crews call this the master, or the safety wide, and they run it for three hours. He gets three to five minutes.
+- **Outside the window**, video is in hand: stop shooting stills, six to ten seconds, resume.
 
-  It only works if the body genuinely records continuously. The classic failure is a camera hitting a clip limit or overheating partway through. A Z8 shooting 8K at 30p in H.265 runs roughly ninety minutes, which covers any single concert or play. Confirm the card has room before the house opens.
-  Shot in 8K, this one camera crops into a wide, a medium, and a tight, each still a full 4K image. Your tight shots come off the tripod, already stable, at double the lens's focal length. See `references/gear-nikon-z8.md`.
-- **Body two, in hand: stills, and a second angle.** The 70-200, braced on a knee or a seat back, between 70 and 135. It exists for angles the fixed wide cannot give you, not for reach, because the crop already gave you reach.
-
-You get real cutting ability and two angles of view. Cutaways must come from where you sit.
+Cutaways must come from where he sits.
 
 ## Roaming
 
-Churches, lobbies, black boxes, anywhere you can walk. Movement is worth more than the tripod, so both bodies come with you on two focal lengths.
+Churches, lobbies, black boxes, anywhere he can walk. He carries both bodies and photographs.
 
-- No safety shot. **This is the cost.** Without a continuous wide, each passage appears once, from wherever you were standing when it happened, and you cannot cut back to anything.
+- Each passage appears once, from wherever he was standing, and there is nothing to cut back to. The parked window is the only exception.
 - Coverage comes from walking, and from banking a large number of cutaways during applause and pauses.
-- Plan your positions in advance against the running order. Decide where you will be for the peak before the peak arrives, because you cannot be crossing the room when it lands.
+- Plan positions in advance against the running order. Decide where he stands for the peak before it arrives, because he cannot be crossing the room when it lands.
+- **A tripod ban does not close the window.** A chair arm or a railing is locked. See `references/gear-nikon-z8.md`.
 
-**Strongly consider the hybrid.** Park the 24-70 on the tripod in 8K for the one number that matters most, and roam with the 70-200. You lose a lens for six minutes and gain three croppable angles of the climax plus a real second angle. Given what 8K crops buy you, this is usually the right call.
+**The window goes on the number that holds the reel's payoff**, not on the biggest number and not on the first song. Choose it in the plan, place it on arrival once someone tells you where that moment lives.
 
 ## Passes
 
