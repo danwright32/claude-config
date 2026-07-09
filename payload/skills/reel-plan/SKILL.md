@@ -130,6 +130,24 @@ The hero cut has no acts. It is a hook, tension, and a payoff. Write it separate
 
 **Risks.** What most likely goes wrong at this specific event, and the cheap mitigation.
 
+## Writing the field card
+
+The card is read in a dark or crowded room, on a phone, with a camera in the other hand, by someone who has not reread the plan. These rules are absolute.
+
+**Every term is defined on the card, or it does not appear.** Words like *the turn*, *the button*, *the peak*, *brace*, *the single moment*, *safety shot* are vocabulary from the reference files. On the card they mean nothing. Either write the thing out ("the moment the actor stops speaking and starts singing") or define it in the same line ("the button: the held pose at the end of a number, arms up, before the applause").
+
+**Never a pronoun without a name.** Not "his face." Which actor. If the cast list is known, use the name. If not, "the actor who sings first."
+
+**Never invent a fact.** No clock times that were not given. No claims about what "usually" happens at a show nobody has seen. If a time or a running order is unknown, say so and put it on the list of things to ask on arrival. Inventing a specific detail and setting it in bold is worse than leaving it blank, because he will trust it.
+
+**Never assume his hands are free.** Mark every shot **HANDS FREE** or **PARKED**. See the prime directive.
+
+**Never require him to wait.** He goes home at the end. A shot that needs the room to empty completely will not be taken. Ask for the audience leaving, not the empty room.
+
+**No preamble.** No line telling him how to read the card. He knows.
+
+**Each shot names its framing size.** Wide, medium, or tight, on the shot itself, not in a reminder box at the bottom. Keep a short reminder box too, but the sizes belong on the shots.
+
 ## Rules that do not bend
 
 - Every shot on the list is achievable with two bodies, two lenses, a tripod, and no gimbal.
