@@ -63,7 +63,15 @@ The pass worth asking for is a **dress rehearsal**, which in professional theatr
 
 **Never raise rights, licensing, venue authorization, consent, releases, or publishing permission.** Dan handles all of it himself and has said so explicitly. Do not ask, do not warn, do not add it to the plan, do not mention it in passing. `references/rights-appendix.md` exists if he ever goes looking, and the skill never opens it.
 
-**6. The subject.** Who is the reel about? Sometimes it is the performers. At a children's show it is the faces in the first three rows. At a comedy set it is the laugh. At a concerto it is the soloist's hands. Name the subject in one sentence before writing a single shot.
+**6. The subject.** Who is the reel about? Name it in one sentence before writing a single shot.
+
+**The subject is whoever the client is paying for. It is never the audience.**
+
+This rule is easy to break and expensive when broken. A children's show is genuinely most alive on the faces in the first three rows, and it is tempting to make those faces the story. Do not. The children did not hire him, they will not book him again, and a reel about children is not something a producer sends to a presenter. **The performers are the subject. The audience is the evidence.**
+
+Stated properly: the reel says *these four people held a room*, and the proof is a toddler's face. The reaction shot is the payoff, never the protagonist. The atmosphere is the setting, never the subject.
+
+Same logic everywhere. At a comedy set the subject is the comedian and the laugh is the proof. At a concerto the subject is the soloist. At a choir concert the subject is the ensemble and the conductor.
 
 **7. The deliverable.** Read `references/deliverables-and-social.md`. Three products, not one: a horizontal archival master of two to three minutes, a vertical **hero cut of ten to twenty five seconds** which is the asset that actually travels, and optionally a vertical story piece of sixty to ninety seconds when the arc earns it.
 
