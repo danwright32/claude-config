@@ -30,7 +30,9 @@ A live performance rarely hands you a plot. Nobody wants something, meets an obs
 
 **The room changes.** Empty and lit, then filling, then transformed by what happens in it. Reliable in every discipline. Requires only that you were there before anyone else.
 
-**The audience changes.** Restless becomes still. Skeptical becomes held. A room of toddlers stops squirming. The strongest arc when available, because a change in the watcher is more legible than a change in the performer.
+**The audience changes.** Restless becomes still. Skeptical becomes held. A room of toddlers stops squirming. The most legible arc available, because a change in the watcher reads faster than a change in the performer.
+
+**But the audience is evidence, never the subject.** The reel is about the people who caused the change, because those are the people who hired you and the people a presenter is deciding whether to book. A reel starring the audience is a reel about strangers. Use the change in the room to prove the performers did something. Then cut back to the performers.
 
 **The performer changes.** A person waiting in the wings, then a performer, then a person again at the bow. The curtain call is often the best footage of the night because it is the moment the artifice drops.
 
