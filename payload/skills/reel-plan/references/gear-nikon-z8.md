@@ -161,8 +161,10 @@ N-Log and Flat are available. Do not use them yet. Flat footage that never gets 
 
 ## Suggested starting configuration
 
-**Pinned mode.** Body one on the tripod, 8K, 30p, shutter 1/60, locked white balance, locked ISO, rolling continuously through whole numbers. Body two in hand, 4K, for stills and tight video from the seat, with 120p reserved for tested slow motion.
+**Most of the show, both modes.** Both bodies photographing, 24-70 on one, 70-200 on the other. Video is taken in hand, in six to ten second bursts, by stopping stills and resuming.
 
-**Roaming mode.** Both bodies with you, two focal lengths, 4K at 24p or 30p. Consider parking one in 8K on the tripod for the single most important number, and collecting it back afterward.
+**Inside a parked window.** The 24-70 goes down on the tripod, or a chair arm, or a railing. 8K, 30p, H.265, shutter 1/60, white balance locked, ISO locked. Framed wide, untouched, for three to five minutes. He photographs on the 70-200 the whole time.
+
+**Slow motion.** 4K at 120p, in hand, only after the banding test passes.
 
 Test for banding before the house opens, every time.
