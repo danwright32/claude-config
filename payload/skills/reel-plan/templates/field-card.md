@@ -86,12 +86,17 @@ OPTIONAL. Subject centered. One person.
 
 ---
 
-## PARK THE SECOND BODY
+## PARKED WINDOWS
+Only these. Costs you the {24-70} for those minutes.
 
-{Tripod, set before doors.}
-{or, if tripod banned: the surface you chose, named. Nobody sits in front of it. Frame wider than feels right. It cannot be moved once the room fills.}
+**1. {The number}**
+Park on {the surface}. Start rolling {cue}. Collect {cue}.
 
-Rolling before the bow. Do not touch it.
+**2. Bow + applause**
+Park on {the surface} before the last note. Shoot stills. Collect after.
+
+Frame wider than feels right. It cannot be moved.
+Nobody sits in front of it.
 
 ---
 
