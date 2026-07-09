@@ -35,7 +35,17 @@ This is not a compromise. It is how the bow, the curtain call, and the applause 
 
 **Bring the tripod to roaming venues too, wherever one is permitted.** He used to leave it behind when he could move, reasoning that it cost him a body. That reasoning died with the stills first rule: his hands are on stills at the bow regardless, so a body has to be parked anyway. Set the tripod before doors, use it when his hands are full, roam the rest of the time.
 
-**When tripods are banned**, and they are in some halls and lobbies, furniture is the fallback. A railing, a chair arm, a windowsill, a stack of programs, a speaker cabinet. Then say so on the plan, and name three things:
+### A couch is a tripod
+
+**"No tripod" does not mean "no safety shot."** This is the mistake that will be made every time, because the two feel like the same sentence.
+
+A camera resting on a chair arm, a railing, or a windowsill is **locked**. It is as stable as a tripod, its 8K crops are as clean, and it will roll continuously for as long as the card and battery allow. A Z8 shooting 8K at 30p in H.265 uses roughly three gigabytes a minute, so a thirty five minute show is about 105 GB, inside a 256 GB card and inside the ninety minute record limit. Check the battery, which is the real limit on a long unattended take.
+
+**Braced is not locked.** A braced camera is held in a hand that is resting on something. It still shakes, and cropping an 8K braced shot to a tight framing magnifies the tremor by exactly the factor it magnifies the subject. A parked camera does not shake at all.
+
+So in a venue that bans tripods, the safety shot is not gone. It moved to the furniture. Never write a plan that concludes there is no safety shot merely because there is no tripod. Ask first whether there is a surface.
+
+**When tripods are banned**, furniture is where the parked body goes. A railing, a chair arm, a windowsill, a stack of programs, a speaker cabinet. Say so on the plan, and name three things:
 
 1. **Which surface**, chosen before doors, pointed at the performance area.
 2. **Who will sit in front of it.** Pick a position nobody walks past.
