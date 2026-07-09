@@ -98,6 +98,7 @@ The hero cut is not three acts. It is a hook and a payoff. Write it separately.
 
 ## Reference files
 
+- `references/story-structure.md`. **Read for every plan, before anything else.** Montage versus story, where the change comes from, the three act shape, and wide, medium, tight coverage.
 - `references/videography-for-photographers.md`. Read this once with the user if he has never shot video. It is the bridge from stills.
 - `references/rig-and-audio.md`. Read for every plan. Rights first, because rights can cancel the shoot.
 - `references/edit-grammars.md`. Read when picking the grammar.
