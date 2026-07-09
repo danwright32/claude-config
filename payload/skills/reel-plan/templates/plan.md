@@ -78,12 +78,16 @@ Material for a beginning and an end, whether or not this structure uses it. It c
 |---|---|---|---|---|---|---|
 | | | | | | | |
 
-**Stills obligations.** List the moments when he is contractually shooting photographs and cannot hold a video camera. Any video needed at those moments must come from a parked, rolling body.
+**Parked windows.** Both cameras photograph the show. There is no whole show safety shot. A window is bounded, deliberate, and costs one focal length for its duration. Two per event is the budget.
 
-| Stills moment | Video still needed? | Where the parked camera sits |
-|---|---|---|
-| The bow | | |
-| | | |
+| Window | Duration | Surface | Points at | Costs him | Why this one and not another |
+|---|---|---|---|---|---|
+| {the number} | | | | {the 24-70} | |
+| Bow and applause | | | | | His hands are on stills |
+
+**Free windows**, no photographs required: before doors, the empty room, the audience arriving, the room emptying.
+
+Everything outside a window is **IN HAND**: he stops shooting stills, takes six to ten seconds of video, and goes back to photographing.
 
 ### Cutaways. Shoot three times more than seems reasonable.
 
