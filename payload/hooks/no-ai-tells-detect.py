@@ -55,7 +55,7 @@ try:
             is_writing = True
 
     if is_writing:
-        skill_path = "/Users/danhankins-wright/.claude/skills/no-ai-tells/SKILL.md"
+        skill_path = "/Users/danielhankins-wright/.claude/skills/no-ai-tells/SKILL.md"
         with open(skill_path, "r") as f:
             skill_content = f.read()
         print(json.dumps({
