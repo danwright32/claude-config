@@ -74,9 +74,15 @@ If those cannot be answered, stop and fix the spine. A plan that fails this test
 
 **Grammar.** Pick from `references/edit-grammars.md`. Driven by music, by speech, by movement, or hybrid. This determines what a cut lands on, and therefore what coverage is mandatory.
 
-**Shot list.** Organized by rig mode and by pass. Safety first, clearly separated. For each shot: the framing, the lens, roughly when in the running order, and what it is *for* in the edit. A shot with no job in the paper edit does not belong on the list.
+**Shot list.** Built as a **grid of story beats by shot size.** Every beat gets a wide, a medium, and a tight, because two adjacent shots of the same size cannot be cut together. An empty cell in the grid is a beat that will be uncuttable, and it must be visible on the page before he leaves the house.
 
-**Paper edit.** The shape of the cut, written before the shoot. Beat by beat: the cold open, the build, the peak, the release, the button. Naming what goes where is how he knows what he is collecting. Without it he will sit in front of forty minutes of footage with no idea where to start.
+Within the grid, mark each shot **safety** or **ambitious**. Safety shots are banked first and the reel is deliverable with only those. For each shot: framing, lens, roughly when in the running order, and what it is *for* in the edit. A shot with no job in the paper edit does not belong on the list.
+
+Expect to be short of tight shots. Everyone comes home with too many wides. Over collect tights deliberately.
+
+**Paper edit.** The shape of the cut, written before the shoot, in three acts: the before, the event, the after. Roughly fifteen, seventy, and fifteen percent. Name what goes where, and name the turn. Without this he will sit in front of forty minutes of footage with no idea where to start.
+
+The hero cut is not three acts. It is a hook and a payoff. Write it separately.
 
 **Risks.** What most likely goes wrong at this specific event, and the cheap mitigation.
 
