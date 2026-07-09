@@ -66,22 +66,25 @@ This structure is not among them. This opening device is not among them.
 
 ## Coverage grid
 
-Every beat needs all three sizes, or it cannot be cut. Mark each shot **S** for safety or **A** for ambitious. An empty cell is a beat you will not be able to edit.
+Beats come from the chosen structure, not from a fixed template. Every beat needs all three sizes, or it cannot be cut. Mark each shot **S** for safety or **A** for ambitious. An empty cell is a beat you will not be able to edit.
 
 | Story beat | Wide | Medium | Tight |
 |---|---|---|---|
-| **ACT ONE, the before** | | | |
-| {empty room} | | | |
-| {arrival, waiting} | | | |
-| **ACT TWO, the event** | | | |
-| {opening} | | | |
-| {build} | | | |
+| {beat 1} | | | |
+| {beat 2} | | | |
 | **{the turn}** | | | |
-| {peak} | | | |
-| **ACT THREE, the after** | | | |
-| {the last note, the silence} | | | |
-| {bow, applause, faces} | | | |
-| {room emptying, empty stage} | | | |
+| {beat 4} | | | |
+| {beat 5} | | | |
+
+### Always shot, regardless of structure
+
+Material for a beginning and an end, whether or not this structure uses it. It cannot be manufactured later.
+
+- [ ] Empty stage, lit, before anyone arrives
+- [ ] Arrival, doors, the room filling, a performer waiting
+- [ ] The silence after the last note. Keep rolling.
+- [ ] Bow, applause, faces
+- [ ] The room emptying, the empty stage again
 
 **Lens and timing detail for anything non obvious:**
 
