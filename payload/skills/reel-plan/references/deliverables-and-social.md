@@ -28,6 +28,18 @@ Reels and Shorts autoplay silent. Somewhere between half and the overwhelming ma
 
 For performing arts this is close to an existential problem, because **the art is the sound.** A choir reel with the audio muted is a video of people standing still with their mouths open.
 
+### The mute test
+
+**The payoff must be visible with the sound off.** Not merely comprehensible. Visible.
+
+This kills a whole class of beautiful ideas. A high note, a key change, the moment a spoken line becomes a sung one, a perfect entrance, a held final chord: on a muted screen, every one of those is a person standing still with their mouth open. They are theatrical events, not cinematic ones, and the reel is cinema.
+
+Apply it as a test, out loud, before writing a single shot. **Describe the payoff to someone who cannot hear it.** If the description needs the word "sounds," "sings," "says," or "plays," it fails.
+
+What passes: a body arriving at a shape. A face changing. A room going still. Arms going up. A hundred people standing at once. A child leaning forward. Something moves, or something stops.
+
+The sound is the reward for unmuting. It cannot be the payoff, because most people never hear it.
+
 The response is not to give up on sound. It is to build the vertical cut **silent first**:
 
 - **Burned in text carries the meaning.** The piece, the composer or choreographer, the performer, the venue. Placed inside the safe area, away from the platform's own interface.
