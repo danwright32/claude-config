@@ -224,6 +224,8 @@ The card is read in a dark or crowded room, on a phone, with a camera in the oth
 
 **No compression that costs meaning.** "Get 3x more" is not shorter than "you will not have enough, take more," it is merely less legible. "Sync is legal" is skill vocabulary. Write the sentence out. The card is short because it omits whole ideas, never because it squeezes them.
 
+**Never use a craft word he has not been taught.** *Cutaway* is the clearest example: the card once said "cutaways, get 3x more," which names a thing he does not know and then explains why he needs it. Call it what it is on the page. "Spare shots: anything that is not the performance. Six seconds each. They let you join two clips that would otherwise clash." The same goes for *b-roll*, *coverage*, *the master*, *sync*, *the button*, *the turn*.
+
 **Each shot names its framing size.** Wide, medium, or tight, on the shot itself, not in a reminder box at the bottom. Keep a short reminder box too, but the sizes belong on the shots.
 
 ### The card is ordered by the clock, not by category
