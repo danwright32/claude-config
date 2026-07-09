@@ -81,7 +81,7 @@ Ask in this order. The early answers reorganize the later ones.
 The pass worth asking for is a **dress rehearsal**, which in professional theatre and concert work is the norm rather than a favor. Full costume, full tech, no audience, and you can move anywhere and fail without consequence. Shoot the rehearsal for the stage, and the performance for the room.
 
 **3. Rig mode.** See `references/rig-and-audio.md`.
-- **Pinned.** He cannot move (Carnegie, a formal hall, an assigned seat). The tripod costs nothing, so the 24-70 goes on it in 8K as the safety shot, rolling continuously through whole numbers. That one frame crops into a wide, a medium, and a tight, each a full 4K image. The 70-200 is in hand, braced, for a second angle.
+- **Pinned.** He cannot move (Carnegie, a formal hall, an assigned seat). He photographs from the one position on both bodies. A tripod, if permitted, is where the parked window sits when it opens, and it stands idle the rest of the time.
 - **Roaming.** He can move (a church, a lobby, a black box). He carries both bodies and photographs.
 - **In no mode is there a continuous safety shot.** Both cameras are photographing. The only continuous video is inside a parked window, and a parked window is minutes long, not a whole show.
 - **A tripod ban does not remove the parked window.** A camera on a chair arm, a railing, or a windowsill is **locked**, and its 8K crops are as clean as a tripod's. Braced is not locked: a braced camera is held in a hand and still shakes, and cropping a braced 8K frame to a tight framing magnifies the tremor. If the room has a surface, the parked window works. It always has a surface.
