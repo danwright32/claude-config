@@ -30,7 +30,9 @@ For performing arts this is close to an existential problem, because **the art i
 
 ### The mute test
 
-**The payoff must be visible with the sound off.** Not merely comprehensible. Visible.
+**Applies to the vertical cuts. Not to the horizontal master**, which is watched deliberately, with sound, by people who already care. A held final chord can end the master. It cannot end a reel.
+
+**A vertical payoff must be visible with the sound off.** Not merely comprehensible. Visible.
 
 This kills a whole class of beautiful ideas. A high note, a key change, the moment a spoken line becomes a sung one, a perfect entrance, a held final chord: on a muted screen, every one of those is a person standing still with their mouth open. They are theatrical events, not cinematic ones, and the reel is cinema.
 
