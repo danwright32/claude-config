@@ -68,7 +68,7 @@ A note that applies to all of them: **the highest engagement material in perform
 
 **Peak.** The eleven o'clock number, or in a short piece, the last song.
 
-**What goes wrong.** Grand rights. If the musical is licensed from a rights house, the license to perform it almost never includes the right to record it, and the company cannot grant you permission it does not itself have. Establish that the work is original, or that recording rights were separately obtained, before you take the job. This is the most common way a musical theatre reel dies.
+**What goes wrong.** Treating the whole show as one grammar. A musical cut entirely to music loses every joke; cut entirely to dialogue it never lifts. Mark the blocks in advance and switch grammar with them. The other failure is missing the transition into song, which is the shot the form exists for and which nobody expects, so nobody is rolling.
 
 ---
 
