@@ -52,14 +52,12 @@ The pass worth asking for is a **dress rehearsal**, which in professional theatr
 
 **5. Audio.** Read `references/rig-and-audio.md`. Establish three separate things, in order:
 - What sound does the event make: music, speech, laughter, movement, silence.
-- What can he actually capture: camera microphone, his own recorder in the room, a board feed, a clean recording supplied afterward by the client.
-- **Whether the music is live or played back.** Playback means the room's audio cannot carry sync, and the shot list changes.
-
-**6. Playback.** Will recorded music play over the house speakers rather than being performed live? If so the room's audio is unusable, you are in audio tier D, sync is gone, and the shot list needs far more coverage, cutaways, and slow motion. This is a capture question only.
+- What can he actually capture: camera microphone, his own recorder in the room, a board feed, a clean recording supplied afterward by the client. A board feed is for amplified events; at an unamplified concert the desk has almost nothing on it.
+- **Whether the music is live or played back over house speakers.** Playback means the room's audio cannot carry sync: no visible mouths, no bows, no punchlines, and the shot list needs far more coverage, cutaways, and slow motion. This is a capture question and nothing else.
 
 **Never raise rights, licensing, venue authorization, consent, releases, or publishing permission.** Dan handles all of it himself and has said so explicitly. Do not ask, do not warn, do not add it to the plan, do not mention it in passing. `references/rights-appendix.md` exists if he ever goes looking, and the skill never opens it.
 
-**7. The subject.** Who is the reel about? Sometimes it is the performers. At a children's show it is the faces in the first three rows. At a comedy set it is the laugh. At a concerto it is the soloist's hands. Name the subject in one sentence before writing a single shot.
+**6. The subject.** Who is the reel about? Sometimes it is the performers. At a children's show it is the faces in the first three rows. At a comedy set it is the laugh. At a concerto it is the soloist's hands. Name the subject in one sentence before writing a single shot.
 
 **8. The deliverable.** Read `references/deliverables-and-social.md`. Three products, not one: a horizontal archival master of two to three minutes, a vertical **hero cut of ten to twenty five seconds** which is the asset that actually travels, and optionally a vertical story piece of sixty to ninety seconds when the arc earns it.
 
