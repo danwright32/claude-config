@@ -95,7 +95,9 @@ You have two bodies, two lenses, and a tripod. The venue decides how they are ar
 
 Formal halls, assigned positions, Carnegie. You cannot move, so the tripod costs you nothing.
 
-- **Body one, on the tripod: the safety wide.** Framed to hold the full stage with a little air, locked off, rolling continuously through entire numbers. Do not touch it. This is the most valuable footage you will shoot, because it is the angle you can always cut back to, and it is the only thing that lets you cut two views of the same musical moment.
+- **Body one, on the tripod: the safety shot.** That is the actual trade name, also called the master or the fail safe. Framed to hold the full stage with a little air, locked off, rolling continuously through entire numbers. Do not touch it. This is the most valuable footage you will shoot, and professional concert crews confirm it: it is the angle you can always cut back to, and the only thing that lets you cut two views of the same musical moment.
+
+  It only works if the body genuinely records continuously. The classic failure is a camera hitting a clip limit or overheating partway through. A Z8 shooting 8K at 30p in H.265 runs roughly ninety minutes, which covers any single concert or play. Confirm the card has room before the house opens.
 - **Body two, in hand: stills, and tight video from the one position.** Long lens, braced on a knee or a seat back, because handheld past about 50mm shakes.
 
 You get real cutting ability and one angle of view. The reel will feel composed and slightly distant. Cutaways must come from where you sit.
