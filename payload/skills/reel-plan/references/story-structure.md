@@ -97,7 +97,13 @@ Two other things that make reels look identical, independent of structure:
 
 ## Part 4. Wide, medium, tight
 
-The positive statement of the jump cut rule. Two adjacent shots must differ meaningfully in size or angle, so **every beat needs coverage at all three sizes** or it cannot be cut at all. This is a physical constraint of editing, not an aesthetic preference, and it does not vary with structure.
+The positive statement of the jump cut rule, which has a formal name: **the 30 degree rule.** Two successive shots of the same subject must differ by roughly thirty degrees of angle, or by a full step of shot size. Less than that and the image jumps and the viewer sees the edit.
+
+So you must **carry** all three sizes of any subject you intend to cut on. That is a physical constraint of editing, not an aesthetic preference.
+
+**But carrying three sizes is not a licence to cut three times.** Over cutting is a specific, named error in concert direction: switching angles too often, and giving every clip the same length, reads as mechanical and monotonous. Orchestra directors deliberately pace their cuts to musical phrasing, and return to the conductor between angles rather than ping ponging.
+
+The rule, stated correctly: **carry a wide, a medium, and a tight of every subject so that any cut you make is legal. Then cut on the phrasing, not on the beat, and cut less often than you want to.**
 
 - **Wide.** Where are we. The whole stage, the whole room, the whole body. In dance, non negotiable, and it must include feet.
 - **Medium.** Who is doing what. A performer from the waist, a section, two people in relationship.
