@@ -76,6 +76,16 @@ Get more. Then get more.
 
 ---
 
+## EVERY BEAT NEEDS ALL THREE
+
+**WIDE** where are we
+**MEDIUM** who is doing what
+**TIGHT** what it feels like
+
+You are short of tights. You always are.
+
+---
+
 ## DO NOT MISS
 
 # {the one moment}
@@ -88,6 +98,7 @@ at roughly **{when}**
 
 - Six seconds minimum. Roll before, roll after.
 - Never reframe while rolling. Stop, reframe, roll.
+- Never cut a size to itself. Change size or angle.
 - Do not stop rolling at the last note. The silence is the shot.
 - Long lens needs a brace.
 - {consent constraint, if any}
