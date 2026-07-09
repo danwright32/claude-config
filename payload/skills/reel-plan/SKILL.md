@@ -37,12 +37,16 @@ Ask in this order. The early answers reorganize the later ones.
 
 **1. The event.** What is it, what discipline, what venue, what date, how long does it run?
 
-**2. How many passes?** One performance only, a repeated performance the same day, a dress rehearsal, a soundcheck, a tech run. If any second pass exists, say plainly what it buys: pass one is coverage and reconnaissance, pass two is where every ambitious shot goes, because by then the blocking is known. If a show repeats and he is booked for one, tell him to ask to sit in on the other. It is free and nobody thinks to ask.
+**2. How many passes?** One performance only, a repeated performance the same day, a dress or tech rehearsal, a soundcheck.
+
+**Two performances do not intercut.** Actors are not robots: blocking shifts, laughs land differently, tempi move. A second pass gives alternative material, not extra angles on the first. Choose one performance as the spine.
+
+The pass worth asking for is a **dress rehearsal**, which in professional theatre and concert work is the norm rather than a favor. Full costume, full tech, no audience, and you can move anywhere and fail without consequence. Shoot the rehearsal for the stage, and the performance for the room.
 
 **3. Rig mode.** See `references/rig-and-audio.md`.
-- **Pinned.** He cannot move (Carnegie, a formal hall, an assigned seat). The tripod costs nothing, so body one goes on it, locked wide, rolling continuously for whole numbers. Body two is in hand for stills and tight video from the one position.
-- **Roaming.** He can move (a church, a lobby, a black box). The tripod costs a body, so both cameras come with him on two focal lengths. There is no safety wide, which means he can never cut two angles of the same musical moment. Coverage comes from walking, and from banking cutaways.
-- **Mixed.** Some numbers pinned, some free. Plan per section.
+- **Pinned.** He cannot move (Carnegie, a formal hall, an assigned seat). The tripod costs nothing, so the 24-70 goes on it in 8K as the safety shot, rolling continuously through whole numbers. That one frame crops into a wide, a medium, and a tight, each a full 4K image. The 70-200 is in hand, braced, for a second angle.
+- **Roaming.** He can move (a church, a lobby, a black box). Without a locked camera there is no safety shot, so each passage happens once, from wherever he stood, with nothing to cut back to. Coverage comes from walking and from banking cutaways.
+- **Hybrid, and usually the right answer in a roaming venue.** Park the 24-70 on the tripod in 8K for the number that matters most, roam with the 70-200. Six minutes of a lost lens buys three croppable angles of the climax plus a real second angle.
 
 **4. Program detail.** Full running order, rough shape, or nothing. Degrade gracefully. With a full program, name specific moments and where the cuts land. With nothing, plan against the discipline's beat sheet and tell him what to find out in the first five minutes on site.
 
