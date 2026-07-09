@@ -4,15 +4,16 @@
 
 {Venue}. Doors {time}. Show {time}. {Name}, {phone}.
 
-**8K · 30p · H.265 · 1/60 · WB LOCK · ISO LOCK**
-{Second body 4K. Levels manual.}
+**In hand ● 4K · 1/60 · WB LOCK · ISO LOCK**
+**Parked ◆ 8K · 30p · H.265 · 1/60**
+{Levels manual.}
 
 ---
 
 ## BOTH CAMERAS ARE SHOOTING STILLS
 
-**● IN HAND** = stop stills. 6 to 10 sec. Back to stills.
-**◆ PARKED** = rolling alone, inside a window below.
+**● IN HAND** = stop stills. 6 to 10 sec. Back to stills. **This is most of the day.**
+**◆ PARKED** = rolling alone, inside a window below. **Minutes, not the show.**
 
 Never miss a photo for a shot.
 
