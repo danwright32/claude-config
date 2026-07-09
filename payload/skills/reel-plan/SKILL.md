@@ -53,7 +53,11 @@ Ask in this order. The early answers reorganize the later ones.
 
 **7. The subject.** Who is the reel about? Sometimes it is the performers. At a children's show it is the faces in the first three rows. At a comedy set it is the laugh. At a concerto it is the soloist's hands. Name the subject in one sentence before writing a single shot.
 
-**8. The deliverable.** Read `references/deliverables-and-social.md`. Three products, not one: a horizontal archival master of two to three minutes, a vertical **hero cut of fifteen to thirty seconds** which is the asset that actually travels, and optionally a vertical story piece of sixty to ninety seconds when the arc earns it. The vertical is not cropped out of the finished horizontal as an afterthought. It is composed for during the shoot.
+**8. The deliverable.** Read `references/deliverables-and-social.md`. Three products, not one: a horizontal archival master of two to three minutes, a vertical **hero cut of ten to twenty five seconds** which is the asset that actually travels, and optionally a vertical story piece of sixty to ninety seconds when the arc earns it.
+
+The hero cut runs exactly as long as the payoff needs and not one beat longer. Ten seconds fits a single visual beat. A musical phrase needs closer to twenty five. Never clip the payoff to hit a number.
+
+The vertical is not cropped out of the finished horizontal as an afterthought. It is composed for during the shoot.
 
 ## Writing the plan
 
