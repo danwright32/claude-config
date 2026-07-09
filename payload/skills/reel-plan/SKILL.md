@@ -123,6 +123,8 @@ Answer the test at the end of that file, in writing, on the plan. If it cannot b
 
 Within the grid, mark each shot **safety** or **ambitious**. Safety shots are banked first and the reel is deliverable with only those. For each shot: framing, lens, roughly when in the running order, and what it is *for* in the edit. A shot with no job in the paper edit does not belong on the list.
 
+**A shot the plan elsewhere warns may fail is not a safety shot.** If the risks table, or a technical note, or any sentence in the document says a shot may be unusable, it is ambitious by definition. Safety means high confidence, not high importance. Before finishing, read the risks table against the grid and demote anything that appears in both.
+
 Expect to be short of tight shots. Everyone comes home with too many wides. Over collect tights deliberately.
 
 **Paper edit.** The shape of the cut, written before the shoot, following **the structure chosen above**, not a fixed template. Name what goes where, and name the turn. Without this he will sit in front of forty minutes of footage with no idea where to start.
