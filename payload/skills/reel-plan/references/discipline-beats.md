@@ -40,7 +40,7 @@ A note that applies to all of them: **the highest engagement material in perform
 
 **Peak.** The end of the big aria, and the curtain call, which is often the best footage of the night because the artifice drops.
 
-**What goes wrong.** Rights. Opera is frequently a licensed staging of a copyrighted production concept even when the score is public domain. Ask.
+**What goes wrong.** Scale defeats the tight shot. From a house seat with a 70-200 you will not reach a face on a large stage, and the 8K crop off the locked wide is where your closeups actually come from. Plan the wide's framing with that in mind, tighter than instinct says.
 
 ---
 
