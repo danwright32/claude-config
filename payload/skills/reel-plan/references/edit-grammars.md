@@ -34,7 +34,13 @@ Play, comedy, spoken theatre, keynote, panel.
 
 **The cut lands on** the end of a line, a reaction, or a laugh.
 
-**The structure.** A licensed music bed runs underneath, and it is punctured by pockets of clean sync sound where a line or a laugh lands. The bed carries the montage. The sync pockets carry the meaning. Three or four pockets in a two minute piece.
+**The structure.** A licensed music bed runs underneath, and it is punctured by pockets of clean sync sound where a line or a laugh lands. The bed carries the montage. The sync pockets carry the meaning. **Two to four pockets in a sixty to ninety second cut**, no more.
+
+A pocket earns its place only if it lands a beat the pictures cannot land alone. The kinds that work: a question that hooks, one short line that frames the premise, one emotionally loaded line, one lyric hook. Keep each one short and broadly legible. Do not let a pocket explain the plot.
+
+**The trick professionals insist on:** when the show's own underscore is playing beneath a line you want to use, do not lay your bed on top of it. Two pieces of music will fight and both will lose. Get a dialogue only version of that moment if one exists, or choose a line spoken in silence. Then duck your bed under the pocket and bring it back up after.
+
+**The title card goes at the end.** Trailer grammar puts it after the escalation, at the peak, not at the front. Show name, dates, venue. A single striking shot after the card is the button.
 
 **The hard part.** Intelligible dialogue from a house seat, in a reverberant room, on a camera microphone, is genuinely difficult, harder than music. Music survives reverb. Consonants do not. Decide before the shoot which two or three lines must be heard, and solve those specifically: get close, get the feed, or cut the line.
 
