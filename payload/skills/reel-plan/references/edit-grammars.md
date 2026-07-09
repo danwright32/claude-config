@@ -58,7 +58,7 @@ Dance, physical theatre, circus, movement based work.
 
 **What that demands.** Wide shots that hold whole bodies, because cutting off a dancer's feet is a crime and everyone in the room will notice. Then tight shots for texture, never for the movement itself. Slow motion earns its keep here, at 60 frames per second, on the accents, with the sound covered by music.
 
-**The rights problem.** Movement work is usually set to recorded playback over the house speakers, and that playback is frequently a commercial track. Camera audio captures it, the platform's content matching hears it, and the reel is muted or blocked after you have already edited it. Settle this before you shoot. If the audio is unpostable, you are shooting for a silent cut with a library bed, which changes the shot list: you lose sync entirely, so you need far more coverage and far more slow motion.
+**The playback problem.** Movement work is usually set to recorded music over the house speakers rather than performed live. That means the room's audio is a bed, not a source, and **you have no sync.** Settle it before you shoot. Without sync you are cutting a silent film to a library track, which changes the shot list: far more coverage, far more cutaway material, far more slow motion, and no shot that depends on a sound landing exactly where it appears to.
 
 ---
 
