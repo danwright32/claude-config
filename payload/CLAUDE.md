@@ -35,6 +35,11 @@ These come from a 2026-07-06 audit of roughly 850 historical GitHub issues acros
 - Quote glob patterns (zsh errors on unmatched globs like `--include=*.tsx`). Use `rg` or `grep -r`, not `fd` (not installed).
 - Never run a command that will show an interactive prompt (wrangler, supabase, npx installers). Find the non-interactive form (flags, piped values) first; a raw y/n prompt handed to the user has derailed sessions.
 
+## Local tooling gotchas
+
+- `bbedit` is NOT on PATH. To open a file in BBEdit use the bundled helper: `/Applications/BBEdit.app/Contents/Helpers/bbedit_tool <file>`. Never use `open` (triggers Island browser).
+- The `check-style-guide.sh` pre-push hook rejects the ENTIRE Bash call when it sees `git push` anywhere in it, before any earlier command in the chain runs. So never chain `... && git commit --amend && git push`: the amend silently never happens and the hook re-reads the old commit. Run the fix, the amend, and the push as separate Bash calls.
+
 ## Hand-offs to Dan (manual steps)
 
 Dan does not write code or live in the terminal. When a step genuinely requires him:
