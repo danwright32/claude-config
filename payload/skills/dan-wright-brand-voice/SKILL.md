@@ -74,6 +74,8 @@ Direct, warm, concise. No filler, no throat-clearing openers, no performative en
 
 **Cite a credential and the portfolio link in cold outreach.** Work in one relevant credential from the citable list above plus the portfolio link, so the pitch carries real proof, not just an offer. Tailor which credential leads to the context: a Carnegie-venue show leads with the Carnegie tenure; a show at another marquee venue can lead with that venue instead or pair it with the Carnegie tenure. Don't reproduce Dan's reference pitch (references/email-and-alt-text.md) verbatim or reuse the same sentence shape draft to draft; state the credential and link naturally and vary the phrasing.
 
+**Rotate opener shapes when drafting several emails in one sitting.** See references/email-and-alt-text.md's "Opener variety" for the four shapes (reason-first, credential-first, observation-first, direct-intent) and the rule against reusing the same one twice in a row. Body length can range 2 to 4 sentences; don't pad to hit a target.
+
 ## Voice Check
 
 - Does it sound like a real person talking?
