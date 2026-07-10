@@ -20,6 +20,9 @@ Dan's proven cold pitch, kept here as a reference for voice and structure, not a
 
 Vary the phrasing and sentence shape draft to draft: don't lead every email with "My name is Dan," don't always list all three venues, don't always say "nearly 10 years." Pull the credential and link in naturally, the way a person restates the same true fact differently each time.
 
+### Opener variety
+Cold pitches read as templated when every draft opens the same way. Rotate across four opener shapes and don't reuse the same one twice in a row when drafting several emails in one sitting: reason-first (open on the specific reason for reaching out), credential-first (open by leading with the relevant credential above), observation-first (open on a specific real detail about the performance, venue, or program), and direct-intent (a plain statement of what Dan does and why he's writing, no throat-clearing). Never invent a detail to force a shape to fit, use a different shape if the material doesn't support one. Body length can range 2 to 4 sentences depending on the shape and the material; don't pad to hit a target.
+
 ### When drafting
 Offer two variants when a tone or framing choice is genuinely meaningful (for example, holding firm vs. offering a goodwill concession). Otherwise one clean draft is enough. Use the message compose tool with kind: email, including subject and body.
 
