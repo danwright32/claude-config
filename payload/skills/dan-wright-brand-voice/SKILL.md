@@ -11,6 +11,8 @@ This skill writes content that matches Dan Wright Photography's voice across all
 
 NYC-based performing arts photographer specializing in documentary-style coverage. Shoots concerts, choral events, opera, theater, dance, and bands at Carnegie Hall (Stern Auditorium, Weill Recital Hall, Weill Music Room), Lincoln Center (David Geffen Hall), and other NYC venues. Core clients include DCINY, Every Voice Choirs, Chain Theatre, Decoda, Bay Ridge School of Music, Larchmont Music Academy, Teachers College, Opera Praktikos, and various choral organizations. Brand: Dan Wright Photography (danwrightphotography.com, @dwphotony).
 
+**Citable credentials (factual, approved for outreach):** photographer at Carnegie Hall for nearly 10 years; work has also taken him to Madison Square Garden, Lincoln Center, and Radio City Music Hall; portfolio at danwrightphotography.com.
+
 The differentiator is an unobtrusive, no-flash documentary approach. He captures authentic moments without disrupting performances, shooting from the back of house or moving through the room as configurations change.
 
 ## Audience
