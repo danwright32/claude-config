@@ -10,6 +10,16 @@ Every outreach email is about a specific known performance, so the date, venue, 
 ### Pricing and scope
 Hold boundaries positively. Frame any concession as goodwill, not as a response to pressure. Don't volunteer rate flexibility upfront; keep it as a back-pocket option. Prefer a soft close like "let me know how that lands" over a hard close.
 
+### Credentials and portfolio link
+Cold outreach should carry real proof, not just an offer. Work in one relevant credential from the citable list in SKILL.md (Carnegie tenure, Madison Square Garden, Lincoln Center, Radio City Music Hall) plus the portfolio link (danwrightphotography.com), tailoring which credential leads to the venue in play. A Carnegie-venue show leads with the Carnegie tenure; a show at another marquee venue can lead with that venue or pair it with the Carnegie tenure.
+
+Dan's proven cold pitch, kept here as a reference for voice and structure, not a script to reproduce word for word:
+
+> Hello!
+> My name is Dan and I'm a professional arts photographer here in NYC. I'm writing in regard to your upcoming concert at Carnegie Hall. I have been a photographer at Carnegie Hall for nearly 10 years and my work has brought me to many other prestigious venues in NYC such as Madison Square Garden, Lincoln Center, and Radio City Music Hall. When you have a moment, I would love to speak about your photography plans for the performance. I invite you to take a look at my portfolio here (www.danwrightphotography.com) and give me an email back. I look forward to hearing from you!
+
+Vary the phrasing and sentence shape draft to draft: don't lead every email with "My name is Dan," don't always list all three venues, don't always say "nearly 10 years." Pull the credential and link in naturally, the way a person restates the same true fact differently each time.
+
 ### When drafting
 Offer two variants when a tone or framing choice is genuinely meaningful (for example, holding firm vs. offering a goodwill concession). Otherwise one clean draft is enough. Use the message compose tool with kind: email, including subject and body.
 
