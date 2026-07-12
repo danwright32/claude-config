@@ -6,6 +6,12 @@
 - Whenever you ask what to do next, or offer a choice between options, present it as an AskUserQuestion clickable picker, not as a prose list. The user wants to answer by selecting.
 - Ask AskUserQuestion questions ONE at a time (one question per call). Multi-question calls have lost answers mid-selection.
 
+## Driving Dan's Machine (keyboard, mouse, screen)
+
+- **Tell Dan BEFORE taking control of the keyboard, mouse, or screen, and wait for him to be ready** (his words, 2026-07-12: "let me know when you need to take control so I'm ready"). This covers synthetic keystrokes, clicks, and anything that steals focus.
+- **Never send a keystroke without first PROVING the intended app is frontmost, and abort if it is not.** An "activate the app" step can fail silently; on 2026-07-12 a Cmd+N intended for Overture landed in Adobe Lightroom and opened a New Snapshot dialog on the photo Dan had open. Verify the frontmost process name, and send nothing when it does not match.
+- Prefer read-only inspection (a screenshot, an accessibility query of the UI tree) over anything that types or clicks. When a click is genuinely needed, target the element through the accessibility tree rather than blind screen coordinates.
+
 ## Progress & Feedback (UI)
 
 - **Time-taking actions must always show working / still-alive / failed as visibly distinct states.** Any action that does not return instantly (network calls, sends, detached AI or background runs, long computations) must never present a bare indefinite spinner. The user has to be able to tell, at a glance, three things apart: it actually started, it is still alive (elapsed time, a heartbeat, streamed progress, or a count), and it failed or stalled (a timeout that converts the in-progress state into an actionable error/retry). A spinner that looks identical whether the work is progressing, hung, or dead is a defect. Apply this to every such surface by default, not just the one a bug was reported on. (Dan, 2026-06-28: "that's a principle we should apply everywhere.")
