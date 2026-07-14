@@ -67,7 +67,7 @@ want_clean "empty"                  ""
 
 # --- The negation has to GOVERN the keyword, or half the honest PRs in the world are blocked ---
 
-# A previous SENTENCE\'s negation is ordinary English, and must sail through. This is the case
+# A previous SENTENCE negation is ordinary English, and must sail through. This is the case
 # that matters most for keeping the hook trusted: a PR that says what it does NOT do, then
 # genuinely closes something, is exactly what a careful author writes.
 want_clean "negation in the previous sentence" \
