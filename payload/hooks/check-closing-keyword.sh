@@ -80,7 +80,8 @@ for m in re.finditer(KEYWORDS + r"\s+" + REF, text, re.IGNORECASE):
     # towards blocking rather than passing, because the two failures are not symmetrical. A
     # false block is loud, visible, and overridable in one word. A false pass silently closes
     # an issue nobody meant to close, and is only found later, by accident, if at all.
-    before = text[max(0, m.start() - 60):m.start()]
+    sentence = re.split(r"[.!?\n]", text[:m.start()])[-1]
+    before = sentence
     # Apostrophes are stripped BEFORE tokenizing, both the ascii one and the typographic one.
     # Without this, the contraction tokenizes to "doesn" and sails straight past a list holding
     # "doesnt", and the contraction is the most natural way anybody would write this sentence.
