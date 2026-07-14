@@ -65,9 +65,20 @@ want_clean "issue ref, no keyword"  "See #897 for the analysis."
 want_clean "prose about closing"    "The queue closes the lead out when Dan sends a closing note."
 want_clean "empty"                  ""
 
-# --- The negation has to be NEAR the keyword, or half the PRs in the world would be blocked ---
+# --- The negation has to GOVERN the keyword, or half the honest PRs in the world are blocked ---
+
+# A previous SENTENCE\'s negation is ordinary English, and must sail through. This is the case
+# that matters most for keeping the hook trusted: a PR that says what it does NOT do, then
+# genuinely closes something, is exactly what a careful author writes.
+want_clean "negation in the previous sentence" \
+  "This does not attempt the per-page contract. Closes #910."
+
 want_clean "far-away negation" \
   "This does not attempt the per-page contract, the reject tolerance, or any of the other three problems the issue raises, and it is deliberately narrow. Closes #910."
+
+# But inside ONE sentence, a negation a few words back still governs the keyword.
+want_flag "negation with a clause between it and the keyword" \
+  "This does not, in the end, close #897."
 
 echo
 echo "passed: $pass   failed: $fail"
