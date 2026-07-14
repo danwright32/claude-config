@@ -45,10 +45,27 @@ sys.stdout.write(ti.get("command") or "")
 cmd="$(parse_payload)" || exit 0
 [ -n "$cmd" ] || exit 0
 
-# Only the commands that can actually link an issue: a PR's body/title, or a commit message.
-# A `gh pr comment` or an `gh issue comment` cannot close anything, and must not be blocked:
-# discussing the mistake (as this hook's own issue does) has to stay possible.
-printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?gh[[:space:]]+pr[[:space:]]+(create|edit)([[:space:]]|$)|(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)' || exit 0
+# Only the commands that can actually link an issue: a PR body/title, or a commit message.
+#
+# Matched on the LEADING TOKENS of each shell segment, never anywhere in the string. That is
+# the whole difference between a command and a command PAYLOAD, and getting it wrong was not
+# theoretical: the first draft of this hook blocked its own issue-closing comment, because
+# that comment QUOTED a PR-creation command as the example of what it catches. An issue
+# comment cannot close anything, and neither can a comment that merely talks about a PR.
+is_target=0
+while IFS= read -r seg; do
+  # Drop leading env assignments (GH_TOKEN=... gh pr create ...) before reading the program.
+  head_tokens="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//' | awk '{print $1, $2, $3}')"
+  if printf '%s' "$head_tokens" | grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+(create|edit)([[:space:]]|$)'; then
+    is_target=1
+    break
+  fi
+  if printf '%s' "$head_tokens" | grep -Eq '(^|/)(rtk[[:space:]]+)?git[[:space:]]+commit([[:space:]]|$)'; then
+    is_target=1
+    break
+  fi
+done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;)/\n/g')
+[ "$is_target" -eq 1 ] || exit 0
 
 if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_CLOSING_CHECK=1([[:space:]]|$)'; then
   exit 0
