@@ -73,6 +73,12 @@ want_clean "empty"                  ""
 want_clean "negation in the previous sentence" \
   "This does not attempt the per-page contract. Closes #910."
 
+# The discriminating case: the negation is only a WORD or two back, but it belongs to the
+# previous sentence, so it governs nothing here. A plain distance window (however tight) blocks
+# this, and it is a sentence a careful author writes constantly.
+want_clean "negation ending the previous sentence" \
+  "The ratchet was not simple. Closes #910."
+
 want_clean "far-away negation" \
   "This does not attempt the per-page contract, the reject tolerance, or any of the other three problems the issue raises, and it is deliberately narrow. Closes #910."
 
