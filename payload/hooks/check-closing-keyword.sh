@@ -73,10 +73,12 @@ for m in re.finditer(KEYWORDS + r"\s+" + REF, text, re.IGNORECASE):
     # earlier ("this does not attempt the contract ... Closes #910") is ordinary English and
     # must not be blocked, or the hook would fire on half the honest PRs ever written.
     before = text[max(0, m.start() - 60):m.start()]
-    # Apostrophes are stripped BEFORE tokenizing, both the ascii one and the typographic one:
-    # "doesn'"'"'t" otherwise tokenizes to "doesn" and sails straight past a list containing
-    # "doesnt". That is the most natural way anybody would write this sentence.
-    flat = before.lower().replace("'"'"'", "").replace("’", "")
+    # Apostrophes are stripped BEFORE tokenizing, both the ascii one and the typographic one.
+    # Without this, the contraction tokenizes to "doesn" and sails straight past a list holding
+    # "doesnt", and the contraction is the most natural way anybody would write this sentence.
+    # Written as escape codes because this whole detector lives inside a single-quoted shell
+    # string, where a literal apostrophe would end it.
+    flat = re.sub("[’']", "", before.lower())
     words = re.findall(r"[a-z]+", flat)[-5:]
     if any(w in NEGATIONS for w in words):
         findings.append(" ".join(before.split()[-6:]) + " " + m.group(0))
