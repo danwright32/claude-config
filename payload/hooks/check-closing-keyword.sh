@@ -79,7 +79,7 @@ for m in re.finditer(KEYWORDS + r"\s+" + REF, text, re.IGNORECASE):
     # Written as escape codes because this whole detector lives inside a single-quoted shell
     # string, where a literal apostrophe would end it.
     flat = re.sub("[\u2019\u0027]", "", before.lower())
-    words = re.findall(r"[a-z]+", flat)[-0:]
+    words = re.findall(r"[a-z]+", flat)[-5:]
     if any(w in NEGATIONS for w in words):
         findings.append(" ".join(before.split()[-6:]) + " " + m.group(0))
 
