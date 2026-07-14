@@ -20,6 +20,10 @@
             "command": "__CLAUDE_HOME__/hooks/check-style-guide.sh",
             "timeout": 30,
             "statusMessage": "Checking pushed changes for style-guide violations"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-closing-keyword.sh"
           }
         ]
       }
