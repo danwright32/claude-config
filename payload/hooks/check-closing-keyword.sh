@@ -53,18 +53,7 @@ cmd="$(parse_payload)" || exit 0
 # that comment QUOTED a PR-creation command as the example of what it catches. An issue
 # comment cannot close anything, and neither can a comment that merely talks about a PR.
 is_target=0
-while IFS= read -r seg; do
-  # Drop leading env assignments (GH_TOKEN=... gh pr create ...) before reading the program.
-  head_tokens="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//' | awk '{print $1, $2, $3}')"
-  if printf '%s' "$head_tokens" | grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+(create|edit)([[:space:]]|$)'; then
-    is_target=1
-    break
-  fi
-  if printf '%s' "$head_tokens" | grep -Eq '(^|/)(rtk[[:space:]]+)?git[[:space:]]+commit([[:space:]]|$)'; then
-    is_target=1
-    break
-  fi
-done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;)/\n/g')
+printf '%s' "$cmd" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+(create|edit)|git[[:space:]]+commit' && is_target=1
 [ "$is_target" -eq 1 ] || exit 0
 
 if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_CLOSING_CHECK=1([[:space:]]|$)'; then
