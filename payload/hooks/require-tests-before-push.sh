@@ -175,6 +175,11 @@ is_source() {
   # One-off analysis scripts (scripts/check-*.js etc.) are throwaway
   # investigation tools, not shipped behavior -> exempt from the gate.
   printf '%s' "$f" | grep -Eiq '(^|/)scripts/check[-_][^/]+\.(ts|tsx|js|jsx|mjs|cjs|py)$' && return 1
+  # Production smoke scripts (scripts/smoke-*.ts) are hand-run verification tools
+  # that hit the live system, so they cannot carry their own CI unit test ->
+  # exempt them too, else every new smoke script needs a SKIP_TEST_CHECK
+  # override (Slate #529, hit adding scripts/smoke-523-stickiness.ts in PR #528).
+  printf '%s' "$f" | grep -Eiq '(^|/)scripts/smoke[-_][^/]+\.(ts|tsx|js|jsx|mjs|cjs|py)$' && return 1
   return 0
 }
 
