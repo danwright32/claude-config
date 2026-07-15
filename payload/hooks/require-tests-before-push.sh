@@ -180,6 +180,10 @@ is_source() {
   # exempt them too, else every new smoke script needs a SKIP_TEST_CHECK
   # override (Slate #529, hit adding scripts/smoke-523-stickiness.ts in PR #528).
   printf '%s' "$f" | grep -Eiq '(^|/)scripts/smoke[-_][^/]+\.(ts|tsx|js|jsx|mjs|cjs|py)$' && return 1
+  # Hand-run diagnostics (scripts/diag-*.mjs, e.g. the live Google/SF credential
+  # probes) are the same class as check-*/smoke-*: not shipped behavior and not
+  # CI-testable -> exempt from the gate.
+  printf '%s' "$f" | grep -Eiq '(^|/)scripts/diag[-_][^/]+\.(ts|tsx|js|jsx|mjs|cjs|py)$' && return 1
   return 0
 }
 
