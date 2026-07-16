@@ -478,7 +478,7 @@ try:
     else:
         print("PASS")
 except Exception:
-    print("ERR")
+    print("ERR_VERDICT")
 ' 2>/dev/null)"
 
 case "$verdict" in
