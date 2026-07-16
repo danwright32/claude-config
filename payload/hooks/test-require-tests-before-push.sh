@@ -126,16 +126,18 @@ STUB
 chmod +x "$STUB_DIR/claude"
 PATH_STUB="$STUB_DIR:$PATH_NOCLAUDE"
 
-TMPROOTS=()
-cleanup() { rm -rf "$STUB_DIR" "${TMPROOTS[@]}"; }
+# One parent dir for every scratch repo. mk_repo runs inside $(...), a subshell,
+# so it cannot append to an array in this shell: a tracking array would silently
+# stay empty and leak every repo it made.
+TMPROOT="$(mktemp -d)"
+cleanup() { rm -rf "$STUB_DIR" "$TMPROOT"; }
 trap cleanup EXIT
 
 # A scratch repo WITH a bare remote and a tracking branch. Without the upstream
 # the hook has no merge base and silently allows everything (trap 1 above).
 mk_repo() {
   local root
-  root="$(mktemp -d)"
-  TMPROOTS+=("$root")
+  root="$(mktemp -d "$TMPROOT/repo.XXXXXX")"
   git init -q --bare "$root/origin.git"
   git init -q "$root/work"
   (
