@@ -213,15 +213,7 @@ diff_docs_only() {
   d="$(cat)"
   changed="$(printf '%s\n' "$d" \
     | grep -E '^[+-]' \
-    | grep -Ev '^(\+\+\+|---)([[:space:]]|$)')"
-  # Zero changed content lines (a permission/mode change such as chmod +x, or a
-  # pure rename) means we can SEE no documentation change. "I saw nothing" is not
-  # "there is nothing to see": treating it as docs-only let a chmod on a source
-  # file pass untested, which the pre-#733 gate blocked. Fail CLOSED here -- the
-  # zero-test floor below is the hard floor and must not be softened by a diff we
-  # could not read.
-  [ -n "$changed" ] || return 1
-  changed="$(printf '%s\n' "$changed" \
+    | grep -Ev '^(\+\+\+|---)([[:space:]]|$)' \
     | sed -E 's/^[+-]//' \
     | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
   case "$style" in

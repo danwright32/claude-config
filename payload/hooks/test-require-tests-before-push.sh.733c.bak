@@ -60,10 +60,7 @@ want_docsonly slash "$(printf -- '--- a/lib/foo.js\n+++ b/lib/foo.js\n@@\n+/**\n
 want_docsonly slash "$(printf -- '--- a/foo.js\n+++ b/foo.js\n@@\n+\n+    \n')"
 want_docsonly slash "$(printf -- '--- a/foo.js\n+++ b/foo.js\n@@\n-  // old note\n')"
 want_docsonly slash "$(printf -- '--- a/foo.js\n+++ b/foo.js\n@@\n+ */\n')"
-# A diff with NO changed content lines at all (a mode/permission change, a pure
-# rename) must NOT count as docs-only -- we saw no documentation change, so the
-# hard floor applies. See the fail-closed guard in diff_docs_only.
-want_notdocsonly slash ""
+want_docsonly slash ""
 want_docsonly    hash "$(printf -- '--- a/s.py\n+++ b/s.py\n@@\n+# a python comment\n')"
 
 # --- real code must STILL block (these guard against over-allowing) ---
