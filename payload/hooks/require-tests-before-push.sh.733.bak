@@ -187,39 +187,9 @@ is_source() {
   return 0
 }
 
-# Comment style for a source file, by extension. Hash-comment languages use
-# '#'; everything else in is_source() is a slash/star family (//, /*, *).
-docs_style_for() {
-  case "$1" in
-    *.py|*.rb|*.ex|*.exs) echo hash ;;
-    *) echo slash ;;
-  esac
-}
-
-# Read a git diff on stdin, return 0 (docs-only) iff every ADDED/REMOVED content
-# line is blank or a comment for the given style. Conservative: a line it cannot
-# confidently call a comment counts as CODE, so the push still blocks (author can
-# override). That is why '#' is a comment ONLY for hash-style files -- in JS/TS
-# '#foo' is a private field, i.e. real code, and a bare '*ptr' in C is a deref.
-diff_docs_only() {
-  local style="$1" comment_re code
-  case "$style" in
-    hash) comment_re='^#' ;;
-    *)    comment_re='^(//|/\*|\*([[:space:]/]|$))' ;;
-  esac
-  code="$(grep -E '^[+-]' \
-    | grep -Ev '^(\+\+\+|---)([[:space:]]|$)' \
-    | sed -E 's/^[+-]//' \
-    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
-    | grep -Ev '^[[:space:]]*$' \
-    | grep -Ev "$comment_re")"
-  [ -z "$code" ]
-}
-
 source_changed=0
 test_changed=0
 source_list=""
-source_paths=""
 test_list=""
 test_paths=""
 while IFS= read -r f; do
@@ -235,7 +205,6 @@ while IFS= read -r f; do
   if is_source "$f"; then
     source_changed=1
     source_list="${source_list}  - ${f}"$'\n'
-    source_paths="${source_paths}${f}"$'\n'
   fi
 done <<EOF
 $files
@@ -246,28 +215,6 @@ EOF
 
 # Source touched but not a single test in the push -> block without a model.
 if [ "$test_changed" -eq 0 ]; then
-  # Documentation-only change: if EVERY changed line in EVERY source file that
-  # tripped the gate is blank or a comment, there is no behavior to test -> pass.
-  # Mirrors the model rubric's needsTest=false for comments; this path exists
-  # because the zero-test floor below never reaches the model. (#733)
-  docs_only=1; examined=0
-  while IFS= read -r f; do
-    [ -z "$f" ] && continue
-    examined=$((examined+1))
-    style="$(docs_style_for "$f")"
-    d="$( { [ -n "$mb" ] && git diff "$mb" HEAD -- "$f" 2>/dev/null; \
-            [ "$commit_in_chain" -eq 1 ] && git diff HEAD -- "$f" 2>/dev/null; } )"
-    if [ -z "$d" ] && [ -f "$f" ]; then
-      d="$(git diff --no-index -- /dev/null "$f" 2>/dev/null)"
-    fi
-    if ! printf '%s\n' "$d" | diff_docs_only "$style"; then
-      docs_only=0; break
-    fi
-  done <<DOCS_ONLY_EOF
-$source_paths
-DOCS_ONLY_EOF
-  [ "$examined" -ge 1 ] && [ "$docs_only" -eq 1 ] && exit 0
-
   {
     echo "PUSH BLOCKED: this push changes source code but adds or modifies no tests."
     echo ""
