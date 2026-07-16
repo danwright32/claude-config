@@ -499,8 +499,17 @@ case "$verdict" in
     } >&2
     exit 2
     ;;
-  *)
-    # PASS or ERR -> fail open.
+  PASS)
     exit 0
+    ;;
+  ERR_ENVELOPE)
+    fail_open "judge returned an error envelope"
+    ;;
+  ERR_VERDICT|"")
+    # Includes the judge answering in prose, and this parser itself throwing.
+    fail_open "judge verdict was not readable JSON"
+    ;;
+  *)
+    fail_open "judge returned an unrecognized verdict"
     ;;
 esac
