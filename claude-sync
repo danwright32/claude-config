@@ -248,7 +248,15 @@ do_status(){
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
     local ex=""; [ "$d" = skills ] && ex="$(skill_excludes)"
-    rsync -an --delete $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' | sed "s|^|$d: |" || true
+    # -i is load-bearing: plain `rsync -an` prints NOTHING whatever differs, so
+    # this whole section used to be decorative and status always read clean.
+    # -c because -a quick-checks on size plus mtime, and a config edit that
+    # keeps both (a one character swap) is otherwise invisible. These trees are
+    # small, so the checksum costs nothing worth saving.
+    # COMMON_EXCLUDES must match stage_local_to_payload: status is only useful
+    # if it describes what a push would ACTUALLY do, and some skills are git
+    # clones whose .git would otherwise dominate the output. (#737)
+    rsync -ainc --delete "${COMMON_EXCLUDES[@]}" $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' | sed "s|^|$d: |" || true
   done
   for f in "${TOP_FILES[@]}"; do
     [ -f "$CLAUDE_HOME/$f" ] || continue

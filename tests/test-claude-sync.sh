@@ -283,6 +283,70 @@ git -C "$RSA" add claude-sync && git -C "$RSA" -c user.name=t -c user.email=t@e 
 out_sync_restart="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RSCHOME" SYNC_REPO="$RSC" bash "$SCRIPT" sync 2>&1)"
 check "sync also restarts the watch daemon on a script change" "printf '%s' \"\$out_sync_restart\" | grep -qi 'watch daemon'"
 
+# ---- status must actually REPORT a difference (#737) ----
+# do_status ran `rsync -an`, which has no -v and no -i, so rsync printed nothing
+# no matter what differed. The dry-run section could never report anything and
+# status always read clean. A check that reports clean without checking is worse
+# than no check, because it gets trusted.
+STHOME="$WORK/st-home"; STREPO="$WORK/st-repo"
+mkdir -p "$STHOME/hooks" "$STREPO/payload/hooks"
+echo '{"hooks":{}}' > "$STHOME/settings.json"
+
+# Identical on both sides -> status must stay quiet.
+echo 'same' > "$STHOME/hooks/same.sh"
+cp "$STHOME/hooks/same.sh" "$STREPO/payload/hooks/same.sh"
+out_st_clean="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
+check "status is quiet when local matches payload" \
+  "! printf '%s' \"\$out_st_clean\" | grep -q 'hooks: '"
+
+# A hook that exists locally but NOT in the payload: status must name it.
+echo 'brand new' > "$STHOME/hooks/added.sh"
+out_st_add="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
+check "status names a hook missing from the payload" \
+  "printf '%s' \"\$out_st_add\" | grep -q 'added.sh'"
+
+# A file in the payload that is gone locally: --delete is in the command, so a
+# working status must show the pending deletion. This is the exact case that
+# proved the bug (rsync -an silent, rsync -ain printed '*deleting').
+echo 'stale' > "$STREPO/payload/hooks/removed.sh"
+out_st_del="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
+check "status names a payload file deleted locally" \
+  "printf '%s' \"\$out_st_del\" | grep -q 'removed.sh'"
+
+# An edit to an existing hook with the SAME byte count. -a quick-checks on size
+# plus mtime, so without -c this edit is invisible even to an itemized rsync.
+printf 'aaaa\n' > "$STHOME/hooks/edit.sh"
+printf 'aaaa\n' > "$STREPO/payload/hooks/edit.sh"
+touch -t 202601010000 "$STHOME/hooks/edit.sh" "$STREPO/payload/hooks/edit.sh"
+printf 'bbbb\n' > "$STHOME/hooks/edit.sh"
+touch -t 202601010000 "$STHOME/hooks/edit.sh"
+out_st_edit="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
+check "status names a same-size same-mtime edit" \
+  "printf '%s' \"\$out_st_edit\" | grep -q 'edit.sh'"
+
+# status must report what a push would ACTUALLY do, so it has to honor the same
+# exclude set as stage_local_to_payload. Some skills are git clones carrying
+# their own .git, and a status that reports those as pending changes is noise
+# describing work that will never happen. (#737)
+mkdir -p "$STHOME/skills/cloned/.git/hooks"
+echo 'ref: refs/heads/main' > "$STHOME/skills/cloned/.git/HEAD"
+echo 'SKILL' > "$STHOME/skills/cloned/SKILL.md"
+echo 'junk' > "$STHOME/skills/cloned/.DS_Store"
+out_st_ex="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
+check "status ignores nested .git the way a push does" \
+  "! printf '%s' \"\$out_st_ex\" | grep -q '\.git/'"
+check "status ignores .DS_Store the way a push does" \
+  "! printf '%s' \"\$out_st_ex\" | grep -q '\.DS_Store'"
+check "status still reports the real skill file next to them" \
+  "printf '%s' \"\$out_st_ex\" | grep -q 'SKILL.md'"
+
+# A plugin-managed skill is excluded from the sync, so status must not offer it.
+mkdir -p "$STHOME/skills/wrangler"
+echo 'PLUGIN' > "$STHOME/skills/wrangler/SKILL.md"
+out_st_plugin="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
+check "status ignores plugin-managed skills the way a push does" \
+  "! printf '%s' \"\$out_st_plugin\" | grep -q 'wrangler'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
