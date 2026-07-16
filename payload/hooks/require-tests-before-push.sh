@@ -19,12 +19,32 @@
 # Override: SKIP_TEST_CHECK=1 git push ...   (docs/config/copy-only, or a
 # refactor already covered by existing tests; state why).
 #
-# Fails OPEN: any parse/git/model error allows the push (the floor in step 3
-# still guarantees at least one test accompanies source changes).
+# Fails OPEN, but never quietly: any parse/git/model error allows the push (the
+# floor in step 3 still guarantees at least one test accompanies source changes)
+# AND says why, via fail_open() below. Blocking on infrastructure trouble is
+# worse than allowing, but a push that was never gated must not look identical
+# to a push the gate approved. (#735)
 
 JUDGE_MODEL="sonnet"
 JUDGE_TIMEOUT=90       # seconds for the model call
 DIFF_BUDGET=60000      # max bytes of diff sent to the model
+
+# Allow the push, but surface WHY the gate did not run.
+#
+# Exit 1, not 0, is load-bearing. Claude Code discards a PreToolUse hook's
+# stderr entirely on exit 0, so a notice printed there would vanish and this
+# whole function would be theatre. Exit 1 is a non-blocking error: the push
+# still runs, and the FIRST line of stderr surfaces in the transcript as a hook
+# error notice (the rest goes to the debug log). Hence one line, reason first.
+#
+# Reserve this for paths where the gate wanted to decide and could not. The
+# ordinary silent allows (not a push, SKIP_TEST_CHECK, no source touched,
+# docs-only) are correct verdicts, not failures: making them talk would train
+# everyone to tune the notice out.
+fail_open() {
+  echo "TEST GATE DID NOT RUN ($1). Push allowed ungated." >&2
+  exit 1
+}
 
 # ---------------------------------------------------------------------------
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
