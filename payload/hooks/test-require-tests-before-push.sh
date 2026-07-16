@@ -315,6 +315,48 @@ STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}
   run_hook "$W" "git add . && git commit -m 'x' && git push"
 want_code 0 "chain: source with a test reaches the judge and passes"
 
+# --- #736: a base that resolves to HEAD itself means the gate is blind ------
+# With no upstream, the base falls back through origin/HEAD, origin/main,
+# origin/master, main, master. On an unpushed branch that lands on the CURRENT
+# branch, so merge-base is HEAD, the diff is empty, and the hook finds nothing
+# to gate. That is the trap that fake-greened the #733 scratch scripts.
+
+# A repo with real commits and NO upstream at all.
+mk_repo_no_upstream() {
+  local root
+  root="$(mktemp -d "$TMPROOT/noup.XXXXXX")"
+  git init -q "$root/work"
+  (
+    cd "$root/work" || exit 1
+    git config user.email t@example.com
+    git config user.name tester
+    git config commit.gpgsign false
+    echo init > README.md
+    git add README.md
+    git commit -qm init
+  ) >/dev/null 2>&1
+  printf '%s' "$root/work"
+}
+
+W="$(mk_repo_no_upstream)"; seed_source_only "$W"
+run_hook "$W" "git push"
+want_code 1 "no upstream: gate is blind and must say so"
+want_stderr "upstream" "no upstream: gate is blind and must say so"
+
+# Nothing new to push, WITH an upstream, is a legitimate empty diff. The gate
+# saw everything and there was nothing to gate, so it must stay silent.
+W="$(mk_repo)"
+run_hook "$W" "git push"
+want_code 0 "up to date with upstream: nothing to gate"
+want_silent "up to date with upstream: nothing to gate"
+
+# No upstream, but the chain stages the work, so the gate CAN see the pending
+# files without needing a base. It must judge them, not cry blindness.
+W="$(mk_repo_no_upstream)"
+( cd "$W" && mkdir -p lib && printf 'const z = 9;\n' > lib/n.js ) >/dev/null 2>&1
+run_hook "$W" "git add . && git commit -m 'x' && git push"
+want_code 2 "no upstream but chain staged the work: still BLOCKS on a missing test"
+
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$fail" -eq 0 ]]
