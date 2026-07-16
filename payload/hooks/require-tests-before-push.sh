@@ -181,7 +181,6 @@ files="$(printf '%s\n%s\n' "$committed" "$pending" | sed '/^$/d' | sort -u)"
 # `add && commit && push` chain still has visible staged work, so the gate is
 # not blind there and must judge it rather than cry blindness.
 if [ -z "$files" ]; then
-  [ -z "$upstream" ] && fail_open "no upstream branch: cannot tell what this push adds"
   exit 0
 fi
 
