@@ -69,10 +69,13 @@ sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 ' 2>/dev/null
 }
 
-parsed="$(parse_payload)" || exit 0
+parsed="$(parse_payload)" || fail_open "hook payload did not parse"
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
-[ -n "$cmd" ] || exit 0
+# An empty command is a malformed payload too: a real Bash tool call always has
+# one. A payload that parsed as JSON but carried no command means the gate saw
+# nothing to inspect, which is not the same as approving the push.
+[ -n "$cmd" ] || fail_open "hook payload carried no command"
 
 # ---------------------------------------------------------------------------
 # 2. Act only on a `git push`; honor the override.
