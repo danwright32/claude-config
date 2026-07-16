@@ -462,13 +462,13 @@ import sys, json, re
 try:
     env = json.load(sys.stdin)
     if env.get("is_error"):
-        print("ERR"); sys.exit(0)
+        print("ERR_ENVELOPE"); sys.exit(0)
     txt = (env.get("result") or "").strip()
     txt = re.sub(r"^```[a-zA-Z]*", "", txt).strip()
     txt = re.sub(r"```$", "", txt).strip()
     m = re.search(r"\{.*\}", txt, re.S)
     if not m:
-        print("ERR"); sys.exit(0)
+        print("ERR_VERDICT"); sys.exit(0)
     obj = json.loads(m.group(0))
     missing = obj.get("missing") or []
     if obj.get("verdict") == "block" and missing:
