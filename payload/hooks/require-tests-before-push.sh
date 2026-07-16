@@ -335,7 +335,7 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Tests are present. Ask the model whether every distinct change is covered.
 # ---------------------------------------------------------------------------
-command -v claude >/dev/null 2>&1 || exit 0   # fail open: no judge available
+command -v claude >/dev/null 2>&1 || fail_open "judge unavailable: no claude CLI on PATH"
 # GNU `timeout` is absent on stock macOS (it ships as `gtimeout` via coreutils).
 TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
 
