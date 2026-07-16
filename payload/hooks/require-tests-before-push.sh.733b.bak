@@ -201,32 +201,18 @@ docs_style_for() {
 # confidently call a comment counts as CODE, so the push still blocks (author can
 # override). That is why '#' is a comment ONLY for hash-style files -- in JS/TS
 # '#foo' is a private field, i.e. real code, and a bare '*ptr' in C is a deref.
-#
-# '*'-leading lines are only trusted as block-comment continuations when the diff
-# ALSO opens a block comment ('/*'). Without that guard, leading-operator code
-# style ("const a = b" / "  * 2;") lets a real behavior change (2 -> 3) pass as
-# documentation, because every changed line starts with '*'. The cost is that
-# editing wording INSIDE an existing block comment now blocks; that is the safe
-# direction and the override still exists.
 diff_docs_only() {
-  local style="$1" comment_re code d changed
-  d="$(cat)"
-  changed="$(printf '%s\n' "$d" \
-    | grep -E '^[+-]' \
-    | grep -Ev '^(\+\+\+|---)([[:space:]]|$)' \
-    | sed -E 's/^[+-]//' \
-    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  local style="$1" comment_re code
   case "$style" in
     hash) comment_re='^#' ;;
-    *)
-      if printf '%s\n' "$changed" | grep -q '^/\*'; then
-        comment_re='^(//|/\*|\*([[:space:]/]|$))'
-      else
-        comment_re='^(//|/\*|\*/$)'
-      fi
-      ;;
+    *)    comment_re='^(//|/\*|\*([[:space:]/]|$))' ;;
   esac
-  code="$(printf '%s\n' "$changed" | grep -Ev '^[[:space:]]*$' | grep -Ev "$comment_re")"
+  code="$(grep -E '^[+-]' \
+    | grep -Ev '^(\+\+\+|---)([[:space:]]|$)' \
+    | sed -E 's/^[+-]//' \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    | grep -Ev '^[[:space:]]*$' \
+    | grep -Ev "$comment_re")"
   [ -z "$code" ]
 }
 

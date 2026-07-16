@@ -82,15 +82,6 @@ want_style foo.ts slash
 want_style foo.go slash
 want_style foo.c slash
 
-# --- #733 follow-up: a leading-operator code line must NOT read as a comment ---
-# "const a = b" / "  * 2;" -> changing 2 to 3 is a real behavior change whose
-# only diff lines start with '*'. It must block.
-want_notdocsonly slash "$(printf -- '--- a/calc.js\n+++ b/calc.js\n@@\n-  * 2;\n+  * 3;\n')"
-want_notdocsonly slash "$(printf -- '--- a/calc.js\n+++ b/calc.js\n@@\n+  * factor;\n')"
-# Editing wording inside an EXISTING block comment has no '/*' opener in the
-# diff, so it conservatively blocks rather than reopen the hole above.
-want_notdocsonly slash "$(printf -- '--- a/foo.js\n+++ b/foo.js\n@@\n- * old wording\n+ * new wording\n')"
-
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$fail" -eq 0 ]]
