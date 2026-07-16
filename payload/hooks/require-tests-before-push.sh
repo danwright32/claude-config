@@ -166,7 +166,24 @@ $u"; break ;; esac
 fi
 
 files="$(printf '%s\n%s\n' "$committed" "$pending" | sed '/^$/d' | sort -u)"
-[ -n "$files" ] || exit 0
+# An empty file list has two very different causes, and only one is benign.
+#
+# With an upstream, empty means the gate compared against the real remote tip
+# and this push genuinely adds nothing. Correct verdict, stay quiet.
+#
+# Without one, `base` fell back through origin/HEAD, origin/main, origin/master,
+# main, master. On an unpushed branch that can land on the CURRENT branch, so
+# merge-base is HEAD, the diff is empty, and the hook sees nothing to gate while
+# real commits are about to ship. That is the trap that fake-greened the #733
+# scratch scripts. "I saw nothing" is not "there is nothing to see". (#736)
+#
+# Note this deliberately sits AFTER $pending is folded in: a no-upstream
+# `add && commit && push` chain still has visible staged work, so the gate is
+# not blind there and must judge it rather than cry blindness.
+if [ -z "$files" ]; then
+  [ -z "$upstream" ] && fail_open "no upstream branch: cannot tell what this push adds"
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Classify: did the push change source? did it touch any test?
