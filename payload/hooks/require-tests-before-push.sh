@@ -445,8 +445,17 @@ else
     claude -p --model "$JUDGE_MODEL" --output-format json \
       --strict-mcp-config --setting-sources local --system-prompt "$RUBRIC" ) 2>/dev/null )"
 fi
+judge_status=$?
 rm -rf "$JTMP"
-[ -n "$envelope" ] || exit 0   # fail open: model unreachable / timed out
+# `timeout` reports a killed command as 124, which is the difference between
+# "the judge is down" and "the judge was too slow". Name the one that happened:
+# they have different fixes.
+if [ -z "$envelope" ]; then
+  if [ "$judge_status" -eq 124 ]; then
+    fail_open "judge timed out after ${JUDGE_TIMEOUT}s"
+  fi
+  fail_open "judge unreachable: returned nothing (exit $judge_status)"
+fi
 
 verdict="$(printf '%s' "$envelope" | python3 -c '
 import sys, json, re
