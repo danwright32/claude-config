@@ -17,6 +17,14 @@ set -uo pipefail
 
 input=$(cat)
 
+# Detached-run guard: a headless `claude -p` launched by an app has nobody to reflect TO, and its
+# stdout is a file some program parses rather than a person reads. Firing here does real damage: the
+# re-prompt is spent on ceremony instead of the run's actual job. Overture's scout-extract run burned
+# itself writing this banner into its own log and never wrote the results file the app was waiting
+# for, losing every extracted show (2026-07-16). Any runner that sets this is telling us the same
+# thing: there is no reader on the other end.
+[ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
+
 # Loop guard: don't re-fire on our own (or another Stop hook's) continuation.
 stop_active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)
 [ "$stop_active" = "true" ] && exit 0
