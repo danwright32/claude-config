@@ -10,6 +10,11 @@ set -euo pipefail
 
 input=$(cat)
 
+# Detached-run guard: see session-reflection.sh. A headless `claude -p` launched by an app has no
+# reader, so an issue-review re-prompt spends the run on ceremony and can never reach a person
+# anyway. It would also file issues nobody asked for, from a run that was told to do one job.
+[ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
+
 # Loop guard: if this stop was triggered by our own re-prompt, let it end.
 stop_active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false')
 [ "$stop_active" = "true" ] && exit 0
