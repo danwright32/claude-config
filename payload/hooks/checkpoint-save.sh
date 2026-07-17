@@ -18,6 +18,12 @@ set -uo pipefail
 
 input=$(cat)
 
+# Detached-run guard: see session-reflection.sh. A headless `claude -p` launched by an app is not a
+# session whose lessons are worth keeping, and this hook WRITES: Overture's scout-extract run left a
+# memory file in that project's store, authored by a run that was only ever asked to read pages
+# (2026-07-16). A detached run must not teach the next session anything.
+[ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
+
 CC_HOOK_INPUT="$input" python3 <<'PY'
 import sys, json, os, re
 
