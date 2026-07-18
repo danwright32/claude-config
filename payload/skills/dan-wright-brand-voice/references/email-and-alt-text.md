@@ -8,7 +8,10 @@ Direct, warm, concise. No filler, no throat-clearing openers, no performative en
 Every outreach email is about a specific known performance, so the date, venue, and location are already in hand. Reference them, never request them. Write "your March 10 concert at Carnegie Hall," never "let me know the date and I'll confirm availability." Asking for a fact you already hold reads as careless and undercuts the impression that Dan did his homework on their show, which is the whole point of targeting a specific performance. Ask only about things genuinely unknown (confirming Dan's own availability, logistics he can't infer). This holds for both cold pitches and replies.
 
 ### Pricing and scope
-Hold boundaries positively. Frame any concession as goodwill, not as a response to pressure. Don't volunteer rate flexibility upfront; keep it as a back-pocket option. Prefer a soft close like "let me know how that lands" over a hard close.
+Hold boundaries positively. Frame any concession as goodwill, not as a response to pressure. Don't volunteer rate flexibility upfront; keep it as a back-pocket option. Prefer a soft close like "Happy to answer any questions" over a hard close. Never "let me know how that lands," Dan flagged it as reading douchey (2026-07-18).
+
+### Don't overstate experience with the specific genre
+Dan has shot far more concert, choral, and opera work than dance. When pitching a dance company or another genre he's less experienced in, don't describe genre-specific technique as if it's established practice (for example, don't claim a particular way of "moving with the room" for dancers). Keep the approach description general, the no-flash, unobtrusive, back-of-house documentary style, and let the citable credentials carry the confidence instead of an invented specialty.
 
 ### Credentials and portfolio link
 Cold outreach should carry real proof, not just an offer. Work in one relevant credential from the citable list in SKILL.md (Carnegie tenure, Madison Square Garden, Lincoln Center, Radio City Music Hall) plus the portfolio link (danwrightphotography.com), tailoring which credential leads to the venue in play. A Carnegie-venue show leads with the Carnegie tenure; a show at another marquee venue can lead with that venue or pair it with the Carnegie tenure.
