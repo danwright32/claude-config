@@ -7,6 +7,8 @@ Direct, warm, concise. No filler, no throat-clearing openers, no performative en
 ### Never ask for what you already know
 Every outreach email is about a specific known performance, so the date, venue, and location are already in hand. Reference them, never request them. Write "your March 10 concert at Carnegie Hall," never "let me know the date and I'll confirm availability." Asking for a fact you already hold reads as careless and undercuts the impression that Dan did his homework on their show, which is the whole point of targeting a specific performance. Ask only about things genuinely unknown (confirming Dan's own availability, logistics he can't infer). This holds for both cold pitches and replies.
 
+For a multi-night run (an opening date and a closing date, not one night), reference the run, not just the opening: "your run at BAM, March 10 to 14." If the opening night has already passed while later dates remain, pitch only the remaining dates and never name or reference the passed opening night, since citing a date already behind us reads as a stale, unread listing. Refer to the remaining performances or a specific still-upcoming date.
+
 ### Pricing and scope
 Hold boundaries positively. Frame any concession as goodwill, not as a response to pressure. Don't volunteer rate flexibility upfront; keep it as a back-pocket option. Prefer a soft close like "Happy to answer any questions" over a hard close. Never "let me know how that lands," Dan flagged it as reading douchey (2026-07-18).
 
