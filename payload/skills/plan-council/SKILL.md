@@ -31,6 +31,8 @@ Then, in conversation with the user, establish:
 
 Ask only what you genuinely cannot determine from the code yourself — don't quiz the user on what a quick read answers. Keep going until you could hand the panel a brief with no critical unknowns left.
 
+**If the plan will read, parse, classify, or geo-locate external source pages, fetch a real example of each source FIRST and quote its raw strings into the framing**, the same way you read the DB schema before writing SQL. For a scraper the external pages ARE part of the system under design; grounding only in the code produces plans that are internally rigorous and wrong about the world. On a past run the panel fitted a parser to the one source it had ever scouted and picked a winner that two 30-second `WebFetch` calls then refuted. Hand the panel those verbatim snippets so it designs against the real pages, not the exception.
+
 Then present the full framing (roles + criteria + scope + what you learned in the interview) with **AskUserQuestion** for approval or edits. Do not skip this gate — it is what keeps the run grounded and cheap-to-correct, and it is the user's last input before the panel runs autonomously.
 
 ## 2. Run the debate (Workflow engine)
