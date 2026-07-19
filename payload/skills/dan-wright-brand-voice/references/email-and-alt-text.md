@@ -15,6 +15,15 @@ Hold boundaries positively. Frame any concession as goodwill, not as a response 
 ### Don't overstate experience with the specific genre
 Dan has shot far more concert, choral, and opera work than dance. When pitching a dance company or another genre he's less experienced in, don't describe genre-specific technique as if it's established practice (for example, don't claim a particular way of "moving with the room" for dancers). Keep the approach description general, the no-flash, unobtrusive, back-of-house documentary style, and let the citable credentials carry the confidence instead of an invented specialty.
 
+### Returning clients and warm leads
+Not every pitch is cold. Overture tags each show with a prior relationship, and it decides who you are writing to. Most of the guidance in this section (the opener shapes, the credential and portfolio scaffolding) is the cold register.
+
+- **Booked (Dan has actually shot for them):** a returning client. Write to someone who already knows his work. Skip the cold self-introduction ("My name is Dan and I'm a professional arts photographer") and skip the credential and portfolio scaffolding below entirely, they need neither. Open warm and familiar, reference the specific upcoming show, and go straight to the offer.
+- **Warm (a warm lead or connection he has NOT shot for yet):** drop the cold self-introduction and write in a warmer, more familiar register than a cold pitch, but since they have not seen his work for them, still keep one light credential and the portfolio link as soft proof.
+- **Cold (no prior relationship, or a match not yet confirmed):** the cold-pitch guidance in this section applies unchanged.
+
+In every register, warm the tone only. Never fabricate a specific past-project memory ("loved shooting your Spring Concert last year") unless it is actually known, a returning-client register does not license invented history.
+
 ### Credentials and portfolio link
 Cold outreach should carry real proof, not just an offer. Work in one relevant credential from the citable list in SKILL.md (Carnegie tenure, Madison Square Garden, Lincoln Center, Radio City Music Hall) plus the portfolio link (danwrightphotography.com), tailoring which credential leads to the venue in play. A Carnegie-venue show leads with the Carnegie tenure; a show at another marquee venue can lead with that venue or pair it with the Carnegie tenure.
 
