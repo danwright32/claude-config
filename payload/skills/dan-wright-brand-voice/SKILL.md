@@ -74,6 +74,8 @@ Direct, warm, concise. No filler, no throat-clearing openers, no performative en
 
 **Cite a credential and the portfolio link in cold outreach.** Work in one relevant credential from the citable list above plus the portfolio link, so the pitch carries real proof, not just an offer. Tailor which credential leads to the context: a Carnegie-venue show leads with the Carnegie tenure; a show at another marquee venue can lead with that venue instead or pair it with the Carnegie tenure. Don't reproduce Dan's reference pitch (references/email-and-alt-text.md) verbatim or reuse the same sentence shape draft to draft; state the credential and link naturally and vary the phrasing.
 
+**Returning clients and warm leads are not cold.** Overture tags each show with a prior relationship. Booked (Dan has actually shot for them): skip the self-introduction AND the credential/portfolio scaffolding, write warm and familiar, straight to the specific show and the offer. Warm (a lead or connection he has NOT shot for yet): drop the self-introduction but keep one light credential and the portfolio link as soft proof. Cold (no prior relationship): unchanged. Warm the tone only, never invent a past-project memory. See references/email-and-alt-text.md's "Returning clients and warm leads."
+
 **Rotate opener shapes when drafting several emails in one sitting.** See references/email-and-alt-text.md's "Opener variety" for the four shapes (reason-first, credential-first, observation-first, direct-intent) and the rule against reusing the same one twice in a row. Body length can range 2 to 4 sentences; don't pad to hit a target.
 
 ## Voice Check
