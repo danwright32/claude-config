@@ -32,7 +32,8 @@ Your output is a list of concrete, actionable suggestions. Each suggestion names
 
 After fetching the page, internalize the full list of AI signals. Then for every sentence you write, ask:
 
-- Does this sentence contain any word from the AI vocabulary list (delve, tapestry, pivotal, underscore, foster, garner, vibrant, landscape, showcase, testament, crucial, intricate, enduring, etc.)?
+- Does this sentence contain any word from the AI vocabulary list (delve, tapestry, pivotal, underscore, foster, garner, vibrant, landscape, showcase, testament, crucial, intricate, enduring, quietly, etc.)?
+- Am I using "quietly" as a filler adverb (e.g. "quietly became the standard," "quietly reshaping the industry")? Cut it or name what actually happened.
 - Am I using "serves as," "stands as," "marks," or "represents" where "is" would do?
 - Am I constructing a "Not only X, but also Y" pattern?
 - Am I listing exactly three things to sound comprehensive?
