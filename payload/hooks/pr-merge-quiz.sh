@@ -62,12 +62,31 @@ if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_PR_QUIZ=1([[:space:]]|$
   exit 0
 fi
 
-# Does any shell segment RUN `gh pr merge` (as opposed to merely mentioning it)? Match on the
-# leading tokens of each segment, after stripping any leading env assignments (GH_TOKEN=... gh ...).
+# Does any shell segment RUN a merge (as opposed to merely mentioning it)? Two forms count:
+#   1. `gh pr merge ...` directly.
+#   2. `scripts/merge-when-green.sh <pr>`, the wrapper that polls CI and then merges INTERNALLY via
+#      `gh pr merge` in a subprocess this hook cannot see. Matching the wrapper is the only way the
+#      quiz is not silently dodged by using the project's own recommended merge command.
+# Both are matched on the LEADING TOKENS of each segment (after stripping leading env assignments), so
+# a payload that merely NAMES either one (an echo, an ls, an issue comment) does not fire. The wrapper
+# is matched only in command position: as the first token, or the second when the first is an
+# interpreter (bash/sh/zsh). A basename match (preceded by `/` or start of token) covers ./scripts/...,
+# scripts/..., and a bare name alike.
 is_merge=0
 while IFS= read -r seg; do
-  head_tokens="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//' | awk '{print $1, $2, $3}')"
+  stripped="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//')"
+  head_tokens="$(printf '%s' "$stripped" | awk '{print $1, $2, $3}')"
   if printf '%s' "$head_tokens" | grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
+    is_merge=1
+    break
+  fi
+  first="$(printf '%s' "$stripped" | awk '{print $1}')"
+  second="$(printf '%s' "$stripped" | awk '{print $2}')"
+  if [ "${first##*/}" = "merge-when-green.sh" ]; then
+    is_merge=1
+    break
+  fi
+  if printf '%s' "$first" | grep -Eq '^(bash|sh|zsh)$' && [ "${second##*/}" = "merge-when-green.sh" ]; then
     is_merge=1
     break
   fi
