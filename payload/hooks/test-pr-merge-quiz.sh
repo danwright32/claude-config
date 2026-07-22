@@ -54,6 +54,17 @@ run "a merge of the current branch"  fire 'gh pr merge'
 run "an env-prefixed merge"          fire 'GH_TOKEN=abc gh pr merge 42'
 run "a merge at the end of a chain"  fire 'git fetch origin && gh pr merge 42 --squash'
 
+# --- The merge-when-green.sh wrapper merges internally, so it must fire too (its real `gh pr merge`
+#     runs in a subprocess the hook can't see; matching the wrapper is the only way it isn't dodged) ---
+run "the wrapper by relative path"   fire 'scripts/merge-when-green.sh 42'
+run "the wrapper with a ./ prefix"   fire './scripts/merge-when-green.sh 1367'
+run "the wrapper after a chain"      fire 'git fetch origin && ./scripts/merge-when-green.sh 42'
+run "the wrapper run via bash"       fire 'bash scripts/merge-when-green.sh 42'
+run "the wrapper bare"               fire 'merge-when-green.sh 42'
+run "wrapper override still skips"   skip 'SKIP_PR_QUIZ=1 ./scripts/merge-when-green.sh 42'
+run "the wrapper name only mentioned" skip 'echo "run scripts/merge-when-green.sh 42 next"'
+run "the wrapper name as a bare arg" skip 'ls merge-when-green.sh'
+
 # --- Things that are not a merge must stay quiet ---
 run "closing without merging"        skip 'gh pr close 42'
 run "viewing a pr"                   skip 'gh pr view 42 --json state'
