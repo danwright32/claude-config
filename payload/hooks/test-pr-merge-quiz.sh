@@ -69,6 +69,18 @@ run "a grep for the phrase"          skip 'grep -r "gh pr merge" .'
 run "the documented override"        skip 'SKIP_PR_QUIZ=1 gh pr merge 42'
 run "a detached headless run"        skip 'gh pr merge 42' 'CLAUDE_DETACHED_RUN=1'
 
+# --- Failure path: a broken or empty payload must fail QUIET, never fire or crash ---
+raw() {
+  local desc="$1" want="$2" rawpayload="$3"
+  local out fired
+  out="$(printf '%s' "$rawpayload" | "$HOOK" 2>/dev/null)"
+  if printf '%s' "$out" | grep -q '"decision"[[:space:]]*:[[:space:]]*"block"'; then fired="fire"; else fired="skip"; fi
+  if [ "$fired" = "$want" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $desc (wanted $want, got $fired)"; fi
+}
+raw "a malformed json payload"       skip 'not json at all'
+raw "a payload with no command"      skip '{"tool_input":{},"cwd":"/tmp"}'
+raw "an empty payload"               skip ''
+
 echo
 echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]
