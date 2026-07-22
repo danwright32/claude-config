@@ -28,6 +28,19 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/pr-merge-quiz.sh",
+            "timeout": 15,
+            "statusMessage": "Checking for a merged PR to quiz on"
+          }
+        ]
+      }
+    ],
     "Notification": [
       {
         "matcher": "idle_prompt",
