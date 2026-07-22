@@ -3,9 +3,10 @@
 # pr-merge-quiz.sh
 # Claude Code PostToolUse(Bash) hook.
 #
-# Goal: the moment a PR is MERGED in a session (Claude running `gh pr merge` for Dan), gate the
-# workflow with a short comprehension quiz about what just shipped, so Dan cannot be swept on to
-# the next issue without understanding the change that just went out.
+# Goal: the moment a PR is MERGED in a session (Claude running `gh pr merge`, or the
+# `scripts/merge-when-green.sh` wrapper that merges internally, for Dan), gate the workflow with a
+# short comprehension quiz about what just shipped, so Dan cannot be swept on to the next issue
+# without understanding the change that just went out.
 #
 # Why PostToolUse and not Pre: the quiz is about what SHIPPED, so it has to come after the merge
 # lands. Firing before would quiz a PR that has not merged yet, and blocking pre-merge would stop
