@@ -86,6 +86,29 @@ def test_a_size_word_inside_ordinary_prose_is_not_boxed():
     assert 'class="size"' not in out
 
 
+def test_rendering_never_overwrites_its_own_shell():
+    """Rendering templates/field-card.md destroyed templates/field-card.html.
+
+    The renderer writes <card>.html beside <card>.md, and the shell happens to
+    be named field-card.html in the same folder as the template field-card.md.
+    So rendering the template clobbered the shell with the rendered output, and
+    the next render would have used a card as its own shell. 2026-07-23.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        md = Path(d) / "field-card.md"
+        md.write_text("## THE STORY\n")
+        shell = Path(d) / "field-card.html"   # same stem: the collision
+        shell.write_text(SHELL)
+        before = shell.read_text()
+
+        r = subprocess.run(
+            [sys.executable, str(RENDER), str(md), "--shell", str(shell)],
+            capture_output=True, text=True,
+        )
+        assert r.returncode != 0, "should refuse, not clobber"
+        assert shell.read_text() == before, "shell must be left untouched"
+
+
 def test_bold_is_converted():
     out = render("**Out by 2:00.**\n", SHELL)
     assert "<b>Out by 2:00.</b>" in out
