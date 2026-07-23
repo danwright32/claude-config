@@ -131,7 +131,13 @@ Ask in this order. The early answers reorganize the later ones.
 
 A **dress rehearsal** is the most valuable pass there is: full costume, full tech, no audience, and you can move anywhere and fail without consequence. Shoot the rehearsal for the stage, and the performance for the room. But **do not tell him to ask for one**, because the client is never asked anything. Ask instead whether one already exists that he will be present for. If it does, it changes everything below it.
 
-**Then ask what he is hired for.** Not every booking covers the whole evening. A double bill, a festival slot, or a shared programme may mean he is paid for one half and merely present for the other, and **the half he is not shooting is a free technical rehearsal**: hands empty, stage lit, room full, real light cues. He can test flicker, set exposure, rehearse framings and learn the room before the paid half starts. It is the closest thing to a second pass that a one pass event ever offers, it costs nothing, and it needs nobody's permission. Ask for it every time.
+**Then ask what he is hired for.** Not every booking covers the whole evening. A double bill, a festival slot, or a shared programme may mean he is paid for one act and merely present for the other.
+
+**A half he is not hired for is not his to record.** Not video, not stills, not audio. He was engaged by one artist, and another company's work is not free material because he happens to be sitting in front of it. Dan's correction, 2026-07-23, after an earlier version of this file called it a free technical rehearsal: *"Unless the first performing group hires me I have to assume that I'll be unable to shoot anything."*
+
+**What survives is real, though, and it is worth planning for: looking is not shooting.** Banding, exposure and framing are all read in the viewfinder without pressing record. If he is comfortable raising a camera to his eye at the back of a dark house, he can settle the whole technical setup during their half and record none of it. If that feels conspicuous, it moves to the interval and he watches with the camera down, which still teaches him the room.
+
+**Plan for the loss, not around it.** No rehearsal under performance light means exposure gets set cold at the top of the only act he can shoot. So **do not start a parked window on the subject's entrance.** Let them get on stage, read the light for about a minute, set it, then roll. A parked take at a guessed exposure is worth nothing; a missed first minute is one handheld shot.
 
 **3. Rig mode.** See `references/rig-and-audio.md`.
 - **Pinned.** He cannot move (Carnegie, a formal hall, an assigned seat). He photographs from the one position on both bodies. A tripod, if permitted, is where the parked window sits when it opens, and it stands idle the rest of the time.
