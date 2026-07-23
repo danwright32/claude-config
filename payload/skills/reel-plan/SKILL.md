@@ -83,13 +83,15 @@ If Dan ever says he is talking to a client about a specific event, that override
    **Read the table, and only the table.** Take the Structure and Opening device columns of the most recent three rows. Never trust a summary line, in the log or on a plan, because a hand maintained second copy of the same fact drifts and the stale copy is the one you will believe. This is not optional and it happens before the interview. Also read the previous plans themselves if they are nearby and cheap to open, but the log's table is the authority.
 2. Run the interview. Ask questions one at a time as pickers where the answer is a choice.
 3. Read the reference files that apply. Do not read all of them.
-4. **Write the plan and the field card beside the questionnaire**, as `<event-slug>.md` and `<event-slug>-card.md`. Do not invent a subfolder.
+4. **Write the plan and the field card into a `Reel/` folder beside the questionnaire**, as `<event-slug>.md` and `<event-slug>-card.md`.
 
-   The event folder is the one containing the questionnaire PDF, normally in a `Documents/` subfolder alongside `RAW/` and `Final/`. Write into that event folder, not into `Documents/` itself. The skill is normally run from that folder and the two are the same place, but **when they differ, the questionnaire wins.**
+   **Find the questionnaire PDF, then write into `<its folder>/Reel/`.** The questionnaire normally sits in the event's `Documents/` folder, alongside a contract, so the target is `<event>/Documents/Reel/`. Create `Reel/` if it does not exist. Dan's instruction, 2026-07-23.
 
-   Why this is a rule and not a preference: on 2026-07-23 the project folder was moved into `Upcoming/` mid session. The working directory silently stopped existing, and writing to it recreated it as an empty duplicate next to the real folder, so the plan landed in a stray directory. Resolve the target from the questionnaire's location at the moment of writing, and confirm it still exists before writing.
+   **The questionnaire's location is the authority, never the working directory.** Twice in one session the event folder was moved between `Theater/` and `Theater/Upcoming/` while the plan was being written. Writing to a remembered path recreated it as an empty duplicate next to the real folder, and the plan landed in a stray directory that looked correct in every listing.
 
-   Exception: if a `plans/` folder already exists in the event folder, write there instead, because he has clearly chosen to organize that way.
+   So: locate the questionnaire immediately before writing, not once at the start. Do the same again before the final render. If a write or a move fails with "no such file or directory," **do not retry the same path.** Search for the questionnaire again, because the folder has moved.
+
+   After writing, list the destination and confirm the files are actually there. A successful `mkdir` proves nothing about where it landed.
 4b. **Generate the phone card. Never write it by hand.**
 
    ```
