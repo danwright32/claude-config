@@ -58,6 +58,29 @@ def test_markers_are_wrapped_for_styling():
     assert 'class="park"' in out
 
 
+def test_a_single_framing_size_is_boxed():
+    out = render("- [ ] Empty stage · WIDE\n", SHELL)
+    assert out.count('class="size"') == 1
+
+
+def test_every_size_in_a_pair_is_boxed_not_just_the_first():
+    """Dan, 2026-07-23: 'unclear why wide and tight are different fonts.'
+
+    The old pattern listed WIDE before WIDE + TIGHT in an alternation, so it
+    matched WIDE and stopped, leaving TIGHT as bare text. On the card that reads
+    as two different kinds of thing when it is one instruction.
+    """
+    for line in ("- [ ] Empty stage · WIDE + TIGHT\n",
+                 "- [ ] Empty stage · WIDE and TIGHT\n"):
+        out = render(line, SHELL)
+        assert out.count('class="size"') == 2, line
+
+
+def test_a_size_word_inside_ordinary_prose_is_not_boxed():
+    out = render("Take a wide berth around the TIGHTrope.\n", SHELL)
+    assert 'class="size"' not in out
+
+
 def test_bold_is_converted():
     out = render("**Out by 2:00.**\n", SHELL)
     assert "<b>Out by 2:00.</b>" in out
