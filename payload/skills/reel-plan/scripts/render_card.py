@@ -85,9 +85,21 @@ def render_body(markdown: str) -> str:
             if not in_list:
                 out.append("<ul>")
                 in_list = True
+            # Gather indented continuation lines into this same item. Emitting
+            # them separately detached the tail of a shot into its own paragraph
+            # a full gap below the checkbox, which is unreadable at a glance.
+            text = stripped[6:]
+            while i < len(lines):
+                nxt = lines[i]
+                if not nxt.startswith((" ", "\t")) or not nxt.strip():
+                    break
+                if nxt.strip().startswith("- [ ] "):
+                    break
+                text += " " + nxt.strip()
+                i += 1
             out.append(
                 f'<li><label><input type="checkbox">'
-                f'<span class="txt">{_inline(stripped[6:])}</span></label></li>'
+                f'<span class="txt">{_inline(text)}</span></label></li>'
             )
             continue
 
