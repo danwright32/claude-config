@@ -52,10 +52,15 @@ def test_star_gets_its_own_class_so_it_can_be_styled():
     assert 'class="star"' in out
 
 
-def test_markers_are_wrapped_for_styling():
+def test_in_hand_and_parked_markers_are_no_longer_special():
+    """Dan, 2026-07-23: 'I'm not going to remember the symbols.'
+
+    The ● and ◆ legend was dropped from the card. The star survives because it
+    needs no decoding. Nothing should re-introduce a legend by styling these.
+    """
     out = render("- [ ] ● Empty room\n- [ ] ◆ Bow\n", SHELL)
-    assert 'class="hand"' in out
-    assert 'class="park"' in out
+    assert 'class="hand"' not in out
+    assert 'class="park"' not in out
 
 
 def test_a_single_framing_size_is_boxed():
