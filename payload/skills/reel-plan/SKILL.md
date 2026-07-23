@@ -30,7 +30,7 @@ Typical budget for one event: **two windows.**
 1. **One number**, chosen because it contains the moment the reel is built around.
 2. **The bow and applause**, because his hands are on stills there and the reel wants it. Park before the bow, let it run, collect it after.
 
-Free windows, costing nothing, because no photographs are required: the arrival, any interval, the room emptying, and **any part of the evening he is not hired for**, which is by far the largest of them when it exists. Before doors and the empty room belong on this list only when he is actually arriving early enough for them to exist, which is usually not the case.
+Free windows, costing nothing, because no photographs are required: the arrival, any interval, and the room emptying. All of them are short. Before doors and the empty room belong on this list only when he is actually arriving early enough for them to exist, which is usually not the case. **A part of the evening he is not hired for is not a free window**, because it is not his to record at all: see the passes section.
 
 ### Marking shots
 
