@@ -49,12 +49,12 @@ Glance at the phone once: still counting?
 - [ ] {A second angle on the proof} · TIGHT
 - [ ] {The built-on shot again, closer in} · MEDIUM
 
-**Spare shots.** Six seconds each. They let you join two clips that would clash.
+# B-ROLL
+
+Six seconds each. Take twice as many as feels sensible.
 
 - [ ] {Objects, floor, anything left behind} · TIGHT
 - [ ] {The room, the walls} · WIDE
-
-Take twice as many as feels sensible.
 
 # THE END
 
