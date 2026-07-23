@@ -301,7 +301,17 @@ The plan document may be long and argued. The card may not. When they conflict, 
 - Never plan a specific note being fingered as a cutaway. The viewer hears one note and watches another being played. Hands doing something unspecific cut anywhere.
 - **Never invent a fact.** Not a clock time, not a running order, not a claim about what "usually" happens at a show that has not been performed yet. An unknown goes on the list of things to ask on arrival, named to a person who can answer it. A guess printed in bold will be believed and acted on.
 - **Never write jargon into a document he reads in a venue.** The turn, the button, the peak, the single moment, the safety shot, brace. All of it is vocabulary from these files. Write out what he should physically do, or define the word in the same sentence.
-- Arrive at least ninety minutes early. Test for LED banding at the intended frame rate and shutter before the house opens. Shoot the empty lit stage, the room before it fills, the performers before they become performers. Highest engagement material, lowest competition, near zero cost.
+- **Dan arrives fifteen to thirty minutes early.** His words, 2026-07-23. Ninety minutes is what this file used to demand, and planning against it produced a shot list built on an empty lit stage he was never going to see, because at fifteen minutes the house is usually open and often already full.
+
+  Plan for the real arrival unless he says he is arriving early for that specific event. **Say what it costs once, plainly, then plan around it rather than repeating the advice.** What is lost is the empty lit stage, the room before it fills, and the performers before they become performers, which is genuinely the highest engagement and lowest competition material there is.
+
+  Substitutes that survive a late arrival, and none of them need permission:
+  - **The building exterior, shot on the way in**, before going through the door. Ninety seconds, always available, and it covers the establishing shot.
+  - **The stage during an interval**, reset and empty with nobody on it. The room is full and the light is wrong, so it is not the same shot, but it is an empty stage and it costs nothing.
+  - **The room emptying afterwards**, thirty seconds, then he goes home.
+  - **A half of the evening he is not hired for**, when one exists, which is where the flicker test and the exposure work move to.
+
+  The LED banding test still happens every time. It just happens during whatever is on stage before the paid half, rather than in an empty room.
 - The plan tells him what to do with his hands, not what to feel.
 
 ## Reference files
