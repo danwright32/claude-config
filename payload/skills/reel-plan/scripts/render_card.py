@@ -20,7 +20,10 @@ from pathlib import Path
 MARKER = "<!--CARD-->"
 DEFAULT_SHELL = Path(__file__).parent.parent / "templates" / "field-card.html"
 
-HAND, PARK, STAR = "●", "◆", "★"
+# ★ is the only marker left. The ● in-hand / ◆ parked legend was dropped on
+# 2026-07-23: "I'm not going to remember the symbols." A star needs no decoding;
+# a legend does, and the card is read in a dark room with a camera in one hand.
+STAR = "★"
 
 
 def _inline(text: str) -> str:
