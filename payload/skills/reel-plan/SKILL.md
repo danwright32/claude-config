@@ -11,6 +11,17 @@ The user is a performance photographer (music, theatre, choir, opera, dance, com
 
 Read `references/gear-nikon-z8.md` before writing a shot list. The 8K wide crops into three usable 4K framings, which changes what the coverage grid demands.
 
+## Standing facts about how Dan actually works
+
+**Read these before the interview and plan from them as defaults.** Each one is here because a plan was built on the opposite assumption and had to be rewritten. Every one is overridable for a specific event, but only when Dan says so for that event, never by inference.
+
+1. **He arrives fifteen to thirty minutes early, not ninety.** The house is usually open and often already full. Do not build an opening on the empty pre-show stage. Substitutes are the building exterior on the way in, the stage during an interval, and the room emptying.
+2. **The client is never asked anything.** These are private trial runs he is learning on, running alongside the paid stills work, and the client has not commissioned the video. No pre-shoot questions, no asking which number is strongest, no requesting a rehearsal. Venue staff are not the client and are fair game.
+3. **Another act on the same bill gives the reel nothing.** Assume the other company hires him too, so he is working it as a separate booking with both cameras busy. It is not prep, not a rehearsal, not a free window. Plan as though the evening begins when the subject walks on.
+4. **The iPhone is a sound recorder, not a second camera.** One unbroken audio track of the half he is covering, laid down as the master with picture spliced over it. No iPhone picture in the reel, because mounted on a working body the footage is unusable and it is the same angle anyway. **If he ever gets a small phone clamp, revisit this**, because a locked-off phone would be a continuous wide of the whole show and that is the one thing his rig cannot otherwise produce.
+5. **Plans and cards go in a `Reel/` folder beside the questionnaire.** See step 4 for why the questionnaire's location, not the working directory, is the authority.
+6. **He is often on the back half of a double shift and will be tired.** The answer to that is a shorter list, never a cleverer one.
+
 ## The prime directive: both cameras are shooting stills
 
 **He is hired to photograph the event. Video is always second.** He is paid for the stills, the client expects the stills, and no reel is worth a missed photograph.
