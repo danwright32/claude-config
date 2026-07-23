@@ -5,6 +5,7 @@ independently let them drift apart within a single editing session, which is the
 bug this exists to prevent.
 """
 
+import re
 import subprocess
 import sys
 import tempfile
