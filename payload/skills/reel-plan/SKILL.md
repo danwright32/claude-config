@@ -52,6 +52,22 @@ So the shot list is always split in two:
 
 Multiple passes (a second performance, a dress rehearsal, a soundcheck) are a bonus the interview asks about and never assumes. When one exists, it changes everything below it, so ask early.
 
+## And: the client is never asked anything
+
+**These are private trial runs.** Dan is hired to photograph the event. The video is a self-directed exercise he is learning on, running alongside the paid stills work, and the client has not commissioned it and does not know to expect it. Dan's words, 2026-07-23: *"I'm not going to email him, this is a trial run for me still, not something he's expecting."*
+
+So **no step in a plan may depend on an answer from the performer, the company, or the client.** Not which number is strongest, not where the piece turns, not how dark the stage gets, not a request for a dress rehearsal or a photo call. Asking any of it announces a deliverable he has not promised.
+
+This is narrower than it sounds. **Venue staff are not the client.** A house manager, a box office person, an usher: all fair game, and a thirty second question to one of them about a tripod or a running time is often the highest leverage move on the card.
+
+Where a plan wants information only the client has, the discipline is:
+
+- **Write the fallback as the plan of record.** The version that needs no answer is the plan. The better version is an opportunistic upgrade, taken only if it presents itself on the night.
+- **Never leave a shot depending on an unanswered question.** "Park on whichever number they name" is not a plan when nobody is being asked. Pick a moment whose location is knowable in advance (an opening, a named final number, the bow) and commit to it.
+- **Mark the unverifiable premises as unverifiable** in the premise audit, and say plainly that they stay that way until he is standing in the room.
+
+If Dan ever says he is talking to a client about a specific event, that overrides this for that event only.
+
 ## Process
 
 0. **Check that the shoot has not already happened.** This skill plans before a shoot. Everything it produces is advice about spending a moment that has not been spent yet, and none of it is actionable against footage already on a card.
