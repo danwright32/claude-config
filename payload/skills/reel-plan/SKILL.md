@@ -328,8 +328,9 @@ He is glancing at it between numbers, on a phone, in bad light. Length is the en
 - **No paragraphs anywhere.** A line is a shot, a setting, or a rule. Nothing else.
 - **No sentence over ten words.** Most should be four.
 - **No explanation.** The card says what to do. The plan says why. He read the plan at his desk.
-- **Every shot is one line**: marker, shot, size. `● Doors, room filling · WIDE`
-- **Markers, not words.** `●` in hand, `◆` parked. Legible at a glance, no reading.
+- **Every shot is one line**: shot, then size. `Doors, room filling · WIDE`
+- **★ is the only symbol on the card**, and it means get this before anything else in that block. It needs no decoding.
+- **No legend, ever.** An earlier version used `●` for in hand and `◆` for parked. Dan, 2026-07-23: *"I'm not going to remember the symbols."* He is right, and the reasoning that produced them was wrong: a symbol he has to decode in a dark room is slower than the word, not faster. **Write the instruction out.** "Take the 24-70 off the strap. Set it on the flat spot. Press record." Anything that needs a key at the top of the page does not belong on the card.
 - Anything he cannot act on while holding a camera does not belong on the card.
 
 The plan document may be long and argued. The card may not. When they conflict, cut the card.
