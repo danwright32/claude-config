@@ -123,6 +123,46 @@ def test_a_wrapped_shot_stays_inside_one_checkbox_item():
     assert "Film the whole change in one take" in out
 
 
+SHELL_WITH_KEY = (
+    '<html><head><style>x</style></head><body>\n<!--CARD-->\n'
+    '<script>var KEY = "{event-slug}-card-v1";</script></body></html>'
+)
+
+
+def _key(out: str) -> str:
+    m = re.search(r'var KEY = "([^"]*)"', out)
+    assert m, "no storage key in output"
+    return m.group(1)
+
+
+def test_the_storage_key_placeholder_never_ships():
+    """Every card shipped with the literal "{event-slug}" placeholder as its key.
+
+    The ticked-checkbox state is saved per key, so every card shared one key.
+    Ticking shots on one event's card made them appear already ticked on the
+    next event's card, by position. A silent wrong answer, in a venue.
+    """
+    out = render("- [ ] A shot\n", SHELL_WITH_KEY)
+    assert "{event-slug}" not in out
+    assert "{" not in _key(out)
+
+
+def test_two_cards_get_different_storage_keys():
+    with tempfile.TemporaryDirectory() as d:
+        keys = []
+        for name in ("odyssey-card.md", "bludline-card.md"):
+            md = Path(d) / name
+            md.write_text("- [ ] A shot\n")
+            sh = Path(d) / "shell.html"
+            sh.write_text(SHELL_WITH_KEY)
+            subprocess.run(
+                [sys.executable, str(RENDER), str(md), "--shell", str(sh)],
+                check=True, capture_output=True, text=True,
+            )
+            keys.append(_key(md.with_suffix(".html").read_text()))
+        assert keys[0] != keys[1], f"both cards share the key {keys[0]}"
+
+
 def test_bold_is_converted():
     out = render("**Out by 2:00.**\n", SHELL)
     assert "<b>Out by 2:00.</b>" in out
