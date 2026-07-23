@@ -127,7 +127,9 @@ Ask in this order. The early answers reorganize the later ones.
 
 **Two performances do not intercut.** Actors are not robots: blocking shifts, laughs land differently, tempi move. A second pass gives alternative material, not extra angles on the first. Choose one performance as the spine.
 
-The pass worth asking for is a **dress rehearsal**, which in professional theatre and concert work is the norm rather than a favor. Full costume, full tech, no audience, and you can move anywhere and fail without consequence. Shoot the rehearsal for the stage, and the performance for the room.
+A **dress rehearsal** is the most valuable pass there is: full costume, full tech, no audience, and you can move anywhere and fail without consequence. Shoot the rehearsal for the stage, and the performance for the room. But **do not tell him to ask for one**, because the client is never asked anything. Ask instead whether one already exists that he will be present for. If it does, it changes everything below it.
+
+**Then ask what he is hired for.** Not every booking covers the whole evening. A double bill, a festival slot, or a shared programme may mean he is paid for one half and merely present for the other, and **the half he is not shooting is a free technical rehearsal**: hands empty, stage lit, room full, real light cues. He can test flicker, set exposure, rehearse framings and learn the room before the paid half starts. It is the closest thing to a second pass that a one pass event ever offers, it costs nothing, and it needs nobody's permission. Ask for it every time.
 
 **3. Rig mode.** See `references/rig-and-audio.md`.
 - **Pinned.** He cannot move (Carnegie, a formal hall, an assigned seat). He photographs from the one position on both bodies. A tripod, if permitted, is where the parked window sits when it opens, and it stands idle the rest of the time.
