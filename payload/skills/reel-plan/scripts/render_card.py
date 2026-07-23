@@ -31,8 +31,6 @@ def _inline(text: str) -> str:
     out = html.escape(text)
     out = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", out)
     out = out.replace(STAR, f'<span class="star">{STAR}</span>')
-    out = out.replace(HAND, f'<span class="hand">{HAND}</span>')
-    out = out.replace(PARK, f'<span class="park">{PARK}</span>')
     out = _box_sizes(out)
     return out
 
