@@ -109,6 +109,20 @@ def test_rendering_never_overwrites_its_own_shell():
         assert shell.read_text() == before, "shell must be left untouched"
 
 
+def test_a_wrapped_shot_stays_inside_one_checkbox_item():
+    """Dan, 2026-07-23: 'this line break is going to screw me up because I
+    won't read the second line in the heat of the moment.'
+
+    An indented continuation line used to close the list and emit a <p>, so the
+    tail of a shot rendered as a detached paragraph a full gap below its own
+    checkbox. It must stay in the same item and simply wrap.
+    """
+    out = render("- [ ] Film the whole change\n      in one take · MEDIUM\n", SHELL)
+    assert out.count("<li>") == 1
+    assert "<p>" not in out
+    assert "Film the whole change in one take" in out
+
+
 def test_bold_is_converted():
     out = render("**Out by 2:00.**\n", SHELL)
     assert "<b>Out by 2:00.</b>" in out
