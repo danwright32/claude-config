@@ -115,6 +115,20 @@ If Dan ever says he is talking to a client about a specific event, that override
 
    The shell holds styles and the checkbox script and a `<!--CARD-->` placeholder. Touch it only to change how the card looks, never what it says. Tests live in `scripts/test_render_card.py`; run them after any change to either file.
 
+4c. **Sweep the whole plan and card for contradictions. Never skip this, and never skip it after a revision.**
+
+   A plan is written and then revised, often several times, as Dan corrects an assumption. **Every revision leaves sentences behind that have quietly become false**, and they do not read as false. They read as confident, because they were true when written. On 2026-07-23 this happened in four separate rounds: a section header still said "three decisions" while listing four, a line said "decide this after watching the first half" after it had been established he would be working it, a free-windows list still included a window that had just been removed, and a line said "nothing gets recorded" about an act he had just been hired to shoot.
+
+   So, after writing and again after **every** revision, re-read both documents end to end against the current constraints. Do not reason from what you remember writing. Actually read them. Specifically check:
+
+   - **Counts and lists.** "Three things" followed by four. A budget of two windows when the plan now spends one, or three.
+   - **Anything conditional on a constraint that changed.** Search the documents for the old assumption's keywords, not just the section you edited.
+   - **Timing words.** "Before doors," "during the first half," "at the interval," "after watching." These go stale the instant an arrival time or a booking changes.
+   - **The risks table against the shot list.** Anything the risks table says may fail is **ambitious**, never safety. Demote it.
+   - **The card against the plan.** They drift in opposite directions because the card is edited for length.
+
+   Then report what the sweep found, including finding nothing. Declaring a document consistent without having re-read it is the single most repeated failure in this skill's history, and saying "checked and clear" without checking is worse than not checking, because it is believed.
+
 5. **Append one row to the reel log's table**, naming this event's date, discipline, structure, and opening device. Do not write a summary line anywhere. Do this when the plan is written, not after the shoot. The structure is chosen at the desk, and that is the thing the next plan must avoid. A plan that does not update the log has disarmed the rule that keeps every reel from looking the same.
 6. After the shoot, run the debrief with `templates/debrief.md` and save it beside the plan. **Then apply its corrections to the reference files.** See below.
 
