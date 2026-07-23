@@ -123,8 +123,14 @@ def main() -> int:
               f"so there is nowhere to put the card", file=sys.stderr)
         return 1
 
-    out = shell.replace(MARKER, render_body(args.card.read_text()))
     dest = args.card.with_suffix(".html")
+    if dest.resolve() == args.shell.resolve():
+        print(f"error: {dest} is the shell. Rendering would overwrite it with a "
+              f"card, and the next render would use that card as its shell. "
+              f"Rename the input, or pass a --shell somewhere else.", file=sys.stderr)
+        return 1
+
+    out = shell.replace(MARKER, render_body(args.card.read_text()))
     dest.write_text(out)
     print(f"wrote {dest}")
     return 0
