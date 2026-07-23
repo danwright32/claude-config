@@ -54,6 +54,8 @@ Every shot in a plan is marked:
 
 Anything that cannot be one of those two does not go on the list. Do not plan a handheld video shot during the bow. He will be photographing it.
 
+**These two labels belong in the plan and never on the card.** The plan is read at a desk; the card is read in a dark room with a camera in one hand. On the card, write the action instead: "stop shooting stills, eight seconds, back to stills", or "set it down, press record, stand next to it". Dan asked outright what "park" meant on a card that used it.
+
 ## Also: assume one pass, forever
 
 A live performance happens once. Every ambitious shot spends a moment that cannot be recovered, and it spends the safe coverage of that moment too, because the camera was busy being clever.
