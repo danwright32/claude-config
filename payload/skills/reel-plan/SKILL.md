@@ -15,6 +15,8 @@ Read `references/gear-nikon-z8.md` before writing a shot list. The 8K wide crops
 
 **Read these before the interview and plan from them as defaults.** Each one is here because a plan was built on the opposite assumption and had to be rewritten. Every one is overridable for a specific event, but only when Dan says so for that event, never by inference.
 
+**This block is the authority.** Sections further down elaborate on these and will eventually drift, exactly as this file warns about summary lines everywhere else. If a later section contradicts a fact here, the fact here wins and **the later section is stale and should be corrected in the same edit.**
+
 1. **He arrives fifteen to thirty minutes early, not ninety.** The house is usually open and often already full. Do not build an opening on the empty pre-show stage. Substitutes are the building exterior on the way in, the stage during an interval, and the room emptying.
 2. **The client is never asked anything.** These are private trial runs he is learning on, running alongside the paid stills work, and the client has not commissioned the video. No pre-shoot questions, no asking which number is strongest, no requesting a rehearsal. Venue staff are not the client and are fair game.
 3. **Another act on the same bill gives the reel nothing.** Assume the other company hires him too, so he is working it as a separate booking with both cameras busy. It is not prep, not a rehearsal, not a free window. Plan as though the evening begins when the subject walks on.
