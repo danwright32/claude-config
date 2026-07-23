@@ -12,6 +12,7 @@ as the styled shell. The shell must contain a <!--CARD--> placeholder.
 """
 
 import argparse
+import hashlib
 import html
 import re
 import sys
@@ -142,7 +143,17 @@ def main() -> int:
               f"Rename the input, or pass a --shell somewhere else.", file=sys.stderr)
         return 1
 
-    out = shell.replace(MARKER, render_body(args.card.read_text()))
+    body = args.card.read_text()
+    out = shell.replace(MARKER, render_body(body))
+
+    # Ticked checkboxes persist under this key. It must be unique per card:
+    # every card used to ship the literal "{event-slug}" placeholder, so they
+    # all shared one key and ticks from one event surfaced on the next event's
+    # card by position. Include a content hash so an edited card starts clean
+    # rather than landing old ticks on renumbered shots.
+    digest = hashlib.sha1(body.encode()).hexdigest()[:8]
+    out = out.replace("{event-slug}-card-v1", f"{args.card.stem}-{digest}")
+
     dest.write_text(out)
     print(f"wrote {dest}")
     return 0
