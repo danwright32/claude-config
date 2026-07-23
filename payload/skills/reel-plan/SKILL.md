@@ -133,11 +133,19 @@ A **dress rehearsal** is the most valuable pass there is: full costume, full tec
 
 **Then ask what he is hired for.** Not every booking covers the whole evening. A double bill, a festival slot, or a shared programme may mean he is paid for one act and merely present for the other.
 
-**A half he is not hired for is not his to record.** Not video, not stills, not audio. He was engaged by one artist, and another company's work is not free material because he happens to be sitting in front of it. Dan's correction, 2026-07-23, after an earlier version of this file called it a free technical rehearsal: *"Unless the first performing group hires me I have to assume that I'll be unable to shoot anything."*
+**An act he is not hired for gives the reel nothing. Plan as though the evening begins when his subject walks on.**
 
-**What survives is real, though, and it is worth planning for: looking is not shooting.** Banding, exposure and framing are all read in the viewfinder without pressing record. If he is comfortable raising a camera to his eye at the back of a dark house, he can settle the whole technical setup during their half and record none of it. If that feels conspicuous, it moves to the interval and he watches with the camera down, which still teaches him the room.
+This file got it wrong twice in one session, in opposite directions, so take the conclusion rather than re-deriving it. First it called the other act a free technical rehearsal, which was wrong because another company's work is not free material just because he is sitting in front of it. Then it salvaged "looking is not shooting," which was also wrong, because on a shared bill **the other company will often hire him too.** Dan, 2026-07-23: *"It's likely the first half is going to hire me separately... let's act like I'll be working during the first half and can't use that as prep or anything else for this reel."*
 
-**Plan for the loss, not around it.** No rehearsal under performance light means exposure gets set cold at the top of the only act he can shoot. So **do not start a parked window on the subject's entrance.** Let them get on stage, read the light for about a minute, set it, then roll. A parked take at a guessed exposure is worth nothing; a missed first minute is one handheld shot.
+So the default is the strict one. **Assume he is working the other act as a separate paid booking**, both cameras busy, no attention spare. Anything he happens to learn about the room is a windfall, never a resource, and no shot or setting may assume it.
+
+Three consequences that shape the whole plan:
+
+- **The interval is the only setup window.** Rank its items on the card and say which one to drop first, because he arrives at it straight off another job and it may be short.
+- **Exposure gets set cold, live.** So **never start a parked window on the subject's entrance.** Let them get on stage, read the light for about a minute, set it, then roll. A parked take at a guessed exposure is worth nothing; a missed first minute is one handheld shot.
+- **He is on the back half of a double shift.** The answer to fatigue is a shorter list, not a cleverer one.
+
+**And check the log for the other act.** If both halves get reels, they are shot in one room, one night, from one seat, and they are the likeliest pair in the whole log to come out identical. Whichever is planned second takes a different structure and a different opening device.
 
 **3. Rig mode.** See `references/rig-and-audio.md`.
 - **Pinned.** He cannot move (Carnegie, a formal hall, an assigned seat). He photographs from the one position on both bodies. A tripod, if permitted, is where the parked window sits when it opens, and it stands idle the rest of the time.
