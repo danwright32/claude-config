@@ -5,6 +5,9 @@
      Every line is a shot, a setting, or an action he can do alone, holding a camera.
      Nothing that restates what a working photographer already knows.
      Never name a surface the plan has not established exists.
+     TWO heading levels, and they must stay consistent or he asks why one looks different:
+       #  = a block of work he does (ARRIVAL, INTERVAL, THE SHOW, B-ROLL, THE END)
+       ## = a reference block he consults (THE ONE IDEA, SOUND, RULES)
      Delete any phase or line that does not apply. Count lines. Well under 100. -->
 
 # {EVENT}
