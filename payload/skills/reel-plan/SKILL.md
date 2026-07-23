@@ -291,7 +291,11 @@ The card is read in a dark or crowded room, on a phone, with a camera in the oth
 
 **Never invent a fact.** No clock times that were not given. No claims about what "usually" happens at a show nobody has seen. If a time or a running order is unknown, say so and put it on the list of things to ask on arrival. Inventing a specific detail and setting it in bold is worse than leaving it blank, because he will trust it.
 
-**Never assume his hands are free.** Mark every shot **HANDS FREE** or **PARKED**. See the prime directive.
+**Never assume his hands are free.** Every shot must be one he can physically take at that moment. Say what he does, in words: "stop shooting stills, eight seconds, back to stills", or "set it down, press record, stand next to it". See the prime directive.
+
+**Never restate what a working photographer already knows.** Dan cut, from one card, the venue and show time, the client's phone number, a primer explaining that video is stolen from stills time, a reminder of which half he was shooting, a heading saying "your half", and a line telling him what to do about banding once he had looked for it. Every line must be a shot, a setting, or an action. If it explains, justifies, or reminds him of something he does for a living, delete it.
+
+**Never name a surface the plan has not established exists.** A card once said "braced on a seat back" when he stands behind the last row, where there is a wall. If the plan has not confirmed the furniture, write "lean on something solid".
 
 **Never require him to wait.** He goes home at the end. A shot that needs the room to empty completely will not be taken. Ask for the audience leaving, not the empty room.
 
