@@ -317,7 +317,7 @@ The plan document may be long and argued. The card may not. When they conflict, 
   - **The building exterior, shot on the way in**, before going through the door. Ninety seconds, always available, and it covers the establishing shot.
   - **The stage during an interval**, reset and empty with nobody on it. The room is full and the light is wrong, so it is not the same shot, but it is an empty stage and it costs nothing.
   - **The room emptying afterwards**, thirty seconds, then he goes home.
-  - **A half of the evening he is not hired for**, when one exists, which is where the flicker test and the exposure work move to.
+  - **Looking through the camera without recording**, during a half he is not hired for or at the interval. This is where the flicker check and the exposure setup happen when there is no early access. Nothing is recorded.
 
   The LED banding test still happens every time. It just happens during whatever is on stage before the paid half, rather than in an empty room.
 - The plan tells him what to do with his hands, not what to feel.
