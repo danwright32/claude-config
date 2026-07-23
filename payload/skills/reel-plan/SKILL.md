@@ -30,7 +30,7 @@ Typical budget for one event: **two windows.**
 1. **One number**, chosen because it contains the moment the reel is built around.
 2. **The bow and applause**, because his hands are on stills there and the reel wants it. Park before the bow, let it run, collect it after.
 
-Free windows, costing nothing, because no photographs are required: before doors, the empty room, the audience arriving, the room emptying.
+Free windows, costing nothing, because no photographs are required: the arrival, any interval, the room emptying, and **any part of the evening he is not hired for**, which is by far the largest of them when it exists. Before doors and the empty room belong on this list only when he is actually arriving early enough for them to exist, which is usually not the case.
 
 ### Marking shots
 
@@ -136,7 +136,7 @@ A **dress rehearsal** is the most valuable pass there is: full costume, full tec
 - **Roaming.** He can move (a church, a lobby, a black box). He carries both bodies and photographs.
 - **In no mode is there a continuous safety shot.** Both cameras are photographing. The only continuous video is inside a parked window, and a parked window is minutes long, not a whole show.
 - **A tripod ban does not remove the parked window.** A camera on a chair arm, a railing, or a windowsill is **locked**, and its 8K crops are as clean as a tripod's. Braced is not locked: a braced camera is held in a hand and still shakes, and cropping a braced 8K frame to a tight framing magnifies the tremor. If the room has a surface, the parked window works. It always has a surface.
-- **Decide before doors** where the parked body sits, what it points at, which number it covers, and who might sit in front of it.
+- **Decide at the first free moment** where the parked body sits, what it points at, which number it covers, and who might sit in front of it. That is before doors when he arrives early enough, and otherwise on arrival or at the interval. Never later than the interval, because a surface cannot be chosen in the dark with a show running.
 
 **4. Program detail.** Full running order, rough shape, or nothing. Degrade gracefully. With a full program, name specific moments and where the cuts land. With nothing, plan against the discipline's beat sheet and tell him what to find out in the first five minutes on site.
 
