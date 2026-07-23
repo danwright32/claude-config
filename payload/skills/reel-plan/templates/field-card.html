@@ -46,11 +46,18 @@
     padding:16px 16px calc(64px + env(safe-area-inset-bottom));
     max-width:680px;margin:0 auto;overflow-x:hidden;
   }
-  h1{font-size:26px;line-height:1.15;margin:0 0 6px;letter-spacing:-.01em}
+  /* Headings must be unmistakably headings at a glance: a phase heading is a
+     thick rule you cannot mistake for a shot, a section heading a thinner one.
+     Dan, 2026-07-23: "make it clearer when something is a heading." */
+  h1{
+    font-size:26px;line-height:1.15;margin:40px 0 4px;letter-spacing:-.01em;
+    padding-bottom:8px;border-bottom:4px solid var(--fg);
+  }
+  h1:first-child{margin-top:0}
   h2{
     font-size:15px;letter-spacing:.12em;text-transform:uppercase;
-    color:var(--dim);margin:34px 0 10px;padding-top:12px;
-    border-top:2px solid var(--line);font-weight:800;
+    color:var(--dim);margin:28px 0 6px;padding-bottom:6px;
+    border-bottom:2px solid var(--line);font-weight:800;
   }
   .lede{color:var(--dim);font-weight:500;font-size:17px;margin:0 0 4px}
   .hard{color:var(--alarm);font-weight:800}
