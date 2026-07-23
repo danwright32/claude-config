@@ -30,9 +30,29 @@ def _inline(text: str) -> str:
     out = out.replace(STAR, f'<span class="star">{STAR}</span>')
     out = out.replace(HAND, f'<span class="hand">{HAND}</span>')
     out = out.replace(PARK, f'<span class="park">{PARK}</span>')
-    out = re.sub(r"·\s*(WIDE|MEDIUM|TIGHT|ALL SIZES|WIDE \+ TIGHT)\b",
-                 r'<span class="size">\1</span>', out)
+    out = _box_sizes(out)
     return out
+
+
+SIZE_WORD = r"ALL SIZES|WIDE|MEDIUM|TIGHT"
+# A run of sizes after a separator: "· WIDE", "· WIDE + TIGHT", "· WIDE and TIGHT".
+SIZE_RUN = re.compile(
+    rf"·\s*(?P<run>(?:{SIZE_WORD})(?:\s*(?:\+|and|&amp;|,)\s*(?:{SIZE_WORD}))*)\b"
+)
+
+
+def _box_sizes(text: str) -> str:
+    """Box every framing size in a run, not just the first.
+
+    The previous pattern was a flat alternation, so "WIDE + TIGHT" matched the
+    WIDE branch and left TIGHT as bare prose. On the card that reads as two
+    different kinds of thing when it is one instruction (Dan, 2026-07-23).
+    """
+    def box_run(m: re.Match) -> str:
+        return re.sub(rf"\b({SIZE_WORD})\b",
+                      r'<span class="size">\1</span>', m.group("run"))
+
+    return SIZE_RUN.sub(box_run, text)
 
 
 def render_body(markdown: str) -> str:
