@@ -305,7 +305,15 @@ The card is read in a dark or crowded room, on a phone, with a camera in the oth
 
 **No compression that costs meaning.** "Get 3x more" is not shorter than "you will not have enough, take more," it is merely less legible. "Sync is legal" is skill vocabulary. Write the sentence out. The card is short because it omits whole ideas, never because it squeezes them.
 
-**Never use a craft word he has not been taught.** *Cutaway* is the clearest example: the card once said "cutaways, get 3x more," which names a thing he does not know and then explains why he needs it. Call it what it is on the page. "Spare shots: anything that is not the performance. Six seconds each. They let you join two clips that would otherwise clash." The same goes for *b-roll*, *coverage*, *the master*, *sync*, *the button*, *the turn*.
+**The line is standard industry vocabulary versus vocabulary this skill invented.** An earlier version of this rule banned craft words wholesale, listing *b-roll* among them. That was wrong and slightly condescending: Dan is a working professional. His words, 2026-07-23, on a card that said "spare shots": *"let's be professional, this is b-roll isn't it?"*
+
+**Use the real word when the trade uses it.** *B-roll*, *wide*, *medium*, *tight*, *stereo*, *exposure*, *frame rate*. He knows these better than this file does, and inventing a homespun substitute makes the card harder to read, not easier.
+
+**Write out anything this skill made up**, because those words exist nowhere else and he has no way to look them up: *parked*, *the window*, *in hand*, *safety shot*, *the turn*, *the button*, *the single moment*. He asked outright what "park" meant on a card that used it.
+
+**And write out anything genuinely ambiguous**, whoever coined it. *Braced* is the example: he asked what it meant, and "lean on something solid" then read as a description of the performer rather than an instruction to him.
+
+If unsure which side a word falls on, ask whether he would have used it himself on a shoot he was hired for. If yes, use it.
 
 **Each shot names its framing size.** Wide, medium, or tight, on the shot itself, not in a reminder box at the bottom. Keep a short reminder box too, but the sizes belong on the shots.
 
