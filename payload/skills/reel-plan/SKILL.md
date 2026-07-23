@@ -325,7 +325,7 @@ The plan document may be long and argued. The card may not. When they conflict, 
   - **The building exterior, shot on the way in**, before going through the door. Ninety seconds, always available, and it covers the establishing shot.
   - **The stage during an interval**, reset and empty with nobody on it. The room is full and the light is wrong, so it is not the same shot, but it is an empty stage and it costs nothing.
   - **The room emptying afterwards**, thirty seconds, then he goes home.
-  - **Looking through the camera without recording**, during a half he is not hired for or at the interval. This is where the flicker check and the exposure setup happen when there is no early access. Nothing is recorded.
+  - **The interval, which on a shared bill is the only setup window there is.** The flicker check and the exposure setup happen there, by looking through the camera without recording. Rank the interval's tasks, because it is short and he reaches it straight off another job.
 
   The LED banding test still happens every time. It just happens during whatever is on stage before the paid half, rather than in an empty room.
 - The plan tells him what to do with his hands, not what to feel.
