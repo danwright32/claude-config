@@ -131,22 +131,24 @@ def main() -> int:
     title = args.title or lines[0].lstrip("# ").strip()
     # Notes takes the title from the name property. Repeating the card's own
     # first heading in the body shows it twice.
-    body = notes_body("\n".join(lines[1:]))
+    blocks = notes_blocks("\n".join(lines[1:]))
+    body = "".join(b.html for b in blocks)
+    tickable = [b.paragraph for b in blocks if b.tickable]
 
     r = create_note(title, body, args.folder)
     if r.returncode != 0:
         print(f"error creating note: {r.stderr.strip()}", file=sys.stderr)
         return 1
 
-    r = apply_checklist(title)
+    r = apply_checklist(title, tickable)
     out = r.stdout.strip()
     if out.startswith("ABORTED"):
         print(f"note created, but tick boxes NOT applied.\n{out}\n"
-              f"Open the note, select all, and press Shift+Cmd+L yourself.",
-              file=sys.stderr)
+              f"Leave Notes frontmost and run this again.", file=sys.stderr)
         return 1
 
-    print(f'wrote note "{title}" to folder "{args.folder}" with tick boxes')
+    print(f'wrote note "{title}" to "{args.folder}": '
+          f'{len(tickable)} tick boxes, {len(blocks) - len(tickable)} plain lines')
     return 0
 
 
