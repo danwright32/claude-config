@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from render_card import notes_body  # noqa: E402
+from render_card import notes_blocks  # noqa: E402
 
 
 def _osascript(script: str) -> subprocess.CompletedProcess:
