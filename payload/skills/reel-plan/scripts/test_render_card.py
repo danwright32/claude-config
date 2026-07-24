@@ -175,6 +175,14 @@ def test_notes_body_puts_every_card_line_in_its_own_div():
     assert out.count("<div>") == 3
 
 
+def test_notes_body_keeps_a_wrapped_shot_as_one_checkbox():
+    """Same trap as the HTML card: a wrapped line must not become two ticks."""
+    from render_card import notes_body
+    out = notes_body("- [ ] Take the camera off the strap,\n      press record\n")
+    assert out.count("<div>") == 1
+    assert "off the strap, press record" in out
+
+
 def test_notes_body_drops_the_checkbox_syntax_but_keeps_the_words():
     from render_card import notes_body
     out = notes_body("- [ ] Barrow Street · WIDE\n")
