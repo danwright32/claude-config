@@ -117,7 +117,30 @@ If Dan ever says he is talking to a client about a specific event, that override
 
    **The markdown card is the only source of truth.** Authoring the HTML separately is how the two documents drift, and the one he reads in the lobby is the one that goes stale. It has already happened once. Edit the markdown, re-run the script.
 
-   The shell holds styles and the checkbox script and a `<!--CARD-->` placeholder. Touch it only to change how the card looks, never what it says. Tests live in `scripts/test_render_card.py`; run them after any change to either file.
+   The shell holds styles and a `<!--CARD-->` placeholder. Touch it only to change how the card looks, never what it says. Tests live in `scripts/test_render_card.py`; run them after any change to either file.
+
+4b-ii. **Push the card into Apple Notes. This is the version he actually uses at the venue.**
+
+   ```
+   python3 ~/.claude/skills/reel-plan/scripts/push_to_notes.py <event-slug>-card.md --folder Reels
+   ```
+
+   **Why Notes and not the HTML card.** The HTML card's tick boxes cannot persist on a phone. Safari refuses local storage to any page opened from a file, so ticks vanish the moment he leaves the app, and the page's own error handling hid that. The HTML is still worth generating and is fine for reading. It just cannot remember anything. Do not describe it to him as something he can tick off.
+
+   The markdown card remains the single source of truth. The script regenerates the note from it, so the two cannot drift. Re-run it after any card edit.
+
+   **Rerunning replaces the note and clears any ticks**, so finish card edits before shoot day and tell him that plainly.
+
+   **What was learned getting this working**, because none of it is guessable and it cost three probes against a live Notes window:
+
+   - Notes checkboxes are a proprietary format **AppleScript cannot write**. The state is not in the note's HTML at all. The only route is to create a plain note and have Notes convert it with the Format menu's checklist command, Shift+Cmd+L.
+   - **Never Cmd+A.** That ticks the headings and the camera settings too. Dan rejected exactly that: *"but everything got a checkbox."* Only shots and actions get boxes.
+   - Select **whole paragraphs**, run by contiguous run. Notes moves by paragraph on Option+Down, which is immune to how lines wrap in the window. Counting arrow-down presses by line is not.
+   - **Notes injects the note's name as paragraph 1**, so body paragraphs number from 2. Repeating the title inside the body shows it twice.
+   - Moving down N paragraphs leaves the cursor at the **end** of paragraph N, and a selection that merely touches a paragraph reformats all of it. One Right arrow steps over the boundary. Without it the format spills onto the heading above.
+   - Bold and font size **survive** the conversion, so headings stay legible.
+
+   **This step types on his keyboard**, so it obeys the standing rule: tell him before taking control, verify Notes is frontmost with the cursor in the note body, and abort rather than send a keystroke anywhere else. The script does this and has already aborted correctly once when Terminal had focus. Prove it on a throwaway note before touching a real one.
 
 4c. **Sweep the whole plan and card for contradictions. Never skip this, and never skip it after a revision.**
 
