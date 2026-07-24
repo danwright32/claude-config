@@ -170,29 +170,7 @@ def notes_body(markdown: str) -> str:
     Do not emit the note's own title: Notes takes it from the name property,
     and repeating it in the body shows it twice.
     """
-    out, lines, i = [], markdown.splitlines(), 0
-    while i < len(lines):
-        raw = lines[i]
-        i += 1
-        line = raw.strip()
-        if not line or line == "---" or line.startswith("<!--"):
-            continue
-        # Fold indented continuation lines into the line above, or a wrapped
-        # shot becomes two separate tick boxes.
-        while i < len(lines) and lines[i].startswith((" ", "\t")) and lines[i].strip() \
-                and not lines[i].strip().startswith("- [ ] "):
-            line += " " + lines[i].strip()
-            i += 1
-        if line.startswith("# "):
-            out.append(f'<div><b><span style="font-size: 20px">'
-                       f'{html.escape(line[2:])}</span></b></div>')
-        elif line.startswith("## "):
-            out.append(f"<div><b>{html.escape(line[3:])}</b></div>")
-        elif line.startswith("- [ ] "):
-            out.append(f"<div>{_notes_inline(line[6:])}</div>")
-        else:
-            out.append(f"<div>{_notes_inline(line)}</div>")
-    return "".join(out)
+    return "".join(b.html for b in notes_blocks(markdown))
 
 
 def _notes_inline(text: str) -> str:
