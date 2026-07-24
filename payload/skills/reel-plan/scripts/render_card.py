@@ -117,6 +117,46 @@ def render_body(markdown: str) -> str:
     return "\n".join(out)
 
 
+class NotesBlock(NamedTuple):
+    """One paragraph of the note.
+
+    `paragraph` is 1-based and starts at 2, because Notes injects the note's
+    own name as paragraph 1 of the body. `tickable` marks the lines that should
+    become tick boxes: shots and actions, never headings or camera settings.
+    """
+    html: str
+    tickable: bool
+    paragraph: int
+
+
+def notes_blocks(markdown: str) -> list:
+    blocks, lines, i = [], markdown.splitlines(), 0
+    while i < len(lines):
+        raw = lines[i]
+        i += 1
+        line = raw.strip()
+        if not line or line == "---" or line.startswith("<!--"):
+            continue
+        while i < len(lines) and lines[i].startswith((" ", "\t")) and lines[i].strip() \
+                and not lines[i].strip().startswith("- [ ] "):
+            line += " " + lines[i].strip()
+            i += 1
+        n = len(blocks) + 2
+        if line.startswith("# "):
+            blocks.append(NotesBlock(
+                f'<div><b><span style="font-size: 20px">'
+                f'{html.escape(line[2:])}</span></b></div>', False, n))
+        elif line.startswith("## "):
+            blocks.append(NotesBlock(
+                f"<div><b>{html.escape(line[3:])}</b></div>", False, n))
+        elif line.startswith("- [ ] "):
+            blocks.append(NotesBlock(
+                f"<div>{_notes_inline(line[6:])}</div>", True, n))
+        else:
+            blocks.append(NotesBlock(f"<div>{_notes_inline(line)}</div>", False, n))
+    return blocks
+
+
 def notes_body(markdown: str) -> str:
     """Render the card as HTML for an Apple Notes note.
 
