@@ -164,6 +164,24 @@ def test_two_cards_get_different_storage_keys():
         assert keys[0] != keys[1], f"both cards share the key {keys[0]}"
 
 
+def test_notes_blocks_marks_only_the_shot_lines_as_tickable():
+    """Headings and camera settings are not tasks and must not get tick boxes.
+
+    Dan, 2026-07-23, on a note where Cmd+A had ticked everything:
+    "but everything got a checkbox".
+    """
+    from render_card import notes_blocks
+    blocks = notes_blocks("# ARRIVAL\n\nSettings line.\n\n- [ ] A shot · WIDE\n")
+    assert [b.tickable for b in blocks] == [False, False, True]
+
+
+def test_notes_blocks_numbers_paragraphs_from_two():
+    """Notes injects the note's name as paragraph 1, shifting the body down."""
+    from render_card import notes_blocks
+    blocks = notes_blocks("- [ ] First\n- [ ] Second\n")
+    assert [b.paragraph for b in blocks] == [2, 3]
+
+
 def test_notes_body_puts_every_card_line_in_its_own_div():
     """Apple Notes turns each block into one checklist item via Shift+Cmd+L.
 
