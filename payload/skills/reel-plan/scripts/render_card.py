@@ -117,6 +117,40 @@ def render_body(markdown: str) -> str:
     return "\n".join(out)
 
 
+def notes_body(markdown: str) -> str:
+    """Render the card as HTML for an Apple Notes note.
+
+    Notes cannot be given checkboxes through AppleScript: the checkbox state is
+    a proprietary format that lives outside the HTML. The working route, proven
+    against Notes on 2026-07-23, is to create the note with plain content and
+    then apply Shift+Cmd+L, which converts **every block** into a checklist
+    item. So the only structural requirement here is one div per card line.
+
+    Bold and font size survive that conversion, so headings stay legible.
+    Do not emit the note's own title: Notes takes it from the name property,
+    and repeating it in the body shows it twice.
+    """
+    out = []
+    for raw in markdown.splitlines():
+        line = raw.strip()
+        if not line or line == "---" or line.startswith("<!--"):
+            continue
+        if line.startswith("# "):
+            out.append(f'<div><b><span style="font-size: 20px">'
+                       f'{html.escape(line[2:])}</span></b></div>')
+        elif line.startswith("## "):
+            out.append(f"<div><b>{html.escape(line[3:])}</b></div>")
+        elif line.startswith("- [ ] "):
+            out.append(f"<div>{_notes_inline(line[6:])}</div>")
+        else:
+            out.append(f"<div>{_notes_inline(line)}</div>")
+    return "".join(out)
+
+
+def _notes_inline(text: str) -> str:
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html.escape(text))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("card", type=Path)
