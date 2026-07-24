@@ -51,8 +51,48 @@ end tell
 ''')
 
 
-def apply_checklist(title: str) -> subprocess.CompletedProcess:
-    """Convert every block to a tick box, refusing to type anywhere unsafe."""
+def runs_of(paragraphs: list) -> list:
+    """Group sorted paragraph numbers into contiguous (start, length) runs."""
+    runs = []
+    for n in paragraphs:
+        if runs and n == runs[-1][0] + runs[-1][1]:
+            runs[-1] = (runs[-1][0], runs[-1][1] + 1)
+        else:
+            runs.append((n, 1))
+    return runs
+
+
+def apply_checklist(title: str, paragraphs: list) -> subprocess.CompletedProcess:
+    """Tick-box only the given paragraphs, refusing to type anywhere unsafe.
+
+    Selecting whole paragraphs, rather than Cmd+A, is the whole point: an
+    earlier version ticked the headings and the camera settings too. Notes
+    moves by paragraph on Option+Down, which is immune to how lines happen to
+    wrap in the window.
+
+    The anchor must land on the *start* of the first paragraph in a run. Moving
+    down N paragraphs leaves the cursor at the end of paragraph N, and a
+    selection that merely touches a paragraph formats the whole of it, so one
+    Right arrow is needed to step over the boundary.
+    """
+    steps = []
+    for start, length in runs_of(paragraphs):
+        steps.append(f'''
+  key code 126 using command down
+  delay 0.25
+  repeat {start - 1} times
+    key code 125 using option down
+    delay 0.06
+  end repeat
+  key code 124
+  delay 0.15
+  repeat {length} times
+    key code 125 using {{option down, shift down}}
+    delay 0.06
+  end repeat
+  keystroke "l" using {{command down, shift down}}
+  delay 0.5''')
+
     return _osascript(f'''
 tell application "Notes"
   activate
@@ -69,10 +109,7 @@ tell application "System Events"
       return "ABORTED: focus is not the note body. Nothing sent."
     end if
   end tell
-  keystroke "a" using command down
-  delay 0.4
-  keystroke "l" using {{command down, shift down}}
-  delay 1.0
+{"".join(steps)}
 end tell
 return "applied"
 ''')
