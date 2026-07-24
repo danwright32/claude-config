@@ -164,6 +164,36 @@ def test_two_cards_get_different_storage_keys():
         assert keys[0] != keys[1], f"both cards share the key {keys[0]}"
 
 
+def test_notes_body_puts_every_card_line_in_its_own_div():
+    """Apple Notes turns each block into one checklist item via Shift+Cmd+L.
+
+    So every card line must be its own div, or several shots collapse into one
+    tick box. Verified against Notes on 2026-07-23.
+    """
+    from render_card import notes_body
+    out = notes_body("# ARRIVAL\n\n- [ ] First shot · WIDE\n- [ ] Second shot · TIGHT\n")
+    assert out.count("<div>") == 3
+
+
+def test_notes_body_drops_the_checkbox_syntax_but_keeps_the_words():
+    from render_card import notes_body
+    out = notes_body("- [ ] Barrow Street · WIDE\n")
+    assert "- [ ]" not in out
+    assert "Barrow Street" in out
+
+
+def test_notes_body_keeps_headings_visually_distinct():
+    from render_card import notes_body
+    out = notes_body("# THE END\n")
+    assert "<b>" in out and "THE END" in out
+
+
+def test_notes_body_escapes_html_so_a_shot_name_cannot_inject():
+    from render_card import notes_body
+    out = notes_body("- [ ] A <script>alert(1)</script> shot\n")
+    assert "<script>" not in out
+
+
 def test_bold_is_converted():
     out = render("**Out by 2:00.**\n", SHELL)
     assert "<b>Out by 2:00.</b>" in out
