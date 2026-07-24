@@ -131,12 +131,25 @@
   var KEY = "{event-slug}-card-v1";
   var boxes = Array.prototype.slice.call(document.querySelectorAll("input[type=checkbox]"));
   boxes.forEach(function(b,i){ b.dataset.i = i; });
+  // Safari refuses localStorage to a page opened from a file, so on a phone
+  // ticks cannot survive leaving the app. Say so rather than looking like it
+  // saved: a counter that silently resets is worse than no counter.
+  var canSave = (function(){
+    try { localStorage.setItem(KEY + ":probe", "1");
+          localStorage.removeItem(KEY + ":probe"); return true; }
+    catch(e) { return false; }
+  })();
+  if(!canSave){
+    document.getElementById("warn").textContent = "ticks are not saved";
+  }
   function load(){
+    if(!canSave) return;
     var raw; try { raw = localStorage.getItem(KEY); } catch(e) { return; }
     if(!raw) return;
     try { JSON.parse(raw).forEach(function(i){ if(boxes[i]) boxes[i].checked = true; }); } catch(e){}
   }
   function save(){
+    if(!canSave) return;
     var on = boxes.filter(function(b){return b.checked}).map(function(b){return +b.dataset.i});
     try { localStorage.setItem(KEY, JSON.stringify(on)); } catch(e){}
   }
