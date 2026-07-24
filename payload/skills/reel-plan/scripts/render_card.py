@@ -17,6 +17,7 @@ import html
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 MARKER = "<!--CARD-->"
 DEFAULT_SHELL = Path(__file__).parent.parent / "templates" / "field-card.html"
