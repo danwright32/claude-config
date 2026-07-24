@@ -39,9 +39,10 @@ def _applescript_string(s: str) -> str:
 def create_note(title: str, body: str, folder: str) -> subprocess.CompletedProcess:
     return _osascript(f'''
 tell application "Notes"
-  repeat with n in (every note of folder {_applescript_string(folder)})
-    if name of n is {_applescript_string(title)} then delete n
-  end repeat
+  try
+    delete (every note of folder {_applescript_string(folder)} ¬
+      whose name is {_applescript_string(title)})
+  end try
   set fresh to make new note at folder {_applescript_string(folder)} ¬
     with properties {{name:{_applescript_string(title)}, body:{_applescript_string(body)}}}
   activate
