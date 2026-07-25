@@ -27,6 +27,8 @@ In every register, warm the tone only. Never fabricate a specific past-project m
 ### Credentials and portfolio link
 Cold outreach should carry real proof, not just an offer. Work in one relevant credential from the citable list in SKILL.md (Carnegie tenure, Madison Square Garden, Lincoln Center, Radio City Music Hall) plus the portfolio link (danwrightphotography.com), tailoring which credential leads to the venue in play. A Carnegie-venue show leads with the Carnegie tenure; a show at another marquee venue can lead with that venue or pair it with the Carnegie tenure.
 
+Match the portfolio link to the show's discipline, so the recipient lands on relevant work rather than the general site. Use exactly these gallery URLs and never invent one: music links danwrightphotography.com/music, band links danwrightphotography.com/bands, comedy links danwrightphotography.com/comedy, dance links danwrightphotography.com/dance, and opera or theater links danwrightphotography.com/performing-arts (that gallery is Dan's theater and opera work). For any other discipline, or when none fits, link the main site danwrightphotography.com. This is the honest way to strengthen the pitch: showing relevant work, not claiming genre experience Dan lacks.
+
 Dan's proven cold pitch, kept here as a reference for voice and structure, not a script to reproduce word for word:
 
 > Hello!
