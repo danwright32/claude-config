@@ -34,6 +34,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/durable-lesson-check.sh",
+            "timeout": 10,
+            "statusMessage": "Checking a just-filed issue for a durable lesson"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/pr-merge-quiz.sh",
             "timeout": 15,
             "statusMessage": "Checking for a merged PR to quiz on"
