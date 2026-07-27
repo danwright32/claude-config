@@ -127,16 +127,6 @@
             "statusMessage": "Reflecting on uncertainties"
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/checkpoint-save.sh",
-            "timeout": 15,
-            "statusMessage": "Saving session checkpoint to memory"
-          }
-        ]
       }
     ],
     "TeammateIdle": [
