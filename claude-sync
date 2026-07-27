@@ -32,7 +32,7 @@ PLUGIN_SKILLS=(agents-sdk cloudflare cloudflare-email-service durable-objects \
   plannotator-compound)
 
 MIRROR_DIRS=(hooks agents commands)   # full mirror (no overlap with plugins)
-TOP_FILES=(CLAUDE.md RTK.md)          # top-level global rule files, synced verbatim
+TOP_FILES=(CLAUDE.md RTK.md LESSONS.md)   # top-level global rule files, synced verbatim
 
 # never copy nested VCS/OS cruft (some skills are git clones with their own .git)
 COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store)

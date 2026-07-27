@@ -27,6 +27,7 @@ echo 'AGENT' > "$CH/agents/plan-redteam.md"
 echo 'CMD' > "$CH/commands/plannotator-last.md"
 echo '# global rules v1' > "$CH/CLAUDE.md"
 echo '# rtk notes' > "$CH/RTK.md"
+echo '# lessons L1' > "$CH/LESSONS.md"
 cat > "$CH/settings.json" <<JSON
 {
   "model": "opus",
@@ -54,6 +55,7 @@ check "fragment path is tokenized"          "grep -q '__CLAUDE_HOME__/hooks/tdd-
 check "fragment does NOT leak real home"    "! grep -q '$CH' '$REPO/payload/settings.hooks.json'"
 check "payload has CLAUDE.md"               "[ -f '$REPO/payload/CLAUDE.md' ]"
 check "payload has RTK.md"                  "[ -f '$REPO/payload/RTK.md' ]"
+check "payload has LESSONS.md"              "[ -f '$REPO/payload/LESSONS.md' ]"
 
 echo "== pull into a DIFFERENT home (simulates other Mac) =="
 CH2="$WORK/dot-claude-2"
@@ -78,6 +80,7 @@ check "Mac 2 LOCAL permissions preserved"   "jq -e '.permissions.allow[0]==\"MAC
 check "CLAUDE.md arrived on Mac 2"          "[ -f '$CH2/CLAUDE.md' ]"
 check "RTK.md arrived on Mac 2"             "[ -f '$CH2/RTK.md' ]"
 check "CLAUDE.md content matches source"    "grep -q 'global rules v1' '$CH2/CLAUDE.md'"
+check "LESSONS.md arrived on Mac 2"          "grep -q 'lessons L1' '$CH2/LESSONS.md'"
 
 echo "== install-schedule plist content (background job must find Homebrew tools) =="
 PLDIR="$WORK/launchagents"; mkdir -p "$PLDIR"
