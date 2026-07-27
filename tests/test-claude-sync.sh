@@ -295,13 +295,21 @@ git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q
 out_nowatch="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$RSBHOME" SYNC_REPO="$RSB" bash "$SCRIPT" pull 2>&1)"
 check "payload-only pull does not restart the daemon" "! printf '%s' \"\$out_nowatch\" | grep -qi 'watch daemon'"
 
-# sync (two-way) must do the same self-change detection as pull.
+# sync (two-way) must do the same self-change detection as pull, AND must still
+# apply the payload afterwards. A self-update makes `sync` resume at an
+# apply-only step; asserting only the restart notice would let a regression that
+# skipped the copying entirely still pass. (#11)
 RSC="$WORK/rsrepoC"; git clone -q "$RSBARE" "$RSC"
 RSCHOME="$WORK/rschome"; mkdir -p "$RSCHOME"; echo '{"hooks":{}}' > "$RSCHOME/settings.json"
-echo '# another edit' >> "$RSA/claude-sync"
-git -C "$RSA" add claude-sync && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "edit script again" && git -C "$RSA" push -q
+sed 's/^TOP_FILES=(CLAUDE.md/TOP_FILES=(RESUMED.md CLAUDE.md/' "$SCRIPT" > "$RSA/claude-sync"
+echo '# only the NEW script version knows to sync this' > "$RSA/payload/RESUMED.md"
+echo '#!/bin/sh ordinary' > "$RSA/payload/hooks/ordinary.sh"
+git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "edit script again" && git -C "$RSA" push -q
 out_sync_restart="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RSCHOME" SYNC_REPO="$RSC" bash "$SCRIPT" sync 2>&1)"
 check "sync also restarts the watch daemon on a script change" "printf '%s' \"\$out_sync_restart\" | grep -qi 'watch daemon'"
+check "the resumed sync still applies ordinary payload files" "[ -f '$RSCHOME/hooks/ordinary.sh' ]"
+check "the resumed sync applies what only the NEW version syncs" "[ -f '$RSCHOME/RESUMED.md' ]"
+check "the resumed sync still reports completion"             "printf '%s' \"\$out_sync_restart\" | grep -q 'Synced'"
 
 # ---- status must actually REPORT a difference (#737) ----
 # do_status ran `rsync -an`, which has no -v and no -i, so rsync printed nothing
