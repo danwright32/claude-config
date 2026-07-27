@@ -608,6 +608,50 @@ SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$QSRC" SYNC_REPO="$QR
 check "a failed pull leaves no temp file behind"  "[ -z \"\$(ls -A '$TMPD' 2>/dev/null)\" ]"
 rm -f "$QREPO/payload/CLAUDE.md" "$QSRC/CLAUDE.md"
 
+echo "== send must not publish over changes this Mac has never applied =="
+# The 2026-07-27 incident, reproduced. Mirroring ~/.claude -> payload is
+# unconditional and uses --delete, so whenever the repo holds content this Mac has
+# not applied yet (the state right after ANY merge), a watcher firing publishes an
+# older snapshot and silently reverts the other Mac's work. It cost a real lesson
+# entry: the repo was 20 seconds ahead of ~/.claude and the watcher wiped it.
+UABARE="$WORK/uabare.git"; git init -q --bare -b main "$UABARE"
+UAA="$WORK/uarepoA"; git clone -q "$UABARE" "$UAA" 2>/dev/null
+UAAH="$WORK/uahomeA"; mkdir -p "$UAAH/hooks"; echo '{"hooks":{}}' > "$UAAH/settings.json"
+echo one > "$UAAH/hooks/shared.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UAAH" SYNC_REPO="$UAA" bash "$SCRIPT" sync >/dev/null 2>&1
+UAB="$WORK/uarepoB"; git clone -q "$UABARE" "$UAB" 2>/dev/null
+UABH="$WORK/uahomeB"; mkdir -p "$UABH"; echo '{"hooks":{}}' > "$UABH/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" pull >/dev/null 2>&1
+check "B starts in sync with A"            "grep -q one '$UABH/hooks/shared.sh'"
+# A makes a change and sends it up.
+echo two > "$UAAH/hooks/shared.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UAAH" SYNC_REPO="$UAA" bash "$SCRIPT" sync >/dev/null 2>&1
+# B merges it at the git level but never applies it: repo ahead of ~/.claude.
+git -C "$UAB" pull -q --ff-only
+check "B's repo now holds A's change"      "grep -q two '$UAB/payload/hooks/shared.sh'"
+check "B's home does NOT have it yet"      "grep -q one '$UABH/hooks/shared.sh'"
+commits_before="$(git -C "$UAB" rev-list --count HEAD)"
+out_ua="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" send 2>&1)"
+check "send does NOT revert A's change"    "grep -q two '$UAB/payload/hooks/shared.sh'"
+check "send makes no commit in that state" "[ \"\$(git -C '$UAB' rev-list --count HEAD)\" = \"\$commits_before\" ]"
+check "send says why it skipped"           "printf '%s' \"\$out_ua\" | grep -qi 'not applied'"
+# Control: with both sides agreed, a genuine local edit still sends normally.
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" pull >/dev/null 2>&1
+check "B received A's change on pull"      "grep -q two '$UABH/hooks/shared.sh'"
+echo 'B-only' > "$UABH/hooks/b-only.sh"
+out_ua2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" send 2>&1)"
+check "a normal send still works"          "[ -f '$UAB/payload/hooks/b-only.sh' ]"
+check "and does not warn"                  "! printf '%s' \"\$out_ua2\" | grep -qi 'not applied'"
+# sync in that same state must RECEIVE first, then still send the local edit.
+echo three > "$UAAH/hooks/shared.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UAAH" SYNC_REPO="$UAA" bash "$SCRIPT" sync >/dev/null 2>&1
+git -C "$UAB" pull -q --ff-only
+echo 'B-second' > "$UABH/hooks/b-two.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" sync >/dev/null 2>&1
+check "sync receives before sending"       "grep -q three '$UABH/hooks/shared.sh'"
+check "sync keeps A's change in the repo"  "grep -q three '$UAB/payload/hooks/shared.sh'"
+check "sync still sends B's own edit"      "[ -f '$UAB/payload/hooks/b-two.sh' ]"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

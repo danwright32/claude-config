@@ -22,6 +22,7 @@ set -euo pipefail
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 SYNC_REPO="${SYNC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 PAYLOAD="$SYNC_REPO/payload"
+LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
 
 # Skills that the plugins install & manage — excluded so the repo stays clean
@@ -108,21 +109,30 @@ stage_local_to_payload(){
   # as the last sync is skipped: rsync fixes the mode bit and leaves the OLD
   # content, and the edit silently never leaves this Mac. `status` already
   # documented this hazard; push and apply were still exposed to it.
-  for d in "${MIRROR_DIRS[@]}"; do
+  # Hold back the paths this Mac has not applied yet, per subtree (rsync excludes
+  # are relative to the transfer root, and each mirror below has its own root).
+  local protected; protected="$(unapplied_paths)"
+  for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
+    local ex=() p
+    [ "$d" = skills ] && { local s; for s in $(skill_excludes); do ex+=("$s"); done; }
+    while IFS= read -r p; do
+      case "$p" in "$d"/?*) ex+=(--exclude="/${p#"$d"/}") ;; esac
+    done <<PROT
+$protected
+PROT
     mkdir -p "$PAYLOAD/$d"
-    rsync -ac --delete "${COMMON_EXCLUDES[@]}" "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
+    rsync -ac --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
   done
-  if [ -d "$CLAUDE_HOME/skills" ]; then
-    mkdir -p "$PAYLOAD/skills"
-    rsync -ac --delete "${COMMON_EXCLUDES[@]}" $(skill_excludes) "$CLAUDE_HOME/skills/" "$PAYLOAD/skills/"
-  fi
   # hooks block of settings.json, with this Mac's home path tokenized
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
     jq '{hooks}' "$CLAUDE_HOME/settings.json" | tok > "$PAYLOAD/settings.hooks.json"
   fi
   # top-level rule files, derived from CLAUDE.md's own imports, copied verbatim
   for f in $(top_files_in "$CLAUDE_HOME"); do
+    case "
+$protected" in *"
+$f"*) continue ;; esac      # stale here; leave the repo's newer copy alone
     [ -f "$CLAUDE_HOME/$f" ] && cp "$CLAUDE_HOME/$f" "$PAYLOAD/$f"
   done
   scan_secrets   # never let a credential reach the shared remote
@@ -247,6 +257,51 @@ apply_payload_to_local(){
     fi
   fi
   verify_rule_imports
+  # Remember which commit's payload is now actually on this Mac. Everything that
+  # publishes upward compares against this, so it can tell "the user edited a
+  # file" apart from "this Mac is simply behind".
+  if have_git; then repo_head > "$LAST_APPLIED_FILE" 2>/dev/null || true; fi
+}
+
+# Is the shared repo holding payload content this Mac has never applied? That is
+# the state right after ANY merge, and it is when publishing upward is destructive:
+# stage_local_to_payload mirrors ~/.claude over the payload with --delete and no
+# regard for what is already there, so a send in this state silently reverts the
+# other Mac's work. On 2026-07-27 that wiped a rules entry the other Mac had just
+# written, 20 seconds after a merge left this Mac behind.
+# The payload paths whose content in the repo is newer than what this Mac has
+# applied, relative to payload/. Staging must not mirror over these: this Mac's
+# copy of them is stale, so copying it up reverts the other Mac. Everything else
+# still mirrors normally, so a genuine local edit (or a brand new file) still goes
+# up in the same run. Receiving first instead would be wrong: the apply mirrors
+# with --delete and would erase local files that have never been sent.
+unapplied_paths(){
+  local last head
+  have_git || return 0
+  last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
+  [ -n "$last" ] || return 0
+  head="$(repo_head)"
+  [ -n "$head" ] || return 0
+  [ "$head" != "$last" ] || return 0
+  git -C "$SYNC_REPO" diff --name-only "$last" "$head" -- payload 2>/dev/null \
+    | sed 's|^payload/||'
+  return 0
+}
+
+unapplied_remote_changes(){
+  have_git || return 1
+  local head last branch upstream
+  git -C "$SYNC_REPO" fetch -q origin 2>/dev/null || true
+  head="$(repo_head)"
+  last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
+  # Never applied here yet (fresh clone, or first run of this version): there is
+  # no recorded state to protect, and blocking would wedge a first push.
+  [ -n "$last" ] || return 1
+  if [ "$head" != "$last" ]; then return 0; fi
+  branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+  upstream="$(git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" 2>/dev/null || true)"
+  if [ -n "$upstream" ] && [ "$upstream" != "$head" ]; then return 0; fi
+  return 1
 }
 
 # Fail loud when the global rule files reference something that is not here.
@@ -422,6 +477,10 @@ do_apply_only(){
 
 # ---------- sync (two-way, used by the background job) ----------
 do_sync(){
+  # Staging is protected against the paths this Mac has not applied yet (see
+  # unapplied_paths), so the original order is safe: send local changes, integrate
+  # theirs, then apply. Receiving first is NOT an option here, because the apply
+  # mirrors with --delete and would erase a local file that has never been sent.
   stage_local_to_payload
   local pushed=0 branch before="" after=""
   if have_git; then
@@ -452,6 +511,16 @@ do_sync(){
 # (b) self-triggered the watcher. Receiving stays the timer's job (do_sync). If
 # the remote moved on, fall back to a full reconcile so our commit still rides up.
 do_send(){
+  # Never publish while this Mac is behind: send has no apply step, so it cannot
+  # reconcile, and mirroring upward from here would revert the other Mac. Skipping
+  # is safe because the receive timer (and any manual pull) will apply, after which
+  # the next edit sends normally. Deliberately not an error: the watcher fires on
+  # every edit, and a failure per edit while behind would be noise, not signal.
+  if unapplied_remote_changes; then
+    echo "claude-sync: skipped sending, because the shared repo holds changes this Mac has not applied yet and mirroring now would overwrite them. Run 'claude-sync pull' (or wait for the receive timer); the next edit sends normally." >&2
+    notify "send skipped: pull first, this Mac is behind"
+    return 0
+  fi
   stage_local_to_payload
   have_git || return 0
   commit_if_changed || return 0          # nothing changed -> nothing to send
