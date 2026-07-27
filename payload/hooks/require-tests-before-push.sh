@@ -200,6 +200,9 @@ is_test() {
   fi
   printf '%s' "$f" | grep -Eiq '(^|/)test_[^/]+\.py$'                 && return 0
   printf '%s' "$f" | grep -Eiq '_test\.(py|go|rb|dart|exs?)$'         && return 0
+  # Deno names its tests `foo_test.ts`, which is the convention Supabase edge
+  # function tests follow. Without this they read as untested source code.
+  printf '%s' "$f" | grep -Eiq '_test\.(ts|tsx|js|jsx|mjs|cjs)$'       && return 0
   printf '%s' "$f" | grep -Eiq '_spec\.rb$'                           && return 0
   printf '%s' "$f" | grep -Eiq 'Tests?\.(java|kt|cs|swift|scala)$'    && return 0
   printf '%s' "$f" | grep -Eiq '(^|/)conftest\.py$'                   && return 0
