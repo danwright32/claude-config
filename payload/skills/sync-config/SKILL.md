@@ -18,7 +18,7 @@ This brings the shared repo's config onto THIS Mac. It never touches the memory 
 ## Steps
 
 1. Run the command above.
-2. If it succeeds, tell the user in plain language what changed (the script prints which files/dirs were updated). If nothing changed, say config was already up to date.
+2. If it succeeds, relay the script's received-changes summary in plain language: it prints "Received changes from the shared repo:" followed by one line per file (added / updated / removed / renamed). If it prints "Already up to date", tell the user nothing new had to be pulled.
 3. If it fails, surface the error verbatim and the likely cause. Common ones:
    - merge/conflict in the sync repo → tell the user, do not force anything.
    - secret-scan block → a credential was detected; report it, do not bypass.
