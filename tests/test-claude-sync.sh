@@ -652,6 +652,41 @@ check "sync receives before sending"       "grep -q three '$UABH/hooks/shared.sh
 check "sync keeps A's change in the repo"  "grep -q three '$UAB/payload/hooks/shared.sh'"
 check "sync still sends B's own edit"      "[ -f '$UAB/payload/hooks/b-two.sh' ]"
 
+echo "== when both Macs changed the same file, keep the local copy and say so =="
+# Holding back the paths this Mac is stale on stops it reverting the other Mac,
+# but on a REAL conflict (both sides edited the same file) it just moved the loss:
+# the apply overwrote this Mac's edit with the other Mac's and said nothing. Trading
+# one silent loss for the other is not a fix. Keep the local version beside it.
+CFBARE="$WORK/cfbare.git"; git init -q --bare -b main "$CFBARE"
+CFA="$WORK/cfrepoA"; git clone -q "$CFBARE" "$CFA" 2>/dev/null
+CFAH="$WORK/cfhomeA"; mkdir -p "$CFAH/hooks"; echo '{"hooks":{}}' > "$CFAH/settings.json"
+echo original > "$CFAH/hooks/x.sh"
+echo untouched > "$CFAH/hooks/y.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFAH" SYNC_REPO="$CFA" bash "$SCRIPT" sync >/dev/null 2>&1
+CFB="$WORK/cfrepoB"; git clone -q "$CFBARE" "$CFB" 2>/dev/null
+CFBH="$WORK/cfhomeB"; mkdir -p "$CFBH"; echo '{"hooks":{}}' > "$CFBH/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFBH" SYNC_REPO="$CFB" bash "$SCRIPT" pull >/dev/null 2>&1
+# A changes both files and sends them up; B merges at the git level only.
+echo MAC-A-VERSION > "$CFAH/hooks/x.sh"
+echo A-CHANGED-THIS-TOO > "$CFAH/hooks/y.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFAH" SYNC_REPO="$CFA" bash "$SCRIPT" sync >/dev/null 2>&1
+git -C "$CFB" pull -q --ff-only
+# B edits x.sh (a real conflict) but leaves y.sh alone (not a conflict).
+echo MAC-B-MY-OWN-EDIT > "$CFBH/hooks/x.sh"
+out_cf="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFBH" SYNC_REPO="$CFB" bash "$SCRIPT" sync 2>&1)"
+check "the other Mac's version is applied"        "grep -q MAC-A-VERSION '$CFBH/hooks/x.sh'"
+check "the local edit is kept beside it"          "grep -rq MAC-B-MY-OWN-EDIT '$CFBH/hooks/'"
+check "the kept copy is named as a conflict"      "ls '$CFBH/hooks/' | grep -q 'x.sh.conflict'"
+check "and the conflict is reported, not silent"  "printf '%s' \"\$out_cf\" | grep -qi 'both Macs changed'"
+check "the report names the file"                 "printf '%s' \"\$out_cf\" | grep -q 'hooks/x.sh'"
+# No conflict on a file this Mac never touched: no stray copy, no noise.
+check "an untouched file gets the new version"    "grep -q A-CHANGED-THIS-TOO '$CFBH/hooks/y.sh'"
+check "and leaves no conflict copy behind"        "! ls '$CFBH/hooks/' | grep -q 'y.sh.conflict'"
+# Conflict copies are local evidence; they must never travel to the other Mac.
+check "conflict copies are not sent up"           "! ls '$CFB/payload/hooks/' | grep -q conflict"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFBH" SYNC_REPO="$CFB" bash "$SCRIPT" sync >/dev/null 2>&1
+check "and still are not sent on a later sync"    "! ls '$CFB/payload/hooks/' | grep -q conflict"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

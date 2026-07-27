@@ -42,8 +42,10 @@ MIRROR_DIRS=(hooks agents commands)   # full mirror (no overlap with plugins)
 # LESSONS.md the sync had never been told about.
 TOP_FILES_SEED=(CLAUDE.md RTK.md LESSONS.md)
 
-# never copy nested VCS/OS cruft (some skills are git clones with their own .git)
-COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store)
+# never copy nested VCS/OS cruft (some skills are git clones with their own .git),
+# nor the conflict copies preserve_local_conflicts leaves behind: those are local
+# evidence of one Mac's own edit and must never travel to the other Mac.
+COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.conflict-*)
 
 # desktop alert (no-op if disabled or the notifier isn't installed)
 notify(){
@@ -206,6 +208,7 @@ record_rsync(){
 apply_payload_to_local(){
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
+  preserve_local_conflicts   # before anything is overwritten below
   # Explicit template, not a bare mktemp: BSD mktemp ignores TMPDIR unless the
   # template says so, which left the tests unable to see this file at all.
   APPLIED_LOG="$(mktemp "${TMPDIR:-/tmp}/claude-sync-applied.XXXXXX")"
@@ -285,6 +288,36 @@ unapplied_paths(){
   [ "$head" != "$last" ] || return 0
   git -C "$SYNC_REPO" diff --name-only "$last" "$head" -- payload 2>/dev/null \
     | sed 's|^payload/||'
+  return 0
+}
+
+# A path this Mac is stale on is only safe to overwrite if this Mac did not also
+# change it. When both sides did, the apply is about to discard one person's work,
+# and holding the path back from the send just moves that loss to the local copy
+# instead of the remote one. Keep the local version beside the file and say so:
+# whichever copy is wanted, it still exists. Suffixed per host so two Macs never
+# collide, and excluded from the mirror so the copy stays local.
+conflict_suffix(){ printf '.conflict-%s\n' "${SYNC_HOSTNAME:-$(hostname -s)}"; }
+preserve_local_conflicts(){
+  local last p local_f sfx saved=""
+  have_git || return 0
+  last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
+  [ -n "$last" ] || return 0
+  sfx="$(conflict_suffix)"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    local_f="$CLAUDE_HOME/$p"
+    [ -f "$local_f" ] || continue
+    # unchanged here since our last apply: nothing of ours to lose
+    if git -C "$SYNC_REPO" show "$last:payload/$p" 2>/dev/null | cmp -s - "$local_f"; then continue; fi
+    # already identical to what is arriving: not a conflict either
+    if [ -f "$PAYLOAD/$p" ] && cmp -s "$PAYLOAD/$p" "$local_f"; then continue; fi
+    cp "$local_f" "$local_f$sfx"
+    saved+="$p "
+  done < <(unapplied_paths)
+  [ -z "${saved// }" ] && return 0
+  echo "claude-sync: both Macs changed these files, so the other Mac's version was applied and YOUR version was kept next to it with the suffix $sfx: ${saved}" >&2
+  notify "conflict kept as *$sfx: ${saved}"
   return 0
 }
 
