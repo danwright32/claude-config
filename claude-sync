@@ -279,8 +279,25 @@ reexec_after_self_update(){   # $1 before  $2 after  $3 command for the child
   [ "${SYNC_REEXECED:-0}" = "1" ] && return 1
   script_changed_between "$1" "$2" || return 1
   [ -s "$SYNC_REPO/claude-sync" ] || return 1
+  pulled_script_ok || return 1
   export SYNC_REEXECED=1 SYNC_PULL_BASE="$1" CLAUDE_HOME SYNC_REPO
   exec bash "$SYNC_REPO/claude-sync" "$3"
+}
+
+# Never hand control to, or restart the watch daemon into, a script that cannot
+# parse. Bash executes a script incrementally, so where the error sits decides the
+# damage: a trailing one runs the whole pull and only then complains, while an
+# error early in the file aborts before anything is applied, which would leave
+# this Mac's config frozen until someone fixed the other Mac. Degrading to the
+# copy already loaded keeps the sync working with older logic in the meantime.
+SCRIPT_SELF_BROKEN=0
+pulled_script_ok(){
+  [ "$SCRIPT_SELF_BROKEN" -eq 1 ] && return 1
+  bash -n "$SYNC_REPO/claude-sync" 2>/dev/null && return 0
+  SCRIPT_SELF_BROKEN=1
+  echo "claude-sync: the pulled claude-sync does not parse, so this run kept the copy already running and left the watch daemon alone. That broken copy is now on disk here, so later runs of it will fail until the Mac that pushed it pushes a fix; recover with: git -C $SYNC_REPO pull" >&2
+  notify "pulled claude-sync does not parse; kept the older copy"
+  return 1
 }
 restart_watch_daemon_if_installed(){
   local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
@@ -334,7 +351,7 @@ do_pull(){
     reexec_after_self_update "$before" "$after" pull || true
   fi
   apply_payload_to_local
-  script_changed_between "$before" "$after" && restart_watch_daemon_if_installed
+  script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   summarize_applied "$before" "$after"
   echo "Pulled shared config onto this Mac (memory/permissions untouched)."
 }
@@ -347,7 +364,7 @@ do_apply_only(){
   local before="${SYNC_PULL_BASE-}" after=""
   have_git && after="$(repo_head)"
   apply_payload_to_local
-  script_changed_between "$before" "$after" && restart_watch_daemon_if_installed
+  script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   echo "Synced (sent local changes, pulled remote; memory/permissions untouched)."
 }
 
@@ -373,7 +390,7 @@ do_sync(){
     reexec_after_self_update "$before" "$after" apply-only || true
   fi
   apply_payload_to_local
-  script_changed_between "$before" "$after" && restart_watch_daemon_if_installed
+  script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   echo "Synced (sent local changes, pulled remote; memory/permissions untouched)."
 }
 

@@ -439,6 +439,53 @@ check "the self-updating pull still succeeds"  "printf '%s' \"\$out_up\" | grep 
 restarts="$(printf '%s\n' "$out_up" | grep -ci 'watch daemon' || true)"
 check "hand-off happens once, no re-exec loop"  "[ \"\$restarts\" -le 1 ]"
 
+echo "== a broken pulled script must not be handed control, and must not restart the daemon (#10) =="
+# A pull now hands off to the freshly pulled copy of claude-sync so the apply runs
+# current logic. That makes a syntactically broken script pushed from one Mac able
+# to break pulls on the other, which the old behavior would have survived. Worse,
+# restarting the watch daemon into a broken script leaves it crash-looping. So:
+# validate first, warn loudly, and degrade to the copy already running.
+BKBARE="$WORK/bkbare.git"; git init -q --bare -b main "$BKBARE"
+BKA="$WORK/bkrepoA"; git clone -q "$BKBARE" "$BKA" 2>/dev/null
+cp "$SCRIPT" "$BKA/claude-sync"
+mkdir -p "$BKA/payload/hooks"; echo '#!/bin/sh' > "$BKA/payload/hooks/base.sh"
+git -C "$BKA" checkout -q -b main 2>/dev/null || true
+git -C "$BKA" add -A && git -C "$BKA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$BKA" push -q -u origin main
+BKB="$WORK/bkrepoB"; git clone -q "$BKBARE" "$BKB" 2>/dev/null
+BKBH="$WORK/bkhomeB"; mkdir -p "$BKBH"; echo '{"hooks":{}}' > "$BKBH/settings.json"
+BKPL="$WORK/bk-launchagents"; mkdir -p "$BKPL"; touch "$BKPL/com.claudesync.watch.plist"
+CLAUDE_HOME="$BKBH" SYNC_REPO="$BKB" bash "$BKB/claude-sync" pull >/dev/null 2>&1
+# Mac A pushes a script with a syntax error, alongside a normal payload change.
+# The error goes EARLY in the file, which is the case that actually hurts: bash
+# executes a script incrementally, so a trailing error runs the whole pull first
+# and only then complains, while an early one aborts before anything is applied.
+awk 'NR==26{print "if [ ; then"} {print}' "$SCRIPT" > "$BKA/claude-sync"
+echo '#!/bin/sh later' > "$BKA/payload/hooks/later.sh"
+git -C "$BKA" add -A && git -C "$BKA" -c user.name=t -c user.email=t@e commit -q -m "break the script" && git -C "$BKA" push -q
+check "the pushed script really is broken" "! bash -n '$BKA/claude-sync' 2>/dev/null"
+if out_bk="$(SYNC_LAUNCHAGENTS="$BKPL" SYNC_NO_LAUNCHCTL=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BKBH" SYNC_REPO="$BKB" bash "$BKB/claude-sync" pull 2>&1)"; then rc_bk=0; else rc_bk=$?; fi
+check "the pull still succeeds on a broken pulled script" "[ \"\$rc_bk\" -eq 0 ]"
+check "it still applies the payload with the old logic"   "[ -f '$BKBH/hooks/later.sh' ]"
+# grep for OUR wording, not 'syntax': bash prints its own syntax-error line, so a
+# looser pattern would pass with no guard implemented at all.
+check "it warns that the pulled script was rejected"      "printf '%s' \"\$out_bk\" | grep -q 'kept the copy already running'"
+check "it does NOT restart the daemon into a broken script" "! printf '%s' \"\$out_bk\" | grep -qi 'restart'"
+# The broken script is now the copy sitting in this clone, so the NEXT run
+# executes it and cannot help itself. The guard protects the pull that delivers
+# the break and keeps the daemon off it; recovering afterwards needs a plain git
+# pull, which is why the warning has to name that command.
+check "the warning names the plain git recovery command" "printf '%s' \"\$out_bk\" | grep -q 'git -C'"
+if bash "$BKB/claude-sync" pull >/dev/null 2>&1; then rc_stuck=0; else rc_stuck=$?; fi
+check "running the landed broken script fails (documented limit)" "[ \"\$rc_stuck\" -ne 0 ]"
+# Control: after the other Mac fixes it, a plain git pull restores a working tool.
+cp "$SCRIPT" "$BKA/claude-sync"
+echo '#!/bin/sh fixed' > "$BKA/payload/hooks/fixed.sh"
+git -C "$BKA" add -A && git -C "$BKA" -c user.name=t -c user.email=t@e commit -q -m "fix the script" && git -C "$BKA" push -q
+git -C "$BKB" pull -q --ff-only
+out_bk2="$(SYNC_LAUNCHAGENTS="$BKPL" SYNC_NO_LAUNCHCTL=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BKBH" SYNC_REPO="$BKB" bash "$BKB/claude-sync" pull 2>&1)"
+check "a recovered script runs and applies again"       "[ -f '$BKBH/hooks/fixed.sh' ]"
+check "and no longer warns about the pulled copy"       "! printf '%s' \"\$out_bk2\" | grep -q 'kept the copy already running'"
+
 echo "== pull fails loudly when CLAUDE.md references a rules file that isn't here (#7) =="
 # CLAUDE.md pulls in extra rule files with an @import. When the imported file is
 # missing, Claude Code loads nothing from it and says nothing, so an entire rules
