@@ -14,5 +14,5 @@
 # stdout on exit 0 is appended to the prompt context.
 
 cat <<'EOF'
-[Test-first policy] If this task involves writing or modifying code, use test-driven development: invoke the `superpowers:test-driven-development` skill and write a failing test that captures the intended behavior BEFORE writing the implementation, then make it pass, then refactor. Do not write implementation code first. This policy does not apply to read-only, research, planning, or non-code requests.
+[Test-first policy] Code changes use TDD: invoke `superpowers:test-driven-development` and write the failing test before the implementation. No-op for read-only, research, planning, or non-code prompts.
 EOF
