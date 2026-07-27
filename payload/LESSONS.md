@@ -39,6 +39,11 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L9. Destructive actions get confirmation or undo from the first build, and any
   automatic deletion or retention policy is the user's product decision, never a silent
   default.** (9 issues, 4 repos)
+- **L40. A check that decides to SKIP work must compare something that changes whenever
+  the content changes.** Size plus timestamp, or any cheap stand-in, silently keeps the
+  stale copy whenever the stand-in happens to match, so compare the content itself
+  wherever skipping means keeping what is already there.
+  (claude-config#6)
 
 ## Honest failure
 
