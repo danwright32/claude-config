@@ -1,4 +1,5 @@
 @RTK.md
+@LESSONS.md
 
 ## General Behavior
 
