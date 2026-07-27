@@ -399,6 +399,113 @@ out_noop="$(CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" bash "$SCRIPT" pull 2>&1)"
 check "no-change pull says up to date"     "printf '%s' \"\$out_noop\" | grep -qi 'up to date'"
 check "no-change pull has no change list"  "! printf '%s' \"\$out_noop\" | grep -q 'Received'"
 
+echo "== a pull that updates claude-sync itself applies the NEW logic, same pull (#6) =="
+# The running process loaded the OLD script at start, so a pull that updates
+# claude-sync kept applying with the old code: anything the new version added to
+# the synced set was skipped on the very pull that delivered it, and only landed
+# on the NEXT pull. That is how CLAUDE.md arrived importing a LESSONS.md that was
+# never copied. The pull must hand off to the freshly pulled copy before applying.
+SUBARE2="$WORK/subare2.git"; git init -q --bare -b main "$SUBARE2"
+# Mac A seeds the repo with the CURRENT (old) script, then upgrades it to a
+# version that syncs one more top-level file, and adds that file to the payload.
+UPA="$WORK/uprepoA"; git clone -q "$SUBARE2" "$UPA"
+cp "$SCRIPT" "$UPA/claude-sync"
+mkdir -p "$UPA/payload/hooks"; echo '#!/bin/sh' > "$UPA/payload/hooks/dummy.sh"
+git -C "$UPA" checkout -q -b main 2>/dev/null || true
+git -C "$UPA" add -A && git -C "$UPA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$UPA" push -q -u origin main
+# Mac B clones at the OLD script and runs THAT copy, exactly as the real Mac does.
+UPB="$WORK/uprepoB"; git clone -q "$SUBARE2" "$UPB"
+UPBH="$WORK/uphomeB"; mkdir -p "$UPBH"; echo '{"hooks":{}}' > "$UPBH/settings.json"
+CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$UPB/claude-sync" pull >/dev/null 2>&1
+# Mac A: new script version teaches the sync about NOTES.md, and ships NOTES.md.
+sed 's/^TOP_FILES=(CLAUDE.md/TOP_FILES=(NOTES.md CLAUDE.md/' "$SCRIPT" > "$UPA/claude-sync"
+echo '# notes from the new version' > "$UPA/payload/NOTES.md"
+git -C "$UPA" add -A && git -C "$UPA" -c user.name=t -c user.email=t@e commit -q -m "sync NOTES.md too" && git -C "$UPA" push -q
+check "the new version really does sync NOTES.md" "grep -q 'TOP_FILES=(NOTES.md' '$UPA/claude-sync'"
+out_up="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$UPB/claude-sync" pull 2>&1)"
+check "file added by the new script version lands on the SAME pull" "[ -f '$UPBH/NOTES.md' ]"
+check "that file has the right content"        "grep -q 'notes from the new version' '$UPBH/NOTES.md' 2>/dev/null"
+check "the self-updating pull still reports the change" "printf '%s' \"\$out_up\" | grep -q 'NOTES.md'"
+check "the self-updating pull still succeeds"  "printf '%s' \"\$out_up\" | grep -q 'Pulled shared config'"
+# and it must not loop: exactly one hand-off, so one daemon-restart notice
+restarts="$(printf '%s\n' "$out_up" | grep -ci 'watch daemon' || true)"
+check "hand-off happens once, no re-exec loop"  "[ \"\$restarts\" -le 1 ]"
+
+echo "== pull fails loudly when CLAUDE.md references a rules file that isn't here (#7) =="
+# CLAUDE.md pulls in extra rule files with an @import. When the imported file is
+# missing, Claude Code loads nothing from it and says nothing, so an entire rules
+# file goes silently absent. The pull must refuse to report success in that state.
+IMH="$WORK/imp-home"; IMR="$WORK/imp-repo"
+mkdir -p "$IMH" "$IMR/payload/hooks"
+echo '{"hooks":{}}' > "$IMH/settings.json"
+echo 'x' > "$IMR/payload/hooks/h.sh"
+printf '@GONE.md\n\n# rules\n' > "$IMR/payload/CLAUDE.md"
+if out_imp="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$IMH" SYNC_REPO="$IMR" bash "$SCRIPT" pull 2>&1)"; then rc_imp=0; else rc_imp=$?; fi
+check "pull exits nonzero on a dangling rules import" "[ \"\$rc_imp\" -ne 0 ]"
+check "the error names the missing file"             "printf '%s' \"\$out_imp\" | grep -q 'GONE.md'"
+check "it does not claim the pull succeeded"         "! printf '%s' \"\$out_imp\" | grep -q 'Pulled shared config'"
+# Control: an import naming a file the sync actually carries must pull clean.
+printf '@RTK.md\n\n# rules\n' > "$IMR/payload/CLAUDE.md"
+printf '# rtk\n' > "$IMR/payload/RTK.md"
+if out_imp2="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$IMH" SYNC_REPO="$IMR" bash "$SCRIPT" pull 2>&1)"; then rc_imp2=0; else rc_imp2=$?; fi
+check "pull succeeds when the import resolves"       "[ \"\$rc_imp2\" -eq 0 ]"
+check "the imported file landed"                     "[ -f '$IMH/RTK.md' ]"
+# An absolute or ~ path outside the synced set must not be treated as missing.
+printf '@~/.some-external-thing-that-does-exist\n' > "$IMR/payload/CLAUDE.md"
+touch "$HOME/.some-external-thing-that-does-exist" 2>/dev/null || true
+if SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$IMH" SYNC_REPO="$IMR" bash "$SCRIPT" pull >/dev/null 2>&1; then rc_imp3=0; else rc_imp3=$?; fi
+check "a resolvable ~ import does not fail the pull"  "[ \"\$rc_imp3\" -eq 0 ]"
+rm -f "$HOME/.some-external-thing-that-does-exist"
+
+echo "== the pull summary describes what was WRITTEN here, not what the repo changed (#8) =="
+# The summary was built from the shared repo's commit range, so it could disagree
+# with reality in both directions: it announced "added LESSONS.md" when that file
+# was never written, then said "Already up to date" on the pull that finally wrote
+# it. Both readings were the opposite of the truth, which is how a missing rules
+# file went unnoticed. Report the actual local writes.
+WRB="$WORK/wrbare.git"; git init -q --bare -b main "$WRB"
+WRA="$WORK/wrrepoA"; git clone -q "$WRB" "$WRA"
+WRAH="$WORK/wrhomeA"; mkdir -p "$WRAH/hooks"; echo '{"hooks":{}}' > "$WRAH/settings.json"
+echo 'keep me' > "$WRAH/hooks/keep.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$WRAH" SYNC_REPO="$WRA" bash "$SCRIPT" sync >/dev/null 2>&1
+WRBR="$WORK/wrrepoB"; git clone -q "$WRB" "$WRBR"
+WRBH="$WORK/wrhomeB"; mkdir -p "$WRBH"; echo '{"hooks":{}}' > "$WRBH/settings.json"
+CLAUDE_HOME="$WRBH" SYNC_REPO="$WRBR" bash "$SCRIPT" pull >/dev/null 2>&1
+check "baseline pull delivered the hook"     "[ -f '$WRBH/hooks/keep.sh' ]"
+# Now the exact failure mode: the repo has nothing new, but a file IS missing
+# locally, so this pull really does write one. It must say so, not "up to date".
+rm -f "$WRBH/hooks/keep.sh"
+out_wr="$(CLAUDE_HOME="$WRBH" SYNC_REPO="$WRBR" bash "$SCRIPT" pull 2>&1)"
+check "a pull that writes a file names it"        "printf '%s' \"\$out_wr\" | grep -q 'keep.sh'"
+check "it does NOT claim to be up to date"        "! printf '%s' \"\$out_wr\" | grep -qi 'up to date'"
+check "and the file is back"                      "[ -f '$WRBH/hooks/keep.sh' ]"
+# A pull that genuinely writes nothing still has to say exactly that.
+out_wr2="$(CLAUDE_HOME="$WRBH" SYNC_REPO="$WRBR" bash "$SCRIPT" pull 2>&1)"
+check "a pull that writes nothing says up to date" "printf '%s' \"\$out_wr2\" | grep -qi 'up to date'"
+check "and lists no files"                         "! printf '%s' \"\$out_wr2\" | grep -q 'keep.sh'"
+
+echo "== a same-size edit still reaches the other Mac (rsync quick-check data loss) =="
+# rsync's default quick check compares size plus mtime at one-second granularity.
+# A same-size edit made in the same second as the last sync (a one character fix
+# in a hook, a swapped word in CLAUDE.md) was therefore skipped: rsync updated the
+# mode bit and left the OLD content, so the edit silently never left this Mac.
+# Only -c (checksum) catches it. This is a data-loss path, not a cosmetic one.
+QSRC="$WORK/qs-home"; QREPO="$WORK/qs-repo"
+mkdir -p "$QSRC/hooks" "$QREPO/payload/hooks"
+echo '{"hooks":{}}' > "$QSRC/settings.json"
+printf 'aaaa\n' > "$QSRC/hooks/tiny.sh"
+printf 'bbbb\n' > "$QREPO/payload/hooks/tiny.sh"          # same byte count, different content
+chmod 755 "$QSRC/hooks/tiny.sh"; chmod 644 "$QREPO/payload/hooks/tiny.sh"
+touch -t 202601010000 "$QSRC/hooks/tiny.sh" "$QREPO/payload/hooks/tiny.sh"   # identical mtime
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" push >/dev/null 2>&1
+check "push propagates a same-size same-mtime edit" "grep -q 'aaaa' '$QREPO/payload/hooks/tiny.sh'"
+# and the same hazard on the receiving side
+printf 'cccc\n' > "$QREPO/payload/hooks/tiny.sh"
+chmod 644 "$QREPO/payload/hooks/tiny.sh"
+touch -t 202601010000 "$QSRC/hooks/tiny.sh" "$QREPO/payload/hooks/tiny.sh"
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" pull >/dev/null 2>&1
+check "pull applies a same-size same-mtime edit"     "grep -q 'cccc' '$QSRC/hooks/tiny.sh'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

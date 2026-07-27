@@ -57,14 +57,20 @@ detok(){ sed "s|$TOKEN|$CLAUDE_HOME|g"; } # placeholder -> this Mac's home
 stage_local_to_payload(){
   [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
   mkdir -p "$PAYLOAD"
+  # -c is load-bearing, not a nicety. Without it rsync quick-checks on size plus
+  # mtime at ONE-SECOND granularity, so a same-size edit (a one character fix in
+  # a hook, a swapped word in CLAUDE.md) whose timestamp lands in the same second
+  # as the last sync is skipped: rsync fixes the mode bit and leaves the OLD
+  # content, and the edit silently never leaves this Mac. `status` already
+  # documented this hazard; push and apply were still exposed to it.
   for d in "${MIRROR_DIRS[@]}"; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
     mkdir -p "$PAYLOAD/$d"
-    rsync -a --delete "${COMMON_EXCLUDES[@]}" "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
+    rsync -ac --delete "${COMMON_EXCLUDES[@]}" "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
   done
   if [ -d "$CLAUDE_HOME/skills" ]; then
     mkdir -p "$PAYLOAD/skills"
-    rsync -a --delete "${COMMON_EXCLUDES[@]}" $(skill_excludes) "$CLAUDE_HOME/skills/" "$PAYLOAD/skills/"
+    rsync -ac --delete "${COMMON_EXCLUDES[@]}" $(skill_excludes) "$CLAUDE_HOME/skills/" "$PAYLOAD/skills/"
   fi
   # hooks block of settings.json, with this Mac's home path tokenized
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
@@ -102,19 +108,57 @@ scan_secrets(){
   die "possible secret found in: ${findings}— remove it, allowlist its fingerprint in .secret-allowlist, or set SYNC_SKIP_SECRET_SCAN=1 to override"
 }
 
+# ---------- what the apply ACTUALLY wrote on this Mac ----------
+# The pull summary used to be read off the shared repo's commit range, which is a
+# proxy for the local result, not the result itself. The two disagreed in both
+# directions: a pull announced "added LESSONS.md" when that file was never
+# written, then reported "Already up to date" on the pull that finally wrote it.
+# Record every real create/update/delete instead, and report from that.
+APPLIED_LOG=""
+record_applied(){   # $1 = added|updated|removed   $2 = path relative to ~/.claude
+  if [ -n "$APPLIED_LOG" ]; then printf '%s\t%s\n' "$1" "$2" >> "$APPLIED_LOG"; fi
+  return 0
+}
+# Turn `rsync -i` itemized output into those records. $1 prefixes the subtree.
+record_rsync(){
+  local line change path kind prefix="${1:+$1/}"
+  while IFS= read -r line; do
+    change="${line%%[[:space:]]*}"
+    path="${line#"$change"}"
+    path="${path#"${path%%[![:space:]]*}"}"     # drop the separating spaces
+    [ -n "$path" ] || continue
+    case "$path" in */|.|./) continue ;; esac   # directories carry no information
+    # Match on the presence of '+', not a fixed run of them: the flag field is 11
+    # chars in rsync 3.x but 9 in the openrsync that ships with current macOS,
+    # and a hard-coded '+++++++++' silently made every new file read as "updated".
+    case "$change" in
+      '*deleting')          kind=removed ;;
+      *'+++'*)              kind=added ;;
+      '>'*|'c'*|'h'*)       kind=updated ;;
+      *)                    continue ;;         # '.' lines are metadata-only no-ops
+    esac
+    record_applied "$kind" "$prefix$path"
+  done
+  return 0
+}
+
 # copy repo payload -> local config, merging the hooks block (no git)
 apply_payload_to_local(){
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
+  APPLIED_LOG="$(mktemp)"
+  # -i itemizes so we can report the real writes; -c because -a quick-checks on
+  # size plus mtime, and a same-size edit whose mtime git happens to preserve
+  # would otherwise be neither copied nor reported. These trees are small.
   for d in "${MIRROR_DIRS[@]}"; do
     [ -d "$PAYLOAD/$d" ] || continue
     mkdir -p "$CLAUDE_HOME/$d"
-    rsync -a --delete "${COMMON_EXCLUDES[@]}" "$PAYLOAD/$d/" "$CLAUDE_HOME/$d/"
+    rsync -aic --delete "${COMMON_EXCLUDES[@]}" "$PAYLOAD/$d/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
   done
   if [ -d "$PAYLOAD/skills" ]; then
     mkdir -p "$CLAUDE_HOME/skills"
     # same excludes => plugin skills on THIS Mac are never deleted by the mirror
-    rsync -a --delete "${COMMON_EXCLUDES[@]}" $(skill_excludes) "$PAYLOAD/skills/" "$CLAUDE_HOME/skills/"
+    rsync -aic --delete "${COMMON_EXCLUDES[@]}" $(skill_excludes) "$PAYLOAD/skills/" "$CLAUDE_HOME/skills/" | record_rsync skills
   fi
   chmod +x "$CLAUDE_HOME"/hooks/*.sh "$CLAUDE_HOME"/hooks/*.py 2>/dev/null || true
   find "$CLAUDE_HOME/skills" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
@@ -123,7 +167,12 @@ apply_payload_to_local(){
   for f in "${TOP_FILES[@]}"; do
     [ -f "$PAYLOAD/$f" ] || continue
     if [ -f "$CLAUDE_HOME/$f" ] && cmp -s "$PAYLOAD/$f" "$CLAUDE_HOME/$f"; then continue; fi
-    [ -f "$CLAUDE_HOME/$f" ] && cp "$CLAUDE_HOME/$f" "$CLAUDE_HOME/$f.syncbak"
+    if [ -f "$CLAUDE_HOME/$f" ]; then
+      cp "$CLAUDE_HOME/$f" "$CLAUDE_HOME/$f.syncbak"
+      record_applied updated "$f"
+    else
+      record_applied added "$f"
+    fi
     cp "$PAYLOAD/$f" "$CLAUDE_HOME/$f"
   done
   if [ -f "$PAYLOAD/settings.hooks.json" ]; then
@@ -141,8 +190,33 @@ apply_payload_to_local(){
     else
       cp "$settings" "$settings.syncbak"
       mv "$tmp" "$settings"
+      record_applied updated "settings.json (hooks section)"
     fi
   fi
+  verify_rule_imports
+}
+
+# Fail loud when the global rule files reference something that is not here.
+# CLAUDE.md pulls in extra rule files with a leading "@file" line; when the
+# target is missing, Claude Code loads nothing from it and reports nothing, so an
+# entire rules file can be silently absent from every session. A sync that leaves
+# that state must not report success.
+verify_rule_imports(){
+  local base="$CLAUDE_HOME/CLAUDE.md" line target missing=""
+  [ -f "$base" ] || return 0
+  while IFS= read -r line; do
+    case "$line" in '@'?*) ;; *) continue ;; esac
+    target="${line#@}"
+    target="${target%%[[:space:]]*}"
+    case "$target" in
+      '~/'*) target="$HOME/${target#\~/}" ;;
+      /*)    ;;
+      *)     target="$CLAUDE_HOME/$target" ;;
+    esac
+    [ -e "$target" ] || missing+="${line#@} "
+  done < "$base"
+  [ -z "${missing// }" ] && return 0
+  die "CLAUDE.md imports rule files that are not on this Mac: ${missing}(referenced but never copied, so their rules load silently as nothing). Re-run 'claude-sync pull'; if it persists, check TOP_FILES in claude-sync."
 }
 
 # Commit synced config changes (identity baked in so it works headless). Scoped to
@@ -186,6 +260,21 @@ script_changed_between(){
   [ "$before" != "$after" ] || return 1
   git -C "$SYNC_REPO" diff --name-only "$before" "$after" 2>/dev/null | grep -qx "claude-sync"
 }
+# A pull that updates claude-sync itself has been executing the OLD copy since
+# the process started, so the apply step that follows runs stale logic: anything
+# the new version added to the synced set (a TOP_FILES entry, a mirrored dir) is
+# skipped on the very pull that delivered it, and only lands on the NEXT pull.
+# That is how CLAUDE.md once arrived importing a LESSONS.md that was never
+# copied. Hand off to the freshly pulled copy BEFORE applying anything.
+# SYNC_PULL_BASE carries the pre-pull commit so the child still reports the whole
+# pull; SYNC_REEXECED makes a second hand-off (and so a loop) impossible.
+reexec_after_self_update(){   # $1 before  $2 after  $3 command for the child
+  [ "${SYNC_REEXECED:-0}" = "1" ] && return 1
+  script_changed_between "$1" "$2" || return 1
+  [ -s "$SYNC_REPO/claude-sync" ] || return 1
+  export SYNC_REEXECED=1 SYNC_PULL_BASE="$1" CLAUDE_HOME SYNC_REPO
+  exec bash "$SYNC_REPO/claude-sync" "$3"
+}
 restart_watch_daemon_if_installed(){
   local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
   [ -f "$agentdir/com.claudesync.watch.plist" ] || return 0
@@ -198,48 +287,61 @@ restart_watch_daemon_if_installed(){
   fi
 }
 
-# Summarize what a pull actually received, so "it worked" is visible instead of
-# implied. Reads the commits the pull just brought in (before..after), scoped to
-# payload/, and names each file with what happened to it. Quiet under
-# SYNC_NO_GIT (no history to diff).
-summarize_received(){
-  local before="$1" after="$2" st path dest word name
-  [ -n "$after" ] || return 0
-  if [ -z "$before" ]; then
-    echo "Received the shared config (first pull into this clone)."
+# Summarize what the apply actually wrote on this Mac, so "it worked" is visible
+# instead of implied. Built from the recorded writes, never from the repo's commit
+# range: the range describes the shared repo, and a file can be missing here while
+# the range is empty (or present here while the range claims it arrived).
+SUMMARY_MAX=20
+summarize_applied(){   # $1 pre-pull commit  $2 post-pull commit (for the first-pull note)
+  local list n kind name
+  list=""
+  if [ -n "$APPLIED_LOG" ] && [ -s "$APPLIED_LOG" ]; then list="$(sort -u "$APPLIED_LOG")"; fi
+  n="$(printf '%s' "$list" | grep -c . || true)"
+  if [ "$n" -eq 0 ]; then
+    echo "Already up to date: nothing on this Mac needed changing."
     return 0
   fi
-  if [ "$before" = "$after" ]; then
-    echo "Already up to date: no new changes since the last pull."
+  # A first pull writes the whole config; naming every file is noise, not proof.
+  if [ -n "$2" ] && [ -z "$1" ]; then
+    echo "Received the shared config (first pull into this clone): $n file(s) written."
     return 0
   fi
   echo "Received changes from the shared repo:"
-  git -C "$SYNC_REPO" diff --name-status "$before" "$after" -- payload 2>/dev/null \
-  | while IFS=$'\t' read -r st path dest; do
-      name="${path#payload/}"
-      case "$st" in
-        A)  word="added" ;;
-        M)  word="updated" ;;
-        D)  word="removed" ;;
-        R*) word="renamed"; name="$name to ${dest#payload/}" ;;
-        *)  word="changed" ;;
-      esac
-      printf '  %-8s %s\n' "$word" "$name"
-    done
+  printf '%s\n' "$list" | head -"$SUMMARY_MAX" | while IFS=$'\t' read -r kind name; do
+    printf '  %-8s %s\n' "$kind" "$name"
+  done
+  if [ "$n" -gt "$SUMMARY_MAX" ]; then echo "  and $((n - SUMMARY_MAX)) more"; fi
+  return 0
 }
 
 # ---------- pull ----------
 do_pull(){
+  # ${VAR-default}, not ${VAR:-default}: after a hand-off SYNC_PULL_BASE is set
+  # but EMPTY on a first pull, and that empty value is meaningful (no prior
+  # commit). :- would discard it and lose the "first pull" case.
   local before="" after=""
   if have_git; then
-    before="$(repo_head)"
+    before="${SYNC_PULL_BASE-$(repo_head)}"
     git -C "$SYNC_REPO" pull --ff-only -q
     after="$(repo_head)"
+    reexec_after_self_update "$before" "$after" pull || true
   fi
   apply_payload_to_local
   script_changed_between "$before" "$after" && restart_watch_daemon_if_installed
-  summarize_received "$before" "$after"
+  summarize_applied "$before" "$after"
   echo "Pulled shared config onto this Mac (memory/permissions untouched)."
+}
+
+# Resume point after claude-sync updated itself mid-`sync` (internal use only).
+# `sync` must NOT be resumed by re-running `sync`: its first step copies local
+# files into the payload, which after a pull would push this Mac's older copy of
+# a file back over the change the pull just received.
+do_apply_only(){
+  local before="${SYNC_PULL_BASE-}" after=""
+  have_git && after="$(repo_head)"
+  apply_payload_to_local
+  script_changed_between "$before" "$after" && restart_watch_daemon_if_installed
+  echo "Synced (sent local changes, pulled remote; memory/permissions untouched)."
 }
 
 # ---------- sync (two-way, used by the background job) ----------
@@ -260,6 +362,8 @@ do_sync(){
     fi
     after="$(repo_head)"
     [ "$pushed" -eq 1 ] && git -C "$SYNC_REPO" push -u origin "$branch" -q
+    # send half is done; hand off so the apply below runs the pulled logic
+    reexec_after_self_update "$before" "$after" apply-only || true
   fi
   apply_payload_to_local
   script_changed_between "$before" "$after" && restart_watch_daemon_if_installed
@@ -428,6 +532,7 @@ case "$cmd" in
   send) do_send ;;
   watch) do_watch ;;
   status) do_status ;;
+  apply-only) do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
   help|-h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
