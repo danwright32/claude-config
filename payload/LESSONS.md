@@ -85,7 +85,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   verifier.** Secrets never reach logs, process arguments, repos, client binaries, or
   diagnostic exports; PII is never committed, logged loosely, or stored on a public
   bucket. (22 issues, 5 repos)
-- **L40. A control that exists to protect someone fails closed, not open.** When the
+- **L41. A control that exists to protect someone fails closed, not open.** When the
   data a block list, permission check, or content filter depends on cannot be loaded,
   keep hiding or refusing rather than defaulting to an empty set, because an empty
   protective list is indistinguishable from no protection and the person it protects is
