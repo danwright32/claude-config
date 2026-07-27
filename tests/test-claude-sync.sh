@@ -301,7 +301,7 @@ check "payload-only pull does not restart the daemon" "! printf '%s' \"\$out_now
 # skipped the copying entirely still pass. (#11)
 RSC="$WORK/rsrepoC"; git clone -q "$RSBARE" "$RSC"
 RSCHOME="$WORK/rschome"; mkdir -p "$RSCHOME"; echo '{"hooks":{}}' > "$RSCHOME/settings.json"
-sed 's/^TOP_FILES=(CLAUDE.md/TOP_FILES=(RESUMED.md CLAUDE.md/' "$SCRIPT" > "$RSA/claude-sync"
+sed 's/^TOP_FILES_SEED=(CLAUDE.md/TOP_FILES_SEED=(RESUMED.md CLAUDE.md/' "$SCRIPT" > "$RSA/claude-sync"
 echo '# only the NEW script version knows to sync this' > "$RSA/payload/RESUMED.md"
 echo '#!/bin/sh ordinary' > "$RSA/payload/hooks/ordinary.sh"
 git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "edit script again" && git -C "$RSA" push -q
@@ -426,10 +426,10 @@ UPB="$WORK/uprepoB"; git clone -q "$SUBARE2" "$UPB"
 UPBH="$WORK/uphomeB"; mkdir -p "$UPBH"; echo '{"hooks":{}}' > "$UPBH/settings.json"
 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$UPB/claude-sync" pull >/dev/null 2>&1
 # Mac A: new script version teaches the sync about NOTES.md, and ships NOTES.md.
-sed 's/^TOP_FILES=(CLAUDE.md/TOP_FILES=(NOTES.md CLAUDE.md/' "$SCRIPT" > "$UPA/claude-sync"
+sed 's/^TOP_FILES_SEED=(CLAUDE.md/TOP_FILES_SEED=(NOTES.md CLAUDE.md/' "$SCRIPT" > "$UPA/claude-sync"
 echo '# notes from the new version' > "$UPA/payload/NOTES.md"
 git -C "$UPA" add -A && git -C "$UPA" -c user.name=t -c user.email=t@e commit -q -m "sync NOTES.md too" && git -C "$UPA" push -q
-check "the new version really does sync NOTES.md" "grep -q 'TOP_FILES=(NOTES.md' '$UPA/claude-sync'"
+check "the new version really does sync NOTES.md" "grep -q 'TOP_FILES_SEED=(NOTES.md' '$UPA/claude-sync'"
 out_up="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$UPB/claude-sync" pull 2>&1)"
 check "file added by the new script version lands on the SAME pull" "[ -f '$UPBH/NOTES.md' ]"
 check "that file has the right content"        "grep -q 'notes from the new version' '$UPBH/NOTES.md' 2>/dev/null"
@@ -538,6 +538,40 @@ check "and the file is back"                      "[ -f '$WRBH/hooks/keep.sh' ]"
 out_wr2="$(CLAUDE_HOME="$WRBH" SYNC_REPO="$WRBR" bash "$SCRIPT" pull 2>&1)"
 check "a pull that writes nothing says up to date" "printf '%s' \"\$out_wr2\" | grep -qi 'up to date'"
 check "and lists no files"                         "! printf '%s' \"\$out_wr2\" | grep -q 'keep.sh'"
+
+echo "== a newly referenced rules file syncs with no script edit (#9) =="
+# TOP_FILES was a hand-maintained list that had to mirror the @imports at the top
+# of CLAUDE.md. Keeping the two in step was manual, and forgetting it is what made
+# CLAUDE.md arrive referencing a LESSONS.md nobody had told the sync about. The
+# list is now derived from the imports, following them through more than one hop.
+DVH="$WORK/dv-home"; DVR="$WORK/dv-repo"
+mkdir -p "$DVH/hooks" "$DVR/payload"
+echo '{"hooks":{}}' > "$DVH/settings.json"
+echo 'h' > "$DVH/hooks/h.sh"
+printf '@EXTRA.md\n\n# root rules\n' > "$DVH/CLAUDE.md"
+printf '@DEEP.md\n\n# extra rules\n' > "$DVH/EXTRA.md"     # a rules file that itself imports one
+printf '# deep rules\n' > "$DVH/DEEP.md"
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DVH" SYNC_REPO="$DVR" bash "$SCRIPT" push >/dev/null 2>&1
+check "push carries a newly referenced rules file"  "[ -f '$DVR/payload/EXTRA.md' ]"
+check "push follows a reference two hops deep"      "[ -f '$DVR/payload/DEEP.md' ]"
+# and they must arrive on the other Mac
+DVH2="$WORK/dv-home2"; mkdir -p "$DVH2"; echo '{"hooks":{}}' > "$DVH2/settings.json"
+if out_dv="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DVH2" SYNC_REPO="$DVR" bash "$SCRIPT" pull 2>&1)"; then rc_dv=0; else rc_dv=$?; fi
+check "pull delivers the referenced rules file"     "[ -f '$DVH2/EXTRA.md' ]"
+check "pull delivers the two-hop rules file"        "[ -f '$DVH2/DEEP.md' ]"
+check "the pull succeeds (no dangling reference)"   "[ \"\$rc_dv\" -eq 0 ]"
+check "the still-listed defaults are unaffected"    "[ -f '$DVH2/CLAUDE.md' ]"
+# status must describe the derived set too, not just the old hard-coded names
+printf '# root rules CHANGED\n@EXTRA.md\n' > "$DVH/CLAUDE.md"
+printf '# extra rules CHANGED\n' > "$DVH/EXTRA.md"
+out_dvst="$(SYNC_NO_GIT=1 CLAUDE_HOME="$DVH" SYNC_REPO="$DVR" bash "$SCRIPT" status 2>&1)"
+check "status reports a referenced rules file differing" "printf '%s' \"\$out_dvst\" | grep -q 'EXTRA.md'"
+# a nested reference that resolves nowhere must still fail loudly, not pass quietly
+printf '@NOWHERE.md\n' > "$DVH/EXTRA.md"
+if SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DVH" SYNC_REPO="$DVR" bash "$SCRIPT" push >/dev/null 2>&1; then rc_dv2=0; else rc_dv2=$?; fi
+if out_dv3="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DVH2" SYNC_REPO="$DVR" bash "$SCRIPT" pull 2>&1)"; then rc_dv3=0; else rc_dv3=$?; fi
+check "a dangling NESTED reference fails the pull"  "[ \"\$rc_dv3\" -ne 0 ]"
+check "and the error names the missing file"        "printf '%s' \"\$out_dv3\" | grep -q 'NOWHERE.md'"
 
 echo "== a same-size edit still reaches the other Mac (rsync quick-check data loss) =="
 # rsync's default quick check compares size plus mtime at one-second granularity.
