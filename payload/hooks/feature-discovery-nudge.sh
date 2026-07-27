@@ -14,5 +14,5 @@
 # stdout on exit 0 is appended to the prompt context.
 
 cat <<'EOF'
-[Feature-discovery policy] If this prompt proposes, scopes, or asks to build a NEW feature, BEFORE producing any plan or writing any code, invoke the `feature-discovery` skill and run its clarifying interview so both you and the user fully understand the feature first. This policy does not apply to bug fixes, small mechanical edits, research, read-only, or conversational prompts.
+[Feature-discovery policy] New-feature prompts: run the `feature-discovery` skill's clarifying interview before any plan or code. No-op for bug fixes, small mechanical edits, research, or conversation.
 EOF
