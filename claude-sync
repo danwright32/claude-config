@@ -191,16 +191,43 @@ restart_watch_daemon_if_installed(){
   fi
 }
 
+# Summarize what a pull actually received, so "it worked" is visible instead of
+# implied. Reads the commits the pull just brought in (before..after), scoped to
+# payload/, and names each file with what happened to it. Quiet under
+# SYNC_NO_GIT (no history to diff).
+summarize_received(){
+  local before="$1" after="$2" st path dest word name
+  [ -n "$before" ] && [ -n "$after" ] || return 0
+  if [ "$before" = "$after" ]; then
+    echo "Already up to date: no new changes since the last pull."
+    return 0
+  fi
+  echo "Received changes from the shared repo:"
+  git -C "$SYNC_REPO" diff --name-status "$before" "$after" -- payload 2>/dev/null \
+  | while IFS=$'\t' read -r st path dest; do
+      name="${path#payload/}"
+      case "$st" in
+        A)  word="added" ;;
+        M)  word="updated" ;;
+        D)  word="removed" ;;
+        R*) word="renamed"; name="$name to ${dest#payload/}" ;;
+        *)  word="changed" ;;
+      esac
+      printf '  %-8s %s\n' "$word" "$name"
+    done
+}
+
 # ---------- pull ----------
 do_pull(){
   local before="" after=""
   if have_git; then
     before="$(repo_head)"
-    git -C "$SYNC_REPO" pull --ff-only
+    git -C "$SYNC_REPO" pull --ff-only -q
     after="$(repo_head)"
   fi
   apply_payload_to_local
   script_changed_between "$before" "$after" && restart_watch_daemon_if_installed
+  summarize_received "$before" "$after"
   echo "Pulled shared config onto this Mac (memory/permissions untouched)."
 }
 

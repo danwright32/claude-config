@@ -347,6 +347,38 @@ out_st_plugin="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$
 check "status ignores plugin-managed skills the way a push does" \
   "! printf '%s' \"\$out_st_plugin\" | grep -q 'wrangler'"
 
+echo "== pull reports WHAT was received, so it's clear the sync worked =="
+# A pull used to print only a generic success line; the /sync-config skill even
+# claimed the script "prints which files were updated" when it never did. The
+# summary must name each received file with what happened to it, and a pull
+# that received nothing must say so instead of printing an empty summary.
+SUBARE="$WORK/subare.git"; git init -q --bare "$SUBARE"
+SUA="$WORK/surepoA"; git clone -q "$SUBARE" "$SUA"
+SUAH="$WORK/suhomeA"; mkdir -p "$SUAH/hooks"
+echo '{"hooks":{}}' > "$SUAH/settings.json"
+echo one > "$SUAH/hooks/mod-me.sh"
+echo bye > "$SUAH/hooks/del-me.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SUAH" SYNC_REPO="$SUA" bash "$SCRIPT" sync >/dev/null 2>&1
+# Mac B takes a baseline pull first
+SUB="$WORK/surepoB"; git clone -q "$SUBARE" "$SUB"
+SUBH="$WORK/suhomeB"; mkdir -p "$SUBH"; echo '{"hooks":{}}' > "$SUBH/settings.json"
+CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" bash "$SCRIPT" pull >/dev/null 2>&1
+# Mac A then modifies, adds, and deletes a hook and syncs up
+echo two > "$SUAH/hooks/mod-me.sh"
+echo new > "$SUAH/hooks/add-me.sh"
+rm -f "$SUAH/hooks/del-me.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SUAH" SYNC_REPO="$SUA" bash "$SCRIPT" sync >/dev/null 2>&1
+# Mac B's next pull must say exactly what it received
+out_sum="$(CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" bash "$SCRIPT" pull 2>&1)"
+check "pull names the modified file"      "printf '%s' \"\$out_sum\" | grep -q 'updated .*hooks/mod-me.sh'"
+check "pull names the added file"         "printf '%s' \"\$out_sum\" | grep -q 'added .*hooks/add-me.sh'"
+check "pull names the removed file"       "printf '%s' \"\$out_sum\" | grep -q 'removed .*hooks/del-me.sh'"
+check "summary strips the payload/ prefix" "! printf '%s' \"\$out_sum\" | grep -q 'payload/hooks'"
+# A pull with nothing new must say so, and must not print a change summary
+out_noop="$(CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" bash "$SCRIPT" pull 2>&1)"
+check "no-change pull says up to date"     "printf '%s' \"\$out_noop\" | grep -qi 'up to date'"
+check "no-change pull has no change list"  "! printf '%s' \"\$out_noop\" | grep -q 'Received'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
