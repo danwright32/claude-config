@@ -136,13 +136,13 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L31. Everything the product depends on lives in git.** Schema, security policies,
   RPC bodies, migrations, pipelines; a dashboard-only artifact has no rollback path.
   (9 issues, 2 repos)
+- **L32. Docs state testable claims.** A doc stating a fact the code no longer matches
+  is a bug fixed in the same PR; measured numbers are generated or omitted, never
+  hand-written. (56 issues, 8 repos)
 - **L41. A list that must mirror another source of truth is derived from it, never
   maintained by hand beside it.** The two drift the moment someone updates one and not
   the other, and the drift stays silent until something turns up missing.
   (claude-config#9)
-- **L32. Docs state testable claims.** A doc stating a fact the code no longer matches
-  is a bug fixed in the same PR; measured numbers are generated or omitted, never
-  hand-written. (56 issues, 8 repos)
 
 ## Cross-system reliability
 
