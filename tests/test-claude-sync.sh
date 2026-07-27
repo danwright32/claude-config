@@ -506,6 +506,19 @@ touch -t 202601010000 "$QSRC/hooks/tiny.sh" "$QREPO/payload/hooks/tiny.sh"
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" pull >/dev/null 2>&1
 check "pull applies a same-size same-mtime edit"     "grep -q 'cccc' '$QSRC/hooks/tiny.sh'"
 
+echo "== the apply cleans up its own scratch file (no temp litter per run) =="
+# The apply records what it wrote to a temp file so the summary can report real
+# writes. That record has to be removed on the way out, including when the run
+# ends early via die(), or every pull and sync leaves a file in the temp dir.
+TMPD="$WORK/tmpdir"; mkdir -p "$TMPD"
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" pull >/dev/null 2>&1
+check "a clean pull leaves no temp file behind" "[ -z \"\$(ls -A '$TMPD' 2>/dev/null)\" ]"
+# same on the failure path: a pull that dies must not litter either
+printf '@NOPE.md\n' > "$QREPO/payload/CLAUDE.md"
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" pull >/dev/null 2>&1
+check "a failed pull leaves no temp file behind"  "[ -z \"\$(ls -A '$TMPD' 2>/dev/null)\" ]"
+rm -f "$QREPO/payload/CLAUDE.md" "$QSRC/CLAUDE.md"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

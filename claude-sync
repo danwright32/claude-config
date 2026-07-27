@@ -115,6 +115,11 @@ scan_secrets(){
 # written, then reported "Already up to date" on the pull that finally wrote it.
 # Record every real create/update/delete instead, and report from that.
 APPLIED_LOG=""
+# Removed however the run ends, including the early exit die() takes, so a pull
+# never leaves a scratch file behind. Safe across the self-update hand-off: at
+# that point the apply has not run yet, so there is nothing to clean.
+cleanup_applied_log(){ if [ -n "$APPLIED_LOG" ]; then rm -f "$APPLIED_LOG"; fi; return 0; }
+trap cleanup_applied_log EXIT
 record_applied(){   # $1 = added|updated|removed   $2 = path relative to ~/.claude
   if [ -n "$APPLIED_LOG" ]; then printf '%s\t%s\n' "$1" "$2" >> "$APPLIED_LOG"; fi
   return 0
@@ -146,7 +151,9 @@ record_rsync(){
 apply_payload_to_local(){
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
-  APPLIED_LOG="$(mktemp)"
+  # Explicit template, not a bare mktemp: BSD mktemp ignores TMPDIR unless the
+  # template says so, which left the tests unable to see this file at all.
+  APPLIED_LOG="$(mktemp "${TMPDIR:-/tmp}/claude-sync-applied.XXXXXX")"
   # -i itemizes so we can report the real writes; -c because -a quick-checks on
   # size plus mtime, and a same-size edit whose mtime git happens to preserve
   # would otherwise be neither copied nor reported. These trees are small.
