@@ -254,7 +254,7 @@ echo "== pull/sync auto-restarts the watch daemon when claude-sync itself change
 # The watch daemon (launchd KeepAlive) keeps the old script loaded until
 # restarted -- a pulled edit to claude-sync itself must trigger a restart
 # automatically, not rely on a manual launchctl step on each Mac (issue #5).
-RSBARE="$WORK/rsbare.git"; git init -q --bare "$RSBARE"
+RSBARE="$WORK/rsbare.git"; git init -q --bare -b main "$RSBARE"
 RSA="$WORK/rsrepoA"; git clone -q "$RSBARE" "$RSA"
 cp "$SCRIPT" "$RSA/claude-sync"
 mkdir -p "$RSA/payload/hooks"; echo '#!/bin/sh' > "$RSA/payload/hooks/dummy.sh"   # non-empty payload, or apply dies with "no payload in repo"
@@ -271,6 +271,23 @@ git -C "$RSA" add claude-sync && git -C "$RSA" -c user.name=t -c user.email=t@e 
 
 out_restart="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$RSBHOME" SYNC_REPO="$RSB" bash "$SCRIPT" pull 2>&1)"
 check "pull restarts the watch daemon on a script change" "printf '%s' \"\$out_restart\" | grep -qi 'watch daemon'"
+
+# First pull on a brand new Mac: the clone predates every commit (no local
+# HEAD). repo_head used to capture the literal string "HEAD" here, which faked
+# a diffable commit: the pull printed an empty "Received changes:" header and
+# the script self-change detector diffed HEAD against itself and stayed quiet.
+FPBARE="$WORK/fpbare.git"; git init -q --bare -b main "$FPBARE"
+FPD="$WORK/fprepoD"; git clone -q "$FPBARE" "$FPD" 2>/dev/null   # clone while EMPTY
+FPA="$WORK/fprepoA"; git clone -q "$FPBARE" "$FPA" 2>/dev/null
+cp "$SCRIPT" "$FPA/claude-sync"
+mkdir -p "$FPA/payload/hooks"; echo '#!/bin/sh' > "$FPA/payload/hooks/dummy.sh"
+git -C "$FPA" checkout -q -b main 2>/dev/null || true
+git -C "$FPA" add -A && git -C "$FPA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$FPA" push -q -u origin main
+FPHOME="$WORK/fphome"; mkdir -p "$FPHOME"; echo '{"hooks":{}}' > "$FPHOME/settings.json"
+out_first="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$FPHOME" SYNC_REPO="$FPD" bash "$SCRIPT" pull 2>&1)"
+check "first pull announces itself as a first pull"      "printf '%s' \"\$out_first\" | grep -qi 'first pull'"
+check "first pull does not print an empty changes header" "! printf '%s' \"\$out_first\" | grep -q 'Received changes from the shared repo'"
+check "first pull restarts the watch daemon"              "printf '%s' \"\$out_first\" | grep -qi 'watch daemon'"
 
 # Control: a payload-only change must NOT claim a restart happened.
 mkdir -p "$RSA/payload/skills/ctrl"; echo x > "$RSA/payload/skills/ctrl/SKILL.md"
