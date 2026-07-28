@@ -401,6 +401,43 @@ preserve_local_conflicts(){
   return 0
 }
 
+# Is one payload path already in effect on this Mac? Comparing bytes is right for
+# everything the apply writes as a plain file, and wrong for everything it does
+# not. settings.hooks.json is merged INTO settings.json and never lands under its
+# own name; a plugin-managed skill is deliberately never applied at all. Compared
+# against a counterpart that will never exist, those read as "not applied" on
+# every run, which is the same permanent wedge this guard was just fixed for.
+payload_path_applied(){   # $1 = path relative to payload/
+  local p="$1" frag s name
+  case "$p" in
+    settings.hooks.json)
+      [ -f "$PAYLOAD/$p" ] || return 0
+      command -v jq >/dev/null 2>&1 || return 0
+      [ -f "$CLAUDE_HOME/settings.json" ] || return 1
+      frag="$(detok < "$PAYLOAD/$p")" || return 1
+      # Compare the hooks block itself, not the file's bytes. settings.json is
+      # hand-edited and tool-edited, so its formatting drifts from what jq would
+      # emit; asking whether the rendered file matches would answer "no" forever
+      # on nothing but whitespace, and wedge sending all over again.
+      jq -e --argjson frag "$frag" '(.hooks // {}) == ($frag.hooks // {})' \
+        "$CLAUDE_HOME/settings.json" >/dev/null 2>&1
+      return $?
+      ;;
+    settings.json) return 0 ;;   # never applied wholesale; the hooks block owns it
+  esac
+  for s in $(skill_excludes); do
+    name="${s#--exclude=}"
+    [ -n "$name" ] || continue
+    case "$p" in "skills/$name"|"skills/$name"/*) return 0 ;; esac
+  done
+  if [ ! -e "$PAYLOAD/$p" ]; then
+    # the repo removed it: applied here once this Mac no longer has it either
+    [ ! -e "$CLAUDE_HOME/$p" ]
+    return $?
+  fi
+  cmp -s "$PAYLOAD/$p" "$CLAUDE_HOME/$p"
+}
+
 unapplied_remote_changes(){
   have_git || return 1
   local head last branch upstream p
@@ -434,12 +471,7 @@ unapplied_remote_changes(){
   [ "$head" != "$last" ] || return 1
   while IFS= read -r p; do
     [ -n "$p" ] || continue
-    if [ ! -e "$PAYLOAD/$p" ]; then
-      # the repo removed it and this Mac still has it: a real pending change
-      if [ -e "$CLAUDE_HOME/$p" ]; then return 0; fi
-      continue
-    fi
-    cmp -s "$PAYLOAD/$p" "$CLAUDE_HOME/$p" || return 0
+    payload_path_applied "$p" || return 0
   done < <(unapplied_paths)
   printf '%s\n' "$head" > "$LAST_APPLIED_FILE" 2>/dev/null || true
   return 1

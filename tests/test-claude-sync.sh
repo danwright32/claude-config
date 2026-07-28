@@ -844,6 +844,27 @@ out_hcp="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH" SYNC_REPO="$HCR" bash "$SCRIPT" s
 check "an edit after a plain push still sends"    "[ -f '$HCR/payload/hooks/hc-after-push.sh' ]"
 check "and is not called behind either"           "! printf '%s' \"\$out_hcp\" | grep -qi 'not applied'"
 
+# Deciding by content only works over paths the apply actually writes to disk.
+# settings.hooks.json is merged INTO settings.json and never lands as a file of
+# its own, so comparing it byte for byte finds nothing to compare against and
+# reports "behind" forever. Any hooks-config change followed by a plain push put
+# this Mac in exactly that state, which is the original wedge wearing a new hat.
+HCJ="$WORK/hcj-home"; HCJR="$WORK/hcj-repo"
+HCJBARE="$WORK/hcjbare.git"; git init -q --bare -b main "$HCJBARE"
+git clone -q "$HCJBARE" "$HCJR" 2>/dev/null
+mkdir -p "$HCJ/hooks"; printf '#!/bin/sh\necho a\n' > "$HCJ/hooks/hcj.sh"
+printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s/hooks/hcj.sh"}]}]}}\n' "$HCJ" > "$HCJ/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCJ" SYNC_REPO="$HCJR" bash "$SCRIPT" sync >/dev/null 2>&1
+# change the hooks CONFIG, so the merged fragment itself changes, then plain push
+printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s/hooks/hcj.sh"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"%s/hooks/hcj.sh"}]}]}}\n' "$HCJ" "$HCJ" > "$HCJ/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCJ" SYNC_REPO="$HCJR" bash "$SCRIPT" push >/dev/null 2>&1
+check "the hooks fragment really did change" \
+  "git -C '$HCJR' diff --name-only \"\$(cat '$HCJR/.last-applied')\" HEAD -- payload | grep -q settings.hooks.json"
+echo 'edit after a hooks change' > "$HCJ/hooks/hcj-after.sh"
+out_hcj="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCJ" SYNC_REPO="$HCJR" bash "$SCRIPT" send 2>&1)"
+check "a merged-only payload entry does not block sending" "[ -f '$HCJR/payload/hooks/hcj-after.sh' ]"
+check "and it is not reported as unapplied"                "! printf '%s' \"\$out_hcj\" | grep -qi 'not applied'"
+
 # A local commit not yet pushed leaves HEAD ahead of the server. Reading "differs
 # from origin" as "behind" wedges sends in the one state where sending is exactly
 # what would resolve it.
