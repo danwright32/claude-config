@@ -59,6 +59,10 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L13. Background jobs and webhooks alert on failure and on the absence of an expected
   run.** A caught error that never reaches monitoring is invisible twice; also alert on
   zero work done while a backlog grows. (30 issues, 3 repos)
+- **L43. Two independent checks must never share one status field.** A pass from one
+  silently erases the other's failure, so the alert that depends on it can never reach
+  its threshold and the condition it watches becomes unreportable; give each check its
+  own counter and judge it against its own cadence. (slate#1150)
 
 ## State and identity
 
