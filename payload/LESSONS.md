@@ -90,6 +90,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   keep hiding or refusing rather than defaulting to an empty set, because an empty
   protective list is indistinguishable from no protection and the person it protects is
   never told. (playedit#307)
+- **L43. A platform's built in request authentication is not caller authentication when
+  it accepts your public client key.** Supabase's verify_jwt passes the anon key that
+  ships inside every app binary, so an endpoint can look protected while accepting
+  anyone: establish the caller yourself and reject the public key explicitly.
+  (playedit#308, playedit#335)
 
 ## UX completeness
 
