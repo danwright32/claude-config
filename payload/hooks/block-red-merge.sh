@@ -48,9 +48,43 @@ command -v gh >/dev/null 2>&1 || deny "Cannot verify CI: gh is not on PATH. Merg
 # current branch, which is also what the merge itself would do.
 pr=$(printf '%s' "$command" | grep -oE 'gh pr merge[[:space:]]+(--[^[:space:]]+[[:space:]]+)*([0-9]+)' | grep -oE '[0-9]+$' | head -1)
 
-# Run from the same directory the command will, so branch resolution matches.
-cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)
-[ -n "$cwd" ] && [ -d "$cwd" ] && cd "$cwd" 2>/dev/null
+# Resolve the directory the merge will actually run in, which is not necessarily
+# the session cwd: PET keeps its git repo in a pet/ subdirectory, so the hook
+# started outside any repo and gh could not resolve the PR at all. That produced
+# a false block on a green PR the first time this ran.
+#
+# Order: an explicit `cd` at the head of the command wins, because that is where
+# the merge itself will run. Otherwise the session cwd, then walk up for a repo,
+# then look one level down.
+resolve_repo_dir() {
+  # Bash's own regex, not sed: macOS sed is BRE and treats \+ as a literal plus,
+  # so a sed version of this silently matched nothing and every merge was blocked.
+  local from_cd=""
+  if [[ "$command" =~ ^[[:space:]]*cd[[:space:]]+(\"[^\"]+\"|\'[^\']+\'|[^[:space:]\&\|\;]+) ]]; then
+    from_cd="${BASH_REMATCH[1]}"
+    from_cd="${from_cd%\"}"; from_cd="${from_cd#\"}"
+    from_cd="${from_cd%\'}"; from_cd="${from_cd#\'}"
+  fi
+  if [ -n "$from_cd" ] && [ -d "$from_cd" ]; then printf '%s' "$from_cd"; return; fi
+
+  local d
+  d=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)
+  [ -n "$d" ] && [ -d "$d" ] || d=$PWD
+
+  local up=$d
+  while [ "$up" != "/" ]; do
+    [ -e "$up/.git" ] && { printf '%s' "$up"; return; }
+    up=$(dirname "$up")
+  done
+
+  local sub
+  for sub in "$d"/*/; do
+    [ -e "${sub}.git" ] && { printf '%s' "${sub%/}"; return; }
+  done
+  printf '%s' "$d"
+}
+
+cd "$(resolve_repo_dir)" 2>/dev/null || true
 
 rollup=$(gh pr view ${pr:+"$pr"} --json number,statusCheckRollup 2>/dev/null)
 [ -z "$rollup" ] && deny "Cannot verify CI for this PR (gh pr view returned nothing). Check the PR manually, then re-run with ALLOW_RED_MERGE=1 if it is genuinely green."

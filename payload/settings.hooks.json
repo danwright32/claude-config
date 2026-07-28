@@ -24,6 +24,13 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-closing-keyword.sh"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/block-red-merge.sh",
+            "if": "Bash(gh pr merge*)",
+            "timeout": 30,
+            "statusMessage": "Verifying the PR is green before merging"
           }
         ]
       }
