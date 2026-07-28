@@ -209,21 +209,36 @@ apply_payload_to_local(){
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
   preserve_local_conflicts   # before anything is overwritten below
+  # Hold back local edits the repo has not seen (see locally_ahead_paths): the
+  # payload's copy of them is exactly what we last applied, so writing it back
+  # would be a pure revert. During `sync` this list is empty by construction,
+  # because stage_local_to_payload already mirrored these edits into the payload.
+  local keep; keep="$(locally_ahead_paths)"
   # Explicit template, not a bare mktemp: BSD mktemp ignores TMPDIR unless the
   # template says so, which left the tests unable to see this file at all.
   APPLIED_LOG="$(mktemp "${TMPDIR:-/tmp}/claude-sync-applied.XXXXXX")"
   # -i itemizes so we can report the real writes; -c because -a quick-checks on
   # size plus mtime, and a same-size edit whose mtime git happens to preserve
   # would otherwise be neither copied nor reported. These trees are small.
-  for d in "${MIRROR_DIRS[@]}"; do
+  local kex p2
+  for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$PAYLOAD/$d" ] || continue
     mkdir -p "$CLAUDE_HOME/$d"
-    rsync -aic --delete "${COMMON_EXCLUDES[@]}" "$PAYLOAD/$d/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
+    # per-subtree excludes: the plugin-managed skills, plus the locally-ahead
+    # paths being held back (rsync excludes are relative to the transfer root)
+    kex=()
+    [ "$d" = skills ] && { local s2; for s2 in $(skill_excludes); do kex+=("$s2"); done; }
+    while IFS= read -r p2; do
+      case "$p2" in "$d"/?*) kex+=(--exclude="/${p2#"$d"/}") ;; esac
+    done <<KEEP
+$keep
+KEEP
+    rsync -aic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$PAYLOAD/$d/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
   done
-  if [ -d "$PAYLOAD/skills" ]; then
-    mkdir -p "$CLAUDE_HOME/skills"
-    # same excludes => plugin skills on THIS Mac are never deleted by the mirror
-    rsync -aic --delete "${COMMON_EXCLUDES[@]}" $(skill_excludes) "$PAYLOAD/skills/" "$CLAUDE_HOME/skills/" | record_rsync skills
+  if [ -n "${keep// }" ]; then
+    local keeplist; keeplist="$(printf '%s' "$keep" | tr '\n' ' ')"
+    echo "claude-sync: kept local edits the shared repo has not seen yet, instead of reverting them; they go up on the next send: ${keeplist}" >&2
+    notify "kept unsent local edits: ${keeplist}"
   fi
   chmod +x "$CLAUDE_HOME"/hooks/*.sh "$CLAUDE_HOME"/hooks/*.py 2>/dev/null || true
   find "$CLAUDE_HOME/skills" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
@@ -288,6 +303,44 @@ unapplied_paths(){
   [ "$head" != "$last" ] || return 0
   git -C "$SYNC_REPO" diff --name-only "$last" "$head" -- payload 2>/dev/null \
     | sed 's|^payload/||'
+  return 0
+}
+
+# Paths where THIS Mac's copy differs from the payload while the repo has NOT
+# touched them since our last apply: a local edit that was never sent, because
+# the watcher was down or the edit is seconds old. Applying the payload over
+# these would revert real work with a copy that carries no news (on 2026-07-28
+# that silently destroyed a fix to a skill script, with the original mtime
+# restored so the loss was invisible). The apply skips them and the next send
+# publishes them. Repo-changed paths are deliberately NOT listed here: those
+# are stale or conflicted, and preserve_local_conflicts owns the conflicts.
+locally_ahead_paths(){
+  local last unapplied d line change path
+  have_git || return 0
+  last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
+  [ -n "$last" ] || return 0
+  unapplied="
+$(unapplied_paths)
+"
+  for d in "${MIRROR_DIRS[@]}" skills; do
+    [ -d "$PAYLOAD/$d" ] || continue
+    [ -d "$CLAUDE_HOME/$d" ] || continue
+    local ex=()
+    [ "$d" = skills ] && { local s; for s in $(skill_excludes); do ex+=("$s"); done; }
+    while IFS= read -r line; do
+      change="${line%%[[:space:]]*}"
+      path="${line#"$change"}"
+      path="${path#"${path%%[![:space:]]*}"}"
+      [ -n "$path" ] || continue
+      case "$path" in */|.|./) continue ;; esac
+      case "$change" in '*deleting'|'>'*|'c'*|'h'*) ;; *) continue ;; esac
+      [ -f "$CLAUDE_HOME/$d/$path" ] || continue
+      case "$unapplied" in *"
+$d/$path
+"*) continue ;; esac
+      printf '%s\n' "$d/$path"
+    done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$PAYLOAD/$d/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)
+  done
   return 0
 }
 

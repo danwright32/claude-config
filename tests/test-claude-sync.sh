@@ -720,6 +720,40 @@ check "still skips when truly behind"          "[ ! -f '$SWB/payload/hooks/sw-b.
 check "still keeps the other Mac's change"     "grep -q A-MOVED-ON '$SWB/payload/hooks/shared.sh'"
 check "still says why it skipped"              "printf '%s' \"\$out_swb\" | grep -qi 'not applied'"
 
+echo "== a pull must not revert a local edit the repo never changed (2026-07-28) =="
+# The incident: the watcher was down, a skill script was edited locally, and a
+# pull driven by UNRELATED commits mirrored the repo's older copy straight over
+# the edit. No conflict copy (preserve_local_conflicts only owns paths the repo
+# changed), no warning, original mtime restored, so the loss was invisible. A
+# file the repo has not touched since this Mac last applied, whose local copy
+# differs, is simply AHEAD: the pull must leave it alone and say so, and the
+# next send must publish it.
+LEBARE="$WORK/lebare.git"; git init -q --bare -b main "$LEBARE"
+LEA="$WORK/lerepoA"; git clone -q "$LEBARE" "$LEA" 2>/dev/null
+LEAH="$WORK/lehomeA"; mkdir -p "$LEAH/hooks" "$LEAH/skills/reel"
+echo '{"hooks":{}}' > "$LEAH/settings.json"
+echo 'orig-script' > "$LEAH/skills/reel/push.py"
+echo 'other-v1' > "$LEAH/hooks/other.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/null 2>&1
+LEB="$WORK/lerepoB"; git clone -q "$LEBARE" "$LEB" 2>/dev/null
+LEBH="$WORK/lehomeB"; mkdir -p "$LEBH"; echo '{"hooks":{}}' > "$LEBH/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" pull >/dev/null 2>&1
+check "B starts with the original script"   "grep -q orig-script '$LEBH/skills/reel/push.py'"
+# B fixes the script locally; nothing sends it (the watcher is down).
+echo 'MY-LOCAL-FIX' > "$LEBH/skills/reel/push.py"
+# A changes an UNRELATED file and sends it up; B pulls.
+echo 'other-v2' > "$LEAH/hooks/other.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_le="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" pull 2>&1)"
+check "the unrelated change still arrives"  "grep -q other-v2 '$LEBH/hooks/other.sh'"
+check "the local edit is NOT reverted"      "grep -q MY-LOCAL-FIX '$LEBH/skills/reel/push.py'"
+check "and the pull says it kept the edit"  "printf '%s' \"\$out_le\" | grep -qi 'kept'"
+# The kept edit still reaches the repo on the next send, and the other Mac.
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" send >/dev/null 2>&1
+check "the next send publishes the edit"    "grep -q MY-LOCAL-FIX '$LEB/payload/skills/reel/push.py'"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/null 2>&1
+check "the edit round-trips to the other Mac" "grep -q MY-LOCAL-FIX '$LEAH/skills/reel/push.py'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
