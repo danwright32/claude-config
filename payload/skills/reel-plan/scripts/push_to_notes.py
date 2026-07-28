@@ -107,6 +107,38 @@ tell application "System Events"
     return "ABORTED: frontmost is " & frontApp & ". Nothing sent."
   end if
   tell application process "Notes"
+    -- Focus the note body ourselves: after "show", focus sits on the notes
+    -- list, not the body. The body is the one scroll area of the split view
+    -- that contains a text area; the index shifts with the sidebar, so search.
+    set noteBody to missing value
+    repeat with sa in (scroll areas of splitter group 1 of window 1)
+      try
+        set noteBody to text area 1 of sa
+        exit repeat
+      end try
+    end repeat
+    if noteBody is missing value then
+      return "ABORTED: could not find the note body. Nothing sent."
+    end if
+    set value of attribute "AXFocused" of noteBody to true
+    delay 0.4
+    -- Setting AXFocused is sometimes silently ignored (seen 2026-07-28). The
+    -- fallback is one click inside the body, at coordinates read off the
+    -- element itself. Safe at this point: the note is still plain text with
+    -- no checkboxes to toggle, so a click can only place the cursor.
+    set landed to false
+    try
+      if (role of (value of attribute "AXFocusedUIElement")) is "AXTextArea" then
+        set landed to true
+      end if
+    end try
+    if not landed then
+      set p to position of noteBody
+      set s to size of noteBody
+      click at {(item 1 of p) + ((item 1 of s) div 2), (item 2 of p) + 30}
+      delay 0.4
+    end if
+    -- The guard stays: verify focus actually landed before any keystroke.
     if (role of (value of attribute "AXFocusedUIElement")) is not "AXTextArea" then
       return "ABORTED: focus is not the note body. Nothing sent."
     end if
