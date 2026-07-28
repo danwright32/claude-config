@@ -10,9 +10,11 @@ Why it works the way it does. Apple Notes checkboxes are a proprietary format
 that AppleScript cannot write: the checkbox state does not live in the note's
 HTML at all. The only route is to create the note with plain content and then
 have Notes convert it, via the Format menu's checklist command (Shift+Cmd+L),
-which turns every block into a tick box. That last step needs the keyboard, so
-this script refuses to send a keystroke unless Notes is frontmost with the
-cursor in the note body, and says so rather than typing into whatever is there.
+which turns every block into a tick box. That last step needs the keyboard.
+The script activates Notes and focuses the note body itself (added 2026-07-28,
+at Dan's request, so no manual click into Notes is needed), then verifies both
+that Notes is frontmost and that focus really is a text area before sending
+anything, and says so rather than typing into whatever is there.
 
 Verified against Notes on macOS, 2026-07-23: bold and font size survive the
 conversion, so headings stay legible.
