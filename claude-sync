@@ -557,7 +557,16 @@ do_send(){
   stage_local_to_payload
   have_git || return 0
   commit_if_changed || return 0          # nothing changed -> nothing to send
-  git -C "$SYNC_REPO" push -q 2>/dev/null && { echo "Sent."; return 0; }
+  # A commit we just made from our OWN ~/.claude is applied here by construction:
+  # stage_local_to_payload mirrored this Mac's files into it moments ago. Record it
+  # as applied, or .last-applied stays at the previous commit and the guard above
+  # reads this Mac's own send as "behind the other Mac", dropping every later send
+  # until something runs an apply. Only on a clean push: a failed push falls through
+  # to do_sync, whose rebase rewrites this SHA and whose apply records the real one.
+  if git -C "$SYNC_REPO" push -q 2>/dev/null; then
+    repo_head > "$LAST_APPLIED_FILE" 2>/dev/null || true
+    echo "Sent."; return 0
+  fi
   do_sync                                # behind remote: reconcile (pull+apply+push)
 }
 

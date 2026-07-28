@@ -687,6 +687,39 @@ check "conflict copies are not sent up"           "! ls '$CFB/payload/hooks/' | 
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFBH" SYNC_REPO="$CFB" bash "$SCRIPT" sync >/dev/null 2>&1
 check "and still are not sent on a later sync"    "! ls '$CFB/payload/hooks/' | grep -q conflict"
 
+echo "== a send must not leave this Mac wedged against its own commit =="
+# .last-applied is written only by the apply step, and send deliberately has no
+# apply step. So a send moved HEAD forward and left .last-applied pointing at the
+# commit before it, after which the "behind the other Mac" guard fired on this
+# Mac's OWN commit and every later send was silently dropped. One Mac here, no
+# other Mac involved: the second edit must still reach the repo.
+SWBARE="$WORK/swbare.git"; git init -q --bare -b main "$SWBARE"
+SWA="$WORK/swrepoA"; git clone -q "$SWBARE" "$SWA" 2>/dev/null
+SWAH="$WORK/swhomeA"; mkdir -p "$SWAH/hooks"; echo '{"hooks":{}}' > "$SWAH/settings.json"
+echo base > "$SWAH/hooks/shared.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SWAH" SYNC_REPO="$SWA" bash "$SCRIPT" sync >/dev/null 2>&1
+echo 'first' > "$SWAH/hooks/sw-one.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SWAH" SYNC_REPO="$SWA" bash "$SCRIPT" send >/dev/null 2>&1
+check "the first send lands"                   "[ -f '$SWA/payload/hooks/sw-one.sh' ]"
+check "a sent commit counts as applied here"   "[ \"\$(cat '$SWA/.last-applied')\" = \"\$(git -C '$SWA' rev-parse HEAD)\" ]"
+echo 'second' > "$SWAH/hooks/sw-two.sh"
+out_sw="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SWAH" SYNC_REPO="$SWA" bash "$SCRIPT" send 2>&1)"
+check "a second send still lands"              "[ -f '$SWA/payload/hooks/sw-two.sh' ]"
+check "and is never called behind itself"      "! printf '%s' \"\$out_sw\" | grep -qi 'not applied'"
+# The guard this replaces is load-bearing, so prove it still fires: genuinely
+# behind the OTHER Mac must still skip, keep the other Mac's content, and say why.
+SWB="$WORK/swrepoB"; git clone -q "$SWBARE" "$SWB" 2>/dev/null
+SWBH="$WORK/swhomeB"; mkdir -p "$SWBH"; echo '{"hooks":{}}' > "$SWBH/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SWBH" SYNC_REPO="$SWB" bash "$SCRIPT" pull >/dev/null 2>&1
+echo 'A-MOVED-ON' > "$SWAH/hooks/shared.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SWAH" SYNC_REPO="$SWA" bash "$SCRIPT" send >/dev/null 2>&1
+git -C "$SWB" pull -q --ff-only
+echo 'B-local' > "$SWBH/hooks/sw-b.sh"
+out_swb="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SWBH" SYNC_REPO="$SWB" bash "$SCRIPT" send 2>&1)"
+check "still skips when truly behind"          "[ ! -f '$SWB/payload/hooks/sw-b.sh' ]"
+check "still keeps the other Mac's change"     "grep -q A-MOVED-ON '$SWB/payload/hooks/shared.sh'"
+check "still says why it skipped"              "printf '%s' \"\$out_swb\" | grep -qi 'not applied'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
