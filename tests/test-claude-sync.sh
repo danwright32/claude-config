@@ -754,6 +754,82 @@ check "the next send publishes the edit"    "grep -q MY-LOCAL-FIX '$LEB/payload/
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/null 2>&1
 check "the edit round-trips to the other Mac" "grep -q MY-LOCAL-FIX '$LEAH/skills/reel/push.py'"
 
+echo "== a commit made outside send/sync must not wedge the watcher (#12) =="
+# 2026-07-28: a session edited claude-sync itself and committed with plain git.
+# .last-applied is written only by the apply step and by a clean send, so HEAD
+# moved and the marker did not. The guard compared those two SHAs and read this
+# Mac as behind ITS OWN commit, so every later edit was dropped with a "pull
+# first, this Mac is behind" notification until a manual pull happened to reset
+# the marker. A commit whose content is already here is not news arriving from
+# the other Mac, whatever the SHAs say.
+HCBARE="$WORK/hcbare.git"; git init -q --bare -b main "$HCBARE"
+HCR="$WORK/hcrepo"; git clone -q "$HCBARE" "$HCR" 2>/dev/null
+HCH="$WORK/hchome"; mkdir -p "$HCH/hooks"; echo '{"hooks":{}}' > "$HCH/settings.json"
+echo base > "$HCH/hooks/hc-base.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH" SYNC_REPO="$HCR" bash "$SCRIPT" sync >/dev/null 2>&1
+check "the hand-commit case starts in sync" \
+  "[ \"\$(cat '$HCR/.last-applied')\" = \"\$(git -C '$HCR' rev-parse HEAD)\" ]"
+# The tool itself is edited and committed by hand, exactly as a working session does.
+echo '# an ordinary edit to the tool' >> "$HCR/README.md"
+git -C "$HCR" add README.md
+git -C "$HCR" -c user.name=t -c user.email=t@e commit -q -m "edit the tool by hand"
+git -C "$HCR" push -q
+HCREC="$WORK/hc-notify.rec"; HCN="$WORK/hc-notifier"
+cat > "$HCN" <<EOS
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$HCREC"
+EOS
+chmod +x "$HCN"
+echo 'edited after the hand commit' > "$HCH/hooks/hc-after.sh"
+out_hc="$(SYNC_NOTIFIER="$HCN" SYNC_NO_NOTIFY=0 CLAUDE_HOME="$HCH" SYNC_REPO="$HCR" bash "$SCRIPT" send 2>&1)"
+check "the edit still reaches the repo"           "[ -f '$HCR/payload/hooks/hc-after.sh' ]"
+check "send is not called behind its own commit"  "! printf '%s' \"\$out_hc\" | grep -qi 'not applied'"
+check "and no behind-notification is fired"       "! grep -qi 'behind' '$HCREC' 2>/dev/null"
+
+# `claude-sync push` commits the payload straight from THIS Mac's home and pushes,
+# with no apply step, so it moves HEAD with payload changes whose content is
+# already here and leaves the marker behind. Same wedge, and the SHAs cannot tell
+# it apart from the other Mac's work arriving. Comparing the bytes can.
+echo 'pushed-from-here' > "$HCH/hooks/hc-pushed.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH" SYNC_REPO="$HCR" bash "$SCRIPT" push >/dev/null 2>&1
+echo 'edited after the push' > "$HCH/hooks/hc-after-push.sh"
+out_hcp="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH" SYNC_REPO="$HCR" bash "$SCRIPT" send 2>&1)"
+check "an edit after a plain push still sends"    "[ -f '$HCR/payload/hooks/hc-after-push.sh' ]"
+check "and is not called behind either"           "! printf '%s' \"\$out_hcp\" | grep -qi 'not applied'"
+
+# A local commit not yet pushed leaves HEAD ahead of the server. Reading "differs
+# from origin" as "behind" wedges sends in the one state where sending is exactly
+# what would resolve it.
+echo '# committed here, never pushed' >> "$HCR/README.md"
+git -C "$HCR" add README.md
+git -C "$HCR" -c user.name=t -c user.email=t@e commit -q -m "local only, unpushed"
+echo 'edited while ahead' > "$HCH/hooks/hc-ahead.sh"
+out_hca="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH" SYNC_REPO="$HCR" bash "$SCRIPT" send 2>&1)"
+check "being ahead of the server is not being behind" "[ -f '$HCR/payload/hooks/hc-ahead.sh' ]"
+check "and reports no unapplied changes"              "! printf '%s' \"\$out_hca\" | grep -qi 'not applied'"
+
+# Control: the guard is load-bearing. The other Mac pushing something this Mac has
+# not even fetched must still stop the send, or a watcher firing here mirrors an
+# older snapshot over their work.
+HCR2="$WORK/hcrepo2"; git clone -q "$HCBARE" "$HCR2" 2>/dev/null
+HCH2="$WORK/hchome2"; mkdir -p "$HCH2"; echo '{"hooks":{}}' > "$HCH2/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH2" SYNC_REPO="$HCR2" bash "$SCRIPT" pull >/dev/null 2>&1
+# Their work is published from its own healthy clone via sync, which carries no
+# send guard. Publishing it from a Mac this test has deliberately wedged would
+# make the control depend on the very bug it is the control for.
+HCR3="$WORK/hcrepo3"; git clone -q "$HCBARE" "$HCR3" 2>/dev/null
+HCH3="$WORK/hchome3"; mkdir -p "$HCH3"; echo '{"hooks":{}}' > "$HCH3/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH3" SYNC_REPO="$HCR3" bash "$SCRIPT" pull >/dev/null 2>&1
+echo 'THEIR-WORK' > "$HCH3/hooks/hc-theirs.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH3" SYNC_REPO="$HCR3" bash "$SCRIPT" sync >/dev/null 2>&1
+check "their work really was published"            "[ -f '$HCR3/payload/hooks/hc-theirs.sh' ]"
+hc2_commits="$(git -C "$HCR2" rev-list --count HEAD)"
+echo 'mine while truly behind' > "$HCH2/hooks/hc-mine.sh"
+out_hcb="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH2" SYNC_REPO="$HCR2" bash "$SCRIPT" send 2>&1)"
+check "a real remote change still blocks the send" "[ ! -f '$HCR2/payload/hooks/hc-mine.sh' ]"
+check "it makes no commit in that state"           "[ \"\$(git -C '$HCR2' rev-list --count HEAD)\" = \"\$hc2_commits\" ]"
+check "and still says why it skipped"              "printf '%s' \"\$out_hcb\" | grep -qi 'not applied'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

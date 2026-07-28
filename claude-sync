@@ -376,17 +376,45 @@ preserve_local_conflicts(){
 
 unapplied_remote_changes(){
   have_git || return 1
-  local head last branch upstream
+  local head last branch upstream p
   git -C "$SYNC_REPO" fetch -q origin 2>/dev/null || true
   head="$(repo_head)"
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   # Never applied here yet (fresh clone, or first run of this version): there is
   # no recorded state to protect, and blocking would wedge a first push.
   [ -n "$last" ] || return 1
-  if [ "$head" != "$last" ]; then return 0; fi
+  # The server holding commits this Mac does not have is the real "behind": their
+  # work is on its way here and mirroring over it reverts them. Mind the
+  # direction. A commit made here and not yet pushed also makes HEAD differ from
+  # origin, and reading THAT as behind wedges sending in the one state where
+  # sending is exactly what resolves it.
   branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
   upstream="$(git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" 2>/dev/null || true)"
-  if [ -n "$upstream" ] && [ "$upstream" != "$head" ]; then return 0; fi
+  if [ -n "$upstream" ] && [ -n "$head" ]; then
+    if ! git -C "$SYNC_REPO" merge-base --is-ancestor "$upstream" "$head" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  # This Mac now holds every commit the server does, so the only question left is
+  # whether HEAD's payload is really on disk here. HEAD versus .last-applied
+  # cannot answer it: a commit authored HERE moves HEAD with no apply step behind
+  # it, while its content is already applied by construction. That is any hand
+  # commit made while editing this tool, and every `claude-sync push`. On
+  # 2026-07-28 it read as behind and dropped 81 minutes of sends, each one
+  # notifying that the user should pull, with nothing to pull. Compare the bytes
+  # of what the repo actually changed, and repair the marker when they agree so
+  # the state cannot persist.
+  [ "$head" != "$last" ] || return 1
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ ! -e "$PAYLOAD/$p" ]; then
+      # the repo removed it and this Mac still has it: a real pending change
+      if [ -e "$CLAUDE_HOME/$p" ]; then return 0; fi
+      continue
+    fi
+    cmp -s "$PAYLOAD/$p" "$CLAUDE_HOME/$p" || return 0
+  done < <(unapplied_paths)
+  printf '%s\n' "$head" > "$LAST_APPLIED_FILE" 2>/dev/null || true
   return 1
 }
 
