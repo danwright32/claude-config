@@ -245,8 +245,16 @@ KEEP
   # top-level global rule files: only rewrite when changed, so a no-op sync leaves
   # mtime untouched (CLAUDE.md is a WatchPath; rewriting would re-trigger the watcher)
   # derived from the PAYLOAD's CLAUDE.md: it decides what this Mac is about to run
+  local keeppad="
+$keep
+"
   for f in $(top_files_in "$PAYLOAD"); do
     [ -f "$PAYLOAD/$f" ] || continue
+    # held back as a local edit the repo has not seen: writing the payload's copy
+    # over it would be a pure revert of work that never left this Mac
+    case "$keeppad" in *"
+$f
+"*) continue ;; esac
     if [ -f "$CLAUDE_HOME/$f" ] && cmp -s "$PAYLOAD/$f" "$CLAUDE_HOME/$f"; then continue; fi
     if [ -f "$CLAUDE_HOME/$f" ]; then
       cp "$CLAUDE_HOME/$f" "$CLAUDE_HOME/$f.syncbak"
@@ -340,6 +348,25 @@ $d/$path
 "*) continue ;; esac
       printf '%s\n' "$d/$path"
     done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$PAYLOAD/$d/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)
+  done
+  # Top-level rules files reach ~/.claude by a plain copy, not by the rsync above,
+  # and were left out of this protection when it was written. So the revert this
+  # function exists to prevent still happened to them, and they are the files that
+  # matter most: CLAUDE.md, LESSONS.md, RTK.md and whatever those import carry the
+  # rules every session loads. Seen for real on 2026-07-28, when a pull run seconds
+  # after another session appended a lesson deleted it, leaving only a .syncbak.
+  # Same test as above: the repo has not touched it since our last apply, so this
+  # Mac's copy is ahead, not stale. A file the repo DID change is deliberately left
+  # out, exactly as above, because preserve_local_conflicts owns that case.
+  local tf
+  for tf in $(top_files_in "$CLAUDE_HOME"); do
+    [ -f "$CLAUDE_HOME/$tf" ] || continue
+    [ -f "$PAYLOAD/$tf" ] || continue
+    if cmp -s "$PAYLOAD/$tf" "$CLAUDE_HOME/$tf"; then continue; fi
+    case "$unapplied" in *"
+$tf
+"*) continue ;; esac
+    printf '%s\n' "$tf"
   done
   return 0
 }

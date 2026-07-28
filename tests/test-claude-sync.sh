@@ -754,6 +754,53 @@ check "the next send publishes the edit"    "grep -q MY-LOCAL-FIX '$LEB/payload/
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/null 2>&1
 check "the edit round-trips to the other Mac" "grep -q MY-LOCAL-FIX '$LEAH/skills/reel/push.py'"
 
+echo "== a pull must not revert an unsent edit to a top-level rules file =="
+# The keep-local-edits protection covered the mirrored subtrees only. Top-level
+# rules files (CLAUDE.md, LESSONS.md, RTK.md and anything they import) take a
+# separate plain-copy path that had no such guard, so a pull still mirrored the
+# repo's older copy straight over an entry added here and never sent, leaving a
+# .syncbak as the only evidence. Reproduced live on 2026-07-28: a pull run
+# seconds after another session appended a lesson deleted it. These files carry
+# the rules every session loads, which makes a silent revert here the most
+# expensive one in the sync.
+TFBARE="$WORK/tfbare.git"; git init -q --bare -b main "$TFBARE"
+TFA="$WORK/tfrepoA"; git clone -q "$TFBARE" "$TFA" 2>/dev/null
+TFAH="$WORK/tfhomeA"; mkdir -p "$TFAH/hooks"; echo '{"hooks":{}}' > "$TFAH/settings.json"
+printf '# rules\n' > "$TFAH/CLAUDE.md"
+printf -- '- L1. first lesson\n' > "$TFAH/LESSONS.md"
+echo 'other-v1' > "$TFAH/hooks/tf-other.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFAH" SYNC_REPO="$TFA" bash "$SCRIPT" sync >/dev/null 2>&1
+TFB="$WORK/tfrepoB"; git clone -q "$TFBARE" "$TFB" 2>/dev/null
+TFBH="$WORK/tfhomeB"; mkdir -p "$TFBH"; echo '{"hooks":{}}' > "$TFBH/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" pull >/dev/null 2>&1
+check "B starts with the shared lessons file" "grep -q 'first lesson' '$TFBH/LESSONS.md'"
+# B appends a lesson. Nothing sends it (the watcher is down, or it is seconds old).
+printf -- '- L2. MY-NEW-LESSON\n' >> "$TFBH/LESSONS.md"
+# A changes something unrelated and publishes, so B's next pull has real work.
+echo 'other-v2' > "$TFAH/hooks/tf-other.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFAH" SYNC_REPO="$TFA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_tf="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" pull 2>&1)"
+check "the unrelated change still arrives"      "grep -q other-v2 '$TFBH/hooks/tf-other.sh'"
+check "the unsent lesson is NOT reverted"       "grep -q MY-NEW-LESSON '$TFBH/LESSONS.md'"
+check "the earlier lesson is still there too"   "grep -q 'first lesson' '$TFBH/LESSONS.md'"
+check "and the pull says it kept the edit"      "printf '%s' \"\$out_tf\" | grep -qi 'kept'"
+check "and does not report overwriting it"      "! printf '%s' \"\$out_tf\" | grep -q 'updated .*LESSONS.md'"
+# It must reach the repo on the next send, and the other Mac after that.
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" send >/dev/null 2>&1
+check "the next send publishes the lesson"      "grep -q MY-NEW-LESSON '$TFB/payload/LESSONS.md'"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFAH" SYNC_REPO="$TFA" bash "$SCRIPT" sync >/dev/null 2>&1
+check "the lesson round-trips to the other Mac" "grep -q MY-NEW-LESSON '$TFAH/LESSONS.md'"
+# Control: when the repo HAS changed the file since this Mac last applied, the
+# incoming version still wins, and the local copy is kept beside it rather than
+# discarded. Keeping local edits must not become a way to ignore the other Mac.
+printf -- '- L3. FROM-MAC-A\n' >> "$TFAH/LESSONS.md"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFAH" SYNC_REPO="$TFA" bash "$SCRIPT" sync >/dev/null 2>&1
+printf -- '- L4. FROM-MAC-B-SAME-TIME\n' >> "$TFBH/LESSONS.md"
+out_tfc="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" pull 2>&1)"
+check "the other Mac's version is applied"      "grep -q FROM-MAC-A '$TFBH/LESSONS.md'"
+check "the local version is kept beside it"     "grep -rq FROM-MAC-B-SAME-TIME '$TFBH/'"
+check "and the conflict is reported"            "printf '%s' \"\$out_tfc\" | grep -qi 'both Macs changed'"
+
 echo "== a commit made outside send/sync must not wedge the watcher (#12) =="
 # 2026-07-28: a session edited claude-sync itself and committed with plain git.
 # .last-applied is written only by the apply step and by a clean send, so HEAD
