@@ -135,7 +135,7 @@ tell application "System Events"
     if not landed then
       set p to position of noteBody
       set s to size of noteBody
-      click at {(item 1 of p) + ((item 1 of s) div 2), (item 2 of p) + 30}
+      click at {{(item 1 of p) + ((item 1 of s) div 2), (item 2 of p) + 30}}
       delay 0.4
     end if
     -- The guard stays: verify focus actually landed before any keystroke.
