@@ -113,6 +113,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   resume, and every exit path of a guarded action get deliberate behavior; enumerate
   degenerate inputs (zero items, missing files, overlong media) at design time.
   (32 issues, 4 repos)
+- **L44. A request to stop, cancel, or undo gets its own acknowledged state the instant it
+  is accepted, distinct from both running and stopped.** A control that keeps offering
+  itself after being pressed reads as broken, so the person presses it again, and the work
+  meanwhile may already be honoured, already finished, or still costing money.
+  (overture#1684)
+- **L45. When filtered views are the only way to reach records, the filters must cover the
+  whole state space between them.** Every record must match at least one view, and no state
+  transition may move a record into a combination that matches none, or it stays in the data
+  while vanishing from the product. (overture#1691)
 
 ## External systems
 
@@ -144,6 +153,11 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 - **L29. Dead code is worse than deleted code.** Wire it or delete it the moment nothing
   calls it; git remembers. (10 issues, 2 repos)
+- **L46. Stored data needs a reader, not just a writer.** A field that is only ever
+  written looks alive to any is-this-used check, because the write path really does run,
+  so the purpose the field was added for silently never happens: name a field's consumer
+  in the same change that adds it, and when the last consumer goes away either wire a new
+  one or delete the field. (overture#1715)
 - **L30. Fix the class, not the instance.** Sweep for a found defect's siblings in the
   same change, and enumerate every surface a cross-cutting behavior must cover before
   shipping it. (22 issues, 4 repos)
