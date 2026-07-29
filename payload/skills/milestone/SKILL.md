@@ -47,6 +47,16 @@ On approval, run the helper for real:
 
 It prints `MILESTONE <url>` and one `ISSUE <url>` per phase. Relay the milestone URL to the user.
 
+## Single issue, not a whole feature
+For one issue that just needs the right milestone (the common case, including the end-of-turn issue review), skip the plan JSON and use the resolver directly. Every issue-filing path shares it, and a PreToolUse gate blocks a `gh issue create` with no `--milestone`:
+
+    bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>"                    # reuse only, never creates
+    bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>" --create-approved  # only after the user approves
+
+It prints `MILESTONE-EXISTS` or `MILESTONE-CREATED` plus a `MILESTONE-TITLE <title>` line. Pass that exact title to `gh issue create --milestone`, because `gh` matches milestones by name and a case variant is not found. Exit codes tell you what needs a human: `3` an identically named milestone exists but is closed, `4` the title closely resembles an open milestone (attach to that one instead of creating a twin), `5` nothing matched and creating was not approved, `6` the list could not be read.
+
 ## Notes
-- The same `create-milestone.sh` helper backs `/plan-council` and `/plan-lite`, so milestones look identical no matter which path created them.
+- The same helpers back `/plan-council`, `/plan-lite` and `/production-ready`, so milestones look identical no matter which path created them, and re-running a plan reuses its milestone instead of duplicating it.
+- `create-milestone.sh` aborts without filing any issue when the milestone needs a human decision (exit 3 or 4), because half a filed plan is worse than none.
 - Requires `gh` authenticated (`gh auth status`). If milestone creation fails on permissions, tell the user rather than retrying blindly.
+- Tests: `bash ~/.claude/skills/milestone/test-ensure-milestone.sh` and `test-create-milestone.sh`. Both use a fake `gh`, so they never touch a real repo.

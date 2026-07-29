@@ -45,18 +45,23 @@ sys.stdout.write(ti.get("command") or "")
 cmd="$(parse_payload)" || exit 0
 [ -n "$cmd" ] || exit 0
 
-# Documented override: an inline SKIP_LESSON_CHECK=1 prefix.
-if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_LESSON_CHECK=1([[:space:]]|$)'; then
-  exit 0
-fi
-
 # Does any shell segment RUN `gh issue create` (leading tokens, after stripping simple
 # leading env assignments), as opposed to merely mentioning it?
 is_create=0
 while IFS= read -r seg; do
+  # Documented override: an inline SKIP_LESSON_CHECK=1 prefix. It is judged PER
+  # SEGMENT, because it belongs to the one command it prefixes. Reading it across
+  # the whole call let a genuine create sitting in a later segment go unexamined.
+  if printf '%s' "$seg" | grep -Eq '(^|[[:space:]])SKIP_LESSON_CHECK=1([[:space:]]|$)'; then
+    continue
+  fi
   stripped="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//')"
   head_tokens="$(printf '%s' "$stripped" | awk '{print $1, $2, $3}')"
   if printf '%s' "$head_tokens" | grep -Eq '(^|/)gh[[:space:]]+issue[[:space:]]+create([[:space:]]|$)'; then
+    # A help invocation files nothing, so there is no issue to draw a lesson from.
+    if printf '%s' "$stripped" | grep -Eq '(^|[[:space:]])(--help|-h)([[:space:]]|$)'; then
+      continue
+    fi
     is_create=1
     break
   fi

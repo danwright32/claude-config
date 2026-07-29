@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # post-discussion.sh — robustly publish a plan-council result, with fallbacks.
-# Usage: post-discussion.sh <owner/repo> <title> <body-file>
+# Usage: post-discussion.sh <owner/repo> <title> <body-file> [milestone-title]
 #
 # Tries, in order:
 #   1. a GitHub Discussion (needs Discussions enabled + a category)
@@ -9,11 +9,19 @@
 #   3. a local PLAN-<slug>.md file
 # Prints one line describing what happened: "DISCUSSION <url>", "ISSUE <url>",
 # or "FILE <path>", so the caller can tell the user exactly where the plan went.
+#
+# Milestones: every issue belongs to one. This runs before the plan is approved, so
+# the plan's own milestone usually does not exist yet (creating it here would create
+# milestones for plans that get rejected). So it attaches an EXISTING milestone when
+# one matches, and otherwise prints a NO-MILESTONE warning naming the gap, which the
+# milestone step then closes by adopting this issue. It never invents a milestone,
+# and it never files an orphan silently.
 
 set -uo pipefail
-repo="${1:?usage: post-discussion.sh owner/repo title body-file}"
+repo="${1:?usage: post-discussion.sh owner/repo title body-file [milestone-title]}"
 title="${2:?missing title}"
 bodyfile="${3:?missing body file}"
+milestone="${4:-}"
 [ -f "$bodyfile" ] || { echo "ERROR: body file not found: $bodyfile" >&2; exit 1; }
 body="$(cat "$bodyfile")"
 owner="${repo%%/*}"; name="${repo##*/}"
@@ -44,8 +52,27 @@ except Exception: print("")' 2>/dev/null)"
   fi
 
   # 2. Tracking issue ------------------------------------------------------
-  url="$(gh issue create --repo "$repo" --title "$title" --body "$body" 2>/dev/null)"
-  if [ -n "$url" ]; then echo "ISSUE $url"; exit 0; fi
+  # Resolve a milestone WITHOUT creating one. An exact or case variant match is
+  # reused; anything else leaves the issue unmilestoned and says so out loud.
+  ensure="$(cd "$(dirname "${BASH_SOURCE[0]}")/../milestone" && pwd)/ensure-milestone.sh"
+  ms_title=""
+  if [ -n "$milestone" ] && [ -f "$ensure" ]; then
+    ms_out="$(bash "$ensure" "$repo" "$milestone" 2>/dev/null)"
+    ms_title="$(printf '%s\n' "$ms_out" | sed -n 's/^MILESTONE-TITLE //p' | head -1)"
+  fi
+
+  if [ -n "$ms_title" ]; then
+    url="$(gh issue create --repo "$repo" --title "$title" --body "$body" --milestone "$ms_title" 2>/dev/null)"
+  else
+    url="$(gh issue create --repo "$repo" --title "$title" --body "$body" 2>/dev/null)"
+  fi
+  if [ -n "$url" ]; then
+    echo "ISSUE $url"
+    if [ -z "$ms_title" ]; then
+      echo "NO-MILESTONE $url has no milestone yet. Attach it when the plan's milestone is created: gh issue edit $url --milestone \"<title>\""
+    fi
+    exit 0
+  fi
 fi
 
 # 3. Local file ------------------------------------------------------------

@@ -55,9 +55,11 @@ It starts with a **preflight** that confirms it can actually reach your code and
 ## 3. Record to GitHub (the audit surface)
 Build a markdown body (final plan, rival options + scores, overruled dissent, ideal-vs-doable gap, open risks, reality-check verdict) and write it to a temp file. Then run the bundled helper, which handles every fallback for you:
 
-    bash /Users/danielhankins-wright/.claude/skills/plan-council/post-discussion.sh "<owner/name>" "<title>" <body-file>
+    bash ~/.claude/skills/plan-council/post-discussion.sh "<owner/name>" "<title>" <body-file> "<milestone title, optional>"
 
 It tries a GitHub Discussion first, then a tracking issue, then a local `PLAN-<slug>.md`, and prints one line: `DISCUSSION <url>`, `ISSUE <url>`, or `FILE <path>`. Tell the user which happened (and, if it fell back, that enabling Discussions on the repo would give a nicer home next time).
+
+If it fell back to an issue and also printed `NO-MILESTONE <url> ...`, that issue has no milestone yet, because the plan's milestone does not exist until step 5. **Carry that URL to step 5 and attach it there.** Do not leave it orphaned.
 
 ## 4. Present + decide  👤
 Open with any CAVEATS before the summary — the user must never mistake a partly-checked plan for a clean one:
@@ -75,7 +77,10 @@ Once the plan is approved, offer to turn it into a GitHub milestone with one iss
        DRY_RUN=1 bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>   # preview
        bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>             # create
 
-3. Relay the `MILESTONE <url>` it prints. Same helper backs `/plan-lite` and `/milestone`, so milestones look identical across all three paths.
+3. Relay the milestone URL it prints. Same helper backs `/plan-lite` and `/milestone`, so milestones look identical across all three paths. The helper reuses an existing milestone with that title rather than creating a second one, and stops to ask if the title closely resembles an open milestone.
+4. If step 3 printed `NO-MILESTONE <url>`, adopt that tracking issue into the milestone now, so the plan record lives with the work it describes:
+
+       gh issue edit <url> --milestone "<milestone title>"
 
 ## Revise mode — fold in the user's GitHub comments
 When the user has commented on the Discussion and wants the plan updated (e.g. "revise the plan-council plan from <discussion-url>"):

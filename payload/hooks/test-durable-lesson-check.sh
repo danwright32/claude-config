@@ -70,6 +70,31 @@ out2=$(run_hook "$(payload 'gh issue create -t second')" "$T")
 check "first create in window fires" fires "$out1"
 check "second create in window is silent" silent "$out2"
 
+# 7b. A help invocation creates nothing, so there is no issue to draw a lesson from.
+# This fired twice on 2026-07-29 for `gh issue create --help`.
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'gh issue create --help')" "$T")
+check "silent on --help" silent "$out"
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'gh issue create -h')" "$T")
+check "silent on -h" silent "$out"
+
+# 7c. The override belongs to the command it prefixes, not to the whole call. Reading
+# it across every segment lets a real create go unexamined.
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'SKIP_LESSON_CHECK=1 gh issue create -t skipped && gh issue create -t "real one" -b b')" "$T")
+check "override on one segment does not cover a later create" fires "$out"
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'SKIP_LESSON_CHECK=1 gh issue create -t skipped
+gh issue create -t "real one" -b b')" "$T")
+check "override on line 1 does not cover a create on line 2" fires "$out"
+
+# 7d. A create on a later LINE of a multi-line command is still a create.
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'echo preparing
+gh issue create -t "on line two" -b b')" "$T")
+check "fires on a create on a later line" fires "$out"
+
 # 8. Fails quiet (exit 0, no output) on malformed payload.
 T=$(mktemp -d)
 out=$(printf 'not json at all' | env TMPDIR="$T" CLAUDE_PROJECT_DIR="/fake/project" "$HOOK" 2>/dev/null); rc=$?

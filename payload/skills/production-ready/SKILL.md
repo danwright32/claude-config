@@ -49,15 +49,27 @@ Offer, via **AskUserQuestion**, to file the backlog as GitHub issues in the audi
        gh label create "severity:low"       --color 0E8A16 --description "Production-readiness: low"       2>/dev/null || true
        gh label create "production-readiness" --color 5319E7 --description "Found by /production-ready"    2>/dev/null || true
 
-2. File one issue per backlog item (group tightly-related items into one issue to avoid spam — especially `low` severity, which you may group by domain). Title = imperative summary; body = the gap, why it matters, the remediation direction, and the `path:line` evidence. Label with `production-readiness`, the matching `severity:*`, and the domain. **Never** apply any Claude/AI-attribution label.
+2. **Resolve the milestone BEFORE filing anything.** Every issue belongs to a milestone, and a gate blocks any `gh issue create` without one. Ask in the SAME AskUserQuestion as the filing approval: attach this backlog to an existing open milestone, or create one (a name like "Production readiness: <repo>" works). Read the open milestones first so the options are real:
+
+       gh api "repos/<owner>/<name>/milestones?state=open&per_page=100" --jq '.[] | "#\(.number) \(.title)"'
+
+   Then resolve it through the shared helper, which reuses a match, refuses to create a near duplicate, and only creates once the user has approved:
+
+       bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>"                      # reuse only
+       bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>" --create-approved    # after approval
+
+   Use the exact title it reports on the `MILESTONE-TITLE` line: `gh` matches milestones by name, so a case variant will not be found.
+
+3. File one issue per backlog item, each assigned to that milestone (group tightly-related items into one issue to avoid spam — especially `low` severity, which you may group by domain). Title = imperative summary; body = the gap, why it matters, the remediation direction, and the `path:line` evidence. Label with `production-readiness`, the matching `severity:*`, and the domain. **Never** apply any Claude/AI-attribution label.
 
        gh issue create --repo "<owner/name>" --title "<title>" --body "<body>" \
+         --milestone "<milestone title>" \
          --label "production-readiness" --label "severity:high"
 
-3. If `gh` is not installed/authenticated or the repo isn't resolvable, skip filing and tell the user — the saved report still captures everything.
+4. If `gh` is not installed/authenticated or the repo isn't resolvable, skip filing and tell the user — the saved report still captures everything.
 
-## 6. Offer a tracking milestone  👤
-Optionally offer (AskUserQuestion) to group the issues under a GitHub milestone via the shared helper:
+## 6. Note on grouping
+Milestone grouping now happens up front in step 5, not as an afterthought, so no issue is ever left unattached. If the audit backlog is large enough to deserve phases of its own, `~/.claude/skills/milestone/create-milestone.sh` still files a whole set in one call:
 
     DRY_RUN=1 bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>   # preview
     bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>             # create
