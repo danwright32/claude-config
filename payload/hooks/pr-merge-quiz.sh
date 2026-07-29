@@ -25,6 +25,12 @@
 # whose payload merely mentions "gh pr merge" (an echo, an issue comment) does not fire. That is
 # the command-vs-payload distinction check-closing-keyword.sh had to learn the hard way.
 #
+# What the quiz may ask (Dan's spec, 2026-07-29): only how the system behaves NOW that the change
+# has shipped, in the present tense, ideally as a concrete scenario. Questions about the old
+# behavior, before and after comparisons, and what the change fixed or why it was needed are out.
+# Dan already knows the problem he asked for; what he needs to hold is the state of the product
+# today. test-pr-merge-quiz.sh pins this into the emitted instruction so an edit cannot drop it.
+#
 # Guards:
 #   - CLAUDE_DETACHED_RUN set: a headless run has no human to quiz. Skip. (Same guard as
 #     session-reflection.sh.)
