@@ -33,6 +33,10 @@ transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/nul
 [ -n "$transcript" ] || exit 0
 [ -f "$transcript" ] || exit 0
 
+# Per-conversation kill switch: `touch <transcript>.skip-stop-hooks` silences
+# this hook for that one conversation only; delete the file to re-enable.
+[ -f "${transcript}.skip-stop-hooks" ] && exit 0
+
 # Did the latest turn (since the last genuine user message) use a MUTATING tool
 # (Edit/Write/Bash/Agent/...)? Chat-only and read-only Q&A turns -> skip, so the
 # reflection doesn't crowd out short question turns (shared helper, also used by

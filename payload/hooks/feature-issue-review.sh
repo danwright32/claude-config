@@ -24,6 +24,10 @@ stop_active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false')
 # stamp below (shared helper, also used by session-reflection.sh).
 transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 [ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
+
+# Per-conversation kill switch: `touch <transcript>.skip-stop-hooks` silences
+# this hook for that one conversation only; delete the file to re-enable.
+[ -f "${transcript}.skip-stop-hooks" ] && exit 0
 worked=$(python3 "$(dirname "${BASH_SOURCE[0]}")/turn-worked.py" "$transcript" 2>/dev/null)
 [ "$worked" = "yes" ] || exit 0
 
