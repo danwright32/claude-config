@@ -12,11 +12,14 @@
 #   claude-sync sync              # two-way: send local changes, then receive remote
 #   claude-sync watch             # foreground: sync on every change (needs fswatch)
 #   claude-sync status            # show what differs, no changes
+#   claude-sync next-lesson       # the next free lesson number, so none is picked by eye
+#   claude-sync check-lessons     # fail if two lessons share a number
 #   claude-sync install-autosync  # background: fswatch watcher + periodic receive-timer
 #   claude-sync help
 #
 # Env overrides (mainly for tests): CLAUDE_HOME, SYNC_REPO, SYNC_NO_GIT=1,
-#   SYNC_INTERVAL, SYNC_FSWATCH, SYNC_SKIP_SECRET_SCAN, SYNC_NO_NOTIFY
+#   SYNC_INTERVAL, SYNC_FSWATCH, SYNC_SKIP_SECRET_SCAN, SYNC_NO_NOTIFY,
+#   SYNC_SKIP_LESSON_CHECK=1 (publish a rule file despite a duplicate number)
 set -euo pipefail
 
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
@@ -102,6 +105,43 @@ top_files_in(){   # $1 = directory
   return 0
 }
 
+# The lesson numbers in a rule file are assigned by hand, so two Macs working the
+# same day both reach for the same one and neither can see the other's yet. The file
+# promises the numbering is stable for reference, so a duplicate quietly breaks every
+# reference to it. Seen 2026-07-29: six lessons claiming three numbers, plus an
+# earlier duplicate that had gone unnoticed for a day (#15).
+# Prints one line per duplicate, per file. Empty output means the numbering is sound.
+duplicate_lesson_numbers(){   # $1 = tree to inspect
+  local f line
+  for f in $(top_files_in "$1"); do
+    [ -f "$1/$f" ] || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf '%s: %s\n' "$f" "$line"
+    done < <(grep -oE '^- \*\*L[0-9]+\.' "$1/$f" 2>/dev/null \
+             | grep -oE 'L[0-9]+' | sort | uniq -c \
+             | awk '$1 > 1 { printf "%s used %s times\n", $2, $1 }')
+  done
+  return 0
+}
+
+# One past the highest number in use, never a gap: a skipped number was skipped
+# deliberately (the audit's L6 was reviewed and rejected), so reusing it would
+# resurrect a retired reference.
+next_lesson_number(){   # $1 = tree
+  local f highest=0 n
+  for f in $(top_files_in "$1"); do
+    [ -f "$1/$f" ] || continue
+    # The trailing "|| true" is load-bearing: under pipefail a grep that matches
+    # nothing fails the whole substitution, and an assignment that fails is fatal
+    # under set -e, so a rule file with no lessons in it aborted the command
+    # outright and printed nothing at all.
+    n="$(grep -oE '^- \*\*L[0-9]+\.' "$1/$f" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
+    if [ -n "$n" ] && [ "$n" -gt "$highest" ]; then highest="$n"; fi
+  done
+  printf 'L%s\n' "$((highest + 1))"
+}
+
 # copy local config -> repo payload (no git)
 stage_local_to_payload(){
   [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
@@ -131,11 +171,27 @@ PROT
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
     jq '{hooks}' "$CLAUDE_HOME/settings.json" | tok > "$PAYLOAD/settings.hooks.json"
   fi
+  # A rule file whose lesson numbers have collided is held back rather than
+  # published, so the broken numbering does not spread to the other Mac. Only that
+  # file waits: failing the whole send would stop hooks and skills moving between
+  # Macs, which is the wedge this tool has already been bitten by twice.
+  local dupfiles="" duplines=""
+  if [ "${SYNC_SKIP_LESSON_CHECK:-0}" != "1" ]; then
+    duplines="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
+    if [ -n "${duplines// }" ]; then
+      dupfiles="$(printf '%s\n' "$duplines" | cut -d: -f1 | sort -u)"
+      echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because the same lesson number is used twice, which silently breaks every reference to it: $(printf '%s' "$duplines" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number) and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
+      notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): duplicate lesson number"
+    fi
+  fi
   # top-level rule files, derived from CLAUDE.md's own imports, copied verbatim
   for f in $(top_files_in "$CLAUDE_HOME"); do
     case "
 $protected" in *"
 $f"*) continue ;; esac      # stale here; leave the repo's newer copy alone
+    case "
+$dupfiles" in *"
+$f"*) continue ;; esac      # numbering collision here; do not spread it
     [ -f "$CLAUDE_HOME/$f" ] && cp "$CLAUDE_HOME/$f" "$PAYLOAD/$f"
   done
   scan_secrets   # never let a credential reach the shared remote
@@ -347,6 +403,15 @@ $f
     fi
   fi
   verify_rule_imports
+  # A numbering collision can arrive with the payload, or be created here by the
+  # entry level merge above when both Macs happened to pick the same number. Either
+  # way it is in the file now, so say so at once: the L43 duplicate went unnoticed
+  # for a day because nothing ever looked (#15).
+  local applied_dups; applied_dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
+  if [ -n "${applied_dups// }" ]; then
+    echo "claude-sync: the same lesson number is now used twice on this Mac, which breaks every reference to it: $(printf '%s' "$applied_dups" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number). Until then that file is held back from the next send." >&2
+    notify "duplicate lesson number on this Mac"
+  fi
   # Remember which commit's payload is now actually on this Mac. Everything that
   # publishes upward compares against this, so it can tell "the user edited a
   # file" apart from "this Mac is simply behind".
@@ -1083,6 +1148,12 @@ case "$cmd" in
   apply-only) do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
+  next-lesson) next_lesson_number "$CLAUDE_HOME" ;;
+  check-lessons)
+    dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
+    if [ -n "${dups// }" ]; then die "duplicate lesson numbers: $(printf '%s' "$dups" | tr '\n' ';' | sed 's/;$//')"; fi
+    echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME"))"
+    ;;
   help|-h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, next-lesson, check-lessons, install-autosync, help)" ;;
 esac

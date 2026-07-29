@@ -1098,6 +1098,80 @@ check "#14 and it names the entry only you had" \
 check "#14 an unmergeable file never gets conflict markers" \
   "! grep -q '<<<<<<<' '$RMBH/LESSONS.md'"
 
+echo "== #15: duplicate lesson numbers must not be published or go unnoticed =="
+# Numbers are assigned by hand, so two Macs working the same day both reach for the
+# same one. On 2026-07-29 six lessons claimed three numbers, and a duplicate L43 had
+# already sat in the file for a day. The file's own header promises the numbering is
+# stable for reference, which a duplicate quietly breaks.
+LN="$WORK/lnrepo"; mkdir -p "$LN/payload"
+LNH="$WORK/lnhome"; mkdir -p "$LNH/hooks"
+echo '{"hooks":{}}' > "$LNH/settings.json"
+echo '#!/bin/sh' > "$LNH/hooks/keep-syncing.sh"
+printf '# rules\n@LESSONS.md\n' > "$LNH/CLAUDE.md"
+printf '# Lessons\n\n- **L1. one.** body\n- **L2. two.** body\n' > "$LNH/LESSONS.md"
+out_ln_ok="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" push 2>&1)"; rc_ln_ok=$?
+check "#15 a clean lessons file publishes normally" "[ \"\$rc_ln_ok\" -eq 0 ] && grep -q 'L1. one' '$LN/payload/LESSONS.md'"
+
+# Now a duplicate number.
+printf -- '- **L2. two again.** a different lesson with the same number\n' >> "$LNH/LESSONS.md"
+out_ln_dup="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" push 2>&1)"
+check "#15 the duplicate is named, not silent"        "printf '%s' \"\$out_ln_dup\" | grep -q 'L2'"
+check "#15 the file it is in is named"                "printf '%s' \"\$out_ln_dup\" | grep -q 'LESSONS.md'"
+check "#15 the corrupt numbering is NOT published"    "! grep -q 'two again' '$LN/payload/LESSONS.md'"
+check "#15 the previously published copy is intact"   "grep -q 'L1. one' '$LN/payload/LESSONS.md'"
+# Blocking the whole sync over a numbering slip would stop hooks and skills moving
+# between Macs, which is the wedge this tool has been bitten by twice. Only the
+# affected file is held back.
+check "#15 everything else still publishes"           "[ -f '$LN/payload/hooks/keep-syncing.sh' ]"
+
+# The documented override still publishes it.
+SYNC_SKIP_LESSON_CHECK=1 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" push >/dev/null 2>&1
+check "#15 the override publishes it anyway"          "grep -q 'two again' '$LN/payload/LESSONS.md'"
+
+# The helper that stops a number being picked by eye. Next means one past the
+# highest, never a gap: a skipped number was skipped deliberately.
+printf '# Lessons\n\n- **L1. one.** body\n- **L2. two.** body\n- **L5. five.** body\n' > "$LNH/LESSONS.md"
+out_next="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" next-lesson 2>&1)"
+check "#15 next-lesson reports one past the highest"  "printf '%s' \"\$out_next\" | grep -q 'L6'"
+check "#15 next-lesson does not offer a gap"          "! printf '%s' \"\$out_next\" | grep -q 'L3'"
+
+# next-lesson must survive a rule file that contains no lessons at all: under
+# pipefail a grep matching nothing killed the whole command and printed nothing.
+printf '# just rules, no lessons here\n' > "$LNH/RTK.md"
+out_next2="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" next-lesson 2>&1)"; rc_next2=$?
+check "#15 next-lesson survives a file with no lessons" "[ \"\$rc_next2\" -eq 0 ] && printf '%s' \"\$out_next2\" | grep -q 'L6'"
+
+# The standalone check, usable as a gate before writing a lesson.
+out_chk_ok="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" check-lessons 2>&1)"; rc_chk_ok=$?
+check "#15 check-lessons passes on sound numbering" "[ \"\$rc_chk_ok\" -eq 0 ]"
+check "#15 check-lessons reports the next free number" "printf '%s' \"\$out_chk_ok\" | grep -q 'L6'"
+printf -- '- **L5. five again.** duplicate\n' >> "$LNH/LESSONS.md"
+out_chk_bad="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" check-lessons 2>&1)"; rc_chk_bad=$?
+check "#15 check-lessons fails on a duplicate" "[ \"\$rc_chk_bad\" -ne 0 ]"
+check "#15 and names the number involved"      "printf '%s' \"\$out_chk_bad\" | grep -q 'L5'"
+
+# A duplicate created by the #14 merge (both Macs choosing the same number) has to
+# surface at apply time too, since by then it is already in the file.
+LNM="$WORK/lnmbare.git"; git init -q --bare -b main "$LNM"
+LNMA="$WORK/lnmA"; git clone -q "$LNM" "$LNMA" 2>/dev/null
+cp "$SCRIPT" "$LNMA/claude-sync"
+mkdir -p "$LNMA/payload/hooks"; echo '#!/bin/sh' > "$LNMA/payload/hooks/x.sh"
+echo '{"hooks":{}}' > "$LNMA/payload/settings.hooks.json"
+printf '# rules\n@LESSONS.md\n' > "$LNMA/payload/CLAUDE.md"
+printf '# Lessons\n\n- **L1. one.** body\n' > "$LNMA/payload/LESSONS.md"
+git -C "$LNMA" checkout -q -b main 2>/dev/null || true
+git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$LNMA" push -q -u origin main
+LNMBH="$WORK/lnmhomeB"; mkdir -p "$LNMBH"; echo '{"hooks":{}}' > "$LNMBH/settings.json"
+LNMB="$WORK/lnmB"; git clone -q "$LNM" "$LNMB" 2>/dev/null
+CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" SYNC_NO_NOTIFY=1 bash "$LNMB/claude-sync" pull >/dev/null 2>&1
+# Both Macs independently write an L2.
+printf -- '- **L2. mine.** written on Mac B\n' >> "$LNMBH/LESSONS.md"
+printf -- '- **L2. theirs.** written on Mac A\n' >> "$LNMA/payload/LESSONS.md"
+git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds its L2" && git -C "$LNMA" push -q
+out_lnm="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" bash "$LNMB/claude-sync" pull 2>&1)"
+check "#15 the merge kept both lessons"               "grep -q 'L2. mine' '$LNMBH/LESSONS.md' && grep -q 'L2. theirs' '$LNMBH/LESSONS.md'"
+check "#15 and the collision it created is reported"  "printf '%s' \"\$out_lnm\" | grep -q 'L2'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
