@@ -118,6 +118,13 @@ needs "forbids what-did-this-fix"         'what problem'
 needs "forbids before-and-after"          'before the change'
 needs "prefers a concrete scenario"       'scenario'
 
+# A wrong answer means Dan expected something else, which is a product signal, not just a miss:
+# the correction stays in the present tense AND he gets offered the chance to change the behavior
+# to the one he picked. Dan's spec, 2026-07-29.
+needs "corrects without looking back"     'without describing the old behavior'
+needs "offers to change the behavior"     'change it to what he picked'
+needs "captures a change as an issue"     'open a GitHub issue'
+
 # The old framing that let past-tense questions in must be gone.
 if printf '%s' "$REASON" | grep -qF 'Test BEHAVIOR AND IMPACT'; then
   fail=$((fail+1))
