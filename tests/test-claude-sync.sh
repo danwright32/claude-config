@@ -947,6 +947,92 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/
 out_ns3="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
 check "a removed skill also earns the notice"    "printf '%s' \"\$out_ns3\" | grep -i 'new Claude Code session' | grep -q 'rs-added'"
 
+echo "== #13: an apply must not delete a hook registration this Mac has not sent yet =="
+# Seen for real on 2026-07-29 (and once before, during the send-wedge): the hooks
+# block was applied by REPLACING it wholesale, so a hook registered here since the
+# last send vanished, silently, while its script file was correctly held back. The
+# fix is a three-way merge against the fragment this Mac last applied: incoming
+# wins, locally added entries survive, and a deliberate removal on the other Mac is
+# still honored.
+HK="$WORK/hkbare.git"; git init -q --bare -b main "$HK"
+HKA="$WORK/hkrepoA"; git clone -q "$HK" "$HKA" 2>/dev/null
+cp "$SCRIPT" "$HKA/claude-sync"
+mkdir -p "$HKA/payload/hooks"; echo '#!/bin/sh' > "$HKA/payload/hooks/shared.sh"
+cat > "$HKA/payload/settings.hooks.json" <<'J'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"__CLAUDE_HOME__/hooks/shared.sh"}]}]}}
+J
+git -C "$HKA" checkout -q -b main 2>/dev/null || true
+git -C "$HKA" add -A && git -C "$HKA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$HKA" push -q -u origin main
+
+HKBH="$WORK/hkhomeB"; mkdir -p "$HKBH/hooks"
+echo '{"model":"opus","hooks":{}}' > "$HKBH/settings.json"
+HKB="$WORK/hkrepoB"; git clone -q "$HK" "$HKB" 2>/dev/null
+CLAUDE_HOME="$HKBH" SYNC_REPO="$HKB" SYNC_NO_NOTIFY=1 bash "$HKB/claude-sync" pull >/dev/null 2>&1
+check "#13 baseline: the shared hook arrived on Mac B" \
+  "jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test(\"shared.sh\"))' '$HKBH/settings.json' >/dev/null"
+
+# Mac B registers a brand new hook of its own and has NOT sent it yet.
+echo '#!/bin/sh' > "$HKBH/hooks/local-gate.sh"
+jqtmp="$WORK/hk-tmp.json"
+jq --arg c "$HKBH/hooks/local-gate.sh" \
+   '.hooks.PreToolUse[0].hooks += [{"type":"command","command":$c}]' \
+   "$HKBH/settings.json" > "$jqtmp" && mv "$jqtmp" "$HKBH/settings.json"
+check "#13 setup: Mac B has its own hook registered locally" \
+  "jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test(\"local-gate.sh\"))' '$HKBH/settings.json' >/dev/null"
+
+# Mac A publishes an unrelated payload change: real news, fragment untouched.
+echo '#!/bin/sh v2' > "$HKA/payload/hooks/shared.sh"
+git -C "$HKA" add -A && git -C "$HKA" -c user.name=t -c user.email=t@e commit -q -m "unrelated change" && git -C "$HKA" push -q
+out_hk1="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HKBH" SYNC_REPO="$HKB" bash "$HKB/claude-sync" pull 2>&1)"
+check "#13 an unrelated pull keeps the unsent local hook" \
+  "jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test(\"local-gate.sh\"))' '$HKBH/settings.json' >/dev/null"
+check "#13 that pull still delivered the payload change" \
+  "grep -q 'v2' '$HKBH/hooks/shared.sh'"
+check "#13 the shared hook is still registered too" \
+  "jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test(\"shared.sh\"))' '$HKBH/settings.json' >/dev/null"
+
+# Now a true collision: Mac A registers a hook of its own in the fragment.
+cat > "$HKA/payload/settings.hooks.json" <<'J'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"__CLAUDE_HOME__/hooks/shared.sh"},{"type":"command","command":"__CLAUDE_HOME__/hooks/from-mac-a.sh"}]}]}}
+J
+echo '#!/bin/sh' > "$HKA/payload/hooks/from-mac-a.sh"
+git -C "$HKA" add -A && git -C "$HKA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds a hook" && git -C "$HKA" push -q
+out_hk2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HKBH" SYNC_REPO="$HKB" bash "$HKB/claude-sync" pull 2>&1)"
+check "#13 both Macs' hooks coexist after the merge" \
+  "jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | (any(test(\"local-gate.sh\")) and any(test(\"from-mac-a.sh\")))' '$HKBH/settings.json' >/dev/null"
+check "#13 the summary names the hook that arrived" \
+  "printf '%s' \"\$out_hk2\" | grep -q 'from-mac-a.sh'"
+
+# A deliberate removal on Mac A must still be honored, not resurrected from here.
+cat > "$HKA/payload/settings.hooks.json" <<'J'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"__CLAUDE_HOME__/hooks/from-mac-a.sh"}]}]}}
+J
+git -C "$HKA" add -A && git -C "$HKA" -c user.name=t -c user.email=t@e commit -q -m "Mac A removes the shared hook" && git -C "$HKA" push -q
+out_hk3="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HKBH" SYNC_REPO="$HKB" bash "$HKB/claude-sync" pull 2>&1)"
+check "#13 a removal on the other Mac is honored" \
+  "! jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test(\"shared.sh\"))' '$HKBH/settings.json' >/dev/null"
+check "#13 the local hook still survives that removal" \
+  "jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test(\"local-gate.sh\"))' '$HKBH/settings.json' >/dev/null"
+check "#13 the summary names the hook that was removed" \
+  "printf '%s' \"\$out_hk3\" | grep -q 'shared.sh'"
+check "#13 machine-local settings are still untouched" \
+  "jq -e '.model==\"opus\"' '$HKBH/settings.json' >/dev/null"
+check "#13 no home-path token is left behind" \
+  "! grep -q '__CLAUDE_HOME__' '$HKBH/settings.json'"
+
+# Failure path: settings.json is not valid JSON, so the merge cannot run. It must
+# say so loudly and leave the file byte for byte alone, never half write it.
+HKC="$WORK/hkrepoC"; git clone -q "$HK" "$HKC" 2>/dev/null
+HKCH="$WORK/hkhomeC"; mkdir -p "$HKCH/hooks"
+printf '{ "hooks": { BROKEN' > "$HKCH/settings.json"
+before_bad="$(shasum "$HKCH/settings.json" | awk '{print $1}')"
+out_hkbad="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HKCH" SYNC_REPO="$HKC" bash "$HKC/claude-sync" pull 2>&1)"
+after_bad="$(shasum "$HKCH/settings.json" | awk '{print $1}')"
+check "#13 an unmergeable settings.json is left untouched" "[ '$before_bad' = '$after_bad' ]"
+check "#13 and it says so instead of failing silently" \
+  "printf '%s' \"\$out_hkbad\" | grep -q 'could not merge the hooks block'"
+check "#13 the rest of the pull still lands" "[ -f '$HKCH/hooks/from-mac-a.sh' ]"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

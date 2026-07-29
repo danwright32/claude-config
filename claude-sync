@@ -265,21 +265,77 @@ $f
     cp "$PAYLOAD/$f" "$CLAUDE_HOME/$f"
   done
   if [ -f "$PAYLOAD/settings.hooks.json" ]; then
-    local frag settings tmp
+    local frag settings tmp inc_h bas_h basefrag last added removed label
     settings="$CLAUDE_HOME/settings.json"
     [ -f "$settings" ] || echo '{}' > "$settings"
     frag="$(detok < "$PAYLOAD/settings.hooks.json")"
+    inc_h="$(printf '%s' "$frag" | jq -c '.hooks // {}' 2>/dev/null || echo '{}')"
+    # The hooks block used to be REPLACED wholesale, which silently unregistered a
+    # hook added here since the last send: the hook script itself was held back as
+    # locally ahead, but the line that activates it was not, so the hook shipped
+    # inert. Seen on 2026-07-29 and once before during the send-wedge (#13).
+    # So merge three ways instead. The base is the fragment this Mac last applied:
+    # without it there is no way to tell "the other Mac deliberately removed this"
+    # from "this Mac added it and has not sent it yet", so with no base we keep
+    # local entries rather than drop work.
+    bas_h='{}'
+    if have_git; then
+      last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
+      if [ -n "$last" ]; then
+        basefrag="$(git -C "$SYNC_REPO" show "$last:payload/settings.hooks.json" 2>/dev/null | detok || true)"
+        [ -n "$basefrag" ] && bas_h="$(printf '%s' "$basefrag" | jq -c '.hooks // {}' 2>/dev/null || echo '{}')"
+      fi
+    fi
     tmp="$(mktemp)"
-    jq --argjson frag "$frag" '.hooks = $frag.hooks' "$settings" > "$tmp"
-    # Only replace settings.json when the result actually differs. settings.json
-    # is a WatchPath; rewriting it on every sync would re-trigger the auto-sync
-    # job forever. A no-op sync must leave the file (and its mtime) untouched.
-    if cmp -s "$tmp" "$settings"; then
+    if ! jq --argjson inc "$inc_h" --argjson bas "$bas_h" '
+      def cmds($h): [ $h | to_entries[] | .value[]? | .hooks[]? | .command ];
+      . as $s
+      | cmds($inc) as $incC
+      | cmds($bas) as $basC
+      # Entries registered here that the shared repo has never seen: absent from
+      # what is arriving AND absent from what we last applied. Those are local
+      # additions. An entry present in the base but not arriving is a real
+      # removal on the other Mac, so it is allowed to disappear.
+      | [ (($s.hooks // {}) | to_entries[])
+          | .key as $k
+          | [ .value[]? | .hooks[]? | select( ([.command] - $incC - $basC) | length > 0 ) ]
+          | select(length > 0) | {key: $k, keep: .} ] as $keeps
+      | (reduce $keeps[] as $e ($inc;
+            if ((.[$e.key] // []) | length) > 0
+              then .[$e.key] = (.[$e.key] | (.[0].hooks = ((.[0].hooks // []) + $e.keep)))
+              else .[$e.key] = [ {hooks: $e.keep} ]
+            end)) as $merged
+      | $s | .hooks = $merged
+    ' "$settings" > "$tmp" 2>/dev/null; then
+      # Fail loud and change nothing: a half-written hooks block is worse than an
+      # unchanged one, and a silent skip would leave hooks quietly out of date.
       rm -f "$tmp"
-    else
-      cp "$settings" "$settings.syncbak"
-      mv "$tmp" "$settings"
-      record_applied updated "settings.json (hooks section)"
+      echo "claude-sync: could not merge the hooks block into settings.json, so it was left exactly as it was and your hooks may now be out of date. That usually means settings.json is not valid JSON: check with 'jq . $settings', fix it, then re-run the pull." >&2
+      [ -t 2 ] || notify "hooks block could not be merged into settings.json"
+      tmp=""
+    fi
+    if [ -n "$tmp" ]; then
+      # Only replace settings.json when the result actually differs. settings.json
+      # is a WatchPath; rewriting it on every sync would re-trigger the auto-sync
+      # job forever. A no-op sync must leave the file (and its mtime) untouched.
+      if cmp -s "$tmp" "$settings"; then
+        rm -f "$tmp"
+      else
+        # Name the hooks that came and went. "updated settings.json" alone gave no
+        # way to notice that a registration had just disappeared.
+        added="$(jq -rn --argjson inc "$inc_h" --argjson bas "$bas_h" '
+          def cmds($h): [ $h | to_entries[] | .value[]? | .hooks[]? | .command ];
+          (cmds($inc) - cmds($bas)) | map(split("/") | last) | unique | join(", ")' 2>/dev/null || true)"
+        removed="$(jq -rn --argjson inc "$inc_h" --argjson bas "$bas_h" '
+          def cmds($h): [ $h | to_entries[] | .value[]? | .hooks[]? | .command ];
+          (cmds($bas) - cmds($inc)) | map(split("/") | last) | unique | join(", ")' 2>/dev/null || true)"
+        label="settings.json (hooks section)"
+        [ -n "$added" ] && label="$label, registered: $added"
+        [ -n "$removed" ] && label="$label, unregistered: $removed"
+        cp "$settings" "$settings.syncbak"
+        mv "$tmp" "$settings"
+        record_applied updated "$label"
+      fi
     fi
   fi
   verify_rule_imports
