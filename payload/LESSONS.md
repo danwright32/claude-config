@@ -63,6 +63,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   silently erases the other's failure, so the alert that depends on it can never reach
   its threshold and the condition it watches becomes unreportable; give each check its
   own counter and judge it against its own cadence. (slate#1150)
+- **L47. A batch that partly fails must record the attempt on the items it failed, not
+  only on the ones it completed.** An item left with no trace is indistinguishable from
+  one never attempted, so the work is silently selected and paid for again, and the
+  partial result reports as a clean run. (overture#1724)
 
 ## State and identity
 
