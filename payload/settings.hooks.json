@@ -31,6 +31,12 @@
             "if": "Bash(gh pr merge*)",
             "timeout": 30,
             "statusMessage": "Verifying the PR is green before merging"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/require-milestone-on-issue.sh",
+            "timeout": 10,
+            "statusMessage": "Checking the new issue names a milestone"
           }
         ]
       }
