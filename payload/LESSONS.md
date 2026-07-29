@@ -222,3 +222,8 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L39. One timezone, one date helper.** Compute every business date in one explicitly
   chosen zone through one shared helper, never the host clock's default; test month,
   DST, and midnight boundaries with a pinned clock. (15 issues, 5 repos)
+- **L51. A time based threshold is only as timely as the schedule that evaluates it.**
+  When you choose a cutoff, deadline, or staleness window, check the cadence of the job
+  or build that computes it and confirm a run actually lands soon after the boundary, or
+  the condition stays invisible until the next run.
+  (project-enrollment-tracker#903)
