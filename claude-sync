@@ -24,6 +24,7 @@ SYNC_REPO="${SYNC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 PAYLOAD="$SYNC_REPO/payload"
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
+MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
 
 # Skills that the plugins install & manage — excluded so the repo stays clean
 # and plugin updates don't create churn. Edit this list if you install one of
@@ -208,12 +209,16 @@ record_rsync(){
 apply_payload_to_local(){
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
-  preserve_local_conflicts   # before anything is overwritten below
+  merge_rule_files           # entry level merge first: what merges is no conflict
+  preserve_local_conflicts   # then whatever genuinely clashed, before it is overwritten
   # Hold back local edits the repo has not seen (see locally_ahead_paths): the
   # payload's copy of them is exactly what we last applied, so writing it back
   # would be a pure revert. During `sync` this list is empty by construction,
   # because stage_local_to_payload already mirrored these edits into the payload.
-  local keep; keep="$(locally_ahead_paths)"
+  # A file merged just above is held back the same way, so the apply does not
+  # overwrite the merge, and the next send publishes it to the other Mac.
+  local ahead; ahead="$(locally_ahead_paths)"
+  local keep; keep="$ahead${MERGED_RULE_FILES:-}"
   # Explicit template, not a bare mktemp: BSD mktemp ignores TMPDIR unless the
   # template says so, which left the tests unable to see this file at all.
   APPLIED_LOG="$(mktemp "${TMPDIR:-/tmp}/claude-sync-applied.XXXXXX")"
@@ -235,8 +240,11 @@ $keep
 KEEP
     rsync -aic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$PAYLOAD/$d/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
   done
-  if [ -n "${keep// }" ]; then
-    local keeplist; keeplist="$(printf '%s' "$keep" | tr '\n' ' ')"
+  # Reported from $ahead, not $keep: a merged rule file is held back too, but it
+  # already had its own clearer "these were MERGED" line and listing it again here
+  # would read as two different things happening to the same file.
+  if [ -n "${ahead// }" ]; then
+    local keeplist; keeplist="$(printf '%s' "$ahead" | tr '\n' ' ')"
     echo "claude-sync: kept local edits the shared repo has not seen yet, instead of reverting them; they go up on the next send: ${keeplist}" >&2
     notify "kept unsent local edits: ${keeplist}"
   fi
@@ -434,14 +442,110 @@ $tf
 # whichever copy is wanted, it still exists. Suffixed per host so two Macs never
 # collide, and excluded from the mirror so the copy stays local.
 conflict_suffix(){ printf '.conflict-%s\n' "${SYNC_HOSTNAME:-$(hostname -s)}"; }
+
+# The top-level rule files are append-only lists: a lesson, a rule, one entry per
+# item. When both Macs add to one, the two sides touch different lines, so there is
+# a real merge to be had and no reason for either copy to win. Picking a winner cost
+# two lessons on 2026-07-29 that existed nowhere else (#14).
+#
+# So merge three ways first, against the copy this Mac last applied. What merges
+# cleanly is not a conflict at all: the merged file is written here and held back
+# from the apply, and the next send publishes it so the other Mac gets both sides.
+# Only a genuine same-line clash falls through to preserve_local_conflicts below.
+# Sets MERGED_RULE_FILES (newline separated) for the caller.
+#
+# Both Macs appending a DIFFERENT entry to the end of the same list is the common
+# case, and to a three-way merge that is one conflict at one spot, because both
+# sides inserted where there was nothing. Those hunks are safe to settle by keeping
+# both sides. A hunk whose base side is NOT empty means the two Macs rewrote the
+# same existing text, which no rule can settle, so the whole file is left to the
+# conflict path rather than guessing.
+# Reads a --diff3 merge on stdin, writes the resolved file, exits non-zero if any
+# hunk was a real clash.
+resolve_add_add_hunks(){
+  awk '
+    BEGIN { state = 0; clash = 0; no = 0; nb = 0; nt = 0 }
+    /^<<<<<<< / { state = 1; no = 0; nb = 0; nt = 0; next }
+    /^\|\|\|\|\|\|\| / { if (state == 1) { state = 2; next } }
+    /^=======$/ { if (state == 2 || state == 1) { state = 3; next } }
+    /^>>>>>>> / {
+      if (state == 3) {
+        if (nb > 0) { clash = 1 }            # both sides changed existing text
+        else {
+          for (i = 1; i <= nt; i++) print theirs[i]   # incoming first, ours after
+          for (i = 1; i <= no; i++) print ours[i]
+        }
+        state = 0; next
+      }
+    }
+    { if (state == 1) { ours[++no] = $0 }
+      else if (state == 2) { base[++nb] = $0 }
+      else if (state == 3) { theirs[++nt] = $0 }
+      else print }
+    END { exit (clash ? 1 : 0) }
+  '
+}
+
+merge_rule_files(){
+  local last p local_f tmpb tmpm tmpr reported="" resolved
+  MERGED_RULE_FILES=""
+  have_git || return 0
+  last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
+  [ -n "$last" ] || return 0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in */*) continue ;; esac   # top-level rule files only
+    local_f="$CLAUDE_HOME/$p"
+    [ -f "$local_f" ] && [ -f "$PAYLOAD/$p" ] || continue
+    tmpb="$(mktemp)"
+    if ! git -C "$SYNC_REPO" show "$last:payload/$p" > "$tmpb" 2>/dev/null; then rm -f "$tmpb"; continue; fi
+    # nothing of ours to merge, or already exactly what is arriving
+    if cmp -s "$tmpb" "$local_f" || cmp -s "$PAYLOAD/$p" "$local_f"; then rm -f "$tmpb"; continue; fi
+    tmpm="$(mktemp)"; tmpr="$(mktemp)"; resolved=""
+    if git merge-file --quiet -p "$local_f" "$tmpb" "$PAYLOAD/$p" > "$tmpm" 2>/dev/null; then
+      cp "$tmpm" "$tmpr"; resolved=1
+    else
+      git merge-file --diff3 -p "$local_f" "$tmpb" "$PAYLOAD/$p" > "$tmpm" 2>/dev/null || true
+      if [ -s "$tmpm" ] && resolve_add_add_hunks < "$tmpm" > "$tmpr" 2>/dev/null; then resolved=1; fi
+    fi
+    # Never write a file still carrying conflict markers: these load as rules.
+    if [ -n "$resolved" ] && [ -s "$tmpr" ] && ! grep -q '^<<<<<<< \|^>>>>>>> ' "$tmpr"; then
+      cp "$local_f" "$local_f.syncbak"
+      cp "$tmpr" "$local_f"
+      MERGED_RULE_FILES="$MERGED_RULE_FILES
+$p"
+      reported="$reported$p "
+    fi
+    rm -f "$tmpb" "$tmpm" "$tmpr"
+  done < <(unapplied_paths)
+  if [ -n "${reported// }" ]; then
+    echo "claude-sync: both Macs had edited these rule files, so their entries were MERGED and nothing was dropped (your previous copy is beside them as .syncbak): ${reported}" >&2
+    notify "merged rule files: ${reported}"
+  fi
+  return 0
+}
+
+# Entry labels present in the first file but not the second, where an entry is a
+# self naming list item ("- **L47. ...**"). Naming only the FILE, as this used to,
+# reads as resolved when a lesson that existed nowhere else has just left it.
+local_only_entries(){   # $1 = ours  $2 = theirs
+  comm -23 \
+    <(grep -oE '^- \*\*[^.*]+\.' "$1" 2>/dev/null | sed 's/^- \*\*//; s/\.$//' | sort -u) \
+    <(grep -oE '^- \*\*[^.*]+\.' "$2" 2>/dev/null | sed 's/^- \*\*//; s/\.$//' | sort -u) \
+    2>/dev/null | tr '\n' ' '
+}
+
 preserve_local_conflicts(){
-  local last p local_f sfx saved=""
+  local last p local_f sfx saved="" detail n
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
   sfx="$(conflict_suffix)"
   while IFS= read -r p; do
     [ -n "$p" ] || continue
+    # merged above, so both sides are already in the file: not a conflict
+    case "${MERGED_RULE_FILES:-}" in *"
+$p"*) continue ;; esac
     local_f="$CLAUDE_HOME/$p"
     [ -f "$local_f" ] || continue
     # unchanged here since our last apply: nothing of ours to lose
@@ -449,10 +553,19 @@ preserve_local_conflicts(){
     # already identical to what is arriving: not a conflict either
     if [ -f "$PAYLOAD/$p" ] && cmp -s "$PAYLOAD/$p" "$local_f"; then continue; fi
     cp "$local_f" "$local_f$sfx"
-    saved+="$p "
+    # Say what is actually at stake in this file, not just its name.
+    detail=""
+    if [ -f "$PAYLOAD/$p" ]; then
+      detail="$(local_only_entries "$local_f" "$PAYLOAD/$p")"
+      if [ -z "${detail// }" ]; then
+        n="$(comm -23 <(sort -u "$local_f") <(sort -u "$PAYLOAD/$p") 2>/dev/null | wc -l | tr -d ' ')"
+        [ "${n:-0}" -gt 0 ] && detail="$n lines"
+      fi
+    fi
+    if [ -n "${detail// }" ]; then saved+="$p [only in yours: ${detail% }] "; else saved+="$p "; fi
   done < <(unapplied_paths)
   [ -z "${saved// }" ] && return 0
-  echo "claude-sync: both Macs changed these files, so the other Mac's version was applied and YOUR version was kept next to it with the suffix $sfx: ${saved}" >&2
+  echo "claude-sync: both Macs changed these files and they could NOT be merged automatically, so the other Mac's version was applied and YOUR version was kept next to it with the suffix $sfx: ${saved}" >&2
   notify "conflict kept as *$sfx: ${saved}"
   return 0
 }

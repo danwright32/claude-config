@@ -791,15 +791,20 @@ check "the next send publishes the lesson"      "grep -q MY-NEW-LESSON '$TFB/pay
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFAH" SYNC_REPO="$TFA" bash "$SCRIPT" sync >/dev/null 2>&1
 check "the lesson round-trips to the other Mac" "grep -q MY-NEW-LESSON '$TFAH/LESSONS.md'"
 # Control: when the repo HAS changed the file since this Mac last applied, the
-# incoming version still wins, and the local copy is kept beside it rather than
-# discarded. Keeping local edits must not become a way to ignore the other Mac.
+# other Mac's work must still arrive. It must not be possible to ignore the other
+# Mac by editing locally.
+# Superseded by #14: this used to assert that the incoming copy WON and the local
+# copy was set aside, which is the loss #14 exists to stop. Both Macs appending a
+# different entry is a merge, not a conflict, so both entries must now end up in
+# the one file that sessions actually load.
 printf -- '- L3. FROM-MAC-A\n' >> "$TFAH/LESSONS.md"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFAH" SYNC_REPO="$TFA" bash "$SCRIPT" sync >/dev/null 2>&1
 printf -- '- L4. FROM-MAC-B-SAME-TIME\n' >> "$TFBH/LESSONS.md"
 out_tfc="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" pull 2>&1)"
-check "the other Mac's version is applied"      "grep -q FROM-MAC-A '$TFBH/LESSONS.md'"
-check "the local version is kept beside it"     "grep -rq FROM-MAC-B-SAME-TIME '$TFBH/'"
-check "and the conflict is reported"            "printf '%s' \"\$out_tfc\" | grep -qi 'both Macs changed'"
+check "the other Mac's entry arrives"           "grep -q FROM-MAC-A '$TFBH/LESSONS.md'"
+check "this Mac's entry is still in the file"   "grep -q FROM-MAC-B-SAME-TIME '$TFBH/LESSONS.md'"
+check "so no conflict copy was needed"          "! ls '$TFBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
+check "and the merge is reported"               "printf '%s' \"\$out_tfc\" | grep -qi 'MERGED'"
 
 echo "== a commit made outside send/sync must not wedge the watcher (#12) =="
 # 2026-07-28: a session edited claude-sync itself and committed with plain git.
@@ -1032,6 +1037,66 @@ check "#13 an unmergeable settings.json is left untouched" "[ '$before_bad' = '$
 check "#13 and it says so instead of failing silently" \
   "printf '%s' \"\$out_hkbad\" | grep -q 'could not merge the hooks block'"
 check "#13 the rest of the pull still lands" "[ -f '$HKCH/hooks/from-mac-a.sh' ]"
+
+echo "== #14: rule files merge entry by entry instead of one Mac's copy winning =="
+# Seen for real on 2026-07-29: both Macs had appended lessons, so the conflict path
+# applied the other Mac's whole LESSONS.md and set this Mac's aside with a suffix.
+# Two lessons that existed nowhere else vanished from the file every session loads,
+# and the warning named the file but not the lessons. These are append-only lists,
+# so the two sides almost always touch different lines and a real three-way merge
+# keeps both.
+RM="$WORK/rmbare.git"; git init -q --bare -b main "$RM"
+RMA="$WORK/rmrepoA"; git clone -q "$RM" "$RMA" 2>/dev/null
+cp "$SCRIPT" "$RMA/claude-sync"
+mkdir -p "$RMA/payload/hooks"; echo '#!/bin/sh' > "$RMA/payload/hooks/x.sh"
+echo '{"hooks":{}}' > "$RMA/payload/settings.hooks.json"
+printf '# rules\n@LESSONS.md\n' > "$RMA/payload/CLAUDE.md"
+printf '# Lessons\n\n- **L1. one.** body one\n- **L2. two.** body two\n' > "$RMA/payload/LESSONS.md"
+git -C "$RMA" checkout -q -b main 2>/dev/null || true
+git -C "$RMA" add -A && git -C "$RMA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$RMA" push -q -u origin main
+
+RMBH="$WORK/rmhomeB"; mkdir -p "$RMBH"; echo '{"hooks":{}}' > "$RMBH/settings.json"
+RMB="$WORK/rmrepoB"; git clone -q "$RM" "$RMB" 2>/dev/null
+CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" SYNC_NO_NOTIFY=1 bash "$RMB/claude-sync" pull >/dev/null 2>&1
+check "#14 baseline: lessons arrived on Mac B" "grep -q 'L1. one' '$RMBH/LESSONS.md'"
+
+# Both Macs append a DIFFERENT lesson, neither knowing about the other.
+printf -- '- **L3. three.** written only on Mac B\n' >> "$RMBH/LESSONS.md"
+printf -- '- **L4. four.** written only on Mac A\n' >> "$RMA/payload/LESSONS.md"
+git -C "$RMA" add -A && git -C "$RMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds L4" && git -C "$RMA" push -q
+out_rm1="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" bash "$RMB/claude-sync" pull 2>&1)"
+check "#14 the other Mac's lesson arrives"        "grep -q 'L4. four' '$RMBH/LESSONS.md'"
+check "#14 this Mac's unsent lesson survives"     "grep -q 'L3. three' '$RMBH/LESSONS.md'"
+check "#14 the original lessons are still there"  "grep -q 'L1. one' '$RMBH/LESSONS.md' && grep -q 'L2. two' '$RMBH/LESSONS.md'"
+check "#14 no conflict copy is left behind"       "[ ! -e '$RMBH/LESSONS.md.conflict-'* ] 2>/dev/null || ! ls '$RMBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
+check "#14 the merge is reported, not silent"     "printf '%s' \"\$out_rm1\" | grep -qi 'merged'"
+check "#14 the report names the file merged"      "printf '%s' \"\$out_rm1\" | grep -q 'LESSONS.md'"
+check "#14 no conflict markers reach the file"    "! grep -q '<<<<<<<' '$RMBH/LESSONS.md'"
+
+# The merged file must then reach the other Mac, or the lesson is still stranded.
+CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" SYNC_NO_NOTIFY=1 bash "$RMB/claude-sync" push >/dev/null 2>&1
+check "#14 the merged result is published upward" "grep -q 'L3. three' '$RMB/payload/LESSONS.md'"
+check "#14 and it still carries the other side"   "grep -q 'L4. four' '$RMB/payload/LESSONS.md'"
+
+# A genuine clash is both Macs REWRITING the same existing entry, not both adding
+# at the end. That cannot be settled by any rule, so the old behavior stands, but
+# the entries that exist ONLY on this Mac have to be named, not just the filename.
+git -C "$RMB" pull -q 2>/dev/null
+CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" SYNC_NO_NOTIFY=1 bash "$RMB/claude-sync" pull >/dev/null 2>&1
+git -C "$RMA" pull -q --no-rebase 2>/dev/null
+# Mac A rewrites L1's wording.
+sed -i '' 's/- \*\*L1\. one\.\*\* body one/- **L1. one.** rewritten by Mac A/' "$RMA/payload/LESSONS.md"
+git -C "$RMA" add -A && git -C "$RMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A rewrites L1" && git -C "$RMA" push -q
+# Mac B rewrites the SAME line differently, and also adds an entry of its own.
+sed -i '' 's/- \*\*L1\. one\.\*\* body one/- **L1. one.** rewritten by Mac B/' "$RMBH/LESSONS.md"
+printf -- '- **L6. six.** only on Mac B\n' >> "$RMBH/LESSONS.md"
+out_rm2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" bash "$RMB/claude-sync" pull 2>&1)"
+check "#14 an unmergeable file still keeps a copy of yours" \
+  "ls '$RMBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
+check "#14 and it names the entry only you had" \
+  "printf '%s' \"\$out_rm2\" | grep -q 'L6'"
+check "#14 an unmergeable file never gets conflict markers" \
+  "! grep -q '<<<<<<<' '$RMBH/LESSONS.md'"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
