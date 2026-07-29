@@ -22,7 +22,7 @@ This brings the shared repo's config onto THIS Mac. It never touches the memory 
 3. If it fails, surface the error verbatim and the likely cause. Common ones:
    - merge/conflict in the sync repo → tell the user, do not force anything.
    - secret-scan block → a credential was detected; report it, do not bypass.
-4. If config files changed, note that some Claude Code changes (hooks, settings) may need a new session to take full effect.
+4. If the script prints a "Start a new Claude Code session to pick these up" line, relay it and name those files. Do NOT invent your own version of this: the script decides which received files a running session cannot see (the rule files, and skills/agents/commands that were added or removed), and it stays silent when everything pulled is already live. Hook scripts are re-read from disk each time they fire, so a pull that only changed hooks needs no restart; saying otherwise sends the user to a new session for nothing.
 
 ## Notes
 
