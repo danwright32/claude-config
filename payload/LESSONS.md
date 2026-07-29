@@ -147,6 +147,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   tooltip.** An interactive element styled like static text ships as an invisible feature, so the
   person it was built for asks for it while looking straight at it, and no test can tell the two
   apart. (overture#1742)
+- **L54. A guard may refuse only what the system genuinely cannot do; when the work is
+  possible, confirm it instead of blocking it.** A ceiling meant to catch an accident cannot tell
+  an accident from a deliberate choice, so it only ever stops the person who meant it, and it
+  forces them to hand-do the batching or chunking the machinery already performs.
+  (overture#1765)
 
 ## External systems
 
