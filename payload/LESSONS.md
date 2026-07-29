@@ -78,6 +78,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   only on the ones it completed.** An item left with no trace is indistinguishable from
   one never attempted, so the work is silently selected and paid for again, and the
   partial result reports as a clean run. (overture#1724)
+- **L50. A value parsed from storage or input must never feed a comparison
+  directly.** A failed parse yields NaN or an invalid value that compares false
+  against every threshold, so the check silently lands on the healthy or
+  permissive side with no error ever raised. Parse through one shared helper that
+  returns a value or null, and map null to the fail-safe side at each call site.
+  (slate#1169, slate#1171)
 
 ## State and identity
 
