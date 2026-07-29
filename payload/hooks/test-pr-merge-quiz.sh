@@ -92,6 +92,40 @@ raw "a malformed json payload"       skip 'not json at all'
 raw "a payload with no command"      skip '{"tool_input":{},"cwd":"/tmp"}'
 raw "an empty payload"               skip ''
 
+# --- The instruction itself: the quiz must ask ONLY about how things behave now, never about the
+#     old behavior or what the change fixed. Dan's spec (2026-07-29). The shell cannot check the
+#     questions Claude ends up asking, so what it CAN pin is that the instruction it hands Claude
+#     actually carries the constraint. Without these, a future edit could quietly drop it. ---
+instruction() {
+  printf '%s' '{"tool_input": {"command": "gh pr merge 42"}, "cwd": "/tmp"}' | "$HOOK" 2>/dev/null
+}
+REASON="$(instruction)"
+
+needs() {
+  local desc="$1" phrase="$2"
+  if printf '%s' "$REASON" | grep -qF "$phrase"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    echo "FAIL: instruction $desc (missing: $phrase)"
+  fi
+}
+
+needs "demands current behavior"          'current behavior'
+needs "demands the present tense"         'present tense'
+needs "forbids the old behavior"          'used to'
+needs "forbids what-did-this-fix"         'what problem'
+needs "forbids before-and-after"          'before the change'
+needs "prefers a concrete scenario"       'scenario'
+
+# The old framing that let past-tense questions in must be gone.
+if printf '%s' "$REASON" | grep -qF 'Test BEHAVIOR AND IMPACT'; then
+  fail=$((fail+1))
+  echo "FAIL: instruction still carries the old open-ended behavior-and-impact framing"
+else
+  pass=$((pass+1))
+fi
+
 echo
 echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]
