@@ -26,6 +26,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   case that cannot occur, so it passes forever while protecting nothing, and the
   fabrication is invisible to every reviewer who does not query the real data.
   (overture#1719)
+- **L52. A test whose only outside dependency is a stub you wrote can only confirm your
+  own assumption about the real interface.** Read the real contract in the same change
+  that stubs it (its help output, its API docs, one live read only call), because a fake
+  will happily accept the wrong identifier, field, or shape and stay green.
+  (2026-07-29, milestone gate: 128 passing tests still had a milestone passed by number
+  to a command that matches only by name)
 
 ## Data safety
 
