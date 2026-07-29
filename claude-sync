@@ -591,6 +591,56 @@ restart_watch_daemon_if_installed(){
   fi
 }
 
+# Which of the received paths a session that is ALREADY running will keep
+# ignoring. Claude Code reads the rule files (CLAUDE.md and its @imports) once, at
+# session start, and builds its list of available skills/agents/commands then too,
+# so those changes reach only the NEXT session. Hook scripts are deliberately NOT
+# listed: Claude Code re-reads the script from disk every time the hook fires, and
+# picks up the hooks block of settings.json with its own file watcher, so both are
+# already live. Naming them would turn this into a line that prints on nearly every
+# pull, and a notice people scroll past protects nobody.
+# Reads the applied list (kind<TAB>path) on stdin, prints one name per line.
+needs_new_session(){
+  local kind name out=""
+  while IFS=$'\t' read -r kind name; do
+    [ -n "$name" ] || continue
+    case "$name" in
+      settings.json*) continue ;;
+      skills/*|agents/*|commands/*)
+        # Only gaining or losing one changes what the running session can reach.
+        # An edit to one already in its list is re-read when it is next invoked.
+        [ "$kind" = added ] || [ "$kind" = removed ] || continue
+        # A skill is a directory of files; report the skill, not each file in it.
+        case "$name" in skills/*) name="${name#skills/}"; name="skills/${name%%/*}" ;; esac
+        ;;
+      # hooks/ lands here, and so does anything else living in a subtree: none of
+      # it is read at session start, so a running session is already using it.
+      */*) continue ;;
+    esac
+    out+="$name
+"
+  done
+  printf '%s' "$out" | sort -u | grep . || true
+  return 0
+}
+
+# Print the notice for those paths, if any. Capped like the change list: the point
+# is to name what is stale, not to reprint a first pull's entire config.
+NOTICE_MAX=6
+print_new_session_notice(){   # $1 = applied list (kind<TAB>path per line)
+  local names n shown
+  names="$(printf '%s\n' "$1" | needs_new_session)"
+  [ -n "${names// }" ] || return 0
+  n="$(printf '%s' "$names" | grep -c . || true)"
+  shown="$(printf '%s' "$names" | head -"$NOTICE_MAX" | tr '\n' ' ')"
+  shown="${shown% }"
+  [ "$n" -gt "$NOTICE_MAX" ] && shown="${shown} and $((n - NOTICE_MAX)) more"
+  # Names last: the reader needs the instruction first, and putting the list at
+  # the end keeps the sentence intact however many names it carries.
+  echo "Start a new Claude Code session to pick these up (a session already running keeps the copy it loaded at startup): ${shown}"
+  return 0
+}
+
 # Summarize what the apply actually wrote on this Mac, so "it worked" is visible
 # instead of implied. Built from the recorded writes, never from the repo's commit
 # range: the range describes the shared repo, and a file can be missing here while
@@ -608,6 +658,7 @@ summarize_applied(){   # $1 pre-pull commit  $2 post-pull commit (for the first-
   # A first pull writes the whole config; naming every file is noise, not proof.
   if [ -n "$2" ] && [ -z "$1" ]; then
     echo "Received the shared config (first pull into this clone): $n file(s) written."
+    print_new_session_notice "$list"
     return 0
   fi
   echo "Received changes from the shared repo:"
@@ -615,6 +666,7 @@ summarize_applied(){   # $1 pre-pull commit  $2 post-pull commit (for the first-
     printf '  %-8s %s\n' "$kind" "$name"
   done
   if [ "$n" -gt "$SUMMARY_MAX" ]; then echo "  and $((n - SUMMARY_MAX)) more"; fi
+  print_new_session_notice "$list"
   return 0
 }
 

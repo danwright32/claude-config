@@ -898,6 +898,55 @@ check "a real remote change still blocks the send" "[ ! -f '$HCR2/payload/hooks/
 check "it makes no commit in that state"           "[ \"\$(git -C '$HCR2' rev-list --count HEAD)\" = \"\$hc2_commits\" ]"
 check "and still says why it skipped"              "printf '%s' \"\$out_hcb\" | grep -qi 'not applied'"
 
+echo "== a pull says which received files only take effect in a NEW session =="
+# Claude Code reads the rule files (CLAUDE.md and its @imports) once, at session
+# start, and builds its list of available skills/agents/commands then too. So a
+# pull can land a rule change or a brand-new skill that every already-running
+# session keeps ignoring, with nothing on screen saying so. Hook scripts are the
+# opposite: they are re-read from disk every time they fire, so naming them here
+# would train the eye to ignore the notice.
+NSBARE="$WORK/nsbare.git"; git init -q --bare "$NSBARE"
+NSA="$WORK/nsrepoA"; git clone -q "$NSBARE" "$NSA"
+NSAH="$WORK/nshomeA"; mkdir -p "$NSAH/hooks" "$NSAH/skills/rs-existing"
+echo '{"hooks":{}}' > "$NSAH/settings.json"
+echo '# rules v1' > "$NSAH/CLAUDE.md"
+echo 'one' > "$NSAH/hooks/rs-hook.sh"
+echo 'SKILL v1' > "$NSAH/skills/rs-existing/SKILL.md"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
+NSB="$WORK/nsrepoB"; git clone -q "$NSBARE" "$NSB"
+NSBH="$WORK/nshomeB"; mkdir -p "$NSBH"; echo '{"hooks":{}}' > "$NSBH/settings.json"
+CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull >/dev/null 2>&1
+# Mac A now changes a rule file, adds a whole new skill, edits an existing
+# skill, and edits a hook, all in one push.
+echo '# rules v2' > "$NSAH/CLAUDE.md"
+mkdir -p "$NSAH/skills/rs-added"; echo 'SKILL new' > "$NSAH/skills/rs-added/SKILL.md"
+echo 'SKILL v2' > "$NSAH/skills/rs-existing/SKILL.md"
+echo 'two' > "$NSAH/hooks/rs-hook.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_ns="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
+notice_ns="$(printf '%s\n' "$out_ns" | grep -i 'new Claude Code session' || true)"
+check "pull tells you a new session is needed"   "[ -n \"\$notice_ns\" ]"
+check "the notice names the changed rule file"   "printf '%s' \"\$notice_ns\" | grep -q 'CLAUDE.md'"
+check "the notice names the newly added skill"   "printf '%s' \"\$notice_ns\" | grep -q 'rs-added'"
+check "it does NOT name the edited hook script"  "! printf '%s' \"\$notice_ns\" | grep -q 'rs-hook'"
+# It is one sentence a person reads at a glance, so it has to render as one: the
+# first draft joined the last filename straight onto the next word.
+check "the notice reads as a sentence"           "! printf '%s' \"\$notice_ns\" | grep -q '[A-Za-z0-9]('"
+check "nor an edit to an existing skill"         "! printf '%s' \"\$notice_ns\" | grep -q 'rs-existing'"
+# The whole point is that it stays quiet otherwise: a pull carrying only hook
+# edits must not tell you to restart, or the notice becomes noise to scroll past.
+echo three > "$NSAH/hooks/rs-hook.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_ns2="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
+check "hook-only pull still reports the change"  "printf '%s' \"\$out_ns2\" | grep -q 'updated .*hooks/rs-hook.sh'"
+check "hook-only pull says nothing about restarting" "! printf '%s' \"\$out_ns2\" | grep -qi 'new Claude Code session'"
+# A removed skill is gone from the running session's list just as wrongly as an
+# added one is missing from it, so it earns the notice too.
+rm -rf "$NSAH/skills/rs-added"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_ns3="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
+check "a removed skill also earns the notice"    "printf '%s' \"\$out_ns3\" | grep -i 'new Claude Code session' | grep -q 'rs-added'"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
