@@ -21,6 +21,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   migration applied in production, the live site serving the new commit, behavior
   confirmed in a production build. CI must exercise the artifact production actually
   runs. (20 issues, 5 repos)
+- **L48. A test fixture that claims to come from real data must be measured from it, never
+  shaped so the rule under test fires.** An invented shape makes a test appear to cover a
+  case that cannot occur, so it passes forever while protecting nothing, and the
+  fabrication is invisible to every reviewer who does not query the real data.
+  (overture#1719)
 
 ## Data safety
 
