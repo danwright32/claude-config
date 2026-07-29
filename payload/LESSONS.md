@@ -131,6 +131,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   whole state space between them.** Every record must match at least one view, and no state
   transition may move a record into a combination that matches none, or it stays in the data
   while vanishing from the product. (overture#1691)
+- **L49. A control must look like a control at rest, not only on hover and not only in a
+  tooltip.** An interactive element styled like static text ships as an invisible feature, so the
+  person it was built for asks for it while looking straight at it, and no test can tell the two
+  apart. (overture#1742)
 
 ## External systems
 
