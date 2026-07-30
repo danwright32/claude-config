@@ -131,9 +131,12 @@ shape checked.
 
 ## Categories: labels
 
-What an issue is *about* is a label, so an issue carries **as many as genuinely
-apply**. An accessibility fix that is also tech debt gets both. That is the whole
-reason categories are labels rather than milestones.
+What an issue is *about* is a label. **Every issue needs at least one**, and carries
+**as many as genuinely apply**. An accessibility fix that is also tech debt gets both.
+That is the whole reason categories are labels rather than milestones.
+
+A gate blocks any `gh issue create` that has no label other than its priority. It does
+not check which label, only that one is there.
 
 Aim for **one type label plus every area label that fits**.
 
