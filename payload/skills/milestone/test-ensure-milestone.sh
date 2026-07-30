@@ -233,6 +233,24 @@ for t in "${narrative[@]}"; do
   check_eq "narrative title creates nothing: $t" "0" "$(created_count)"
 done
 
+# Each of the four rules gets a title that ONLY it catches. Without these, three of
+# the rules could be deleted and this suite would stay green: every title above
+# happens to trip the stop-word or length rule as well, which makes the other rules
+# look tested when they are not.
+#
+#            title                                                      caught only by
+isolating=(
+  "Purge stale sources from every build"                             # word count (6)
+  "Docs, tests and guards"                                           # punctuation
+  "Reconciliation instrumentation and provisioning telemetry"        # character count
+  "Queue contents you trust"                                         # stop word
+)
+for t in "${isolating[@]}"; do
+  out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
+  check_eq "each rule stands on its own: $t" "8" "$rc"
+  check_eq "no creation on: $t" "0" "$(created_count)"
+done
+
 # The refusal has to teach the shape, not just say no, or the next attempt is
 # another guess.
 out="$(ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved)"
