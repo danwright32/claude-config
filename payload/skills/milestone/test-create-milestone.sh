@@ -67,9 +67,9 @@ cat >"$TMP/plan.json" <<'JSON'
   "title": "Onboarding revamp",
   "description": "Rework first-run experience.\n\nFrom /plan-council.",
   "issues": [
-    { "title": "Phase 1: empty states", "body": "Design empty states." },
-    { "title": "Phase 2: tour", "body": "Build the product tour." },
-    { "title": "Phase 3: telemetry", "body": "Instrument funnel." }
+    { "title": "Phase 1: empty states", "body": "Design empty states.", "priority": "p1" },
+    { "title": "Phase 2: tour", "body": "Build the product tour.", "priority": "p2" },
+    { "title": "Phase 3: telemetry", "body": "Instrument funnel.", "priority": "p3" }
   ]
 }
 JSON
