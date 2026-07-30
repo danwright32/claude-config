@@ -261,11 +261,12 @@ print("OK")
 
 if [[ "$shape" != "OK" ]]; then
   if [[ -z "${ALLOW_ANY_MILESTONE_TITLE:-}" ]]; then
-    echo "TITLE-NOT-A-CATEGORY \"$title\" is not shaped like a milestone: $shape."
-    echo "A milestone groups a CATEGORY of work, so its title is a short noun phrase that stays true for months: Accessibility, UI/UX, Monitoring and alerting, Analytics, Tech debt and CI hygiene, Data integrity, Security and privacy."
-    echo "Pick the category this work belongs to and use that as the title. Put the narrative (what is wrong, why it matters) in the milestone DESCRIPTION, where it belongs."
+    echo "TITLE-NOT-A-FEATURE \"$title\" is not shaped like a milestone: $shape."
+    echo "A milestone is the overarching FEATURE, and its issues are what has to be finished for that feature to ship. So the title is a short noun phrase naming the thing being built: Saved views, Salesforce sync v2, Bulk contact enrichment, Queue windowing."
+    echo "Name the feature and use that as the title. Put the narrative (what is wrong, why it matters, what counts as done) in the milestone DESCRIPTION, where GitHub actually shows it."
+    echo "If this work is a standalone bug or chore belonging to no feature, it goes in the catch-all milestone instead: \"$CATCH_ALL\"."
     echo "The full rule, with the examples this check came from, is in ~/.claude/skills/milestone/NAMING.md."
-    echo "If a non category title is genuinely right here, say why first, then re-run with the visible override: ALLOW_ANY_MILESTONE_TITLE=1"
+    echo "If a non feature title is genuinely right here, say why first, then re-run with the visible override: ALLOW_ANY_MILESTONE_TITLE=1"
     exit 8
   fi
   echo "TITLE-SHAPE-OVERRIDDEN \"$title\" ($shape), allowed by ALLOW_ANY_MILESTONE_TITLE."
