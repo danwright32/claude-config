@@ -2,3 +2,8 @@
 *.syncbak
 *.log
 .last-applied
+# Python bytecode cache. claude-sync's rsync excludes already stop these from
+# being staged into payload/; this is the second line of defence, so one that
+# arrives by any other route still cannot be committed and travel between Macs.
+__pycache__/
+*.pyc

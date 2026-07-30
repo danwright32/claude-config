@@ -21,6 +21,11 @@ mkdir -p "$CH/hooks" "$CH/skills/plan-council" "$CH/skills/wrangler" \
 
 # ---- seed a fake ~/.claude ----
 echo 'echo hi' > "$CH/hooks/tdd-nudge.sh"
+# Python bytecode cache next to a hook: local build cruft, tied to one Python
+# version, invalidated by a timestamp that syncing scrambles. Must never travel.
+mkdir -p "$CH/hooks/__pycache__"
+echo 'BYTECODE' > "$CH/hooks/__pycache__/gh_issue_scan.cpython-314.pyc"
+echo 'BYTECODE' > "$CH/hooks/stray.pyc"
 echo 'SKILL custom' > "$CH/skills/plan-council/SKILL.md"
 echo 'SKILL plugin-owned' > "$CH/skills/wrangler/SKILL.md"   # should be EXCLUDED from sync
 echo 'AGENT' > "$CH/agents/plan-redteam.md"
@@ -48,6 +53,8 @@ bash "$SCRIPT" push >/dev/null 2>&1
 check "payload has the custom skill"        "[ -f '$REPO/payload/skills/plan-council/SKILL.md' ]"
 check "payload EXCLUDES plugin skill"       "[ ! -e '$REPO/payload/skills/wrangler' ]"
 check "payload has the hook script"         "[ -f '$REPO/payload/hooks/tdd-nudge.sh' ]"
+check "payload EXCLUDES __pycache__ dir"    "[ ! -e '$REPO/payload/hooks/__pycache__' ]"
+check "payload EXCLUDES a stray .pyc"       "[ ! -e '$REPO/payload/hooks/stray.pyc' ]"
 check "payload has the agent"               "[ -f '$REPO/payload/agents/plan-redteam.md' ]"
 check "payload has the command"             "[ -f '$REPO/payload/commands/plannotator-last.md' ]"
 check "hooks fragment written"              "[ -f '$REPO/payload/settings.hooks.json' ]"

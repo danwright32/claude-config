@@ -49,7 +49,13 @@ TOP_FILES_SEED=(CLAUDE.md RTK.md LESSONS.md)
 # never copy nested VCS/OS cruft (some skills are git clones with their own .git),
 # nor the conflict copies preserve_local_conflicts leaves behind: those are local
 # evidence of one Mac's own edit and must never travel to the other Mac.
-COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.conflict-*)
+# Python bytecode caches are the same category: build output, not config. They are
+# also actively unsafe to sync, because Python decides whether to trust a cached
+# .pyc by comparing a timestamp against its source, and rsync between two Macs is
+# exactly what makes that timestamp lie. A travelling cache can shadow an edited
+# hook. Regenerating one locally costs nothing.
+COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.conflict-* \
+  --exclude=__pycache__ --exclude=__pycache__/ --exclude=*.pyc)
 
 # desktop alert (no-op if disabled or the notifier isn't installed)
 notify(){
