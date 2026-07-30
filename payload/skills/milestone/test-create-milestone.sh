@@ -67,9 +67,9 @@ cat >"$TMP/plan.json" <<'JSON'
   "title": "Onboarding revamp",
   "description": "Rework first-run experience.\n\nFrom /plan-council.",
   "issues": [
-    { "title": "Phase 1: empty states", "body": "Design empty states.", "priority": "p1" },
-    { "title": "Phase 2: tour", "body": "Build the product tour.", "priority": "p2" },
-    { "title": "Phase 3: telemetry", "body": "Instrument funnel.", "priority": "p3" }
+    { "title": "Phase 1: empty states", "body": "Design empty states.", "priority": "p1", "labels": ["enhancement", "onboarding"] },
+    { "title": "Phase 2: tour", "body": "Build the product tour.", "priority": "p2", "labels": ["enhancement"] },
+    { "title": "Phase 3: telemetry", "body": "Instrument funnel.", "priority": "p3", "labels": ["analytics"] }
   ]
 }
 JSON
@@ -117,6 +117,7 @@ cat >"$TMP/variant-plan.json" <<'JSON'
 {
   "title": "onboarding revamp",
   "priority": "p2",
+  "labels": ["enhancement"],
   "issues": [ { "title": "Phase 1: empty states", "body": "Design empty states." } ]
 }
 JSON
@@ -212,6 +213,7 @@ check "the labels are ensured first" "label create priority-p0" "$calls"
 cat >"$TMP/plan-full.json" <<'JSON'
 {
   "title": "Onboarding revamp",
+  "labels": ["bug"],
   "issues": [ { "title": "Phase 1", "body": "b", "priority": "priority-p0" } ]
 }
 JSON
@@ -224,6 +226,7 @@ cat >"$TMP/plan-default.json" <<'JSON'
 {
   "title": "Onboarding revamp",
   "priority": "p2",
+  "labels": ["enhancement"],
   "issues": [
     { "title": "Phase 1", "body": "b" },
     { "title": "Phase 2", "body": "b", "priority": "p0" }
@@ -294,6 +297,7 @@ check_eq "the refusal files nothing" "0" "$(issues_filed)"
 cat >"$TMP/plan-nopriority.json" <<'JSON'
 {
   "title": "Onboarding revamp",
+  "labels": ["bug"],
   "issues": [
     { "title": "Phase 1", "body": "b" },
     { "title": "Phase 2", "body": "b" }
@@ -311,6 +315,7 @@ check_eq "the refusal files nothing" "0" "$(issues_filed)"
 cat >"$TMP/plan-badpriority.json" <<'JSON'
 {
   "title": "Onboarding revamp",
+  "labels": ["bug"],
   "issues": [ { "title": "Phase 1", "body": "b", "priority": "p9" } ]
 }
 JSON
