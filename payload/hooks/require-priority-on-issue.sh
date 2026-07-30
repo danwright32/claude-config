@@ -67,7 +67,7 @@ LEVEL = re.compile(r"^priority-p[0-4]$", re.IGNORECASE)
 
 def has_priority(args):
     """Does this argument list carry a priority label?"""
-    for value in flag_values(args, "--label", "-l"):
+    for value in scan.flag_values(args, "--label", "-l"):
         # gh accepts a comma separated list in one --label flag.
         for name in value.split(","):
             if LEVEL.match(name.strip()):
