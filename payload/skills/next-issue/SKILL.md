@@ -22,8 +22,9 @@ Check the project's CLAUDE.md and memory for a deploy step that does not happen 
 ## 3. Pick the next issues
 
 1. `gh issue list --state open --limit 50` in the current repo.
-2. Rank by: explicit priority labels or milestone due dates first, then bugs affecting live behavior, then whatever most directly continues the theme of the work just finished, then value for effort.
-3. Pick the top 3 candidates.
+2. Rank by **priority label first**: every issue carries one of `priority-p0` through `priority-p4` (`p0` broken now, `p1` do next, `p2` normal, `p3` nice to have, `p4` someday). A `p0` outranks everything. Within a level, prefer whatever continues the feature just shipped (its milestone), then bugs affecting live behavior, then value for effort.
+3. Pick the top 3 candidates. Show each one's level in the picker so Dan can see he is being offered the right tier, and say so plainly if the top candidates are only `p3` and below, because that is worth knowing.
+4. An issue with no priority label predates the rule. Do not silently rank it last: `gh issue edit <n> --add-label priority-pN` as you go, choosing the level yourself (these are not Dan's to arbitrate, he has not read them). The scale is in `~/.claude/skills/milestone/NAMING.md`.
 
 ## 4. Present the picker and continue
 
