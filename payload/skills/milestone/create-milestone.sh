@@ -198,10 +198,18 @@ while [[ "$i" -lt "$n" ]]; do
   if [[ -z "$it" ]]; then
     i=$((i + 1)); continue
   fi
+  # One --label per name, so a label containing a comma cannot be split in two.
+  label_args=(--label "$lvl")
+  while IFS= read -r l; do
+    [[ -z "$l" ]] && continue
+    [[ "$l" =~ ^priority-[pP][0-4]$ ]] && continue  # the level is already applied
+    label_args+=(--label "$l")
+  done <<<"$(labels_for "$i")"
+
   if [[ -n "$dry" ]]; then
-    echo "WOULD-CREATE-ISSUE repo=$repo milestone=$ms_ref priority=$lvl title=$it"
+    echo "WOULD-CREATE-ISSUE repo=$repo milestone=$ms_ref priority=$lvl labels=$(printf '%s' "$(labels_for "$i")" | tr '\n' ',' | sed 's/,$//') title=$it"
   else
-    iss_url="$(gh issue create --repo "$repo" --title "$it" --body "$ib" --milestone "$ms_ref" --label "$lvl" 2>&1)"
+    iss_url="$(gh issue create --repo "$repo" --title "$it" --body "$ib" --milestone "$ms_ref" "${label_args[@]}" 2>&1)"
     if [[ $? -ne 0 ]]; then
       echo "ISSUE-FAILED title=$it: $iss_url" >&2
       failed=$((failed + 1))
