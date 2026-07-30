@@ -244,12 +244,24 @@ done
 #
 #            title                                                      caught only by
 isolating=(
-  "Purge stale sources from every local build"                        # word count (7)
+  "Purge stale sources from every local build and cache"              # word count (9)
   "Docs, tests and guards"                                           # punctuation
-  "Reconciliation instrumentation and provisioning telemetry"        # character count
+  "Reconciliation instrumentation and provisioning telemetry pipeline"  # character count
   "Queue contents you trust"                                         # stop word
   "Dan cannot act here"                                              # stop word: his name
 )
+short_but_punctuated=(
+  "One store, one truth"
+  "Saved views: phase one"
+  "Queue windowing, part two"
+  "Ship it."
+)
+for t in "${short_but_punctuated[@]}"; do
+  out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
+  check_eq "punctuation is refused however short the title: $t" "8" "$rc"
+  check "the refusal names the punctuation: $t" "reads as a sentence" "$out"
+done
+
 for t in "${isolating[@]}"; do
   out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
   check_eq "each rule stands on its own: $t" "8" "$rc"
@@ -276,6 +288,8 @@ features=(
   "Queue windowing"
   "Organisation contact ledger"
   "Node test coloring in edit mode"
+  "Bulk contact enrichment for scouted shows"
+  "Organisation contact ledger for scouted show venues"
 )
 for t in "${features[@]}"; do
   out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
