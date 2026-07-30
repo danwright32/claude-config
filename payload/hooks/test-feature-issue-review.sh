@@ -75,6 +75,10 @@ needs=(
   "NAMING.md"                       # points at the shared rule
   "AskUserQuestion"                 # the picker, not prose
   "claude-suggested"                # the forbidden attribution label
+  "EVERY area label that genuinely applies"  # labels are many per issue, not one
+  "STARTING POINT, not a closed set"         # the vocabulary is guidance, not a cage
+  "gh label list"                            # read the repo's own labels first
+  "data-integrity"                           # the area vocabulary is actually listed
 )
 for want in "${needs[@]}"; do
   if [[ "$reason" == *"$want"* ]]; then
