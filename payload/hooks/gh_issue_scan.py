@@ -175,21 +175,20 @@ def scan_creates(command):
     creates = []
     i = 0
     at_head = True
-    # The override belongs to the ONE command it prefixes. Reading it across the
-    # whole call is how an unmilestoned create slipped through on 2026-07-29: an
-    # override on line 1 silently exempted a second create three lines later.
-    seg_waived = False
+    # An override belongs to the ONE command it prefixes. Reading it across the whole
+    # call is how an unmilestoned create slipped through on 2026-07-29: an override on
+    # line 1 silently exempted a second create three lines later.
+    seg_env = []
     while i < len(tokens):
         tok = tokens[i]
         if _is_operator(tok):
             at_head = True
-            seg_waived = False
+            seg_env = []
             i += 1
             continue
 
         if at_head and ASSIGNMENT.match(tok):
-            if override and tok == override:
-                seg_waived = True
+            seg_env.append(tok)
             i += 1  # env assignment prefix: still at the head
             continue
 
@@ -199,15 +198,15 @@ def scan_creates(command):
             while j < len(tokens) and not _is_operator(tokens[j]):
                 args.append(tokens[j])
                 j += 1
-            # Asking for the help text files nothing, so it is not a create. A live
-            # false positive on 2026-07-30: `gh issue create --help` was blocked for
-            # having no category, which is absurd and teaches exactly the override
-            # habit these gates are built to avoid. A gate that cries wolf is ignored.
-            if not any(a in ("--help", "-h") for a in args):
-                creates.append((args, seg_waived))
+            # A command that files nothing is not a create. A live false positive on
+            # 2026-07-30: `gh issue create --help` was blocked for having no category,
+            # which is absurd and teaches exactly the override habit this exists to
+            # avoid. A gate that cries wolf gets ignored.
+            if not any(a in NON_FILING_FLAGS for a in args):
+                creates.append((args, list(seg_env)))
             i = j
             at_head = True
-            seg_waived = False
+            seg_env = []
             continue
 
         at_head = False
