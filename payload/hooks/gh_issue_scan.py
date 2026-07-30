@@ -21,6 +21,18 @@ import shlex
 OPERATORS = {"&&", "||", ";", "|", "&", "(", ")", "{", "}", "\n"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
+# Flags that make `gh issue create` file nothing, so it is not a create to gate.
+#
+# `--help` prints the help text. `--web` hands off to the browser form, where the
+# milestone and label pickers are on screen and a person completes the issue, so
+# nothing can land incomplete without someone looking at it.
+#
+# The rest of the flags all end in a filed issue: `--editor` and `--recover` open an
+# editor or resume a failed run, then file. Swept 2026-07-30 against `gh issue create
+# --help` rather than guessed, because a gate that refuses harmless commands is how
+# the habit of reaching for an override gets learned.
+NON_FILING_FLAGS = {"--help", "-h", "--web", "-w"}
+
 
 def normalize(cmd):
     """Make command boundaries visible to the lexer, quote awarely.
