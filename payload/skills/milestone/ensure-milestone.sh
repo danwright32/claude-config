@@ -194,6 +194,76 @@ case "$kind" in
     ;;
 esac
 
+# --- a NEW title has to be a category, not a narrative sentence -----------
+# Only ever checked here, on the path that CREATES. A title that already names a
+# real milestone is reused above and never reaches this point, which matters
+# because Dan kept the narrative milestones he already had: applying the shape rule
+# to a lookup would orphan every issue that belongs to one of them.
+#
+# This is a shape check, not a vocabulary check. Dan deliberately chose not to
+# freeze a list of allowed categories, so anything that READS as a category passes.
+shape="$(python3 -c '
+import re
+import sys
+
+title = sys.argv[1]
+
+# A sentence needs punctuation to hold its clauses together. A category name does
+# not have clauses.
+PUNCT = ",;:.!?"
+
+# Words that only turn up when a title is describing rather than naming: pronouns,
+# copulas and modals, relative pronouns. Plus the one proper noun that kept showing
+# up in the titles Dan objected to.
+STOP = {
+    "i", "me", "my", "mine", "you", "your", "yours", "he", "him", "his", "she",
+    "her", "hers", "we", "us", "our", "ours", "they", "them", "their", "theirs",
+    "it", "its",
+    "am", "is", "are", "was", "were", "be", "been", "being",
+    "can", "will", "would", "should", "must", "may", "might", "shall",
+    "do", "does", "did", "done", "has", "have", "had",
+    "where", "when", "that", "which", "who", "whose", "whom", "why", "how", "what",
+    "dan",
+}
+
+MAX_WORDS = 5
+MAX_CHARS = 48
+
+words = title.split()
+
+if len(words) > MAX_WORDS:
+    print("it is %d words long, and a category name is at most %d" % (len(words), MAX_WORDS))
+    sys.exit(0)
+
+if len(title) > MAX_CHARS:
+    print("it is %d characters long, and a category name is at most %d" % (len(title), MAX_CHARS))
+    sys.exit(0)
+
+found = [c for c in PUNCT if c in title]
+if found:
+    print("it reads as a sentence: a category name has no %s" % " or ".join(repr(c) for c in found))
+    sys.exit(0)
+
+hits = [w for w in words if re.sub(r"[^a-z]", "", w.lower()) in STOP]
+if hits:
+    print("it describes rather than names, because of: %s" % ", ".join(hits))
+    sys.exit(0)
+
+print("OK")
+' "$title")"
+
+if [[ "$shape" != "OK" ]]; then
+  if [[ -z "${ALLOW_ANY_MILESTONE_TITLE:-}" ]]; then
+    echo "TITLE-NOT-A-CATEGORY \"$title\" is not shaped like a milestone: $shape."
+    echo "A milestone groups a CATEGORY of work, so its title is a short noun phrase that stays true for months: Accessibility, UI/UX, Monitoring and alerting, Analytics, Tech debt and CI hygiene, Data integrity, Security and privacy."
+    echo "Pick the category this work belongs to and use that as the title. Put the narrative (what is wrong, why it matters) in the milestone DESCRIPTION, where it belongs."
+    echo "The full rule, with the examples this check came from, is in ~/.claude/skills/milestone/NAMING.md."
+    echo "If a non category title is genuinely right here, say why first, then re-run with the visible override: ALLOW_ANY_MILESTONE_TITLE=1"
+    exit 8
+  fi
+  echo "TITLE-SHAPE-OVERRIDDEN \"$title\" ($shape), allowed by ALLOW_ANY_MILESTONE_TITLE."
+fi
+
 # --- create, only ever on the approved NONE path --------------------------
 if [[ -n "${DRY_RUN:-}" ]]; then
   echo "WOULD-CREATE-MILESTONE repo=$repo title=$title"
