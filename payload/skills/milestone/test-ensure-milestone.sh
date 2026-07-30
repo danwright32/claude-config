@@ -66,6 +66,7 @@ cat >"$TMP/milestones.json" <<'JSON'
 [
   { "number": 3, "title": "Onboarding revamp", "state": "open",   "html_url": "https://github.com/acme/widgets/milestone/3" },
   { "number": 4, "title": "Payments hardening", "state": "open",   "html_url": "https://github.com/acme/widgets/milestone/4" },
+  { "number": 7, "title": "One store, one truth", "state": "open", "html_url": "https://github.com/acme/widgets/milestone/7" },
   { "number": 1, "title": "Legacy cleanup",     "state": "closed", "html_url": "https://github.com/acme/widgets/milestone/1" }
 ]
 JSON
