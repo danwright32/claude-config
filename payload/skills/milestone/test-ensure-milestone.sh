@@ -244,7 +244,7 @@ done
 #
 #            title                                                      caught only by
 isolating=(
-  "Purge stale sources from every build"                             # word count (6)
+  "Purge stale sources from every local build"                        # word count (7)
   "Docs, tests and guards"                                           # punctuation
   "Reconciliation instrumentation and provisioning telemetry"        # character count
   "Queue contents you trust"                                         # stop word
