@@ -89,6 +89,23 @@ other things` is an ordinary title and still needs approval.
 Its progress bar never completes. That is expected: it is a holding pen, not a
 feature.
 
+### Who creates a milestone
+
+**Creating a milestone is a planning decision.** It happens in `/plan-council`,
+`/plan-lite` or `/milestone`, where a feature is being planned and its phases become
+the issues. Nowhere else.
+
+Every other path that files an issue (the end of turn review, `/next-issue`,
+`/production-ready`, anything typed mid flow) has exactly two choices and no third:
+
+1. An existing open milestone, when the work ships with that feature.
+2. `Ungrouped`, the catch-all.
+
+It never makes sense to open a milestone for a one-off issue. A milestone with one
+issue in it is not a feature, it is a label with extra steps. If the resolver exits
+5, that means the title matches nothing: the answer is `Ungrouped`, not a request to
+approve a new milestone.
+
 ### Resolving a milestone
 
 Always prefer an existing open milestone. Resolve through the helper, which reuses a
