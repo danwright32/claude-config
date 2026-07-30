@@ -236,9 +236,9 @@ removing a label strips it from every issue that carries it, so that is Dan's ca
 
 | Rule | Enforced by | Visible override |
 |---|---|---|
-| An issue has a milestone | `~/.claude/hooks/require-milestone-on-issue.sh` (PreToolUse) | `SKIP_MILESTONE_CHECK=1 <command>` |
-| An issue has a priority | `~/.claude/hooks/require-priority-on-issue.sh` (PreToolUse) | `SKIP_PRIORITY_CHECK=1 <command>` |
-| An issue has at least one category | `~/.claude/hooks/require-category-on-issue.sh` (PreToolUse) | `SKIP_CATEGORY_CHECK=1 <command>` |
+| An issue has a milestone | `~/.claude/hooks/require-issue-fields.sh` (PreToolUse) | `SKIP_MILESTONE_CHECK=1 <command>` |
+| An issue has a priority | the same gate | `SKIP_PRIORITY_CHECK=1 <command>` |
+| An issue has at least one category | the same gate | `SKIP_CATEGORY_CHECK=1 <command>` |
 | A plan's issues carry both | `create-milestone.sh`, which the gates cannot see into | none, fix the plan JSON |
 | A new milestone title names a feature | `ensure-milestone.sh`, on the create path only | `ALLOW_ANY_MILESTONE_TITLE=1 <command>` |
 
@@ -246,7 +246,10 @@ Every override is visible in the command itself, so it cannot happen by accident
 go unnoticed in the transcript. Explain to Dan why you are using one, first. An
 override is good for that one command, never standing permission.
 
+One gate carries all three rules, in a table in `~/.claude/hooks/issue_field_gate.py`.
+A create missing two things says so once, and each rule keeps its own override so
+waiving one never waives another. Adding a fourth rule is one entry in that table.
+
 Tests: `test-ensure-milestone.sh`, `test-ensure-priority-labels.sh`,
-`test-create-milestone.sh` in this directory, and
-`test-require-milestone-on-issue.sh`, `test-require-priority-on-issue.sh` in
+`test-create-milestone.sh` in this directory, and `test-require-issue-fields.sh` in
 `~/.claude/hooks/`. All use a fake `gh`, so none of them can reach a real repo.
