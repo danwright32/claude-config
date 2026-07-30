@@ -107,11 +107,12 @@ check "reports it finished" "PRIORITY-LABELS-READY acme/widgets" "$out"
 # Each label carries its meaning, so the scale is readable on GitHub itself and
 # not only in the config. A colour ramp makes the level legible at a glance.
 calls="$(cat "$TMP/calls.log")"
-check "p0 says what it means" "broken now" "$calls"
-check "p1 says what it means" "do next" "$calls"
-check "p2 says what it means" "normal" "$calls"
-check "p3 says what it means" "nice to have" "$calls"
-check "p4 says what it means" "someday" "$calls"
+lc_calls="$(printf '%s' "$calls" | tr 'A-Z' 'a-z')"
+check "p0 says what it means" "broken now" "$lc_calls"
+check "p1 says what it means" "do next" "$lc_calls"
+check "p2 says what it means" "normal" "$lc_calls"
+check "p3 says what it means" "nice to have" "$lc_calls"
+check "p4 says what it means" "someday" "$lc_calls"
 check "labels are coloured" "--color" "$calls"
 check "the repo is passed through" "--repo acme/widgets" "$calls"
 
