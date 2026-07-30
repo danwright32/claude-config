@@ -37,6 +37,12 @@
             "command": "__CLAUDE_HOME__/hooks/require-milestone-on-issue.sh",
             "timeout": 10,
             "statusMessage": "Checking the new issue names a milestone"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/require-priority-on-issue.sh",
+            "timeout": 15,
+            "statusMessage": "Checking the issue carries a priority"
           }
         ]
       }
