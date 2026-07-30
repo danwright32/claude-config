@@ -259,25 +259,27 @@ done
 # The refusal has to teach the shape, not just say no, or the next attempt is
 # another guess.
 out="$(ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved)"
-check "the refusal is named" "TITLE-NOT-A-CATEGORY" "$out"
+check "the refusal is named" "TITLE-NOT-A-FEATURE" "$out"
 check "the refusal points at the shared rule" "NAMING.md" "$out"
-check "the refusal shows what a good title looks like" "Accessibility" "$out"
+check "the refusal says the narrative belongs in the description" "description" "$out"
 check "the refusal names the override" "ALLOW_ANY_MILESTONE_TITLE=1" "$out"
 
-# Category shaped titles pass, including the ones Dan named himself.
-category=(
-  "Accessibility"
-  "UI/UX"
-  "Monitoring and alerting"
-  "Analytics"
-  "Tech debt and CI hygiene"
-  "Data integrity"
-  "Security and privacy"
+# Feature shaped titles pass. A milestone is the feature that ships when its issues
+# are done, so these are the names of things being built.
+features=(
+  "Saved views"
+  "Salesforce sync v2"
+  "Bulk contact enrichment"
   "Canvas & editor"
+  "Engine reliability"
+  "Test coverage"
+  "Queue windowing"
+  "Organisation contact ledger"
+  "Node test coloring in edit mode"
 )
-for t in "${category[@]}"; do
+for t in "${features[@]}"; do
   out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
-  check_eq "category title is accepted: $t" "0" "$rc"
+  check_eq "feature title is accepted: $t" "0" "$rc"
 done
 
 # --- 11b. reuse is never blocked by the shape rule ---
