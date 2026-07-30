@@ -99,6 +99,11 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L17. Long-running work belongs to an owner that outlives the screen that started
   it**, and re-reads live state at write-back instead of a copy captured at start.
   (6 issues, 2 repos)
+- **L55. A reader whose correctness depends on which code path produced the state it
+  reads breaks silently when a second path starts producing that state.** When you add a
+  writer for an existing status or flag, recheck every rule that interprets it, because
+  the assumption is usually recorded only in a comment and the rule keeps answering with
+  confidence. (overture#1797)
 
 ## Security and privacy
 
