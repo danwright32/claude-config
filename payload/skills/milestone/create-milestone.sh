@@ -133,20 +133,34 @@ if [[ -z "$ms_ref" ]]; then
   exit 6
 fi
 
+# --- make sure the priority labels exist before referencing one -----------
+# gh fails the WHOLE issue create on an unknown label, so a repo that has never been
+# labelled would lose every issue in the plan. Idempotent, so a repo already set up
+# costs one read.
+if [[ -z "$dry" && "$n_issues" -gt 0 ]]; then
+  if ! bash "$HERE/ensure-priority-labels.sh" "$repo" >/dev/null 2>&1; then
+    echo "Could not confirm the priority labels exist in $repo. Filing would fail on an unknown label, so nothing was filed. Run ensure-priority-labels.sh to see why." >&2
+    exit 9
+  fi
+fi
+
 # --- file one issue per phase, each assigned to that milestone ------------
-n="$(jq '.issues | length // 0' "$plan" 2>/dev/null || echo 0)"
+n="$n_issues"
 i=0
 failed=0
 while [[ "$i" -lt "$n" ]]; do
   it="$(jq -r ".issues[$i].title // empty" "$plan")"
   ib="$(jq -r ".issues[$i].body // \"\"" "$plan")"
+  lvl="$(jq -r ".issues[$i].priority // empty" "$plan")"
+  [[ -z "$lvl" ]] && lvl="$default_priority"
+  [[ "$lvl" =~ ^[pP][0-4]$ ]] && lvl="priority-${lvl}"
   if [[ -z "$it" ]]; then
     i=$((i + 1)); continue
   fi
   if [[ -n "$dry" ]]; then
-    echo "WOULD-CREATE-ISSUE repo=$repo milestone=$ms_ref title=$it"
+    echo "WOULD-CREATE-ISSUE repo=$repo milestone=$ms_ref priority=$lvl title=$it"
   else
-    iss_url="$(gh issue create --repo "$repo" --title "$it" --body "$ib" --milestone "$ms_ref" 2>&1)"
+    iss_url="$(gh issue create --repo "$repo" --title "$it" --body "$ib" --milestone "$ms_ref" --label "$lvl" 2>&1)"
     if [[ $? -ne 0 ]]; then
       echo "ISSUE-FAILED title=$it: $iss_url" >&2
       failed=$((failed + 1))
