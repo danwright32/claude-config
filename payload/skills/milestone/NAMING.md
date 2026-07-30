@@ -126,22 +126,47 @@ shape checked.
 
 ## Categories: labels
 
-What an issue is *about* is a label, so an issue can carry several. This is where
-the category names live:
+What an issue is *about* is a label, so an issue carries **as many as genuinely
+apply**. An accessibility fix that is also tech debt gets both. That is the whole
+reason categories are labels rather than milestones.
 
-    accessibility        ui-ux              monitoring-and-alerting
-    analytics            tech-debt          ci-hygiene
-    data-integrity       security           performance
-    docs                 error-handling     test-coverage
+Aim for **one type label plus every area label that fits**.
 
-**Reuse what the repo already has** before adding a name. The repos already carry
-`accessibility`, `ux`, `tech-debt`, `frontend`, `canvas`, `data-pipeline`, `bug`,
-`enhancement`. A second name for a category that already has one is worse than an
-imperfect fit. Create a new label only when nothing existing covers it, keeping it
-short, kebab-case and reusable.
+**Type**, what kind of work it is. Pick exactly one:
+
+    bug              something is broken
+    enhancement      new or improved behaviour
+    tech-debt        works, but the way it is built is a liability
+    documentation    docs, comments, READMEs
+
+**Area**, what part of the product or practice it touches. Pick all that apply:
+
+    accessibility      ui-ux              performance
+    security           data-integrity     error-handling
+    monitoring         analytics          ci-hygiene
+    test-coverage      onboarding         deployment
+
+This is a **starting list, not a closed one.** Two rules govern going outside it:
+
+1. **Reuse what the repo already has, first.** The repos already carry
+   `accessibility`, `ux`, `tech-debt`, `frontend`, `canvas`, `data-pipeline`, `bug`,
+   `enhancement`. If the repo says `ux` and this list says `ui-ux`, use `ux`: a
+   second name for a category that already has one is worse than an imperfect fit.
+   Read the repo's labels before you decide (`gh label list --limit 100`).
+2. **Add a new label when nothing above covers it.** Do not force a bad fit and do
+   not leave the issue bare. Create it first, then apply it:
+
+       gh label create <name> --color <hex> --description "<what it means>"
+
+   Keep new names short, kebab-case, and reusable across issues. A label used once
+   is a note, not a label.
+
+Never apply `claude-suggested` or any label attributing the issue to Claude or AI.
+Never apply `sev-*` or `severity:*`: priority is the only urgency scale.
 
 This axis is deliberately **not** gated. Dan asked for priority on every issue, not
-category, and a rule nobody asked for is friction.
+category, and a rule nobody asked for is friction. The guidance is strong; the
+enforcement is not.
 
 ## Priority: p0 to p4
 
