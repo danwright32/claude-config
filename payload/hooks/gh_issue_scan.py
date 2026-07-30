@@ -139,12 +139,14 @@ class Unreadable(Exception):
     """The command could not be tokenized, so no gate may judge it."""
 
 
-def scan_creates(command, override=None):
+def scan_creates(command):
     """Find every real `gh issue create` in a command string.
 
-    Returns a list of (args, waived) pairs, one per create, where args are the
-    tokens belonging to that create and waived says whether the override env
-    assignment prefixed that specific command.
+    Returns a list of (args, env_assignments) pairs, one per create, where args are
+    the tokens belonging to that create and env_assignments are the `NAME=value`
+    tokens prefixing that specific command. Returning all of them, rather than
+    testing one override here, is what lets a single gate carry several independent
+    rules with an override each.
 
     A create only counts when `gh issue create` sits at the head of a segment
     (start of the command, or just after a shell operator, with leading env
