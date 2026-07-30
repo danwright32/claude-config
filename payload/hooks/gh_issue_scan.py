@@ -185,7 +185,12 @@ def scan_creates(command, override=None):
             while j < len(tokens) and not _is_operator(tokens[j]):
                 args.append(tokens[j])
                 j += 1
-            creates.append((args, seg_waived))
+            # Asking for the help text files nothing, so it is not a create. A live
+            # false positive on 2026-07-30: `gh issue create --help` was blocked for
+            # having no category, which is absurd and teaches exactly the override
+            # habit these gates are built to avoid. A gate that cries wolf is ignored.
+            if not any(a in ("--help", "-h") for a in args):
+                creates.append((args, seg_waived))
             i = j
             at_head = True
             seg_waived = False
