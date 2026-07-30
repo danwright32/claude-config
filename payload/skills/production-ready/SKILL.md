@@ -57,7 +57,7 @@ Offer, via **AskUserQuestion**, to file the backlog as GitHub issues in the audi
 
    The scale and the rest of the rules live in `~/.claude/skills/milestone/NAMING.md`.
 
-2. **Resolve the milestone BEFORE filing anything.** Every issue belongs to a milestone, and a gate blocks any `gh issue create` without one. Ask in the SAME AskUserQuestion as the filing approval: attach this backlog to an existing open milestone, or create one (a name like "Production readiness: <repo>" works). Read the open milestones first so the options are real:
+2. **Resolve the milestone BEFORE filing anything.** Every issue belongs to a milestone, and a gate blocks any `gh issue create` without one. Ask in the SAME AskUserQuestion as the filing approval: attach this backlog to an existing open milestone, or create one. A milestone title names a CATEGORY of work in at most 5 words (`Reliability`, `Security and privacy`, `Test coverage`), never a narrative sentence, and the create path enforces that shape. The full rule is in `~/.claude/skills/milestone/NAMING.md`. Read the open milestones first so the options are real:
 
        gh api "repos/<owner>/<name>/milestones?state=open&per_page=100" --jq '.[] | "#\(.number) \(.title)"'
 
