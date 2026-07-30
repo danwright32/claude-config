@@ -200,10 +200,17 @@ case "$kind" in
     exit 4
     ;;
   NONE)
-    if [[ -z "$create_approved" ]]; then
+    if is_catch_all "$title"; then
+      # The catch-all needs no approval, and it is described here rather than by the
+      # caller so every repo's holding pen reads the same.
+      create_approved=1
+      [[ -z "$description" ]] && description="Standalone bugs and chores that belong to no feature. Not a feature milestone: it is the home for work that still needs a milestone but has nothing to ship alongside, so it never completes."
+      echo "CATCH-ALL-MILESTONE creating the standalone holding pen \"$CATCH_ALL\" in $repo, which needs no approval."
+    elif [[ -z "$create_approved" ]]; then
       echo "NO-MATCH \"$title\" matches no open milestone in $repo."
       echo "Open milestones: $f2"
       echo "Creating a milestone needs the user's approval. Offer the fitting one from that list, or ask before creating \"$title\"."
+      echo "If this is a standalone bug or chore that belongs to no feature, use the catch-all instead, which needs no approval: \"$CATCH_ALL\"."
       exit 5
     fi
     ;;
