@@ -65,6 +65,36 @@ due_on="$(jq -r '.due_on // empty' "$plan")"
 
 dry="${DRY_RUN:-}"
 
+# --- every issue needs a priority, checked BEFORE anything is written ----------
+# Refusing beats defaulting. A silent default is how the priority labels became
+# meaningless in the first place, and this runs before the milestone is touched so a
+# plan missing a level files nothing at all rather than half of itself.
+default_priority="$(jq -r '.priority // empty' "$plan")"
+n_issues="$(jq '(.issues // []) | length' "$plan")"
+missing=""
+i=0
+while [[ "$i" -lt "$n_issues" ]]; do
+  it="$(jq -r ".issues[$i].title // empty" "$plan")"
+  lvl="$(jq -r ".issues[$i].priority // empty" "$plan")"
+  [[ -z "$lvl" ]] && lvl="$default_priority"
+  # "p2" and "priority-p2" are both natural to write by hand, so accept either.
+  [[ "$lvl" =~ ^[pP][0-4]$ ]] && lvl="priority-${lvl}"
+  if [[ ! "$lvl" =~ ^priority-[pP][0-4]$ ]]; then
+    missing="$missing  \"${it:-<untitled issue $i>}\": ${lvl:-(none given)}"$'\n'
+  fi
+  i=$((i + 1))
+done
+
+if [[ -n "$missing" ]]; then
+  echo "MISSING-PRIORITY every issue needs a priority level, and these do not have a valid one:" >&2
+  printf '%s' "$missing" >&2
+  echo "Add \"priority\" to each issue in the plan, or a plan-level \"priority\" as the default for all of them. Accepted: p0 to p4, or the full priority-p0 to priority-p4." >&2
+  echo "  priority-p0 broken now, drop everything; priority-p1 important, do next; priority-p2 normal, the default for real work; priority-p3 nice to have; priority-p4 someday, maybe never." >&2
+  echo "You choose the level per phase: these are your plan's phases, not something the user should have to grade. The rule is in ~/.claude/skills/milestone/NAMING.md." >&2
+  echo "ABORTED: no issues were filed, and the milestone was not touched." >&2
+  exit 9
+fi
+
 # --- resolve the milestone through the shared helper ----------------------
 ensure_args=("$repo" "$title" --create-approved --description "$description")
 [[ -n "$due_on" ]] && ensure_args+=(--due "$due_on")
