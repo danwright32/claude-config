@@ -107,9 +107,9 @@ reason = (
     "scales on one issue is what made the backlog unreadable in the first place.\n\n"
     "If this issue genuinely should not carry a priority (a repo you do not own, a throwaway repo), say "
     "so and re-run with the visible override: SKIP_PRIORITY_CHECK=1 <the same command>."
-).format(c=plural_issues(offenders))
+).format(c=scan.plural_issues(offenders))
 
-json.dump(deny_payload(reason), sys.stdout)
+json.dump(scan.deny_payload(reason), sys.stdout)
 PY
 
 # A crash here must not block work, but it must not be invisible either: a silent
