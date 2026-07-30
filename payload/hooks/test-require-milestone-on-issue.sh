@@ -226,8 +226,9 @@ fi
 
 # --- the deny message points at the naming rule, not just at "a milestone" ---
 # A gate that only says "add a milestone" is how the narrative titles arrived: the
-# model invented a theme name on the spot. The refusal has to name the shape.
-for want in "NAMING.md" "Accessibility" "CATEGORY of work"; do
+# model invented a theme name on the spot. The refusal has to name the shape, and it
+# has to offer the catch-all, or the pressure to invent a milestone is still there.
+for want in "NAMING.md" "FEATURE" "Ungrouped" "labels"; do
   if [[ "$msg" == *"$want"* ]]; then
     pass=$((pass + 1))
   else
