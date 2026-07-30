@@ -11,8 +11,13 @@ Three separate axes. Keeping them separate is the whole point.
 | Axis | Mechanism | How many per issue | Enforced |
 |---|---|---|---|
 | Which feature does this ship with | Milestone | Exactly one | Yes, a gate |
-| What is it about | Labels | As many as fit | No, guidance |
+| What is it about | Category labels | At least one, as many as fit | Yes, a gate |
 | How urgent is it | Priority label | Exactly one | Yes, a gate |
+
+All three are required. The category gate checks that a category **exists**, never
+which one it is: Dan restricted the priority levels deliberately and left the
+categories open, in his words, "it does need category on every issue, and it can be
+multiple. I just don't want to restrict what those categories are."
 
 ## Why this file exists
 
