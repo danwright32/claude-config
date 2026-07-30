@@ -57,10 +57,10 @@ The shape, concretely:
 
 | Rule | Why |
 |---|---|
-| At most 6 words, at most 48 characters | A name that needs a clause is a description, not a name |
-| No `,` `;` `:` `.` `!` `?` | Sentence punctuation holds clauses together, and a name has no clauses |
+| **No `,` `;` `:` `.` `!` `?`, at any length** | Punctuation is never needed in a milestone title. It is there to hold clauses together, and a name has no clauses. Checked first, so `Saved views, part one` is refused even though it is short |
 | No pronouns, copulas, modals or relative pronouns (is, are, can, you, he, where, when, that) | Those words describe rather than name |
 | No person's name | A milestone is about the work, not about who noticed it |
+| At most 8 words, at most 60 characters | A backstop against a title that is plainly a paragraph. Deliberately generous, so `Organisation contact ledger for scouted show venues` fits |
 
 **The narrative still matters, and it goes in the milestone description**, which is
 where the detail belongs and where GitHub actually shows it:
