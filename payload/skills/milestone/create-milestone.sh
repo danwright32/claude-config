@@ -15,15 +15,21 @@
 #     "description": "markdown body",     # optional, milestone description
 #     "due_on": "2026-09-01T00:00:00Z",   # optional, ISO8601 due date
 #     "priority": "p2",                   # optional default for every issue below
+#     "labels": ["enhancement"],          # optional default for every issue below
 #     "issues": [                         # optional, one GitHub issue each
-#       { "title": "Phase 1: ...", "body": "...", "priority": "p1" }
+#       { "title": "Phase 1: ...", "body": "...", "priority": "p1",
+#         "labels": ["tech-debt", "accessibility"] }
 #     ]
 #   }
 #
-# Every issue needs a priority, either its own or the plan-level default. Accepts
-# "p2" or "priority-p2". This script is the ONE issue-filing path the PreToolUse
-# priority gate cannot see (the gate reads the Bash command, and here the create runs
-# inside a script), so the rule is enforced here instead.
+# Every issue needs a priority AND at least one category label, either its own or the
+# plan-level default. Priority accepts "p2" or "priority-p2". Categories are not
+# restricted to any vocabulary: any label counts, as long as it is not just a priority
+# level. Apply as many as genuinely apply.
+#
+# This script is the ONE issue-filing path the PreToolUse gates cannot see (they read
+# the Bash command, and here the create runs inside a script), so both rules are
+# enforced here instead.
 #
 # Set DRY_RUN=1 to print what would happen without writing to GitHub.
 # Prints: MILESTONE <url> (or MILESTONE-EXISTS ...), then ISSUE <url> per issue,
