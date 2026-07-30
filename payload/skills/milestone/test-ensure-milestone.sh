@@ -244,6 +244,7 @@ isolating=(
   "Docs, tests and guards"                                           # punctuation
   "Reconciliation instrumentation and provisioning telemetry"        # character count
   "Queue contents you trust"                                         # stop word
+  "Dan cannot act here"                                              # stop word: his name
 )
 for t in "${isolating[@]}"; do
   out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
