@@ -235,6 +235,59 @@ check_eq "a plan-level default exits 0" "0" "$rc"
 check "the default applies where a phase says nothing" "--label priority-p2" "$(cat "$TMP/calls.log")"
 check "a phase still overrides the default" "--label priority-p0" "$(cat "$TMP/calls.log")"
 
+# --- every issue also needs a category label ---
+# Same blind spot as priority: the category gate reads the Bash command, and here the
+# create runs inside a script, so without this /plan-council and /plan-lite would be
+# the only paths still filing uncategorised issues.
+cat >"$TMP/plan-labels.json" <<'JSON'
+{
+  "title": "Onboarding revamp",
+  "priority": "p2",
+  "labels": ["enhancement"],
+  "issues": [
+    { "title": "Phase 1", "body": "b" },
+    { "title": "Phase 2", "body": "b", "labels": ["tech-debt", "accessibility"] }
+  ]
+}
+JSON
+out="$(run "$TMP/existing.json" "acme/widgets" "$TMP/plan-labels.json")"; rc=$?
+calls="$(cat "$TMP/calls.log")"
+check_eq "a plan carrying labels exits 0" "0" "$rc"
+check "the plan-level label applies where a phase says nothing" "--label enhancement" "$calls"
+check "a phase's own labels are applied" "--label tech-debt" "$calls"
+check "several labels on one issue all apply" "--label accessibility" "$calls"
+
+# The vocabulary is not restricted, so an unfamiliar label must pass straight through.
+cat >"$TMP/plan-oddlabel.json" <<'JSON'
+{
+  "title": "Onboarding revamp",
+  "priority": "p2",
+  "issues": [ { "title": "Phase 1", "body": "b", "labels": ["wobbly-gizmo-behaviour"] } ]
+}
+JSON
+out="$(run "$TMP/existing.json" "acme/widgets" "$TMP/plan-oddlabel.json")"; rc=$?
+check_eq "an unfamiliar label is accepted" "0" "$rc"
+check "the unfamiliar label reaches gh" "--label wobbly-gizmo-behaviour" "$(cat "$TMP/calls.log")"
+
+# --- a plan with no category files NOTHING ---
+cat >"$TMP/plan-nolabels.json" <<'JSON'
+{
+  "title": "Onboarding revamp",
+  "priority": "p2",
+  "issues": [
+    { "title": "Phase 1", "body": "b" },
+    { "title": "Phase 2", "body": "b", "labels": ["priority-p1"] }
+  ]
+}
+JSON
+out="$(run "$TMP/existing.json" "acme/widgets" "$TMP/plan-nolabels.json")"; rc=$?
+check_eq "a plan with no category exits 9" "9" "$rc"
+check "the refusal names the offending phase" "Phase 1" "$out"
+# A priority in the labels array is still not a category.
+check "a priority label does not count as a category" "Phase 2" "$out"
+check "the refusal says nothing was filed" "no issues were filed" "$out"
+check_eq "the refusal files nothing" "0" "$(issues_filed)"
+
 # --- a plan with no priority at all files NOTHING ---
 # Refusing beats defaulting: a silent default to p2 is how the priority labels became
 # meaningless in the first place, and half a filed plan is worse than none.
