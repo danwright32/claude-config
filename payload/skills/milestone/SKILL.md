@@ -15,10 +15,12 @@ Use for: a feature worth tracking as a milestone. Not for single tasks — just 
 
 ### 1. Frame  👤
 In a short exchange, confirm:
-- The **feature** (becomes the milestone title) and a one-paragraph **description**.
+- The **feature** (becomes the milestone title) and a one-paragraph **description**. The title NAMES the feature in at most 6 words (`Saved views`, `Salesforce sync v2`, `Queue windowing`); the narrative goes in the description. Never a narrative sentence, and never a category like `Accessibility` (categories are labels, since an issue can be two at once). The create path enforces that shape, and the full rule is in [NAMING.md](NAMING.md).
 - The **GitHub repo** (`owner/name`). If you're in a project dir, infer it from `gh repo view --json nameWithOwner -q .nameWithOwner` and confirm.
 - The **phases** — the chunks of work, each becoming one issue. If the user has a plan, derive phases from it; otherwise ask for the breakdown. Keep phases at feature-chunk altitude, not micro-tasks.
 - Optional: a **due date** (ISO8601).
+
+If the work is a standalone bug or chore that no feature ships with, it does not need a milestone of its own: use the repo's catch-all `Ungrouped` and just file the issue. See "Single issue" below.
 
 ### 2. Build the plan JSON
 Write a temp JSON file in the shape the helper expects:
