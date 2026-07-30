@@ -218,8 +218,9 @@ check_eq "empty title exits 2" "2" "$rc"
 # where he is looking" and "One store, one truth". They read as essay headings, so
 # the list could not be scanned. Nothing enforced a shape, so each session invented
 # a theme. The rule now lives here, where every filing path already funnels.
+# ("One store, one truth" is deliberately absent: it exists in the fixture, so it
+# is a reuse case, covered in 11b below.)
 narrative=(
-  "One store, one truth"
   "Let Dan act where he is looking"
   "A queue whose order and contents you can trust"
   "Trustworthy local verification: tests, guards, and the build"
