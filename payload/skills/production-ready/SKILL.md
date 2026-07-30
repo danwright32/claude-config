@@ -68,11 +68,13 @@ Offer, via **AskUserQuestion**, to file the backlog as GitHub issues in the audi
 
    Use the exact title it reports on the `MILESTONE-TITLE` line: `gh` matches milestones by name, so a case variant will not be found.
 
-3. File one issue per backlog item, each assigned to that milestone (group tightly-related items into one issue to avoid spam — especially `low` severity, which you may group by domain). Title = imperative summary; body = the gap, why it matters, the remediation direction, and the `path:line` evidence. Label with `production-readiness`, the matching `severity:*`, and the domain. **Never** apply any Claude/AI-attribution label.
+3. File one issue per backlog item, each assigned to that milestone (group tightly-related items into one issue to avoid spam, especially `low` severity, which you may group by domain). Title = imperative summary; body = the gap, why it matters, the remediation direction, and the `path:line` evidence. Label with `production-readiness`, the mapped `priority-pN`, and the domain. A gate blocks any `gh issue create` with no priority label. **Never** apply any Claude/AI-attribution label.
+
+   These findings are yours, not Dan's: you found them in the audit, so YOU choose each level from the mapping above rather than asking him to arbitrate a backlog he has not read.
 
        gh issue create --repo "<owner/name>" --title "<title>" --body "<body>" \
          --milestone "<milestone title>" \
-         --label "production-readiness" --label "severity:high"
+         --label "production-readiness" --label "priority-p1"
 
 4. If `gh` is not installed/authenticated or the repo isn't resolvable, skip filing and tell the user — the saved report still captures everything.
 
