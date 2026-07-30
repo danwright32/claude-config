@@ -89,7 +89,8 @@ check_eq "dry run exits 0" "0" "$rc"
 check "dry run previews the milestone" "WOULD-CREATE-MILESTONE repo=acme/widgets title=Onboarding revamp" "$out"
 n_issues="$(printf '%s\n' "$out" | grep -c '^WOULD-CREATE-ISSUE')"
 check_eq "one issue per phase" "3" "$n_issues"
-check "issue carries the milestone" "milestone=Onboarding revamp title=Phase 1: empty states" "$out"
+# The preview shows the level too, so an approval is given with the priority in view.
+check "issue carries the milestone and its level" "milestone=Onboarding revamp priority=priority-p1 title=Phase 1: empty states" "$out"
 check "last phase present" "title=Phase 3: telemetry" "$out"
 check_eq "dry run files nothing" "0" "$(issues_filed)"
 
@@ -115,6 +116,7 @@ check_eq "re-run creates no second milestone" "0" "$milestone_writes"
 cat >"$TMP/variant-plan.json" <<'JSON'
 {
   "title": "onboarding revamp",
+  "priority": "p2",
   "issues": [ { "title": "Phase 1: empty states", "body": "Design empty states." } ]
 }
 JSON
