@@ -251,7 +251,7 @@ isolating=(
   "Dan cannot act here"                                              # stop word: his name
 )
 short_but_punctuated=(
-  "One store, one truth"
+  "Saved views, part one"
   "Saved views: phase one"
   "Queue windowing, part two"
   "Ship it."
