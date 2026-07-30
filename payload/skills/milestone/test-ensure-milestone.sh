@@ -213,11 +213,15 @@ check "no args prints usage" "Usage:" "$out"
 out="$(ensure acme/widgets "")"; rc=$?
 check_eq "empty title exits 2" "2" "$rc"
 
-# --- 11. a NEW milestone title has to be a category, not a narrative sentence ---
+# --- 11. a NEW milestone title names the feature, not a narrative sentence ---
 # Why: on 2026-07-30 Dan found his milestone list full of titles like "Let Dan act
 # where he is looking" and "One store, one truth". They read as essay headings, so
 # the list could not be scanned. Nothing enforced a shape, so each session invented
 # a theme. The rule now lives here, where every filing path already funnels.
+#
+# A milestone is the overarching FEATURE, and its issues are what has to be finished
+# for that feature to ship. So the title is a short noun phrase naming the thing
+# being built. The narrative belongs in the milestone description.
 # ("One store, one truth" is deliberately absent: it exists in the fixture, so it
 # is a reuse case, covered in 11b below.)
 narrative=(
