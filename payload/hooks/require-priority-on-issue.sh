@@ -32,16 +32,26 @@ payload="$(cat)"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 read -r -d '' PROG <<'PY'
+import importlib.util
 import json
 import os
 import re
 import sys
 
-# The scanner is a sibling file. A failed import must crash loudly rather than be
-# caught here: the wrapper turns a non-zero exit into a visible "gate did not run"
-# warning, so a missing scanner can never read as a clean pass.
-sys.path.insert(0, os.environ["GATE_DIR"])
-from gh_issue_scan import Unreadable, deny_payload, flag_values, plural_issues, scan_creates
+# The scanner is a sibling file, loaded by its explicit path rather than by name.
+# `python3 -c` puts the working directory first on the import path, so importing by
+# name would let any gh_issue_scan.py sitting in whatever project the command runs
+# from shadow the real one, and the gate would enforce someone else's logic.
+#
+# A failure here must crash loudly rather than be caught: the wrapper turns a
+# non-zero exit into a visible "gate did not run" warning, so a missing scanner can
+# never read as a clean pass.
+_path = os.path.join(os.environ["GATE_DIR"], "gh_issue_scan.py")
+_spec = importlib.util.spec_from_file_location("gh_issue_scan", _path)
+if _spec is None or _spec.loader is None:
+    raise ImportError("cannot load the shared scanner at %s" % _path)
+scan = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(scan)
 
 RAW = sys.stdin.read()
 
