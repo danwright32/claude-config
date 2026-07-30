@@ -97,7 +97,7 @@ reason = (
     "and ANY of these for what it touches:\n"
     "  accessibility   ui-ux   performance   security   data-integrity   error-handling\n"
     "  monitoring   analytics   ci-hygiene   test-coverage   onboarding   deployment\n\n"
-    "That is a starting point and NOT a fixed list. Two rules for going outside it:\n"
+    "Those are a starting point and not a fixed list. Two rules for going outside it:\n"
     "1. Read the repo's own labels first and prefer one that already exists over a near synonym of it "
     "(if the repo says `ux`, use `ux`, not `ui-ux`):\n"
     "   gh label list --limit 100\n"

@@ -106,7 +106,7 @@ if [[ "$msg2" == *"file 2 issues with no category"* ]]; then pass=$((pass + 1));
   fail=$((fail + 1)); echo "FAIL: two-issue message should read 'file 2 issues', got: $msg2"; fi
 # The message must make clear the vocabulary is open and that several labels are fine,
 # or it will read as "pick one from a fixed list", which is the opposite of the rule.
-for want in "gh label list" "as many" "not a fixed list" "NAMING.md" "SKIP_CATEGORY_CHECK=1" "bug" "accessibility"; do
+for want in "gh label list" "as many" "not a fixed list" "gh label create" "NAMING.md" "SKIP_CATEGORY_CHECK=1" "bug" "accessibility"; do
   if [[ "$msg" == *"$want"* ]]; then pass=$((pass + 1)); else
     fail=$((fail + 1)); echo "FAIL: deny message should mention '$want'"; fi
 done
