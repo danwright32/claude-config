@@ -61,10 +61,10 @@ Offer, via **AskUserQuestion**, to file the backlog as GitHub issues in the audi
 
        gh api "repos/<owner>/<name>/milestones?state=open&per_page=100" --jq '.[] | "#\(.number) \(.title)"'
 
-   Then resolve it through the shared helper, which reuses a match, refuses to create a near duplicate, and only creates once the user has approved:
+   Then resolve it through the shared helper, which reuses a match and refuses to create a near duplicate:
 
-       bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>"                      # reuse only
-       bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>" --create-approved    # after approval
+       bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<existing milestone title>"   # reuse only
+       bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "Ungrouped"                    # the catch-all, no approval
 
    Use the exact title it reports on the `MILESTONE-TITLE` line: `gh` matches milestones by name, so a case variant will not be found.
 
