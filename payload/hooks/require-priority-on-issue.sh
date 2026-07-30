@@ -76,8 +76,8 @@ def has_priority(args):
 
 
 try:
-    creates = scan_creates(command, override="SKIP_PRIORITY_CHECK=1")
-except Unreadable:
+    creates = scan.scan_creates(command, override="SKIP_PRIORITY_CHECK=1")
+except scan.Unreadable:
     sys.exit(0)  # not ours to judge
 
 offenders = sum(1 for args, waived in creates if not waived and not has_priority(args))
