@@ -43,6 +43,12 @@
             "command": "__CLAUDE_HOME__/hooks/require-priority-on-issue.sh",
             "timeout": 15,
             "statusMessage": "Checking the issue carries a priority"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/require-category-on-issue.sh",
+            "timeout": 15,
+            "statusMessage": "Checking the issue carries a category"
           }
         ]
       }
