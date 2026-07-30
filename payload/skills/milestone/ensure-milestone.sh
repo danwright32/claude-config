@@ -194,14 +194,18 @@ case "$kind" in
     ;;
 esac
 
-# --- a NEW title has to be a category, not a narrative sentence -----------
+# --- a NEW title names the feature, not a narrative sentence ---------------
+# A milestone is the overarching feature, and its issues are what has to be finished
+# for that feature to ship. So the title is a short noun phrase naming the thing
+# being built, and the narrative goes in the description.
+#
 # Only ever checked here, on the path that CREATES. A title that already names a
 # real milestone is reused above and never reaches this point, which matters
 # because Dan kept the narrative milestones he already had: applying the shape rule
 # to a lookup would orphan every issue that belongs to one of them.
 #
 # This is a shape check, not a vocabulary check. Dan deliberately chose not to
-# freeze a list of allowed categories, so anything that READS as a category passes.
+# freeze a list of allowed names, so anything that READS as a feature name passes.
 shape="$(python3 -c '
 import re
 import sys
