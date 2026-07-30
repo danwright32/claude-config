@@ -34,21 +34,9 @@
           },
           {
             "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/require-milestone-on-issue.sh",
-            "timeout": 10,
-            "statusMessage": "Checking the new issue names a milestone"
-          },
-          {
-            "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/require-priority-on-issue.sh",
+            "command": "__CLAUDE_HOME__/hooks/require-issue-fields.sh",
             "timeout": 15,
-            "statusMessage": "Checking the issue carries a priority"
-          },
-          {
-            "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/require-category-on-issue.sh",
-            "timeout": 15,
-            "statusMessage": "Checking the issue carries a category"
+            "statusMessage": "Checking the issue has a milestone, priority and category"
           }
         ]
       }
