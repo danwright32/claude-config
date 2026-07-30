@@ -1,13 +1,18 @@
-# Milestone titles and issue priority
+# Milestones, categories and priority
 
-The single source of truth for two things every filed issue depends on: what a
-milestone is called, and how urgent the issue is. Every path that files an issue
+The single source of truth for how a filed issue is organised: which milestone it
+belongs to, what it is about, and how urgent it is. Every path that files an issue
 (`/milestone`, `/plan-council`, `/plan-lite`, `/production-ready`, `/next-issue`,
 the end of turn issue review) points here instead of restating the rules, so there
 is one copy to change.
 
-Both rules are also enforced by code, because a rule that lives only in a prompt is
-a hope. The enforcement is listed at the bottom.
+Three separate axes. Keeping them separate is the whole point.
+
+| Axis | Mechanism | How many per issue | Enforced |
+|---|---|---|---|
+| Which feature does this ship with | Milestone | Exactly one | Yes, a gate |
+| What is it about | Labels | As many as fit | No, guidance |
+| How urgent is it | Priority label | Exactly one | Yes, a gate |
 
 ## Why this file exists
 
@@ -21,58 +26,78 @@ On 2026-07-30 Dan opened his milestone list and found this:
     One paid contact answer, recorded and reused correctly
 
 Every one of those is a decent sentence and a bad milestone. They read as essay
-headings, so the list cannot be scanned, two of them overlap without it being
-visible, and none of them tells you what kind of work is inside. Nothing in the
-config said what shape a title should be, so each session invented a theme.
+headings, so the list could not be scanned, and none of them says what feature the
+work belongs to. Nothing in the config said what shape a title should be, so each
+session invented a theme.
 
 The same day he found the priority labels applied to some issues and not others,
-with two rival scales (`sev-*` and `severity:*`) sitting alongside them, so the
-backlog could not be read by urgency either.
+with two rival scales (`sev-*` and `severity:*`) alongside them, so the backlog
+could not be read by urgency either.
 
-## Milestone titles: name a category
+## Milestone: the feature that ships
 
-A milestone groups a **category of work** that stays true for months. Its title is
-a short noun phrase naming that category. Nothing else.
+A milestone is **an overarching feature**, and its issues are what has to be
+finished for that feature to ship. It closes when the feature is done. That is the
+whole test: if it can never be completed, it is not a milestone.
 
-Dan's own examples of the right shape:
+The title names the thing being built:
 
-    Accessibility
-    UI/UX
-    Monitoring and alerting
-    Analytics
-    Tech debt and CI hygiene
-
-Others that fit the same mould: `Data integrity`, `Security and privacy`,
-`Performance`, `Reliability`, `Docs`, `Onboarding`, `Error handling`,
-`Canvas & editor`, `Test coverage`.
+    Saved views
+    Salesforce sync v2
+    Bulk contact enrichment
+    Queue windowing
+    Node test coloring in edit mode
 
 The shape, concretely:
 
 | Rule | Why |
 |---|---|
-| At most 5 words, at most 48 characters | A category name that needs a clause is not a category |
+| At most 6 words, at most 48 characters | A name that needs a clause is a description, not a name |
 | No `,` `;` `:` `.` `!` `?` | Sentence punctuation holds clauses together, and a name has no clauses |
 | No pronouns, copulas, modals or relative pronouns (is, are, can, you, he, where, when, that) | Those words describe rather than name |
 | No person's name | A milestone is about the work, not about who noticed it |
 
-**The narrative still matters. It goes in the milestone description**, which is
-where the detail belongs and where GitHub actually shows it. So the milestone that
-used to be titled "One store, one truth" becomes:
+**The narrative still matters, and it goes in the milestone description**, which is
+where the detail belongs and where GitHub actually shows it:
 
-    Title:        Data integrity
-    Description:  Duplicates with no way out, retired columns nobody reads,
-                  write-only snapshot fields, and no record of what the nightly
-                  scout did to which show.
+    Title:        Node test coloring in edit mode
+    Description:  Failed node-test styling persists into view mode, the wider
+                  code-panel default never applies, and there is no way to clear
+                  test-run coloring. Ships when a test run's colour is correct in
+                  both modes and clearable.
 
-Nothing is lost, and the list becomes readable.
+Nothing is lost, and the list becomes scannable.
 
-### Choosing between an existing milestone and a new one
+### What is NOT a milestone
+
+A **category** is not a milestone. `Accessibility`, `UI/UX`, `Monitoring and
+alerting`, `Analytics`, `Tech debt and CI hygiene` never complete, and an issue can
+hold only one milestone while it is routinely two categories at once (an
+accessibility fix that is also tech debt). Those are labels. See below.
+
+### The catch-all: `Ungrouped`
+
+Most issues are standalone bugs and chores belonging to no feature. They still need
+a milestone, so every repo has one holding pen, titled `Ungrouped`.
+
+It is exempt from the approval rule: `ensure-milestone.sh` creates it without asking,
+because choosing it is not a decision anyone needs to make. Requiring approval there
+is what caused the original problem, a session inventing a milestone on the spot to
+satisfy the gate. The exemption is an exact title match, so `Ungrouped work and
+other things` is an ordinary title and still needs approval.
+
+Its progress bar never completes. That is expected: it is a holding pen, not a
+feature.
+
+### Resolving a milestone
 
 Always prefer an existing open milestone. Resolve through the helper, which reuses a
-match, refuses to create a near duplicate, and never creates without approval:
+match, refuses to create a near duplicate, and never creates without approval
+(except the catch-all):
 
     bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<title>"                    # reuse only
     bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<title>" --create-approved  # after approval
+    bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "Ungrouped"                  # catch-all, no approval
 
 Pass the exact title it reports on the `MILESTONE-TITLE` line to
 `gh issue create --milestone`, because `gh` matches milestones by name and a case
@@ -81,6 +106,25 @@ variant is not found.
 The shape rule guards **creation only**. Dan kept the narrative milestones he
 already had, so an issue must still be able to attach to one: a lookup is never
 shape checked.
+
+## Categories: labels
+
+What an issue is *about* is a label, so an issue can carry several. This is where
+the category names live:
+
+    accessibility        ui-ux              monitoring-and-alerting
+    analytics            tech-debt          ci-hygiene
+    data-integrity       security           performance
+    docs                 error-handling     test-coverage
+
+**Reuse what the repo already has** before adding a name. The repos already carry
+`accessibility`, `ux`, `tech-debt`, `frontend`, `canvas`, `data-pipeline`, `bug`,
+`enhancement`. A second name for a category that already has one is worse than an
+imperfect fit. Create a new label only when nothing existing covers it, keeping it
+short, kebab-case and reusable.
+
+This axis is deliberately **not** gated. Dan asked for priority on every issue, not
+category, and a rule nobody asked for is friction.
 
 ## Priority: p0 to p4
 
@@ -144,7 +188,7 @@ removing a label strips it from every issue that carries it, so that is Dan's ca
 |---|---|---|
 | An issue has a milestone | `~/.claude/hooks/require-milestone-on-issue.sh` (PreToolUse) | `SKIP_MILESTONE_CHECK=1 <command>` |
 | An issue has a priority | `~/.claude/hooks/require-priority-on-issue.sh` (PreToolUse) | `SKIP_PRIORITY_CHECK=1 <command>` |
-| A new milestone title is a category | `ensure-milestone.sh`, on the create path only | `ALLOW_ANY_MILESTONE_TITLE=1 <command>` |
+| A new milestone title names a feature | `ensure-milestone.sh`, on the create path only | `ALLOW_ANY_MILESTONE_TITLE=1 <command>` |
 
 Every override is visible in the command itself, so it cannot happen by accident or
 go unnoticed in the transcript. Explain to Dan why you are using one, first. An
