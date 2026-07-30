@@ -77,7 +77,28 @@ dry="${DRY_RUN:-}"
 # plan missing a level files nothing at all rather than half of itself.
 default_priority="$(jq -r '.priority // empty' "$plan")"
 n_issues="$(jq '(.issues // []) | length' "$plan")"
-missing=""
+
+# labels_for <index> : the issue's own labels, else the plan-level default, one per line
+labels_for() {
+  local n="$1" out
+  out="$(jq -r "(.issues[$n].labels // []) | .[]" "$plan" 2>/dev/null)"
+  [[ -z "$out" ]] && out="$(jq -r '(.labels // []) | .[]' "$plan" 2>/dev/null)"
+  printf '%s' "$out"
+}
+
+# A category is any label that is not just a priority level, because the vocabulary is
+# deliberately open: Dan restricted the levels, not the categories.
+has_category() {
+  local l
+  while IFS= read -r l; do
+    [[ -z "$l" ]] && continue
+    if [[ ! "$l" =~ ^priority-[pP][0-4]$ ]]; then return 0; fi
+  done <<<"$1"
+  return 1
+}
+
+missing_priority=""
+missing_category=""
 i=0
 while [[ "$i" -lt "$n_issues" ]]; do
   it="$(jq -r ".issues[$i].title // empty" "$plan")"
@@ -86,17 +107,31 @@ while [[ "$i" -lt "$n_issues" ]]; do
   # "p2" and "priority-p2" are both natural to write by hand, so accept either.
   [[ "$lvl" =~ ^[pP][0-4]$ ]] && lvl="priority-${lvl}"
   if [[ ! "$lvl" =~ ^priority-[pP][0-4]$ ]]; then
-    missing="$missing  \"${it:-<untitled issue $i>}\": ${lvl:-(none given)}"$'\n'
+    missing_priority="$missing_priority  \"${it:-<untitled issue $i>}\": ${lvl:-(none given)}"$'\n'
+  fi
+  if ! has_category "$(labels_for "$i")"; then
+    missing_category="$missing_category  \"${it:-<untitled issue $i>}\""$'\n'
   fi
   i=$((i + 1))
 done
 
-if [[ -n "$missing" ]]; then
+if [[ -n "$missing_priority" ]]; then
   echo "MISSING-PRIORITY every issue needs a priority level, and these do not have a valid one:" >&2
-  printf '%s' "$missing" >&2
+  printf '%s' "$missing_priority" >&2
   echo "Add \"priority\" to each issue in the plan, or a plan-level \"priority\" as the default for all of them. Accepted: p0 to p4, or the full priority-p0 to priority-p4." >&2
   echo "  priority-p0 broken now, drop everything; priority-p1 important, do next; priority-p2 normal, the default for real work; priority-p3 nice to have; priority-p4 someday, maybe never." >&2
   echo "You choose the level per phase: these are your plan's phases, not something the user should have to grade. The rule is in ~/.claude/skills/milestone/NAMING.md." >&2
+fi
+
+if [[ -n "$missing_category" ]]; then
+  echo "MISSING-CATEGORY every issue needs at least one label saying what it is about, and these have none:" >&2
+  printf '%s' "$missing_category" >&2
+  echo "Add \"labels\" to each issue in the plan, or a plan-level \"labels\" array as the default for all of them. Apply as many as genuinely apply, since a phase is often about more than one thing." >&2
+  echo "A starting point, one for the kind of work (bug, enhancement, tech-debt, documentation) plus any that fit for what it touches (accessibility, ui-ux, performance, security, data-integrity, error-handling, monitoring, analytics, ci-hygiene, test-coverage, onboarding, deployment)." >&2
+  echo "That list is NOT fixed. Prefer a label the repo already has (\`gh label list --limit 100\`) over a near synonym, and invent one when nothing fits rather than forcing a bad match. A priority level on its own does not count as a category." >&2
+fi
+
+if [[ -n "$missing_priority" || -n "$missing_category" ]]; then
   echo "ABORTED: no issues were filed, and the milestone was not touched." >&2
   exit 9
 fi
