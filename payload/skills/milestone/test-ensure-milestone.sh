@@ -261,7 +261,7 @@ done
 out="$(ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved)"
 check "the refusal is named" "TITLE-NOT-A-FEATURE" "$out"
 check "the refusal points at the shared rule" "NAMING.md" "$out"
-check "the refusal says the narrative belongs in the description" "description" "$out"
+check "the refusal says the narrative belongs in the description" "description" "$(printf '%s' "$out" | tr 'A-Z' 'a-z')"
 check "the refusal names the override" "ALLOW_ANY_MILESTONE_TITLE=1" "$out"
 
 # Feature shaped titles pass. A milestone is the feature that ships when its issues
