@@ -15,7 +15,7 @@ Use for: a feature worth tracking as a milestone. Not for single tasks — just 
 
 ### 1. Frame  👤
 In a short exchange, confirm:
-- The **feature** (becomes the milestone title) and a one-paragraph **description**. The title NAMES the feature in at most 6 words (`Saved views`, `Salesforce sync v2`, `Queue windowing`); the narrative goes in the description. Never a narrative sentence, and never a category like `Accessibility` (categories are labels, since an issue can be two at once). The create path enforces that shape, and the full rule is in [NAMING.md](NAMING.md).
+- The **feature** (becomes the milestone title) and a one-paragraph **description**. The title NAMES the feature, with NO punctuation at all (a comma or colon is refused at any length) and at most 8 words (`Saved views`, `Bulk contact enrichment for scouted shows`); the narrative goes in the description. Never a narrative sentence, and never a category like `Accessibility` (categories are labels, since an issue can be two at once). The create path enforces that shape, and the full rule is in [NAMING.md](NAMING.md).
 - The **GitHub repo** (`owner/name`). If you're in a project dir, infer it from `gh repo view --json nameWithOwner -q .nameWithOwner` and confirm.
 - The **phases** — the chunks of work, each becoming one issue. If the user has a plan, derive phases from it; otherwise ask for the breakdown. Keep phases at feature-chunk altitude, not micro-tasks.
 - Optional: a **due date** (ISO8601).
