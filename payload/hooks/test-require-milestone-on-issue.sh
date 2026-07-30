@@ -200,6 +200,42 @@ else
   echo "FAIL: a broken gate should announce itself on stderr, got: ${broken_err:-<silence>}"
 fi
 
+# --- failure path: a missing shared scanner is loud, not silent ---
+# The command splitting lives in gh_issue_scan.py now, so it can go missing on its
+# own (a half finished sync, a rename). That must read as a broken gate rather than
+# a clean pass, and the gate must not pick up some other copy from the working
+# directory instead.
+MOVED_DIR="$TMP_DIR/moved"
+mkdir -p "$MOVED_DIR"
+cp "$HOOK" "$MOVED_DIR/"
+noscanner_out="$(printf '{"tool_input":{"command":"gh issue create --title T"}}' \
+  | bash "$MOVED_DIR/$(basename "$HOOK")" 2>"$TMP_ERR")"
+noscanner_err="$(cat "$TMP_ERR")"
+if [[ "$noscanner_out" != *'"deny"'* ]]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL: a missing scanner should not block the command"
+fi
+if [[ "$noscanner_err" == *"MILESTONE GATE DID NOT RUN"* ]]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL: a missing scanner should announce itself, got: ${noscanner_err:-<silence>}"
+fi
+
+# --- the deny message points at the naming rule, not just at "a milestone" ---
+# A gate that only says "add a milestone" is how the narrative titles arrived: the
+# model invented a theme name on the spot. The refusal has to name the shape.
+for want in "NAMING.md" "Accessibility" "category"; do
+  if [[ "$msg" == *"$want"* ]]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    echo "FAIL: deny message should mention '$want'"
+  fi
+done
+
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$fail" -eq 0 ]]
