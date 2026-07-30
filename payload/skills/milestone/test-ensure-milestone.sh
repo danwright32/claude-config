@@ -327,6 +327,15 @@ check_eq "it creates nothing" "0" "$(created_count)"
 out="$(ensure acme/widgets "Saved views")"; rc=$?
 check_eq "an ordinary feature title still needs approval" "5" "$rc"
 
+# Creating a milestone is a PLANNING decision, so the refusal has to say where
+# creation belongs and offer the two answers that are always available. Otherwise a
+# session filing one ad hoc issue reads "needs approval" as "ask to create one",
+# which is how a one-off bug ended up with a milestone of its own.
+check "the refusal names the catch-all" "Ungrouped" "$out"
+check "the refusal says creation belongs to a planning flow" "plan-council" "$out"
+check "the refusal names the other planning flow" "plan-lite" "$out"
+check "the refusal says not to create one for a one-off issue" "one-off" "$out"
+
 # Once it exists it is reused like anything else, never twinned.
 cat >"$TMP/withcatchall.json" <<'JSON'
 [
