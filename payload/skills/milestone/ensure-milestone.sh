@@ -212,8 +212,8 @@ import sys
 
 title = sys.argv[1]
 
-# A sentence needs punctuation to hold its clauses together. A category name does
-# not have clauses.
+# A sentence needs punctuation to hold its clauses together. The name of a feature
+# does not have clauses.
 PUNCT = ",;:.!?"
 
 # Words that only turn up when a title is describing rather than naming: pronouns,
