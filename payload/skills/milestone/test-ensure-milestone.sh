@@ -213,6 +213,76 @@ check "no args prints usage" "Usage:" "$out"
 out="$(ensure acme/widgets "")"; rc=$?
 check_eq "empty title exits 2" "2" "$rc"
 
+# --- 11. a NEW milestone title has to be a category, not a narrative sentence ---
+# Why: on 2026-07-30 Dan found his milestone list full of titles like "Let Dan act
+# where he is looking" and "One store, one truth". They read as essay headings, so
+# the list could not be scanned. Nothing enforced a shape, so each session invented
+# a theme. The rule now lives here, where every filing path already funnels.
+narrative=(
+  "One store, one truth"
+  "Let Dan act where he is looking"
+  "A queue whose order and contents you can trust"
+  "Trustworthy local verification: tests, guards, and the build"
+  "Say it once, and only when Dan can act on it"
+  "One paid contact answer, recorded and reused correctly"
+)
+for t in "${narrative[@]}"; do
+  out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
+  check_eq "narrative title is refused: $t" "8" "$rc"
+  check_eq "narrative title creates nothing: $t" "0" "$(created_count)"
+done
+
+# The refusal has to teach the shape, not just say no, or the next attempt is
+# another guess.
+out="$(ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved)"
+check "the refusal is named" "TITLE-NOT-A-CATEGORY" "$out"
+check "the refusal points at the shared rule" "NAMING.md" "$out"
+check "the refusal shows what a good title looks like" "Accessibility" "$out"
+check "the refusal names the override" "ALLOW_ANY_MILESTONE_TITLE=1" "$out"
+
+# Category shaped titles pass, including the ones Dan named himself.
+category=(
+  "Accessibility"
+  "UI/UX"
+  "Monitoring and alerting"
+  "Analytics"
+  "Tech debt and CI hygiene"
+  "Data integrity"
+  "Security and privacy"
+  "Canvas & editor"
+)
+for t in "${category[@]}"; do
+  out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
+  check_eq "category title is accepted: $t" "0" "$rc"
+done
+
+# --- 11b. reuse is never blocked by the shape rule ---
+# Dan kept his existing narrative milestones, so an issue still has to be able to
+# attach to one. The shape rule guards CREATION only: applying it to a lookup would
+# orphan every issue belonging to a milestone that already exists.
+out="$(ensure acme/widgets "One store, one truth")"; rc=$?
+check_eq "an existing narrative milestone is still reusable" "0" "$rc"
+check "reuse of a narrative milestone reports it" "MILESTONE-EXISTS 7" "$out"
+check "reuse reports the title for gh to match on" "MILESTONE-TITLE One store, one truth" "$out"
+check_eq "reuse creates nothing" "0" "$(created_count)"
+
+# Same lookup with approval to create: it matches, so it never reaches the shape
+# check either.
+out="$(ensure acme/widgets "One store, one truth" --create-approved)"; rc=$?
+check_eq "reuse with approval still exits 0" "0" "$rc"
+check "reuse with approval still reuses" "MILESTONE-EXISTS 7" "$out"
+
+# --- 11c. the shape rule is checked before anything is written ---
+out="$(DRY_RUN=1 ensure acme/widgets "One paid contact answer, recorded and reused correctly" --create-approved)"; rc=$?
+check_eq "a dry run of a narrative title is still refused" "8" "$rc"
+check_not "a refused dry run does not claim it would create" "WOULD-CREATE-MILESTONE" "$out"
+
+# --- 11d. the documented override lets a genuine exception through ---
+out="$(ALLOW_ANY_MILESTONE_TITLE=1 ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved)"; rc=$?
+check_eq "the override creates the milestone" "0" "$rc"
+check "the override reports a real creation" "MILESTONE-CREATED" "$out"
+check_eq "the override makes exactly one write call" "1" "$(created_count)"
+
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$fail" -eq 0 ]]
