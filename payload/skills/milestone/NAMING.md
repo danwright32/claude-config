@@ -172,9 +172,9 @@ This is a **starting list, not a closed one.** Two rules govern going outside it
 Never apply `claude-suggested` or any label attributing the issue to Claude or AI.
 Never apply `sev-*` or `severity:*`: priority is the only urgency scale.
 
-This axis is deliberately **not** gated. Dan asked for priority on every issue, not
-category, and a rule nobody asked for is friction. The guidance is strong; the
-enforcement is not.
+The vocabulary above is guidance, and the presence of a category is enforced. Those
+are different things on purpose: a closed list would go stale and start forcing bad
+fits, while a missing category leaves an issue that can never be found by area.
 
 ## Priority: p0 to p4
 
