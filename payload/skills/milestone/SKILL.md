@@ -29,11 +29,16 @@ Write a temp JSON file in the shape the helper expects:
       "title": "<feature name>",
       "description": "<milestone description, markdown ok>",
       "due_on": "2026-09-01T00:00:00Z",
+      "priority": "p2",
+      "labels": ["enhancement"],
       "issues": [
-        { "title": "Phase 1: <name>", "body": "<what this phase covers>" },
-        { "title": "Phase 2: <name>", "body": "..." }
+        { "title": "Phase 1: <name>", "body": "<what this phase covers>",
+          "priority": "p1", "labels": ["enhancement", "onboarding"] },
+        { "title": "Phase 2: <name>", "body": "...", "labels": ["tech-debt"] }
       ]
     }
+
+Every issue needs a priority and at least one category label, either its own or the plan-level default. The helper refuses the whole plan and files nothing if any phase is missing either, because this is the one filing path the gates cannot see into.
 
 `due_on` is optional; omit the key if there's no date. `issues` may be empty to create a milestone with no issues yet.
 
@@ -60,8 +65,8 @@ It prints `MILESTONE-EXISTS` or `MILESTONE-CREATED` plus a `MILESTONE-TITLE <tit
 
 `Ungrouped` is every repo's holding pen for standalone bugs and chores that belong to no feature, and it is the right answer far more often than a new milestone. It is exempt from the approval rule, so reach for it instead of inventing a milestone to satisfy the gate.
 
-## Priority
-Every issue also carries exactly one `priority-p0` to `priority-p4` label, enforced by a second gate. **Who picks the level matters**: if Dan reported the problem himself, ask him with an AskUserQuestion picker that carries the meanings in its option descriptions; if you found it, choose it yourself and say which. Both rules, the scale, and the label helper are in [NAMING.md](NAMING.md).
+## Priority and category
+Every issue also carries exactly one `priority-p0` to `priority-p4` label and at least one category label saying what it is about, each enforced by its own gate. Categories are unrestricted and multiple are expected: an accessibility fix that is also tech debt gets both. **Who picks the level matters**: if Dan reported the problem himself, ask him with an AskUserQuestion picker that carries the meanings in its option descriptions; if you found it, choose it yourself and say which. Both rules, the scale, and the label helper are in [NAMING.md](NAMING.md).
 
 ## Notes
 - The same helpers back `/plan-council`, `/plan-lite` and `/production-ready`, so milestones look identical no matter which path created them, and re-running a plan reuses its milestone instead of duplicating it.
