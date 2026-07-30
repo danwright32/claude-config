@@ -72,6 +72,8 @@ Open with any CAVEATS before the summary — the user must never mistake a partl
 ## 5. Offer a tracking milestone  👤
 Once the plan is approved, offer to turn it into a GitHub milestone with one issue per plan phase — this is how big features get tracked. Ask with **AskUserQuestion** ("Create a GitHub milestone + one issue per phase for this plan?"); skip silently if the user declines. On yes:
 1. Build a temp JSON file: `title` = the feature, `description` = a short summary plus the Discussion/issue link from step 3, `issues` = one `{title, body}` per phase of the synthesized plan (phase name as title, the phase's scope as body).
+
+   This is one of only three places a milestone gets created (`/plan-lite` and `/milestone` are the others), so the title matters: it NAMES the feature in at most 6 words (`Saved views`, `Queue windowing`), never a narrative sentence and never a category like `Accessibility`, since categories are labels and an issue can be two at once. The helper exits 8 refusing a title that is not shaped like a feature name. Every issue also needs a `priority-p0` to `priority-p4` label, which you choose per phase. Both rules: `~/.claude/skills/milestone/NAMING.md`.
 2. Preview with a dry run, then create:
 
        DRY_RUN=1 bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>   # preview
