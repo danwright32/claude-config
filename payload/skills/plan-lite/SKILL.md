@@ -30,7 +30,9 @@ Revise the plan to address each red-team point (or note why you're pushing back)
 - If a genuine values trade-off remains (only the user can decide), present it with **AskUserQuestion**, not prose.
 
 ### 6. Offer a tracking milestone  👤
-After the plan is settled, offer to turn it into a GitHub milestone with one issue per phase — the standard way to track a feature. Ask with **AskUserQuestion**; skip silently if declined. On yes, confirm the repo (`gh repo view --json nameWithOwner -q .nameWithOwner` from the project dir, then confirm with the user), build a temp JSON (`title` = feature, `description` = short summary, `issues` = one `{title, body}` per plan phase), preview, then create:
+After the plan is settled, offer to turn it into a GitHub milestone with one issue per phase, the standard way to track a feature. This is one of the only three places a milestone gets created (`/plan-council` and `/milestone` are the others), so the title matters: it NAMES the feature in at most 6 words (`Saved views`, `Salesforce sync v2`), never a narrative sentence and never a category like `Accessibility`, since categories are labels. The helper refuses a title that is not shaped like a feature name. Every issue also needs a `priority-p0` to `priority-p4` label, which you choose per phase (these are your plan's phases, not something Dan should have to grade). Both rules: `~/.claude/skills/milestone/NAMING.md`.
+
+Ask with **AskUserQuestion**; skip silently if declined. On yes, confirm the repo (`gh repo view --json nameWithOwner -q .nameWithOwner` from the project dir, then confirm with the user), build a temp JSON (`title` = feature, `description` = short summary, `issues` = one `{title, body}` per plan phase), preview, then create:
 
     DRY_RUN=1 bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>   # preview
     bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>             # create
