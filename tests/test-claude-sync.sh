@@ -14,6 +14,14 @@ check(){ if eval "$2"; then ok "$1"; else bad "$1 (expr: $2)"; fi; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+# Redirect the shell rc for the WHOLE suite, not just the alias tests. install-autosync
+# installs the claudesync alias, and the older autosync tests below call it without
+# setting this, so a default of ~/.zshrc means the suite edits the real shell config of
+# whoever runs it. It did exactly that, appending aliases pointing at temp dirs. A test
+# must be structurally unable to touch live config, so the safe value is the default
+# here and individual tests override it only to point at another throwaway file.
+export SYNC_ZSHRC="$WORK/zshrc-guard"
 CH="$WORK/dot-claude"          # fake ~/.claude
 REPO="$WORK/repo"              # fake sync repo
 mkdir -p "$CH/hooks" "$CH/skills/plan-council" "$CH/skills/wrangler" \
@@ -1190,6 +1198,65 @@ if git -C "$(dirname "$SCRIPT")" rev-parse --git-dir >/dev/null 2>&1; then
 else
   ok "no bytecode tracked in the sync repo (skipped: not a git checkout)"
 fi
+
+echo "== install-autosync installs the claudesync shell alias, idempotently =="
+# Why: the /sync-config skill lives under skills/ so it reaches every Mac on the next
+# push, but the `claudesync` terminal alias lives in ~/.zshrc which is deliberately NOT
+# synced. So the alias had to be added by hand on each Mac while the skill arrived by
+# itself. SYNC_ZSHRC redirects the target, so no test can reach the real ~/.zshrc.
+ZDIR="$WORK/zsh"; mkdir -p "$ZDIR"
+ALIAS_LINE="alias claudesync='"'"'$HOME/claude-config-sync/claude-sync pull'"'"'"
+
+# 1. a zshrc with no alias gets one appended, and existing content is preserved
+ZRC="$ZDIR/rc-plain"
+printf 'export EDITOR=bbedit\n' > "$ZRC"
+outZ="$(SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
+  SYNC_ZSHRC="$ZRC" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync 2>&1)"
+check "alias added when missing"        "grep -q 'alias claudesync=' '$ZRC'"
+check "alias runs a pull"               "grep -q \"claude-sync' *pull\|claude-sync pull\" '$ZRC'"
+check "alias line is commented"         "grep -q 'claude-config-sync: pull shared' '$ZRC'"
+check "existing zshrc content kept"     "grep -q 'EDITOR=bbedit' '$ZRC'"
+check "it says the alias was added"     "printf '%s' \"\$outZ\" | grep -qi 'alias'"
+
+# 2. assume it runs twice: a second install must not append a duplicate
+SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
+  SYNC_ZSHRC="$ZRC" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync >/dev/null 2>&1
+check "no duplicate alias on re-run"    "[ \"\$(grep -c 'alias claudesync=' '$ZRC')\" = 1 ]"
+check "no duplicate comment on re-run"  "[ \"\$(grep -c 'claude-config-sync: pull shared' '$ZRC')\" = 1 ]"
+
+# 3. an absent zshrc is created rather than skipped
+ZRC2="$ZDIR/rc-absent"
+SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
+  SYNC_ZSHRC="$ZRC2" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync >/dev/null 2>&1
+check "absent zshrc is created"         "[ -f '$ZRC2' ]"
+check "created zshrc has the alias"     "grep -q 'alias claudesync=' '$ZRC2'"
+
+# 4. someone else's claudesync alias is LEFT ALONE and reported, never rewritten.
+# This is the user's shell config: silently repointing a command they typed themselves
+# is worse than telling them it differs.
+ZRC3="$ZDIR/rc-conflict"
+printf "alias claudesync='echo something else'\n" > "$ZRC3"
+outZ3="$(SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
+  SYNC_ZSHRC="$ZRC3" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync 2>&1)"
+check "a different alias is untouched"  "grep -q 'echo something else' '$ZRC3'"
+check "no second alias appended"        "[ \"\$(grep -c 'alias claudesync=' '$ZRC3')\" = 1 ]"
+check "the difference is reported"      "printf '%s' \"\$outZ3\" | grep -qi 'differ\|already\|points'"
+
+# 5. `~` and the expanded home directory are the SAME path, so an alias written with a
+# tilde (which is how it was added by hand on this Mac) must count as already installed
+# rather than as somebody else's conflicting alias. A gate that cries wolf gets ignored.
+ZRC4="$ZDIR/rc-tilde"
+printf "alias claudesync='~/claude-config-sync/claude-sync pull'\n" > "$ZRC4"
+outZ4="$(SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
+  SYNC_ZSHRC="$ZRC4" SYNC_SELF_DIR="$HOME/claude-config-sync" CLAUDE_HOME="$CA" \
+  bash "$SCRIPT" install-autosync 2>&1)"
+check "a tilde alias counts as installed"  "printf '%s' \"\$outZ4\" | grep -qi 'already installed'"
+check "no duplicate for the tilde form"    "[ \"\$(grep -c 'alias claudesync=' '$ZRC4')\" = 1 ]"
+check "the tilde form is not called a conflict" "! printf '%s' \"\$outZ4\" | grep -qi 'points somewhere else'"
+
+echo "== the suite never touches a real shell rc =="
+check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
+check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

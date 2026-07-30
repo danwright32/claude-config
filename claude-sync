@@ -1115,6 +1115,56 @@ PL
 }
 
 # ---------- install-autosync: receive-timer + (if available) fswatch watcher ----------
+# --- the claudesync shell alias -------------------------------------------
+# The /sync-config skill lives under skills/, so it reaches every Mac on the next
+# push. This alias does NOT: it lives in ~/.zshrc, which is deliberately outside the
+# sync. So the shortcut had to be added by hand on each Mac while the skill arrived by
+# itself. Installing it alongside the launch agents makes the whole setup travel
+# together. SYNC_ZSHRC redirects the target so the tests can never touch a real one.
+ensure_zsh_alias(){
+  local rc="${SYNC_ZSHRC:-$HOME/.zshrc}"
+  # SYNC_SELF_DIR lets a test pin the repo location without moving the script.
+  local selfdir="${SYNC_SELF_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+  local self="$selfdir/claude-sync"
+  local comment="# claude-config-sync: pull shared ~/.claude config onto this Mac"
+  local want="alias claudesync='$self pull'"
+
+  # No need to create the file first: the append below creates it when absent, and
+  # the grep above tolerates a missing file. A separate touch was dead code that no
+  # test could tell apart.
+
+  # `|| true`: with `set -e` and `pipefail`, a grep that simply finds nothing would
+  # abort the whole install silently, which is exactly what it did the first time.
+  local existing
+  existing="$(grep -n '^[[:space:]]*alias[[:space:]]\+claudesync=' "$rc" 2>/dev/null | head -1 || true)"
+
+  if [ -n "$existing" ]; then
+    # `~/x` and `$HOME/x` are the same path, and the alias on this Mac was added by
+    # hand with a tilde. Comparing the raw strings would call that a conflict and send
+    # the user to fix something that is already correct.
+    # Compare the COMMAND, not the raw line: quoting style and a tilde are noise.
+    local found_cmd="${existing#*=}"        # everything after the first '='
+    found_cmd="${found_cmd//\'/}"           # drop single quotes
+    found_cmd="${found_cmd//\"/}"           # and double quotes
+    found_cmd="${found_cmd//\~\//$HOME/}"   # a leading ~ is the home directory
+    if [ "$found_cmd" = "$self pull" ]; then
+      echo "Shell alias already installed: claudesync"
+    else
+      # Someone's own alias. Repointing a command they typed themselves, silently, is
+      # worse than telling them it differs and letting them decide.
+      echo "Left your existing claudesync alias alone: it already exists in $rc and points somewhere else."
+      echo "  yours:  ${existing#*:}"
+      echo "  ours:   $want"
+      echo "  Change it by hand if you want the shared one."
+    fi
+    return 0
+  fi
+
+  # A newline first, so this never lands glued onto a line with no trailing newline.
+  printf '\n%s\n%s\n' "$comment" "$want" >> "$rc"
+  echo "Installed shell alias: claudesync (run it in a new terminal, or: source $rc)"
+}
+
 do_install_autosync(){
   local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
   local interval="${SYNC_INTERVAL:-604800}"   # default weekly
@@ -1140,6 +1190,7 @@ do_install_autosync(){
     rm -f "$agentdir/com.claudesync.watch.plist"
     echo "fswatch not found — instant push disabled. For instant sync: brew install fswatch, then re-run: claude-sync install-autosync"
   fi
+  ensure_zsh_alias
   echo "Log: $HOME/.claude-sync.log   (change interval: SYNC_INTERVAL=<seconds> claude-sync install-autosync)"
 }
 

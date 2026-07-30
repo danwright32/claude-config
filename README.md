@@ -33,7 +33,8 @@ turnstile-spin, web-perf, workers-best-practices, wrangler, plannotator-compound
 
 ## Automatic sync
 
-`install-autosync` sets up two launchd agents (and retires older ones):
+`install-autosync` sets up two launchd agents (and retires older ones), and installs
+the `claudesync` shell alias:
 
 - **`com.claudesync.watch`** — an fswatch process that runs a two-way `sync` on
   every change to a synced folder, however deep, so edits push within seconds.
@@ -41,6 +42,16 @@ turnstile-spin, web-perf, workers-best-practices, wrangler, plannotator-compound
 - **`com.claudesync.timer`** — a periodic two-way `sync` (default weekly,
   `SYNC_INTERVAL=<seconds>`) so the other Mac's changes arrive even when this Mac
   makes no local edits.
+
+It also adds this to `~/.zshrc`, so the shortcut arrives with the rest of the setup
+instead of being added by hand on each Mac (`~/.zshrc` is deliberately not synced):
+
+    alias claudesync='<repo>/claude-sync pull'
+
+That step is idempotent: it never appends a second copy, it treats a `~` and the
+expanded home directory as the same path, and if a `claudesync` alias already exists
+pointing somewhere else it leaves your line alone and tells you rather than rewriting
+your shell config. Override the target file with `SYNC_ZSHRC=<path>`.
 
 Sending is automatic on change; receiving is automatic on the timer. A no-op sync
 writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
