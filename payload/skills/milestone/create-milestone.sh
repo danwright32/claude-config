@@ -14,10 +14,16 @@
 #     "title": "Feature name",            # required, becomes the milestone title
 #     "description": "markdown body",     # optional, milestone description
 #     "due_on": "2026-09-01T00:00:00Z",   # optional, ISO8601 due date
+#     "priority": "p2",                   # optional default for every issue below
 #     "issues": [                         # optional, one GitHub issue each
-#       { "title": "Phase 1: ...", "body": "..." }
+#       { "title": "Phase 1: ...", "body": "...", "priority": "p1" }
 #     ]
 #   }
+#
+# Every issue needs a priority, either its own or the plan-level default. Accepts
+# "p2" or "priority-p2". This script is the ONE issue-filing path the PreToolUse
+# priority gate cannot see (the gate reads the Bash command, and here the create runs
+# inside a script), so the rule is enforced here instead.
 #
 # Set DRY_RUN=1 to print what would happen without writing to GitHub.
 # Prints: MILESTONE <url> (or MILESTONE-EXISTS ...), then ISSUE <url> per issue,
