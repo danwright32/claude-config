@@ -170,6 +170,103 @@ out_notitle="$(DRY_RUN=1 run "$TMP/none.json" "acme/widgets" "$TMP/notitle.json"
 check_eq "missing title exits non-zero" "1" "$rc"
 check "missing title explains why" "title" "$out_notitle"
 
+# --- priority reaches every issue this script files ---
+# This is the one issue-filing path the PreToolUse priority gate cannot see: the gate
+# reads the Bash command, and here the create runs inside a script, so `bash
+# create-milestone.sh` looks like nothing to it. Without this, /plan-council and
+# /plan-lite would be the only paths still filing issues with no priority at all.
+cat >"$TMP/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$GH_CALLS"
+if [ "${1:-}" = "issue" ] && [ "${2:-}" = "create" ]; then
+  echo "https://github.com/acme/widgets/issues/77"
+  exit 0
+fi
+if [ "${1:-}" = "label" ]; then
+  if [ "${2:-}" = "list" ]; then echo '[]'; fi
+  exit 0
+fi
+for a in "$@"; do
+  if [ "$a" = "-f" ]; then cat "$GH_CREATED"; exit 0; fi
+done
+cat "$GH_FIXTURE"
+exit 0
+STUB
+chmod +x "$TMP/bin/gh"
+
+out="$(run "$TMP/existing.json" "acme/widgets" "$TMP/plan.json")"; rc=$?
+calls="$(cat "$TMP/calls.log")"
+check_eq "a plan carrying priorities exits 0" "0" "$rc"
+check_eq "every phase is filed" "3" "$(issues_filed)"
+check "the per-issue level is applied" "--label priority-p1" "$calls"
+check "the second level is applied" "--label priority-p2" "$calls"
+check "the third level is applied" "--label priority-p3" "$calls"
+# The labels have to exist before an issue can reference one: gh fails the whole
+# create on an unknown label.
+check "the labels are ensured first" "label create priority-p0" "$calls"
+
+# A bare level is accepted as well as the full label name, because a plan is written
+# by hand and both readings are natural.
+cat >"$TMP/plan-full.json" <<'JSON'
+{
+  "title": "Onboarding revamp",
+  "issues": [ { "title": "Phase 1", "body": "b", "priority": "priority-p0" } ]
+}
+JSON
+out="$(run "$TMP/existing.json" "acme/widgets" "$TMP/plan-full.json")"; rc=$?
+check_eq "a full label name is accepted" "0" "$rc"
+check "the full label name is applied once, not doubled" "--label priority-p0" "$(cat "$TMP/calls.log")"
+
+# One default for the whole plan saves repeating it on every phase.
+cat >"$TMP/plan-default.json" <<'JSON'
+{
+  "title": "Onboarding revamp",
+  "priority": "p2",
+  "issues": [
+    { "title": "Phase 1", "body": "b" },
+    { "title": "Phase 2", "body": "b", "priority": "p0" }
+  ]
+}
+JSON
+out="$(run "$TMP/existing.json" "acme/widgets" "$TMP/plan-default.json")"; rc=$?
+check_eq "a plan-level default exits 0" "0" "$rc"
+check "the default applies where a phase says nothing" "--label priority-p2" "$(cat "$TMP/calls.log")"
+check "a phase still overrides the default" "--label priority-p0" "$(cat "$TMP/calls.log")"
+
+# --- a plan with no priority at all files NOTHING ---
+# Refusing beats defaulting: a silent default to p2 is how the priority labels became
+# meaningless in the first place, and half a filed plan is worse than none.
+cat >"$TMP/plan-nopriority.json" <<'JSON'
+{
+  "title": "Onboarding revamp",
+  "issues": [
+    { "title": "Phase 1", "body": "b" },
+    { "title": "Phase 2", "body": "b" }
+  ]
+}
+JSON
+out="$(run "$TMP/existing.json" "acme/widgets" "$TMP/plan-nopriority.json")"; rc=$?
+check_eq "a plan with no priority exits 9" "9" "$rc"
+check "the refusal names the offending phase" "Phase 1" "$out"
+check "the refusal says nothing was filed" "no issues were filed" "$out"
+check "the refusal shows the scale" "priority-p2" "$out"
+check_eq "the refusal files nothing" "0" "$(issues_filed)"
+
+# An off-scale level is a mistake, not a level.
+cat >"$TMP/plan-badpriority.json" <<'JSON'
+{
+  "title": "Onboarding revamp",
+  "issues": [ { "title": "Phase 1", "body": "b", "priority": "p9" } ]
+}
+JSON
+out="$(run "$TMP/existing.json" "acme/widgets" "$TMP/plan-badpriority.json")"; rc=$?
+check_eq "an off-scale level exits 9" "9" "$rc"
+check_eq "an off-scale level files nothing" "0" "$(issues_filed)"
+
+# The check runs before any write, so a dry run refuses too.
+out="$(DRY_RUN=1 run "$TMP/existing.json" "acme/widgets" "$TMP/plan-nopriority.json")"; rc=$?
+check_eq "a dry run of a plan with no priority also exits 9" "9" "$rc"
+
 # --- zero issues is allowed (milestone only) ---
 echo '{ "title": "Just a milestone", "issues": [] }' >"$TMP/noissues.json"
 out_noissues="$(DRY_RUN=1 run "$TMP/none.json" "acme/widgets" "$TMP/noissues.json")"; rc=$?
