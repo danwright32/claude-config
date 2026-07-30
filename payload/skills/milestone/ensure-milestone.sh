@@ -42,6 +42,25 @@ if [[ -z "$repo" || -z "$title" || "$repo" == --* ]]; then
 fi
 shift 2
 
+# The one designated holding pen per repo. Most issues are standalone bugs and
+# chores that belong to no feature, and the gate still requires a milestone on every
+# issue, so this exists to be their home. Creating it is not a decision anyone needs
+# to make, so it is exempt from the approval rule below. Without that exemption the
+# friction is what caused the original problem: a session invents a milestone on the
+# spot to satisfy the gate.
+CATCH_ALL="Ungrouped"
+
+# Matched on the normalised title, so a case variant resolves to the same one and
+# never creates a twin. Deliberately an EXACT match: "Ungrouped work and other
+# things" is an ordinary title and still needs approval, or the exemption becomes a
+# way to create anything without asking.
+is_catch_all() {
+  local norm_want norm_catch
+  norm_want="$(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
+  norm_catch="$(printf '%s' "$CATCH_ALL" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
+  [[ "$norm_want" == "$norm_catch" ]]
+}
+
 create_approved=""
 description=""
 due_on=""
