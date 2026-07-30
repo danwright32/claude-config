@@ -303,6 +303,42 @@ out="$(DRY_RUN=1 ensure acme/widgets "One paid contact answer, recorded and reus
 check_eq "a dry run of a narrative title is still refused" "8" "$rc"
 check_not "a refused dry run does not claim it would create" "WOULD-CREATE-MILESTONE" "$out"
 
+# --- 11e. the catch-all milestone needs no approval ---
+# Most issues are standalone bugs and chores that belong to no feature. They still
+# need a milestone (the gate requires one), so there is one designated holding pen
+# per repo. Creating it is not a decision anyone needs to make, so requiring
+# approval every time would be pure friction, and the alternative is what happened
+# before: a session invents a milestone to satisfy the gate.
+out="$(ensure acme/widgets "Ungrouped")"; rc=$?
+check_eq "the catch-all is created without approval" "0" "$rc"
+check "the catch-all reports a real creation" "MILESTONE-CREATED" "$out"
+check_eq "the catch-all makes exactly one write call" "1" "$(created_count)"
+check "the catch-all says what it is for" "standalone" "$(printf '%s' "$out" | tr 'A-Z' 'a-z')"
+
+out="$(ensure acme/widgets "ungrouped")"; rc=$?
+check_eq "a case variant of the catch-all also needs no approval" "0" "$rc"
+
+# The exemption is for that ONE title. Any other unmatched title still needs the
+# user to approve it, or the approval rule is worthless.
+out="$(ensure acme/widgets "Ungrouped work and other things")"; rc=$?
+check_eq "a title merely containing the word still needs approval" "5" "$rc"
+check_eq "it creates nothing" "0" "$(created_count)"
+
+out="$(ensure acme/widgets "Saved views")"; rc=$?
+check_eq "an ordinary feature title still needs approval" "5" "$rc"
+
+# Once it exists it is reused like anything else, never twinned.
+cat >"$TMP/withcatchall.json" <<'JSON'
+[
+  { "number": 3, "title": "Onboarding revamp", "state": "open", "html_url": "https://github.com/acme/widgets/milestone/3" },
+  { "number": 12, "title": "Ungrouped", "state": "open", "html_url": "https://github.com/acme/widgets/milestone/12" }
+]
+JSON
+out="$(GH_FIXTURE="$TMP/withcatchall.json" ensure acme/widgets "Ungrouped")"; rc=$?
+check_eq "an existing catch-all is reused" "0" "$rc"
+check "the existing catch-all is reported" "MILESTONE-EXISTS 12" "$out"
+check_eq "reusing the catch-all creates nothing" "0" "$(created_count)"
+
 # --- 11d. the documented override lets a genuine exception through ---
 out="$(ALLOW_ANY_MILESTONE_TITLE=1 ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved)"; rc=$?
 check_eq "the override creates the milestone" "0" "$rc"
