@@ -41,13 +41,21 @@ Give a plain-language summary for a product manager: how many critical/high/medi
 
 ## 5. File issues  👤
 Offer, via **AskUserQuestion**, to file the backlog as GitHub issues in the audited repo. On approval:
-1. Ensure labels exist (create missing ones), one per domain key plus severity labels:
+1. Ensure labels exist (create missing ones), one per domain key, plus the shared priority labels:
 
-       gh label create "severity:critical" --color B60205 --description "Production-readiness: critical" 2>/dev/null || true
-       gh label create "severity:high"     --color D93F0B --description "Production-readiness: high"     2>/dev/null || true
-       gh label create "severity:medium"   --color FBCA04 --description "Production-readiness: medium"   2>/dev/null || true
-       gh label create "severity:low"       --color 0E8A16 --description "Production-readiness: low"       2>/dev/null || true
-       gh label create "production-readiness" --color 5319E7 --description "Found by /production-ready"    2>/dev/null || true
+       bash ~/.claude/skills/milestone/ensure-priority-labels.sh "<owner/name>"
+       gh label create "production-readiness" --color 5319E7 --description "Found by /production-ready" 2>/dev/null || true
+
+   **Do NOT create `severity:*` labels.** They were retired on 2026-07-30: priority is the only urgency scale, and an issue carrying both said the same thing twice. The audit's own severity grading still drives the REPORT; it maps onto the label like this:
+
+   | Audit severity | Label |
+   |---|---|
+   | critical | `priority-p0` |
+   | high | `priority-p1` |
+   | medium | `priority-p2` |
+   | low | `priority-p3` |
+
+   The scale and the rest of the rules live in `~/.claude/skills/milestone/NAMING.md`.
 
 2. **Resolve the milestone BEFORE filing anything.** Every issue belongs to a milestone, and a gate blocks any `gh issue create` without one. Ask in the SAME AskUserQuestion as the filing approval: attach this backlog to an existing open milestone, or create one (a name like "Production readiness: <repo>" works). Read the open milestones first so the options are real:
 
