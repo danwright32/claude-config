@@ -1179,6 +1179,18 @@ out_lnm="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" bash "$LNMB/c
 check "#15 the merge kept both lessons"               "grep -q 'L2. mine' '$LNMBH/LESSONS.md' && grep -q 'L2. theirs' '$LNMBH/LESSONS.md'"
 check "#15 and the collision it created is reported"  "printf '%s' \"\$out_lnm\" | grep -q 'L2'"
 
+# ---- repo hygiene: nothing already-committed slips past the rsync excludes ----
+# The excludes above stop NEW bytecode being staged, but they cannot clean a file
+# that was committed before they existed: three had been, and the apply-side
+# exclude then hid them from every symptom. Assert the tracked set stays clean.
+echo "== repo hygiene =="
+if git -C "$(dirname "$SCRIPT")" rev-parse --git-dir >/dev/null 2>&1; then
+  tracked_bytecode="$(git -C "$(dirname "$SCRIPT")" ls-files | grep -cE '\.pyc$|__pycache__' || true)"
+  check "no bytecode tracked in the sync repo" "[ '$tracked_bytecode' = '0' ]"
+else
+  ok "no bytecode tracked in the sync repo (skipped: not a git checkout)"
+fi
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
