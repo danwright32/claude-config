@@ -209,8 +209,12 @@ case "$kind" in
     elif [[ -z "$create_approved" ]]; then
       echo "NO-MATCH \"$title\" matches no open milestone in $repo."
       echo "Open milestones: $f2"
-      echo "Creating a milestone needs the user's approval. Offer the fitting one from that list, or ask before creating \"$title\"."
-      echo "If this is a standalone bug or chore that belongs to no feature, use the catch-all instead, which needs no approval: \"$CATCH_ALL\"."
+      echo "You almost certainly do not want to create one. A new milestone is a PLANNING decision, made when a feature is planned through /plan-council, /plan-lite or /milestone. It never makes sense to open a milestone for a one-off issue."
+      echo "So pick one of these two instead:"
+      echo "  1. An existing open milestone from the list above, if the work ships with that feature."
+      echo "  2. The catch-all milestone \"$CATCH_ALL\", which needs no approval. This is a REAL milestone that holds the standalone issues, not the absence of one:"
+      echo "     bash ~/.claude/skills/milestone/ensure-milestone.sh \"$repo\" \"$CATCH_ALL\""
+      echo "Only if this genuinely is a feature being planned right now, ask the user first, then re-run with --create-approved."
       exit 5
     fi
     ;;
