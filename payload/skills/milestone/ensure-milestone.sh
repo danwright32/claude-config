@@ -230,22 +230,25 @@ STOP = {
     "dan",
 }
 
-MAX_WORDS = 5
+# Six words fits a real feature name ("Node test coloring in edit mode") while still
+# refusing every title Dan objected to: those ran 7 to 11 words, or carried a comma
+# or a colon.
+MAX_WORDS = 6
 MAX_CHARS = 48
 
 words = title.split()
 
 if len(words) > MAX_WORDS:
-    print("it is %d words long, and a category name is at most %d" % (len(words), MAX_WORDS))
+    print("it is %d words long, and a feature name is at most %d" % (len(words), MAX_WORDS))
     sys.exit(0)
 
 if len(title) > MAX_CHARS:
-    print("it is %d characters long, and a category name is at most %d" % (len(title), MAX_CHARS))
+    print("it is %d characters long, and a feature name is at most %d" % (len(title), MAX_CHARS))
     sys.exit(0)
 
 found = [c for c in PUNCT if c in title]
 if found:
-    print("it reads as a sentence: a category name has no %s" % " or ".join(repr(c) for c in found))
+    print("it reads as a sentence: a feature name has no %s" % " or ".join(repr(c) for c in found))
     sys.exit(0)
 
 hits = [w for w in words if re.sub(r"[^a-z]", "", w.lower()) in STOP]
