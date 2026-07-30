@@ -54,8 +54,14 @@ For one issue that just needs the right milestone (the common case, including th
 
     bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>"                    # reuse only, never creates
     bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>" --create-approved  # only after the user approves
+    bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "Ungrouped"                            # the catch-all, no approval needed
 
-It prints `MILESTONE-EXISTS` or `MILESTONE-CREATED` plus a `MILESTONE-TITLE <title>` line. Pass that exact title to `gh issue create --milestone`, because `gh` matches milestones by name and a case variant is not found. Exit codes tell you what needs a human: `3` an identically named milestone exists but is closed, `4` the title closely resembles an open milestone (attach to that one instead of creating a twin), `5` nothing matched and creating was not approved, `6` the list could not be read.
+It prints `MILESTONE-EXISTS` or `MILESTONE-CREATED` plus a `MILESTONE-TITLE <title>` line. Pass that exact title to `gh issue create --milestone`, because `gh` matches milestones by name and a case variant is not found. Exit codes tell you what needs a human: `3` an identically named milestone exists but is closed, `4` the title closely resembles an open milestone (attach to that one instead of creating a twin), `5` nothing matched and creating was not approved, `6` the list could not be read, `8` the title is not shaped like a feature name.
+
+`Ungrouped` is every repo's holding pen for standalone bugs and chores that belong to no feature, and it is the right answer far more often than a new milestone. It is exempt from the approval rule, so reach for it instead of inventing a milestone to satisfy the gate.
+
+## Priority
+Every issue also carries exactly one `priority-p0` to `priority-p4` label, enforced by a second gate. **Who picks the level matters**: if Dan reported the problem himself, ask him with an AskUserQuestion picker that carries the meanings in its option descriptions; if you found it, choose it yourself and say which. Both rules, the scale, and the label helper are in [NAMING.md](NAMING.md).
 
 ## Notes
 - The same helpers back `/plan-council`, `/plan-lite` and `/production-ready`, so milestones look identical no matter which path created them, and re-running a plan reuses its milestone instead of duplicating it.
