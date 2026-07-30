@@ -87,6 +87,15 @@ allows "pr create" 'gh pr create --title "T" --body "B"'
 allows "unrelated command" 'git status'
 allows "empty command" ''
 
+# --- reading the help is not filing an issue ---
+# A live false positive on 2026-07-30: `gh issue create --help` was blocked, which is
+# absurd (it files nothing) and it teaches the override habit the gates are designed
+# to avoid. Fixed in the shared scanner, so all three gates get it.
+allows "asking for help on the create command" 'gh issue create --help'
+allows "the short help flag" 'gh issue create -h'
+allows "help after other flags" 'gh issue create --title "T" --help'
+allows "help piped to a reader" 'gh issue create --help | grep label'
+
 # --- chained creates ---
 denies "create after another command" 'git status && gh issue create --title "T"'
 allows "chained create that carries a milestone" 'git status && gh issue create --title "T" --milestone "Q3"'

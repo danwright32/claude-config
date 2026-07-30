@@ -76,6 +76,15 @@ allows "mention inside a heredoc" 'cat > n.md <<EOF
 gh issue create --title "T"
 EOF'
 
+# --- reading the help is not filing an issue ---
+# A live false positive on 2026-07-30: `gh issue create --help` was blocked, which is
+# absurd (it files nothing) and it teaches the override habit the gates are designed
+# to avoid. Fixed in the shared scanner, so all three gates get it.
+allows "asking for help on the create command" 'gh issue create --help'
+allows "the short help flag" 'gh issue create -h'
+allows "help after other flags" 'gh issue create --title "T" --help'
+allows "help piped to a reader" 'gh issue create --help | grep label'
+
 # --- the label must belong to the create itself ---
 denies "category in a later segment" 'gh issue create --title "T" --label priority-p2 && echo --label bug'
 denies "create after another command" 'git status && gh issue create --title "T" --label priority-p2'
