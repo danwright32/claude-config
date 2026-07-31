@@ -214,6 +214,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   maintained by hand beside it.** The two drift the moment someone updates one and not
   the other, and the drift stays silent until something turns up missing.
   (claude-config#9)
+- **L57. A correction recorded only in memory or a transcript will recur, because the
+  artifact that actually governs the behavior never changed.** Write every accepted
+  correction into the prompt, config, or rule file that decides the outcome, in the same
+  session it is given, and add the check that would catch its return.
+  (overture#1884, the same recital defect twice, 2026-07-18 and 2026-07-31)
 
 ## Cross-system reliability
 
