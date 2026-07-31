@@ -15,6 +15,18 @@ Hold boundaries positively. Frame any concession as goodwill, not as a response 
 ### Don't overstate experience with the specific genre
 Dan has shot far more concert, choral, and opera work than dance. When pitching a dance company or another genre he's less experienced in, don't describe genre-specific technique as if it's established practice (for example, don't claim a particular way of "moving with the room" for dancers). Keep the approach description general, the no-flash, unobtrusive, back-of-house documentary style, and let the citable credentials carry the confidence instead of an invented specialty.
 
+### Describe Dan, never categorize the recipient
+Introducing Dan requires no claim about who is reading. Say what HE does ("I photograph performing arts in New York", "I'm a documentary photographer here in New York") and let the next sentence name the specific show. Never open with a category the reader has to fit ("performing arts organizations", "companies like yours", "arts institutions"), and never call a recipient an organisation, a company, an institution, a team or an ensemble unless that is actually known. A solo artist, a duo and a producing company all get the same self-introduction. This is a real failure, not a hypothetical one: on 2026-07-30 a draft opened "I'm a documentary photographer working with performing arts organizations in New York" to one singer-songwriter. That phrase appears nowhere in this skill; it was assembled from Dan's own identity line and applied to a reader who does not fit it.
+
+### Name the show, describe nothing
+The reader booked, produced, or performs the show. They know what it is. Name it, with its date and venue, and say why Dan is writing ("your August 3 show at The Green Room 42"). That is the entire reference to their event.
+
+Never write a clause whose job is to say what the show IS: not its running time, its cast size, its theme or premise, its genre or billing, its guest artists, or a quoted review. Not as the opening sentence, not buried later, not folded into a sentence about Dan. Ask it of every clause that touches their event: does this tell the reader something they do not already know about their own night? If not, cut it.
+
+Two real failures, the same class twice. On 2026-07-31 a draft opened "Don't Be So Hard on Yourself is 75 minutes of new songs and a cast of five, built around the idea that we're our own harshest critics." Dan: "it literally just summarized the show. that person obviously knows what the show is about." On 2026-07-18 one opened "An evening of Glee covers sung by Broadway performers comes to 54 Below on July 19." He called that email terrible, the first sentence especially. Reciting someone's own event back to them in press-release phrasing tells them nothing and reads exactly like a line generated from a scraped calendar listing.
+
+The date and venue are evidence Dan did his homework, not an announcement: fold them into his reason for writing, never narrate the event. Read the show's own listing when there is one, but read it so the email cannot get their show wrong (the right title, the right people, one artist or a company), never to supply description. What fills the space instead is the half the reader does not know: what Dan does, how he shoots, the credential, the rate, the ask.
+
 ### Returning clients and warm leads
 Not every pitch is cold. Overture tags each show with a prior relationship, and it decides who you are writing to. Most of the guidance in this section (the opener shapes, the credential and portfolio scaffolding) is the cold register.
 
@@ -27,17 +39,28 @@ In every register, warm the tone only. Never fabricate a specific past-project m
 ### Credentials and portfolio link
 Cold outreach should carry real proof, not just an offer. Work in one relevant credential from the citable list in SKILL.md (Carnegie tenure, Madison Square Garden, Lincoln Center, Radio City Music Hall) plus the portfolio link (danwrightphotography.com), tailoring which credential leads to the venue in play. A Carnegie-venue show leads with the Carnegie tenure; a show at another marquee venue can lead with that venue or pair it with the Carnegie tenure.
 
-Match the portfolio link to the show's discipline, so the recipient lands on relevant work rather than the general site. Use exactly these gallery URLs and never invent one: music links danwrightphotography.com/music, band links danwrightphotography.com/bands, comedy links danwrightphotography.com/comedy, dance links danwrightphotography.com/dance, and opera or theater links danwrightphotography.com/performing-arts (that gallery is Dan's theater and opera work). For any other discipline, or when none fits, link the main site danwrightphotography.com. This is the honest way to strengthen the pitch: showing relevant work, not claiming genre experience Dan lacks.
+Link danwrightphotography.com and nothing deeper. Never a gallery path: not danwrightphotography.com/music, not danwrightphotography.com/bands, not danwrightphotography.com/comedy, not danwrightphotography.com/dance, not danwrightphotography.com/performing-arts. Dan's call, 2026-07-30: always the same site, and the reader clicks into whichever portfolio they want to see. Picking a gallery for them is a decision they are better placed to make, and Overture now refuses to send a draft that carries one. Say what the coverage IS in the words instead (unobtrusive, no-flash, back-of-house documentary), which strengthens the pitch honestly without claiming genre experience Dan lacks.
 
 Dan's proven cold pitch, kept here as a reference for voice and structure, not a script to reproduce word for word:
 
 > Hello!
 > My name is Dan and I'm a professional arts photographer here in NYC. I'm writing in regard to your upcoming concert at Carnegie Hall. I have been a photographer at Carnegie Hall for nearly 10 years and my work has brought me to many other prestigious venues in NYC such as Madison Square Garden, Lincoln Center, and Radio City Music Hall. When you have a moment, I would love to speak about your photography plans for the performance. I invite you to take a look at my portfolio here (www.danwrightphotography.com) and give me an email back. I look forward to hearing from you!
 
-Vary the phrasing and sentence shape draft to draft: don't lead every email with "My name is Dan," don't always list all three venues, don't always say "nearly 10 years." Pull the credential and link in naturally, the way a person restates the same true fact differently each time.
+Vary the phrasing and sentence shape draft to draft: don't always list all three venues, don't always say "nearly 10 years." Pull the credential and link in naturally, the way a person restates the same true fact differently each time. The opening is the exception, see below: Dan introduces himself every time, only the wording changes.
+
+### Sentence one always introduces Dan, by name and by trade
+A cold reader does not know who is writing, so nothing else may come first: not a credential, not an observation, not the reason for writing. Every cold pitch starts from the shape of Dan's own proven opener, "My name is Dan and I'm a professional arts photographer here in NYC." Reword it every time rather than reproducing it ("My name is Dan, I'm an arts photographer here in New York", "I'm Dan Wright, a performing arts photographer based in New York"), but it must always carry both his name and what he does.
+
+This replaced an earlier instruction not to lead with his name, which was invented to manufacture variety and produced emails that started talking before saying who was talking. Dan, 2026-07-31: "I should always introduce myself."
+
+The exception is a returning client or a warm lead (above): they already know him, so the cold self-introduction is wrong for them.
 
 ### Opener variety
-Cold pitches read as templated when every draft opens the same way. Rotate across four opener shapes and don't reuse the same one twice in a row when drafting several emails in one sitting: reason-first (open on the specific reason for reaching out), credential-first (open by leading with the relevant credential above), observation-first (open on a specific real detail about the performance, venue, or program), and direct-intent (a plain statement of what Dan does and why he's writing, no throat-clearing). Never invent a detail to force a shape to fit, use a different shape if the material doesn't support one. Body length can range 2 to 4 sentences depending on the shape and the material; don't pad to hit a target.
+The introduction is fixed, so the opener shape governs sentence two, what the email does once Dan has said who he is. Two shapes, and don't reuse the same one twice in a row when drafting several emails in one sitting: reason-first (sentence two is the reason for writing, naming the show, its date and its venue) and direct-intent (sentence two folds how he works into the reason itself, reaching the offer a beat sooner). Never invent a detail to force a shape to fit.
+
+Two earlier shapes are retired (Dan, 2026-07-31). Credential-first led with venues before the reader knew what Dan does, which is what sentence one now owns. Observation-first only ever had the show's own material to observe, which "Name the show, describe nothing" above forbids, and with that gone it reached for scarcity instead ("only one chance at pictures of it"), which is a sales tactic rather than an observation.
+
+Body length can range 2 to 4 sentences depending on the shape and the material; don't pad to hit a target.
 
 ### When drafting
 Offer two variants when a tone or framing choice is genuinely meaningful (for example, holding firm vs. offering a goodwill concession). Otherwise one clean draft is enough. Use the message compose tool with kind: email, including subject and body.
