@@ -22,7 +22,7 @@ Ask about their photography plans for this show, never whether they want photogr
 
 Close by expecting a reply: "I look forward to hearing from you", or a rewording, with no exclamation mark.
 
-Never close with "Happy to answer any questions", retired by Dan on 2026-07-31, and never with any variation that asks the reader to produce something ("let me know if you have any questions", "feel free to reach out with questions"). Inviting questions makes them do the work of inventing one, when the email has already given the rate, the turnaround and the ask.
+Never close with "Happy to answer any questions", retired by Dan on 2026-07-31, and never with any variation that asks the reader to produce something ("let me know if you have any questions", "feel free to reach out with questions"). Inviting questions makes them do the work of inventing one, when the email has already made the offer and the ask.
 
 A draft may acknowledge they might be covered already ("if you don't have someone on it already"), Dan's call 2026-07-31: it is honest about how often a show is booked before the pitch arrives.
 
@@ -42,7 +42,7 @@ Never write a clause whose job is to say what the show IS: not its running time,
 
 Two real failures, the same class twice. On 2026-07-31 a draft opened "Don't Be So Hard on Yourself is 75 minutes of new songs and a cast of five, built around the idea that we're our own harshest critics." Dan: "it literally just summarized the show. that person obviously knows what the show is about." On 2026-07-18 one opened "An evening of Glee covers sung by Broadway performers comes to 54 Below on July 19." He called that email terrible, the first sentence especially. Reciting someone's own event back to them in press-release phrasing tells them nothing and reads exactly like a line generated from a scraped calendar listing.
 
-The date and venue are evidence Dan did his homework, not an announcement: fold them into his reason for writing, never narrate the event. Read the show's own listing when there is one, but read it so the email cannot get their show wrong (the right title, the right people, one artist or a company), never to supply description. What fills the space instead is the half the reader does not know: what Dan does, how he shoots, the credential, the rate, the ask.
+The date and venue are evidence Dan did his homework, not an announcement: fold them into his reason for writing, never narrate the event. Read the show's own listing when there is one, but read it so the email cannot get their show wrong (the right title, the right people, one artist or a company), never to supply description. What fills the space instead is the half the reader does not know: what Dan does, how he shoots, the credential, the ask.
 
 ### Returning clients and warm leads
 Not every pitch is cold. Overture tags each show with a prior relationship, and it decides who you are writing to. Most of the guidance in this section (the opener shapes, the credential and portfolio scaffolding) is the cold register.
@@ -56,6 +56,11 @@ In every register, warm the tone only. Never fabricate a specific past-project m
 ### Credentials and portfolio link
 Cold outreach should carry real proof, not just an offer. Work in one relevant credential from the citable list in SKILL.md (Carnegie tenure, Madison Square Garden, Lincoln Center, Radio City Music Hall) plus the portfolio link (danwrightphotography.com), tailoring which credential leads to the venue in play. A Carnegie-venue show leads with the Carnegie tenure; a show at another marquee venue can lead with that venue or pair it with the Carnegie tenure.
 
+### No price and no turnaround in a cold pitch
+A cold pitch states NO rate and NO delivery turnaround. Not the hourly figure, not the one-hour minimum, not "the gallery comes back within two weeks". Dan's call, 2026-07-31, reversing the earlier rule that made the rate mandatory: "I feel like I'm more likely to get a response if I don't, because they may check out my portfolio instead of getting sticker shock and then email me asking about it." A number in a first email from a stranger gets judged before the work is looked at. Leave them the portfolio and the ask, and let them raise money themselves.
+
+This is about the COLD PITCH only. A reply to someone who asks what Dan charges states it plainly, as it always has: $250 an hour plus tax, one-hour minimum, edited gallery within two weeks.
+
 ### Rooms Dan has already shot
 When you are told Dan has worked the venue before, say so, ALONGSIDE the credential above rather than instead of it (Dan's call, 2026-07-31). The credential says the level he works at; this says he knows THIS room, and it is the one thing in a cold pitch a stranger cannot fake. Three bands, and the wording stays at that grain:
 
@@ -63,9 +68,13 @@ When you are told Dan has worked the venue before, say so, ALONGSIDE the credent
 - a few: he has photographed a few shows there.
 - regularly: he shoots there regularly.
 
+The follow-on clause is about FAMILIARITY, never about what could otherwise go wrong (Dan, 2026-07-31). A short phrase after the band is welcome and it says he knows the space: "so I'm familiar with the room", "so I know the space". Never frame it as a risk avoided ("so I'm not learning it on the night", "so there's no guesswork"): naming the bad outcome plants it in the reader's head and invites them to picture a photographer fumbling in a room he does not know, which is the opposite of the point.
+
 Never state a count. Not a numeral, not a number word, and not a phrase standing in for one ("twice", "a couple of", "three times", "over a dozen"). Dan was explicit that a pitch never claims an exact number, and Overture deliberately hands over a band with no count attached, so any number in a draft was invented. Overture refuses to send a draft that pairs a past-tense claim about shooting with a count.
 
 If you are told nothing about the venue, say nothing about it. Never infer past work from the venue's name, from a past client, or from anything else to hand. On a Carnegie Hall show Overture deliberately says nothing here, because the Carnegie tenure credential above is already about that exact room and stating both would be one fact twice.
+
+Write "you can see MY portfolio at danwrightphotography.com", never "the portfolio" (Dan, 2026-07-31): the definite article makes it sound like a shared company asset rather than his own body of work, in an email written entirely in his first person.
 
 Link danwrightphotography.com and nothing deeper. Never a gallery path: not danwrightphotography.com/music, not danwrightphotography.com/bands, not danwrightphotography.com/comedy, not danwrightphotography.com/dance, not danwrightphotography.com/performing-arts. Dan's call, 2026-07-30: always the same site, and the reader clicks into whichever portfolio they want to see. Picking a gallery for them is a decision they are better placed to make, and Overture now refuses to send a draft that carries one. Say what the coverage IS in the words instead (unobtrusive, no-flash documentary), which strengthens the pitch honestly without claiming genre experience Dan lacks.
 
