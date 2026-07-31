@@ -71,7 +71,7 @@ The introduction is fixed, so the opener shape governs sentence two, what the em
 
 Two earlier shapes are retired (Dan, 2026-07-31). Credential-first led with venues before the reader knew what Dan does, which is what sentence one now owns. Observation-first only ever had the show's own material to observe, which "Name the show, describe nothing" above forbids, and with that gone it reached for scarcity instead ("only one chance at pictures of it"), which is a sales tactic rather than an observation.
 
-Body length can range 2 to 4 sentences depending on the shape and the material; don't pad to hit a target.
+The middle of the email, between the opener and the offer, runs 2 to 4 sentences depending on the shape and the material; don't pad to hit a target. That count is for the middle alone, not the whole email: the self-introduction, the offer, the ask and the soft line are each required in their own right, so a finished pitch runs longer than four sentences.
 
 ### When drafting
 Offer two variants when a tone or framing choice is genuinely meaningful (for example, holding firm vs. offering a goodwill concession). Otherwise one clean draft is enough. Use the message compose tool with kind: email, including subject and body.
