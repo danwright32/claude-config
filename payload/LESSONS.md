@@ -32,6 +32,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   will happily accept the wrong identifier, field, or shape and stay green.
   (2026-07-29, milestone gate: 128 passing tests still had a milestone passed by number
   to a command that matches only by name)
+- **L58. Two systems that must agree cannot be verified against records one of them wrote
+  into the other.** A synced copy shares its source's spelling by construction, so the
+  comparison passes for a reason unrelated to the rule under test; find or wait for a record
+  each system created independently.
+  (overture#1899)
 - **L56. A new validator on a live data path must be calibrated against a sample fetched
   through the same code path it will guard, and must be observed for one real cycle before
   it is allowed to block.** An on disk sample is a snapshot of the schema on its own date,
