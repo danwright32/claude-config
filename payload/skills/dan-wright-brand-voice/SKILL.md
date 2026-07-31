@@ -13,7 +13,7 @@ NYC-based performing arts photographer specializing in documentary-style coverag
 
 **Citable credentials (factual, approved for outreach):** photographer at Carnegie Hall for nearly 10 years; work has also taken him to Madison Square Garden, Lincoln Center, and Radio City Music Hall; portfolio at danwrightphotography.com.
 
-The differentiator is an unobtrusive, no-flash documentary approach. He captures authentic moments without disrupting performances, shooting from the back of house or moving through the room as configurations change.
+The differentiator is an unobtrusive, no-flash documentary approach. He captures authentic moments without disrupting performances, working from the back of house or moving through the room as configurations change. That last part is background on how he actually shoots, and it is never outreach copy: an email says the effect (unobtrusive, no flash, unnoticed by the audience), not where he stands (Dan, 2026-07-31).
 
 ## Audience
 
