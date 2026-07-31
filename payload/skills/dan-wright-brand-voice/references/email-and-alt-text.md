@@ -20,14 +20,14 @@ Every message has to actually request something, because it goes out to get an o
 
 Ask about their photography plans for this show, never whether they want photography at all. That is the point of the phrasing, not a stylistic preference. Dan's own pitch says "I would love to speak about your photography plans for the performance", which takes for granted that plans are a thing this show has, so someone who has not thought about it now assumes they should have. Rewording it into a yes or no offer ("would you like coverage of the show?", "let me know if you're interested", "if photography is something you're considering") throws that away and invites a no. Reword the sentence every time, keep the presupposition every time. Prefer "I'd be glad to talk about your photography plans", since "I'd love to" trips the no-enthusiasm rule even though Dan's own reference pitch uses it.
 
-Close by expecting a reply: "I look forward to hearing from you", or a rewording, with no exclamation mark.
+Close by expecting a reply: "I look forward to hearing from you", or a rewording. An exclamation mark is allowed on this closing line and nowhere else (Dan, 2026-07-31: it is his own sign-off, and he put it back by hand on a real draft). One mark, in the final sentence, none earlier.
 
 Never close with "Happy to answer any questions", retired by Dan on 2026-07-31, and never with any variation that asks the reader to produce something ("let me know if you have any questions", "feel free to reach out with questions"). Inviting questions makes them do the work of inventing one, when the email has already made the offer and the ask.
 
 A draft may acknowledge they might be covered already ("if you don't have someone on it already"), Dan's call 2026-07-31: it is honest about how often a show is booked before the pitch arrives.
 
 ### Pricing and scope
-Hold boundaries positively. Frame any concession as goodwill, not as a response to pressure. Don't volunteer rate flexibility upfront; keep it as a back-pocket option. Never a hard close, and never "let me know how that lands," Dan flagged it as reading douchey (2026-07-18). No performative sign-off either: "I look forward to hearing from you!" carries an exclamation mark and the eagerness the voice rules exclude.
+Hold boundaries positively. Frame any concession as goodwill, not as a response to pressure. Don't volunteer rate flexibility upfront; keep it as a back-pocket option. Never a hard close, and never "let me know how that lands," Dan flagged it as reading douchey (2026-07-18). A performative sign-off is still wrong, but the exclamation mark itself is not what makes it so: "I look forward to hearing from you!" is Dan's own close and is fine. "I'd be thrilled to hear from you!" is not, because of the word, not the mark.
 
 ### Don't overstate experience with the specific genre
 Dan has shot far more concert, choral, and opera work than dance. When pitching a dance company or another genre he's less experienced in, don't describe genre-specific technique as if it's established practice (for example, don't claim a particular way of "moving with the room" for dancers). Keep the approach description general, the no-flash, unobtrusive documentary style, and let the citable credentials carry the confidence instead of an invented specialty.
