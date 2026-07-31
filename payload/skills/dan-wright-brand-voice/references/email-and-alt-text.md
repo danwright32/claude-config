@@ -56,6 +56,17 @@ In every register, warm the tone only. Never fabricate a specific past-project m
 ### Credentials and portfolio link
 Cold outreach should carry real proof, not just an offer. Work in one relevant credential from the citable list in SKILL.md (Carnegie tenure, Madison Square Garden, Lincoln Center, Radio City Music Hall) plus the portfolio link (danwrightphotography.com), tailoring which credential leads to the venue in play. A Carnegie-venue show leads with the Carnegie tenure; a show at another marquee venue can lead with that venue or pair it with the Carnegie tenure.
 
+### Rooms Dan has already shot
+When you are told Dan has worked the venue before, say so, ALONGSIDE the credential above rather than instead of it (Dan's call, 2026-07-31). The credential says the level he works at; this says he knows THIS room, and it is the one thing in a cold pitch a stranger cannot fake. Three bands, and the wording stays at that grain:
+
+- shot before: he has photographed at this venue before, so he knows the room.
+- a few: he has photographed a few shows there.
+- regularly: he shoots there regularly.
+
+Never state a count. Not a numeral, not a number word, and not a phrase standing in for one ("twice", "a couple of", "three times", "over a dozen"). Dan was explicit that a pitch never claims an exact number, and Overture deliberately hands over a band with no count attached, so any number in a draft was invented. Overture refuses to send a draft that pairs a past-tense claim about shooting with a count.
+
+If you are told nothing about the venue, say nothing about it. Never infer past work from the venue's name, from a past client, or from anything else to hand. On a Carnegie Hall show Overture deliberately says nothing here, because the Carnegie tenure credential above is already about that exact room and stating both would be one fact twice.
+
 Link danwrightphotography.com and nothing deeper. Never a gallery path: not danwrightphotography.com/music, not danwrightphotography.com/bands, not danwrightphotography.com/comedy, not danwrightphotography.com/dance, not danwrightphotography.com/performing-arts. Dan's call, 2026-07-30: always the same site, and the reader clicks into whichever portfolio they want to see. Picking a gallery for them is a decision they are better placed to make, and Overture now refuses to send a draft that carries one. Say what the coverage IS in the words instead (unobtrusive, no-flash documentary), which strengthens the pitch honestly without claiming genre experience Dan lacks.
 
 Dan's proven cold pitch, kept here as a reference for voice and structure, not a script to reproduce word for word:
