@@ -32,6 +32,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   will happily accept the wrong identifier, field, or shape and stay green.
   (2026-07-29, milestone gate: 128 passing tests still had a milestone passed by number
   to a command that matches only by name)
+- **L56. A new validator on a live data path must be calibrated against a sample fetched
+  through the same code path it will guard, and must be observed for one real cycle before
+  it is allowed to block.** A local file carrying the feed's name can be a different report
+  with a different schema, so a guard calibrated on it rejects the real data the first time
+  it runs. (project-enrollment-tracker#925, #930)
 
 ## Data safety
 
