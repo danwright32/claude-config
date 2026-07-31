@@ -34,9 +34,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   to a command that matches only by name)
 - **L56. A new validator on a live data path must be calibrated against a sample fetched
   through the same code path it will guard, and must be observed for one real cycle before
-  it is allowed to block.** A local file carrying the feed's name can be a different report
-  with a different schema, so a guard calibrated on it rejects the real data the first time
-  it runs. (project-enrollment-tracker#925, #930)
+  it is allowed to block.** An on disk sample is a snapshot of the schema on its own date,
+  not a contract, so a guard calibrated on it encodes a shape the vendor may already have
+  changed. Note the guard can be CORRECT and still cause the outage: the first version of
+  this one truly caught a renamed column, but because its first live run was also its first
+  enforcing run, a real finding stopped the primary feed instead of reporting itself.
+  (project-enrollment-tracker#925, #930)
 
 ## Data safety
 
