@@ -9,8 +9,19 @@ Every outreach email is about a specific known performance, so the date, venue, 
 
 For a multi-night run (an opening date and a closing date, not one night), reference the run, not just the opening: "your run at BAM, March 10 to 14." If the opening night has already passed while later dates remain, pitch only the remaining dates and never name or reference the passed opening night, since citing a date already behind us reads as a stale, unread listing. Refer to the remaining performances or a specific still-upcoming date.
 
+### Say the effect, not the vantage point
+Never write that Dan shoots "from the back of the house" or "back of house" (Dan, 2026-07-31). Where he stands is his problem to solve, not a selling point, and a reader who pictures a photographer parked at the back may hear "distant" rather than "discreet". Write what the reader actually cares about: he is unobtrusive, he works without flash, the audience does not notice him and the performance is not disturbed.
+
+### Always "New York City" or "NYC", never bare "New York"
+Where Dan works is the city, and the city is a different place from the state (Dan, 2026-07-31). Every reference to it in his own words says "New York City" or "NYC": "a performing arts photographer here in NYC", "based in New York City", "venues across New York City". "In New York" on its own is wrong. This governs Dan's words only, so a venue or organisation is quoted as it is printed: Lincoln Center, Radio City Music Hall, and any group that calls itself the New York Something are all untouched.
+
+### Ask for something, then hold the door open
+Every message has to actually request something, because it goes out to get an outcome and an open door is not a request. Dan's own pitch asks twice: "When you have a moment, I would love to speak about your photography plans for the performance," and "give me an email back." Close with a plain request to talk about their photography plans for the show, reworded each time, and only then the soft line. "Happy to answer any questions" is that soft line, not the ask. Two drafts on 2026-07-31 described the whole offer and then asked for nothing at all, which leaves the next step entirely with a stranger.
+
+A draft may acknowledge they might be covered already ("if you don't have someone on it already"), Dan's call 2026-07-31: it is honest about how often a show is booked before the pitch arrives.
+
 ### Pricing and scope
-Hold boundaries positively. Frame any concession as goodwill, not as a response to pressure. Don't volunteer rate flexibility upfront; keep it as a back-pocket option. Prefer a soft close like "Happy to answer any questions" over a hard close. Never "let me know how that lands," Dan flagged it as reading douchey (2026-07-18).
+Hold boundaries positively. Frame any concession as goodwill, not as a response to pressure. Don't volunteer rate flexibility upfront; keep it as a back-pocket option. Never a hard close, and never "let me know how that lands," Dan flagged it as reading douchey (2026-07-18). No performative sign-off either: "I look forward to hearing from you!" carries an exclamation mark and the eagerness the voice rules exclude.
 
 ### Don't overstate experience with the specific genre
 Dan has shot far more concert, choral, and opera work than dance. When pitching a dance company or another genre he's less experienced in, don't describe genre-specific technique as if it's established practice (for example, don't claim a particular way of "moving with the room" for dancers). Keep the approach description general, the no-flash, unobtrusive documentary style, and let the citable credentials carry the confidence instead of an invented specialty.
