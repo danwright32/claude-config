@@ -117,6 +117,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   writer for an existing status or flag, recheck every rule that interprets it, because
   the assumption is usually recorded only in a comment and the rule keeps answering with
   confidence. (overture#1797)
+- **L59. Bookkeeping state that changes for reasons unrelated to the data (a scroll position,
+  an in flight animation, a hover, a tick) must not live on the component that derives the
+  expensive data, because every such write pays the whole derivation again.** Keep it on its
+  own object read only by the small control that shows it, and let an idle surface pay
+  nothing. (overture#1774, overture#1922, overture#1923)
 
 ## Security and privacy
 
