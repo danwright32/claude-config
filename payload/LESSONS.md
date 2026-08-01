@@ -234,6 +234,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   correction into the prompt, config, or rule file that decides the outcome, in the same
   session it is given, and add the check that would catch its return.
   (overture#1884, the same recital defect twice, 2026-07-18 and 2026-07-31)
+- **L61. A decision recorded on an issue is only true as of its date, so re-check it against
+  what has shipped since before building to it.** Work that landed in between can make the
+  recorded choice actively harmful rather than merely stale, and nothing links the two: the
+  July decision here was to write the act into a field, and by August a shipped feature was
+  using that field's EMPTINESS to select the 169 rows it served, so following the decision
+  would have silently dropped every one of them back out of it.
+  (overture#1823 against overture#1861, caught 2026-08-01)
 
 ## Cross-system reliability
 
