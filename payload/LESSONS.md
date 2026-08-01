@@ -122,6 +122,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   expensive data, because every such write pays the whole derivation again.** Keep it on its
   own object read only by the small control that shows it, and let an idle surface pay
   nothing. (overture#1774, overture#1922, overture#1923)
+- **L60. A one-shot trigger (navigate to, scroll to, present, run once) must carry an event
+  with its own identity, never the destination value, because a change-detecting effect
+  cannot see a repeat request for the same target and silently drops it.** The second
+  identical request is the case a first walk never tries, so it ships looking correct.
+  (overture#1774, overture#1927)
 
 ## Security and privacy
 
