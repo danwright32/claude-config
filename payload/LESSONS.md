@@ -241,6 +241,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   using that field's EMPTINESS to select the 169 rows it served, so following the decision
   would have silently dropped every one of them back out of it.
   (overture#1823 against overture#1861, caught 2026-08-01)
+- **L62. A guard on a function's first line cannot protect against the cost of building its
+  arguments, because every language evaluates those before the call runs.** Put the cheap
+  check at the call site, or take the expensive input as something the function can decline
+  to run, because the call site reads as free while paying in full and no test measures what
+  an answer cost.
+  (overture#1916, overture#1960)
 
 ## Cross-system reliability
 
