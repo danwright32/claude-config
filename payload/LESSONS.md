@@ -294,3 +294,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   or build that computes it and confirm a run actually lands soon after the boundary, or
   the condition stays invisible until the next run.
   (project-enrollment-tracker#903)
+- **L66. When several records are collapsed onto one shared external identifier (one email
+  thread, one payment, one batch call), decide for EACH downstream fact whether it belongs to
+  the group or to one member, and refuse to write a member level fact the external system does
+  not name.** A group level fact like a reply can safely mark every member, but a member level
+  fact like a bounce silently marks people it is not true of, and the data that would tell them
+  apart is usually absent from the response you already fetch.
+  (overture#2032)
