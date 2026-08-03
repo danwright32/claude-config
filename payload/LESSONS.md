@@ -50,6 +50,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   this one truly caught a renamed column, but because its first live run was also its first
   enforcing run, a real finding stopped the primary feed instead of reporting itself.
   (project-enrollment-tracker#925, #930)
+- **L65. A guard shipped deliberately inactive needs the issue that activates it filed in
+  the same change.** The observe only state becomes invisible the moment the reason for it
+  is forgotten, and an unenforced guard is indistinguishable from no guard. This applies to
+  every deliberately temporary state, an observe only check, a dark launch constant, a date
+  gate. (project-enrollment-tracker#928, #951)
 
 ## Data safety
 
