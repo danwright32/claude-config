@@ -185,6 +185,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   an accident from a deliberate choice, so it only ever stops the person who meant it, and it
   forces them to hand-do the batching or chunking the machinery already performs.
   (overture#1765)
+- **L64. What a person reviews and approves must be exactly what ships, so anything the system
+  composes onto it (a greeting, a header, a footer) belongs in the reviewed artifact and not in the
+  send path.** A step that adds or rewrites content after approval is invisible to the only person
+  who could have caught it, and whether it goes wrong then depends on details they cannot see.
+  (overture#2010)
 
 ## External systems
 
