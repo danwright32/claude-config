@@ -21,6 +21,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   migration applied in production, the live site serving the new commit, behavior
   confirmed in a production build. CI must exercise the artifact production actually
   runs. (20 issues, 5 repos)
+- **L63. A regression guard must assert the quantity it exists to protect, never a proxy for
+  it.** A pinned count, size or flag stays constant while the thing it stands in for doubles,
+  so the guard passes for the whole time the defect is growing and the detector goes back to
+  being the person who notices.
+  (overture#1913, overture#1992)
 - **L48. A test fixture that claims to come from real data must be measured from it, never
   shaped so the rule under test fires.** An invented shape makes a test appear to cover a
   case that cannot occur, so it passes forever while protecting nothing, and the
