@@ -133,6 +133,62 @@ else
   pass=$((pass+1))
 fi
 
+# --- The gate on WHETHER to quiz at all. Dan's spec, 2026-08-03: the quiz is for changes a person
+#     could notice, not for changes to how the program works inside. The old gate only skipped
+#     comments, docs, formatting and version bumps, so a test-only or refactor-only merge still
+#     quizzed him. As with the question constraints above, the shell cannot check what Claude
+#     actually decides, so what it CAN pin is that the instruction carries the rule. ---
+
+absent() {
+  local desc="$1" phrase="$2"
+  if printf '%s' "$REASON" | grep -qF "$phrase"; then
+    fail=$((fail+1))
+    echo "FAIL: instruction $desc (must no longer contain: $phrase)"
+  else
+    pass=$((pass+1))
+  fi
+}
+
+# The positive test: quiz only when someone could notice.
+needs "gates on a noticeable difference"   'could notice a difference'
+needs "counts what they see"               'what they see'
+needs "counts what they interact with"     'what they interact with'
+needs "counts what they receive and when"  'what they receive and when'
+
+# Two categories Dan explicitly kept IN (2026-08-03), despite being invisible while things work.
+needs "counts failure behavior"            'what happens when something goes wrong'
+needs "counts a rare edge case fix"        'a fix to a rare edge case'
+
+# For his own tooling, Dan is the user, so a change to how a hook or skill behaves still quizzes.
+needs "makes Dan the user of his tooling"  'Dan IS the user'
+
+# The skip list. Every one of these is a category Dan said he does not want quizzed.
+needs "skips tests"                        'tests, fixtures'
+needs "skips docs in any repo"             'documentation of any kind'
+needs "skips refactors and internals"      'refactors and internal restructuring'
+needs "skips perceptible speedups too"     'performance work, even a speedup'
+needs "skips invisible groundwork"         'groundwork that ships nothing visible yet'
+needs "rules out internals as a reason"    'never a reason to quiz'
+
+# A skip must be VISIBLE and pushed back on, because a wider skip rule makes a wrong skip
+# indistinguishable from the hook being broken.
+needs "names its judgement on a skip"      'ONE line that names what you judged'
+needs "invites a manual override"          'quiz me anyway'
+needs "forbids a silent skip"              'Do not skip silently'
+
+# A mixed merge fires, but only the user-facing slice is fair game, and the question count
+# scales to that slice rather than to the size of the whole diff.
+needs "fires on any user-facing change"    'the quiz fires'
+needs "asks only about the user slice"     'only from the user-facing part'
+needs "never asks about internals"        'never ask about the internal'
+needs "scales the count to the slice"      'not the size of the whole diff'
+
+# The old, far narrower gate must be gone, or the change has not actually taken effect.
+absent "drops the old triviality framing"  'triviality gate'
+absent "drops the old skip message"        'Nothing substantive shipped'
+absent "drops the old narrow skip list"    'only comments, docs, formatting'
+absent "drops the inconsequential test"    'If the change is inconsequential'
+
 echo
 echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]
