@@ -101,6 +101,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   only on the ones it completed.** An item left with no trace is indistinguishable from
   one never attempted, so the work is silently selected and paid for again, and the
   partial result reports as a clean run. (overture#1724)
+- **L67. A placeholder rendered in place of a missing required value (no subject, unknown, not
+  set) is a DETECTION that the value is absent, so it must block the action it appears in, never
+  merely label it.** The code substituting the placeholder has already proved the data is missing,
+  so leaving the commit button enabled beside it means the app told the person it was wrong and let
+  them proceed anyway.
+  (overture#2052)
 - **L50. A value parsed from storage or input must never feed a comparison
   directly.** A failed parse yields NaN or an invalid value that compares false
   against every threshold, so the check silently lands on the healthy or
