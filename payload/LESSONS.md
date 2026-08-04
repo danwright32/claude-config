@@ -207,6 +207,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   content or picks a target after approval is invisible to the only person who could have caught it,
   and whether it goes wrong then depends on details they cannot see.
   (overture#2010, overture#2015)
+- **L69. A preview or approval surface must render the content on both light and dark backgrounds.**
+  Styling that matches one background is invisible there and glaring on the other, so a single
+  background preview can approve a defect it is structurally unable to show: a signature carrying
+  white 1px borders previewed on a white card shipped a hard white outline box to every dark-mode
+  recipient for two weeks.
+  (overture#2086)
 
 ## External systems
 
