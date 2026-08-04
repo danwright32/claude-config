@@ -50,6 +50,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   this one truly caught a renamed column, but because its first live run was also its first
   enforcing run, a real finding stopped the primary feed instead of reporting itself.
   (project-enrollment-tracker#925, #930)
+- **L68. A guard that reads live production data must assert the SIGNATURE of the failure it
+  protects against, never the data's current emptiness.** A blanket bad default sets every row
+  while ordinary use sets one, so a guard written as "no row has this yet" expires the first time
+  the feature is legitimately used and can no longer tell that use apart from the defect.
+  (overture#2054)
 - **L65. A guard shipped deliberately inactive needs the issue that activates it filed in
   the same change.** The observe only state becomes invisible the moment the reason for it
   is forgotten, and an unenforced guard is indistinguishable from no guard. This applies to
