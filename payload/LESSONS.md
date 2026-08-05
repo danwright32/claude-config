@@ -60,6 +60,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   is forgotten, and an unenforced guard is indistinguishable from no guard. This applies to
   every deliberately temporary state, an observe only check, a dark launch constant, a date
   gate. (project-enrollment-tracker#928, #951)
+- **L70. A check whose expected value and its actual value come from the same lookup can only
+  prove that lookup is self-consistent, never that it is correct.** Resolve the two sides by
+  independent routes, and where several candidates could match, assert against the others too,
+  because a self-agreeing check passes hardest exactly when the lookup is wrong.
+  (2026-08-04, driving the Mac during overture#2088: a guard proved the frontmost app matched
+  the process it had resolved, both from one bad specifier, and quit the live app it was
+  written to protect)
 
 ## Data safety
 
