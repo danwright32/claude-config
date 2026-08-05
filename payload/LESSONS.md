@@ -239,6 +239,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   white 1px borders previewed on a white card shipped a hard white outline box to every dark-mode
   recipient for two weeks.
   (overture#2086)
+- **L76. A region that clips its content must show, at rest and with no interaction, that content
+  continues past the edge, and must stop showing it once the end is reached.** A platform that hides
+  scrollbars until a gesture starts makes an overflowing panel look like a complete one, so the
+  person reads what fits and never learns the rest existed.
+  (overture#2159)
 
 ## External systems
 
