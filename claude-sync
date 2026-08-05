@@ -557,8 +557,59 @@ resolve_add_add_hunks(){
   '
 }
 
+# Settling a number collision means renumbering the copy that was never published,
+# and that fix has to survive the very next merge. It did not: the merge above is
+# additive by design, so an entry this Mac still holds under its OLD number and the
+# arriving copy of the SAME entry under its new one are different lines, and both were
+# kept. The lesson then sat in the file twice, the duplicate numbers the renumber had
+# just resolved came straight back, and the duplicate guard held that one file back
+# from every send with no wedge notification (seen 2026-08-05, the third collision).
+#
+# So after merging, drop a local entry that the arriving file carries under a different
+# number. Bodies must be byte-identical apart from the number, which is what a pure
+# renumber produces; anything else is a real edit and is left alone. Prints one report
+# line per drop, because an entry that vanishes silently reads as a clean merge (#14).
+drop_renumbered_duplicates(){   # $1 = merged file, rewritten in place  $2 = arriving file
+  local out; out="$(mktemp)"
+  local report; report="$(awk -v out="$out" '
+    function entry_start(s) { return (s ~ /^- \*\*L[0-9]+\./) }
+    function sig_of(s)      { sub(/^- \*\*L[0-9]+\./, "- **L#.", s); return s }
+    function num_of(s)      { match(s, /L[0-9]+/); return substr(s, RSTART, RLENGTH) }
+    function close_block() {
+      if (nb == 0) return
+      s = sig_of(blk[1]); for (i = 2; i <= nb; i++) s = s "\n" blk[i]
+      n = num_of(blk[1])
+      if (pass == 1) { if (!(s in authnum)) authnum[s] = n }
+      else if (pass == 2) { seen[s]++; if (!(s in firstnum)) firstnum[s] = n }
+      else {
+        keep = (s in authnum) ? authnum[s] : firstnum[s]
+        if (seen[s] > 1 && (n != keep || (s SUBSEP n) in taken)) {
+          printf "%s became %s\n", n, keep
+        } else {
+          taken[s SUBSEP n] = 1
+          for (i = 1; i <= nb; i++) print blk[i] > out
+        }
+      }
+      nb = 0
+    }
+    FNR == 1 { close_block(); pass++ }
+    {
+      if (entry_start($0)) { close_block(); blk[++nb] = $0 }
+      else if (nb > 0 && $0 ~ /^  /) { blk[++nb] = $0 }
+      else { close_block(); if (pass == 3) print > out }
+    }
+    END { close_block() }
+  ' "$2" "$1" "$1")"
+  if [ -n "$report" ]; then
+    cat "$out" > "$1"
+    printf '%s' "$report"
+  fi
+  rm -f "$out"
+  return 0
+}
+
 merge_rule_files(){
-  local last p local_f tmpb tmpm tmpr reported="" resolved
+  local last p local_f tmpb tmpm tmpr reported="" resolved renumbered
   MERGED_RULE_FILES=""
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
@@ -581,6 +632,11 @@ merge_rule_files(){
     fi
     # Never write a file still carrying conflict markers: these load as rules.
     if [ -n "$resolved" ] && [ -s "$tmpr" ] && ! grep -q '^<<<<<<< \|^>>>>>>> ' "$tmpr"; then
+      renumbered="$(drop_renumbered_duplicates "$tmpr" "$PAYLOAD/$p")"
+      if [ -n "$renumbered" ]; then
+        echo "claude-sync: the other Mac renumbered an entry you had not sent yet, so your old-numbered copy was dropped and its renumbered version kept ($p: $(printf '%s' "$renumbered" | tr '\n' ';' | sed 's/;$//')). Nothing was lost: the text is identical and your previous copy is beside it as .syncbak." >&2
+        notify "$p: dropped an entry the other Mac renumbered"
+      fi
       cp "$local_f" "$local_f.syncbak"
       cp "$tmpr" "$local_f"
       MERGED_RULE_FILES="$MERGED_RULE_FILES

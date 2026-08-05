@@ -1254,6 +1254,74 @@ check "a tilde alias counts as installed"  "printf '%s' \"\$outZ4\" | grep -qi '
 check "no duplicate for the tilde form"    "[ \"\$(grep -c 'alias claudesync=' '$ZRC4')\" = 1 ]"
 check "the tilde form is not called a conflict" "! printf '%s' \"\$outZ4\" | grep -qi 'points somewhere else'"
 
+echo "== a lesson renumbered on the other Mac must not come back under its old number =="
+# Seen for real on 2026-08-05, the third numbering collision. Both Macs had used L66
+# and L67 for different lessons. The clash was settled in the shared repo the agreed
+# way (published keeps the number, the unsent local one is renumbered), but the merge
+# below is ADDITIVE: it kept this Mac's old-numbered copy alongside the arriving
+# renumbered one, so the same lesson sat in the file twice, the duplicate numbers came
+# straight back, and the duplicate guard then held the whole file back from every send
+# with no wedge notification. The renumbering has to survive the merge that follows it.
+RN="$WORK/rnbare.git"; git init -q --bare -b main "$RN"
+RNA="$WORK/rnrepoA"; git clone -q "$RN" "$RNA" 2>/dev/null
+cp "$SCRIPT" "$RNA/claude-sync"
+mkdir -p "$RNA/payload/hooks"; echo '#!/bin/sh' > "$RNA/payload/hooks/x.sh"
+echo '{"hooks":{}}' > "$RNA/payload/settings.hooks.json"
+printf '# rules\n@LESSONS.md\n' > "$RNA/payload/CLAUDE.md"
+printf '# Lessons\n\n- **L1. one.** body one\n' > "$RNA/payload/LESSONS.md"
+git -C "$RNA" checkout -q -b main 2>/dev/null || true
+git -C "$RNA" add -A && git -C "$RNA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$RNA" push -q -u origin main
+
+RNBH="$WORK/rnhomeB"; mkdir -p "$RNBH"; echo '{"hooks":{}}' > "$RNBH/settings.json"
+RNB="$WORK/rnrepoB"; git clone -q "$RN" "$RNB" 2>/dev/null
+CLAUDE_HOME="$RNBH" SYNC_REPO="$RNB" SYNC_NO_NOTIFY=1 bash "$RNB/claude-sync" pull >/dev/null 2>&1
+
+# This Mac writes L2 and never gets to send it. The other Mac independently uses L2
+# for something else and publishes it, then settles the clash by renumbering this
+# Mac's entry to L3, exactly as the convention says.
+printf -- '- **L2. mine.** written only on Mac B\n' >> "$RNBH/LESSONS.md"
+printf -- '- **L2. theirs.** published first by Mac A\n- **L3. mine.** written only on Mac B\n' >> "$RNA/payload/LESSONS.md"
+git -C "$RNA" add -A && git -C "$RNA" -c user.name=t -c user.email=t@e commit -q -m "Mac A publishes L2 and renumbers B's to L3" && git -C "$RNA" push -q
+out_rn="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RNBH" SYNC_REPO="$RNB" bash "$RNB/claude-sync" pull 2>&1)"
+
+check "renumber: the other Mac's L2 arrives"        "grep -q 'L2. theirs' '$RNBH/LESSONS.md'"
+check "renumber: this Mac's lesson survives"        "grep -q 'mine.\\*\\* written only on Mac B' '$RNBH/LESSONS.md'"
+check "renumber: it survives under its NEW number"  "grep -q 'L3. mine' '$RNBH/LESSONS.md'"
+check "renumber: the old-numbered copy is gone"     "! grep -q 'L2. mine' '$RNBH/LESSONS.md'"
+check "renumber: the lesson appears exactly once"   "[ \"\$(grep -c 'written only on Mac B' '$RNBH/LESSONS.md')\" = 1 ]"
+check "renumber: no duplicate numbers are created"  "! printf '%s' \"\$out_rn\" | grep -qi 'used twice\\|used 2 times'"
+check "renumber: numbering passes its own check" \
+  "CLAUDE_HOME='$RNBH' SYNC_REPO='$RNB' bash '$RNB/claude-sync' check-lessons >/dev/null 2>&1"
+# The report has to name what was dropped and both numbers involved, or a silently
+# vanished entry reads as a clean merge. Asserting only the word "renumber" would
+# pass on the pre-existing duplicate warning, which is a different message entirely.
+check "renumber: the drop names the old and new number" \
+  "printf '%s' \"\$out_rn\" | grep -qi 'renumbered' && printf '%s' \"\$out_rn\" | grep -q 'L2' && printf '%s' \"\$out_rn\" | grep -q 'L3'"
+# And the file must still be sendable. A duplicate holds that ONE file back from every
+# send, so prove it by sending something NEW: asserting the arriving L3 is still in the
+# payload would pass either way, since the other Mac put it there.
+printf -- '- **L4. later.** added on Mac B after the merge\n' >> "$RNBH/LESSONS.md"
+CLAUDE_HOME="$RNBH" SYNC_REPO="$RNB" SYNC_NO_NOTIFY=1 bash "$RNB/claude-sync" push >/dev/null 2>&1
+check "renumber: the file is not held back from sending" \
+  "grep -q 'L4. later' '$RNB/payload/LESSONS.md'"
+
+# The dangerous direction of the fix above is over-deleting: it removes an entry, so
+# two entries that merely LOOK alike must never be collapsed. Only a pure renumber
+# (identical text, different number) qualifies. Both Macs independently using one
+# number for two DIFFERENT lessons is the ordinary collision, and both must survive
+# for a human to renumber, exactly as they did before this fix existed.
+printf -- '- **L9. same number.** but this text is only on Mac B\n' >> "$RNBH/LESSONS.md"
+# Mac A has to take Mac B's published work first, or its own push is rejected and the
+# scenario silently never happens (the assertions below would then pass vacuously).
+git -C "$RNA" pull -q --no-rebase 2>/dev/null
+printf -- '- **L9. same number.** and this different text is only on Mac A\n' >> "$RNA/payload/LESSONS.md"
+git -C "$RNA" add -A && git -C "$RNA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds a clashing L9" && git -C "$RNA" push -q
+out_rn2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RNBH" SYNC_REPO="$RNB" bash "$RNB/claude-sync" pull 2>&1)"
+check "renumber: a genuinely different entry is never dropped" \
+  "grep -q 'only on Mac B' '$RNBH/LESSONS.md' && grep -q 'only on Mac A' '$RNBH/LESSONS.md'"
+check "renumber: a real collision is still reported for a human" \
+  "printf '%s' \"\$out_rn2\" | grep -qi 'used twice\\|used 2 times'"
+
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
