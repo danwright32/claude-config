@@ -343,3 +343,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   ones lost are unrelated to the one that broke, so a single try block around a sequence
   makes every check's reliability depend on every other check's worst case.
   (slate#1281, a monitor lane reached thirteen steps with four of them guarded)
+- **L74. A deadline, age or due date computed from the current clock at read time can never
+  age, because every evaluation moves it forward with the clock.** Anchor it to the stored
+  instant the work actually arrived (the reply, the guess, the event) so a missed one reads as
+  overdue instead of silently re-filing itself under today.
+  (overture#2111, overture#2116)
