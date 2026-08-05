@@ -125,6 +125,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   permissive side with no error ever raised. Parse through one shared helper that
   returns a value or null, and map null to the fail-safe side at each call site.
   (slate#1169, slate#1171)
+- **L71. A watchdog must not share the abort-on-error behaviour of the work it watches**,
+  because an incidental failure then kills the watchdog silently and leaves the work
+  running unobserved, which looks exactly like a healthy system. Give it its own error
+  handling and a fail-safe exit that stops the work it can no longer vouch for.
+  (overture#2106, overture#2109)
 
 ## State and identity
 
