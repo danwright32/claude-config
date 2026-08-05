@@ -190,6 +190,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   pool on first login while the migration's own comment said an admin had to
   approve them)
 
+- **L75. When identifying WHO or WHAT an outward action targets fails, refuse the action; never
+  fall back to a nearby candidate.** A visible placeholder at least tells the person something is
+  missing, while a silent substitution looks exactly like success and performs the action on
+  somebody else.
+  (overture#2147, a reply whose sender matched no known contact fell back to the row's own contact,
+  so answering the person who wrote would have emailed a colleague instead)
 ## UX completeness
 
 - **L20. Accessibility is part of building each control.** Labels on icon-only controls,
