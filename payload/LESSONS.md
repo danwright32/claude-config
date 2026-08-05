@@ -181,6 +181,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   ships inside every app binary, so an endpoint can look protected while accepting
   anyone: establish the caller yourself and reject the public key explicitly.
   (playedit#308, playedit#335)
+- **L72. A gate's stored DEFAULT must be its OFF value, so that FORGETTING to set it
+  produces the safe state rather than the live one.** A default of enabled, bookable,
+  active, visible or published means every insert path that omits the column ships a
+  record into production behavior, and the one path that forgets is the one nobody
+  tests; a comment stating the intended default enforces nothing.
+  (slate#1266, a column defaulting to bookable=true put agents in the live routing
+  pool on first login while the migration's own comment said an admin had to
+  approve them)
 
 ## UX completeness
 
@@ -330,3 +338,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   fact like a bounce silently marks people it is not true of, and the data that would tell them
   apart is usually absent from the response you already fetch.
   (overture#2032)
+- **L73. Independent steps sharing one handler each need their own failure boundary.**
+  An unguarded throw in step three silently cancels steps four through thirteen, and the
+  ones lost are unrelated to the one that broke, so a single try block around a sequence
+  makes every check's reliability depend on every other check's worst case.
+  (slate#1281, a monitor lane reached thirteen steps with four of them guarded)
