@@ -273,6 +273,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   server-side, paginate every list (PostgREST caps at 1,000 rows silently), batch N+1s,
   run independent awaits concurrently, keep heavy work out of render paths, ship the
   index with the query. (58 issues, 4 repos)
+- **L79. A batch must be sized in the UNIT the limit is actually expressed in, measured
+  from the real inputs, never in a proxy unit calibrated on one sample.** A row count
+  standing in for URL bytes, or a message count standing in for tokens, holds only while
+  every input is the same size, so the number gets copied to a call site with larger
+  inputs and the request is refused outright rather than merely running slow.
+  (slate#1259, slate#1268: a 500 id batch carried from 27 character keys onto 36
+  character uuids and then onto 43 to 181 character calendar event ids)
 - **L25. Pin everything.** Toolchains, dependencies, external API versions, AI models;
   "latest" is an unannounced breaking change. (11 issues, 4 repos)
 - **L26. Twin implementations in two languages consume one shared committed fixture**,
