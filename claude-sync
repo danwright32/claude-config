@@ -829,12 +829,32 @@ commit_if_changed(){
   return 0
 }
 
+# True when this branch holds commits the remote does not have. The "ride up on the
+# next push" promise in the comment above was not kept: push and sync both decided
+# whether to push from whether commit_if_changed had just made one, so a deliberate
+# commit to the tool itself was never sent and push printed "already up to date" over
+# a branch that was ahead. Ask the repo what is unpushed instead of inferring it from
+# what we happened to do this run, so it holds for a commit made by hand, by an
+# editor, or by an earlier run that died between committing and pushing.
+# No upstream yet means there is nothing to be ahead OF: the caller's -u push creates
+# it, so report false rather than guessing at a branch name.
+unpushed_commits(){
+  local up n
+  up="$(git -C "$SYNC_REPO" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  [ -n "$up" ] || return 1
+  n="$(git -C "$SYNC_REPO" rev-list --count "$up..HEAD" 2>/dev/null || echo 0)"
+  [ "${n:-0}" -gt 0 ]
+}
+
 # ---------- push ----------
 do_push(){
   stage_local_to_payload
   echo "Staged config into $PAYLOAD"
   if have_git; then
-    if commit_if_changed; then git -C "$SYNC_REPO" push && echo "Pushed."
+    local staged=0
+    commit_if_changed && staged=1
+    if [ "$staged" -eq 1 ] || unpushed_commits; then
+      git -C "$SYNC_REPO" push && echo "Pushed."
     else echo "Nothing changed — repo already up to date."; fi
   fi
 }
@@ -1032,7 +1052,9 @@ do_sync(){
       fi
     fi
     after="$(repo_head)"
-    [ "$pushed" -eq 1 ] && git -C "$SYNC_REPO" push -u origin "$branch" -q
+    # Re-checked AFTER the rebase, not from $pushed alone: the daemon runs this, so a
+    # hand commit to the tool would otherwise sit unsent with nobody watching.
+    { [ "$pushed" -eq 1 ] || unpushed_commits; } && git -C "$SYNC_REPO" push -u origin "$branch" -q
     # send half is done; hand off so the apply below runs the pulled logic
     reexec_after_self_update "$before" "$after" apply-only || true
   fi

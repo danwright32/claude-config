@@ -1337,6 +1337,57 @@ check "renumber: a genuinely different entry is never dropped" \
 check "renumber: a real collision is still reported for a human" \
   "printf '%s' \"\$out_rn2\" | grep -qi 'used twice\\|used 2 times'"
 
+echo "== #16: a commit that does not touch payload must still be sent =="
+# Found on 2026-08-06 while pushing a fix to this very script: push decided WHETHER to
+# push from whether STAGING THE PAYLOAD had produced a commit. So a commit touching
+# anything else in the repo (this script, this test file) was never sent, and push
+# still printed "already up to date" over a branch that was ahead. Same shape as L78,
+# one signal standing in for the whole state, except here what it silently withheld
+# was the work itself. do_sync had it too, so the background daemon stranded them as
+# well and the tool looked healthy the entire time.
+UPB="$WORK/upbare.git"; git init -q --bare -b main "$UPB"
+UPR="$WORK/uprepo"; git clone -q "$UPB" "$UPR" 2>/dev/null
+cp "$SCRIPT" "$UPR/claude-sync"
+echo '{"hooks":{}}' > "$UPR/payload/settings.hooks.json" 2>/dev/null || { mkdir -p "$UPR/payload"; echo '{"hooks":{}}' > "$UPR/payload/settings.hooks.json"; }
+echo '# rules' > "$UPR/payload/CLAUDE.md"
+git -C "$UPR" checkout -q -b main 2>/dev/null || true
+git -C "$UPR" add -A && git -C "$UPR" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$UPR" push -q -u origin main
+UPH="$WORK/uphome"; mkdir -p "$UPH"; echo '{"hooks":{}}' > "$UPH/settings.json"; echo '# rules' > "$UPH/CLAUDE.md"
+# Settle first, so the run under test genuinely has nothing to stage. Without this the
+# test could pass for the wrong reason: any incidental payload change makes push fire
+# anyway, and the assertion would never exercise the bug.
+CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+out_up0="$(CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+check "#16 precondition: a settled push has nothing to stage" \
+  "printf '%s' \"\$out_up0\" | grep -qi 'already up to date'"
+
+echo '# notes' > "$UPR/NOTES.md"
+git -C "$UPR" add -A && git -C "$UPR" -c user.name=t -c user.email=t@e commit -q -m "edit outside payload"
+out_up="$(CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+check "#16 push does not claim nothing changed while ahead" \
+  "! printf '%s' \"\$out_up\" | grep -qi 'already up to date'"
+# Captured, not piped straight into grep: under `set -o pipefail` grep -q exits on the
+# first matching line, git takes SIGPIPE, and the pipeline reports failure over a log
+# that DOES contain the commit. That false negative cost a debugging detour here.
+bare_log_up="$(git -C "$UPB" log --oneline main 2>/dev/null || true)"
+check "#16 the non-payload commit reaches the remote" \
+  "printf '%s' \"\$bare_log_up\" | grep -q 'edit outside payload'"
+
+# sync is what the background daemon runs, so the same hole there strands the commit
+# with nobody watching at all.
+echo '# more' >> "$UPR/NOTES.md"
+git -C "$UPR" add -A && git -C "$UPR" -c user.name=t -c user.email=t@e commit -q -m "second edit outside payload"
+CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+bare_log_up2="$(git -C "$UPB" log --oneline main 2>/dev/null || true)"
+check "#16 sync also sends a non-payload commit" \
+  "printf '%s' \"\$bare_log_up2\" | grep -q 'second edit outside payload'"
+
+# And it must still stay quiet when there is genuinely nothing to do, or the line
+# becomes noise and the real "already up to date" case stops meaning anything.
+out_up2="$(CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+check "#16 a truly settled push still says so" \
+  "printf '%s' \"\$out_up2\" | grep -qi 'already up to date'"
+
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
