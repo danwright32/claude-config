@@ -138,6 +138,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   above it.
   (slate#1313, slate#1315: cal.com refused 50+ bookings in two hours because its booker
   offered slots that were not free, and every one of them looked like ordinary contention)
+- **L78. A report of what changed must be assembled from the finished state, never from one of
+  the code paths that change it.** A write deliberately routed around the ordinary path to
+  PROTECT it (a merge held back so a copy cannot clobber it, a hand applied fix, a retry) is
+  thereby also missing from a summary built only from the ordinary path, so the tool says
+  nothing happened about the very change that needed special handling, and any instruction
+  hanging off that report (restart, re-read, re-run, go look) never fires. The protection and
+  the blindness come from the same exclusion, which is why it reads as correct in review.
+  (claude-config, 2026-08-06: a config pull merged three entries into the rule file every
+  session loads, then printed "nothing on this Mac needed changing" and named nothing to
+  restart for)
 
 ## State and identity
 
