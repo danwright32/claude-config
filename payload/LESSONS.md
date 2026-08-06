@@ -130,6 +130,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   running unobserved, which looks exactly like a healthy system. Give it its own error
   handling and a fail-safe exit that stops the work it can no longer vouch for.
   (overture#2106, overture#2109)
+- **L77. An error deliberately classified as EXPECTED (a lost race, a declined payment, a
+  rejected duplicate, a taken slot) must still be counted against a RATE.** The code waving
+  it through has no notion of volume, so one benign instance and a systemic outage arrive on
+  the same path and are indistinguishable, which leaves the second invisible for exactly as
+  long as it lasts. Classify by frequency, not only by kind: normal below a threshold, a page
+  above it.
+  (slate#1313, slate#1315: cal.com refused 50+ bookings in two hours because its booker
+  offered slots that were not free, and every one of them looked like ordinary contention)
 
 ## State and identity
 
