@@ -284,6 +284,21 @@ apply_payload_to_local(){
   # Explicit template, not a bare mktemp: BSD mktemp ignores TMPDIR unless the
   # template says so, which left the tests unable to see this file at all.
   APPLIED_LOG="$(mktemp "${TMPDIR:-/tmp}/claude-sync-applied.XXXXXX")"
+  # A merged rule file was rewritten on this Mac by merge_rule_files just above, and
+  # it is EXCLUDED from the rsync below so the apply cannot clobber that merge. Both
+  # facts are correct, and together they used to make the merge the one write nothing
+  # reported: the summary read only this log, so a pull that merged lessons in printed
+  # "nothing on this Mac needed changing" and named no file to restart for. Record it
+  # here, where the log finally exists (merge_rule_files runs before it is created).
+  # It matters most for the restart notice: a rule file is read at session start, so
+  # an open session keeps the pre-merge copy until it is told to restart.
+  local mp
+  while IFS= read -r mp; do
+    [ -n "$mp" ] || continue
+    record_applied merged "$mp"
+  done <<MERGED
+${MERGED_RULE_FILES:-}
+MERGED
   # -i itemizes so we can report the real writes; -c because -a quick-checks on
   # size plus mtime, and a same-size edit whose mtime git happens to preserve
   # would otherwise be neither copied nor reported. These trees are small.

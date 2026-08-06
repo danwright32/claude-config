@@ -1088,6 +1088,21 @@ check "#14 the merge is reported, not silent"     "printf '%s' \"\$out_rm1\" | g
 check "#14 the report names the file merged"      "printf '%s' \"\$out_rm1\" | grep -q 'LESSONS.md'"
 check "#14 no conflict markers reach the file"    "! grep -q '<<<<<<<' '$RMBH/LESSONS.md'"
 
+# Seen for real on 2026-08-06: this same pull merged three lessons into LESSONS.md and
+# then printed "Already up to date: nothing on this Mac needed changing", with no
+# restart notice. The merge recorded its write only in MERGED_RULE_FILES, never in the
+# applied list that BOTH the change summary and the restart notice read, so the one
+# path that rewrites a rule file was the one path invisible to the report about it.
+# Two things follow, and the second is the one that costs something: a rule file is
+# loaded at session start (LESSONS.md via CLAUDE.md), so a session that stays open
+# keeps the pre-merge copy while the summary says there is nothing to pick up.
+check "#14 a merge is never reported as nothing-changed" \
+  "! printf '%s' \"\$out_rm1\" | grep -qi 'nothing on this Mac needed changing'"
+check "#14 the merged file is listed as a received change" \
+  "printf '%s' \"\$out_rm1\" | grep -qE '^ +merged +LESSONS\\.md'"
+check "#14 a merged rule file earns the restart notice" \
+  "printf '%s' \"\$out_rm1\" | grep -i 'new Claude Code session' | grep -q 'LESSONS.md'"
+
 # The merged file must then reach the other Mac, or the lesson is still stranded.
 CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" SYNC_NO_NOTIFY=1 bash "$RMB/claude-sync" push >/dev/null 2>&1
 check "#14 the merged result is published upward" "grep -q 'L3. three' '$RMB/payload/LESSONS.md'"
