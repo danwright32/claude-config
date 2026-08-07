@@ -186,6 +186,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   cannot see a repeat request for the same target and silently drops it.** The second
   identical request is the case a first walk never tries, so it ships looking correct.
   (overture#1774, overture#1927)
+- **L83. A fact that could sit at either of two levels (the organisation or the contact, the order
+  or its line, the show or the person on it) must have ONE declared home, and every writer and
+  reader must use it.** A fact written at one level and read at the other goes missing in exactly
+  one direction, so the writing file and the reading file each look correct alone and only somebody
+  holding both notices. A guard phrased at the coarser level does the same damage, silently
+  excluding a whole segment from a per item rule that was already enforcing the same thing.
+  (overture#2225 wrote the booking on the show and read it per contact, overture#2226 wrote it on
+  the contact and read it on the show, overture#2223 skipped booking detection for every past
+  client on an organisation level flag)
 
 ## Security and privacy
 
