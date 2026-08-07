@@ -262,6 +262,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   scrollbars until a gesture starts makes an overflowing panel look like a complete one, so the
   person reads what fits and never learns the rest existed.
   (overture#2159)
+- **L81. A notice placed in a container the platform may collapse, overflow or truncate (a toolbar
+  slot, a header that condenses, a single row) is not shipped until it has been seen at the window
+  size the person actually uses.** Every mechanism protecting that message, a priority rule that stops
+  it being overwritten, a dedupe, a retention window, is worth nothing while the surface holding it is
+  off screen, and the code stays entirely correct the whole time.
+  (overture#2204)
+- **L80. When a message names a specific record, source or item so the person can act on it, the
+  surface showing it must carry that action.** Naming the target and then classifying the message as
+  informational tells the person exactly what is wrong and gives them nowhere to go, and the two halves
+  usually live in different files so no reviewer sees the contradiction.
+  (overture#2207)
 
 ## External systems
 
