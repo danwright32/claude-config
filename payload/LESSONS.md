@@ -84,6 +84,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   (new-agent-onboarding#468: the canonical screenshot of the new-hire form had recorded the
   trainer picker's red "couldn't load the trainer list" error as the form at rest, and the
   guard passed on it for as long as it existed)
+- **L85. Two changes that are each green can merge into a broken main, because each one was
+  verified against a base that did not contain the other.** A passing check proves the change
+  works beside what existed when it ran, never beside what landed since, so when anything merges
+  while yours is open, rebase and re-run before merging instead of trusting the earlier green, and
+  prefer having the platform require an up to date branch so the guarantee stops depending on
+  anyone remembering.
+  (new-agent-onboarding#477 and #478: one made a field required, the other added a fixture built
+  without it, both green, red on main. Only the typecheck caught it, because the test suite does
+  not typecheck, so it surfaced after merging rather than on either branch)
 
 ## Data safety
 
