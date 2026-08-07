@@ -67,6 +67,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   (2026-08-04, driving the Mac during overture#2088: a guard proved the frontmost app matched
   the process it had resolved, both from one bad specifier, and quit the live app it was
   written to protect)
+- **L82. When a platform primitive's DOCUMENTED guarantee is the entire reason a guard is safe
+  (a clock that excludes sleep, a delivery that happens once, a write that is atomic), measure
+  that guarantee on the real target before shipping.** Documentation ages behind the hardware
+  and the runtime, while every test that injects the value agrees with the documentation by
+  construction, so the suite is structurally unable to notice.
+  (overture#2220: ProcessInfo.systemUptime is documented as awake time only and lost 7.6
+  minutes across two nights of closed lid on Apple Silicon, so a sleep-immune outage detector
+  reported a false twelve hour failure every morning)
 
 ## Data safety
 
