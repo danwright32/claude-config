@@ -75,6 +75,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2220: ProcessInfo.systemUptime is documented as awake time only and lost 7.6
   minutes across two nights of closed lid on Apple Silicon, so a sleep-immune outage detector
   reported a false twelve hour failure every morning)
+- **L84. A recorded expectation (a baseline screenshot, a golden file, an approved snapshot)
+  captures whatever the surface happened to be showing when it was recorded, including an error
+  or empty state caused by a dependency the harness never fed it, and then defends that broken
+  state as correct for as long as it lives.** Stub every dependency the recorded surface
+  fetches, and make each recording assert in words the state it claims to show, because a
+  recording cannot notice it photographed a failure.
+  (new-agent-onboarding#468: the canonical screenshot of the new-hire form had recorded the
+  trainer picker's red "couldn't load the trainer list" error as the form at rest, and the
+  guard passed on it for as long as it existed)
 
 ## Data safety
 
