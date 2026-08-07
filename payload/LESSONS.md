@@ -268,7 +268,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   it being overwritten, a dedupe, a retention window, is worth nothing while the surface holding it is
   off screen, and the code stays entirely correct the whole time.
   (overture#2204)
-- **L82. When a message names a specific record, source or item so the person can act on it, the
+- **L80. When a message names a specific record, source or item so the person can act on it, the
   surface showing it must carry that action.** Naming the target and then classifying the message as
   informational tells the person exactly what is wrong and gives them nowhere to go, and the two halves
   usually live in different files so no reviewer sees the contradiction.
