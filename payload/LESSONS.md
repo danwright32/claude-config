@@ -213,6 +213,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2225 wrote the booking on the show and read it per contact, overture#2226 wrote it on
   the contact and read it on the show, overture#2223 skipped booking detection for every past
   client on an organisation level flag)
+- **L86. A short lived component that registers actions, observers or callbacks into a longer
+  lived shared host (an undo stack, a notification center, an event target, a subscription
+  registry) must either own a private instance of that host or deregister on teardown, because
+  these hosts routinely hold unowned references and outlive the component.** The shared default
+  also silently merges independent components' histories, so one instance's undo, replay or
+  callback reaches another's state.
+  (PostRoll#196: seven text editors sharing the window's NSUndoManager, which does not retain
+  its targets, so holding Cmd+Z walked past the live editor's history into a freed one and
+  killed the app)
 
 ## Security and privacy
 
