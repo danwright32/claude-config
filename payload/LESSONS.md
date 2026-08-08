@@ -335,6 +335,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   inputs and the request is refused outright rather than merely running slow.
   (slate#1259, slate#1268: a 500 id batch carried from 27 character keys onto 36
   character uuids and then onto 43 to 181 character calendar event ids)
+- **L87. A change that multiplies how many items an existing request carries inherits
+  that request's aggregate limit, and proving the change correct says nothing about
+  whether it still fits.** Measure the whole payload against the real ceiling on the
+  largest realistic input, because the item that got better is not the one that breaks.
+  (PostRoll#216: splitting each program page into two images to fix a misread name was
+  verified on one page and doubled an uncapped request, so an eight page program went
+  from working to refused outright)
 - **L25. Pin everything.** Toolchains, dependencies, external API versions, AI models;
   "latest" is an unannounced breaking change. (11 issues, 4 repos)
 - **L26. Twin implementations in two languages consume one shared committed fixture**,
