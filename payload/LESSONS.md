@@ -93,6 +93,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   (new-agent-onboarding#477 and #478: one made a field required, the other added a fixture built
   without it, both green, red on main. Only the typecheck caught it, because the test suite does
   not typecheck, so it surfaced after merging rather than on either branch)
+- **L88. A CI job that runs only when certain paths change must have those paths derived
+  from every input its tests actually read, not from where the code under test lives.**
+  A shared fixture, golden file or config consumed from elsewhere in the tree makes the
+  job skip precisely the change that breaks it, and a skipped job looks identical to a
+  passing one.
+  (PostRoll#246: a Swift job filtered to the app folder, while two of its tests read
+  cross-language fixtures living beside the Python suite)
 
 ## Data safety
 
