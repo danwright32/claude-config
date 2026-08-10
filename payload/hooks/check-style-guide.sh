@@ -61,8 +61,17 @@ if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_STYLE_CHECK=1([[:space:
   exit 0
 fi
 
-[ -n "$cwd" ] && cd "$cwd" 2>/dev/null
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+# The repo is resolved from the COMMAND first and the payload cwd second. The cwd
+# is the SESSION's directory, so a session rooted outside the project reaches it
+# as `cd <repo> && git push`, and reading the cwd alone let every one of those
+# pushes past this check with no style scan at all, looking exactly like a push
+# it had cleared. Shared with the other push hooks so the three cannot drift.
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
+[ -n "$repo_dir" ] || exit 0
+cd "$repo_dir" 2>/dev/null || exit 0
 
 base=""
 upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
