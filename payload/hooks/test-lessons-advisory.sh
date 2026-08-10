@@ -199,7 +199,19 @@ git -C "$NR" add -A && git -C "$NR" commit -qm change
 out=$(run_hook "git push" "$NR")
 assert_contains "a repo with no upstream is still scanned" 'additionalContext' "$out"
 
-# --- 12. It reports WHERE, so the advice is actionable ------------------------
+# --- 12. The repo comes from the command when the cwd is not one --------------
+# A session rooted outside the project pushes with `cd <repo> && git push` or
+# `git -C <repo> push`. Resolving only the payload cwd would make every such
+# push invisible, and invisible reads exactly like nothing-to-say.
+R=$(make_repo fromcd 'try { x() } catch (e) { return [] }' src/f.ts)
+out=$(run_hook "cd $R && git push" "$WORK")
+assert_contains "a cd-then-push resolves the repo from the command" 'additionalContext' "$out"
+
+R=$(make_repo fromdashc 'try { x() } catch (e) { return [] }' src/g.ts)
+out=$(run_hook "git -C $R push" "$WORK")
+assert_contains "a git -C push resolves the repo from the command" 'additionalContext' "$out"
+
+# --- 13. It reports WHERE, so the advice is actionable ------------------------
 R=$(make_repo location 'try { x() } catch (e) { return [] }' src/where.ts)
 out=$(run_hook "git push" "$R")
 assert_contains "advisory names the file that triggered it" 'src/where.ts' "$out"
