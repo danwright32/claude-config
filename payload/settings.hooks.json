@@ -23,6 +23,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/lessons-advisory.sh",
+            "timeout": 30,
+            "statusMessage": "Checking pushed changes against the recorded lessons"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-closing-keyword.sh"
           },
           {
