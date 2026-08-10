@@ -65,6 +65,61 @@ want_clean "plain new file with no violations" "--- NEW FILE: app/new.ts ---
 
 rm -f "$DIR/.style-detector.tmp.py"
 
+# --- end to end: the hook must find the repo even when the session is elsewhere -
+# The payload's cwd is the SESSION's directory, not the project's. A session
+# rooted somewhere else reaches a project as `cd <repo> && git push`, and reading
+# the cwd alone made this check see no work tree and wave the push through with
+# no style check at all, silently. The forbidden characters below are written as
+# escapes so this file holds no literal one for the hook to catch.
+E2E="$(mktemp -d)"
+mk_style_repo() {
+  # $1 = file content
+  local root; root="$(mktemp -d)"
+  git init -q --bare "$root/origin.git"
+  git init -q -b main "$root/work"
+  (
+    cd "$root/work" || exit 1
+    git config user.email t@t.t; git config user.name t
+    echo baseline > README.md
+    git add -A; git commit -qm init
+    git remote add origin "$root/origin.git"
+    git push -qu origin main
+    mkdir -p app
+    printf '%s\n' "$1" > app/copy.ts
+    git add -A; git commit -qm copy
+  ) >/dev/null 2>&1
+  printf '%s' "$root/work"
+}
+run_style_hook() {
+  # $1 cwd, $2 command -> sets STYLE_CODE
+  local p
+  p="$(HK_CMD="$2" HK_CWD="$1" python3 -c 'import json,os,sys
+sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
+  printf '%s' "$p" | bash "$HOOK" >/dev/null 2>&1
+  STYLE_CODE=$?
+}
+want_style_code() {
+  if [ "$STYLE_CODE" = "$1" ]; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: $2: expected exit $1, got $STYLE_CODE"; fi
+}
+
+BAD="$(python3 -c 'print("const label = \"Loading — please wait\";")')"
+W="$(mk_style_repo "$BAD")"
+run_style_hook "$W" "git push"
+want_style_code 2 "canary: a forbidden character blocks a plain push"
+
+W="$(mk_style_repo "$BAD")"
+run_style_hook "$E2E" "cd $W && git push"
+want_style_code 2 "cd-then-push from a non-repo cwd must still be checked"
+
+W="$(mk_style_repo "$BAD")"
+run_style_hook "$E2E" "git -C $W push"
+want_style_code 2 "git -C push from a non-repo cwd must still be checked"
+
+W="$(mk_style_repo 'const label = "Loading, please wait";')"
+run_style_hook "$E2E" "cd $W && git push"
+want_style_code 0 "clean copy pushed the same way is allowed"
+
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$fail" -eq 0 ]]
