@@ -105,11 +105,19 @@ ps_base_ref() {
 
 # The commit the pushed range starts from. Falls back to HEAD~1 so a repo with
 # no resolvable base still yields the most recent change rather than nothing.
+#
+# The second fallback matters as much as the first: with no upstream, ps_base_ref
+# walks down to a local `main`, which on an unpushed branch IS the current branch,
+# so the merge-base comes back as HEAD and the range is empty. A caller cannot
+# tell that empty range from "this push adds nothing", so it would read a scan of
+# zero commits as a clean result. Drop to HEAD~1 instead and scan the real change.
 ps_merge_base() {
-  local base="${1:-}"
+  local base="${1:-}" mb=""
   if [ -n "$base" ] && git rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
-    git merge-base "$base" HEAD 2>/dev/null
-  else
-    git rev-parse --verify --quiet HEAD~1 2>/dev/null
+    mb="$(git merge-base "$base" HEAD 2>/dev/null)"
   fi
+  if [ -z "$mb" ] || [ "$mb" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
+    mb="$(git rev-parse --verify --quiet HEAD~1 2>/dev/null)"
+  fi
+  printf '%s' "$mb"
 }
