@@ -146,7 +146,8 @@ assert_silent "non-push command is silent" "$out"
 out=$(run_hook 'echo "remember to git push later"' "$R")
 assert_silent "a command merely mentioning git push is silent" "$out"
 
-out=$(payload "git push" "$R" | env TMPDIR="$WORK/tmp" CLAUDE_DETACHED_RUN=1 "$HOOK" 2>/dev/null)
+P="$(payload "git push" "$R")"
+out=$(printf '%s' "$P" | env TMPDIR="$WORK/tmp" CLAUDE_DETACHED_RUN=1 "$HOOK" 2>/dev/null)
 assert_silent "detached run is silent" "$out"
 
 # --- 7. Matching is on ADDED lines, not the whole file ------------------------
