@@ -22,7 +22,7 @@
 ps_is_git_push() {
   local cmd="$1" seg
   while IFS= read -r seg; do
-    ps__segment_is_push "$seg" && return 0
+    : "$seg"
   done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
   return 1
 }
