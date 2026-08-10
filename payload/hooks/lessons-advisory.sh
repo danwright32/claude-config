@@ -77,8 +77,9 @@ cwd="${parsed#*$'\x1f'}"
 
 ps_is_git_push "$cmd" || exit 0
 
-[ -n "$cwd" ] && cd "$cwd" 2>/dev/null
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
+[ -n "$repo_dir" ] || exit 0
+cd "$repo_dir" 2>/dev/null || exit 0
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
 # --- Cooldown: advise once per repo per window -------------------------------
