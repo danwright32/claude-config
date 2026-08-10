@@ -181,7 +181,16 @@ R=$(make_repo cooldown 'try { x() } catch (e) { return [] }' src/d.ts)
 first=$(run_hook "git push" "$R")
 second=$(run_hook "git push" "$R")
 assert_contains "first push of a repo advises" 'additionalContext' "$first"
-assert_silent "an immediately repeated push is silent" "$second"
+assert_silent "the SAME finding pushed again is silent" "$second"
+
+# A different problem inside the same window must still get through: the quiet
+# is for repetition, not for the repo. Otherwise silence, which is supposed to
+# mean "nothing matched", would sometimes mean "something matched and was eaten".
+git -C "$R" push -q origin main
+printf 'DELETE FROM contacts WHERE stale = true;\n' > "$R/cleanup.sql"
+git -C "$R" add -A && git -C "$R" commit -qm cleanup
+third=$(run_hook "git push" "$R")
+assert_contains "a DIFFERENT finding in the same window still advises" 'L5' "$third"
 
 # --- 11. A branch with no upstream still gets scanned -------------------------
 # The base falls back through origin/HEAD, origin/main, main. On a repo with no
