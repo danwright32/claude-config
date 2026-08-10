@@ -100,6 +100,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   passing one.
   (PostRoll#246: a Swift job filtered to the app folder, while two of its tests read
   cross-language fixtures living beside the Python suite)
+- **L92. When you make a removal or refusal durable by recording it against an identifier
+  (an email, an id, a URL), every item the action can apply to must actually carry that
+  identifier, or the ones lacking it silently keep the exact defect the recording was added
+  to fix.** The gap is invisible because the fix demonstrably works on every item you tested
+  it on.
+  (overture#2392 recorded a struck contact as a refused EMAIL, so the six contacts with no
+  address at all were still hard deleted and rebuilt by the next run: overture#2421)
+- **L93. A guard that avoids a wrong action by falling back to a different action has only
+  chosen which defect to ship, so name what the fallback gets wrong and measure how often the
+  guard fires on real data.** One written for a rare ambiguity that turns out to be true in the
+  common case makes its fallback the only live path, and the code reads as careful the whole
+  time.
+  (overture#2422: an importer skipped matching whenever a batch held two contacts of the same
+  kind, which is every multi performer show, so every re-run appended duplicates instead of
+  correcting rows)
 
 ## Data safety
 
@@ -107,6 +122,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   temp and rename, keep the prior version until the new one is confirmed, defer physical
   deletes until undo expires, and never let a blank value beat real data in a merge.
   (16 issues, 2 repos)
+- **L95. Adding a WRITE to an error path re-audits every error that can reach it**, because a
+  misclassification that was harmless while the path only reported becomes data loss the
+  moment it persists. The classification was never checked against the new consequence, and
+  the branch reads as long-settled code, so review skips it.
+  (PostRoll#262: a salvage branch added to the failure path merged a half-finished run over
+  hand-edited captions on Cancel, because cancelling surfaces as an ordinary script failure,
+  which had never mattered while that path only showed a message)
 - **L7. User data gets a rotating backup and a restore path from day one.** A single
   .bak copied from the possibly-bad current file is not a backup. Rehearse every
   destructive migration against a copy of the real store, never only fresh data.
@@ -180,6 +202,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   above it.
   (slate#1313, slate#1315: cal.com refused 50+ bookings in two hours because its booker
   offered slots that were not free, and every one of them looked like ordinary contention)
+- **L94. A request or payload assembled in two places, a builder plus a caller that adds more
+  fields, has nowhere its completeness can be seen, so a field missing from both halves is
+  invisible to a reader of either.** Assemble it in one function and give that function the
+  whole input it needs.
+  (PostRoll#266: the Friday re-render manifest was half built by a helper and half by its
+  caller, and the key that keeps a user's own music was in neither, so every hand-edited
+  Friday silently swapped his track for a stranger's)
 - **L78. A report of what changed must be assembled from the finished state, never from one of
   the code paths that change it.** A write deliberately routed around the ordinary path to
   PROTECT it (a merge held back so a copy cannot clobber it, a hand applied fix, a retry) is
@@ -246,6 +275,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2388: a close-out menu deliberately trimmed against the Archive card's menu,
   with a comment saying so, still offered the same stored outcome as the state menu
   rendered one line beneath it)
+- **L91. A user action's visible response must not wait on a derivation whose cost scales with
+  the whole collection rather than with what changed.** Removing one row by rebuilding every row
+  reads as a broken control at any real data size, and the person presses it again, so decouple
+  what the screen does on the press from what the store recomputes after it.
+  (overture#2417: closing a show out took a second or two to leave the screen, because each write
+  invalidated the queue's whole query and rebuilt every card, whole-corpus derivations included,
+  on the main thread; the same lag struck an address off a card, and Dan named the pattern before
+  anyone had looked at the cause)
 
 ## Security and privacy
 
@@ -341,6 +378,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   informational tells the person exactly what is wrong and gives them nowhere to go, and the two halves
   usually live in different files so no reviewer sees the contradiction.
   (overture#2207)
+- **L97. An undo whose input is the very thing the action removed from the screen is not an undo,
+  because the action destroys the only key to its own reversal.** Either keep what was removed
+  listed somewhere with the way back attached to it, or make the reversal reachable without the
+  person having to remember the value, since from inside the code the undo genuinely exists and
+  the gap is invisible.
+  (overture#2392, overture#2408: striking a contact address was reversible by typing that address
+  back in, and the strike removed that address from every screen that showed it)
 
 ## External systems
 
@@ -404,6 +448,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   maintained by hand beside it.** The two drift the moment someone updates one and not
   the other, and the drift stays silent until something turns up missing.
   (claude-config#9)
+- **L96. A guard driven by a hand-written registry checks only what the registry lists, so
+  anything missing from it is exempt from the very check meant to catch it, and the guard
+  reports green while blind.** Derive the registry from the code, or add a second check in the
+  code-to-registry direction, because the entries you remembered are exactly the ones already
+  safe.
+  (PostRoll#273: the payload contract enforced that every declared payload was fully declared,
+  and six payloads crossing the same boundary were never declared at all, so the sweep that
+  claimed to cover all of them passed)
 - **L57. A correction recorded only in memory or a transcript will recur, because the
   artifact that actually governs the behavior never changed.** Write every accepted
   correction into the prompt, config, or rule file that decides the outcome, in the same
