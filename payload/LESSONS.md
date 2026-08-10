@@ -142,6 +142,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   silently erases the other's failure, so the alert that depends on it can never reach
   its threshold and the condition it watches becomes unreportable; give each check its
   own counter and judge it against its own cadence. (slate#1150)
+- **L90. A counter or category whose only input is a value nothing in the system ever writes
+  reports ZERO, and zero is indistinguishable from a true measurement.** The mirror of L46:
+  that one catches a field written but never read, this one catches a reader whose value has
+  no live writer, and it is the worse of the two because it fails as a confident number rather
+  than as a blank. Assert that every value a reader branches on is actually produced somewhere.
+  (overture#2401: the funnel's lost count could only be filled by two show-level values that no
+  code path writes, so it read zero while every closed-out show was tallied as "no response",
+  and the history teaching the scout could learn that an org booked Dan but never that one
+  turned him down)
 - **L47. A batch that partly fails must record the attempt on the items it failed, not
   only on the ones it completed.** An item left with no trace is indistinguishable from
   one never attempted, so the work is silently selected and paid for again, and the
