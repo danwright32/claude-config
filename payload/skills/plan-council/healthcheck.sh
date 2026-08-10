@@ -41,6 +41,28 @@ for f in "$D"/skills/plan-council/post-discussion.sh "$D"/hooks/teammate-challen
   if [ -f "$f" ] && bash -n "$f" 2>/dev/null; then ok "$(basename "$f")"; else bad "$(basename "$f") — missing or syntax error"; fi
 done
 
+echo "== hook test suites (discoverable, and every hook that has one) =="
+# This does NOT run the suites: they take minutes, and a healthcheck nobody runs
+# because it is slow protects nothing. It checks the runner exists and would
+# actually FIND every suite on disk, then names the one command that runs them.
+runner="$D/hooks/run-all-tests.sh"
+if [ -f "$runner" ] && bash -n "$runner" 2>/dev/null; then
+  n_suites=$(ls "$D"/hooks/test-*.sh 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$n_suites" -gt 0 ]; then
+    ok "run-all-tests.sh present, discovers $n_suites suite(s)"
+    echo "        run them with: bash $runner"
+  else
+    bad "run-all-tests.sh present but there are NO test-*.sh suites to find"
+  fi
+else
+  bad "hooks/run-all-tests.sh missing or has a syntax error — nothing runs the hook suites together"
+fi
+# Every hook that ships a gate should have a suite. Named explicitly because
+# these are the ones that can silently stop protecting anything.
+for h in require-tests-before-push check-style-guide lessons-advisory require-issue-fields; do
+  if [ -f "$D/hooks/test-$h.sh" ]; then ok "$h has a test suite"; else bad "$h has NO test suite"; fi
+done
+
 echo "== skill -> workflow path resolves =="
 ref=$(grep -o '/Users/[^"]*panel\.workflow\.js' "$D/skills/plan-council/SKILL.md" 2>/dev/null | head -1)
 if [ -n "$ref" ] && [ -f "$ref" ]; then ok "scriptPath -> $ref"; else bad "SKILL.md scriptPath missing or broken: '${ref:-none}'"; fi
