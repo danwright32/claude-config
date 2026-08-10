@@ -97,8 +97,13 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Resolve repo + the commits being pushed.
 # ---------------------------------------------------------------------------
-[ -n "$cwd" ] && cd "$cwd" 2>/dev/null
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+# The repo is resolved from the COMMAND first and the payload cwd second. The
+# cwd is the SESSION's directory, so a session rooted outside the project reaches
+# it as `cd <repo> && git push`, and reading the cwd alone let every one of those
+# pushes past the gate while looking exactly like a push it had approved.
+repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
+[ -n "$repo_dir" ] || exit 0
+cd "$repo_dir" 2>/dev/null || exit 0
 
 # `upstream` is kept separately from `base`: step 3's blindness check below turns
 # on whether a real upstream existed, which the resolved base alone cannot say.
