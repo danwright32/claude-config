@@ -46,6 +46,14 @@ fail_open() {
   exit 1
 }
 
+# Push detection, the inline-override check and the chain/base questions are
+# shared with the other push hooks, so they live in one library rather than a
+# copy per hook. Deliberately NOT shared: what an empty range means. This gate
+# treats it as blindness and says so (see step 3); an advisory hook cannot.
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || fail_open "shared push-scope library missing"
+
 # ---------------------------------------------------------------------------
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
 # ---------------------------------------------------------------------------
