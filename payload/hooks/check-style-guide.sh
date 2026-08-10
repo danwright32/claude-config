@@ -66,9 +66,6 @@ fi
 # as `cd <repo> && git push`, and reading the cwd alone let every one of those
 # pushes past this check with no style scan at all, looking exactly like a push
 # it had cleared. Shared with the other push hooks so the three cannot drift.
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
 repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
