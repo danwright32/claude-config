@@ -179,7 +179,23 @@ second=$(run_hook "git push" "$R")
 assert_contains "first push of a repo advises" 'additionalContext' "$first"
 assert_silent "an immediately repeated push is silent" "$second"
 
-# --- 11. It reports WHERE, so the advice is actionable ------------------------
+# --- 11. A branch with no upstream still gets scanned -------------------------
+# The base falls back through origin/HEAD, origin/main, main. On a repo with no
+# remote that lands on the CURRENT branch, making the range empty. Silence there
+# would mean "scanned nothing" while reading as "matched nothing".
+NR="$WORK/noremote"
+git init -q -b main "$NR"
+git -C "$NR" config user.email t@t.t
+git -C "$NR" config user.name t
+echo baseline > "$NR/README.md"
+git -C "$NR" add -A && git -C "$NR" commit -qm baseline
+mkdir -p "$NR/src"
+printf 'try { x() } catch (e) { return [] }\n' > "$NR/src/e.ts"
+git -C "$NR" add -A && git -C "$NR" commit -qm change
+out=$(run_hook "git push" "$NR")
+assert_contains "a repo with no upstream is still scanned" 'additionalContext' "$out"
+
+# --- 12. It reports WHERE, so the advice is actionable ------------------------
 R=$(make_repo location 'try { x() } catch (e) { return [] }' src/where.ts)
 out=$(run_hook "git push" "$R")
 assert_contains "advisory names the file that triggered it" 'src/where.ts' "$out"
