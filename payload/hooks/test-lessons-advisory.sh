@@ -151,13 +151,16 @@ out=$(printf '%s' "$P" | env TMPDIR="$WORK/tmp" CLAUDE_DETACHED_RUN=1 "$HOOK" 2>
 assert_silent "detached run is silent" "$out"
 
 # --- 7. Matching is on ADDED lines, not the whole file ------------------------
-# The trigger already existed before this push, so this push introduces nothing.
+# The trigger already existed and is pushed. This push appends an innocuous line
+# to THAT SAME FILE, so a hook scanning the changed files' contents would fire
+# while one scanning the added lines stays quiet. Touching a different file would
+# pass either way and prove nothing.
 R=$(make_repo preexisting 'try { x() } catch (e) { return [] }' src/old.ts)
 git -C "$R" push -q origin main
-echo "// an unrelated comment" >> "$R/src/other.ts"
+echo "// an unrelated comment" >> "$R/src/old.ts"
 git -C "$R" add -A && git -C "$R" commit -qm unrelated
 out=$(run_hook "git push" "$R")
-assert_silent "a pre-existing pattern does not re-fire on a later push" "$out"
+assert_silent "a pre-existing pattern in a touched file does not re-fire" "$out"
 
 # --- 8. An unresolvable lesson id is reported, never silently dropped ---------
 # LESSONS.md renumbering must not empty the map behind everyone's back.
