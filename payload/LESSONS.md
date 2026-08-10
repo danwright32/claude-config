@@ -229,6 +229,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   (PostRoll#196: seven text editors sharing the window's NSUndoManager, which does not retain
   its targets, so holding Cmd+Z walked past the live editor's history into a freed one and
   killed the app)
+- **L89. When two controls can write the same stored field, their option lists are one
+  vocabulary and must be reconciled against each other, not each against some third
+  reference.** A list trimmed carefully against one neighbour still duplicates a second one
+  sitting beside it, and the duplicate reads to the person as two different outcomes while
+  the report counts one.
+  (overture#2388: a close-out menu deliberately trimmed against the Archive card's menu,
+  with a comment saying so, still offered the same stored outcome as the state menu
+  rendered one line beneath it)
 
 ## Security and privacy
 
