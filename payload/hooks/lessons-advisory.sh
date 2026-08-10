@@ -181,6 +181,19 @@ done
 
 [ -n "$hit_ids" ] || exit 0
 
+# --- Cooldown, keyed on WHAT WAS FOUND, not merely on the repo ----------------
+# The quiet is for repetition: pushing again after acting on the advice should
+# not repeat it. A cooldown keyed on the repo alone would also swallow a DIFFERENT
+# problem raised minutes later, and this hook's silence is supposed to mean "no
+# pattern matched". Silence that sometimes means "matched, but recently" would
+# make the quiet case unreadable.
+stamp="$stamp_dir/.claude-lessons-advisory-$(printf '%s|%s' "$repo_root" "$hit_ids" | cksum | tr -d ' ')"
+if [ -f "$stamp" ]; then
+  last="$(cat "$stamp" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((now - last)) -lt "$COOLDOWN" ] && exit 0
+fi
+
 # --- Resolve each lesson's own words from LESSONS.md --------------------------
 # The wording lives in one place. This hook stores pattern-to-id pairs only, so
 # an edit to a lesson reaches the advice without anyone updating a second copy
