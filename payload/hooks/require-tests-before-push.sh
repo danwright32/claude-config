@@ -100,18 +100,10 @@ fi
 [ -n "$cwd" ] && cd "$cwd" 2>/dev/null
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
-base=""
+# `upstream` is kept separately from `base`: step 3's blindness check below turns
+# on whether a real upstream existed, which the resolved base alone cannot say.
 upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
-if [ -n "$upstream" ]; then
-  base="$upstream"
-else
-  base="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
-  if [ -z "$base" ]; then
-    for c in origin/main origin/master main master; do
-      if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then base="$c"; break; fi
-    done
-  fi
-fi
+base="$(ps_base_ref)"
 
 # Does this command commit (and maybe stage) before it pushes? PreToolUse runs
 # BEFORE the command, so for `git add ... && git commit ... && git push` the
