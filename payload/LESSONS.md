@@ -115,6 +115,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2422: an importer skipped matching whenever a batch held two contacts of the same
   kind, which is every multi performer show, so every re-run appended duplicates instead of
   correcting rows)
+- **L98. A watcher, poller or wait-for-completion step that reports SUCCESS when it found NOTHING
+  to watch is indistinguishable from one that saw everything pass.** Finding zero subjects has to be
+  its own non-success outcome, because the empty result arrives exactly when the work has not started
+  yet, which is the moment a green verdict is most likely to be believed and acted on.
+  (2026-08-10, new-agent-onboarding#490: `gh pr checks --watch` exited 0 printing "no checks
+  reported" seconds after a branch was republished, so trusting it would have merged a commit no
+  check had run against; minutes later a hand written filter over that same output reported every
+  check green while one job was still running)
 
 ## Data safety
 
