@@ -48,16 +48,16 @@ cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0
 
-is_push=0
-while IFS= read -r seg; do
-  if printf '%s' "$seg" | grep -Eq '(^|[[:space:]])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+(-[^[:space:]]+|[A-Za-z_]+=[^[:space:]]+))*[[:space:]]+push([[:space:]]|$)'; then
-    is_push=1
-    break
-  fi
-done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
-[ "$is_push" -eq 1 ] || exit 0
+# Push detection is shared with the other push hooks. The local version this
+# replaced could not see `git -C <repo> push` at all (the repo path matched
+# neither a flag nor an assignment), so those pushes were never style checked.
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
 
-if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_STYLE_CHECK=1([[:space:]]|$)'; then
+ps_is_git_push "$cmd" || exit 0
+
+if ps_has_override "$cmd" SKIP_STYLE_CHECK; then
   exit 0
 fi
 
