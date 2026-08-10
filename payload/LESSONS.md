@@ -393,6 +393,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   the gap is invisible.
   (overture#2392, overture#2408: striking a contact address was reversible by typing that address
   back in, and the strike removed that address from every screen that showed it)
+- **L99. A client side input mask or cap must never be stricter than the validator that accepts
+  the value, because the form then refuses input the server would take and the person is blocked
+  by a rule nothing states.** Decide the real limit once and let the stricter side be the one that
+  explains itself, since the two rules usually live in different files and the contradiction is
+  invisible until somebody arrives with the value that falls between them.
+  (slate#1356: a booker phone field capped at ten digits beside a validator deliberately accepting
+  ten to fifteen, so a number the server would have booked could not be typed in)
 
 ## External systems
 
