@@ -211,6 +211,24 @@ W="$(mk_repo)"; seed_source_only "$W"
 run_hook "$W" "git push"
 want_code 2 "canary: source with no test must BLOCK"
 
+# --- The repo comes from the COMMAND when the session sits elsewhere ------
+# The payload's cwd is the SESSION's directory, not the project's. A session
+# rooted somewhere else reaches a project as `cd <repo> && git push` or
+# `git -C <repo> push`, and resolving the cwd alone made the gate see no work
+# tree and wave those pushes through untested, silently.
+NOTREPO="$(mktemp -d)"
+W="$(mk_repo)"; seed_source_only "$W"
+run_hook "$NOTREPO" "cd $W && git push"
+want_code 2 "cd-then-push from a non-repo cwd must BLOCK"
+
+W="$(mk_repo)"; seed_source_only "$W"
+run_hook "$NOTREPO" "git -C $W push"
+want_code 2 "git -C push from a non-repo cwd must BLOCK"
+
+# ...and a genuinely unrelated directory still gates nothing.
+run_hook "$NOTREPO" "git push"
+want_code 0 "a push with no resolvable repo stays out of the way"
+
 # --- #735: fail-open paths must SAY SO (exit 1) instead of vanishing ------
 # exit 0 discards stderr entirely, so a notice on exit 0 would be invisible.
 # exit 1 is a non-blocking error: the push still runs, and the first stderr
