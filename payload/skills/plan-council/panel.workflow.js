@@ -9,6 +9,7 @@ export const meta = {
     { title: 'Score & select' },
     { title: 'Synthesize' },
     { title: 'Reality-check' },
+    { title: 'Lessons audit' },
     { title: 'Fix & reverify' },
     { title: 'Revise' },
   ],
@@ -63,6 +64,58 @@ const grounding =
   `Project directory: ${a.projectDir || '(current working directory)'}\n` +
   `GROUND YOURSELF IN THE REAL CODE: read the relevant files, the project's CLAUDE.md, and the live database schema (Supabase MCP) if available. Do NOT invent files, APIs, or tables — only reference things you have verified exist.`
 
+// --- Recorded lessons: the plan must not propose something already known to be a mistake ---
+// LESSONS.md is the distilled record of defects found across every project (L1, L2, … ).
+// A plan that violates one of them is a plan to repeat a known failure, so the audit is a
+// GATE with a fix loop, not an appended note. The auditor reports whether it actually READ
+// the file, because an audit that read nothing would otherwise be indistinguishable from a
+// clean one (see LESSONS.md L68).
+const LESSONS_PATH = '/Users/danielhankins-wright/.claude/LESSONS.md'
+const RULES_PATH = '/Users/danielhankins-wright/.claude/CLAUDE.md'
+const LESSONS_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['lessonsFileRead', 'lessonsSeen', 'verdict', 'violations'],
+  properties: {
+    lessonsFileRead: { type: 'boolean', description: `true ONLY if you actually read ${LESSONS_PATH} yourself in this task` },
+    lessonsSeen: { type: 'number', description: 'how many distinct L-numbered lessons you found in the file (0 if you could not read it)' },
+    verdict: { type: 'string', enum: ['clean', 'violations', 'could-not-audit'] },
+    violations: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['lessonId', 'where', 'why', 'fix'],
+        properties: {
+          lessonId: { type: 'string', description: 'e.g. L13, or the CLAUDE.md rule name' },
+          where: { type: 'string', description: 'the exact part of the plan that violates it' },
+          why: { type: 'string' },
+          fix: { type: 'string', description: 'the concrete change to the plan that would satisfy the lesson' },
+        },
+      },
+    },
+    notes: { type: 'string' },
+  },
+}
+const auditLessons = (planText, label) => agent(
+  `Audit this plan for "${feature}" against the RECORDED LESSONS — the distilled record of defects already paid for on past projects.\n\n` +
+  `FIRST, read ${LESSONS_PATH} in full, and the build-time reliability rules in ${RULES_PATH}. Do not work from memory: report lessonsFileRead=false and verdict="could-not-audit" if you cannot read the lessons file, and NEVER report "clean" on a file you did not read.\n\n` +
+  `${grounding}\n\nPLAN:\n${planText}\n\n` +
+  `Go lesson by lesson. For each one that the plan VIOLATES, or that the plan silently ignores where it plainly applies (a background job with no failure alerting, a guard that fails open, a multi-step write that is not idempotent, a route with no tenant scoping, a destructive step with no backup or undo, an empty state rendered over an error, a count and its rows from two different predicates, a hand-maintained list mirroring a source of truth, a test that cannot fail), report it with the lesson id, the exact part of the plan at fault, why it is the same mistake, and the concrete fix.\n\n` +
+  `Report ONLY real violations grounded in the plan's own text — do not pad the list with generic advice, and do not restate the reality-check's job (whether files and tables exist). Absence of a lesson from the plan is a violation only where that lesson plainly applies to what the plan is building.`,
+  { label, phase: 'Lessons audit', schema: LESSONS_SCHEMA, effort: 'high' }
+)
+// An auditor that dies must never resolve to silence: parallel() yields null on failure,
+// and a missing audit reads exactly like a clean one unless it is converted to a loud one.
+const normalizeAudit = (res) => res || {
+  lessonsFileRead: false, lessonsSeen: 0, verdict: 'could-not-audit', violations: [],
+  notes: 'The lessons-audit agent failed or was skipped, so this plan was NEVER checked against LESSONS.md. Treat it as unaudited, not as clean.',
+}
+const auditFailed = (au) => au.verdict === 'could-not-audit' || !au.lessonsFileRead || !(au.lessonsSeen > 0)
+// Same rule for the reality-check: a checker that died must not resolve to "holds".
+const normalizeRC = (res) => res || {
+  verdict: 'needs-fixes', confirmed: [], adjustments: [],
+  broken: ['The reality-check agent failed or was skipped, so NOTHING in this plan was verified against the real codebase. Treat every concrete claim as unverified.'],
+}
+
 // --- Revise mode (re-run incorporating the human's GitHub Discussion comments) ---
 if (a.mode === 'revise') {
   const prior = a.priorPlan || '(no prior plan supplied)'
@@ -82,12 +135,36 @@ if (a.mode === 'revise') {
     { label: 'revise', phase: 'Revise', schema: REVISE_SCHEMA, effort: 'high' }
   )
   phase('Reality-check')
-  const reviseRC = await agent(
-    `Reality-check this REVISED plan against the actual codebase and data.\n${grounding}\n\nPlan:\n${revised.plan}\n\nVerify every concrete claim (files, APIs, tables, constraints) by reading the real code/schema. Report what holds, what is broken, and concrete adjustments.`,
-    { label: 'reality-check', phase: 'Reality-check', effort: 'high',
-      schema: { type: 'object', additionalProperties: false, required: ['verdict', 'confirmed', 'broken'], properties: { verdict: { type: 'string', enum: ['holds', 'needs-fixes'] }, confirmed: { type: 'array', items: { type: 'string' } }, broken: { type: 'array', items: { type: 'string' } }, adjustments: { type: 'array', items: { type: 'string' } } } } }
-  )
-  return { mode: 'revise', feature, revised, realityCheck: reviseRC }
+  const REVISE_RC_SCHEMA = { type: 'object', additionalProperties: false, required: ['verdict', 'confirmed', 'broken'], properties: { verdict: { type: 'string', enum: ['holds', 'needs-fixes'] }, confirmed: { type: 'array', items: { type: 'string' } }, broken: { type: 'array', items: { type: 'string' } }, adjustments: { type: 'array', items: { type: 'string' } } } }
+  const reviseRcPrompt = (planText) =>
+    `Reality-check this REVISED plan against the actual codebase and data.\n${grounding}\n\nPlan:\n${planText}\n\nVerify every concrete claim (files, APIs, tables, constraints) by reading the real code/schema. Report what holds, what is broken, and concrete adjustments.`
+  let reviseFinal = revised
+  let [reviseRC0, reviseAudit0] = await parallel([
+    () => agent(reviseRcPrompt(revised.plan), { label: 'reality-check', phase: 'Reality-check', effort: 'high', schema: REVISE_RC_SCHEMA }),
+    () => auditLessons(revised.plan, 'lessons-audit'),
+  ])
+  let reviseRC = normalizeRC(reviseRC0)
+  let reviseAudit = normalizeAudit(reviseAudit0)
+  if (auditFailed(reviseAudit)) log(`LESSONS AUDIT DID NOT RUN CLEANLY (${reviseAudit.verdict}, read=${reviseAudit.lessonsFileRead}, lessons seen=${reviseAudit.lessonsSeen}) — the revised plan is UNAUDITED against LESSONS.md, not clean.`)
+
+  // One bounded correction round: revise mode stays light, but a known-bad proposal
+  // must be FIXED in the plan text, never merely reported beside it.
+  const reviseProblems = reviseRC.broken.length + reviseAudit.violations.length
+  if (reviseProblems > 0) {
+    phase('Fix & reverify')
+    log(`Revised plan has ${reviseRC.broken.length} broken claim(s) and ${reviseAudit.violations.length} lesson violation(s) — correcting inline.`)
+    reviseFinal = await agent(
+      `Correct this revised plan IN PLACE. Fix each broken claim and each recorded-lesson violation directly in the plan text; do NOT append correction notes. Keep everything already correct, and keep the point-by-point responses to the human's comments.\n${grounding}\n\nBROKEN CLAIMS:\n${JSON.stringify(reviseRC.broken, null, 2)}\nLESSON VIOLATIONS (from ${LESSONS_PATH} — each names the lesson, the offending part, and the fix; apply the fix):\n${JSON.stringify(reviseAudit.violations, null, 2)}\n\nCURRENT PLAN:\n${reviseFinal.plan}\n\nReturn the fully corrected plan with the same structure.`,
+      { label: 'fix:1', phase: 'Fix & reverify', schema: REVISE_SCHEMA, effort: 'high' }
+    )
+    const [reviseRC1, reviseAudit1] = await parallel([
+      () => agent(reviseRcPrompt(reviseFinal.plan), { label: 'reverify:1', phase: 'Fix & reverify', effort: 'high', schema: REVISE_RC_SCHEMA }),
+      () => auditLessons(reviseFinal.plan, 'reaudit:1'),
+    ])
+    reviseRC = normalizeRC(reviseRC1)
+    reviseAudit = normalizeAudit(reviseAudit1)
+  }
+  return { mode: 'revise', feature, revised: reviseFinal, realityCheck: reviseRC, lessonsAudit: reviseAudit }
 }
 
 // --- Preflight: confirm the grounding sources are actually reachable ---
@@ -163,7 +240,7 @@ const advocacy = (await parallel(options.flatMap(o => [
       schema: { type: 'object', additionalProperties: false, required: ['optionId', 'caseFor', 'confidence'], properties: { optionId: { type: 'string' }, caseFor: { type: 'string' }, confidence: { type: 'string', enum: ['low', 'medium', 'high'] } } } }
   ).then(x => ({ ...x, optionId: o.id, kind: 'for' })),
   () => agent(
-    `RED-TEAM this approach to "${feature}":\nName: ${o.name}\nSummary: ${o.summary}\nKey choices: ${o.keyChoices.join('; ')}\n${grounding}\n\nTry to KILL it. Find the failure modes, hidden costs, and reasons it would NOT be the best plan. Default to skeptical; assume it has a flaw and find it. State your confidence (low/medium/high) in your strongest objection.`,
+    `RED-TEAM this approach to "${feature}":\nName: ${o.name}\nSummary: ${o.summary}\nKey choices: ${o.keyChoices.join('; ')}\n${grounding}\n\nTry to KILL it. Find the failure modes, hidden costs, and reasons it would NOT be the best plan. Default to skeptical; assume it has a flaw and find it.\n\nYOUR SHARPEST WEAPON IS THE RECORD: read ${LESSONS_PATH} (the distilled defects already paid for on past projects) and ${RULES_PATH}. Where this approach repeats one of them, say so and CITE the lesson id (e.g. "L13: the nightly job has no alert on the absence of a run"). A cited lesson is a defect this project has already shipped once, so it is worth more than a hypothetical objection.\n\nState your confidence (low/medium/high) in your strongest objection.`,
     { label: `redteam:${o.id}`, phase: 'Champion + red-team', model: REDTEAM_MODEL, agentType: 'plan-redteam',
       schema: { type: 'object', additionalProperties: false, required: ['optionId', 'caseAgainst', 'confidence'], properties: { optionId: { type: 'string' }, caseAgainst: { type: 'string' }, confidence: { type: 'string', enum: ['low', 'medium', 'high'] } } } }
   ).then(x => ({ ...x, optionId: o.id, kind: 'against' })),
@@ -184,7 +261,7 @@ const SELECT_SCHEMA = {
 
 phase('Score & select')
 const selection = await agent(
-  `Feature: ${feature}\nWeighted criteria that define "best": ${criteria}\nCandidate options:\n${JSON.stringify(options, null, 2)}\nChampion & red-team cases:\n${JSON.stringify(advocacy, null, 2)}\n\nBLIND JUDGING: you are NOT told which specialist or role favored which option, and you must NOT infer or weight by any author's seniority — judge each option purely on its merits against the criteria. WEIGHT BY CONFIDENCE: each case carries a stated confidence; a low-confidence claim must not outweigh a well-supported one.\n\nScore EACH option 0-10 against the weighted criteria, with reasons. Then pick the highest-scoring option that SURVIVES its red-team. Choose the BEST plan, not the most comfortable or easiest-to-ship — if the more ambitious option scores higher and survives, pick it. COST IS FIRST-CLASS: do not pick a paid option over a free/cheapest one that scores nearly as well — prefer free unless the paid option is clearly, materially better on the weighted criteria. IGNORE BUILD TIME / EFFORT: the user's standing rule is "right is always better than fast" — NEVER prefer an option because it is quicker or easier to build; when options differ on correctness vs. build speed, the more correct/robust one wins. (Recurring cost still counts; build effort does not.) List the runner-up's best ideas worth grafting into the winner.`,
+  `Feature: ${feature}\nWeighted criteria that define "best": ${criteria}\nCandidate options:\n${JSON.stringify(options, null, 2)}\nChampion & red-team cases:\n${JSON.stringify(advocacy, null, 2)}\n\nBLIND JUDGING: you are NOT told which specialist or role favored which option, and you must NOT infer or weight by any author's seniority — judge each option purely on its merits against the criteria. WEIGHT BY CONFIDENCE: each case carries a stated confidence; a low-confidence claim must not outweigh a well-supported one.\n\nA red-team objection that CITES a recorded lesson id (from ${LESSONS_PATH}) is evidence of a defect this project has already shipped once, not a hypothetical — weight it accordingly, and score an option down on correctness & robustness where it repeats a recorded mistake and does nothing to prevent it.\n\nScore EACH option 0-10 against the weighted criteria, with reasons. Then pick the highest-scoring option that SURVIVES its red-team. Choose the BEST plan, not the most comfortable or easiest-to-ship — if the more ambitious option scores higher and survives, pick it. COST IS FIRST-CLASS: do not pick a paid option over a free/cheapest one that scores nearly as well — prefer free unless the paid option is clearly, materially better on the weighted criteria. IGNORE BUILD TIME / EFFORT: the user's standing rule is "right is always better than fast" — NEVER prefer an option because it is quicker or easier to build; when options differ on correctness vs. build speed, the more correct/robust one wins. (Recurring cost still counts; build effort does not.) List the runner-up's best ideas worth grafting into the winner.`,
   { label: 'judge', phase: 'Score & select', schema: SELECT_SCHEMA, effort: 'high' }
 )
 const winner = options.find(o => o.id === selection.winnerId) || options[0]
@@ -207,7 +284,7 @@ const PLAN_SCHEMA = {
 
 phase('Synthesize')
 const draft = await agent(
-  `Write the implementation plan for "${feature}" from the winning approach "${winner.name}" (${winner.summary}).\nGraft in these runner-up ideas where they strengthen it: ${(selection.runnerUpBestIdeas || []).join('; ') || '(none)'}\nJudge rationale: ${selection.rationale}\nFull champion/red-team context:\n${JSON.stringify(advocacy)}\n\nProduce: (1) a phased, concrete plan grounded in this codebase; (2) dissent you overruled and WHY; (3) the IDEAL-vs-DOABLE gap — what the best version would add and why it is deferred; (4) escalatedDecisions — EVERY product / scope / cost trade-off where reasonable people could choose differently MUST go here for the human to decide; do NOT 'lock' such a call yourself. This includes scope (build one thing vs two), thin-vs-full, and especially FREE-vs-PAID: if a non-free option is meaningfully better than the free one, put 'ship the free way' vs 'pay for the better way' here as an explicit decision with the cost named. Lock ONLY purely technical decisions that have one clearly-correct answer; (5) open risks and unknowns.`,
+  `Write the implementation plan for "${feature}" from the winning approach "${winner.name}" (${winner.summary}).\nGraft in these runner-up ideas where they strengthen it: ${(selection.runnerUpBestIdeas || []).join('; ') || '(none)'}\nJudge rationale: ${selection.rationale}\nFull champion/red-team context:\n${JSON.stringify(advocacy)}\n\nBEFORE writing, read ${LESSONS_PATH} and the build-time rules in ${RULES_PATH}, and design against them: every failure path surfaces loudly, every multi-step write survives running twice, every route states who may call it and whose data it touches, every destructive step keeps the good state until its replacement is verified, and every guard is one that can be seen to fail. The plan is audited against that file after you write it, so build it in now rather than having it corrected out of you.\n\nProduce: (1) a phased, concrete plan grounded in this codebase; (2) dissent you overruled and WHY; (3) the IDEAL-vs-DOABLE gap — what the best version would add and why it is deferred; (4) escalatedDecisions — EVERY product / scope / cost trade-off where reasonable people could choose differently MUST go here for the human to decide; do NOT 'lock' such a call yourself. This includes scope (build one thing vs two), thin-vs-full, and especially FREE-vs-PAID: if a non-free option is meaningfully better than the free one, put 'ship the free way' vs 'pay for the better way' here as an explicit decision with the cost named. Lock ONLY purely technical decisions that have one clearly-correct answer; (5) open risks and unknowns.`,
   { label: 'synthesize', phase: 'Synthesize', schema: PLAN_SCHEMA, effort: 'high' }
 )
 
@@ -222,28 +299,48 @@ const RC_SCHEMA = {
   },
 }
 
+// Reality-check (does the plan match the code?) and lessons audit (does the plan repeat a
+// known mistake?) are independent questions, so they run side by side and BOTH feed the
+// same fix loop. Neither is allowed to be merely advisory.
 phase('Reality-check')
 let finalPlan = draft
-let realityCheck = await agent(
-  `Reality-check this plan against the ACTUAL codebase and data.\n${grounding}\n\nPlan:\n${finalPlan.plan}\n\nVerify every concrete assumption: do the referenced files, components, APIs, and tables actually exist? Are the file paths and line numbers correct? Does the data model support it? Does anything violate the stated constraints (${constraints})? Read the real code and schema to confirm — do not take the plan's word for it. Report what holds, what is broken, and concrete adjustments.`,
-  { label: 'reality-check', phase: 'Reality-check', schema: RC_SCHEMA, effort: 'high' }
-)
+const rcPrompt = (planText, corrected) => corrected
+  ? `Reality-check this CORRECTED plan against the ACTUAL codebase and data.\n${grounding}\n\nPlan:\n${planText}\n\nVerify every concrete claim (files, paths, line numbers, APIs, tables, constraints) by reading the real code/schema. Report what holds and anything still broken.`
+  : `Reality-check this plan against the ACTUAL codebase and data.\n${grounding}\n\nPlan:\n${planText}\n\nVerify every concrete assumption: do the referenced files, components, APIs, and tables actually exist? Are the file paths and line numbers correct? Does the data model support it? Does anything violate the stated constraints (${constraints})? Read the real code and schema to confirm — do not take the plan's word for it. Report what holds, what is broken, and concrete adjustments.`
 
-// Fix-and-reverify: if the check found broken claims, correct the plan IN PLACE
-// (not as an appended note) and re-verify. Bounded to 2 rounds so it converges.
-let rcRounds = 0
-while ((realityCheck.verdict === 'needs-fixes' || (realityCheck.broken && realityCheck.broken.length)) && rcRounds < 2) {
-  rcRounds++
-  log(`Reality-check found ${(realityCheck.broken || []).length} broken item(s) — correcting the plan inline (round ${rcRounds}).`)
-  phase('Fix & reverify')
-  finalPlan = await agent(
-    `The reality-check found BROKEN items in this plan. Correct EACH one directly in the plan text — fix the wrong file paths, line numbers, and claims in place; do NOT just append a correction note. Keep everything that was already correct.\n${grounding}\n\nBROKEN:\n${JSON.stringify(realityCheck.broken, null, 2)}\nADJUSTMENTS:\n${JSON.stringify(realityCheck.adjustments || [], null, 2)}\n\nCURRENT PLAN:\n${finalPlan.plan}\n\nReturn the fully corrected plan with the same structure.`,
-    { label: `fix:${rcRounds}`, phase: 'Fix & reverify', schema: PLAN_SCHEMA, effort: 'high' }
-  )
-  realityCheck = await agent(
-    `Reality-check this CORRECTED plan against the ACTUAL codebase and data.\n${grounding}\n\nPlan:\n${finalPlan.plan}\n\nVerify every concrete claim (files, paths, line numbers, APIs, tables, constraints) by reading the real code/schema. Report what holds and anything still broken.`,
-    { label: `reverify:${rcRounds}`, phase: 'Fix & reverify', schema: RC_SCHEMA, effort: 'high' }
-  )
+let [rc0, audit0] = await parallel([
+  () => agent(rcPrompt(finalPlan.plan, false), { label: 'reality-check', phase: 'Reality-check', schema: RC_SCHEMA, effort: 'high' }),
+  () => auditLessons(finalPlan.plan, 'lessons-audit'),
+])
+let realityCheck = normalizeRC(rc0)
+let lessonsAudit = normalizeAudit(audit0)
+if (auditFailed(lessonsAudit)) {
+  log(`LESSONS AUDIT DID NOT RUN CLEANLY (${lessonsAudit.verdict}, read=${lessonsAudit.lessonsFileRead}, lessons seen=${lessonsAudit.lessonsSeen}) — this plan is UNAUDITED against LESSONS.md, not clean. ${lessonsAudit.notes || ''}`)
 }
 
-return { feature, criteria, preflight, options, passes, advocacy, selection, winner, plan: finalPlan, realityCheck, rcRounds }
+// Fix-and-reverify: if either check found a problem, correct the plan IN PLACE (not as an
+// appended note) and re-run BOTH checks. Bounded to 2 rounds so it converges.
+let rcRounds = 0
+const stillBroken = () => (realityCheck.verdict === 'needs-fixes' || (realityCheck.broken && realityCheck.broken.length))
+const stillViolating = () => lessonsAudit.violations.length > 0
+while ((stillBroken() || stillViolating()) && rcRounds < 2) {
+  rcRounds++
+  log(`Round ${rcRounds}: ${(realityCheck.broken || []).length} broken item(s), ${lessonsAudit.violations.length} recorded-lesson violation(s) — correcting the plan inline.`)
+  phase('Fix & reverify')
+  finalPlan = await agent(
+    `This plan failed its checks. Correct EACH item directly in the plan text — fix the wrong file paths, line numbers, and claims in place, and change the DESIGN where it repeats a recorded mistake; do NOT just append correction notes. Keep everything that was already correct.\n${grounding}\n\n` +
+    `BROKEN CLAIMS (reality-check):\n${JSON.stringify(realityCheck.broken || [], null, 2)}\n` +
+    `ADJUSTMENTS:\n${JSON.stringify(realityCheck.adjustments || [], null, 2)}\n` +
+    `RECORDED-LESSON VIOLATIONS (from ${LESSONS_PATH} — each names the lesson, the offending part of the plan, and the fix; APPLY the fix, and if you genuinely disagree with one, put it in overruledDissent with your reason rather than silently ignoring it):\n${JSON.stringify(lessonsAudit.violations, null, 2)}\n\n` +
+    `CURRENT PLAN:\n${finalPlan.plan}\n\nReturn the fully corrected plan with the same structure.`,
+    { label: `fix:${rcRounds}`, phase: 'Fix & reverify', schema: PLAN_SCHEMA, effort: 'high' }
+  )
+  const [rcN, auditN] = await parallel([
+    () => agent(rcPrompt(finalPlan.plan, true), { label: `reverify:${rcRounds}`, phase: 'Fix & reverify', schema: RC_SCHEMA, effort: 'high' }),
+    () => auditLessons(finalPlan.plan, `reaudit:${rcRounds}`),
+  ])
+  realityCheck = normalizeRC(rcN)
+  lessonsAudit = normalizeAudit(auditN)
+}
+
+return { feature, criteria, preflight, options, passes, advocacy, selection, winner, plan: finalPlan, realityCheck, lessonsAudit, rcRounds }
