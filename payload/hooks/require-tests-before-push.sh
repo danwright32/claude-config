@@ -111,9 +111,8 @@ base="$(ps_base_ref)"
 # changes so a test added in the same breath is counted.
 commit_in_chain=0
 add_in_chain=0
-printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)' && commit_in_chain=1
-printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' && add_in_chain=1
-printf '%s' "$cmd" | grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a' && add_in_chain=1
+ps_commit_in_chain "$cmd" && commit_in_chain=1
+ps_add_in_chain "$cmd" && add_in_chain=1
 
 if [ -n "$base" ] && git rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
   mb="$(git merge-base "$base" HEAD 2>/dev/null)"
