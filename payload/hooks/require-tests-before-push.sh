@@ -80,16 +80,9 @@ cwd="${parsed#*$'\x1f'}"
 # ---------------------------------------------------------------------------
 # 2. Act only on a `git push`; honor the override.
 # ---------------------------------------------------------------------------
-is_push=0
-while IFS= read -r seg; do
-  if printf '%s' "$seg" | grep -Eq '(^|[[:space:]])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+(-[^[:space:]]+|[A-Za-z_]+=[^[:space:]]+))*[[:space:]]+push([[:space:]]|$)'; then
-    is_push=1
-    break
-  fi
-done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
-[ "$is_push" -eq 1 ] || exit 0
+ps_is_git_push "$cmd" || exit 0
 
-if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_TEST_CHECK=1([[:space:]]|$)'; then
+if ps_has_override "$cmd" SKIP_TEST_CHECK; then
   exit 0
 fi
 
