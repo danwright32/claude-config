@@ -82,15 +82,8 @@ repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
-# --- Cooldown: advise once per repo per window -------------------------------
 stamp_dir="${TMPDIR:-/tmp}"
-stamp="$stamp_dir/.claude-lessons-advisory-$(printf '%s' "$repo_root" | cksum | tr -d ' ')"
 now="$(date +%s)"
-if [ -f "$stamp" ]; then
-  last="$(cat "$stamp" 2>/dev/null || echo 0)"
-  case "$last" in ''|*[!0-9]*) last=0 ;; esac
-  [ $((now - last)) -lt "$COOLDOWN" ] && exit 0
-fi
 
 # --- The added lines this push introduces ------------------------------------
 # Added lines only. Matching the whole file would re-raise the same lesson on
