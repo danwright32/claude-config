@@ -73,6 +73,36 @@ ps__segment_is_push() {
   return 1
 }
 
+# Which repository is this push about? The hook payload's cwd is the SESSION's
+# directory, which is only the project when the session was started there. A
+# session rooted elsewhere reaches a project as `cd <repo> && git push` or
+# `git -C <repo> push`, and reading the cwd alone makes every one of those pushes
+# invisible to the hook. Invisible is indistinguishable from nothing-to-say, so
+# prefer a directory named IN the command and fall back to the cwd.
+#
+# Echoes the directory, or nothing when neither is a work tree.
+ps_repo_dir() {
+  local cmd="$1" cwd="${2:-}" cand=""
+
+  # `git -C <path> … push`
+  cand="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[[:space:];&|])(rtk[[:space:]]+)?git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*@\3@p' | head -1)"
+  if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi
+
+  # `cd <path> && … git push`
+  cand="$(printf '%s' "$cmd" | sed -nE 's@(^|[[:space:];&|])cd[[:space:]]+([^[:space:]&|;]+).*@\2@p' | head -1)"
+  cand="${cand%\"}"; cand="${cand#\"}"
+  cand="${cand%\'}"; cand="${cand#\'}"
+  if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi
+
+  if [ -n "$cwd" ] && ps__is_worktree "$cwd"; then printf '%s' "$cwd"; return 0; fi
+  return 1
+}
+
+ps__is_worktree() {
+  [ -d "$1" ] || return 1
+  git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
 # Does the command carry an inline `VAR=1` override, e.g. SKIP_TEST_CHECK=1?
 ps_has_override() {
   # $1 command, $2 variable name
