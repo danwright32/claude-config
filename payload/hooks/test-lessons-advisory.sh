@@ -42,8 +42,34 @@ make_repo() {
 
 run_hook() {
   # $1 command, $2 cwd, remaining: extra env assignments
+  # The payload is materialized BEFORE the pipe: piping a python process
+  # straight into a hook that exits early makes python spew a BrokenPipeError
+  # into the test output, which is noise the next reader has to learn to ignore.
   local cmd="$1" cwd="$2"; shift 2
-  payload "$cmd" "$cwd" | env -u CLAUDE_DETACHED_RUN TMPDIR="$WORK/tmp" "$@" "$HOOK" 2>/dev/null
+  local p; p="$(payload "$cmd" "$cwd")"
+  printf '%s' "$p" | env -u CLAUDE_DETACHED_RUN TMPDIR="$WORK/tmp" "$@" "$HOOK" 2>/dev/null
+}
+
+assert_json_field() {
+  # $1 desc, $2 dotted path, $3 expected, $4 output. Parses rather than
+  # substring-matching, so the test pins the CONTRACT and not the whitespace
+  # json.dumps happens to emit.
+  local got
+  got="$(printf '%s' "$4" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("<unparseable>"); raise SystemExit
+for k in sys.argv[1].split("."):
+    d = d.get(k, {}) if isinstance(d, dict) else {}
+print(d if isinstance(d, str) else "<missing>")
+' "$2" 2>/dev/null)"
+  if [ "$got" = "$3" ]; then
+    PASS=$((PASS+1)); echo "PASS: $1"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL: $1 (expected $3, got $got)"
+  fi
 }
 
 assert_contains() {
@@ -85,7 +111,7 @@ R=$(make_repo swallow 'try {
   return []
 }' src/send.ts)
 out=$(run_hook "git push" "$R")
-assert_contains "swallowed catch produces advisory JSON" '"hookEventName":"PreToolUse"' "$out"
+assert_json_field "swallowed catch produces valid PreToolUse JSON" "hookSpecificOutput.hookEventName" "PreToolUse" "$out"
 assert_contains "swallowed catch carries additionalContext" 'additionalContext' "$out"
 assert_contains "swallowed catch cites the error-path lesson" 'L11' "$out"
 
