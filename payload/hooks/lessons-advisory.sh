@@ -29,7 +29,9 @@
 #   - CLAUDE_DETACHED_RUN set: nobody is reading advice in a headless run. Skip.
 #   - Not a git push, or not inside a work tree ................. silent
 #   - Nothing matched .......................................... silent
-#   - Cooldown stamp (90s per repo): a retried or split push advises once.
+#   - Cooldown stamp (90s per repo AND per finding): pushing again after acting
+#     on the advice does not repeat it, while a DIFFERENT finding still gets
+#     through rather than being swallowed by the window.
 #
 # Seams for tests: LESSONS_FILE overrides the lessons path, TMPDIR the cooldown
 # stamp directory.
