@@ -424,10 +424,12 @@ $f
     fi
   fi
   verify_rule_imports
-  # A numbering collision can arrive with the payload, or be created here by the
-  # entry level merge above when both Macs happened to pick the same number. Either
-  # way it is in the file now, so say so at once: the L43 duplicate went unnoticed
-  # for a day because nothing ever looked (#15).
+  # A collision the merge creates is settled there by renumbering the unsent
+  # entry, so what reaches this point is one that cannot be settled on this Mac:
+  # it arrived with the payload already published (both numbers may be referenced
+  # on the other Mac), or it predates the sync entirely. It is in the file now, so
+  # say so at once: the L43 duplicate went unnoticed for a day because nothing
+  # ever looked (#15).
   local applied_dups; applied_dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
   if [ -n "${applied_dups// }" ]; then
     echo "claude-sync: the same lesson number is now used twice on this Mac, which breaks every reference to it: $(printf '%s' "$applied_dups" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number). Until then that file is held back from the next send." >&2
@@ -623,8 +625,70 @@ drop_renumbered_duplicates(){   # $1 = merged file, rewritten in place  $2 = arr
   return 0
 }
 
+# The merge above can CREATE a collision: both Macs reached for the same next
+# number for different lessons, and keeping both sides (correct) leaves the number
+# used twice. The settled rule for that (2026-08-05, and done by hand again
+# 2026-08-11) is mechanical: the published copy keeps the number, because the
+# other Mac may already reference it, and the entry that has never left this Mac
+# takes the next free number. The script knows both facts at merge time, so it
+# does the renumber itself instead of holding the file back for a by-hand fix.
+# An entry counts as published only if the ARRIVING file carries this exact body
+# under this exact number; everything else holding a contested number is local and
+# safe to renumber. A collision entirely between published entries (the other Mac
+# shipped a duplicate) is NOT ours to settle, because both numbers may be
+# referenced there: those are left alone for the apply-time warning below.
+# Prints one "Lx became Ly" line per renumber; empty output means nothing changed.
+renumber_merge_collisions(){   # $1 = merged file, rewritten in place  $2 = arriving file  $3 = first free number (digits)
+  local out; out="$(mktemp)"
+  local report; report="$(awk -v out="$out" -v next_free="$3" '
+    function entry_start(s) { return (s ~ /^- \*\*L[0-9]+\./) }
+    function sig_of(s)      { sub(/^- \*\*L[0-9]+\./, "- **L#.", s); return s }
+    function num_of(s)      { match(s, /L[0-9]+/); return substr(s, RSTART, RLENGTH) }
+    function close_block() {
+      if (nb == 0) return
+      s = sig_of(blk[1]); for (i = 2; i <= nb; i++) s = s "\n" blk[i]
+      n = num_of(blk[1])
+      if (pass == 1) { pub[s SUBSEP n] = 1 }
+      else if (pass == 2) { cnt[n]++; if ((s SUBSEP n) in pub) claimed[n] = 1 }
+      else {
+        if (cnt[n] > 1 && !((s SUBSEP n) in pub)) {
+          if (n in claimed) {
+            newn = "L" next_free; next_free++
+            sub(/^- \*\*L[0-9]+\./, "- **" newn ".", blk[1])
+            printf "%s became %s\n", n, newn
+          } else claimed[n] = 1
+        }
+        for (i = 1; i <= nb; i++) print blk[i] > out
+      }
+      nb = 0
+    }
+    FNR == 1 { close_block(); pass++ }
+    {
+      if (entry_start($0)) { close_block(); blk[++nb] = $0 }
+      else if (nb > 0 && $0 ~ /^  /) { blk[++nb] = $0 }
+      else { close_block(); if (pass == 3) print > out }
+    }
+    END { close_block() }
+  ' "$2" "$1" "$1")"
+  if [ -n "$report" ]; then
+    cat "$out" > "$1"
+    printf '%s' "$report"
+  fi
+  rm -f "$out"
+  return 0
+}
+
+# The highest lesson number visible in the given files, 0 when there are none.
+# The renumber must clear every number in use anywhere, not just the contested
+# one: next_lesson_number covers the local tree, this covers the two merge inputs.
+highest_lesson_in(){   # $@ = files
+  local n
+  n="$(grep -hoE '^- \*\*L[0-9]+\.' "$@" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
+  printf '%s' "${n:-0}"
+}
+
 merge_rule_files(){
-  local last p local_f tmpb tmpm tmpr reported="" resolved renumbered
+  local last p local_f tmpb tmpm tmpr reported="" resolved renumbered start fmax collided
   MERGED_RULE_FILES=""
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
@@ -651,6 +715,14 @@ merge_rule_files(){
       if [ -n "$renumbered" ]; then
         echo "claude-sync: the other Mac renumbered an entry you had not sent yet, so your old-numbered copy was dropped and its renumbered version kept ($p: $(printf '%s' "$renumbered" | tr '\n' ';' | sed 's/;$//')). Nothing was lost: the text is identical and your previous copy is beside it as .syncbak." >&2
         notify "$p: dropped an entry the other Mac renumbered"
+      fi
+      start="$(next_lesson_number "$CLAUDE_HOME")"; start="${start#L}"
+      fmax="$(highest_lesson_in "$tmpr" "$PAYLOAD/$p")"
+      [ "$((fmax + 1))" -gt "$start" ] && start="$((fmax + 1))"
+      collided="$(renumber_merge_collisions "$tmpr" "$PAYLOAD/$p" "$start")"
+      if [ -n "$collided" ]; then
+        echo "claude-sync: both Macs had used the same lesson number for different entries, so this Mac's unsent entry was renumbered to the next free number and the published one keeps the number, which the other Mac may already reference ($p: $(printf '%s' "$collided" | tr '\n' ';' | sed 's/;$//')). The renumbered entry publishes on the next send; your previous copy is beside it as .syncbak." >&2
+        notify "$p: renumbered an unsent entry after a number collision"
       fi
       cp "$local_f" "$local_f.syncbak"
       cp "$tmpr" "$local_f"

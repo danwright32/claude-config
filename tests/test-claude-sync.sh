@@ -1194,13 +1194,39 @@ git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit 
 LNMBH="$WORK/lnmhomeB"; mkdir -p "$LNMBH"; echo '{"hooks":{}}' > "$LNMBH/settings.json"
 LNMB="$WORK/lnmB"; git clone -q "$LNM" "$LNMB" 2>/dev/null
 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" SYNC_NO_NOTIFY=1 bash "$LNMB/claude-sync" pull >/dev/null 2>&1
-# Both Macs independently write an L2.
+# Both Macs independently write an L2. Mac A also has an L4, so the next free
+# number is L5: the renumber must go one past every number in use, never just
+# one past the collision.
 printf -- '- **L2. mine.** written on Mac B\n' >> "$LNMBH/LESSONS.md"
-printf -- '- **L2. theirs.** written on Mac A\n' >> "$LNMA/payload/LESSONS.md"
-git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds its L2" && git -C "$LNMA" push -q
+printf -- '- **L2. theirs.** written on Mac A\n- **L4. four.** also on Mac A\n' >> "$LNMA/payload/LESSONS.md"
+git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds its L2 and L4" && git -C "$LNMA" push -q
 out_lnm="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" bash "$LNMB/claude-sync" pull 2>&1)"
-check "#15 the merge kept both lessons"               "grep -q 'L2. mine' '$LNMBH/LESSONS.md' && grep -q 'L2. theirs' '$LNMBH/LESSONS.md'"
-check "#15 and the collision it created is reported"  "printf '%s' \"\$out_lnm\" | grep -q 'L2'"
+echo "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
+# The settled rule (see the 2026-08-05 note above): the published copy keeps the
+# number, because the other Mac may already reference it, and the entry that has
+# never left this Mac takes the next free number. The script already knows both
+# facts at merge time, so doing the renumber by hand (seen again 2026-08-11) was
+# pure toil, and until it was done the guard held the file back from every send.
+check "#17 both lessons survive the merge"               "grep -q 'mine' '$LNMBH/LESSONS.md' && grep -q 'theirs' '$LNMBH/LESSONS.md'"
+check "#17 the published entry keeps its number"         "grep -q '^- \*\*L2\. theirs' '$LNMBH/LESSONS.md'"
+check "#17 the unsent entry takes the next free number"  "grep -q '^- \*\*L5\. mine' '$LNMBH/LESSONS.md'"
+check "#17 the old number is no longer duplicated"       "[ \"\$(grep -c '^- \*\*L2\.' '$LNMBH/LESSONS.md')\" = 1 ]"
+check "#17 the numbering is sound afterwards"            "SYNC_NO_GIT=1 CLAUDE_HOME='$LNMBH' SYNC_REPO='$LNMB' bash '$LNMB/claude-sync' check-lessons >/dev/null 2>&1"
+check "#17 the renumber is reported, naming old and new" "printf '%s' \"\$out_lnm\" | grep -qi 'renumber' && printf '%s' \"\$out_lnm\" | grep -q 'L2' && printf '%s' \"\$out_lnm\" | grep -q 'L5'"
+check "#17 the file is not reported as held back"        "! printf '%s' \"\$out_lnm\" | grep -qi 'held back'"
+# The renumbered file must publish on the very next send, which is the whole point.
+CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" SYNC_NO_NOTIFY=1 bash "$LNMB/claude-sync" push >/dev/null 2>&1
+check "#17 the renumbered entry publishes upward"        "grep -q '^- \*\*L5\. mine' '$LNMB/payload/LESSONS.md'"
+
+# A collision that ARRIVES already published is NOT ours to settle: both entries
+# are on the other Mac under those numbers, so renumbering either here would break
+# references there. It applies as-is and the existing warning fires instead.
+git -C "$LNMA" pull -q --no-rebase 2>/dev/null
+printf -- '- **L6. six.** on Mac A\n- **L6. six again.** also on Mac A under the same number\n' >> "$LNMA/payload/LESSONS.md"
+git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A publishes a collision" && git -C "$LNMA" push -q
+out_lnm2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" bash "$LNMB/claude-sync" pull 2>&1)"
+check "#17 an arriving collision is applied untouched"   "[ \"\$(grep -c '^- \*\*L6\.' '$LNMBH/LESSONS.md')\" = 2 ]"
+check "#17 and is warned about, not auto-renumbered"     "printf '%s' \"\$out_lnm2\" | grep -q 'used 2 times'"
 
 # ---- repo hygiene: nothing already-committed slips past the rsync excludes ----
 # The excludes above stop NEW bytecode being staged, but they cannot clean a file
@@ -1323,8 +1349,8 @@ check "renumber: the file is not held back from sending" \
 # The dangerous direction of the fix above is over-deleting: it removes an entry, so
 # two entries that merely LOOK alike must never be collapsed. Only a pure renumber
 # (identical text, different number) qualifies. Both Macs independently using one
-# number for two DIFFERENT lessons is the ordinary collision, and both must survive
-# for a human to renumber, exactly as they did before this fix existed.
+# number for two DIFFERENT lessons is the ordinary collision, and both must survive:
+# the published one under the contested number, the unsent one renumbered (#17).
 printf -- '- **L9. same number.** but this text is only on Mac B\n' >> "$RNBH/LESSONS.md"
 # Mac A has to take Mac B's published work first, or its own push is rejected and the
 # scenario silently never happens (the assertions below would then pass vacuously).
@@ -1334,8 +1360,14 @@ git -C "$RNA" add -A && git -C "$RNA" -c user.name=t -c user.email=t@e commit -q
 out_rn2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RNBH" SYNC_REPO="$RNB" bash "$RNB/claude-sync" pull 2>&1)"
 check "renumber: a genuinely different entry is never dropped" \
   "grep -q 'only on Mac B' '$RNBH/LESSONS.md' && grep -q 'only on Mac A' '$RNBH/LESSONS.md'"
-check "renumber: a real collision is still reported for a human" \
-  "printf '%s' \"\$out_rn2\" | grep -qi 'used twice\\|used 2 times'"
+check "renumber: the published entry keeps the contested number" \
+  "grep -q '^- \*\*L9\..*only on Mac A' '$RNBH/LESSONS.md'"
+check "renumber: the unsent entry is renumbered, not left colliding" \
+  "grep -q '^- \*\*L10\..*only on Mac B' '$RNBH/LESSONS.md'"
+check "renumber: the settled collision is reported, not silent" \
+  "printf '%s' \"\$out_rn2\" | grep -qi 'renumbered' && printf '%s' \"\$out_rn2\" | grep -q 'L10'"
+check "renumber: no duplicate number remains afterwards" \
+  "! printf '%s' \"\$out_rn2\" | grep -qi 'used twice\\|used 2 times'"
 
 echo "== #16: a commit that does not touch payload must still be sent =="
 # Found on 2026-08-06 while pushing a fix to this very script: push decided WHETHER to
