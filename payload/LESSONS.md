@@ -124,6 +124,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   check had run against; minutes later a hand written filter over that same output reported every
   check green while one job was still running)
 
+- **L100. An operation that finds its target by matching text (a marker to insert at, a file to stash,
+  a pattern to replace, a helper name to call) reports SUCCESS when it matches NOTHING, so the next
+  step acts on a state nobody created.** Assert the match happened, because zero matches and a
+  completed edit are indistinguishable from the exit code, and the failure surfaces later as the
+  wrong thing having been done rather than as an error.
+  (2026-08-11, four times in one session on overture: a `gh issue create` whose backticked body the
+  shell executed instead of sending, filing nothing while reporting as backgrounded; a `git stash push`
+  of an already-committed file, so the following `pop` restored an unrelated older stash and left
+  conflicts in two untouched files; a scripted insert whose anchor text did not exist, which printed
+  "added" and added nothing; and three shell assertions calling a helper that file never defined,
+  which printed "command not found" to stderr while the summary reported every fixture passing)
+
 ## Data safety
 
 - **L5. Never destroy good state before its replacement is verified to exist.** Write to
