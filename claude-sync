@@ -678,6 +678,15 @@ renumber_merge_collisions(){   # $1 = merged file, rewritten in place  $2 = arri
   return 0
 }
 
+# Lines mentioning a lesson number in body text, counted with each entry's own
+# heading number stripped first. After a renumber the OLD number names the other
+# Mac's entry, and lessons routinely cite each other by number, so a body mention
+# of it may now point at the wrong lesson. The tool cannot know which lesson a
+# mention meant, so it never rewrites one: it counts them and sends a human to look.
+stale_number_mentions(){   # $1 = file  $2 = number, e.g. L2
+  sed -E 's/^- \*\*L[0-9]+\./- **/' "$1" | grep -cE "(^|[^A-Za-z0-9])${2}([^0-9]|\$)" || true
+}
+
 # The highest lesson number visible in the given files, 0 when there are none.
 # The renumber must clear every number in use anywhere, not just the contested
 # one: next_lesson_number covers the local tree, this covers the two merge inputs.
@@ -688,7 +697,7 @@ highest_lesson_in(){   # $@ = files
 }
 
 merge_rule_files(){
-  local last p local_f tmpb tmpm tmpr reported="" resolved renumbered start fmax collided
+  local last p local_f tmpb tmpm tmpr reported="" resolved renumbered start fmax collided renline oldnum newnum stale
   MERGED_RULE_FILES=""
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
@@ -723,6 +732,17 @@ merge_rule_files(){
       if [ -n "$collided" ]; then
         echo "claude-sync: both Macs had used the same lesson number for different entries, so this Mac's unsent entry was renumbered to the next free number and the published one keeps the number, which the other Mac may already reference ($p: $(printf '%s' "$collided" | tr '\n' ';' | sed 's/;$//')). The renumbered entry publishes on the next send; your previous copy is beside it as .syncbak." >&2
         notify "$p: renumbered an unsent entry after a number collision"
+        while IFS= read -r renline; do
+          [ -n "$renline" ] || continue
+          oldnum="${renline%% became *}"; newnum="${renline##* became }"
+          stale="$(stale_number_mentions "$tmpr" "$oldnum")"
+          if [ "${stale:-0}" -gt 0 ]; then
+            echo "claude-sync: $p still mentions $oldnum in body text on $stale line(s). $oldnum now names the other Mac's entry, so check whether each mention meant the renumbered lesson (now $newnum); nothing was rewritten." >&2
+            notify "$p: check body mentions of $oldnum after the renumber"
+          fi
+        done <<COLLIDED
+$collided
+COLLIDED
       fi
       cp "$local_f" "$local_f.syncbak"
       cp "$tmpr" "$local_f"

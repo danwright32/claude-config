@@ -1197,7 +1197,7 @@ CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" SYNC_NO_NOTIFY=1 bash "$LNMB/claude-sync"
 # Both Macs independently write an L2. Mac A also has an L4, so the next free
 # number is L5: the renumber must go one past every number in use, never just
 # one past the collision.
-printf -- '- **L2. mine.** written on Mac B\n' >> "$LNMBH/LESSONS.md"
+printf -- '- **L2. mine.** written on Mac B\n  and its body cites L2 by its own number\n' >> "$LNMBH/LESSONS.md"
 printf -- '- **L2. theirs.** written on Mac A\n- **L4. four.** also on Mac A\n' >> "$LNMA/payload/LESSONS.md"
 git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds its L2 and L4" && git -C "$LNMA" push -q
 out_lnm="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" bash "$LNMB/claude-sync" pull 2>&1)"
@@ -1214,6 +1214,13 @@ check "#17 the old number is no longer duplicated"       "[ \"\$(grep -c '^- \*\
 check "#17 the numbering is sound afterwards"            "SYNC_NO_GIT=1 CLAUDE_HOME='$LNMBH' SYNC_REPO='$LNMB' bash '$LNMB/claude-sync' check-lessons >/dev/null 2>&1"
 check "#17 the renumber is reported, naming old and new" "printf '%s' \"\$out_lnm\" | grep -qi 'renumber' && printf '%s' \"\$out_lnm\" | grep -q 'L2' && printf '%s' \"\$out_lnm\" | grep -q 'L5'"
 check "#17 the file is not reported as held back"        "! printf '%s' \"\$out_lnm\" | grep -qi 'held back'"
+# A renumber changes only the heading. A body mention of the old number (lessons
+# routinely cite each other) now points at the OTHER Mac's entry, and the tool
+# cannot know which lesson the mention meant, so it must send a human to look
+# rather than rewrite it or stay silent.
+check "#17 a body mention of the old number is warned about" \
+  "printf '%s' \"\$out_lnm\" | grep -qi 'still mentions' && printf '%s' \"\$out_lnm\" | grep -q 'L2'"
+check "#17 the body text itself is never rewritten"      "grep -q 'cites L2 by its own number' '$LNMBH/LESSONS.md'"
 # The renumbered file must publish on the very next send, which is the whole point.
 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" SYNC_NO_NOTIFY=1 bash "$LNMB/claude-sync" push >/dev/null 2>&1
 check "#17 the renumbered entry publishes upward"        "grep -q '^- \*\*L5\. mine' '$LNMB/payload/LESSONS.md'"
@@ -1368,6 +1375,10 @@ check "renumber: the settled collision is reported, not silent" \
   "printf '%s' \"\$out_rn2\" | grep -qi 'renumbered' && printf '%s' \"\$out_rn2\" | grep -q 'L10'"
 check "renumber: no duplicate number remains afterwards" \
   "! printf '%s' \"\$out_rn2\" | grep -qi 'used twice\\|used 2 times'"
+# A warning that cries wolf gets ignored: nothing in this file mentions L9 in
+# body text, so the stale-mention warning must stay quiet here.
+check "renumber: no stale-mention warning when nothing mentions the old number" \
+  "! printf '%s' \"\$out_rn2\" | grep -qi 'still mentions'"
 
 echo "== #16: a commit that does not touch payload must still be sent =="
 # Found on 2026-08-06 while pushing a fix to this very script: push decided WHETHER to
