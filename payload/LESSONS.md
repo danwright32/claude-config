@@ -169,6 +169,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   (slate#1368: a scrubber written to keep a lead's phone number out of browser error
   reports matched "digits and separators", so it turned every 2026-08-11 into [phone] and
   stripped the slot time out of exactly the booking errors it was built to surface)
+- **L107. A number measured to justify a design decision must be produced by the code's own
+  predicate, never by a query written beside it, because an ad-hoc reimplementation is a second
+  definition that drifts silently and in the direction that flatters the argument being made.**
+  Distinct from L16, which keeps one predicate behind a count and the rows it promises INSIDE the
+  product: this is the measurement taken to argue FOR a change, which no test covers and which
+  therefore reaches a decision, a plan or a comment tagged as verified with nothing between it and
+  belief.
+  (overture#2035 and #2517: a funnel measured by SQL beside the app counted a web form or a DM as a
+  contact, which the shipped rule excludes because neither can be written to, so the design note said
+  81 shows held a contact where the code said 66, and 49 waiting where it said 38. It passed the full
+  suite, CI and a merge, and was caught only when Dan read the real numbers off his own screen)
 
 ## Data safety
 
@@ -199,6 +210,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   stale copy whenever the stand-in happens to match, so compare the content itself
   wherever skipping means keeping what is already there.
   (claude-config#6)
+- **L105. A read, modify, write cycle whose read answers EMPTY when it fails will erase the
+  whole record the first time the read fails, and it does so at the exact moment the record
+  is worth having.** Distinguish absent from unreadable at the read itself and refuse the
+  write on unreadable, because both look identical to every caller downstream and only one
+  of them is safe to rebuild a file from.
+  (downbeat#165: three append-by-rewrite logs, the commit failures, the Overture export and
+  the warnings, each treating an unopenable file as an empty one and writing a single line
+  back over it)
 
 ## Honest failure
 
@@ -273,6 +292,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   (claude-config, 2026-08-06: a config pull merged three entries into the rule file every
   session loads, then printed "nothing on this Mac needed changing" and named nothing to
   restart for)
+
+- **L106. A liveness signal emitted on a timer (a heartbeat, a keepalive, a still-working marker)
+  proves only that its EMITTER is alive, never that the work is progressing, so a live signal over
+  dead work is indistinguishable from a healthy run.** The mirror of L71: that one catches the
+  watchdog dying while the work runs unobserved, this one catches the work dying while the watchdog
+  keeps vouching for it, and this is the worse half because it actively reassures. Tie the signal to
+  observed progress, or surface both facts separately so a fresh heartbeat beside a frozen count
+  reads as the alarm it is.
+  (overture#2506: a paid 27 source run finished its work at 10:47 and was still reporting "26 of 27,
+  running" at 11:43, because one parallel chunk's worker died writing nothing at all while the
+  heartbeat kept touching the marker every few seconds. The 10 minute staleness timeout could never
+  fire, since the marker was never stale. Dan saw it was stuck from the screen and was talked out of
+  it twice on the strength of a fresh heartbeat, while the results file's CONTENT had not changed)
 
 ## State and identity
 
