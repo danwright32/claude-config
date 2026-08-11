@@ -26,6 +26,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   so the guard passes for the whole time the defect is growing and the detector goes back to
   being the person who notices.
   (overture#1913, overture#1992)
+- **L103. A guard that asserts the exact rendering of a value rather than the rule behind it fails
+  the first legitimate refinement of that value, and when the value is a file's text it can also be
+  satisfied by a comment ABOUT the thing, including one explaining that the thing was removed.**
+  Assert the invariant, and strip comments before matching on source or config text, because a guard
+  that is green on prose is indistinguishable from one that works.
+  (new-agent-onboarding#516: four in one session, an engines range pinned as `>=22 <23` in two files
+  that forbade stating the more precise floor a dependency required, a typecheck command pinned as
+  `tsc --noEmit` that forbade it checking a second thing, and two assertions that had passed for
+  months on the comment explaining the behaviour they asserted had been deleted)
 - **L48. A test fixture that claims to come from real data must be measured from it, never
   shaped so the rule under test fires.** An invented shape makes a test appear to cover a
   case that cannot occur, so it passes forever while protecting nothing, and the
