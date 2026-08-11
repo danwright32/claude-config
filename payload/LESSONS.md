@@ -162,6 +162,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   (slate#1365: an on demand availability search timed at 2.9s against a deliberately dark
   roster, where every pass returned before touching a single calendar)
 
+- **L104. A filter that identifies data by its SHAPE (a redaction regex, a content
+  classifier, a profanity or spam rule) must be tested against the content it has to
+  PRESERVE, not only against the content it has to catch, because the shape it matches is
+  rarely unique to its target and an over match reads exactly like the feature working.**
+  (slate#1368: a scrubber written to keep a lead's phone number out of browser error
+  reports matched "digits and separators", so it turned every 2026-08-11 into [phone] and
+  stripped the slot time out of exactly the booking errors it was built to surface)
+
 ## Data safety
 
 - **L5. Never destroy good state before its replacement is verified to exist.** Write to
