@@ -145,6 +145,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   test checked a reel that never moved)
 
 
+- **L102. A cost or latency measured while the expensive path is switched off measures the
+  short circuit, not the work, so the number reads as reassurance for exactly the case nobody
+  has tested.** Measure with the thing that makes it expensive turned on, or state plainly
+  which case the figure came from, because a fast reading taken against an empty roster, an
+  unpopulated table or a disabled integration is indistinguishable from a genuinely fast path.
+  (slate#1365: an on demand availability search timed at 2.9s against a deliberately dark
+  roster, where every pass returned before touching a single calendar)
+
 ## Data safety
 
 - **L5. Never destroy good state before its replacement is verified to exist.** Write to
