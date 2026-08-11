@@ -135,6 +135,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   conflicts in two untouched files; a scripted insert whose anchor text did not exist, which printed
   "added" and added nothing; and three shell assertions calling a helper that file never defined,
   which printed "command not found" to stderr while the summary reported every fixture passing)
+- **L101. A code path that switches behaviour on the SIZE of its input will always take the
+  small branch under test, because a fixture is minimal by construction, so the mode that
+  actually ships is the one never exercised and the suite is green the whole time.** Size
+  the fixture past the threshold, and assert the run did not report taking the degraded
+  path.
+  (PostRoll#319: every Thursday reel test rendered ten photos, below the point where the
+  strip is taller than the frame, so the generator collapsed the scroll to a still and each
+  test checked a reel that never moved)
+
 
 ## Data safety
 
