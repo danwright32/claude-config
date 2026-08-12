@@ -672,3 +672,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   instant the work actually arrived (the reply, the guess, the event) so a missed one reads as
   overdue instead of silently re-filing itself under today.
   (overture#2111, overture#2116)
+- **L114. A tool that creates a throwaway workspace must also remove what that workspace caused to
+  be created OUTSIDE it.** Build caches are keyed by workspace path, so every new path mints a fresh
+  full copy that nothing reclaims when the path goes away, the growth is proportional to how often
+  the workflow runs rather than to how much work is done, and it is invisible until the disk stops
+  the machine, at which point the diagnosis itself can no longer run.
+  (overture#2585: 105 Xcode DerivedData folders at roughly 1.6 GB each, 101 of them belonging to
+  agent worktrees and throwaway verify worktrees that had already been deleted, filled a 926 GiB
+  volume to 132 MiB free and left no command able to write even its own output)
