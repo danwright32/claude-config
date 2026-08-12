@@ -1198,7 +1198,12 @@ CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" SYNC_NO_NOTIFY=1 bash "$LNMB/claude-sync"
 # number is L5: the renumber must go one past every number in use, never just
 # one past the collision.
 printf -- '- **L2. mine.** written on Mac B\n  and its body cites L2 by its own number\n' >> "$LNMBH/LESSONS.md"
-printf -- '- **L2. theirs.** written on Mac A\n- **L4. four.** also on Mac A\n' >> "$LNMA/payload/LESSONS.md"
+# A mention in ANOTHER synced rule file, written on this Mac: the tool cannot merge
+# that file this pull, so it must be warned about, never rewritten.
+printf -- 'see L2 for the rule\n' >> "$LNMBH/CLAUDE.md"
+# Mac A's published side ALSO cites the contested number in a body line: that mention
+# means Mac A's own L2 and must never be rewritten.
+printf -- '- **L2. theirs.** written on Mac A\n- **L4. four.** also on Mac A\n  distinct from L2, which it cites\n' >> "$LNMA/payload/LESSONS.md"
 git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds its L2 and L4" && git -C "$LNMA" push -q
 out_lnm="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" bash "$LNMB/claude-sync" pull 2>&1)"
 echo "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
@@ -1214,13 +1219,26 @@ check "#17 the old number is no longer duplicated"       "[ \"\$(grep -c '^- \*\
 check "#17 the numbering is sound afterwards"            "SYNC_NO_GIT=1 CLAUDE_HOME='$LNMBH' SYNC_REPO='$LNMB' bash '$LNMB/claude-sync' check-lessons >/dev/null 2>&1"
 check "#17 the renumber is reported, naming old and new" "printf '%s' \"\$out_lnm\" | grep -qi 'renumber' && printf '%s' \"\$out_lnm\" | grep -q 'L2' && printf '%s' \"\$out_lnm\" | grep -q 'L5'"
 check "#17 the file is not reported as held back"        "! printf '%s' \"\$out_lnm\" | grep -qi 'held back'"
-# A renumber changes only the heading. A body mention of the old number (lessons
-# routinely cite each other) now points at the OTHER Mac's entry, and the tool
-# cannot know which lesson the mention meant, so it must send a human to look
-# rather than rewrite it or stay silent.
-check "#17 a body mention of the old number is warned about" \
-  "printf '%s' \"\$out_lnm\" | grep -qi 'still mentions' && printf '%s' \"\$out_lnm\" | grep -q 'L2'"
-check "#17 the body text itself is never rewritten"      "grep -q 'cites L2 by its own number' '$LNMBH/LESSONS.md'"
+# A renumber must carry its body mentions with it. At merge time the tool DOES know
+# which lesson a local mention meant: a line this Mac wrote (absent from the arriving
+# published file) could only ever have meant this Mac's own entry, because the other
+# Mac's entry did not exist here until this pull. So local mentions are rewritten to
+# the new number, published mentions keep the old number (which now names the other
+# Mac's entry), and a mention in a rule file the tool is not merging is warned about.
+check "#17 a local body mention of the old number is rewritten" \
+  "grep -q 'cites L5 by its own number' '$LNMBH/LESSONS.md'"
+check "#17 the old local mention is gone" \
+  "! grep -q 'cites L2 by its own number' '$LNMBH/LESSONS.md'"
+check "#17 a published body mention keeps its number" \
+  "grep -q 'distinct from L2, which it cites' '$LNMBH/LESSONS.md'"
+check "#17 the rewrite is reported, naming old and new" \
+  "printf '%s' \"\$out_lnm\" | grep -qi 'rewrote' && printf '%s' \"\$out_lnm\" | grep -q 'L2 to L5'"
+check "#17 no go-and-check warning for the file it rewrote" \
+  "! printf '%s' \"\$out_lnm\" | grep -qi 'still mentions'"
+check "#17 a mention in another synced rule file is warned about" \
+  "printf '%s' \"\$out_lnm\" | grep -q 'CLAUDE.md' && printf '%s' \"\$out_lnm\" | grep -qi 'also mentions L2'"
+check "#17 that other file is never rewritten" \
+  "grep -q 'see L2 for the rule' '$LNMBH/CLAUDE.md'"
 # The renumbered file must publish on the very next send, which is the whole point.
 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" SYNC_NO_NOTIFY=1 bash "$LNMB/claude-sync" push >/dev/null 2>&1
 check "#17 the renumbered entry publishes upward"        "grep -q '^- \*\*L5\. mine' '$LNMB/payload/LESSONS.md'"
@@ -1327,7 +1345,9 @@ CLAUDE_HOME="$RNBH" SYNC_REPO="$RNB" SYNC_NO_NOTIFY=1 bash "$RNB/claude-sync" pu
 # This Mac writes L2 and never gets to send it. The other Mac independently uses L2
 # for something else and publishes it, then settles the clash by renumbering this
 # Mac's entry to L3, exactly as the convention says.
-printf -- '- **L2. mine.** written only on Mac B\n' >> "$RNBH/LESSONS.md"
+# A second local lesson cites the doomed number: written on this Mac, it could only
+# have meant this Mac's entry, so the drop must carry the mention to the new number.
+printf -- '- **L2. mine.** written only on Mac B\n- **L8. other.** a local note pointing at L2\n' >> "$RNBH/LESSONS.md"
 printf -- '- **L2. theirs.** published first by Mac A\n- **L3. mine.** written only on Mac B\n' >> "$RNA/payload/LESSONS.md"
 git -C "$RNA" add -A && git -C "$RNA" -c user.name=t -c user.email=t@e commit -q -m "Mac A publishes L2 and renumbers B's to L3" && git -C "$RNA" push -q
 out_rn="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RNBH" SYNC_REPO="$RNB" bash "$RNB/claude-sync" pull 2>&1)"
@@ -1345,6 +1365,14 @@ check "renumber: numbering passes its own check" \
 # pass on the pre-existing duplicate warning, which is a different message entirely.
 check "renumber: the drop names the old and new number" \
   "printf '%s' \"\$out_rn\" | grep -qi 'renumbered' && printf '%s' \"\$out_rn\" | grep -q 'L2' && printf '%s' \"\$out_rn\" | grep -q 'L3'"
+# The other Mac's renumber of OUR entry must carry our local mentions with it, exactly
+# as a renumber done here does: the local note meant our lesson, which is now L3.
+check "renumber: a local mention follows the other Mac's renumber" \
+  "grep -q 'a local note pointing at L3' '$RNBH/LESSONS.md'"
+check "renumber: the old-numbered local mention is gone" \
+  "! grep -q 'a local note pointing at L2' '$RNBH/LESSONS.md'"
+check "renumber: the published entry keeps its own heading number" \
+  "grep -q '^- \*\*L2\. theirs' '$RNBH/LESSONS.md'"
 # And the file must still be sendable. A duplicate holds that ONE file back from every
 # send, so prove it by sending something NEW: asserting the arriving L3 is still in the
 # payload would pass either way, since the other Mac put it there.
@@ -1376,9 +1404,9 @@ check "renumber: the settled collision is reported, not silent" \
 check "renumber: no duplicate number remains afterwards" \
   "! printf '%s' \"\$out_rn2\" | grep -qi 'used twice\\|used 2 times'"
 # A warning that cries wolf gets ignored: nothing in this file mentions L9 in
-# body text, so the stale-mention warning must stay quiet here.
-check "renumber: no stale-mention warning when nothing mentions the old number" \
-  "! printf '%s' \"\$out_rn2\" | grep -qi 'still mentions'"
+# body text, so neither a rewrite report nor a go-and-check warning may fire here.
+check "renumber: no mention handling when nothing mentions the old number" \
+  "! printf '%s' \"\$out_rn2\" | grep -qiE 'rewrote|also mentions|still mentions'"
 
 echo "== #16: a commit that does not touch payload must still be sent =="
 # Found on 2026-08-06 while pushing a fix to this very script: push decided WHETHER to
