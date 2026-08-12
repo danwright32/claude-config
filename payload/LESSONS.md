@@ -180,6 +180,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   contact, which the shipped rule excludes because neither can be written to, so the design note said
   81 shows held a contact where the code said 66, and 49 waiting where it said 38. It passed the full
   suite, CI and a merge, and was caught only when Dan read the real numbers off his own screen)
+- **L115. A harness that measures whether content is VISIBLE must be checked against the
+  substitutes its own renderer makes for content it cannot draw, because a placeholder is
+  itself a mark on the page and measures as presence.** A surface built only from controls the
+  renderer does not support then clears every legibility check while showing no words at all,
+  and the check reports hardest on exactly the surface it can see least of. Measure a bare
+  unsupported control once, assert that it scores as content, and either exclude it from the
+  measured surfaces or render those through a real host.
+  (PostRoll#396, #404: SwiftUI's ImageRenderer has no AppKit host, so `Menu` and `ProgressView`
+  come out as a bright placeholder block that measured well above the ink threshold separating a
+  legible screen from a blank one)
 
 ## Data safety
 
