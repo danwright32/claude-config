@@ -510,6 +510,31 @@ for reference; L6 was reviewed and deliberately not adopted.
   invisible until somebody arrives with the value that falls between them.
   (slate#1356: a booker phone field capped at ten digits beside a validator deliberately accepting
   ten to fifteen, so a number the server would have booked could not be typed in)
+- **L111. A message that tells someone HOW to recover must name an action that actually changes
+  the state they are stuck in, so trace the suggested step against the stored state before
+  shipping it.** Advice like reload, retry or start again is written from the developer's mental
+  model and reads as helpful while leaving the person in exactly the same place, and the code is
+  entirely correct the whole time.
+  (new-agent-onboarding#565: a refused Salesforce profile told the operator to reload the page,
+  but the stale profile id lives on the saved onboarding, so the reload restored the same value
+  and the only control that could fix it went unmentioned)
+
+- **L112. An alert's urgency is set by what the reader must DO and how soon, never by
+  whether something is broken.** A condition correctly judged "not a fault" gets filed
+  as informational and put on a long cooldown, which makes the product quietest at
+  exactly the moment customers are being turned away for the most ordinary reason.
+  (slate#1412: a bucket with no bookable times because its agents were genuinely booked
+  whispered on the info channel, while the booker told every lead "all times are taken")
+
+- **L113. A lookup table keyed by a vocabulary (a colour by status, an icon by type, a label
+  by code) must have its completeness enforced by the type system or a test, because a missing
+  key silently takes the default branch, and a default is indistinguishable from a deliberate
+  choice.** The entry most likely to be missing is the one written by a second set of writers
+  that arrived after the table was built.
+  (new-agent-onboarding#554: the audit ledger's colour table was built for provisioning
+  outcomes, the settings routes later became a second writer of the same ledger, and every
+  audited config change rendered in the muted fallback for months, two lines under a comment
+  warning that the fallback renders the most consequential row as the quietest on the screen)
 
 ## External systems
 
