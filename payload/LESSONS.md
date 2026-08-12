@@ -316,6 +316,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   thirteen characters of a hundred and eight sat stored and unremarked from 2026-08-09,
   the field rendered as dots so it looked full, and the metered path had never once run)
 
+- **L109. A refusal message that can only be spoken by an action, while the same predicate that
+  would produce it disables that action, can never be spoken, so the person is left with a dead
+  control and no reason while the code reads as careful and its tests pass.** Render the refusal
+  where the gate is applied, from the same function, so the reason and the disabling cannot
+  disagree.
+  (overture#2544: the manual prep sheet computed a refusal naming the missing field on every
+  keystroke, kept only the boolean, and disabled Save draft; the four sentences it discarded were
+  reachable only through the save path that button opens, so Dan met a greyed out button with an
+  empty Subject box and nothing on screen connecting the two)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
