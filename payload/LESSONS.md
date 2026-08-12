@@ -306,6 +306,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   fire, since the marker was never stale. Dan saw it was stuck from the screen and was talked out of
   it twice on the strength of a fresh heartbeat, while the results file's CONTENT had not changed)
 
+- **L108. A check that validates a value's recognisable PREFIX or shape, but not its
+  completeness, accepts a truncated paste and then stays silent, and that silence reads as
+  confirmation the whole value is good.** Validate length and shape together for anything
+  copied by hand (keys, tokens, account numbers, ids), and refuse rather than warn, because
+  the failure otherwise surfaces as an authentication or lookup error far from the paste
+  that caused it.
+  (PostRoll#348: the API key field checked only that the value started with sk-ant-, so
+  thirteen characters of a hundred and eight sat stored and unremarked from 2026-08-09,
+  the field rendered as dots so it looked full, and the metered path had never once run)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
