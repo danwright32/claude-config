@@ -326,6 +326,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   reachable only through the save path that button opens, so Dan met a greyed out button with an
   empty Subject box and nothing on screen connecting the two)
 
+- **L110. A wait for a condition with no deadline cannot fail, it can only hang, and a hang is worse
+  than a failure because it is indistinguishable from slowness and holds whatever shared resource it
+  acquired.** Give every wait a timeout that names what it was waiting for, because the first person
+  to trip it spends hours believing the machine is merely busy. Distinct from L98, which catches a
+  watcher that finds nothing and calls it success, and from L106, which catches a heartbeat still
+  ticking over dead work: this is the wait that emits no signal at all and is read as patience.
+  (overture#2576, overture#2577, 2026-08-12: making a greeting required turned one test fixture
+  unsendable, so a `while cleared.isEmpty { await Task.yield() }` never exited; the run span for over
+  an hour writing 21MB of repeated CoreData errors while holding the machine wide xcodebuild lock,
+  a second run sat blocked behind it for 50 minutes, and three consecutive status reports said
+  "waiting on the suite" when the work had been dead the whole time)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
