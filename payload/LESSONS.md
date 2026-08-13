@@ -190,6 +190,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   (PostRoll#396, #404: SwiftUI's ImageRenderer has no AppKit host, so `Menu` and `ProgressView`
   come out as a bright placeholder block that measured well above the ink threshold separating a
   legible screen from a blank one)
+- **L117. A per-item ceiling judged against a POOLED total across every item in a run can only ever
+  be exceeded by a single-item run, because the many-item case averages and one expensive item is
+  paid for out of the cheap ones' headroom.** So the guard fires on the smallest runs and stays
+  silent on exactly the large one it was written for, and its silence there reads as proof they were
+  fine. Enforce the ceiling per item, and measure the firing rate against real runs of each size
+  rather than trusting the arithmetic.
+  (overture#2617: a 15 lookups per show cap summed to a 810 allowance on a 17 show run that used 338
+  and never warned, while the same show checked alone spent 18 against 15 and warned, so the only
+  warning Dan has ever seen came from the cheapest run the app makes)
 
 ## Data safety
 
