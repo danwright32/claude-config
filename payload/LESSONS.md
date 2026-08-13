@@ -389,6 +389,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   a second run sat blocked behind it for 50 minutes, and three consecutive status reports said
   "waiting on the suite" when the work had been dead the whole time)
 
+- **L121. A retry or self heal step that decides from a RECORDED success marker (a stored
+  status, an effects string, an ok field) cannot notice that the artifact it created has since
+  been deleted, so it suppresses its own repair permanently.** Decide from the artifact's
+  current existence, and treat a null reference beside an ok marker as damage rather than as
+  done, because the two halves are usually written by different code and nothing compares them.
+  (slate#1464: an approved time off whose calendar event timed out fell back to a Slate busy
+  block, which a reconcile sweep deleted 31 seconds later as an orphan. The foreign key was ON
+  DELETE SET NULL, so the record ended up saying no block was ever written while its effects
+  still read "ok (slate fallback)", and the guard skipping the step on any effect starting with
+  "ok" meant no later pass could ever put it back)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
