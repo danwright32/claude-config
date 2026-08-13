@@ -225,6 +225,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   a pooled ceiling can only ever be tripped by a single item run, which the same data refuted: one
   14 show run reached 71%, so the absolute claim was the measurement being flattered, L107)
 
+- **L130. A test fixture whose meaning is the RELATIONSHIP between a stored date and the clock (a show
+  still ahead, a licence not yet expired, a record inside its retention window) must pin BOTH ends,
+  because pinning only the fixture lets real time walk the pair into a different state and the test then
+  passes while asserting about a case nobody chose.** The tell is a literal date sitting beside a bare
+  read of now, and it fails silently in both directions: one such test had spent months asserting that a
+  show 27 days in the past should still be chased. Distinct from L39, which pins the clock to test month
+  and DST boundaries: there the clock is the subject, here it is the half of a pair nobody thought of as
+  an input at all.
+  (overture#2669, overture#2670: four fixtures in one session, every one of them red the moment a rule
+  about shows that have already performed arrived, and not one of them red for a reason it asserted)
+
 ## Data safety
 
 - **L5. Never destroy good state before its replacement is verified to exist.** Write to
