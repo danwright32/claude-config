@@ -228,6 +228,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   (downbeat#165: three append-by-rewrite logs, the commit failures, the Overture export and
   the warnings, each treating an unopenable file as an empty one and writing a single line
   back over it)
+- **L116. A rule that only encodes somebody's PREFERENCE must be enforced by filtering what is
+  shown, never by deleting the data it filters, because a preference can be reversed and the data
+  cannot be brought back.** Enforcing it by deletion also makes the reversal invisible, since the
+  code then reads as though the value was never found.
+  (overture#2421 deleted 45 social-only contacts to enforce "an Instagram is a dead end", and when
+  that call was reversed on 2026-08-13 the handles were gone from 33 shows and only a paid re-check
+  could recover them)
 
 ## Honest failure
 
