@@ -472,6 +472,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   it.** Copy is a contract: limits, prices, labels, and promises must match what the
   code does, and a control labeled as navigation must never trigger a paid operation.
   (42 issues, 5 repos)
+- **L118. Two surfaces a person meets in sequence must not use one word for two different units, and
+  a qualifier is not enough of a difference to carry it.** Each sentence is correct read alone, so
+  the contradiction exists only in the reading and no diff, review or test can hold both halves at
+  once; the fix is one word per concept across the whole product, checked by reading the pair in the
+  order the person meets them.
+  (overture#2616: a button promising a re-check "costs one lookup" was followed three minutes later
+  by "18 web lookups for 1 show, more than expected", one counting shows and the other counting web
+  calls, and Dan read it as a control that spent eighteen times what it said)
 - **L22. Walk the whole flow as the user before calling it done.** Cancel, retry,
   resume, and every exit path of a guarded action get deliberate behavior; enumerate
   degenerate inputs (zero items, missing files, overlong media) at design time.
