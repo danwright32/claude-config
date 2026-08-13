@@ -510,6 +510,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2147, a reply whose sender matched no known contact fell back to the row's own contact,
   so answering the person who wrote would have emailed a colleague instead)
 
+- **L124. A platform's DEFAULT grant may already give away what you are about to grant**, so the
+  GRANT you add as protection changes nothing while making the migration READ as protected, and
+  an accompanying comment describing the exclusion is worse than silence. Query the live
+  privilege after applying rather than reviewing the migration text, because the only evidence
+  is a REVOKE that is absent, and nobody reviews for a missing line.
+  (bidspoke#762: Postgres grants EXECUTE to PUBLIC on every new function, so six security-definer
+  functions were callable by anon over the REST API, two of which write and bypass RLS)
+
 - **L123. Declining to PROVISION someone is not declining to AUTHENTICATE them**, so a signup
   gate that only skips creating app records still hands that person a valid session carrying a
   privileged role, and every policy written against that role must then defend against someone
