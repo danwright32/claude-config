@@ -410,6 +410,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   the one control that could fix slate#1464, while the button itself rendered for every role
   from team lead up)
 
+- **L125. A function answering WHEN something comes due must not fold in the test for whether it is due
+  YET, because reporting nothing for a moment still in the future is indistinguishable from having no
+  moment at all, and any fold that takes the soonest of several such clocks then confidently names a
+  later one.** Keep the schedule and the is-it-now test as two functions, so a countdown reads the
+  schedule and a gate reads the test. Distinct from L98, where finding nothing reads as success: here
+  the silent clock is the nearest one, so the answer is not merely missing but wrong in the reassuring
+  direction.
+  (overture#2646: `PostEventPrompt.nextPromptDate`, commented as the single source of truth for when a
+  prompt is due, guarded `now >= dayAfter` and returned nil until the date had already arrived, so a
+  row for a show performing that night counted down to a follow-up nudge five days out while the thing
+  actually owed landed the next morning, then jumped to "Reach out now" overnight with no warning)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
@@ -631,6 +643,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   audited config change rendered in the muted fallback for months, two lines under a comment
   warning that the fallback renders the most consequential row as the quietest on the screen)
 
+- **L126. An action offered only on a transient surface (a run summary, a status message, a toast)
+  cannot serve a condition that PERSISTS in the data, because the notice clears while the state
+  stays, so every encounter after the first finds the fault still named and the remedy gone.** Put
+  the action on the durable surface showing the condition, and let the notice be a shortcut to it.
+  The sibling of L80, which catches a message naming a target with no action at all: this one catches
+  the action existing and outliving nothing.
+  (overture#2621: a card reading "A check missed this show" carries that badge for 90 days, while the
+  control that re-runs exactly those shows hangs off the status message set when a run ends, and the
+  badge's own hover text then sends Dan to re-tick the whole date instead)
+
 ## External systems
 
 - **L23. Treat every external response as hostile and every event stream as unordered,
@@ -659,6 +681,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   "latest" is an unannounced breaking change. (11 issues, 4 repos)
 - **L26. Twin implementations in two languages consume one shared committed fixture**,
   with a declared source of truth that is itself directly tested. (11 issues, 2 repos)
+- **L127. An identifier you SUPPLY to an external system is a request, never a fact, so read back
+  the one it actually assigned before storing it as the key to any later operation.** Verifying in
+  the vendor's OWN client cannot catch the substitution, because that client can reach the record by
+  a private path that never touches the identifier, so it looks correct in the one place anybody
+  checks and is broken everywhere else.
+  (overture#2647: Gmail discarded Overture's Message-ID and assigned its own, so every follow-up
+  referenced a message that existed nowhere, while Gmail's web view still grouped the thread on its
+  internal threadId and Spark showed two unrelated conversations)
 
 ## Building with AI
 
@@ -670,6 +700,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   forbid it from asking questions, enforce its tool limits rather than asserting them,
   verify it did the expensive step, and require an honest failure record when it dies.
   (12 issues, 1 repo)
+- **L128. A field whose only writer is an AI prompt, and whose ABSENCE is itself a legitimate value
+  in the domain, cannot tell a model that IGNORED the instruction from one that judged the field
+  inapplicable, so the feature stays dormant forever while every reader reports its honest default.**
+  Assert at the boundary that a run produced the field at all, at least once per run, because the
+  first run after shipping is the cheapest moment to find out the prompt is being ignored. Neither
+  L27 (a hard constraint on output needs a deterministic check) nor L90 (a value nothing writes
+  reports a confident zero) covers it: here the writer exists and may simply decline, and its
+  declining is indistinguishable from an answer.
+  (overture#2641, from #2622's contact tier and #2612's social route, both instructions added to the
+  prep runbook with no way to notice a run that skips them)
 
 ## Codebase hygiene
 
@@ -701,6 +741,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   (PostRoll#273: the payload contract enforced that every declared payload was fully declared,
   and six payloads crossing the same boundary were never declared at all, so the sweep that
   claimed to cover all of them passed)
+- **L129. A category deliberately EXEMPTED from a review or check, for a CORRECT reason, has no
+  reviewer at all unless one is named in the same change, and the gap is invisible precisely
+  because the exemption was right.** The excluded content still needs reviewing, just by something
+  else, so name what WILL review it rather than only what will not. The mirror of L96, where the
+  registry forgot an entry: here nothing was forgotten and the exclusion is correct on its own
+  terms, which is why it survives every audit of whether the check is working.
+  (overture#2643, overture#2650: outbound email is rightly kept out of the app's copy inventory,
+  since that inventory is the app's own voice to Dan and the cold read of it is a required pre-PR
+  step, which left the sentences going to strangers under his name as the only copy in the product
+  with no reader. A closing note told people who had never replied "it was good to be in touch",
+  and it survived a rewrite of the first sentence of that same paragraph three days earlier)
 - **L57. A correction recorded only in memory or a transcript will recur, because the
   artifact that actually governs the behavior never changed.** Write every accepted
   correction into the prompt, config, or rule file that decides the outcome, in the same
