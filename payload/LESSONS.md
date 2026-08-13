@@ -190,15 +190,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   (PostRoll#396, #404: SwiftUI's ImageRenderer has no AppKit host, so `Menu` and `ProgressView`
   come out as a bright placeholder block that measured well above the ink threshold separating a
   legible screen from a blank one)
-- **L117. A per-item ceiling judged against a POOLED total across every item in a run can only ever
-  be exceeded by a single-item run, because the many-item case averages and one expensive item is
-  paid for out of the cheap ones' headroom.** So the guard fires on the smallest runs and stays
-  silent on exactly the large one it was written for, and its silence there reads as proof they were
-  fine. Enforce the ceiling per item, and measure the firing rate against real runs of each size
-  rather than trusting the arithmetic.
-  (overture#2617: a 15 lookups per show cap summed to a 810 allowance on a 17 show run that used 338
-  and never warned, while the same show checked alone spent 18 against 15 and warned, so the only
-  warning Dan has ever seen came from the cheapest run the app makes)
+- **L117. A per-item ceiling judged against a POOLED total cannot notice one item running away, because
+  the expensive item is paid for out of the cheap ones' headroom, and a single-item run is the only
+  size where the ceiling and the total are the same number.** So the guard fires on the smallest runs
+  and stays quietest on the large ones it was written for, whose silence then reads as proof they were
+  fine. Enforce it per item, which means RECORDING per item, and measure the firing rate against real
+  runs of each size rather than trusting the arithmetic.
+  (overture#2617: a 15 lookups per show cap pooled to an 810 allowance on a 17 show run that used 338
+  and never warned, while the same show checked alone spent 18 against 15 and did, so every warning
+  Dan has seen came from the cheapest run the app makes. Note the first version of THIS lesson said
+  a pooled ceiling can only ever be tripped by a single item run, which the same data refuted: one
+  14 show run reached 71%, so the absolute claim was the measurement being flattered, L107)
 
 ## Data safety
 
