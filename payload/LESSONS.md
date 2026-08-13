@@ -133,6 +133,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   check had run against; minutes later a hand written filter over that same output reported every
   check green while one job was still running)
 
+- **L119. A detection that ACCUSES on an empty answer from an external provider's derived index (a
+  commit-to-PR association, a search index, a related-records lookup) must confirm against the
+  primary record before acting, because a missing index entry and a real violation are
+  indistinguishable and the index can stay permanently incomplete rather than catch up.** The mirror
+  of L98: there, finding nothing reads as success; here, finding nothing reads as guilt, and the
+  false accusation is what teaches everyone to ignore the guard.
+  (slate#1447: main-push-guard paged "direct push to main with no merged PR (review bypassed)" on a
+  squash merge of a reviewed, green PR. GitHub's `/commits/<sha>/pulls` returned `[]` and still did
+  twenty minutes later, while the PR itself recorded that exact commit as its merge_commit_sha. The
+  three merges before it associated fine; the one that differed was merged during a GitHub API
+  incident, so the association record was never written and no retry could have helped)
+
 - **L100. An operation that finds its target by matching text (a marker to insert at, a file to stash,
   a pattern to replace, a helper name to call) reports SUCCESS when it matches NOTHING, so the next
   step acts on a state nobody created.** Assert the match happened, because zero matches and a
