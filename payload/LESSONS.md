@@ -145,6 +145,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   three merges before it associated fine; the one that differed was merged during a GitHub API
   incident, so the association record was never written and no retry could have helped)
 
+- **L120. A fan out that delivers only to recipients matching a subscription list reports SUCCESS
+  when it matches ZERO of them, so a newly added event, topic or category is silently delivered to
+  nobody while the send path looks healthy.** Assert that every value the code can emit has at least
+  one recipient that could receive it, because the delivery record is written either way and nothing
+  downstream can tell an empty fan out from a delivered one. The sibling of L98 (a watcher finding
+  nothing reads as everything passing) on the sending side, and of L46 (a field written but never
+  read): here the value is emitted but nothing has subscribed to it.
+  (slate#1459: adding a webhook event to the code union ships it inert, because delivery is filtered
+  by a subscriber list held in a database column that no code change touches, and #1341 was about to
+  add one)
+
 - **L100. An operation that finds its target by matching text (a marker to insert at, a file to stash,
   a pattern to replace, a helper name to call) reports SUCCESS when it matches NOTHING, so the next
   step acts on a state nobody created.** Assert the match happened, because zero matches and a
