@@ -38,7 +38,7 @@ The finished PRD has these parts, in this order, and these properties:
 7. **How it works, at the product level.** Modes and flows only; no schemas, stacks, or implementation. Link, don't embed.
 8. **Non-goals.** Each with the reason it is out, not just the exclusion.
 9. **Decision attribution, everywhere.** Every consequential decision is either agreed (by whom) or opens with "Proposed, not yet agreed:" naming whose sign-off it needs and pointing to its open question. The same status appears at every mention of that decision, not just one.
-10. **Open questions and risks.** Numbered so they can be referenced (10.1, 10.2...), each stating who owns it and what happens if it stays unresolved. Honest unknowns beat false completeness.
+10. **Open questions and risks.** Numbered under their own section's number so they can be referenced (if open questions are section 8, they are 8.1, 8.2, and cross-references elsewhere say 8.1), each stating who owns it and what happens if it stays unresolved. Honest unknowns beat false completeness.
 11. **Later versions.** Marked "directional, not committed"; proposed items keep their "pending [name]" tags here too.
 12. **Style:** plain language a non-engineer reads cold; numbered lists, never bullets; no dashes as punctuation, no emoji; testable wording (no "fast", "intuitive", "easily"); active voice with names; 3 to 6 pages. Read every sentence cold as its named reviewer and check it does not overstate anyone's position (what someone "did not object to" is not what they agreed to).
 
