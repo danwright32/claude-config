@@ -509,6 +509,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   somebody else.
   (overture#2147, a reply whose sender matched no known contact fell back to the row's own contact,
   so answering the person who wrote would have emailed a colleague instead)
+
+- **L123. Declining to PROVISION someone is not declining to AUTHENTICATE them**, so a signup
+  gate that only skips creating app records still hands that person a valid session carrying a
+  privileged role, and every policy written against that role must then defend against someone
+  you believe you already turned away. Refuse at the credential itself and prune the accounts
+  earlier refusals left behind, because the code performing the refusal reads as complete.
+  (bidspoke#759)
+
 ## UX completeness
 
 - **L20. Accessibility is part of building each control.** Labels on icon-only controls,
