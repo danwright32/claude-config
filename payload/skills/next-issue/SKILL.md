@@ -11,7 +11,16 @@ Dan does not write code and should never have to pump the loop by typing "what's
 
 If there is an open PR for the work just finished:
 1. Check CI yourself: `gh pr checks <pr> --watch` (run in the background if slow; report elapsed progress, never a silent wait).
-2. When green, merge it yourself: `gh pr merge <pr> --squash --delete-branch` (match the repo's usual merge style if different). Never ask Dan to merge, and never ask him whether something merged when `gh pr view` can answer it.
+2. When green, merge it yourself: `gh pr merge <pr> --squash --delete-branch` (match the repo's
+   usual merge style if different), and then CONFIRM it, because a merge command that exits 0 is
+   not a merge. Ask `gh pr view <pr> --json state --jq .state` and treat anything but `MERGED` as
+   not merged: say so, do not delete a branch, do not close the issue, and do not move on to the
+   next one. Measured 2026-08-13 in Overture: `gh pr merge` failed with a transient
+   `GraphQL: Something went wrong while executing your query`, and the script around it reported
+   `merged PR #2609`, deleted the local branch of a PR that was still open, and exited 0. If the
+   repo has its own merge script that already does this (Overture:
+   `scripts/verify-and-merge-branch.sh`), prefer it. Never ask Dan to merge, and never ask him
+   whether something merged when `gh pr view` can answer it.
 3. If CI fails, fix it before moving on; that is still the current issue.
 4. Close the issue if the merge did not auto-close it, with a one-line comment linking the PR.
 
