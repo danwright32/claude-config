@@ -400,6 +400,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   still read "ok (slate fallback)", and the guard skipping the step on any effect starting with
   "ok" meant no later pass could ever put it back)
 
+- **L122. A permission or capability check written as equality against ONE rank of a ranked
+  vocabulary silently excludes every rank ABOVE it, so the most privileged person is the one
+  refused.** Compare through the shared at least predicate, and exercise the TOP tier in the
+  test, because it is the rank no fixture reaches for and the person holding it is usually the
+  one who never gets asked whether the control worked.
+  (slate#1468: the admin only retry that repairs a failed time off gated on `role !== "admin"`
+  in a five tier hierarchy, so the owner, whose role is `super_admin`, met "Not authorized" on
+  the one control that could fix slate#1464, while the button itself rendered for every role
+  from team lead up)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
