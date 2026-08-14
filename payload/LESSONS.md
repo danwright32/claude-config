@@ -491,6 +491,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   row for a show performing that night counted down to a follow-up nudge five days out while the thing
   actually owed landed the next morning, then jumped to "Reach out now" overnight with no warning)
 
+- **L139. A minimum volume floor added so a RATE is not noisy at small samples also silences the
+  SATURATION case, because a proportion cannot tell one bad out of two from twelve bad out of
+  twelve.** Pair every rate threshold with a separate near total rule carrying its own much smaller
+  floor, or the clearest evidence a source is broken is precisely the evidence the guard is built to
+  discard. Distinct from L117, which catches a per item ceiling judged against a pooled total: there
+  the arithmetic hides one bad item among many, here the floor discards the item entirely before any
+  arithmetic runs.
+  (bidspoke#744, bidspoke#777: an email drop alert judged each lead source on a 5% rate above a 20
+  lead floor, so a source sending twelve leads with all twelve addresses rejected was never judged at
+  all, which Dan spotted immediately on reading the shipped behaviour)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
