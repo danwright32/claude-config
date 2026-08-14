@@ -314,6 +314,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   that call was reversed on 2026-08-13 the handles were gone from 33 shows and only a paid re-check
   could recover them)
 
+- **L136. Clearing a field to CORRECT bad data is a state change whose consequences live in every
+  reader of that field, and a constant named for the empty case (a noManager message, a notSet
+  label) can be a hard REFUSAL rather than a graceful fallback, so read what the null branch DOES
+  before writing the null.** The correction then moves the person from a wrong but working state
+  into a blocked one, and it reads as obviously right the whole time precisely because the empty
+  case appears to be handled. Distinct from L38, which enumerates the derived resources a delete
+  must also touch: here nothing else needs deleting, and the damage is done by a reader that
+  refuses.
+  (slate#1474 cleared a manager link Salesforce contradicted, correctly, on the strength of the
+  request flow already having a NO_MANAGER_MESSAGE for the empty case; that message is a refusal at
+  submission, so the manager could no longer request time off at all, and it told him to ask an
+  admin to set a manager that no surface can now set: slate#1499)
+
 ## Honest failure
 
 - **L10. An error state and an empty state are different screens.** Never render a
