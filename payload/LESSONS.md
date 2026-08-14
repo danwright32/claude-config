@@ -178,6 +178,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   conflicts in two untouched files; a scripted insert whose anchor text did not exist, which printed
   "added" and added nothing; and three shell assertions calling a helper that file never defined,
   which printed "command not found" to stderr while the summary reported every fixture passing)
+- **L143. A test double that selects what it intercepts by PATTERN (a route glob, a URL matcher, a
+  path prefix) silently becomes NO double at all when the pattern misses, so the test talks to the
+  real dependency and reports whatever that produces as the behaviour under test.** Assert that every
+  declared double actually fired at least once, because a stub that matched nothing is
+  indistinguishable from one that worked, and is worse than having none, since you believe the case
+  is covered. Distinct from L84, where the dependency was never faked at all, and from L100, which is
+  about operations rather than test doubles: here the fake was written, reviewed, and is inert.
+  (new-agent-onboarding#591: a Playwright stub written as `**/api/starter-password/value` matched
+  nothing once the request carried `?onboardingId=`, so the unauthenticated CI fixture reached the
+  real route, got a 401, and drew its "couldn't load" error. It was one guard away from being
+  committed as the canonical screenshot of the screen at rest)
 - **L133. A detector that identifies records written BEFORE a fix must key on a recorded stamp, never
   on a property of the stored value itself, because a store that re-encodes on save normalizes that
   property away and the detector then reports every row as already correct.** The tell is usually
@@ -291,6 +302,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   unchanged on a mutation deleting the Reached Out branch's entire conditional. Two more guards failed
   the same session for the neighbouring reasons, a searched substring surviving a rewrite that inverted
   the rule, and a fallback defended against a state no writer can produce)
+
+- **L142. When phasing a risky change into observe then enforce, check WHICH half the observation
+  covers: the observed half is usually the one you understand, and the harm usually lives in the
+  other, so an observe phase that never exercises the dangerous path buys confidence about the wrong
+  thing.** Split the phases along the axis of BLAST RADIUS rather than along the axis of what is
+  easiest to watch. Distinct from L56, which asks for one observed cycle before a validator blocks,
+  and from L3, which asks that a guard be proven to execute: here both are honoured and the rollout is
+  still blind, because the phase boundary was drawn in the wrong place.
+  (project-enrollment-tracker#1036: a plan to derive PET's access list phased it as compute-then-use,
+  so phase one watched the computation, which was pure and unit tested, while the thing that could take
+  the whole app offline was the edge gate importing the generated file at all. That import is at module
+  scope, so a throw there fails every request including the login page, leaving nobody able to sign in
+  and fix it, and it would first have run in the phase that also changed who was on the list)
 
 ## Data safety
 
