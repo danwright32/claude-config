@@ -496,6 +496,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   invalidated the queue's whole query and rebuilt every card, whole-corpus derivations included,
   on the main thread; the same lag struck an address off a card, and Dan named the pattern before
   anyone had looked at the cause)
+- **L131. A map keyed by a value the real data can repeat (a date, a name, a day) silently keeps the
+  LAST writer and discards every earlier one, and because the surface renders one row per key the
+  loss is invisible on the very screen that exists to report it.** Check the live data for a repeat
+  before making something a key, and where one can occur hold a list rather than a single value.
+  Distinct from L66, which collapses several records onto one shared external identifier and then
+  writes member level facts about all of them: here the other members are dropped outright, so
+  nothing downstream can even know they existed.
+  (overture#2693: the blocked calendar stored one booked shoot per date under a comment reading "a
+  day cannot be blocked twice", which is true of the blocking decision and false of the shoots
+  behind it, so two of Dan's fifteen bookings were missing from the list of what he already has on,
+  and which of each colliding pair survived was decided by the order the export happened to list
+  them in)
 
 ## Security and privacy
 
