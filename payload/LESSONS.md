@@ -167,6 +167,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   conflicts in two untouched files; a scripted insert whose anchor text did not exist, which printed
   "added" and added nothing; and three shell assertions calling a helper that file never defined,
   which printed "command not found" to stderr while the summary reported every fixture passing)
+- **L133. A detector that identifies records written BEFORE a fix must key on a recorded stamp, never
+  on a property of the stored value itself, because a store that re-encodes on save normalizes that
+  property away and the detector then reports every row as already correct.** The tell is usually
+  visible in the source data and gone from the file, so the design reads as obviously workable right
+  up until it is measured against what is actually on disk. Distinct from L40, where the stand-in
+  merely happens to match, and from L68, where the guard expires on legitimate use: here the evidence
+  is destroyed by the persistence layer doing exactly its job.
+  (PostRoll#549: stale analytics were to be found by their publish time carrying no timezone offset,
+  but AnalyticsStore encodes with .iso8601, so the first save after any import had already rewritten
+  every naive time as an absolute instant)
 - **L101. A code path that switches behaviour on the SIZE of its input will always take the
   small branch under test, because a fixture is minimal by construction, so the mode that
   actually ships is the one never exercised and the suite is green the whole time.** Size
