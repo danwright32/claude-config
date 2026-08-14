@@ -246,6 +246,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2669, overture#2670: four fixtures in one session, every one of them red the moment a rule
   about shows that have already performed arrived, and not one of them red for a reason it asserted)
 
+- **L134. A test that derives two inputs from the same LIVE shared resource read at different moments
+  must ASSERT the separation it depends on, never assume it, because the healthy margin is usually one
+  unit of that resource's own granularity and a single stale read closes it exactly.** The resulting
+  intermittent failure is indistinguishable from the defect the check exists to catch, so it is
+  investigated as a real outage every time and then dismissed, which is how a canary stops being read.
+  (slate#1489: a production booking canary picked one slot from a list fetched at the start of the run
+  and the other from a list fetched mid run, whose head shifts by exactly one event length while an
+  earlier scenario's booking is still cached, so the two landed on the same instant, the API deduped
+  correctly, and the same two checks paged three times in ten days)
+
 ## Data safety
 
 - **L5. Never destroy good state before its replacement is verified to exist.** Write to
