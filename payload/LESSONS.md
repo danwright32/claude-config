@@ -256,6 +256,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   earlier scenario's booking is still cached, so the two landed on the same instant, the API deduped
   correctly, and the same two checks paged three times in ten days)
 
+- **L135. A guard that matches source text over a WHOLE FILE is satisfied by any occurrence in it, so a
+  second legitimate use of the same construct elsewhere in that file answers the check while the region
+  it was written about is broken.** Scope every source assertion to the function or declaration it is
+  about, because a large file makes a coincidental match near certain and the guard reads greenest
+  exactly when it is blindest. Distinct from L103, where the guard is satisfied by a COMMENT about the
+  thing: here it is satisfied by real code correctly doing the same thing somewhere else, so stripping
+  prose does not help and nothing about the match looks wrong.
+  (overture#2726: a guard asserting the Reached Out list drew a quiet exit row searched the whole of
+  QueueView.swift, and the date-grouped list draws that same row from another function, so it passed
+  unchanged on a mutation deleting the Reached Out branch's entire conditional. Two more guards failed
+  the same session for the neighbouring reasons, a searched substring surviving a rewrite that inverted
+  the rule, and a fallback defended against a state no writer can produce)
+
 ## Data safety
 
 - **L5. Never destroy good state before its replacement is verified to exist.** Write to
