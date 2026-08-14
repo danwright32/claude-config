@@ -364,6 +364,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   so leaving the commit button enabled beside it means the app told the person it was wrong and let
   them proceed anyway.
   (overture#2052)
+- **L138. A templating or interpolation layer usually renders a MISSING setting as an EMPTY value
+  rather than an absent one, so every absence check written as a null fallback silently accepts it
+  and the default it promises never applies.** Validate that the referenced setting EXISTS, and
+  treat empty as absent at the read, because the wiring reads as configured either way and the
+  failure surfaces far from it. Distinct from L3, where the guard was never wired at all: here it
+  IS wired, to nothing.
+  (slate#1494 wired SLATE_BASE_URL from a repo variable that does not exist, so GitHub passed the
+  empty string, the `?? "https://slate.trypennie.app"` fallback accepted it, and the production
+  canary failed 11 minutes after the merge with `Failed to parse URL from /api/availability`. Two
+  scripts had been converted to an empty-safe read and the shared helper every request goes through
+  had not: slate#1498, slate#1500)
+
 - **L50. A value parsed from storage or input must never feed a comparison
   directly.** A failed parse yields NaN or an invalid value that compares false
   against every threshold, so the check silently lands on the healthy or
