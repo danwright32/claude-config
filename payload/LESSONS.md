@@ -793,6 +793,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   to run, because the call site reads as free while paying in full and no test measures what
   an answer cost.
   (overture#1916, overture#1960)
+- **L132. A generated catalogue that a PERSON reviews (a copy inventory, an API surface list, a
+  route map) must be derived from what is REACHABLE, not from what merely appears in the source,
+  because an entry for code nothing calls is indistinguishable from a live one and every reader
+  spends real attention reasoning about a surface that cannot exist.** Distinct from L29, which
+  is about the dead code itself, and from L96, where the hand-written registry lists too FEW: here
+  the derivation is automatic and correct on its own terms, and lists too MANY. It also inflates
+  whatever headline count the catalogue opens with, which is the number quoted whenever its
+  coverage is discussed.
+  (overture#2707: a sentence about a masthead line removed by #1131 sat in the copy inventory for
+  more than a thousand issues, and that inventory's cold read is a required pre-PR step)
 
 ## Cross-system reliability
 
