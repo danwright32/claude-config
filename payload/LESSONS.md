@@ -606,6 +606,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   earlier refusals left behind, because the code performing the refusal reads as complete.
   (bidspoke#759)
 
+- **L137. A grant checked only where it is GRANTED (a login, a signup, an invite) is never
+  re-checked for anyone already holding a session, so removing someone from an access list takes
+  nothing away from the people most likely to be removed, and the gap stays invisible until the
+  first real removal.** Consult the list on the path that SERVES the protected data, and end
+  existing sessions when a grant is withdrawn, because an expiry measured in weeks is the very
+  window the removal was meant to close. Distinct from L123, where the refusal never reached the
+  credential: here the grant was legitimate and the REVOCATION is what fails to land.
+  (project-enrollment-tracker#1022: the access list was consulted at login and on API routes only,
+  while the gate serving the dashboard and every data file checked just that the session cookie was
+  valid, and sessions rotated silently for 30 days)
+
 ## UX completeness
 
 - **L20. Accessibility is part of building each control.** Labels on icon-only controls,
