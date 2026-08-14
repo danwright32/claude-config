@@ -234,6 +234,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   (PostRoll#396, #404: SwiftUI's ImageRenderer has no AppKit host, so `Menu` and `ProgressView`
   come out as a bright placeholder block that measured well above the ink threshold separating a
   legible screen from a blank one)
+- **L141. A visibility check that measures ink over a whole surface is answered by whatever that
+  surface paints for ITSELF, a fill, a border, a panel, so the words it exists to check can be
+  drawn in the background colour while the measurement barely moves.** Assert the contrast between
+  the text colour and the colour behind it, read from the values the view actually draws with
+  rather than a copy of them, and prove it by making the text invisible and watching the check go
+  red. The sibling of L115, where the renderer's own substitute measures as presence: here nothing
+  is substituted and the surface's legitimate decoration is what answers for the missing type.
+  (PostRoll#559: the Insights staleness notice measured 0.0799 against a 0.01 threshold with its
+  sentence drawn in the colour of its own panel, because the panel and its rose gold border were
+  what the check was reading. A filled button was worse still at 0.2475, almost all of it the
+  button's own background. Found by mutation, not by review: the first guard written for it
+  SURVIVED)
 - **L117. A per-item ceiling judged against a POOLED total cannot notice one item running away, because
   the expensive item is paid for out of the cheap ones' headroom, and a single-item run is the only
   size where the ceiling and the total are the same number.** So the guard fires on the smallest runs
