@@ -11,6 +11,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   asserting their own mock, wrappers treating exit 0 as a pass, vacuous assertions, and
   tests of hand-copied reimplementations all sit green while protecting nothing. Break
   the code once and watch it go red before trusting it. (58 issues, 6 repos)
+- **L140. A test asserting that something THREW is satisfied by ANY throw, including one
+  raised by its own fixture, so assert on the specific failure (the message, the type, the
+  state left behind) rather than on the mere fact of an error.** A typo in the fake then
+  fails as a typo, instead of masquerading as the refusal the test exists to prove, and the
+  suite reports hardest on the branch it is covering least.
+  (slate#1504: a fake in the test for "a block-lookup read error aborts with ZERO inserts"
+  incremented an undefined `calls`, which threw BEFORE the fake recorded anything, so the
+  surrounding try/catch set threw=true and both assertions passed. Had the sweep ever
+  regressed into mass-inserting busy blocks, that test would still have reported success.
+  It was invisible because tsconfig excludes the whole scripts tree from typechecking)
+
 - **L2. Tests must be structurally unable to touch live data, production services, or
   paid APIs.** Inject seams for stores, directories, clocks, and external calls, plus a
   refusal inside the service itself. (10 issues, 6 repos)
