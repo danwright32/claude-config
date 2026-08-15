@@ -316,6 +316,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   scope, so a throw there fails every request including the login page, leaving nobody able to sign in
   and fix it, and it would first have run in the phase that also changed who was on the list)
 
+- **L144. A monitor reporting whether an action HAPPENED must judge by the same predicate the
+  action used to decide whether to ACT, or the two disagree precisely when the action correctly
+  declined, and the resulting false alarm cannot be cleared by the remedy it names, because
+  re-running the action makes it decline again.** The second harm is the one that costs: while
+  stuck, the monitor cannot report the real failure it exists to catch, since both read
+  identically. Distinct from L16, which shares one predicate between a count and its rows inside
+  the product, and from L119, where an empty index entry is mistaken for guilt: here both sides
+  answer confidently and mean different things by the same question.
+  (bidspoke#802: the deploy decides the worker changed by building the bundle at both commits and
+  comparing bytes, while the drift check asked git which commits touched the apps/worker path, so
+  a commit changing only worker TEST files paged hourly from 21:40 on 2026-08-14 with nothing
+  unshipped, and its printed fix, re-run the deploy, hit the same artifact gate and skipped again)
+
 ## Data safety
 
 - **L5. Never destroy good state before its replacement is verified to exist.** Write to
