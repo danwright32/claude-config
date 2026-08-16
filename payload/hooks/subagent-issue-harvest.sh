@@ -123,13 +123,7 @@ ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 if [ "$status" -ne 0 ] || [ -z "${out//[[:space:]]/}" ]; then
   reason="the harvest model exited $status"
   [ -z "${out//[[:space:]]/}" ] && [ "$status" -eq 0 ] && reason="the harvest model returned nothing"
-  record=$(python3 -c '
-import json, sys
-print(json.dumps({"ts": sys.argv[1], "status": "error", "agent": sys.argv[2],
-                  "session": sys.argv[3], "cwd": sys.argv[4], "error": sys.argv[5]}))
-' "$ts" "$agent" "$session" "$cwd" "$reason")
-  bash "$SPOOL" append "$cwd" "$record"
-  exit 0
+  spool_error "$reason"
 fi
 
 record=$(printf '%s' "$out" | python3 -c '
@@ -139,9 +133,10 @@ findings = [ln.split("FINDING:", 1)[1].strip()
             if ln.strip().startswith("FINDING:") and ln.split("FINDING:", 1)[1].strip()]
 print(json.dumps({"ts": sys.argv[1],
                   "status": "found" if findings else "none",
-                  "agent": sys.argv[2], "session": sys.argv[3], "cwd": sys.argv[4],
+                  "agent": sys.argv[2], "agent_id": sys.argv[3], "session": sys.argv[4],
+                  "cwd": sys.argv[5], "transcript": sys.argv[6],
                   "findings": findings}))
-' "$ts" "$agent" "$session" "$cwd")
+' "$ts" "$agent" "$agent_id" "$session" "$cwd" "$transcript")
 
 bash "$SPOOL" append "$cwd" "$record"
 exit 0
