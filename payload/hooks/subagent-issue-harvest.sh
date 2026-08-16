@@ -160,18 +160,40 @@ nothing else: no preamble, no summary, no closing line.
 The transcript follows.
 PROMPT_END
 
+# The model call gets a DEADLINE. The hook itself is killed at 180 seconds by
+# Claude Code, and a kill leaves no record at all: absence of a record is the one
+# state this design cannot represent, so a hang would be indistinguishable from
+# an agent that never ran. The default sits below the hook's own limit so the
+# error is written while there is still a process alive to write it. macOS has
+# no `timeout`, hence perl's alarm.
+harvest_timeout="${CLAUDE_ISSUE_HARVEST_TIMEOUT:-150}"
+with_deadline() { # with_deadline <seconds> <command...>
+  perl -e 'my $s = shift; eval { local $SIG{ALRM} = sub { die "timeout\n" };
+           alarm $s; exec @ARGV; }; exit 124;' "$@" 2>/dev/null
+}
+
+# The runner is documented as a command, so it has to be able to carry
+# arguments. Expanded as a single word it fails with "command not found" on the
+# obvious form, and no test covered it because every stub was one bare script.
 runner="${CLAUDE_ISSUE_HARVEST_CMD:-}"
 if [ -n "$runner" ]; then
   # The recursion guard belongs on BOTH paths. A custom runner that reaches
   # `claude` re-enters this hook when its own agents finish, and the guard at
   # the top of the file is the only thing standing between one agent finishing
   # and a chain of them.
-  out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" | CLAUDE_DETACHED_RUN=1 "$runner" 2>/dev/null)
+  out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
+    | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" bash -c "$runner")
 else
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
-    | CLAUDE_DETACHED_RUN=1 claude -p --model haiku 2>/dev/null)
+    | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" claude -p --model haiku)
 fi
 status=$?
+
+# A runaway reply must not become a multi-megabyte record that is then injected
+# into every review prompt until it is filed.
+if [ "${#out}" -gt 20000 ]; then
+  out="${out:0:20000}"
+fi
 
 ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
