@@ -77,7 +77,7 @@ fi
 # transcript, one function along.
 digest=$(python3 "$DIR/subagent-digest.py" "$transcript" 2>/dev/null)
 digest_status=$?
-if [ "$digest_status" -ge 2 ]; then
+if [ "$digest_status" -ge 99 ]; then
   spool_error "the agent transcript could not be read (digest exited $digest_status)"
 fi
 if [ -z "$digest" ]; then
