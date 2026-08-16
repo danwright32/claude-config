@@ -151,12 +151,12 @@ PY_COMPACT
 # path for any agent, since it costs no model call.
 issue_spool_note() { # note <dir> <finding text> [who reported it]
   local dir="${1:-$PWD}" text="${2:-}" source="${3:-self-reported}" record
-  :
+  [ -n "${text//[[:space:]]/}" ] || return 2
   record="$(python3 -c '
 import json, sys, datetime
 print(json.dumps({
     "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "status": "found",
+    "status": "none",
     "agent": sys.argv[1] or "self-reported",
     "cwd": sys.argv[2],
     "findings": [sys.argv[3].strip()[:500]],
