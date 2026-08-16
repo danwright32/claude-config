@@ -174,11 +174,16 @@ printf '%s' "$sent" | grep -q "EventPlace has no test" \
 
 # With no agent transcript named, it must REFUSE. Falling back to the parent is
 # the exact defect above, and a silent skip would hide a payload change.
+# The reason is asserted, not merely the fact of an error. The same-file guard
+# below would otherwise answer for this one: under a reintroduced fallback the
+# agent path becomes the parent path, that guard fires, and this test passes
+# while the fallback it exists to forbid is back in the code (L140).
 reset_spool
 stub 'echo "FINDING: should never be reached."'
 payload "$REPO" OMIT | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
 printf '%s' "$got" | grep -q '"status": *"error"' \
+  && printf '%s' "$got" | grep -q "named no agent_transcript_path" \
   && ! printf '%s' "$got" | grep -q "should never be reached" \
   && check "no agent transcript is an error, never a fallback to the parent" ok \
   || check "no agent transcript is an error, never a fallback to the parent" "spool=$got"
