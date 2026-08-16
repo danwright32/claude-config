@@ -112,7 +112,7 @@ reset_spool() { rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; }
 
 # A harvest that finds something records it.
 reset_spool
-stub 'cat >/dev/null; echo "FINDING: EventPlace has no test for the empty case (EventPlace.swift)."'
+stub 'echo "FINDING: EventPlace has no test for the empty case (EventPlace.swift)."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
 printf '%s' "$got" | grep -q '"status": *"found"' \
@@ -123,7 +123,7 @@ printf '%s' "$got" | grep -q '"status": *"found"' \
 # A harvest that finds NOTHING must still leave a record. Otherwise "looked and
 # found nothing" and "never ran" are the same empty file (L98).
 reset_spool
-stub 'cat >/dev/null; echo NONE'
+stub 'echo NONE'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
 printf '%s' "$got" | grep -q '"status": *"none"' \
@@ -132,7 +132,7 @@ printf '%s' "$got" | grep -q '"status": *"none"' \
 
 # A harvest that FAILED must say so in its own words, not borrow the empty one.
 reset_spool
-stub 'cat >/dev/null; echo "model unavailable" >&2; exit 7'
+stub 'echo "model unavailable" >&2; exit 7'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
 printf '%s' "$got" | grep -q '"status": *"error"' \
@@ -141,7 +141,7 @@ printf '%s' "$got" | grep -q '"status": *"error"' \
 
 # A harvest whose model returns nothing at all is a failure too, not an empty answer.
 reset_spool
-stub 'cat >/dev/null; exit 0'
+stub 'exit 0'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
 printf '%s' "$got" | grep -q '"status": *"error"' \
@@ -151,7 +151,7 @@ printf '%s' "$got" | grep -q '"status": *"error"' \
 # Recursion guard: the harvest runs a headless Claude, whose own subagents must
 # not harvest in turn.
 reset_spool
-stub 'cat >/dev/null; echo "FINDING: should never be written."'
+stub 'echo "FINDING: should never be written."'
 payload "$REPO" | CLAUDE_DETACHED_RUN=1 bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
 [ -z "$got" ] \
@@ -161,7 +161,7 @@ got="$(records)"
 # A missing transcript writes nothing rather than an error record: there was no
 # agent to read, so there is nothing to report either way.
 reset_spool
-stub 'cat >/dev/null; echo NONE'
+stub 'echo NONE'
 payload "$REPO" "$TMPROOT/does-not-exist.jsonl" | bash "$HARVEST" >/dev/null 2>&1
 [ -z "$(records)" ] \
   && check "a missing transcript is skipped silently" ok \
@@ -171,9 +171,9 @@ payload "$REPO" "$TMPROOT/does-not-exist.jsonl" | bash "$HARVEST" >/dev/null 2>&
 # pending / clear: what the review reads, and what filing removes.
 # ---------------------------------------------------------------------------
 reset_spool
-stub 'cat >/dev/null; echo "FINDING: the queue rebuild is not measured."'
+stub 'echo "FINDING: the queue rebuild is not measured."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
-stub 'cat >/dev/null; echo NONE'
+stub 'echo NONE'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 
 pending="$(bash "$SPOOL_LIB" pending "$REPO" 2>&1)"
@@ -216,7 +216,7 @@ bash "$SPOOL_LIB" pending "$TMPROOT" >/dev/null 2>&1
 # and the payload must still be valid JSON once the finding is injected.
 # ---------------------------------------------------------------------------
 reset_spool
-stub 'cat >/dev/null; echo "FINDING: spool injection marker seven."'
+stub 'echo "FINDING: spool injection marker seven."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 
 REVIEW_TRANSCRIPT="$TMPROOT/main.jsonl"
