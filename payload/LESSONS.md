@@ -835,6 +835,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   invisible until somebody arrives with the value that falls between them.
   (slate#1356: a booker phone field capped at ten digits beside a validator deliberately accepting
   ten to fifteen, so a number the server would have booked could not be typed in)
+- **L150. A writer that accepts a value on its own terms must accept only what its READER can
+  actually consume, so validate at the write against the reader's own predicate rather than a
+  looser one.** Otherwise the value is stored, looks correct, and is silently unusable at the
+  point it matters, and because the accepting rule and the consuming rule live in different
+  files neither looks wrong when read alone. The mirror of L99, which catches the form being
+  STRICTER than the validator behind it: this catches the writer being LOOSER than the reader.
+  (overture#2794: `EventLocationFill` rule 1 stores a page's own location verbatim, and
+  `460 Main Street, Chatham NJ` is accepted and then answers `couldNotPlace` in `EventPlace`,
+  which is what actually decides where a show is, while `cityFromVenue` in the same file would
+  have read `Chatham, NJ` cleanly)
 - **L111. A message that tells someone HOW to recover must name an action that actually changes
   the state they are stuck in, so trace the suggested step against the stored state before
   shipping it.** Advice like reload, retry or start again is written from the developer's mental
