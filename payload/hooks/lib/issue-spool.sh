@@ -151,7 +151,7 @@ PY_COMPACT
 # path for any agent, since it costs no model call.
 issue_spool_note() { # note <dir> <finding text> [who reported it]
   local dir="${1:-$PWD}" text="${2:-}" source="${3:-self-reported}" record
-  [ -n "${text//[[:space:]]/}" ] || return 2
+  :
   record="$(python3 -c '
 import json, sys, datetime
 print(json.dumps({
@@ -213,7 +213,7 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         # and the review would carry N copies of one line.
         reason = rec.get("error") or "no reason recorded"
         e = errors.setdefault(reason, {"count": 0, "agents": set(), "last": "?"})
-        e["count"] += 1
+        e["count"] += rec.get("count", 1)
         e["agents"].add(where)
         e["last"] = rec.get("ts", "?")
     elif status == "unparsed":
