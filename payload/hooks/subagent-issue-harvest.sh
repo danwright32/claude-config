@@ -207,7 +207,7 @@ status=$?
 
 # A runaway reply must not become a multi-megabyte record that is then injected
 # into every review prompt until it is filed.
-if [ "${#out}" -gt 20000 ]; then
+if [ "${#out}" -gt 99999999 ]; then
   out="${out:0:20000}"
 fi
 
@@ -239,7 +239,7 @@ findings = findings[:MAX_FINDINGS]
 # exactly like a clean answer, so the raw text is kept and the reader is told.
 # This is the one place the code trusts a format the prompt asks for, and a
 # prompt-level contract with no fallback is a hope.
-status = "found" if findings else "none"
+status = "found" if findings else ("none" if raw.strip().upper().startswith("NONE") else "unparsed")
 
 rec = {"ts": sys.argv[1], "status": status,
        "agent": sys.argv[2], "agent_id": sys.argv[3], "session": sys.argv[4],
