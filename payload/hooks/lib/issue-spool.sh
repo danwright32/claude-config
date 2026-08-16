@@ -124,7 +124,7 @@ issue_spool_clear() { # clear <dir>  -> file the pending records into the archiv
   [ -s "$file" ] || return 0
   mkdir -p "$SPOOL_ROOT" || return 1
   staged="${file}.filing.$$"
-  cp "$file" "$staged" 2>/dev/null || return 1
+  mv "$file" "$staged" 2>/dev/null || return 1
 
   # Test seam: the one instant that decides whether a concurrently arriving
   # record survives. Racing real processes proved nothing here, because the
