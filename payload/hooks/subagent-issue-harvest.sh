@@ -54,7 +54,7 @@ spool_append() { # spool_append <record>
   if bash "$SPOOL" append "$cwd" "$1" 2>/dev/null; then
     return 0
   fi
-  :
+  printf '%s\n' "$1" >> "$lost_records" 2>/dev/null
   note_unrecorded "a record could not be appended to the spool; it is in $lost_records"
   return 1
 }
@@ -198,7 +198,7 @@ if [ -n "$runner" ]; then
   # the top of the file is the only thing standing between one agent finishing
   # and a chain of them.
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
-    | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" bash -c "$runner")
+    | CLAUDE_DETACHED_RUN=1 bash -c "$runner")
 else
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
     | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" claude -p --model haiku)
