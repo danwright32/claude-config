@@ -84,8 +84,15 @@ import json, sys
 print(json.dumps({"ts": sys.argv[1], "status": "error", "agent": sys.argv[2],
                   "agent_id": sys.argv[3], "session": sys.argv[4], "cwd": sys.argv[5],
                   "transcript": sys.argv[6], "error": sys.argv[7]}))
-' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent" "$agent_id" "$session" "$cwd" "$transcript" "$1")
-  bash "$SPOOL" append "$cwd" "$rec"
+' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent" "$agent_id" "$session" "$cwd" "$transcript" "$1" 2>/dev/null)
+  # If python3 itself is unavailable this would otherwise append an empty line,
+  # which every reader skips: the error would vanish at the exact moment the
+  # machine is least healthy. A hand-built record with no interpolation at all
+  # is worth more than a blank one.
+  if [ -z "${rec//[[:space:]]/}" ]; then
+    rec='{"status":"error","agent":"subagent","error":"a harvest failed and could not encode its own reason"}'
+  fi
+  spool_append "$rec"
   exit 0
 }
 
