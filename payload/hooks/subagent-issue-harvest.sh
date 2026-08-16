@@ -198,7 +198,7 @@ if [ -n "$runner" ]; then
   # the top of the file is the only thing standing between one agent finishing
   # and a chain of them.
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
-    | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" bash -c "$runner")
+    | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" "$runner")
 else
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
     | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" claude -p --model haiku)
