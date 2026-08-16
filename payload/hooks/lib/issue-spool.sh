@@ -115,7 +115,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     path)    issue_spool_path "${1:-$PWD}" ;;
     append)  issue_spool_append "${1:-$PWD}" "${2:-}" ;;
     raw)     f="$(issue_spool_path "${1:-$PWD}")"; [ -s "$f" ] && cat "$f" ;;
-    pending) issue_spool_pending "${1:-$PWD}"; c=$?; issue_spool_clear "${1:-$PWD}"; exit $c ;;
+    pending) issue_spool_pending "${1:-$PWD}" ;;
     archive) f="$(issue_spool_archive "${1:-$PWD}")"; [ -s "$f" ] && cat "$f" ;;
     clear)   issue_spool_clear "${1:-$PWD}" ;;
     *)       echo "issue-spool.sh: unknown command '${cmd}'" >&2; exit 2 ;;
