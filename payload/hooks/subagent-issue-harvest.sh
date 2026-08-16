@@ -30,17 +30,60 @@ input=$(cat)
 [ -n "${CLAUDE_ISSUE_HARVEST_OFF:-}" ] && exit 0
 [ -f "$SPOOL" ] || exit 0
 
-transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
-agent=$(printf '%s' "$input" | jq -r '.agent_type // .subagent_type // .agent // "subagent"' 2>/dev/null)
+agent=$(printf '%s' "$input" | jq -r '.agent_type // .subagent_type // "subagent"' 2>/dev/null)
+agent_id=$(printf '%s' "$input" | jq -r '.agent_id // empty' 2>/dev/null)
 session=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
-[ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
 [ -n "$cwd" ] || cwd="$PWD"
+[ -n "$agent" ] || agent="subagent"
 
-# Nothing the agent SAID means nothing it could have noticed. That is not a
-# finding and not a failure, so it leaves no record.
-digest=$(python3 "$DIR/subagent-digest.py" "$transcript" 2>/dev/null) || exit 0
-[ -n "$digest" ] || exit 0
+# THE TRANSCRIPT TO READ IS `agent_transcript_path`, NOT `transcript_path`.
+# A SubagentStop payload carries both, and `transcript_path` is the transcript
+# of the SESSION THAT SPAWNED the agent. Reading that one does not fail: it
+# harvests the wrong conversation and spools findings that look entirely real
+# (measured 2026-08-16, three records, every one of them about the parent).
+# So there is no fallback to it here, ever, in any of the three ways it could
+# arrive wrong. A payload change has to surface as a loud error rather than as
+# a harvest quietly reporting on the wrong thing.
+transcript=$(printf '%s' "$input" | jq -r '.agent_transcript_path // empty' 2>/dev/null)
+parent=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
+
+spool_error() { # spool_error <reason>
+  local rec
+  rec=$(python3 -c '
+import json, sys
+print(json.dumps({"ts": sys.argv[1], "status": "error", "agent": sys.argv[2],
+                  "agent_id": sys.argv[3], "session": sys.argv[4], "cwd": sys.argv[5],
+                  "transcript": sys.argv[6], "error": sys.argv[7]}))
+' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent" "$agent_id" "$session" "$cwd" "$transcript" "$1")
+  bash "$SPOOL" append "$cwd" "$rec"
+  exit 0
+}
+
+if [ -z "$transcript" ]; then
+  spool_error "the payload named no agent_transcript_path, so there was nothing safe to read"
+fi
+if [ -n "$parent" ] && [ "$transcript" = "$parent" ]; then
+  spool_error "the agent transcript and the parent session transcript were the same file"
+fi
+if [ ! -f "$transcript" ]; then
+  spool_error "the named agent transcript does not exist"
+fi
+
+digest=$(python3 "$DIR/subagent-digest.py" "$transcript" 2>/dev/null)
+if [ -z "$digest" ]; then
+  # The agent said nothing at all. Recorded rather than skipped, so the spool
+  # still shows a harvest ran for it.
+  rec=$(python3 -c '
+import json, sys
+print(json.dumps({"ts": sys.argv[1], "status": "none", "agent": sys.argv[2],
+                  "agent_id": sys.argv[3], "session": sys.argv[4], "cwd": sys.argv[5],
+                  "transcript": sys.argv[6], "findings": [],
+                  "note": "the agent transcript held nothing the agent said"}))
+' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent" "$agent_id" "$session" "$cwd" "$transcript")
+  bash "$SPOOL" append "$cwd" "$rec"
+  exit 0
+fi
 
 read -r -d '' PROMPT <<'PROMPT_END' || true
 You are reading the transcript of a coding subagent that has just finished a task.
