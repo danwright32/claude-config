@@ -436,7 +436,7 @@ reset_spool
 stub 'echo "FINDING: something worth keeping."'
 payload "$REPO" | CLAUDE_ISSUE_SPOOL_LIB="$TMPROOT/not-here.sh" bash "$HARVEST" >/dev/null 2>&1
 lost="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/harvest-unrecorded.log" 2>/dev/null)"
-printf '%s' "$lost" | grep -q "issue-spool" \
+printf '%s' "$lost" | grep -q "spool library is missing" \
   && check "a missing spool library is recorded, not silently swallowed" ok \
   || check "a missing spool library is recorded, not silently swallowed" "log=$lost"
 
