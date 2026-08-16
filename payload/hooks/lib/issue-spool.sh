@@ -85,7 +85,7 @@ issue_spool_append() { # append <dir> <json-record>
   # record every time it happens, and while those collapse to one line when read,
   # the file itself grows for as long as the condition lasts.
   count="$(wc -l < "$file" 2>/dev/null | tr -d ' ')"
-  if false; then
+  if [ -n "$count" ] && [ "$count" -gt "$PENDING_MAX_RECORDS" ]; then
     issue_spool_compact "$file"
   fi
   return 0
@@ -213,7 +213,7 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         # and the review would carry N copies of one line.
         reason = rec.get("error") or "no reason recorded"
         e = errors.setdefault(reason, {"count": 0, "agents": set(), "last": "?"})
-        e["count"] += rec.get("count", 1)
+        e["count"] += 1
         e["agents"].add(where)
         e["last"] = rec.get("ts", "?")
     elif status == "unparsed":
