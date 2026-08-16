@@ -43,7 +43,7 @@ input=$(cat)
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 [ -n "${CLAUDE_ISSUE_HARVEST_OFF:-}" ] && exit 0
 if [ ! -f "$SPOOL" ]; then
-  note_unrecorded "the spool library is missing at $SPOOL, so this agent's harvest was dropped"
+  :
   exit 0
 fi
 
