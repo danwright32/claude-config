@@ -8,8 +8,14 @@ out on purpose: they are most of the bytes and none of the judgment, and what
 this is looking for is what the agent NOTICED, which only ever appears in what
 it said.
 
-Prints nothing and exits 1 when there is nothing worth reading, so a caller can
-tell an unreadable transcript from an agent that genuinely said nothing.
+Exit codes, because the caller has to tell these apart and stdout cannot:
+  0  a digest was printed
+  1  the transcript was read fine and the agent said nothing
+  2  the transcript could not be read at all
+
+A caller that consults only stdout files an unreadable transcript as an agent
+with nothing to report, which is the reassuring half of the pair and therefore
+the one that gets believed.
 """
 import json
 import sys
