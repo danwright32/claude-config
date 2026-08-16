@@ -257,6 +257,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   what the check was reading. A filled button was worse still at 0.2475, almost all of it the
   button's own background. Found by mutation, not by review: the first guard written for it
   SURVIVED)
+- **L147. A guard seen to fail on a fixture you chose has only been shown to work on the shape you had
+  in mind, so measure how often it fires on the REAL values it will meet.** An exact comparison on a
+  normalized name (a domain, a slug, a key) routinely misses the common case for a difference the
+  normalization keeps, and a guard that never fires is indistinguishable from one with nothing to catch.
+  Distinct from L1, which any red satisfies: here the guard genuinely goes red on the fixture and is
+  still blind to production. The mirror of L93, which catches a guard firing on the common case it was
+  not written for.
+  (overture#2743: `VenueContactGuard` compares a slugged venue name to the domain's second-level label
+  exactly, so `thegreenroom42` never equals `greenroom42` and the guard keeping a room's own address out
+  of the product, the oldest standing rule in it, has never fired on the room behind four of Dan's five
+  open pitches. Its tests pass, because every one of them was written with a venue whose name carries no
+  article)
 - **L117. A per-item ceiling judged against a POOLED total cannot notice one item running away, because
   the expensive item is paid for out of the cheap ones' headroom, and a single-item run is the only
   size where the ceiling and the total are the same number.** So the guard fires on the smallest runs
@@ -328,6 +340,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   comparing bytes, while the drift check asked git which commits touched the apps/worker path, so
   a commit changing only worker TEST files paged hourly from 21:40 on 2026-08-14 with nothing
   unshipped, and its printed fix, re-run the deploy, hit the same artifact gate and skipped again)
+
+- **L146. To check that content reached a rendered surface, measure the surface WITHOUT that content and
+  take the difference, because any quantity computed over the whole surface (ink, coverage, a pixel
+  count) also counts the fill, the border and the controls, and can even RISE when the content is
+  removed, since removing it changes what the commonest colour is.** Keep the with-content side
+  uninstrumented: an instrument added to both sides can change the path the content takes and dissolve
+  the very defect being looked for, which is how a probe reported every screen healthy while measuring a
+  screen the product never draws. The remedy L141 reaches for, asserting contrast between the type and
+  what is behind it, answers whether content COULD be read; this answers whether it is there at all, and
+  a floor derived from the difference is one number every surface can share instead of one per screen.
+  (PostRoll#612, PostRoll#614: three thresholds had drifted down to fit sparse screens, three notices
+  measured MORE ink with their words switched off than with them on, and the first version of the probe
+  drew an animating view's label perfectly as soon as that view's type went through a renderer of ours)
 
 ## Data safety
 
@@ -562,6 +587,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   lead floor, so a source sending twelve leads with all twelve addresses rejected was never judged at
   all, which Dan spotted immediately on reading the shipped behaviour)
 
+- **L148. A durable control whose failure reason is written only to a surface that dies with the
+  attempt (a terminal window that closes, a process's stderr, a toast) leaves the person facing the
+  same control, the same unchanged condition, and no way to learn why it did nothing, so pressing it
+  again is the only diagnosis available.** Persist the reason wherever the condition itself is
+  reported, because a control that refused and a control never pressed are otherwise
+  indistinguishable. The mirror of L126, where the condition persists and the remedy is transient:
+  here the remedy persists and the explanation is what evaporates.
+  (downbeat#210: the stale copy panel's Update button refused, printed its reason into a Terminal
+  window that then closed, and the panel went on reporting the copy as behind with no record that an
+  attempt had been made. The reason given was also wrong, which nothing could have revealed, since
+  the only place it was ever written no longer existed)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
@@ -570,6 +607,16 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L15. Key everything on stable identifiers.** Never mutable strings, display names,
   positional indices, or fabricated fallbacks; when a key must change, record the
   old-to-new mapping for everything still holding the old one. (16 issues, 4 repos)
+- **L145. Changing a record's identity IN PLACE can land on an identity another record already holds, so
+  check the destination is free before writing it.** Under a unique constraint the write either fails and
+  leaves the record half-changed, or silently merges the two and destroys one's history, and both
+  outcomes look from the call site exactly like the operation working. The other half of L15: that one
+  covers carrying the old-to-new mapping to everything still holding the old key, this one covers the new
+  key not being anybody else's.
+  (overture#2754: dropping one night of a multi-night run re-keys the row onto its next night, and 8 of
+  98 live runs have a SEPARATE stored card on that very night, because a weekly series is stored both as
+  a run carrying every night and as individual cards. Found by measuring the live store immediately after
+  merging, not by any test)
 - **L16. A count and the rows it promises come from one shared predicate**, and any
   cross-cutting filter or threshold is one named implementation every consumer is forced
   through. (16 issues, 2 repos)
@@ -705,6 +752,14 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L20. Accessibility is part of building each control.** Labels on icon-only controls,
   real buttons instead of tap gestures, type scaling, tap targets, AA contrast in both
   themes, reduced motion, focus management. (49 issues, 7 repos)
+- **L149. A colour token that clears the level for an icon or a border does not thereby clear
+  it for TEXT, because an interface component needs 3:1 and body text needs 4.5:1, so an accent
+  reused for a label ships under the line while every check that measures whether it DREW
+  reports it as fine.** Measure each token in every role it is used in, and let the strictest
+  role decide the value.
+  (PostRoll#580: roseGold measured 4.31:1 on the page and 3.68:1 on the deeper panel, under the
+  floor in roughly 50 places where it is type, and over the 3:1 it needs in the 240-odd places
+  where it is a rule or an icon)
 - **L21. Read every new user-facing sentence cold, rendered, in the state that produces
   it.** Copy is a contract: limits, prices, labels, and promises must match what the
   code does, and a control labeled as navigation must never trigger a paid operation.
