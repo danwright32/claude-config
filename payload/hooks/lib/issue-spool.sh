@@ -128,7 +128,7 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         e["count"] += 1
         e["agents"].add(where)
         e["last"] = rec.get("ts", "?")
-    elif False:
+    elif status == "unparsed":
         unparsed.append((where, rec.get("ts", "?"), (rec.get("raw") or "")[:400]))
 
 for where, ts, f in findings[:MAX_FINDINGS]:
