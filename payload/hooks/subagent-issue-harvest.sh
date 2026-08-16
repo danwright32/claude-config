@@ -24,11 +24,6 @@ SPOOL="$DIR/lib/issue-spool.sh"
 
 input=$(cat)
 
-# TEMPORARY PAYLOAD PROBE (removed immediately after capture)
-mkdir -p /tmp/subagent-payload-probe
-printf '%s\n' "$input" > "/tmp/subagent-payload-probe/$(date +%s%N).json"
-exit 0
-
 # The harvest runs a headless Claude of its own. Its subagents must not harvest
 # in turn, or one agent finishing starts a chain of them.
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
