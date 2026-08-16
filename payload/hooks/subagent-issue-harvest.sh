@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#
+# subagent-issue-harvest.sh — SubagentStop hook. Reads the transcript of a
+# subagent that just finished and spools anything it noticed that is worth
+# filing but was not the job it was sent to do.
+#
+# The point is that it does not ask the agent for anything. An instruction to
+# "report what you found" is a rule living only in a prompt, which is a hope
+# (LESSONS.md L27), and it reaches nothing at all in the batches where it
+# matters most: SubagentStop was unlistened to, so an agent's observations died
+# with it, and the main session's issue review can only ever see an agent's
+# final report. This reads the agent's own transcript instead.
+#
+# Runs async (see settings.json), so it never holds a subagent's completion up.
+#
+# Seams, both for the tests and for driving it by hand:
+#   CLAUDE_ISSUE_HARVEST_CMD   the model runner (default: headless claude, haiku)
+#   CLAUDE_ISSUE_SPOOL_DIR     where the spool lives
+#   CLAUDE_ISSUE_HARVEST_OFF   set to anything to disable the harvest entirely
+set -uo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SPOOL="$DIR/lib/issue-spool.sh"
+
+input=$(cat)
+
+# The harvest runs a headless Claude of its own. Its subagents must not harvest
+# in turn, or one agent finishing starts a chain of them.
+[ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
+[ -n "${CLAUDE_ISSUE_HARVEST_OFF:-}" ] && exit 0
+[ -f "$SPOOL" ] || exit 0
+
+transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
+cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
+agent=$(printf '%s' "$input" | jq -r '.agent_type // .subagent_type // .agent // "subagent"' 2>/dev/null)
+session=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
+[ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
+[ -n "$cwd" ] || cwd="$PWD"
+
+# Nothing the agent SAID means nothing it could have noticed. That is not a
+# finding and not a failure, so it leaves no record.
+digest=$(python3 "$DIR/subagent-digest.py" "$transcript" 2>/dev/null) || exit 0
+[ -n "$digest" ] || exit 0
+
+read -r -d '' PROMPT <<'PROMPT_END' || true
+You are reading the transcript of a coding subagent that has just finished a task.
+
+Report only what the agent NOTICED but did not fix: a defect it saw and left
+alone, a gap it flagged, an assumption it made that could be wrong, a missing
+test, work it explicitly deferred. Do NOT report the task it was sent to do, or
+anything it completed.
+
+Apply a real bar. Report only things a maintainer would genuinely act on. A
+transcript with nothing of that kind in it is the normal case, not a failure.
+
+If there is nothing that meets the bar, print exactly:
+NONE
+
+Otherwise print one line per item, each beginning with "FINDING: ", each a
+single sentence, naming a file path where the transcript gives one. Print
+nothing else: no preamble, no summary, no closing line.
+
+The transcript follows.
+PROMPT_END
+
+runner="${CLAUDE_ISSUE_HARVEST_CMD:-}"
+if [ -n "$runner" ]; then
+  out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" | "$runner" 2>/dev/null)
+else
+  out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
+    | CLAUDE_DETACHED_RUN=1 claude -p --model haiku 2>/dev/null)
+fi
+status=$?
+
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# A harvest that could not run is recorded as an ERROR, never as an empty
+# answer. The two are indistinguishable downstream otherwise, and "no findings"
+# is the reassuring reading of the pair (LESSONS.md L11, L98).
+if [ "$status" -ne 0 ] || [ -z "${out//[[:space:]]/}" ]; then
+  reason="the harvest model exited $status"
+  [ -z "${out//[[:space:]]/}" ] && [ "$status" -eq 0 ] && reason="the harvest model returned nothing"
+  record=$(python3 -c '
+import json, sys
+print(json.dumps({"ts": sys.argv[1], "status": "error", "agent": sys.argv[2],
+                  "session": sys.argv[3], "cwd": sys.argv[4], "error": sys.argv[5]}))
+' "$ts" "$agent" "$session" "$cwd" "$reason")
+  bash "$SPOOL" append "$cwd" "$record"
+  exit 0
+fi
+
+record=$(printf '%s' "$out" | python3 -c '
+import json, sys
+findings = [ln.split("FINDING:", 1)[1].strip()
+            for ln in sys.stdin.read().splitlines()
+            if ln.strip().startswith("FINDING:") and ln.split("FINDING:", 1)[1].strip()]
+print(json.dumps({"ts": sys.argv[1],
+                  "status": "found" if findings else "none",
+                  "agent": sys.argv[2], "session": sys.argv[3], "cwd": sys.argv[4],
+                  "findings": findings}))
+' "$ts" "$agent" "$session" "$cwd")
+
+bash "$SPOOL" append "$cwd" "$record"
+exit 0
