@@ -598,6 +598,55 @@ printf '%s' "$out_big" | grep -q '"decision"' \
   && check "a very large pending list does not break the review" ok \
   || check "a very large pending list does not break the review" "review went silent"
 
+# ---------------------------------------------------------------------------
+# claude-config#18: an agent must be able to record a finding DIRECTLY, without
+# a transcript being read afterwards. A nested subagent leaves no transcript
+# anywhere, so for that shape of agent this is the only capture path there is.
+# ---------------------------------------------------------------------------
+reset_spool
+bash "$SPOOL_LIB" note "$REPO" "the queue rebuild is unmeasured" "fix/2693 agent" >/dev/null 2>&1 \
+  && check "note records a finding" ok \
+  || check "note records a finding" "note exited non-zero"
+bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "queue rebuild is unmeasured" \
+  && check "a noted finding reaches the reader" ok \
+  || check "a noted finding reaches the reader" "not surfaced"
+bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "fix/2693 agent" \
+  && check "a noted finding says who reported it" ok \
+  || check "a noted finding says who reported it" "source not shown"
+bash "$SPOOL_LIB" has-findings "$REPO" >/dev/null 2>&1 \
+  && check "a noted finding counts as a real finding" ok \
+  || check "a noted finding counts as a real finding" "did not count"
+bash "$SPOOL_LIB" note "$REPO" "   " >/dev/null 2>&1 \
+  && check "note refuses an empty finding" "it accepted whitespace" \
+  || check "note refuses an empty finding" ok
+
+# ---------------------------------------------------------------------------
+# claude-config#19: the pending file is compacted once it grows past a limit.
+# Repeated failures collapse; findings are never touched, because losing one is
+# the single outcome this whole mechanism exists to prevent.
+# ---------------------------------------------------------------------------
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$REPO" "a finding that must survive compaction" "early agent" >/dev/null 2>&1
+for i in $(seq 1 60); do
+  bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+done
+CLAUDE_ISSUE_SPOOL_PENDING_MAX=20 bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+remaining="$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -c . || true)"
+[ "$remaining" -lt 40 ] \
+  && check "the pending file is compacted once it grows" ok \
+  || check "the pending file is compacted once it grows" "$remaining records remain"
+
+bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "a finding that must survive compaction" \
+  && check "compaction never drops a finding" ok \
+  || check "compaction never drops a finding" "the finding was lost"
+
+# The count a person reads must still be the true number of occurrences, or
+# compaction quietly turns 61 failures into 1 and the scale of a fault vanishes.
+bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "61 times" \
+  && check "compaction preserves the true failure count" ok \
+  || check "compaction preserves the true failure count" "count wrong: $(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep 'HARVEST FAILED' | cut -c1-90)"
+
 echo
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
