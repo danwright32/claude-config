@@ -386,6 +386,27 @@ print("ok" if d.get("decision") == "block" and d.get("reason") else "missing dec
 ' 2>&1)"
 check "the injected payload is still valid JSON" "$parsed"
 
+# A spool holding ONLY failures must NOT bypass the cooldown. Deduping cut the
+# volume of a recurring fault but not the interruption: pending stays non-empty
+# forever, so the review would still fire on every single turn. A failure is
+# worth reporting at the next ordinary review, not worth interrupting for.
+reset_spool
+stub 'exit 7'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+printf '%s' "$review_payload" | bash "$REVIEW" >/dev/null 2>&1   # warm the stamp
+out_err="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+[ -z "$out_err" ] \
+  && check "failures alone do not bypass the cooldown" ok \
+  || check "failures alone do not bypass the cooldown" "spoke anyway: ${out_err:0:100}"
+
+# ...but a failure still gets REPORTED once the cooldown lets the review speak,
+# or a broken harvest becomes invisible instead of merely quiet.
+rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
+out_err_cold="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+printf '%s' "$out_err_cold" | grep -q "HARVEST FAILED" \
+  && check "a failure is still reported at the next ordinary review" ok \
+  || check "a failure is still reported at the next ordinary review" "not mentioned"
+
 # With the spool empty, the cooldown must still hold, or the review fires every turn.
 bash "$SPOOL_LIB" clear "$REPO" >/dev/null 2>&1
 out_quiet="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
