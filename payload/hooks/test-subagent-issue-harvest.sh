@@ -221,6 +221,84 @@ printf '%s' "$got" | grep -q '"agent": *"Explore"' \
   || check "the record names the agent type" "spool=$got"
 
 # ---------------------------------------------------------------------------
+# An UNREADABLE transcript is not an agent that said nothing. The digest prints
+# nothing in both cases, so if only its output is consulted a corrupt file, a
+# permissions failure or a schema change all file as a reassuring "none". This
+# is the same defect as reading the parent transcript, one function along.
+# ---------------------------------------------------------------------------
+UNREADABLE="$TMPROOT/unreadable.jsonl"
+printf '\x80\x81\x82 not valid utf-8 \xff\xfe' > "$UNREADABLE"
+
+reset_spool
+stub 'echo NONE'
+payload "$REPO" "$UNREADABLE" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+printf '%s' "$got" | grep -q '"status": *"error"' \
+  && check "an unreadable transcript is an error, not an agent that said nothing" ok \
+  || check "an unreadable transcript is an error, not an agent that said nothing" "spool=$got"
+
+# ...while an agent that genuinely said nothing is still a `none`, so the two
+# stay told apart in both directions.
+SILENT_AGENT="$TMPROOT/silent.jsonl"
+cat > "$SILENT_AGENT" <<'JSONL'
+{"type":"user","message":{"content":"do a thing"}}
+JSONL
+reset_spool
+stub 'echo NONE'
+payload "$REPO" "$SILENT_AGENT" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+printf '%s' "$got" | grep -q '"status": *"none"' \
+  && check "an agent that said nothing is a none, not an error" ok \
+  || check "an agent that said nothing is a none, not an error" "spool=$got"
+
+# ---------------------------------------------------------------------------
+# Repeated identical failures must not be able to spam the review. A non-empty
+# spool bypasses the cooldown by design, so an error that recurs (measured
+# 2026-08-16: a subagent with no transcript on disk fired about once a minute)
+# would otherwise make the review fire every turn, carrying N copies of one line.
+# ---------------------------------------------------------------------------
+reset_spool
+stub 'exit 7'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+lines="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -c "HARVEST FAILED" || true)"
+[ "$lines" = "1" ] \
+  && check "one repeated failure is reported once, not once per occurrence" ok \
+  || check "one repeated failure is reported once, not once per occurrence" "printed $lines lines"
+
+# Two DIFFERENT failures are still two, or deduping would hide a second fault.
+reset_spool
+stub 'exit 7'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+payload "$REPO" OMIT | bash "$HARVEST" >/dev/null 2>&1
+lines="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -c "HARVEST FAILED" || true)"
+[ "$lines" = "2" ] \
+  && check "two different failures are still reported separately" ok \
+  || check "two different failures are still reported separately" "printed $lines lines"
+
+# ---------------------------------------------------------------------------
+# Filing must not be able to eat a finding that arrives while it runs. `clear`
+# used to copy the file and then truncate it, two steps with no lock, and it is
+# run exactly when background agents are still finishing.
+# ---------------------------------------------------------------------------
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+APPENDS=120
+(
+  for i in $(seq 1 "$APPENDS"); do
+    bash "$SPOOL_LIB" append "$REPO" "{\"ts\":\"t\",\"status\":\"found\",\"findings\":[\"race-$i\"]}"
+  done
+) &
+appender=$!
+for _ in 1 2 3 4 5; do bash "$SPOOL_LIB" clear "$REPO" >/dev/null 2>&1; done
+wait "$appender" 2>/dev/null
+survived="$( { bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null; bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null; } | grep -c "race-" || true)"
+[ "$survived" = "$APPENDS" ] \
+  && check "filing while agents are appending loses nothing" ok \
+  || check "filing while agents are appending loses nothing" "$survived of $APPENDS survived"
+
+# ---------------------------------------------------------------------------
 # pending / clear: what the review reads, and what filing removes.
 # ---------------------------------------------------------------------------
 reset_spool
