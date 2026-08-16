@@ -23,6 +23,7 @@
 #   issue-spool.sh append   <dir> <json>     append one record (used by the harvest)
 #   issue-spool.sh raw      <dir>            the pending records, verbatim
 #   issue-spool.sh pending  <dir>            pending FINDING lines; exit 1 if none
+#   issue-spool.sh has-findings <dir>        exit 0 only if a real finding is pending
 #   issue-spool.sh archive  <dir>            everything already filed
 #   issue-spool.sh clear    <dir>            move pending into the archive
 #
@@ -110,6 +111,29 @@ sys.exit(0 if shown else 1)
 PY
 }
 
+# Does the spool hold an actual FINDING, as opposed to only records of harvests
+# that failed or looked and found nothing? The review bypasses its cooldown on
+# this answer alone: a recurring failure keeps the spool permanently non-empty,
+# and interrupting every turn over it would train the review to be ignored.
+issue_spool_has_findings() { # has-findings <dir> -> exit 0 when a finding is pending
+  local file; file="$(issue_spool_path "$1")"
+  [ -s "$file" ] || return 1
+  python3 - "$file" <<'PY_HF'
+import json, sys
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    if rec.get("status") == "found" and (rec.get("findings") or []):
+        sys.exit(0)
+sys.exit(1)
+PY_HF
+}
+
 # Filing RENAMES the pending file out of the way first, then drains the renamed
 # copy into the archive. Copying and then truncating is two steps with no lock,
 # and anything a finishing agent appends between them is destroyed: not
@@ -145,6 +169,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     append)  issue_spool_append "${1:-$PWD}" "${2:-}" ;;
     raw)     f="$(issue_spool_path "${1:-$PWD}")"; [ -s "$f" ] && cat "$f" ;;
     pending) issue_spool_pending "${1:-$PWD}" ;;
+    has-findings) issue_spool_has_findings "${1:-$PWD}" ;;
     archive) f="$(issue_spool_archive "${1:-$PWD}")"; [ -s "$f" ] && cat "$f" ;;
     clear)   issue_spool_clear "${1:-$PWD}" ;;
     *)       echo "issue-spool.sh: unknown command '${cmd}'" >&2; exit 2 ;;

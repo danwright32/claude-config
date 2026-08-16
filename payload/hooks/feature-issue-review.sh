@@ -44,8 +44,14 @@ SPOOL_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/issue-spool.sh"
 # have to be caught explicitly. Left bare, an empty spool would kill the hook
 # and the review would simply stop happening, with nothing anywhere to say why.
 pending=""
+urgent="no"
 if [ -f "$SPOOL_LIB" ]; then
   pending=$(bash "$SPOOL_LIB" pending "$proj" 2>/dev/null) || pending=""
+  # Only a real FINDING earns the cooldown bypass. A harvest that FAILED is
+  # reported whenever the review next speaks, but does not itself make it speak:
+  # a recurring failure keeps the spool permanently non-empty, which would fire
+  # the review on every single turn and teach us both to ignore it.
+  if bash "$SPOOL_LIB" has-findings "$proj" >/dev/null 2>&1; then urgent="yes"; fi
 fi
 
 # Throttle: only re-prompt once per cooldown window, tracked per project.
@@ -56,7 +62,7 @@ stamp="${TMPDIR:-/tmp}/claude-feature-issue-review-${hash}.stamp"
 now=$(date +%s)
 last=0
 [ -f "$stamp" ] && last=$(cat "$stamp" 2>/dev/null || echo 0)
-if [ -z "$pending" ] && [ $(( now - last )) -lt "$COOLDOWN_SECONDS" ]; then
+if [ "$urgent" != "yes" ] && [ $(( now - last )) -lt "$COOLDOWN_SECONDS" ]; then
   exit 0
 fi
 
