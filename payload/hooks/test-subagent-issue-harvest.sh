@@ -237,6 +237,16 @@ out_quiet="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
   && check "an empty spool leaves the cooldown in force" ok \
   || check "an empty spool leaves the cooldown in force" "spoke anyway: ${out_quiet:0:120}"
 
+# ...and the review must still FIRE normally when the spool is empty and the
+# cooldown has expired. Silence is the correct answer to a warm cooldown and a
+# fatal error looks exactly the same from outside, so this asserts the ordinary
+# path the spool lookup sits in front of still works at all.
+rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
+out_cold="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+printf '%s' "$out_cold" | grep -q '"decision"' \
+  && check "an empty spool does not stop the ordinary review" ok \
+  || check "an empty spool does not stop the ordinary review" "silent: ${out_cold:0:120}"
+
 echo
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
