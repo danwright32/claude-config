@@ -424,6 +424,164 @@ printf '%s' "$out_cold" | grep -q '"decision"' \
   && check "an empty spool does not stop the ordinary review" ok \
   || check "an empty spool does not stop the ordinary review" "silent: ${out_cold:0:120}"
 
+# ---------------------------------------------------------------------------
+# The second round, from an agent's own review of this code. Every one of these
+# is a way a failure could be silent, a record could be lost, or something could
+# grow without bound.
+# ---------------------------------------------------------------------------
+
+# The spool library going missing must not silence the harvest. A partial config
+# sync is plausible, and today it drops every finding with nothing written down.
+reset_spool
+stub 'echo "FINDING: something worth keeping."'
+payload "$REPO" | CLAUDE_ISSUE_SPOOL_LIB="$TMPROOT/not-here.sh" bash "$HARVEST" >/dev/null 2>&1
+lost="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/harvest-unrecorded.log" 2>/dev/null)"
+printf '%s' "$lost" | grep -q "issue-spool" \
+  && check "a missing spool library is recorded, not silently swallowed" ok \
+  || check "a missing spool library is recorded, not silently swallowed" "log=$lost"
+
+# An append that cannot be written must not be reported as a clean run.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+chmod 500 "$CLAUDE_ISSUE_SPOOL_DIR"
+stub 'echo "FINDING: written to a read-only spool."'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+chmod 700 "$CLAUDE_ISSUE_SPOOL_DIR"
+lost="$(cat "${TMPDIR:-/tmp}/claude-issue-spool-lost.jsonl" 2>/dev/null)"
+printf '%s' "$lost" | grep -q "read-only spool" \
+  && check "a record that cannot be written lands in the lost file" ok \
+  || check "a record that cannot be written lands in the lost file" "lost=$lost"
+rm -f "${TMPDIR:-/tmp}/claude-issue-spool-lost.jsonl"
+
+# A hung model must not take the whole hook down with it and leave no trace.
+reset_spool
+stub 'sleep 30'
+start=$SECONDS
+payload "$REPO" | CLAUDE_ISSUE_HARVEST_TIMEOUT=2 bash "$HARVEST" >/dev/null 2>&1
+elapsed=$((SECONDS - start))
+got="$(records)"
+[ "$elapsed" -lt 15 ] && printf '%s' "$got" | grep -q '"status": *"error"' \
+  && check "a hung model is cut off and recorded" ok \
+  || check "a hung model is cut off and recorded" "took ${elapsed}s spool=$got"
+
+# Model output that is neither NONE nor FINDING lines is its own outcome, and
+# the raw text is kept. Today it is silently indistinguishable from a clean NONE.
+reset_spool
+stub 'echo "Here are the issues I spotted: the parser is wrong."'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+printf '%s' "$got" | grep -q '"status": *"unparsed"' \
+  && printf '%s' "$got" | grep -q "the parser is wrong" \
+  && check "unparseable model output is its own status with the raw text kept" ok \
+  || check "unparseable model output is its own status with the raw text kept" "spool=$got"
+bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "COULD NOT BE READ" \
+  && check "unparseable model output is reported to the reader" ok \
+  || check "unparseable model output is reported to the reader" "not surfaced"
+
+# A runaway reply must not become a multi-megabyte record.
+reset_spool
+stub 'python3 -c "print(\"FINDING: \" + \"x\"*200000)"'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+size="$(records | wc -c | tr -d ' ')"
+[ "$size" -lt 20000 ] \
+  && check "a runaway model reply is bounded" ok \
+  || check "a runaway model reply is bounded" "record is $size bytes"
+
+# A corrupt line must be reported, not skipped in silence.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+printf 'this is not json\n' >> "$(bash "$SPOOL_LIB" path "$REPO")"
+bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "UNREADABLE SPOOL" \
+  && check "a corrupt spool line is reported" ok \
+  || check "a corrupt spool line is reported" "silently skipped"
+
+# append must refuse anything that would break one record per line.
+reset_spool
+bash "$SPOOL_LIB" append "$REPO" 'not json at all' 2>/dev/null \
+  && check "append refuses a non-JSON record" "it accepted it" \
+  || check "append refuses a non-JSON record" ok
+bash "$SPOOL_LIB" append "$REPO" '{"a":1}
+{"b":2}' 2>/dev/null \
+  && check "append refuses a multi-line record" "it accepted it" \
+  || check "append refuses a multi-line record" ok
+
+# The archive must not grow forever.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+arch="$(bash "$SPOOL_LIB" archive-path "$REPO" 2>/dev/null)"
+if [ -n "$arch" ]; then
+  python3 -c "
+import sys
+open(sys.argv[1],'w').write(''.join('{\"ts\":\"t\",\"status\":\"none\",\"n\":%d}\n' % i for i in range(9000)))
+" "$arch"
+  bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"found","findings":["trigger"]}'
+  bash "$SPOOL_LIB" clear "$REPO" >/dev/null 2>&1
+  lines="$(wc -l < "$arch" | tr -d ' ')"
+  [ "$lines" -le 5100 ] \
+    && check "the archive is capped" ok \
+    || check "the archive is capped" "$lines lines"
+else
+  check "the archive path is queryable" "archive-path is not a command"
+fi
+
+# raw and archive must not exit non-zero just because the spool is empty: a
+# caller under errexit dies on the ordinary case.
+reset_spool
+bash "$SPOOL_LIB" raw "$REPO" >/dev/null 2>&1 \
+  && check "raw exits 0 on an empty spool" ok \
+  || check "raw exits 0 on an empty spool" "exited non-zero"
+bash "$SPOOL_LIB" archive "$REPO" >/dev/null 2>&1 \
+  && check "archive exits 0 on an empty spool" ok \
+  || check "archive exits 0 on an empty spool" "exited non-zero"
+
+# A runner carrying arguments is the documented seam and must work.
+reset_spool
+export CLAUDE_ISSUE_HARVEST_CMD="bash -c 'cat >/dev/null; echo \"FINDING: ran with arguments.\"'"
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+unset CLAUDE_ISSUE_HARVEST_CMD
+records | grep -q "ran with arguments" \
+  && check "a runner with arguments works" ok \
+  || check "a runner with arguments works" "spool=$(records)"
+
+# The key must not change just because a path reaches the repo through a symlink.
+LINKED="$TMPROOT/linked-repo"
+ln -s "$REPO" "$LINKED" 2>/dev/null
+if [ -L "$LINKED" ]; then
+  k1="$(bash "$SPOOL_LIB" key "$REPO")"
+  k2="$(bash "$SPOOL_LIB" key "$LINKED")"
+  [ "$k1" = "$k2" ] \
+    && check "a symlinked path keys the same as the real one" ok \
+    || check "a symlinked path keys the same as the real one" "real=$k1 link=$k2"
+fi
+
+# If the injector fails, the review must still fire. Losing the spool text is a
+# bad outcome; losing the entire review because of it is a worse one.
+reset_spool
+stub 'echo "FINDING: injector failure case."'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
+out_inj="$(printf '%s' "$review_payload" | CLAUDE_INJECT_SPOOL_FORCE_FAIL=1 bash "$REVIEW" 2>/dev/null)"
+printf '%s' "$out_inj" | grep -q '"decision"' \
+  && check "a broken injector does not cancel the review" ok \
+  || check "a broken injector does not cancel the review" "review went silent"
+
+# A very large pending list must not break the review by overflowing the
+# argument list. It is handed over as a file, not as one enormous argument.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+python3 -c "
+import json, sys
+p = sys.argv[1]
+with open(p, 'w') as fh:
+    for i in range(4000):
+        fh.write(json.dumps({'ts':'t','status':'found','findings':['finding number %d %s' % (i, 'y'*200)]}) + '\n')
+" "$(bash "$SPOOL_LIB" path "$REPO")"
+rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
+out_big="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+printf '%s' "$out_big" | grep -q '"decision"' \
+  && check "a very large pending list does not break the review" ok \
+  || check "a very large pending list does not break the review" "review went silent"
+
 echo
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
