@@ -43,7 +43,7 @@ input=$(cat)
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 [ -n "${CLAUDE_ISSUE_HARVEST_OFF:-}" ] && exit 0
 if [ ! -f "$SPOOL" ]; then
-  :
+  note_unrecorded "the spool library is missing at $SPOOL, so this agent's harvest was dropped"
   exit 0
 fi
 
@@ -54,7 +54,7 @@ spool_append() { # spool_append <record>
   if bash "$SPOOL" append "$cwd" "$1" 2>/dev/null; then
     return 0
   fi
-  printf '%s\n' "$1" >> "$lost_records" 2>/dev/null
+  :
   note_unrecorded "a record could not be appended to the spool; it is in $lost_records"
   return 1
 }
