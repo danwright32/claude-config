@@ -33,23 +33,39 @@ TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
 export CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool"
 
-# A fake subagent transcript. Content does not matter to these tests: the model
-# call is stubbed, so what is under test is the plumbing around it.
+# Two transcripts, because the real payload carries two and picking the wrong
+# one is the defect these tests exist for. `transcript_path` is the transcript of
+# the SESSION THAT SPAWNED the agent; `agent_transcript_path` is the agent's own.
+# Reading the parent produces confident findings about the wrong conversation,
+# and it looks exactly like the harvest working (measured 2026-08-16: three
+# spooled records, every one of them about the parent session).
 FAKE_TRANSCRIPT="$TMPROOT/agent.jsonl"
 cat > "$FAKE_TRANSCRIPT" <<'JSONL'
 {"type":"user","message":{"content":"Fix the venue location bug"}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"Fixed it. I also noticed EventPlace has no test for the empty case."}]}}
 JSONL
 
-payload() { # payload <cwd> [transcript]
-  python3 - "$1" "${2:-$FAKE_TRANSCRIPT}" <<'PY'
+PARENT_TRANSCRIPT="$TMPROOT/parent.jsonl"
+cat > "$PARENT_TRANSCRIPT" <<'JSONL'
+{"type":"user","message":{"content":"run the batch"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"PARENT_SESSION_MARKER: this is the conversation that spawned the agent, not the agent."}]}}
+JSONL
+
+payload() { # payload <cwd> [agent-transcript] [parent-transcript]
+  python3 - "$1" "${2:-$FAKE_TRANSCRIPT}" "${3:-$PARENT_TRANSCRIPT}" <<'PY'
 import json, sys
-print(json.dumps({
+rec = {
     "session_id": "test-session",
-    "transcript_path": sys.argv[2],
     "cwd": sys.argv[1],
-    "agent_type": "general-purpose",
-}))
+    "agent_type": "Explore",
+    "agent_id": "test-agent-id",
+    "hook_event_name": "SubagentStop",
+}
+if sys.argv[2] != "OMIT":
+    rec["agent_transcript_path"] = sys.argv[2]
+if sys.argv[3] != "OMIT":
+    rec["transcript_path"] = sys.argv[3]
+print(json.dumps(rec))
 PY
 }
 
