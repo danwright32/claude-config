@@ -40,7 +40,7 @@ SPOOL_ROOT="${CLAUDE_ISSUE_SPOOL_DIR:-$HOME/.claude-issue-spool}"
 # checkout share one common git dir.
 issue_spool_key() {
   local dir="${1:-$PWD}" common root
-  common=""
+  common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
   if [ -n "$common" ] && [ -d "$common" ]; then
     root="$(dirname "$common")"
   else
