@@ -100,5 +100,5 @@ print(json.dumps({"ts": sys.argv[1],
                   "findings": findings}))
 ' "$ts" "$agent" "$session" "$cwd")
 
-[ "" = skip ] && bash "" append "" ""
+bash "$SPOOL" append "$cwd" "$record"
 exit 0
