@@ -226,7 +226,7 @@ record=$(printf '%s' "$out" | python3 -c '
 import json, sys
 
 MAX_FINDINGS = 50
-MAX_FINDING_CHARS = 10**9
+MAX_FINDING_CHARS = 500
 
 raw = sys.stdin.read()
 findings = [ln.split("FINDING:", 1)[1].strip()[:MAX_FINDING_CHARS]
