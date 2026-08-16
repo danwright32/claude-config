@@ -70,7 +70,16 @@ if [ ! -f "$transcript" ]; then
   spool_error "the named agent transcript does not exist"
 fi
 
+# The digest's EXIT CODE is what tells an unreadable transcript from an agent
+# that said nothing, because both print nothing. Consulting only its output
+# files a corrupt file, a permissions failure or a payload schema change as a
+# reassuring "found nothing", which is the same defect as reading the parent
+# transcript, one function along.
 digest=$(python3 "$DIR/subagent-digest.py" "$transcript" 2>/dev/null)
+digest_status=$?
+if [ "$digest_status" -ge 2 ]; then
+  spool_error "the agent transcript could not be read (digest exited $digest_status)"
+fi
 if [ -z "$digest" ]; then
   # The agent said nothing at all. Recorded rather than skipped, so the spool
   # still shows a harvest ran for it.
