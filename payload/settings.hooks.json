@@ -164,6 +164,18 @@
           }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/subagent-issue-harvest.sh",
+            "async": true,
+            "timeout": 180
+          }
+        ]
+      }
     ]
   }
 }
