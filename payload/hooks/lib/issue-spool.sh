@@ -156,7 +156,7 @@ issue_spool_note() { # note <dir> <finding text> [who reported it]
 import json, sys, datetime
 print(json.dumps({
     "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "status": "none",
+    "status": "found",
     "agent": sys.argv[1] or "self-reported",
     "cwd": sys.argv[2],
     "findings": [sys.argv[3].strip()[:500]],
