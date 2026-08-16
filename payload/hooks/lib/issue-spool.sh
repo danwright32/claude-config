@@ -87,10 +87,16 @@ for line in open(sys.argv[1], encoding="utf-8"):
             shown += 1
             print("FINDING (%s, %s): %s" % (where, rec.get("ts", "?"), f))
     elif rec.get("status") == "error":
-        shown += 1
-        print("HARVEST FAILED (%s, %s): %s. Nothing was read from that agent, so this is "
-              "not the same as it finding nothing."
-              % (where, rec.get("ts", "?"), rec.get("error") or "no reason recorded"))
+        # Deduped by REASON, and counted. A recurring fault (a subagent kind that
+        # leaves no transcript fires about once a minute, measured 2026-08-16)
+        # otherwise appends a fresh record every time, the spool is never empty,
+        # and a non-empty spool deliberately bypasses the review's cooldown: the
+        # review would then fire every single turn carrying N copies of one line.
+        reason = rec.get("error") or "no reason recorded"
+        errors.setdefault(reason, {"count": 0, "agents": set(), "last": rec.get("ts", "?")})
+        errors[reason]["count"] += 1
+        errors[reason]["agents"].add(where)
+        errors[reason]["last"] = rec.get("ts", "?")
 
 sys.exit(0 if shown else 1)
 PY
