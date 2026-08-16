@@ -158,14 +158,62 @@ got="$(records)"
   && check "a detached run does not harvest" ok \
   || check "a detached run does not harvest" "spool=$got"
 
-# A missing transcript writes nothing rather than an error record: there was no
-# agent to read, so there is nothing to report either way.
+# ---------------------------------------------------------------------------
+# WHICH transcript is read. The payload carries the parent session's transcript
+# as well as the agent's, and reading the parent is indistinguishable from the
+# harvest working: it spools real-looking findings about the wrong conversation.
+# ---------------------------------------------------------------------------
+reset_spool
+stub 'echo NONE'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+sent="$(cat "$MODEL_INPUT" 2>/dev/null)"
+printf '%s' "$sent" | grep -q "EventPlace has no test" \
+  && ! printf '%s' "$sent" | grep -q "PARENT_SESSION_MARKER" \
+  && check "the agent's transcript is what reaches the model" ok \
+  || check "the agent's transcript is what reaches the model" "the parent's content reached it"
+
+# With no agent transcript named, it must REFUSE. Falling back to the parent is
+# the exact defect above, and a silent skip would hide a payload change.
+reset_spool
+stub 'echo "FINDING: should never be reached."'
+payload "$REPO" OMIT | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+printf '%s' "$got" | grep -q '"status": *"error"' \
+  && ! printf '%s' "$got" | grep -q "should never be reached" \
+  && check "no agent transcript is an error, never a fallback to the parent" ok \
+  || check "no agent transcript is an error, never a fallback to the parent" "spool=$got"
+
+# Belt and braces: if the two paths ever arrive equal, that is the parent again.
+reset_spool
+stub 'echo "FINDING: should never be reached."'
+payload "$REPO" "$PARENT_TRANSCRIPT" "$PARENT_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+printf '%s' "$got" | grep -q '"status": *"error"' \
+  && check "an agent path equal to the parent's is refused" ok \
+  || check "an agent path equal to the parent's is refused" "spool=$got"
+
+# A transcript that was named but is not there is an error, not silence: we were
+# told where to look and it was not there, which is a fault worth seeing.
 reset_spool
 stub 'echo NONE'
 payload "$REPO" "$TMPROOT/does-not-exist.jsonl" | bash "$HARVEST" >/dev/null 2>&1
-[ -z "$(records)" ] \
-  && check "a missing transcript is skipped silently" ok \
-  || check "a missing transcript is skipped silently" "spool=$(records)"
+got="$(records)"
+printf '%s' "$got" | grep -q '"status": *"error"' \
+  && check "a named but missing transcript is an error" ok \
+  || check "a named but missing transcript is an error" "spool=$got"
+
+# Every record has to say what it read and who it read, or the next version of
+# this defect is again only findable by hand.
+reset_spool
+stub 'echo "FINDING: something."'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+printf '%s' "$got" | grep -q "$FAKE_TRANSCRIPT" \
+  && check "the record names the transcript it read" ok \
+  || check "the record names the transcript it read" "spool=$got"
+printf '%s' "$got" | grep -q '"agent": *"Explore"' \
+  && check "the record names the agent type" ok \
+  || check "the record names the agent type" "spool=$got"
 
 # ---------------------------------------------------------------------------
 # pending / clear: what the review reads, and what filing removes.
