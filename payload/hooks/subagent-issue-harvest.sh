@@ -208,15 +208,31 @@ fi
 
 record=$(printf '%s' "$out" | python3 -c '
 import json, sys
-findings = [ln.split("FINDING:", 1)[1].strip()
-            for ln in sys.stdin.read().splitlines()
+
+MAX_FINDINGS = 50
+MAX_FINDING_CHARS = 500
+
+raw = sys.stdin.read()
+findings = [ln.split("FINDING:", 1)[1].strip()[:MAX_FINDING_CHARS]
+            for ln in raw.splitlines()
             if ln.strip().startswith("FINDING:") and ln.split("FINDING:", 1)[1].strip()]
-print(json.dumps({"ts": sys.argv[1],
-                  "status": "found" if findings else "none",
-                  "agent": sys.argv[2], "agent_id": sys.argv[3], "session": sys.argv[4],
-                  "cwd": sys.argv[5], "transcript": sys.argv[6],
-                  "findings": findings}))
+findings = findings[:MAX_FINDINGS]
+
+# A reply that is neither NONE nor FINDING lines is its OWN outcome. Treating it
+# as "found nothing" throws away whatever the model actually said and looks
+# exactly like a clean answer, so the raw text is kept and the reader is told.
+# This is the one place the code trusts a format the prompt asks for, and a
+# prompt-level contract with no fallback is a hope.
+status = "found" if findings else ("none" if raw.strip().upper().startswith("NONE") else "unparsed")
+
+rec = {"ts": sys.argv[1], "status": status,
+       "agent": sys.argv[2], "agent_id": sys.argv[3], "session": sys.argv[4],
+       "cwd": sys.argv[5], "transcript": sys.argv[6],
+       "findings": findings}
+if status == "unparsed":
+    rec["raw"] = raw.strip()[:2000]
+print(json.dumps(rec))
 ' "$ts" "$agent" "$agent_id" "$session" "$cwd" "$transcript")
 
-bash "$SPOOL" append "$cwd" "$record"
+spool_append "$record"
 exit 0
