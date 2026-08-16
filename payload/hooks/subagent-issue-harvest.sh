@@ -167,9 +167,21 @@ PROMPT_END
 # error is written while there is still a process alive to write it. macOS has
 # no `timeout`, hence perl's alarm.
 harvest_timeout="${CLAUDE_ISSUE_HARVEST_TIMEOUT:-150}"
+# The child is FORKED rather than exec'd. An `exec` replaces the process image
+# and takes the alarm with it, so the deadline silently never fires: measured,
+# a two second limit let a thirty second sleep run to completion.
 with_deadline() { # with_deadline <seconds> <command...>
-  perl -e 'my $s = shift; eval { local $SIG{ALRM} = sub { die "timeout\n" };
-           alarm $s; exec @ARGV; }; exit 124;' "$@" 2>/dev/null
+  perl -e '
+    my $secs = shift;
+    my $pid = fork();
+    if (!defined $pid) { exit 125; }
+    if ($pid == 0) { exec @ARGV; exit 127; }
+    $SIG{ALRM} = sub { kill "KILL", $pid; waitpid($pid, 0); exit 124; };
+    alarm $secs;
+    waitpid($pid, 0);
+    alarm 0;
+    exit($? >> 8);
+  ' "$@" 2>/dev/null
 }
 
 # The runner is documented as a command, so it has to be able to carry
