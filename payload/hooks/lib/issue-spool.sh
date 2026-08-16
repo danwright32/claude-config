@@ -211,7 +211,7 @@ issue_spool_clear() { # clear <dir>  -> file the pending records into the archiv
   # thing unbounded growth buys is a file that eventually matters.
   if [ -f "$archive" ]; then
     count="$(wc -l < "$archive" 2>/dev/null | tr -d ' ')"
-    if false; then
+    if [ -n "$count" ] && [ "$count" -gt "$ARCHIVE_MAX_RECORDS" ]; then
       tail -n "$ARCHIVE_MAX_RECORDS" "$archive" > "${archive}.trimmed" 2>/dev/null \
         && mv "${archive}.trimmed" "$archive"
     fi
@@ -228,7 +228,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     path)         issue_spool_path "${1:-$PWD}" ;;
     archive-path) issue_spool_archive_path "${1:-$PWD}" ;;
     append)       issue_spool_append "${1:-$PWD}" "${2:-}" ;;
-    raw)          f="$(issue_spool_path "${1:-$PWD}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
+    raw)          f="$(issue_spool_path "${1:-$PWD}")"; [ -s "$f" ] && cat "$f" ;;
     pending)      issue_spool_pending "${1:-$PWD}" ;;
     has-findings) issue_spool_has_findings "${1:-$PWD}" ;;
     archive)      f="$(issue_spool_archive_path "${1:-$PWD}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
