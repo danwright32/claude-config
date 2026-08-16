@@ -39,8 +39,14 @@ worked=$(python3 "$(dirname "${BASH_SOURCE[0]}")/turn-worked.py" "$transcript" 2
 # over. Reading does not consume the spool; only filing does.
 proj="${CLAUDE_PROJECT_DIR:-$PWD}"
 SPOOL_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/issue-spool.sh"
+# `pending` exits non-zero when there is nothing to show, and this script runs
+# under errexit, so both the missing-library case and the ordinary empty case
+# have to be caught explicitly. Left bare, an empty spool would kill the hook
+# and the review would simply stop happening, with nothing anywhere to say why.
 pending=""
-[ -f "$SPOOL_LIB" ] && pending=$(bash "$SPOOL_LIB" pending "$proj" 2>/dev/null)
+if [ -f "$SPOOL_LIB" ]; then
+  pending=$(bash "$SPOOL_LIB" pending "$proj" 2>/dev/null) || pending=""
+fi
 
 # Throttle: only re-prompt once per cooldown window, tracked per project.
 COOLDOWN_SECONDS=1800  # 30 minutes
