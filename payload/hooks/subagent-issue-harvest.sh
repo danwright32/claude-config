@@ -19,8 +19,22 @@
 #   CLAUDE_ISSUE_HARVEST_OFF   set to anything to disable the harvest entirely
 set -uo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SPOOL="$DIR/lib/issue-spool.sh"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+[ -n "$DIR" ] || DIR="$HOME/.claude/hooks"
+SPOOL="${CLAUDE_ISSUE_SPOOL_LIB:-$DIR/lib/issue-spool.sh}"
+SPOOL_ROOT="${CLAUDE_ISSUE_SPOOL_DIR:-$HOME/.claude-issue-spool}"
+
+# Where a record goes when the ordinary path cannot take it. Both of these exist
+# because the alternative is dropping a finding and reporting success: the spool
+# library going missing (a partial config sync is plausible) and a spool the
+# process cannot write to (a full or read-only disk) are both silent otherwise.
+unrecorded_log="$SPOOL_ROOT/harvest-unrecorded.log"
+lost_records="${TMPDIR:-/tmp}/claude-issue-spool-lost.jsonl"
+
+note_unrecorded() { # note_unrecorded <what>
+  mkdir -p "$SPOOL_ROOT" 2>/dev/null
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$unrecorded_log" 2>/dev/null
+}
 
 input=$(cat)
 
@@ -28,7 +42,22 @@ input=$(cat)
 # in turn, or one agent finishing starts a chain of them.
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 [ -n "${CLAUDE_ISSUE_HARVEST_OFF:-}" ] && exit 0
-[ -f "$SPOOL" ] || exit 0
+if [ ! -f "$SPOOL" ]; then
+  note_unrecorded "the spool library is missing at $SPOOL, so this agent's harvest was dropped"
+  exit 0
+fi
+
+# Appending is the last step of every path through this file, and it can fail.
+# Reporting success over a record that was never written is the same defect this
+# whole mechanism exists to stop, one layer down.
+spool_append() { # spool_append <record>
+  if bash "$SPOOL" append "$cwd" "$1" 2>/dev/null; then
+    return 0
+  fi
+  printf '%s\n' "$1" >> "$lost_records" 2>/dev/null
+  note_unrecorded "a record could not be appended to the spool; it is in $lost_records"
+  return 1
+}
 
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 agent=$(printf '%s' "$input" | jq -r '.agent_type // .subagent_type // "subagent"' 2>/dev/null)
