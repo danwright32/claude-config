@@ -22,6 +22,7 @@
 #   issue-spool.sh path         <dir>          the pending spool file for <dir>
 #   issue-spool.sh archive-path <dir>          the archive file for <dir>
 #   issue-spool.sh append       <dir> <json>   append one record; non-zero if refused
+#   issue-spool.sh note <dir> <text> [who]     record a finding directly, no model call
 #   issue-spool.sh raw          <dir>          the pending records, verbatim
 #   issue-spool.sh pending      <dir>          what a person should read; exit 1 if nothing
 #   issue-spool.sh has-findings <dir>          exit 0 only if a real finding is pending
@@ -42,6 +43,9 @@ SPOOL_ROOT="${CLAUDE_ISSUE_SPOOL_DIR:-$HOME/.claude-issue-spool}"
 # How many records the archive keeps. It is only history, and nothing reads it
 # automatically, but left uncapped it grows for as long as the machine lives.
 ARCHIVE_MAX_RECORDS="${CLAUDE_ISSUE_SPOOL_ARCHIVE_MAX:-5000}"
+# How large the PENDING file may grow before it is compacted. Findings are
+# never dropped by that; only records that repeat are folded together.
+PENDING_MAX_RECORDS="${CLAUDE_ISSUE_SPOOL_PENDING_MAX:-500}"
 
 # The key must survive a worktree. An agent usually runs in .claude/worktrees/<x>,
 # whose path hashes differently from the checkout the session reading the spool
@@ -209,7 +213,7 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         # and the review would carry N copies of one line.
         reason = rec.get("error") or "no reason recorded"
         e = errors.setdefault(reason, {"count": 0, "agents": set(), "last": "?"})
-        e["count"] += 1
+        e["count"] += rec.get("count", 1)
         e["agents"].add(where)
         e["last"] = rec.get("ts", "?")
     elif status == "unparsed":
@@ -312,6 +316,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     path)         issue_spool_path "${1:-$PWD}" ;;
     archive-path) issue_spool_archive_path "${1:-$PWD}" ;;
     append)       issue_spool_append "${1:-$PWD}" "${2:-}" ;;
+    note)         issue_spool_note "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     raw)          f="$(issue_spool_path "${1:-$PWD}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
     pending)      issue_spool_pending "${1:-$PWD}" ;;
     has-findings) issue_spool_has_findings "${1:-$PWD}" ;;
