@@ -554,6 +554,22 @@ if [ -L "$LINKED" ]; then
     || check "a symlinked path keys the same as the real one" "real=$k1 link=$k2"
 fi
 
+# ...and outside a repo too, where git is not there to resolve it for us. This
+# is the case that actually bites: /tmp and /private/tmp are the same directory
+# on macOS, and the payload's cwd and the reader's $PWD do not always agree on
+# which spelling they use.
+PLAIN="$TMPROOT/plain-dir"
+mkdir -p "$PLAIN"
+PLAIN_LINK="$TMPROOT/plain-link"
+ln -s "$PLAIN" "$PLAIN_LINK" 2>/dev/null
+if [ -L "$PLAIN_LINK" ]; then
+  k1="$(bash "$SPOOL_LIB" key "$PLAIN")"
+  k2="$(bash "$SPOOL_LIB" key "$PLAIN_LINK")"
+  [ "$k1" = "$k2" ] \
+    && check "a symlinked NON-repo path keys the same as the real one" ok \
+    || check "a symlinked NON-repo path keys the same as the real one" "real=$k1 link=$k2"
+fi
+
 # If the injector fails, the review must still fire. Losing the spool text is a
 # bad outcome; losing the entire review because of it is a worse one.
 reset_spool
