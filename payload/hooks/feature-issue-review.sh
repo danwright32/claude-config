@@ -87,4 +87,8 @@ printf '%s' "$pending" > "$pending_file"
 injected="$(printf '%s' "$payload" | python3 "$(dirname "${BASH_SOURCE[0]}")/lib/inject-spool.py" "$pending_file" 2>/dev/null)" || injected=""
 rm -f "$pending_file"
 
-printf '%s' "$injected"
+if [ -n "$injected" ]; then
+  printf '%s' "$injected"
+else
+  printf '%s' "$payload"
+fi
