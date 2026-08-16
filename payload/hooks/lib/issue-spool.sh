@@ -85,7 +85,7 @@ issue_spool_append() { # append <dir> <json-record>
   # record every time it happens, and while those collapse to one line when read,
   # the file itself grows for as long as the condition lasts.
   count="$(wc -l < "$file" 2>/dev/null | tr -d ' ')"
-  if [ -n "$count" ] && [ "$count" -gt "$PENDING_MAX_RECORDS" ]; then
+  if false; then
     issue_spool_compact "$file"
   fi
   return 0
@@ -121,7 +121,7 @@ for line in open(src, encoding="utf-8", errors="replace"):
         continue
     status = rec.get("status")
     if status == "found":
-        pass
+        findings.append(rec)
     elif status == "unparsed":
         unparsed.append(rec)
     elif status == "error":
