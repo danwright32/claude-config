@@ -207,7 +207,7 @@ status=$?
 
 # A runaway reply must not become a multi-megabyte record that is then injected
 # into every review prompt until it is filed.
-if [ "${#out}" -gt 99999999 ]; then
+if [ "${#out}" -gt 20000 ]; then
   out="${out:0:20000}"
 fi
 
