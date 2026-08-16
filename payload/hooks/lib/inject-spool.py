@@ -1,16 +1,27 @@
 #!/usr/bin/env python3
 """Fold spooled subagent findings into the issue review's payload.
 
-Usage: cat payload.json | inject-spool.py <pending-text>
+Usage: cat payload.json | inject-spool.py <path-to-pending-text-file>
+
+The pending text arrives as a FILE, not as an argument. Passed as one argv
+element it is bounded by ARG_MAX (1 MiB on macOS), and the spool has no
+natural size limit, so a busy project would eventually fail the exec and the
+review would silently stop happening.
 
 The review's instruction stays a single static heredoc in the hook, so it can go
 on being checked as one literal block; this only appends to its `reason`. If the
-pending text is empty the payload passes through untouched.
+pending text is empty or the file is unreadable, the payload passes through
+untouched, because a review without the spool text is worth far more than no
+review at all.
 
-Exits 1 without printing when the payload does not parse, so a broken payload
-fails loudly here rather than being handed on as a silently dropped hook.
+Exits non-zero only when the PAYLOAD itself does not parse. The caller is
+expected to fall back to the payload it already has.
+
+Seam: CLAUDE_INJECT_SPOOL_FORCE_FAIL makes this fail on purpose, so the caller's
+fallback can be tested rather than assumed.
 """
 import json
+import os
 import sys
 
 PREAMBLE = (
@@ -23,7 +34,9 @@ PREAMBLE = (
     "same quality bar you apply to your own ideas and drop the ones that do not "
     "clear it, saying in one line how many you dropped. A line reading HARVEST "
     "FAILED is not a finding: it means one agent could not be read at all, so say "
-    "so plainly rather than reporting that agent as having found nothing.\n\n"
+    "so plainly rather than reporting that agent as having found nothing. A line "
+    "reading REPLY COULD NOT BE READ means the harvest ran but its answer could "
+    "not be parsed, so anything that agent found was not captured; say that too.\n\n"
     "AFTER the picker is answered, and only then, run this to file them away so "
     "they are not offered again:\n"
     "  bash ~/.claude/hooks/lib/issue-spool.sh clear \"$PWD\"\n"
@@ -43,7 +56,18 @@ def main():
         print("inject-spool: payload does not parse: %s" % exc, file=sys.stderr)
         return 1
 
-    pending = sys.argv[1] if len(sys.argv) > 1 else ""
+    if os.environ.get("CLAUDE_INJECT_SPOOL_FORCE_FAIL"):
+        print("inject-spool: failing on purpose (test seam)", file=sys.stderr)
+        return 1
+
+    pending = ""
+    if len(sys.argv) > 1 and sys.argv[1]:
+        try:
+            with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as fh:
+                pending = fh.read()
+        except Exception:
+            pending = ""
+
     if pending.strip():
         payload["reason"] = (payload.get("reason") or "") + PREAMBLE + pending.strip()
 
