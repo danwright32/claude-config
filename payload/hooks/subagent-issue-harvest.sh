@@ -126,7 +126,11 @@ PROMPT_END
 
 runner="${CLAUDE_ISSUE_HARVEST_CMD:-}"
 if [ -n "$runner" ]; then
-  out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" | "$runner" 2>/dev/null)
+  # The recursion guard belongs on BOTH paths. A custom runner that reaches
+  # `claude` re-enters this hook when its own agents finish, and the guard at
+  # the top of the file is the only thing standing between one agent finishing
+  # and a chain of them.
+  out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" | CLAUDE_DETACHED_RUN=1 "$runner" 2>/dev/null)
 else
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
     | CLAUDE_DETACHED_RUN=1 claude -p --model haiku 2>/dev/null)
