@@ -25,14 +25,17 @@ MAX_DEFAULT = 40000
 
 def main():
     if len(sys.argv) < 2:
-        return 1
-    max_chars = int(sys.argv[2]) if len(sys.argv) > 2 else MAX_DEFAULT
+        return 2
+    try:
+        max_chars = int(sys.argv[2]) if len(sys.argv) > 2 else MAX_DEFAULT
+    except ValueError:
+        max_chars = MAX_DEFAULT
 
     try:
         with open(sys.argv[1], "r", encoding="utf-8") as fh:
             lines = [ln for ln in fh if ln.strip()]
     except Exception:
-        return 1
+        return 2   # unreadable: not the same as silent
 
     said = []
     touched = []
@@ -49,8 +52,8 @@ def main():
                 task = content.strip()[:1500]
             elif isinstance(content, list):
                 for it in content:
-                    if isinstance(it, dict) and it.get("type") == "text" and it.get("text", "").strip():
-                        task = it["text"].strip()[:1500]
+                    if isinstance(it, dict) and it.get("type") == "text" and (it.get("text") or "").strip():
+                        task = (it["text"] or "").strip()[:1500]
                         break
 
         if obj.get("type") != "assistant":
@@ -58,8 +61,8 @@ def main():
         for it in ((obj.get("message") or {}).get("content") or []):
             if not isinstance(it, dict):
                 continue
-            if it.get("type") == "text" and it.get("text", "").strip():
-                said.append(it["text"].strip())
+            if it.get("type") == "text" and (it.get("text") or "").strip():
+                said.append((it["text"] or "").strip())
             elif it.get("type") == "tool_use":
                 inp = it.get("input") or {}
                 path = inp.get("file_path") or inp.get("path")
@@ -68,7 +71,7 @@ def main():
 
     body = "\n\n".join(said).strip()
     if not body:
-        return 1
+        return 1   # read fine, the agent simply said nothing
 
     # Keep the END of what the agent said: the observations it is still carrying
     # when it wraps up are the ones worth filing, and an agent's closing summary
