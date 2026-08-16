@@ -56,7 +56,7 @@ stamp="${TMPDIR:-/tmp}/claude-feature-issue-review-${hash}.stamp"
 now=$(date +%s)
 last=0
 [ -f "$stamp" ] && last=$(cat "$stamp" 2>/dev/null || echo 0)
-if [ $(( now - last )) -lt "$COOLDOWN_SECONDS" ]; then
+if [ -z "$pending" ] && [ $(( now - last )) -lt "$COOLDOWN_SECONDS" ]; then
   exit 0
 fi
 
