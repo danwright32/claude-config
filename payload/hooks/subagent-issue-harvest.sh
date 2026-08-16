@@ -26,7 +26,7 @@ input=$(cat)
 
 # The harvest runs a headless Claude of its own. Its subagents must not harvest
 # in turn, or one agent finishing starts a chain of them.
-
+[ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 [ -n "${CLAUDE_ISSUE_HARVEST_OFF:-}" ] && exit 0
 [ -f "$SPOOL" ] || exit 0
 
