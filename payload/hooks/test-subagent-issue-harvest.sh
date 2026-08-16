@@ -282,21 +282,27 @@ lines="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -c "HARVEST FAILED
 # used to copy the file and then truncate it, two steps with no lock, and it is
 # run exactly when background agents are still finishing.
 # ---------------------------------------------------------------------------
+# Timing this by racing real processes is not a test: run against the losing
+# implementation it passed anyway, because the window happened not to open. So
+# `clear` carries a named seam at the one moment that decides the answer, and
+# the test appends exactly there. Copy-then-truncate destroys that record;
+# rename-then-drain cannot, because the appender is writing to a fresh file.
 reset_spool
-mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-APPENDS=120
-(
-  for i in $(seq 1 "$APPENDS"); do
-    bash "$SPOOL_LIB" append "$REPO" "{\"ts\":\"t\",\"status\":\"found\",\"findings\":[\"race-$i\"]}"
-  done
-) &
-appender=$!
-for _ in 1 2 3 4 5; do bash "$SPOOL_LIB" clear "$REPO" >/dev/null 2>&1; done
-wait "$appender" 2>/dev/null
-survived="$( { bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null; bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null; } | grep -c "race-" || true)"
-[ "$survived" = "$APPENDS" ] \
-  && check "filing while agents are appending loses nothing" ok \
-  || check "filing while agents are appending loses nothing" "$survived of $APPENDS survived"
+stub 'echo "FINDING: filed before the clear."'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+
+export CLAUDE_ISSUE_SPOOL_MIDCLEAR="bash '$SPOOL_LIB' append '$REPO' '{\"ts\":\"t\",\"status\":\"found\",\"findings\":[\"arrived-mid-clear\"]}'"
+bash "$SPOOL_LIB" clear "$REPO" >/dev/null 2>&1
+unset CLAUDE_ISSUE_SPOOL_MIDCLEAR
+
+still_pending="$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null)"
+archived="$(bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null)"
+printf '%s' "$still_pending" | grep -q "arrived-mid-clear" \
+  && check "a finding arriving during filing is not eaten by it" ok \
+  || check "a finding arriving during filing is not eaten by it" "pending=$still_pending"
+printf '%s' "$archived" | grep -q "filed before the clear" \
+  && check "filing still archives what was there when it started" ok \
+  || check "filing still archives what was there when it started" "archive=$archived"
 
 # ---------------------------------------------------------------------------
 # pending / clear: what the review reads, and what filing removes.
