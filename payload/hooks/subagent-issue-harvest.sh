@@ -126,7 +126,7 @@ print(json.dumps({"ts": sys.argv[1], "status": "none", "agent": sys.argv[2],
                   "transcript": sys.argv[6], "findings": [],
                   "note": "the agent transcript held nothing the agent said"}))
 ' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent" "$agent_id" "$session" "$cwd" "$transcript")
-  bash "$SPOOL" append "$cwd" "$rec"
+  spool_append "$rec"
   exit 0
 fi
 
