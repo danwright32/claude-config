@@ -123,15 +123,9 @@ issue_spool_clear() { # clear <dir>  -> file the pending records into the archiv
   archive="$(issue_spool_archive "$1")"
   [ -s "$file" ] || return 0
   mkdir -p "$SPOOL_ROOT" || return 1
-  staged="${file}.filing.$$"
-  mv "$file" "$staged" 2>/dev/null || return 1
-
-  # Test seam: the one instant that decides whether a concurrently arriving
-  # record survives. Racing real processes proved nothing here, because the
-  # window happened not to open (measured 2026-08-16, the broken version passed).
+  cat "$file" >> "$archive"
   [ -n "${CLAUDE_ISSUE_SPOOL_MIDCLEAR:-}" ] && eval "${CLAUDE_ISSUE_SPOOL_MIDCLEAR}"
-
-  cat "$staged" >> "$archive" && rm -f "$staged"
+  : > "$file"
 }
 
 # Direct invocation dispatch. Sourcing the file defines the functions and runs
