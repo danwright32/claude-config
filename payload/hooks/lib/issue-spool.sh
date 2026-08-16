@@ -96,13 +96,28 @@ sys.exit(0 if shown else 1)
 PY
 }
 
+# Filing RENAMES the pending file out of the way first, then drains the renamed
+# copy into the archive. Copying and then truncating is two steps with no lock,
+# and anything a finishing agent appends between them is destroyed: not
+# archived, not shown, gone. Filing runs exactly when background agents are most
+# likely to be finishing (right after the picker is answered), so that window is
+# the normal case rather than a corner. After the rename an appender writes to a
+# fresh file and cannot be caught by the drain at all.
 issue_spool_clear() { # clear <dir>  -> file the pending records into the archive
-  local file archive
+  local file archive staged
   file="$(issue_spool_path "$1")"
   archive="$(issue_spool_archive "$1")"
   [ -s "$file" ] || return 0
   mkdir -p "$SPOOL_ROOT" || return 1
-  cat "$file" >> "$archive" && : > "$file"
+  staged="${file}.filing.$$"
+  mv "$file" "$staged" 2>/dev/null || return 1
+
+  # Test seam: the one instant that decides whether a concurrently arriving
+  # record survives. Racing real processes proved nothing here, because the
+  # window happened not to open (measured 2026-08-16, the broken version passed).
+  [ -n "${CLAUDE_ISSUE_SPOOL_MIDCLEAR:-}" ] && eval "${CLAUDE_ISSUE_SPOOL_MIDCLEAR}"
+
+  cat "$staged" >> "$archive" && rm -f "$staged"
 }
 
 # Direct invocation dispatch. Sourcing the file defines the functions and runs
