@@ -175,8 +175,12 @@ with_deadline() { # with_deadline <seconds> <command...>
     my $secs = shift;
     my $pid = fork();
     if (!defined $pid) { exit 125; }
-    if ($pid == 0) { exec @ARGV; exit 127; }
-    $SIG{ALRM} = sub { kill "KILL", $pid; waitpid($pid, 0); exit 124; };
+    # The child leads its own process GROUP, and the deadline kills the group.
+    # Killing only the child leaves its own children holding the output pipe
+    # open, so the caller keeps waiting for a command that is already dead:
+    # measured, a two second limit still took the full thirty seconds.
+    if ($pid == 0) { setpgrp(0, 0); exec @ARGV; exit 127; }
+    $SIG{ALRM} = sub { kill("KILL", -$pid) || kill("KILL", $pid); waitpid($pid, 0); exit 124; };
     alarm $secs;
     waitpid($pid, 0);
     alarm 0;
