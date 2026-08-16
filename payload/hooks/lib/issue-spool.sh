@@ -94,7 +94,7 @@ for line in open(sys.argv[1], encoding="utf-8"):
         # and a non-empty spool deliberately bypasses the review's cooldown: the
         # review would then fire every single turn carrying N copies of one line.
         reason = rec.get("error") or "no reason recorded"
-        errors.setdefault(reason, {"count": 0, "agents": set(), "last": rec.get("ts", "?")})
+        reason = reason + str(len(errors)); errors.setdefault(reason, {"count": 0, "agents": set(), "last": rec.get("ts", "?")})
         errors[reason]["count"] += 1
         errors[reason]["agents"].add(where)
         errors[reason]["last"] = rec.get("ts", "?")
