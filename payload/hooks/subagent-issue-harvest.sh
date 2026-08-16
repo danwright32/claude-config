@@ -97,10 +97,19 @@ fi
 read -r -d '' PROMPT <<'PROMPT_END' || true
 You are reading the transcript of a coding subagent that has just finished a task.
 
-Report only what the agent NOTICED but did not fix: a defect it saw and left
-alone, a gap it flagged, an assumption it made that could be wrong, a missing
-test, work it explicitly deferred. Do NOT report the task it was sent to do, or
-anything it completed.
+Report the problems the agent IDENTIFIED and did not resolve: a defect it saw
+and left alone, a gap it flagged, an assumption it made that could be wrong, a
+missing test, work it explicitly deferred.
+
+Report those whether or not finding them was the agent's job. An agent sent to
+review, audit or investigate has problems as its OUTPUT, and those are exactly
+what is worth filing; excluding them as "the task it was sent to do" throws away
+the richest transcripts there are. Measured 2026-08-16: an agent that reported
+seventeen concrete defects was harvested as having found nothing, for that
+reason.
+
+What to leave out is narration of work that is finished: changes the agent made
+and verified, its restating of its own assignment, and its progress commentary.
 
 Apply a real bar. Report only things a maintainer would genuinely act on. A
 transcript with nothing of that kind in it is the normal case, not a failure.
