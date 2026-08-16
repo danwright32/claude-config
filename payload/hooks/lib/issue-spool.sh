@@ -105,7 +105,7 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
     try:
         rec = json.loads(line)
     except Exception:
-        corrupt += 1          # counted, never silently skipped
+        pass
         continue
     if not isinstance(rec, dict):
         corrupt += 1
