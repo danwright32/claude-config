@@ -31,16 +31,28 @@ transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/nul
 worked=$(python3 "$(dirname "${BASH_SOURCE[0]}")/turn-worked.py" "$transcript" 2>/dev/null)
 [ "$worked" = "yes" ] || exit 0
 
+# Findings harvested from subagents that finished for this project (see
+# subagent-issue-harvest.sh). Fetched BEFORE the cooldown is judged, because a
+# pending finding has to beat it: a batch of agents finishing together would
+# otherwise get one review between them, and the rest of what they found would
+# sit unread until the window reopened, by which point the session is usually
+# over. Reading does not consume the spool; only filing does.
+proj="${CLAUDE_PROJECT_DIR:-$PWD}"
+SPOOL_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/issue-spool.sh"
+pending=""
+[ -f "$SPOOL_LIB" ] && pending=$(bash "$SPOOL_LIB" pending "$proj" 2>/dev/null)
+
 # Throttle: only re-prompt once per cooldown window, tracked per project.
 COOLDOWN_SECONDS=1800  # 30 minutes
-proj="${CLAUDE_PROJECT_DIR:-$PWD}"
 hash=$(printf '%s' "$proj" | shasum | cut -c1-12)
 stamp="${TMPDIR:-/tmp}/claude-feature-issue-review-${hash}.stamp"
 
 now=$(date +%s)
 last=0
 [ -f "$stamp" ] && last=$(cat "$stamp" 2>/dev/null || echo 0)
-[ $(( now - last )) -lt "$COOLDOWN_SECONDS" ] && exit 0
+if [ -z "$pending" ] && [ $(( now - last )) -lt "$COOLDOWN_SECONDS" ]; then
+  exit 0
+fi
 
 printf '%s' "$now" > "$stamp"
 
