@@ -98,8 +98,11 @@ key_other="$(bash "$SPOOL_LIB" key "$TMPROOT" 2>&1)"
 # ---------------------------------------------------------------------------
 # The harvest itself, with the model call stubbed through its seam.
 # ---------------------------------------------------------------------------
+MODEL_INPUT="$TMPROOT/model-input.txt"
 stub() { # stub <script-body>  -> writes an executable stub and points the seam at it
-  printf '#!/usr/bin/env bash\n%s\n' "$1" > "$TMPROOT/stub.sh"
+  # Every stub records what was actually piped to the model, so a test can ask
+  # WHICH transcript reached it rather than only what came back.
+  printf '#!/usr/bin/env bash\ncat > "%s"\n%s\n' "$MODEL_INPUT" "$1" > "$TMPROOT/stub.sh"
   chmod +x "$TMPROOT/stub.sh"
   export CLAUDE_ISSUE_HARVEST_CMD="$TMPROOT/stub.sh"
 }
