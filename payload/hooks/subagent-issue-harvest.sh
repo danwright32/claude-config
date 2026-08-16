@@ -45,7 +45,7 @@ session=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 # So there is no fallback to it here, ever, in any of the three ways it could
 # arrive wrong. A payload change has to surface as a loud error rather than as
 # a harvest quietly reporting on the wrong thing.
-transcript=$(printf '%s' "$input" | jq -r '.agent_transcript_path // .transcript_path // empty' 2>/dev/null)
+transcript=$(printf '%s' "$input" | jq -r '.agent_transcript_path // empty' 2>/dev/null)
 parent=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 
 spool_error() { # spool_error <reason>
