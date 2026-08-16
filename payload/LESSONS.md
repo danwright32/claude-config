@@ -22,6 +22,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   regressed into mass-inserting busy blocks, that test would still have reported success.
   It was invisible because tsconfig excludes the whole scripts tree from typechecking)
 
+- **L151. Every outcome a guard's own contract ENUMERATES must have a test that PRODUCES that
+  outcome, not merely a test that passes.** A documented outcome nobody constructs can be
+  unreachable in the code while the guard looks thoroughly tested, so read the contract as a list
+  of states to build and check each one is achievable. Distinct from L1, which asks that a guard be
+  seen to fail at all: this asks that it be seen to fail in each case it claims to cover.
+  (overture#2817: `check-pbxproj-fresh.sh`'s header names three outcomes including "a regen that
+  was never committed BLOCKS", and it decides with `git diff --quiet -- <path>`, which compares the
+  working tree to the INDEX rather than to HEAD. A regeneration staged and left uncommitted, which
+  is exactly what the repo's own post-merge hook produces, therefore read as FRESH. The gate exists
+  because a stale file reached main once, and the one state it was written for was the one state no
+  test built)
+
 - **L2. Tests must be structurally unable to touch live data, production services, or
   paid APIs.** Inject seams for stores, directories, clocks, and external calls, plus a
   refusal inside the service itself. (10 issues, 6 repos)
@@ -461,7 +473,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   scripts had been converted to an empty-safe read and the shared helper every request goes through
   had not: slate#1498, slate#1500)
 
-- **L151. A change is usually reported by the surfaces that show what is still OUTSTANDING (a badge, a
+- **L152. A change is usually reported by the surfaces that show what is still OUTSTANDING (a badge, a
   waiting list, a standing question), so an operation that RESOLVES everything silences every one of
   them and the most complete success is the one the product says least about.** Give the completed
   state its own durable line naming what was captured and that nothing is waiting, because a fully
