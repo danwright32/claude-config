@@ -121,7 +121,7 @@ for line in open(src, encoding="utf-8", errors="replace"):
         continue
     status = rec.get("status")
     if status == "found":
-        findings.append(rec)
+        pass
     elif status == "unparsed":
         unparsed.append(rec)
     elif status == "error":
