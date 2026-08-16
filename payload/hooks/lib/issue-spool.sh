@@ -58,7 +58,7 @@ issue_spool_key() {
   else
     root="$dir"
   fi
-  root="$(cd "$root" 2>/dev/null && pwd -P || printf '%s' "$root")"
+  :
   printf '%s' "$root" | shasum | cut -c1-12
 }
 
