@@ -461,6 +461,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   scripts had been converted to an empty-safe read and the shared helper every request goes through
   had not: slate#1498, slate#1500)
 
+- **L151. A change is usually reported by the surfaces that show what is still OUTSTANDING (a badge, a
+  waiting list, a standing question), so an operation that RESOLVES everything silences every one of
+  them and the most complete success is the one the product says least about.** Give the completed
+  state its own durable line naming what was captured and that nothing is waiting, because a fully
+  successful run and a run that never happened otherwise look identical on the screen the person is
+  standing in front of. Distinct from L148, where a refusal's reason evaporates, and from L126, where
+  the remedy outlives nothing: here the action fully succeeded and its own success is what removes
+  every surface that could have reported it.
+  (overture#2806: linking a Gmail conversation onto a form pitch wrote five facts including a new email
+  address on a contact, then stamped the reply as already handled, which is exactly the state whose row
+  draws nothing at all, so Dan asked whether the link had worked)
+
 - **L50. A value parsed from storage or input must never feed a comparison
   directly.** A failed parse yields NaN or an invalid value that compares false
   against every threshold, so the check silently lands on the healthy or
