@@ -94,7 +94,7 @@ for line in open(sys.argv[1], encoding="utf-8"):
         # and a non-empty spool deliberately bypasses the review's cooldown: the
         # review would then fire every single turn carrying N copies of one line.
         reason = rec.get("error") or "no reason recorded"
-        reason = reason + str(len(errors)); errors.setdefault(reason, {"count": 0, "agents": set(), "last": rec.get("ts", "?")})
+        errors.setdefault(reason, {"count": 0, "agents": set(), "last": rec.get("ts", "?")})
         errors[reason]["count"] += 1
         errors[reason]["agents"].add(where)
         errors[reason]["last"] = rec.get("ts", "?")
@@ -124,7 +124,7 @@ issue_spool_clear() { # clear <dir>  -> file the pending records into the archiv
   [ -s "$file" ] || return 0
   mkdir -p "$SPOOL_ROOT" || return 1
   staged="${file}.filing.$$"
-  mv "$file" "$staged" 2>/dev/null || return 1
+  cp "$file" "$staged" 2>/dev/null || return 1
 
   # Test seam: the one instant that decides whether a concurrently arriving
   # record survives. Racing real processes proved nothing here, because the
