@@ -70,12 +70,96 @@ issue_spool_archive_path() { printf '%s/%s.filed.jsonl' "$SPOOL_ROOT" "$(issue_s
 # reader, so a bad caller would corrupt the spool and see no complaint. Refusing
 # here means the caller can fall back to somewhere the record still survives.
 issue_spool_append() { # append <dir> <json-record>
-  local file record; file="$(issue_spool_path "$1")"; record="${2:-}"
+  local file record count; file="$(issue_spool_path "$1")"; record="${2:-}"
   [ -n "$record" ] || return 2
   case "$record" in *$'\n'*) return 2 ;; esac
   printf '%s' "$record" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null || return 2
   mkdir -p "$SPOOL_ROOT" 2>/dev/null || return 1
   printf '%s\n' "$record" >> "$file" 2>/dev/null || return 1
+
+  # Keep the pending file bounded (claude-config#19). A fault that recurs adds a
+  # record every time it happens, and while those collapse to one line when read,
+  # the file itself grows for as long as the condition lasts.
+  count="$(wc -l < "$file" 2>/dev/null | tr -d ' ')"
+  if [ -n "$count" ] && [ "$count" -gt "$PENDING_MAX_RECORDS" ]; then
+    issue_spool_compact "$file"
+  fi
+  return 0
+}
+
+# Collapse what can be collapsed without losing anything a person needs.
+# FINDINGS ARE NEVER TOUCHED: losing one is the single outcome this whole
+# mechanism exists to prevent, so compaction is only ever allowed to fold the
+# records that repeat. A folded error carries its own `count`, so the number a
+# person reads stays the true number of occurrences rather than becoming 1.
+issue_spool_compact() { # compact <pending-file>
+  local file="$1" tmp="$1.compacting.$$"
+  python3 - "$file" "$tmp" <<'PY_COMPACT' || return 1
+import json, sys
+
+src, dst = sys.argv[1], sys.argv[2]
+KEEP_NONE = 25          # enough to show harvests ran, not enough to matter
+
+findings, unparsed, nones, corrupt = [], [], [], []
+errors = {}
+
+for line in open(src, encoding="utf-8", errors="replace"):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        rec = json.loads(line)
+    except Exception:
+        corrupt.append(line)          # kept, so the reader still reports them
+        continue
+    if not isinstance(rec, dict):
+        corrupt.append(line)
+        continue
+    status = rec.get("status")
+    if status == "found":
+        findings.append(rec)
+    elif status == "unparsed":
+        unparsed.append(rec)
+    elif status == "error":
+        reason = rec.get("error") or "no reason recorded"
+        prev = errors.get(reason)
+        if prev is None:
+            rec["count"] = rec.get("count", 1)
+            errors[reason] = rec
+        else:
+            prev["count"] = prev.get("count", 1) + rec.get("count", 1)
+            prev["ts"] = rec.get("ts", prev.get("ts"))
+    else:
+        nones.append(rec)
+
+with open(dst, "w", encoding="utf-8") as fh:
+    for rec in findings + unparsed + list(errors.values()) + nones[-KEEP_NONE:]:
+        fh.write(json.dumps(rec) + "\n")
+    for line in corrupt[-KEEP_NONE:]:
+        fh.write(line + "\n")
+PY_COMPACT
+  mv "$tmp" "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }
+}
+
+# Record a finding DIRECTLY, with no transcript involved (claude-config#18).
+# A nested subagent leaves no transcript anywhere, so it cannot be harvested at
+# all; this is the only capture path that works for one. It is also the cheaper
+# path for any agent, since it costs no model call.
+issue_spool_note() { # note <dir> <finding text> [who reported it]
+  local dir="${1:-$PWD}" text="${2:-}" source="${3:-self-reported}" record
+  [ -n "${text//[[:space:]]/}" ] || return 2
+  record="$(python3 -c '
+import json, sys, datetime
+print(json.dumps({
+    "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "status": "found",
+    "agent": sys.argv[1] or "self-reported",
+    "cwd": sys.argv[2],
+    "findings": [sys.argv[3].strip()[:500]],
+    "self_reported": True,
+}))' "$source" "$dir" "$text" 2>/dev/null)"
+  [ -n "$record" ] || return 1
+  issue_spool_append "$dir" "$record"
 }
 
 # What a person should read. Records that looked and found nothing are kept in
