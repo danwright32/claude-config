@@ -70,6 +70,7 @@ import json, sys
 
 shown = 0
 seen = set()
+errors = {}
 for line in open(sys.argv[1], encoding="utf-8"):
     line = line.strip()
     if not line:
@@ -97,6 +98,13 @@ for line in open(sys.argv[1], encoding="utf-8"):
         errors[reason]["count"] += 1
         errors[reason]["agents"].add(where)
         errors[reason]["last"] = rec.get("ts", "?")
+
+for reason, info in errors.items():
+    shown += 1
+    times = "" if info["count"] == 1 else ", %d times" % info["count"]
+    print("HARVEST FAILED (%s, last %s%s): %s. Nothing was read from those agents, so this "
+          "is not the same as them finding nothing."
+          % (", ".join(sorted(info["agents"])), info["last"], times, reason))
 
 sys.exit(0 if shown else 1)
 PY
