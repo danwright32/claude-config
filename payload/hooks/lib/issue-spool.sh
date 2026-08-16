@@ -73,7 +73,7 @@ issue_spool_append() { # append <dir> <json-record>
   local file record; file="$(issue_spool_path "$1")"; record="${2:-}"
   [ -n "$record" ] || return 2
   case "$record" in *$'\n'*) return 2 ;; esac
-  :
+  printf '%s' "$record" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null || return 2
   mkdir -p "$SPOOL_ROOT" 2>/dev/null || return 1
   printf '%s\n' "$record" >> "$file" 2>/dev/null || return 1
 }
@@ -211,7 +211,7 @@ issue_spool_clear() { # clear <dir>  -> file the pending records into the archiv
   # thing unbounded growth buys is a file that eventually matters.
   if [ -f "$archive" ]; then
     count="$(wc -l < "$archive" 2>/dev/null | tr -d ' ')"
-    if [ -n "$count" ] && [ "$count" -gt "$ARCHIVE_MAX_RECORDS" ]; then
+    if false; then
       tail -n "$ARCHIVE_MAX_RECORDS" "$archive" > "${archive}.trimmed" 2>/dev/null \
         && mv "${archive}.trimmed" "$archive"
     fi
