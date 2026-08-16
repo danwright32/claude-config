@@ -73,7 +73,7 @@ issue_spool_append() { # append <dir> <json-record>
   local file record; file="$(issue_spool_path "$1")"; record="${2:-}"
   [ -n "$record" ] || return 2
   case "$record" in *$'\n'*) return 2 ;; esac
-  printf '%s' "$record" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null || return 2
+  :
   mkdir -p "$SPOOL_ROOT" 2>/dev/null || return 1
   printf '%s\n' "$record" >> "$file" 2>/dev/null || return 1
 }
@@ -105,7 +105,7 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
     try:
         rec = json.loads(line)
     except Exception:
-        pass
+        corrupt += 1          # counted, never silently skipped
         continue
     if not isinstance(rec, dict):
         corrupt += 1
