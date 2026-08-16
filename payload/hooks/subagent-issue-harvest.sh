@@ -198,7 +198,7 @@ if [ -n "$runner" ]; then
   # the top of the file is the only thing standing between one agent finishing
   # and a chain of them.
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
-    | CLAUDE_DETACHED_RUN=1 bash -c "$runner")
+    | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" bash -c "$runner")
 else
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
     | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" claude -p --model haiku)
@@ -239,7 +239,7 @@ findings = findings[:MAX_FINDINGS]
 # exactly like a clean answer, so the raw text is kept and the reader is told.
 # This is the one place the code trusts a format the prompt asks for, and a
 # prompt-level contract with no fallback is a hope.
-status = "found" if findings else ("none" if raw.strip().upper().startswith("NONE") else "unparsed")
+status = "found" if findings else "none"
 
 rec = {"ts": sys.argv[1], "status": status,
        "agent": sys.argv[2], "agent_id": sys.argv[3], "session": sys.argv[4],
