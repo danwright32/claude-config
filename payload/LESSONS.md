@@ -259,6 +259,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   contact, which the shipped rule excludes because neither can be written to, so the design note said
   81 shows held a contact where the code said 66, and 49 waiting where it said 38. It passed the full
   suite, CI and a merge, and was caught only when Dan read the real numbers off his own screen)
+- **L156. A success check that looks for a SUBSTRING OF THE THING BEING TALKED TO (a hostname, a
+  command name, a file path, a resource id) also matches the ERROR about it, because a failure
+  message quotes its target, so match the shape of the SUCCESS output instead.** The check then
+  reports success hardest at the exact moment the thing failed, and a retry loop built on it stops
+  retrying on its first failure. Distinct from L100, where the operation matched NOTHING and the
+  silence read as success: here the match is real, and it is the error text that satisfied it.
+  (2026-08-16, caught live: a loop retrying `gh issue create` through a network fault decided it had
+  worked by finding "github.com" in the output, and the failure is
+  `Post "https://api.github.com/graphql": dial tcp ...: can't assign requested address`. It printed
+  FILED and stopped. Correct predicate: the issue URL itself,
+  `^https://github\.com/[^/]+/[^/]+/issues/[0-9]+$`)
 - **L115. A harness that measures whether content is VISIBLE must be checked against the
   substitutes its own renderer makes for content it cannot draw, because a placeholder is
   itself a mark on the page and measures as presence.** A surface built only from controls the
