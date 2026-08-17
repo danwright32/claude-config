@@ -794,6 +794,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   while the gate serving the dashboard and every data file checked just that the session cookie was
   valid, and sessions rotated silently for 30 days)
 
+- **L155. An issue or plan written with REAL measured evidence becomes the source whoever implements
+  it copies into fixtures, so redact people's identities where the evidence is RECORDED rather than
+  trusting the implementer to anonymise it later.** The evidence-rich issue is the right habit and is
+  exactly what carries a real person's name, address and their own words into test data, and a
+  reviewer cannot tell an invented contact from a real one by reading a fixture, so the only defence
+  is somebody recognising a name. Distinct from L19, which says PII is never committed: this names
+  the ROUTE it travels, out of the evidence you were right to gather and into a file you were right
+  to write.
+  (overture#2833, 2026-08-16: #2815 documented a real defect with a real Gmail thread, quoting the
+  presenter by name and his own words about a fee. The agent sent to fix it copied all of that into a
+  test and opened a PR against a PUBLIC repo. Closing the PR and deleting the branch then exposed the
+  wider habit: roughly 90 occurrences of twelve addresses across 18 files, eight or nine of them real
+  people, one in an app source comment and one in a checked-in fixture)
+
 ## UX completeness
 
 - **L20. Accessibility is part of building each control.** Labels on icon-only controls,
