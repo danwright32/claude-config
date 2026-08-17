@@ -510,6 +510,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   would render and commit a booking with the venue missing from the folder name, the task text, the
   calendar sentence and the filename, with nothing anywhere reporting it)
 
+- **L174. Shortening a retention or expiry window makes every later step keyed to a longer
+  window unreachable, and that step goes on reading as an active safeguard rather than as
+  dead code.** When you tighten a window, re-check every cleanup, scrub or archive that
+  fires after it, because the one that no longer runs is usually the defence in depth
+  someone will later cite as the reason the shorter window is safe. Distinct from L29,
+  which asks that dead code be wired or deleted: here nothing looks dead, the job runs
+  nightly and reports success, and only the arithmetic between two windows shows it can
+  never match a row.
+  (bidspoke#826: execution retention went from 14 days to 7, and the 03:00 job nulling lead
+  payloads at 14 days has matched nothing every night since. Its own migration comment still
+  says it exists so payloads are scrubbed before their partition is dropped, and the
+  write-time redaction that would otherwise limit exposure is switched off, so the second
+  line of defence anyone would cite is the one that stopped firing)
+
 ## Honest failure
 
 - **L10. An error state and an empty state are different screens.** Never render a
