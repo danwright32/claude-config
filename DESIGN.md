@@ -63,8 +63,22 @@ which closes the class rather than the instance and is reachable in milliseconds
 actually be tested.
 
 The flag itself then turned out to be the trap. It is inherited by everything a run starts, so a
-grandchild reads it as being about itself and ignores the section limit it was given. That is
-recorded as L169 and tracked as #37.
+grandchild read it as being about itself and ignored the section limit it was given. That is
+recorded as L169 and was fixed in #37.
+
+### Clearing the inherited flag at each spawn site
+
+Considered for #37 and rejected, which is what the issue itself proposed. Every spawn already had
+to clear it by hand, and four of them did, which is the shape of a rule that protects only the
+sites that remembered it: a site added later never saw the rule (L96).
+
+The flag is un-exported once, ahead of every spawn, so it describes the current process and nothing
+else. The four hand-written clears were then removed rather than left as reassurance, because a
+second mechanism that cannot fire is indistinguishable from the one doing the work.
+
+The skip that stood in for it is gone too. #27's subruns were skipped entirely inside a filtered
+run, so `SECTION_UNTIL` at or past that section quietly ran none of its checks, which are the ones
+anybody iterating on the section runner would want.
 
 ### Queueing behind a run that is already going
 
