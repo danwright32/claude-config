@@ -1530,6 +1530,9 @@ LNM="$WORK/lnmbare.git"; git init -q --bare -b main "$LNM"
 LNMA="$WORK/lnmA"; git clone -q "$LNM" "$LNMA" 2>/dev/null
 cp "$SCRIPT" "$LNMA/claude-sync"
 mkdir -p "$LNMA/payload/hooks"; echo '#!/bin/sh' > "$LNMA/payload/hooks/x.sh"
+# A skill, so the scan below is exercised against a nested path and not only against the
+# flat mirror dirs. skills/ is synced alongside hooks, agents and commands.
+mkdir -p "$LNMA/payload/skills/demo"; printf -- '---\nname: demo\n---\nbody\n' > "$LNMA/payload/skills/demo/SKILL.md"
 echo '{"hooks":{}}' > "$LNMA/payload/settings.hooks.json"
 printf '# rules\n@LESSONS.md\n' > "$LNMA/payload/CLAUDE.md"
 printf '# Lessons\n\n- **L1. one.** body\n' > "$LNMA/payload/LESSONS.md"
@@ -1545,6 +1548,13 @@ printf -- '- **L2. mine.** written on Mac B\n  and its body cites L2 by its own 
 # A mention in ANOTHER synced rule file, written on this Mac: the tool cannot merge
 # that file this pull, so it must be warned about, never rewritten.
 printf -- 'see L2 for the rule\n' >> "$LNMBH/CLAUDE.md"
+# The same mention again, but in files that live in SUBDIRECTORIES of the config rather
+# than at the top level. hooks/, agents/, commands/ and skills/ all sync, and hooks cite
+# lessons by number heavily: payload/hooks/lessons-advisory.sh alone carries sixteen such
+# citations today. The scan only ever looked at CLAUDE_HOME/*.md, so a renumber left every
+# one of them pointing silently at a different lesson and said nothing (#43).
+printf -- 'see L2 for the rule\n' >> "$LNMBH/hooks/x.sh"
+printf -- 'see L2 for the rule\n' >> "$LNMBH/skills/demo/SKILL.md"
 # Mac A's published side ALSO cites the contested number in a body line: that mention
 # means Mac A's own L2 and must never be rewritten.
 printf -- '- **L2. theirs.** written on Mac A\n- **L4. four.** also on Mac A\n  distinct from L2, which it cites\n' >> "$LNMA/payload/LESSONS.md"
@@ -1583,6 +1593,25 @@ check "#17 a mention in another synced rule file is warned about" \
   "printf '%s' \"\$out_lnm\" | grep -q 'CLAUDE.md' && printf '%s' \"\$out_lnm\" | grep -qi 'also mentions L2'"
 check "#17 that other file is never rewritten" \
   "grep -q 'see L2 for the rule' '$LNMBH/CLAUDE.md'"
+# Or every assertion below is about files that were never delivered, and passes by
+# reporting nothing about nothing (L143).
+check "#43 the fixture's subdirectory files really did sync" \
+  "[ -f '$LNMBH/hooks/x.sh' ] && [ -f '$LNMBH/skills/demo/SKILL.md' ]"
+# Asserted as ONE line carrying both the path and the warning, never as two greps over the
+# whole output. The first version of these two checks passed against unmodified code: the
+# pull's own change report already names every file it applied, including hooks/x.sh and
+# skills/demo/SKILL.md, and the CLAUDE.md warning already supplies "also mentions L2", so a
+# pair of independent greps was satisfied by two unrelated lines and proved nothing (L135).
+check "#43 a mention in a synced hooks file is warned about" \
+  "printf '%s' \"\$out_lnm\" | grep -q 'hooks/x\.sh also mentions L2'"
+check "#43 a mention in a synced skills file is warned about" \
+  "printf '%s' \"\$out_lnm\" | grep -q 'skills/demo/SKILL\.md also mentions L2'"
+# Named by the path it lives at, never by its basename: SKILL.md is the commonest
+# filename in the whole config, so "SKILL.md also mentions L2" names nothing findable.
+check "#43 a nested file is named by its path, not its basename" \
+  "! printf '%s' \"\$out_lnm\" | grep -qE '(^|[^/])SKILL\.md also mentions'"
+check "#43 neither subdirectory file is rewritten" \
+  "grep -q 'see L2 for the rule' '$LNMBH/hooks/x.sh' && grep -q 'see L2 for the rule' '$LNMBH/skills/demo/SKILL.md'"
 # The renumbered file must publish on the very next send, which is the whole point.
 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" SYNC_NO_NOTIFY=1 bash "$LNMB/claude-sync" push >/dev/null 2>&1
 check "#17 the renumbered entry publishes upward"        "grep -q '^- \*\*L5\. mine' '$LNMB/payload/LESSONS.md'"
