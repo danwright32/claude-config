@@ -1056,6 +1056,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2641, from #2622's contact tier and #2612's social route, both instructions added to the
   prep runbook with no way to notice a run that skips them)
 
+- **L161. When an AI writes a fact the system ALREADY HOLDS the true value for (a date, a venue, a
+  price, a name), check what it wrote AGAINST that value rather than merely checking that something
+  is there, because a presence check passes a contradicted fact, and a wrong fact reaching a stranger
+  is worse than an omitted one, which at least reads as missing.** Neither L27 (a prompt rule needs a
+  deterministic check) nor L108 (a value validated for shape but not completeness) covers it: both are
+  about a value being absent or partial, where this one is present, well formed, and contradicts a
+  source of truth sitting in the same record.
+  (overture#2864: a pitch that had already been SENT told a theatre Dan wanted to photograph their
+  show "on July 18" when the stored performanceDate for it was July 25, and the check being specified
+  asked only whether a date appeared anywhere in the subject or body, which that draft passes. Found
+  by measuring the live store rather than by reading the code: 6 of 19 drafts named no date at all and
+  2 named a wrong one)
+
 ## Codebase hygiene
 
 - **L29. Dead code is worse than deleted code.** Wire it or delete it the moment nothing
