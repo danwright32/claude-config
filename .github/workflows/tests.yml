@@ -65,4 +65,6 @@ jobs:
           [ "$rc" -eq 0 ]
 
       - name: Run the suite
-        run: bash tests/test-claude-sync.sh
+        # SUITE_DEBUG prints what the tool actually said in the scenarios that only fail here, so a
+        # failure on this runner can be diagnosed from evidence rather than from a theory (#52).
+        run: SUITE_DEBUG=1 bash tests/test-claude-sync.sh

@@ -366,6 +366,11 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1 (expr: $2)"; fi; }
+# SUITE_DEBUG=1 prints tool output a scenario would otherwise throw away. It exists because a
+# failure that only happens on a machine you cannot run has to be MEASURED there, and a check
+# reports which assertion failed while saying nothing about what the tool actually did. Two wrong
+# causes were shipped for the CI failures before anything printed the facts (L171, #52).
+dbg(){ [ -n "${SUITE_DEBUG:-}" ] && printf '  [debug] %s\n' "$1"; return 0; }
 
 # Named, not a bare `mktemp -d`. A run that is force-killed never reaches suite_cleanup, so this
 # directory is abandoned, and an ANONYMOUS one cannot be attributed to this suite afterwards: the
@@ -682,6 +687,7 @@ echo '# only the NEW script version knows to sync this' > "$RSA/payload/RESUMED.
 echo '#!/bin/sh ordinary' > "$RSA/payload/hooks/ordinary.sh"
 git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "edit script again" && git -C "$RSA" push -q
 out_sync_restart="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RSCHOME" SYNC_REPO="$RSC" bash "$SCRIPT" sync 2>&1)"
+dbg "the resumed sync said: $out_sync_restart"
 check "sync also restarts the watch daemon on a script change" "printf '%s' \"\$out_sync_restart\" | grep -qi 'watch daemon'"
 check "the resumed sync still applies ordinary payload files" "[ -f '$RSCHOME/hooks/ordinary.sh' ]"
 check "the resumed sync applies what only the NEW version syncs" "[ -f '$RSCHOME/RESUMED.md' ]"
@@ -1020,10 +1026,13 @@ check "a normal send still works"          "[ -f '$UAB/payload/hooks/b-only.sh' 
 check "and does not warn"                  "! printf '%s' \"\$out_ua2\" | grep -qi 'not applied'"
 # sync in that same state must RECEIVE first, then still send the local edit.
 echo three > "$UAAH/hooks/shared.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UAAH" SYNC_REPO="$UAA" bash "$SCRIPT" sync >/dev/null 2>&1
-git -C "$UAB" pull -q --ff-only
+_ua_syncA="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UAAH" SYNC_REPO="$UAA" bash "$SCRIPT" sync 2>&1)"; _ua_rcA=$?
+dbg "A's sync exited $_ua_rcA: $_ua_syncA"
+dbg "A's repo holds: $(git -C "$UAA" log --oneline -1 2>&1)"
+git -C "$UAB" pull -q --ff-only 2>&1 | while IFS= read -r _l; do dbg "B's test-side pull: $_l"; done
 echo 'B-second' > "$UABH/hooks/b-two.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" sync >/dev/null 2>&1
+_ua_syncB="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" sync 2>&1)"; _ua_rcB=$?
+dbg "B's sync exited $_ua_rcB: $_ua_syncB"
 check "sync receives before sending"       "grep -q three '$UABH/hooks/shared.sh'"
 check "sync keeps A's change in the repo"  "grep -q three '$UAB/payload/hooks/shared.sh'"
 check "sync still sends B's own edit"      "[ -f '$UAB/payload/hooks/b-two.sh' ]"
