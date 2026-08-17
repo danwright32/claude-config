@@ -992,8 +992,43 @@ rewrite_local_mentions(){   # $1 = merged file, rewritten in place  $2 = arrivin
 # mentions to the new number (published lines keep the old one, which now names
 # the other Mac's entry), and warn about mentions in any OTHER synced rule file,
 # which is not being merged this pull so its lines' ownership cannot be read.
+# Every synced file a lesson citation could be sitting in, as paths relative to CLAUDE_HOME.
+#
+# This used to be CLAUDE_HOME/*.md and nothing else, which meant the renumber report covered
+# the two rule files and was blind to everywhere else the config cites a lesson by number.
+# That is not a corner: hooks/lessons-advisory.sh alone carries sixteen citations, and seven
+# files across hooks/ and skills/ carry twenty-seven distinct numbers between them. A renumber
+# left every one of them pointing at a different lesson and said nothing, which is the worst
+# shape a wrong reference can take, because the file still reads as though it means what it
+# says (#43).
+#
+# Report only, exactly as before. Nothing here is rewritten: outside the file being merged the
+# tool cannot tell which lesson a citation meant, and guessing would silently rewrite a correct
+# reference into a wrong one.
+#
+# Paths are RELATIVE, never basenames. SKILL.md is the commonest filename in the config, so
+# "SKILL.md also mentions L2" names nothing anybody can go and open.
+#
+# Binary files are skipped with grep -I: an image under skills/ is not a citation, and byte
+# soup run through the matcher below produces counts nobody can act on.
+scannable_synced_files(){
+  local f d
+  for f in "$CLAUDE_HOME"/*.md; do
+    [ -f "$f" ] || continue
+    printf '%s\n' "${f#"$CLAUDE_HOME"/}"
+  done
+  for d in "${MIRROR_DIRS[@]}" skills; do
+    [ -d "$CLAUDE_HOME/$d" ] || continue
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      grep -Iq . "$f" 2>/dev/null || continue
+      printf '%s\n' "${f#"$CLAUDE_HOME"/}"
+    done < <(find "$CLAUDE_HOME/$d" -type f 2>/dev/null)
+  done
+}
+
 settle_renumber_mentions(){   # $1 = merged file (tmp)  $2 = arriving file  $3 = display name; report lines on stdin
-  local renline oldnum newnum rewritten otherf othern stale
+  local renline oldnum newnum rewritten othern stale
   while IFS= read -r renline; do
     [ -n "$renline" ] || continue
     oldnum="${renline%% became *}"; newnum="${renline##* became }"
@@ -1003,17 +1038,16 @@ settle_renumber_mentions(){   # $1 = merged file (tmp)  $2 = arriving file  $3 =
       echo "claude-sync: $3: rewrote $rewritten body mention(s) of $oldnum to $newnum on lines this Mac wrote, which could only have meant the renumbered lesson; mentions on published lines keep $oldnum, which now names the other Mac's entry." >&2
       notify "$3: rewrote mentions of $oldnum to $newnum"
     fi
-    for otherf in "$CLAUDE_HOME"/*.md; do
-      [ -f "$otherf" ] || continue
-      othern="$(basename "$otherf")"
+    while IFS= read -r othern; do
+      [ -n "$othern" ] || continue
       [ "$othern" = "$3" ] && continue
-      [ -f "$PAYLOAD/$othern" ] || continue   # only synced rule files are in scope
-      stale="$(stale_number_mentions "$otherf" "$oldnum")"
+      [ -f "$PAYLOAD/$othern" ] || continue   # only synced files are in scope
+      stale="$(stale_number_mentions "$CLAUDE_HOME/$othern" "$oldnum")"
       if [ "${stale:-0}" -gt 0 ] 2>/dev/null; then
         echo "claude-sync: $othern also mentions $oldnum on $stale line(s). $oldnum now names the other Mac's entry, so check whether each mention meant the renumbered lesson (now $newnum); nothing was rewritten there." >&2
         notify "$othern: check mentions of $oldnum after the renumber"
       fi
-    done
+    done < <(scannable_synced_files)
   done
   return 0
 }
