@@ -34,6 +34,35 @@ for reference; L6 was reviewed and deliberately not adopted.
   tool reported CAUGHT. It validates roughly 1,600 source-text guards, and CAUGHT is the verdict
   quoted as proof. Only the diff it already printed exposed it, and only because a person read it)
 
+- **L177. When a failure reproduces only in an environment you cannot run (a CI runner, another
+  machine, a device), make that environment PRINT the fact in question before changing any code,
+  because a theory built from the symptom is cheap to believe and expensive to ship.** Each wrong
+  fix also costs a full round trip through the only place that can judge it, and it leaves behind a
+  change that reads as deliberate. Distinct from L82 and L34, which say measure a platform guarantee
+  or a data semantic before BUILDING on it: this is about DIAGNOSING, where the temptation is
+  stronger because a symptom is already in hand and looks like evidence.
+  (claude-config#52: the suite's first Linux run failed 9 checks. Two plausible causes were acted
+  on before anything was measured, that `claude-sync status` was exiting non-zero and tripping the
+  self-update gate, then that git 2.54 had changed how it reports a conflicted autostash restore.
+  Both were wrong, and the second shipped a reordering of a failure classifier defended by a comment
+  stating the false reading as fact. A twenty line probe printing what git actually does settled it
+  in one run: exit 0, stash kept, no rebase directory, identical to the older git)
+
+- **L178. A check written as two conditions over one body of text is satisfied by two unrelated
+  places in it, so it proves neither half and passes hardest when nothing works at all.** Assert the
+  halves as ONE line carrying both, because each condition read alone looks specific and the compound
+  reads as stricter than either, which is why nobody re-examines it. Distinct from L135, where a
+  single match over a whole file is answered by a legitimate use elsewhere, and from L156, where the
+  match is real and it is the error text that satisfied it: here both matches are real, both are
+  irrelevant, and the conjunction is what creates the illusion.
+  (claude-config#55: two assertions that a renumber warns about citations in `hooks/` and `skills/`
+  each grepped the captured pull output for the file path AND for the warning wording. Both passed
+  against completely unmodified code, because the pull's own change report names every file it
+  applied while a pre-existing warning about a different file supplied the wording. Caught only
+  because the fix was known to be still unwritten and the green looked wrong. The same mistake was
+  made an hour later at a larger scale, reading one sentence in a blob of CI output as proof of which
+  branch of a classifier had fired, which produced the wrong diagnosis recorded in L177)
+
 - **L151. Every outcome a guard's own contract ENUMERATES must have a test that PRODUCES that
   outcome, not merely a test that passes.** A documented outcome nobody constructs can be
   unreachable in the code while the guard looks thoroughly tested, so read the contract as a list
@@ -192,6 +221,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   distribution whose median was 0.37pt and whose 90th percentile was exactly the 1.00pt threshold,
   with 55 rows sitting between 0.75 and 1.0. Running the identical query against four retained
   Salesforce dataset builds gave 49, 48, 48, 48, so the population had barely moved)
+
+- **L179. A status query about work in flight must be scoped to the exact revision it asks about,
+  because a superseded run reports under the same check names and answers for the new one in both
+  directions: a stale failure blocks a commit nothing has judged, and a stale pass merges one.** Ask
+  for the runs at the head commit and refuse to answer until every one of them has finished. Distinct
+  from L98, where the watcher finds nothing and calls it success: here it finds a real, complete,
+  confidently wrong answer about a different version of the work.
+  (2026-08-17, PostRoll#669: `tools/wait_for_checks.py` asks `gh pr checks`, which is keyed by
+  workflow and check name with no notion of commit, so three consecutive pushes each reported
+  `red: failed: Tests / python` within seconds, every one of them the previous commit's run, while
+  the new run had not started. The README directs everyone to that tool rather than to `gh` by hand)
 
 - **L119. A detection that ACCUSES on an empty answer from an external provider's derived index (a
   commit-to-PR association, a search index, a related-records lookup) must confirm against the
@@ -906,6 +946,35 @@ for reference; L6 was reviewed and deliberately not adopted.
   time rather than a burst, so no process count tripped and it read as a suite merely taking a
   while. It happened twice in one session, the second time after the first had been fixed)
 
+- **L175. A value read once at startup is only true at startup, and when the thing it describes
+  lives OUTSIDE the program (a checkout, a config file, a device, another service) there is no
+  action inside the program to hang a re-read on, so it goes stale invisibly and its silence reads
+  as an assurance.** Re-read it on the events the program does see, coming to the foreground and
+  starting the work that depends on it, and refresh from a read something already takes rather than
+  adding a second reader. Distinct from L14, which asks that derived state re-derive on every input
+  that feeds it: there an action inside the product changes the input and can trigger the
+  re-derivation, and here nothing inside it ever fires.
+  (PostRoll#668: the banner saying the code folder was not on a clean main was read once at launch,
+  and the folder moves precisely while the app is open, because that is when a session switches
+  branch or leaves edits. So the likeliest state was the wrong one, the banner absent while the
+  folder had already moved, or naming a branch left an hour ago. PostRoll#675 is the same check
+  sitting beside it, whose own comment states as fact that its answer cannot change while the app
+  is open)
+
+- **L176. A field name that asserts a ROLE or a DIRECTION (who referred whom, source versus
+  destination, sender versus recipient, parent versus child) must be verified against the code that
+  RENDERS it, because the rendered wording is the authority and a backwards name silently recruits
+  every future writer into filling it the wrong way round, with nothing anywhere reporting a
+  problem.** Distinct from L118, which is about one word naming two different units, and from L46,
+  which asks that a field have a reader at all: here the reader exists, is correct, and contradicts
+  the name every writer is reading instead.
+  (downbeat#252: `newGroupThatReferred` reads as the group that DID the referring, while the seeded
+  Referral Tracker task renders it as `New Client:` beside `Returning Client: <<clientName>>` and
+  `Name of Referring Group's Concert: <<photoshootName>>`, so the booking's own client is the
+  referrer and the field holds the new group they referred IN. Found only because a questionnaire
+  import was about to fill it from "Referral program (BK Treble Choir)", where that group is the
+  referrer, which would have put the wrong organisation into a task Dan then acts on)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -1115,6 +1184,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2621: a card reading "A check missed this show" carries that badge for 90 days, while the
   control that re-runs exactly those shows hangs off the status message set when a run ends, and the
   badge's own hover text then sends Dan to re-tick the whole date instead)
+
+- **L180. A confirmation dialog's consequence sentence must be derived from the state it is about to
+  change, never asserted, because a warning shown on every delete carries no information and reads
+  identically whether it is taking one row or a subtree of ten.** The person then learns to click
+  through the one confirmation that mattered, and the code looks careful the whole time. Distinct
+  from L11, which is about a failure claiming only what its check measured: here nothing has failed
+  and the sentence is describing a consequence that may not exist.
+  (downbeat#247, downbeat#248: a task delete always said "All subtasks are deleted as well." on leaf
+  tasks with none, and an email template delete always claimed tasks would break without checking
+  whether any referenced it, while two tabs in the same folder already built their warning from the
+  live state)
 
 ## External systems
 
