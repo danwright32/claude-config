@@ -1925,6 +1925,48 @@ CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NOTIFIER="$FAKEN2" SYNC_NO_NOTIFY=0 \
   SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync >/dev/null 2>&1 || true
 check "#25 a genuinely recent success still keeps a blip quiet" "[ ! -s '$NOTED2' ]"
 
+echo "== a Mac that no longer exists does not hold verify hostage (#26) =="
+# The markers are keyed on hostname, which is a MUTABLE string, so renaming or reinstalling
+# a Mac does not move its marker, it mints a second one and abandons the first. Nothing ever
+# removed the old one, so verify reported that ghost as behind for ever and the verdict could
+# never be positive again. A check that can only ever say no stops being read.
+GHB="$WORK/ghost-bare.git"; git init -q --bare -b main "$GHB"
+GHR="$WORK/ghost-repo"; git clone -q "$GHB" "$GHR" 2>/dev/null
+GHH="$WORK/ghost-home"; mkdir -p "$GHH/skills/g"
+echo 'G' > "$GHH/skills/g/SKILL.md"; echo '{"hooks":{}}' > "$GHH/settings.json"
+CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+# A second Mac publishes, then goes away for good and never applies anything again.
+GHR2="$WORK/ghost-repo2"; git clone -q "$GHB" "$GHR2" 2>/dev/null
+GHH2="$WORK/ghost-home2"; mkdir -p "$GHH2"; echo '{"hooks":{}}' > "$GHH2/settings.json"
+CLAUDE_HOME="$GHH2" SYNC_REPO="$GHR2" SYNC_HOSTNAME=macGone SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+echo 'G changed' > "$GHH/skills/g/SKILL.md"
+CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+# Age the departed Mac's marker past the point where it can mean anything.
+GHREF="refs/claude-sync-state/macGone"
+out_gh="$(CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 \
+  SYNC_MAC_RETIRE_AFTER=0 bash "$SCRIPT" verify 2>&1 || true)"
+check "#26 a long-silent Mac is called retired, not behind" \
+  "printf '%s' \"\$out_gh\" | grep -qi 'retired'"
+check "#26 a retired Mac is not counted as behind" \
+  "! printf '%s' \"\$out_gh\" | grep -q 'macGone: BEHIND'"
+check "#26 and it no longer blocks the verdict" \
+  "CLAUDE_HOME='$GHH' SYNC_REPO='$GHR' SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 SYNC_MAC_RETIRE_AFTER=0 bash '$SCRIPT' verify >/dev/null 2>&1"
+# Retired must NOT mean forgotten: it still has to be named, or a Mac that genuinely fell
+# behind quietly disappears from the report that exists to notice exactly that.
+check "#26 a retired Mac is still named"  "printf '%s' \"\$out_gh\" | grep -q 'macGone'"
+# The control: with a normal retirement window that same Mac is simply behind, so the rule
+# cannot be satisfied by calling every absent Mac retired.
+out_gh2="$(CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1 || true)"
+check "#26 a recently seen Mac is still reported as behind" \
+  "printf '%s' \"\$out_gh2\" | grep -q 'macGone: BEHIND'"
+# And a way to drop one deliberately, since a Mac you know is gone should not need a wait.
+CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" forget-mac macGone >/dev/null 2>&1
+check "#26 forget-mac removes the marker" \
+  "[ -z \"\$(git -C '$GHR' for-each-ref --format='%(refname)' '$GHREF')\" ]"
+check "#26 forget-mac refuses to remove this Mac's own marker" \
+  "! CLAUDE_HOME='$GHH' SYNC_REPO='$GHR' SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash '$SCRIPT' forget-mac macNow >/dev/null 2>&1"
+
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

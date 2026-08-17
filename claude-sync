@@ -1586,10 +1586,38 @@ report_conflict_copies(){
   echo "  Compare each with the live file next to it, then delete the copy once you have what you need."
 }
 
+# ---------- forget a Mac that is genuinely gone (#26) ----------
+# A Mac you KNOW is gone should not need a 60 day wait to stop being reported. Deliberately
+# manual: retiring a machine is a decision about the world, not something the tool can infer,
+# and the automatic rule above only ever changes the WORDING, never removes anything.
+do_forget_mac(){
+  local host="${1:-}" me
+  have_git || die "forget-mac needs the shared repo's git."
+  [ -n "$host" ] || die "which Mac? Usage: claude-sync forget-mac <hostname>. Run 'claude-sync verify' to see the names."
+  me="$(sync_hostname)"
+  # Refused for THIS Mac: dropping your own marker does not retire anything, it just makes
+  # this Mac invisible to the other one until its next apply republishes it.
+  [ "$host" = "$me" ] && die "that is this Mac ($me). Dropping its own marker would only hide it from the other Mac until the next sync puts it back."
+  fetch_state_refs
+  git -C "$SYNC_REPO" rev-parse -q --verify "$STATE_REF_PREFIX/$host" >/dev/null 2>&1 \
+    || die "no Mac called '$host' has published anything. Run 'claude-sync verify' to see the names on record."
+  git -C "$SYNC_REPO" update-ref -d "$STATE_REF_PREFIX/$host" 2>/dev/null || true
+  # Best effort on the remote: if it fails the ref comes back on the next fetch, so say so
+  # rather than reporting a removal that will silently undo itself.
+  if git -C "$SYNC_REPO" push -q origin ":$STATE_REF_PREFIX/$host" 2>/dev/null; then
+    echo "Forgot $host. It will no longer appear in verify."
+  else
+    echo "claude-sync: removed $host locally, but could not reach the shared repo to remove it there, so it will come back on the next fetch. Run this again when you are online." >&2
+    return 1
+  fi
+  return 0
+}
+
 # ---------- verify: do the Macs actually hold the same config? (#23) ----------
 do_verify(){
   have_git || die "verify needs the shared repo's git history, and this run has git disabled."
-  local tree me host file mtree mtime others=0 agreed=0 behind=0 line
+  local tree me host file mtree mtime others=0 agreed=0 behind=0 retired=0 line now
+  now="$(date +%s)"
   tree="$(payload_tree)"
   me="$(sync_hostname)"
   [ -n "$tree" ] || die "the shared repo has no payload yet, so there is nothing to compare."
@@ -1607,6 +1635,20 @@ do_verify(){
       [ "$host" = "$me" ] && line="This Mac ($host): up to date with the shared config" \
                           || line="$host: up to date with the shared config"
       agreed=$((agreed+1))
+    elif [ "$host" != "$me" ] && [ -n "$mtime" ] \
+         && [ "$((now - mtime))" -gt "${SYNC_MAC_RETIRE_AFTER:-5184000}" ] 2>/dev/null; then
+      # Silent for so long that "behind" is the wrong word: this reads as a Mac that was
+      # retired, renamed or reinstalled. Its marker is keyed on hostname, a mutable string,
+      # so a rename abandons the old one rather than moving it (L15, and the reason #26
+      # exists at all). Left as BEHIND it would hold the verdict negative for ever, and a
+      # check that can only ever say no stops being read.
+      # 60 days, from the real history rather than a guess: the other Mac's longest gap
+      # between syncs in 60 days was 6.8 days, so this is roughly 9x the longest real
+      # absence and a holiday cannot trip it.
+      # STILL NAMED, never dropped from the report: a Mac that genuinely fell behind must
+      # not vanish from the surface that exists to notice exactly that.
+      line="$host: RETIRED, no sign of it since $(date -r "$mtime" '+%Y-%m-%d' 2>/dev/null || echo 'an unknown date'). Run 'claude-sync forget-mac $host' to drop it."
+      retired=$((retired+1))
     else
       # Counted from the HISTORY, never from the marker's clock. Counting commits since a
       # timestamp is a stand-in for the real quantity and it is wrong exactly when the two
@@ -1639,14 +1681,23 @@ do_verify(){
     echo "claude-sync: no Mac has published what it applied yet, so whether they hold the same config cannot be answered. Run a sync on each Mac once, then verify again." >&2
     return 1
   fi
+  [ "$retired" -gt 0 ] && echo "  ($retired Mac(s) reported as retired above are not counted in the verdict)"
   if [ "$behind" -eq 0 ]; then
     # One Mac agreeing with itself is agreement with nobody, and saying "agree" there is the
     # same vacuous success the no-markers case above exists to prevent. Found on the real
     # repo minutes after shipping, where it read "all 1 Mac(s) agree" while the second Mac
     # had simply never published.
-    if [ "$agreed" -le 1 ]; then
+    # The "cannot be answered yet" refusal is for the case where another Mac is EXPECTED to
+    # report and has not. When the only other Mac is retired there is nothing outstanding and
+    # nothing to wait for, so telling you to go and sync it would be wrong advice, and a
+    # verdict that can never be positive is the very thing #26 is about.
+    if [ "$agreed" -le 1 ] && [ "$retired" -eq 0 ]; then
       echo "This Mac is up to date, but only this Mac has published what it applied, so whether the Macs agree cannot be answered yet. Run a sync on the other Mac, then verify again." >&2
       return 1
+    fi
+    if [ "$agreed" -le 1 ]; then
+      echo "Verified: this Mac is up to date, and the only other Mac on record is retired."
+      return 0
     fi
     if [ "$agreed" -eq 2 ]; then echo "Verified: both Macs agree on the same config."
     else echo "Verified: all $agreed Macs agree on the same config."; fi
@@ -1860,6 +1911,7 @@ case "$cmd" in
   watch) do_watch ;;
   status) do_status ;;           # read-only, deliberately never blocked
   verify) do_verify ;;           # read-only too: it answers a question, it changes nothing
+  forget-mac) with_lock do_forget_mac "${2:-}" ;;   # mutating: it deletes a published ref
   apply-only) with_lock do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
@@ -1870,5 +1922,5 @@ case "$cmd" in
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME"))"
     ;;
   help|-h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, next-lesson, check-lessons, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, forget-mac, next-lesson, check-lessons, install-autosync, help)" ;;
 esac
