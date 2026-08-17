@@ -389,6 +389,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   measured MORE ink with their words switched off than with them on, and the first version of the probe
   drew an animating view's label perfectly as soon as that view's type went through a renderer of ours)
 
+- **L165. A fixture built by damaging the END of something lets the scenario finish its real
+  work before failing, so the case under test never occurs while the test reads as convincing,
+  and it passes for a reason unrelated to what it claims.** Break the input where the work
+  BEGINS, and confirm by hand that the scenario actually fails the way the test describes.
+  Distinct from L48, where the fixture's shape was invented rather than measured: here the
+  shape is right and the damage is in the wrong place.
+  (claude-config#28: a pulled script broken by appending a bad line after its dispatch
+  completed its entire job successfully and failed only on the last line, so the self-update
+  it was meant to block went through normally. Four fixtures in one session failed this way)
+
 ## Data safety
 
 - **L5. Never destroy good state before its replacement is verified to exist.** Write to
