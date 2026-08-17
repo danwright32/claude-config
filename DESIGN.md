@@ -208,6 +208,30 @@ second definition of what a citation is (L107).
 The test asserts how many files the scan OPENS, not how long it took: a wall-clock threshold on a
 shared runner is noise, and a number that moved cannot say why.
 
+### Recording an unresolved conflict as a marker under `state/`
+
+Rejected for #45, which is what the issue itself proposed.
+
+When a merge fails, the pull keeps your version as `<file>.conflict-<host>` and says so once. The
+condition then persists and nothing says so again, because the live file matches the payload
+exactly afterwards and every later check reports healthy. On 2026-08-17 that dropped a lesson out
+of the loaded rules and it survived only because the one output line happened to be read.
+
+A marker written at the moment of conflict records a judgement made then. It cannot notice the copy
+being resolved by hand or deleted since, so it needs its own clearing rule, and a marker whose
+clearing rule is wrong is worse than none: it either cries wolf for ever or goes quiet while the
+content is still missing (L121).
+
+So the answer is derived on every run instead, from the two files sitting on disk: what the copy
+holds that the live file does not, computed by the same function that describes the conflict when
+it happens (L16). The report stops the moment the entry is back in the live file or the copy is
+deleted, and never before, with no state to keep in step. It costs one comparison per copy, and
+there are normally none at all.
+
+Status names both states separately rather than merely listing the file: one still holds something,
+the other is safe to delete. "A conflict copy exists" says nothing about whether anything is at
+stake in it (L11).
+
 ## Measured numbers
 
 Every threshold here is a multiple of something real, measured on the date given. None is a round

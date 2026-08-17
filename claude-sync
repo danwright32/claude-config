@@ -32,6 +32,7 @@ PAYLOAD="$SYNC_REPO/payload"
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
 MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
+PRESERVED_CONFLICTS=""   # copies set aside by THIS run (see preserve_local_conflicts)
 SYNC_LOCK="${SYNC_LOCK:-$SYNC_REPO/.sync-lock}"   # one mutating run at a time (#21)
 LOCK_HELD=0
 LAST_SUCCESS_FILE="$SYNC_REPO/.last-success"   # last time the shared repo was reachable (#22)
@@ -689,6 +690,7 @@ $f
     echo "claude-sync: the same lesson number is now used twice on this Mac, which breaks every reference to it: $(printf '%s' "$applied_dups" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number). Until then that file is held back from the next send." >&2
     notify "duplicate lesson number on this Mac"
   fi
+  report_pending_conflicts
   # Remember which commit's payload is now actually on this Mac. Everything that
   # publishes upward compares against this, so it can tell "the user edited a
   # file" apart from "this Mac is simply behind".
@@ -1241,8 +1243,28 @@ local_only_entries(){   # $1 = ours  $2 = theirs
     2>/dev/null | tr '\n' ' '
 }
 
+# What one file holds that the other does not: the entry names when it is a rule file, and a line
+# count when it is anything else. Empty means nothing at all is only in the first, which is a
+# DIFFERENT answer from "could not tell" and is what lets a set-aside copy be called resolved.
+#
+# One definition, used both when a conflict is created and every time one is reported afterwards.
+# Written twice, the two would answer differently about the same pair of files, and the report that
+# persists is the one nobody would check (L16).
+only_in_first(){   # $1 = ours  $2 = theirs
+  local detail n
+  [ -f "$1" ] || return 0
+  if [ ! -f "$2" ]; then printf 'the live file is gone'; return 0; fi
+  detail="$(local_only_entries "$1" "$2")"
+  if [ -z "${detail// }" ]; then
+    n="$(comm -23 <(sort -u "$1") <(sort -u "$2") 2>/dev/null | grep -c . || true)"
+    [ "${n:-0}" -gt 0 ] && detail="${n} lines"
+  fi
+  printf '%s' "${detail% }"
+  return 0
+}
+
 preserve_local_conflicts(){
-  local last p local_f sfx saved="" detail n
+  local last p local_f sfx saved="" detail
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
@@ -1259,15 +1281,13 @@ $p"*) continue ;; esac
     # already identical to what is arriving: not a conflict either
     if [ -f "$PAYLOAD/$p" ] && cmp -s "$PAYLOAD/$p" "$local_f"; then continue; fi
     cp "$local_f" "$local_f$sfx"
+    # This run's own copies, so the standing report below does not repeat what the line beneath is
+    # about to say. It is only ever about copies an EARLIER run left behind.
+    PRESERVED_CONFLICTS="$PRESERVED_CONFLICTS
+$p$sfx"
     # Say what is actually at stake in this file, not just its name.
     detail=""
-    if [ -f "$PAYLOAD/$p" ]; then
-      detail="$(local_only_entries "$local_f" "$PAYLOAD/$p")"
-      if [ -z "${detail// }" ]; then
-        n="$(comm -23 <(sort -u "$local_f") <(sort -u "$PAYLOAD/$p") 2>/dev/null | wc -l | tr -d ' ')"
-        [ "${n:-0}" -gt 0 ] && detail="$n lines"
-      fi
-    fi
+    [ -f "$PAYLOAD/$p" ] && detail="$(only_in_first "$local_f" "$PAYLOAD/$p")"
     if [ -n "${detail// }" ]; then saved+="$p [only in yours: ${detail% }] "; else saved+="$p "; fi
   done < <(unapplied_paths)
   [ -z "${saved// }" ] && return 0
@@ -1755,29 +1775,77 @@ do_send(){
 # condition which PERSISTS in the data with nothing but a transient surface to report it, and
 # a copy from 2026-07-29 duly sat in ~/.claude unnoticed for nearly three weeks. status is the
 # surface that describes state, so it reports them for as long as they exist. (#20)
+# Every set-aside copy on this Mac, absolute paths, sorted. Only the places
+# preserve_local_conflicts can write one (it copies to CLAUDE_HOME plus a payload-relative path),
+# never a sweep of the whole config folder, which holds the session history and every plugin and
+# would make this cost real time on every status.
+conflict_copy_paths(){
+  local d
+  {
+    find "$CLAUDE_HOME" -maxdepth 1 -name '*.conflict-*' -type f 2>/dev/null
+    for d in "${MIRROR_DIRS[@]}" skills; do
+      [ -d "$CLAUDE_HOME/$d" ] || continue
+      find "$CLAUDE_HOME/$d" -name '*.conflict-*' -type f 2>/dev/null
+    done
+  } | sort
+  return 0
+}
+
+# The live file a copy was set aside from: the same path with the suffix removed.
+conflict_copy_live(){   # $1 = absolute path of a .conflict-* copy
+  printf '%s' "${1%.conflict-*}"
+}
+
 report_conflict_copies(){
-  local f age now found=""
+  local f age now found="" live outstanding
   now="$(date +%s)"
-  # Only the places preserve_local_conflicts can write one (it copies to CLAUDE_HOME plus a
-  # payload-relative path), never a sweep of the whole config folder, which holds the session
-  # history and every plugin and would make this cost real time on every status.
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     age=$(( (now - $(file_mtime "$f" | grep . || echo "$now")) / 86400 ))
-    found+="  ${f#"$CLAUDE_HOME"/} ($age days old)"$'\n'
-  done < <( {
-    find "$CLAUDE_HOME" -maxdepth 1 -name '*.conflict-*' -type f 2>/dev/null
-    for f in "${MIRROR_DIRS[@]}" skills; do
-      [ -d "$CLAUDE_HOME/$f" ] || continue
-      find "$CLAUDE_HOME/$f" -name '*.conflict-*' -type f 2>/dev/null
-    done
-  } | sort )
+    live="$(conflict_copy_live "$f")"
+    outstanding="$(only_in_first "$f" "$live")"
+    # The two states get different words, because "a conflict copy exists" says nothing about
+    # whether anything is still at stake in it, and a copy whose content is now all in the live
+    # file reads identically to one holding the last surviving version of a lesson (L11).
+    if [ -n "${outstanding// }" ]; then
+      found+="  ${f#"$CLAUDE_HOME"/} ($age days old, STILL only here: ${outstanding})"$'\n'
+    else
+      found+="  ${f#"$CLAUDE_HOME"/} ($age days old, nothing in it is missing from the live file: safe to delete)"$'\n'
+    fi
+  done < <(conflict_copy_paths)
   # Silent when there are none. A standing line saying "no conflicts" would be printed on
   # every single status and stop being read long before a real one ever appeared.
   [ -z "$found" ] && return 0
   echo "--- unresolved conflict copies (YOUR version, kept when a merge could not be done) ---"
   printf '%s' "$found"
   echo "  Compare each with the live file next to it, then delete the copy once you have what you need."
+}
+
+# The standing report, run at the end of every apply. The conflict itself is announced once, by
+# preserve_local_conflicts, and NOTHING said so again: the live file matches the payload exactly
+# afterwards, so status read healthy, verify read healthy, and the only copy of the entry that lost
+# the merge sat beside it unmentioned. On 2026-08-17 a lesson survived only because that single
+# line of output happened to be read (#45, L148, L152).
+#
+# Judged by what is still only in the copy, on this run, so it goes quiet the moment the content is
+# back in the live file or the copy is deleted, and never before. A report keyed on the file merely
+# existing would cry wolf until somebody deleted a file they had already dealt with, and one keyed
+# on a marker written when the conflict happened could not notice either (L121).
+report_pending_conflicts(){
+  local f live outstanding pending=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$PRESERVED_CONFLICTS" in *"
+${f#"$CLAUDE_HOME"/}"*) continue ;; esac   # announced by this very run, a line above
+    live="$(conflict_copy_live "$f")"
+    outstanding="$(only_in_first "$f" "$live")"
+    [ -n "${outstanding// }" ] || continue
+    pending+="${f#"$CLAUDE_HOME"/} [still only there: ${outstanding}] "
+  done < <(conflict_copy_paths)
+  [ -z "${pending// }" ] && return 0
+  echo "claude-sync: an earlier conflict set a copy of your version aside and it is STILL not resolved, so this content is in no file anything loads: ${pending}Take what you need into the live file beside it, then delete the copy. Nothing else reports this." >&2
+  notify "still unresolved: ${pending}"
+  return 0
 }
 
 # ---------- forget a Mac that is genuinely gone (#26) ----------

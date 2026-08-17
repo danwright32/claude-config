@@ -64,6 +64,17 @@ Sending is automatic on change; receiving is automatic on the timer. A no-op syn
 writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
 conflict the background job stops and fires a desktop notification.
 
+## When a merge cannot be done
+
+The other Mac's version is applied and yours is kept beside it as `<file>.conflict-<host>`, with one
+line naming what was only in yours. That copy is then the ONLY place that content exists, so every
+later apply keeps reporting it, and `claude-sync status` lists it too, naming what it still holds
+that the live file does not.
+
+Both reports go quiet on their own: as soon as the content is back in the live file, or the copy is
+deleted, there is nothing outstanding to report. A copy whose content is already in the live file is
+still listed by `status`, named as safe to delete, because only you can decide to remove it.
+
 ## Secret scan
 
 Every push/sync scans the payload and aborts if it finds a credential shape.
