@@ -13,13 +13,70 @@ set -uo pipefail
 SCRIPT="${SCRIPT:-$(cd "$(dirname "$0")/.." && pwd)/claude-sync}"
 SCRIPT_SELF="${SCRIPT_SELF:-$(cd "$(dirname "$0")" && pwd)/$(basename "$0")}"
 
+# ---- a hard limit on suite runs that spawn suite runs (#34) ----
+# #27 let this suite run itself as a subprocess, and 45528c7 fixed one way that recursed without
+# bound, after seventeen suite processes were found multiplying on this Mac. That fix was one
+# flag read correctly, proven by a single observation, and its own check had to be deleted
+# because the child stopped before ever reaching the guard. The SHAPE stayed: anything running
+# the suite from inside the suite can multiply.
+#
+# So a run now carries how deep it already is, every spawn hands its child one more, and a run
+# past the limit refuses to start. That closes the class rather than the instance, and it is
+# reachable in milliseconds, which is what makes it testable at all.
+#
+# This lives HERE, ahead of the section runner below, for two reasons. A run that is too deep
+# must cost nothing rather than be stopped somewhere inside itself. And the section runner
+# re-executes the suite from a temp copy, so a guard placed after it would never be reached by
+# a filtered run, which is exactly the kind of run that was multiplying.
+SUITE_MAX_DEPTH="${SUITE_MAX_DEPTH:-1}"
+for _dpair in "SUITE_DEPTH:${SUITE_DEPTH:-0}" "SUITE_MAX_DEPTH:$SUITE_MAX_DEPTH"; do
+  # Fails CLOSED on anything that is not a whole number. `[ abc -gt 1 ]` is a shell ERROR, not a
+  # false, and this suite deliberately runs without `set -e`, so an unvalidated comparison would
+  # be read as "not too deep" and the limit would be off at exactly the moment the environment
+  # is wrong (L50: a value that cannot be parsed must never land on the permissive side).
+  case "${_dpair#*:}" in
+    ''|*[!0-9]*)
+      echo "test suite: ${_dpair%%:*}='${_dpair#*:}' is not a whole number, so how deeply this run is nested cannot be judged. Refusing to run rather than guessing." >&2
+      exit 4 ;;
+  esac
+done
+SUITE_DEPTH="${SUITE_DEPTH:-0}"
+if [ "$SUITE_DEPTH" -gt "$SUITE_MAX_DEPTH" ]; then
+  echo "test suite: refusing to run at depth $SUITE_DEPTH (the limit is $SUITE_MAX_DEPTH). A suite run spawned from inside a suite run multiplies, and the pile-up presents as slowness rather than as a failure, so nobody investigates it." >&2
+  exit 4
+fi
+# Said out loud, because a counter that never moves reads exactly like a limit that works, and
+# because a stray suite process in a process list is otherwise attributable to nothing.
+if [ "$SUITE_DEPTH" -gt 0 ]; then
+  echo "test suite: running at depth $SUITE_DEPTH (the limit is $SUITE_MAX_DEPTH)"
+fi
+# What every spawn below hands its child. Named once rather than written as an expression at
+# each call site, so the sites cannot drift apart from each other.
+SUITE_CHILD_DEPTH=$((SUITE_DEPTH + 1))
+
 # ---- run one section at a time (#27) ----
 # SECTION_FILTER=<text> runs only the sections whose heading contains <text>. Default is a
 # full run, so the pre-push gate is unaffected and nobody can narrow it by accident.
 # `section` REPLACES the bare `echo "== ... =="` headings: every check that follows a heading
 # belongs to it, and a skipped section's checks are never executed rather than executed and
 # hidden, which would save no time at all and defeat the point.
-section(){ echo "$1"; }
+# Also records where the run has got to, for the deadline below to name when it kills a hung run
+# (#31), and carries the seam that makes that deadline testable. Both are inert until the
+# deadline is armed further down, which is after the section runner has decided whether this
+# process is the one that will actually execute the sections.
+section(){
+  echo "$1"
+  if [ -n "$SUITE_SECTION_MARK" ]; then printf '%s\n' "$1" > "$SUITE_SECTION_MARK"; fi
+  # SUITE_HANG_IN=<text> stalls deliberately in the first matching section. A deadline can only
+  # be trusted once it has been watched killing something (L1), and waiting for a real stall to
+  # turn up is not a test.
+  if [ -n "${SUITE_HANG_IN:-}" ] && printf '%s' "$1" | grep -qi -- "$SUITE_HANG_IN"; then
+    echo "  (test seam: hanging deliberately in this section)"
+    while true; do sleep 60; done
+  fi
+  return 0
+}
+SUITE_SECTION_MARK=""
 
 # SECTION_UNTIL=<text> runs from the beginning UP TO AND INCLUDING the matching section, then
 # stops. Deliberately not "only the matching section": the sections are not independent, they
@@ -59,17 +116,103 @@ if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
     echo "test suite: stopping after '$SECTION_UNTIL' produced a script that does not parse, so it was NOT run. This is a bug in the section extractor, not in the code under test. Run the full suite." >&2
     exit 3
   fi
-  SUITE_FILTERED=1 SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered"; _rc=$?
+  # #34: the depth is passed through UNCHANGED here, deliberately. This is the same logical run
+  # re-executed from a temp copy, not a run nested inside another, and counting it would put an
+  # ordinary `SECTION_UNTIL=... bash tests/...` at depth 1, whose own #27 subruns would then be
+  # refused at depth 2 for no reason. Depth counts suites started BY a suite.
+  SUITE_FILTERED=1 SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered"; _rc=$?
   rm -f "$_filtered"
   exit "$_rc"
 fi
+
+# ---- every run gets a deadline (#31) ----
+# Armed HERE rather than at the top, because everything above either exits immediately or hands
+# the work to a re-executed copy that arms its own. A run waiting on a covered child needs no
+# deadline of its own; the child's fires first and the wait then returns.
+#
+# The failure this closes: a wait with no deadline cannot fail, it can only hang, and a hang is
+# indistinguishable from an ordinary slow run, so nobody investigates and the time is spent
+# before anyone suspects anything (L110). It also holds whatever the run had acquired.
+#
+# The default is measured, not guessed: a full run of this suite took 123 seconds on this Mac on
+# 2026-08-17, so 15 minutes is roughly 7x the real thing. Deliberately generous, because wrong
+# LOW turns a slow or contended machine into a false failure, and an alarm that cries wolf stops
+# being read (L36), which would leave the suite worse off than with no deadline at all.
+SUITE_TIMEOUT="${SUITE_TIMEOUT:-900}"
+case "$SUITE_TIMEOUT" in
+  ''|*[!0-9]*)
+    echo "test suite: SUITE_TIMEOUT='$SUITE_TIMEOUT' is not a whole number of seconds. Refusing to run rather than running with no deadline at all, which is the state this exists to end." >&2
+    exit 4 ;;
+esac
+SUITE_SECTION_MARK="$(mktemp -t suite-section)"
+if [ "$SUITE_TIMEOUT" -gt 0 ]; then
+  _suite_pid=$$
+  # A watchdog must not share the abort-on-error behaviour of the work it watches, or an
+  # incidental failure kills the watchdog and leaves the work running unobserved, which looks
+  # exactly like a healthy system (L71). This is a plain subshell with no `set -e` reaching it.
+  #
+  # It polls for the run being GONE rather than sleeping the whole deadline in one go, so a
+  # normal run's watchdog exits within a couple of seconds of the run finishing instead of
+  # lingering. A watchdog outliving its run holds a process id the system may reuse, and would
+  # then kill whatever inherited it.
+  (
+    exec -a suite-deadline-watchdog sh -c '
+      waited=0
+      while [ "$waited" -lt "$2" ]; do
+        sleep 2
+        waited=$((waited + 2))
+        kill -0 "$1" 2>/dev/null || exit 0
+      done
+      where="$(cat "$3" 2>/dev/null)"
+      echo "" >&2
+      echo "test suite: TIMED OUT after ${2}s, still inside section: ${where:-<no section reached>}" >&2
+      echo "It was killed rather than left waiting. A run with no deadline cannot fail, it can only hang, and a hang reads as an ordinary slow run (L110). Raise SUITE_TIMEOUT if this machine is genuinely slower than that." >&2
+      # Kill the run AND everything it started. Killing only the run itself leaves its children
+      # alive, and anything reading the run output then waits for THEM: a 6 second deadline
+      # measured 60, the length of the sleep the run happened to be sitting in. Its children are
+      # also precisely what is still holding whatever the hung run acquired, which is half the
+      # reason a hang is worse than a failure.
+      self=$$
+      kill_tree() {
+        [ "$1" = "$self" ] && return 0    # never the watchdog: it is a child of the run too
+        for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done
+        kill -9 "$1" 2>/dev/null
+      }
+      kill_tree "$1"
+      rm -f "$3"    # the victim was killed outright and cannot clean up after itself
+    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK"
+  ) &
+  SUITE_WATCHDOG_PID=$!
+  # Taken out of the job table, or bash announces the kill at cleanup by printing the whole
+  # watchdog source, which CONTAINS the words it prints on a real timeout. A healthy run then
+  # ends with a timeout message in its own output and anything reading for one is fooled. Caught
+  # by the check that a healthy run is not killed by its own deadline, which is the half of this
+  # that only exists because a guard has to be seen NOT firing too.
+  disown "$SUITE_WATCHDOG_PID" 2>/dev/null || true
+else
+  SUITE_WATCHDOG_PID=""
+fi
+
+# One cleanup, ADDED to rather than replaced further down. #21 shipped a defect of exactly that
+# shape here: an exit handler that replaced the one removing the pull temp file, leaking a file
+# on every run, and nothing noticed because both handlers were individually correct.
+suite_cleanup(){
+  [ -n "${SUITE_WATCHDOG_PID:-}" ] && kill "$SUITE_WATCHDOG_PID" 2>/dev/null
+  [ -n "${SUITE_SECTION_MARK:-}" ] && rm -f "$SUITE_SECTION_MARK"
+  [ -n "${WORK:-}" ] && rm -rf "$WORK"
+  return 0
+}
+trap suite_cleanup EXIT
+
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1 (expr: $2)"; fi; }
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# No trap here any more. It used to remove WORK and would now REPLACE suite_cleanup, silently
+# leaving the deadline watchdog running after every run, which is the precise defect #21 shipped
+# once already. suite_cleanup removes WORK as well, so this is one handler doing all of it.
 
 # Redirect the shell rc for the WHOLE suite, not just the alias tests. install-autosync
 # installs the claudesync alias, and the older autosync tests below call it without
@@ -2038,7 +2181,7 @@ if [ -n "${SUITE_FILTERED:-}" ]; then
   echo "  skipped: #27 subruns (already inside a filtered run; spawning here would recurse)"
 else
 SUBOUT="$WORK/subrun.txt"
-SECTION_UNTIL="sync (two-way) over a local fake remote" bash "$SCRIPT_SELF" > "$SUBOUT" 2>&1; rc_sub=$?
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL="sync (two-way) over a local fake remote" bash "$SCRIPT_SELF" > "$SUBOUT" 2>&1; rc_sub=$?
 check "#27 a stopped-early run still reports a total" "grep -q '^PASS=' '$SUBOUT'"
 check "#27 it reaches the named section"       "grep -q 'sync (two-way) over a local fake remote' '$SUBOUT'"
 check "#27 it stops after it"                  "! grep -q 'install-autosync writes a receive-timer' '$SUBOUT'"
@@ -2048,17 +2191,21 @@ check "#27 a stopped-early run does less work" "[ \"\${sub_total:-99999}\" -lt 2
 # And it must be HONEST: the sections build on each other, so a partial run that produced
 # failures the code did not cause would be worse than the slow full run it replaces.
 check "#27 a stopped-early run is still green" "[ $rc_sub -eq 0 ]"
+# #34: the depth limit is only real if a real spawn site actually increments it. Asserted on a
+# child this section was already paying for, and on the child SAYING so, because a limit whose
+# counter never moves reads exactly like one that works (L3: built is not wired).
+check "#34 a spawned run announces the depth it is running at" "grep -q 'depth 1' '$SUBOUT'"
 # A name matching NOTHING is an error, never a silent green: a run that checked zero things
 # and exits 0 is indistinguishable from one where everything passed.
 SUBOUT2="$WORK/subrun2.txt"
-SECTION_UNTIL=zzz-no-such-section bash "$SCRIPT_SELF" > "$SUBOUT2" 2>&1; rc_sub2=$?
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=zzz-no-such-section bash "$SCRIPT_SELF" > "$SUBOUT2" 2>&1; rc_sub2=$?
 check "#27 a name matching nothing fails"      "[ $rc_sub2 -ne 0 ]"
 check "#27 and says it matched no section"     "grep -qi 'matched no section' '$SUBOUT2'"
 # An extraction that produces invalid shell must REFUSE, not run the broken script and report
 # its parse errors as failures of the code under test. Driven through a named seam rather
 # than by racing a real breakage, so the refusal is proven instead of assumed.
 SUBOUT3="$WORK/subrun3.txt"
-SUITE_EXTRACT_BREAK=1 SECTION_UNTIL="push" bash "$SCRIPT_SELF" > "$SUBOUT3" 2>&1; rc_sub3=$?
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_EXTRACT_BREAK=1 SECTION_UNTIL="push" bash "$SCRIPT_SELF" > "$SUBOUT3" 2>&1; rc_sub3=$?
 check "#27 an unparseable extraction refuses to run"  "[ $rc_sub3 -ne 0 ]"
 check "#27 and blames the extractor, not the code"    "grep -qi 'bug in the section extractor' '$SUBOUT3'"
 check "#27 and reports no test results at all"        "! grep -q '^PASS=' '$SUBOUT3'"
@@ -2199,6 +2346,115 @@ check "#30 every state file the code defines is documented" "[ -z \"\$_undocumen
 # nothing and passes, which is the failure this session kept running into.
 check "#30 the derivation found the state files to check" \
   "[ \"\$(_statepaths | grep -c .)\" -ge 5 ]"
+
+section "== a suite run refuses to nest without bound (#34) =="
+# #27 let the suite run itself as a subprocess and 45528c7 fixed one way that recursed without
+# bound, by skipping subruns inside an already-filtered run. That protection was one flag read
+# correctly, proven by a single observation, and its own check had to be removed because the
+# child stopped before ever reaching the guard. The SHAPE stayed: anything running the suite
+# from inside the suite can multiply, and a process explosion presents as slowness, so nobody
+# investigates (seventeen of them were found by accident on 2026-08-17).
+#
+# A depth counter makes the whole class impossible instead of that one instance, and it is
+# reachable in milliseconds: the refusal is at the TOP of the script, so proving it needs no
+# suite inside a suite at all, which is what made the old check untestable.
+#
+# The child is given SECTION_UNTIL as well, and that is not decoration. Without it, a child that
+# is NOT refused runs the whole suite, reaches this very section and spawns further, so the
+# state this test exists to catch presents as a process explosion rather than as a red check.
+# It did exactly that when this was first written. Bounded, an unrefused child instead runs one
+# cheap section and exits 0, and every assertion below then fails in the ordinary way.
+#
+# It also pins WHERE the refusal has to live. SECTION_UNTIL re-executes the suite from a temp
+# copy, so a depth guard placed after that handling would never be reached by a filtered run;
+# a child refused while carrying a filter proves the guard sits ahead of it.
+#
+# SUITE_FILTERED is CLEARED for the child, and that is the sharpest edge here. This section can
+# itself be reached inside a filtered run, and a filtered run exports that flag to everything it
+# starts. A child inheriting it skips the section filter above, runs the WHOLE suite, arrives
+# back at this section and spawns again, one level at a time, for ever. It is not a wide
+# explosion that a process count would catch: it is a slow chain that looks exactly like a
+# suite that is merely taking a while, which is the whole reason #31 and #34 both exist.
+_deep(){ SUITE_DEPTH="$1" SUITE_FILTERED= SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1; }
+
+_d2="$(_deep 2)"; _d2_rc=$?
+check "#34 a run past the depth limit refuses to run at all" "[ '$_d2_rc' -ne 0 ]"
+check "#34 the refusal says how deep it was asked to go" "printf '%s' \"\$_d2\" | grep -q 'depth 2'"
+# It must refuse EARLY, not run the suite and complain afterwards: a refusal that still pays for
+# a full run is not a limit on anything. A real run prints per-section headings and a PASS= line.
+check "#34 it refuses before running any checks" "! printf '%s' \"\$_d2\" | grep -q '^PASS='"
+
+# A value that cannot be compared must never land on the permissive side of a threshold (L50).
+# `[ abc -gt 1 ]` is a shell ERROR, not a false, and this suite runs without `set -e`, so an
+# unvalidated compare would let a garbage depth through as "not too deep" and the limit would be
+# off precisely when the environment is wrong.
+_dj="$(_deep abc)"; _dj_rc=$?
+check "#34 a depth that is not a number is refused, not waved through" "[ '$_dj_rc' -ne 0 ]"
+check "#34 the refusal names the value it could not read" "printf '%s' \"\$_dj\" | grep -q 'abc'"
+_dn="$(_deep -1)"; _dn_rc=$?
+check "#34 a negative depth is refused too" "[ '$_dn_rc' -ne 0 ]"
+
+# Derived from the script rather than from a list of the spawn sites that were converted, so a
+# NEW spawn site cannot arrive unnoticed (L96). The pattern is BUILT from pieces so the literal
+# never appears in this file: a guard that matches its own assertion line is satisfied by itself.
+_selfspawn_pat="bash \"\$SCRIPT""_SELF\""
+_undeep=""
+while IFS= read -r _sl; do
+  [ -n "$_sl" ] || continue
+  case "$_sl" in *SUITE_DEPTH=*) ;; *) _undeep="$_undeep[$_sl]" ;; esac
+done <<EOF
+$(grep -nF "$_selfspawn_pat" "$SCRIPT_SELF")
+EOF
+check "#34 every line that spawns the suite carries a depth" "[ -z \"\$_undeep\" ]"
+# Or the loop above compares nothing against nothing and passes while every spawn is unguarded.
+check "#34 the derivation found the spawn sites to check" \
+  "[ \"\$(grep -cF \"\$_selfspawn_pat\" '$SCRIPT_SELF')\" -ge 3 ]"
+
+section "== a run that hangs fails on a deadline instead of waiting (#31) =="
+# A wait with no deadline cannot fail, it can only hang, and a hang is WORSE than a failure
+# because it is indistinguishable from slowness (L110). This suite had no time bound at all, and
+# on 2026-08-17 a stalled run went unexamined for eight minutes for exactly that reason. Twice
+# more while this was being written: a recursing run looked simply slow both times.
+#
+# Driven through a named seam that hangs in a chosen section, rather than by waiting for a real
+# stall, so the deadline is PROVEN rather than assumed. The child hangs in the very first
+# section, so this costs about as long as the deadline it sets.
+# Counted BEFORE anything is spawned, because this run has a watchdog of its own and an
+# assertion that none exist at all can only ever fail. What has to be true is that the children
+# below leave none of THEIRS behind.
+_wd_before="$(pgrep -f suite-deadline-watchdog 2>/dev/null | wc -l | tr -d ' ')"
+_t0="$(date +%s)"
+_hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_FILTERED= SUITE_TIMEOUT=6 SUITE_HANG_IN=push bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
+_elapsed=$(( $(date +%s) - _t0 ))
+check "#31 a hung run ends instead of waiting for ever" "[ '$_hang_rc' -ne 0 ]"
+# 30s against a 6s deadline. Deliberately not a tight bound: what this has to catch is the run
+# taking as long as whatever it was sitting in, which is what happened when only the run itself
+# was killed and its children were left holding the output open.
+check "#31 it ends near its deadline rather than long after" "[ '$_elapsed' -lt 30 ]"
+check "#31 it says plainly that it timed out"   "printf '%s' \"\$_hang\" | grep -q 'TIMED OUT'"
+check "#31 it names the section it died in"     "printf '%s' \"\$_hang\" | grep -q 'push'"
+# The whole point is that a hang stops reading as an ordinary run, so it must never leave behind
+# the summary line that means everything passed.
+check "#31 a hung run is never reported as green" "! printf '%s' \"\$_hang\" | grep -q 'FAIL=0'"
+
+# The other half, and the one that would do real damage if it were wrong: a deadline that fires
+# on a HEALTHY run turns every ordinary run into a false failure. A guard has to be seen not
+# firing when it should not, not only firing when it should.
+_okrun="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_FILTERED= SECTION_UNTIL=push SUITE_TIMEOUT=300 bash "$SCRIPT_SELF" 2>&1)"; _okrun_rc=$?
+check "#31 a healthy run is not killed by its own deadline" "! printf '%s' \"\$_okrun\" | grep -q 'TIMED OUT'"
+check "#31 and still reports its result"        "[ '$_okrun_rc' -eq 0 ]"
+
+# A watchdog that outlives the run it watches is holding a process id that the system is free to
+# hand to something else, and it kills what it finds there. Each one exits within a poll of its
+# own run ending, so this waits a few seconds for that rather than reading the instant after.
+_wd_now="$_wd_before"
+_wd_wait=0
+while [ "$_wd_wait" -lt 10 ]; do
+  _wd_now="$(pgrep -f suite-deadline-watchdog 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$_wd_now" -le "$_wd_before" ] && break
+  sleep 1; _wd_wait=$((_wd_wait + 1))
+done
+check "#31 the runs above left no watchdog of their own behind" "[ '$_wd_now' -le '$_wd_before' ]"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
