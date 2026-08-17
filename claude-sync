@@ -136,6 +136,12 @@ die_transient(){   # $1 = message. Fails like die(), but stays quiet during a sh
   # A marker that will not parse must never compare as "recent" and silence a real outage:
   # an unusable value goes to the fail-safe side, which here means alerting (L50).
   case "$last" in ''|*[!0-9]*) last="" ;; esac
+  # A success stamped in the FUTURE is not usable evidence, and it is the dangerous
+  # direction: it makes the gap NEGATIVE, which is smaller than any threshold, so it reads
+  # as "synced moments ago" and silences the alert for as long as it stays ahead. A folder
+  # restored from a backup, or carried off a machine whose clock was wrong, lands exactly
+  # there. Merely OLD is already handled, because a large gap alerts by definition. (#25)
+  if [ -n "$last" ] && [ "$last" -gt "$now" ] 2>/dev/null; then last=""; fi
   if [ -n "$last" ]; then
     gap=$((now - last))
     if [ "$gap" -lt "$threshold" ]; then
@@ -163,6 +169,17 @@ have_git(){ [ "${SYNC_NO_GIT:-0}" != "1" ]; }
 # you to run and a diagnosis that hangs on the condition it diagnoses is worse than none.
 lock_owner_alive(){ [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
+# How long this lock has existed, in seconds. Unknown counts as 0 (not stale), so a lock
+# whose age cannot be read is left alone rather than broken on a guess.
+lock_age_seconds(){
+  local m now
+  m="$(stat -f %m "$SYNC_LOCK/pid" 2>/dev/null || true)"
+  case "$m" in ''|*[!0-9]*) printf '0'; return 0 ;; esac
+  now="$(date +%s)"
+  if [ "$m" -gt "$now" ]; then printf '0'; return 0; fi   # a future mtime is not evidence of age
+  printf '%s' "$((now - m))"
+}
+
 acquire_lock(){
   local waited=0 broke=0 max="${SYNC_LOCK_WAIT:-90}" pid
   while ! mkdir "$SYNC_LOCK" 2>/dev/null; do
@@ -173,6 +190,21 @@ acquire_lock(){
     # the full timeout for itself and then dies, which is how every self-update test in
     # the suite failed the first time this lock was added.
     [ -n "$pid" ] && [ "$pid" = "$$" ] && return 0
+    # A lock older than any plausible run is broken REGARDLESS of whether its recorded pid
+    # looks alive. Liveness alone is not enough for a folder copied or restored from a
+    # backup: the pid in it belongs to a process on a DIFFERENT machine, and if some
+    # unrelated process here happens to hold that number, the lock reads as held for ever
+    # and syncing never resumes. Age is the evidence that survives the move. (#25)
+    # One hour, and that number is measured rather than guessed: on 2026-08-17 a live sync of
+    # the real 4.7MB payload took 6 seconds and a fresh clone plus full first pull took 4, so
+    # the ceiling is roughly 600x the slowest real run. It matters more than the other
+    # thresholds here because being wrong LOW starts a second run on top of a live one.
+    if [ "$(lock_age_seconds)" -gt "${SYNC_LOCK_MAX_AGE:-3600}" ] 2>/dev/null; then
+      echo "claude-sync: broke a stale lock in $SYNC_LOCK (older than ${SYNC_LOCK_MAX_AGE:-3600}s, so no run can still be holding it)." >&2
+      rm -rf "$SYNC_LOCK" 2>/dev/null || true
+      broke=$((broke+1))
+      [ "$broke" -le 5 ] && continue
+    fi
     if ! lock_owner_alive "$pid"; then
       # A crashed run must not wedge syncing for good, so a lock whose owner is gone has
       # to be breakable. This reading deliberately does NOT decide who takes over: two

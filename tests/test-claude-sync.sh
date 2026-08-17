@@ -1894,19 +1894,36 @@ check "#25 an ancient lock does not block a run" "[ $rc_st -eq 0 ]"
 check "#25 and the run says it broke a stale lock" \
   "printf '%s' \"\$out_st\" | grep -qi 'stale lock'"
 
-# An outage clock from before this clone existed must not be treated as a recent success,
-# because that is exactly what silences a real outage.
+# The FUTURE is the hole, not the past. A clock that is merely old already alerts, because
+# the gap exceeds the threshold by definition. A clock ahead of now produces a NEGATIVE gap,
+# which is smaller than any threshold, so it reads as "synced moments ago" and silences the
+# alert for as long as it stays ahead. A folder restored from a backup, or one carried off a
+# machine whose clock was wrong, lands exactly there. The first version of this test aged the
+# FILE while the code reads the timestamp written INSIDE it, so it passed for an unrelated
+# reason and proved nothing; it is rewritten rather than kept.
 git -C "$STR2" remote set-url origin "$WORK/stale-gone.git"
-printf '%s\n' "$(( $(date +%s) - 60 ))" > "$STR2/.last-success"
-touch -t "$(date -v-30d +%Y%m%d%H%M)" "$STR2/.last-success" 2>/dev/null || touch -d '30 days ago' "$STR2/.last-success"
+# Independent of the lock section above. Leaving that planted lock in place made every sync
+# here die with "already running" and notify, so the clock checks were measuring the LOCK:
+# the future-clock check passed for that reason, and only the control below revealed it.
+rm -rf "$STR2/.sync-lock"
 NOTED2="$WORK/notified2.log"; : > "$NOTED2"
 FAKEN2="$WORK/fake-notifier2"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$NOTED2" > "$FAKEN2"; chmod +x "$FAKEN2"
+printf '%s\n' "$(( $(date +%s) + 86400 ))" > "$STR2/.last-success"   # a day in the future
 echo 'edit again' > "$STH2/skills/s/SKILL.md"
+out_fut="$(CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NOTIFIER="$FAKEN2" SYNC_NO_NOTIFY=0 \
+  SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync 2>&1 || true)"
+check "#25 a clock in the future does not silence an outage" "[ -s '$NOTED2' ]"
+check "#25 and it says the record was not usable" \
+  "printf '%s' \"\$out_fut\" | grep -qi 'no record'"
+# Control, so the rule above cannot be satisfied by simply alerting on everything: an
+# ordinary recent success must still keep a blip quiet.
+: > "$NOTED2"
+printf '%s\n' "$(( $(date +%s) - 60 ))" > "$STR2/.last-success"
+echo 'edit once more' > "$STH2/skills/s/SKILL.md"
 CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NOTIFIER="$FAKEN2" SYNC_NO_NOTIFY=0 \
   SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync >/dev/null 2>&1 || true
-check "#25 a clock older than the file it sits in does not silence an outage" \
-  "[ -s '$NOTED2' ]"
+check "#25 a genuinely recent success still keeps a blip quiet" "[ ! -s '$NOTED2' ]"
 
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
