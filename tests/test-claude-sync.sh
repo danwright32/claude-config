@@ -2591,6 +2591,63 @@ check "#32 a nested run does not fight its parent for the lock" "[ '$_nested_rc'
 # A run that finishes must not leave the lock standing, or the next one refuses for ever.
 check "#32 a finished run releases its lock" "[ ! -d '$_lockdir/dead' ] || [ ! -f '$_lockdir/dead/pid' ]"
 
+section "== status notices processes the tool left running (#33) =="
+# Seventeen suite processes were running and spawning each other on 2026-08-17, found only because
+# Dan asked an unrelated question about a monitor. Before that they had silently been making every
+# run take about twice as long, and those timings were used to reason about the code. The symptom
+# is indistinguishable from ordinary slowness, so nobody investigates.
+#
+# The process list comes through one seam so this never depends on, or reports, what happens to be
+# running on the real machine (L2). A real watcher IS running here while these tests execute, and
+# the empty-fixture case below is the control proving the seam is actually consulted rather than
+# silently missed, which would leave every check passing against live processes (L143).
+PSH="$WORK/ps-home"; PSR="$WORK/ps-repo"
+mkdir -p "$PSH" "$PSR/payload"; echo '{"hooks":{}}' > "$PSH/settings.json"
+_status_with(){ SYNC_PS_FIXTURE="$1" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1; }
+
+# One watcher, with the helper it forks. This is the ordinary healthy machine and must be silent,
+# or a line appears on every status and stops being read before a real pile-up ever shows up.
+cat > "$WORK/ps-healthy" <<'PSEOF'
+  501     1 03:11:02 /bin/bash /Users/x/claude-config-sync/claude-sync watch
+  502   501 03:11:02 /bin/bash /Users/x/claude-config-sync/claude-sync watch
+  777     1 00:00:04 /bin/bash /Users/x/claude-config-sync/tests/test-claude-sync.sh
+PSEOF
+_ps_ok="$(_status_with "$WORK/ps-healthy")"
+check "#33 one watcher and one run are not reported" \
+  "! printf '%s' \"\$_ps_ok\" | grep -qi 'left running\|stray'"
+
+# Three separate watchers. A count alone would catch this one.
+cat > "$WORK/ps-many" <<'PSEOF'
+  501     1 03:11:02 /bin/bash /Users/x/claude-config-sync/claude-sync watch
+  601     1 01:02:03 /bin/bash /Users/x/claude-config-sync/claude-sync watch
+  701     1 00:09:00 /bin/bash /Users/x/claude-config-sync/claude-sync watch
+PSEOF
+_ps_many="$(_status_with "$WORK/ps-many")"
+check "#33 several watchers are reported"        "printf '%s' \"\$_ps_many\" | grep -qi 'watcher'"
+check "#33 and each one's age is given"          "printf '%s' \"\$_ps_many\" | grep -q '03:11:02'"
+check "#33 and the process ids are named"        "printf '%s' \"\$_ps_many\" | grep -q '601'"
+
+# The case a count CANNOT catch, and the reason this counts roots and depth instead. A run that
+# spawned a run that spawned a run is one root nested deep, and the pile grows one process at a
+# time: the real runaway peaked at seven and an alarm set at six never fired once.
+cat > "$WORK/ps-chain" <<'PSEOF'
+  800     1 00:20:00 /bin/bash /Users/x/claude-config-sync/tests/test-claude-sync.sh
+  801   800 00:15:00 /bin/bash /Users/x/claude-config-sync/tests/test-claude-sync.sh
+  802   801 00:10:00 /bin/bash /Users/x/claude-config-sync/tests/test-claude-sync.sh
+  803   802 00:05:00 /bin/bash /Users/x/claude-config-sync/tests/test-claude-sync.sh
+PSEOF
+_ps_chain="$(_status_with "$WORK/ps-chain")"
+check "#33 a run nested inside a run is reported" "printf '%s' \"\$_ps_chain\" | grep -qi 'test run'"
+check "#33 and it says how deeply they are nested" "printf '%s' \"\$_ps_chain\" | grep -qi 'deep'"
+
+# The control (L143): an EMPTY listing must report nothing even though this machine really does
+# have a watcher running right now. If the seam were ignored, this check would fail against the
+# live process table, which is the only thing that can tell a working stub from one that missed.
+: > "$WORK/ps-none"
+_ps_none="$(_status_with "$WORK/ps-none")"
+check "#33 nothing running is reported as nothing" \
+  "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher\|test run'"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
