@@ -75,6 +75,11 @@ Accept a known string by adding the sha256 of the matched text to
 bash tests/test-claude-sync.sh
 ```
 
+Every push and pull request also runs the suite on a Linux runner
+(`.github/workflows/tests.yml`). No path filter: the suite reads `README.md` and `DESIGN.md` as
+well as the code, and checks every tracked file for Python bytecode, so filtering by where the code
+lives would skip precisely the change that breaks it.
+
 Run one part while iterating, which stops after the section you name:
 
 ```bash

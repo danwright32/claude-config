@@ -124,6 +124,38 @@ peering inside them, which is a rule that would then live for ever.
 The other half of the measurement is why "older than a day" was not kept: all 37 were created
 within one hour and 43 minutes of each other, so a day would have reclaimed nothing at all.
 
+### Running the suite in CI on a Mac, so it runs where it ships
+
+Rejected for #38 on cost, after being chosen and then reversed on a measurement.
+
+The argument for it is real: this tool only ever runs on macOS, so a Mac runner needs no porting
+and tests the platform that actually matters. The argument against is arithmetic. GitHub bills
+macOS minutes at 10x, the suite takes about two minutes, so a run costs roughly 25 billable
+minutes. This repo took 265 commits in the fourteen days to 2026-08-17, about 19 a day, because the
+watcher pushes every config edit within seconds of it happening. That is around 14,000 billable
+minutes a month against a 2,000 minute allowance.
+
+Filtering which pushes trigger a run does not save it either: at roughly 2 non-autosync commits a
+day plus pull requests plus a periodic unfiltered run, it still lands near 2,250 a month, and the
+filter itself is the thing L88 warns about, since the suite reads README.md and DESIGN.md and
+checks every tracked file.
+
+So the suite was made portable instead, which turned out to be two helpers and eleven call sites,
+and it now runs on Linux on every push with no filter at all, for about 1,400 minutes a month at
+the 1x rate.
+
+The port also found a real defect that had nothing to do with Linux. BSD `date -r ""` does not
+fail: it succeeds and answers 1969-12-31. A Mac marker whose timestamp could not be read would
+therefore have been reported as a confident date rather than as "an unknown date", which the
+calling code already had ready and never got to use.
+
+The GNU halves of both helpers are exercised on this Mac through stand-ins shaped like the GNU
+tools, because a Mac otherwise never runs that code at all and the runner depends on it entirely.
+The trap they exist for is specific: `stat -f %m FILE` on GNU means file system status, prints a
+block about the filesystem and exits non-zero, so a plain `||` fallback concatenates that block
+with the real answer rather than replacing it. A mutation to exactly that naive form is caught by
+those stand-ins and by nothing else.
+
 ## Measured numbers
 
 Every threshold here is a multiple of something real, measured on the date given. None is a round

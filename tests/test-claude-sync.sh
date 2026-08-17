@@ -345,6 +345,18 @@ if [ "$SUITE_DEPTH" -eq 0 ]; then
   bash "$SCRIPT" reap-scratch 2>&1 | sed 's/^claude-sync: /test suite: /'
 fi
 
+# The suite's own mtime reader. Deliberately NOT claude-sync's, though the two do the same thing:
+# a test that measures with the code under test can only confirm that code agrees with itself, so
+# a broken reader would move both sides of every comparison together and nothing would notice
+# (L70). That the two agree is a separate and much weaker claim, and it is checked once, on its own.
+_suite_mtime(){   # path -> unix timestamp, or nothing
+  local m
+  m="$(stat -f %m "$1" 2>/dev/null || true)"
+  case "$m" in ''|*[!0-9]*) m="$(stat -c %Y "$1" 2>/dev/null || true)" ;; esac
+  case "$m" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s\n' "$m"
+}
+
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
@@ -508,13 +520,13 @@ RI="$WORK/repoI"; mkdir -p "$RI"
 # first pull-style apply establishes canonical form
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
-before_mtime="$(stat -f %m "$CI/settings.json")"
-before_cl="$(stat -f %m "$CI/CLAUDE.md")"
+before_mtime="$(_suite_mtime "$CI/settings.json")"
+before_cl="$(_suite_mtime "$CI/CLAUDE.md")"
 sleep 1
 # second apply with identical payload must NOT touch settings.json or CLAUDE.md
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
-after_mtime="$(stat -f %m "$CI/settings.json")"
-after_cl="$(stat -f %m "$CI/CLAUDE.md")"
+after_mtime="$(_suite_mtime "$CI/settings.json")"
+after_cl="$(_suite_mtime "$CI/CLAUDE.md")"
 check "settings.json untouched on no-op sync" "[ '$before_mtime' = '$after_mtime' ]"
 check "CLAUDE.md untouched on no-op sync"      "[ '$before_cl' = '$after_cl' ]"
 
@@ -1459,10 +1471,10 @@ git -C "$RMB" pull -q 2>/dev/null
 CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" SYNC_NO_NOTIFY=1 bash "$RMB/claude-sync" pull >/dev/null 2>&1
 git -C "$RMA" pull -q --no-rebase 2>/dev/null
 # Mac A rewrites L1's wording.
-sed -i '' 's/- \*\*L1\. one\.\*\* body one/- **L1. one.** rewritten by Mac A/' "$RMA/payload/LESSONS.md"
+perl -i -pe 's/- \*\*L1\. one\.\*\* body one/- **L1. one.** rewritten by Mac A/' "$RMA/payload/LESSONS.md"
 git -C "$RMA" add -A && git -C "$RMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A rewrites L1" && git -C "$RMA" push -q
 # Mac B rewrites the SAME line differently, and also adds an entry of its own.
-sed -i '' 's/- \*\*L1\. one\.\*\* body one/- **L1. one.** rewritten by Mac B/' "$RMBH/LESSONS.md"
+perl -i -pe 's/- \*\*L1\. one\.\*\* body one/- **L1. one.** rewritten by Mac B/' "$RMBH/LESSONS.md"
 printf -- '- **L6. six.** only on Mac B\n' >> "$RMBH/LESSONS.md"
 out_rm2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" bash "$RMB/claude-sync" pull 2>&1)"
 check "#14 an unmergeable file still keeps a copy of yours" \
@@ -2766,6 +2778,88 @@ check "#33 and it says how deeply they are nested" "printf '%s' \"\$_ps_chain\" 
 _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
   "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher\|test run'"
+
+section "== nothing depends on a tool only BSD has (#38) =="
+# The suite runs on every push now, on a Linux runner, so anything spelled the BSD way stops the
+# whole gate rather than failing one check. The awkward part is that a wrong answer here does not
+# look like an error: `stat -f %m FILE` on GNU means "file system status" and prints a multi-line
+# block about the filesystem, so a naive fallback concatenates that block with the real number and
+# every age comparison downstream then reads it as garbage.
+_PORTABLE_HELPERS="$WORK/helpers.sh"
+{ echo 'file_mtime(){ :; }'; sed -n '/^file_mtime(){/,/^}/p;/^date_from_epoch(){/,/^}/p' "$SCRIPT"; } > "$_PORTABLE_HELPERS"
+# shellcheck disable=SC1090
+. "$_PORTABLE_HELPERS"
+echo 'x' > "$WORK/mtime-probe"
+_pm="$(file_mtime "$WORK/mtime-probe")"
+check "#38 the mtime helper returns a bare timestamp" "printf '%s' \"\$_pm\" | grep -qE '^[0-9]+$'"
+# The claim that matters is not "it returns a number" but "it returns the RIGHT number", measured
+# against the suite's own independent reader rather than against itself (L70).
+check "#38 and it agrees with the suite's own reader" "[ \"\$_pm\" = \"\$(_suite_mtime '$WORK/mtime-probe')\" ]"
+# Unreadable must be EMPTY, not a zero and not an error blob: every caller treats empty as "no
+# evidence", and a 0 would read as 1970, which is old enough to trip every age threshold there is.
+_pmiss="$(file_mtime "$WORK/no-such-file-at-all")"
+check "#38 an unreadable path yields nothing at all" "[ -z \"\$_pmiss\" ]"
+_pdate="$(date_from_epoch 1000000000 '+%Y-%m-%d')"
+check "#38 the date helper formats a timestamp" "[ '$_pdate' = '2001-09-08' ] || [ '$_pdate' = '2001-09-09' ]"
+_pdbad="$(date_from_epoch '' '+%Y-%m-%d')"
+check "#38 and yields nothing for a timestamp it cannot read" "[ -z \"\$_pdbad\" ]"
+
+# The GNU half of both helpers is the half this Mac never runs, so on a Mac it is unproven code
+# that the runner is about to depend on entirely. Driven here through stand-ins that behave the way
+# the GNU tools do, so the fallback is watched WORKING rather than assumed (L143: a fallback nothing
+# exercises is indistinguishable from one that is broken).
+_GNUBIN="$WORK/gnu-bin"; mkdir -p "$_GNUBIN"
+cat > "$_GNUBIN/stat" <<'GNUSTAT'
+#!/usr/bin/env bash
+# GNU stat: -f means --file-system and prints a block about the filesystem, and the mtime format
+# lives behind -c. This is the shape that makes a naive `||` fallback concatenate the two.
+if [ "${1:-}" = "-f" ]; then shift; echo "  File: \"${*}\""; echo "    ID: 9a1f2b Namelen: 255  Type: apfs"; exit 1; fi
+if [ "${1:-}" = "-c" ]; then fmt="${2:-}"; shift 2; [ "$fmt" = "%Y" ] || exit 1; exec perl -e 'print ((stat($ARGV[0]))[9], "\n")' "$1"; fi
+exit 1
+GNUSTAT
+cat > "$_GNUBIN/date" <<'GNUDATE'
+#!/usr/bin/env bash
+# GNU date: -r takes a FILE, so a timestamp is not found; -d @N is the way to format an epoch.
+if [ "${1:-}" = "-r" ]; then echo "date: cannot stat '${2:-}': No such file or directory" >&2; exit 1; fi
+if [ "${1:-}" = "-d" ]; then
+  spec="${2:-}"; fmt="${3:-+%Y-%m-%d}"
+  case "$spec" in @*) exec perl -e 'use POSIX qw(strftime); my $f=$ARGV[1]; $f =~ s/^\+//; print strftime($f, localtime($ARGV[0])), "\n"' "${spec#@}" "$fmt" ;; esac
+  exit 1
+fi
+exit 1
+GNUDATE
+chmod +x "$_GNUBIN/stat" "$_GNUBIN/date"
+_gnu_mtime="$(PATH="$_GNUBIN:$PATH" bash -c ". '$_PORTABLE_HELPERS'; file_mtime '$WORK/mtime-probe'")"
+check "#38 the mtime helper still answers with GNU-shaped tools" \
+  "printf '%s' \"\$_gnu_mtime\" | grep -qE '^[0-9]+$'"
+# The specific trap: the filesystem block must not be carried along with the number.
+check "#38 and does not carry the filesystem block with it" \
+  "[ \"\$_gnu_mtime\" = \"\$(_suite_mtime '$WORK/mtime-probe')\" ]"
+check "#38 and the stand-in really was used" \
+  "PATH='$_GNUBIN:'\$PATH command -v stat | grep -q gnu-bin"
+_gnu_date="$(PATH="$_GNUBIN:$PATH" bash -c ". '$_PORTABLE_HELPERS'; date_from_epoch 1000000000 '+%Y-%m-%d'")"
+check "#38 the date helper still answers with GNU-shaped tools" \
+  "[ '$_gnu_date' = '2001-09-08' ] || [ '$_gnu_date' = '2001-09-09' ]"
+
+# Derived, so the port cannot quietly rot: one new `stat -f` anywhere outside the helper breaks
+# every run on the runner, and the helper is the only place allowed to spell it that way. Comments
+# are stripped first, or the paragraph above explaining the problem counts as an instance of it
+# (L103). The helper bodies are excluded by name rather than by line number.
+# The patterns are BUILT from pieces, so this file never contains the literals it searches for. A
+# guard satisfied by its own assertion line reports the codebase as broken for ever and teaches
+# everyone to ignore it, which is the same trap #34's spawn-site check had to be written around.
+_bsdisms(){
+  local a b c
+  a="stat"" -f"; b="date"" -r "; c="sed"" -i ''"
+  sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" \
+    | grep -nF -e "$a" -e "$b" -e "$c" \
+    | grep -vF "$a %m \"\$1\"" | grep -vF "$b\"\$1\"" || true
+}
+check "#38 no BSD-only spelling survives outside the two helpers" "[ -z \"\$(_bsdisms)\" ]"
+# And the helpers really are there to be excluded, or the check above passes by matching nothing
+# at all in a file that has been emptied or renamed.
+check "#38 the portable helpers exist" \
+  "grep -q '^file_mtime(){' '$SCRIPT' && grep -q '^date_from_epoch(){' '$SCRIPT' && grep -q '^_suite_mtime(){' '$SCRIPT_SELF'"
 
 section "== the design record's numbers still match the code (#41) =="
 # DESIGN.md records every threshold as a MEASURED value with the reasoning behind it, and all of

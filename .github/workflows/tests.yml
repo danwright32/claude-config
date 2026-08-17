@@ -1,0 +1,50 @@
+name: tests
+
+# Runs on EVERY push and pull request, with no path filter, and that is deliberate. The suite reads
+# claude-sync and its own file, but it also reads README.md and DESIGN.md (the checks that the
+# documented state files and the measured thresholds still match the code), and it runs git ls-files
+# over the whole tree to prove no Python bytecode is tracked. A filter derived from "where the code
+# lives" would skip precisely the change that breaks it, and a skipped job is indistinguishable from
+# a passing one (L88).
+on:
+  push:
+  pull_request:
+
+# A superseded run tells you nothing you will act on, and the watcher pushes config changes one
+# commit at a time, so several can be queued at once.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    # The suite kills itself at 900s and says which section it died in, which is a far more useful
+    # failure than a job the platform cuts off. This is the backstop for a hang that escapes that,
+    # set well above it so it never fires first.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The bytecode hygiene check runs git ls-files, and the suite's own subruns re-execute
+          # the checked-out copy. Neither needs history, so the default shallow clone is fine.
+          fetch-depth: 1
+
+      - name: Record the environment the suite is judged in
+        # Printed rather than assumed. Several checks shell out to pgrep, mktemp, rsync, jq and
+        # perl, and a version difference here is the first thing worth seeing when a run fails on
+        # the runner but passes on a Mac.
+        run: |
+          bash --version | head -1
+          git --version
+          rsync --version | head -1
+          jq --version
+          perl --version | sed -n '2p'
+          echo "pgrep: $(command -v pgrep || echo MISSING)"
+          echo "TMPDIR: ${TMPDIR:-<unset, /tmp will be used>}"
+
+      - name: Run the suite
+        run: bash tests/test-claude-sync.sh
