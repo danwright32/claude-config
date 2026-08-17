@@ -2,6 +2,11 @@
 
 Two-way sync of selected `~/.claude` config between my Macs.
 
+This file says what the tool does. [DESIGN.md](DESIGN.md) says what was tried and rejected, where
+every threshold's number came from, and how much each guard is actually proven. Read it before
+changing a design decision, so an approach that was already measured and discarded does not come
+back.
+
 ## What syncs
 
 - `payload/hooks/` — automation scripts
