@@ -1854,7 +1854,16 @@ report_process_family(){
 # is decided by its own ownership rules, and a reaper second-guessing them from outside is exactly
 # how a live lock gets deleted (L157).
 SYNC_SCRATCH_ROOT="${SYNC_SCRATCH_ROOT:-${TMPDIR:-/tmp}}"
+# An automatic deletion policy is the user's decision, never a silent default (L9), so it has an
+# off switch and it is the same one the deadline uses: 0 means never sweep. Anything that is not a
+# whole number is REFUSED rather than guessed at, because this value guards an `rm -rf` and an
+# unparseable one must not land on the permissive side of it (L50).
 SYNC_SCRATCH_MAX_AGE="${SYNC_SCRATCH_MAX_AGE:-3600}"
+case "$SYNC_SCRATCH_MAX_AGE" in
+  ''|*[!0-9]*)
+    echo "claude-sync: SYNC_SCRATCH_MAX_AGE='$SYNC_SCRATCH_MAX_AGE' is not a whole number of seconds. Refusing to run rather than sweeping to an age nobody can read. Set it to 0 to turn the sweep off." >&2
+    exit 2 ;;
+esac
 SYNC_SCRATCH_NAMES="claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-suite-work. claude-sync-suite-section."
 
 # Every short-lived temp FILE in this tool is made here rather than by each call site writing its
@@ -1870,6 +1879,8 @@ scratch_file(){ mktemp "${TMPDIR:-/tmp}/claude-sync-work.XXXXXXXX"; }
 # stated: a burst of interrupted runs is not reclaimed until an hour after the last of them.
 scratch_leftovers(){
   local root="${SYNC_SCRATCH_ROOT%/}" now p n age m
+  # Off means off: nothing is listed, so nothing is reported and nothing is removed.
+  [ "$SYNC_SCRATCH_MAX_AGE" -eq 0 ] && return 0
   now="$(date +%s)"
   for n in $SYNC_SCRATCH_NAMES; do
     for p in "$root/$n"*; do
@@ -1928,6 +1939,12 @@ do_reap_scratch(){
   n="$(printf '%s' "$list" | grep -c . || true)"
   # Finding nothing is its own outcome, said out loud. A reaper that prints the same thing whether
   # it swept a gigabyte or was pointed at the wrong directory is one nobody can check (L98).
+  # Turned OFF and found nothing are different answers, and saying "nothing to reclaim" to somebody
+  # who has switched the sweep off would be a claim this never checked (L11).
+  if [ "$SYNC_SCRATCH_MAX_AGE" -eq 0 ]; then
+    echo "claude-sync: the scratch sweep is off (SYNC_SCRATCH_MAX_AGE=0), so nothing in $SYNC_SCRATCH_ROOT was looked at or removed."
+    return 0
+  fi
   if [ "${n:-0}" -eq 0 ]; then
     echo "claude-sync: no abandoned scratch to reclaim in $SYNC_SCRATCH_ROOT (nothing there older than ${SYNC_SCRATCH_MAX_AGE}s carries a name this tool owns)."
     return 0

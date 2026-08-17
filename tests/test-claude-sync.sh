@@ -2806,6 +2806,25 @@ check "#36 reaping again finds nothing and says so" \
 check "#36 and status goes quiet once they are gone" \
   "! _scr_status | grep -qi 'scratch the tool left behind'"
 
+# An automatic deletion policy is the user's decision, never a silent default (L9). Planted old,
+# so a sweep that ignored the off switch would really remove them and the check cannot pass by
+# there being nothing to delete.
+_scr_dir "claude-sync-suite-work.OFFTEST" 1
+_scr_age "$_SCR/claude-sync-suite-work.OFFTEST"
+_scr_off="$(SYNC_SCRATCH_MAX_AGE=0 SYNC_SCRATCH_ROOT="$_SCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"; _scr_off_rc=$?
+check "#36 the sweep can be turned off"          "[ '$_scr_off_rc' -eq 0 ]"
+check "#36 and says it is off rather than that it found nothing" \
+  "printf '%s' \"\$_scr_off\" | grep -qi 'sweep is off'"
+check "#36 and removes nothing while it is off"  "[ -d '$_SCR/claude-sync-suite-work.OFFTEST' ]"
+_scr_off_st="$(SYNC_SCRATCH_MAX_AGE=0 SYNC_SCRATCH_ROOT="$_SCR" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#36 and status reports no leftovers while it is off" \
+  "! printf '%s' \"\$_scr_off_st\" | grep -qi 'scratch the tool left behind'"
+# An age that cannot be read must never land on the permissive side of an `rm -rf` (L50).
+_scr_junk="$(SYNC_SCRATCH_MAX_AGE=soon SYNC_SCRATCH_ROOT="$_SCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"; _scr_junk_rc=$?
+check "#36 an unreadable age is refused, not guessed" "[ '$_scr_junk_rc' -ne 0 ]"
+check "#36 and the refusal names the value"          "printf '%s' \"\$_scr_junk\" | grep -q 'soon'"
+check "#36 and it removed nothing on the way out"    "[ -d '$_SCR/claude-sync-suite-work.OFFTEST' ]"
+
 # A young path matching the LAST name the reaper looks for. This is not a corner: the last name is
 # the suite's own section mark, and a run always has a live one, so this is the state EVERY call
 # made during a suite run is in. The tool runs under `set -e`, so the sweep ending on a false age

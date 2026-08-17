@@ -110,7 +110,7 @@ is still using is safe.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `SYNC_SCRATCH_ROOT` | `$TMPDIR` | Where the tool's scratch lives, and the only place the sweep looks. |
-| `SYNC_SCRATCH_MAX_AGE` | `3600` | Seconds before scratch counts as abandoned. A suite run cannot outlive its own 15 minute deadline and a sync takes 6 seconds, so this is 4x the longest run the tool permits. The cost is that a burst of interrupted runs is not reclaimed until an hour after the last of them. |
+| `SYNC_SCRATCH_MAX_AGE` | `3600` | Seconds before scratch counts as abandoned. A suite run cannot outlive its own 15 minute deadline and a sync takes 6 seconds, so this is 4x the longest run the tool permits. The cost is that a burst of interrupted runs is not reclaimed until an hour after the last of them. `0` turns the sweep off entirely, and a value that is not a whole number is refused rather than guessed at. |
 
 `claude-sync status` also reports watcher processes and test runs the tool left behind, counting
 how many started independently and how deeply they are nested. It stays silent for one watcher
