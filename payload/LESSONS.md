@@ -1001,6 +1001,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   its own header, so a waiter acting on a stale owner it had read seconds earlier removed a
   LIVE lock and both suites ran at once)
 
+- **L158. A test asserting that something did NOT happen is satisfied by a fixture in which it
+  COULD not happen, so prove the positive case fires in the SAME fixture before trusting the
+  negative.** A suite that switches a whole mechanism off for convenience turns every such
+  assertion green permanently, and the test reads as careful precisely because it names the thing
+  it checks for. Distinct from L143, where a declared double matched nothing: here nothing was
+  stubbed and the capability is simply off.
+  (claude-config#22: a check that no desktop alert was raised passed against a suite exporting
+  SYNC_NO_NOTIFY=1 for everything. Caught only because the sibling assertion that an alert SHOULD
+  fire failed in the same run, which is the control this lesson asks for)
+
 ## Building with AI
 
 - **L27. A rule that lives only in a prompt is a hope.** Every hard constraint on AI
