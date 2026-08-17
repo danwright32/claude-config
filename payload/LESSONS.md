@@ -670,6 +670,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   (bidspoke#814: an Equifax ACRO_GATEWAY outage ran 9:25 to 11:04 PM over 1,326 failed runs, went
   quiet for 23 minutes in the middle, and was announced to the team as an incident lasting 5 minutes)
 
+- **L164. Failure recording that lives INSIDE the program a launcher starts cannot record any
+  failure of the launcher itself, so a missing directory, a bad path or an unreadable interpreter
+  leaves no trace at all and reads exactly like the control never having been pressed.** Put the
+  recording where the wrapper can reach it too, because a wrapper's own failures are both the
+  likeliest and the least visible. Distinct from L148, where the reason IS produced and written
+  somewhere that dies: here it is never produced, because its producer never ran.
+  (downbeat#228: pressing Update ran a launcher whose cd into a moved checkout failed, so
+  update-downbeat.sh, which holds every path that writes update-attempt.json, never started, and
+  the panel went on saying "behind" with no record of the attempt)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
