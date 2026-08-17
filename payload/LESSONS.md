@@ -660,6 +660,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   locations, while the real traceback sat unread. Today the login shell is silent, so the first
   Homebrew notice or zsh deprecation warning would misclassify every failed run)
 
+- **L160. A condition is only OVER once it has stayed healthy for a re-arm window, never on the first
+  healthy sample, and its duration must be measured to the last observed failure rather than to the
+  moment the all clear is sent.** Otherwise the first quiet minute inside a flapping outage ends the
+  incident, and every relapse after it is announced as a new short one, each arithmetically correct
+  and all of them together false about the thing the reader actually lived through. Distinct from
+  L36, which is about how the alert FIRES: this is the recovery half, which nobody re-reads because
+  it only ever brings good news.
+  (bidspoke#814: an Equifax ACRO_GATEWAY outage ran 9:25 to 11:04 PM over 1,326 failed runs, went
+  quiet for 23 minutes in the middle, and was announced to the team as an incident lasting 5 minutes)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
