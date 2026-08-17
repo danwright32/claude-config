@@ -2158,6 +2158,35 @@ check "#29 a dead owner on this machine is still broken at once" "[ $rc_cj3 -eq 
 # for is already proven by the two checks above, which can only pass if the machine is
 # recorded and consulted.
 
+section "== the README documents every local state file (#30) =="
+# Six things now hold state outside payload/, four of them added on 2026-08-17, and nothing
+# named them in one place. Each drives a real decision (whether sending is safe, whether an
+# outage alerts, whether a run proceeds at all), so anyone diagnosing odd behaviour had to
+# read the whole script to learn what exists. The list is DERIVED from the code rather than
+# kept by hand, or it silently drifts the first time somebody adds a seventh (L41).
+_README="$(dirname "$SCRIPT")/README.md"
+check "#30 the README has a state section" "grep -qi 'Local state' '$_README'"
+# Derived from the code's OWN top-level definitions (any variable whose value lives under
+# the repo), so adding a seventh is caught automatically. payload is excluded because it is
+# the synced content itself, documented at length already, not local state.
+_statepaths(){
+  grep -E '^[A-Z_]+="[^"]*\$SYNC_REPO/' "$SCRIPT" \
+    | grep -oE '\$SYNC_REPO/[^"}]*' | sed 's|\$SYNC_REPO/||' | grep -v '^payload$' | sort -u
+  grep -oE 'refs/claude-sync-state' "$SCRIPT" | sort -u
+}
+_undocumented=""
+while IFS= read -r _sv; do
+  [ -n "$_sv" ] || continue
+  grep -qF -- "$_sv" "$_README" || _undocumented="$_undocumented[$_sv]"
+done <<EOF
+$(_statepaths)
+EOF
+check "#30 every state file the code defines is documented" "[ -z \"\$_undocumented\" ]"
+# The derivation must actually have found things, or the check above compares nothing against
+# nothing and passes, which is the failure this session kept running into.
+check "#30 the derivation found the state files to check" \
+  "[ \"\$(_statepaths | grep -c .)\" -ge 5 ]"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

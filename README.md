@@ -68,3 +68,32 @@ Accept a known string by adding the sha256 of the matched text to
 ```bash
 bash tests/test-claude-sync.sh
 ```
+
+Run one part while iterating, which stops after the section you name:
+
+```bash
+SECTION_UNTIL="conflict copies" bash tests/test-claude-sync.sh
+```
+
+It runs from the start up to and including that section, because the sections build on each
+other and running one alone reports failures the code did not cause. A name matching nothing
+is an error, not a quiet pass.
+
+## Local state (per Mac, never synced)
+
+Six things hold state outside `payload/`. All are gitignored, so a fresh clone starts without
+them. A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
+defined answer for being absent or untrustworthy.
+
+| File | Written by | Read by | Missing or stale |
+| --- | --- | --- | --- |
+| `.last-applied` | every apply | the guard that blocks sending while behind | absent means nothing is protected yet, so sending is allowed |
+| `.last-success` | a successful fetch, and a successful push | the outage clock | absent, unparseable, or dated in the FUTURE all mean "no record", which alerts rather than staying quiet |
+| `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
+| `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |
+| `state/` | every apply | nothing reads the local copy; it exists so a marker is only republished when it changes | absent just means the next apply republishes |
+| `refs/claude-sync-state` | every apply, pushed per Mac | `claude-sync verify` | nothing published means "cannot be answered", never agreement; a Mac silent for 60 days is reported as retired |
+
+None of this travels between Macs except the published refs, and those deliberately never
+land on the config branch: a marker commit there is a commit the other Mac does not have,
+which the send guard correctly reads as being behind, and every send is then skipped.
