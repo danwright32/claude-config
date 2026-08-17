@@ -366,6 +366,16 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1 (expr: $2)"; fi; }
+# A skill the way a real one is shaped: a directory holding a SKILL.md whose frontmatter carries a
+# name and a description. Fixtures used to write a single bare line, which is a shape that cannot
+# occur in the real config and which the sync now declines to carry, so a test built on one would
+# be asserting about an entry nothing can load (L48, #50). The body line is still whatever the
+# caller passes, because several checks grep for it.
+mkskill(){   # $1 = path to a SKILL.md  $2 = body line
+  local dir; dir="$(dirname "$1")"
+  mkdir -p "$dir"
+  printf -- '---\nname: %s\ndescription: a fixture skill for the suite\n---\n%s\n' "$(basename "$dir")" "$2" > "$1"
+}
 # SUITE_DEBUG=1 prints tool output a scenario would otherwise throw away. It exists because a
 # failure that only happens on a machine you cannot run has to be MEASURED there, and a check
 # reports which assertion failed while saying nothing about what the tool actually did. Two wrong
@@ -400,8 +410,8 @@ echo 'echo hi' > "$CH/hooks/tdd-nudge.sh"
 mkdir -p "$CH/hooks/__pycache__"
 echo 'BYTECODE' > "$CH/hooks/__pycache__/gh_issue_scan.cpython-314.pyc"
 echo 'BYTECODE' > "$CH/hooks/stray.pyc"
-echo 'SKILL custom' > "$CH/skills/plan-council/SKILL.md"
-echo 'SKILL plugin-owned' > "$CH/skills/wrangler/SKILL.md"   # should be EXCLUDED from sync
+mkskill "$CH/skills/plan-council/SKILL.md" 'SKILL custom'
+mkskill "$CH/skills/wrangler/SKILL.md" 'SKILL plugin-owned'   # should be EXCLUDED from sync
 echo 'AGENT' > "$CH/agents/plan-redteam.md"
 echo 'CMD' > "$CH/commands/plannotator-last.md"
 echo '# global rules v1' > "$CH/CLAUDE.md"
@@ -441,7 +451,7 @@ check "payload has LESSONS.md"              "[ -f '$REPO/payload/LESSONS.md' ]"
 section "== pull into a DIFFERENT home (simulates other Mac) =="
 CH2="$WORK/dot-claude-2"
 mkdir -p "$CH2/skills/wrangler"
-echo 'PLUGIN-LOCAL' > "$CH2/skills/wrangler/SKILL.md"   # plugin skill present on Mac 2
+mkskill "$CH2/skills/wrangler/SKILL.md" 'PLUGIN-LOCAL'   # plugin skill present on Mac 2
 cat > "$CH2/settings.json" <<JSON
 { "model": "opus", "effortLevel": "high",
   "permissions": { "allow": ["MAC2-ONLY-KEEP-ME"] },
@@ -479,7 +489,7 @@ BARE="$WORK/bare.git"; git init -q --bare "$BARE"
 RA="$WORK/repoA"; git clone -q "$BARE" "$RA"
 CA="$WORK/homeA"; mkdir -p "$CA/skills/alpha"
 echo '{"model":"opus","hooks":{}}' > "$CA/settings.json"
-echo 'ALPHA' > "$CA/skills/alpha/SKILL.md"
+mkskill "$CA/skills/alpha/SKILL.md" 'ALPHA'
 CLAUDE_HOME="$CA" SYNC_REPO="$RA" bash "$SCRIPT" sync >/dev/null 2>&1
 # Mac B: empty, syncs and should receive A's skill
 RB="$WORK/repoB"; git clone -q "$BARE" "$RB"
@@ -517,13 +527,13 @@ check "watch error mentions fswatch"    "printf '%s' \"\$out_nofs\" | grep -qi f
 # fake fswatch that emits one batch then exits; the watch loop should fire one sync
 WBARE="$WORK/wbare.git"; git init -q --bare "$WBARE"
 WR="$WORK/wrepo"; git clone -q "$WBARE" "$WR"
-WC="$WORK/wchome"; mkdir -p "$WC/skills/zeta"; echo Z > "$WC/skills/zeta/SKILL.md"; echo '{"hooks":{}}' > "$WC/settings.json"
+WC="$WORK/wchome"; mkdir -p "$WC/skills/zeta"; mkskill "$WC/skills/zeta/SKILL.md" 'Z'; echo '{"hooks":{}}' > "$WC/settings.json"
 EMIT="$WORK/emit-fswatch"; printf '#!/usr/bin/env bash\necho 1\n' > "$EMIT"; chmod +x "$EMIT"
 SYNC_FSWATCH="$EMIT" CLAUDE_HOME="$WC" SYNC_REPO="$WR" bash "$SCRIPT" watch >/dev/null 2>&1
 check "watch pushed a commit on event"  "[ -n \"\$(git -C '$WR' log --oneline 2>/dev/null)\" ]"
 
 section "== apply is idempotent (no-op sync must not rewrite settings.json -> no watch loop) =="
-CI="$WORK/idem"; mkdir -p "$CI/skills/keep"; echo K > "$CI/skills/keep/SKILL.md"
+CI="$WORK/idem"; mkdir -p "$CI/skills/keep"; mkskill "$CI/skills/keep/SKILL.md" 'K'
 echo '# rules' > "$CI/CLAUDE.md"
 echo '{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}' > "$CI/settings.json"
 RI="$WORK/repoI"; mkdir -p "$RI"
@@ -597,6 +607,7 @@ section "== send (watcher path) propagates a delete and never re-applies to home
 SDBARE="$WORK/sdbare.git"; git init -q --bare "$SDBARE"
 SDR="$WORK/sdrepo"; git clone -q "$SDBARE" "$SDR"
 SDC="$WORK/sdhome"; mkdir -p "$SDC/skills/plan-council"; echo '{"hooks":{}}' > "$SDC/settings.json"
+mkskill "$SDC/skills/plan-council/SKILL.md" 'the skill the nested file below belongs to'
 echo deep > "$SDC/skills/plan-council/.nested"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SDC" SYNC_REPO="$SDR" bash "$SCRIPT" send >/dev/null 2>&1
 check "send pushed the nested add"      "[ -n \"\$(git -C '$SDR' ls-files | grep nested)\" ]"
@@ -610,6 +621,7 @@ section "== auto-commit is scoped to payload; uncommitted tool edits aren't swep
 WB11="$WORK/w11bare.git"; git init -q --bare "$WB11"
 WR11="$WORK/w11repo"; git clone -q "$WB11" "$WR11"
 WC11="$WORK/w11home"; mkdir -p "$WC11/skills/s"; echo '{"hooks":{}}' > "$WC11/settings.json"; echo a > "$WC11/skills/s/f"
+mkskill "$WC11/skills/s/SKILL.md" 'the skill this file belongs to'
 echo 'half-finished tool edit' > "$WR11/claude-sync.wip"   # simulates WIP in the repo
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$WC11" SYNC_REPO="$WR11" bash "$SCRIPT" sync >/dev/null 2>&1
 check "payload change committed"        "[ -n \"\$(git -C '$WR11' ls-files | grep 'payload/skills/s/f')\" ]"
@@ -671,7 +683,7 @@ check "first pull does not print an empty changes header" "! printf '%s' \"\$out
 check "first pull restarts the watch daemon"              "printf '%s' \"\$out_first\" | grep -qi 'watch daemon'"
 
 # Control: a payload-only change must NOT claim a restart happened.
-mkdir -p "$RSA/payload/skills/ctrl"; echo x > "$RSA/payload/skills/ctrl/SKILL.md"
+mkdir -p "$RSA/payload/skills/ctrl"; mkskill "$RSA/payload/skills/ctrl/SKILL.md" 'x'
 git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "payload only" && git -C "$RSA" push -q
 out_nowatch="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$RSBHOME" SYNC_REPO="$RSB" bash "$SCRIPT" pull 2>&1)"
 check "payload-only pull does not restart the daemon" "! printf '%s' \"\$out_nowatch\" | grep -qi 'watch daemon'"
@@ -740,7 +752,7 @@ check "status names a same-size same-mtime edit" \
 # describing work that will never happen. (#737)
 mkdir -p "$STHOME/skills/cloned/.git/hooks"
 echo 'ref: refs/heads/main' > "$STHOME/skills/cloned/.git/HEAD"
-echo 'SKILL' > "$STHOME/skills/cloned/SKILL.md"
+mkskill "$STHOME/skills/cloned/SKILL.md" 'SKILL'
 echo 'junk' > "$STHOME/skills/cloned/.DS_Store"
 out_st_ex="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status ignores nested .git the way a push does" \
@@ -752,7 +764,7 @@ check "status still reports the real skill file next to them" \
 
 # A plugin-managed skill is excluded from the sync, so status must not offer it.
 mkdir -p "$STHOME/skills/wrangler"
-echo 'PLUGIN' > "$STHOME/skills/wrangler/SKILL.md"
+mkskill "$STHOME/skills/wrangler/SKILL.md" 'PLUGIN'
 out_st_plugin="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status ignores plugin-managed skills the way a push does" \
   "! printf '%s' \"\$out_st_plugin\" | grep -q 'wrangler'"
@@ -1120,6 +1132,7 @@ section "== a pull must not revert a local edit the repo never changed (2026-07-
 LEBARE="$WORK/lebare.git"; git init -q --bare -b main "$LEBARE"
 LEA="$WORK/lerepoA"; git clone -q "$LEBARE" "$LEA" 2>/dev/null
 LEAH="$WORK/lehomeA"; mkdir -p "$LEAH/hooks" "$LEAH/skills/reel"
+mkskill "$LEAH/skills/reel/SKILL.md" 'the skill the script below belongs to'
 echo '{"hooks":{}}' > "$LEAH/settings.json"
 echo 'orig-script' > "$LEAH/skills/reel/push.py"
 echo 'other-v1' > "$LEAH/hooks/other.sh"
@@ -1305,7 +1318,7 @@ NSAH="$WORK/nshomeA"; mkdir -p "$NSAH/hooks" "$NSAH/skills/rs-existing"
 echo '{"hooks":{}}' > "$NSAH/settings.json"
 echo '# rules v1' > "$NSAH/CLAUDE.md"
 echo 'one' > "$NSAH/hooks/rs-hook.sh"
-echo 'SKILL v1' > "$NSAH/skills/rs-existing/SKILL.md"
+mkskill "$NSAH/skills/rs-existing/SKILL.md" 'SKILL v1'
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
 NSB="$WORK/nsrepoB"; git clone -q "$NSBARE" "$NSB"
 NSBH="$WORK/nshomeB"; mkdir -p "$NSBH"; echo '{"hooks":{}}' > "$NSBH/settings.json"
@@ -1313,8 +1326,8 @@ CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull >/dev/null 2>&1
 # Mac A now changes a rule file, adds a whole new skill, edits an existing
 # skill, and edits a hook, all in one push.
 echo '# rules v2' > "$NSAH/CLAUDE.md"
-mkdir -p "$NSAH/skills/rs-added"; echo 'SKILL new' > "$NSAH/skills/rs-added/SKILL.md"
-echo 'SKILL v2' > "$NSAH/skills/rs-existing/SKILL.md"
+mkdir -p "$NSAH/skills/rs-added"; mkskill "$NSAH/skills/rs-added/SKILL.md" 'SKILL new'
+mkskill "$NSAH/skills/rs-existing/SKILL.md" 'SKILL v2'
 echo 'two' > "$NSAH/hooks/rs-hook.sh"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
 out_ns="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
@@ -1562,7 +1575,7 @@ cp "$SCRIPT" "$LNMA/claude-sync"
 mkdir -p "$LNMA/payload/hooks"; echo '#!/bin/sh' > "$LNMA/payload/hooks/x.sh"
 # A skill, so the scan below is exercised against a nested path and not only against the
 # flat mirror dirs. skills/ is synced alongside hooks, agents and commands.
-mkdir -p "$LNMA/payload/skills/demo"; printf -- '---\nname: demo\n---\nbody\n' > "$LNMA/payload/skills/demo/SKILL.md"
+mkdir -p "$LNMA/payload/skills/demo"; printf -- '---\nname: demo\ndescription: a fixture skill for the suite\n---\nbody\n' > "$LNMA/payload/skills/demo/SKILL.md"
 echo '{"hooks":{}}' > "$LNMA/payload/settings.hooks.json"
 printf '# rules\n@LESSONS.md\n' > "$LNMA/payload/CLAUDE.md"
 printf '# Lessons\n\n- **L1. one.** body\n' > "$LNMA/payload/LESSONS.md"
@@ -1881,7 +1894,7 @@ seed_pair(){   # $1 = tag -> sets PB/PA/PHA (bare, repo A, home A), all already 
   git -C "$PA" -c user.name=t -c user.email=t@e commit -q -m "seed"
   git -C "$PA" push -q -u origin main
   PHA="$WORK/$1-homeA"; mkdir -p "$PHA/skills/s"
-  echo 'one' > "$PHA/skills/s/SKILL.md"; echo '{"hooks":{}}' > "$PHA/settings.json"
+  mkskill "$PHA/skills/s/SKILL.md" 'one'; echo '{"hooks":{}}' > "$PHA/settings.json"
   CLAUDE_HOME="$PHA" SYNC_REPO="$PA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 }
 
@@ -1889,7 +1902,7 @@ seed_pair(){   # $1 = tag -> sets PB/PA/PHA (bare, repo A, home A), all already 
 # suite is structurally unable to depend on the network being down to pass.
 seed_pair unreach; UNR="$PA"; UNH="$PHA"
 git -C "$UNR" remote set-url origin "$WORK/vanished.git"
-echo 'two' > "$UNH/skills/s/SKILL.md"
+mkskill "$UNH/skills/s/SKILL.md" 'two'
 out_unreach="$(CLAUDE_HOME="$UNH" SYNC_REPO="$UNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_unreach=$?
 check "#22 an unreachable remote fails loudly" "[ $rc_unreach -ne 0 ]"
 check "#22 an unreachable remote is NOT blamed on the other Mac" \
@@ -1905,9 +1918,9 @@ seed_pair conf; CFA="$PA"; CFHA="$PHA"; CFB_BARE="$PB"
 CFR="$WORK/conf-repoB"; git clone -q "$CFB_BARE" "$CFR" 2>/dev/null
 CFHB="$WORK/conf-homeB"; mkdir -p "$CFHB"; echo '{"hooks":{}}' > "$CFHB/settings.json"
 CLAUDE_HOME="$CFHB" SYNC_REPO="$CFR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
-echo 'A rewrote this line' > "$CFHA/skills/s/SKILL.md"
+mkskill "$CFHA/skills/s/SKILL.md" 'A rewrote this line'
 CLAUDE_HOME="$CFHA" SYNC_REPO="$CFA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
-echo 'B rewrote this line' > "$CFHB/skills/s/SKILL.md"
+mkskill "$CFHB/skills/s/SKILL.md" 'B rewrote this line'
 out_conf="$(CLAUDE_HOME="$CFHB" SYNC_REPO="$CFR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_conf=$?
 check "#22 a real two-Mac conflict fails" "[ $rc_conf -ne 0 ]"
 check "#22 a real two-Mac conflict still names both Macs" \
@@ -1928,7 +1941,7 @@ CLAUDE_HOME="$OTHB" SYNC_REPO="$OTR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/
 echo 'guide' > "$OTA/GUIDE.md"
 git -C "$OTA" add GUIDE.md && git -C "$OTA" -c user.name=t -c user.email=t@e commit -q -m "A adds a guide" && git -C "$OTA" push -q
 echo 'my own untracked copy' > "$OTR/GUIDE.md"
-echo 'B edit' > "$OTHB/skills/s/SKILL.md"
+mkskill "$OTHB/skills/s/SKILL.md" 'B edit'
 out_other="$(CLAUDE_HOME="$OTHB" SYNC_REPO="$OTR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_other=$?
 check "#22 an unrecognised pull failure fails loudly" "[ $rc_other -ne 0 ]"
 check "#22 an unrecognised pull failure is NOT blamed on the other Mac" \
@@ -1958,7 +1971,7 @@ CLAUDE_HOME="$STHB" SYNC_REPO="$STR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/
 echo 'tool notes rewritten by A' > "$STA/NOTES.md"
 git -C "$STA" add NOTES.md && git -C "$STA" -c user.name=t -c user.email=t@e commit -q -m "A edits the tool" && git -C "$STA" push -q
 echo 'tool notes rewritten by B, never committed' > "$STR/NOTES.md"
-echo 'B edit' > "$STHB/skills/s/SKILL.md"
+mkskill "$STHB/skills/s/SKILL.md" 'B edit'
 out_stash="$(CLAUDE_HOME="$STHB" SYNC_REPO="$STR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_stash=$?
 check "#22 a conflicted autostash restore is not reported as a clean sync" "[ $rc_stash -ne 0 ]"
 check "#22 a conflicted autostash restore does not announce success" \
@@ -1980,7 +1993,7 @@ section "== status reports leftover conflict copies (#20) =="
 CQH="$WORK/conflict-home"; CQR="$WORK/conflict-repo"
 mkdir -p "$CQH/skills/beta" "$CQR/payload"
 echo '{"hooks":{}}' > "$CQH/settings.json"
-echo 'L1' > "$CQH/LESSONS.md"; echo 'SKILL' > "$CQH/skills/beta/SKILL.md"
+echo 'L1' > "$CQH/LESSONS.md"; mkskill "$CQH/skills/beta/SKILL.md" 'SKILL'
 CLAUDE_HOME="$CQH" SYNC_REPO="$CQR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
 # Silence first: a status with nothing outstanding must not mention conflicts at all, or
 # the line becomes noise and stops meaning anything when a real one appears.
@@ -2013,7 +2026,7 @@ section "== only one mutating run at a time (#21) =="
 # same payload and drive git in the same repo. Nothing serialized them.
 LKH="$WORK/lock-home"; LKR="$WORK/lock-repo"; LOCK="$WORK/lock-dir"
 mkdir -p "$LKH/skills/l" "$LKR/payload"
-echo '{"hooks":{}}' > "$LKH/settings.json"; echo 'L' > "$LKH/skills/l/SKILL.md"
+echo '{"hooks":{}}' > "$LKH/settings.json"; mkskill "$LKH/skills/l/SKILL.md" 'L'
 lockenv(){ echo "CLAUDE_HOME=$LKH SYNC_REPO=$LKR SYNC_LOCK=$LOCK SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1"; }
 
 # A LIVE holder blocks. The waiting run must decline rather than proceed, and must not have
@@ -2048,10 +2061,10 @@ check "#21 the lock is released after a run finishes" "[ ! -d '$LOCK' ]"
 LKB="$WORK/lock-bare.git"; git init -q --bare -b main "$LKB"
 LKGR="$WORK/lock-grepo"; git clone -q "$LKB" "$LKGR" 2>/dev/null
 LKGH="$WORK/lock-ghome"; mkdir -p "$LKGH/skills/l"
-echo 'L' > "$LKGH/skills/l/SKILL.md"; echo '{"hooks":{}}' > "$LKGH/settings.json"
+mkskill "$LKGH/skills/l/SKILL.md" 'L'; echo '{"hooks":{}}' > "$LKGH/settings.json"
 CLAUDE_HOME="$LKGH" SYNC_REPO="$LKGR" SYNC_LOCK="$LOCK" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 git -C "$LKGR" remote set-url origin "$WORK/lock-vanished.git"
-echo 'edited' > "$LKGH/skills/l/SKILL.md"
+mkskill "$LKGH/skills/l/SKILL.md" 'edited'
 out_lkf="$(CLAUDE_HOME="$LKGH" SYNC_REPO="$LKGR" SYNC_LOCK="$LOCK" SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1 bash "$SCRIPT" sync 2>&1)"; rc_lkf=$?
 check "#21 a run that dies inside the lock still fails" "[ $rc_lkf -ne 0 ]"
 check "#21 a run that dies does not keep the lock" "[ ! -d '$LOCK' ]"
@@ -2075,7 +2088,7 @@ chmod +x "$FAKENOTIFIER"
 OUB="$WORK/outage-bare.git"; git init -q --bare -b main "$OUB"
 OUR="$WORK/outage-repo"; git clone -q "$OUB" "$OUR" 2>/dev/null
 OUH="$WORK/outage-home"; mkdir -p "$OUH/skills/o"
-echo 'O' > "$OUH/skills/o/SKILL.md"; echo '{"hooks":{}}' > "$OUH/settings.json"
+mkskill "$OUH/skills/o/SKILL.md" 'O'; echo '{"hooks":{}}' > "$OUH/settings.json"
 # NOTE: SYNC_NO_NOTIFY is deliberately NOT set for this section. Every other test disables
 # notifications wholesale, which would make "did not alert" pass no matter what the code did.
 # SYNC_NO_NOTIFY=0 is load-bearing and must be set explicitly: the suite exports
@@ -2088,7 +2101,7 @@ check "#22 a successful sync records when it last reached the repo" "[ -s '$OUR/
 
 # A blip: the last success was moments ago, so this must be logged and must NOT alert.
 git -C "$OUR" remote set-url origin "$WORK/outage-vanished.git"
-echo 'edited' > "$OUH/skills/o/SKILL.md"
+mkskill "$OUH/skills/o/SKILL.md" 'edited'
 : > "$NOTED"
 out_blip="$(env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync 2>&1)"; rc_blip=$?
 check "#22 a brief outage still fails rather than reporting success" "[ $rc_blip -ne 0 ]"
@@ -2126,17 +2139,17 @@ check "#22 an unreadable marker does not silence the alert" "[ -s '$NOTED' ]"
 SNB="$WORK/send-clock-bare.git"; git init -q --bare -b main "$SNB"
 SNR="$WORK/send-clock-repo"; git clone -q "$SNB" "$SNR" 2>/dev/null
 SNH="$WORK/send-clock-home"; mkdir -p "$SNH/skills/s"
-echo 'S' > "$SNH/skills/s/SKILL.md"; echo '{"hooks":{}}' > "$SNH/settings.json"
+mkskill "$SNH/skills/s/SKILL.md" 'S'; echo '{"hooks":{}}' > "$SNH/settings.json"
 CLAUDE_HOME="$SNH" SYNC_REPO="$SNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 rm -f "$SNR/.last-success"        # so only the send under test can put it back
-echo 'edited by the watcher' > "$SNH/skills/s/SKILL.md"
+mkskill "$SNH/skills/s/SKILL.md" 'edited by the watcher'
 CLAUDE_HOME="$SNH" SYNC_REPO="$SNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1
 check "#22 a successful send also records that the repo was reachable" "[ -s '$SNR/.last-success' ]"
 # The failure side: a send that never reaches the repo must record nothing, or the clock
 # would be refreshed by the very outage it exists to measure.
 git -C "$SNR" remote set-url origin "$WORK/send-clock-gone.git"
 rm -f "$SNR/.last-success"
-echo 'edited again' > "$SNH/skills/s/SKILL.md"
+mkskill "$SNH/skills/s/SKILL.md" 'edited again'
 CLAUDE_HOME="$SNH" SYNC_REPO="$SNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1 || true
 check "#22 a send that cannot reach the repo records nothing" "[ ! -s '$SNR/.last-success' ]"
 
@@ -2149,7 +2162,7 @@ section "== verify says whether both Macs actually hold the same config (#23) ==
 VFB="$WORK/verify-bare.git"; git init -q --bare -b main "$VFB"
 VFA="$WORK/verify-repoA"; git clone -q "$VFB" "$VFA" 2>/dev/null
 VFHA="$WORK/verify-homeA"; mkdir -p "$VFHA/skills/v"
-echo 'V1' > "$VFHA/skills/v/SKILL.md"; echo '{"hooks":{}}' > "$VFHA/settings.json"
+mkskill "$VFHA/skills/v/SKILL.md" 'V1'; echo '{"hooks":{}}' > "$VFHA/settings.json"
 CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 check "#23 applying publishes a marker for this Mac" \
   "[ -s '$VFA/state/macA.applied' ]"
@@ -2196,7 +2209,7 @@ check "#23 verify says the two Macs agree"    "printf '%s' \"\$out_v2\" | grep -
 
 # A changes the config and publishes. B has not applied it, so B is BEHIND, and verify must
 # say so by name rather than reporting a clean bill of health.
-echo 'V2 changed on A' > "$VFHA/skills/v/SKILL.md"
+mkskill "$VFHA/skills/v/SKILL.md" 'V2 changed on A'
 CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 out_v3="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1)"
 check "#23 verify reports the other Mac as behind"  "printf '%s' \"\$out_v3\" | grep -qi 'behind'"
@@ -2218,7 +2231,7 @@ check "#23 verify exits non-zero when they do not agree" \
 VFCB="$WORK/verify-clean-bare.git"; git init -q --bare -b main "$VFCB"
 VFC="$WORK/verify-repoC"; git clone -q "$VFCB" "$VFC" 2>/dev/null
 git -C "$VFC" checkout -q -b main 2>/dev/null || true
-mkdir -p "$VFC/payload/skills/v"; echo 'V' > "$VFC/payload/skills/v/SKILL.md"
+mkdir -p "$VFC/payload/skills/v"; mkskill "$VFC/payload/skills/v/SKILL.md" 'V'
 git -C "$VFC" add -A
 git -C "$VFC" -c user.name=t -c user.email=t@e commit -q -m "config with no marker ever published"
 git -C "$VFC" push -q -u origin main
@@ -2237,14 +2250,14 @@ section "== outage decisions are recorded so the threshold can be judged (#24) =
 OCB="$WORK/ocount-bare.git"; git init -q --bare -b main "$OCB"
 OCR="$WORK/ocount-repo"; git clone -q "$OCB" "$OCR" 2>/dev/null
 OCH="$WORK/ocount-home"; mkdir -p "$OCH/skills/o"
-echo 'O' > "$OCH/skills/o/SKILL.md"; echo '{"hooks":{}}' > "$OCH/settings.json"
+mkskill "$OCH/skills/o/SKILL.md" 'O'; echo '{"hooks":{}}' > "$OCH/settings.json"
 CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 git -C "$OCR" remote set-url origin "$WORK/ocount-gone.git"
-echo 'edited' > "$OCH/skills/o/SKILL.md"
+mkskill "$OCH/skills/o/SKILL.md" 'edited'
 CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync >/dev/null 2>&1 || true
 check "#24 a quiet outage is recorded" "[ -s '$OCR/.outage-log' ]"
 check "#24 the record says it stayed quiet" "grep -q 'quiet' '$OCR/.outage-log'"
-echo 'edited again' > "$OCH/skills/o/SKILL.md"
+mkskill "$OCH/skills/o/SKILL.md" 'edited again'
 CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 SYNC_OUTAGE_ALERT_AFTER=0 bash "$SCRIPT" sync >/dev/null 2>&1 || true
 check "#24 an alerting outage is recorded too" "grep -q 'alert' '$OCR/.outage-log'"
 check "#24 the two decisions are kept apart" \
@@ -2263,7 +2276,7 @@ check "#24 the tally names both counts"  "printf '%s' \"\$out_oc\" | grep -q '1 
 # A run that reached the repo must not be recorded as an outage, or the tally that exists to
 # judge the threshold is padded with every healthy sync and answers nothing.
 git -C "$OCR" remote set-url origin "$OCB"
-echo 'fine now' > "$OCH/skills/o/SKILL.md"
+mkskill "$OCH/skills/o/SKILL.md" 'fine now'
 CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 check "#24 a healthy sync records no outage" \
   "[ \"\$(grep -c . '$OCR/.outage-log')\" = 2 ]"
@@ -2283,7 +2296,7 @@ section "== local state carried in from elsewhere is not trusted (#25) =="
 STB="$WORK/stale-bare.git"; git init -q --bare -b main "$STB"
 STR2="$WORK/stale-repo"; git clone -q "$STB" "$STR2" 2>/dev/null
 STH2="$WORK/stale-home"; mkdir -p "$STH2/skills/s"
-echo 'S' > "$STH2/skills/s/SKILL.md"; echo '{"hooks":{}}' > "$STH2/settings.json"
+mkskill "$STH2/skills/s/SKILL.md" 'S'; echo '{"hooks":{}}' > "$STH2/settings.json"
 CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 
 # A lock whose recorded process is long gone AND which is older than any plausible run must
@@ -2291,7 +2304,7 @@ CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev
 # was restored onto, in which case the liveness test alone says "held" for ever.
 STLOCK="$STR2/.sync-lock"; mkdir -p "$STLOCK"; printf '%s\n' "$$" > "$STLOCK/pid"
 touch -t "$(date -v-2d +%Y%m%d%H%M)" "$STLOCK/pid" 2>/dev/null || touch -d '2 days ago' "$STLOCK/pid"
-echo 'edited' > "$STH2/skills/s/SKILL.md"
+mkskill "$STH2/skills/s/SKILL.md" 'edited'
 out_st="$(CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1 bash "$SCRIPT" sync 2>&1)"; rc_st=$?
 check "#25 an ancient lock does not block a run" "[ $rc_st -eq 0 ]"
 check "#25 and the run says it broke a stale lock" \
@@ -2313,7 +2326,7 @@ NOTED2="$WORK/notified2.log"; : > "$NOTED2"
 FAKEN2="$WORK/fake-notifier2"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$NOTED2" > "$FAKEN2"; chmod +x "$FAKEN2"
 printf '%s\n' "$(( $(date +%s) + 86400 ))" > "$STR2/.last-success"   # a day in the future
-echo 'edit again' > "$STH2/skills/s/SKILL.md"
+mkskill "$STH2/skills/s/SKILL.md" 'edit again'
 out_fut="$(CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NOTIFIER="$FAKEN2" SYNC_NO_NOTIFY=0 \
   SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync 2>&1 || true)"
 check "#25 a clock in the future does not silence an outage" "[ -s '$NOTED2' ]"
@@ -2323,7 +2336,7 @@ check "#25 and it says the record was not usable" \
 # ordinary recent success must still keep a blip quiet.
 : > "$NOTED2"
 printf '%s\n' "$(( $(date +%s) - 60 ))" > "$STR2/.last-success"
-echo 'edit once more' > "$STH2/skills/s/SKILL.md"
+mkskill "$STH2/skills/s/SKILL.md" 'edit once more'
 CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NOTIFIER="$FAKEN2" SYNC_NO_NOTIFY=0 \
   SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync >/dev/null 2>&1 || true
 check "#25 a genuinely recent success still keeps a blip quiet" "[ ! -s '$NOTED2' ]"
@@ -2336,14 +2349,14 @@ section "== a Mac that no longer exists does not hold verify hostage (#26) =="
 GHB="$WORK/ghost-bare.git"; git init -q --bare -b main "$GHB"
 GHR="$WORK/ghost-repo"; git clone -q "$GHB" "$GHR" 2>/dev/null
 GHH="$WORK/ghost-home"; mkdir -p "$GHH/skills/g"
-echo 'G' > "$GHH/skills/g/SKILL.md"; echo '{"hooks":{}}' > "$GHH/settings.json"
+mkskill "$GHH/skills/g/SKILL.md" 'G'; echo '{"hooks":{}}' > "$GHH/settings.json"
 CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 # A second Mac publishes, then goes away for good and never applies anything again.
 GHR2="$WORK/ghost-repo2"; git clone -q "$GHB" "$GHR2" 2>/dev/null
 GHH2="$WORK/ghost-home2"; mkdir -p "$GHH2"; echo '{"hooks":{}}' > "$GHH2/settings.json"
 CLAUDE_HOME="$GHH2" SYNC_REPO="$GHR2" SYNC_HOSTNAME=macGone SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
-echo 'G changed' > "$GHH/skills/g/SKILL.md"
+mkskill "$GHH/skills/g/SKILL.md" 'G changed'
 CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 # Age the departed Mac's marker past the point where it can mean anything.
 GHREF="refs/claude-sync-state/macGone"
@@ -2495,7 +2508,7 @@ section "== a clock jump must not break a live lock (#29) =="
 # can still see running, no matter what the clock says.
 CJH="$WORK/clockjump-home"; CJR="$WORK/clockjump-repo"; CJLOCK="$WORK/clockjump-lock"
 mkdir -p "$CJH/skills/c" "$CJR/payload"
-echo 'C' > "$CJH/skills/c/SKILL.md"; echo '{"hooks":{}}' > "$CJH/settings.json"
+mkskill "$CJH/skills/c/SKILL.md" 'C'; echo '{"hooks":{}}' > "$CJH/settings.json"
 cjenv(){ echo "CLAUDE_HOME=$CJH SYNC_REPO=$CJR SYNC_LOCK=$CJLOCK SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1"; }
 # A lock held by a LIVE process on THIS machine, made to look ancient.
 sleep 120 & CJ_LIVE=$!
@@ -3460,6 +3473,56 @@ check "#44 a claim is committed, so it reaches the other Mac" \
   "git -C '$BDG' log --oneline -- lesson-bands | grep -q ."
 check "#44 and the working tree is left clean" \
   "[ -z \"\$(git -C '$BDG' status --porcelain lesson-bands 2>/dev/null)\" ]"
+section "== a skills entry that cannot load is not carried between Macs (#50) =="
+# payload/skills/humanizer/ and payload/skills/stop-slop/ hold no SKILL.md, so nothing can ever
+# load them, and two loose markdown files sat directly under skills/ where nothing reads them.
+# All four synced between both Macs indefinitely with nothing reporting that they are inert: a
+# skill that cannot load is indistinguishable from one that works until somebody invokes it.
+BSH="$WORK/badskill-home"; BSR="$WORK/badskill-repo"
+mkdir -p "$BSH/skills/good" "$BSH/skills/nofm" "$BSH/skills/empty" "$BSR/payload"
+echo '{"hooks":{}}' > "$BSH/settings.json"
+printf '# rules\n' > "$BSH/CLAUDE.md"
+printf -- '---\nname: good\ndescription: a skill that can actually load\n---\nbody\n' > "$BSH/skills/good/SKILL.md"
+printf -- '---\nname: nofm\n---\nno description in the frontmatter\n' > "$BSH/skills/nofm/SKILL.md"
+printf 'loose markdown, not a skill\n' > "$BSH/skills/design-notes.md"
+# A body line that looks like frontmatter. The frontmatter is a block at the top of the file, so a
+# check that greps the whole file is answered by prose about the thing (L103, L135).
+mkdir -p "$BSH/skills/bodyonly"
+printf 'This skill has no frontmatter at all.\nname: bodyonly\ndescription: written in the body\n' > "$BSH/skills/bodyonly/SKILL.md"
+out_bs="$(CLAUDE_HOME="$BSH" SYNC_REPO="$BSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+dbg "push with unloadable skills: $out_bs"
+check "#50 a skill that can load is still sent"        "[ -f '$BSR/payload/skills/good/SKILL.md' ]"
+check "#50 a directory with no SKILL.md is not sent"   "[ ! -e '$BSR/payload/skills/empty' ]"
+check "#50 a bare file under skills/ is not sent"      "[ ! -e '$BSR/payload/skills/design-notes.md' ]"
+check "#50 a SKILL.md with no description is not sent" "[ ! -e '$BSR/payload/skills/nofm' ]"
+check "#50 frontmatter written in the body does not count" "[ ! -e '$BSR/payload/skills/bodyonly' ]"
+# Named WITH the reason on one line: "four skills were skipped" sends nobody anywhere, and two
+# separate greps over a push report that lists paths anyway prove nothing (L172, #55).
+check "#50 the push names the empty directory and why"  "printf '%s' \"\$out_bs\" | grep -qE 'empty.*SKILL\.md'"
+check "#50 the push names the loose file and why"       "printf '%s' \"\$out_bs\" | grep -qE 'design-notes\.md.*(not a skill|bare file)'"
+check "#50 the push names the one missing a description" "printf '%s' \"\$out_bs\" | grep -qE 'nofm.*description'"
+# Silence when everything can load, or the warning becomes furniture and stops being read.
+BS2="$WORK/badskill-home2"; BSR2="$WORK/badskill-repo2"
+mkdir -p "$BS2/skills/good" "$BSR2/payload"
+echo '{"hooks":{}}' > "$BS2/settings.json"; printf '# rules\n' > "$BS2/CLAUDE.md"
+printf -- '---\nname: good\ndescription: a skill that can actually load\n---\nbody\n' > "$BS2/skills/good/SKILL.md"
+out_bsok="$(CLAUDE_HOME="$BS2" SYNC_REPO="$BSR2" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+check "#50 a clean push says nothing about skills that cannot load" \
+  "! printf '%s' \"\$out_bsok\" | grep -qi 'cannot load'"
+# The other direction: junk already in the payload (all four of these have been syncing for
+# months) must not be written onto this Mac either, and the pull has to say so.
+BSD="$WORK/badskill-dest"; mkdir -p "$BSD"
+echo '{"hooks":{}}' > "$BSD/settings.json"
+mkdir -p "$BSR2/payload/skills/humanizer" "$BSR2/payload/skills/loose"
+printf 'not a skill\n' > "$BSR2/payload/skills/stop-slop.md"
+printf 'a directory holding no SKILL.md\n' > "$BSR2/payload/skills/humanizer/notes.md"
+printf -- '---\nname: loose\ndescription: this one loads\n---\nbody\n' > "$BSR2/payload/skills/loose/SKILL.md"
+out_bspull="$(CLAUDE_HOME="$BSD" SYNC_REPO="$BSR2" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull with unloadable skills: $out_bspull"
+check "#50 a skill that can load still arrives"      "[ -f '$BSD/skills/loose/SKILL.md' ]"
+check "#50 a directory with no SKILL.md is not applied" "[ ! -e '$BSD/skills/humanizer' ]"
+check "#50 a bare file in the payload is not applied"   "[ ! -e '$BSD/skills/stop-slop.md' ]"
+check "#50 the pull names what it refused, and why"     "printf '%s' \"\$out_bspull\" | grep -qE 'humanizer.*SKILL\.md'"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"

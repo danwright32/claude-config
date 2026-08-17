@@ -87,6 +87,17 @@ Macs that claim while unable to see each other are settled by name order, the sa
 Mac, and the one that moves says so. A band that fills up refuses rather than spilling into the next
 Mac's numbers (`SYNC_LESSON_BAND_SIZE` widens it).
 
+## Skills that cannot load
+
+A skill is a directory holding a `SKILL.md` whose frontmatter carries a name and a description.
+Anything else under `skills/` is inert, so it is not carried in either direction: a push does not
+send it and a pull does not write it onto this Mac. The run names each one and says why, rather than
+skipping it quietly, because an entry that cannot load is indistinguishable from one that works
+until somebody tries to invoke it.
+
+Measured against the real config on 2026-08-17, this refuses exactly four entries (two directories
+holding no `SKILL.md` and two loose markdown files) and every one of the 43 real skills passes.
+
 ## Secret scan
 
 Every push/sync scans the payload and aborts if it finds a credential shape.
