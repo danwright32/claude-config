@@ -169,6 +169,15 @@ have_git(){ [ "${SYNC_NO_GIT:-0}" != "1" ]; }
 # you to run and a diagnosis that hangs on the condition it diagnoses is worse than none.
 lock_owner_alive(){ [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
+# The identity every git command that can WRITE a commit runs under, including the rebase inside
+# `pull --rebase`, which is not obvious: the tool already passed this to its own two commits so it
+# would not depend on whoever's machine it runs on, and then left the rebase to find one ambiently.
+# A Mac hides that, because git there quietly invents user@hostname when none is configured. A
+# machine where git refuses to guess instead fails the pull, and the failure arrives as "both Macs
+# changed the same config", which is not what happened and is not something the person can fix
+# (#52, found the first time this ran anywhere but a Mac).
+SYNC_GIT_IDENTITY=(-c user.name="claude-config-sync" -c user.email="sync@localhost")
+
 # ---------- the two things BSD and GNU spell differently ----------
 # Asked for once here rather than at seven call sites, because neither accepts the other's flag and
 # the failure is not a clean one: `stat -f %m FILE` on GNU means "file system status" and prints a
@@ -812,7 +821,7 @@ publish_applied_marker(){
   [ -n "$blob" ] || return 0
   treeobj="$(printf '100644 blob %s\tapplied\n' "$blob" | git -C "$SYNC_REPO" mktree 2>/dev/null || true)"
   [ -n "$treeobj" ] || return 0
-  commit="$(git -C "$SYNC_REPO" -c user.name="claude-config-sync" -c user.email="sync@localhost" \
+  commit="$(git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" \
               commit-tree "$treeobj" -m "applied by $host" 2>/dev/null || true)"
   [ -n "$commit" ] || return 0
   git -C "$SYNC_REPO" update-ref "$STATE_REF_PREFIX/$host" "$commit" 2>/dev/null || true
@@ -1310,7 +1319,7 @@ commit_if_changed(){
   # publish_applied_marker.
   git -C "$SYNC_REPO" add -A -- payload
   git -C "$SYNC_REPO" diff --cached --quiet -- payload && return 1
-  git -C "$SYNC_REPO" -c user.name="claude-config-sync" -c user.email="sync@localhost" \
+  git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" \
     commit -m "sync from $(hostname -s)" >/dev/null
   return 0
 }
@@ -1577,7 +1586,7 @@ do_sync(){
       # Counted around the pull because git DROPS the autostash on a clean restore and
       # KEEPS it on a conflicted one. See the check after the pull for why that matters.
       stash_before="$(git -C "$SYNC_REPO" stash list 2>/dev/null | wc -l | tr -d ' ')"
-      if ! pull_err="$(git -C "$SYNC_REPO" pull --rebase --autostash -q origin "$branch" 2>&1)"; then
+      if ! pull_err="$(git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" pull --rebase --autostash -q origin "$branch" 2>&1)"; then
         # Which failure this is, decided from git's own STATE rather than from the words
         # in its message: a real content conflict is the only one that leaves a rebase
         # half finished. Matching on message text would be a second, drifting definition.

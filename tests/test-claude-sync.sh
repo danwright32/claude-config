@@ -2797,6 +2797,77 @@ _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
   "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher\|test run'"
 
+section "== a sync works where git has no identity of its own (#52) =="
+# The tool passes its own name and address to the two commits it makes, so it does not depend on
+# whoever's machine it is running on. It then left the rebase inside `pull --rebase` to find one
+# ambiently, and a rebase writes commits too.
+#
+# No Mac can show this. Git on a Mac quietly invents user@hostname when nothing is configured, so
+# the pull succeeds and the gap is invisible. A machine where git refuses to guess fails instead,
+# and the failure is reported as "both Macs changed the same config", which is not what happened,
+# names an innocent cause, and tells the person to reconcile a conflict that does not exist. It
+# took six runs on a Linux runner to find, and it was the root of nine failing checks there.
+#
+# `user.useConfigOnly` is what makes it reproducible HERE: it tells git to refuse to invent an
+# identity rather than deriving one from the machine, which is exactly the state the runner is in.
+_NOID="$WORK/noid"; mkdir -p "$_NOID"
+git init -q --bare "$_NOID/bare.git"
+git clone -q "$_NOID/bare.git" "$_NOID/repo" 2>/dev/null
+git -C "$_NOID/repo" checkout -q -b main 2>/dev/null || true
+mkdir -p "$_NOID/repo/payload/hooks" "$_NOID/home/hooks"
+echo '{"hooks":{}}' > "$_NOID/home/settings.json"
+echo 'seed' > "$_NOID/repo/payload/hooks/seed.sh"
+git -C "$_NOID/repo" add -A
+git -C "$_NOID/repo" -c user.name=t -c user.email=t@e commit -q -m seed
+git -C "$_NOID/repo" push -q -u origin main
+# The other Mac moves the shared branch on, and this one has a commit of its own that is not there
+# yet. That DIVERGENCE is the whole fixture: a pull with nothing to replay writes no commit and so
+# needs no identity, which is why the first version of this section passed against the defect.
+# -b main, or the clone comes up on the bare repo's default branch, which is not the one
+# that was pushed: it checks out nothing, the write below fails, and the remote never moves.
+git clone -q -b main "$_NOID/bare.git" "$_NOID/other" 2>/dev/null
+echo 'from the other Mac' > "$_NOID/other/payload/hooks/theirs.sh"
+git -C "$_NOID/other" add -A
+git -C "$_NOID/other" -c user.name=o -c user.email=o@e commit -q -m theirs
+git -C "$_NOID/other" push -q origin HEAD:main
+echo 'from this Mac' > "$_NOID/repo/payload/hooks/ours.sh"
+git -C "$_NOID/repo" add -A
+git -C "$_NOID/repo" -c user.name=t -c user.email=t@e commit -q -m ours
+# Now take the identity away, and forbid git from making one up.
+git -C "$_NOID/repo" config user.useConfigOnly true
+git -C "$_NOID/repo" config --unset user.name 2>/dev/null || true
+git -C "$_NOID/repo" config --unset user.email 2>/dev/null || true
+# The global config has to be taken out of view as well, not just the repo's own: unsetting the
+# local name and address leaves git falling straight back to the one in the person's ~/.gitconfig,
+# and useConfigOnly only stops git INVENTING one, it does not hide a real one. Without this the
+# fixture looked correct and denied nothing.
+_noid_env=(env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null)
+# Two controls, because each covers a different way this can assert nothing (L159). The first: git
+# really does refuse an identity here.
+_noid_probe="$("${_noid_env[@]}" git -C "$_NOID/repo" commit --allow-empty -m probe 2>&1 || true)"
+check "#52 the fixture really does deny git an identity" \
+  "printf '%s' \"\$_noid_probe\" | grep -qi 'identity'"
+# The second: there really is something for the pull to replay. With nothing to rebase, no commit
+# is written, no identity is needed, and every check below passes against the defect untouched.
+# BOTH directions. Ahead alone is not enough: with the remote unmoved the pull fast-forwards
+# nothing, replays nothing, writes no commit and needs no identity, which is exactly how the first
+# two versions of this fixture passed against the defect untouched.
+git -C "$_NOID/repo" fetch -q origin main 2>/dev/null || true
+_noid_ahead="$(git -C "$_NOID/repo" rev-list --count origin/main..HEAD 2>/dev/null || echo 0)"
+_noid_behind="$(git -C "$_NOID/repo" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)"
+check "#52 and the two sides really have diverged" \
+  "[ \"\${_noid_ahead:-0}\" -ge 1 ] && [ \"\${_noid_behind:-0}\" -ge 1 ]"
+
+echo 'local edit' > "$_NOID/home/hooks/mine.sh"
+_noid_out="$("${_noid_env[@]}" SYNC_NO_NOTIFY=1 SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$_NOID/home" SYNC_REPO="$_NOID/repo" bash "$SCRIPT" sync 2>&1)"; _noid_rc=$?
+dbg "sync with no git identity exited $_noid_rc: $_noid_out"
+check "#52 a sync completes where git has no identity"  "[ '$_noid_rc' -eq 0 ]"
+# The half that names the damage. A wrong cause here sends the person to reconcile a conflict that
+# does not exist, and there is no edit they can make that will clear it.
+check "#52 and it is not blamed on a two-Mac conflict" \
+  "! printf '%s' \"\$_noid_out\" | grep -q 'both Macs changed the same config'"
+check "#52 and the local edit really was published" "[ -f '$_NOID/repo/payload/hooks/mine.sh' ]"
+
 section "== nothing depends on a tool only BSD has (#38) =="
 # The suite runs on every push now, on a Linux runner, so anything spelled the BSD way stops the
 # whole gate rather than failing one check. The awkward part is that a wrong answer here does not
