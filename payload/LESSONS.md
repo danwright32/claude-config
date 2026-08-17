@@ -840,6 +840,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   script tripped a separate crash on its second iteration and died before reaching the live task, and
   the order OmniFocus happened to return them in is what decided whether a real reminder was lost)
 
+- **L169. A variable recording that a step has ALREADY HAPPENED is inherited by every process that
+  step starts, so a descendant reads it as true of ITSELF and skips work it never did.** Clear such a
+  flag for anything you spawn, because the descendant looks correct read alone and the skipped work
+  is invisible. Distinct from L55, where a second writer changes what a stored value means: here
+  there is one writer and the value is simply carried somewhere it was never meant to apply.
+  (claude-config#37: a section-limited test run re-executes itself with a flag meaning "extraction
+  already done", which its own children then inherited, so each ignored the section limit it was
+  given, ran the WHOLE suite, reached the section that spawns, and started another. One process at a
+  time rather than a burst, so no process count tripped and it read as a suite merely taking a
+  while. It happened twice in one session, the second time after the first had been fixed)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
