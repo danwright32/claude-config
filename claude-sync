@@ -583,7 +583,7 @@ $f
         [ -n "$basefrag" ] && bas_h="$(printf '%s' "$basefrag" | jq -c '.hooks // {}' 2>/dev/null || echo '{}')"
       fi
     fi
-    tmp="$(mktemp)"
+    tmp="$(scratch_file)"
     if ! jq --argjson inc "$inc_h" --argjson bas "$bas_h" '
       def cmds($h): [ $h | to_entries[] | .value[]? | .hooks[]? | .command ];
       . as $s
@@ -852,7 +852,7 @@ resolve_add_add_hunks(){
 # renumber produces; anything else is a real edit and is left alone. Prints one report
 # line per drop, because an entry that vanishes silently reads as a clean merge (#14).
 drop_renumbered_duplicates(){   # $1 = merged file, rewritten in place  $2 = arriving file
-  local out; out="$(mktemp)"
+  local out; out="$(scratch_file)"
   local report; report="$(awk -v out="$out" '
     function entry_start(s) { return (s ~ /^- \*\*L[0-9]+\./) }
     function sig_of(s)      { sub(/^- \*\*L[0-9]+\./, "- **L#.", s); return s }
@@ -904,7 +904,7 @@ drop_renumbered_duplicates(){   # $1 = merged file, rewritten in place  $2 = arr
 # referenced there: those are left alone for the apply-time warning below.
 # Prints one "Lx became Ly" line per renumber; empty output means nothing changed.
 renumber_merge_collisions(){   # $1 = merged file, rewritten in place  $2 = arriving file  $3 = first free number (digits)
-  local out; out="$(mktemp)"
+  local out; out="$(scratch_file)"
   local report; report="$(awk -v out="$out" -v next_free="$3" '
     function entry_start(s) { return (s ~ /^- \*\*L[0-9]+\./) }
     function sig_of(s)      { sub(/^- \*\*L[0-9]+\./, "- **L#.", s); return s }
@@ -963,7 +963,7 @@ stale_number_mentions(){   # $1 = file  $2 = number, e.g. L2
 # Matching uses the same boundary rule as stale_number_mentions, so L2 never
 # matches inside L12, L20, or a word.
 rewrite_local_mentions(){   # $1 = merged file, rewritten in place  $2 = arriving file  $3 = old, e.g. L2  $4 = new, e.g. L5
-  local out; out="$(mktemp)"
+  local out; out="$(scratch_file)"
   local count; count="$(awk -v out="$out" -v old="$3" -v new="$4" '
     function rewrite(line,   res, seg) {
       res = ""
@@ -1038,11 +1038,11 @@ merge_rule_files(){
     case "$p" in */*) continue ;; esac   # top-level rule files only
     local_f="$CLAUDE_HOME/$p"
     [ -f "$local_f" ] && [ -f "$PAYLOAD/$p" ] || continue
-    tmpb="$(mktemp)"
+    tmpb="$(scratch_file)"
     if ! git -C "$SYNC_REPO" show "$last:payload/$p" > "$tmpb" 2>/dev/null; then rm -f "$tmpb"; continue; fi
     # nothing of ours to merge, or already exactly what is arriving
     if cmp -s "$tmpb" "$local_f" || cmp -s "$PAYLOAD/$p" "$local_f"; then rm -f "$tmpb"; continue; fi
-    tmpm="$(mktemp)"; tmpr="$(mktemp)"; resolved=""
+    tmpm="$(scratch_file)"; tmpr="$(scratch_file)"; resolved=""
     if git merge-file --quiet -p "$local_f" "$tmpb" "$PAYLOAD/$p" > "$tmpm" 2>/dev/null; then
       cp "$tmpm" "$tmpr"; resolved=1
     else
@@ -1336,7 +1336,10 @@ pulled_script_ok(){
     # bad version breaks the very thing that would otherwise deliver the fix. So run it, in
     # throwaway directories where it can touch nothing real, and require it to finish. (#28)
     local d rc=0
-    d="$(mktemp -d)" || return 0    # cannot test it: fall back to the parse result, which is
+    # Named, not a bare `mktemp -d`: an anonymous directory cannot be attributed to this tool
+    # afterwards, so a run killed here leaves scratch nothing can ever reclaim (#36).
+    d="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-selftest.XXXXXXXX")" || return 0
+                                    # cannot test it: fall back to the parse result, which is
                                     # what this gate did before, rather than block an update
                                     # over a temp directory problem
     mkdir -p "$d/home" "$d/repo/payload" 2>/dev/null && printf '{"hooks":{}}\n' > "$d/home/settings.json" 2>/dev/null || { rm -rf "$d"; return 0; }
@@ -1770,6 +1773,7 @@ do_status(){
   report_conflict_copies
   report_outage_tally
   report_stray_processes
+  report_scratch_leftovers
 }
 
 # The process table, behind one seam so a test never reads or reports what happens to be running
@@ -1826,6 +1830,140 @@ report_process_family(){
   printf '%s\n' "$out" | grep -v '^SUMMARY '
   echo "  $n in total, $roots started independently, nested up to $maxd deep."
   echo "  $advice"
+}
+
+# ---------- scratch a killed run left behind (#36) ----------
+# The suite and every apply create scratch under the system temp directory and remove it on the
+# way out. A run that is force-killed never reaches that, so its scratch is abandoned, and nothing
+# ever reclaimed one. Measured on this Mac on 2026-08-17: 37 abandoned suite directories holding
+# 475 MB, and 92 abandoned apply logs, from a single day of interrupted runs. It grows with how
+# OFTEN runs are interrupted rather than with how much work is done, it is invisible until the
+# disk is under pressure, and the runs likeliest to be killed are the hangs and pile-ups this repo
+# has spent the day fixing. It is the disk half of #33, which watches for leftover processes and
+# says nothing about leftover space.
+#
+# Swept BY NAME, from the list of prefixes this tool owns, and never as "old temp directories".
+# The same temp directory held 542 anonymous `tmp.*` directories belonging to OTHER tools on the
+# day this was measured, holding 33 MB between them, and a sweep written by age alone would have
+# deleted every one (L8: own your paths). The names are also why the suite's scratch is now
+# created from an explicit template rather than a bare `mktemp -d`: an anonymous directory cannot
+# be attributed to anything afterwards, which is why the 37 above had to be identified by peering
+# inside them.
+#
+# The suite LOCK lives beside these and is deliberately not swept. Whether a lock may be removed
+# is decided by its own ownership rules, and a reaper second-guessing them from outside is exactly
+# how a live lock gets deleted (L157).
+SYNC_SCRATCH_ROOT="${SYNC_SCRATCH_ROOT:-${TMPDIR:-/tmp}}"
+# An automatic deletion policy is the user's decision, never a silent default (L9), so it has an
+# off switch and it is the same one the deadline uses: 0 means never sweep. Anything that is not a
+# whole number is REFUSED rather than guessed at, because this value guards an `rm -rf` and an
+# unparseable one must not land on the permissive side of it (L50).
+SYNC_SCRATCH_MAX_AGE="${SYNC_SCRATCH_MAX_AGE:-3600}"
+case "$SYNC_SCRATCH_MAX_AGE" in
+  ''|*[!0-9]*)
+    echo "claude-sync: SYNC_SCRATCH_MAX_AGE='$SYNC_SCRATCH_MAX_AGE' is not a whole number of seconds. Refusing to run rather than sweeping to an age nobody can read. Set it to 0 to turn the sweep off." >&2
+    exit 2 ;;
+esac
+SYNC_SCRATCH_NAMES="claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-suite-work. claude-sync-suite-section."
+
+# Every short-lived temp FILE in this tool is made here rather than by each call site writing its
+# own `mktemp`. One name, so every one of them is reclaimable, and one place to change it if that
+# name ever has to move. Seven call sites used a bare `mktemp`, which is anonymous the moment the
+# run holding it is killed, and 92 of those were on this Mac when #36 was measured.
+scratch_file(){ mktemp "${TMPDIR:-/tmp}/claude-sync-work.XXXXXXXX"; }
+
+# Old enough that no live run can own it. A suite run cannot outlive its own 15 minute deadline
+# and a real sync takes 6 seconds, so an hour is 4x the longest run the tool permits and 600x the
+# commonest one. Being wrong LOW here deletes the scratch of something still using it, which is
+# the one outcome worse than the litter, so it is deliberately generous. The cost is accepted and
+# stated: a burst of interrupted runs is not reclaimed until an hour after the last of them.
+scratch_leftovers(){
+  local root="${SYNC_SCRATCH_ROOT%/}" now p n age m
+  # Off means off: nothing is listed, so nothing is reported and nothing is removed.
+  [ "$SYNC_SCRATCH_MAX_AGE" -eq 0 ] && return 0
+  now="$(date +%s)"
+  for n in $SYNC_SCRATCH_NAMES; do
+    for p in "$root/$n"*; do
+      [ -e "$p" ] || continue
+      m="$(stat -f %m "$p" 2>/dev/null || true)"
+      # An mtime that cannot be read is treated as YOUNG, so a path is never removed on no
+      # evidence at all (L50: an unparseable value must land on the safe side).
+      case "$m" in ''|*[!0-9]*) continue ;; esac
+      age=$(( now - m ))
+      if [ "$age" -ge "$SYNC_SCRATCH_MAX_AGE" ]; then printf '%s\n' "$p"; fi
+    done
+  done
+  # Said explicitly, and not left to whatever the last comparison happened to leave behind. This
+  # file runs under `set -e`, so a function ending on a false test returns 1 and kills its caller.
+  # Written as a trailing `&&` it did exactly that, and the trigger is not rare: the LAST name in
+  # the list is the suite's section mark, and a suite run always has a live one, so every call
+  # made DURING a run ended on a false age test. The command then printed nothing at all and
+  # exited 1, which the self-update gate reads as a pulled script that cannot run, so it declared
+  # a perfectly good version broken and kept the old one. Six checks went red for that.
+  return 0
+}
+
+scratch_total_kb(){   # reads paths on stdin
+  local list; list="$(cat)"
+  [ -n "$list" ] || { echo 0; return 0; }
+  # `du` is allowed to fail on a path that vanished between the listing and here, and the total is
+  # reported from whatever it could read. Under `pipefail` an unguarded pipeline would take the
+  # whole command down over scratch that has already gone, which is the one outcome nobody needs
+  # reporting.
+  printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 du -sk 2>/dev/null | awk '{s+=$1} END{print s+0}' || echo 0
+}
+
+# Reported in the unit that says something. 92 abandoned apply logs really do come to under a
+# megabyte, and rounding them to "0 MB" reads as nothing worth reclaiming while the count is the
+# part that matters; 37 abandoned suite directories really are 475 MB, and reporting those in KB
+# reads as noise. A message may only claim what it measured (L11).
+scratch_human_size(){   # kb
+  if [ "${1:-0}" -ge 1024 ]; then echo "$(( ($1 + 512) / 1024 )) MB"; else echo "$1 KB"; fi
+}
+
+report_scratch_leftovers(){
+  local list n kb
+  list="$(scratch_leftovers)"
+  n="$(printf '%s' "$list" | grep -c . || true)"
+  [ "${n:-0}" -gt 0 ] || return 0
+  kb="$(printf '%s\n' "$list" | scratch_total_kb)"
+  echo "--- scratch the tool left behind ---"
+  echo "  $n abandoned, holding $(scratch_human_size "$kb") in $SYNC_SCRATCH_ROOT, each older than ${SYNC_SCRATCH_MAX_AGE}s."
+  echo "  Every one belongs to a run that was killed before it could clean up after itself. Reclaim them with: claude-sync reap-scratch"
+  return 0
+}
+
+do_reap_scratch(){
+  local list n kb p removed=0
+  list="$(scratch_leftovers)"
+  n="$(printf '%s' "$list" | grep -c . || true)"
+  # Finding nothing is its own outcome, said out loud. A reaper that prints the same thing whether
+  # it swept a gigabyte or was pointed at the wrong directory is one nobody can check (L98).
+  # Turned OFF and found nothing are different answers, and saying "nothing to reclaim" to somebody
+  # who has switched the sweep off would be a claim this never checked (L11).
+  if [ "$SYNC_SCRATCH_MAX_AGE" -eq 0 ]; then
+    echo "claude-sync: the scratch sweep is off (SYNC_SCRATCH_MAX_AGE=0), so nothing in $SYNC_SCRATCH_ROOT was looked at or removed."
+    return 0
+  fi
+  if [ "${n:-0}" -eq 0 ]; then
+    echo "claude-sync: no abandoned scratch to reclaim in $SYNC_SCRATCH_ROOT (nothing there older than ${SYNC_SCRATCH_MAX_AGE}s carries a name this tool owns)."
+    return 0
+  fi
+  kb="$(printf '%s\n' "$list" | scratch_total_kb)"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    # Judged again, independently, immediately before the delete. The list was built from the
+    # names above and this asks the question a second way, because everything after it is an
+    # `rm -rf` on a path assembled from the environment (L5).
+    case "$p" in
+      "${SYNC_SCRATCH_ROOT%/}"/claude-sync-*) rm -rf "$p" && removed=$((removed + 1)) ;;
+      *) echo "claude-sync: refusing to remove '$p', which is not scratch this tool owns." >&2 ;;
+    esac
+  done <<EOF
+$list
+EOF
+  echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding $(scratch_human_size "$kb") in $SYNC_SCRATCH_ROOT."
+  return 0
 }
 
 report_stray_processes(){
@@ -2021,6 +2159,9 @@ case "$cmd" in
   watch) do_watch ;;
   status) do_status ;;           # read-only, deliberately never blocked
   verify) do_verify ;;           # read-only too: it answers a question, it changes nothing
+  # Not wrapped in with_lock: it touches only the tool's own scratch under the temp directory,
+  # never the repo or the home, so it has nothing to serialize against.
+  reap-scratch) do_reap_scratch ;;
   forget-mac) with_lock do_forget_mac "${2:-}" ;;   # mutating: it deletes a published ref
   apply-only) with_lock do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
@@ -2032,5 +2173,5 @@ case "$cmd" in
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME"))"
     ;;
   help|-h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, forget-mac, next-lesson, check-lessons, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, install-autosync, help)" ;;
 esac

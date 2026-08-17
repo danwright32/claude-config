@@ -106,6 +106,24 @@ plus the subshell it forks, and both match. What counts as normal is now measure
 line printed on every status stops being read long before a real pile up appears, which is how the
 seventeen went unnoticed in the first place.
 
+### Sweeping abandoned scratch by age
+
+Rejected for #36, which is what the issue proposed. The issue reported 586 abandoned directories
+holding 491 MB and read them all as the suite's, because a bare `mktemp -d` produces an anonymous
+name and there is nothing else to go on.
+
+Measured before building it: of 579 anonymous `tmp.*` directories in that folder holding 508 MB,
+only 37 were the suite's, holding 475 MB. The other 542 belonged to other tools on this Mac, and a
+sweep of old temp directories would have deleted every one of them.
+
+So the scratch is NAMED at the point it is created, and swept by name from a list this tool owns.
+The age floor stayed, as the second line rather than the first. The 37 already on disk carry no
+name and were removed by hand once, rather than teaching the sweep to recognise directories by
+peering inside them, which is a rule that would then live for ever.
+
+The other half of the measurement is why "older than a day" was not kept: all 37 were created
+within one hour and 43 minutes of each other, so a day would have reclaimed nothing at all.
+
 ## Measured numbers
 
 Every threshold here is a multiple of something real, measured on the date given. None is a round
@@ -117,6 +135,7 @@ number chosen because it felt safe.
 | 60 days | A Mac counts as retired | The other Mac's longest real gap between syncs in the preceding 60 days was 6.8 days, so roughly 9x the longest real absence, and a holiday cannot trip it | 2026-08-17 |
 | 15 minutes | A suite run is killed as hung | A full run of the suite took 123 seconds, so roughly 7x | 2026-08-17 |
 | 30 minutes | A suite lock from another machine is broken | The same 123 second run, so roughly 15x | 2026-08-17 |
+| 1 hour | Scratch counts as abandoned | A suite run cannot outlive its own 15 minute deadline, so 4x the longest run the tool permits, and 600x the 6 second sync | 2026-08-17 |
 | 2 processes | One healthy watcher | Observed directly as a launcher with one child (pid 13658 with 13702) | 2026-08-17 |
 | 1 nested run | The suite's own depth allowance | The suite legitimately runs itself as a subprocess in one place and never deeper | 2026-08-17 |
 
@@ -136,6 +155,17 @@ Not all of these carry the same weight, and the difference matters when deciding
 going red. The stale lock takeover: disabling it turns exactly the five checks covering it red and
 nothing else, which is what makes the three that predated the lock into real guards rather than
 decoration.
+
+The scratch reaper, on five separate mutations, each turning red only the check written for it:
+removing the age floor sweeps scratch a live run is using, widening the name list reaches another
+tool's directory, adding the lock to that list deletes a lock, dropping a created name leaves it
+unreclaimable for ever, and making the shared helper anonymous again hides every file it creates
+from the sweep. Widening the name list ALONE does not reach the foreign directory, because the
+check made immediately before the delete refuses it, which is the two independent rules doing what
+they were separated for.
+
+The un-export in #37 likewise: with it removed, the probe reports a child inheriting the flag and
+that child runs the whole suite instead of the one section it was given.
 
 **Proven by construction**, meaning the failure was manufactured through a named seam rather than
 waited for. The suite deadline (a section that hangs deliberately), the depth limit (a run started

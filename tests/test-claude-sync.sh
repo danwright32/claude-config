@@ -86,7 +86,9 @@ SUITE_SECTION_MARK=""
 # one, so this trades some of the speed-up for never lying. Iterating on an early or middle
 # section is where it pays; asking for the last one is honestly just a full run.
 if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
-  _filtered="$(mktemp)"
+  # Named for the same reason as everything else this suite creates: a run killed between writing
+  # this copy and removing it leaves a file nothing can attribute afterwards (#36).
+  _filtered="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
   awk -v pat="$SECTION_UNTIL" '
     BEGIN{ keep=1; matched=0 }
     /^section "/ {
@@ -176,7 +178,10 @@ case "$SUITE_TIMEOUT" in
     echo "test suite: SUITE_TIMEOUT='$SUITE_TIMEOUT' is not a whole number of seconds. Refusing to run rather than running with no deadline at all, which is the state this exists to end." >&2
     exit 4 ;;
 esac
-SUITE_SECTION_MARK="$(mktemp -t suite-section)"
+# Named from an explicit template, and not `mktemp -t`: the name is what lets an abandoned copy be
+# attributed to this tool and reclaimed later (#36), and `-t` also means different things to BSD
+# and GNU mktemp, which matters the moment this runs anywhere but a Mac.
+SUITE_SECTION_MARK="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-section.XXXXXXXX")"
 if [ "$SUITE_TIMEOUT" -gt 0 ]; then
   _suite_pid=$$
   # A watchdog must not share the abort-on-error behaviour of the work it watches, or an
@@ -329,12 +334,27 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
   fi
 fi
 
+# ---- reclaim scratch a killed run left behind (#36) ----
+# Here, and not earlier, because holding the lock is what makes it safe: at depth 0 with the lock
+# held there is no other run of this suite in existence, so nothing matching these names can belong
+# to something still using it. The age floor inside the reaper is the second line, for a run
+# started with SUITE_NO_LOCK=1.
+# It REPORTS what it reclaimed rather than tidying quietly, so a number that keeps growing is
+# visible as a symptom (runs are being killed) instead of being absorbed every time.
+if [ "$SUITE_DEPTH" -eq 0 ]; then
+  bash "$SCRIPT" reap-scratch 2>&1 | sed 's/^claude-sync: /test suite: /'
+fi
+
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1 (expr: $2)"; fi; }
 
-WORK="$(mktemp -d)"
+# Named, not a bare `mktemp -d`. A run that is force-killed never reaches suite_cleanup, so this
+# directory is abandoned, and an ANONYMOUS one cannot be attributed to this suite afterwards: the
+# 37 found on this Mac on 2026-08-17, holding 475 MB, had to be identified by looking inside them,
+# next to 542 belonging to other tools that a sweep by age alone would have deleted (#36).
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
 # No trap here any more. It used to remove WORK and would now REPLACE suite_cleanup, silently
 # leaving the deadline watchdog running after every run, which is the precise defect #21 shipped
 # once already. suite_cleanup removes WORK as well, so this is one handler doing all of it.
@@ -2717,6 +2737,141 @@ check "#33 and it says how deeply they are nested" "printf '%s' \"\$_ps_chain\" 
 _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
   "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher\|test run'"
+
+section "== scratch a killed run left behind is reclaimed, and nothing else is (#36) =="
+# A run that is force-killed never reaches its cleanup, so its scratch directory is abandoned and
+# nothing ever reclaimed one. 37 of them were measured on this Mac on 2026-08-17 holding 475 MB,
+# from one day of interrupted runs, alongside 92 abandoned apply logs.
+#
+# The whole risk of the fix is on the other side: the same temp directory held 542 anonymous
+# `tmp.*` directories belonging to OTHER tools that day, so a sweep written as "old directories in
+# the temp folder" would have deleted them. Every fixture below therefore points at a THROWAWAY
+# root (L2), and the checks that matter most are the ones asserting what SURVIVES.
+_SCR="$WORK/scratch-root"; mkdir -p "$_SCR"
+_scr_age(){    # path
+  touch -t "$(date -v-2H +%Y%m%d%H%M)" "$1" 2>/dev/null || touch -d '2 hours ago' "$1"
+}
+_scr_dir(){    # name mb
+  mkdir -p "$_SCR/$1"
+  dd if=/dev/zero of="$_SCR/$1/filler" bs=1048576 count="$2" 2>/dev/null
+}
+_reap(){ SYNC_SCRATCH_ROOT="$_SCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1; }
+_scr_status(){ SYNC_SCRATCH_ROOT="$_SCR" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1; }
+
+# The control first, and before anything is planted: an empty root must report NOTHING. Without
+# it, every assertion below could be satisfied by a reaper that reports on the real temp directory
+# rather than the one it was pointed at, which is a stub that matched nothing (L143).
+_scr_empty="$(_scr_status)"
+check "#36 an empty root reports no leftover scratch" \
+  "! printf '%s' \"\$_scr_empty\" | grep -qi 'scratch the tool left behind'"
+_scr_empty_reap="$(_reap)"
+check "#36 and reaping it says plainly that it found nothing" \
+  "printf '%s' \"\$_scr_empty_reap\" | grep -qi 'no abandoned scratch'"
+
+_scr_dir "claude-sync-suite-work.OLDAAAA" 3     # a killed suite run
+_scr_age "$_SCR/claude-sync-suite-work.OLDAAAA"
+echo 'applied log' > "$_SCR/claude-sync-applied.OLDBBBB"   # a killed apply
+_scr_age "$_SCR/claude-sync-applied.OLDBBBB"
+_scr_dir "claude-sync-suite-work.NEWCCCC" 1     # a run that is still going
+mkdir -p "$_SCR/claude-sync-suite.lock"; echo "$$" > "$_SCR/claude-sync-suite.lock/pid"
+_scr_age "$_SCR/claude-sync-suite.lock"
+_scr_dir "tmp.SOMEONEELSE" 2                    # another tool's scratch, the measured hazard
+_scr_age "$_SCR/tmp.SOMEONEELSE"
+
+_scr_rep="$(_scr_status)"
+check "#36 status reports abandoned scratch"     "printf '%s' \"\$_scr_rep\" | grep -qi 'scratch the tool left behind'"
+check "#36 and says how many there are"          "printf '%s' \"\$_scr_rep\" | grep -q '2 abandoned'"
+# The size, not just the count: the count is what grows and the size is what actually hurts, and
+# 2 items could be 2 KB or 2 GB.
+check "#36 and how much space they hold"         "printf '%s' \"\$_scr_rep\" | grep -qE '[0-9]+ MB'"
+check "#36 and names the command that reclaims them" "printf '%s' \"\$_scr_rep\" | grep -q 'reap-scratch'"
+
+_scr_out="$(_reap)"
+check "#36 the reaper says how many it reclaimed" "printf '%s' \"\$_scr_out\" | grep -q 'reclaimed 2'"
+check "#36 and how much space it got back"        "printf '%s' \"\$_scr_out\" | grep -qE '[0-9]+ MB'"
+check "#36 an abandoned suite directory is gone"  "[ ! -e '$_SCR/claude-sync-suite-work.OLDAAAA' ]"
+check "#36 an abandoned apply log is gone"        "[ ! -e '$_SCR/claude-sync-applied.OLDBBBB' ]"
+# The three that must SURVIVE, which is where the damage would be. Each is a different reason.
+check "#36 scratch too young to be abandoned is kept" "[ -d '$_SCR/claude-sync-suite-work.NEWCCCC' ]"
+# A lock is not scratch. Whether it may be removed is decided by its own ownership rules, and a
+# reaper answering that question from outside is how a live lock gets deleted (L157).
+check "#36 the suite lock is not treated as scratch"  "[ -d '$_SCR/claude-sync-suite.lock' ]"
+# The one the measurement is about: 542 of these belonged to other tools on the day this was found.
+check "#36 another tool's temp directory is left alone" "[ -d '$_SCR/tmp.SOMEONEELSE' ]"
+check "#36 and its contents are untouched"             "[ -f '$_SCR/tmp.SOMEONEELSE/filler' ]"
+# Run twice: there is nothing left to reclaim, and saying so is not the same as saying nothing.
+_scr_again="$(_reap)"
+check "#36 reaping again finds nothing and says so" \
+  "printf '%s' \"\$_scr_again\" | grep -qi 'no abandoned scratch'"
+check "#36 and status goes quiet once they are gone" \
+  "! _scr_status | grep -qi 'scratch the tool left behind'"
+
+# An automatic deletion policy is the user's decision, never a silent default (L9). Planted old,
+# so a sweep that ignored the off switch would really remove them and the check cannot pass by
+# there being nothing to delete.
+_scr_dir "claude-sync-suite-work.OFFTEST" 1
+_scr_age "$_SCR/claude-sync-suite-work.OFFTEST"
+_scr_off="$(SYNC_SCRATCH_MAX_AGE=0 SYNC_SCRATCH_ROOT="$_SCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"; _scr_off_rc=$?
+check "#36 the sweep can be turned off"          "[ '$_scr_off_rc' -eq 0 ]"
+check "#36 and says it is off rather than that it found nothing" \
+  "printf '%s' \"\$_scr_off\" | grep -qi 'sweep is off'"
+check "#36 and removes nothing while it is off"  "[ -d '$_SCR/claude-sync-suite-work.OFFTEST' ]"
+_scr_off_st="$(SYNC_SCRATCH_MAX_AGE=0 SYNC_SCRATCH_ROOT="$_SCR" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#36 and status reports no leftovers while it is off" \
+  "! printf '%s' \"\$_scr_off_st\" | grep -qi 'scratch the tool left behind'"
+# An age that cannot be read must never land on the permissive side of an `rm -rf` (L50).
+_scr_junk="$(SYNC_SCRATCH_MAX_AGE=soon SYNC_SCRATCH_ROOT="$_SCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"; _scr_junk_rc=$?
+check "#36 an unreadable age is refused, not guessed" "[ '$_scr_junk_rc' -ne 0 ]"
+check "#36 and the refusal names the value"          "printf '%s' \"\$_scr_junk\" | grep -q 'soon'"
+check "#36 and it removed nothing on the way out"    "[ -d '$_SCR/claude-sync-suite-work.OFFTEST' ]"
+
+# A young path matching the LAST name the reaper looks for. This is not a corner: the last name is
+# the suite's own section mark, and a run always has a live one, so this is the state EVERY call
+# made during a suite run is in. The tool runs under `set -e`, so the sweep ending on a false age
+# test returned 1, and both commands then printed nothing at all and exited 1. Six unrelated checks
+# went red, four of them because the self-update gate reads a non-zero `status` as a pulled script
+# that cannot run, and declares a good version broken.
+rm -rf "$_SCR"/*; touch "$_SCR/claude-sync-suite-section.LIVE"
+_scr_young="$(_reap)"; _scr_young_rc=$?
+check "#36 a live section mark does not break the reaper" "[ '$_scr_young_rc' -eq 0 ]"
+check "#36 and it still says what it found"       "printf '%s' \"\$_scr_young\" | grep -qi 'no abandoned scratch'"
+_scr_status >/dev/null 2>&1; _scr_st_rc=$?
+check "#36 and status still exits cleanly beside one" "[ '$_scr_st_rc' -eq 0 ]"
+check "#36 and the live mark is still there"      "[ -f '$_SCR/claude-sync-suite-section.LIVE' ]"
+
+# Derived from the code, because a sweep by name protects only the names somebody remembered, and
+# a scratch path added later is exempt from the very check meant to reclaim it (L96). Any mktemp
+# in either file that does not name itself is unattributable the moment its run is killed.
+# Comments are STRIPPED before matching, or the prose explaining this rule satisfies it, and a
+# guard that is green on its own explanation is indistinguishable from one that works (L103). The
+# first version of this check read `grep -n` output, whose line-number prefix defeated the comment
+# filter entirely, so eight sentences about mktemp were reported as eight unnamed scratch paths.
+_scr_code(){ sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF"; }
+_scr_unnamed=""
+while IFS= read -r _ml; do
+  [ -n "$_ml" ] || continue
+  case "$_ml" in *TMPDIR*) ;; *) _scr_unnamed="$_scr_unnamed[$_ml]" ;; esac
+done <<EOF
+$(_scr_code | grep -E '\bmktemp\b')
+EOF
+check "#36 every scratch path this tool creates is named" "[ -z \"\$_scr_unnamed\" ]"
+check "#36 the derivation found mktemp calls to check" \
+  "[ \"\$(_scr_code | grep -cE '\\bmktemp\\b')\" -ge 5 ]"
+# And every name it creates must be one the reaper actually sweeps, or the naming is decoration.
+# Read from the mktemp calls themselves rather than from every temp path in the file: the suite
+# LOCK lives under the same directory with a name of the same shape, and it is deliberately not
+# scratch, so a derivation over paths reported it as a name the reaper had forgotten.
+_scr_names="$(_scr_code | grep -E '\bmktemp\b' | grep -oE '/claude-sync-[a-z-]+\.' | sed 's|^/||' | sort -u)"
+_scr_unswept=""
+while IFS= read -r _nm; do
+  [ -n "$_nm" ] || continue
+  case " $(grep -oE '^SYNC_SCRATCH_NAMES=.*' "$SCRIPT" | head -1) " in *"$_nm"*) ;; *) _scr_unswept="$_scr_unswept[$_nm]" ;; esac
+done <<EOF
+$_scr_names
+EOF
+check "#36 every name it creates is one the reaper sweeps" "[ -z \"\$_scr_unswept\" ]"
+check "#36 the name derivation found names to check" \
+  "[ \"\$(printf '%s' \"\$_scr_names\" | grep -c .)\" -ge 3 ]"
 
 section "== a grandchild is not told the filtering already happened (#37) =="
 # A run started with SECTION_UNTIL re-executes itself from a temp copy carrying SUITE_FILTERED=1,

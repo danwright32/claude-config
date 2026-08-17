@@ -33,6 +33,7 @@ turnstile-spin, web-perf, workers-best-practices, wrangler, plannotator-compound
 ./claude-sync pull              # bring shared config down
 ./claude-sync sync              # two-way: send local, then receive remote
 ./claude-sync status            # show differences, no changes
+./claude-sync reap-scratch      # reclaim scratch a killed run left behind
 ./claude-sync install-autosync  # background auto-sync (see below)
 ```
 
@@ -93,6 +94,23 @@ One run at a time, and none of them open ended:
 | `SUITE_NO_LOCK` | unset | Run without taking the lock. For when you know the run it names has finished. |
 | `SUITE_LOCK_MAX_AGE` | `1800` | Seconds after which a lock from ANOTHER machine is broken. A lock from this machine is judged by whether its process is alive, never by the clock, so a clock jump cannot break a live one. |
 | `SUITE_MAX_DEPTH` | `1` | How deeply a run may be nested inside another. The suite runs itself as a subprocess in places, and past this it refuses to start rather than multiplying. |
+
+## Scratch left behind by a killed run
+
+The suite and every apply create scratch under the system temp directory and remove it on the way
+out. A run that is force-killed never gets there. `claude-sync status` reports what has been
+abandoned (how many, and how much space), the suite reclaims it at the start of each run, and
+`claude-sync reap-scratch` does it on demand.
+
+Only paths carrying this tool's own names are ever touched, never "old directories in the temp
+folder": on the day this was measured that same directory held 542 anonymous ones belonging to
+other tools. Nothing younger than `SYNC_SCRATCH_MAX_AGE` is removed either, so scratch a live run
+is still using is safe.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `SYNC_SCRATCH_ROOT` | `$TMPDIR` | Where the tool's scratch lives, and the only place the sweep looks. |
+| `SYNC_SCRATCH_MAX_AGE` | `3600` | Seconds before scratch counts as abandoned. A suite run cannot outlive its own 15 minute deadline and a sync takes 6 seconds, so this is 4x the longest run the tool permits. The cost is that a burst of interrupted runs is not reclaimed until an hour after the last of them. `0` turns the sweep off entirely, and a value that is not a whole number is refused rather than guessed at. |
 
 `claude-sync status` also reports watcher processes and test runs the tool left behind, counting
 how many started independently and how deeply they are nested. It stays silent for one watcher
