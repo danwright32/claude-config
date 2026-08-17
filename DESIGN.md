@@ -124,6 +124,32 @@ peering inside them, which is a rule that would then live for ever.
 The other half of the measurement is why "older than a day" was not kept: all 37 were created
 within one hour and 43 minutes of each other, so a day would have reclaimed nothing at all.
 
+### Reordering the pull failure classifier for newer git
+
+Written, measured, and reverted the same hour, which is the reason this section exists.
+
+When the suite first ran on a Linux runner with git 2.54, three checks about a conflicted autostash
+restore failed, and the output showed the run blaming a two-Mac content conflict. The obvious
+reading was that git had changed: that a conflicted autostash restore now FAILS and leaves a rebase
+directory, so the content-conflict test, which comes first, had started answering for it. The fix
+follows from that reading: ask the more specific question first, and read the stash before anything
+aborts, since aborting destroys the evidence.
+
+It was wrong. Measured on the runner directly, git 2.54 does exactly what the older git does: a
+conflicted autostash restore prints "Applying autostash resulted in conflicts", exits ZERO, leaves
+`stash@{0}: autostash` in place, and leaves NO rebase directory. Both branches of the classifier
+behave identically on both versions, so the ordering could not have been the cause and the change
+was reverted rather than kept as harmless.
+
+What that leaves is the fixture, not the tool: on Linux the #22 scenario is not producing a
+conflicted autostash at all, so its assertions are being answered by a different mechanism. That is
+precisely the trap the fixture's own comment warns about, and it is still open.
+
+The lesson worth keeping is the order of work. Three plausible causes were proposed and two were
+acted on before anything was measured, and both were wrong: first that `claude-sync status` was
+exiting non-zero and tripping the self-update gate, then that git had changed its autostash
+reporting. A twenty line probe printing what git actually does settled it in one run.
+
 ### Running the suite in CI on a Mac, so it runs where it ships
 
 Rejected for #38 on cost, after being chosen and then reversed on a measurement.

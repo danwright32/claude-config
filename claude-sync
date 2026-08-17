@@ -1545,13 +1545,6 @@ do_apply_only(){
 }
 
 # ---------- sync (two-way, used by the background job) ----------
-# One message, two paths that reach it. Older git reports a conflicted autostash restore as a
-# SUCCESS and newer git reports it as a FAILURE, so the same situation is detected in two places,
-# and two copies of the sentence telling somebody how to recover their parked edits would drift.
-die_conflicted_autostash(){
-  die "your uncommitted edits inside $SYNC_REPO clashed with the other Mac's version, so git parked them in a stash and left conflict markers in the working tree. The sync tool's own files are the ones affected. Fix the marked files, then run 'git -C $SYNC_REPO stash drop'"
-}
-
 do_sync(){
   # Staging is protected against the paths this Mac has not applied yet (see
   # unapplied_paths), so the original order is safe: send local changes, integrate
@@ -1593,25 +1586,6 @@ do_sync(){
         # own working directory, so the test never fired and every real conflict fell
         # through to the catch-all below. Caught by the guard kept for exactly this.
         gitdir="$(git -C "$SYNC_REPO" rev-parse --absolute-git-dir 2>/dev/null || echo "$SYNC_REPO/.git")"
-        # Read BEFORE anything aborts, because `rebase --abort` re-applies or drops the autostash
-        # and so destroys the one fact that tells these two failures apart.
-        stash_after="$(git -C "$SYNC_REPO" stash list 2>/dev/null | wc -l | tr -d ' ')"
-        stash_top="$(git -C "$SYNC_REPO" stash list 2>/dev/null | head -1 || true)"
-        # Asked FIRST, because it is the more specific fact and because the two states stopped
-        # being mutually exclusive. Older git swallowed a conflicted autostash restore: it printed
-        # "Successfully rebased", returned ZERO, and left the edits in a stash, so this branch was
-        # unreachable for that case and the check after the pull was the only one that could catch
-        # it. Newer git reports the same situation as a FAILURE and leaves a rebase directory
-        # behind, so the content-conflict test below now also matches and, being first, answered
-        # for it: the run died telling the person both Macs had edited the same config, which is
-        # not what happened, and the abort then took away the stash the real message points them
-        # to. Ordering decided the answer, and the order was chosen when only one could be true.
-        # Deliberately no `rebase --abort` on this path, so the end state matches what older git
-        # leaves: the parked stash and the marked files the message tells them to fix.
-        if [ "${stash_after:-0}" -gt "${stash_before:-0}" ] && \
-           printf '%s' "$stash_top" | grep -q 'autostash'; then
-          die_conflicted_autostash
-        fi
         if [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; then
           git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
           die "both Macs changed the same config and it couldn't auto-merge. Run 'claude-sync status' and reconcile by hand"
@@ -1634,7 +1608,7 @@ do_sync(){
       # marker alone would re-fire forever on a conflicted autostash left from last time.
       if [ "${stash_after:-0}" -gt "${stash_before:-0}" ] && \
          printf '%s' "$stash_top" | grep -q 'autostash'; then
-        die_conflicted_autostash
+        die "your uncommitted edits inside $SYNC_REPO clashed with the other Mac's version, so git parked them in a stash and left conflict markers in the working tree. The sync tool's own files are the ones affected. Fix the marked files, then run 'git -C $SYNC_REPO stash drop'"
       fi
     fi
     after="$(repo_head)"
