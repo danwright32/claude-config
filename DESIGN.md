@@ -129,15 +129,27 @@ within one hour and 43 minutes of each other, so a day would have reclaimed noth
 Every threshold here is a multiple of something real, measured on the date given. None is a round
 number chosen because it felt safe.
 
-| Number | What it is | Measured against | Date |
-| --- | --- | --- | --- |
-| 1 hour | A lock is broken as stale | A live sync of the real 4.7MB payload takes 6 seconds and a fresh clone plus first pull takes 4, so roughly 600x the slowest real run | 2026-08-17 |
-| 60 days | A Mac counts as retired | The other Mac's longest real gap between syncs in the preceding 60 days was 6.8 days, so roughly 9x the longest real absence, and a holiday cannot trip it | 2026-08-17 |
-| 15 minutes | A suite run is killed as hung | A full run of the suite took 123 seconds, so roughly 7x | 2026-08-17 |
-| 30 minutes | A suite lock from another machine is broken | The same 123 second run, so roughly 15x | 2026-08-17 |
-| 1 hour | Scratch counts as abandoned | A suite run cannot outlive its own 15 minute deadline, so 4x the longest run the tool permits, and 600x the 6 second sync | 2026-08-17 |
-| 2 processes | One healthy watcher | Observed directly as a launcher with one child (pid 13658 with 13702) | 2026-08-17 |
-| 1 nested run | The suite's own depth allowance | The suite legitimately runs itself as a subprocess in one place and never deeper | 2026-08-17 |
+The `Set by` column is not decoration. Each number below is also a default in the code, and nothing
+kept the two in step: a limit changed in one and not the other leaves this page confidently
+defending a number that is no longer true, and the day it was written is the only day anybody would
+ever check by hand (L32, L41). The suite now reads every one of these defaults out of the code and
+requires a row here that names it and agrees with it, so a threshold that changes and a threshold
+that is added both fail until this table is updated.
+
+| Number | Set by | What it is | Measured against | Date |
+| --- | --- | --- | --- | --- |
+| 1 hour | `SYNC_LOCK_MAX_AGE=3600` | A lock is broken as stale | A live sync of the real 4.7MB payload takes 6 seconds and a fresh clone plus first pull takes 4, so roughly 600x the slowest real run | 2026-08-17 |
+| 60 days | `SYNC_MAC_RETIRE_AFTER=5184000` | A Mac counts as retired | The other Mac's longest real gap between syncs in the preceding 60 days was 6.8 days, so roughly 9x the longest real absence, and a holiday cannot trip it | 2026-08-17 |
+| 15 minutes | `SUITE_TIMEOUT=900` | A suite run is killed as hung | A full run of the suite took 123 seconds, so roughly 7x | 2026-08-17 |
+| 30 minutes | `SUITE_LOCK_MAX_AGE=1800` | A suite lock from another machine is broken | The same 123 second run, so roughly 15x | 2026-08-17 |
+| 1 hour | `SYNC_SCRATCH_MAX_AGE=3600` | Scratch counts as abandoned | A suite run cannot outlive its own 15 minute deadline, so 4x the longest run the tool permits, and 600x the 6 second sync | 2026-08-17 |
+| 1 nested run | `SUITE_MAX_DEPTH=1` | The suite's own depth allowance | The suite legitimately runs itself as a subprocess in one place and never deeper | 2026-08-17 |
+| 2 processes | not a setting | One healthy watcher | Observed directly as a launcher with one child (pid 13658 with 13702) | 2026-08-17 |
+
+The last row is the one exception, and it is stated rather than quietly left out: what a healthy
+watcher looks like is passed straight to `report_process_family` as arguments, so there is no
+default for the check to read. That makes it the only number here nothing verifies, which is worth
+knowing when deciding how much to trust it.
 
 Two of these are the ones where being wrong LOW is dangerous rather than merely annoying: the lock
 ceiling starts a second run on top of a live one, and the retired window drops a Mac that is only
