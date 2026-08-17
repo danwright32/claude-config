@@ -182,6 +182,32 @@ block about the filesystem and exits non-zero, so a plain `||` fallback concaten
 with the real answer rather than replacing it. A mutation to exactly that naive form is caught by
 those stand-ins and by nothing else.
 
+### Testing each synced file in turn for a lesson citation
+
+Rejected for #53 on a measurement, having shipped that way with #43.
+
+The renumber report has to say which other synced files cite a number that has just moved. The
+first version walked the whole config and ran a text test plus a matcher on every file it found,
+once per renumbered lesson. Against the real config on 2026-08-17 that is 800 files (747 of them
+under `skills/`) at 8.4 seconds per lesson, roughly 2,400 processes. The 2026-08-17 collision
+renumbered three lessons at once, so that pull would have spent about 25 seconds inside this alone,
+and the watcher runs it in the background on every config edit.
+
+One grep answers the same question: `grep -rIlE` over the same roots took 0.022 seconds. So the
+scan now finds its candidates in one pass and runs the existing per-file count only on those, which
+makes the cost proportional to how many files match rather than to how big `skills/` is. Measured
+again after the change on the same config: 0.246 seconds against 3.235, same files, same counts.
+
+Two things the fast path is careful about. It is deliberately a SUPERSET of what counts as a
+citation, because the count strips each entry's own heading number before matching and the grep
+does not, so a file whose only occurrence is its own `- **L2.` heading is a candidate and is then
+correctly counted as zero. And the old walk is still reachable behind `SYNC_NO_CITATION_PREFILTER=1`
+so the two can be run over one fixture and compared, rather than the fast path quietly becoming a
+second definition of what a citation is (L107).
+
+The test asserts how many files the scan OPENS, not how long it took: a wall-clock threshold on a
+shared runner is noise, and a number that moved cannot say why.
+
 ## Measured numbers
 
 Every threshold here is a multiple of something real, measured on the date given. None is a round
