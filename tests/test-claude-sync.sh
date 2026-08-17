@@ -2114,6 +2114,50 @@ out_suok="$(CLAUDE_HOME="$SUCH" SYNC_REPO="$SUC" SYNC_NO_NOTIFY=1 bash "$SCRIPT"
 check "#28 a healthy pulled script is still accepted" \
   "! printf '%s' \"\$out_suok\" | grep -qi 'cannot complete a run'"
 
+section "== a clock jump must not break a live lock (#29) =="
+# Of the eleven places the tool reads the clock, ten only affect what it SAYS. One changes
+# what it DOES: the lock is broken when it looks older than the ceiling, so a clock jumping
+# forward (a correction, a timezone change, a wake from sleep) makes a live lock look ancient
+# and lets a second run start on top of a running one, which is the collision #21 exists to
+# prevent. Wedging is now detectable, since #22 alerts after hours without a successful sync;
+# a silent collision is not. So the safe direction is to refuse to break a lock this machine
+# can still see running, no matter what the clock says.
+CJH="$WORK/clockjump-home"; CJR="$WORK/clockjump-repo"; CJLOCK="$WORK/clockjump-lock"
+mkdir -p "$CJH/skills/c" "$CJR/payload"
+echo 'C' > "$CJH/skills/c/SKILL.md"; echo '{"hooks":{}}' > "$CJH/settings.json"
+cjenv(){ echo "CLAUDE_HOME=$CJH SYNC_REPO=$CJR SYNC_LOCK=$CJLOCK SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1"; }
+# A lock held by a LIVE process on THIS machine, made to look ancient.
+sleep 120 & CJ_LIVE=$!
+mkdir -p "$CJLOCK"; printf '%s\n' "$CJ_LIVE" > "$CJLOCK/pid"
+printf '%s\n' "$(hostname -s)" > "$CJLOCK/host"
+touch -t "$(date -v-2d +%Y%m%d%H%M)" "$CJLOCK/pid" 2>/dev/null || touch -d '2 days ago' "$CJLOCK/pid"
+out_cj="$(env $(cjenv) bash "$SCRIPT" push 2>&1)"; rc_cj=$?
+check "#29 an ancient lock whose owner is ALIVE here is not broken" "[ $rc_cj -ne 0 ]"
+check "#29 and the run declines rather than proceeding" \
+  "printf '%s' \"\$out_cj\" | grep -qi 'already running'"
+kill "$CJ_LIVE" 2>/dev/null; wait "$CJ_LIVE" 2>/dev/null
+# Control: the same ancient lock from ANOTHER machine must still be broken, or #25 regresses
+# and a restored folder wedges syncing for good.
+rm -rf "$CJLOCK"; mkdir -p "$CJLOCK"
+sleep 120 & CJ_LIVE2=$!
+printf '%s\n' "$CJ_LIVE2" > "$CJLOCK/pid"
+printf '%s\n' "some-other-mac" > "$CJLOCK/host"
+touch -t "$(date -v-2d +%Y%m%d%H%M)" "$CJLOCK/pid" 2>/dev/null || touch -d '2 days ago' "$CJLOCK/pid"
+out_cj2="$(env $(cjenv) bash "$SCRIPT" push 2>&1)"; rc_cj2=$?
+check "#29 an ancient lock from ANOTHER machine is still broken" "[ $rc_cj2 -eq 0 ]"
+kill "$CJ_LIVE2" 2>/dev/null; wait "$CJ_LIVE2" 2>/dev/null
+# Control: a dead owner on this machine is still broken promptly, with no waiting for age.
+rm -rf "$CJLOCK"; mkdir -p "$CJLOCK"
+printf '%s\n' "$(bash -c 'echo $$')" > "$CJLOCK/pid"
+printf '%s\n' "$(hostname -s)" > "$CJLOCK/host"
+rc_cj3=0; env $(cjenv) bash "$SCRIPT" push >/dev/null 2>&1 || rc_cj3=$?
+check "#29 a dead owner on this machine is still broken at once" "[ $rc_cj3 -eq 0 ]"
+# A check that the tool records the machine in its own lock was written here and removed: it
+# read "no lock dir, or it has a host file", and the lock is always released by the time the
+# run ends, so the first half was always true and it asserted nothing. The behaviour it stood
+# for is already proven by the two checks above, which can only pass if the machine is
+# recorded and consulted.
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

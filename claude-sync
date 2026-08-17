@@ -181,7 +181,7 @@ lock_age_seconds(){
 }
 
 acquire_lock(){
-  local waited=0 broke=0 max="${SYNC_LOCK_WAIT:-90}" pid
+  local waited=0 broke=0 max="${SYNC_LOCK_WAIT:-90}" pid lock_host="" 
   while ! mkdir "$SYNC_LOCK" 2>/dev/null; do
     pid="$(cat "$SYNC_LOCK/pid" 2>/dev/null || true)"
     # Our OWN lock, met again. reexec_after_self_update runs the updated script with
@@ -199,6 +199,22 @@ acquire_lock(){
     # the real 4.7MB payload took 6 seconds and a fresh clone plus full first pull took 4, so
     # the ceiling is roughly 600x the slowest real run. It matters more than the other
     # thresholds here because being wrong LOW starts a second run on top of a live one.
+    # Whose lock is it? If THIS machine took it, the recorded pid is authoritative and the
+    # clock is not consulted at all: a clock jumping forward (a correction, a timezone change,
+    # a wake from sleep) would otherwise make a live lock look ancient and let a second run
+    # start on top of a running one, which is the collision the lock exists to prevent. Age is
+    # the fallback only for a lock from ELSEWHERE, which is the restored-folder case it was
+    # actually written for (#25), where the pid refers to a process on another machine and
+    # means nothing here. Wedging is detectable now that an outage alerts after hours without
+    # a successful sync; a silent collision would never surface, so this is the safe
+    # direction. A lock with no machine recorded predates this and falls back to age. (#29)
+    lock_host="$(cat "$SYNC_LOCK/host" 2>/dev/null || true)"
+    if [ -n "$lock_host" ] && [ "$lock_host" = "$(sync_hostname)" ] && lock_owner_alive "$pid"; then
+      waited=$((waited+1))
+      [ "$waited" -ge "$max" ] && return 1
+      sleep 1
+      continue
+    fi
     if [ "$(lock_age_seconds)" -gt "${SYNC_LOCK_MAX_AGE:-3600}" ] 2>/dev/null; then
       echo "claude-sync: broke a stale lock in $SYNC_LOCK (older than ${SYNC_LOCK_MAX_AGE:-3600}s, so no run can still be holding it)." >&2
       rm -rf "$SYNC_LOCK" 2>/dev/null || true
@@ -229,6 +245,8 @@ acquire_lock(){
     sleep 1
   done
   printf '%s\n' "$$" > "$SYNC_LOCK/pid" 2>/dev/null || true
+  # Which machine holds it, so a lock met later can be judged by the right evidence (#29).
+  printf '%s\n' "$(sync_hostname)" > "$SYNC_LOCK/host" 2>/dev/null || true
   return 0
 }
 
