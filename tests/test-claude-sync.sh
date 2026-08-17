@@ -1737,6 +1737,84 @@ echo 'edited again' > "$SNH/skills/s/SKILL.md"
 CLAUDE_HOME="$SNH" SYNC_REPO="$SNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1 || true
 check "#22 a send that cannot reach the repo records nothing" "[ ! -s '$SNR/.last-success' ]"
 
+echo "== verify says whether both Macs actually hold the same config (#23) =="
+# Everything else in this tool reports on the PROCESS: whether a run reached the repo,
+# whether a merge failed, whether a conflict copy is outstanding. Nothing reported the
+# OUTCOME the product exists for, which is that the two Macs hold the same config, and the
+# only evidence was that no error had appeared. .last-applied is gitignored, so the repo
+# knew nothing about the other Mac at all: each Mac now PUBLISHES what it has applied.
+VFB="$WORK/verify-bare.git"; git init -q --bare -b main "$VFB"
+VFA="$WORK/verify-repoA"; git clone -q "$VFB" "$VFA" 2>/dev/null
+VFHA="$WORK/verify-homeA"; mkdir -p "$VFHA/skills/v"
+echo 'V1' > "$VFHA/skills/v/SKILL.md"; echo '{"hooks":{}}' > "$VFHA/settings.json"
+CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#23 applying publishes a marker for this Mac" \
+  "[ -s '$VFA/state/macA.applied' ]"
+# The marker records the payload TREE, never HEAD. With HEAD the two Macs ping-pong for
+# ever: A publishes a marker, which moves HEAD, so B sees a new commit, applies, publishes
+# its own marker, which moves HEAD again. A marker-only commit leaves the payload tree
+# untouched, so the exchange settles after one round.
+check "#23 the marker records the payload tree, not the commit" \
+  "grep -q \"\$(git -C '$VFA' rev-parse HEAD:payload)\" '$VFA/state/macA.applied'"
+# The constraint the whole design turns on, found by bisecting 27 unrelated failures rather
+# than by reasoning: a marker must never become a commit on the config branch. One that does
+# is a commit the other Mac lacks, so the guard against publishing while behind reads it as
+# behind and silently skips every send until somebody pulls.
+check "#23 markers are never committed to the config branch" \
+  "[ -z \"\$(git -C '$VFA' ls-files state)\" ]"
+check "#23 markers do not add commits to the config branch" \
+  "[ \"\$(git -C '$VFA' log --oneline -- state | wc -l | tr -d ' ')\" = 0 ]"
+check "#23 the marker is published on its own ref instead" \
+  "[ -n \"\$(git -C '$VFA' for-each-ref --format='%(refname)' refs/claude-sync-state)\" ]"
+
+# A second Mac that has never applied must NOT be reported as being in agreement.
+VFR="$WORK/verify-repoB"; git clone -q "$VFB" "$VFR" 2>/dev/null
+VFHB="$WORK/verify-homeB"; mkdir -p "$VFHB"; echo '{"hooks":{}}' > "$VFHB/settings.json"
+out_v1="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1)"
+check "#23 verify reports this Mac as up to date" \
+  "printf '%s' \"\$out_v1\" | grep -qi 'up to date'"
+
+# Now B applies too, and both must read as agreeing.
+CLAUDE_HOME="$VFHB" SYNC_REPO="$VFR" SYNC_HOSTNAME=macB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_v2="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1)"
+check "#23 verify names the other Mac"        "printf '%s' \"\$out_v2\" | grep -q 'macB'"
+check "#23 verify says the two Macs agree"    "printf '%s' \"\$out_v2\" | grep -qi 'agree'"
+
+# A changes the config and publishes. B has not applied it, so B is BEHIND, and verify must
+# say so by name rather than reporting a clean bill of health.
+echo 'V2 changed on A' > "$VFHA/skills/v/SKILL.md"
+CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_v3="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1)"
+check "#23 verify reports the other Mac as behind"  "printf '%s' \"\$out_v3\" | grep -qi 'behind'"
+# Asserts the NUMBER, not just the word: the count was first written as "commits since the
+# marker's timestamp", which is a stand-in for the real quantity and goes wrong whenever the
+# two Macs' clocks disagree. A test that only looked for the word "behind" passed on it.
+check "#23 verify counts exactly one config change behind" \
+  "printf '%s' \"\$out_v3\" | grep -q 'BEHIND by 1 config change'"
+check "#23 a Mac that is behind is not called agreeing" \
+  "! printf '%s' \"\$out_v3\" | grep -qi 'both Macs agree'"
+check "#23 verify exits non-zero when they do not agree" \
+  "! CLAUDE_HOME='$VFHA' SYNC_REPO='$VFA' SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash '$SCRIPT' verify >/dev/null 2>&1"
+
+# No marker from anyone is UNKNOWN, never agreement. Finding nothing is the moment a clean
+# verdict is most likely to be believed, and it is exactly when nothing has been checked.
+# Built from a repo where nobody has EVER published, not by deleting local files: markers
+# live on their own refs now, so a fresh clone re-fetches them and deleting the local copies
+# proves nothing. The state being asserted is unchanged; only the way to reach it is.
+VFCB="$WORK/verify-clean-bare.git"; git init -q --bare -b main "$VFCB"
+VFC="$WORK/verify-repoC"; git clone -q "$VFCB" "$VFC" 2>/dev/null
+git -C "$VFC" checkout -q -b main 2>/dev/null || true
+mkdir -p "$VFC/payload/skills/v"; echo 'V' > "$VFC/payload/skills/v/SKILL.md"
+git -C "$VFC" add -A
+git -C "$VFC" -c user.name=t -c user.email=t@e commit -q -m "config with no marker ever published"
+git -C "$VFC" push -q -u origin main
+out_v4="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFC" SYNC_HOSTNAME=macZ SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1 || true)"
+check "#23 no markers at all does not claim agreement" \
+  "! printf '%s' \"\$out_v4\" | grep -qi 'agree'"
+check "#23 no markers at all says so plainly" \
+  "printf '%s' \"\$out_v4\" | grep -qi 'no Mac has published'"
+
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

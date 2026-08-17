@@ -31,6 +31,7 @@ MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
 SYNC_LOCK="${SYNC_LOCK:-$SYNC_REPO/.sync-lock}"   # one mutating run at a time (#21)
 LOCK_HELD=0
 LAST_SUCCESS_FILE="$SYNC_REPO/.last-success"   # last time the shared repo was reachable (#22)
+STATE_DIR="$SYNC_REPO/state"   # what each Mac has applied, published so verify can compare (#23)
 
 # Skills that the plugins install & manage — excluded so the repo stays clean
 # and plugin updates don't create churn. Edit this list if you install one of
@@ -547,6 +548,9 @@ $f
   # publishes upward compares against this, so it can tell "the user edited a
   # file" apart from "this Mac is simply behind".
   if have_git; then repo_head > "$LAST_APPLIED_FILE" 2>/dev/null || true; fi
+  # .last-applied stays local (it is this Mac's own bookkeeping); this is the published
+  # half, so the OTHER Mac can be told apart from a Mac nobody has heard from. (#23)
+  publish_applied_marker
 }
 
 # Is the shared repo holding payload content this Mac has never applied? That is
@@ -638,6 +642,56 @@ $tf
 # whichever copy is wanted, it still exists. Suffixed per host so two Macs never
 # collide, and excluded from the mirror so the copy stays local.
 conflict_suffix(){ printf '.conflict-%s\n' "${SYNC_HOSTNAME:-$(hostname -s)}"; }
+
+# ---------- what each Mac has applied, published (#23) ----------
+# Every other check in this tool reports on the sync PROCESS. Nothing reported the OUTCOME
+# the product exists for, which is that both Macs hold the same config: .last-applied is
+# gitignored and never leaves the machine that wrote it, so the repo knew nothing about the
+# other Mac at all and the only evidence of agreement was that no error had appeared.
+sync_hostname(){ printf '%s' "${SYNC_HOSTNAME:-$(hostname -s)}"; }
+payload_tree(){ git -C "$SYNC_REPO" rev-parse -q --verify HEAD:payload 2>/dev/null || true; }
+
+STATE_REF_PREFIX="refs/claude-sync-state"   # one ref per Mac, never on the config branch
+
+publish_applied_marker(){
+  have_git || return 0
+  local tree host file ts blob treeobj commit
+  tree="$(payload_tree)"; [ -n "$tree" ] || return 0
+  host="$(sync_hostname)"; file="$STATE_DIR/$host.applied"
+  # Records the payload TREE, never HEAD. Keyed on HEAD the two Macs republish markers at
+  # each other for ever: publishing moves HEAD, so the other Mac sees a new commit, applies,
+  # publishes its own marker, which moves HEAD again. A marker-only commit does not change
+  # the payload tree, so the exchange settles after one round and then writes nothing.
+  if [ -f "$file" ]; then
+    case "$(cat "$file" 2>/dev/null || true)" in "$tree "*) return 0 ;; esac
+  fi
+  ts="$(date +%s)"
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  printf '%s %s\n' "$tree" "$ts" > "$file" 2>/dev/null || true
+
+  # Published on its OWN ref, NEVER as a commit on the config branch. Measured, not feared:
+  # committing markers alongside the payload turned 27 unrelated tests red, because a marker
+  # commit is a commit the other Mac does not have, and the guard that stops a Mac
+  # publishing while it is behind reads that as behind and skips every send until somebody
+  # pulls. That guard already has history (it once dropped 81 minutes of sends on
+  # 2026-07-28), so it is the last thing that should be taught about a new exception.
+  # One ref per Mac, so two Macs can never contend for the same one.
+  blob="$(printf '%s %s\n' "$tree" "$ts" | git -C "$SYNC_REPO" hash-object -w --stdin 2>/dev/null || true)"
+  [ -n "$blob" ] || return 0
+  treeobj="$(printf '100644 blob %s\tapplied\n' "$blob" | git -C "$SYNC_REPO" mktree 2>/dev/null || true)"
+  [ -n "$treeobj" ] || return 0
+  commit="$(git -C "$SYNC_REPO" -c user.name="claude-config-sync" -c user.email="sync@localhost" \
+              commit-tree "$treeobj" -m "applied by $host" 2>/dev/null || true)"
+  [ -n "$commit" ] || return 0
+  git -C "$SYNC_REPO" update-ref "$STATE_REF_PREFIX/$host" "$commit" 2>/dev/null || true
+  # Best effort. A push that fails only means verify sees staler data from this Mac, and it
+  # reports the date it has rather than presenting it as current.
+  git -C "$SYNC_REPO" push -q --force origin "$STATE_REF_PREFIX/$host:$STATE_REF_PREFIX/$host" 2>/dev/null || true
+}
+
+fetch_state_refs(){
+  git -C "$SYNC_REPO" fetch -q --force origin "$STATE_REF_PREFIX/*:$STATE_REF_PREFIX/*" 2>/dev/null || true
+}
 
 # The top-level rule files are append-only lists: a lesson, a rule, one entry per
 # item. When both Macs add to one, the two sides touch different lines, so there is
@@ -1083,6 +1137,11 @@ verify_rule_imports(){
 # itself (claude-sync/tests/README) — those are committed deliberately by hand and
 # ride up on the next push.
 commit_if_changed(){
+  # ONLY payload. The applied-markers (#23) deliberately do NOT ride along here: staging them
+  # was tried and measured, and it turned 27 unrelated tests red, because a marker commit is
+  # a commit the other Mac does not have, which the guard against publishing while behind
+  # reads as behind and then skips every send. They go on their own ref instead, see
+  # publish_applied_marker.
   git -C "$SYNC_REPO" add -A -- payload
   git -C "$SYNC_REPO" diff --cached --quiet -- payload && return 1
   git -C "$SYNC_REPO" -c user.name="claude-config-sync" -c user.email="sync@localhost" \
@@ -1442,6 +1501,68 @@ report_conflict_copies(){
   echo "  Compare each with the live file next to it, then delete the copy once you have what you need."
 }
 
+# ---------- verify: do the Macs actually hold the same config? (#23) ----------
+do_verify(){
+  have_git || die "verify needs the shared repo's git history, and this run has git disabled."
+  local tree me host file mtree mtime others=0 agreed=0 behind=0 line
+  tree="$(payload_tree)"
+  me="$(sync_hostname)"
+  [ -n "$tree" ] || die "the shared repo has no payload yet, so there is nothing to compare."
+
+  fetch_state_refs
+  for file in $(git -C "$SYNC_REPO" for-each-ref --format='%(refname)' "$STATE_REF_PREFIX" 2>/dev/null || true); do
+    [ -n "$file" ] || continue
+    host="${file##*/}"
+    line="$(git -C "$SYNC_REPO" cat-file blob "$file:applied" 2>/dev/null || true)"
+    [ -n "$line" ] || continue
+    mtree="${line%% *}"
+    mtime="${line##* }"
+    case "$mtime" in ''|*[!0-9]*) mtime="" ;; esac
+    if [ "$mtree" = "$tree" ]; then
+      [ "$host" = "$me" ] && line="This Mac ($host): up to date with the shared config" \
+                          || line="$host: up to date with the shared config"
+      agreed=$((agreed+1))
+    else
+      # Counted from the HISTORY, never from the marker's clock. Counting commits since a
+      # timestamp is a stand-in for the real quantity and it is wrong exactly when the two
+      # Macs' clocks disagree, which is routine after a laptop sleeps. So: find the newest
+      # commit whose payload tree is the one that Mac actually has, and count the
+      # payload-changing commits after it. Falls back to the clock only when that commit is
+      # no longer in history, and SAYS which of the two it used rather than presenting a
+      # guess as a measurement.
+      local n="" when="an unknown time" at=""
+      at="$(git -C "$SYNC_REPO" rev-list HEAD 2>/dev/null | while read -r c; do
+              [ "$(git -C "$SYNC_REPO" rev-parse -q --verify "$c:payload" 2>/dev/null)" = "$mtree" ] && { printf '%s' "$c"; break; }
+            done || true)"
+      if [ -n "$at" ]; then
+        n="$(git -C "$SYNC_REPO" rev-list --count "$at..HEAD" -- payload 2>/dev/null || true)"
+      fi
+      if [ -z "$n" ]; then n="an unknown number of"; fi
+      if [ -n "$mtime" ]; then
+        when="$(date -r "$mtime" '+%Y-%m-%d %H:%M' 2>/dev/null || echo 'an unknown time')"
+      fi
+      line="$host: BEHIND by $n config change(s), last applied $when"
+      behind=$((behind+1))
+    fi
+    echo "  $line"
+    others=$((others+1))
+  done
+
+  # Nothing published is UNKNOWN, never agreement. An empty result arrives exactly when
+  # nothing has been checked, which is the moment a clean verdict is most likely believed.
+  if [ "$others" -eq 0 ]; then
+    echo "claude-sync: no Mac has published what it applied yet, so whether they hold the same config cannot be answered. Run a sync on each Mac once, then verify again." >&2
+    return 1
+  fi
+  if [ "$behind" -eq 0 ]; then
+    if [ "$agreed" -eq 2 ]; then echo "Verified: both Macs agree on the same config."
+    else echo "Verified: all $agreed Mac(s) agree on the same config."; fi
+    return 0
+  fi
+  echo "claude-sync: $behind of $others Mac(s) have not applied the current config. Run 'claude-sync pull' on each one named above." >&2
+  return 1
+}
+
 do_status(){
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
   echo "--- local config vs repo payload (dry run) ---"
@@ -1644,6 +1765,7 @@ case "$cmd" in
   # the entire life of the daemon. It takes the lock per event instead, around its send.
   watch) do_watch ;;
   status) do_status ;;           # read-only, deliberately never blocked
+  verify) do_verify ;;           # read-only too: it answers a question, it changes nothing
   apply-only) with_lock do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
@@ -1654,5 +1776,5 @@ case "$cmd" in
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME"))"
     ;;
   help|-h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, next-lesson, check-lessons, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, next-lesson, check-lessons, install-autosync, help)" ;;
 esac

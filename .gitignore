@@ -9,3 +9,4 @@ __pycache__/
 *.pyc
 .last-success
 .sync-lock/
+state/
