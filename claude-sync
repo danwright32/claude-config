@@ -169,11 +169,49 @@ have_git(){ [ "${SYNC_NO_GIT:-0}" != "1" ]; }
 # you to run and a diagnosis that hangs on the condition it diagnoses is worse than none.
 lock_owner_alive(){ [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
+# The identity every git command that can WRITE a commit runs under, including the rebase inside
+# `pull --rebase`, which is not obvious: the tool already passed this to its own two commits so it
+# would not depend on whoever's machine it runs on, and then left the rebase to find one ambiently.
+# A Mac hides that, because git there quietly invents user@hostname when none is configured. A
+# machine where git refuses to guess instead fails the pull, and the failure arrives as "both Macs
+# changed the same config", which is not what happened and is not something the person can fix
+# (#52, found the first time this ran anywhere but a Mac).
+SYNC_GIT_IDENTITY=(-c user.name="claude-config-sync" -c user.email="sync@localhost")
+
+# ---------- the two things BSD and GNU spell differently ----------
+# Asked for once here rather than at seven call sites, because neither accepts the other's flag and
+# the failure is not a clean one: `stat -f %m FILE` on GNU means "file system status" and prints a
+# multi-line block about the filesystem while exiting non-zero, so a plain `||` fallback would
+# concatenate that block with the real answer. Each result is therefore VALIDATED as a bare number
+# before it is believed, and an unreadable path prints nothing at all, which every caller already
+# treats as no evidence rather than as a value (L50).
+file_mtime(){   # path -> unix timestamp, or nothing
+  local m
+  m="$(stat -f %m "$1" 2>/dev/null || true)"
+  case "$m" in ''|*[!0-9]*) m="$(stat -c %Y "$1" 2>/dev/null || true)" ;; esac
+  case "$m" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s\n' "$m"
+}
+
+# Same split. `date -r` takes a timestamp on BSD and a FILE on GNU, so the GNU form is tried only
+# when the BSD one produced nothing.
+date_from_epoch(){   # unix timestamp, strftime format -> formatted date, or nothing
+  local out
+  # Validated BEFORE either backend sees it. BSD `date -r ""` does not fail: it succeeds and
+  # answers 1969-12-31, so a marker whose timestamp could not be read would have been reported to
+  # the person as a confident date instead of the "an unknown date" its caller already had ready
+  # (L50). Found by the check asking what this returns when it cannot read its input.
+  case "${1:-}" in ''|*[!0-9]*) return 0 ;; esac
+  out="$(date -r "$1" "$2" 2>/dev/null || true)"
+  [ -n "$out" ] || out="$(date -d "@$1" "$2" 2>/dev/null || true)"
+  printf '%s' "$out"
+}
+
 # How long this lock has existed, in seconds. Unknown counts as 0 (not stale), so a lock
 # whose age cannot be read is left alone rather than broken on a guess.
 lock_age_seconds(){
   local m now
-  m="$(stat -f %m "$SYNC_LOCK/pid" 2>/dev/null || true)"
+  m="$(file_mtime "$SYNC_LOCK/pid")"
   case "$m" in ''|*[!0-9]*) printf '0'; return 0 ;; esac
   now="$(date +%s)"
   if [ "$m" -gt "$now" ]; then printf '0'; return 0; fi   # a future mtime is not evidence of age
@@ -783,7 +821,7 @@ publish_applied_marker(){
   [ -n "$blob" ] || return 0
   treeobj="$(printf '100644 blob %s\tapplied\n' "$blob" | git -C "$SYNC_REPO" mktree 2>/dev/null || true)"
   [ -n "$treeobj" ] || return 0
-  commit="$(git -C "$SYNC_REPO" -c user.name="claude-config-sync" -c user.email="sync@localhost" \
+  commit="$(git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" \
               commit-tree "$treeobj" -m "applied by $host" 2>/dev/null || true)"
   [ -n "$commit" ] || return 0
   git -C "$SYNC_REPO" update-ref "$STATE_REF_PREFIX/$host" "$commit" 2>/dev/null || true
@@ -1281,7 +1319,7 @@ commit_if_changed(){
   # publish_applied_marker.
   git -C "$SYNC_REPO" add -A -- payload
   git -C "$SYNC_REPO" diff --cached --quiet -- payload && return 1
-  git -C "$SYNC_REPO" -c user.name="claude-config-sync" -c user.email="sync@localhost" \
+  git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" \
     commit -m "sync from $(hostname -s)" >/dev/null
   return 0
 }
@@ -1548,7 +1586,7 @@ do_sync(){
       # Counted around the pull because git DROPS the autostash on a clean restore and
       # KEEPS it on a conflicted one. See the check after the pull for why that matters.
       stash_before="$(git -C "$SYNC_REPO" stash list 2>/dev/null | wc -l | tr -d ' ')"
-      if ! pull_err="$(git -C "$SYNC_REPO" pull --rebase --autostash -q origin "$branch" 2>&1)"; then
+      if ! pull_err="$(git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" pull --rebase --autostash -q origin "$branch" 2>&1)"; then
         # Which failure this is, decided from git's own STATE rather than from the words
         # in its message: a real content conflict is the only one that leaves a rebase
         # half finished. Matching on message text would be a second, drifting definition.
@@ -1559,7 +1597,12 @@ do_sync(){
         gitdir="$(git -C "$SYNC_REPO" rev-parse --absolute-git-dir 2>/dev/null || echo "$SYNC_REPO/.git")"
         if [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; then
           git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
-          die "both Macs changed the same config and it couldn't auto-merge. Run 'claude-sync status' and reconcile by hand"
+          # git's own words are carried, and that is not decoration. This branch ASSERTS a cause
+          # from a state rather than reading it, so when it is wrong it is confidently wrong and
+          # there is nothing left to diagnose from: the catch-all beneath it quotes git and this one
+          # did not, which made a misclassification here the only failure in the tool that says
+          # nothing about what actually happened (L11, and #52 was exactly this).
+          die "both Macs changed the same config and it couldn't auto-merge. Run 'claude-sync status' and reconcile by hand. git said: ${pull_err:-<no output>}"
         fi
         git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
         # Deliberately NOT folded into either message above. An unknown failure defaulted
@@ -1646,7 +1689,7 @@ report_conflict_copies(){
   # history and every plugin and would make this cost real time on every status.
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    age=$(( (now - $(stat -f %m "$f" 2>/dev/null || echo "$now")) / 86400 ))
+    age=$(( (now - $(file_mtime "$f" | grep . || echo "$now")) / 86400 ))
     found+="  ${f#"$CLAUDE_HOME"/} ($age days old)"$'\n'
   done < <( {
     find "$CLAUDE_HOME" -maxdepth 1 -name '*.conflict-*' -type f 2>/dev/null
@@ -1713,7 +1756,14 @@ do_verify(){
                           || line="$host: up to date with the shared config"
       agreed=$((agreed+1))
     elif [ "$host" != "$me" ] && [ -n "$mtime" ] \
-         && [ "$((now - mtime))" -gt "${SYNC_MAC_RETIRE_AFTER:-5184000}" ] 2>/dev/null; then
+         && [ "$((now - mtime))" -ge "${SYNC_MAC_RETIRE_AFTER:-5184000}" ] 2>/dev/null; then
+      # Inclusive, and that is not cosmetic. Written as "more than", a window of 0 does not retire
+      # a marker recorded in the same SECOND, so whether the rule fires depended on how long the
+      # machine took to get from writing it to reading it: green on a Mac, and green or red on a
+      # runner depending on the run. The same commit produced both in two runs two seconds apart.
+      # Two values read off a live clock whose whole margin is one tick of that clock's own
+      # granularity (L134). At the real 60 day default the difference is one second and means
+      # nothing; at the boundary it is the difference between a rule and a coin toss.
       # Silent for so long that "behind" is the wrong word: this reads as a Mac that was
       # retired, renamed or reinstalled. Its marker is keyed on hostname, a mutable string,
       # so a rename abandons the old one rather than moving it (L15, and the reason #26
@@ -1724,7 +1774,7 @@ do_verify(){
       # absence and a holiday cannot trip it.
       # STILL NAMED, never dropped from the report: a Mac that genuinely fell behind must
       # not vanish from the surface that exists to notice exactly that.
-      line="$host: RETIRED, no sign of it since $(date -r "$mtime" '+%Y-%m-%d' 2>/dev/null || echo 'an unknown date'). Run 'claude-sync forget-mac $host' to drop it."
+      line="$host: RETIRED, no sign of it since $(date_from_epoch "$mtime" '+%Y-%m-%d' | grep . || echo 'an unknown date'). Run 'claude-sync forget-mac $host' to drop it."
       retired=$((retired+1))
     else
       # Counted from the HISTORY, never from the marker's clock. Counting commits since a
@@ -1743,7 +1793,7 @@ do_verify(){
       fi
       if [ -z "$n" ]; then n="an unknown number of"; fi
       if [ -n "$mtime" ]; then
-        when="$(date -r "$mtime" '+%Y-%m-%d %H:%M' 2>/dev/null || echo 'an unknown time')"
+        when="$(date_from_epoch "$mtime" '+%Y-%m-%d %H:%M' | grep . || echo 'an unknown time')"
       fi
       line="$host: BEHIND by $n config change(s), last applied $when"
       behind=$((behind+1))
@@ -1919,7 +1969,7 @@ scratch_leftovers(){
   for n in $SYNC_SCRATCH_NAMES; do
     for p in "$root/$n"*; do
       [ -e "$p" ] || continue
-      m="$(stat -f %m "$p" 2>/dev/null || true)"
+      m="$(file_mtime "$p")"
       # An mtime that cannot be read is treated as YOUNG, so a path is never removed on no
       # evidence at all (L50: an unparseable value must land on the safe side).
       case "$m" in ''|*[!0-9]*) continue ;; esac

@@ -264,8 +264,13 @@ trap suite_cleanup EXIT
 # Both removals below are `rm -rf` on a path that arrives from the environment, so a typo naming
 # somewhere real would delete it. Refused up front rather than relied on being caught by one of the
 # ownership rules further down, which is where it happens to land today (L5, L9).
+# Read through a default first. TMPDIR is always set on a Mac and is NOT set on a Linux runner, and
+# `${TMPDIR%/}` under `set -u` is an error rather than an empty string, so the suite died on its
+# second line there while every Mac ran it for months (L153: a location that happens to be true of
+# one machine is not a fact about the environment).
+_SUITE_TMPROOT="${TMPDIR:-/tmp}"
 case "${SUITE_LOCK%/}" in
-  ''|/|"${HOME%/}"|"${TMPDIR%/}")
+  ''|/|"${HOME%/}"|"${_SUITE_TMPROOT%/}")
     echo "test suite: SUITE_LOCK='$SUITE_LOCK' names a real directory rather than a lock of its own. Refusing, because taking over a stale lock removes the directory it is in." >&2
     exit 5 ;;
 esac
@@ -345,10 +350,27 @@ if [ "$SUITE_DEPTH" -eq 0 ]; then
   bash "$SCRIPT" reap-scratch 2>&1 | sed 's/^claude-sync: /test suite: /'
 fi
 
+# The suite's own mtime reader. Deliberately NOT claude-sync's, though the two do the same thing:
+# a test that measures with the code under test can only confirm that code agrees with itself, so
+# a broken reader would move both sides of every comparison together and nothing would notice
+# (L70). That the two agree is a separate and much weaker claim, and it is checked once, on its own.
+_suite_mtime(){   # path -> unix timestamp, or nothing
+  local m
+  m="$(stat -f %m "$1" 2>/dev/null || true)"
+  case "$m" in ''|*[!0-9]*) m="$(stat -c %Y "$1" 2>/dev/null || true)" ;; esac
+  case "$m" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s\n' "$m"
+}
+
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1 (expr: $2)"; fi; }
+# SUITE_DEBUG=1 prints tool output a scenario would otherwise throw away. It exists because a
+# failure that only happens on a machine you cannot run has to be MEASURED there, and a check
+# reports which assertion failed while saying nothing about what the tool actually did. Two wrong
+# causes were shipped for the CI failures before anything printed the facts (L171, #52).
+dbg(){ [ -n "${SUITE_DEBUG:-}" ] && printf '  [debug] %s\n' "$1"; return 0; }
 
 # Named, not a bare `mktemp -d`. A run that is force-killed never reaches suite_cleanup, so this
 # directory is abandoned, and an ANONYMOUS one cannot be attributed to this suite afterwards: the
@@ -508,13 +530,13 @@ RI="$WORK/repoI"; mkdir -p "$RI"
 # first pull-style apply establishes canonical form
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
-before_mtime="$(stat -f %m "$CI/settings.json")"
-before_cl="$(stat -f %m "$CI/CLAUDE.md")"
+before_mtime="$(_suite_mtime "$CI/settings.json")"
+before_cl="$(_suite_mtime "$CI/CLAUDE.md")"
 sleep 1
 # second apply with identical payload must NOT touch settings.json or CLAUDE.md
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
-after_mtime="$(stat -f %m "$CI/settings.json")"
-after_cl="$(stat -f %m "$CI/CLAUDE.md")"
+after_mtime="$(_suite_mtime "$CI/settings.json")"
+after_cl="$(_suite_mtime "$CI/CLAUDE.md")"
 check "settings.json untouched on no-op sync" "[ '$before_mtime' = '$after_mtime' ]"
 check "CLAUDE.md untouched on no-op sync"      "[ '$before_cl' = '$after_cl' ]"
 
@@ -665,6 +687,7 @@ echo '# only the NEW script version knows to sync this' > "$RSA/payload/RESUMED.
 echo '#!/bin/sh ordinary' > "$RSA/payload/hooks/ordinary.sh"
 git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "edit script again" && git -C "$RSA" push -q
 out_sync_restart="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RSCHOME" SYNC_REPO="$RSC" bash "$SCRIPT" sync 2>&1)"
+dbg "the resumed sync said: $out_sync_restart"
 check "sync also restarts the watch daemon on a script change" "printf '%s' \"\$out_sync_restart\" | grep -qi 'watch daemon'"
 check "the resumed sync still applies ordinary payload files" "[ -f '$RSCHOME/hooks/ordinary.sh' ]"
 check "the resumed sync applies what only the NEW version syncs" "[ -f '$RSCHOME/RESUMED.md' ]"
@@ -1003,10 +1026,17 @@ check "a normal send still works"          "[ -f '$UAB/payload/hooks/b-only.sh' 
 check "and does not warn"                  "! printf '%s' \"\$out_ua2\" | grep -qi 'not applied'"
 # sync in that same state must RECEIVE first, then still send the local edit.
 echo three > "$UAAH/hooks/shared.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UAAH" SYNC_REPO="$UAA" bash "$SCRIPT" sync >/dev/null 2>&1
-git -C "$UAB" pull -q --ff-only
+dbg "A's log before its sync: $(git -C "$UAA" log --oneline -4 2>&1 | tr '\n' ' | ')"
+dbg "A's status before its sync: [$(git -C "$UAA" status --short 2>&1 | tr '\n' ' | ')]"
+dbg "A's upstream before its sync: $(git -C "$UAA" rev-list --left-right --count HEAD...@{u} 2>&1) (ahead/behind)"
+dbg "remote log: $(git -C "$UAA" log --oneline -4 @{u} 2>&1 | tr '\n' ' | ')"
+_ua_syncA="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UAAH" SYNC_REPO="$UAA" bash "$SCRIPT" sync 2>&1)"; _ua_rcA=$?
+dbg "A's sync exited $_ua_rcA: $_ua_syncA"
+dbg "A's repo holds: $(git -C "$UAA" log --oneline -1 2>&1)"
+git -C "$UAB" pull -q --ff-only 2>&1 | while IFS= read -r _l; do dbg "B's test-side pull: $_l"; done
 echo 'B-second' > "$UABH/hooks/b-two.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" sync >/dev/null 2>&1
+_ua_syncB="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" sync 2>&1)"; _ua_rcB=$?
+dbg "B's sync exited $_ua_rcB: $_ua_syncB"
 check "sync receives before sending"       "grep -q three '$UABH/hooks/shared.sh'"
 check "sync keeps A's change in the repo"  "grep -q three '$UAB/payload/hooks/shared.sh'"
 check "sync still sends B's own edit"      "[ -f '$UAB/payload/hooks/b-two.sh' ]"
@@ -1459,10 +1489,10 @@ git -C "$RMB" pull -q 2>/dev/null
 CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" SYNC_NO_NOTIFY=1 bash "$RMB/claude-sync" pull >/dev/null 2>&1
 git -C "$RMA" pull -q --no-rebase 2>/dev/null
 # Mac A rewrites L1's wording.
-sed -i '' 's/- \*\*L1\. one\.\*\* body one/- **L1. one.** rewritten by Mac A/' "$RMA/payload/LESSONS.md"
+perl -i -pe 's/- \*\*L1\. one\.\*\* body one/- **L1. one.** rewritten by Mac A/' "$RMA/payload/LESSONS.md"
 git -C "$RMA" add -A && git -C "$RMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A rewrites L1" && git -C "$RMA" push -q
 # Mac B rewrites the SAME line differently, and also adds an entry of its own.
-sed -i '' 's/- \*\*L1\. one\.\*\* body one/- **L1. one.** rewritten by Mac B/' "$RMBH/LESSONS.md"
+perl -i -pe 's/- \*\*L1\. one\.\*\* body one/- **L1. one.** rewritten by Mac B/' "$RMBH/LESSONS.md"
 printf -- '- **L6. six.** only on Mac B\n' >> "$RMBH/LESSONS.md"
 out_rm2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" bash "$RMB/claude-sync" pull 2>&1)"
 check "#14 an unmergeable file still keeps a copy of yours" \
@@ -2325,6 +2355,13 @@ check "#26 a retired Mac is not counted as behind" \
   "! printf '%s' \"\$out_gh\" | grep -q 'macGone: BEHIND'"
 check "#26 and it no longer blocks the verdict" \
   "CLAUDE_HOME='$GHH' SYNC_REPO='$GHR' SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 SYNC_MAC_RETIRE_AFTER=0 bash '$SCRIPT' verify >/dev/null 2>&1"
+# The boundary is NOT pinned here, and that is a gap stated rather than a guard held. A check that
+# a zero window retires a marker written this second cannot fail on a Mac: the marker is never read
+# in the same second it was written, so the old exclusive comparison satisfies it too. It was
+# written, watched passing against the defect, and removed. The evidence for the inclusive
+# comparison is the flakiness itself: the same commit, two runs two seconds apart, one green and
+# one red on the three checks above. Proving it directly needs a seam for the clock, which the tool
+# does not have.
 # Retired must NOT mean forgotten: it still has to be named, or a Mac that genuinely fell
 # behind quietly disappears from the report that exists to notice exactly that.
 check "#26 a retired Mac is still named"  "printf '%s' \"\$out_gh\" | grep -q 'macGone'"
@@ -2767,6 +2804,184 @@ _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
   "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher\|test run'"
 
+section "== a sync works where git has no identity of its own (#52) =="
+# The tool passes its own name and address to the two commits it makes, so it does not depend on
+# whoever's machine it is running on. It then left the rebase inside `pull --rebase` to find one
+# ambiently, and a rebase writes commits too.
+#
+# No Mac can show this. Git on a Mac quietly invents user@hostname when nothing is configured, so
+# the pull succeeds and the gap is invisible. A machine where git refuses to guess fails instead,
+# and the failure is reported as "both Macs changed the same config", which is not what happened,
+# names an innocent cause, and tells the person to reconcile a conflict that does not exist. It
+# took six runs on a Linux runner to find, and it was the root of nine failing checks there.
+#
+# `user.useConfigOnly` is what makes it reproducible HERE: it tells git to refuse to invent an
+# identity rather than deriving one from the machine, which is exactly the state the runner is in.
+_NOID="$WORK/noid"; mkdir -p "$_NOID"
+git init -q --bare "$_NOID/bare.git"
+git clone -q "$_NOID/bare.git" "$_NOID/repo" 2>/dev/null
+git -C "$_NOID/repo" checkout -q -b main 2>/dev/null || true
+mkdir -p "$_NOID/repo/payload/hooks" "$_NOID/home/hooks"
+echo '{"hooks":{}}' > "$_NOID/home/settings.json"
+echo 'seed' > "$_NOID/repo/payload/hooks/seed.sh"
+git -C "$_NOID/repo" add -A
+git -C "$_NOID/repo" -c user.name=t -c user.email=t@e commit -q -m seed
+git -C "$_NOID/repo" push -q -u origin main
+# The other Mac moves the shared branch on, and this one has a commit of its own that is not there
+# yet. That DIVERGENCE is the whole fixture: a pull with nothing to replay writes no commit and so
+# needs no identity, which is why the first version of this section passed against the defect.
+# -b main, or the clone comes up on the bare repo's default branch, which is not the one
+# that was pushed: it checks out nothing, the write below fails, and the remote never moves.
+git clone -q -b main "$_NOID/bare.git" "$_NOID/other" 2>/dev/null
+echo 'from the other Mac' > "$_NOID/other/payload/hooks/theirs.sh"
+git -C "$_NOID/other" add -A
+git -C "$_NOID/other" -c user.name=o -c user.email=o@e commit -q -m theirs
+git -C "$_NOID/other" push -q origin HEAD:main
+echo 'from this Mac' > "$_NOID/repo/payload/hooks/ours.sh"
+git -C "$_NOID/repo" add -A
+git -C "$_NOID/repo" -c user.name=t -c user.email=t@e commit -q -m ours
+# Now take the identity away, and forbid git from making one up.
+git -C "$_NOID/repo" config user.useConfigOnly true
+git -C "$_NOID/repo" config --unset user.name 2>/dev/null || true
+git -C "$_NOID/repo" config --unset user.email 2>/dev/null || true
+# The global config has to be taken out of view as well, not just the repo's own: unsetting the
+# local name and address leaves git falling straight back to the one in the person's ~/.gitconfig,
+# and useConfigOnly only stops git INVENTING one, it does not hide a real one. Without this the
+# fixture looked correct and denied nothing.
+_noid_env=(env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null)
+# Two controls, because each covers a different way this can assert nothing (L159). The first: git
+# really does refuse an identity here.
+_noid_probe="$("${_noid_env[@]}" git -C "$_NOID/repo" commit --allow-empty -m probe 2>&1 || true)"
+check "#52 the fixture really does deny git an identity" \
+  "printf '%s' \"\$_noid_probe\" | grep -qi 'identity'"
+# The second: there really is something for the pull to replay. With nothing to rebase, no commit
+# is written, no identity is needed, and every check below passes against the defect untouched.
+# BOTH directions. Ahead alone is not enough: with the remote unmoved the pull fast-forwards
+# nothing, replays nothing, writes no commit and needs no identity, which is exactly how the first
+# two versions of this fixture passed against the defect untouched.
+git -C "$_NOID/repo" fetch -q origin main 2>/dev/null || true
+_noid_ahead="$(git -C "$_NOID/repo" rev-list --count origin/main..HEAD 2>/dev/null || echo 0)"
+_noid_behind="$(git -C "$_NOID/repo" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)"
+check "#52 and the two sides really have diverged" \
+  "[ \"\${_noid_ahead:-0}\" -ge 1 ] && [ \"\${_noid_behind:-0}\" -ge 1 ]"
+
+echo 'local edit' > "$_NOID/home/hooks/mine.sh"
+_noid_out="$("${_noid_env[@]}" SYNC_NO_NOTIFY=1 SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$_NOID/home" SYNC_REPO="$_NOID/repo" bash "$SCRIPT" sync 2>&1)"; _noid_rc=$?
+dbg "sync with no git identity exited $_noid_rc: $_noid_out"
+check "#52 a sync completes where git has no identity"  "[ '$_noid_rc' -eq 0 ]"
+# The half that names the damage. A wrong cause here sends the person to reconcile a conflict that
+# does not exist, and there is no edit they can make that will clear it.
+check "#52 and it is not blamed on a two-Mac conflict" \
+  "! printf '%s' \"\$_noid_out\" | grep -q 'both Macs changed the same config'"
+check "#52 and the local edit really was published" "[ -f '$_NOID/repo/payload/hooks/mine.sh' ]"
+
+section "== nothing depends on a tool only BSD has (#38) =="
+# The suite runs on every push now, on a Linux runner, so anything spelled the BSD way stops the
+# whole gate rather than failing one check. The awkward part is that a wrong answer here does not
+# look like an error: `stat -f %m FILE` on GNU means "file system status" and prints a multi-line
+# block about the filesystem, so a naive fallback concatenates that block with the real number and
+# every age comparison downstream then reads it as garbage.
+_PORTABLE_HELPERS="$WORK/helpers.sh"
+{ echo 'file_mtime(){ :; }'; sed -n '/^file_mtime(){/,/^}/p;/^date_from_epoch(){/,/^}/p' "$SCRIPT"; } > "$_PORTABLE_HELPERS"
+# shellcheck disable=SC1090
+. "$_PORTABLE_HELPERS"
+echo 'x' > "$WORK/mtime-probe"
+_pm="$(file_mtime "$WORK/mtime-probe")"
+check "#38 the mtime helper returns a bare timestamp" "printf '%s' \"\$_pm\" | grep -qE '^[0-9]+$'"
+# The claim that matters is not "it returns a number" but "it returns the RIGHT number", measured
+# against the suite's own independent reader rather than against itself (L70).
+check "#38 and it agrees with the suite's own reader" "[ \"\$_pm\" = \"\$(_suite_mtime '$WORK/mtime-probe')\" ]"
+# Unreadable must be EMPTY, not a zero and not an error blob: every caller treats empty as "no
+# evidence", and a 0 would read as 1970, which is old enough to trip every age threshold there is.
+_pmiss="$(file_mtime "$WORK/no-such-file-at-all")"
+check "#38 an unreadable path yields nothing at all" "[ -z \"\$_pmiss\" ]"
+_pdate="$(date_from_epoch 1000000000 '+%Y-%m-%d')"
+check "#38 the date helper formats a timestamp" "[ '$_pdate' = '2001-09-08' ] || [ '$_pdate' = '2001-09-09' ]"
+_pdbad="$(date_from_epoch '' '+%Y-%m-%d')"
+check "#38 and yields nothing for a timestamp it cannot read" "[ -z \"\$_pdbad\" ]"
+
+# The GNU half of both helpers is the half this Mac never runs, so on a Mac it is unproven code
+# that the runner is about to depend on entirely. Driven here through stand-ins that behave the way
+# the GNU tools do, so the fallback is watched WORKING rather than assumed (L143: a fallback nothing
+# exercises is indistinguishable from one that is broken).
+_GNUBIN="$WORK/gnu-bin"; mkdir -p "$_GNUBIN"
+cat > "$_GNUBIN/stat" <<'GNUSTAT'
+#!/usr/bin/env bash
+# GNU stat: -f means --file-system and prints a block about the filesystem, and the mtime format
+# lives behind -c. This is the shape that makes a naive `||` fallback concatenate the two.
+if [ "${1:-}" = "-f" ]; then shift; echo "  File: \"${*}\""; echo "    ID: 9a1f2b Namelen: 255  Type: apfs"; exit 1; fi
+if [ "${1:-}" = "-c" ]; then fmt="${2:-}"; shift 2; [ "$fmt" = "%Y" ] || exit 1; exec perl -e 'print ((stat($ARGV[0]))[9], "\n")' "$1"; fi
+exit 1
+GNUSTAT
+cat > "$_GNUBIN/date" <<'GNUDATE'
+#!/usr/bin/env bash
+# GNU date: -r takes a FILE, so a timestamp is not found; -d @N is the way to format an epoch.
+if [ "${1:-}" = "-r" ]; then echo "date: cannot stat '${2:-}': No such file or directory" >&2; exit 1; fi
+if [ "${1:-}" = "-d" ]; then
+  spec="${2:-}"; fmt="${3:-+%Y-%m-%d}"
+  case "$spec" in @*) exec perl -e 'use POSIX qw(strftime); my $f=$ARGV[1]; $f =~ s/^\+//; print strftime($f, localtime($ARGV[0])), "\n"' "${spec#@}" "$fmt" ;; esac
+  exit 1
+fi
+exit 1
+GNUDATE
+chmod +x "$_GNUBIN/stat" "$_GNUBIN/date"
+_gnu_mtime="$(PATH="$_GNUBIN:$PATH" bash -c ". '$_PORTABLE_HELPERS'; file_mtime '$WORK/mtime-probe'")"
+check "#38 the mtime helper still answers with GNU-shaped tools" \
+  "printf '%s' \"\$_gnu_mtime\" | grep -qE '^[0-9]+$'"
+# The specific trap: the filesystem block must not be carried along with the number.
+check "#38 and does not carry the filesystem block with it" \
+  "[ \"\$_gnu_mtime\" = \"\$(_suite_mtime '$WORK/mtime-probe')\" ]"
+check "#38 and the stand-in really was used" \
+  "PATH='$_GNUBIN:'\$PATH command -v stat | grep -q gnu-bin"
+_gnu_date="$(PATH="$_GNUBIN:$PATH" bash -c ". '$_PORTABLE_HELPERS'; date_from_epoch 1000000000 '+%Y-%m-%d'")"
+check "#38 the date helper still answers with GNU-shaped tools" \
+  "[ '$_gnu_date' = '2001-09-08' ] || [ '$_gnu_date' = '2001-09-09' ]"
+
+# TMPDIR is always set on a Mac and is NOT set on a Linux runner, so anything reading it without a
+# default is a landmine no Mac can step on. The suite died on exactly this the first time it ran on
+# the runner, before a single check executed.
+#
+# Worth stating plainly, because it decides how much these two checks are worth: they CANNOT fail on
+# a Mac. macOS ships bash 3.2, which expands `${TMPDIR%/}` to empty when TMPDIR is unset, while the
+# bash on the runner treats it as an unbound variable and exits. So this pair is green here for a
+# reason unrelated to the code (L159) and does its real work only in CI, which is the argument for
+# having CI rather than an argument against the checks. A static sweep for the whole class, every
+# environment variable expanded with an operator and no default, found this as the only instance.
+_noTMPDIR="$(env -u TMPDIR SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1 || true)"
+# The positive control first: without it, a child that died for some entirely different reason
+# would satisfy the assertion below by never getting far enough to say "unbound variable" (L159).
+check "#38 the suite runs with no TMPDIR set at all" "printf '%s' \"\$_noTMPDIR\" | grep -q '^PASS='"
+check "#38 and names no unbound variable"            "! printf '%s' \"\$_noTMPDIR\" | grep -q 'unbound variable'"
+# The tool itself too, and separately, because it is the half that runs unattended on both Macs.
+_noTMPDIRtool="$(env -u TMPDIR SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" bash "$SCRIPT" status 2>&1 || true)"; _noTMPDIRrc=$?
+check "#38 the tool runs with no TMPDIR set either"  "[ '$_noTMPDIRrc' -eq 0 ]"
+check "#38 and it names no unbound variable"         "! printf '%s' \"\$_noTMPDIRtool\" | grep -q 'unbound variable'"
+
+# Derived, so the port cannot quietly rot: one new `stat -f` anywhere outside the helper breaks
+# every run on the runner, and the helper is the only place allowed to spell it that way. Comments
+# are stripped first, or the paragraph above explaining the problem counts as an instance of it
+# (L103). The helper bodies are excluded by name rather than by line number.
+# The patterns are BUILT from pieces, so this file never contains the literals it searches for. A
+# guard satisfied by its own assertion line reports the codebase as broken for ever and teaches
+# everyone to ignore it, which is the same trap #34's spawn-site check had to be written around.
+_bsdisms(){
+  local a b c d e
+  a="stat"" -f"; b="date"" -r "; c="sed"" -i ''"; d="date"" -v"; e="mktemp"" -t"
+  # Continuation lines are joined first, or a spelling whose GNU fallback sits on the NEXT line
+  # reads as unguarded and this reports two false findings for ever, which is how a guard stops
+  # being read (L36).
+  sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" \
+    | sed -e :a -e '/\\$/N; s/\\\n//; ta' \
+    | grep -nF -e "$a" -e "$b" -e "$c" -e "$d" -e "$e" \
+    | grep -vF "$a %m \"\$1\"" | grep -vF "$b\"\$1\"" \
+    | grep -vE '\|\| +touch -d' || true
+}
+check "#38 no BSD-only spelling survives outside the two helpers" "[ -z \"\$(_bsdisms)\" ]"
+# And the helpers really are there to be excluded, or the check above passes by matching nothing
+# at all in a file that has been emptied or renamed.
+check "#38 the portable helpers exist" \
+  "grep -q '^file_mtime(){' '$SCRIPT' && grep -q '^date_from_epoch(){' '$SCRIPT' && grep -q '^_suite_mtime(){' '$SCRIPT_SELF'"
+
 section "== the design record's numbers still match the code (#41) =="
 # DESIGN.md records every threshold as a MEASURED value with the reasoning behind it, and all of
 # them are also defaults in the code. Nothing kept the two in step. The document's whole value is
@@ -2934,7 +3149,11 @@ check "#36 and the live mark is still there"      "[ -f '$_SCR/claude-sync-suite
 # guard that is green on its own explanation is indistinguishable from one that works (L103). The
 # first version of this check read `grep -n` output, whose line-number prefix defeated the comment
 # filter entirely, so eight sentences about mktemp were reported as eight unnamed scratch paths.
-_scr_code(){ sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF"; }
+# Lines that SPLICE a literal out of pieces are dropped as well as comments. Those are search
+# patterns, not calls, and the splice exists precisely so a guard cannot match its own assertion.
+# Without this, the #38 guard's pattern list reads to this one as an unnamed scratch path, and two
+# derived checks that are each correct report a defect that exists in neither.
+_scr_code(){ sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" | grep -vF '""'; }
 _scr_unnamed=""
 while IFS= read -r _ml; do
   [ -n "$_ml" ] || continue

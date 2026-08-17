@@ -124,6 +124,64 @@ peering inside them, which is a rule that would then live for ever.
 The other half of the measurement is why "older than a day" was not kept: all 37 were created
 within one hour and 43 minutes of each other, so a day would have reclaimed nothing at all.
 
+### Reordering the pull failure classifier for newer git
+
+Written, measured, and reverted the same hour, which is the reason this section exists.
+
+When the suite first ran on a Linux runner with git 2.54, three checks about a conflicted autostash
+restore failed, and the output showed the run blaming a two-Mac content conflict. The obvious
+reading was that git had changed: that a conflicted autostash restore now FAILS and leaves a rebase
+directory, so the content-conflict test, which comes first, had started answering for it. The fix
+follows from that reading: ask the more specific question first, and read the stash before anything
+aborts, since aborting destroys the evidence.
+
+It was wrong. Measured on the runner directly, git 2.54 does exactly what the older git does: a
+conflicted autostash restore prints "Applying autostash resulted in conflicts", exits ZERO, leaves
+`stash@{0}: autostash` in place, and leaves NO rebase directory. Both branches of the classifier
+behave identically on both versions, so the ordering could not have been the cause and the change
+was reverted rather than kept as harmless.
+
+What that leaves is the fixture, not the tool: on Linux the #22 scenario is not producing a
+conflicted autostash at all, so its assertions are being answered by a different mechanism. That is
+precisely the trap the fixture's own comment warns about, and it is still open.
+
+The lesson worth keeping is the order of work. Three plausible causes were proposed and two were
+acted on before anything was measured, and both were wrong: first that `claude-sync status` was
+exiting non-zero and tripping the self-update gate, then that git had changed its autostash
+reporting. A twenty line probe printing what git actually does settled it in one run.
+
+### Running the suite in CI on a Mac, so it runs where it ships
+
+Rejected for #38 on cost, after being chosen and then reversed on a measurement.
+
+The argument for it is real: this tool only ever runs on macOS, so a Mac runner needs no porting
+and tests the platform that actually matters. The argument against is arithmetic. GitHub bills
+macOS minutes at 10x, the suite takes about two minutes, so a run costs roughly 25 billable
+minutes. This repo took 265 commits in the fourteen days to 2026-08-17, about 19 a day, because the
+watcher pushes every config edit within seconds of it happening. That is around 14,000 billable
+minutes a month against a 2,000 minute allowance.
+
+Filtering which pushes trigger a run does not save it either: at roughly 2 non-autosync commits a
+day plus pull requests plus a periodic unfiltered run, it still lands near 2,250 a month, and the
+filter itself is the thing L88 warns about, since the suite reads README.md and DESIGN.md and
+checks every tracked file.
+
+So the suite was made portable instead, which turned out to be two helpers and eleven call sites,
+and it now runs on Linux on every push with no filter at all, for about 1,400 minutes a month at
+the 1x rate.
+
+The port also found a real defect that had nothing to do with Linux. BSD `date -r ""` does not
+fail: it succeeds and answers 1969-12-31. A Mac marker whose timestamp could not be read would
+therefore have been reported as a confident date rather than as "an unknown date", which the
+calling code already had ready and never got to use.
+
+The GNU halves of both helpers are exercised on this Mac through stand-ins shaped like the GNU
+tools, because a Mac otherwise never runs that code at all and the runner depends on it entirely.
+The trap they exist for is specific: `stat -f %m FILE` on GNU means file system status, prints a
+block about the filesystem and exits non-zero, so a plain `||` fallback concatenates that block
+with the real answer rather than replacing it. A mutation to exactly that naive form is caught by
+those stand-ins and by nothing else.
+
 ## Measured numbers
 
 Every threshold here is a multiple of something real, measured on the date given. None is a round
@@ -190,7 +248,16 @@ notice if it were removed. The original recursion flag was in this category, whi
 replaced it. Nothing else is currently here, and anything that lands in it should be treated as a
 gap stated rather than a guard held.
 
-**Deliberately not proven.** A control asserting that an empty process listing reports nothing
+**Deliberately not proven.** The retirement window's boundary is inclusive, so a window of 0
+retires a marker recorded in the same second. Nothing on a Mac can show that: the marker is never
+read in the same second it was written, so the previous exclusive comparison passes every check
+here too. A check for it was written, watched passing against the defect, and removed rather than
+kept as decoration. The evidence is the flakiness it caused instead, which is real but indirect:
+the same commit produced one green run and one red run two seconds apart on a Linux runner, failing
+exactly the three checks that depend on it. Proving it directly needs a seam for the clock, which
+the tool does not have.
+
+A control asserting that an empty process listing reports nothing
 exists specifically because a real watcher is running while the suite executes. Without it, a
 listing that failed to reach the code under test would pass quietly against the live machine, and a
 stub that matched nothing is worse than no stub, because you believe the case is covered.
