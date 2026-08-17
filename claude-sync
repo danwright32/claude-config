@@ -32,6 +32,7 @@ PAYLOAD="$SYNC_REPO/payload"
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
 MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
+REFUSED_SKILL_EXCLUDES=()   # skills entries this run declined to carry (see refuse_unloadable_skills)
 PRESERVED_CONFLICTS=""   # copies set aside by THIS run (see preserve_local_conflicts)
 SYNC_LOCK="${SYNC_LOCK:-$SYNC_REPO/.sync-lock}"   # one mutating run at a time (#21)
 LOCK_HELD=0
@@ -328,6 +329,70 @@ with_lock(){   # $@ = the command to run while holding the lock
   return $rc
 }
 
+# ---- skills entries that cannot load (#50) ----
+# A skill is a DIRECTORY holding a SKILL.md whose frontmatter carries a name and a description.
+# Anything else under skills/ is inert: payload/skills/humanizer/ and payload/skills/stop-slop/
+# held no SKILL.md at all, and two loose markdown files sat directly under skills/ where nothing
+# reads them. All four synced between both Macs for months, because a skill that cannot load is
+# indistinguishable from one that works until somebody tries to invoke it.
+#
+# Prints "entry<TAB>reason" for each one, so every report can name the entry and say why in one
+# line rather than counting them.
+skill_frontmatter(){   # $1 = a SKILL.md
+  awk 'NR==1 && $0 !~ /^---[[:space:]]*$/ { exit } NR==1 { next } /^---[[:space:]]*$/ { exit } { print }' "$1" 2>/dev/null
+}
+
+unloadable_skill_entries(){   # $1 = a skills directory
+  local dir="$1" e base sk fm s
+  [ -d "$dir" ] || return 0
+  for e in "$dir"/*; do
+    [ -e "$e" ] || continue
+    base="${e##*/}"
+    case "$base" in .*) continue ;; esac
+    # A plugin manages these and the sync deliberately never carries them, so judging them here
+    # would report a problem about something this tool does not touch.
+    for s in "${PLUGIN_SKILLS[@]}"; do [ "$base" = "$s" ] && continue 2; done
+    if [ ! -d "$e" ]; then
+      printf '%s\ta bare file directly under skills/ is not a skill, so nothing reads it\n' "$base"
+      continue
+    fi
+    sk="$e/SKILL.md"
+    if [ ! -f "$sk" ]; then
+      printf '%s\tthe directory holds no SKILL.md, so nothing can load it\n' "$base"
+      continue
+    fi
+    # The frontmatter block only. A file whose BODY happens to carry "name:" would otherwise
+    # answer for a file that has no frontmatter at all (L135).
+    fm="$(skill_frontmatter "$sk")"
+    if ! printf '%s\n' "$fm" | grep -qE '^name:[[:space:]]*[^[:space:]]'; then
+      printf '%s\tits SKILL.md carries no name in the frontmatter\n' "$base"
+      continue
+    fi
+    if ! printf '%s\n' "$fm" | grep -qE '^description:[[:space:]]*[^[:space:]]'; then
+      printf '%s\tits SKILL.md carries no description in the frontmatter, so nothing can tell when to use it\n' "$base"
+      continue
+    fi
+  done
+  return 0
+}
+
+# Excludes for the skills mirror, plus the report. Refusing quietly would leave the entry looking
+# like ordinary config that simply had not synced yet, so the same run that declines to carry it
+# says which one and why (#50).
+refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where it is going (a verb for the report)
+  local entry reason named=""
+  while IFS="$(printf '\t')" read -r entry reason; do
+    [ -n "${entry:-}" ] || continue
+    REFUSED_SKILL_EXCLUDES+=(--exclude="/$entry")
+    named+="  skills/$entry: $reason"$'\n'
+  done < <(unloadable_skill_entries "$1")
+  [ -z "$named" ] && return 0
+  echo "claude-sync: these entries under skills/ cannot load, so they were NOT $2 and nothing else about this run was affected:" >&2
+  printf '%s' "$named" >&2
+  notify "skills that cannot load were not $2"
+  return 0
+}
+
 skill_excludes(){ for s in "${PLUGIN_SKILLS[@]}"; do printf -- "--exclude=%s\n" "$s"; done; }
 
 tok(){ sed "s|$CLAUDE_HOME|$TOKEN|g"; }   # real home -> placeholder
@@ -575,7 +640,12 @@ stage_local_to_payload(){
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
     local ex=() p
-    [ "$d" = skills ] && { local s; for s in $(skill_excludes); do ex+=("$s"); done; }
+    if [ "$d" = skills ]; then
+      local s; for s in $(skill_excludes); do ex+=("$s"); done
+      REFUSED_SKILL_EXCLUDES=()
+      refuse_unloadable_skills "$CLAUDE_HOME/skills" "sent"
+      ex+=(${REFUSED_SKILL_EXCLUDES[@]+"${REFUSED_SKILL_EXCLUDES[@]}"})
+    fi
     while IFS= read -r p; do
       case "$p" in "$d"/?*) ex+=(--exclude="/${p#"$d"/}") ;; esac
     done <<PROT
@@ -720,7 +790,12 @@ MERGED
     # per-subtree excludes: the plugin-managed skills, plus the locally-ahead
     # paths being held back (rsync excludes are relative to the transfer root)
     kex=()
-    [ "$d" = skills ] && { local s2; for s2 in $(skill_excludes); do kex+=("$s2"); done; }
+    if [ "$d" = skills ]; then
+      local s2; for s2 in $(skill_excludes); do kex+=("$s2"); done
+      REFUSED_SKILL_EXCLUDES=()
+      refuse_unloadable_skills "$PAYLOAD/skills" "applied to this Mac"
+      kex+=(${REFUSED_SKILL_EXCLUDES[@]+"${REFUSED_SKILL_EXCLUDES[@]}"})
+    fi
     while IFS= read -r p2; do
       case "$p2" in "$d"/?*) kex+=(--exclude="/${p2#"$d"/}") ;; esac
     done <<KEEP
