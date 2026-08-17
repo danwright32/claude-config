@@ -1588,7 +1588,12 @@ do_sync(){
         gitdir="$(git -C "$SYNC_REPO" rev-parse --absolute-git-dir 2>/dev/null || echo "$SYNC_REPO/.git")"
         if [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; then
           git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
-          die "both Macs changed the same config and it couldn't auto-merge. Run 'claude-sync status' and reconcile by hand"
+          # git's own words are carried, and that is not decoration. This branch ASSERTS a cause
+          # from a state rather than reading it, so when it is wrong it is confidently wrong and
+          # there is nothing left to diagnose from: the catch-all beneath it quotes git and this one
+          # did not, which made a misclassification here the only failure in the tool that says
+          # nothing about what actually happened (L11, and #52 was exactly this).
+          die "both Macs changed the same config and it couldn't auto-merge. Run 'claude-sync status' and reconcile by hand. git said: ${pull_err:-<no output>}"
         fi
         git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
         # Deliberately NOT folded into either message above. An unknown failure defaulted
