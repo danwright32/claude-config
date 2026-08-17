@@ -1236,6 +1236,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   coverage is discussed.
   (overture#2707: a sentence about a masthead line removed by #1131 sat in the copy inventory for
   more than a thousand issues, and that inventory's cold read is a required pre-PR step)
+- **L170. A criterion placed last in a strictly ordered comparison chain is consulted only on an
+  exact tie of everything above it, so any earlier criterion carrying many distinct values (a
+  count, a rating, a timestamp) makes it permanently inert while the code reads as a criterion
+  that ranks.** Measure how often each level of the chain actually decides an ordering against
+  real data, because an inert criterion and a working one are indistinguishable from the source.
+  Distinct from L46, where a field has no reader at all: here the reader exists, runs on every
+  request, and can never reach the value.
+  (nursedex#724: the nurse directory ranked on featured tier, photo, communication preference,
+  review count, average rating and profile completeness in that order, so a single review broke
+  the tie before completeness was ever compared, and a fully filled-out profile ranked below a
+  bare one. The completeness score itself was correct and recomputed on every profile save)
 
 ## Cross-system reliability
 
