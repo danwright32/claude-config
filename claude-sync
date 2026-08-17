@@ -37,6 +37,11 @@ SYNC_LOCK="${SYNC_LOCK:-$SYNC_REPO/.sync-lock}"   # one mutating run at a time (
 LOCK_HELD=0
 LAST_SUCCESS_FILE="$SYNC_REPO/.last-success"   # last time the shared repo was reachable (#22)
 STATE_DIR="$SYNC_REPO/state"   # what each Mac has applied, published so verify can compare (#23)
+# One file per Mac, holding the first number of the band that Mac mints lesson numbers from. Unlike
+# everything else outside payload/, this is TRACKED and shared: a band nobody else can see cannot
+# stop anybody else claiming it (#44).
+LESSON_BANDS_DIR="$SYNC_REPO/lesson-bands"
+LESSON_BAND=""   # this Mac's band, once resolved (see lesson_band_locked)
 
 # Skills that the plugins install & manage — excluded so the repo stays clean
 # and plugin updates don't create churn. Edit this list if you install one of
@@ -389,15 +394,166 @@ duplicate_lesson_numbers(){   # $1 = tree to inspect
 # One past the highest number in use, never a gap: a skipped number was skipped
 # deliberately (the audit's L6 was reviewed and rejected), so reusing it would
 # resurrect a retired reference.
-next_lesson_number(){   # $1 = tree
-  local f highest=0 n
+# ---- lesson number bands (#44) ----
+# Both Macs used to allocate the next free number from their own copy of the rules, so any two
+# lessons written between syncs claimed the same number by construction. It happened on 2026-07-29
+# (four renumbers) and again on 2026-08-17 (three). The merge settles it and loses no text, but a
+# renumber leaves references nothing local can reach: a number quoted in a filed issue, in a PR
+# comment, or on a line the other Mac has already published stays pointing at whichever entry kept
+# the number.
+#
+# So each Mac owns a band and mints only inside it. One file per Mac, named after the Mac, holding
+# the first number of its band: one file per writer means two Macs can never edit the same file, so
+# a claim can never produce a merge conflict of its own.
+LESSON_BAND_SIZE="${SYNC_LESSON_BAND_SIZE:-500}"
+
+# Every band any Mac has claimed, as "host<TAB>start". A file that does not hold a number is
+# skipped rather than read as zero: a zero would look like a legitimate band below everyone else's
+# and quietly hand this Mac numbers another Mac is already using (L50).
+lesson_bands(){
+  local f v
+  [ -d "$LESSON_BANDS_DIR" ] || return 0
+  for f in "$LESSON_BANDS_DIR"/*; do
+    [ -f "$f" ] || continue
+    v="$(tr -dc '0-9' < "$f" 2>/dev/null || true)"
+    [ -n "$v" ] || continue
+    printf '%s\t%s\n' "${f##*/}" "$v"
+  done
+  return 0
+}
+
+recorded_lesson_band(){
+  local f v
+  f="$LESSON_BANDS_DIR/$(sync_hostname)"
+  [ -f "$f" ] || return 0
+  v="$(tr -dc '0-9' < "$f" 2>/dev/null || true)"
+  printf '%s' "$v"
+  return 0
+}
+
+# One band past the highest claimed, or the first band when none is. Bands are contiguous, so the
+# numbers stay readable: 1 to 500, 501 to 1000, and so on.
+next_free_band(){
+  local h start highest=0
+  while IFS="$(printf '\t')" read -r h start; do
+    [ -n "${start:-}" ] || continue
+    [ "$start" -gt "$highest" ] && highest="$start"
+  done < <(lesson_bands)
+  if [ "$highest" -eq 0 ]; then printf '1'; else printf '%s' "$((highest + LESSON_BAND_SIZE))"; fi
+  return 0
+}
+
+# Any OTHER Mac holding the band this one holds, and sorting ahead of it by name. Two Macs can only
+# land on one band by claiming while unable to see each other, and there is nobody to arbitrate, so
+# the rule has to give the same answer run on either Mac: the lower name keeps the band and the
+# other moves. One definition, used both to decide whether a write is needed and to do it.
+colliding_band_holders(){   # $1 = this Mac's band
+  local h start me
+  me="$(sync_hostname)"
+  while IFS="$(printf '\t')" read -r h start; do
+    [ -n "${h:-}" ] || continue
+    [ "$h" = "$me" ] && continue
+    [ "${start:-}" = "$1" ] || continue
+    [ "$h" \< "$me" ] || continue
+    printf '%s\n' "$h"
+  done < <(lesson_bands)
+  return 0
+}
+
+# A band is worth nothing to the other Mac until it can see it, and only a commit carries it. This
+# is one commit per Mac for the life of the repo, not a marker written on every apply, so it cannot
+# start the republishing exchange that the design record rejects markers on the branch for.
+record_lesson_band(){   # $1 = band start
+  local host rel
+  host="$(sync_hostname)"; rel="lesson-bands/$host"
+  mkdir -p "$LESSON_BANDS_DIR"
+  printf '%s\n' "$1" > "$LESSON_BANDS_DIR/$host"
+  have_git || return 0
+  git -C "$SYNC_REPO" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  git -C "$SYNC_REPO" add -- "$rel" >/dev/null 2>&1 || return 0
+  git -C "$SYNC_REPO" diff --cached --quiet -- "$rel" 2>/dev/null && return 0
+  git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" commit -q -m "$host mints lesson numbers from $1" -- "$rel" >/dev/null 2>&1 || true
+  return 0
+}
+
+# This Mac's band, claiming one if it has none and moving off a band another Mac holds. Prints the
+# first number of the band.
+lesson_band(){
+  local host mine loser
+  host="$(sync_hostname)"
+  mine="$(recorded_lesson_band)"
+  # A band file holding something that is not a number is NOT the same as having no band: reading
+  # it as absent would quietly hand this Mac the whole range again, which is the very collision
+  # this exists to prevent, and nothing would say so (L50, L11).
+  if [ -z "$mine" ] && [ -f "$LESSON_BANDS_DIR/$host" ]; then
+    die "lesson-bands/$host holds no number, so which numbers belong to this Mac cannot be answered and minting one would risk taking a number the other Mac has already used. Put the band start back, or delete the file to claim a fresh band on the next run."
+  fi
+  if [ -z "$mine" ]; then
+    mine="$(next_free_band)"
+    record_lesson_band "$mine"
+    echo "claude-sync: this Mac ($host) had no lesson number band, so it claimed $mine to $((mine + LESSON_BAND_SIZE - 1)) and every lesson written here now takes a number from it. Two Macs can then never mint the same number, however long they go without seeing each other." >&2
+    LESSON_BAND="$mine"; return 0
+  fi
+  loser="$(colliding_band_holders "$mine" | head -1)"
+  if [ -n "$loser" ]; then
+    local moved; moved="$(next_free_band)"
+    record_lesson_band "$moved"
+    echo "claude-sync: $loser already mints from band $mine, so this Mac ($host) moved to $moved to $((moved + LESSON_BAND_SIZE - 1)). Both Macs claimed while unable to see each other; whichever runs this next moves the same one, so they agree without talking." >&2
+    notify "lesson band moved to $moved"
+    mine="$moved"
+  fi
+  LESSON_BAND="$mine"
+  return 0
+}
+
+# Claiming and moving both WRITE, so they are done while holding the lock. Reading is not, because
+# a number is asked for while the watcher is syncing all the time, and a command that refuses for
+# that reason is one nobody would use.
+# Answers into LESSON_BAND rather than onto stdout, deliberately. Read through a command
+# substitution, its refusal would die inside that subshell and the caller would carry on with an
+# empty band, which is the whole range: the one outcome this must never reach (L50).
+lesson_band_locked(){
+  local mine
+  mine="$(recorded_lesson_band)"
+  if [ -n "$mine" ] && [ -z "$(colliding_band_holders "$mine")" ]; then LESSON_BAND="$mine"; return 0; fi
+  with_lock lesson_band
+}
+
+# The highest number in use inside one band, or one below the band when it holds none.
+highest_lesson_in_band(){   # $1 = band start  $2.. = files
+  local band="$1"; shift
+  local n highest=$((band - 1)) top=$((band + LESSON_BAND_SIZE - 1))
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    [ "$n" -ge "$band" ] && [ "$n" -le "$top" ] && [ "$n" -gt "$highest" ] && highest="$n"
+  done < <(grep -hoE '^- \*\*L[0-9]+\.' "$@" 2>/dev/null | grep -oE '[0-9]+' || true)
+  printf '%s' "$highest"
+  return 0
+}
+
+next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whole range
+  local f highest=0 n band="${2:-}" files=()
   for f in $(top_files_in "$1"); do
     [ -f "$1/$f" ] || continue
+    files+=("$1/$f")
+  done
+  if [ -n "$band" ] && [ "${#files[@]}" -gt 0 ]; then
+    highest="$(highest_lesson_in_band "$band" "${files[@]}")"
+    if [ "$((highest + 1))" -gt "$((band + LESSON_BAND_SIZE - 1))" ]; then
+      # Spilling into the next band would put the collisions back with nothing saying so, which is
+      # the one failure this whole mechanism exists to prevent.
+      die "this Mac's lesson band ($band to $((band + LESSON_BAND_SIZE - 1))) is full, so there is no number left to mint that another Mac could not also choose. Widen it with SYNC_LESSON_BAND_SIZE, or give this Mac a fresh band by editing lesson-bands/$(sync_hostname) in the sync repo."
+    fi
+    printf 'L%s\n' "$((highest + 1))"
+    return 0
+  fi
+  [ -n "$band" ] && { printf 'L%s\n' "$band"; return 0; }
+  for f in ${files[@]+"${files[@]}"}; do
     # The trailing "|| true" is load-bearing: under pipefail a grep that matches
     # nothing fails the whole substitution, and an assignment that fails is fatal
     # under set -e, so a rule file with no lessons in it aborted the command
     # outright and printed nothing at all.
-    n="$(grep -oE '^- \*\*L[0-9]+\.' "$1/$f" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
+    n="$(grep -oE '^- \*\*L[0-9]+\.' "$f" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
     if [ -n "$n" ] && [ "$n" -gt "$highest" ]; then highest="$n"; fi
   done
   printf 'L%s\n' "$((highest + 1))"
@@ -1176,7 +1332,7 @@ highest_lesson_in(){   # $@ = files
 }
 
 merge_rule_files(){
-  local last p local_f tmpb tmpm tmpr reported="" resolved renumbered start fmax collided
+  local last p local_f tmpb tmpm tmpr reported="" resolved renumbered start fmax collided band
   MERGED_RULE_FILES=""
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
@@ -1207,8 +1363,14 @@ merge_rule_files(){
 $renumbered
 RENUMBERED
       fi
-      start="$(next_lesson_number "$CLAUDE_HOME")"; start="${start#L}"
-      fmax="$(highest_lesson_in "$tmpr" "$PAYLOAD/$p")"
+      # Read-only here, deliberately: a pull is not where a Mac should be claiming anything, and
+      # a Mac that has never asked for a number has no band yet. With one, the renumbered entry
+      # lands inside this Mac's own band, which is the point; without one this behaves exactly as
+      # it always did.
+      band="$(recorded_lesson_band)"
+      start="$(next_lesson_number "$CLAUDE_HOME" "$band")"; start="${start#L}"
+      if [ -n "$band" ]; then fmax="$(highest_lesson_in_band "$band" "$tmpr" "$PAYLOAD/$p")"
+      else fmax="$(highest_lesson_in "$tmpr" "$PAYLOAD/$p")"; fi
       [ "$((fmax + 1))" -gt "$start" ] && start="$((fmax + 1))"
       collided="$(renumber_merge_collisions "$tmpr" "$PAYLOAD/$p" "$start")"
       if [ -n "$collided" ]; then
@@ -2392,12 +2554,13 @@ case "$cmd" in
   apply-only) with_lock do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
-  next-lesson) next_lesson_number "$CLAUDE_HOME" ;;
+  next-lesson) lesson_band_locked; next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND" ;;
   cite-scan) do_cite_scan "${2:-}" ;;   # read-only: which synced files cite a lesson number
   check-lessons)
     dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
     if [ -n "${dups// }" ]; then die "duplicate lesson numbers: $(printf '%s' "$dups" | tr '\n' ';' | sed 's/;$//')"; fi
-    echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME"))"
+    lesson_band_locked
+    echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
   help|-h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
   *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, cite-scan, install-autosync, help)" ;;

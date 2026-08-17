@@ -231,6 +231,42 @@ there are normally none at all.
 Status names both states separately rather than merely listing the file: one still holds something,
 the other is safe to delete. "A conflict copy exists" says nothing about whether anything is at
 stake in it (L11).
+### Asking the shared repo for a number every time a lesson is written
+
+Rejected for #44, which the issue offered as the alternative to bands.
+
+It reads as the airtight answer, and it is not. The allocation would have to fetch, read, claim and
+push while the person is mid sentence, which fails offline, fails while the repo is unreachable, and
+still races: two Macs that fetch before either pushes both see the same highest number. It converts
+a rare collision that the merge already settles into a network dependency on the one action that has
+to work when nothing else does.
+
+A band cannot race at all, because the number is decided by a claim made once, per Mac, in advance.
+The cost is that numbers are no longer contiguous across the two Macs, which is only cosmetic: a
+lesson number is an identifier, not a position.
+
+### Deriving each Mac's band from its hostname
+
+Considered for #44 and rejected. A hash of the hostname needs no file and no commit, and two
+hostnames can land on the same band with nothing to notice it, which is the exact failure the issue
+is about, arriving by a quieter route. It is also unverifiable by eye: nobody can look at a band and
+say whether it is right.
+
+The claim is a file per Mac instead, named after the Mac. One file per writer means two Macs can
+never edit the same file, so a claim cannot produce a merge conflict of its own, and the whole
+allocation is legible with `ls`.
+
+Two Macs CAN still claim the same band, by claiming while unable to see each other. That is settled
+on read by name order, so the rule gives the same answer wherever it runs and both Macs agree with
+nobody arbitrating. The alternative, keying it on who claimed first, is not knowable: an offline
+claim has no timestamp anyone else can trust.
+
+### Letting a full band spill into the next one
+
+Rejected while building #44. A band 500 wide is far past anything this will hold (174 lessons in
+five months), so the case is remote, and that is exactly why silently spilling would be the worst
+answer: it would put the collisions back with nothing saying so, years after anybody remembers the
+mechanism. A full band refuses and names itself.
 
 ## Measured numbers
 
