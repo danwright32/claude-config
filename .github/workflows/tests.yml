@@ -64,5 +64,36 @@ jobs:
           echo "claude-sync status exited $rc"
           [ "$rc" -eq 0 ]
 
+      - name: Probe what this git does with the pull the tool relies on
+        # Temporary. Every failing check on this runner sits behind one call,
+        # `git pull --rebase --autostash`, and the tool decides what went wrong from its exit code
+        # and the state it leaves. Both changed between git versions, so this prints the answers
+        # rather than having them inferred from a symptom four sections away.
+        run: |
+          set +e
+          d="$(mktemp -d)"; cd "$d"
+          git init -q --bare bare.git
+          git clone -q bare.git A && cd A
+          git config user.name t; git config user.email t@e
+          echo one > f; git add -A; git commit -qm one; git push -q -u origin HEAD:main
+          cd "$d"; git clone -q -b main bare.git B
+          cd B; git config user.name t; git config user.email t@e
+          cd "$d/A"; echo two > f; git commit -qam two; git push -q
+          echo "--- case 1: clean fast-forward, no local edits ---"
+          cd "$d/B"; git pull --rebase --autostash -q origin main; echo "exit=$?"
+          echo "--- case 2: local uncommitted edit that does NOT conflict ---"
+          cd "$d/A"; echo three > g; git add -A; git commit -qm three; git push -q
+          cd "$d/B"; echo local > h
+          git pull --rebase --autostash -q origin main; echo "exit=$?"
+          echo "--- case 3: local uncommitted edit that DOES conflict ---"
+          cd "$d/A"; echo four > f; git commit -qam four; git push -q
+          cd "$d/B"; echo mine > f
+          git pull --rebase --autostash -q origin main; echo "exit=$?"
+          echo "stash list: [$(git stash list)]"
+          gd="$(git rev-parse --absolute-git-dir)"
+          echo "rebase-merge dir: $([ -d "$gd/rebase-merge" ] && echo PRESENT || echo absent)"
+          echo "rebase-apply dir: $([ -d "$gd/rebase-apply" ] && echo PRESENT || echo absent)"
+          exit 0
+
       - name: Run the suite
         run: bash tests/test-claude-sync.sh
