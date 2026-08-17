@@ -74,6 +74,18 @@ that the live file does not.
 Both reports go quiet on their own: as soon as the content is back in the live file, or the copy is
 deleted, there is nothing outstanding to report. A copy whose content is already in the live file is
 still listed by `status`, named as safe to delete, because only you can decide to remove it.
+## Lesson numbers
+
+Each Mac mints lesson numbers from a band it owns, so two lessons written between syncs can never
+claim the same number. `claude-sync next-lesson` prints the next free number in this Mac's band, and
+`check-lessons` fails on a duplicate anywhere in the file.
+
+A Mac claims its band the first time it asks for a number: the first Mac gets 1 to 500, the next 501
+to 1000, and so on. The claim is one file per Mac under `lesson-bands/` in the repo, committed so the
+other Mac can see it, and one file per writer means a claim can never produce a merge conflict. Two
+Macs that claim while unable to see each other are settled by name order, the same way on either
+Mac, and the one that moves says so. A band that fills up refuses rather than spilling into the next
+Mac's numbers (`SYNC_LESSON_BAND_SIZE` widens it).
 
 ## Secret scan
 
@@ -135,8 +147,10 @@ and one run, which is what a healthy machine looks like.
 
 ## Local state (per Mac, never synced)
 
-Six things hold state outside `payload/`. All are gitignored, so a fresh clone starts without
-them. A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
+Six things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
+so a fresh clone starts without them. (`lesson-bands/` also sits outside `payload/` and is the one
+exception: it is tracked and shared on purpose, because a band nobody else can see cannot stop
+anybody else claiming it. See Lesson numbers above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
 defined answer for being absent or untrustworthy.
 
 | File | Written by | Read by | Missing or stale |

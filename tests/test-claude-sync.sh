@@ -3351,6 +3351,116 @@ cs_bad_rc=0
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CSH" SYNC_REPO="$CSR" bash "$SCRIPT" cite-scan hooks >/dev/null 2>&1 || cs_bad_rc=$?
 check "#53 something that is not a lesson number is refused" "[ \"\$cs_bad_rc\" -ne 0 ]"
 
+section "== each Mac mints lesson numbers in its own band (#44) =="
+# Both Macs allocated the next free number from their own copy of the rules, so any two lessons
+# written between syncs claimed the same number BY CONSTRUCTION. It happened on 2026-07-29 (four
+# renumbers) and again on 2026-08-17 (three). The merge settles it and loses nothing, but every
+# renumber leaves references that no local tool can reach: a number quoted in a filed issue, a PR
+# comment or a published line stays pointing at the entry that kept it.
+#
+# So the number is minted from a band this Mac owns. Two Macs cannot mint the same number however
+# long they go without seeing each other, and the renumber path becomes the thing that never fires.
+BDR="$WORK/band-repo"; BDA="$WORK/band-homeA"; BDB="$WORK/band-homeB"
+mkdir -p "$BDR/payload" "$BDA" "$BDB"
+printf '# rules\n@LESSONS.md\n' > "$BDA/CLAUDE.md"
+printf -- '- **L1. one.** body\n- **L2. two.** body\n- **L3. three.** body\n' > "$BDA/LESSONS.md"
+cp "$BDA/CLAUDE.md" "$BDB/CLAUDE.md"; cp "$BDA/LESSONS.md" "$BDB/LESSONS.md"
+out_bd1="$(SYNC_HOSTNAME=MacOne SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
+dbg "first Mac's claim: $out_bd1"
+check "#44 the first Mac keeps counting from the numbers already in use" \
+  "printf '%s' \"\$out_bd1\" | grep -q 'L4'"
+check "#44 its band is recorded where the other Mac can read it" \
+  "[ \"\$(cat '$BDR/lesson-bands/MacOne' 2>/dev/null)\" = '1' ]"
+check "#44 and the claim says which band it took" \
+  "printf '%s' \"\$out_bd1\" | grep -qi 'band'"
+# The whole point, and the case that used to collide: a second Mac holding the SAME rules file, at
+# the same moment, must not offer the same number.
+out_bd2="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
+dbg "second Mac's claim: $out_bd2"
+check "#44 the second Mac mints from its own band instead" \
+  "printf '%s' \"\$out_bd2\" | grep -q 'L501'"
+check "#44 and the two Macs are not offered the same number" \
+  "[ \"\$(printf '%s' \"\$out_bd1\" | grep -oE 'L[0-9]+' | tail -1)\" != \"\$(printf '%s' \"\$out_bd2\" | grep -oE 'L[0-9]+' | tail -1)\" ]"
+# A band is claimed once. Re-claiming on every call would walk up the bands for ever and make the
+# number nobody can predict.
+out_bd2b="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
+check "#44 asking twice gives the same answer"       "printf '%s' \"\$out_bd2b\" | grep -q 'L501'"
+check "#44 and does not claim a second band"          "[ \"\$(cat '$BDR/lesson-bands/MacTwo' 2>/dev/null)\" = '501' ]"
+check "#44 an established Mac says nothing about claiming" \
+  "! printf '%s' \"\$out_bd2b\" | grep -qi 'claimed'"
+# The second Mac writes its lesson, and both Macs then hold each other's entries after a sync.
+# Neither Mac's next number may move because of what the OTHER one wrote.
+printf -- '- **L501. five hundred and one.** body\n' >> "$BDB/LESSONS.md"
+printf -- '- **L501. five hundred and one.** body\n' >> "$BDA/LESSONS.md"
+out_bd3="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
+out_bd4="$(SYNC_HOSTNAME=MacOne SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
+check "#44 the Mac that wrote it moves on to the next in its band" "printf '%s' \"\$out_bd3\" | grep -q 'L502'"
+check "#44 the other Mac is unaffected by it"                      "printf '%s' \"\$out_bd4\" | grep -q 'L4'"
+# Numbering is still one namespace, so the duplicate check has to keep judging the whole file
+# rather than one band: an arriving duplicate is exactly what it exists to catch.
+printf -- '- **L501. a second entry under the same number.** body\n' >> "$BDA/LESSONS.md"
+bd_dup_rc=0
+SYNC_HOSTNAME=MacOne SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" check-lessons >/dev/null 2>&1 || bd_dup_rc=$?
+check "#44 a duplicate anywhere in the file is still caught" "[ \"\$bd_dup_rc\" -ne 0 ]"
+# A band that runs out must REFUSE, never spill into the neighbouring Mac's numbers, which is the
+# one failure that would put the collisions back without anything saying so.
+BDC="$WORK/band-homeC"; mkdir -p "$BDC"
+printf '# rules\n@LESSONS.md\n' > "$BDC/CLAUDE.md"
+printf -- '- **L1000. the last one in the band.** body\n' > "$BDC/LESSONS.md"
+printf '501\n' > "$BDR/lesson-bands/MacThree"
+bd_full_rc=0
+out_bdfull="$(SYNC_HOSTNAME=MacThree SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDC" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)" || bd_full_rc=$?
+check "#44 a full band refuses instead of spilling into another Mac's" "[ \"\$bd_full_rc\" -ne 0 ]"
+check "#44 and says which band ran out"                               "printf '%s' \"\$out_bdfull\" | grep -q '501'"
+# Two Macs that claimed the same band while unable to see each other. There is nobody to arbitrate,
+# so the rule has to give the same answer wherever it runs: the lower name keeps the band. Which
+# Mac that is does not matter; that both agree without talking does.
+rm -f "$BDR/lesson-bands/MacThree"            # the full-band fixture above, not part of this one
+printf '501\n' > "$BDR/lesson-bands/MacTwo"   # restore, then hand a later-named Mac the same band
+printf '501\n' > "$BDR/lesson-bands/MacZulu"
+printf -- '- **L1. one.** body\n' > "$BDC/LESSONS.md"
+# The Mac that KEEPS it runs first, and must not move: a rule that moved whichever Mac happened to
+# run next would walk both of them up the bands for ever.
+out_bdkeep="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
+check "#44 the Mac whose name sorts first keeps the band" \
+  "[ \"\$(cat '$BDR/lesson-bands/MacTwo' 2>/dev/null)\" = '501' ]"
+check "#44 and is told nothing, because nothing changed for it" \
+  "! printf '%s' \"\$out_bdkeep\" | grep -qi 'moved'"
+out_bdcol="$(SYNC_HOSTNAME=MacZulu SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDC" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
+dbg "collided band: $out_bdcol"
+check "#44 the other one moves to a free band" \
+  "[ \"\$(cat '$BDR/lesson-bands/MacZulu' 2>/dev/null)\" -gt 501 ]"
+check "#44 and it does not take a band anyone else holds" \
+  "[ \"\$(cat '$BDR/lesson-bands/MacZulu' 2>/dev/null)\" != \"\$(cat '$BDR/lesson-bands/MacTwo' 2>/dev/null)\" ] && [ \"\$(cat '$BDR/lesson-bands/MacZulu' 2>/dev/null)\" != \"\$(cat '$BDR/lesson-bands/MacOne' 2>/dev/null)\" ]"
+check "#44 the move is reported, not silent" \
+  "printf '%s' \"\$out_bdcol\" | grep -qi 'moved'"
+check "#44 and it mints from the band it moved to" \
+  "printf '%s' \"\$out_bdcol\" | grep -q \"L\$(cat '$BDR/lesson-bands/MacZulu')\""
+# Settled for good: asking again neither moves it nor reports anything.
+out_bdcol2="$(SYNC_HOSTNAME=MacZulu SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDC" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
+check "#44 a settled collision stays settled" \
+  "! printf '%s' \"\$out_bdcol2\" | grep -qi 'moved'"
+# A band file that holds no number is not the same as having none: read as absent it would hand
+# this Mac the whole range again, which is the collision the mechanism exists to prevent, and the
+# only sign would be a number that happened to be taken (L50).
+printf 'not a number\n' > "$BDR/lesson-bands/MacFive"
+bd_junk_rc=0
+out_bdjunk="$(SYNC_HOSTNAME=MacFive SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)" || bd_junk_rc=$?
+check "#44 a band file with no number in it refuses"  "[ \"\$bd_junk_rc\" -ne 0 ]"
+check "#44 and names the file to fix"                 "printf '%s' \"\$out_bdjunk\" | grep -q 'lesson-bands/MacFive'"
+check "#44 and does not mint a number anyway"         "! printf '%s' \"\$out_bdjunk\" | grep -qE '^L[0-9]+$'"
+rm -f "$BDR/lesson-bands/MacFive"
+
+# A band is worth nothing to the other Mac until it can see it, and only a commit carries it.
+BDG="$WORK/band-git"; git init -q -b main "$BDG" 2>/dev/null || { mkdir -p "$BDG"; git -C "$BDG" init -q; }
+mkdir -p "$BDG/payload"; printf 'seed\n' > "$BDG/payload/seed.txt"
+git -C "$BDG" add -A && git -C "$BDG" -c user.name=t -c user.email=t@e commit -q -m seed
+SYNC_HOSTNAME=MacFour SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDG" bash "$SCRIPT" next-lesson >/dev/null 2>&1
+check "#44 a claim is committed, so it reaches the other Mac" \
+  "git -C '$BDG' log --oneline -- lesson-bands | grep -q ."
+check "#44 and the working tree is left clean" \
+  "[ -z \"\$(git -C '$BDG' status --porcelain lesson-bands 2>/dev/null)\" ]"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
