@@ -125,6 +125,38 @@ if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   exit "$_rc"
 fi
 
+# ---- the flag above describes THIS process only (#37) ----
+# SUITE_FILTERED means "extraction already happened here, do not filter again". It arrives in the
+# ENVIRONMENT, and bash hands an inherited variable to everything this run starts, so a child read
+# it as being about ITSELF: it ignored the SECTION_UNTIL it was given, ran the WHOLE suite, reached
+# a section that spawns, and started another. One process at a time rather than a burst, so no
+# process count trips and it presents as a suite merely taking a while. It cost two runaways on
+# 2026-08-17, and #34's depth limit bounds that damage without removing the trap (L169).
+#
+# `export -n` rather than `unset`: this process still needs the value (the #27 subruns below read
+# it), and the only thing that has to stop is the inheritance. Done HERE, once, rather than at each
+# spawn site, because a site added later cannot remember a rule it never saw (L30, L96).
+export -n SUITE_FILTERED 2>/dev/null || true
+
+# SUITE_SPAWN_UNTIL=<text> starts ONE child with that section limit, says what a child of this run
+# inherits, and exits with the child's status. It is the seam that makes the paragraph above
+# provable from the outside: what matters is a run that RECEIVED the flag, and this stands a real
+# run in that state for the cost of one section instead of a full suite. Placed ahead of the
+# deadline and the lock, so a probe run takes neither.
+# Its own value is cleared for the child, or the child spawns a probe too, which is the very shape
+# being fixed here. Read into a variable of its own FIRST, and not passed straight from the one
+# being cleared in the same prefix: the clear happens before the later assignment expands, so the
+# child was handed an EMPTY section limit and ran the whole suite. It looked exactly like the
+# inheritance bug this seam exists to catch, which is the one failure that would have been read as
+# a real finding.
+if [ -n "${SUITE_SPAWN_UNTIL:-}" ]; then
+  _sp_until="$SUITE_SPAWN_UNTIL"
+  echo "test suite: spawn probe; a child of this run inherits SUITE_FILTERED as: $(bash -c 'printf "%s" "${SUITE_FILTERED:-<unset>}"')"
+  SUITE_SPAWN_UNTIL= SUITE_DEPTH="$SUITE_CHILD_DEPTH" SECTION_UNTIL="$_sp_until" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF"; _sp_rc=$?
+  echo "test suite: spawn probe; the child exited $_sp_rc"
+  exit "$_sp_rc"
+fi
+
 # ---- every run gets a deadline (#31) ----
 # Armed HERE rather than at the top, because everything above either exits immediately or hands
 # the work to a re-executed copy that arms its own. A run waiting on a covered child needs no
@@ -2266,13 +2298,13 @@ section "== the suite can run one section at a time (#27) =="
 # testing, which is where most of that session's defects came from.
 # This section runs the suite as a SUBPROCESS, so it must never recurse: the child is given
 # a filter that cannot match this section's own heading.
-# NEVER spawn from inside a run that is itself a child. A filtered child carries
-# SUITE_FILTERED in its environment, so its subrun would skip extraction, run the WHOLE
-# suite, reach this section again and spawn further, without bound. That is not theoretical:
-# it filled this Mac with runaway suite processes on 2026-08-17 and had to be killed by hand.
-if [ -n "${SUITE_FILTERED:-}" ]; then
-  echo "  skipped: #27 subruns (already inside a filtered run; spawning here would recurse)"
-else
+# These subruns used to be SKIPPED entirely inside a filtered run, because a filtered child
+# inherited SUITE_FILTERED, skipped its own extraction, ran the WHOLE suite, reached this
+# section again and spawned further, without bound. It filled this Mac with runaway suite
+# processes on 2026-08-17 and had to be killed by hand.
+# The flag is no longer inherited (#37), so the skip is gone with the reason for it. That also
+# closes a hole the skip left behind: `SECTION_UNTIL` at or past this section silently ran none
+# of the checks below, which are exactly the ones you would be iterating on.
 SUBOUT="$WORK/subrun.txt"
 SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL="sync (two-way) over a local fake remote" bash "$SCRIPT_SELF" > "$SUBOUT" 2>&1; rc_sub=$?
 check "#27 a stopped-early run still reports a total" "grep -q '^PASS=' '$SUBOUT'"
@@ -2322,8 +2354,8 @@ check "#27 the completeness check had sections to check" \
 # stops before this section, so it never reaches the guard and the check could only ever
 # fail. Asserting it properly needs a child that runs all the way to here, which is a near
 # full suite inside a suite. The guard was instead verified by measurement: a filtered run
-# reaching this section spawns one child and no grandchildren.
-fi
+# reaching this section spawns one child and no grandchildren. That measurement is now a check,
+# in the #37 section below.
 
 section "== a pulled script that parses but cannot run is refused (#28) =="
 # The self-update gate only checked that the pulled script PARSES. A script can parse and
@@ -2462,13 +2494,16 @@ section "== a suite run refuses to nest without bound (#34) =="
 # copy, so a depth guard placed after that handling would never be reached by a filtered run;
 # a child refused while carrying a filter proves the guard sits ahead of it.
 #
-# SUITE_FILTERED is CLEARED for the child, and that is the sharpest edge here. This section can
-# itself be reached inside a filtered run, and a filtered run exports that flag to everything it
-# starts. A child inheriting it skips the section filter above, runs the WHOLE suite, arrives
-# back at this section and spawns again, one level at a time, for ever. It is not a wide
-# explosion that a process count would catch: it is a slow chain that looks exactly like a
-# suite that is merely taking a while, which is the whole reason #31 and #34 both exist.
-_deep(){ SUITE_DEPTH="$1" SUITE_FILTERED= SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1; }
+# Every spawn here used to clear SUITE_FILTERED by hand, and that was the sharpest edge in the
+# section. This section can itself be reached inside a filtered run, which exported that flag to
+# everything it started, so a child inheriting it skipped the section filter above, ran the WHOLE
+# suite, arrived back here and spawned again, one level at a time, for ever. Not a wide explosion
+# a process count would catch: a slow chain that looks exactly like a suite merely taking a while,
+# which is the whole reason #31 and #34 both exist.
+# The clearing is gone from the call sites because the flag is no longer exported at all (#37).
+# A rule living at each site protects only the sites that remembered it, and a site added later
+# never saw it (L96); the un-export sits ahead of all of them and is checked to.
+_deep(){ SUITE_DEPTH="$1" SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1; }
 
 _d2="$(_deep 2)"; _d2_rc=$?
 check "#34 a run past the depth limit refuses to run at all" "[ '$_d2_rc' -ne 0 ]"
@@ -2517,7 +2552,7 @@ section "== a run that hangs fails on a deadline instead of waiting (#31) =="
 # below leave none of THEIRS behind.
 _wd_before="$(pgrep -f suite-deadline-watchdog 2>/dev/null | wc -l | tr -d ' ')"
 _t0="$(date +%s)"
-_hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_FILTERED= SUITE_TIMEOUT=6 SUITE_HANG_IN=push bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
+_hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_TIMEOUT=6 SUITE_HANG_IN=push bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
 _elapsed=$(( $(date +%s) - _t0 ))
 check "#31 a hung run ends instead of waiting for ever" "[ '$_hang_rc' -ne 0 ]"
 # 30s against a 6s deadline. Deliberately not a tight bound: what this has to catch is the run
@@ -2533,7 +2568,7 @@ check "#31 a hung run is never reported as green" "! printf '%s' \"\$_hang\" | g
 # The other half, and the one that would do real damage if it were wrong: a deadline that fires
 # on a HEALTHY run turns every ordinary run into a false failure. A guard has to be seen not
 # firing when it should not, not only firing when it should.
-_okrun="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_FILTERED= SECTION_UNTIL=push SUITE_TIMEOUT=300 bash "$SCRIPT_SELF" 2>&1)"; _okrun_rc=$?
+_okrun="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push SUITE_TIMEOUT=300 bash "$SCRIPT_SELF" 2>&1)"; _okrun_rc=$?
 check "#31 a healthy run is not killed by its own deadline" "! printf '%s' \"\$_okrun\" | grep -q 'TIMED OUT'"
 check "#31 and still reports its result"        "[ '$_okrun_rc' -eq 0 ]"
 
@@ -2565,7 +2600,7 @@ _mklock(){   # path pid host started-epoch
   printf '%s\n' "$2" > "$1/pid"; printf '%s\n' "$3" > "$1/host"; printf '%s\n' "$4" > "$1/started"
 }
 _try_lock(){ # lockpath [depth]
-  SUITE_LOCK="$1" SUITE_DEPTH="${2:-0}" SUITE_FILTERED= SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1
+  SUITE_LOCK="$1" SUITE_DEPTH="${2:-0}" SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1
 }
 _now="$(date +%s)"
 _thishost="$(hostname)"
@@ -2682,6 +2717,44 @@ check "#33 and it says how deeply they are nested" "printf '%s' \"\$_ps_chain\" 
 _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
   "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher\|test run'"
+
+section "== a grandchild is not told the filtering already happened (#37) =="
+# A run started with SECTION_UNTIL re-executes itself from a temp copy carrying SUITE_FILTERED=1,
+# which means "extraction already happened, do not filter again". It arrives in the ENVIRONMENT, so
+# everything that copy starts inherited it and read it as being about itself: the child ignored the
+# SECTION_UNTIL it was given, ran the WHOLE suite, reached a section that spawns, and started
+# another. A chain rather than a burst, so no process count trips and it looks exactly like a suite
+# taking a while, which is why it ran twice on 2026-08-17 before anyone noticed (L169).
+#
+# Proven from the outside rather than by reading the code for the fix: SUITE_SPAWN_UNTIL stands a
+# real run in the state that matters, one that RECEIVED the flag, and has it start one real child.
+_gc="$(SUITE_FILTERED=1 SUITE_DEPTH="$SUITE_DEPTH" SUITE_SPAWN_UNTIL=push SUITE_TIMEOUT=90 bash "$SCRIPT_SELF" 2>&1)"; _gc_rc=$?
+# Said first, because every assertion below reads that child's output, and a probe that never
+# started one would leave them all comparing against nothing at all (L98).
+check "#37 the spawn probe actually started a child" \
+  "printf '%s' \"\$_gc\" | grep -q 'the child exited'"
+check "#37 a filtered run hands the flag to nothing it starts" \
+  "printf '%s' \"\$_gc\" | grep -q 'inherits SUITE_FILTERED as: <unset>'"
+check "#37 its child honours the section limit it was given" \
+  "printf '%s' \"\$_gc\" | grep -q 'stopped after SECTION_UNTIL=push'"
+# The other half, and the one that names the actual damage: not merely that the child stopped, but
+# that it never ran on past its limit. The marker is taken from the file rather than typed, so a
+# renamed section leaves this failing rather than quietly asserting nothing (L103).
+_late="$(awk '/^section "/{n++; if (n==6){ sub(/^section "/,""); sub(/"$/,""); print; exit }}' "$SCRIPT_SELF")"
+check "#37 the late-section marker was found" "[ -n \"\$_late\" ]"
+check "#37 the child did not run on into the rest of the suite" \
+  "! printf '%s' \"\$_gc\" | grep -qF -- \"\$_late\""
+check "#37 and the child is green" "[ '$_gc_rc' -eq 0 ]"
+
+# The class fix has to sit ahead of every spawn site, or a site above it is still handing the flag
+# on. Derived from the file rather than asserted as a line number, and the pattern is built from
+# pieces so this assertion cannot be satisfied by itself.
+_expn_pat="export"" -n SUITE_FILTERED"
+_spawn_pat="bash \"\$SCRIPT""_SELF\""
+_expn_line="$(grep -nF "$_expn_pat" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
+_spawn_first="$(grep -nF "$_spawn_pat" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
+check "#37 the flag is un-exported before anything spawns a run" \
+  "[ -n \"\$_expn_line\" ] && [ -n \"\$_spawn_first\" ] && [ \"\$_expn_line\" -lt \"\$_spawn_first\" ]"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
