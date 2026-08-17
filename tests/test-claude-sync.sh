@@ -3218,6 +3218,73 @@ _spawn_first="$(grep -nF "$_spawn_pat" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
 check "#37 the flag is un-exported before anything spawns a run" \
   "[ -n \"\$_expn_line\" ] && [ -n \"\$_spawn_first\" ] && [ \"\$_expn_line\" -lt \"\$_spawn_first\" ]"
 
+section "== a set-aside rule file is reported until it is resolved (#45) =="
+# When a merge fails, the pull applies the other Mac's version and keeps yours as
+# <file>.conflict-<host>, printing ONE line naming what was only in yours. Nothing restores that
+# content, and every later check reports healthy because the live file matches the payload exactly.
+# On 2026-08-17 that dropped a lesson out of the loaded rules, and it survived only because the one
+# output line happened to be read. A condition that persists cannot be reported by a message that
+# does not (L148, L152).
+#
+# What is outstanding is DERIVED from the two files on each run, never from a marker written when
+# the conflict happened: a marker records a judgement made then, and cannot notice the copy being
+# resolved by hand or deleted since (L121).
+CPH="$WORK/pending-home"; CPR="$WORK/pending-repo"
+mkdir -p "$CPH/skills/beta" "$CPR/payload/skills/beta"
+echo '{"hooks":{}}' > "$CPH/settings.json"
+printf '# rules\n@LESSONS.md\n' > "$CPH/CLAUDE.md"
+printf -- '- **L1. one.** body\n- **L2. two.** body\n' > "$CPH/LESSONS.md"
+printf 'alpha\nbeta\n' > "$CPH/skills/beta/SKILL.md"
+CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+# The state the 2026-08-17 sync left behind: the live file is exactly what arrived, and this Mac's
+# own entry exists nowhere but the copy beside it.
+printf -- '- **L1. one.** body\n- **L2. two.** body\n- **L174. a shortened retention window.** body\n' > "$CPH/LESSONS.md.conflict-OtherMac"
+printf 'alpha\nbeta\ngamma\ndelta\n' > "$CPH/skills/beta/SKILL.md.conflict-OtherMac"
+out_p45="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "status with pending conflicts: $out_p45"
+# ONE line carrying the path AND what is still only in it. Two greps over the whole output would be
+# answered by the file listing and by any other sentence mentioning the entry (L172, #55).
+check "#45 status says what a set-aside rule file still holds" \
+  "printf '%s' \"\$out_p45\" | grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174'"
+check "#45 status says how much a set-aside plain file still holds" \
+  "printf '%s' \"\$out_p45\" | grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac.*2 lines'"
+# The pull is where the condition was reported once and then never again, so it is the surface that
+# has to keep reporting it.
+out_p45pull="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull with pending conflicts: $out_p45pull"
+check "#45 a later pull says the copy is still unresolved" \
+  "printf '%s' \"\$out_p45pull\" | grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174'"
+check "#45 and the pull says plainly that this is not news" \
+  "printf '%s' \"\$out_p45pull\" | grep -qi 'still'"
+# Resolved by putting the entry back into the live file, which is what a person does. The copy is
+# still on disk, so a report keyed on the file EXISTING would cry wolf for ever, and a guard that
+# fires when nothing is wrong is one nobody reads (L36).
+printf -- '- **L174. a shortened retention window.** body\n' >> "$CPH/LESSONS.md"
+# And sent, which is what the watcher does within seconds of the edit. Without it the pull below
+# mirrors the payload back over the live file and undoes the resolution mid-test, so the assertion
+# would be about a state nobody is ever in.
+CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+out_p45done="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+out_p45pull2="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "status after resolving: $out_p45done"
+check "#45 a resolved copy is no longer reported as outstanding by the pull" \
+  "! printf '%s' \"\$out_p45pull2\" | grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174'"
+# Still listed by status, because the file is still on disk and only a person can decide to delete
+# it, but named as safe rather than as work outstanding. A copy that says nothing about its own
+# state is indistinguishable from one holding the last surviving version of a lesson (L11).
+check "#45 status still lists the resolved copy, named as safe to delete" \
+  "printf '%s' \"\$out_p45done\" | grep -qE 'LESSONS\.md\.conflict-OtherMac.*(nothing|safe)'"
+# The other copy has NOT been resolved and must still be reported in the same run: a report that
+# went quiet the moment one of them was dealt with would hide the rest.
+check "#45 the copy that is still outstanding is still named" \
+  "printf '%s' \"\$out_p45done\" | grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac.*2 lines'"
+check "#45 and the pull still names it" \
+  "printf '%s' \"\$out_p45pull2\" | grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac.*2 lines'"
+rm -f "$CPH/LESSONS.md.conflict-OtherMac" "$CPH/skills/beta/SKILL.md.conflict-OtherMac"
+out_p45gone="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+check "#45 a pull with no copies left says nothing about conflicts" \
+  "! printf '%s' \"\$out_p45gone\" | grep -qi 'conflict'"
+
 section "== a renumber's citation scan opens only the files that match (#53) =="
 # The scan walked every synced file and ran a text test plus a matcher on each of them, once per
 # renumbered lesson: 800 files (747 under skills/) at 8.4 seconds per lesson on the real config,
