@@ -28,6 +28,8 @@ PAYLOAD="$SYNC_REPO/payload"
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
 MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
+SYNC_LOCK="${SYNC_LOCK:-$SYNC_REPO/.sync-lock}"   # one mutating run at a time (#21)
+LOCK_HELD=0
 
 # Skills that the plugins install & manage — excluded so the repo stays clean
 # and plugin updates don't create churn. Edit this list if you install one of
@@ -67,6 +69,82 @@ notify(){
 # so the silent log-only failure becomes visible; interactive users see stderr.
 die(){ echo "claude-sync: $*" >&2; [ -t 2 ] || notify "$*"; exit 1; }
 have_git(){ [ "${SYNC_NO_GIT:-0}" != "1" ]; }
+
+# ---------- one mutating run at a time (#21) ----------
+# The fswatch watcher fires a send on every edit, the launchd timer runs a full two-way
+# sync, and a run started by hand can land on top of either. All three stage into the same
+# payload and drive git in the same repo, so they were free to collide: bursty sessions
+# routinely push several sends inside a minute. Read-only commands (status, next-lesson,
+# check-lessons, help) are deliberately NOT locked, because status is what a refusal tells
+# you to run and a diagnosis that hangs on the condition it diagnoses is worse than none.
+lock_owner_alive(){ [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+
+acquire_lock(){
+  local waited=0 broke=0 max="${SYNC_LOCK_WAIT:-90}" pid
+  while ! mkdir "$SYNC_LOCK" 2>/dev/null; do
+    pid="$(cat "$SYNC_LOCK/pid" 2>/dev/null || true)"
+    # Our OWN lock, met again. reexec_after_self_update runs the updated script with
+    # `exec`, which replaces the process image and keeps the SAME pid, so the resumed run
+    # arrives back here holding a lock it took before the update. Without this it waits
+    # the full timeout for itself and then dies, which is how every self-update test in
+    # the suite failed the first time this lock was added.
+    [ -n "$pid" ] && [ "$pid" = "$$" ] && return 0
+    if ! lock_owner_alive "$pid"; then
+      # A crashed run must not wedge syncing for good, so a lock whose owner is gone has
+      # to be breakable. This reading deliberately does NOT decide who takes over: two
+      # runs can reach here together and both judge the same dead pid. The mkdir at the
+      # top of the loop is the arbiter and only one of them can win it. Re-reading the pid
+      # first means a lock a NEW live run has just created is left alone (L157: acting on
+      # a judgement formed before an atomic step reopens the race it appears to close).
+      # What remains is a window of microseconds where two runs break the SAME dead lock,
+      # and the result of that is two overlapping runs, which is exactly what happened
+      # before this existed. So it is never worse than not locking, and the common cases
+      # (a live holder, an ordinary crash) are closed.
+      if [ "$pid" = "$(cat "$SYNC_LOCK/pid" 2>/dev/null || true)" ]; then
+        rm -rf "$SYNC_LOCK" 2>/dev/null || true
+        broke=$((broke+1))
+        # Bounded: a lock that cannot be removed at all (a permissions problem, a full
+        # disk) must time out like any other, never spin here forever.
+        [ "$broke" -le 5 ] && continue
+      fi
+    fi
+    waited=$((waited+1))
+    [ "$waited" -ge "$max" ] && return 1
+    sleep 1
+  done
+  printf '%s\n' "$$" > "$SYNC_LOCK/pid" 2>/dev/null || true
+  return 0
+}
+
+release_lock(){
+  [ "${LOCK_HELD:-0}" = 1 ] || return 0
+  # Only ever remove OUR OWN lock. If this run's lock was broken by someone else while it
+  # was still going, the directory now belongs to them and removing it would hand a third
+  # run in on top of both.
+  [ "$(cat "$SYNC_LOCK/pid" 2>/dev/null || true)" = "$$" ] && rm -rf "$SYNC_LOCK" 2>/dev/null
+  LOCK_HELD=0
+  return 0
+}
+
+with_lock(){   # $@ = the command to run while holding the lock
+  local rc=0
+  # Re-entrant within one run: do_send falls through to do_sync, and a second acquire
+  # there would deadlock against this run's own lock.
+  if [ "${LOCK_HELD:-0}" = 1 ]; then "$@"; return $?; fi
+  acquire_lock || die "another claude-sync run is already running and still holds $SYNC_LOCK, so this one stopped instead of working on the same files at the same time. Nothing was changed. Run 'claude-sync status' to see where things stand."
+  LOCK_HELD=1
+  # An EXIT trap, not a line after the call: every failure in here leaves through die(),
+  # and a lock kept by a run that died would mean the first network blip wedges syncing
+  # until somebody noticed by hand.
+  # Both handlers, because `trap ... EXIT` REPLACES whatever was registered rather than
+  # adding to it, and cleanup_applied_log is already installed at the top level. Setting
+  # only release_lock here silently unregistered it and left a temp file behind on every
+  # pull, which the suite caught immediately.
+  trap 'release_lock; cleanup_applied_log' EXIT
+  "$@" || rc=$?
+  release_lock
+  return $rc
+}
 
 skill_excludes(){ for s in "${PLUGIN_SKILLS[@]}"; do printf -- "--exclude=%s\n" "$s"; done; }
 
@@ -1044,7 +1122,9 @@ reexec_after_self_update(){   # $1 before  $2 after  $3 command for the child
   script_changed_between "$1" "$2" || return 1
   [ -s "$SYNC_REPO/claude-sync" ] || return 1
   pulled_script_ok || return 1
-  export SYNC_REEXECED=1 SYNC_PULL_BASE="$1" CLAUDE_HOME SYNC_REPO
+  # SYNC_LOCK travels too: the resumed run must look at the same lock this one is holding,
+  # not fall back to the default path and take a second one.
+  export SYNC_REEXECED=1 SYNC_PULL_BASE="$1" CLAUDE_HOME SYNC_REPO SYNC_LOCK
   exec bash "$SYNC_REPO/claude-sync" "$3"
 }
 
@@ -1399,7 +1479,7 @@ do_watch(){
     # `if var=$(cmd)` (not a bare assignment) is the one form `set -e` does not
     # abort on when cmd fails -- a bare `out="$(do_send)"; rc=$?` would exit
     # the whole watch loop on failure before the check below ever ran.
-    if out="$( do_send 2>&1 )"; then
+    if out="$( with_lock do_send 2>&1 )"; then
       rc=0
     else
       rc=$?
@@ -1517,13 +1597,15 @@ do_install_autosync(){
 
 cmd="${1:-help}"
 case "$cmd" in
-  push) do_push ;;
-  pull) do_pull ;;
-  sync) do_sync ;;
-  send) do_send ;;
+  push) with_lock do_push ;;
+  pull) with_lock do_pull ;;
+  sync) with_lock do_sync ;;
+  send) with_lock do_send ;;
+  # NOT locked as a whole: watch is a long-lived loop that would then hold the lock for
+  # the entire life of the daemon. It takes the lock per event instead, around its send.
   watch) do_watch ;;
-  status) do_status ;;
-  apply-only) do_apply_only ;;   # internal: resume point after a self-update
+  status) do_status ;;           # read-only, deliberately never blocked
+  apply-only) with_lock do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
   next-lesson) next_lesson_number "$CLAUDE_HOME" ;;

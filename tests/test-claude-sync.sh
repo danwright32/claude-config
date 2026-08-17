@@ -1604,6 +1604,59 @@ check "#20 status says what to do about them" \
 check "#20 a conflict copy is still never staged for the other Mac" \
   "[ ! -e '$CQR/payload/LESSONS.md.conflict-OtherMac' ]"
 
+echo "== only one mutating run at a time (#21) =="
+# The fswatch watcher fires a send on every edit, the launchd timer runs a full two-way
+# sync, and either can overlap the other or a run started by hand. All three stage into the
+# same payload and drive git in the same repo. Nothing serialized them.
+LKH="$WORK/lock-home"; LKR="$WORK/lock-repo"; LOCK="$WORK/lock-dir"
+mkdir -p "$LKH/skills/l" "$LKR/payload"
+echo '{"hooks":{}}' > "$LKH/settings.json"; echo 'L' > "$LKH/skills/l/SKILL.md"
+lockenv(){ echo "CLAUDE_HOME=$LKH SYNC_REPO=$LKR SYNC_LOCK=$LOCK SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1"; }
+
+# A LIVE holder blocks. The waiting run must decline rather than proceed, and must not have
+# done any of the work.
+sleep 60 & LIVE_PID=$!
+mkdir -p "$LOCK"; printf '%s\n' "$LIVE_PID" > "$LOCK/pid"
+out_lk="$(env $(lockenv) bash "$SCRIPT" push 2>&1)"; rc_lk=$?
+check "#21 a run declines while another holds the lock" "[ $rc_lk -ne 0 ]"
+check "#21 the refusal says another run has it"  "printf '%s' \"\$out_lk\" | grep -qi 'already running'"
+check "#21 a blocked run does not stage anything" "[ ! -e '$LKR/payload/skills/l/SKILL.md' ]"
+
+# status must NEVER be blocked: it is what the refusal tells you to run, and a diagnosis
+# command that hangs on the very condition it diagnoses is worse than no diagnosis.
+out_lkst="$(env $(lockenv) bash "$SCRIPT" status 2>&1)"; rc_lkst=$?
+check "#21 status still runs while the lock is held" "[ $rc_lkst -eq 0 ]"
+kill "$LIVE_PID" 2>/dev/null; wait "$LIVE_PID" 2>/dev/null
+
+# A lock left by a run that CRASHED must be taken over, or the tool wedges permanently and
+# every later sync is silently skipped.
+DEAD_PID="$(bash -c 'echo $$')"          # a shell that has already exited
+mkdir -p "$LOCK"; printf '%s\n' "$DEAD_PID" > "$LOCK/pid"
+out_lkd="$(env $(lockenv) bash "$SCRIPT" push 2>&1)"; rc_lkd=$?
+check "#21 a lock from a dead run is taken over" "[ $rc_lkd -eq 0 ]"
+check "#21 the taken-over run does its work"     "[ -f '$LKR/payload/skills/l/SKILL.md' ]"
+
+# Released on the way out, both ways. The failure path is the one that matters: if a run
+# that dies keeps the lock, the FIRST network blip wedges syncing until someone notices.
+check "#21 the lock is released after a run finishes" "[ ! -d '$LOCK' ]"
+# The failing run has to be one that genuinely TAKES the lock and then dies inside it. An
+# unknown command was the first attempt and proved nothing: it is rejected before any lock
+# is taken, so the assertion passed against a lock that had never existed.
+LKB="$WORK/lock-bare.git"; git init -q --bare -b main "$LKB"
+LKGR="$WORK/lock-grepo"; git clone -q "$LKB" "$LKGR" 2>/dev/null
+LKGH="$WORK/lock-ghome"; mkdir -p "$LKGH/skills/l"
+echo 'L' > "$LKGH/skills/l/SKILL.md"; echo '{"hooks":{}}' > "$LKGH/settings.json"
+CLAUDE_HOME="$LKGH" SYNC_REPO="$LKGR" SYNC_LOCK="$LOCK" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+git -C "$LKGR" remote set-url origin "$WORK/lock-vanished.git"
+echo 'edited' > "$LKGH/skills/l/SKILL.md"
+out_lkf="$(CLAUDE_HOME="$LKGH" SYNC_REPO="$LKGR" SYNC_LOCK="$LOCK" SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1 bash "$SCRIPT" sync 2>&1)"; rc_lkf=$?
+check "#21 a run that dies inside the lock still fails" "[ $rc_lkf -ne 0 ]"
+check "#21 a run that dies does not keep the lock" "[ ! -d '$LOCK' ]"
+# And the next run really is unblocked: with the lock retained this times out and dies.
+git -C "$LKGR" remote set-url origin "$LKB"
+out_lka="$(CLAUDE_HOME="$LKGH" SYNC_REPO="$LKGR" SYNC_LOCK="$LOCK" SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1 bash "$SCRIPT" sync 2>&1)"; rc_lka=$?
+check "#21 the next run after a failure is not blocked" "[ $rc_lka -eq 0 ]"
+
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
