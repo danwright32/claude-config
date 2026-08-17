@@ -646,6 +646,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   attempt had been made. The reason given was also wrong, which nothing could have revealed, since
   the only place it was ever written no longer existed)
 
+- **L158. When the text a failure is diagnosed FROM can come from more than one place (a launcher
+  shell and the process it launched, a supervisor and its child), a rule that takes whichever place
+  is non empty hands the diagnosis to the launcher, because the launcher speaks exactly when the
+  real work never started.** Read the failed process's own output first and treat the launcher's as
+  context, since the one that has something to say is the one whose failure came first, and it is
+  never the one you meant to diagnose. Distinct from L11, which asks that distinct causes get
+  distinct messages: here the classifier is working correctly and has been handed the wrong text.
+  (PostRoll#650, found while fixing PostRoll#648: the app redirects Python's stderr into a per run
+  log and reads that log only when the stderr pipe is EMPTY, so a checkout that had moved produced
+  one line of shell output, `zsh:cd:2: no such file or directory`, which matched the classifier's
+  missing file rule and told the photographer to check that his PHOTOS were still in their original
+  locations, while the real traceback sat unread. Today the login shell is silent, so the first
+  Homebrew notice or zsh deprecation warning would misclassify every failed run)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
@@ -1001,7 +1015,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   its own header, so a waiter acting on a stale owner it had read seconds earlier removed a
   LIVE lock and both suites ran at once)
 
-- **L158. A test asserting that something did NOT happen is satisfied by a fixture in which it
+- **L159. A test asserting that something did NOT happen is satisfied by a fixture in which it
   COULD not happen, so prove the positive case fires in the SAME fixture before trusting the
   negative.** A suite that switches a whole mechanism off for convenience turns every such
   assertion green permanently, and the test reads as careful precisely because it names the thing
