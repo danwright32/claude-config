@@ -75,7 +75,8 @@ jobs:
           git init -q --bare bare.git
           git clone -q bare.git A && cd A
           git config user.name t; git config user.email t@e
-          echo one > f; git add -A; git commit -qm one; git push -q -u origin HEAD:main
+          git checkout -q -b main
+          echo one > f; git add -A; git commit -qm one; git push -q -u origin main
           cd "$d"; git clone -q -b main bare.git B
           cd B; git config user.name t; git config user.email t@e
           cd "$d/A"; echo two > f; git commit -qam two; git push -q
