@@ -1,0 +1,150 @@
+# Design record
+
+The README says what this tool does. This says what was tried and rejected, and where the numbers
+came from, so nobody rebuilds a design that was already measured and discarded.
+
+It is not a changelog. Everything here cost real time to learn, and most of it was previously
+recorded only in a commit message, which nothing links to and nobody reads.
+
+## Rejected approaches
+
+### Recording what each Mac has applied as commits on the config branch
+
+Tried and reverted. A marker commit is a commit the other Mac does not have, and the guard that
+stops a Mac publishing while it is behind reads that as behind and skips every send until somebody
+pulls by hand. Committing markers alongside the payload turned 27 unrelated tests red for exactly
+that reason.
+
+That guard is also the last thing that should be taught a new exception: it dropped 81 minutes of
+sends on 2026-07-28 when it was wrong in the other direction.
+
+Markers now live on their own ref, one per Mac, so two Macs can never contend for the same one and
+nothing lands on the branch the guard reads. See `publish_applied_marker` in `claude-sync`.
+
+### Keying an applied marker on the branch tip rather than on the payload
+
+Rejected during the same work. Publishing a marker moves the branch tip, so the other Mac sees a
+new commit, applies it, publishes its own marker, and moves the tip again. The two Macs republish
+at each other for ever.
+
+The marker records the payload tree instead. A marker only commit does not change that tree, so the
+exchange settles after one round and then writes nothing.
+
+### Judging a stale lock by whether its process is alive, and nothing else
+
+Shipped in #25, partly reversed two hours later in #29.
+
+Liveness alone cannot work for a folder restored from a backup: the recorded process id belongs to
+a machine that is not this one, and if anything here happens to hold that number the lock reads as
+held for ever and syncing never resumes. So an age ceiling was added.
+
+Age alone is worse. A clock jumping forward (a correction, a timezone change, a wake from sleep)
+makes a live lock look ancient and lets a second run start on top of a running one, which is the
+collision the lock exists to prevent.
+
+The split that survived: a lock recording THIS machine is judged by whether its process is alive,
+and the clock is never consulted. Age is the fallback only for a lock from elsewhere.
+
+The tie was broken by detectability rather than by data, and that is worth stating plainly. There is
+no measurement of whether a clock jump or a restored folder is likelier here. A wedged sync
+surfaces, because a sustained outage alerts. A silent collision surfaces never.
+
+### Stopping the suite recursing with a single flag
+
+Shipped in 45528c7 after seventeen suite processes were found spawning each other, and replaced by
+#34 the same day.
+
+A run that was already a child skipped its own subruns. It worked, but it was one flag read
+correctly, and its own check had to be deleted because the child in those tests stops before ever
+reaching the guard, making the assertion one that could only ever fail.
+
+Replaced by a depth counter carried in the environment. A run past the limit refuses to start,
+which closes the class rather than the instance and is reachable in milliseconds, so it can
+actually be tested.
+
+The flag itself then turned out to be the trap. It is inherited by everything a run starts, so a
+grandchild reads it as being about itself and ignores the section limit it was given. That is
+recorded as L169 and tracked as #37.
+
+### Queueing behind a run that is already going
+
+Considered for #32 and rejected. A run that waits without saying so is indistinguishable from the
+stall the issue was filed about, which is how three concurrent runs went unnoticed on 2026-08-17.
+
+A second run refuses and names the process holding the lock and how long it has been going. The
+cost is real and was accepted knowingly: a push can now be rejected because of a lock rather than
+because of the code. `SUITE_NO_LOCK=1` is the escape hatch.
+
+### Detecting a runaway by counting processes
+
+Rejected on evidence from the runaway itself. The pile grows one process at a time, because each
+run spawns the next and waits for it, so the real event peaked at seven processes and an alarm set
+at six never fired once.
+
+`claude-sync status` counts how many started independently and how deeply they are nested. A chain
+of four is one independent run nested three deep, which is unmistakable, where a count of four is
+unremarkable.
+
+### Reporting any nesting at all as a problem
+
+The first version of that report flagged every healthy machine, because one watcher is a launcher
+plus the subshell it forks, and both match. What counts as normal is now measured per family. A
+line printed on every status stops being read long before a real pile up appears, which is how the
+seventeen went unnoticed in the first place.
+
+## Measured numbers
+
+Every threshold here is a multiple of something real, measured on the date given. None is a round
+number chosen because it felt safe.
+
+| Number | What it is | Measured against | Date |
+| --- | --- | --- | --- |
+| 1 hour | A lock is broken as stale | A live sync of the real 4.7MB payload takes 6 seconds and a fresh clone plus first pull takes 4, so roughly 600x the slowest real run | 2026-08-17 |
+| 60 days | A Mac counts as retired | The other Mac's longest real gap between syncs in the preceding 60 days was 6.8 days, so roughly 9x the longest real absence, and a holiday cannot trip it | 2026-08-17 |
+| 15 minutes | A suite run is killed as hung | A full run of the suite took 123 seconds, so roughly 7x | 2026-08-17 |
+| 30 minutes | A suite lock from another machine is broken | The same 123 second run, so roughly 15x | 2026-08-17 |
+| 2 processes | One healthy watcher | Observed directly as a launcher with one child (pid 13658 with 13702) | 2026-08-17 |
+| 1 nested run | The suite's own depth allowance | The suite legitimately runs itself as a subprocess in one place and never deeper | 2026-08-17 |
+
+Two of these are the ones where being wrong LOW is dangerous rather than merely annoying: the lock
+ceiling starts a second run on top of a live one, and the retired window drops a Mac that is only
+on holiday. Both are deliberately generous.
+
+The deadline is the opposite. Being wrong low turns a contended machine into a false failure, and
+an alarm that cries wolf stops being read, which would leave the suite worse off than with no
+deadline at all.
+
+## How much each guard is actually proven
+
+Not all of these carry the same weight, and the difference matters when deciding what to trust.
+
+**Proven by mutation**, meaning the code was broken on purpose and the right checks were watched
+going red. The stale lock takeover: disabling it turns exactly the five checks covering it red and
+nothing else, which is what makes the three that predated the lock into real guards rather than
+decoration.
+
+**Proven by construction**, meaning the failure was manufactured through a named seam rather than
+waited for. The suite deadline (a section that hangs deliberately), the depth limit (a run started
+at a depth past the limit), the lock in every ownership state (locks planted live, dead, foreign
+and ancient), and the process report (fixed process listings fed through a seam). Each was seen
+failing before it passed.
+
+**Proven by one observation**, meaning it was watched working once and nothing in the suite would
+notice if it were removed. The original recursion flag was in this category, which is why #34
+replaced it. Nothing else is currently here, and anything that lands in it should be treated as a
+gap stated rather than a guard held.
+
+**Deliberately not proven.** A control asserting that an empty process listing reports nothing
+exists specifically because a real watcher is running while the suite executes. Without it, a
+listing that failed to reach the code under test would pass quietly against the live machine, and a
+stub that matched nothing is worse than no stub, because you believe the case is covered.
+
+## Things known to be wrong and left that way
+
+Markers are keyed on hostname, which is a mutable string. Renaming or reinstalling a Mac abandons
+its marker rather than moving it. #26 sweeps up the orphans a rename leaves rather than carrying
+the old marker forward, so renaming a Mac still loses its history, it just stops shouting about it.
+
+A run killed by the deadline cannot release its lock, and nothing tries to on its behalf. The next
+run finds a process that is gone and takes over saying so, which is the same path a crash needs and
+is therefore the path worth having work.
