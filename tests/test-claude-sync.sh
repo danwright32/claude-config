@@ -2072,6 +2072,48 @@ check "#27 it runs every section up to the named one, none skipped" "[ -z \"\$_m
 check "#27 the completeness check had sections to check" \
   "[ \"\$(printf '%s' \"\$_want\" | grep -c .)\" -ge 3 ]"
 
+section "== a pulled script that parses but cannot run is refused (#28) =="
+# The self-update gate only checked that the pulled script PARSES. A script can parse and
+# still die on its first real step: an unbound variable under `set -u`, a helper that was
+# renamed, a command that is not on this Mac. That path then executes automatically on both
+# Macs with nobody watching, and a bad version breaks the very thing that would deliver the
+# fix. The 2026-08-16 lock change broke exactly this path and was caught only by luck.
+SUBARE="$WORK/su-bare.git"; git init -q --bare -b main "$SUBARE"
+SUA="$WORK/su-repoA"; git clone -q "$SUBARE" "$SUA" 2>/dev/null
+cp "$SCRIPT" "$SUA/claude-sync"
+mkdir -p "$SUA/payload/hooks"; echo '#!/bin/sh' > "$SUA/payload/hooks/dummy.sh"
+git -C "$SUA" add -A && git -C "$SUA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$SUA" push -q -u origin main
+SUB="$WORK/su-repoB"; git clone -q "$SUBARE" "$SUB" 2>/dev/null
+SUBH="$WORK/su-homeB"; mkdir -p "$SUBH"; echo '{"hooks":{}}' > "$SUBH/settings.json"
+cp "$SCRIPT" "$SUB/claude-sync"
+# Valid shell that dies the moment it actually runs. Injected EARLY, before any work: the
+# first attempt appended it after the dispatch, where the script did its entire job
+# successfully and only failed on the last line, so the pull completed normally and the test
+# would have demonstrated nothing. Verified separately: this version parses and exits 127.
+awk 'NR==30{print "a_helper_that_does_not_exist_on_this_mac"} {print}' "$SCRIPT" > "$SUA/claude-sync"
+git -C "$SUA" add claude-sync && git -C "$SUA" -c user.name=t -c user.email=t@e commit -q -m "push a runnable-looking but broken script" && git -C "$SUA" push -q
+check "#28 the broken version really does still parse" "bash -n '$SUA/claude-sync' 2>/dev/null"
+out_su="$(CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#28 a pulled script that cannot run is refused" \
+  "printf '%s' \"\$out_su\" | grep -qi 'cannot complete a run'"
+# Distinct from the parse failure, which already had its own message. Two different faults
+# reported identically would send the diagnosis to the wrong place.
+check "#28 it is not reported as a parse failure" \
+  "! printf '%s' \"\$out_su\" | grep -qi 'does not parse'"
+check "#28 and it says the older copy is still in use" \
+  "printf '%s' \"\$out_su\" | grep -qi 'kept the copy already running'"
+# The control: a pulled script that is FINE must still be accepted, or the gate would be
+# satisfied by refusing every update, which protects nothing and breaks syncing entirely.
+SUC="$WORK/su-repoC"; git clone -q "$SUBARE" "$SUC" 2>/dev/null
+SUCH="$WORK/su-homeC"; mkdir -p "$SUCH"; echo '{"hooks":{}}' > "$SUCH/settings.json"
+cp "$SCRIPT" "$SUC/claude-sync"
+git -C "$SUA" checkout -q -- claude-sync 2>/dev/null || cp "$SCRIPT" "$SUA/claude-sync"
+cp "$SCRIPT" "$SUA/claude-sync"; printf '\n# a harmless comment\n' >> "$SUA/claude-sync"
+git -C "$SUA" add claude-sync && git -C "$SUA" -c user.name=t -c user.email=t@e commit -q -m "a good script" && git -C "$SUA" push -q
+out_suok="$(CLAUDE_HOME="$SUCH" SYNC_REPO="$SUC" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#28 a healthy pulled script is still accepted" \
+  "! printf '%s' \"\$out_suok\" | grep -qi 'cannot complete a run'"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

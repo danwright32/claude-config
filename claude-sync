@@ -1311,7 +1311,29 @@ reexec_after_self_update(){   # $1 before  $2 after  $3 command for the child
 SCRIPT_SELF_BROKEN=0
 pulled_script_ok(){
   [ "$SCRIPT_SELF_BROKEN" -eq 1 ] && return 1
-  bash -n "$SYNC_REPO/claude-sync" 2>/dev/null && return 0
+  if bash -n "$SYNC_REPO/claude-sync" 2>/dev/null; then
+    # Parsing is not enough. A script can parse and still die on its first real step: an
+    # unbound variable under `set -u`, a helper that was renamed, a command absent from THIS
+    # Mac. This path then re-execs automatically on both Macs with nobody watching, and a
+    # bad version breaks the very thing that would otherwise deliver the fix. So run it, in
+    # throwaway directories where it can touch nothing real, and require it to finish. (#28)
+    local d rc=0
+    d="$(mktemp -d)" || return 0    # cannot test it: fall back to the parse result, which is
+                                    # what this gate did before, rather than block an update
+                                    # over a temp directory problem
+    mkdir -p "$d/home" "$d/repo/payload" 2>/dev/null && printf '{"hooks":{}}\n' > "$d/home/settings.json" 2>/dev/null || { rm -rf "$d"; return 0; }
+    CLAUDE_HOME="$d/home" SYNC_REPO="$d/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+      SYNC_LOCK="$d/lock" bash "$SYNC_REPO/claude-sync" status >/dev/null 2>&1 || rc=$?
+    rm -rf "$d" 2>/dev/null || true
+    [ "$rc" -eq 0 ] && return 0
+    SCRIPT_SELF_BROKEN=1
+    # Deliberately its own message. A script that will not parse and one that parses but
+    # cannot run are different faults with different causes, and reporting them identically
+    # sends the diagnosis to the wrong place.
+    echo "claude-sync: the pulled claude-sync parses but cannot complete a run (it exited $rc on a harmless read-only check), so this run kept the copy already running and left the watch daemon alone. That version is on disk here and later runs of it will fail until the Mac that pushed it pushes a fix; recover with: git -C $SYNC_REPO pull" >&2
+    notify "pulled claude-sync fails to run; kept the older copy"
+    return 1
+  fi
   SCRIPT_SELF_BROKEN=1
   echo "claude-sync: the pulled claude-sync does not parse, so this run kept the copy already running and left the watch daemon alone. That broken copy is now on disk here, so later runs of it will fail until the Mac that pushed it pushes a fix; recover with: git -C $SYNC_REPO pull" >&2
   notify "pulled claude-sync does not parse; kept the older copy"
