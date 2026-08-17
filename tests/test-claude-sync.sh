@@ -1026,6 +1026,10 @@ check "a normal send still works"          "[ -f '$UAB/payload/hooks/b-only.sh' 
 check "and does not warn"                  "! printf '%s' \"\$out_ua2\" | grep -qi 'not applied'"
 # sync in that same state must RECEIVE first, then still send the local edit.
 echo three > "$UAAH/hooks/shared.sh"
+dbg "A's log before its sync: $(git -C "$UAA" log --oneline -4 2>&1 | tr '\n' ' | ')"
+dbg "A's status before its sync: [$(git -C "$UAA" status --short 2>&1 | tr '\n' ' | ')]"
+dbg "A's upstream before its sync: $(git -C "$UAA" rev-list --left-right --count HEAD...@{u} 2>&1) (ahead/behind)"
+dbg "remote log: $(git -C "$UAA" log --oneline -4 @{u} 2>&1 | tr '\n' ' | ')"
 _ua_syncA="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UAAH" SYNC_REPO="$UAA" bash "$SCRIPT" sync 2>&1)"; _ua_rcA=$?
 dbg "A's sync exited $_ua_rcA: $_ua_syncA"
 dbg "A's repo holds: $(git -C "$UAA" log --oneline -1 2>&1)"
