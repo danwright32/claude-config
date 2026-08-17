@@ -1657,6 +1657,86 @@ git -C "$LKGR" remote set-url origin "$LKB"
 out_lka="$(CLAUDE_HOME="$LKGH" SYNC_REPO="$LKGR" SYNC_LOCK="$LOCK" SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1 bash "$SCRIPT" sync 2>&1)"; rc_lka=$?
 check "#21 the next run after a failure is not blocked" "[ $rc_lka -eq 0 ]"
 
+echo "== a brief outage is logged, a sustained one alerts (#22) =="
+# An unreachable remote is now correctly told apart from a two-Mac conflict (#22's parent),
+# but it still raised a desktop alert on the FIRST occurrence. A laptop changing networks
+# produces a connection failure lasting milliseconds: the 2026-08-16 incident was exactly
+# that. One benign instance and a real multi-hour GitHub outage arrive on the same path, so
+# they have to be told apart by how LONG it has been failing, never by what kind of failure
+# it is (L77). An alert that fires on every blip is an alert nobody reads, and it is the
+# real outage that then goes unreported.
+NOTED="$WORK/notified.log"
+FAKENOTIFIER="$WORK/fake-notifier"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$NOTED" > "$FAKENOTIFIER"
+chmod +x "$FAKENOTIFIER"
+OUB="$WORK/outage-bare.git"; git init -q --bare -b main "$OUB"
+OUR="$WORK/outage-repo"; git clone -q "$OUB" "$OUR" 2>/dev/null
+OUH="$WORK/outage-home"; mkdir -p "$OUH/skills/o"
+echo 'O' > "$OUH/skills/o/SKILL.md"; echo '{"hooks":{}}' > "$OUH/settings.json"
+# NOTE: SYNC_NO_NOTIFY is deliberately NOT set for this section. Every other test disables
+# notifications wholesale, which would make "did not alert" pass no matter what the code did.
+# SYNC_NO_NOTIFY=0 is load-bearing and must be set explicitly: the suite exports
+# SYNC_NO_NOTIFY=1 for everything at the top, so without this the notifier can never fire
+# and "raises no alert" passes because alerts are switched off, not because the code chose
+# to stay quiet. It did exactly that on the first run of this section.
+ounotify(){ echo "CLAUDE_HOME=$OUH SYNC_REPO=$OUR SYNC_NOTIFIER=$FAKENOTIFIER SYNC_NO_NOTIFY=0"; }
+env $(ounotify) bash "$SCRIPT" sync >/dev/null 2>&1
+check "#22 a successful sync records when it last reached the repo" "[ -s '$OUR/.last-success' ]"
+
+# A blip: the last success was moments ago, so this must be logged and must NOT alert.
+git -C "$OUR" remote set-url origin "$WORK/outage-vanished.git"
+echo 'edited' > "$OUH/skills/o/SKILL.md"
+: > "$NOTED"
+out_blip="$(env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync 2>&1)"; rc_blip=$?
+check "#22 a brief outage still fails rather than reporting success" "[ $rc_blip -ne 0 ]"
+check "#22 a brief outage raises no desktop alert" "[ ! -s '$NOTED' ]"
+check "#22 a brief outage is still written to the log" \
+  "printf '%s' \"\$out_blip\" | grep -qi 'could not reach'"
+
+# The SAME failure, once it has been going on past the threshold, must alert. Only the age
+# of the last success differs between this case and the one above.
+: > "$NOTED"
+out_sust="$(env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=0 bash "$SCRIPT" sync 2>&1)"; rc_sust=$?
+check "#22 a sustained outage fails too" "[ $rc_sust -ne 0 ]"
+check "#22 a sustained outage does raise an alert" "[ -s '$NOTED' ]"
+check "#22 a sustained outage says how long it has been failing" \
+  "printf '%s' \"\$out_sust\" | grep -qi 'failing'"
+
+# No recorded success at all cannot be called a brief blip, so it must alert rather than
+# stay quiet: a message may claim only what its check actually measured (L11).
+rm -f "$OUR/.last-success"; : > "$NOTED"
+out_none="$(env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync 2>&1)"
+check "#22 an outage with no recorded success alerts" "[ -s '$NOTED' ]"
+check "#22 and says the duration is unknown rather than guessing" \
+  "printf '%s' \"\$out_none\" | grep -qi 'no record'"
+
+# A corrupt marker must not read as a recent success and silence a real outage (L50).
+printf 'not-a-timestamp\n' > "$OUR/.last-success"; : > "$NOTED"
+env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#22 an unreadable marker does not silence the alert" "[ -s '$NOTED' ]"
+
+# The watcher fires a SEND on every edit and never fetches, so if only the two-way sync
+# stamps the clock, a Mac that is edited constantly but only syncs on its weekly timer reads
+# as "last reached GitHub days ago" while its connection is perfectly fine, and the next
+# harmless blip is then reported as a long outage. A successful push is equally good proof
+# the repo was reachable, so it counts.
+SNB="$WORK/send-clock-bare.git"; git init -q --bare -b main "$SNB"
+SNR="$WORK/send-clock-repo"; git clone -q "$SNB" "$SNR" 2>/dev/null
+SNH="$WORK/send-clock-home"; mkdir -p "$SNH/skills/s"
+echo 'S' > "$SNH/skills/s/SKILL.md"; echo '{"hooks":{}}' > "$SNH/settings.json"
+CLAUDE_HOME="$SNH" SYNC_REPO="$SNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+rm -f "$SNR/.last-success"        # so only the send under test can put it back
+echo 'edited by the watcher' > "$SNH/skills/s/SKILL.md"
+CLAUDE_HOME="$SNH" SYNC_REPO="$SNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#22 a successful send also records that the repo was reachable" "[ -s '$SNR/.last-success' ]"
+# The failure side: a send that never reaches the repo must record nothing, or the clock
+# would be refreshed by the very outage it exists to measure.
+git -C "$SNR" remote set-url origin "$WORK/send-clock-gone.git"
+rm -f "$SNR/.last-success"
+echo 'edited again' > "$SNH/skills/s/SKILL.md"
+CLAUDE_HOME="$SNH" SYNC_REPO="$SNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1 || true
+check "#22 a send that cannot reach the repo records nothing" "[ ! -s '$SNR/.last-success' ]"
+
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

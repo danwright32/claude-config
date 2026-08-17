@@ -7,3 +7,5 @@
 # arrives by any other route still cannot be committed and travel between Macs.
 __pycache__/
 *.pyc
+.last-success
+.sync-lock/
