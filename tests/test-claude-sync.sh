@@ -3582,6 +3582,96 @@ out_dsstatus="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY
 check "#49 status reports a duplicate without being asked" \
   "printf '%s' \"\$out_dsstatus\" | grep -qE 'wrangler.*cloudflare'"
 
+section "== assertions that could pass on output the command prints anyway (#55) =="
+# Many checks capture a command's whole output and grep that blob for a phrase. claude-sync's own
+# change report already names every file it applied, so an assertion looking for a filename finds
+# it whether or not the behaviour under test works. A check written as two greps over the same blob
+# is worse: each half can be satisfied by a different, unrelated line, and the conjunction reads as
+# stricter than either (L135, L172).
+#
+# Seen live on 2026-08-17 while writing #43: both new assertions passed against completely
+# unmodified code, because the pull's change report supplied the two paths and a pre-existing
+# warning supplied the wording. They were caught only because the fix was expected to be needed and
+# the green looked wrong.
+#
+# Derived from the suite itself, and REPORT ONLY against a ceiling: there are existing instances and
+# some of them are legitimate (a filename really is the whole point of "the error names the missing
+# file"). The ceiling is a ratchet, so nothing new is added while the existing ones are worked
+# through, and it is a measurement rather than a guess.
+WEAK_AWK="$WORK/weak-assertions.awk"
+cat > "$WEAK_AWK" <<'WEAKAWK'
+# One logical check per line, continuations joined.
+{
+  line = $0
+  while (sub(/\\$/, "", line) > 0) { if ((getline nxt) <= 0) break; sub(/^[[:space:]]+/, " ", nxt); line = line nxt }
+  if (line !~ /^check "/) next
+  total++
+  name = line; sub(/^check "/, "", name); sub(/".*/, "", name)
+
+  # A: the same captured output grepped twice in one expression.
+  rest = line; delete seen
+  while (match(rest, /\$[A-Za-z_][A-Za-z0-9_]*\\?"[[:space:]]*\|[[:space:]]*grep/)) {
+    v = substr(rest, RSTART, RLENGTH); sub(/\\?"[[:space:]]*\|[[:space:]]*grep$/, "", v)
+    seen[v]++
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  for (v in seen) if (seen[v] > 1) { ntwice++; print "twice\t" name "\t" v; break }
+
+  # B: a POSITIVE assertion whose whole pattern is a path or a filename, matched against captured
+  # output that lists paths anyway. A negated one is out of scope: there an over-broad pattern makes
+  # the assertion stricter, not weaker.
+  n = split(line, seg, /&&/)
+  for (i = 1; i <= n; i++) {
+    s = seg[i]
+    if (s !~ /printf/ || s !~ /grep/) continue
+    if (s ~ /![[:space:]]*printf/) continue
+    if (match(s, /grep -[a-zA-Z]*q[a-zA-Z]*[[:space:]]+'[^']+'/) == 0) continue
+    p = substr(s, RSTART, RLENGTH); sub(/^grep[^\047]*\047/, "", p); sub(/\047$/, "", p)
+    if (p ~ /^[A-Za-z0-9_.\/\\-]+$/ && (p ~ /\// || p ~ /\.(sh|md|py|json|txt|js)$/)) {
+      nbare++; print "bare\t" name "\t" p
+      break
+    }
+  }
+}
+END { printf "totals\t%d\t%d\t%d\n", total, ntwice+0, nbare+0 }
+WEAKAWK
+# Proven on a file built to contain one of each, because a scanner run only over the real suite
+# reports a number nobody can check, and a number is indistinguishable from a scanner that matched
+# nothing at all (L1, L98).
+WEAKFIX="$WORK/weak-fixture.sh"
+# Written with printf rather than as a heredoc of literal lines, so these four do not begin a line
+# in THIS file: the scanner reads the suite as text, and a fixture written the obvious way is
+# counted as four more weak assertions in the very suite it is measuring.
+: > "$WEAKFIX"
+printf 'check "two greps over one blob"  "printf %s \\"$out_x\\" | grep -q %salpha%s && printf %s \\"$out_x\\" | grep -q %sbeta%s"\n' "'%s'" "'" "'" "'%s'" "'" "'" >> "$WEAKFIX"
+printf 'check "a bare path in the output"  "printf %s \\"$out_y\\" | grep -q %shooks/thing.sh%s"\n' "'%s'" "'" "'" >> "$WEAKFIX"
+printf 'check "a negated bare path is fine"  "! printf %s \\"$out_z\\" | grep -q %shooks/thing.sh%s"\n' "'%s'" "'" "'" >> "$WEAKFIX"
+printf 'check "one line carrying both"  "printf %s \\"$out_w\\" | grep -q %shooks/thing.sh also mentions L2%s"\n' "'%s'" "'" "'" >> "$WEAKFIX"
+weak_fix="$(awk -f "$WEAK_AWK" "$WEAKFIX")"
+dbg "weak scanner on the fixture: $weak_fix"
+check "#55 the scanner reads every check in a file" \
+  "[ \"\$(printf '%s' \"\$weak_fix\" | awk -F'\t' '\$1==\"totals\"{print \$2}')\" = '4' ]"
+check "#55 it flags two greps over one captured output" \
+  "printf '%s' \"\$weak_fix\" | grep -q 'twice.*two greps over one blob'"
+check "#55 it flags a bare path matched in captured output" \
+  "printf '%s' \"\$weak_fix\" | grep -q 'bare.*a bare path in the output'"
+check "#55 a negated bare path is not flagged" \
+  "! printf '%s' \"\$weak_fix\" | grep -q 'a negated bare path is fine'"
+check "#55 an assertion carrying the path and the wording together is not flagged" \
+  "! printf '%s' \"\$weak_fix\" | grep -q 'one line carrying both'"
+# Now the real suite. The ceilings were measured on 2026-08-17 (581 checks, 6 and 22). They are a
+# ratchet: a change that adds one of these fails, while the existing ones are worked through and the
+# numbers come down. Raising either is a decision somebody has to write down here.
+weak_real="$(awk -f "$WEAK_AWK" "$SCRIPT_SELF")"
+weak_total="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $2}')"
+weak_twice="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $3}')"
+weak_bare="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $4}')"
+echo "  (#55 weak assertions in this suite: $weak_twice grep the same output twice, $weak_bare match only a path, out of $weak_total checks)"
+printf '%s\n' "$weak_real" | grep -E '^(twice|bare)' | sed 's/^/    /'
+check "#55 the scan really read this suite" "[ \"\${weak_total:-0}\" -ge 500 ]"
+check "#55 no new check greps one captured output twice" "[ \"\${weak_twice:-999}\" -le 6 ]"
+check "#55 no new check matches only a bare path" "[ \"\${weak_bare:-999}\" -le 22 ]"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

@@ -137,6 +137,11 @@ It runs from the start up to and including that section, because the sections bu
 other and running one alone reports failures the code did not cause. A name matching nothing
 is an error, not a quiet pass.
 
+The suite also scans itself for assertions that could pass on output the command prints anyway: two
+greps over one captured blob, or a match on nothing but a path, in output that lists paths already.
+It prints what it found with a count and holds the numbers to a ceiling, so nothing new is added
+while the existing ones are worked through.
+
 One run at a time, and none of them open ended:
 
 | Setting | Default | What it does |
