@@ -1130,6 +1130,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   by measuring the live store rather than by reading the code: 6 of 19 drafts named no date at all and
   2 named a wrong one)
 
+- **L167. An AI writer that can READ the code consuming its output derives its contract from that
+  code's permissiveness, so an optional field is not neutral, it is permission: any combination the
+  schema tolerates will eventually be emitted and defended as valid.** Express the real constraint in
+  the type or in a boundary check that refuses the combination, because a prompt stating only the
+  positive form leaves the schema as the more authoritative document. Distinct from L27, which asks
+  that a prompt rule get a deterministic check: here the loose schema is not merely failing to catch
+  the violation, it is what taught the model the violation was allowed.
+  (overture#2893: told to record a social route as `method: form_or_dm` with the profile URL in
+  `formUrl`, the check read `PrepResults.swift` mid-run and wrote "Good, `formUrl` is optional. That
+  confirms a `form_or_dm` contact can carry no `formUrl`", then emitted two contacts each naming a
+  route and carrying none. `formUrl` is optional because two OTHER methods have no form. The app
+  correctly discarded both, so the card told Dan the show had no way in while he found one himself
+  in seconds)
+
 ## Codebase hygiene
 
 - **L29. Dead code is worse than deleted code.** Wire it or delete it the moment nothing
