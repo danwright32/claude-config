@@ -457,6 +457,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   submission, so the manager could no longer request time off at all, and it told him to ask an
   admin to set a manager that no surface can now set: slate#1499)
 
+- **L168. A parameter a function needs in order to be CORRECT must never carry a default standing
+  for absent, because a caller that forgets it then receives silently missing data instead of a
+  compile error, and the failure surfaces far away as a blank value rather than as a refusal.**
+  The default reads as a convenience for the callers that genuinely have nothing to pass, and it is
+  indistinguishable at every call site from one that simply forgot. Distinct from L138, where a
+  missing setting arrives as an empty string the absence check accepts: here the value never arrives
+  at all and the language would have said so.
+  (downbeat#244: moving a booking's venue onto each show made the venue an id resolved against the
+  roster, and five entry points took that roster with a default of none, so a screen that forgot it
+  would render and commit a booking with the venue missing from the folder name, the task text, the
+  calendar sentence and the filename, with nothing anywhere reporting it)
+
 ## Honest failure
 
 - **L10. An error state and an empty state are different screens.** Never render a
