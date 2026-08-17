@@ -168,6 +168,31 @@ for reference; L6 was reviewed and deliberately not adopted.
   check had run against; minutes later a hand written filter over that same output reported every
   check green while one job was still running)
 
+- **L171. A positive control proves the query SHAPE, never that the query reached the period you
+  are asking about, so a control satisfiable by data from outside that period cannot detect a
+  lagging pipeline and an absence there is worthless.** Scope the control to the same recency as
+  the question (assert its newest row is recent), because the control passing is exactly what
+  makes the wrong answer believable. Distinct from L98, where the watcher found no subjects at
+  all: here it found plenty, just none from the window that mattered.
+  (slate#1533: Cloudflare's log query API ran about three hours behind, so asking at 16:19
+  whether a line appeared at 14:44 returned needle 0 and control 101 over one 4h window and
+  scored a trustworthy absence. `wrangler tail` saw lines live that the same API reported zero
+  of. The control was working the whole time)
+
+- **L172. Before shipping a threshold, measure where it lands in the REAL distribution of the
+  quantity it judges, because one sitting inside the dense middle turns the count it produces
+  into noise: a small uniform shift carries dozens of items across at once and reads as a sudden
+  regression rather than as the same population barely moving.** Report the spread beside the
+  count, since a threshold at the 90th percentile with a quarter of the population within a hair
+  of it is indistinguishable, from the count alone, from a clean separation. Distinct from L36,
+  which designs an alert against its false positive sources, and from L139, where a volume floor
+  discards the saturated case: here every input is judged and the cut line is simply drawn through
+  the thickest part of the data.
+  (project-enrollment-tracker#1062: a conversion drift check went 15, then 48, on a gap
+  distribution whose median was 0.37pt and whose 90th percentile was exactly the 1.00pt threshold,
+  with 55 rows sitting between 0.75 and 1.0. Running the identical query against four retained
+  Salesforce dataset builds gave 49, 48, 48, 48, so the population had barely moved)
+
 - **L119. A detection that ACCUSES on an empty answer from an external provider's derived index (a
   commit-to-PR association, a search index, a related-records lookup) must confirm against the
   primary record before acting, because a missing index entry and a real violation are
@@ -179,6 +204,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   twenty minutes later, while the PR itself recorded that exact commit as its merge_commit_sha. The
   three merges before it associated fine; the one that differed was merged during a GitHub API
   incident, so the association record was never written and no retry could have helped)
+
+- **L173. A fallback added because a lookup failed must be reachable on EVERY way that lookup can
+  fail, not only the flavour that was observed, because the remedy gets scoped to the symptom named
+  in the incident report and is then absent in the neighbouring, worse failure.** The tell is a
+  fallback consulted only when the primary ANSWERS: a route that requires the primary to succeed is
+  not a fallback, and the code reads as having two routes while having one. Distinct from L119,
+  which is the lesson that PRODUCES such a fallback, and from L93, where the fallback fires and
+  ships the wrong defect: here it never fires at all.
+  (slate#1519, from #1447: the main push guard's second route, asking a PR named in the commit
+  subject whether it claims this commit as its merge commit, was written for an association index
+  that answered EMPTY during a GitHub incident, and sat below an early return for an association
+  that could not be READ. When that endpoint began answering 403 on 2026-08-17 the guard fetched the
+  proof, printed it to its own log as `#1518 isMergeCommitOfThisPush:true ciConclusion:success`, and
+  discarded it, failing every merge to main and paging on each one. The 403 itself turned out to be
+  transient, measured against a controlled permission experiment, which makes the point sharper: a
+  blip is precisely what the second route was for)
 
 - **L120. A fan out that delivers only to recipients matching a subscription list reports SUCCESS
   when it matches ZERO of them, so a newly added event, topic or category is silently delivered to
