@@ -2738,6 +2738,65 @@ _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
   "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher\|test run'"
 
+section "== the design record's numbers still match the code (#41) =="
+# DESIGN.md records every threshold as a MEASURED value with the reasoning behind it, and all of
+# them are also defaults in the code. Nothing kept the two in step. The document's whole value is
+# that its numbers are measured rather than guessed, so a limit changed in code and not in the
+# prose leaves it confidently defending a number that is no longer true (L32), and they agreed on
+# the day they were written, which is the only day anybody would ever check by hand.
+#
+# DERIVED from the code, in the code-to-document direction, so it catches both halves: a number
+# that CHANGES, and a threshold that is ADDED and never written down. A list maintained by hand
+# beside the thing it mirrors only ever covers what somebody remembered (L41, L96).
+_DESIGN="$(dirname "$SCRIPT")/DESIGN.md"
+_README="$(dirname "$SCRIPT")/README.md"
+check "#41 the design record has a measured-numbers table" "grep -qi 'Measured numbers' '$_DESIGN'"
+# Every default of the shape a threshold has, from BOTH files, as "NAME VALUE" pairs. Comments are
+# stripped first, or prose quoting a number satisfies the check that the number is current, and a
+# guard that is green on its own explanation is indistinguishable from one that works (L103).
+_thresholds(){
+  sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" \
+    | grep -ohE '\$\{(SYNC|SUITE)_[A-Z_]*(MAX_AGE|TIMEOUT|MAX_DEPTH|RETIRE_AFTER)[A-Z_]*:-[0-9]+\}' \
+    | sed 's/^\${//; s/}$//; s/:-/ /' | sort -u
+}
+_undocumented=""
+_disagreeing=""
+while IFS=' ' read -r _tn _tv; do
+  [ -n "$_tn" ] || continue
+  if ! grep -qF -- "$_tn" "$_DESIGN"; then _undocumented="$_undocumented[$_tn]"; continue; fi
+  # Named AND agreeing. A row naming the variable while carrying a stale number is the exact
+  # failure this exists to catch, so being mentioned at all is not enough.
+  grep -qF -- "$_tn=$_tv" "$_DESIGN" || _disagreeing="$_disagreeing[$_tn is $_tv in the code]"
+done <<EOF
+$(_thresholds)
+EOF
+check "#41 every threshold in the code has a row in the design record" "[ -z \"\$_undocumented\" ]"
+check "#41 and every row carries the number the code actually uses"    "[ -z \"\$_disagreeing\" ]"
+
+# The README publishes several of these numbers too, in its own settings tables, and drifts for
+# exactly the same reason. It is not held to documenting ALL of them, because two are internal and
+# have no business in a usage guide; it is held to being right about the ones it does mention.
+# The number has to appear on a line that NAMES the threshold, not merely somewhere in the file, so
+# an unrelated 900 elsewhere cannot answer for the deadline (L135). Any such line will do, so a
+# sentence mentioning a setting without repeating its value is fine as long as some row states it.
+_readme_wrong=""
+_readme_seen=0
+while IFS=' ' read -r _tn _tv; do
+  [ -n "$_tn" ] || continue
+  _row="$(grep -F -- "$_tn" "$_README" || true)"
+  [ -n "$_row" ] || continue
+  _readme_seen=$((_readme_seen + 1))
+  printf '%s' "$_row" | grep -qE "(^|[^0-9])$_tv([^0-9]|\$)" || _readme_wrong="$_readme_wrong[$_tn is $_tv in the code]"
+done <<EOF
+$(_thresholds)
+EOF
+check "#41 the README agrees about every threshold it names" "[ -z \"\$_readme_wrong\" ]"
+check "#41 and it really did name some of them" "[ \"\$_readme_seen\" -ge 3 ]"
+# Or both loops above compare nothing against nothing and pass while the table is entirely wrong,
+# which is the state #30 had to be rescued from.
+check "#41 the derivation found the thresholds to check" \
+  "[ \"\$(_thresholds | grep -c .)\" -ge 6 ]"
+
 section "== scratch a killed run left behind is reclaimed, and nothing else is (#36) =="
 # A run that is force-killed never reaches its cleanup, so its scratch directory is abandoned and
 # nothing ever reclaimed one. 37 of them were measured on this Mac on 2026-08-17 holding 475 MB,
