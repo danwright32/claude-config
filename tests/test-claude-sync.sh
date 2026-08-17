@@ -193,16 +193,91 @@ else
   SUITE_WATCHDOG_PID=""
 fi
 
-# One cleanup, ADDED to rather than replaced further down. #21 shipped a defect of exactly that
-# shape here: an exit handler that replaced the one removing the pull temp file, leaking a file
-# on every run, and nothing noticed because both handlers were individually correct.
+# ---- one run at a time (#32) ----
+# Three copies of this suite ran at once on 2026-08-17, competing for the machine, and the only
+# symptom was output appearing to stall. Beyond being slow, it corrupts the measurements: the
+# stale lock ceiling in #25 was set from a measured sync duration, and a duration measured under
+# two other suites is not the number anyone thinks it is.
+#
+# Only a top-level run locks. #27 runs the suite as a subprocess, and a nested run meeting its own
+# parent's lock would refuse, so every one of those checks would fail. Depth is what tells a
+# nested run from a competing one, which is why #34 had to land first.
+SUITE_LOCK="${SUITE_LOCK:-${TMPDIR:-/tmp}/claude-sync-suite.lock}"
+SUITE_LOCK_HELD=""
+
+# The cleanup handler is installed BEFORE the lock is taken, not after, or a run that dies in the
+# gap between taking it and arming the handler leaves it standing. One cleanup, ADDED to rather
+# than replaced further down: #21 shipped a defect of exactly that shape here, an exit handler
+# that replaced the one removing the pull temp file, and nothing noticed because both handlers
+# were individually correct.
 suite_cleanup(){
   [ -n "${SUITE_WATCHDOG_PID:-}" ] && kill "$SUITE_WATCHDOG_PID" 2>/dev/null
   [ -n "${SUITE_SECTION_MARK:-}" ] && rm -f "$SUITE_SECTION_MARK"
+  # Only a run that actually TOOK the lock releases it, or a run that refused would delete the
+  # lock belonging to the run it just refused for.
+  [ -n "${SUITE_LOCK_HELD:-}" ] && rm -rf "$SUITE_LOCK"
   [ -n "${WORK:-}" ] && rm -rf "$WORK"
   return 0
 }
 trap suite_cleanup EXIT
+
+# A run killed by the deadline above cannot release its lock, and deliberately nothing tries to do
+# it on the run's behalf: the next run finds a recorded process that is gone and takes over saying
+# so, which is the same recovery a crash needs and is therefore the path worth having work.
+if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
+  # mkdir is the atomic step that decides who wins, never the reading that judged the previous
+  # owner dead: two runs can reach that judgement together and act on a lock a third has since
+  # taken (L157, downbeat#218, which deleted a LIVE lock doing exactly this).
+  # Bounded, because an unbounded retry is a wait with no deadline wearing a loop (L110). Each
+  # turn either takes the lock or removes exactly one dead lock, so a handful of turns is already
+  # far more than the real contention, and anything past that is a lock path that cannot be
+  # written at all rather than a lock that keeps being retaken.
+  _lk_try=0
+  while [ "$_lk_try" -lt 5 ]; do
+    _lk_try=$((_lk_try + 1))
+    if mkdir "$SUITE_LOCK" 2>/dev/null; then
+      printf '%s\n' "$$" > "$SUITE_LOCK/pid"
+      printf '%s\n' "$(hostname)" > "$SUITE_LOCK/host"
+      printf '%s\n' "$(date +%s)" > "$SUITE_LOCK/started"
+      SUITE_LOCK_HELD=1
+      break
+    fi
+    _lk_pid="$(cat "$SUITE_LOCK/pid" 2>/dev/null || true)"
+    _lk_host="$(cat "$SUITE_LOCK/host" 2>/dev/null || true)"
+    _lk_started="$(cat "$SUITE_LOCK/started" 2>/dev/null || true)"
+    case "$_lk_started" in ''|*[!0-9]*) _lk_started=0 ;; esac
+    _lk_age=$(( $(date +%s) - _lk_started ))
+    [ "$_lk_started" -eq 0 ] && _lk_age=0     # unknown counts as young, so a lock is never broken on no evidence
+    # Whose lock is it? A lock taken on THIS machine is judged by whether its process is still
+    # alive, and the clock is not consulted at all, or a clock jump (a correction, a wake from
+    # sleep) would make a live lock look ancient and let a second run start on top of a running
+    # one, which is the collision the lock exists to prevent (#29). Age is the fallback only for a
+    # lock from ELSEWHERE, whose recorded process id refers to a machine that is not this one.
+    if [ "$_lk_host" = "$(hostname)" ]; then
+      if [ -n "$_lk_pid" ] && kill -0 "$_lk_pid" 2>/dev/null; then
+        echo "test suite: another run is already going (process $_lk_pid on $_lk_host, started ${_lk_age}s ago). Refusing rather than queueing behind it: two suites competing for this machine make each other slower and make every timing either of them reports wrong. Wait for it, or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
+        exit 5
+      fi
+      echo "test suite: took over a lock whose run is gone (process $_lk_pid is not running)." >&2
+    else
+      if [ "$_lk_age" -lt "${SUITE_LOCK_MAX_AGE:-1800}" ]; then
+        echo "test suite: another run is already going (process $_lk_pid on $_lk_host, started ${_lk_age}s ago). Refusing rather than queueing behind it. Wait for it, or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
+        exit 5
+      fi
+      # 30 minutes against a full run measured at 123 seconds, so roughly 15x the real thing. It is
+      # the one threshold where being wrong LOW starts a second run on top of a live one.
+      echo "test suite: took over a lock from $_lk_host that is ${_lk_age}s old, older than any run can be." >&2
+    fi
+    rm -rf "$SUITE_LOCK"
+  done
+  # Exhausting the turns is its own outcome, and a loud one. Falling through silently would run the
+  # suite with no lock at all while every line above claims it is serialized, which is worse than
+  # not locking because it reads as protected.
+  if [ -z "$SUITE_LOCK_HELD" ]; then
+    echo "test suite: could not take the lock at $SUITE_LOCK after $_lk_try attempts, and it is not held by a run this could identify. Refusing rather than running unserialized. Check that path is writable." >&2
+    exit 5
+  fi
+fi
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
@@ -2455,6 +2530,66 @@ while [ "$_wd_wait" -lt 10 ]; do
   sleep 1; _wd_wait=$((_wd_wait + 1))
 done
 check "#31 the runs above left no watchdog of their own behind" "[ '$_wd_now' -le '$_wd_before' ]"
+
+section "== only one suite run at a time (#32) =="
+# Nothing stopped several copies of this suite running at once. Three did on 2026-08-17, competing
+# for the same machine, and the only symptom was that output appeared to stall. It matters twice:
+# every run gets slower, and the timings those runs produce are then used to reason about the code
+# (the stale lock ceiling in #25 was set from a measured sync duration). A number measured while
+# two other suites are running is not the number anyone thinks it is.
+#
+# Every fixture below points the run at a THROWAWAY lock path, so no test can take, break or wait
+# on the lock a real run is using (L2). The planted locks are built here rather than by running a
+# second suite, so each state is constructed exactly rather than raced for.
+_lockdir="$WORK/locks"; mkdir -p "$_lockdir"
+_mklock(){   # path pid host started-epoch
+  rm -rf "$1"; mkdir -p "$1"
+  printf '%s\n' "$2" > "$1/pid"; printf '%s\n' "$3" > "$1/host"; printf '%s\n' "$4" > "$1/started"
+}
+_try_lock(){ # lockpath [depth]
+  SUITE_LOCK="$1" SUITE_DEPTH="${2:-0}" SUITE_FILTERED= SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1
+}
+_now="$(date +%s)"
+_thishost="$(hostname)"
+
+# Held by a process that is genuinely alive on this machine: this very suite. Refusing is what #32
+# asks for, and refusing is only useful if it says WHO and for HOW LONG, or the person is told to
+# wait for something they cannot find.
+_mklock "$_lockdir/live" "$$" "$_thishost" "$((_now - 30))"
+_t0="$(date +%s)"
+_held="$(_try_lock "$_lockdir/live")"; _held_rc=$?
+_held_elapsed=$(( $(date +%s) - _t0 ))
+check "#32 a second run does not start while one is going" "[ '$_held_rc' -ne 0 ]"
+check "#32 it names the run that holds the lock"  "printf '%s' \"\$_held\" | grep -q '$$'"
+check "#32 it says how long that run has been going" "printf '%s' \"\$_held\" | grep -qE '[0-9]+s'"
+# Refuse, never queue: a run that waits silently is the stall this issue was filed about.
+check "#32 it refuses rather than queueing behind it" "[ '$_held_elapsed' -lt 20 ]"
+check "#32 and runs none of the checks"           "! printf '%s' \"\$_held\" | grep -q '^PASS='"
+
+# A crashed run must not wedge the suite for good. The owner being gone is the evidence, not the
+# clock, because this lock only ever holds a process id from THIS machine.
+_mklock "$_lockdir/dead" "99999999" "$_thishost" "$((_now - 5))"
+_dead="$(_try_lock "$_lockdir/dead")"; _dead_rc=$?
+check "#32 a lock whose owner is gone is taken over" "[ '$_dead_rc' -eq 0 ]"
+check "#32 and says it took it over"                 "printf '%s' \"\$_dead\" | grep -qi 'took over'"
+
+# A lock carried in from ELSEWHERE (a restored folder, a shared temp dir) records a process id that
+# means nothing here, so age is the only evidence available. Same split as claude-sync #25 and #29.
+_mklock "$_lockdir/foreign-old" "$$" "some-other-mac" "$((_now - 99999))"
+_fold="$(_try_lock "$_lockdir/foreign-old")"; _fold_rc=$?
+check "#32 an ancient lock from another machine is broken" "[ '$_fold_rc' -eq 0 ]"
+_mklock "$_lockdir/foreign-new" "$$" "some-other-mac" "$((_now - 5))"
+_fnew="$(_try_lock "$_lockdir/foreign-new")"; _fnew_rc=$?
+check "#32 a fresh lock from another machine is respected" "[ '$_fnew_rc' -ne 0 ]"
+
+# The one that would break everything if it were wrong. #27 runs the suite as a subprocess, so a
+# nested run meeting its own parent's lock would refuse and every one of those checks would fail.
+# Depth is what tells them apart, which is why #34 had to land first.
+_nested="$(_try_lock "$_lockdir/live" 1)"; _nested_rc=$?
+check "#32 a nested run does not fight its parent for the lock" "[ '$_nested_rc' -eq 0 ]"
+
+# A run that finishes must not leave the lock standing, or the next one refuses for ever.
+check "#32 a finished run releases its lock" "[ ! -d '$_lockdir/dead' ] || [ ! -f '$_lockdir/dead/pid' ]"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
