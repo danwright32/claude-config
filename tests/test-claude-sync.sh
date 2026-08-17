@@ -1567,6 +1567,43 @@ check "#22 a conflicted autostash restore is not blamed on a payload conflict" \
 check "#22 a conflicted autostash restore leaves the edits recoverable" \
   "[ -n \"\$(git -C '$STR' stash list 2>/dev/null)\" ]"
 
+echo "== status reports leftover conflict copies (#20) =="
+# When both Macs change one file and it cannot be merged, apply_payload_to_local keeps
+# this Mac's version as <file>.conflict-<hostname> and notifies ONCE. Nothing surfaced it
+# after that: status never mentioned it, and *.conflict-* is excluded from syncing so the
+# other Mac cannot see it either. A copy from 2026-07-29 sat in ~/.claude unnoticed for
+# nearly three weeks that way. The copy is the only record of work that lost a merge, so
+# the surface that reports state has to keep reporting it until it is gone.
+CQH="$WORK/conflict-home"; CQR="$WORK/conflict-repo"
+mkdir -p "$CQH/skills/beta" "$CQR/payload"
+echo '{"hooks":{}}' > "$CQH/settings.json"
+echo 'L1' > "$CQH/LESSONS.md"; echo 'SKILL' > "$CQH/skills/beta/SKILL.md"
+CLAUDE_HOME="$CQH" SYNC_REPO="$CQR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+# Silence first: a status with nothing outstanding must not mention conflicts at all, or
+# the line becomes noise and stops meaning anything when a real one appears.
+out_noconf="$(CLAUDE_HOME="$CQH" SYNC_REPO="$CQR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#20 a clean status says nothing about conflicts" \
+  "! printf '%s' \"\$out_noconf\" | grep -qi 'conflict'"
+# Ages are pinned RELATIVE to now, never to a literal date: a fixture whose meaning is the
+# gap between a stored time and the clock drifts into a different case as real time passes.
+touch -t "$(date -v-9d +%Y%m%d%H%M)" "$CQH/LESSONS.md.conflict-OtherMac" 2>/dev/null || \
+  touch -d '9 days ago' "$CQH/LESSONS.md.conflict-OtherMac"
+touch -t "$(date -v-2d +%Y%m%d%H%M)" "$CQH/skills/beta/SKILL.md.conflict-OtherMac" 2>/dev/null || \
+  touch -d '2 days ago' "$CQH/skills/beta/SKILL.md.conflict-OtherMac"
+out_conf20="$(CLAUDE_HOME="$CQH" SYNC_REPO="$CQR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#20 status names a top-level conflict copy" \
+  "printf '%s' \"\$out_conf20\" | grep -q 'LESSONS.md.conflict-OtherMac'"
+check "#20 status names a nested conflict copy" \
+  "printf '%s' \"\$out_conf20\" | grep -q 'skills/beta/SKILL.md.conflict-OtherMac'"
+check "#20 status says how old each copy is" \
+  "printf '%s' \"\$out_conf20\" | grep -q '9 days'"
+check "#20 status says what to do about them" \
+  "printf '%s' \"\$out_conf20\" | grep -qi 'delete'"
+# The copy must not be mistaken for ordinary config: it is excluded from staging, so a
+# status that listed it as a pending change would be reporting a push that cannot happen.
+check "#20 a conflict copy is still never staged for the other Mac" \
+  "[ ! -e '$CQR/payload/LESSONS.md.conflict-OtherMac' ]"
+
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

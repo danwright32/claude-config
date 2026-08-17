@@ -1292,6 +1292,37 @@ do_send(){
 }
 
 # ---------- status ----------
+# A conflict copy is the ONLY record of work that lost a merge, and preserve_local_conflicts
+# announces it exactly once, in a desktop notification, at the moment it is made. It is also
+# in COMMON_EXCLUDES, so it never travels and the other Mac cannot see it either. That left a
+# condition which PERSISTS in the data with nothing but a transient surface to report it, and
+# a copy from 2026-07-29 duly sat in ~/.claude unnoticed for nearly three weeks. status is the
+# surface that describes state, so it reports them for as long as they exist. (#20)
+report_conflict_copies(){
+  local f age now found=""
+  now="$(date +%s)"
+  # Only the places preserve_local_conflicts can write one (it copies to CLAUDE_HOME plus a
+  # payload-relative path), never a sweep of the whole config folder, which holds the session
+  # history and every plugin and would make this cost real time on every status.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    age=$(( (now - $(stat -f %m "$f" 2>/dev/null || echo "$now")) / 86400 ))
+    found+="  ${f#"$CLAUDE_HOME"/} ($age days old)"$'\n'
+  done < <( {
+    find "$CLAUDE_HOME" -maxdepth 1 -name '*.conflict-*' -type f 2>/dev/null
+    for f in "${MIRROR_DIRS[@]}" skills; do
+      [ -d "$CLAUDE_HOME/$f" ] || continue
+      find "$CLAUDE_HOME/$f" -name '*.conflict-*' -type f 2>/dev/null
+    done
+  } | sort )
+  # Silent when there are none. A standing line saying "no conflicts" would be printed on
+  # every single status and stop being read long before a real one ever appeared.
+  [ -z "$found" ] && return 0
+  echo "--- unresolved conflict copies (YOUR version, kept when a merge could not be done) ---"
+  printf '%s' "$found"
+  echo "  Compare each with the live file next to it, then delete the copy once you have what you need."
+}
+
 do_status(){
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
   echo "--- local config vs repo payload (dry run) ---"
@@ -1312,6 +1343,7 @@ do_status(){
     [ -f "$CLAUDE_HOME/$f" ] || continue
     cmp -s "$CLAUDE_HOME/$f" "$PAYLOAD/$f" 2>/dev/null || echo "$f: differs"
   done
+  report_conflict_copies
 }
 
 # ---------- install-schedule ----------
