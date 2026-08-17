@@ -1192,16 +1192,59 @@ do_sync(){
   # mirrors with --delete and would erase a local file that has never been sent.
   stage_local_to_payload
   local pushed=0 branch before="" after=""
+  local fetch_err="" pull_err="" stash_before=0 stash_after=0 stash_top="" gitdir=""
   if have_git; then
     commit_if_changed && pushed=1
     branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
     before="$(repo_head)"
-    git -C "$SYNC_REPO" fetch -q origin 2>/dev/null || true
+    # A failed FETCH means the repo could not be REACHED (offline, VPN, asleep, revoked
+    # credentials). That used to be swallowed by `|| true`, so the pull below failed a
+    # moment later and was reported as a two-Mac conflict: on 2026-08-16 a connection
+    # failure that lasted two milliseconds sent Dan to investigate a Mac that had been
+    # switched off for two days. Only fatal when an origin is actually configured, so a
+    # local-only repo (and the offline tests) still work exactly as before.
+    if git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1; then
+      if ! fetch_err="$(git -C "$SYNC_REPO" fetch -q origin 2>&1)"; then
+        die "could not reach the shared repo, so nothing was sent or received this time. Nothing is lost: this Mac's changes are committed locally and go up on the next edit. git said: ${fetch_err:-<no output>}"
+      fi
+    fi
     # integrate the other Mac's changes (only if the remote branch exists yet)
     if git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1; then
-      if ! git -C "$SYNC_REPO" pull --rebase --autostash -q origin "$branch"; then
+      # Counted around the pull because git DROPS the autostash on a clean restore and
+      # KEEPS it on a conflicted one. See the check after the pull for why that matters.
+      stash_before="$(git -C "$SYNC_REPO" stash list 2>/dev/null | wc -l | tr -d ' ')"
+      if ! pull_err="$(git -C "$SYNC_REPO" pull --rebase --autostash -q origin "$branch" 2>&1)"; then
+        # Which failure this is, decided from git's own STATE rather than from the words
+        # in its message: a real content conflict is the only one that leaves a rebase
+        # half finished. Matching on message text would be a second, drifting definition.
+        # --absolute-git-dir, NOT --git-path: with -C, git answers --git-path with a
+        # path relative to the REPO while `[ -d ... ]` resolves it against the caller's
+        # own working directory, so the test never fired and every real conflict fell
+        # through to the catch-all below. Caught by the guard kept for exactly this.
+        gitdir="$(git -C "$SYNC_REPO" rev-parse --absolute-git-dir 2>/dev/null || echo "$SYNC_REPO/.git")"
+        if [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; then
+          git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
+          die "both Macs changed the same config and it couldn't auto-merge. Run 'claude-sync status' and reconcile by hand"
+        fi
         git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
-        die "both Macs changed the same config and it couldn't auto-merge — run 'claude-sync status' and reconcile by hand"
+        # Deliberately NOT folded into either message above. An unknown failure defaulted
+        # to a known cause is how the original defect read as a confident diagnosis.
+        die "the shared repo was reachable and this is NOT a two-Mac content conflict, but git refused to combine the two sides. git said: ${pull_err:-<no output>}"
+      fi
+      stash_after="$(git -C "$SYNC_REPO" stash list 2>/dev/null | wc -l | tr -d ' ')"
+      stash_top="$(git -C "$SYNC_REPO" stash list 2>/dev/null | head -1 || true)"
+      # A pull that EXITED ZERO can still have gone wrong, measured against real git, not
+      # assumed: when re-applying the edits it set aside conflicts, git prints
+      # "Successfully rebased", returns 0, writes conflict markers into the working tree
+      # and leaves the edits in a stash. commit_if_changed only ever commits payload/, so
+      # the file left holding those markers is claude-sync itself or its tests, and the
+      # next run would then execute a script full of conflict markers.
+      # Both halves are required: the count alone would also fire on a stash somebody
+      # created by hand in this folder while the background sync was mid-run, and the
+      # marker alone would re-fire forever on a conflicted autostash left from last time.
+      if [ "${stash_after:-0}" -gt "${stash_before:-0}" ] && \
+         printf '%s' "$stash_top" | grep -q 'autostash'; then
+        die "your uncommitted edits inside $SYNC_REPO clashed with the other Mac's version, so git parked them in a stash and left conflict markers in the working tree. The sync tool's own files are the ones affected. Fix the marked files, then run 'git -C $SYNC_REPO stash drop'"
       fi
     fi
     after="$(repo_head)"

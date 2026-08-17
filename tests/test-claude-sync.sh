@@ -1459,6 +1459,114 @@ out_up2="$(CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" p
 check "#16 a truly settled push still says so" \
   "printf '%s' \"\$out_up2\" | grep -qi 'already up to date'"
 
+echo "== a failed sync names the RIGHT cause (#22) =="
+# do_sync had ONE message for every way `git pull --rebase` can fail, and it named a
+# specific innocent cause: "both Macs changed the same config". On 2026-08-16 a two
+# millisecond connection failure to github.com was reported that way, sending Dan to
+# investigate a Mac that had been switched off for two days. Each outcome below is a
+# state git can really be left in (all four were measured against real git, not assumed),
+# and each must be told apart by git's own STATE rather than by the text of its message.
+seed_pair(){   # $1 = tag -> sets PB/PA/PHA (bare, repo A, home A), all already in sync
+  PB="$WORK/$1-bare.git"; git init -q --bare -b main "$PB"
+  PA="$WORK/$1-repoA"; git clone -q "$PB" "$PA" 2>/dev/null
+  git -C "$PA" checkout -q -b main 2>/dev/null || true
+  # The real repo ignores .last-applied. Without this the fixture commits it, it lands
+  # as an incoming tracked file on the other side, and it starts answering assertions
+  # that were written about the file the test actually cares about.
+  printf '.last-applied\n' > "$PA/.gitignore"
+  git -C "$PA" add .gitignore
+  git -C "$PA" -c user.name=t -c user.email=t@e commit -q -m "seed"
+  git -C "$PA" push -q -u origin main
+  PHA="$WORK/$1-homeA"; mkdir -p "$PHA/skills/s"
+  echo 'one' > "$PHA/skills/s/SKILL.md"; echo '{"hooks":{}}' > "$PHA/settings.json"
+  CLAUDE_HOME="$PHA" SYNC_REPO="$PA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+}
+
+# 1) the remote cannot be REACHED. Uses a vanished local path, never a real host, so the
+# suite is structurally unable to depend on the network being down to pass.
+seed_pair unreach; UNR="$PA"; UNH="$PHA"
+git -C "$UNR" remote set-url origin "$WORK/vanished.git"
+echo 'two' > "$UNH/skills/s/SKILL.md"
+out_unreach="$(CLAUDE_HOME="$UNH" SYNC_REPO="$UNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_unreach=$?
+check "#22 an unreachable remote fails loudly" "[ $rc_unreach -ne 0 ]"
+check "#22 an unreachable remote is NOT blamed on the other Mac" \
+  "! printf '%s' \"\$out_unreach\" | grep -q 'both Macs changed the same config'"
+check "#22 an unreachable remote says the repo could not be reached" \
+  "printf '%s' \"\$out_unreach\" | grep -qi 'could not reach'"
+check "#22 an unreachable remote still keeps this Mac's commit" \
+  "[ -n \"\$(git -C '$UNR' log --oneline -1 2>/dev/null)\" ]"
+
+# 2) a GENUINE two-Mac conflict: the one case the old message was actually about, so it
+# must keep saying exactly that. Told apart by a rebase left half finished.
+seed_pair conf; CFA="$PA"; CFHA="$PHA"; CFB_BARE="$PB"
+CFR="$WORK/conf-repoB"; git clone -q "$CFB_BARE" "$CFR" 2>/dev/null
+CFHB="$WORK/conf-homeB"; mkdir -p "$CFHB"; echo '{"hooks":{}}' > "$CFHB/settings.json"
+CLAUDE_HOME="$CFHB" SYNC_REPO="$CFR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+echo 'A rewrote this line' > "$CFHA/skills/s/SKILL.md"
+CLAUDE_HOME="$CFHA" SYNC_REPO="$CFA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+echo 'B rewrote this line' > "$CFHB/skills/s/SKILL.md"
+out_conf="$(CLAUDE_HOME="$CFHB" SYNC_REPO="$CFR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_conf=$?
+check "#22 a real two-Mac conflict fails" "[ $rc_conf -ne 0 ]"
+check "#22 a real two-Mac conflict still names both Macs" \
+  "printf '%s' \"\$out_conf\" | grep -q 'both Macs changed the same config'"
+# --absolute-git-dir, not --git-path: the latter answers with a path relative to the
+# repo, which `[ -d ]` then resolves against the SUITE's working directory, so this
+# assertion was passing on a path that could never exist no matter what the code did.
+check "#22 a real two-Mac conflict leaves no half finished rebase" \
+  "[ ! -d \"\$(git -C '$CFR' rev-parse --absolute-git-dir)/rebase-merge\" ]"
+
+# 3) the pull fails for a reason that is NEITHER: here an untracked file sits where the
+# other Mac's commit adds one. Reachable, nothing conflicting, no rebase started. It must
+# quote git rather than invent a cause (never default an unknown failure to a known one).
+seed_pair other; OTA="$PA"; OTHA="$PHA"; OTBARE="$PB"
+OTR="$WORK/other-repoB"; git clone -q "$OTBARE" "$OTR" 2>/dev/null
+OTHB="$WORK/other-homeB"; mkdir -p "$OTHB"; echo '{"hooks":{}}' > "$OTHB/settings.json"
+CLAUDE_HOME="$OTHB" SYNC_REPO="$OTR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+echo 'guide' > "$OTA/GUIDE.md"
+git -C "$OTA" add GUIDE.md && git -C "$OTA" -c user.name=t -c user.email=t@e commit -q -m "A adds a guide" && git -C "$OTA" push -q
+echo 'my own untracked copy' > "$OTR/GUIDE.md"
+echo 'B edit' > "$OTHB/skills/s/SKILL.md"
+out_other="$(CLAUDE_HOME="$OTHB" SYNC_REPO="$OTR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_other=$?
+check "#22 an unrecognised pull failure fails loudly" "[ $rc_other -ne 0 ]"
+check "#22 an unrecognised pull failure is NOT blamed on the other Mac" \
+  "! printf '%s' \"\$out_other\" | grep -q 'both Macs changed the same config'"
+# Deliberately asserts on claude-sync's OWN sentence, not just on the word `untracked`:
+# git's stderr reaches this output whatever the tool does, so grepping only for git's
+# wording passed against the old single-message code and proved nothing.
+check "#22 an unrecognised pull failure is reported by the tool, not just by git" \
+  "printf '%s' \"\$out_other\" | grep -q 'claude-sync:.*git said'"
+check "#22 an unrecognised pull failure repeats git's own reason" \
+  "printf '%s' \"\$out_other\" | grep -qi 'untracked'"
+
+# 4) the pull EXITS ZERO and is still broken. Measured against real git: when re-applying
+# the local edits it set aside conflicts, git prints "Successfully rebased", returns 0,
+# leaves conflict markers in the working tree and parks the edits in a stash. Only
+# payload/ is ever committed, so the file left with markers is the sync tool itself.
+seed_pair stash; STA="$PA"; STHA="$PHA"; STBARE="$PB"
+# NOTES.md has to be TRACKED on BOTH sides before they diverge. The first version of
+# this fixture let A introduce it as a new file, which made it an UNTRACKED collision
+# on B: the scenario quietly became case 3 above and its assertions passed on the wrong
+# mechanism entirely.
+echo 'shared tool notes' > "$STA/NOTES.md"
+git -C "$STA" add NOTES.md && git -C "$STA" -c user.name=t -c user.email=t@e commit -q -m "tool notes" && git -C "$STA" push -q
+STR="$WORK/stash-repoB"; git clone -q "$STBARE" "$STR" 2>/dev/null
+STHB="$WORK/stash-homeB"; mkdir -p "$STHB"; echo '{"hooks":{}}' > "$STHB/settings.json"
+CLAUDE_HOME="$STHB" SYNC_REPO="$STR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+echo 'tool notes rewritten by A' > "$STA/NOTES.md"
+git -C "$STA" add NOTES.md && git -C "$STA" -c user.name=t -c user.email=t@e commit -q -m "A edits the tool" && git -C "$STA" push -q
+echo 'tool notes rewritten by B, never committed' > "$STR/NOTES.md"
+echo 'B edit' > "$STHB/skills/s/SKILL.md"
+out_stash="$(CLAUDE_HOME="$STHB" SYNC_REPO="$STR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_stash=$?
+check "#22 a conflicted autostash restore is not reported as a clean sync" "[ $rc_stash -ne 0 ]"
+check "#22 a conflicted autostash restore does not announce success" \
+  "! printf '%s' \"\$out_stash\" | grep -q 'Synced (sent local changes'"
+check "#22 a conflicted autostash restore says the edits were parked" \
+  "printf '%s' \"\$out_stash\" | grep -qi 'stash'"
+check "#22 a conflicted autostash restore is not blamed on a payload conflict" \
+  "! printf '%s' \"\$out_stash\" | grep -q 'both Macs changed the same config'"
+check "#22 a conflicted autostash restore leaves the edits recoverable" \
+  "[ -n \"\$(git -C '$STR' stash list 2>/dev/null)\" ]"
+
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
