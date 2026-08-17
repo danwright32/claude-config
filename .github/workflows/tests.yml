@@ -46,5 +46,23 @@ jobs:
           echo "pgrep: $(command -v pgrep || echo MISSING)"
           echo "TMPDIR: ${TMPDIR:-<unset, /tmp will be used>}"
 
+      - name: A read-only run of the tool itself
+        # The self-update gate decides whether a pulled claude-sync is safe to hand control to by
+        # running exactly this and requiring it to finish. So a non-zero exit here does not fail one
+        # check, it makes the tool declare every good version broken, and the damage surfaces four
+        # sections away as a sync that quietly applied nothing. Run first, and on its own, so that
+        # cause is never again read off a symptom.
+        run: |
+          d="$(mktemp -d)"
+          mkdir -p "$d/home" "$d/repo/payload"
+          printf '{"hooks":{}}\n' > "$d/home/settings.json"
+          set +e
+          out="$(CLAUDE_HOME="$d/home" SYNC_REPO="$d/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash claude-sync status 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out"
+          echo "claude-sync status exited $rc"
+          [ "$rc" -eq 0 ]
+
       - name: Run the suite
         run: bash tests/test-claude-sync.sh

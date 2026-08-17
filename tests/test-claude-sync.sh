@@ -2874,11 +2874,16 @@ check "#38 and it names no unbound variable"         "! printf '%s' \"\$_noTMPDI
 # guard satisfied by its own assertion line reports the codebase as broken for ever and teaches
 # everyone to ignore it, which is the same trap #34's spawn-site check had to be written around.
 _bsdisms(){
-  local a b c
-  a="stat"" -f"; b="date"" -r "; c="sed"" -i ''"
+  local a b c d e
+  a="stat"" -f"; b="date"" -r "; c="sed"" -i ''"; d="date"" -v"; e="mktemp"" -t"
+  # Continuation lines are joined first, or a spelling whose GNU fallback sits on the NEXT line
+  # reads as unguarded and this reports two false findings for ever, which is how a guard stops
+  # being read (L36).
   sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" \
-    | grep -nF -e "$a" -e "$b" -e "$c" \
-    | grep -vF "$a %m \"\$1\"" | grep -vF "$b\"\$1\"" || true
+    | sed -e :a -e '/\\$/N; s/\\\n//; ta' \
+    | grep -nF -e "$a" -e "$b" -e "$c" -e "$d" -e "$e" \
+    | grep -vF "$a %m \"\$1\"" | grep -vF "$b\"\$1\"" \
+    | grep -vE '\|\| +touch -d' || true
 }
 check "#38 no BSD-only spelling survives outside the two helpers" "[ -z \"\$(_bsdisms)\" ]"
 # And the helpers really are there to be excluded, or the check above passes by matching nothing
@@ -3053,7 +3058,11 @@ check "#36 and the live mark is still there"      "[ -f '$_SCR/claude-sync-suite
 # guard that is green on its own explanation is indistinguishable from one that works (L103). The
 # first version of this check read `grep -n` output, whose line-number prefix defeated the comment
 # filter entirely, so eight sentences about mktemp were reported as eight unnamed scratch paths.
-_scr_code(){ sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF"; }
+# Lines that SPLICE a literal out of pieces are dropped as well as comments. Those are search
+# patterns, not calls, and the splice exists precisely so a guard cannot match its own assertion.
+# Without this, the #38 guard's pattern list reads to this one as an unnamed scratch path, and two
+# derived checks that are each correct report a defect that exists in neither.
+_scr_code(){ sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" | grep -vF '""'; }
 _scr_unnamed=""
 while IFS= read -r _ml; do
   [ -n "$_ml" ] || continue
