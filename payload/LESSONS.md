@@ -767,6 +767,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   and which of each colliding pair survived was decided by the order the export happened to list
   them in)
 
+- **L162. A completion flag whose only writers are actions performed INSIDE your product is
+  permanently wrong for anyone who does the work in the tool that work actually lives in (a mail
+  client, a CRM, a calendar), so when the truth is visible in a system you already read, derive it
+  from there rather than waiting to be told.** The record then asserts for ever that something is
+  outstanding, and nothing about the code looks wrong, because every path that exists writes the
+  flag correctly. Distinct from L46, where a field has no reader at all, and from L90, where a
+  reader's value has no live writer: here the field is read constantly and the writers are real,
+  they are simply all on the inside.
+  (overture#2865: `replyHandledAt` has three writers, the in-app send, the copy-out button and a
+  one-shot check made at the moment a Gmail conversation is linked, so a reply Dan answers from his
+  mail client leaves the row reading "waiting on you" for ever. The routine reply check re-reads
+  that same Gmail thread every half hour, already holds the JSON that answers the question, and
+  never asks it. Two live conversations were in that state when it was found)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
