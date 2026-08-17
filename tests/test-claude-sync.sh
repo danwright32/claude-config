@@ -2355,6 +2355,13 @@ check "#26 a retired Mac is not counted as behind" \
   "! printf '%s' \"\$out_gh\" | grep -q 'macGone: BEHIND'"
 check "#26 and it no longer blocks the verdict" \
   "CLAUDE_HOME='$GHH' SYNC_REPO='$GHR' SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 SYNC_MAC_RETIRE_AFTER=0 bash '$SCRIPT' verify >/dev/null 2>&1"
+# The boundary is NOT pinned here, and that is a gap stated rather than a guard held. A check that
+# a zero window retires a marker written this second cannot fail on a Mac: the marker is never read
+# in the same second it was written, so the old exclusive comparison satisfies it too. It was
+# written, watched passing against the defect, and removed. The evidence for the inclusive
+# comparison is the flakiness itself: the same commit, two runs two seconds apart, one green and
+# one red on the three checks above. Proving it directly needs a seam for the clock, which the tool
+# does not have.
 # Retired must NOT mean forgotten: it still has to be named, or a Mac that genuinely fell
 # behind quietly disappears from the report that exists to notice exactly that.
 check "#26 a retired Mac is still named"  "printf '%s' \"\$out_gh\" | grep -q 'macGone'"

@@ -248,7 +248,16 @@ notice if it were removed. The original recursion flag was in this category, whi
 replaced it. Nothing else is currently here, and anything that lands in it should be treated as a
 gap stated rather than a guard held.
 
-**Deliberately not proven.** A control asserting that an empty process listing reports nothing
+**Deliberately not proven.** The retirement window's boundary is inclusive, so a window of 0
+retires a marker recorded in the same second. Nothing on a Mac can show that: the marker is never
+read in the same second it was written, so the previous exclusive comparison passes every check
+here too. A check for it was written, watched passing against the defect, and removed rather than
+kept as decoration. The evidence is the flakiness it caused instead, which is real but indirect:
+the same commit produced one green run and one red run two seconds apart on a Linux runner, failing
+exactly the three checks that depend on it. Proving it directly needs a seam for the clock, which
+the tool does not have.
+
+A control asserting that an empty process listing reports nothing
 exists specifically because a real watcher is running while the suite executes. Without it, a
 listing that failed to reach the code under test would pass quietly against the live machine, and a
 stub that matched nothing is worse than no stub, because you believe the case is covered.

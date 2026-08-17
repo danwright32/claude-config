@@ -6,8 +6,15 @@ name: tests
 # over the whole tree to prove no Python bytecode is tracked. A filter derived from "where the code
 # lives" would skip precisely the change that breaks it, and a skipped job is indistinguishable from
 # a passing one (L88).
+#
+# Pushes are watched on main only, with pull requests covering everything on its way there. That is
+# a filter on WHERE, not on WHAT, so it creates none of the blind spot above: every change still
+# gets a full unfiltered run, once. Watching every push as well ran the suite TWICE for every
+# commit on a branch with a PR open, since both triggers fire, and the second run tells you nothing
+# the first did not.
 on:
   push:
+    branches: [main]
   pull_request:
 
 # A superseded run tells you nothing you will act on, and the watcher pushes config changes one

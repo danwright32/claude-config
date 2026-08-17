@@ -1756,7 +1756,14 @@ do_verify(){
                           || line="$host: up to date with the shared config"
       agreed=$((agreed+1))
     elif [ "$host" != "$me" ] && [ -n "$mtime" ] \
-         && [ "$((now - mtime))" -gt "${SYNC_MAC_RETIRE_AFTER:-5184000}" ] 2>/dev/null; then
+         && [ "$((now - mtime))" -ge "${SYNC_MAC_RETIRE_AFTER:-5184000}" ] 2>/dev/null; then
+      # Inclusive, and that is not cosmetic. Written as "more than", a window of 0 does not retire
+      # a marker recorded in the same SECOND, so whether the rule fires depended on how long the
+      # machine took to get from writing it to reading it: green on a Mac, and green or red on a
+      # runner depending on the run. The same commit produced both in two runs two seconds apart.
+      # Two values read off a live clock whose whole margin is one tick of that clock's own
+      # granularity (L134). At the real 60 day default the difference is one second and means
+      # nothing; at the boundary it is the difference between a rule and a coin toss.
       # Silent for so long that "behind" is the wrong word: this reads as a Mac that was
       # retired, renamed or reinstalled. Its marker is keyed on hostname, a mutable string,
       # so a rename abandons the old one rather than moving it (L15, and the reason #26
