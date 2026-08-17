@@ -2030,6 +2030,13 @@ section "== the suite can run one section at a time (#27) =="
 # testing, which is where most of that session's defects came from.
 # This section runs the suite as a SUBPROCESS, so it must never recurse: the child is given
 # a filter that cannot match this section's own heading.
+# NEVER spawn from inside a run that is itself a child. A filtered child carries
+# SUITE_FILTERED in its environment, so its subrun would skip extraction, run the WHOLE
+# suite, reach this section again and spawn further, without bound. That is not theoretical:
+# it filled this Mac with runaway suite processes on 2026-08-17 and had to be killed by hand.
+if [ -n "${SUITE_FILTERED:-}" ]; then
+  echo "  skipped: #27 subruns (already inside a filtered run; spawning here would recurse)"
+else
 SUBOUT="$WORK/subrun.txt"
 SECTION_UNTIL="sync (two-way) over a local fake remote" bash "$SCRIPT_SELF" > "$SUBOUT" 2>&1; rc_sub=$?
 check "#27 a stopped-early run still reports a total" "grep -q '^PASS=' '$SUBOUT'"
@@ -2071,6 +2078,12 @@ EOF
 check "#27 it runs every section up to the named one, none skipped" "[ -z \"\$_missing\" ]"
 check "#27 the completeness check had sections to check" \
   "[ \"\$(printf '%s' \"\$_want\" | grep -c .)\" -ge 3 ]"
+# An assertion that a child SAYS it skipped was written here and removed: the child above
+# stops before this section, so it never reaches the guard and the check could only ever
+# fail. Asserting it properly needs a child that runs all the way to here, which is a near
+# full suite inside a suite. The guard was instead verified by measurement: a filtered run
+# reaching this section spawns one child and no grandchildren.
+fi
 
 section "== a pulled script that parses but cannot run is refused (#28) =="
 # The self-update gate only checked that the pulled script PARSES. A script can parse and
