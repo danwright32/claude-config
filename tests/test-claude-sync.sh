@@ -264,8 +264,13 @@ trap suite_cleanup EXIT
 # Both removals below are `rm -rf` on a path that arrives from the environment, so a typo naming
 # somewhere real would delete it. Refused up front rather than relied on being caught by one of the
 # ownership rules further down, which is where it happens to land today (L5, L9).
+# Read through a default first. TMPDIR is always set on a Mac and is NOT set on a Linux runner, and
+# `${TMPDIR%/}` under `set -u` is an error rather than an empty string, so the suite died on its
+# second line there while every Mac ran it for months (L153: a location that happens to be true of
+# one machine is not a fact about the environment).
+_SUITE_TMPROOT="${TMPDIR:-/tmp}"
 case "${SUITE_LOCK%/}" in
-  ''|/|"${HOME%/}"|"${TMPDIR%/}")
+  ''|/|"${HOME%/}"|"${_SUITE_TMPROOT%/}")
     echo "test suite: SUITE_LOCK='$SUITE_LOCK' names a real directory rather than a lock of its own. Refusing, because taking over a stale lock removes the directory it is in." >&2
     exit 5 ;;
 esac
@@ -2840,6 +2845,26 @@ check "#38 and the stand-in really was used" \
 _gnu_date="$(PATH="$_GNUBIN:$PATH" bash -c ". '$_PORTABLE_HELPERS'; date_from_epoch 1000000000 '+%Y-%m-%d'")"
 check "#38 the date helper still answers with GNU-shaped tools" \
   "[ '$_gnu_date' = '2001-09-08' ] || [ '$_gnu_date' = '2001-09-09' ]"
+
+# TMPDIR is always set on a Mac and is NOT set on a Linux runner, so anything reading it without a
+# default is a landmine no Mac can step on. The suite died on exactly this the first time it ran on
+# the runner, before a single check executed.
+#
+# Worth stating plainly, because it decides how much these two checks are worth: they CANNOT fail on
+# a Mac. macOS ships bash 3.2, which expands `${TMPDIR%/}` to empty when TMPDIR is unset, while the
+# bash on the runner treats it as an unbound variable and exits. So this pair is green here for a
+# reason unrelated to the code (L159) and does its real work only in CI, which is the argument for
+# having CI rather than an argument against the checks. A static sweep for the whole class, every
+# environment variable expanded with an operator and no default, found this as the only instance.
+_noTMPDIR="$(env -u TMPDIR SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1 || true)"
+# The positive control first: without it, a child that died for some entirely different reason
+# would satisfy the assertion below by never getting far enough to say "unbound variable" (L159).
+check "#38 the suite runs with no TMPDIR set at all" "printf '%s' \"\$_noTMPDIR\" | grep -q '^PASS='"
+check "#38 and names no unbound variable"            "! printf '%s' \"\$_noTMPDIR\" | grep -q 'unbound variable'"
+# The tool itself too, and separately, because it is the half that runs unattended on both Macs.
+_noTMPDIRtool="$(env -u TMPDIR SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" bash "$SCRIPT" status 2>&1 || true)"; _noTMPDIRrc=$?
+check "#38 the tool runs with no TMPDIR set either"  "[ '$_noTMPDIRrc' -eq 0 ]"
+check "#38 and it names no unbound variable"         "! printf '%s' \"\$_noTMPDIRtool\" | grep -q 'unbound variable'"
 
 # Derived, so the port cannot quietly rot: one new `stat -f` anywhere outside the helper breaks
 # every run on the runner, and the helper is the only place allowed to spell it that way. Comments
