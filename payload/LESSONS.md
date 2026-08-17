@@ -22,6 +22,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   regressed into mass-inserting busy blocks, that test would still have reported success.
   It was invisible because tsconfig excludes the whole scripts tree from typechecking)
 
+- **L154. A tool that reports whether a check CAUGHT a deliberate defect must name WHICH check
+  fired, because a defect large enough to break everything makes every check fail and is
+  indistinguishable from the one that should have.** Require the witness, not the verdict, and treat
+  a near-total failure as evidence the instrument misfired rather than as proof the guard is real.
+  Distinct from L1 and L151, which are about the guard: this is about the INSTRUMENT that measures
+  the guard being wrong, and it fails in the reassuring direction.
+  (overture#2820: `scripts/mutate.sh` separates "matched nothing" from "went red" but has no outcome
+  for "applied somewhere else". A mutation whose expression used a pipe as its perl delimiter
+  prepended text ahead of the shebang, the script stopped parsing, every fixture went red, and the
+  tool reported CAUGHT. It validates roughly 1,600 source-text guards, and CAUGHT is the verdict
+  quoted as proof. Only the diff it already printed exposed it, and only because a person read it)
+
 - **L151. Every outcome a guard's own contract ENUMERATES must have a test that PRODUCES that
   outcome, not merely a test that passes.** A documented outcome nobody constructs can be
   unreachable in the code while the guard looks thoroughly tested, so read the contract as a list
@@ -641,6 +653,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   98 live runs have a SEPARATE stored card on that very night, because a weekly series is stored both as
   a run carrying every night and as individual cards. Found by measuring the live store immediately after
   merging, not by any test)
+- **L153. A path built from the user's home directory plus a literal folder name records where
+  something happened to be, not what it is, so the first time anyone moves it the code points at
+  nothing.** Derive a location from the artifact that needs it (the running bundle, the source file's
+  own path, the repo root), because a suite gated on that path's existence then skips rather than
+  fails, and a skip is indistinguishable from a pass. Distinct from L8, which is about never settling
+  for a framework or OS DEFAULT location: here a location was chosen deliberately, and chosen by
+  where the thing sat rather than by what could find it again.
+  (PostRoll#648, downbeat#217: moving five projects out of iCloud Drive on 2026-08-16 broke the Mac
+  app's Python lookup and silenced Downbeat's research fixture suites in the same moment, and only
+  the app half was visible. The first sweep for the damage filtered by file extension and missed
+  every Swift file, so it reported the move as cosmetic)
 - **L16. A count and the rows it promises come from one shared predicate**, and any
   cross-cutting filter or threshold is one named implementation every consumer is forced
   through. (16 issues, 2 repos)
