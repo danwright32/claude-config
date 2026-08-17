@@ -1870,6 +1870,44 @@ out_ocbad="$(CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT"
 check "#24 status survives a corrupt outage log"  "[ $rc_ocbad -eq 0 ]"
 check "#24 and says a record could not be read"   "printf '%s' \"\$out_ocbad\" | grep -qi 'unreadable'"
 
+echo "== local state carried in from elsewhere is not trusted (#25) =="
+# Four files now hold local state in the sync folder and none had a defined lifetime:
+# .last-applied, .last-success, .outage-log and .sync-lock. All are gitignored, so a fresh
+# clone starts without them, but a folder COPIED or RESTORED from a backup carries stale ones
+# that are then trusted as current. Each drives a real decision, so a stale one is not
+# cosmetic: a lock decides whether a run proceeds at all, and the clock decides whether a
+# live outage is reported.
+STB="$WORK/stale-bare.git"; git init -q --bare -b main "$STB"
+STR2="$WORK/stale-repo"; git clone -q "$STB" "$STR2" 2>/dev/null
+STH2="$WORK/stale-home"; mkdir -p "$STH2/skills/s"
+echo 'S' > "$STH2/skills/s/SKILL.md"; echo '{"hooks":{}}' > "$STH2/settings.json"
+CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+
+# A lock whose recorded process is long gone AND which is older than any plausible run must
+# not block. The pid could have been reused by an unrelated process on the machine the folder
+# was restored onto, in which case the liveness test alone says "held" for ever.
+STLOCK="$STR2/.sync-lock"; mkdir -p "$STLOCK"; printf '%s\n' "$$" > "$STLOCK/pid"
+touch -t "$(date -v-2d +%Y%m%d%H%M)" "$STLOCK/pid" 2>/dev/null || touch -d '2 days ago' "$STLOCK/pid"
+echo 'edited' > "$STH2/skills/s/SKILL.md"
+out_st="$(CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1 bash "$SCRIPT" sync 2>&1)"; rc_st=$?
+check "#25 an ancient lock does not block a run" "[ $rc_st -eq 0 ]"
+check "#25 and the run says it broke a stale lock" \
+  "printf '%s' \"\$out_st\" | grep -qi 'stale lock'"
+
+# An outage clock from before this clone existed must not be treated as a recent success,
+# because that is exactly what silences a real outage.
+git -C "$STR2" remote set-url origin "$WORK/stale-gone.git"
+printf '%s\n' "$(( $(date +%s) - 60 ))" > "$STR2/.last-success"
+touch -t "$(date -v-30d +%Y%m%d%H%M)" "$STR2/.last-success" 2>/dev/null || touch -d '30 days ago' "$STR2/.last-success"
+NOTED2="$WORK/notified2.log"; : > "$NOTED2"
+FAKEN2="$WORK/fake-notifier2"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$NOTED2" > "$FAKEN2"; chmod +x "$FAKEN2"
+echo 'edit again' > "$STH2/skills/s/SKILL.md"
+CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NOTIFIER="$FAKEN2" SYNC_NO_NOTIFY=0 \
+  SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync >/dev/null 2>&1 || true
+check "#25 a clock older than the file it sits in does not silence an outage" \
+  "[ -s '$NOTED2' ]"
+
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
