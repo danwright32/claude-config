@@ -3672,6 +3672,39 @@ check "#55 the scan really read this suite" "[ \"\${weak_total:-0}\" -ge 500 ]"
 check "#55 no new check greps one captured output twice" "[ \"\${weak_twice:-999}\" -le 6 ]"
 check "#55 no new check matches only a bare path" "[ \"\${weak_bare:-999}\" -le 22 ]"
 
+section "== which plugins load is a per Mac setting, so status says what this Mac has (#48) =="
+# Every plugin was enabled at user scope, so all seven loaded into every session in every project:
+# roughly 7,700 tokens of Vercel, Figma and Stripe before any of it was used, plus a 53KB Vercel
+# knowledge graph injected at session start in a directory with no code in it.
+#
+# The fix is per project enablement, and `enabledPlugins` lives in the part of settings.json that
+# deliberately never syncs (model, effort and plugins stay private to each Mac). Carrying it would
+# apply THIS Mac's project survey to a Mac holding different projects, which is the regression the
+# issue warns about. So it stays per Mac and status SAYS SO, because two Macs quietly diverging with
+# nothing able to report it is the failure mode that has to be visible (L148).
+PGH="$WORK/plugins-home"; PGR="$WORK/plugins-repo"
+mkdir -p "$PGH/skills" "$PGR/payload"
+printf '# rules\n' > "$PGH/CLAUDE.md"
+cat > "$PGH/settings.json" <<'PLUGSET'
+{"hooks":{},"enabledPlugins":{"superpowers@superpowers-dev":true,"vercel-plugin@vercel-vercel-plugin":false,"cloudflare@cloudflare":true}}
+PLUGSET
+out_pg="$(CLAUDE_HOME="$PGH" SYNC_REPO="$PGR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "status with plugin settings: $out_pg"
+check "#48 status names the plugins that load on this Mac" \
+  "printf '%s' \"\$out_pg\" | grep -qE 'enabled.*(superpowers|cloudflare)'"
+check "#48 and the ones that do not" \
+  "printf '%s' \"\$out_pg\" | grep -qE 'off.*vercel-plugin|vercel-plugin.*off'"
+check "#48 and says plainly that this is per Mac" \
+  "printf '%s' \"\$out_pg\" | grep -qiE 'per Mac|this Mac only|never synced'"
+# No setting at all is a real state with real consequences (every installed plugin loads
+# everywhere), and it is the state this Mac was in. Saying nothing would report it as fine.
+cat > "$PGH/settings.json" <<'PLUGSET2'
+{"hooks":{}}
+PLUGSET2
+out_pg2="$(CLAUDE_HOME="$PGH" SYNC_REPO="$PGR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#48 a Mac with no plugin settings is told what that means" \
+  "printf '%s' \"\$out_pg2\" | grep -qiE 'no plugin (enablement|settings)'"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

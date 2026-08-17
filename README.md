@@ -98,6 +98,19 @@ until somebody tries to invoke it.
 Measured against the real config on 2026-08-17, this refuses exactly four entries (two directories
 holding no `SKILL.md` and two loose markdown files) and every one of the 43 real skills passes.
 
+## Which plugins load (per Mac, and it does not sync)
+
+Plugins are enabled per project rather than everywhere. A plugin that is off at user scope is turned
+back on by `enabledPlugins` in that project's own `.claude/settings.json`, which travels with the
+project's repo. Proven in a real session on 2026-08-17, with a control: a directory whose project
+settings enable a user-scope-disabled plugin sees its skills, and a directory without those settings
+does not.
+
+`enabledPlugins` in `~/.claude/settings.json` is deliberately NOT carried between Macs, along with
+the rest of that file. Each Mac has different projects checked out, so exporting one Mac's survey
+would turn a fix here into a regression there. Set it on each Mac by hand, and read
+`claude-sync status`, which prints what this Mac has on and off so the two can be compared.
+
 ## A skill provided twice
 
 `claude-sync check-skills` fails when a skill name is provided by an installed plugin AND by

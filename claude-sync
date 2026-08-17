@@ -330,6 +330,37 @@ with_lock(){   # $@ = the command to run while holding the lock
   return $rc
 }
 
+# ---- which plugins load on this Mac (#48) ----
+# Every plugin used to be enabled at user scope, so all seven loaded into every session in every
+# project: roughly 7,700 tokens of Vercel, Figma and Stripe before any of it was used, plus a 53KB
+# Vercel knowledge graph injected at session start in a directory with no code in it. The fix is to
+# enable each plugin in the projects that use it.
+#
+# `enabledPlugins` lives in the part of settings.json this tool deliberately never carries (model,
+# effort and plugins stay private to each Mac). Carrying it would apply THIS Mac's project survey to
+# a Mac holding different projects, turning a fix here into a regression there. So it stays per Mac,
+# and status SAYS SO: two Macs quietly diverging with nothing able to report it is the failure worth
+# making visible (L148).
+report_user_scope_plugins(){
+  local settings on off
+  settings="$CLAUDE_HOME/settings.json"
+  [ -f "$settings" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  if ! jq -e '.enabledPlugins' "$settings" >/dev/null 2>&1; then
+    # A real state with real consequences (every installed plugin loads in every project), and the
+    # state this Mac was in. Saying nothing would report it as fine.
+    echo "--- plugins ---"
+    echo "  no plugin enablement recorded on this Mac, so every installed plugin loads in every project. This setting is per Mac and is never synced."
+    return 0
+  fi
+  on="$(jq -r '[.enabledPlugins | to_entries[] | select(.value == true) | (.key | split("@")[0])] | sort | join(", ")' "$settings" 2>/dev/null || true)"
+  off="$(jq -r '[.enabledPlugins | to_entries[] | select(.value == false) | (.key | split("@")[0])] | sort | join(", ")' "$settings" 2>/dev/null || true)"
+  echo "--- plugins (per Mac, never synced) ---"
+  echo "  enabled everywhere on this Mac: ${on:-<none>}"
+  echo "  off at user scope, so only where a project turns them on: ${off:-<none>}"
+  return 0
+}
+
 # ---- a skill provided twice (#49) ----
 # Nine Cloudflare skills existed as byte identical copies in ~/.claude/skills/ AND inside the
 # cloudflare plugin, so each was listed twice in every session and both were paid for. Nothing
@@ -2315,6 +2346,7 @@ do_status(){
     [ -f "$CLAUDE_HOME/$f" ] || continue
     cmp -s "$CLAUDE_HOME/$f" "$PAYLOAD/$f" 2>/dev/null || echo "$f: differs"
   done
+  report_user_scope_plugins
   report_duplicate_plugin_skills || true
   report_conflict_copies
   report_outage_tally
