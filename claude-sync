@@ -79,6 +79,56 @@ die(){ echo "claude-sync: $*" >&2; [ -t 2 ] || notify "$*"; exit 1; }
 # only raise a desktop alert once syncing has been failing for longer than the threshold.
 record_sync_success(){ date +%s > "$LAST_SUCCESS_FILE" 2>/dev/null || true; }
 
+# The threshold below was chosen by judgement, not measurement, and BOTH ways of being wrong
+# are invisible in use: too low it alerts on blips until the alert is ignored, too high a
+# real outage goes unreported for most of a day. So every decision is recorded with the gap
+# it was judging, and status reports the tally, which is what makes the number answerable
+# after a month of real use rather than a guess nobody can check. (#24)
+OUTAGE_LOG="$SYNC_REPO/.outage-log"
+OUTAGE_LOG_MAX="${SYNC_OUTAGE_LOG_MAX:-500}"
+
+record_outage_decision(){   # $1 = quiet|alert   $2 = gap in seconds, or empty if unknown
+  # The threshold IN FORCE at the time is part of the record. Without it the tally reads as
+  # though every decision was judged by the current setting, so the moment the threshold is
+  # tuned (which is the whole point of collecting this) the summary starts describing the
+  # data wrongly, and it is the summary you would draw the conclusion from.
+  printf '%s %s %s %s\n' "$(date +%s)" "$1" "${2:-unknown}" "${SYNC_OUTAGE_ALERT_AFTER:-10800}" >> "$OUTAGE_LOG" 2>/dev/null || true
+  # Bounded, and the trim is stated rather than silent: an unbounded local log is the kind of
+  # thing nobody notices until it matters.
+  local n
+  n="$(grep -c . "$OUTAGE_LOG" 2>/dev/null || echo 0)"
+  if [ "${n:-0}" -gt "$OUTAGE_LOG_MAX" ]; then
+    tail -n "$OUTAGE_LOG_MAX" "$OUTAGE_LOG" > "$OUTAGE_LOG.trim" 2>/dev/null \
+      && mv -f "$OUTAGE_LOG.trim" "$OUTAGE_LOG" 2>/dev/null || true
+  fi
+}
+
+report_outage_tally(){
+  [ -s "$OUTAGE_LOG" ] || return 0
+  local quiet=0 alerted=0 bad=0 kind gap thr ts seen=""
+  while read -r ts kind gap thr; do
+    [ -n "${ts:-}" ] || continue
+    case "$kind" in
+      quiet)  quiet=$((quiet+1)) ;;
+      alert)  alerted=$((alerted+1)) ;;
+      # A line that does not parse is COUNTED and reported, never skipped into silence: an
+      # unreadable record and no record at all must not look the same (L11).
+      *)      bad=$((bad+1)); continue ;;
+    esac
+    case " $seen " in *" ${thr:-unknown} "*) ;; *) seen="$seen ${thr:-unknown}" ;; esac
+  done < "$OUTAGE_LOG"
+  echo "--- outage decisions so far: $quiet quiet, $alerted alerted ---"
+  # Says what the numbers can and cannot support. A tally spanning more than one threshold
+  # cannot be read as evidence about any single one of them.
+  if [ "$(printf '%s' "$seen" | wc -w | tr -d ' ')" -gt 1 ]; then
+    echo "  judged under different thresholds ($(printf '%s' "${seen# }" | tr ' ' ',')s), so these counts are not evidence about any one of them"
+  else
+    echo "  threshold in force:${seen:-  unknown}s"
+  fi
+  [ "$bad" -gt 0 ] && echo "  $bad record(s) unreadable and not counted"
+  return 0
+}
+
 die_transient(){   # $1 = message. Fails like die(), but stays quiet during a short outage.
   local msg="$1" last now gap threshold="${SYNC_OUTAGE_ALERT_AFTER:-10800}"   # 3 hours
   now="$(date +%s)"
@@ -90,11 +140,14 @@ die_transient(){   # $1 = message. Fails like die(), but stays quiet during a sh
     gap=$((now - last))
     if [ "$gap" -lt "$threshold" ]; then
       # Deliberately NOT die(): same failure, same exit code, same log line, no alert.
+      record_outage_decision quiet "$gap"
       echo "claude-sync: $msg Syncing last worked $((gap / 60)) minutes ago, which is inside the $((threshold / 60)) minute window, so this is being logged without raising an alert." >&2
       exit 1
     fi
+    record_outage_decision alert "$gap"
     die "$msg Syncing has now been failing for $((gap / 60)) minutes."
   fi
+  record_outage_decision alert unknown
   # No usable record of a success. That is NOT evidence of a brief blip, and a message may
   # only claim what its check actually measured (L11), so say what is unknown and alert.
   die "$msg There is no record of this Mac ever reaching the shared repo, so how long this has been failing is unknown."
@@ -1592,6 +1645,7 @@ do_status(){
     cmp -s "$CLAUDE_HOME/$f" "$PAYLOAD/$f" 2>/dev/null || echo "$f: differs"
   done
   report_conflict_copies
+  report_outage_tally
 }
 
 # ---------- install-schedule ----------

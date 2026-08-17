@@ -10,3 +10,4 @@ __pycache__/
 .last-success
 .sync-lock/
 state/
+.outage-log

@@ -1825,6 +1825,51 @@ check "#23 no markers at all does not claim agreement" \
 check "#23 no markers at all says so plainly" \
   "printf '%s' \"\$out_v4\" | grep -qi 'no Mac has published'"
 
+echo "== outage decisions are recorded so the threshold can be judged (#24) =="
+# The 3 hour cutoff deciding when a sync failure stops being logged quietly and starts
+# alerting was chosen by judgement, not measurement, and both ways of being wrong are
+# invisible: too low and it alerts on network blips until the alert is ignored, too high and
+# a real outage sits unreported for most of a day. Recording which branch fired, and how long
+# the outage had been running, is what makes the number answerable after real use.
+OCB="$WORK/ocount-bare.git"; git init -q --bare -b main "$OCB"
+OCR="$WORK/ocount-repo"; git clone -q "$OCB" "$OCR" 2>/dev/null
+OCH="$WORK/ocount-home"; mkdir -p "$OCH/skills/o"
+echo 'O' > "$OCH/skills/o/SKILL.md"; echo '{"hooks":{}}' > "$OCH/settings.json"
+CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+git -C "$OCR" remote set-url origin "$WORK/ocount-gone.git"
+echo 'edited' > "$OCH/skills/o/SKILL.md"
+CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync >/dev/null 2>&1 || true
+check "#24 a quiet outage is recorded" "[ -s '$OCR/.outage-log' ]"
+check "#24 the record says it stayed quiet" "grep -q 'quiet' '$OCR/.outage-log'"
+echo 'edited again' > "$OCH/skills/o/SKILL.md"
+CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 SYNC_OUTAGE_ALERT_AFTER=0 bash "$SCRIPT" sync >/dev/null 2>&1 || true
+check "#24 an alerting outage is recorded too" "grep -q 'alert' '$OCR/.outage-log'"
+check "#24 the two decisions are kept apart" \
+  "[ \"\$(grep -c 'quiet' '$OCR/.outage-log')\" = 1 ] && [ \"\$(grep -c 'alert' '$OCR/.outage-log')\" = 1 ]"
+out_oc="$(CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#24 status reports the tally"     "printf '%s' \"\$out_oc\" | grep -qi 'outage'"
+# The tally exists to judge the threshold, so it must not imply every record was judged under
+# the CURRENT one. The two outages above were deliberately made under different thresholds
+# (10800 then 0), so a summary quoting one number for all of them would be telling you
+# something untrue about the data you are being asked to draw a conclusion from.
+check "#24 each record carries the threshold it was judged under" \
+  "grep -q ' 10800$' '$OCR/.outage-log' && grep -q ' 0$' '$OCR/.outage-log'"
+check "#24 a mixed tally says the threshold changed" \
+  "printf '%s' \"\$out_oc\" | grep -qi 'different threshold'"
+check "#24 the tally names both counts"  "printf '%s' \"\$out_oc\" | grep -q '1 quiet' && printf '%s' \"\$out_oc\" | grep -q '1 alerted'"
+# A run that reached the repo must not be recorded as an outage, or the tally that exists to
+# judge the threshold is padded with every healthy sync and answers nothing.
+git -C "$OCR" remote set-url origin "$OCB"
+echo 'fine now' > "$OCH/skills/o/SKILL.md"
+CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#24 a healthy sync records no outage" \
+  "[ \"\$(grep -c . '$OCR/.outage-log')\" = 2 ]"
+# Failure path: a corrupt log must not crash status nor be silently reported as zero events.
+printf 'garbage line with no fields\n' >> "$OCR/.outage-log"
+out_ocbad="$(CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; rc_ocbad=$?
+check "#24 status survives a corrupt outage log"  "[ $rc_ocbad -eq 0 ]"
+check "#24 and says a record could not be read"   "printf '%s' \"\$out_ocbad\" | grep -qi 'unreadable'"
+
 echo "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
