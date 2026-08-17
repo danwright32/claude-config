@@ -813,6 +813,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   hire inquiry where somebody really wrote and he really answered is filed permanently as "Dan
   replied, they never answered". The same shape as overture#2401, arriving by a different route)
 
+- **L166. An action that carries out a decision must be addressed by every attribute the decision was
+  made over, because an instruction scoped by fewer names a FAMILY where the decision named one
+  MEMBER, and it silently acts on the records the decision deliberately excluded.** The deciding code
+  reads as correct throughout, since it really did choose correctly, and the harm is done by the
+  instruction that carries the choice out. Distinct from L75, where identifying the target FAILS and
+  the fix is to refuse: here identification succeeds and merely under-specifies, so nothing anywhere
+  reports a problem. Also distinct from L16, which shares one predicate between a count and its rows,
+  and from L144, where a monitor and an action answer the same question differently.
+  (overture#2885: `OmniFocusSync.reconcile` decides per (show, contact, due date) and correctly chose
+  to complete only the stale-due follow-up task, then called `complete(naturalKey:recipientId:)`,
+  which carries no due date, so the AppleScript it built matched EVERY open task for that show and
+  contact and would have ticked off the live reminder as well. It was caught only because the same
+  script tripped a separate crash on its second iteration and died before reaching the live task, and
+  the order OmniFocus happened to return them in is what decided whether a real reminder was lost)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
