@@ -1773,6 +1773,16 @@ VFHB="$WORK/verify-homeB"; mkdir -p "$VFHB"; echo '{"hooks":{}}' > "$VFHB/settin
 out_v1="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1)"
 check "#23 verify reports this Mac as up to date" \
   "printf '%s' \"\$out_v1\" | grep -qi 'up to date'"
+# One Mac agreeing with itself is agreement with nobody, which is the same vacuous success
+# the no-markers case exists to prevent. Caught on the REAL repo after shipping, where it
+# printed "all 1 Mac(s) agree" while the second Mac had simply never published.
+# Targets the VERDICT line, not the word "agree", which legitimately appears in the sentence
+# explaining that agreement cannot be answered yet. The first version of this assertion
+# banned the word and so failed on the correct message.
+check "#23 a single published Mac gets no agreement verdict" \
+  "! printf '%s' \"\$out_v1\" | grep -q 'Verified:'"
+check "#23 a single published Mac says only itself has reported" \
+  "printf '%s' \"\$out_v1\" | grep -qi 'only this Mac'"
 
 # Now B applies too, and both must read as agreeing.
 CLAUDE_HOME="$VFHB" SYNC_REPO="$VFR" SYNC_HOSTNAME=macB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1

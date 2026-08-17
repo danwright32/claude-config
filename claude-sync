@@ -1555,8 +1555,16 @@ do_verify(){
     return 1
   fi
   if [ "$behind" -eq 0 ]; then
+    # One Mac agreeing with itself is agreement with nobody, and saying "agree" there is the
+    # same vacuous success the no-markers case above exists to prevent. Found on the real
+    # repo minutes after shipping, where it read "all 1 Mac(s) agree" while the second Mac
+    # had simply never published.
+    if [ "$agreed" -le 1 ]; then
+      echo "This Mac is up to date, but only this Mac has published what it applied, so whether the Macs agree cannot be answered yet. Run a sync on the other Mac, then verify again." >&2
+      return 1
+    fi
     if [ "$agreed" -eq 2 ]; then echo "Verified: both Macs agree on the same config."
-    else echo "Verified: all $agreed Mac(s) agree on the same config."; fi
+    else echo "Verified: all $agreed Macs agree on the same config."; fi
     return 0
   fi
   echo "claude-sync: $behind of $others Mac(s) have not applied the current config. Run 'claude-sync pull' on each one named above." >&2
