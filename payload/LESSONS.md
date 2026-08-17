@@ -781,6 +781,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   that same Gmail thread every half hour, already holds the JSON that answers the question, and
   never asks it. Two live conversations were in that state when it was found)
 
+- **L163. When the model has no field for a fact, never express that fact by NEGATING a neighbouring
+  one, because the negated field goes on being read as its own fact everywhere else and the system
+  then confidently asserts the opposite of what happened.** Add the field, since a missing column is
+  a day's work and a corrupted one is a number nobody can tell is wrong. Distinct from L136, where
+  clearing a field was the CORRECT response to bad data and the harm came from a reader that refused,
+  and from L83, where one fact was written at two levels: here the clearing is simply false, and
+  every reader is behaving properly.
+  (overture#2868: an `Inquiry` has no "Dan answered" stamp, so linking a conversation he had already
+  answered says so by setting `replied = false`. `InquiryReporting` branches on that exact flag, so a
+  hire inquiry where somebody really wrote and he really answered is filed permanently as "Dan
+  replied, they never answered". The same shape as overture#2401, arriving by a different route)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
