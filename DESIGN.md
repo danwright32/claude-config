@@ -268,6 +268,27 @@ five months), so the case is remote, and that is exactly why silently spilling w
 answer: it would put the collisions back with nothing saying so, years after anybody remembers the
 mechanism. A full band refuses and names itself.
 
+### Carrying plugin enablement in the payload
+
+Rejected for #48, which named it as the real fix.
+
+`enabledPlugins` lives in `~/.claude/settings.json`, and this tool carries only the `hooks` block out
+of that file. Carrying the plugin block as well would mean this Mac's survey of which projects use
+which plugin lands on a Mac holding different projects: Bidspoke, trypennie, Slate and
+project-enrollment-tracker are not checked out here and were never surveyed, and at least one of them
+is a plausible Vercel user. The fix would arrive there as a regression, which is exactly what the
+issue warns about.
+
+Project-scope enablement is the half that should travel, and it already does, in each project's own
+repo. What is left per Mac is the user-scope list, so `claude-sync status` prints it: two Macs
+diverging silently with nothing able to report it is the failure worth making visible, and the
+README says plainly that this setting does not sync.
+
+The enable direction was proven before anything was turned off, because the whole plan collapses
+without it. In a real session on 2026-08-17, a directory whose project settings enable a plugin that
+is off at user scope listed that plugin's skills, and a control directory without those settings did
+not.
+
 ## Measured numbers
 
 Every threshold here is a multiple of something real, measured on the date given. None is a round

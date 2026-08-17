@@ -98,6 +98,31 @@ until somebody tries to invoke it.
 Measured against the real config on 2026-08-17, this refuses exactly four entries (two directories
 holding no `SKILL.md` and two loose markdown files) and every one of the 43 real skills passes.
 
+## Which plugins load (per Mac, and it does not sync)
+
+Plugins are enabled per project rather than everywhere. A plugin that is off at user scope is turned
+back on by `enabledPlugins` in that project's own `.claude/settings.json`, which travels with the
+project's repo. Proven in a real session on 2026-08-17, with a control: a directory whose project
+settings enable a user-scope-disabled plugin sees its skills, and a directory without those settings
+does not.
+
+`enabledPlugins` in `~/.claude/settings.json` is deliberately NOT carried between Macs, along with
+the rest of that file. Each Mac has different projects checked out, so exporting one Mac's survey
+would turn a fix here into a regression there. Set it on each Mac by hand, and read
+`claude-sync status`, which prints what this Mac has on and off so the two can be compared.
+
+## A skill provided twice
+
+`claude-sync check-skills` fails when a skill name is provided by an installed plugin AND by
+`~/.claude/skills/` or the synced payload, because both copies are then listed in every session and
+both are paid for. `status` reports the same thing without being asked, so a duplicate that arrives
+with a plugin install surfaces on its own.
+
+The plugin side is read from the install record (`~/.claude/plugins/installed_plugins.json`), so a
+plugin installed later is covered without anybody adding it to a list. A Mac where no plugin skills
+can be found is told exactly that, rather than passing: nothing to compare against is not the same
+answer as nothing wrong.
+
 ## Secret scan
 
 Every push/sync scans the payload and aborts if it finds a credential shape.
@@ -124,6 +149,11 @@ SECTION_UNTIL="conflict copies" bash tests/test-claude-sync.sh
 It runs from the start up to and including that section, because the sections build on each
 other and running one alone reports failures the code did not cause. A name matching nothing
 is an error, not a quiet pass.
+
+The suite also scans itself for assertions that could pass on output the command prints anyway: two
+greps over one captured blob, or a match on nothing but a path, in output that lists paths already.
+It prints what it found with a count and holds the numbers to a ceiling, so nothing new is added
+while the existing ones are worked through.
 
 One run at a time, and none of them open ended:
 

@@ -15,6 +15,7 @@
 #   claude-sync next-lesson       # the next free lesson number, so none is picked by eye
 #   claude-sync check-lessons     # fail if two lessons share a number
 #   claude-sync cite-scan L2      # which synced files cite that lesson number
+#   claude-sync check-skills      # fail if a plugin and the skills folder provide the same skill
 #   claude-sync install-autosync  # background: fswatch watcher + periodic receive-timer
 #   claude-sync help
 #
@@ -327,6 +328,118 @@ with_lock(){   # $@ = the command to run while holding the lock
   "$@" || rc=$?
   release_lock
   return $rc
+}
+
+# ---- which plugins load on this Mac (#48) ----
+# Every plugin used to be enabled at user scope, so all seven loaded into every session in every
+# project: roughly 7,700 tokens of Vercel, Figma and Stripe before any of it was used, plus a 53KB
+# Vercel knowledge graph injected at session start in a directory with no code in it. The fix is to
+# enable each plugin in the projects that use it.
+#
+# `enabledPlugins` lives in the part of settings.json this tool deliberately never carries (model,
+# effort and plugins stay private to each Mac). Carrying it would apply THIS Mac's project survey to
+# a Mac holding different projects, turning a fix here into a regression there. So it stays per Mac,
+# and status SAYS SO: two Macs quietly diverging with nothing able to report it is the failure worth
+# making visible (L148).
+report_user_scope_plugins(){
+  local settings on off
+  settings="$CLAUDE_HOME/settings.json"
+  [ -f "$settings" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  if ! jq -e '.enabledPlugins' "$settings" >/dev/null 2>&1; then
+    # A real state with real consequences (every installed plugin loads in every project), and the
+    # state this Mac was in. Saying nothing would report it as fine.
+    echo "--- plugins ---"
+    echo "  no plugin enablement recorded on this Mac, so every installed plugin loads in every project. This setting is per Mac and is never synced."
+    return 0
+  fi
+  on="$(jq -r '[.enabledPlugins | to_entries[] | select(.value == true) | (.key | split("@")[0])] | sort | join(", ")' "$settings" 2>/dev/null || true)"
+  off="$(jq -r '[.enabledPlugins | to_entries[] | select(.value == false) | (.key | split("@")[0])] | sort | join(", ")' "$settings" 2>/dev/null || true)"
+  echo "--- plugins (per Mac, never synced) ---"
+  echo "  enabled everywhere on this Mac: ${on:-<none>}"
+  echo "  off at user scope, so only where a project turns them on: ${off:-<none>}"
+  return 0
+}
+
+# ---- a skill provided twice (#49) ----
+# Nine Cloudflare skills existed as byte identical copies in ~/.claude/skills/ AND inside the
+# cloudflare plugin, so each was listed twice in every session and both were paid for. Nothing
+# detected it; it was found by hand while auditing. Installing any plugin can shadow a skill of the
+# same name, either a local one or one that syncs between the Macs, and neither copy says anything
+# about the other.
+#
+# Derived from the plugin install record rather than from a list kept beside it, so a plugin
+# installed later is covered without anybody remembering to add it (L96).
+plugin_skill_names(){   # prints "skill<TAB>plugin"
+  local reg paths ip name plug
+  reg="$CLAUDE_HOME/plugins/installed_plugins.json"
+  [ -f "$reg" ] || return 0
+  if command -v jq >/dev/null 2>&1; then
+    paths="$(jq -r '.plugins // {} | to_entries[] | .key as $k | .value[]? | select(.installPath) | "\(.installPath)\t\($k)"' "$reg" 2>/dev/null || true)"
+  else
+    # No jq: read the install paths out of the file directly rather than answering "none", which
+    # would read exactly like a machine with no duplicates at all (L98).
+    paths="$(grep -oE '"installPath"[[:space:]]*:[[:space:]]*"[^"]+"' "$reg" 2>/dev/null | sed 's/.*: *"//; s/"$//; s/$/\t<unknown plugin>/' || true)"
+  fi
+  while IFS="$(printf '\t')" read -r ip plug; do
+    [ -n "${ip:-}" ] || continue
+    [ -d "$ip/skills" ] || continue
+    for name in "$ip/skills"/*; do
+      [ -d "$name" ] || continue
+      printf '%s\t%s\n' "${name##*/}" "${plug%%@*}"
+    done
+  done <<PLUGINPATHS
+$paths
+PLUGINPATHS
+  return 0
+}
+
+# Every skill a plugin provides that ALSO exists locally or in the payload, as
+# "skill<TAB>plugin<TAB>where". One definition, used by the check and by status.
+duplicate_plugin_skills(){
+  local name plug where
+  while IFS="$(printf '\t')" read -r name plug; do
+    [ -n "${name:-}" ] || continue
+    where=""
+    [ -d "$CLAUDE_HOME/skills/$name" ] && where="the skills folder on this Mac"
+    if [ -d "$PAYLOAD/skills/$name" ]; then
+      if [ -n "$where" ]; then where="$where and the synced payload"; else where="the synced payload"; fi
+    fi
+    [ -n "$where" ] || continue
+    printf '%s\t%s\t%s\n' "$name" "$plug" "$where"
+  done < <(plugin_skill_names)
+  return 0
+}
+
+# Returns 0 when it found something to report, 1 when there was nothing, so a caller can tell the
+# two apart without re-deriving the answer.
+report_duplicate_plugin_skills(){
+  local name plug where found=""
+  while IFS="$(printf '\t')" read -r name plug where; do
+    [ -n "${name:-}" ] || continue
+    found+="  $name: provided by the $plug plugin AND by $where, so it is listed twice in every session"$'\n'
+  done < <(duplicate_plugin_skills)
+  [ -z "$found" ] && return 1
+  echo "--- skills provided twice (#49) ---"
+  printf '%s' "$found"
+  echo "  Delete the copy under skills/ and keep the plugin as the single source, or uninstall the plugin."
+  return 0
+}
+
+do_check_skills(){
+  local n
+  n="$(plugin_skill_names | grep -c . || true)"
+  if [ "${n:-0}" -eq 0 ]; then
+    # Zero plugin skills read is NOT the same answer as no duplicates found. Reported as a pass, a
+    # Mac that cannot see its plugins would be indistinguishable from a clean one (L98).
+    echo "no plugin skills were found under $CLAUDE_HOME/plugins, so there is nothing to compare the local skills against. That is an answer about this Mac, not a clean bill of health."
+    return 0
+  fi
+  if report_duplicate_plugin_skills; then
+    die "a skill is provided twice (named above). Each duplicate is listed twice in every session and paid for twice."
+  fi
+  echo "no skill is provided twice ($n plugin skills read, none of them also under skills/ or in the payload)"
+  return 0
 }
 
 # ---- skills entries that cannot load (#50) ----
@@ -2233,6 +2346,8 @@ do_status(){
     [ -f "$CLAUDE_HOME/$f" ] || continue
     cmp -s "$CLAUDE_HOME/$f" "$PAYLOAD/$f" 2>/dev/null || echo "$f: differs"
   done
+  report_user_scope_plugins
+  report_duplicate_plugin_skills || true
   report_conflict_copies
   report_outage_tally
   report_stray_processes
@@ -2631,12 +2746,13 @@ case "$cmd" in
   install-autosync) do_install_autosync ;;
   next-lesson) lesson_band_locked; next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND" ;;
   cite-scan) do_cite_scan "${2:-}" ;;   # read-only: which synced files cite a lesson number
+  check-skills) do_check_skills ;;      # read-only: is any skill provided by a plugin AND locally
   check-lessons)
     dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
     if [ -n "${dups// }" ]; then die "duplicate lesson numbers: $(printf '%s' "$dups" | tr '\n' ';' | sed 's/;$//')"; fi
     lesson_band_locked
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
-  help|-h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, cite-scan, install-autosync, help)" ;;
+  help|-h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, cite-scan, check-skills, install-autosync, help)" ;;
 esac

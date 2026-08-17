@@ -3524,6 +3524,187 @@ check "#50 a directory with no SKILL.md is not applied" "[ ! -e '$BSD/skills/hum
 check "#50 a bare file in the payload is not applied"   "[ ! -e '$BSD/skills/stop-slop.md' ]"
 check "#50 the pull names what it refused, and why"     "printf '%s' \"\$out_bspull\" | grep -qE 'humanizer.*SKILL\.md'"
 
+section "== a skill provided by both a plugin and the local folder is caught (#49) =="
+# Nine Cloudflare skills existed as byte identical copies in ~/.claude/skills/ AND inside the
+# cloudflare plugin, so each was listed twice in every session and both copies were paid for.
+# Nothing detected it: it was found by hand while auditing, and nothing would have caught the next
+# one, which matters because installing any plugin can silently shadow a local skill of the same
+# name (#49).
+DSH="$WORK/dupskill-home"; DSR="$WORK/dupskill-repo"
+mkdir -p "$DSH/skills/wrangler" "$DSH/skills/mine" "$DSR/payload"
+echo '{"hooks":{}}' > "$DSH/settings.json"; printf '# rules\n' > "$DSH/CLAUDE.md"
+mkskill "$DSH/skills/wrangler/SKILL.md" 'a local copy of a skill the plugin also provides'
+mkskill "$DSH/skills/mine/SKILL.md" 'a skill only this Mac has'
+# A plugin laid out the way the real ones are: installed_plugins.json names an install path, and
+# the skills sit under it. Derived from the install record rather than from a list kept by hand,
+# or the check only covers the plugins somebody remembered (L96).
+DSP="$DSH/plugins/cache/cloudflare/cloudflare/1.0.0"
+mkdir -p "$DSP/skills/wrangler" "$DSP/skills/durable-objects" "$DSH/plugins"
+mkskill "$DSP/skills/wrangler/SKILL.md" 'the plugin version'
+mkskill "$DSP/skills/durable-objects/SKILL.md" 'a plugin skill with no local twin'
+cat > "$DSH/plugins/installed_plugins.json" <<PLUGJSON
+{"version":2,"plugins":{"cloudflare@cloudflare":[{"scope":"user","installPath":"$DSP","version":"1.0.0"}]}}
+PLUGJSON
+ds_rc=0
+out_ds="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1)" || ds_rc=$?
+dbg "check-skills: $out_ds"
+check "#49 a name held by both a plugin and the skills folder fails the check" "[ \"\$ds_rc\" -ne 0 ]"
+# One line carrying the skill AND the plugin providing it, or the report names a duplicate without
+# saying which of the seven plugins to look in (L172).
+check "#49 and names the skill and the plugin together" \
+  "printf '%s' \"\$out_ds\" | grep -qE 'wrangler.*cloudflare'"
+check "#49 a skill only this Mac has is not reported"     "! printf '%s' \"\$out_ds\" | grep -q 'mine'"
+check "#49 a plugin skill with no local twin is not reported" "! printf '%s' \"\$out_ds\" | grep -q 'durable-objects'"
+# The payload half: a plugin installed later can shadow a skill that syncs between the Macs, and
+# that copy is on the other Mac too.
+mkdir -p "$DSR/payload/skills/durable-objects"
+mkskill "$DSR/payload/skills/durable-objects/SKILL.md" 'a synced skill a plugin now also provides'
+out_ds2="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1 || true)"
+check "#49 a synced skill shadowed by a plugin is caught too" \
+  "printf '%s' \"\$out_ds2\" | grep -qE 'durable-objects.*cloudflare'"
+# Nothing to report must be a PASS that says so, not a silent zero: a check that prints nothing
+# when it found nothing reads exactly like one that could not look (L98).
+rm -rf "$DSH/skills/wrangler" "$DSR/payload/skills/durable-objects"
+ds_ok_rc=0
+out_dsok="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1)" || ds_ok_rc=$?
+check "#49 a clean config passes"                  "[ \"\$ds_ok_rc\" -eq 0 ]"
+check "#49 and says how many plugin skills it read" "printf '%s' \"\$out_dsok\" | grep -qE '2 (plugin )?skill'"
+# A Mac with no plugins at all cannot answer this question, and must say so rather than passing:
+# zero plugin skills read is not the same as no duplicates found.
+DSN="$WORK/dupskill-none"; mkdir -p "$DSN/skills"; echo '{"hooks":{}}' > "$DSN/settings.json"
+out_dsnone="$(CLAUDE_HOME="$DSN" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1 || true)"
+check "#49 no plugins at all is reported as nothing to compare against" \
+  "printf '%s' \"\$out_dsnone\" | grep -qiE 'no plugin|nothing to compare'"
+# And the standing report, so a duplicate that arrives with a plugin install surfaces without
+# anybody thinking to run the check (L148).
+mkdir -p "$DSH/skills/wrangler"; mkskill "$DSH/skills/wrangler/SKILL.md" 'back again'
+out_dsstatus="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#49 status reports a duplicate without being asked" \
+  "printf '%s' \"\$out_dsstatus\" | grep -qE 'wrangler.*cloudflare'"
+
+section "== assertions that could pass on output the command prints anyway (#55) =="
+# Many checks capture a command's whole output and grep that blob for a phrase. claude-sync's own
+# change report already names every file it applied, so an assertion looking for a filename finds
+# it whether or not the behaviour under test works. A check written as two greps over the same blob
+# is worse: each half can be satisfied by a different, unrelated line, and the conjunction reads as
+# stricter than either (L135, L172).
+#
+# Seen live on 2026-08-17 while writing #43: both new assertions passed against completely
+# unmodified code, because the pull's change report supplied the two paths and a pre-existing
+# warning supplied the wording. They were caught only because the fix was expected to be needed and
+# the green looked wrong.
+#
+# Derived from the suite itself, and REPORT ONLY against a ceiling: there are existing instances and
+# some of them are legitimate (a filename really is the whole point of "the error names the missing
+# file"). The ceiling is a ratchet, so nothing new is added while the existing ones are worked
+# through, and it is a measurement rather than a guess.
+WEAK_AWK="$WORK/weak-assertions.awk"
+cat > "$WEAK_AWK" <<'WEAKAWK'
+# One logical check per line, continuations joined.
+{
+  line = $0
+  while (sub(/\\$/, "", line) > 0) { if ((getline nxt) <= 0) break; sub(/^[[:space:]]+/, " ", nxt); line = line nxt }
+  if (line !~ /^check "/) next
+  total++
+  name = line; sub(/^check "/, "", name); sub(/".*/, "", name)
+
+  # A: the same captured output grepped twice in one expression.
+  rest = line; delete seen
+  while (match(rest, /\$[A-Za-z_][A-Za-z0-9_]*\\?"[[:space:]]*\|[[:space:]]*grep/)) {
+    v = substr(rest, RSTART, RLENGTH); sub(/\\?"[[:space:]]*\|[[:space:]]*grep$/, "", v)
+    seen[v]++
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  for (v in seen) if (seen[v] > 1) { ntwice++; print "twice\t" name "\t" v; break }
+
+  # B: a POSITIVE assertion whose whole pattern is a path or a filename, matched against captured
+  # output that lists paths anyway. A negated one is out of scope: there an over-broad pattern makes
+  # the assertion stricter, not weaker.
+  n = split(line, seg, /&&/)
+  for (i = 1; i <= n; i++) {
+    s = seg[i]
+    if (s !~ /printf/ || s !~ /grep/) continue
+    if (s ~ /![[:space:]]*printf/) continue
+    if (match(s, /grep -[a-zA-Z]*q[a-zA-Z]*[[:space:]]+'[^']+'/) == 0) continue
+    p = substr(s, RSTART, RLENGTH); sub(/^grep[^\047]*\047/, "", p); sub(/\047$/, "", p)
+    if (p ~ /^[A-Za-z0-9_.\/\\-]+$/ && (p ~ /\// || p ~ /\.(sh|md|py|json|txt|js)$/)) {
+      nbare++; print "bare\t" name "\t" p
+      break
+    }
+  }
+}
+END { printf "totals\t%d\t%d\t%d\n", total, ntwice+0, nbare+0 }
+WEAKAWK
+# Proven on a file built to contain one of each, because a scanner run only over the real suite
+# reports a number nobody can check, and a number is indistinguishable from a scanner that matched
+# nothing at all (L1, L98).
+WEAKFIX="$WORK/weak-fixture.sh"
+# Written with printf rather than as a heredoc of literal lines, so these four do not begin a line
+# in THIS file: the scanner reads the suite as text, and a fixture written the obvious way is
+# counted as four more weak assertions in the very suite it is measuring.
+: > "$WEAKFIX"
+printf 'check "two greps over one blob"  "printf %s \\"$out_x\\" | grep -q %salpha%s && printf %s \\"$out_x\\" | grep -q %sbeta%s"\n' "'%s'" "'" "'" "'%s'" "'" "'" >> "$WEAKFIX"
+printf 'check "a bare path in the output"  "printf %s \\"$out_y\\" | grep -q %shooks/thing.sh%s"\n' "'%s'" "'" "'" >> "$WEAKFIX"
+printf 'check "a negated bare path is fine"  "! printf %s \\"$out_z\\" | grep -q %shooks/thing.sh%s"\n' "'%s'" "'" "'" >> "$WEAKFIX"
+printf 'check "one line carrying both"  "printf %s \\"$out_w\\" | grep -q %shooks/thing.sh also mentions L2%s"\n' "'%s'" "'" "'" >> "$WEAKFIX"
+weak_fix="$(awk -f "$WEAK_AWK" "$WEAKFIX")"
+dbg "weak scanner on the fixture: $weak_fix"
+check "#55 the scanner reads every check in a file" \
+  "[ \"\$(printf '%s' \"\$weak_fix\" | awk -F'\t' '\$1==\"totals\"{print \$2}')\" = '4' ]"
+check "#55 it flags two greps over one captured output" \
+  "printf '%s' \"\$weak_fix\" | grep -q 'twice.*two greps over one blob'"
+check "#55 it flags a bare path matched in captured output" \
+  "printf '%s' \"\$weak_fix\" | grep -q 'bare.*a bare path in the output'"
+check "#55 a negated bare path is not flagged" \
+  "! printf '%s' \"\$weak_fix\" | grep -q 'a negated bare path is fine'"
+check "#55 an assertion carrying the path and the wording together is not flagged" \
+  "! printf '%s' \"\$weak_fix\" | grep -q 'one line carrying both'"
+# Now the real suite. The ceilings were measured on 2026-08-17 (581 checks, 6 and 22). They are a
+# ratchet: a change that adds one of these fails, while the existing ones are worked through and the
+# numbers come down. Raising either is a decision somebody has to write down here.
+weak_real="$(awk -f "$WEAK_AWK" "$SCRIPT_SELF")"
+weak_total="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $2}')"
+weak_twice="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $3}')"
+weak_bare="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $4}')"
+echo "  (#55 weak assertions in this suite: $weak_twice grep the same output twice, $weak_bare match only a path, out of $weak_total checks)"
+printf '%s\n' "$weak_real" | grep -E '^(twice|bare)' | sed 's/^/    /'
+check "#55 the scan really read this suite" "[ \"\${weak_total:-0}\" -ge 500 ]"
+check "#55 no new check greps one captured output twice" "[ \"\${weak_twice:-999}\" -le 6 ]"
+check "#55 no new check matches only a bare path" "[ \"\${weak_bare:-999}\" -le 22 ]"
+
+section "== which plugins load is a per Mac setting, so status says what this Mac has (#48) =="
+# Every plugin was enabled at user scope, so all seven loaded into every session in every project:
+# roughly 7,700 tokens of Vercel, Figma and Stripe before any of it was used, plus a 53KB Vercel
+# knowledge graph injected at session start in a directory with no code in it.
+#
+# The fix is per project enablement, and `enabledPlugins` lives in the part of settings.json that
+# deliberately never syncs (model, effort and plugins stay private to each Mac). Carrying it would
+# apply THIS Mac's project survey to a Mac holding different projects, which is the regression the
+# issue warns about. So it stays per Mac and status SAYS SO, because two Macs quietly diverging with
+# nothing able to report it is the failure mode that has to be visible (L148).
+PGH="$WORK/plugins-home"; PGR="$WORK/plugins-repo"
+mkdir -p "$PGH/skills" "$PGR/payload"
+printf '# rules\n' > "$PGH/CLAUDE.md"
+cat > "$PGH/settings.json" <<'PLUGSET'
+{"hooks":{},"enabledPlugins":{"superpowers@superpowers-dev":true,"vercel-plugin@vercel-vercel-plugin":false,"cloudflare@cloudflare":true}}
+PLUGSET
+out_pg="$(CLAUDE_HOME="$PGH" SYNC_REPO="$PGR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "status with plugin settings: $out_pg"
+check "#48 status names the plugins that load on this Mac" \
+  "printf '%s' \"\$out_pg\" | grep -qE 'enabled.*(superpowers|cloudflare)'"
+check "#48 and the ones that do not" \
+  "printf '%s' \"\$out_pg\" | grep -qE 'off.*vercel-plugin|vercel-plugin.*off'"
+check "#48 and says plainly that this is per Mac" \
+  "printf '%s' \"\$out_pg\" | grep -qiE 'per Mac|this Mac only|never synced'"
+# No setting at all is a real state with real consequences (every installed plugin loads
+# everywhere), and it is the state this Mac was in. Saying nothing would report it as fine.
+cat > "$PGH/settings.json" <<'PLUGSET2'
+{"hooks":{}}
+PLUGSET2
+out_pg2="$(CLAUDE_HOME="$PGH" SYNC_REPO="$PGR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#48 a Mac with no plugin settings is told what that means" \
+  "printf '%s' \"\$out_pg2\" | grep -qiE 'no plugin (enablement|settings)'"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
