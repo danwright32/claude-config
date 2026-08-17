@@ -14,12 +14,16 @@
 #   claude-sync status            # show what differs, no changes
 #   claude-sync next-lesson       # the next free lesson number, so none is picked by eye
 #   claude-sync check-lessons     # fail if two lessons share a number
+#   claude-sync cite-scan L2      # which synced files cite that lesson number
 #   claude-sync install-autosync  # background: fswatch watcher + periodic receive-timer
 #   claude-sync help
 #
 # Env overrides (mainly for tests): CLAUDE_HOME, SYNC_REPO, SYNC_NO_GIT=1,
 #   SYNC_INTERVAL, SYNC_FSWATCH, SYNC_SKIP_SECRET_SCAN, SYNC_NO_NOTIFY,
-#   SYNC_SKIP_LESSON_CHECK=1 (publish a rule file despite a duplicate number)
+#   SYNC_SKIP_LESSON_CHECK=1 (publish a rule file despite a duplicate number),
+#   SYNC_NO_CITATION_PREFILTER=1 (scan every synced file for a lesson citation
+#   instead of grepping for candidates first: the pre-#53 path, kept so the two
+#   can be compared)
 set -euo pipefail
 
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
@@ -1049,21 +1053,95 @@ rewrite_local_mentions(){   # $1 = merged file, rewritten in place  $2 = arrivin
 #
 # Binary files are skipped with grep -I: an image under skills/ is not a citation, and byte
 # soup run through the matcher below produces counts nobody can act on.
-scannable_synced_files(){
-  local f d
+#
+# The candidates are found by ONE grep over the tree rather than by testing each file in turn.
+# The per-file walk cost 8.4 seconds per renumbered lesson against the real config (800 files, 747
+# of them under skills/, roughly 2,400 processes), and the watcher runs this in the background on
+# every config edit, so a three-lesson renumber stalled it for about 25 seconds. The same answer
+# takes 0.022 seconds in one pass (#53).
+#
+# The pre-filter is deliberately a SUPERSET of what counts as a citation: it matches the raw text,
+# while stale_number_mentions strips each entry's own heading number before counting, so a file
+# whose only occurrence is its own `- **L2.` heading is a candidate here and is correctly counted
+# as zero afterwards. The count stays the single definition; this only decides which files it is
+# worth running.
+#
+# SYNC_NO_CITATION_PREFILTER=1 keeps the old whole-tree walk reachable, so the two can be compared
+# on one fixture rather than the fast path becoming a second definition of a citation (L107).
+citation_candidates(){   # $1 = number, e.g. L2
+  local num="$1" f g d
+  local -a roots=()
   for f in "$CLAUDE_HOME"/*.md; do
     [ -f "$f" ] || continue
-    printf '%s\n' "${f#"$CLAUDE_HOME"/}"
+    roots+=("$f")
   done
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      grep -Iq . "$f" 2>/dev/null || continue
-      printf '%s\n' "${f#"$CLAUDE_HOME"/}"
-    done < <(find "$CLAUDE_HOME/$d" -type f 2>/dev/null)
+    roots+=("$CLAUDE_HOME/$d")
   done
+  [ "${#roots[@]}" -gt 0 ] || return 0
+  if [ "${SYNC_NO_CITATION_PREFILTER:-0}" = "1" ]; then
+    for f in "${roots[@]}"; do
+      if [ -d "$f" ]; then
+        while IFS= read -r g; do
+          [ -n "$g" ] || continue
+          grep -Iq . "$g" 2>/dev/null || continue
+          printf '%s\n' "${g#"$CLAUDE_HOME"/}"
+        done < <(find "$f" -type f 2>/dev/null)
+      else
+        printf '%s\n' "${f#"$CLAUDE_HOME"/}"
+      fi
+    done
+    return 0
+  fi
+  # -I skips binary files, which the per-file walk did with its own grep. -l stops at the first
+  # match per file, and a symlink is skipped so that both paths answer with the same set: the walk
+  # used `find -type f`, which never yielded one.
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    [ -L "$g" ] && continue
+    printf '%s\n' "${g#"$CLAUDE_HOME"/}"
+  done < <(grep -rIlE "(^|[^A-Za-z0-9])${num}([^0-9]|\$)" "${roots[@]}" 2>/dev/null || true)
+  return 0
 }
+
+# The synced files that CITE a number, as "path<TAB>count" lines, paths relative to CLAUDE_HOME.
+# Candidate paths arrive on stdin. One definition, used by the renumber report and by `cite-scan`.
+count_citations_in(){   # $1 = number, e.g. L2; candidate paths on stdin
+  local num="$1" f stale
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -f "$PAYLOAD/$f" ] || continue   # only synced files are in scope
+    stale="$(stale_number_mentions "$CLAUDE_HOME/$f" "$num")"
+    [ "${stale:-0}" -gt 0 ] 2>/dev/null || continue
+    printf '%s\t%s\n' "$f" "$stale"
+  done
+  return 0
+}
+
+citing_synced_files(){   # $1 = number, e.g. L2
+  citation_candidates "$1" | count_citations_in "$1"
+}
+
+# `claude-sync cite-scan L2` answers, on demand, the question the renumber report answers as a side
+# effect: which synced files cite this lesson number. It also says how many files it had to open to
+# find out, because that is the quantity #53 is about and a scan that quietly went back to opening
+# all 800 would otherwise look identical.
+do_cite_scan(){   # $1 = number
+  local num="${1:-}" cands n
+  case "$num" in
+    L[0-9]*) : ;;
+    *) die "cite-scan needs a lesson number, e.g. cite-scan L2 (got '${num:-<nothing>}')" ;;
+  esac
+  cands="$(scratch_file)"
+  citation_candidates "$num" > "$cands"
+  n="$(grep -c . "$cands" 2>/dev/null || true)"
+  echo "claude-sync: cite-scan: examined ${n:-0} candidate file(s) for $num" >&2
+  count_citations_in "$num" < "$cands"
+  rm -f "$cands"
+  return 0
+}
+
 
 settle_renumber_mentions(){   # $1 = merged file (tmp)  $2 = arriving file  $3 = display name; report lines on stdin
   local renline oldnum newnum rewritten othern stale
@@ -1076,16 +1154,12 @@ settle_renumber_mentions(){   # $1 = merged file (tmp)  $2 = arriving file  $3 =
       echo "claude-sync: $3: rewrote $rewritten body mention(s) of $oldnum to $newnum on lines this Mac wrote, which could only have meant the renumbered lesson; mentions on published lines keep $oldnum, which now names the other Mac's entry." >&2
       notify "$3: rewrote mentions of $oldnum to $newnum"
     fi
-    while IFS= read -r othern; do
+    while IFS="$(printf '\t')" read -r othern stale; do
       [ -n "$othern" ] || continue
       [ "$othern" = "$3" ] && continue
-      [ -f "$PAYLOAD/$othern" ] || continue   # only synced files are in scope
-      stale="$(stale_number_mentions "$CLAUDE_HOME/$othern" "$oldnum")"
-      if [ "${stale:-0}" -gt 0 ] 2>/dev/null; then
-        echo "claude-sync: $othern also mentions $oldnum on $stale line(s). $oldnum now names the other Mac's entry, so check whether each mention meant the renumbered lesson (now $newnum); nothing was rewritten there." >&2
-        notify "$othern: check mentions of $oldnum after the renumber"
-      fi
-    done < <(scannable_synced_files)
+      echo "claude-sync: $othern also mentions $oldnum on $stale line(s). $oldnum now names the other Mac's entry, so check whether each mention meant the renumbered lesson (now $newnum); nothing was rewritten there." >&2
+      notify "$othern: check mentions of $oldnum after the renumber"
+    done < <(citing_synced_files "$oldnum")
   done
   return 0
 }
@@ -2251,11 +2325,12 @@ case "$cmd" in
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
   next-lesson) next_lesson_number "$CLAUDE_HOME" ;;
+  cite-scan) do_cite_scan "${2:-}" ;;   # read-only: which synced files cite a lesson number
   check-lessons)
     dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
     if [ -n "${dups// }" ]; then die "duplicate lesson numbers: $(printf '%s' "$dups" | tr '\n' ';' | sed 's/;$//')"; fi
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME"))"
     ;;
-  help|-h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, install-autosync, help)" ;;
+  help|-h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, cite-scan, install-autosync, help)" ;;
 esac

@@ -33,6 +33,7 @@ turnstile-spin, web-perf, workers-best-practices, wrangler, plannotator-compound
 ./claude-sync pull              # bring shared config down
 ./claude-sync sync              # two-way: send local, then receive remote
 ./claude-sync status            # show differences, no changes
+./claude-sync cite-scan L2      # which synced files cite that lesson number
 ./claude-sync reap-scratch      # reclaim scratch a killed run left behind
 ./claude-sync install-autosync  # background auto-sync (see below)
 ```

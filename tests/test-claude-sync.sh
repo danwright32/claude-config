@@ -3218,6 +3218,72 @@ _spawn_first="$(grep -nF "$_spawn_pat" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
 check "#37 the flag is un-exported before anything spawns a run" \
   "[ -n \"\$_expn_line\" ] && [ -n \"\$_spawn_first\" ] && [ \"\$_expn_line\" -lt \"\$_spawn_first\" ]"
 
+section "== a renumber's citation scan opens only the files that match (#53) =="
+# The scan walked every synced file and ran a text test plus a matcher on each of them, once per
+# renumbered lesson: 800 files (747 under skills/) at 8.4 seconds per lesson on the real config,
+# roughly 2,400 processes, run in the background on every config edit. One grep answers the same
+# question in 0.022 seconds.
+#
+# Asserted as the quantity being protected, how many files the scan OPENS, rather than as elapsed
+# time (L63): a wall-clock threshold on a shared runner is noise, and a number that moved cannot
+# say why. SYNC_NO_CITATION_PREFILTER=1 keeps the old whole-tree walk reachable, so both paths are
+# run over one fixture and compared. Without that the fast path becomes a second definition of what
+# counts as a citation, and the two would drift in the direction that flatters the optimisation
+# (L107).
+CSH="$WORK/citehome"; CSR="$WORK/citerepo"
+mkdir -p "$CSH/hooks" "$CSH/skills/demo" "$CSH/skills/quiet" "$CSH/skills/bulk" \
+         "$CSR/payload/hooks" "$CSR/payload/skills/demo" "$CSR/payload/skills/quiet"
+printf '# rules\n@LESSONS.md\nsee L2 for the rule\n' > "$CSH/CLAUDE.md"
+# A heading and nothing else. Each entry's own number is stripped before the count, so this file
+# does not CITE L2 and neither path may name it: it is the case where the one-pass grep matches and
+# the count that follows must still say no.
+printf '# Lessons\n\n- **L2. two.** body carrying no citation\n' > "$CSH/LESSONS.md"
+printf 'see L2 for the rule\n' > "$CSH/hooks/x.sh"
+printf -- '---\nname: demo\n---\nsee L2 for the rule\n' > "$CSH/skills/demo/SKILL.md"
+printf -- '---\nname: quiet\n---\nno citation here\n' > "$CSH/skills/quiet/SKILL.md"
+# Byte soup run through the matcher produces counts nobody can act on, so a binary file is out of
+# scope however many times its bytes happen to spell the number.
+printf 'L2 \000\001\002 L2\n' > "$CSH/skills/quiet/logo.png"
+# Cites the number and is NOT in the payload, so it is not this tool's to report on.
+printf 'see L2 for the rule\n' > "$CSH/hooks/unsynced.sh"
+# The bulk of a real config is skills/, and it is what made the old walk expensive. These exist
+# only in the home: the payload test happens after the candidates are gathered, so what they prove
+# is that the scan does not open a file it has no reason to.
+for _i in $(seq 1 400); do printf 'nothing to see here\n' > "$CSH/skills/bulk/f$_i.md"; done
+for _p in CLAUDE.md LESSONS.md hooks/x.sh skills/demo/SKILL.md skills/quiet/SKILL.md skills/quiet/logo.png; do
+  cp "$CSH/$_p" "$CSR/payload/$_p"
+done
+cs_fast="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CSH" SYNC_REPO="$CSR" bash "$SCRIPT" cite-scan L2 2>"$WORK/cite-fast.err")"
+cs_fast_err="$(cat "$WORK/cite-fast.err")"
+cs_slow="$(SYNC_NO_CITATION_PREFILTER=1 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CSH" SYNC_REPO="$CSR" bash "$SCRIPT" cite-scan L2 2>"$WORK/cite-slow.err")"
+cs_slow_err="$(cat "$WORK/cite-slow.err")"
+dbg "cite-scan fast: $cs_fast_err / $(printf '%s' "$cs_fast" | tr '\n' ';')"
+dbg "cite-scan slow: $cs_slow_err / $(printf '%s' "$cs_slow" | tr '\n' ';')"
+check "#53 the scan finds the citing files" \
+  "[ \"\$(printf '%s\n' \"\$cs_fast\" | sort | tr '\n' ' ')\" = 'CLAUDE.md	1 hooks/x.sh	1 skills/demo/SKILL.md	1 ' ]"
+check "#53 both paths report exactly the same files" \
+  "[ \"\$(printf '%s' \"\$cs_fast\" | sort)\" = \"\$(printf '%s' \"\$cs_slow\" | sort)\" ]"
+# The point of the change, stated as a number rather than as a feeling: five files opened out of a
+# tree of over four hundred. Five and not three, because the one-pass grep matches raw text: the
+# file whose only occurrence is its own heading and the one that is not synced are both candidates,
+# and the count that follows is what says no to them. The old path is still there behind the seam
+# and still opens all four hundred, which is what makes this assertion mean something.
+check "#53 only the files that could match are opened" \
+  "printf '%s' \"\$cs_fast_err\" | grep -qE 'examined 5 (candidate )?file'"
+check "#53 the slow path opens the whole tree, so the comparison is real" \
+  "[ \"\$(printf '%s' \"\$cs_slow_err\" | sed -nE 's/.*examined ([0-9]+).*/\1/p')\" -gt 400 ]"
+check "#53 a binary file is never scanned"       "! printf '%s' \"\$cs_fast\" | grep -q 'logo.png'"
+check "#53 a file that is not synced is out of scope" "! printf '%s' \"\$cs_fast\" | grep -q 'unsynced.sh'"
+check "#53 a heading is not a citation of itself" "! printf '%s' \"\$cs_fast\" | grep -q 'LESSONS.md'"
+check "#53 a synced file with no mention is not named" "! printf '%s' \"\$cs_fast\" | grep -q 'quiet/SKILL.md'"
+# Report only, in both directions: the scan is a diagnostic and must never edit what it reads.
+check "#53 the scan rewrites nothing"            "grep -q 'see L2 for the rule' '$CSH/hooks/x.sh' && grep -q 'see L2 for the rule' '$CSH/CLAUDE.md'"
+# A number it cannot parse is refused, not scanned for: `cite-scan hooks` would otherwise grep the
+# whole tree for the word and report every file that mentions hooks as a citation.
+cs_bad_rc=0
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CSH" SYNC_REPO="$CSR" bash "$SCRIPT" cite-scan hooks >/dev/null 2>&1 || cs_bad_rc=$?
+check "#53 something that is not a lesson number is refused" "[ \"\$cs_bad_rc\" -ne 0 ]"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
