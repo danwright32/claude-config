@@ -224,6 +224,20 @@ trap suite_cleanup EXIT
 # A run killed by the deadline above cannot release its lock, and deliberately nothing tries to do
 # it on the run's behalf: the next run finds a recorded process that is gone and takes over saying
 # so, which is the same recovery a crash needs and is therefore the path worth having work.
+# Both removals below are `rm -rf` on a path that arrives from the environment, so a typo naming
+# somewhere real would delete it. Refused up front rather than relied on being caught by one of the
+# ownership rules further down, which is where it happens to land today (L5, L9).
+case "${SUITE_LOCK%/}" in
+  ''|/|"${HOME%/}"|"${TMPDIR%/}")
+    echo "test suite: SUITE_LOCK='$SUITE_LOCK' names a real directory rather than a lock of its own. Refusing, because taking over a stale lock removes the directory it is in." >&2
+    exit 5 ;;
+esac
+# A directory holding no pid file was not written by this tool, whatever else it is, so it is never
+# cleared. The two rules are separate on purpose: the one above catches a path that is obviously
+# somewhere else, and this one catches everything else it could possibly be.
+suite_lock_is_ours(){
+  [ -f "$SUITE_LOCK/pid" ] || [ -z "$(ls -A "$SUITE_LOCK" 2>/dev/null)" ]
+}
 if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
   # mkdir is the atomic step that decides who wins, never the reading that judged the previous
   # owner dead: two runs can reach that judgement together and act on a lock a third has since
@@ -267,6 +281,10 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
       # 30 minutes against a full run measured at 123 seconds, so roughly 15x the real thing. It is
       # the one threshold where being wrong LOW starts a second run on top of a live one.
       echo "test suite: took over a lock from $_lk_host that is ${_lk_age}s old, older than any run can be." >&2
+    fi
+    if ! suite_lock_is_ours; then
+      echo "test suite: $SUITE_LOCK exists but holds no record of a run, so it was not written by this tool. Refusing to remove it. Point SUITE_LOCK somewhere else, or clear that directory yourself if it really is a leftover lock." >&2
+      exit 5
     fi
     rm -rf "$SUITE_LOCK"
   done
@@ -2590,6 +2608,23 @@ check "#32 a nested run does not fight its parent for the lock" "[ '$_nested_rc'
 
 # A run that finishes must not leave the lock standing, or the next one refuses for ever.
 check "#32 a finished run releases its lock" "[ ! -d '$_lockdir/dead' ] || [ ! -f '$_lockdir/dead/pid' ]"
+
+# Breaking a stale lock is `rm -rf` on a path that comes from the environment, so a typo naming a
+# real directory would delete it. A directory with no pid file in it is not a lock this tool wrote,
+# whatever it is, and must be refused rather than cleared (L5, L9). It happens to be refused today
+# for an unrelated reason (no recorded host, so it reads as a fresh lock from another machine),
+# which is safe by accident, and safe by accident stops being true the moment the neighbouring
+# rules change.
+_notlock="$_lockdir/precious"; mkdir -p "$_notlock"
+echo 'do not delete me' > "$_notlock/important.txt"
+printf '%s\n' "$_thishost" > "$_notlock/host"     # would otherwise be judged ours, owner gone
+_np="$(_try_lock "$_notlock")"; _np_rc=$?
+check "#32 a directory that is not a lock is refused" "[ '$_np_rc' -ne 0 ]"
+check "#32 and it is not deleted"                    "[ -f '$_notlock/important.txt' ]"
+# A path naming somewhere real is refused before anything reads or removes it.
+_hp="$(_try_lock "$HOME")"; _hp_rc=$?
+check "#32 a lock path naming a real home directory is refused" "[ '$_hp_rc' -ne 0 ]"
+check "#32 and that home directory still exists"                "[ -d '$HOME' ]"
 
 section "== status notices processes the tool left running (#33) =="
 # Seventeen suite processes were running and spawning each other on 2026-08-17, found only because
