@@ -1769,6 +1769,76 @@ do_status(){
   done
   report_conflict_copies
   report_outage_tally
+  report_stray_processes
+}
+
+# The process table, behind one seam so a test never reads or reports what happens to be running
+# on the real machine (L2). SYNC_PS_FIXTURE holds the same four fields in the same order.
+sync_process_list(){
+  if [ -n "${SYNC_PS_FIXTURE:-}" ]; then cat "$SYNC_PS_FIXTURE" 2>/dev/null || true
+  else ps -eo pid=,ppid=,etime=,command= 2>/dev/null || true
+  fi
+}
+
+# Processes this tool left behind (#33). Nothing watched for these: seventeen suite processes were
+# running and spawning each other on 2026-08-17, found only because Dan asked an unrelated
+# question, having silently doubled every run time for the session beforehand.
+#
+# It counts ROOTS and DEPTH rather than how many processes match, and that is the whole design.
+# A plain count catches several independent copies, and misses the shape that actually happened: a
+# run that spawned a run that spawned a run grows ONE process at a time, so the real runaway
+# peaked at seven and an alarm set at six never fired once. A chain is one root nested deep, and
+# depth is the thing that makes it visible.
+report_process_family(){
+  local pattern="$1" label="$2" ok_roots="$3" ok_depth="$4" advice="$5" out summary n roots maxd
+  out="$(sync_process_list | awk -v pat="$pattern" '
+    {
+      p=$1; pp=$2; et=$3; cmd=""
+      for (i = 4; i <= NF; i++) cmd = cmd (i > 4 ? " " : "") $i
+      parent[p] = pp; age[p] = et; keep[p] = cmd
+      if (index(cmd, pat) > 0 && index(cmd, "awk") == 0) matched[p] = 1
+    }
+    END {
+      n = 0; roots = 0; maxd = 0
+      for (p in matched) {
+        n++
+        d = 0; q = parent[p]
+        # Bounded, because a process table read while things are exiting can present a cycle, and
+        # an unbounded ancestry walk over one would hang the very command you run to diagnose it.
+        while ((q in parent) && d < 64) { if (q in matched) d++; q = parent[q] }
+        if (d == 0) roots++
+        if (d > maxd) maxd = d
+        printf "  pid %s, running %s%s\n", p, age[p], (d > 0 ? ", nested " d " deep inside another" : "")
+      }
+      printf "SUMMARY %d %d %d\n", n, roots, maxd
+    }' )"
+  summary="$(printf '%s' "$out" | grep '^SUMMARY ' || true)"
+  n="$(printf '%s' "$summary" | awk '{print $2}')"; roots="$(printf '%s' "$summary" | awk '{print $3}')"
+  maxd="$(printf '%s' "$summary" | awk '{print $4}')"
+  [ -n "$n" ] || return 0
+  # Silent when the machine looks the way it should. What "should" means is MEASURED per family,
+  # not assumed to be one process: a healthy watcher is a parent plus one forked helper, both
+  # matching, and a rule of "nothing nested" reported every healthy machine on the first try. A
+  # line printed on every status stops being read long before a real pile-up appears, which is
+  # exactly how the seventeen went unnoticed (L36, L147).
+  [ "$roots" -le "$ok_roots" ] && [ "$maxd" -le "$ok_depth" ] && return 0
+  echo "--- $label the tool left running ---"
+  printf '%s\n' "$out" | grep -v '^SUMMARY '
+  echo "  $n in total, $roots started independently, nested up to $maxd deep."
+  echo "  $advice"
+}
+
+report_stray_processes(){
+  # One watcher, which is two processes: the launcher and the subshell it forks around fswatch.
+  # Measured on this Mac 2026-08-17 (pid 13658 with its child 13702), not assumed, because the
+  # first version of this rule allowed no nesting at all and reported every healthy machine.
+  report_process_family "claude-sync watch" "watcher processes" 1 1 \
+    "One watcher is expected, running as two processes. Several started independently means an earlier one was never stopped, and they all react to the same edit."
+  # One run, permitted to have spawned one child, which is what the suite's own depth limit allows
+  # (SUITE_MAX_DEPTH defaults to 1 in tests/test-claude-sync.sh). Deeper than that is the runaway
+  # that limit exists to stop, so seeing it here means the limit has been removed or bypassed.
+  report_process_family "tests/test-claude-sync.sh" "test runs" 1 1 \
+    "A run nested deeper than one is a run that spawned a run that spawned a run. It multiplies one process at a time, so it presents as slowness rather than as a failure."
 }
 
 # ---------- install-schedule ----------

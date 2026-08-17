@@ -79,6 +79,20 @@ It runs from the start up to and including that section, because the sections bu
 other and running one alone reports failures the code did not cause. A name matching nothing
 is an error, not a quiet pass.
 
+One run at a time, and none of them open ended:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `SUITE_TIMEOUT` | `900` | Seconds before a stalled run is killed and told which section it died in. A full run measured 123 seconds on 2026-08-17, so this is roughly 7x. `0` disables it. |
+| `SUITE_LOCK` | `$TMPDIR/claude-sync-suite.lock` | Where the one run at a time lock lives. A second run REFUSES, naming the process that holds it and how long it has been going, rather than queueing. |
+| `SUITE_NO_LOCK` | unset | Run without taking the lock. For when you know the run it names has finished. |
+| `SUITE_LOCK_MAX_AGE` | `1800` | Seconds after which a lock from ANOTHER machine is broken. A lock from this machine is judged by whether its process is alive, never by the clock, so a clock jump cannot break a live one. |
+| `SUITE_MAX_DEPTH` | `1` | How deeply a run may be nested inside another. The suite runs itself as a subprocess in places, and past this it refuses to start rather than multiplying. |
+
+`claude-sync status` also reports watcher processes and test runs the tool left behind, counting
+how many started independently and how deeply they are nested. It stays silent for one watcher
+and one run, which is what a healthy machine looks like.
+
 ## Local state (per Mac, never synced)
 
 Six things hold state outside `payload/`. All are gitignored, so a fresh clone starts without

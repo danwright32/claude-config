@@ -457,6 +457,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   submission, so the manager could no longer request time off at all, and it told him to ask an
   admin to set a manager that no surface can now set: slate#1499)
 
+- **L168. A parameter a function needs in order to be CORRECT must never carry a default standing
+  for absent, because a caller that forgets it then receives silently missing data instead of a
+  compile error, and the failure surfaces far away as a blank value rather than as a refusal.**
+  The default reads as a convenience for the callers that genuinely have nothing to pass, and it is
+  indistinguishable at every call site from one that simply forgot. Distinct from L138, where a
+  missing setting arrives as an empty string the absence check accepts: here the value never arrives
+  at all and the language would have said so.
+  (downbeat#244: moving a booking's venue onto each show made the venue an id resolved against the
+  roster, and five entry points took that roster with a default of none, so a screen that forgot it
+  would render and commit a booking with the venue missing from the folder name, the task text, the
+  calendar sentence and the filename, with nothing anywhere reporting it)
+
 ## Honest failure
 
 - **L10. An error state and an empty state are different screens.** Never render a
@@ -828,6 +840,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   script tripped a separate crash on its second iteration and died before reaching the live task, and
   the order OmniFocus happened to return them in is what decided whether a real reminder was lost)
 
+- **L169. A variable recording that a step has ALREADY HAPPENED is inherited by every process that
+  step starts, so a descendant reads it as true of ITSELF and skips work it never did.** Clear such a
+  flag for anything you spawn, because the descendant looks correct read alone and the skipped work
+  is invisible. Distinct from L55, where a second writer changes what a stored value means: here
+  there is one writer and the value is simply carried somewhere it was never meant to apply.
+  (claude-config#37: a section-limited test run re-executes itself with a flag meaning "extraction
+  already done", which its own children then inherited, so each ignored the section limit it was
+  given, ran the WHOLE suite, reached the section that spawns, and started another. One process at a
+  time rather than a burst, so no process count tripped and it read as a suite merely taking a
+  while. It happened twice in one session, the second time after the first had been fixed)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -1129,6 +1152,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   asked only whether a date appeared anywhere in the subject or body, which that draft passes. Found
   by measuring the live store rather than by reading the code: 6 of 19 drafts named no date at all and
   2 named a wrong one)
+
+- **L167. An AI writer that can READ the code consuming its output derives its contract from that
+  code's permissiveness, so an optional field is not neutral, it is permission: any combination the
+  schema tolerates will eventually be emitted and defended as valid.** Express the real constraint in
+  the type or in a boundary check that refuses the combination, because a prompt stating only the
+  positive form leaves the schema as the more authoritative document. Distinct from L27, which asks
+  that a prompt rule get a deterministic check: here the loose schema is not merely failing to catch
+  the violation, it is what taught the model the violation was allowed.
+  (overture#2893: told to record a social route as `method: form_or_dm` with the profile URL in
+  `formUrl`, the check read `PrepResults.swift` mid-run and wrote "Good, `formUrl` is optional. That
+  confirms a `form_or_dm` contact can carry no `formUrl`", then emitted two contacts each naming a
+  route and carrying none. `formUrl` is optional because two OTHER methods have no form. The app
+  correctly discarded both, so the card told Dan the show had no way in while he found one himself
+  in seconds)
 
 ## Codebase hygiene
 
