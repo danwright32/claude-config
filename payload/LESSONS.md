@@ -990,6 +990,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   referenced a message that existed nowhere, while Gmail's web view still grouped the thread on its
   internal threadId and Spark showed two unrelated conversations)
 
+- **L157. An atomic operation guarantees only its own span, so acting on a judgement formed
+  BEFORE it (remove this lock because it was stale, revoke this token because it had expired,
+  evict this entry because it was cold) reintroduces the race the atomicity appears to close,
+  and reads as rigorous precisely because the primitive really is atomic.** Put the judgement
+  and the action in one critical section, and prove it by holding two callers at the decision
+  point rather than hoping the interleaving reproduces. Distinct from L70, where both sides of
+  a check come from one lookup: here the two sides are correct and merely separated in time.
+  (downbeat#218: claim-stale-lock.sh renamed away whatever sat at the lock path, citing L70 in
+  its own header, so a waiter acting on a stale owner it had read seconds earlier removed a
+  LIVE lock and both suites ran at once)
+
 ## Building with AI
 
 - **L27. A rule that lives only in a prompt is a hope.** Every hard constraint on AI
