@@ -98,6 +98,18 @@ until somebody tries to invoke it.
 Measured against the real config on 2026-08-17, this refuses exactly four entries (two directories
 holding no `SKILL.md` and two loose markdown files) and every one of the 43 real skills passes.
 
+## A skill provided twice
+
+`claude-sync check-skills` fails when a skill name is provided by an installed plugin AND by
+`~/.claude/skills/` or the synced payload, because both copies are then listed in every session and
+both are paid for. `status` reports the same thing without being asked, so a duplicate that arrives
+with a plugin install surfaces on its own.
+
+The plugin side is read from the install record (`~/.claude/plugins/installed_plugins.json`), so a
+plugin installed later is covered without anybody adding it to a list. A Mac where no plugin skills
+can be found is told exactly that, rather than passing: nothing to compare against is not the same
+answer as nothing wrong.
+
 ## Secret scan
 
 Every push/sync scans the payload and aborts if it finds a credential shape.

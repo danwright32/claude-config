@@ -3524,6 +3524,64 @@ check "#50 a directory with no SKILL.md is not applied" "[ ! -e '$BSD/skills/hum
 check "#50 a bare file in the payload is not applied"   "[ ! -e '$BSD/skills/stop-slop.md' ]"
 check "#50 the pull names what it refused, and why"     "printf '%s' \"\$out_bspull\" | grep -qE 'humanizer.*SKILL\.md'"
 
+section "== a skill provided by both a plugin and the local folder is caught (#49) =="
+# Nine Cloudflare skills existed as byte identical copies in ~/.claude/skills/ AND inside the
+# cloudflare plugin, so each was listed twice in every session and both copies were paid for.
+# Nothing detected it: it was found by hand while auditing, and nothing would have caught the next
+# one, which matters because installing any plugin can silently shadow a local skill of the same
+# name (#49).
+DSH="$WORK/dupskill-home"; DSR="$WORK/dupskill-repo"
+mkdir -p "$DSH/skills/wrangler" "$DSH/skills/mine" "$DSR/payload"
+echo '{"hooks":{}}' > "$DSH/settings.json"; printf '# rules\n' > "$DSH/CLAUDE.md"
+mkskill "$DSH/skills/wrangler/SKILL.md" 'a local copy of a skill the plugin also provides'
+mkskill "$DSH/skills/mine/SKILL.md" 'a skill only this Mac has'
+# A plugin laid out the way the real ones are: installed_plugins.json names an install path, and
+# the skills sit under it. Derived from the install record rather than from a list kept by hand,
+# or the check only covers the plugins somebody remembered (L96).
+DSP="$DSH/plugins/cache/cloudflare/cloudflare/1.0.0"
+mkdir -p "$DSP/skills/wrangler" "$DSP/skills/durable-objects" "$DSH/plugins"
+mkskill "$DSP/skills/wrangler/SKILL.md" 'the plugin version'
+mkskill "$DSP/skills/durable-objects/SKILL.md" 'a plugin skill with no local twin'
+cat > "$DSH/plugins/installed_plugins.json" <<PLUGJSON
+{"version":2,"plugins":{"cloudflare@cloudflare":[{"scope":"user","installPath":"$DSP","version":"1.0.0"}]}}
+PLUGJSON
+ds_rc=0
+out_ds="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1)" || ds_rc=$?
+dbg "check-skills: $out_ds"
+check "#49 a name held by both a plugin and the skills folder fails the check" "[ \"\$ds_rc\" -ne 0 ]"
+# One line carrying the skill AND the plugin providing it, or the report names a duplicate without
+# saying which of the seven plugins to look in (L172).
+check "#49 and names the skill and the plugin together" \
+  "printf '%s' \"\$out_ds\" | grep -qE 'wrangler.*cloudflare'"
+check "#49 a skill only this Mac has is not reported"     "! printf '%s' \"\$out_ds\" | grep -q 'mine'"
+check "#49 a plugin skill with no local twin is not reported" "! printf '%s' \"\$out_ds\" | grep -q 'durable-objects'"
+# The payload half: a plugin installed later can shadow a skill that syncs between the Macs, and
+# that copy is on the other Mac too.
+mkdir -p "$DSR/payload/skills/durable-objects"
+mkskill "$DSR/payload/skills/durable-objects/SKILL.md" 'a synced skill a plugin now also provides'
+out_ds2="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1 || true)"
+check "#49 a synced skill shadowed by a plugin is caught too" \
+  "printf '%s' \"\$out_ds2\" | grep -qE 'durable-objects.*cloudflare'"
+# Nothing to report must be a PASS that says so, not a silent zero: a check that prints nothing
+# when it found nothing reads exactly like one that could not look (L98).
+rm -rf "$DSH/skills/wrangler" "$DSR/payload/skills/durable-objects"
+ds_ok_rc=0
+out_dsok="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1)" || ds_ok_rc=$?
+check "#49 a clean config passes"                  "[ \"\$ds_ok_rc\" -eq 0 ]"
+check "#49 and says how many plugin skills it read" "printf '%s' \"\$out_dsok\" | grep -qE '2 (plugin )?skill'"
+# A Mac with no plugins at all cannot answer this question, and must say so rather than passing:
+# zero plugin skills read is not the same as no duplicates found.
+DSN="$WORK/dupskill-none"; mkdir -p "$DSN/skills"; echo '{"hooks":{}}' > "$DSN/settings.json"
+out_dsnone="$(CLAUDE_HOME="$DSN" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1 || true)"
+check "#49 no plugins at all is reported as nothing to compare against" \
+  "printf '%s' \"\$out_dsnone\" | grep -qiE 'no plugin|nothing to compare'"
+# And the standing report, so a duplicate that arrives with a plugin install surfaces without
+# anybody thinking to run the check (L148).
+mkdir -p "$DSH/skills/wrangler"; mkskill "$DSH/skills/wrangler/SKILL.md" 'back again'
+out_dsstatus="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#49 status reports a duplicate without being asked" \
+  "printf '%s' \"\$out_dsstatus\" | grep -qE 'wrangler.*cloudflare'"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
