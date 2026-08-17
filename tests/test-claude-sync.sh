@@ -6,7 +6,63 @@
 #   SYNC_NO_GIT  - skip all git operations
 set -uo pipefail
 
-SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/claude-sync"
+# Both honour a value passed IN. A stopped-early run (#27) executes an extracted copy from a
+# temp directory, where deriving these from $0 points at a claude-sync that does not exist:
+# every run then silently did nothing while the suite reported the resulting failures as if
+# the code were broken.
+SCRIPT="${SCRIPT:-$(cd "$(dirname "$0")/.." && pwd)/claude-sync}"
+SCRIPT_SELF="${SCRIPT_SELF:-$(cd "$(dirname "$0")" && pwd)/$(basename "$0")}"
+
+# ---- run one section at a time (#27) ----
+# SECTION_FILTER=<text> runs only the sections whose heading contains <text>. Default is a
+# full run, so the pre-push gate is unaffected and nobody can narrow it by accident.
+# `section` REPLACES the bare `echo "== ... =="` headings: every check that follows a heading
+# belongs to it, and a skipped section's checks are never executed rather than executed and
+# hidden, which would save no time at all and defeat the point.
+section(){ echo "$1"; }
+
+# SECTION_UNTIL=<text> runs from the beginning UP TO AND INCLUDING the matching section, then
+# stops. Deliberately not "only the matching section": the sections are not independent, they
+# build on fixtures and settings established by earlier ones (`unset SYNC_NO_GIT` alone
+# changes everything after it), so running one alone produced 24 failures that were purely
+# missing setup. A tool that reports failures the code did not cause is worse than a slow
+# one, so this trades some of the speed-up for never lying. Iterating on an early or middle
+# section is where it pays; asking for the last one is honestly just a full run.
+if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+  _filtered="$(mktemp)"
+  awk -v pat="$SECTION_UNTIL" '
+    BEGIN{ keep=1; matched=0 }
+    /^section "/ {
+      if (matched) { keep=0 }
+      else if (index(tolower($0), tolower(pat)) > 0) { matched=1; keep=1 }
+    }
+    keep { print }
+    END{ if (!matched) exit 9 }
+  ' "$0" > "$_filtered"
+  awk_rc=$?
+  if [ "$awk_rc" -eq 9 ]; then
+    rm -f "$_filtered"
+    # A filter that matched no section is an ERROR, never a silent green run: a suite that
+    # checked nothing and exits 0 is indistinguishable from one where everything passed.
+    echo "test suite: SECTION_UNTIL='$SECTION_UNTIL' matched no section. Run without it, or check the spelling against the '==' headings." >&2
+    exit 2
+  fi
+  printf '\necho ""\necho "PASS=$PASS FAIL=$FAIL (stopped after SECTION_UNTIL=%s, NOT a full run)"\n[ "$FAIL" -eq 0 ]\n' "$SECTION_UNTIL" >> "$_filtered"
+  # The extracted file must PARSE before it is run. Cutting at section boundaries can land
+  # inside a multi-line construct and produce invalid shell, and without this the broken
+  # script runs anyway and its parse errors are reported as if the code under test failed.
+  # Found by a mutation that dropped a section and produced exactly that. The seam exists so
+  # this refusal can be tested rather than assumed.
+  [ -n "${SUITE_EXTRACT_BREAK:-}" ] && printf '\nif then fi\n' >> "$_filtered"
+  if ! bash -n "$_filtered" 2>/dev/null; then
+    rm -f "$_filtered"
+    echo "test suite: stopping after '$SECTION_UNTIL' produced a script that does not parse, so it was NOT run. This is a bug in the section extractor, not in the code under test. Run the full suite." >&2
+    exit 3
+  fi
+  SUITE_FILTERED=1 SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered"; _rc=$?
+  rm -f "$_filtered"
+  exit "$_rc"
+fi
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
@@ -56,7 +112,7 @@ JSON
 
 export CLAUDE_HOME="$CH" SYNC_REPO="$REPO" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1
 
-echo "== push =="
+section "== push =="
 bash "$SCRIPT" push >/dev/null 2>&1
 check "payload has the custom skill"        "[ -f '$REPO/payload/skills/plan-council/SKILL.md' ]"
 check "payload EXCLUDES plugin skill"       "[ ! -e '$REPO/payload/skills/wrangler' ]"
@@ -72,7 +128,7 @@ check "payload has CLAUDE.md"               "[ -f '$REPO/payload/CLAUDE.md' ]"
 check "payload has RTK.md"                  "[ -f '$REPO/payload/RTK.md' ]"
 check "payload has LESSONS.md"              "[ -f '$REPO/payload/LESSONS.md' ]"
 
-echo "== pull into a DIFFERENT home (simulates other Mac) =="
+section "== pull into a DIFFERENT home (simulates other Mac) =="
 CH2="$WORK/dot-claude-2"
 mkdir -p "$CH2/skills/wrangler"
 echo 'PLUGIN-LOCAL' > "$CH2/skills/wrangler/SKILL.md"   # plugin skill present on Mac 2
@@ -97,7 +153,7 @@ check "RTK.md arrived on Mac 2"             "[ -f '$CH2/RTK.md' ]"
 check "CLAUDE.md content matches source"    "grep -q 'global rules v1' '$CH2/CLAUDE.md'"
 check "LESSONS.md arrived on Mac 2"          "grep -q 'lessons L1' '$CH2/LESSONS.md'"
 
-echo "== install-schedule plist content (background job must find Homebrew tools) =="
+section "== install-schedule plist content (background job must find Homebrew tools) =="
 PLDIR="$WORK/launchagents"; mkdir -p "$PLDIR"
 SYNC_LAUNCHAGENTS="$PLDIR" SYNC_NO_LAUNCHCTL=1 bash "$SCRIPT" install-schedule >/dev/null 2>&1
 PL="$PLDIR/com.claudesync.pull.plist"
@@ -106,7 +162,7 @@ check "plist sets a PATH for the job" "grep -q '<key>PATH</key>' '$PL'"
 check "PATH includes Homebrew bin"    "grep -q '/opt/homebrew/bin' '$PL'"
 check "schedule is monthly (Day key)" "grep -q '<key>Day</key>' '$PL'"
 
-echo "== sync (two-way) over a local fake remote =="
+section "== sync (two-way) over a local fake remote =="
 unset SYNC_NO_GIT   # this section exercises the real git round-trip
 BARE="$WORK/bare.git"; git init -q --bare "$BARE"
 # Mac A: has a custom skill, syncs it up
@@ -124,7 +180,7 @@ check "sync pushed+committed from A"   "[ -n \"\$(git -C '$RA' log --oneline 2>/
 check "B received A's skill via sync"  "[ -f '$CB/skills/alpha/SKILL.md' ]"
 check "B kept its local permissions"   "jq -e '.permissions.allow[0]==\"B-LOCAL\"' '$CB/settings.json' >/dev/null"
 
-echo "== install-autosync writes a receive-timer; adds an fswatch watcher when available =="
+section "== install-autosync writes a receive-timer; adds an fswatch watcher when available =="
 PLDIR2="$WORK/la2"; mkdir -p "$PLDIR2"
 # no fswatch -> timer only, plus a hint
 FAKEFS="$WORK/fake-fswatch"
@@ -144,7 +200,7 @@ check "watcher runs the watch command"  "grep -q '<string>watch</string>' '$WPL'
 check "watcher stays alive"            "grep -q 'KeepAlive' '$WPL'"
 check "watcher sets Homebrew PATH"      "grep -q '/opt/homebrew/bin' '$WPL'"
 
-echo "== watch: errors without fswatch; runs a sync per event when present =="
+section "== watch: errors without fswatch; runs a sync per event when present =="
 out_nofs="$(SYNC_FSWATCH="$WORK/nope" CLAUDE_HOME="$CA" SYNC_REPO="$RA" bash "$SCRIPT" watch 2>&1)"; rcw=$?
 check "watch fails without fswatch"     "[ $rcw -ne 0 ]"
 check "watch error mentions fswatch"    "printf '%s' \"\$out_nofs\" | grep -qi fswatch"
@@ -156,7 +212,7 @@ EMIT="$WORK/emit-fswatch"; printf '#!/usr/bin/env bash\necho 1\n' > "$EMIT"; chm
 SYNC_FSWATCH="$EMIT" CLAUDE_HOME="$WC" SYNC_REPO="$WR" bash "$SCRIPT" watch >/dev/null 2>&1
 check "watch pushed a commit on event"  "[ -n \"\$(git -C '$WR' log --oneline 2>/dev/null)\" ]"
 
-echo "== apply is idempotent (no-op sync must not rewrite settings.json -> no watch loop) =="
+section "== apply is idempotent (no-op sync must not rewrite settings.json -> no watch loop) =="
 CI="$WORK/idem"; mkdir -p "$CI/skills/keep"; echo K > "$CI/skills/keep/SKILL.md"
 echo '# rules' > "$CI/CLAUDE.md"
 echo '{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}' > "$CI/settings.json"
@@ -174,7 +230,7 @@ after_cl="$(stat -f %m "$CI/CLAUDE.md")"
 check "settings.json untouched on no-op sync" "[ '$before_mtime' = '$after_mtime' ]"
 check "CLAUDE.md untouched on no-op sync"      "[ '$before_cl' = '$after_cl' ]"
 
-echo "== a background failure fires a desktop notification (issue #1) =="
+section "== a background failure fires a desktop notification (issue #1) =="
 REC="$WORK/notify.rec"
 NOTIFIER="$WORK/fake-notifier"
 cat > "$NOTIFIER" <<EOS
@@ -197,7 +253,7 @@ SYNC_NOTIFIER="$NOTIFIER" SYNC_NO_NOTIFY=0 CLAUDE_HOME="$CC2" SYNC_REPO="$CR2" b
 check "conflict fired a notification"  "[ -s '$REC' ]"
 check "notification mentions conflict"  "grep -qi 'merge\\|conflict\\|reconcile' '$REC'"
 
-echo "== secret scan blocks sending a credential (issue #3) =="
+section "== secret scan blocks sending a credential (issue #3) =="
 SS="$WORK/sshome"; mkdir -p "$SS/hooks"
 echo '{"hooks":{}}' > "$SS/settings.json"
 echo 'export AWS_KEY=AKIAIOSFODNN7EXAMPLE' > "$SS/hooks/leak.sh"
@@ -214,7 +270,7 @@ SR2="$WORK/ssrepo2"; mkdir -p "$SR2"
 CLAUDE_HOME="$SS2" SYNC_REPO="$SR2" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
 check "clean payload pushes fine"        "[ -f '$SR2/payload/hooks/ok.sh' ]"
 
-echo "== allowlist accepts a known secret by fingerprint; new ones still blocked (issue #3) =="
+section "== allowlist accepts a known secret by fingerprint; new ones still blocked (issue #3) =="
 SA="$WORK/sahome"; mkdir -p "$SA/hooks"; echo '{"hooks":{}}' > "$SA/settings.json"
 echo 'KEY=AKIAIOSFODNN7EXAMPLE' > "$SA/hooks/known.sh"
 SAR="$WORK/sarepo"; mkdir -p "$SAR"
@@ -227,7 +283,7 @@ out3="$(CLAUDE_HOME="$SA" SYNC_REPO="$SAR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "
 check "non-allowlisted secret blocks"     "[ $rc3 -ne 0 ]"
 check "block names the new file"          "printf '%s' \"\$out3\" | grep -q 'new.sh'"
 
-echo "== send (watcher path) propagates a delete and never re-applies to home (issue #2) =="
+section "== send (watcher path) propagates a delete and never re-applies to home (issue #2) =="
 SDBARE="$WORK/sdbare.git"; git init -q --bare "$SDBARE"
 SDR="$WORK/sdrepo"; git clone -q "$SDBARE" "$SDR"
 SDC="$WORK/sdhome"; mkdir -p "$SDC/skills/plan-council"; echo '{"hooks":{}}' > "$SDC/settings.json"
@@ -240,7 +296,7 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SDC" SYNC_REPO="$SDR" bash "$SCRIPT" send >/dev/n
 check "send removed it from the repo"    "[ -z \"\$(git -C '$SDR' ls-files | grep nested)\" ]"
 check "send did NOT resurrect it locally" "[ ! -e '$SDC/skills/plan-council/.nested' ]"
 
-echo "== auto-commit is scoped to payload; uncommitted tool edits aren't swept (issue 1.1) =="
+section "== auto-commit is scoped to payload; uncommitted tool edits aren't swept (issue 1.1) =="
 WB11="$WORK/w11bare.git"; git init -q --bare "$WB11"
 WR11="$WORK/w11repo"; git clone -q "$WB11" "$WR11"
 WC11="$WORK/w11home"; mkdir -p "$WC11/skills/s"; echo '{"hooks":{}}' > "$WC11/settings.json"; echo a > "$WC11/skills/s/f"
@@ -250,7 +306,7 @@ check "payload change committed"        "[ -n \"\$(git -C '$WR11' ls-files | gre
 check "WIP tool file NOT committed"      "[ -z \"\$(git -C '$WR11' ls-files | grep 'claude-sync.wip')\" ]"
 check "WIP still present on disk"        "[ -f '$WR11/claude-sync.wip' ]"
 
-echo "== watch: a failed sync leaves a durable log line, not just a transient notification =="
+section "== watch: a failed sync leaves a durable log line, not just a transient notification =="
 # Regression for the 2026-07-06 incident: a secret-scan false positive blocked
 # the real watcher for 4 days with nothing but an (easily-missed) notification
 # -- ~/.claude-sync.log itself stayed silent the whole time.
@@ -265,7 +321,7 @@ wl_out="$(SYNC_FSWATCH="$WLEMIT" SYNC_NOTIFIER="$WLNOTIFIER" CLAUDE_HOME="$WLC" 
 check "watch output logs the failure"     "printf '%s' \"\$wl_out\" | grep -qi 'FAILED'"
 check "logged failure names the file"     "printf '%s' \"\$wl_out\" | grep -q 'leak.sh'"
 
-echo "== pull/sync auto-restarts the watch daemon when claude-sync itself changed =="
+section "== pull/sync auto-restarts the watch daemon when claude-sync itself changed =="
 # The watch daemon (launchd KeepAlive) keeps the old script loaded until
 # restarted -- a pulled edit to claude-sync itself must trigger a restart
 # automatically, not rely on a manual launchctl step on each Mac (issue #5).
@@ -390,7 +446,7 @@ out_st_plugin="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$
 check "status ignores plugin-managed skills the way a push does" \
   "! printf '%s' \"\$out_st_plugin\" | grep -q 'wrangler'"
 
-echo "== pull reports WHAT was received, so it's clear the sync worked =="
+section "== pull reports WHAT was received, so it's clear the sync worked =="
 # A pull used to print only a generic success line; the /sync-config skill even
 # claimed the script "prints which files were updated" when it never did. The
 # summary must name each received file with what happened to it, and a pull
@@ -422,7 +478,7 @@ out_noop="$(CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" bash "$SCRIPT" pull 2>&1)"
 check "no-change pull says up to date"     "printf '%s' \"\$out_noop\" | grep -qi 'up to date'"
 check "no-change pull has no change list"  "! printf '%s' \"\$out_noop\" | grep -q 'Received'"
 
-echo "== a pull that updates claude-sync itself applies the NEW logic, same pull (#6) =="
+section "== a pull that updates claude-sync itself applies the NEW logic, same pull (#6) =="
 # The running process loaded the OLD script at start, so a pull that updates
 # claude-sync kept applying with the old code: anything the new version added to
 # the synced set was skipped on the very pull that delivered it, and only landed
@@ -454,7 +510,7 @@ check "the self-updating pull still succeeds"  "printf '%s' \"\$out_up\" | grep 
 restarts="$(printf '%s\n' "$out_up" | grep -ci 'watch daemon' || true)"
 check "hand-off happens once, no re-exec loop"  "[ \"\$restarts\" -le 1 ]"
 
-echo "== a broken pulled script must not be handed control, and must not restart the daemon (#10) =="
+section "== a broken pulled script must not be handed control, and must not restart the daemon (#10) =="
 # A pull now hands off to the freshly pulled copy of claude-sync so the apply runs
 # current logic. That makes a syntactically broken script pushed from one Mac able
 # to break pulls on the other, which the old behavior would have survived. Worse,
@@ -501,7 +557,7 @@ out_bk2="$(SYNC_LAUNCHAGENTS="$BKPL" SYNC_NO_LAUNCHCTL=1 SYNC_NO_NOTIFY=1 CLAUDE
 check "a recovered script runs and applies again"       "[ -f '$BKBH/hooks/fixed.sh' ]"
 check "and no longer warns about the pulled copy"       "! printf '%s' \"\$out_bk2\" | grep -q 'kept the copy already running'"
 
-echo "== pull fails loudly when CLAUDE.md references a rules file that isn't here (#7) =="
+section "== pull fails loudly when CLAUDE.md references a rules file that isn't here (#7) =="
 # CLAUDE.md pulls in extra rule files with an @import. When the imported file is
 # missing, Claude Code loads nothing from it and says nothing, so an entire rules
 # file goes silently absent. The pull must refuse to report success in that state.
@@ -527,7 +583,7 @@ if SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$IMH" SYNC_REPO="$IMR" bash "$SCR
 check "a resolvable ~ import does not fail the pull"  "[ \"\$rc_imp3\" -eq 0 ]"
 rm -f "$HOME/.some-external-thing-that-does-exist"
 
-echo "== the pull summary describes what was WRITTEN here, not what the repo changed (#8) =="
+section "== the pull summary describes what was WRITTEN here, not what the repo changed (#8) =="
 # The summary was built from the shared repo's commit range, so it could disagree
 # with reality in both directions: it announced "added LESSONS.md" when that file
 # was never written, then said "Already up to date" on the pull that finally wrote
@@ -554,7 +610,7 @@ out_wr2="$(CLAUDE_HOME="$WRBH" SYNC_REPO="$WRBR" bash "$SCRIPT" pull 2>&1)"
 check "a pull that writes nothing says up to date" "printf '%s' \"\$out_wr2\" | grep -qi 'up to date'"
 check "and lists no files"                         "! printf '%s' \"\$out_wr2\" | grep -q 'keep.sh'"
 
-echo "== a newly referenced rules file syncs with no script edit (#9) =="
+section "== a newly referenced rules file syncs with no script edit (#9) =="
 # TOP_FILES was a hand-maintained list that had to mirror the @imports at the top
 # of CLAUDE.md. Keeping the two in step was manual, and forgetting it is what made
 # CLAUDE.md arrive referencing a LESSONS.md nobody had told the sync about. The
@@ -588,7 +644,7 @@ if out_dv3="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DVH2" SYNC_REPO="$DVR
 check "a dangling NESTED reference fails the pull"  "[ \"\$rc_dv3\" -ne 0 ]"
 check "and the error names the missing file"        "printf '%s' \"\$out_dv3\" | grep -q 'NOWHERE.md'"
 
-echo "== a same-size edit still reaches the other Mac (rsync quick-check data loss) =="
+section "== a same-size edit still reaches the other Mac (rsync quick-check data loss) =="
 # rsync's default quick check compares size plus mtime at one-second granularity.
 # A same-size edit made in the same second as the last sync (a one character fix
 # in a hook, a swapped word in CLAUDE.md) was therefore skipped: rsync updated the
@@ -610,7 +666,7 @@ touch -t 202601010000 "$QSRC/hooks/tiny.sh" "$QREPO/payload/hooks/tiny.sh"
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" pull >/dev/null 2>&1
 check "pull applies a same-size same-mtime edit"     "grep -q 'cccc' '$QSRC/hooks/tiny.sh'"
 
-echo "== the apply cleans up its own scratch file (no temp litter per run) =="
+section "== the apply cleans up its own scratch file (no temp litter per run) =="
 # The apply records what it wrote to a temp file so the summary can report real
 # writes. That record has to be removed on the way out, including when the run
 # ends early via die(), or every pull and sync leaves a file in the temp dir.
@@ -623,7 +679,7 @@ SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$QSRC" SYNC_REPO="$QR
 check "a failed pull leaves no temp file behind"  "[ -z \"\$(ls -A '$TMPD' 2>/dev/null)\" ]"
 rm -f "$QREPO/payload/CLAUDE.md" "$QSRC/CLAUDE.md"
 
-echo "== send must not publish over changes this Mac has never applied =="
+section "== send must not publish over changes this Mac has never applied =="
 # The 2026-07-27 incident, reproduced. Mirroring ~/.claude -> payload is
 # unconditional and uses --delete, so whenever the repo holds content this Mac has
 # not applied yet (the state right after ANY merge), a watcher firing publishes an
@@ -667,7 +723,7 @@ check "sync receives before sending"       "grep -q three '$UABH/hooks/shared.sh
 check "sync keeps A's change in the repo"  "grep -q three '$UAB/payload/hooks/shared.sh'"
 check "sync still sends B's own edit"      "[ -f '$UAB/payload/hooks/b-two.sh' ]"
 
-echo "== when both Macs changed the same file, keep the local copy and say so =="
+section "== when both Macs changed the same file, keep the local copy and say so =="
 # Holding back the paths this Mac is stale on stops it reverting the other Mac,
 # but on a REAL conflict (both sides edited the same file) it just moved the loss:
 # the apply overwrote this Mac's edit with the other Mac's and said nothing. Trading
@@ -702,7 +758,7 @@ check "conflict copies are not sent up"           "! ls '$CFB/payload/hooks/' | 
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFBH" SYNC_REPO="$CFB" bash "$SCRIPT" sync >/dev/null 2>&1
 check "and still are not sent on a later sync"    "! ls '$CFB/payload/hooks/' | grep -q conflict"
 
-echo "== a send must not leave this Mac wedged against its own commit =="
+section "== a send must not leave this Mac wedged against its own commit =="
 # .last-applied is written only by the apply step, and send deliberately has no
 # apply step. So a send moved HEAD forward and left .last-applied pointing at the
 # commit before it, after which the "behind the other Mac" guard fired on this
@@ -735,7 +791,7 @@ check "still skips when truly behind"          "[ ! -f '$SWB/payload/hooks/sw-b.
 check "still keeps the other Mac's change"     "grep -q A-MOVED-ON '$SWB/payload/hooks/shared.sh'"
 check "still says why it skipped"              "printf '%s' \"\$out_swb\" | grep -qi 'not applied'"
 
-echo "== a pull must not revert a local edit the repo never changed (2026-07-28) =="
+section "== a pull must not revert a local edit the repo never changed (2026-07-28) =="
 # The incident: the watcher was down, a skill script was edited locally, and a
 # pull driven by UNRELATED commits mirrored the repo's older copy straight over
 # the edit. No conflict copy (preserve_local_conflicts only owns paths the repo
@@ -769,7 +825,7 @@ check "the next send publishes the edit"    "grep -q MY-LOCAL-FIX '$LEB/payload/
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/null 2>&1
 check "the edit round-trips to the other Mac" "grep -q MY-LOCAL-FIX '$LEAH/skills/reel/push.py'"
 
-echo "== a pull must not revert an unsent edit to a top-level rules file =="
+section "== a pull must not revert an unsent edit to a top-level rules file =="
 # The keep-local-edits protection covered the mirrored subtrees only. Top-level
 # rules files (CLAUDE.md, LESSONS.md, RTK.md and anything they import) take a
 # separate plain-copy path that had no such guard, so a pull still mirrored the
@@ -821,7 +877,7 @@ check "this Mac's entry is still in the file"   "grep -q FROM-MAC-B-SAME-TIME '$
 check "so no conflict copy was needed"          "! ls '$TFBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
 check "and the merge is reported"               "printf '%s' \"\$out_tfc\" | grep -qi 'MERGED'"
 
-echo "== a commit made outside send/sync must not wedge the watcher (#12) =="
+section "== a commit made outside send/sync must not wedge the watcher (#12) =="
 # 2026-07-28: a session edited claude-sync itself and committed with plain git.
 # .last-applied is written only by the apply step and by a clean send, so HEAD
 # moved and the marker did not. The guard compared those two SHAs and read this
@@ -918,7 +974,7 @@ check "a real remote change still blocks the send" "[ ! -f '$HCR2/payload/hooks/
 check "it makes no commit in that state"           "[ \"\$(git -C '$HCR2' rev-list --count HEAD)\" = \"\$hc2_commits\" ]"
 check "and still says why it skipped"              "printf '%s' \"\$out_hcb\" | grep -qi 'not applied'"
 
-echo "== a pull says which received files only take effect in a NEW session =="
+section "== a pull says which received files only take effect in a NEW session =="
 # Claude Code reads the rule files (CLAUDE.md and its @imports) once, at session
 # start, and builds its list of available skills/agents/commands then too. So a
 # pull can land a rule change or a brand-new skill that every already-running
@@ -967,7 +1023,7 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/
 out_ns3="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
 check "a removed skill also earns the notice"    "printf '%s' \"\$out_ns3\" | grep -i 'new Claude Code session' | grep -q 'rs-added'"
 
-echo "== #13: an apply must not delete a hook registration this Mac has not sent yet =="
+section "== #13: an apply must not delete a hook registration this Mac has not sent yet =="
 # Seen for real on 2026-07-29 (and once before, during the send-wedge): the hooks
 # block was applied by REPLACING it wholesale, so a hook registered here since the
 # last send vanished, silently, while its script file was correctly held back. The
@@ -1053,7 +1109,7 @@ check "#13 and it says so instead of failing silently" \
   "printf '%s' \"\$out_hkbad\" | grep -q 'could not merge the hooks block'"
 check "#13 the rest of the pull still lands" "[ -f '$HKCH/hooks/from-mac-a.sh' ]"
 
-echo "== #14: rule files merge entry by entry instead of one Mac's copy winning =="
+section "== #14: rule files merge entry by entry instead of one Mac's copy winning =="
 # Seen for real on 2026-07-29: both Macs had appended lessons, so the conflict path
 # applied the other Mac's whole LESSONS.md and set this Mac's aside with a suffix.
 # Two lessons that existed nowhere else vanished from the file every session loads,
@@ -1128,7 +1184,7 @@ check "#14 and it names the entry only you had" \
 check "#14 an unmergeable file never gets conflict markers" \
   "! grep -q '<<<<<<<' '$RMBH/LESSONS.md'"
 
-echo "== #15: duplicate lesson numbers must not be published or go unnoticed =="
+section "== #15: duplicate lesson numbers must not be published or go unnoticed =="
 # Numbers are assigned by hand, so two Macs working the same day both reach for the
 # same one. On 2026-07-29 six lessons claimed three numbers, and a duplicate L43 had
 # already sat in the file for a day. The file's own header promises the numbering is
@@ -1206,7 +1262,7 @@ printf -- 'see L2 for the rule\n' >> "$LNMBH/CLAUDE.md"
 printf -- '- **L2. theirs.** written on Mac A\n- **L4. four.** also on Mac A\n  distinct from L2, which it cites\n' >> "$LNMA/payload/LESSONS.md"
 git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds its L2 and L4" && git -C "$LNMA" push -q
 out_lnm="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" bash "$LNMB/claude-sync" pull 2>&1)"
-echo "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
+section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
 # The settled rule (see the 2026-08-05 note above): the published copy keeps the
 # number, because the other Mac may already reference it, and the entry that has
 # never left this Mac takes the next free number. The script already knows both
@@ -1257,7 +1313,7 @@ check "#17 and is warned about, not auto-renumbered"     "printf '%s' \"\$out_ln
 # The excludes above stop NEW bytecode being staged, but they cannot clean a file
 # that was committed before they existed: three had been, and the apply-side
 # exclude then hid them from every symptom. Assert the tracked set stays clean.
-echo "== repo hygiene =="
+section "== repo hygiene =="
 if git -C "$(dirname "$SCRIPT")" rev-parse --git-dir >/dev/null 2>&1; then
   tracked_bytecode="$(git -C "$(dirname "$SCRIPT")" ls-files | grep -cE '\.pyc$|__pycache__' || true)"
   check "no bytecode tracked in the sync repo" "[ '$tracked_bytecode' = '0' ]"
@@ -1265,7 +1321,7 @@ else
   ok "no bytecode tracked in the sync repo (skipped: not a git checkout)"
 fi
 
-echo "== install-autosync installs the claudesync shell alias, idempotently =="
+section "== install-autosync installs the claudesync shell alias, idempotently =="
 # Why: the /sync-config skill lives under skills/ so it reaches every Mac on the next
 # push, but the `claudesync` terminal alias lives in ~/.zshrc which is deliberately NOT
 # synced. So the alias had to be added by hand on each Mac while the skill arrived by
@@ -1320,7 +1376,7 @@ check "a tilde alias counts as installed"  "printf '%s' \"\$outZ4\" | grep -qi '
 check "no duplicate for the tilde form"    "[ \"\$(grep -c 'alias claudesync=' '$ZRC4')\" = 1 ]"
 check "the tilde form is not called a conflict" "! printf '%s' \"\$outZ4\" | grep -qi 'points somewhere else'"
 
-echo "== a lesson renumbered on the other Mac must not come back under its old number =="
+section "== a lesson renumbered on the other Mac must not come back under its old number =="
 # Seen for real on 2026-08-05, the third numbering collision. Both Macs had used L66
 # and L67 for different lessons. The clash was settled in the shared repo the agreed
 # way (published keeps the number, the unsent local one is renumbered), but the merge
@@ -1408,7 +1464,7 @@ check "renumber: no duplicate number remains afterwards" \
 check "renumber: no mention handling when nothing mentions the old number" \
   "! printf '%s' \"\$out_rn2\" | grep -qiE 'rewrote|also mentions|still mentions'"
 
-echo "== #16: a commit that does not touch payload must still be sent =="
+section "== #16: a commit that does not touch payload must still be sent =="
 # Found on 2026-08-06 while pushing a fix to this very script: push decided WHETHER to
 # push from whether STAGING THE PAYLOAD had produced a commit. So a commit touching
 # anything else in the repo (this script, this test file) was never sent, and push
@@ -1459,7 +1515,7 @@ out_up2="$(CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" p
 check "#16 a truly settled push still says so" \
   "printf '%s' \"\$out_up2\" | grep -qi 'already up to date'"
 
-echo "== a failed sync names the RIGHT cause (#22) =="
+section "== a failed sync names the RIGHT cause (#22) =="
 # do_sync had ONE message for every way `git pull --rebase` can fail, and it named a
 # specific innocent cause: "both Macs changed the same config". On 2026-08-16 a two
 # millisecond connection failure to github.com was reported that way, sending Dan to
@@ -1567,7 +1623,7 @@ check "#22 a conflicted autostash restore is not blamed on a payload conflict" \
 check "#22 a conflicted autostash restore leaves the edits recoverable" \
   "[ -n \"\$(git -C '$STR' stash list 2>/dev/null)\" ]"
 
-echo "== status reports leftover conflict copies (#20) =="
+section "== status reports leftover conflict copies (#20) =="
 # When both Macs change one file and it cannot be merged, apply_payload_to_local keeps
 # this Mac's version as <file>.conflict-<hostname> and notifies ONCE. Nothing surfaced it
 # after that: status never mentioned it, and *.conflict-* is excluded from syncing so the
@@ -1604,7 +1660,7 @@ check "#20 status says what to do about them" \
 check "#20 a conflict copy is still never staged for the other Mac" \
   "[ ! -e '$CQR/payload/LESSONS.md.conflict-OtherMac' ]"
 
-echo "== only one mutating run at a time (#21) =="
+section "== only one mutating run at a time (#21) =="
 # The fswatch watcher fires a send on every edit, the launchd timer runs a full two-way
 # sync, and either can overlap the other or a run started by hand. All three stage into the
 # same payload and drive git in the same repo. Nothing serialized them.
@@ -1657,7 +1713,7 @@ git -C "$LKGR" remote set-url origin "$LKB"
 out_lka="$(CLAUDE_HOME="$LKGH" SYNC_REPO="$LKGR" SYNC_LOCK="$LOCK" SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1 bash "$SCRIPT" sync 2>&1)"; rc_lka=$?
 check "#21 the next run after a failure is not blocked" "[ $rc_lka -eq 0 ]"
 
-echo "== a brief outage is logged, a sustained one alerts (#22) =="
+section "== a brief outage is logged, a sustained one alerts (#22) =="
 # An unreachable remote is now correctly told apart from a two-Mac conflict (#22's parent),
 # but it still raised a desktop alert on the FIRST occurrence. A laptop changing networks
 # produces a connection failure lasting milliseconds: the 2026-08-16 incident was exactly
@@ -1737,7 +1793,7 @@ echo 'edited again' > "$SNH/skills/s/SKILL.md"
 CLAUDE_HOME="$SNH" SYNC_REPO="$SNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1 || true
 check "#22 a send that cannot reach the repo records nothing" "[ ! -s '$SNR/.last-success' ]"
 
-echo "== verify says whether both Macs actually hold the same config (#23) =="
+section "== verify says whether both Macs actually hold the same config (#23) =="
 # Everything else in this tool reports on the PROCESS: whether a run reached the repo,
 # whether a merge failed, whether a conflict copy is outstanding. Nothing reported the
 # OUTCOME the product exists for, which is that the two Macs hold the same config, and the
@@ -1825,7 +1881,7 @@ check "#23 no markers at all does not claim agreement" \
 check "#23 no markers at all says so plainly" \
   "printf '%s' \"\$out_v4\" | grep -qi 'no Mac has published'"
 
-echo "== outage decisions are recorded so the threshold can be judged (#24) =="
+section "== outage decisions are recorded so the threshold can be judged (#24) =="
 # The 3 hour cutoff deciding when a sync failure stops being logged quietly and starts
 # alerting was chosen by judgement, not measurement, and both ways of being wrong are
 # invisible: too low and it alerts on network blips until the alert is ignored, too high and
@@ -1870,7 +1926,7 @@ out_ocbad="$(CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT"
 check "#24 status survives a corrupt outage log"  "[ $rc_ocbad -eq 0 ]"
 check "#24 and says a record could not be read"   "printf '%s' \"\$out_ocbad\" | grep -qi 'unreadable'"
 
-echo "== local state carried in from elsewhere is not trusted (#25) =="
+section "== local state carried in from elsewhere is not trusted (#25) =="
 # Four files now hold local state in the sync folder and none had a defined lifetime:
 # .last-applied, .last-success, .outage-log and .sync-lock. All are gitignored, so a fresh
 # clone starts without them, but a folder COPIED or RESTORED from a backup carries stale ones
@@ -1925,7 +1981,7 @@ CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NOTIFIER="$FAKEN2" SYNC_NO_NOTIFY=0 \
   SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync >/dev/null 2>&1 || true
 check "#25 a genuinely recent success still keeps a blip quiet" "[ ! -s '$NOTED2' ]"
 
-echo "== a Mac that no longer exists does not hold verify hostage (#26) =="
+section "== a Mac that no longer exists does not hold verify hostage (#26) =="
 # The markers are keyed on hostname, which is a MUTABLE string, so renaming or reinstalling
 # a Mac does not move its marker, it mints a second one and abandons the first. Nothing ever
 # removed the old one, so verify reported that ghost as behind for ever and the verdict could
@@ -1967,7 +2023,56 @@ check "#26 forget-mac removes the marker" \
 check "#26 forget-mac refuses to remove this Mac's own marker" \
   "! CLAUDE_HOME='$GHH' SYNC_REPO='$GHR' SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash '$SCRIPT' forget-mac macNow >/dev/null 2>&1"
 
-echo "== the suite never touches a real shell rc =="
+section "== the suite can run one section at a time (#27) =="
+# A full run takes over three minutes, so verifying a one line change cost the same as
+# verifying a rewrite. That is not just slow, it changes how the tool gets built: on
+# 2026-08-16 it forced about a dozen full runs and quietly encouraged reasoning in place of
+# testing, which is where most of that session's defects came from.
+# This section runs the suite as a SUBPROCESS, so it must never recurse: the child is given
+# a filter that cannot match this section's own heading.
+SUBOUT="$WORK/subrun.txt"
+SECTION_UNTIL="sync (two-way) over a local fake remote" bash "$SCRIPT_SELF" > "$SUBOUT" 2>&1; rc_sub=$?
+check "#27 a stopped-early run still reports a total" "grep -q '^PASS=' '$SUBOUT'"
+check "#27 it reaches the named section"       "grep -q 'sync (two-way) over a local fake remote' '$SUBOUT'"
+check "#27 it stops after it"                  "! grep -q 'install-autosync writes a receive-timer' '$SUBOUT'"
+# The whole point is speed, so assert it did less rather than trusting that it did.
+sub_total="$(grep -o 'PASS=[0-9]*' "$SUBOUT" | head -1 | cut -d= -f2)"
+check "#27 a stopped-early run does less work" "[ \"\${sub_total:-99999}\" -lt 200 ]"
+# And it must be HONEST: the sections build on each other, so a partial run that produced
+# failures the code did not cause would be worse than the slow full run it replaces.
+check "#27 a stopped-early run is still green" "[ $rc_sub -eq 0 ]"
+# A name matching NOTHING is an error, never a silent green: a run that checked zero things
+# and exits 0 is indistinguishable from one where everything passed.
+SUBOUT2="$WORK/subrun2.txt"
+SECTION_UNTIL=zzz-no-such-section bash "$SCRIPT_SELF" > "$SUBOUT2" 2>&1; rc_sub2=$?
+check "#27 a name matching nothing fails"      "[ $rc_sub2 -ne 0 ]"
+check "#27 and says it matched no section"     "grep -qi 'matched no section' '$SUBOUT2'"
+# An extraction that produces invalid shell must REFUSE, not run the broken script and report
+# its parse errors as failures of the code under test. Driven through a named seam rather
+# than by racing a real breakage, so the refusal is proven instead of assumed.
+SUBOUT3="$WORK/subrun3.txt"
+SUITE_EXTRACT_BREAK=1 SECTION_UNTIL="push" bash "$SCRIPT_SELF" > "$SUBOUT3" 2>&1; rc_sub3=$?
+check "#27 an unparseable extraction refuses to run"  "[ $rc_sub3 -ne 0 ]"
+check "#27 and blames the extractor, not the code"    "grep -qi 'bug in the section extractor' '$SUBOUT3'"
+check "#27 and reports no test results at all"        "! grep -q '^PASS=' '$SUBOUT3'"
+# The runner now sits between every future change and its test result, so a silent DROP is
+# its worst failure: a green partial run that quietly omitted a section reads as proof and is
+# not. Assert that every section heading up to the named one actually appears in the output,
+# derived from the file itself rather than from a list somebody has to remember to update.
+_want="$(awk '/^section "/{print; if (index($0, "sync (two-way) over a local fake remote")>0) exit}' "$SCRIPT_SELF" \
+         | sed 's/^section "//; s/"$//')"
+_missing=""
+while IFS= read -r _h; do
+  [ -n "$_h" ] || continue
+  grep -qF -- "$_h" "$SUBOUT" || _missing="$_missing[$_h]"
+done <<EOF
+$_want
+EOF
+check "#27 it runs every section up to the named one, none skipped" "[ -z \"\$_missing\" ]"
+check "#27 the completeness check had sections to check" \
+  "[ \"\$(printf '%s' \"\$_want\" | grep -c .)\" -ge 3 ]"
+
+section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
 
