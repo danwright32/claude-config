@@ -170,11 +170,11 @@ die_transient(){   # $1 = message. Fails like die(), but stays quiet during a sh
     if [ "$gap" -lt "$threshold" ]; then
       # Deliberately NOT die(): same failure, same exit code, same log line, no alert.
       record_outage_decision quiet "$gap"
-      echo "claude-sync: $msg Syncing last worked $((gap / 60)) minutes ago, which is inside the $((threshold / 60)) minute window, so this is being logged without raising an alert." >&2
+      echo "claude-sync: $msg Syncing last worked $(age_in_words "$gap"), which is inside the $(duration_in_words "$threshold") window, so this is being logged without raising an alert." >&2
       exit 1
     fi
     record_outage_decision alert "$gap"
-    die "$msg Syncing has now been failing for $((gap / 60)) minutes."
+    die "$msg Syncing has now been failing for $(duration_in_words "$gap")."
   fi
   record_outage_decision alert unknown
   # No usable record of a success. That is NOT evidence of a brief blip, and a message may
@@ -234,17 +234,31 @@ date_from_epoch(){   # unix timestamp, strftime format -> formatted date, or not
 # the stamps is telling "an hour" from "three weeks" at a glance, and a raw timestamp does not.
 # Anything that is not a whole number of seconds, INCLUDING a negative gap from a clock that went
 # backwards, says so rather than being rendered as a confident duration (L50).
-age_in_words(){   # seconds -> "just now", "5 minutes ago", "3 weeks ago"
+# THE one place a length of time becomes words (#77). It used to be three: raw minutes in the
+# outage message, raw whole days in the conflict copy list, and this. The same gap then read three
+# different ways depending which part of the output you were in, and one of them told somebody
+# their sync had been failing for "0 minutes", which is not a duration anybody can act on.
+duration_in_words(){   # seconds -> "less than a minute", "5 minutes", "2 days", "3 weeks"
   local s="${1:-}" n unit
-  case "$s" in ''|*[!0-9]*) printf 'an unknown time ago'; return 0 ;; esac
-  if [ "$s" -lt 45 ]; then printf 'just now'; return 0; fi
+  case "$s" in ''|*[!0-9]*) printf 'an unknown length of time'; return 0 ;; esac
+  if [ "$s" -lt 60 ]; then printf 'less than a minute'; return 0; fi
   if   [ "$s" -lt 5400 ];    then n=$(( (s + 30) / 60 ));         unit=minute
   elif [ "$s" -lt 129600 ];  then n=$(( (s + 1800) / 3600 ));     unit=hour
   elif [ "$s" -lt 1209600 ]; then n=$(( (s + 43200) / 86400 ));   unit=day
   elif [ "$s" -lt 5184000 ]; then n=$(( (s + 302400) / 604800 )); unit=week
   else                            n=$(( (s + 1296000) / 2592000 )); unit=month
   fi
-  if [ "$n" -eq 1 ]; then printf '1 %s ago' "$unit"; else printf '%s %ss ago' "$n" "$unit"; fi
+  if [ "$n" -eq 1 ]; then printf '1 %s' "$unit"; else printf '%s %ss' "$n" "$unit"; fi
+}
+
+# The same span said as a point in the past. Split from duration_in_words because a conflict copy
+# is reported with the suffix "old" and a send with the suffix "ago", and only one of them wants it
+# baked in.
+age_in_words(){   # seconds -> "just now", "5 minutes ago", "3 weeks ago"
+  local s="${1:-}"
+  case "$s" in ''|*[!0-9]*) printf 'an unknown time ago'; return 0 ;; esac
+  if [ "$s" -lt 45 ]; then printf 'just now'; return 0; fi
+  printf '%s ago' "$(duration_in_words "$s")"
 }
 
 # How long this lock has existed, in seconds. Unknown counts as 0 (not stale), so a lock
@@ -2318,16 +2332,18 @@ report_conflict_copies(){
   now="$(date +%s)"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    age=$(( (now - $(file_mtime "$f" | grep . || echo "$now")) / 86400 ))
+    # Seconds, not whole days: a copy made this morning used to report itself as zero of them,
+    # and the shared renderer has words for spans shorter than a day (#77).
+    age=$(( now - $(file_mtime "$f" | grep . || echo "$now") ))
     live="$(conflict_copy_live "$f")"
     outstanding="$(only_in_first "$f" "$live")"
     # The two states get different words, because "a conflict copy exists" says nothing about
     # whether anything is still at stake in it, and a copy whose content is now all in the live
     # file reads identically to one holding the last surviving version of a lesson (L11).
     if [ -n "${outstanding// }" ]; then
-      found+="  ${f#"$CLAUDE_HOME"/} ($age days old, STILL only here: ${outstanding})"$'\n'
+      found+="  ${f#"$CLAUDE_HOME"/} ($(duration_in_words "$age") old, STILL only here: ${outstanding})"$'\n'
     else
-      found+="  ${f#"$CLAUDE_HOME"/} ($age days old, nothing in it is missing from the live file: safe to delete)"$'\n'
+      found+="  ${f#"$CLAUDE_HOME"/} ($(duration_in_words "$age") old, nothing in it is missing from the live file: safe to delete)"$'\n'
     fi
   done < <(conflict_copy_paths)
   # Silent when there are none. A standing line saying "no conflicts" would be printed on
@@ -2906,7 +2922,7 @@ do_install_autosync(){
   # receive-timer: two-way sync on a schedule (catches the other Mac's changes when idle)
   writeplist com.claudesync.timer sync \
     "  <key>StartInterval</key><integer>$interval</integer>"
-  echo "Installed receive-timer: two-way sync every $((interval/86400)) day(s)."
+  echo "Installed receive-timer: two-way sync every $(duration_in_words "$interval")."
   # change-watcher: instant push on any edit, however deep (needs fswatch)
   if command -v "${SYNC_FSWATCH:-fswatch}" >/dev/null 2>&1; then
     writeplist com.claudesync.watch watch \

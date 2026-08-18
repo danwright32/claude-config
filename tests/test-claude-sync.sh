@@ -2157,7 +2157,12 @@ out_sust="$(env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=0 bash "$SCRIPT" sync 2>&1)"
 check "#22 a sustained outage fails too" "[ $rc_sust -ne 0 ]"
 check "#22 a sustained outage does raise an alert" "[ -s '$NOTED' ]"
 check "#22 a sustained outage says how long it has been failing" \
-  "printf '%s' \"\$out_sust\" | grep -qE 'Syncing has now been failing for [0-9]+ minutes'"
+  "printf '%s' \"\$out_sust\" | grep -qE 'Syncing has now been failing for (less than a minute|[0-9]+ (minute|hour|day|week|month)s?)'"
+# The sub-minute case is the one that shows why (#77). Dividing seconds by 60 and printing the
+# result told somebody their sync had been failing for "0 minutes", which is not a duration anybody
+# can act on and reads as though nothing is wrong. A shared renderer has a word for it.
+check "#77 a sub-minute outage is not reported as zero minutes" \
+  "! line_has \"\$out_sust\" 'failing for' '0 minutes'"
 
 # No recorded success at all cannot be called a brief blip, so it must alert rather than
 # stay quiet: a message may claim only what its check actually measured (L11).
@@ -3993,6 +3998,26 @@ if [ -n "$set_missing" ]; then
   printf '%s\n' "$set_missing" | sed 's/^/    /'
 fi
 check "#73 every setting named in prose is referenced by code" "[ -z \"\$set_missing\" ]"
+
+section "== one renderer turns a length of time into words (#77) =="
+# The tool said how long ago something happened in four different ways: raw minutes in the outage
+# message, raw whole days in the conflict copy list and again in the timer message, and plain words
+# in the status header. The same span then read differently depending which part of the output you
+# were in, and two of them produced sentences nobody can act on ("failing for 0 minutes", a copy
+# made this morning reported as zero days). Derived rather than trusted, because a rule that only
+# lives in a comment is a hope (L27, L30).
+_dur_inline="$(awk '/^duration_in_words\(\)/{inh=1} inh && /^}/{inh=0; next} !inh && /\$\(\([^)]*\/ *(60|3600|86400|604800|2592000)/ {printf "%d:%s\n", NR, $0}' "$SCRIPT")"
+if [ -n "$_dur_inline" ]; then
+  echo "  (#77 places still turning seconds into a duration by hand:)"
+  printf '%s\n' "$_dur_inline" | sed 's/^/    /'
+fi
+check "#77 nothing renders a duration by hand any more" "[ -z \"\$_dur_inline\" ]"
+# And the scan must be able to SEE such a line, or the emptiness above is the scan reading nothing
+# rather than the code being clean (L98, L1).
+_dur_fixture="$WORK/duration-probe.sh"
+printf 'echo "every $((interval/86400)) days"\n' > "$_dur_fixture"
+check "#77 the scan does find one when there is one" \
+  "[ -n \"\$(awk '/^duration_in_words\(\)/{inh=1} inh && /^}/{inh=0; next} !inh && /\\\$\\(\\([^)]*\/ *(60|3600|86400|604800|2592000)/ {print}' '$_dur_fixture')\" ]"
 
 section "== one helper for the one-line assertion form (#74) =="
 # #67, #69 and #71 rewrote 67 assertions and the scan holds all three weak shapes at zero. That is
