@@ -189,6 +189,11 @@ It also scans itself for check names used more than once. A failure prints the n
 expression and nothing else, so two checks sharing a name leave you searching the file for which
 scenario actually broke.
 
+For writing new checks there is `line_has "$output" 'fact one' 'fact two'`, which passes only when
+ONE line carries every fact. That is the form all three bans exist to enforce, so the correct thing
+is now the shortest thing to write. It takes two patterns minimum and refuses one, because a single
+pattern is the weak form itself and hiding it behind a helper would put it out of the scan's sight.
+
 And it scans itself for settings named in a comment or in this README that the code never
 references. One of those had been sitting there describing a way to run a single section that was
 never built, under a name that does not exist, and it cost two wasted runs before anyone noticed.
