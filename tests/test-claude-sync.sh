@@ -3750,6 +3750,12 @@ function tally(c, restr,   rest, m, v, rs, rl) {
   # OUTPUT: an anchored pattern (^PASS=) is precise, a regex is doing real work, and the same word
   # grepped from a FILE the fixture wrote is a planted sentinel that can only have come from the
   # thing under test.
+  #
+  # There is deliberately NO length rule. It shipped with one (12 characters, on the theory that
+  # short words are generic and long ones specific) and that number was never measured against the
+  # real spread, which is the thing L172 warns about. Once the 40 were rewritten it was inert: no
+  # single-word pattern of ANY length was left, so the cap could not remove a finding, it could
+  # only let a future one through. Length is not what makes a word generic anyway.
   nc = split(expr, segc, /&&/)
   for (ic = 1; ic <= nc; ic++) {
     sc = segc[ic]
@@ -3757,7 +3763,7 @@ function tally(c, restr,   rest, m, v, rs, rl) {
     if (sc ~ /![[:space:]]*printf/) continue
     if (match(sc, /grep -[a-zA-Z]*q[a-zA-Z]*[[:space:]]+'[^']+'/) == 0) continue
     pc = substr(sc, RSTART, RLENGTH); sub(/^grep[^\047]*\047/, "", pc); sub(/\047$/, "", pc)
-    if (pc ~ /^[A-Za-z][A-Za-z0-9]*$/ && length(pc) <= 12) {
+    if (pc ~ /^[A-Za-z][A-Za-z0-9]*$/) {
       nword++; print "word\t" name "\t" pc
       break
     }
@@ -3787,11 +3793,12 @@ sed 's/^@@//' > "$WEAKFIX" <<'WEAKFIXTURE'
 @@check "a negated bare word is fine"  "! printf '%s' \"$out_v2\" | grep -q 'kept'"
 @@check "a word with what it is about"  "printf '%s' \"$out_v3\" | grep -q 'kept your edit to push.py'"
 @@check "an anchored pattern is fine"  "printf '%s' \"$out_v4\" | grep -q '^PASS='"
+@@check "a long bare word in the output"  "printf '%s' \"$out_v5\" | grep -q 'unregistering'"
 WEAKFIXTURE
 weak_fix="$(awk -f "$WEAK_AWK" "$WEAKFIX")"
 dbg "weak scanner on the fixture: $weak_fix"
 check "#55 the scanner reads every check in a file" \
-  "[ \"\$(printf '%s' \"\$weak_fix\" | awk -F'\t' '\$1==\"totals\"{print \$2}')\" = '12' ]"
+  "[ \"\$(printf '%s' \"\$weak_fix\" | awk -F'\t' '\$1==\"totals\"{print \$2}')\" = '13' ]"
 check "#55 it flags two greps over one captured output" \
   "printf '%s' \"\$weak_fix\" | grep -q 'twice.*two greps over one blob'"
 check "#55 it flags a bare path matched in captured output" \
@@ -3821,6 +3828,12 @@ check "#71 a word carrying what it is about is not flagged" \
   "! printf '%s' \"\$weak_fix\" | grep -q 'a word with what it is about'"
 check "#71 an anchored pattern is not flagged" \
   "! printf '%s' \"\$weak_fix\" | grep -q 'an anchored pattern is fine'"
+# Length is not what makes a word generic. The cap this pass shipped with (12 characters) was a
+# guess nobody measured, and it was inert the moment the 40 were rewritten, so the only thing it
+# could ever do was let a future one through (#71, L172: do not ship a threshold you have not
+# measured against the real spread).
+check "#71 a long bare word is flagged too" \
+  "printf '%s' \"\$weak_fix\" | grep -q 'word.*a long bare word in the output'"
 # Now the real suite. The ceilings were first measured on 2026-08-17 (581 checks, 6 and 22); #67
 # rewrote all six of the double-grep checks and #69 all twenty-one of the bare path ones, so both
 # are 0. From here either shape fails the suite. Raising either is a decision somebody has to write
