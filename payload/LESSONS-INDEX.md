@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 184 lessons.
+LESSONS.md, which is NOT loaded into the session. 186 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -130,6 +130,7 @@ to decide something: the body is where the failure it came from is described.
 - L175. A value read once at startup is only true at startup, and when the thing it describes lives OUTSIDE the program (a checkout, a config file, a device, another service) there is no action inside the program to hang a re-read on, so it goes stale invisibly and its silence reads as an assurance.
 - L176. A field name that asserts a ROLE or a DIRECTION (who referred whom, source versus destination, sender versus recipient, parent versus child) must be verified against the code that RENDERS it, because the rendered wording is the authority and a backwards name silently recruits every future writer into filling it the wrong way round, with nothing anywhere reporting a problem.
 - L185. A statement that NORMALIZES a value on the way in (a COALESCE, a lowercase, a trim, a default standing for absent) must group or deduplicate by the NORMALIZED form, never by the raw one, because two raw spellings that normalize to the same thing survive as separate groups and then collide on one stored key.
+- L186. A durable record that exists to stop an action repeating is only as durable as its KEY.
 
 ## Security and privacy
 
@@ -168,6 +169,7 @@ to decide something: the body is where the failure it came from is described.
 - L113. A lookup table keyed by a vocabulary (a colour by status, an icon by type, a label by code) must have its completeness enforced by the type system or a test, because a missing key silently takes the default branch, and a default is indistinguishable from a deliberate choice.
 - L126. An action offered only on a transient surface (a run summary, a status message, a toast) cannot serve a condition that PERSISTS in the data, because the notice clears while the state stays, so every encounter after the first finds the fault still named and the remedy gone.
 - L180. A confirmation dialog's consequence sentence must be derived from the state it is about to change, never asserted, because a warning shown on every delete carries no information and reads identically whether it is taking one row or a subtree of ten.
+- L187. A control gated on a collection holding MORE THAN ONE member is absent in the commonest case, which is one member.
 
 ## External systems
 
