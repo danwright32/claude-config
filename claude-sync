@@ -2154,6 +2154,11 @@ do_pull(){
   if have_git; then
     before="${SYNC_PULL_BASE-$(repo_head)}"
     git -C "$SYNC_REPO" pull --ff-only -q
+    # A pull that went through is proof the repo was reachable, exactly as a push is. Only send and
+    # sync stamped it before, so a Mac that ONLY ever pulls reported that it had never reached the
+    # shared repo while pulling successfully every day, which #76 surfaced by putting the fact on
+    # screen. The same argument written at the push site, one command over. (#22, #76)
+    record_sync_success
     after="$(repo_head)"
     reexec_after_self_update "$before" "$after" pull || true
   fi
@@ -2531,9 +2536,15 @@ stamp_in_words(){   # $1 = stamp file  $2 = now (epoch)  $3 = what "never" means
 report_sync_times(){
   local now; now="$(date +%s)"
   echo "--- when config last moved between this Mac and the shared repo ---"
-  printf '  last sent:     %s\n' "$(stamp_in_words "$LAST_SENT_FILE" "$now" 'nothing has gone up from this clone')"
-  printf '  last received: %s\n' "$(stamp_in_words "$LAST_RECEIVED_FILE" "$now" 'nothing has come down into this clone')"
-  echo "  Both are the last time something actually moved, not the last time a sync ran."
+  printf '  last sent:      %s\n' "$(stamp_in_words "$LAST_SENT_FILE" "$now" 'nothing has gone up from this clone')"
+  printf '  last received:  %s\n' "$(stamp_in_words "$LAST_RECEIVED_FILE" "$now" 'nothing has come down into this clone')"
+  # The third fact, without which the first two are ambiguous (#76). A long gap since the last send
+  # means something is stuck if the repo was reachable throughout, and means an outage if it was
+  # not, and those want opposite responses. .last-success has recorded this since #22 and nothing
+  # showed it.
+  printf '  repo reachable: %s\n' "$(stamp_in_words "$LAST_SUCCESS_FILE" "$now" 'this clone has never reached the shared repo')"
+  echo "  The first two are the last time something actually moved, not the last time a sync ran."
+  echo "  The third only means the repo could be reached; it moves on every successful run and says nothing about whether anything crossed."
 }
 
 do_status(){

@@ -4106,6 +4106,25 @@ check "#75 an unreadable stamp says it could not be read" \
 check "#75 and status still exits cleanly on a corrupt stamp" \
   "CLAUDE_HOME='$STAH' SYNC_REPO='$STA' SYNC_NO_NOTIFY=1 bash '$SCRIPT' status >/dev/null 2>&1"
 
+# #76: the third fact. Sent and received alone leave two very different situations reading the
+# same. "Last sent three weeks ago, repo reachable throughout" means something is genuinely stuck
+# and needs a person; "last sent three weeks ago, repo unreachable" is an outage already reported
+# elsewhere. Without reachability the reader of a stale pending list cannot tell which (L11).
+check "#76 a clone that has never reached the repo says so" \
+  "line_has \"\$out_st0\" 'reachable' 'never'"
+check "#76 status says when the repo was last reachable" \
+  "! line_has \"\$out_st2\" 'reachable' 'never'"
+# It moves on EVERY successful fetch, so it must not be read as config having crossed. The other
+# two lines mean something moved; this one only means the door opened.
+check "#76 and says plainly that reachable is not the same as moved" \
+  "line_has \"\$out_st2\" 'reach' 'says nothing about whether anything crossed'"
+printf 'not-a-timestamp\n' > "$STB/.last-success"
+out_st4="$(CLAUDE_HOME="$STBH" SYNC_REPO="$STB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#76 an unreadable reachability stamp is not reported as never" \
+  "! line_has \"\$out_st4\" 'reachable' 'never'"
+check "#76 an unreadable reachability stamp says it could not be read" \
+  "line_has \"\$out_st4\" 'reachable' 'could not be read'"
+
 # The stamps are this Mac's own bookkeeping and must never travel, the way .last-applied does not.
 check "#75 the stamps are not committed to the shared repo" \
   "! git -C '$STA' ls-files --error-unmatch .last-sent >/dev/null 2>&1 && ! git -C '$STA' ls-files --error-unmatch .last-received >/dev/null 2>&1"
