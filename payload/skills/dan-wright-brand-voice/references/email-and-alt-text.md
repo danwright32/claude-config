@@ -63,7 +63,7 @@ Cold outreach should carry real proof, not just an offer. Work in one relevant c
 ### No price and no turnaround in a cold pitch
 A cold pitch states NO rate and NO delivery turnaround. Not the hourly figure, not the one-hour minimum, not "the gallery comes back within two weeks". Dan's call, 2026-07-31, reversing the earlier rule that made the rate mandatory: "I feel like I'm more likely to get a response if I don't, because they may check out my portfolio instead of getting sticker shock and then email me asking about it." A number in a first email from a stranger gets judged before the work is looked at. Leave them the portfolio and the ask, and let them raise money themselves.
 
-This is about the COLD PITCH only. A reply to someone who asks what Dan charges states it plainly, as it always has: $250 an hour plus tax, one-hour minimum, edited gallery within two weeks.
+This is about the COLD PITCH only. A reply to someone who asks what Dan charges reproduces the canonical two paragraphs in SKILL.md verbatim, never a summary of them.
 
 ### Rooms Dan has already shot
 When you are told Dan has worked the venue before, say so, ALONGSIDE the credential above rather than instead of it (Dan's call, 2026-07-31). The credential says the level he works at; this says he knows THIS room, and it is the one thing in a cold pitch a stranger cannot fake. Three bands, and the wording stays at that grain:
