@@ -1465,6 +1465,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   the tie before completeness was ever compared, and a fully filled-out profile ranked below a
   bare one. The completeness score itself was correct and recomputed on every profile save)
 
+- **L501. A new thing built by cloning a proven pattern copies that pattern AS FIRST WRITTEN,
+  including every value already corrected in the original, so clone the CURRENT version and
+  re-check each constant against the rule it has to satisfy.** The clone's own note saying it
+  follows a proven pattern is what makes it read as safe, and the correction it missed usually
+  lives in a comment on the original, which governs nothing. Distinct from L30, which sweeps a
+  found defect's siblings in the same change: here the sibling did not exist when the fix landed,
+  so no sweep could have reached it, and distinct from L57, where the correction never reached the
+  governing artifact at all.
+  (bidspoke#849: workflow_stats_daily's nightly rollup lookback was cut from 90 days to 7 in May to
+  match raw retention, with a comment saying it must never exceed it. field_presence_daily was
+  added a month later, its header reading "clones the proven refresh_workflow_stats_daily pattern",
+  and took the 90. Measured 2026-08-18: 110 days of history in the table with the 7, and 10 in the
+  table with the 90, because every successful nightly run deleted 90 days and could only rebuild
+  the 8 still in raw)
+
 ## Cross-system reliability
 
 - **L33. Make the pair of a database write and an external side effect crash-safe.**
