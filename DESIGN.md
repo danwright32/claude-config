@@ -289,6 +289,25 @@ without it. In a real session on 2026-08-17, a directory whose project settings 
 is off at user scope listed that plugin's skills, and a control directory without those settings did
 not.
 
+### Trimming LESSONS.md rather than splitting it
+
+Rejected for #63. The obvious way to spend fewer tokens on 180 lessons is to write them shorter, and
+it is the wrong one: the body of each entry is the evidence, and a rule without the failure it came
+from is routinely too short to apply correctly. Several lessons exist BECAUSE a shortened version of
+them was misread.
+
+So nothing is trimmed. The session loads a generated index of one line per lesson, and the full
+entry is read on demand, by `claude-sync lesson L174` or by opening the file. Measured through the
+shipping code path on the real file: 117,050 bytes to 33,549, with all 180 lessons present.
+
+Two things this had to avoid. `LESSONS.md` is no longer imported by `CLAUDE.md`, and the set of
+files that sync is DERIVED from those imports, so dropping it could have stopped the lessons file
+syncing at all, leaving a generated index as the only copy anywhere. It stays because
+`TOP_FILES_SEED` names it, and a test asserts the whole file still travels. And the index is
+regenerated on every send and every apply rather than maintained beside the file, because a copy
+kept by hand next to its source drifts silently (L41). The renumber scan skips it for the same
+reason: a number in a file that is rewritten in the same run is not something to go and check.
+
 ## Measured numbers
 
 Every threshold here is a multiple of something real, measured on the date given. None is a round

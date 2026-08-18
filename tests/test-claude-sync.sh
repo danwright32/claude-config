@@ -3755,6 +3755,71 @@ out_pg2="$(CLAUDE_HOME="$PGH" SYNC_REPO="$PGR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 ba
 check "#48 a Mac with no plugin settings is told what that means" \
   "printf '%s' \"\$out_pg2\" | grep -qiE 'no plugin (enablement|settings)'"
 
+section "== the lessons index is derived, and the full text is read on demand (#63) =="
+# LESSONS.md is 179 entries and about 116 KB, imported in full into every session in every project.
+# Each entry is written to be read closely, so the cost is attention as well as tokens. The session
+# now loads an index (number, section, the rule sentence) and the full entry is read on demand.
+#
+# The index is DERIVED on every send and every apply, never maintained by hand beside the file it
+# mirrors, or the two drift and the drift is silent (L41).
+LXH="$WORK/lessonindex-home"; LXR="$WORK/lessonindex-repo"
+mkdir -p "$LXH" "$LXR/payload"
+echo '{"hooks":{}}' > "$LXH/settings.json"
+printf '# rules\n@LESSONS-INDEX.md\n' > "$LXH/CLAUDE.md"
+cat > "$LXH/LESSONS.md" <<'LESSONSEOF'
+# Build-time lessons
+
+## Proof over green
+
+- **L1. A guard is only real once it has been seen to fail.** Mocked guards asserting their own
+  mock sit green while protecting nothing.
+  (someproject#11)
+- **L2. A rule that wraps onto a second line is still one rule, so the whole sentence
+  belongs in the index.** The body underneath it does not.
+  (someproject#12)
+
+## Data safety
+
+- **L3. Never destroy good state before its replacement exists.** Write to temp and rename.
+  (someproject#13)
+LESSONSEOF
+out_lx="$(CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+dbg "push with lessons: $out_lx"
+check "#63 the index is written where the session loads it" "[ -f '$LXH/LESSONS-INDEX.md' ]"
+check "#63 and it travels to the other Mac"                 "[ -f '$LXR/payload/LESSONS-INDEX.md' ]"
+check "#63 every lesson has a line"        "[ \"\$(grep -c '^- L[0-9]' '$LXH/LESSONS-INDEX.md')\" = '3' ]"
+check "#63 a rule that wraps is kept whole" "grep -q 'L2. A rule that wraps onto a second line is still one rule, so the whole sentence belongs in the index.' '$LXH/LESSONS-INDEX.md'"
+check "#63 the sections are kept"           "grep -q 'Data safety' '$LXH/LESSONS-INDEX.md'"
+check "#63 the bodies are left out"         "! grep -q 'Write to temp and rename' '$LXH/LESSONS-INDEX.md'"
+check "#63 and so is the provenance"        "! grep -q 'someproject#13' '$LXH/LESSONS-INDEX.md'"
+check "#63 the index says where the full text is" "grep -qi 'LESSONS.md' '$LXH/LESSONS-INDEX.md'"
+# The whole file still syncs, even though CLAUDE.md no longer imports it. Losing that would be the
+# worst outcome of this change: the index would be the only copy anywhere.
+check "#63 the full lessons file still travels" "[ -f '$LXR/payload/LESSONS.md' ]"
+check "#63 and the payload copy is the whole thing" "grep -q 'Write to temp and rename' '$LXR/payload/LESSONS.md'"
+# Derived means derived: a hand-edited index is replaced, not trusted, and a new lesson appears
+# without anybody touching the index.
+printf 'this line was typed into the index by hand\n' >> "$LXH/LESSONS-INDEX.md"
+printf -- '- **L4. A late lesson still reaches the index.** body\n  (someproject#14)\n' >> "$LXH/LESSONS.md"
+CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+check "#63 a hand edit to the index is overwritten"  "! grep -q 'typed into the index by hand' '$LXH/LESSONS-INDEX.md'"
+check "#63 a new lesson appears without touching it" "grep -q 'L4. A late lesson still reaches the index.' '$LXH/LESSONS-INDEX.md'"
+# A no-op run must not rewrite it: CLAUDE.md and its imports are watched, and rewriting one on
+# every sync re-triggers the watcher for ever.
+lx_sum_before="$(cksum < "$LXH/LESSONS-INDEX.md")"
+CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+check "#63 a second send leaves the index alone" "[ \"\$(cksum < '$LXH/LESSONS-INDEX.md')\" = \"\$lx_sum_before\" ]"
+# Reading one in full, which is what the index sends you to.
+out_lxl="$(CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson L3 2>&1)"
+dbg "lesson L3: $out_lxl"
+check "#63 a lesson can be read in full on demand"   "printf '%s' \"\$out_lxl\" | grep -q 'Write to temp and rename'"
+check "#63 with its provenance"                      "printf '%s' \"\$out_lxl\" | grep -q 'someproject#13'"
+check "#63 and without the neighbouring entries"     "! printf '%s' \"\$out_lxl\" | grep -q 'Mocked guards'"
+lx_miss_rc=0
+out_lxmiss="$(CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson L99 2>&1)" || lx_miss_rc=$?
+check "#63 a number that is not there is refused"     "[ \"\$lx_miss_rc\" -ne 0 ]"
+check "#63 rather than printing nothing and exiting 0" "printf '%s' \"\$out_lxmiss\" | grep -q 'L99'"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
