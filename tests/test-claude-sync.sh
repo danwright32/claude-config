@@ -3739,8 +3739,31 @@ function tally(c, restr,   rest, m, v, rs, rl) {
       break
     }
   }
+
+  # C: a POSITIVE assertion over captured output whose whole pattern is ONE BARE WORD. A command's
+  # output carries ordinary words ("kept", "merged", "alert", "behind") for reasons that have
+  # nothing to do with the behaviour under test, so the match is real and irrelevant, which is the
+  # same illusion as the bare path family one pass up (#71, L135, L156, L178).
+  #
+  # Deliberately narrow, so it reports something a person can act on rather than a wall. It only
+  # fires on an UNANCHORED pattern of nothing but letters and digits, matched against CAPTURED
+  # OUTPUT: an anchored pattern (^PASS=) is precise, a regex is doing real work, and the same word
+  # grepped from a FILE the fixture wrote is a planted sentinel that can only have come from the
+  # thing under test.
+  nc = split(expr, segc, /&&/)
+  for (ic = 1; ic <= nc; ic++) {
+    sc = segc[ic]
+    if (sc !~ /printf/ || sc !~ /grep/) continue
+    if (sc ~ /![[:space:]]*printf/) continue
+    if (match(sc, /grep -[a-zA-Z]*q[a-zA-Z]*[[:space:]]+'[^']+'/) == 0) continue
+    pc = substr(sc, RSTART, RLENGTH); sub(/^grep[^\047]*\047/, "", pc); sub(/\047$/, "", pc)
+    if (pc ~ /^[A-Za-z][A-Za-z0-9]*$/ && length(pc) <= 12) {
+      nword++; print "word\t" name "\t" pc
+      break
+    }
+  }
 }
-END { printf "totals\t%d\t%d\t%d\n", total, ntwice+0, nbare+0 }
+END { printf "totals\t%d\t%d\t%d\t%d\n", total, ntwice+0, nbare+0, nword+0 }
 WEAKAWK
 # Proven on a file built to contain one of each, because a scanner run only over the real suite
 # reports a number nobody can check, and a number is indistinguishable from a scanner that matched
@@ -3752,19 +3775,23 @@ WEAKFIX="$WORK/weak-fixture.sh"
 # measuring. (It used to be a stack of nested printf calls, which was unreadable enough that
 # nobody would add a case to it, and #68 needed four more.)
 sed 's/^@@//' > "$WEAKFIX" <<'WEAKFIXTURE'
-@@check "two greps over one blob"  "printf '%s' \"$out_x\" | grep -q 'alpha' && printf '%s' \"$out_x\" | grep -q 'beta'"
+@@check "two greps over one blob"  "printf '%s' \"$out_x\" | grep -q 'alpha-1' && printf '%s' \"$out_x\" | grep -q 'beta-1'"
 @@check "a bare path in the output"  "printf '%s' \"$out_y\" | grep -q 'hooks/thing.sh'"
 @@check "a negated bare path is fine"  "! printf '%s' \"$out_z\" | grep -q 'hooks/thing.sh'"
 @@check "one line carrying both"  "printf '%s' \"$out_w\" | grep -q 'hooks/thing.sh also mentions L2'"
-@@check "two herestrings over one blob"  "grep -q 'alpha' <<<\"$out_h\" && grep -q 'beta' <<<\"$out_h\""
-@@check "a case and a grep over one blob"  "case \"$out_c\" in *alpha*) true ;; *) false ;; esac && printf '%s' \"$out_c\" | grep -q 'beta'"
-@@check "two double brackets over one blob"  "[[ \"$out_b\" == *alpha* ]] && [[ \"$out_b\" == *beta* ]]"
-@@check "a positive and a negated match is fine"  "printf '%s' \"$out_n\" | grep -q 'alpha' && ! printf '%s' \"$out_n\" | grep -q 'beta'"
+@@check "two herestrings over one blob"  "grep -q 'alpha-1' <<<\"$out_h\" && grep -q 'beta-1' <<<\"$out_h\""
+@@check "a case and a grep over one blob"  "case \"$out_c\" in *alpha-1*) true ;; *) false ;; esac && printf '%s' \"$out_c\" | grep -q 'beta-1'"
+@@check "two double brackets over one blob"  "[[ \"$out_b\" == *alpha-1* ]] && [[ \"$out_b\" == *beta-1* ]]"
+@@check "a positive and a negated match is fine"  "printf '%s' \"$out_n\" | grep -q 'alpha-1' && ! printf '%s' \"$out_n\" | grep -q 'beta-1'"
+@@check "a bare word in the output"  "printf '%s' \"$out_v\" | grep -q 'kept'"
+@@check "a negated bare word is fine"  "! printf '%s' \"$out_v2\" | grep -q 'kept'"
+@@check "a word with what it is about"  "printf '%s' \"$out_v3\" | grep -q 'kept your edit to push.py'"
+@@check "an anchored pattern is fine"  "printf '%s' \"$out_v4\" | grep -q '^PASS='"
 WEAKFIXTURE
 weak_fix="$(awk -f "$WEAK_AWK" "$WEAKFIX")"
 dbg "weak scanner on the fixture: $weak_fix"
 check "#55 the scanner reads every check in a file" \
-  "[ \"\$(printf '%s' \"\$weak_fix\" | awk -F'\t' '\$1==\"totals\"{print \$2}')\" = '8' ]"
+  "[ \"\$(printf '%s' \"\$weak_fix\" | awk -F'\t' '\$1==\"totals\"{print \$2}')\" = '12' ]"
 check "#55 it flags two greps over one captured output" \
   "printf '%s' \"\$weak_fix\" | grep -q 'twice.*two greps over one blob'"
 check "#55 it flags a bare path matched in captured output" \
@@ -3785,6 +3812,15 @@ check "#68 it flags two double brackets over one captured output" \
 # blob is sound. Banning it at a ceiling of zero would refuse a legitimate check.
 check "#68 a positive paired with a negated match is not flagged" \
   "! printf '%s' \"\$weak_fix\" | grep -q 'a positive and a negated match is fine'"
+# #71: the third family. One bare word, matched against a whole captured output.
+check "#71 it flags an assertion matching one bare word" \
+  "printf '%s' \"\$weak_fix\" | grep -q 'word.*a bare word in the output'"
+check "#71 a negated bare word is not flagged" \
+  "! printf '%s' \"\$weak_fix\" | grep -q 'a negated bare word is fine'"
+check "#71 a word carrying what it is about is not flagged" \
+  "! printf '%s' \"\$weak_fix\" | grep -q 'a word with what it is about'"
+check "#71 an anchored pattern is not flagged" \
+  "! printf '%s' \"\$weak_fix\" | grep -q 'an anchored pattern is fine'"
 # Now the real suite. The ceilings were first measured on 2026-08-17 (581 checks, 6 and 22); #67
 # rewrote all six of the double-grep checks and #69 all twenty-one of the bare path ones, so both
 # are 0. From here either shape fails the suite. Raising either is a decision somebody has to write
@@ -3798,11 +3834,18 @@ weak_real="$(awk -f "$WEAK_AWK" "$SCRIPT_SELF")"
 weak_total="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $2}')"
 weak_twice="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $3}')"
 weak_bare="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $4}')"
-echo "  (#55 weak assertions in this suite: $weak_twice grep the same output twice, $weak_bare match only a path, out of $weak_total checks)"
-printf '%s\n' "$weak_real" | grep -E '^(twice|bare)' | sed 's/^/    /'
+weak_word="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $5}')"
+echo "  (#55 weak assertions in this suite: $weak_twice grep the same output twice, $weak_bare match only a path, $weak_word match one bare word, out of $weak_total checks)"
+printf '%s\n' "$weak_real" | grep -E '^(twice|bare|word)' | sed 's/^/    /'
 check "#55 the scan really read this suite" "[ \"\${weak_total:-0}\" -ge 500 ]"
 check "#55 no check greps one captured output twice" "[ \"\${weak_twice:-999}\" -le 0 ]"
 check "#55 no check matches only a bare path" "[ \"\${weak_bare:-999}\" -le 0 ]"
+# The third family (#71) starts where the other two did: a ratchet at the number measured when it
+# was added, not a ban, because some of them will turn out to be legitimate and the honest way to
+# find out is to read each one. Measured at 40 on 2026-08-17 out of 634 checks. It needs no
+# positive control while it is non-zero, since 40 findings are their own proof the pass is alive;
+# it will need one the moment it reaches 0, for the reason the other two have one.
+check "#71 no new check matches only one bare word" "[ \"\${weak_word:-999}\" -le 40 ]"
 # A POSITIVE CONTROL on BOTH zeros (#68, extended by #69 once the bare half reached zero too). The
 # fixture proves the scanner on a file built for it; this proves it on the file actually being
 # scanned, in the same invocation, by planting one instance of each in a copy and requiring both
