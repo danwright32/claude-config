@@ -64,6 +64,20 @@ Sending is automatic on change; receiving is automatic on the timer. A no-op syn
 writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
 conflict the background job stops and fires a desktop notification.
 
+## Lessons: an index in context, the full text on demand
+
+`CLAUDE.md` imports `LESSONS-INDEX.md`, one line per lesson (the rule, without its body or
+provenance). `LESSONS.md` still syncs and still holds everything; it is simply not loaded into every
+session. Measured on the real file: 117,050 bytes down to 33,549, with all 180 lessons present.
+
+Read one in full with `./claude-sync lesson L174`, or open the entry in `~/.claude/LESSONS.md`. The
+body is where the failure behind the rule is described, so read it whenever a rule is about to
+decide something.
+
+The index is generated from `LESSONS.md` on every send and every apply, never maintained beside it.
+A hand edit to it is overwritten on the next run, which is the point: a list kept by hand next to
+the thing it mirrors drifts, and the drift is silent.
+
 ## When a merge cannot be done
 
 The other Mac's version is applied and yours is kept beside it as `<file>.conflict-<host>`, with one

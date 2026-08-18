@@ -14,6 +14,7 @@
 #   claude-sync status            # show what differs, no changes
 #   claude-sync next-lesson       # the next free lesson number, so none is picked by eye
 #   claude-sync check-lessons     # fail if two lessons share a number
+#   claude-sync lesson L174       # one lesson in full, with its provenance
 #   claude-sync cite-scan L2      # which synced files cite that lesson number
 #   claude-sync check-skills      # fail if a plugin and the skills folder provide the same skill
 #   claude-sync install-autosync  # background: fswatch watcher + periodic receive-timer
@@ -600,6 +601,85 @@ duplicate_lesson_numbers(){   # $1 = tree to inspect
 # One past the highest number in use, never a gap: a skipped number was skipped
 # deliberately (the audit's L6 was reviewed and rejected), so reusing it would
 # resurrect a retired reference.
+# ---- the lessons index (#63) ----
+# LESSONS.md is 179 entries and about 116 KB, and CLAUDE.md used to import the whole of it into
+# every session in every project. Each entry is written to be read closely, so the cost is attention
+# spread across 179 of them as much as it is tokens. The session loads this index instead (the
+# number, its section, and the rule sentence), and the full entry is read on demand.
+#
+# DERIVED from LESSONS.md on every send and every apply, never maintained beside it: a list kept by
+# hand next to the thing it mirrors drifts the moment one of them is edited, and the drift is
+# silent (L41). A hand edit here is therefore overwritten, which is the point.
+LESSON_INDEX_FILE="LESSONS-INDEX.md"
+
+lesson_index_body(){   # $1 = the full lessons file
+  local n
+  [ -f "$1" ] || return 0
+  n="$(grep -c '^- \*\*L[0-9]\+\.' "$1" 2>/dev/null || true)"
+  printf '# Lessons index (generated, do not edit)\n\n'
+  printf 'One line per lesson: the rule itself, without the body or the provenance. Generated from\n'
+  printf 'LESSONS.md, which is NOT loaded into the session. %s lessons.\n\n' "${n:-0}"
+  printf 'To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or\n'
+  printf 'read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about\n'
+  printf 'to decide something: the body is where the failure it came from is described.\n'
+  awk '
+    /^## / { section = substr($0, 4); next }
+    /^- \*\*L[0-9]+\./ {
+      rest = substr($0, index($0, "- **") + 4)
+      # The rule sentence is bold and routinely wraps onto later lines, so read until it closes.
+      while (index(rest, "**") == 0) {
+        if ((getline nxt) <= 0) break
+        sub(/^[[:space:]]+/, " ", nxt)
+        rest = rest nxt
+      }
+      end = index(rest, "**")
+      rule = (end > 0) ? substr(rest, 1, end - 1) : rest
+      gsub(/[[:space:]]+/, " ", rule)
+      sub(/[[:space:]]+$/, "", rule)
+      if (section != lastsec) { printf "\n## %s\n\n", section; lastsec = section }
+      printf "- %s\n", rule
+    }
+  ' "$1"
+  return 0
+}
+
+# Writes the index beside the lessons file, and ONLY when it differs. CLAUDE.md and everything it
+# imports are watched, so rewriting one on every sync would re-trigger the watcher for ever.
+write_lesson_index(){   # $1 = tree holding LESSONS.md
+  local src="$1/LESSONS.md" out
+  [ -f "$src" ] || return 0
+  out="$(scratch_file)"
+  lesson_index_body "$src" > "$out" 2>/dev/null || { rm -f "$out"; return 0; }
+  [ -s "$out" ] || { rm -f "$out"; return 0; }
+  if ! cmp -s "$out" "$1/$LESSON_INDEX_FILE"; then cat "$out" > "$1/$LESSON_INDEX_FILE"; fi
+  rm -f "$out"
+  return 0
+}
+
+# One entry, in full, with its provenance: what the index sends you to.
+do_lesson(){   # $1 = number, e.g. L174
+  local num="${1:-}" src out
+  case "$num" in
+    L[0-9]*) : ;;
+    *) die "lesson needs a number, e.g. lesson L174 (got '${num:-<nothing>}')" ;;
+  esac
+  src="$CLAUDE_HOME/LESSONS.md"
+  [ -f "$src" ] || die "no LESSONS.md at $src, so nothing can be looked up."
+  out="$(awk -v want="$num" '
+    $0 ~ ("^- \\*\\*" want "\\.") { printing = 1; print; next }
+    printing && /^- \*\*L[0-9]+\./ { exit }
+    printing && /^## / { exit }
+    printing { print }
+  ' "$src")"
+  # An empty answer is a REFUSAL, not a lesson with nothing in it: printing nothing and exiting 0
+  # would read exactly like a lesson that says nothing (L98).
+  if [ -z "${out// }" ]; then
+    die "$num is not in $src. 'claude-sync next-lesson' prints the next free number if you are adding one."
+  fi
+  printf '%s\n' "$out"
+  return 0
+}
+
 # ---- lesson number bands (#44) ----
 # Both Macs used to allocate the next free number from their own copy of the rules, so any two
 # lessons written between syncs claimed the same number by construction. It happened on 2026-07-29
@@ -812,6 +892,9 @@ PROT
       notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): duplicate lesson number"
     fi
   fi
+  # Regenerated here rather than trusted, so the copy that travels always matches the lessons file
+  # sitting beside it, whatever anybody has typed into it (#63).
+  write_lesson_index "$CLAUDE_HOME"
   # top-level rule files, derived from CLAUDE.md's own imports, copied verbatim
   for f in $(top_files_in "$CLAUDE_HOME"); do
     case "
@@ -1051,6 +1134,10 @@ $f
       fi
     fi
   fi
+  # Before the imports are checked, and after the rule files have landed: on a Mac pulling for the
+  # first time CLAUDE.md arrives importing an index that does not exist here yet, and after a merge
+  # or a renumber the index that does exist is one edit behind (#63).
+  write_lesson_index "$CLAUDE_HOME"
   verify_rule_imports
   # A collision the merge creates is settled there by renumbering the unsent
   # entry, so what reaches this point is one that cannot be settled on this Mac:
@@ -1486,6 +1573,9 @@ count_citations_in(){   # $1 = number, e.g. L2; candidate paths on stdin
   local num="$1" f stale
   while IFS= read -r f; do
     [ -n "$f" ] || continue
+    # The lessons index is generated from LESSONS.md on every send and every apply, so a number in
+    # it is never something to go and check by hand: it is rewritten in the same run (#63).
+    [ "$f" = "$LESSON_INDEX_FILE" ] && continue
     [ -f "$PAYLOAD/$f" ] || continue   # only synced files are in scope
     stale="$(stale_number_mentions "$CLAUDE_HOME/$f" "$num")"
     [ "${stale:-0}" -gt 0 ] 2>/dev/null || continue
@@ -2775,6 +2865,7 @@ case "$cmd" in
   install-autosync) do_install_autosync ;;
   next-lesson) lesson_band_locked; next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND" ;;
   cite-scan) do_cite_scan "${2:-}" ;;   # read-only: which synced files cite a lesson number
+  lesson) do_lesson "${2:-}" ;;         # read-only: one lesson in full, with its provenance
   check-skills) do_check_skills ;;      # read-only: is any skill provided by a plugin AND locally
   check-lessons)
     dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
@@ -2782,6 +2873,6 @@ case "$cmd" in
     lesson_band_locked
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
-  help|-h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, cite-scan, check-skills, install-autosync, help)" ;;
+  help|-h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, cite-scan, check-skills, lesson, install-autosync, help)" ;;
 esac
