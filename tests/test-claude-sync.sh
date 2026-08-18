@@ -4019,6 +4019,78 @@ check "#74 it refuses no pattern at all"              "! line_has \"\$_lh_one\""
 check "#74 it refuses empty output rather than passing vacuously" \
   "! line_has '' 'alpha' 'beta'"
 
+section "== status says when this Mac last sent and last received (#75) =="
+# status listed pending files with no way to tell whether the other Mac had been waiting on them
+# for an hour or three weeks. Silent drift between the two Macs is the failure mode this tool
+# exists to prevent, and status is the only place anybody would notice it, so a pending list that
+# reads identically fresh or months old is the report failing at its one job (L148).
+#
+# The stamps mean "the last time something actually MOVED", not "the last time we looked". A stamp
+# that advanced on every run would make a Mac that syncs hourly with nothing to do look permanently
+# healthy, which is the exact reassurance that hides the drift (L106, L98).
+STBARE="$WORK/stbare.git"; git init -q --bare -b main "$STBARE"
+STA="$WORK/strepoA"; git clone -q "$STBARE" "$STA" 2>/dev/null
+STAH="$WORK/sthomeA"; mkdir -p "$STAH/hooks"; echo '{"hooks":{}}' > "$STAH/settings.json"
+echo 'v1' > "$STAH/hooks/st.sh"
+STB="$WORK/strepoB"; STBH="$WORK/sthomeB"
+
+# Nothing has happened yet on this clone, so both answers are "never", and never must not be
+# dressed up as a date (L67).
+out_st0="$(CLAUDE_HOME="$STAH" SYNC_REPO="$STA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#75 a clone that has never sent says so" \
+  "line_has \"\$out_st0\" 'last sent' 'never'"
+check "#75 a clone that has never received says so" \
+  "line_has \"\$out_st0\" 'last received' 'never'"
+
+# A send that actually publishes stamps the sent time.
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$STAH" SYNC_REPO="$STA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_st1="$(CLAUDE_HOME="$STAH" SYNC_REPO="$STA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#75 a send that published stamps the sent time" \
+  "! line_has \"\$out_st1\" 'last sent' 'never'"
+check "#75 and the sent line carries an age in plain words" \
+  "line_has \"\$out_st1\" 'last sent' '(just now|second|minute|hour|day|week|month)'"
+check "#75 sending does not pretend anything was received" \
+  "line_has \"\$out_st1\" 'last received' 'never'"
+
+# The other Mac pulls: that one applies files, so its received time is stamped.
+git clone -q "$STBARE" "$STB" 2>/dev/null
+mkdir -p "$STBH"; echo '{"hooks":{}}' > "$STBH/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$STBH" SYNC_REPO="$STB" bash "$SCRIPT" pull >/dev/null 2>&1
+out_st2="$(CLAUDE_HOME="$STBH" SYNC_REPO="$STB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#75 a pull that applied files stamps the received time" \
+  "! line_has \"\$out_st2\" 'last received' 'never'"
+check "#75 and that clone has still never sent" \
+  "line_has \"\$out_st2\" 'last sent' 'never'"
+
+# THE point of the feature: a pull with nothing to apply must NOT move the stamp, or a Mac that
+# checks hourly and receives nothing reads as freshly in sync forever.
+_st_before="$(cat "$STB/.last-received" 2>/dev/null || echo missing)"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$STBH" SYNC_REPO="$STB" bash "$SCRIPT" pull >/dev/null 2>&1
+_st_after="$(cat "$STB/.last-received" 2>/dev/null || echo missing)"
+check "#75 a pull that applied NOTHING leaves the received time alone" \
+  "[ \"\$_st_before\" = \"\$_st_after\" ] && [ \"\$_st_before\" != missing ]"
+
+# A stamp that cannot be read is its own state: reporting it as "never" would say this Mac has
+# never sent, which is a different and wrong claim (L11).
+printf 'not-a-timestamp\n' > "$STA/.last-sent"
+out_st3="$(CLAUDE_HOME="$STAH" SYNC_REPO="$STA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#75 an unreadable stamp is not reported as never" \
+  "! line_has \"\$out_st3\" 'last sent' 'never'"
+check "#75 an unreadable stamp says it could not be read" \
+  "line_has \"\$out_st3\" 'last sent' 'could not be read'"
+check "#75 and status still exits cleanly on a corrupt stamp" \
+  "CLAUDE_HOME='$STAH' SYNC_REPO='$STA' SYNC_NO_NOTIFY=1 bash '$SCRIPT' status >/dev/null 2>&1"
+
+# The stamps are this Mac's own bookkeeping and must never travel, the way .last-applied does not.
+check "#75 the stamps are not committed to the shared repo" \
+  "! git -C '$STA' ls-files --error-unmatch .last-sent >/dev/null 2>&1 && ! git -C '$STA' ls-files --error-unmatch .last-received >/dev/null 2>&1"
+# Asserted against the SHIPPED .gitignore rather than a fixture repo: the fixtures are bare repos
+# built by the suite with no .gitignore at all, so every state file shows as untracked there and a
+# check over one of them would be measuring the fixture, not the product.
+_GI="$(dirname "$SCRIPT")/.gitignore"
+check "#75 the shipped gitignore covers both stamps" \
+  "grep -qx '\.last-sent' '$_GI' && grep -qx '\.last-received' '$_GI'"
+
 section "== which plugins load is a per Mac setting, so status says what this Mac has (#48) =="
 # Every plugin was enabled at user scope, so all seven loaded into every session in every project:
 # roughly 7,700 tokens of Vercel, Figma and Stripe before any of it was used, plus a 53KB Vercel

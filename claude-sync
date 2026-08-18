@@ -39,6 +39,11 @@ PRESERVED_CONFLICTS=""   # copies set aside by THIS run (see preserve_local_conf
 SYNC_LOCK="${SYNC_LOCK:-$SYNC_REPO/.sync-lock}"   # one mutating run at a time (#21)
 LOCK_HELD=0
 LAST_SUCCESS_FILE="$SYNC_REPO/.last-success"   # last time the shared repo was reachable (#22)
+# When config last actually MOVED, in either direction (#75). Distinct from .last-success, which
+# only says the repo was reachable: a Mac can reach GitHub every hour for weeks while nothing
+# crosses in either direction, and that is precisely the drift status exists to make visible.
+LAST_SENT_FILE="$SYNC_REPO/.last-sent"
+LAST_RECEIVED_FILE="$SYNC_REPO/.last-received"
 STATE_DIR="$SYNC_REPO/state"   # what each Mac has applied, published so verify can compare (#23)
 # One file per Mac, holding the first number of the band that Mac mints lesson numbers from. Unlike
 # everything else outside payload/, this is TRACKED and shared: a band nobody else can see cannot
@@ -91,6 +96,11 @@ die(){ echo "claude-sync: $*" >&2; [ -t 2 ] || notify "$*"; exit 1; }
 # real one that goes unread (L77). So: fail either way and always write to the log, but
 # only raise a desktop alert once syncing has been failing for longer than the threshold.
 record_sync_success(){ date +%s > "$LAST_SUCCESS_FILE" 2>/dev/null || true; }
+# Called ONLY where something really crossed: a push that went through, an apply that wrote at
+# least one file. Stamping on every run instead would make a Mac that syncs hourly with nothing to
+# do look permanently fresh, which is the reassurance that hides the drift (L106).
+record_sent(){     date +%s > "$LAST_SENT_FILE" 2>/dev/null || true; }
+record_received(){ date +%s > "$LAST_RECEIVED_FILE" 2>/dev/null || true; }
 
 # The threshold below was chosen by judgement, not measurement, and BOTH ways of being wrong
 # are invisible in use: too low it alerts on blips until the alert is ignored, too high a
@@ -218,6 +228,23 @@ date_from_epoch(){   # unix timestamp, strftime format -> formatted date, or not
   out="$(date -r "$1" "$2" 2>/dev/null || true)"
   [ -n "$out" ] || out="$(date -d "@$1" "$2" 2>/dev/null || true)"
   printf '%s' "$out"
+}
+
+# A gap in seconds as something a person reads without doing arithmetic (#75). The whole point of
+# the stamps is telling "an hour" from "three weeks" at a glance, and a raw timestamp does not.
+# Anything that is not a whole number of seconds, INCLUDING a negative gap from a clock that went
+# backwards, says so rather than being rendered as a confident duration (L50).
+age_in_words(){   # seconds -> "just now", "5 minutes ago", "3 weeks ago"
+  local s="${1:-}" n unit
+  case "$s" in ''|*[!0-9]*) printf 'an unknown time ago'; return 0 ;; esac
+  if [ "$s" -lt 45 ]; then printf 'just now'; return 0; fi
+  if   [ "$s" -lt 5400 ];    then n=$(( (s + 30) / 60 ));         unit=minute
+  elif [ "$s" -lt 129600 ];  then n=$(( (s + 1800) / 3600 ));     unit=hour
+  elif [ "$s" -lt 1209600 ]; then n=$(( (s + 43200) / 86400 ));   unit=day
+  elif [ "$s" -lt 5184000 ]; then n=$(( (s + 302400) / 604800 )); unit=week
+  else                            n=$(( (s + 1296000) / 2592000 )); unit=month
+  fi
+  if [ "$n" -eq 1 ]; then printf '1 %s ago' "$unit"; else printf '%s %ss ago' "$n" "$unit"; fi
 }
 
 # How long this lock has existed, in seconds. Unknown counts as 0 (not stale), so a lock
@@ -1155,6 +1182,24 @@ $f
   # publishes upward compares against this, so it can tell "the user edited a
   # file" apart from "this Mac is simply behind".
   if have_git; then repo_head > "$LAST_APPLIED_FILE" 2>/dev/null || true; fi
+  # Only when a FILE actually landed. Two things are deliberately not enough (#75).
+  #
+  # An apply that found nothing to do has received nothing, so an empty log does not stamp.
+  #
+  # Neither does a log holding only "settings.json (hooks section)". That block is regenerated from
+  # whatever payload is on disk, INCLUDING one this Mac staged from its own ~/.claude moments
+  # earlier, so it is the single entry a first `sync` produces on a clone nobody has ever sent to.
+  # Counting it would have this Mac reporting that config arrived when nothing did, which is the
+  # exact false reassurance the stamps exist to prevent (L106).
+  #
+  # The stated cost of that: a change from the other Mac that touches ONLY the hooks registration
+  # and no file will not move this stamp. That direction is the safe one for a drift report. It can
+  # say "nothing has come down for a while" when something small did, which prompts a harmless
+  # pull; the other way round hides the drift, which is the failure being fixed.
+  if [ -n "$APPLIED_LOG" ] && [ -s "$APPLIED_LOG" ] \
+     && grep -qv 'settings\.json (hooks section)' "$APPLIED_LOG"; then
+    record_received
+  fi
   # .last-applied stays local (it is this Mac's own bookkeeping); this is the published
   # half, so the OTHER Mac can be told apart from a Mac nobody has heard from. (#23)
   publish_applied_marker
@@ -2191,7 +2236,9 @@ do_sync(){
     after="$(repo_head)"
     # Re-checked AFTER the rebase, not from $pushed alone: the daemon runs this, so a
     # hand commit to the tool would otherwise sit unsent with nobody watching.
-    { [ "$pushed" -eq 1 ] || unpushed_commits; } && git -C "$SYNC_REPO" push -u origin "$branch" -q
+    if { [ "$pushed" -eq 1 ] || unpushed_commits; } && git -C "$SYNC_REPO" push -u origin "$branch" -q; then
+      record_sent
+    fi
     # send half is done; hand off so the apply below runs the pulled logic
     reexec_after_self_update "$before" "$after" apply-only || true
   fi
@@ -2232,6 +2279,7 @@ do_send(){
     # all day but synced weekly reads as "last reached GitHub days ago" while perfectly
     # online, and the next harmless blip gets reported as a long outage. (#22)
     record_sync_success
+    record_sent
     echo "Sent."; return 0
   fi
   do_sync                                # behind remote: reconcile (pull+apply+push)
@@ -2445,8 +2493,36 @@ do_verify(){
   return 1
 }
 
+# One stamp, rendered. Three states, deliberately worded so they cannot be mistaken for each other
+# (L11): it never happened, the record is unreadable, or here is when and how long ago. Reporting an
+# unreadable record as "never" would be a confident claim that this Mac has never sent, which is a
+# different and wrong thing to tell somebody.
+stamp_in_words(){   # $1 = stamp file  $2 = now (epoch)  $3 = what "never" means for this one
+  local raw when
+  [ -f "$1" ] || { printf 'never, %s' "$3"; return 0; }
+  raw="$(cat "$1" 2>/dev/null || true)"
+  case "$raw" in ''|*[!0-9]*)
+    printf 'the record exists but could not be read (%s), so this is unknown' "$1"; return 0 ;;
+  esac
+  when="$(date_from_epoch "$raw" '+%Y-%m-%d %H:%M')"
+  [ -n "$when" ] || { printf 'the record exists but could not be read (%s), so this is unknown' "$1"; return 0; }
+  printf '%s (%s)' "$when" "$(age_in_words "$(( $2 - raw ))")"
+}
+
+# The header the pending list below is read against (#75). Four files pending means one thing if
+# this Mac sent an hour ago and something very different if it last sent three weeks ago, and
+# without this the two read identically.
+report_sync_times(){
+  local now; now="$(date +%s)"
+  echo "--- when config last moved between this Mac and the shared repo ---"
+  printf '  last sent:     %s\n' "$(stamp_in_words "$LAST_SENT_FILE" "$now" 'nothing has gone up from this clone')"
+  printf '  last received: %s\n' "$(stamp_in_words "$LAST_RECEIVED_FILE" "$now" 'nothing has come down into this clone')"
+  echo "  Both are the last time something actually moved, not the last time a sync ran."
+}
+
 do_status(){
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
+  report_sync_times
   echo "--- local config vs repo payload (dry run) ---"
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
