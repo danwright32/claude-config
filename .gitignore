@@ -11,3 +11,5 @@ __pycache__/
 .sync-lock/
 state/
 .outage-log
+.last-sent
+.last-received

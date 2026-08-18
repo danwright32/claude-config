@@ -185,9 +185,22 @@ turn and measured passing its ceiling while failing only that control. A negated
 since an absence cannot be supplied by an unrelated line, and neither does an anchored pattern, a
 regex doing real work, or a word grepped from a file the fixture wrote.
 
+`claude-sync status` opens with when config last moved in each direction and when the repo was last
+reachable, so a pending list can be read against all three: four files waiting means one thing an
+hour after the last send and something very different three weeks after. The first two are the last
+time something actually moved, not the last time a sync ran, because a stamp that advanced on every
+run would make a Mac with nothing to do look permanently healthy. Reachability is the one that tells
+a stuck Mac from an offline one, and it is deliberately labelled as saying nothing about whether
+anything crossed.
+
 It also scans itself for check names used more than once. A failure prints the name and the
 expression and nothing else, so two checks sharing a name leave you searching the file for which
 scenario actually broke.
+
+For writing new checks there is `line_has "$output" 'fact one' 'fact two'`, which passes only when
+ONE line carries every fact. That is the form all three bans exist to enforce, so the correct thing
+is now the shortest thing to write. It takes two patterns minimum and refuses one, because a single
+pattern is the weak form itself and hiding it behind a helper would put it out of the scan's sight.
 
 And it scans itself for settings named in a comment or in this README that the code never
 references. One of those had been sitting there describing a way to run a single section that was
@@ -226,7 +239,7 @@ and one run, which is what a healthy machine looks like.
 
 ## Local state (per Mac, never synced)
 
-Six things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
+Eight things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
 so a fresh clone starts without them. (`lesson-bands/` also sits outside `payload/` and is the one
 exception: it is tracked and shared on purpose, because a band nobody else can see cannot stop
 anybody else claiming it. See Lesson numbers above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
@@ -235,7 +248,9 @@ defined answer for being absent or untrustworthy.
 | File | Written by | Read by | Missing or stale |
 | --- | --- | --- | --- |
 | `.last-applied` | every apply | the guard that blocks sending while behind | absent means nothing is protected yet, so sending is allowed |
-| `.last-success` | a successful fetch, and a successful push | the outage clock | absent, unparseable, or dated in the FUTURE all mean "no record", which alerts rather than staying quiet |
+| `.last-success` | a successful pull, fetch or push | the outage clock | absent, unparseable, or dated in the FUTURE all mean "no record", which alerts rather than staying quiet |
+| `.last-sent` | a push that went through | `claude-sync status` | absent means nothing has ever gone up from this clone, which is said in those words rather than shown as a date; a value that will not parse is reported as unreadable, never as never |
+| `.last-received` | an apply that wrote at least one file | `claude-sync status` | same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block, since that is regenerated from whatever payload is present, including one this Mac just staged itself |
 | `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
 | `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |
 | `state/` | every apply | nothing reads the local copy; it exists so a marker is only republished when it changes | absent just means the next apply republishes |

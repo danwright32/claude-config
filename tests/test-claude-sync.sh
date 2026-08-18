@@ -366,6 +366,32 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1 (expr: $2)"; fi; }
+
+# ---- assert that ONE line carries several facts (#74) ----
+# The correct form for an assertion over a command's whole output, made the SHORT form. Every
+# family the #55 scan bans is a way of asking for several facts and accepting them from different
+# places: two greps over one blob answered by two unrelated lines, a filename found in a change
+# report that lists filenames anyway, a common word found in routine chatter. Narrowing line by
+# line makes all three unwritable here.
+#
+# Two patterns MINIMUM. One pattern is the weak form itself, and letting it through a helper would
+# hide it from the scan (which reads printf-and-grep segments), so the ceilings at zero would go on
+# reading as clean while the shape came back through the front door. Patterns are ERE.
+line_has(){   # $1 = captured output   $2.. = patterns that must ALL appear on ONE line
+  local _lh_out="$1"; shift
+  if [ "$#" -lt 2 ]; then
+    echo "line_has: needs at least two patterns; one pattern is the weak form this exists to replace, use grep for that" >&2
+    return 2
+  fi
+  # Empty output must REFUSE rather than pass by matching nothing (L98).
+  [ -n "$_lh_out" ] || return 1
+  local _lh_cur="$_lh_out" _lh_p
+  for _lh_p in "$@"; do
+    _lh_cur="$(printf '%s\n' "$_lh_cur" | grep -E -- "$_lh_p")" || return 1
+    [ -n "$_lh_cur" ] || return 1
+  done
+  [ -n "$_lh_cur" ]
+}
 # A skill the way a real one is shaped: a directory holding a SKILL.md whose frontmatter carries a
 # name and a description. Fixtures used to write a single bare line, which is a shape that cannot
 # occur in the real config and which the sync now declines to carry, so a test built on one would
@@ -641,7 +667,7 @@ WLEMIT="$WORK/wl-emit-fswatch"; printf '#!/usr/bin/env bash\necho 1\n' > "$WLEMI
 WLNOTIFIER="$WORK/wl-fake-notifier"; printf '#!/usr/bin/env bash\ntrue\n' > "$WLNOTIFIER"; chmod +x "$WLNOTIFIER"
 wl_out="$(SYNC_FSWATCH="$WLEMIT" SYNC_NOTIFIER="$WLNOTIFIER" CLAUDE_HOME="$WLC" SYNC_REPO="$WLR" bash "$SCRIPT" watch 2>&1)"
 check "watch output logs the failure"     "printf '%s' \"\$wl_out\" | grep -qi 'watch: sync FAILED (exit 1)'"
-check "logged failure names the file"     "printf '%s' \"\$wl_out\" | grep -q 'watch: sync FAILED.*hooks/leak\.sh'"
+check "logged failure names the file"     "line_has \"\$wl_out\" 'watch: sync FAILED' 'hooks/leak\.sh'"
 
 section "== pull/sync auto-restarts the watch daemon when claude-sync itself changed =="
 # The watch daemon (launchd KeepAlive) keeps the old script loaded until
@@ -1086,7 +1112,7 @@ check "the other Mac's version is applied"        "grep -q MAC-A-VERSION '$CFBH/
 check "the local edit is kept beside it"          "grep -rq MAC-B-MY-OWN-EDIT '$CFBH/hooks/'"
 check "the kept copy is named as a conflict"      "ls '$CFBH/hooks/' | grep -q 'x.sh.conflict'"
 check "and the conflict is reported, not silent"  "printf '%s' \"\$out_cf\" | grep -qi 'both Macs changed'"
-check "the report names the file"                 "printf '%s' \"\$out_cf\" | grep -q 'could NOT be merged.*hooks/x\.sh'"
+check "the report names the file"                 "line_has \"\$out_cf\" 'could NOT be merged' 'hooks/x\.sh'"
 # No conflict on a file this Mac never touched: no stray copy, no noise.
 check "an untouched file gets the new version"    "grep -q A-CHANGED-THIS-TOO '$CFBH/hooks/y.sh'"
 check "and leaves no conflict copy behind"        "! ls '$CFBH/hooks/' | grep -q 'y.sh.conflict'"
@@ -1156,7 +1182,7 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/
 out_le="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" pull 2>&1)"
 check "local script edit: the unrelated change still arrives"  "grep -q other-v2 '$LEBH/hooks/other.sh'"
 check "the local edit is NOT reverted"      "grep -q MY-LOCAL-FIX '$LEBH/skills/reel/push.py'"
-check "local script edit: the pull says it kept it"  "printf '%s' \"\$out_le\" | grep -qi 'kept local edits.*skills/reel/push\.py'"
+check "local script edit: the pull says it kept it"  "line_has \"\$out_le\" 'kept local edits' 'skills/reel/push\.py'"
 # The kept edit still reaches the repo on the next send, and the other Mac.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" send >/dev/null 2>&1
 check "the next send publishes the edit"    "grep -q MY-LOCAL-FIX '$LEB/payload/skills/reel/push.py'"
@@ -1192,7 +1218,7 @@ out_tf="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" p
 check "unsent lesson: the unrelated change still arrives"  "grep -q other-v2 '$TFBH/hooks/tf-other.sh'"
 check "the unsent lesson is NOT reverted"       "grep -q MY-NEW-LESSON '$TFBH/LESSONS.md'"
 check "the earlier lesson is still there too"   "grep -q 'first lesson' '$TFBH/LESSONS.md'"
-check "unsent lesson: the pull says it kept it"  "printf '%s' \"\$out_tf\" | grep -qi 'kept local edits.*LESSONS\.md'"
+check "unsent lesson: the pull says it kept it"  "line_has \"\$out_tf\" 'kept local edits' 'LESSONS\.md'"
 check "and does not report overwriting it"      "! printf '%s' \"\$out_tf\" | grep -q 'updated .*LESSONS.md'"
 # It must reach the repo on the next send, and the other Mac after that.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" send >/dev/null 2>&1
@@ -1213,7 +1239,7 @@ out_tfc="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" 
 check "the other Mac's entry arrives"           "grep -q FROM-MAC-A '$TFBH/LESSONS.md'"
 check "this Mac's entry is still in the file"   "grep -q FROM-MAC-B-SAME-TIME '$TFBH/LESSONS.md'"
 check "so no conflict copy was needed"          "! ls '$TFBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
-check "and the merge is reported"               "printf '%s' \"\$out_tfc\" | grep -qi 'entries were MERGED.*LESSONS\.md'"
+check "and the merge is reported"               "line_has \"\$out_tfc\" 'entries were MERGED' 'LESSONS\.md'"
 
 section "== a commit made outside send/sync must not wedge the watcher (#12) =="
 # 2026-07-28: a session edited claude-sync itself and committed with plain git.
@@ -1340,7 +1366,7 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/
 out_ns="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
 notice_ns="$(printf '%s\n' "$out_ns" | grep -i 'new Claude Code session' || true)"
 check "pull tells you a new session is needed"   "[ -n \"\$notice_ns\" ]"
-check "the notice names the changed rule file"   "printf '%s' \"\$notice_ns\" | grep -q 'new Claude Code session.*CLAUDE\.md'"
+check "the notice names the changed rule file"   "line_has \"\$notice_ns\" 'new Claude Code session' 'CLAUDE\.md'"
 check "the notice names the newly added skill"   "printf '%s' \"\$notice_ns\" | grep -q 'rs-added'"
 check "it does NOT name the edited hook script"  "! printf '%s' \"\$notice_ns\" | grep -q 'rs-hook'"
 # It is one sentence a person reads at a glance, so it has to render as one: the
@@ -1495,7 +1521,7 @@ check "#14 a merge is never reported as nothing-changed" \
 check "#14 the merged file is listed as a received change" \
   "printf '%s' \"\$out_rm1\" | grep -qE '^ +merged +LESSONS\\.md'"
 check "#14 a merged rule file earns the restart notice" \
-  "printf '%s' \"\$out_rm1\" | grep -q 'new Claude Code session.*LESSONS\.md'"
+  "line_has \"\$out_rm1\" 'new Claude Code session' 'LESSONS\.md'"
 
 # The merged file must then reach the other Mac, or the lesson is still stranded.
 CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" SYNC_NO_NOTIFY=1 bash "$RMB/claude-sync" push >/dev/null 2>&1
@@ -1626,7 +1652,7 @@ check "#17 the numbering is sound afterwards"            "SYNC_NO_GIT=1 CLAUDE_H
 # of the same pull says "renumbered", and the CLAUDE.md warning below carries L2 and L5 together,
 # so the three halves were answered by two unrelated lines and proved nothing (L135, L178).
 check "#17 the renumber is reported, naming old and new" \
-  "printf '%s' \"\$out_lnm\" | grep -q 'renumbered.*L2 became L5'"
+  "line_has \"\$out_lnm\" 'renumbered' 'L2 became L5'"
 check "#17 the file is not reported as held back"        "! printf '%s' \"\$out_lnm\" | grep -qi 'held back'"
 # A renumber must carry its body mentions with it. At merge time the tool DOES know
 # which lesson a local mention meant: a line this Mac wrote (absent from the arriving
@@ -1641,7 +1667,7 @@ check "#17 the old local mention is gone" \
 check "#17 a published body mention keeps its number" \
   "grep -q 'distinct from L2, which it cites' '$LNMBH/LESSONS.md'"
 check "#17 the rewrite is reported, naming old and new" \
-  "printf '%s' \"\$out_lnm\" | grep -q 'LESSONS\.md: rewrote .*mention.*of L2 to L5'"
+  "line_has \"\$out_lnm\" 'LESSONS\.md: rewrote' 'mention' 'of L2 to L5'"
 check "#17 no go-and-check warning for the file it rewrote" \
   "! printf '%s' \"\$out_lnm\" | grep -qi 'still mentions'"
 check "#17 a mention in another synced rule file is warned about" \
@@ -1795,7 +1821,7 @@ check "renumber: numbering passes its own check" \
 # deleted the assertion still passed, because the rewrite line below says "renumbered"
 # and supplies both numbers. One line carrying the drop and both numbers is the test.
 check "renumber: the drop names the old and new number" \
-  "printf '%s' \"\$out_rn\" | grep -q 'dropped.*L2 became L3'"
+  "line_has \"\$out_rn\" 'dropped' 'L2 became L3'"
 # The other Mac's renumber of OUR entry must carry our local mentions with it, exactly
 # as a renumber done here does: the local note meant our lesson, which is now L3.
 check "renumber: a local mention follows the other Mac's renumber" \
@@ -1831,7 +1857,7 @@ check "renumber: the published entry keeps the contested number" \
 check "renumber: the unsent entry is renumbered, not left colliding" \
   "grep -q '^- \*\*L10\..*only on Mac B' '$RNBH/LESSONS.md'"
 check "renumber: the settled collision is reported, not silent" \
-  "printf '%s' \"\$out_rn2\" | grep -q 'renumbered.*L9 became L10'"
+  "line_has \"\$out_rn2\" 'renumbered' 'L9 became L10'"
 check "renumber: no duplicate number remains afterwards" \
   "! printf '%s' \"\$out_rn2\" | grep -qi 'used twice\\|used 2 times'"
 # A warning that cries wolf gets ignored: nothing in this file mentions L9 in
@@ -1967,7 +1993,7 @@ check "#22 an unrecognised pull failure is NOT blamed on the other Mac" \
 check "#22 an unrecognised pull failure is reported by the tool, not just by git" \
   "printf '%s' \"\$out_other\" | grep -q 'claude-sync:.*git said'"
 check "#22 an unrecognised pull failure repeats git's own reason" \
-  "printf '%s' \"\$out_other\" | grep -qi 'git said:.*untracked working tree files'"
+  "line_has \"\$out_other\" 'git said:' 'untracked working tree files'"
 
 # 4) the pull EXITS ZERO and is still broken. Measured against real git: when re-applying
 # the local edits it set aside conflicts, git prints "Successfully rebased", returns 0,
@@ -2131,7 +2157,12 @@ out_sust="$(env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=0 bash "$SCRIPT" sync 2>&1)"
 check "#22 a sustained outage fails too" "[ $rc_sust -ne 0 ]"
 check "#22 a sustained outage does raise an alert" "[ -s '$NOTED' ]"
 check "#22 a sustained outage says how long it has been failing" \
-  "printf '%s' \"\$out_sust\" | grep -qE 'Syncing has now been failing for [0-9]+ minutes'"
+  "printf '%s' \"\$out_sust\" | grep -qE 'Syncing has now been failing for (less than a minute|[0-9]+ (minute|hour|day|week|month)s?)'"
+# The sub-minute case is the one that shows why (#77). Dividing seconds by 60 and printing the
+# result told somebody their sync had been failing for "0 minutes", which is not a duration anybody
+# can act on and reads as though nothing is wrong. A shared renderer has a word for it.
+check "#77 a sub-minute outage is not reported as zero minutes" \
+  "! line_has \"\$out_sust\" 'failing for' '0 minutes'"
 
 # No recorded success at all cannot be called a brief blip, so it must alert rather than
 # stay quiet: a message may claim only what its check actually measured (L11).
@@ -3967,6 +3998,142 @@ if [ -n "$set_missing" ]; then
   printf '%s\n' "$set_missing" | sed 's/^/    /'
 fi
 check "#73 every setting named in prose is referenced by code" "[ -z \"\$set_missing\" ]"
+
+section "== one renderer turns a length of time into words (#77) =="
+# The tool said how long ago something happened in four different ways: raw minutes in the outage
+# message, raw whole days in the conflict copy list and again in the timer message, and plain words
+# in the status header. The same span then read differently depending which part of the output you
+# were in, and two of them produced sentences nobody can act on ("failing for 0 minutes", a copy
+# made this morning reported as zero days). Derived rather than trusted, because a rule that only
+# lives in a comment is a hope (L27, L30).
+_dur_inline="$(awk '/^duration_in_words\(\)/{inh=1} inh && /^}/{inh=0; next} !inh && /\$\(\([^)]*\/ *(60|3600|86400|604800|2592000)/ {printf "%d:%s\n", NR, $0}' "$SCRIPT")"
+if [ -n "$_dur_inline" ]; then
+  echo "  (#77 places still turning seconds into a duration by hand:)"
+  printf '%s\n' "$_dur_inline" | sed 's/^/    /'
+fi
+check "#77 nothing renders a duration by hand any more" "[ -z \"\$_dur_inline\" ]"
+# And the scan must be able to SEE such a line, or the emptiness above is the scan reading nothing
+# rather than the code being clean (L98, L1).
+_dur_fixture="$WORK/duration-probe.sh"
+printf 'echo "every $((interval/86400)) days"\n' > "$_dur_fixture"
+check "#77 the scan does find one when there is one" \
+  "[ -n \"\$(awk '/^duration_in_words\(\)/{inh=1} inh && /^}/{inh=0; next} !inh && /\\\$\\(\\([^)]*\/ *(60|3600|86400|604800|2592000)/ {print}' '$_dur_fixture')\" ]"
+
+section "== one helper for the one-line assertion form (#74) =="
+# #67, #69 and #71 rewrote 67 assertions and the scan holds all three weak shapes at zero. That is
+# detection after the fact. Sixty-seven accumulated because the correct form is MORE typing than the
+# weak one, so the weak one is what gets written. This flips that: line_has says "one line of this
+# output carries all of these", which is the thing the three families each failed to do.
+#
+# It takes TWO patterns at minimum and refuses fewer, deliberately. A one-fact assertion does not
+# need it, and allowing one would make the helper a hole straight through the scan: the scan reads
+# printf-and-grep segments, so a single weak pattern hidden behind a helper call would be invisible
+# and the two ceilings at zero would quietly stop meaning anything (L96, L182).
+_lh_split="alpha here
+beta there"
+_lh_one="alpha and beta on one line"
+check "#74 it accepts two facts on one line"          "line_has \"\$_lh_one\" 'alpha' 'beta'"
+check "#74 it REFUSES two facts on different lines"   "! line_has \"\$_lh_split\" 'alpha' 'beta'"
+check "#74 it refuses a fact that is absent"          "! line_has \"\$_lh_one\" 'alpha' 'gamma'"
+check "#74 it takes an extended regex"                "line_has \"\$_lh_one\" '^alpha' 'on one line$'"
+check "#74 and an anchor that does NOT hold is refused" \
+  "! line_has \"\$_lh_one\" '^alpha' 'beta$'"
+check "#74 it refuses one pattern, which is the weak form" \
+  "! line_has \"\$_lh_one\" 'alpha'"
+check "#74 it refuses no pattern at all"              "! line_has \"\$_lh_one\""
+check "#74 it refuses empty output rather than passing vacuously" \
+  "! line_has '' 'alpha' 'beta'"
+
+section "== status says when this Mac last sent and last received (#75) =="
+# status listed pending files with no way to tell whether the other Mac had been waiting on them
+# for an hour or three weeks. Silent drift between the two Macs is the failure mode this tool
+# exists to prevent, and status is the only place anybody would notice it, so a pending list that
+# reads identically fresh or months old is the report failing at its one job (L148).
+#
+# The stamps mean "the last time something actually MOVED", not "the last time we looked". A stamp
+# that advanced on every run would make a Mac that syncs hourly with nothing to do look permanently
+# healthy, which is the exact reassurance that hides the drift (L106, L98).
+STBARE="$WORK/stbare.git"; git init -q --bare -b main "$STBARE"
+STA="$WORK/strepoA"; git clone -q "$STBARE" "$STA" 2>/dev/null
+STAH="$WORK/sthomeA"; mkdir -p "$STAH/hooks"; echo '{"hooks":{}}' > "$STAH/settings.json"
+echo 'v1' > "$STAH/hooks/st.sh"
+STB="$WORK/strepoB"; STBH="$WORK/sthomeB"
+
+# Nothing has happened yet on this clone, so both answers are "never", and never must not be
+# dressed up as a date (L67).
+out_st0="$(CLAUDE_HOME="$STAH" SYNC_REPO="$STA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#75 a clone that has never sent says so" \
+  "line_has \"\$out_st0\" 'last sent' 'never'"
+check "#75 a clone that has never received says so" \
+  "line_has \"\$out_st0\" 'last received' 'never'"
+
+# A send that actually publishes stamps the sent time.
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$STAH" SYNC_REPO="$STA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_st1="$(CLAUDE_HOME="$STAH" SYNC_REPO="$STA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#75 a send that published stamps the sent time" \
+  "! line_has \"\$out_st1\" 'last sent' 'never'"
+check "#75 and the sent line carries an age in plain words" \
+  "line_has \"\$out_st1\" 'last sent' '(just now|second|minute|hour|day|week|month)'"
+check "#75 sending does not pretend anything was received" \
+  "line_has \"\$out_st1\" 'last received' 'never'"
+
+# The other Mac pulls: that one applies files, so its received time is stamped.
+git clone -q "$STBARE" "$STB" 2>/dev/null
+mkdir -p "$STBH"; echo '{"hooks":{}}' > "$STBH/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$STBH" SYNC_REPO="$STB" bash "$SCRIPT" pull >/dev/null 2>&1
+out_st2="$(CLAUDE_HOME="$STBH" SYNC_REPO="$STB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#75 a pull that applied files stamps the received time" \
+  "! line_has \"\$out_st2\" 'last received' 'never'"
+check "#75 and that clone has still never sent" \
+  "line_has \"\$out_st2\" 'last sent' 'never'"
+
+# THE point of the feature: a pull with nothing to apply must NOT move the stamp, or a Mac that
+# checks hourly and receives nothing reads as freshly in sync forever.
+_st_before="$(cat "$STB/.last-received" 2>/dev/null || echo missing)"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$STBH" SYNC_REPO="$STB" bash "$SCRIPT" pull >/dev/null 2>&1
+_st_after="$(cat "$STB/.last-received" 2>/dev/null || echo missing)"
+check "#75 a pull that applied NOTHING leaves the received time alone" \
+  "[ \"\$_st_before\" = \"\$_st_after\" ] && [ \"\$_st_before\" != missing ]"
+
+# A stamp that cannot be read is its own state: reporting it as "never" would say this Mac has
+# never sent, which is a different and wrong claim (L11).
+printf 'not-a-timestamp\n' > "$STA/.last-sent"
+out_st3="$(CLAUDE_HOME="$STAH" SYNC_REPO="$STA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#75 an unreadable stamp is not reported as never" \
+  "! line_has \"\$out_st3\" 'last sent' 'never'"
+check "#75 an unreadable stamp says it could not be read" \
+  "line_has \"\$out_st3\" 'last sent' 'could not be read'"
+check "#75 and status still exits cleanly on a corrupt stamp" \
+  "CLAUDE_HOME='$STAH' SYNC_REPO='$STA' SYNC_NO_NOTIFY=1 bash '$SCRIPT' status >/dev/null 2>&1"
+
+# #76: the third fact. Sent and received alone leave two very different situations reading the
+# same. "Last sent three weeks ago, repo reachable throughout" means something is genuinely stuck
+# and needs a person; "last sent three weeks ago, repo unreachable" is an outage already reported
+# elsewhere. Without reachability the reader of a stale pending list cannot tell which (L11).
+check "#76 a clone that has never reached the repo says so" \
+  "line_has \"\$out_st0\" 'reachable' 'never'"
+check "#76 status says when the repo was last reachable" \
+  "! line_has \"\$out_st2\" 'reachable' 'never'"
+# It moves on EVERY successful fetch, so it must not be read as config having crossed. The other
+# two lines mean something moved; this one only means the door opened.
+check "#76 and says plainly that reachable is not the same as moved" \
+  "line_has \"\$out_st2\" 'reach' 'says nothing about whether anything crossed'"
+printf 'not-a-timestamp\n' > "$STB/.last-success"
+out_st4="$(CLAUDE_HOME="$STBH" SYNC_REPO="$STB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#76 an unreadable reachability stamp is not reported as never" \
+  "! line_has \"\$out_st4\" 'reachable' 'never'"
+check "#76 an unreadable reachability stamp says it could not be read" \
+  "line_has \"\$out_st4\" 'reachable' 'could not be read'"
+
+# The stamps are this Mac's own bookkeeping and must never travel, the way .last-applied does not.
+check "#75 the stamps are not committed to the shared repo" \
+  "! git -C '$STA' ls-files --error-unmatch .last-sent >/dev/null 2>&1 && ! git -C '$STA' ls-files --error-unmatch .last-received >/dev/null 2>&1"
+# Asserted against the SHIPPED .gitignore rather than a fixture repo: the fixtures are bare repos
+# built by the suite with no .gitignore at all, so every state file shows as untracked there and a
+# check over one of them would be measuring the fixture, not the product.
+_GI="$(dirname "$SCRIPT")/.gitignore"
+check "#75 the shipped gitignore covers both stamps" \
+  "grep -qx '\.last-sent' '$_GI' && grep -qx '\.last-received' '$_GI'"
 
 section "== which plugins load is a per Mac setting, so status says what this Mac has (#48) =="
 # Every plugin was enabled at user scope, so all seven loaded into every session in every project:

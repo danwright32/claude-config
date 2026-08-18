@@ -589,6 +589,17 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L184. Judge a command by its EXIT CODE, never by a line of its output, because a tool's final
+  line is routinely a different measurement than its verdict and is usually the more reassuring of
+  the two.** Writing the rule down about one tool does not carry, since the next one phrases its
+  summary differently, so the habit has to be reading the code rather than remembering which line
+  each tool puts last.
+  (new-agent-onboarding#637, 2026-08-17: eslint ends with "0 errors and 1 warning potentially
+  fixable with the --fix option", a count of FIXABLE problems, printed below the real summary
+  "5 problems (1 error, 4 warnings)". Reading the tail scored a genuine lint error as a clean run
+  and the branch was pushed red. The repo already held a note about exactly this, written about the
+  test runner, which is why the tool-specific form of the rule is not enough)
+
 - **L10. An error state and an empty state are different screens.** Never render a
   cheerful empty state over a failure, and return real not-found semantics rather than a
   200 shell. (16 issues, 3 repos)
@@ -998,7 +1009,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   import was about to fill it from "Referral program (BK Treble Choir)", where that group is the
   referrer, which would have put the wrong organisation into a task Dan then acts on)
 
-- **L184. A durable record that exists to stop an action repeating is only as durable as its
+- **L185. A statement that NORMALIZES a value on the way in (a COALESCE, a lowercase, a trim, a
+  default standing for absent) must group or deduplicate by the NORMALIZED form, never by the raw
+  one, because two raw spellings that normalize to the same thing survive as separate groups and
+  then collide on one stored key.** Each line reads as correct alone, and the collision stays
+  dormant until the first input arrives in the second spelling, so the defect ships and waits.
+  Distinct from L131, where a repeatable key silently keeps the last writer: here nothing is
+  dropped and the write fails outright. Also distinct from L147, where normalization makes a
+  guard miss: there the comparison is too loose, here the grouping is too tight.
+  (bidspoke#837: `refresh_workflow_stats_daily` inserts `COALESCE(outcome, '')` into a NOT NULL
+  DEFAULT '' primary key column while grouping by the raw `outcome`, so NULL and '' form two
+  groups that collapse to one key. Measured live: 11 rows with NULL and 0 with '', which is the
+  only reason a nightly job has never hit it, and a single execution written with the empty
+  string would freeze the dashboard rollup until that row aged out of raw retention)
+
+- **L186. A durable record that exists to stop an action repeating is only as durable as its
   KEY.** One keyed on an identifier minted in memory per attempt (a fresh UUID, an object
   identity, an in process map) survives a restart while nothing can find it again, so the
   protection silently shrinks to the session that wrote it: key it on something recomputable
@@ -1229,6 +1254,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   tasks with none, and an email template delete always claimed tasks would break without checking
   whether any referenced it, while two tabs in the same folder already built their warning from the
   live state)
+
+- **L187. A control gated on a collection holding MORE THAN ONE member is absent in the
+  commonest case, which is one member.** So the safe way out of a slow operation is missing
+  exactly when a person is most likely to reach for an unsafe one: gate such a control on the
+  operation being underway, never on the count of things it covers. (downbeat#282, where Stop
+  rendered only for runs of two or more shows because `isRun` is `plans.count > 1`, so a single
+  show booking, which is most of the year, was uninterruptible for up to 180 seconds with
+  navigation locked, and on 2026-08-18 the only remaining exit was closing the window, which is
+  the one action that loses the commit)
 
 ## External systems
 
