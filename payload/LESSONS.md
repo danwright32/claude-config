@@ -1254,6 +1254,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   SYNC_NO_NOTIFY=1 for everything. Caught only because the sibling assertion that an alert SHOULD
   fire failed in the same run, which is the control this lesson asks for)
 
+- **L181. Inferring that a person DID something from a provider's record must key on that provider's own
+  committed state marker, never on an attribute a merely started attempt shares with a finished one (its
+  author, its recipient, its subject), because platforms routinely return drafts, pending items and
+  abandoned attempts in the same collection as completed ones.** A started and abandoned attempt then
+  reads as a completed action, and the inference is wrong in the direction that closes the matter down
+  and stops anything asking again. Distinct from L12, which is about OUR OWN write reporting success
+  before it committed: here the action is somebody else's and the record is being read rather than
+  written.
+  (overture#2918: the check deciding Dan had answered a reply from his mail client took the newest
+  message in the Gmail thread whose From was his. Gmail returns DRAFT messages inside a thread beside
+  sent ones, so an abandoned draft would have stamped the conversation answered for good, with no badge
+  and no task, and the stamp never moves backwards. Measured on a live thread the same day, an abandoned
+  draft sat 29 minutes above a real reply, and only the timing of the next check saved it)
+
 ## Building with AI
 
 - **L27. A rule that lives only in a prompt is a hope.** Every hard constraint on AI
