@@ -181,6 +181,10 @@ the count has to move. A scanner deliberately broken was measured passing the ce
 only that control. A negated half never counts, since an absence cannot be supplied by an unrelated
 line.
 
+It also scans itself for check names used more than once. A failure prints the name and the
+expression and nothing else, so two checks sharing a name leave you searching the file for which
+scenario actually broke.
+
 One run at a time, and none of them open ended:
 
 | Setting | Default | What it does |

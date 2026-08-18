@@ -1147,9 +1147,9 @@ echo 'MY-LOCAL-FIX' > "$LEBH/skills/reel/push.py"
 echo 'other-v2' > "$LEAH/hooks/other.sh"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/null 2>&1
 out_le="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" pull 2>&1)"
-check "the unrelated change still arrives"  "grep -q other-v2 '$LEBH/hooks/other.sh'"
+check "local script edit: the unrelated change still arrives"  "grep -q other-v2 '$LEBH/hooks/other.sh'"
 check "the local edit is NOT reverted"      "grep -q MY-LOCAL-FIX '$LEBH/skills/reel/push.py'"
-check "and the pull says it kept the edit"  "printf '%s' \"\$out_le\" | grep -qi 'kept'"
+check "local script edit: the pull says it kept it"  "printf '%s' \"\$out_le\" | grep -qi 'kept'"
 # The kept edit still reaches the repo on the next send, and the other Mac.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" send >/dev/null 2>&1
 check "the next send publishes the edit"    "grep -q MY-LOCAL-FIX '$LEB/payload/skills/reel/push.py'"
@@ -1182,10 +1182,10 @@ printf -- '- L2. MY-NEW-LESSON\n' >> "$TFBH/LESSONS.md"
 echo 'other-v2' > "$TFAH/hooks/tf-other.sh"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFAH" SYNC_REPO="$TFA" bash "$SCRIPT" sync >/dev/null 2>&1
 out_tf="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" pull 2>&1)"
-check "the unrelated change still arrives"      "grep -q other-v2 '$TFBH/hooks/tf-other.sh'"
+check "unsent lesson: the unrelated change still arrives"  "grep -q other-v2 '$TFBH/hooks/tf-other.sh'"
 check "the unsent lesson is NOT reverted"       "grep -q MY-NEW-LESSON '$TFBH/LESSONS.md'"
 check "the earlier lesson is still there too"   "grep -q 'first lesson' '$TFBH/LESSONS.md'"
-check "and the pull says it kept the edit"      "printf '%s' \"\$out_tf\" | grep -qi 'kept'"
+check "unsent lesson: the pull says it kept it"  "printf '%s' \"\$out_tf\" | grep -qi 'kept'"
 check "and does not report overwriting it"      "! printf '%s' \"\$out_tf\" | grep -q 'updated .*LESSONS.md'"
 # It must reach the repo on the next send, and the other Mac after that.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" send >/dev/null 2>&1
@@ -3811,6 +3811,40 @@ dbg "positive control on the real suite: planted 1, scanner reports ${weak_pos:-
 check "#68 the zero is a live measurement, not a dead scanner" \
   "[ \"\${weak_pos:-x}\" = '1' ]"
 rm -f "$WEAKPOS"
+
+section "== every check names itself uniquely (#70) =="
+# The runner prints the name and the expression on failure, and nothing else, so two checks sharing
+# a name leave the reader searching the file to find out which scenario actually broke. That is the
+# same defect this suite guards against everywhere else: a report that does not name which of
+# several things it is about (L154, L11). Two names were used twice, one in the pull-must-not-revert
+# pair, where the two scenarios differ only in whether the unsent edit was a script or a lesson.
+#
+# Derived from the suite text rather than maintained by hand, because a hand-kept list of known
+# names is exempt from the very check it is supposed to drive (L96, L41).
+DUPFIX="$WORK/dupname-fixture.sh"
+# Same @@ marker as the #55 fixture, so none of these begins a line in THIS file and gets counted
+# as a real check name by the scan two sections up.
+sed 's/^@@//' > "$DUPFIX" <<'DUPFIXTURE'
+@@check "alpha"  "true"
+@@check "beta"   "true"
+@@check "alpha"  "true"
+DUPFIXTURE
+dup_names(){ grep -o '^check "[^"]*"' "$1" | sort | uniq -d; }
+# Proven on a file built to hold one repeat and one unique name, because a scan run only over the
+# real suite reports an empty answer nobody can check, and empty is indistinguishable from a scan
+# that matched nothing at all (L1, L98).
+dup_fix="$(dup_names "$DUPFIX")"
+dbg "duplicate-name scan on the fixture: $dup_fix"
+check "#70 the scan finds a name used twice" \
+  "printf '%s' \"\$dup_fix\" | grep -q 'check \"alpha\"'"
+check "#70 and leaves a name used once alone" \
+  "! printf '%s' \"\$dup_fix\" | grep -q 'beta'"
+dup_real="$(dup_names "$SCRIPT_SELF")"
+if [ -n "$dup_real" ]; then
+  echo "  (#70 check names used more than once in this suite:)"
+  printf '%s\n' "$dup_real" | sed 's/^/    /'
+fi
+check "#70 no check name is used twice in this suite" "[ -z \"\$dup_real\" ]"
 
 section "== which plugins load is a per Mac setting, so status says what this Mac has (#48) =="
 # Every plugin was enabled at user scope, so all seven loaded into every session in every project:
