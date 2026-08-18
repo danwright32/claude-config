@@ -189,6 +189,10 @@ It also scans itself for check names used more than once. A failure prints the n
 expression and nothing else, so two checks sharing a name leave you searching the file for which
 scenario actually broke.
 
+And it scans itself for settings named in a comment or in this README that the code never
+references. One of those had been sitting there describing a way to run a single section that was
+never built, under a name that does not exist, and it cost two wasted runs before anyone noticed.
+
 One run at a time, and none of them open ended:
 
 | Setting | Default | What it does |

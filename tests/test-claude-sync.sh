@@ -54,9 +54,9 @@ fi
 # each call site, so the sites cannot drift apart from each other.
 SUITE_CHILD_DEPTH=$((SUITE_DEPTH + 1))
 
-# ---- run one section at a time (#27) ----
-# SECTION_FILTER=<text> runs only the sections whose heading contains <text>. Default is a
-# full run, so the pre-push gate is unaffected and nobody can narrow it by accident.
+# ---- stop early rather than run one section alone (#27) ----
+# The knob is SECTION_UNTIL, described where it is implemented further down. Default is a full
+# run, so the pre-push gate is unaffected and nobody can narrow it by accident.
 # `section` REPLACES the bare `echo "== ... =="` headings: every check that follows a heading
 # belongs to it, and a skipped section's checks are never executed rather than executed and
 # hidden, which would save no time at all and defeat the point.
@@ -3910,6 +3910,63 @@ if [ -n "$dup_real" ]; then
   printf '%s\n' "$dup_real" | sed 's/^/    /'
 fi
 check "#70 no check name is used twice in this suite" "[ -z \"\$dup_real\" ]"
+
+section "== every setting named in a comment or the README exists (#73) =="
+# This file documented a knob called section_filter (written lowercase here on purpose, see below)
+# as running only the sections whose heading matched. It was implemented nowhere, and the knob that
+# does exist (SECTION_UNTIL) deliberately does something different, for the reason written next to
+# it: the sections build on each other, so running one alone produced 24 failures the code did not
+# cause. The comment therefore named a setting that did not exist AND promised behaviour that had
+# been considered and rejected.
+#
+# Lowercase because this scan reads UPPERCASE names, and a comment explaining the ban cannot spell
+# the banned name without tripping it. That is the guard working, not a hole in it: it cannot tell
+# the line describing the dead knob from the line promising it. Same trick as the style hook, where
+# a rule about a forbidden character writes it as an escape rather than reaching for an override.
+#
+# It cost real time on 2026-08-17, used twice while working #67, producing a full run each time,
+# with the results misread before anyone noticed. Deleting that one line is the instance; this is
+# the class (L30, L32): a name that appears in prose and never in code fails the suite.
+#
+# Derived from the files themselves rather than a hand-kept list of known settings, because a list
+# of the ones somebody remembered is exempt from the very check meant to catch the forgotten one
+# (L96, L41).
+mentioned_settings(){   # $1 = a shell file, comments only   $2 = optional prose file, all of it
+  { grep -o '#.*' "$1"; [ -n "${2:-}" ] && cat "$2"; true; } \
+    | grep -oE '(SUITE|SECTION)_[A-Z][A-Z0-9_]*' | sort -u
+}
+used_settings(){        # $@ = files whose NON-comment text counts as a real reference
+  for _us_f in "$@"; do sed 's/#.*//' "$_us_f"; done \
+    | grep -oE '(SUITE|SECTION)_[A-Z][A-Z0-9_]*' | sort -u
+}
+# Proven on a pair built to hold one real name and one invented one, because a comparison run only
+# over the real files reports an empty answer nobody can check, and empty is indistinguishable from
+# a scan that read nothing (L1, L98). The invented name is ASSEMBLED at runtime so the token never
+# appears whole in this file: written out plainly it would be a comment naming a setting that does
+# not exist, which is the exact thing being banned, and the guard would fail on itself.
+_fake_setting="SUITE""_NOSUCHKNOB"
+SETC="$WORK/settings-prose.txt"; SETK="$WORK/settings-code.sh"
+printf '# %s and %s are both mentioned here\n' "$_fake_setting" "SECTION_UNTIL" > "$SETC"
+printf '%s=1\n' "SECTION_UNTIL" > "$SETK"
+set_fix="$(comm -23 <(mentioned_settings "$SETC") <(used_settings "$SETK"))"
+dbg "setting-name scan on the fixture: $set_fix"
+check "#73 the scan reports a name that only prose mentions" \
+  "printf '%s' \"\$set_fix\" | grep -q \"\$_fake_setting\""
+check "#73 and leaves a name the code really uses alone" \
+  "! printf '%s' \"\$set_fix\" | grep -q 'SECTION_UNTIL'"
+# Now the real files. The workflow counts as code: it is where several SUITE_* knobs are actually
+# set, and treating it as prose would report every one of them as invented.
+_repo_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
+_readme="$_repo_root/README.md"; _wf="$_repo_root/.github/workflows/tests.yml"
+# Or the comparison silently has nothing on one side and passes by reading nothing (L98).
+check "#73 the files this scan reads are all present" \
+  "[ -f '$_readme' ] && [ -f '$_wf' ] && [ -f \"\$SCRIPT_SELF\" ] && [ -f \"\$SCRIPT\" ]"
+set_missing="$(comm -23 <(mentioned_settings "$SCRIPT_SELF" "$_readme") <(used_settings "$SCRIPT_SELF" "$SCRIPT" "$_wf"))"
+if [ -n "$set_missing" ]; then
+  echo "  (#73 settings named in a comment or the README but never referenced by code:)"
+  printf '%s\n' "$set_missing" | sed 's/^/    /'
+fi
+check "#73 every setting named in prose is referenced by code" "[ -z \"\$set_missing\" ]"
 
 section "== which plugins load is a per Mac setting, so status says what this Mac has (#48) =="
 # Every plugin was enabled at user scope, so all seven loaded into every session in every project:
