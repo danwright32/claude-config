@@ -724,8 +724,15 @@ check "status is quiet when local matches payload" \
 # A hook that exists locally but NOT in the payload: status must name it.
 echo 'brand new' > "$STHOME/hooks/added.sh"
 out_st_add="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
+# The four assertions below read rsync's itemize field, so they say WHICH kind of change was
+# reported and not merely that a filename appeared (#69). The flag characters are rsync's to
+# change, so only the ONE character carrying the meaning is pinned (`+` newly created, `c` checksum
+# differs) and the rest of the field is any run of non-spaces: an rsync that sets one more
+# attribute flag would otherwise fail these, and read as claude-sync mis-reporting rather than as a
+# pattern that aged (#72, L103). Codes read from rsync 3.4.1 on macOS and 3.4.1 on the CI runner;
+# the CI job prints its rsync version, see .github/workflows/tests.yml.
 check "status names a hook missing from the payload" \
-  "printf '%s' \"\$out_st_add\" | grep -q 'hooks: >f+.* added\.sh'"
+  "printf '%s' \"\$out_st_add\" | grep -q 'hooks: >f+[^ ]* added\.sh'"
 
 # A file in the payload that is gone locally: --delete is in the command, so a
 # working status must show the pending deletion. This is the exact case that
@@ -744,7 +751,7 @@ printf 'bbbb\n' > "$STHOME/hooks/edit.sh"
 touch -t 202601010000 "$STHOME/hooks/edit.sh"
 out_st_edit="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status names a same-size same-mtime edit" \
-  "printf '%s' \"\$out_st_edit\" | grep -q 'hooks: >fc\.* edit\.sh'"
+  "printf '%s' \"\$out_st_edit\" | grep -q 'hooks: >fc[^ ]* edit\.sh'"
 
 # status must report what a push would ACTUALLY do, so it has to honor the same
 # exclude set as stage_local_to_payload. Some skills are git clones carrying
@@ -760,7 +767,7 @@ check "status ignores nested .git the way a push does" \
 check "status ignores .DS_Store the way a push does" \
   "! printf '%s' \"\$out_st_ex\" | grep -q '\.DS_Store'"
 check "status still reports the real skill file next to them" \
-  "printf '%s' \"\$out_st_ex\" | grep -q 'skills: >f+.* cloned/SKILL\.md'"
+  "printf '%s' \"\$out_st_ex\" | grep -q 'skills: >f+[^ ]* cloned/SKILL\.md'"
 
 # A plugin-managed skill is excluded from the sync, so status must not offer it.
 mkdir -p "$STHOME/skills/wrangler"
