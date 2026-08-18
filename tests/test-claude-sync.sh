@@ -3280,6 +3280,7 @@ CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT
 out_p45done="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 out_p45pull2="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "status after resolving: $out_p45done"
+dbg "second pull: $out_p45pull2"
 check "#45 a resolved copy is no longer reported as outstanding by the pull" \
   "! printf '%s' \"\$out_p45pull2\" | grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174'"
 # Still listed by status, because the file is still on disk and only a person can decide to delete
@@ -3523,6 +3524,55 @@ check "#50 a skill that can load still arrives"      "[ -f '$BSD/skills/loose/SK
 check "#50 a directory with no SKILL.md is not applied" "[ ! -e '$BSD/skills/humanizer' ]"
 check "#50 a bare file in the payload is not applied"   "[ ! -e '$BSD/skills/stop-slop.md' ]"
 check "#50 the pull names what it refused, and why"     "printf '%s' \"\$out_bspull\" | grep -qE 'humanizer.*SKILL\.md'"
+
+section "== an empty skills folder in the payload is cleared, not reported for ever (#62) =="
+# stop-slop/ and humanizer/ arrived in the payload as directories holding no files at all: both are
+# git clones whose working trees are empty, and .git never syncs. Every pull on every Mac then
+# printed a refusal line for each of them, which trains the reader to skim past exactly the warning
+# that matters when a real skill breaks (L36). Git cannot carry the deletion of an empty directory,
+# so hand-deleting it on one Mac leaves the other reporting it for ever.
+#
+# An entry that holds NO FILES has nothing to lose, so the payload copy is removed and the reports
+# stop. An entry that holds files is refused and LEFT ALONE, however unloadable it is: refusing to
+# carry something is not a reason to destroy it (L5).
+EMH="$WORK/emptyskill-home"; EMR="$WORK/emptyskill-repo"
+mkdir -p "$EMH/skills" "$EMR/payload/skills/hollow" "$EMR/payload/skills/haswork" "$EMR/payload/skills/fine"
+echo '{"hooks":{}}' > "$EMH/settings.json"
+printf 'notes nobody can load, but they are somebody work\n' > "$EMR/payload/skills/haswork/notes.md"
+mkskill "$EMR/payload/skills/fine/SKILL.md" 'a skill that loads'
+out_em="$(CLAUDE_HOME="$EMH" SYNC_REPO="$EMR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull with an empty payload skill: $out_em"
+check "#62 the empty folder is named once, with the reason" \
+  "printf '%s' \"\$out_em\" | grep -qE 'hollow.*SKILL\.md'"
+check "#62 and it is gone from the payload"        "[ ! -d '$EMR/payload/skills/hollow' ]"
+check "#62 a folder holding files is refused, never deleted" \
+  "[ -f '$EMR/payload/skills/haswork/notes.md' ]"
+check "#62 and that one is still named"            "printf '%s' \"\$out_em\" | grep -qE 'haswork.*SKILL\.md'"
+check "#62 a skill that loads is untouched"        "[ -f '$EMH/skills/fine/SKILL.md' ]"
+# The point of clearing it: the next pull is quiet about it, so the warning that remains means
+# something.
+out_em2="$(CLAUDE_HOME="$EMH" SYNC_REPO="$EMR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+check "#62 the next pull says nothing about the empty one" \
+  "! printf '%s' \"\$out_em2\" | grep -q 'hollow'"
+check "#62 and still reports the one holding files"  "printf '%s' \"\$out_em2\" | grep -q 'haswork'"
+# The mirror runs with --delete, so an entry the payload does not carry is deleted from this Mac
+# unless something protects it. Refusing to carry a half-built or broken skill folder therefore
+# became "delete it from the other Mac" the moment that Mac pulled, which is the shape L5 is about,
+# and the second pull is where it bit: the first one still had the payload copy to derive the
+# protection from.
+mkdir -p "$EMH/skills/half-built"
+printf 'a draft nobody can load yet, but it is somebody work\n' > "$EMH/skills/half-built/notes.md"
+CLAUDE_HOME="$EMH" SYNC_REPO="$EMR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+CLAUDE_HOME="$EMH" SYNC_REPO="$EMR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#62 a half-built skill here survives repeated pulls" "[ -f '$EMH/skills/half-built/notes.md' ]"
+check "#62 and is still not carried to the other Mac"       "[ ! -e '$EMR/payload/skills/half-built' ]"
+
+# Never in the home direction. A person's own half-built skill folder is theirs, and the sync has no
+# business deleting it because it cannot carry it yet.
+mkdir -p "$EMH/skills/mine-in-progress"
+CLAUDE_HOME="$EMH" SYNC_REPO="$EMR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+check "#62 an empty folder on this Mac is left where it is" "[ -d '$EMH/skills/mine-in-progress' ]"
+check "#62 and is still not sent"                           "[ ! -d '$EMR/payload/skills/mine-in-progress' ]"
 
 section "== a skill provided by both a plugin and the local folder is caught (#49) =="
 # Nine Cloudflare skills existed as byte identical copies in ~/.claude/skills/ AND inside the
