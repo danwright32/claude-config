@@ -3662,8 +3662,31 @@ section "== assertions that could pass on output the command prints anyway (#55)
 # were rewritten under #67 and that ceiling is ZERO, so the shape is banned: it is the dangerous
 # half, and two of the six were the exact shape that shipped green against unmodified code. The bare
 # path half is still a ratchet with instances left in it.
+#
+# Taking that half to zero is what forced #68. A count of zero is not read the way a count of six
+# is: six invites somebody to look, zero is taken as proof the shape cannot occur here (L182). It
+# could only ever have meant "none written the ONE way the scanner recognised", so the scanner now
+# counts every form this suite has for feeding a captured variable to a matcher, and a zero is
+# backed by a positive control that plants an instance in a copy of the file being scanned and
+# requires the count to move. A dead scanner was measured passing the ceiling and failing only that
+# control, which is precisely the state the ceiling alone cannot tell from a clean suite.
 WEAK_AWK="$WORK/weak-assertions.awk"
 cat > "$WEAK_AWK" <<'WEAKAWK'
+# Counts, into seen[], every captured variable the given regex feeds to a matcher. The regex is
+# passed as a STRING: an awk function cannot take a /regex/ constant as an argument, it would be
+# evaluated against $0 first and arrive as 0 or 1.
+function tally(c, restr,   rest, m, v, rs, rl) {
+  rest = c
+  while (match(rest, restr)) {
+    # RSTART and RLENGTH are GLOBAL and the inner match below overwrites them, so the outer
+    # match's position is saved first. Without this the loop never advances past its first hit
+    # and every single matcher is counted as several, which reads as the defect it hunts for.
+    rs = RSTART; rl = RLENGTH
+    m = substr(rest, rs, rl)
+    if (match(m, /\$[A-Za-z_][A-Za-z0-9_]*/)) { v = substr(m, RSTART, RLENGTH); seen[v]++ }
+    rest = substr(rest, rs + rl)
+  }
+}
 # One logical check per line, continuations joined.
 {
   line = $0
@@ -3671,13 +3694,25 @@ cat > "$WEAK_AWK" <<'WEAKAWK'
   if (line !~ /^check "/) next
   total++
   name = line; sub(/^check "/, "", name); sub(/".*/, "", name)
+  # The NAME is not part of the assertion, and one containing "! " would read as a negation.
+  expr = line; sub(/^check "[^"]*"/, "", expr)
 
-  # A: the same captured output grepped twice in one expression.
-  rest = line; delete seen
-  while (match(rest, /\$[A-Za-z_][A-Za-z0-9_]*\\?"[[:space:]]*\|[[:space:]]*grep/)) {
-    v = substr(rest, RSTART, RLENGTH); sub(/\\?"[[:space:]]*\|[[:space:]]*grep$/, "", v)
-    seen[v]++
-    rest = substr(rest, RSTART + RLENGTH)
+  # A: one captured output consumed by more than one POSITIVE matcher in one expression, counted
+  # over EVERY form this suite has for feeding a captured variable to a matcher. A detector that
+  # knows one spelling reports ZERO about all the others, and a zero is read as proof the shape
+  # cannot occur rather than as a measurement of it (#68, L96, L182).
+  delete seen
+  ncl = split(expr, cl, /&&|\|\|/)
+  for (ci = 1; ci <= ncl; ci++) {
+    c = cl[ci]
+    # A negated half is out of scope: an absence cannot be supplied by an unrelated line, so
+    # "present AND not present" over one blob is sound rather than weak, and a ceiling of zero
+    # that counted it would refuse a legitimate check. "!=" is not a negation, hence the space.
+    if (c ~ /![[:space:]]/) continue
+    tally(c, "\\$[A-Za-z_][A-Za-z0-9_]*\\\\?\"[[:space:]]*\\|")     # "$v" | grep, | awk, | wc
+    tally(c, "<<<[[:space:]]*\\\\?\"?\\$[A-Za-z_][A-Za-z0-9_]*")      # grep ... <<< "$v"
+    tally(c, "case[[:space:]]+\\\\?\"?\\$[A-Za-z_][A-Za-z0-9_]*")     # case "$v" in
+    tally(c, "\\[\\[[[:space:]]+\\\\?\"?\\$[A-Za-z_][A-Za-z0-9_]*")   # [[ "$v" == * ]]
   }
   for (v in seen) if (seen[v] > 1) { ntwice++; print "twice\t" name "\t" v; break }
 
@@ -3703,18 +3738,25 @@ WEAKAWK
 # reports a number nobody can check, and a number is indistinguishable from a scanner that matched
 # nothing at all (L1, L98).
 WEAKFIX="$WORK/weak-fixture.sh"
-# Written with printf rather than as a heredoc of literal lines, so these four do not begin a line
-# in THIS file: the scanner reads the suite as text, and a fixture written the obvious way is
-# counted as four more weak assertions in the very suite it is measuring.
-: > "$WEAKFIX"
-printf 'check "two greps over one blob"  "printf %s \\"$out_x\\" | grep -q %salpha%s && printf %s \\"$out_x\\" | grep -q %sbeta%s"\n' "'%s'" "'" "'" "'%s'" "'" "'" >> "$WEAKFIX"
-printf 'check "a bare path in the output"  "printf %s \\"$out_y\\" | grep -q %shooks/thing.sh%s"\n' "'%s'" "'" "'" >> "$WEAKFIX"
-printf 'check "a negated bare path is fine"  "! printf %s \\"$out_z\\" | grep -q %shooks/thing.sh%s"\n' "'%s'" "'" "'" >> "$WEAKFIX"
-printf 'check "one line carrying both"  "printf %s \\"$out_w\\" | grep -q %shooks/thing.sh also mentions L2%s"\n' "'%s'" "'" "'" >> "$WEAKFIX"
+# Every line is written with a leading @@ and the marker stripped on the way into the fixture, so
+# none of them begins a line in THIS file: the scanner reads the suite as text, and a fixture
+# written the obvious way is counted as that many more weak assertions in the very suite it is
+# measuring. (It used to be a stack of nested printf calls, which was unreadable enough that
+# nobody would add a case to it, and #68 needed four more.)
+sed 's/^@@//' > "$WEAKFIX" <<'WEAKFIXTURE'
+@@check "two greps over one blob"  "printf '%s' \"$out_x\" | grep -q 'alpha' && printf '%s' \"$out_x\" | grep -q 'beta'"
+@@check "a bare path in the output"  "printf '%s' \"$out_y\" | grep -q 'hooks/thing.sh'"
+@@check "a negated bare path is fine"  "! printf '%s' \"$out_z\" | grep -q 'hooks/thing.sh'"
+@@check "one line carrying both"  "printf '%s' \"$out_w\" | grep -q 'hooks/thing.sh also mentions L2'"
+@@check "two herestrings over one blob"  "grep -q 'alpha' <<<\"$out_h\" && grep -q 'beta' <<<\"$out_h\""
+@@check "a case and a grep over one blob"  "case \"$out_c\" in *alpha*) true ;; *) false ;; esac && printf '%s' \"$out_c\" | grep -q 'beta'"
+@@check "two double brackets over one blob"  "[[ \"$out_b\" == *alpha* ]] && [[ \"$out_b\" == *beta* ]]"
+@@check "a positive and a negated match is fine"  "printf '%s' \"$out_n\" | grep -q 'alpha' && ! printf '%s' \"$out_n\" | grep -q 'beta'"
+WEAKFIXTURE
 weak_fix="$(awk -f "$WEAK_AWK" "$WEAKFIX")"
 dbg "weak scanner on the fixture: $weak_fix"
 check "#55 the scanner reads every check in a file" \
-  "[ \"\$(printf '%s' \"\$weak_fix\" | awk -F'\t' '\$1==\"totals\"{print \$2}')\" = '4' ]"
+  "[ \"\$(printf '%s' \"\$weak_fix\" | awk -F'\t' '\$1==\"totals\"{print \$2}')\" = '8' ]"
 check "#55 it flags two greps over one captured output" \
   "printf '%s' \"\$weak_fix\" | grep -q 'twice.*two greps over one blob'"
 check "#55 it flags a bare path matched in captured output" \
@@ -3723,14 +3765,28 @@ check "#55 a negated bare path is not flagged" \
   "! printf '%s' \"\$weak_fix\" | grep -q 'a negated bare path is fine'"
 check "#55 an assertion carrying the path and the wording together is not flagged" \
   "! printf '%s' \"\$weak_fix\" | grep -q 'one line carrying both'"
+# #68: the same defect written the other ways this suite can write it. A detector that knows one
+# spelling reports zero about the rest, and a zero is read as proof the shape cannot occur (L182).
+check "#68 it flags two herestrings over one captured output" \
+  "printf '%s' \"\$weak_fix\" | grep -q 'twice.*two herestrings over one blob'"
+check "#68 it flags a case and a grep over one captured output" \
+  "printf '%s' \"\$weak_fix\" | grep -q 'twice.*a case and a grep over one blob'"
+check "#68 it flags two double brackets over one captured output" \
+  "printf '%s' \"\$weak_fix\" | grep -q 'twice.*two double brackets over one blob'"
+# A negated half cannot be supplied by an unrelated line, so "present AND not present" over one
+# blob is sound. Banning it at a ceiling of zero would refuse a legitimate check.
+check "#68 a positive paired with a negated match is not flagged" \
+  "! printf '%s' \"\$weak_fix\" | grep -q 'a positive and a negated match is fine'"
 # Now the real suite. The ceilings were first measured on 2026-08-17 (581 checks, 6 and 22); #67
 # rewrote all six of the double-grep checks, taking that half to 0 and the bare half to 21 (the
 # CLAUDE.md assertion was flagged by both and one rewrite cleared it). They are a ratchet: a change
 # that adds one of these fails, while the existing ones are worked through and the numbers come
 # down. Raising either is a decision somebody has to write down here.
 #
-# Zero is not a number that can drift: from here any check that greps one captured blob twice fails
-# the suite, which is what stops the six coming back one at a time.
+# Zero is not a number that can drift: from here any check that consumes one captured blob with two
+# positive matchers fails the suite, which is what stops the six coming back one at a time. A
+# negated half does not count, because an absence cannot be supplied by an unrelated line, so
+# "present AND not present" over one blob is sound and must stay writable.
 weak_real="$(awk -f "$WEAK_AWK" "$SCRIPT_SELF")"
 weak_total="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $2}')"
 weak_twice="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $3}')"
@@ -3740,6 +3796,21 @@ printf '%s\n' "$weak_real" | grep -E '^(twice|bare)' | sed 's/^/    /'
 check "#55 the scan really read this suite" "[ \"\${weak_total:-0}\" -ge 500 ]"
 check "#55 no check greps one captured output twice" "[ \"\${weak_twice:-999}\" -le 0 ]"
 check "#55 no new check matches only a bare path" "[ \"\${weak_bare:-999}\" -le 21 ]"
+# A POSITIVE CONTROL on the zero above (#68). The fixture proves the scanner on a file built for
+# it; this proves it on the file actually being scanned, in the same invocation, by planting one
+# instance in a copy and requiring the count to move to exactly 1. Exactly 1, not at least 1, so it
+# says two things at once: the scanner is alive here, and the real file really did contribute none.
+# Without it a scanner broken by any later edit reports 0 and reads as a clean suite (L98, L171).
+WEAKPOS="$WORK/weak-positive-control.sh"
+cp "$SCRIPT_SELF" "$WEAKPOS"
+sed 's/^@@//' >> "$WEAKPOS" <<'WEAKPLANT'
+@@check "planted: two greps over one blob"  "printf '%s' \"$out_p\" | grep -q 'alpha' && printf '%s' \"$out_p\" | grep -q 'beta'"
+WEAKPLANT
+weak_pos="$(awk -f "$WEAK_AWK" "$WEAKPOS" | awk -F'\t' '$1=="totals"{print $3}')"
+dbg "positive control on the real suite: planted 1, scanner reports ${weak_pos:-<nothing>}"
+check "#68 the zero is a live measurement, not a dead scanner" \
+  "[ \"\${weak_pos:-x}\" = '1' ]"
+rm -f "$WEAKPOS"
 
 section "== which plugins load is a per Mac setting, so status says what this Mac has (#48) =="
 # Every plugin was enabled at user scope, so all seven loaded into every session in every project:

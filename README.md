@@ -174,6 +174,13 @@ line carrying both facts, so any new one fails the suite. Three of the six were 
 against a build where the report they were guarding had been deleted outright. The bare path half is
 still a ratchet, currently 21.
 
+Because a zero is read as proof rather than as a measurement, the scan counts every form this suite
+has for feeding a captured output to a matcher (a pipe, a herestring, a `case`, a `[[ ]]`), and the
+zero is backed by a positive control: an instance is planted in a copy of the file being scanned and
+the count has to move. A scanner deliberately broken was measured passing the ceiling and failing
+only that control. A negated half never counts, since an absence cannot be supplied by an unrelated
+line.
+
 One run at a time, and none of them open ended:
 
 | Setting | Default | What it does |
