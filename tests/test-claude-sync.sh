@@ -1614,7 +1614,12 @@ check "#17 the published entry keeps its number"         "grep -q '^- \*\*L2\. t
 check "#17 the unsent entry takes the next free number"  "grep -q '^- \*\*L5\. mine' '$LNMBH/LESSONS.md'"
 check "#17 the old number is no longer duplicated"       "[ \"\$(grep -c '^- \*\*L2\.' '$LNMBH/LESSONS.md')\" = 1 ]"
 check "#17 the numbering is sound afterwards"            "SYNC_NO_GIT=1 CLAUDE_HOME='$LNMBH' SYNC_REPO='$LNMB' bash '$LNMB/claude-sync' check-lessons >/dev/null 2>&1"
-check "#17 the renumber is reported, naming old and new" "printf '%s' \"\$out_lnm\" | grep -qi 'renumber' && printf '%s' \"\$out_lnm\" | grep -q 'L2' && printf '%s' \"\$out_lnm\" | grep -q 'L5'"
+# One line carrying the word and both numbers, never three greps over the whole pull output
+# (#67). Split apart, this passed with the renumber report line deleted outright: another line
+# of the same pull says "renumbered", and the CLAUDE.md warning below carries L2 and L5 together,
+# so the three halves were answered by two unrelated lines and proved nothing (L135, L178).
+check "#17 the renumber is reported, naming old and new" \
+  "printf '%s' \"\$out_lnm\" | grep -q 'renumbered.*L2 became L5'"
 check "#17 the file is not reported as held back"        "! printf '%s' \"\$out_lnm\" | grep -qi 'held back'"
 # A renumber must carry its body mentions with it. At merge time the tool DOES know
 # which lesson a local mention meant: a line this Mac wrote (absent from the arriving
@@ -1629,11 +1634,11 @@ check "#17 the old local mention is gone" \
 check "#17 a published body mention keeps its number" \
   "grep -q 'distinct from L2, which it cites' '$LNMBH/LESSONS.md'"
 check "#17 the rewrite is reported, naming old and new" \
-  "printf '%s' \"\$out_lnm\" | grep -qi 'rewrote' && printf '%s' \"\$out_lnm\" | grep -q 'L2 to L5'"
+  "printf '%s' \"\$out_lnm\" | grep -q 'LESSONS\.md: rewrote .*mention.*of L2 to L5'"
 check "#17 no go-and-check warning for the file it rewrote" \
   "! printf '%s' \"\$out_lnm\" | grep -qi 'still mentions'"
 check "#17 a mention in another synced rule file is warned about" \
-  "printf '%s' \"\$out_lnm\" | grep -q 'CLAUDE.md' && printf '%s' \"\$out_lnm\" | grep -qi 'also mentions L2'"
+  "printf '%s' \"\$out_lnm\" | grep -q 'CLAUDE\.md also mentions L2'"
 check "#17 that other file is never rewritten" \
   "grep -q 'see L2 for the rule' '$LNMBH/CLAUDE.md'"
 # Or every assertion below is about files that were never delivered, and passes by
@@ -1779,8 +1784,11 @@ check "renumber: numbering passes its own check" \
 # The report has to name what was dropped and both numbers involved, or a silently
 # vanished entry reads as a clean merge. Asserting only the word "renumber" would
 # pass on the pre-existing duplicate warning, which is a different message entirely.
+# As three greps over the whole output it did exactly that (#67): with the drop report
+# deleted the assertion still passed, because the rewrite line below says "renumbered"
+# and supplies both numbers. One line carrying the drop and both numbers is the test.
 check "renumber: the drop names the old and new number" \
-  "printf '%s' \"\$out_rn\" | grep -qi 'renumbered' && printf '%s' \"\$out_rn\" | grep -q 'L2' && printf '%s' \"\$out_rn\" | grep -q 'L3'"
+  "printf '%s' \"\$out_rn\" | grep -q 'dropped.*L2 became L3'"
 # The other Mac's renumber of OUR entry must carry our local mentions with it, exactly
 # as a renumber done here does: the local note meant our lesson, which is now L3.
 check "renumber: a local mention follows the other Mac's renumber" \
@@ -1816,7 +1824,7 @@ check "renumber: the published entry keeps the contested number" \
 check "renumber: the unsent entry is renumbered, not left colliding" \
   "grep -q '^- \*\*L10\..*only on Mac B' '$RNBH/LESSONS.md'"
 check "renumber: the settled collision is reported, not silent" \
-  "printf '%s' \"\$out_rn2\" | grep -qi 'renumbered' && printf '%s' \"\$out_rn2\" | grep -q 'L10'"
+  "printf '%s' \"\$out_rn2\" | grep -q 'renumbered.*L9 became L10'"
 check "renumber: no duplicate number remains afterwards" \
   "! printf '%s' \"\$out_rn2\" | grep -qi 'used twice\\|used 2 times'"
 # A warning that cries wolf gets ignored: nothing in this file mentions L9 in
@@ -2272,7 +2280,8 @@ check "#24 each record carries the threshold it was judged under" \
   "grep -q ' 10800$' '$OCR/.outage-log' && grep -q ' 0$' '$OCR/.outage-log'"
 check "#24 a mixed tally says the threshold changed" \
   "printf '%s' \"\$out_oc\" | grep -qi 'different threshold'"
-check "#24 the tally names both counts"  "printf '%s' \"\$out_oc\" | grep -q '1 quiet' && printf '%s' \"\$out_oc\" | grep -q '1 alerted'"
+check "#24 the tally names both counts" \
+  "printf '%s' \"\$out_oc\" | grep -q '1 quiet, 1 alerted'"
 # A run that reached the repo must not be recorded as an outage, or the tally that exists to
 # judge the threshold is padded with every healthy sync and answers nothing.
 git -C "$OCR" remote set-url origin "$OCB"
@@ -3644,10 +3653,15 @@ section "== assertions that could pass on output the command prints anyway (#55)
 # warning supplied the wording. They were caught only because the fix was expected to be needed and
 # the green looked wrong.
 #
-# Derived from the suite itself, and REPORT ONLY against a ceiling: there are existing instances and
-# some of them are legitimate (a filename really is the whole point of "the error names the missing
-# file"). The ceiling is a ratchet, so nothing new is added while the existing ones are worked
-# through, and it is a measurement rather than a guess.
+# Derived from the suite itself, and held against a ceiling rather than banned outright, because
+# some instances are legitimate (a filename really is the whole point of "the error names the
+# missing file"). The ceiling is a ratchet, so nothing new is added while the existing ones are
+# worked through, and it is a measurement rather than a guess.
+#
+# The two halves are now at different stages. The six checks that grepped one captured output twice
+# were rewritten under #67 and that ceiling is ZERO, so the shape is banned: it is the dangerous
+# half, and two of the six were the exact shape that shipped green against unmodified code. The bare
+# path half is still a ratchet with instances left in it.
 WEAK_AWK="$WORK/weak-assertions.awk"
 cat > "$WEAK_AWK" <<'WEAKAWK'
 # One logical check per line, continuations joined.
@@ -3709,9 +3723,14 @@ check "#55 a negated bare path is not flagged" \
   "! printf '%s' \"\$weak_fix\" | grep -q 'a negated bare path is fine'"
 check "#55 an assertion carrying the path and the wording together is not flagged" \
   "! printf '%s' \"\$weak_fix\" | grep -q 'one line carrying both'"
-# Now the real suite. The ceilings were measured on 2026-08-17 (581 checks, 6 and 22). They are a
-# ratchet: a change that adds one of these fails, while the existing ones are worked through and the
-# numbers come down. Raising either is a decision somebody has to write down here.
+# Now the real suite. The ceilings were first measured on 2026-08-17 (581 checks, 6 and 22); #67
+# rewrote all six of the double-grep checks, taking that half to 0 and the bare half to 21 (the
+# CLAUDE.md assertion was flagged by both and one rewrite cleared it). They are a ratchet: a change
+# that adds one of these fails, while the existing ones are worked through and the numbers come
+# down. Raising either is a decision somebody has to write down here.
+#
+# Zero is not a number that can drift: from here any check that greps one captured blob twice fails
+# the suite, which is what stops the six coming back one at a time.
 weak_real="$(awk -f "$WEAK_AWK" "$SCRIPT_SELF")"
 weak_total="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $2}')"
 weak_twice="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $3}')"
@@ -3719,8 +3738,8 @@ weak_bare="$(printf '%s' "$weak_real" | awk -F'\t' '$1=="totals"{print $4}')"
 echo "  (#55 weak assertions in this suite: $weak_twice grep the same output twice, $weak_bare match only a path, out of $weak_total checks)"
 printf '%s\n' "$weak_real" | grep -E '^(twice|bare)' | sed 's/^/    /'
 check "#55 the scan really read this suite" "[ \"\${weak_total:-0}\" -ge 500 ]"
-check "#55 no new check greps one captured output twice" "[ \"\${weak_twice:-999}\" -le 6 ]"
-check "#55 no new check matches only a bare path" "[ \"\${weak_bare:-999}\" -le 22 ]"
+check "#55 no check greps one captured output twice" "[ \"\${weak_twice:-999}\" -le 0 ]"
+check "#55 no new check matches only a bare path" "[ \"\${weak_bare:-999}\" -le 21 ]"
 
 section "== which plugins load is a per Mac setting, so status says what this Mac has (#48) =="
 # Every plugin was enabled at user scope, so all seven loaded into every session in every project:

@@ -169,6 +169,11 @@ greps over one captured blob, or a match on nothing but a path, in output that l
 It prints what it found with a count and holds the numbers to a ceiling, so nothing new is added
 while the existing ones are worked through.
 
+The two greps over one blob half is now at ZERO: the six that existed were rewritten to require one
+line carrying both facts, so any new one fails the suite. Three of the six were measured passing
+against a build where the report they were guarding had been deleted outright. The bare path half is
+still a ratchet, currently 21.
+
 One run at a time, and none of them open ended:
 
 | Setting | Default | What it does |
