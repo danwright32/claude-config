@@ -640,7 +640,7 @@ echo '{"hooks":{}}' > "$WLC/settings.json"
 WLEMIT="$WORK/wl-emit-fswatch"; printf '#!/usr/bin/env bash\necho 1\n' > "$WLEMIT"; chmod +x "$WLEMIT"
 WLNOTIFIER="$WORK/wl-fake-notifier"; printf '#!/usr/bin/env bash\ntrue\n' > "$WLNOTIFIER"; chmod +x "$WLNOTIFIER"
 wl_out="$(SYNC_FSWATCH="$WLEMIT" SYNC_NOTIFIER="$WLNOTIFIER" CLAUDE_HOME="$WLC" SYNC_REPO="$WLR" bash "$SCRIPT" watch 2>&1)"
-check "watch output logs the failure"     "printf '%s' \"\$wl_out\" | grep -qi 'FAILED'"
+check "watch output logs the failure"     "printf '%s' \"\$wl_out\" | grep -qi 'watch: sync FAILED (exit 1)'"
 check "logged failure names the file"     "printf '%s' \"\$wl_out\" | grep -q 'watch: sync FAILED.*hooks/leak\.sh'"
 
 section "== pull/sync auto-restarts the watch daemon when claude-sync itself changed =="
@@ -703,7 +703,7 @@ dbg "the resumed sync said: $out_sync_restart"
 check "sync also restarts the watch daemon on a script change" "printf '%s' \"\$out_sync_restart\" | grep -qi 'watch daemon'"
 check "the resumed sync still applies ordinary payload files" "[ -f '$RSCHOME/hooks/ordinary.sh' ]"
 check "the resumed sync applies what only the NEW version syncs" "[ -f '$RSCHOME/RESUMED.md' ]"
-check "the resumed sync still reports completion"             "printf '%s' \"\$out_sync_restart\" | grep -q 'Synced'"
+check "the resumed sync still reports completion"             "printf '%s' \"\$out_sync_restart\" | grep -q 'Synced (sent local changes, pulled remote'"
 
 # ---- status must actually REPORT a difference (#737) ----
 # do_status ran `rsync -an`, which has no -v and no -i, so rsync printed nothing
@@ -1156,7 +1156,7 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/
 out_le="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" pull 2>&1)"
 check "local script edit: the unrelated change still arrives"  "grep -q other-v2 '$LEBH/hooks/other.sh'"
 check "the local edit is NOT reverted"      "grep -q MY-LOCAL-FIX '$LEBH/skills/reel/push.py'"
-check "local script edit: the pull says it kept it"  "printf '%s' \"\$out_le\" | grep -qi 'kept'"
+check "local script edit: the pull says it kept it"  "printf '%s' \"\$out_le\" | grep -qi 'kept local edits.*skills/reel/push\.py'"
 # The kept edit still reaches the repo on the next send, and the other Mac.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" send >/dev/null 2>&1
 check "the next send publishes the edit"    "grep -q MY-LOCAL-FIX '$LEB/payload/skills/reel/push.py'"
@@ -1192,7 +1192,7 @@ out_tf="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" p
 check "unsent lesson: the unrelated change still arrives"  "grep -q other-v2 '$TFBH/hooks/tf-other.sh'"
 check "the unsent lesson is NOT reverted"       "grep -q MY-NEW-LESSON '$TFBH/LESSONS.md'"
 check "the earlier lesson is still there too"   "grep -q 'first lesson' '$TFBH/LESSONS.md'"
-check "unsent lesson: the pull says it kept it"  "printf '%s' \"\$out_tf\" | grep -qi 'kept'"
+check "unsent lesson: the pull says it kept it"  "printf '%s' \"\$out_tf\" | grep -qi 'kept local edits.*LESSONS\.md'"
 check "and does not report overwriting it"      "! printf '%s' \"\$out_tf\" | grep -q 'updated .*LESSONS.md'"
 # It must reach the repo on the next send, and the other Mac after that.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" send >/dev/null 2>&1
@@ -1213,7 +1213,7 @@ out_tfc="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" 
 check "the other Mac's entry arrives"           "grep -q FROM-MAC-A '$TFBH/LESSONS.md'"
 check "this Mac's entry is still in the file"   "grep -q FROM-MAC-B-SAME-TIME '$TFBH/LESSONS.md'"
 check "so no conflict copy was needed"          "! ls '$TFBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
-check "and the merge is reported"               "printf '%s' \"\$out_tfc\" | grep -qi 'MERGED'"
+check "and the merge is reported"               "printf '%s' \"\$out_tfc\" | grep -qi 'entries were MERGED.*LESSONS\.md'"
 
 section "== a commit made outside send/sync must not wedge the watcher (#12) =="
 # 2026-07-28: a session edited claude-sync itself and committed with plain git.
@@ -1478,7 +1478,7 @@ check "#14 the other Mac's lesson arrives"        "grep -q 'L4. four' '$RMBH/LES
 check "#14 this Mac's unsent lesson survives"     "grep -q 'L3. three' '$RMBH/LESSONS.md'"
 check "#14 the original lessons are still there"  "grep -q 'L1. one' '$RMBH/LESSONS.md' && grep -q 'L2. two' '$RMBH/LESSONS.md'"
 check "#14 no conflict copy is left behind"       "[ ! -e '$RMBH/LESSONS.md.conflict-'* ] 2>/dev/null || ! ls '$RMBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
-check "#14 the merge is reported, not silent"     "printf '%s' \"\$out_rm1\" | grep -qi 'merged'"
+check "#14 the merge is reported, not silent"     "printf '%s' \"\$out_rm1\" | grep -qi 'entries were MERGED and nothing was dropped'"
 check "#14 the report names the file merged"      "printf '%s' \"\$out_rm1\" | grep -q 'merged  *LESSONS\.md'"
 check "#14 no conflict markers reach the file"    "! grep -q '<<<<<<<' '$RMBH/LESSONS.md'"
 
@@ -1518,7 +1518,7 @@ out_rm2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" bash "$RMB/clau
 check "#14 an unmergeable file still keeps a copy of yours" \
   "ls '$RMBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
 check "#14 and it names the entry only you had" \
-  "printf '%s' \"\$out_rm2\" | grep -q 'L6'"
+  "printf '%s' \"\$out_rm2\" | grep -q 'only in yours: L6'"
 check "#14 an unmergeable file never gets conflict markers" \
   "! grep -q '<<<<<<<' '$RMBH/LESSONS.md'"
 
@@ -1539,7 +1539,7 @@ check "#15 a clean lessons file publishes normally" "[ \"\$rc_ln_ok\" -eq 0 ] &&
 # Now a duplicate number.
 printf -- '- **L2. two again.** a different lesson with the same number\n' >> "$LNH/LESSONS.md"
 out_ln_dup="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" push 2>&1)"
-check "#15 the duplicate is named, not silent"        "printf '%s' \"\$out_ln_dup\" | grep -q 'L2'"
+check "#15 the duplicate is named, not silent"        "printf '%s' \"\$out_ln_dup\" | grep -q 'L2 used 2 times'"
 check "#15 the file it is in is named"                "printf '%s' \"\$out_ln_dup\" | grep -q 'LESSONS\.md: L2 used 2 times'"
 check "#15 the corrupt numbering is NOT published"    "! grep -q 'two again' '$LN/payload/LESSONS.md'"
 check "#15 the previously published copy is intact"   "grep -q 'L1. one' '$LN/payload/LESSONS.md'"
@@ -1556,23 +1556,23 @@ check "#15 the override publishes it anyway"          "grep -q 'two again' '$LN/
 # highest, never a gap: a skipped number was skipped deliberately.
 printf '# Lessons\n\n- **L1. one.** body\n- **L2. two.** body\n- **L5. five.** body\n' > "$LNH/LESSONS.md"
 out_next="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" next-lesson 2>&1)"
-check "#15 next-lesson reports one past the highest"  "printf '%s' \"\$out_next\" | grep -q 'L6'"
+check "#15 next-lesson reports one past the highest"  "printf '%s' \"\$out_next\" | grep -q '^L6$'"
 check "#15 next-lesson does not offer a gap"          "! printf '%s' \"\$out_next\" | grep -q 'L3'"
 
 # next-lesson must survive a rule file that contains no lessons at all: under
 # pipefail a grep matching nothing killed the whole command and printed nothing.
 printf '# just rules, no lessons here\n' > "$LNH/RTK.md"
 out_next2="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" next-lesson 2>&1)"; rc_next2=$?
-check "#15 next-lesson survives a file with no lessons" "[ \"\$rc_next2\" -eq 0 ] && printf '%s' \"\$out_next2\" | grep -q 'L6'"
+check "#15 next-lesson survives a file with no lessons" "[ \"\$rc_next2\" -eq 0 ] && printf '%s' \"\$out_next2\" | grep -q '^L6$'"
 
 # The standalone check, usable as a gate before writing a lesson.
 out_chk_ok="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" check-lessons 2>&1)"; rc_chk_ok=$?
 check "#15 check-lessons passes on sound numbering" "[ \"\$rc_chk_ok\" -eq 0 ]"
-check "#15 check-lessons reports the next free number" "printf '%s' \"\$out_chk_ok\" | grep -q 'L6'"
+check "#15 check-lessons reports the next free number" "printf '%s' \"\$out_chk_ok\" | grep -q 'next free: L6'"
 printf -- '- **L5. five again.** duplicate\n' >> "$LNH/LESSONS.md"
 out_chk_bad="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" check-lessons 2>&1)"; rc_chk_bad=$?
 check "#15 check-lessons fails on a duplicate" "[ \"\$rc_chk_bad\" -ne 0 ]"
-check "#15 and names the number involved"      "printf '%s' \"\$out_chk_bad\" | grep -q 'L5'"
+check "#15 and names the number involved"      "printf '%s' \"\$out_chk_bad\" | grep -q 'L5 used 2 times'"
 
 # A duplicate created by the #14 merge (both Macs choosing the same number) has to
 # surface at apply time too, since by then it is already in the file.
@@ -1710,7 +1710,7 @@ check "alias added when missing"        "grep -q 'alias claudesync=' '$ZRC'"
 check "alias runs a pull"               "grep -q \"claude-sync' *pull\|claude-sync pull\" '$ZRC'"
 check "alias line is commented"         "grep -q 'claude-config-sync: pull shared' '$ZRC'"
 check "existing zshrc content kept"     "grep -q 'EDITOR=bbedit' '$ZRC'"
-check "it says the alias was added"     "printf '%s' \"\$outZ\" | grep -qi 'alias'"
+check "it says the alias was added"     "printf '%s' \"\$outZ\" | grep -qi 'Installed shell alias: claudesync'"
 
 # 2. assume it runs twice: a second install must not append a duplicate
 SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
@@ -1967,7 +1967,7 @@ check "#22 an unrecognised pull failure is NOT blamed on the other Mac" \
 check "#22 an unrecognised pull failure is reported by the tool, not just by git" \
   "printf '%s' \"\$out_other\" | grep -q 'claude-sync:.*git said'"
 check "#22 an unrecognised pull failure repeats git's own reason" \
-  "printf '%s' \"\$out_other\" | grep -qi 'untracked'"
+  "printf '%s' \"\$out_other\" | grep -qi 'git said:.*untracked working tree files'"
 
 # 4) the pull EXITS ZERO and is still broken. Measured against real git: when re-applying
 # the local edits it set aside conflicts, git prints "Successfully rebased", returns 0,
@@ -1992,7 +1992,7 @@ check "#22 a conflicted autostash restore is not reported as a clean sync" "[ $r
 check "#22 a conflicted autostash restore does not announce success" \
   "! printf '%s' \"\$out_stash\" | grep -q 'Synced (sent local changes'"
 check "#22 a conflicted autostash restore says the edits were parked" \
-  "printf '%s' \"\$out_stash\" | grep -qi 'stash'"
+  "printf '%s' \"\$out_stash\" | grep -qi 'parked them in a stash and left conflict markers'"
 check "#22 a conflicted autostash restore is not blamed on a payload conflict" \
   "! printf '%s' \"\$out_stash\" | grep -q 'both Macs changed the same config'"
 check "#22 a conflicted autostash restore leaves the edits recoverable" \
@@ -2029,7 +2029,7 @@ check "#20 status names a nested conflict copy" \
 check "#20 status says how old each copy is" \
   "printf '%s' \"\$out_conf20\" | grep -q '9 days'"
 check "#20 status says what to do about them" \
-  "printf '%s' \"\$out_conf20\" | grep -qi 'delete'"
+  "printf '%s' \"\$out_conf20\" | grep -qi 'Compare each with the live file next to it, then delete the copy'"
 # The copy must not be mistaken for ordinary config: it is excluded from staging, so a
 # status that listed it as a pending change would be reporting a push that cannot happen.
 check "#20 a conflict copy is still never staged for the other Mac" \
@@ -2131,7 +2131,7 @@ out_sust="$(env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=0 bash "$SCRIPT" sync 2>&1)"
 check "#22 a sustained outage fails too" "[ $rc_sust -ne 0 ]"
 check "#22 a sustained outage does raise an alert" "[ -s '$NOTED' ]"
 check "#22 a sustained outage says how long it has been failing" \
-  "printf '%s' \"\$out_sust\" | grep -qi 'failing'"
+  "printf '%s' \"\$out_sust\" | grep -qE 'Syncing has now been failing for [0-9]+ minutes'"
 
 # No recorded success at all cannot be called a brief blip, so it must alert rather than
 # stay quiet: a message may claim only what its check actually measured (L11).
@@ -2219,15 +2219,15 @@ check "#23 a single published Mac says only itself has reported" \
 CLAUDE_HOME="$VFHB" SYNC_REPO="$VFR" SYNC_HOSTNAME=macB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 out_v2="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1)"
-check "#23 verify names the other Mac"        "printf '%s' \"\$out_v2\" | grep -q 'macB'"
-check "#23 verify says the two Macs agree"    "printf '%s' \"\$out_v2\" | grep -qi 'agree'"
+check "#23 verify names the other Mac"        "printf '%s' \"\$out_v2\" | grep -q 'macB: up to date with the shared config'"
+check "#23 verify says the two Macs agree"    "printf '%s' \"\$out_v2\" | grep -qi 'both Macs agree on the same config'"
 
 # A changes the config and publishes. B has not applied it, so B is BEHIND, and verify must
 # say so by name rather than reporting a clean bill of health.
 mkskill "$VFHA/skills/v/SKILL.md" 'V2 changed on A'
 CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 out_v3="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1)"
-check "#23 verify reports the other Mac as behind"  "printf '%s' \"\$out_v3\" | grep -qi 'behind'"
+check "#23 verify reports the other Mac as behind"  "printf '%s' \"\$out_v3\" | grep -qE 'macB: BEHIND by [0-9]+ config change'"
 # Asserts the NUMBER, not just the word: the count was first written as "commits since the
 # marker's timestamp", which is a stand-in for the real quantity and goes wrong whenever the
 # two Macs' clocks disagree. A test that only looked for the word "behind" passed on it.
@@ -2278,7 +2278,7 @@ check "#24 an alerting outage is recorded too" "grep -q 'alert' '$OCR/.outage-lo
 check "#24 the two decisions are kept apart" \
   "[ \"\$(grep -c 'quiet' '$OCR/.outage-log')\" = 1 ] && [ \"\$(grep -c 'alert' '$OCR/.outage-log')\" = 1 ]"
 out_oc="$(CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
-check "#24 status reports the tally"     "printf '%s' \"\$out_oc\" | grep -qi 'outage'"
+check "#24 status reports the tally"     "printf '%s' \"\$out_oc\" | grep -qi 'outage decisions so far:'"
 # The tally exists to judge the threshold, so it must not imply every record was judged under
 # the CURRENT one. The two outages above were deliberately made under different thresholds
 # (10800 then 0), so a summary quoting one number for all of them would be telling you
@@ -2300,7 +2300,7 @@ check "#24 a healthy sync records no outage" \
 printf 'garbage line with no fields\n' >> "$OCR/.outage-log"
 out_ocbad="$(CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; rc_ocbad=$?
 check "#24 status survives a corrupt outage log"  "[ $rc_ocbad -eq 0 ]"
-check "#24 and says a record could not be read"   "printf '%s' \"\$out_ocbad\" | grep -qi 'unreadable'"
+check "#24 and says a record could not be read"   "printf '%s' \"\$out_ocbad\" | grep -qE '[0-9]+ record\(s\) unreadable and not counted'"
 
 section "== local state carried in from elsewhere is not trusted (#25) =="
 # Four files now hold local state in the sync folder and none had a defined lifetime:
@@ -2379,7 +2379,7 @@ GHREF="refs/claude-sync-state/macGone"
 out_gh="$(CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 \
   SYNC_MAC_RETIRE_AFTER=0 bash "$SCRIPT" verify 2>&1 || true)"
 check "#26 a long-silent Mac is called retired, not behind" \
-  "printf '%s' \"\$out_gh\" | grep -qi 'retired'"
+  "printf '%s' \"\$out_gh\" | grep -qi 'RETIRED, no sign of it since'"
 check "#26 a retired Mac is not counted as behind" \
   "! printf '%s' \"\$out_gh\" | grep -q 'macGone: BEHIND'"
 check "#26 and it no longer blocks the verdict" \
@@ -2393,7 +2393,7 @@ check "#26 and it no longer blocks the verdict" \
 # does not have.
 # Retired must NOT mean forgotten: it still has to be named, or a Mac that genuinely fell
 # behind quietly disappears from the report that exists to notice exactly that.
-check "#26 a retired Mac is still named"  "printf '%s' \"\$out_gh\" | grep -q 'macGone'"
+check "#26 a retired Mac is still named"  "printf '%s' \"\$out_gh\" | grep -q 'macGone: RETIRED'"
 # The control: with a normal retirement window that same Mac is simply behind, so the rule
 # cannot be satisfied by calling every absent Mac retired.
 out_gh2="$(CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1 || true)"
@@ -2633,7 +2633,7 @@ check "#34 it refuses before running any checks" "! printf '%s' \"\$_d2\" | grep
 # off precisely when the environment is wrong.
 _dj="$(_deep abc)"; _dj_rc=$?
 check "#34 a depth that is not a number is refused, not waved through" "[ '$_dj_rc' -ne 0 ]"
-check "#34 the refusal names the value it could not read" "printf '%s' \"\$_dj\" | grep -q 'abc'"
+check "#34 the refusal names the value it could not read" "printf '%s' \"\$_dj\" | grep -q 'SUITE_DEPTH=.abc. is not a whole number'"
 _dn="$(_deep -1)"; _dn_rc=$?
 check "#34 a negative depth is refused too" "[ '$_dn_rc' -ne 0 ]"
 
@@ -2675,7 +2675,7 @@ check "#31 a hung run ends instead of waiting for ever" "[ '$_hang_rc' -ne 0 ]"
 # was killed and its children were left holding the output open.
 check "#31 it ends near its deadline rather than long after" "[ '$_elapsed' -lt 30 ]"
 check "#31 it says plainly that it timed out"   "printf '%s' \"\$_hang\" | grep -q 'TIMED OUT'"
-check "#31 it names the section it died in"     "printf '%s' \"\$_hang\" | grep -q 'push'"
+check "#31 it names the section it died in"     "printf '%s' \"\$_hang\" | grep -q 'still inside section: == push =='"
 # The whole point is that a hang stops reading as an ordinary run, so it must never leave behind
 # the summary line that means everything passed.
 check "#31 a hung run is never reported as green" "! printf '%s' \"\$_hang\" | grep -q 'FAIL=0'"
@@ -2808,7 +2808,7 @@ cat > "$WORK/ps-many" <<'PSEOF'
   701     1 00:09:00 /bin/bash /Users/x/claude-config-sync/claude-sync watch
 PSEOF
 _ps_many="$(_status_with "$WORK/ps-many")"
-check "#33 several watchers are reported"        "printf '%s' \"\$_ps_many\" | grep -qi 'watcher'"
+check "#33 several watchers are reported"        "printf '%s' \"\$_ps_many\" | grep -qi 'watcher processes the tool left running'"
 check "#33 and each one's age is given"          "printf '%s' \"\$_ps_many\" | grep -q '03:11:02'"
 check "#33 and the process ids are named"        "printf '%s' \"\$_ps_many\" | grep -q '601'"
 
@@ -2823,7 +2823,7 @@ cat > "$WORK/ps-chain" <<'PSEOF'
 PSEOF
 _ps_chain="$(_status_with "$WORK/ps-chain")"
 check "#33 a run nested inside a run is reported" "printf '%s' \"\$_ps_chain\" | grep -qi 'test run'"
-check "#33 and it says how deeply they are nested" "printf '%s' \"\$_ps_chain\" | grep -qi 'deep'"
+check "#33 and it says how deeply they are nested" "printf '%s' \"\$_ps_chain\" | grep -qE 'nested [0-9]+ deep inside another'"
 
 # The control (L143): an EMPTY listing must report nothing even though this machine really does
 # have a watcher running right now. If the seam were ignored, this check would fail against the
@@ -2882,7 +2882,7 @@ _noid_env=(env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null)
 # really does refuse an identity here.
 _noid_probe="$("${_noid_env[@]}" git -C "$_NOID/repo" commit --allow-empty -m probe 2>&1 || true)"
 check "#52 the fixture really does deny git an identity" \
-  "printf '%s' \"\$_noid_probe\" | grep -qi 'identity'"
+  "printf '%s' \"\$_noid_probe\" | grep -qi 'Author identity unknown'"
 # The second: there really is something for the pull to replay. With nothing to rebase, no commit
 # is written, no identity is needed, and every check below passes against the defect untouched.
 # BOTH directions. Ahead alone is not enough: with the remote unmoved the pull fast-forwards
@@ -3154,7 +3154,7 @@ check "#36 and status reports no leftovers while it is off" \
 # An age that cannot be read must never land on the permissive side of an `rm -rf` (L50).
 _scr_junk="$(SYNC_SCRATCH_MAX_AGE=soon SYNC_SCRATCH_ROOT="$_SCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"; _scr_junk_rc=$?
 check "#36 an unreadable age is refused, not guessed" "[ '$_scr_junk_rc' -ne 0 ]"
-check "#36 and the refusal names the value"          "printf '%s' \"\$_scr_junk\" | grep -q 'soon'"
+check "#36 and the refusal names the value"          "printf '%s' \"\$_scr_junk\" | grep -q 'SYNC_SCRATCH_MAX_AGE=.soon. is not a whole number'"
 check "#36 and it removed nothing on the way out"    "[ -d '$_SCR/claude-sync-suite-work.OFFTEST' ]"
 
 # A young path matching the LAST name the reaper looks for. This is not a corner: the last name is
@@ -3284,7 +3284,7 @@ dbg "pull with pending conflicts: $out_p45pull"
 check "#45 a later pull says the copy is still unresolved" \
   "printf '%s' \"\$out_p45pull\" | grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174'"
 check "#45 and the pull says plainly that this is not news" \
-  "printf '%s' \"\$out_p45pull\" | grep -qi 'still'"
+  "printf '%s' \"\$out_p45pull\" | grep -qi 'set a copy of your version aside and it is STILL not resolved'"
 # Resolved by putting the entry back into the live file, which is what a person does. The copy is
 # still on disk, so a report keyed on the file EXISTING would cry wolf for ever, and a guard that
 # fires when nothing is wrong is one nobody reads (L36).
@@ -3398,23 +3398,23 @@ cp "$BDA/CLAUDE.md" "$BDB/CLAUDE.md"; cp "$BDA/LESSONS.md" "$BDB/LESSONS.md"
 out_bd1="$(SYNC_HOSTNAME=MacOne SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
 dbg "first Mac's claim: $out_bd1"
 check "#44 the first Mac keeps counting from the numbers already in use" \
-  "printf '%s' \"\$out_bd1\" | grep -q 'L4'"
+  "printf '%s' \"\$out_bd1\" | grep -q '^L4$'"
 check "#44 its band is recorded where the other Mac can read it" \
   "[ \"\$(cat '$BDR/lesson-bands/MacOne' 2>/dev/null)\" = '1' ]"
 check "#44 and the claim says which band it took" \
-  "printf '%s' \"\$out_bd1\" | grep -qi 'band'"
+  "printf '%s' \"\$out_bd1\" | grep -qi 'had no lesson number band, so it claimed 1 to 500'"
 # The whole point, and the case that used to collide: a second Mac holding the SAME rules file, at
 # the same moment, must not offer the same number.
 out_bd2="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
 dbg "second Mac's claim: $out_bd2"
 check "#44 the second Mac mints from its own band instead" \
-  "printf '%s' \"\$out_bd2\" | grep -q 'L501'"
+  "printf '%s' \"\$out_bd2\" | grep -q '^L501$'"
 check "#44 and the two Macs are not offered the same number" \
   "[ \"\$(printf '%s' \"\$out_bd1\" | grep -oE 'L[0-9]+' | tail -1)\" != \"\$(printf '%s' \"\$out_bd2\" | grep -oE 'L[0-9]+' | tail -1)\" ]"
 # A band is claimed once. Re-claiming on every call would walk up the bands for ever and make the
 # number nobody can predict.
 out_bd2b="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
-check "#44 asking twice gives the same answer"       "printf '%s' \"\$out_bd2b\" | grep -q 'L501'"
+check "#44 asking twice gives the same answer"       "printf '%s' \"\$out_bd2b\" | grep -q '^L501$'"
 check "#44 and does not claim a second band"          "[ \"\$(cat '$BDR/lesson-bands/MacTwo' 2>/dev/null)\" = '501' ]"
 check "#44 an established Mac says nothing about claiming" \
   "! printf '%s' \"\$out_bd2b\" | grep -qi 'claimed'"
@@ -3424,8 +3424,8 @@ printf -- '- **L501. five hundred and one.** body\n' >> "$BDB/LESSONS.md"
 printf -- '- **L501. five hundred and one.** body\n' >> "$BDA/LESSONS.md"
 out_bd3="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
 out_bd4="$(SYNC_HOSTNAME=MacOne SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
-check "#44 the Mac that wrote it moves on to the next in its band" "printf '%s' \"\$out_bd3\" | grep -q 'L502'"
-check "#44 the other Mac is unaffected by it"                      "printf '%s' \"\$out_bd4\" | grep -q 'L4'"
+check "#44 the Mac that wrote it moves on to the next in its band" "printf '%s' \"\$out_bd3\" | grep -q '^L502$'"
+check "#44 the other Mac is unaffected by it"                      "printf '%s' \"\$out_bd4\" | grep -q '^L4$'"
 # Numbering is still one namespace, so the duplicate check has to keep judging the whole file
 # rather than one band: an arriving duplicate is exactly what it exists to catch.
 printf -- '- **L501. a second entry under the same number.** body\n' >> "$BDA/LESSONS.md"
@@ -3463,7 +3463,7 @@ check "#44 the other one moves to a free band" \
 check "#44 and it does not take a band anyone else holds" \
   "[ \"\$(cat '$BDR/lesson-bands/MacZulu' 2>/dev/null)\" != \"\$(cat '$BDR/lesson-bands/MacTwo' 2>/dev/null)\" ] && [ \"\$(cat '$BDR/lesson-bands/MacZulu' 2>/dev/null)\" != \"\$(cat '$BDR/lesson-bands/MacOne' 2>/dev/null)\" ]"
 check "#44 the move is reported, not silent" \
-  "printf '%s' \"\$out_bdcol\" | grep -qi 'moved'"
+  "printf '%s' \"\$out_bdcol\" | grep -qi 'moved to 1001 to 1500'"
 check "#44 and it mints from the band it moved to" \
   "printf '%s' \"\$out_bdcol\" | grep -q \"L\$(cat '$BDR/lesson-bands/MacZulu')\""
 # Settled for good: asking again neither moves it nor reports anything.
@@ -3570,7 +3570,7 @@ check "#62 a skill that loads is untouched"        "[ -f '$EMH/skills/fine/SKILL
 out_em2="$(CLAUDE_HOME="$EMH" SYNC_REPO="$EMR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 check "#62 the next pull says nothing about the empty one" \
   "! printf '%s' \"\$out_em2\" | grep -q 'hollow'"
-check "#62 and still reports the one holding files"  "printf '%s' \"\$out_em2\" | grep -q 'haswork'"
+check "#62 and still reports the one holding files"  "printf '%s' \"\$out_em2\" | grep -q 'skills/haswork: the directory holds no SKILL\.md'"
 # The mirror runs with --delete, so an entry the payload does not carry is deleted from this Mac
 # unless something protects it. Refusing to carry a half-built or broken skill folder therefore
 # became "delete it from the other Mac" the moment that Mac pulled, which is the shape L5 is about,
@@ -3840,13 +3840,12 @@ printf '%s\n' "$weak_real" | grep -E '^(twice|bare|word)' | sed 's/^/    /'
 check "#55 the scan really read this suite" "[ \"\${weak_total:-0}\" -ge 500 ]"
 check "#55 no check greps one captured output twice" "[ \"\${weak_twice:-999}\" -le 0 ]"
 check "#55 no check matches only a bare path" "[ \"\${weak_bare:-999}\" -le 0 ]"
-# The third family (#71) starts where the other two did: a ratchet at the number measured when it
-# was added, not a ban, because some of them will turn out to be legitimate and the honest way to
-# find out is to read each one. Measured at 40 on 2026-08-17 out of 634 checks. It needs no
-# positive control while it is non-zero, since 40 findings are their own proof the pass is alive;
-# it will need one the moment it reaches 0, for the reason the other two have one.
-check "#71 no new check matches only one bare word" "[ \"\${weak_word:-999}\" -le 40 ]"
-# A POSITIVE CONTROL on BOTH zeros (#68, extended by #69 once the bare half reached zero too). The
+# The third family (#71) started as a ratchet at the 40 measured when the pass was added, not a
+# ban, because some were expected to be legitimate. None were: all 40 were read, and every one of
+# them could name what the word was ABOUT, so this is 0 and a ban like the other two.
+check "#71 no check matches only one bare word" "[ \"\${weak_word:-999}\" -le 0 ]"
+# A POSITIVE CONTROL on ALL THREE zeros (#68, extended by #69 and again by #71 as each half
+# reached zero; the check keeps its #69 name so it stays findable in the history). The
 # fixture proves the scanner on a file built for it; this proves it on the file actually being
 # scanned, in the same invocation, by planting one instance of each in a copy and requiring both
 # counts to move to exactly 1. Exactly 1, not at least 1, so it says two things at once: the scanner
@@ -3855,13 +3854,14 @@ check "#71 no new check matches only one bare word" "[ \"\${weak_word:-999}\" -l
 WEAKPOS="$WORK/weak-positive-control.sh"
 cp "$SCRIPT_SELF" "$WEAKPOS"
 sed 's/^@@//' >> "$WEAKPOS" <<'WEAKPLANT'
-@@check "planted: two greps over one blob"  "printf '%s' \"$out_p\" | grep -q 'alpha' && printf '%s' \"$out_p\" | grep -q 'beta'"
+@@check "planted: two greps over one blob"  "printf '%s' \"$out_p\" | grep -q 'alpha-1' && printf '%s' \"$out_p\" | grep -q 'beta-1'"
 @@check "planted: a bare path in the output"  "printf '%s' \"$out_q\" | grep -q 'hooks/planted.sh'"
+@@check "planted: one bare word in the output"  "printf '%s' \"$out_r\" | grep -q 'planted'"
 WEAKPLANT
-weak_pos="$(awk -f "$WEAK_AWK" "$WEAKPOS" | awk -F'\t' '$1=="totals"{print $3 " " $4}')"
+weak_pos="$(awk -f "$WEAK_AWK" "$WEAKPOS" | awk -F'\t' '$1=="totals"{print $3 " " $4 " " $5}')"
 dbg "positive control on the real suite: planted 1 of each, scanner reports ${weak_pos:-<nothing>}"
 check "#69 both zeros are live measurements, not a dead scanner" \
-  "[ \"\${weak_pos:-x}\" = '1 1' ]"
+  "[ \"\${weak_pos:-x}\" = '1 1 1' ]"
 rm -f "$WEAKPOS"
 
 section "== every check names itself uniquely (#70) =="
@@ -3994,7 +3994,7 @@ check "#63 and without the neighbouring entries"     "! printf '%s' \"\$out_lxl\
 lx_miss_rc=0
 out_lxmiss="$(CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson L99 2>&1)" || lx_miss_rc=$?
 check "#63 a number that is not there is refused"     "[ \"\$lx_miss_rc\" -ne 0 ]"
-check "#63 rather than printing nothing and exiting 0" "printf '%s' \"\$out_lxmiss\" | grep -q 'L99'"
+check "#63 rather than printing nothing and exiting 0" "printf '%s' \"\$out_lxmiss\" | grep -q 'L99 is not in'"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"

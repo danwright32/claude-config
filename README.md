@@ -169,18 +169,21 @@ greps over one captured blob, or a match on nothing but a path, in output that l
 It prints what it found with a count and holds the numbers to a ceiling, so nothing new is added
 while the existing ones are worked through.
 
-Both halves are now at ZERO, so either shape fails the suite. The six double greps were rewritten to
-require one line carrying both facts, and the twenty-one bare path assertions to name the file next
-to the fact about it: not `added.sh` but `added.sh reported as a new file`, not `GONE.md` but
-`GONE.md is referenced and not on this Mac`. None of them turned out to be the legitimate case the
-ratchet was left open for.
+It looks for three shapes, and all three are now at ZERO, so any of them fails the suite. The six
+double greps were rewritten to require one line carrying both facts. The twenty-one bare path
+assertions now name the file next to the fact about it: not `added.sh` but `added.sh reported as a
+new file`, not `GONE.md` but `GONE.md is referenced and not on this Mac`. The forty that matched one
+bare word now name what the word was about: not `kept` but `kept local edits ... skills/reel/push.py`,
+not `retired` but `RETIRED, no sign of it since`. In none of the three families did the legitimate
+case the ratchet was left open for actually exist.
 
 Because a zero is read as proof rather than as a measurement, the scan counts every form this suite
-has for feeding a captured output to a matcher (a pipe, a herestring, a `case`, a `[[ ]]`), and both
-zeros are backed by a positive control: one instance of each is planted in a copy of the file being
-scanned and both counts have to move to exactly one. Each half was deliberately broken in turn and
-measured passing its ceiling while failing only that control. A negated half never counts, since an
-absence cannot be supplied by an unrelated line.
+has for feeding a captured output to a matcher (a pipe, a herestring, a `case`, a `[[ ]]`), and all
+three zeros are backed by a positive control: one instance of each is planted in a copy of the file
+being scanned and all three counts have to move to exactly one. Each pass was deliberately broken in
+turn and measured passing its ceiling while failing only that control. A negated half never counts,
+since an absence cannot be supplied by an unrelated line, and neither does an anchored pattern, a
+regex doing real work, or a word grepped from a file the fixture wrote.
 
 It also scans itself for check names used more than once. A failure prints the name and the
 expression and nothing else, so two checks sharing a name leave you searching the file for which
