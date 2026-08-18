@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 182 lessons.
+LESSONS.md, which is NOT loaded into the session. 184 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -78,6 +78,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Honest failure
 
+- L184. Judge a command by its EXIT CODE, never by a line of its output, because a tool's final line is routinely a different measurement than its verdict and is usually the more reassuring of the two.
 - L10. An error state and an empty state are different screens.
 - L11. Distinct causes get distinct messages, and a message may claim only what its check actually measured.
 - L12. Show success only after the write commits, and report what verifiably happened.
@@ -128,6 +129,7 @@ to decide something: the body is where the failure it came from is described.
 - L169. A variable recording that a step has ALREADY HAPPENED is inherited by every process that step starts, so a descendant reads it as true of ITSELF and skips work it never did.
 - L175. A value read once at startup is only true at startup, and when the thing it describes lives OUTSIDE the program (a checkout, a config file, a device, another service) there is no action inside the program to hang a re-read on, so it goes stale invisibly and its silence reads as an assurance.
 - L176. A field name that asserts a ROLE or a DIRECTION (who referred whom, source versus destination, sender versus recipient, parent versus child) must be verified against the code that RENDERS it, because the rendered wording is the authority and a backwards name silently recruits every future writer into filling it the wrong way round, with nothing anywhere reporting a problem.
+- L185. A statement that NORMALIZES a value on the way in (a COALESCE, a lowercase, a trim, a default standing for absent) must group or deduplicate by the NORMALIZED form, never by the raw one, because two raw spellings that normalize to the same thing survive as separate groups and then collide on one stored key.
 
 ## Security and privacy
 
