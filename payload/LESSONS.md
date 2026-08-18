@@ -998,6 +998,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   import was about to fill it from "Referral program (BK Treble Choir)", where that group is the
   referrer, which would have put the wrong organisation into a task Dan then acts on)
 
+- **L184. A durable record that exists to stop an action repeating is only as durable as its
+  KEY.** One keyed on an identifier minted in memory per attempt (a fresh UUID, an object
+  identity, an in process map) survives a restart while nothing can find it again, so the
+  protection silently shrinks to the session that wrote it: key it on something recomputable
+  from the data itself, and surface any unresolved record at startup. (downbeat#277, where a
+  commit journal entry recording an unknown OmniFocus outcome correctly refused a duplicating
+  retry, then became unreachable, because the batch mints `bookingId` in a dictionary on itself
+  and the fallback guard keys on a saved booking row a failed commit never writes; nothing at
+  launch reads such an entry either, so it waits thirty days for the pruner and the next attempt
+  fires the script again with no guard firing at all)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
