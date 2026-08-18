@@ -492,11 +492,39 @@ unloadable_skill_entries(){   # $1 = a skills directory
 # Excludes for the skills mirror, plus the report. Refusing quietly would leave the entry looking
 # like ordinary config that simply had not synced yet, so the same run that declines to carry it
 # says which one and why (#50).
-refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where it is going (a verb for the report)
-  local entry reason named=""
+# The apply mirrors the payload over skills/ with --delete, so anything here that the payload does
+# not carry is DELETED from this Mac. An entry that cannot load is deliberately never carried, which
+# means "refuse to carry it" silently became "delete it from the other Mac" for any half-built or
+# broken skill folder somebody has. Protect them, with no report: the staging half already names
+# them on every send, and saying it twice per sync is how a warning stops being read (#62).
+protect_unloadable_local_skills(){
+  local entry reason
   while IFS="$(printf '\t')" read -r entry reason; do
     [ -n "${entry:-}" ] || continue
     REFUSED_SKILL_EXCLUDES+=(--exclude="/$entry")
+  done < <(unloadable_skill_entries "$CLAUDE_HOME/skills")
+  return 0
+}
+
+refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where it is going (a verb for the report)  $3 = "prune" to clear entries holding no files at all
+  local entry reason named=""
+  while IFS="$(printf '\t')" read -r entry reason; do
+    [ -n "${entry:-}" ] || continue
+    # An entry holding NO FILES has nothing to lose, and git cannot carry the deletion of an empty
+    # directory, so hand-deleting it on one Mac leaves the other reporting it for ever. Clear it
+    # here and the reports stop. Anything holding a file is refused and LEFT ALONE, however
+    # unloadable: declining to carry something is not a reason to destroy it (L5). Only ever in the
+    # payload, never in somebody's own skills folder, where a half-built skill is theirs (#62).
+    # The exclusion goes on FIRST and stays on even when the payload copy is pruned. The mirror
+    # runs with --delete, so an entry missing from the payload and not excluded is deleted from
+    # THIS MAC, and the first version of the prune did exactly that to a folder holding the
+    # person's own work. The suite caught it (L5).
+    REFUSED_SKILL_EXCLUDES+=(--exclude="/$entry")
+    if [ "${3:-}" = prune ] && [ -d "$1/$entry" ] && [ -z "$(find "$1/$entry" -type f 2>/dev/null | head -1)" ]; then
+      rm -rf "$1/$entry"
+      named+="  skills/$entry: $reason, and it held no files at all, so it was removed from the payload and will stop being reported"$'\n'
+      continue
+    fi
     named+="  skills/$entry: $reason"$'\n'
   done < <(unloadable_skill_entries "$1")
   [ -z "$named" ] && return 0
@@ -906,7 +934,8 @@ MERGED
     if [ "$d" = skills ]; then
       local s2; for s2 in $(skill_excludes); do kex+=("$s2"); done
       REFUSED_SKILL_EXCLUDES=()
-      refuse_unloadable_skills "$PAYLOAD/skills" "applied to this Mac"
+      refuse_unloadable_skills "$PAYLOAD/skills" "applied to this Mac" prune
+      protect_unloadable_local_skills
       kex+=(${REFUSED_SKILL_EXCLUDES[@]+"${REFUSED_SKILL_EXCLUDES[@]}"})
     fi
     while IFS= read -r p2; do
