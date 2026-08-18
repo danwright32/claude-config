@@ -63,6 +63,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   made an hour later at a larger scale, reading one sentence in a blob of CI output as proof of which
   branch of a classifier had fired, which produced the wrong diagnosis recorded in L177)
 
+- **L182. A ratchet or violation count driven to ZERO stops being read as a measurement and starts
+  being read as proof the thing cannot occur, so nobody re-examines it.** Prove the detector
+  recognises every form of what it bans before letting the count reach zero, because a zero produced
+  by a narrow detector certifies only the spellings it happens to match. Distinct from L96, where
+  the guard is blind because its registry omits an entry: here the blindness is the same, and what
+  is new is that a zero forecloses the re-reading a non-zero count invites.
+  (claude-config#67, claude-config#68: the suite's scan for assertions that grep one captured blob
+  twice was lowered from a ceiling of 6 to 0 once the six were rewritten. The scan matches only one
+  spelling of feeding a captured variable to grep, so a new weak check written another way is
+  invisible and the count still reads 0. Noticed only while reviewing what had just been shipped)
+
 - **L151. Every outcome a guard's own contract ENUMERATES must have a test that PRODUCES that
   outcome, not merely a test that passes.** A documented outcome nobody constructs can be
   unreachable in the code while the guard looks thoroughly tested, so read the contract as a list
@@ -351,6 +362,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   `Post "https://api.github.com/graphql": dial tcp ...: can't assign requested address`. It printed
   FILED and stopped. Correct predicate: the issue URL itself,
   `^https://github\.com/[^/]+/[^/]+/issues/[0-9]+$`)
+- **L183. A pipeline under `set -o pipefail` can be failed by its PRODUCER being killed when a
+  short-circuiting consumer (`grep -q`, `head`) exits first, so a correct check reports a failure that
+  never happened.** Feed the consumer from a herestring or a file rather than a pipe when it may exit
+  early, because the race is load dependent, so it appears only when several things are running, and the
+  false red is indistinguishable from the defect the check exists to catch. Distinct from the pipe rule
+  already written down, which covers a pipe HIDING a failure by reporting the LAST command's status: this
+  one is `pipefail` working exactly as documented and still lying, because of the FIRST. (2026-08-16,
+  overture#2850: a full suite run went red claiming a script did not call a function it calls on the
+  exact line the assertion reads. `printf '%s' "$text" | grep -qF '...'`, and `grep -q` exits on its
+  first match, closing the pipe, so `printf` dies of SIGPIPE and pipefail takes printf's status. Eight
+  such lines across four fixtures, in the mandatory pre-push gate, inventing a failure about correct
+  code.)
 - **L115. A harness that measures whether content is VISIBLE must be checked against the
   substitutes its own renderer makes for content it cannot draw, because a placeholder is
   itself a mark on the page and measures as presence.** A surface built only from controls the

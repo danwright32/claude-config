@@ -41,6 +41,28 @@ fi
 # rtk rewrite exits 1 when there's no rewrite — hook passes through silently.
 REWRITTEN=$(rtk rewrite "$CMD" 2>/dev/null) || exit 0
 
+# NEVER rewrite a command into `rtk read` (downbeat#254).
+#
+# `rtk read` STRIPS COMMENT LINES and renumbers what remains from 1. Measured
+# 2026-08-17 on rtk 0.31.0: a 51 line Swift file came back as 28 lines. So every
+# line number taken from it is wrong AND plausible, which is worse than mangled
+# output, because a wrong line number looks exactly like a line number. Three
+# consecutive planning passes cited wrong file:line pairs for this reason and
+# each one corrected the previous pass's numbers rather than suspecting the
+# instrument.
+#
+# This refuses by the DESTINATION rather than by the source command. rtk's own
+# `[hooks] exclude_commands` setting honours `cat` but is ignored for `head` and
+# `tail` (measured on 0.31.0 with all three listed), so a source based list both
+# misses those two and would miss the next command that starts mapping here.
+# Whatever produced it, `rtk read` is the thing that corrupts the output.
+#
+# Everything else still goes through rtk, which is the point: git, gh and the
+# rest keep saving tokens. Only file reads pass through untouched.
+case "$REWRITTEN" in
+  "rtk read "*) exit 0 ;;
+esac
+
 # No change — nothing to do.
 if [ "$CMD" = "$REWRITTEN" ]; then
   exit 0

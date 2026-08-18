@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 180 lessons.
+LESSONS.md, which is NOT loaded into the session. 182 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -14,6 +14,7 @@ to decide something: the body is where the failure it came from is described.
 - L154. A tool that reports whether a check CAUGHT a deliberate defect must name WHICH check fired, because a defect large enough to break everything makes every check fail and is indistinguishable from the one that should have.
 - L177. When a failure reproduces only in an environment you cannot run (a CI runner, another machine, a device), make that environment PRINT the fact in question before changing any code, because a theory built from the symptom is cheap to believe and expensive to ship.
 - L178. A check written as two conditions over one body of text is satisfied by two unrelated places in it, so it proves neither half and passes hardest when nothing works at all.
+- L182. A ratchet or violation count driven to ZERO stops being read as a measurement and starts being read as proof the thing cannot occur, so nobody re-examines it.
 - L151. Every outcome a guard's own contract ENUMERATES must have a test that PRODUCES that outcome, not merely a test that passes.
 - L2. Tests must be structurally unable to touch live data, production services, or paid APIs.
 - L3. Built is not wired, and wired is not proven.
@@ -48,6 +49,7 @@ to decide something: the body is where the failure it came from is described.
 - L104. A filter that identifies data by its SHAPE (a redaction regex, a content classifier, a profanity or spam rule) must be tested against the content it has to PRESERVE, not only against the content it has to catch, because the shape it matches is rarely unique to its target and an over match reads exactly like the feature working.
 - L107. A number measured to justify a design decision must be produced by the code's own predicate, never by a query written beside it, because an ad-hoc reimplementation is a second definition that drifts silently and in the direction that flatters the argument being made.
 - L156. A success check that looks for a SUBSTRING OF THE THING BEING TALKED TO (a hostname, a command name, a file path, a resource id) also matches the ERROR about it, because a failure message quotes its target, so match the shape of the SUCCESS output instead.
+- L183. A pipeline under `set -o pipefail` can be failed by its PRODUCER being killed when a short-circuiting consumer (`grep -q`, `head`) exits first, so a correct check reports a failure that never happened.
 - L115. A harness that measures whether content is VISIBLE must be checked against the substitutes its own renderer makes for content it cannot draw, because a placeholder is itself a mark on the page and measures as presence.
 - L141. A visibility check that measures ink over a whole surface is answered by whatever that surface paints for ITSELF, a fill, a border, a panel, so the words it exists to check can be drawn in the background colour while the measurement barely moves.
 - L147. A guard seen to fail on a fixture you chose has only been shown to work on the shape you had in mind, so measure how often it fires on the REAL values it will meet.

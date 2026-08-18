@@ -103,6 +103,16 @@ Never write either of the two retired shapes (Dan, 2026-07-31). Not credential-f
 
 The middle of the email, between the opener and the offer, runs 2 to 4 sentences depending on the shape and the material; don't pad to hit a target. That count is for the middle alone, not the whole email: the self-introduction, the offer, the ask and the soft line are each required in their own right, so a finished pitch runs longer than four sentences.
 
+### Vary the construction inside one email
+
+Every rule in this section is scoped to ONE sentence, and each supplies its own canonical phrasing, so written back to back they stack into an email of a single shape. Dan, 2026-08-16, reading a real draft: "this draft is a lot of short sentences and doesn't feel great". Three of its sentences were long, so length was not what he was hearing. Three consecutive sentences were built the same way (independent clause, comma, "and" or "so", trailing clause) and two of them landed on the same "so ..." effect tail: "so the performance isn't disturbed", then "so I'm familiar with the space".
+
+So: **no two sentences in a row may use the same connector construction.** Never two "so ..." effect tails back to back. Never two ", and ..." trailing clauses back to back. Never two sentences opening on a fronted "If ..." or "When ..." clause back to back. Dan's proven pitch above already does this without being told: it runs compound, simple, compound, fronted-subordinate, compound, simple, and no two neighbours are built the same way. Read a finished draft as a sequence of SHAPES before sending it, not as a list of individually correct sentences, because every one of them can be correct while the sequence is the problem.
+
+Write the body in **short paragraphs**, two or three sentences each, rather than one block. That is the second fix as well as its own rule: a break between two sentences of the same shape resets the cadence for the reader, so either varying the construction or breaking the block will do.
+
+Do NOT reach for a rule about first-person sentence openings. It looks like the same defect (six of the bad draft's eight sentences began with I, I'm, I've or My) and it is not the defect: Dan's own proven pitch opens five of its six sentences in first person, three of them consecutively, which is a higher rate than the draft he objected to. Overture flags the repeated CONSTRUCTION and says nothing about pronouns, deliberately.
+
 ### When drafting
 Offer two variants when a tone or framing choice is genuinely meaningful (for example, holding firm vs. offering a goodwill concession). Otherwise one clean draft is enough. Use the message compose tool with kind: email, including subject and body.
 
