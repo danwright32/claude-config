@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 193 lessons.
+LESSONS.md, which is NOT loaded into the session. 194 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -193,6 +193,7 @@ to decide something: the body is where the failure it came from is described.
 ## Building with AI
 
 - L27. A rule that lives only in a prompt is a hope.
+- L194. A payload that reduces a stored fact to a FLAG ABOUT ITSELF (a hasProducer boolean, an isEmpty, a count) tells its reader the fact exists while denying it the value, so the reader is sent to rediscover at cost what the sender already held, and its failure to find it reads as the fact never having existed.
 - L28. Treat a detached AI run as an untrusted subprocess.
 - L128. A field whose only writer is an AI prompt, and whose ABSENCE is itself a legitimate value in the domain, cannot tell a model that IGNORED the instruction from one that judged the field inapplicable, so the feature stays dormant forever while every reader reports its honest default.
 - L161. When an AI writes a fact the system ALREADY HOLDS the true value for (a date, a venue, a price, a name), check what it wrote AGAINST that value rather than merely checking that something is there, because a presence check passes a contradicted fact, and a wrong fact reaching a stranger is worse than an omitted one, which at least reads as missing.

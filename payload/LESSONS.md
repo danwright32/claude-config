@@ -1401,6 +1401,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   output also gets a deterministic code check at the boundary, and every field a prompt
   references must provably exist in the payload sent, or the model fabricates it.
   (14 issues, 2 repos)
+- **L194. A payload that reduces a stored fact to a FLAG ABOUT ITSELF (a hasProducer boolean, an
+  isEmpty, a count) tells its reader the fact exists while denying it the value, so the reader is
+  sent to rediscover at cost what the sender already held, and its failure to find it reads as the
+  fact never having existed.** Pass the value and let the reader derive the flag. The inverse of
+  L27's second clause, where the prompt names a field the payload lacks: here the payload lacks a
+  field the prompt was never given a reason to name, so nothing anywhere reports a problem.
+  (overture#2983: the contact check's work list derived `onlyTheActIsNamed` from the stored
+  `presenter` and dropped the name, so a check on a show credited to Underbelly Theatre Company was
+  told a producer existed, never told which, spent 22 web calls drifting onto a different production
+  of a similarly titled show, and recorded `nothing_published` about an organisation publishing its
+  address on its own contact page. 12 of the 23 no-email cards on the live store were in that state)
 - **L28. Treat a detached AI run as an untrusted subprocess.** Pin its model per task,
   forbid it from asking questions, enforce its tool limits rather than asserting them,
   verify it did the expensive step, and require an honest failure record when it dies.
