@@ -597,7 +597,6 @@ for reference; L6 was reviewed and deliberately not adopted.
   says it exists so payloads are scrubbed before their partition is dropped, and the
   write-time redaction that would otherwise limit exposure is switched off, so the second
   line of defence anyone would cite is the one that stopped firing)
-
 - **L191. A write into a CAPPED or rolling store (a log with a maximum, a ring buffer, a
   recent list) does not merely add noise, it EVICTS the oldest real records**, so a cheap
   writer (a test, a retry, a health check) destroys the expensive observations the store
