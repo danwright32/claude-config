@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 189 lessons.
+LESSONS.md, which is NOT loaded into the session. 190 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -185,6 +185,7 @@ to decide something: the body is where the failure it came from is described.
 - L157. An atomic operation guarantees only its own span, so acting on a judgement formed BEFORE it (remove this lock because it was stale, revoke this token because it had expired, evict this entry because it was cold) reintroduces the race the atomicity appears to close, and reads as rigorous precisely because the primitive really is atomic.
 - L159. A test asserting that something did NOT happen is satisfied by a fixture in which it COULD not happen, so prove the positive case fires in the SAME fixture before trusting the negative.
 - L181. Inferring that a person DID something from a provider's record must key on that provider's own committed state marker, never on an attribute a merely started attempt shares with a finished one (its author, its recipient, its subject), because platforms routinely return drafts, pending items and abandoned attempts in the same collection as completed ones.
+- L190. A read back verifying that another application performed a write must be proved to read the store THAT application writes to, never a second system subscribed to the same account.
 
 ## Building with AI
 

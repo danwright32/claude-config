@@ -1352,6 +1352,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   sent ones, so an abandoned draft would have stamped the conversation answered for good, with no badge
   and no task, and the stamp never moves backwards. Measured on a live thread the same day, an abandoned
   draft sat 29 minutes above a real reply, and only the timing of the next check saved it)
+- **L190. A read back verifying that another application performed a write must be proved to read
+  the store THAT application writes to, never a second system subscribed to the same account.**
+  Two subscribers to one server are separate replicas, so the read measures replication lag rather
+  than the action, and it reports absent in exactly the window the check runs in.
+  (downbeat#305: Fantastical writes through its own CalDAV connections rather than through EventKit,
+  so events it had already created were still absent from the macOS calendar half an hour later, and
+  the verifier reading EventKit warned that two of two were lost on every single booking)
 
 ## Building with AI
 
