@@ -33,6 +33,9 @@ if grep -q '@@' "$SKILL"; then fail "SKILL.md still contains an unsubstituted pl
 #    A stale absolute path here is silent: the skill reads fine and only fails
 #    at run time, which is exactly how the original shipped broken.
 WFPATH="$(grep -o 'scriptPath: "[^"]*"' "$SKILL" | head -1 | sed 's/scriptPath: "//; s/"$//')"
+# SKILL.md writes the home dir as <HOME> so it is portable between Macs with different
+# home directories; expand it here so this still checks the file really resolves.
+WFPATH="${WFPATH/<HOME>/$HOME}"
 [ -n "$WFPATH" ] || fail "SKILL.md declares no scriptPath for the Workflow tool"
 [ -f "$WFPATH" ] || fail "SKILL.md scriptPath does not exist on this machine: $WFPATH"
 
