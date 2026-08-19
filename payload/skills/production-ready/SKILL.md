@@ -31,6 +31,8 @@ Call the **Workflow** tool with:
       }
     }
 
+Substitute `<HOME>` with this machine's home directory (run `echo $HOME`). It is a placeholder because this config syncs between two Macs whose home directories differ, and the Workflow tool takes `scriptPath` as a literal string: it does not expand `~` or `$HOME`.
+
 Pass `date` from your own context — the workflow engine cannot read the clock. It returns `{ profile, applicable, naDomains, report }`, where `report = { executiveSummary, whatsSolid, topRisks, severityCounts, backlog }`.
 
 ## 3. Save the report
