@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 191 lessons.
+LESSONS.md, which is NOT loaded into the session. 192 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -133,6 +133,7 @@ to decide something: the body is where the failure it came from is described.
 - L176. A field name that asserts a ROLE or a DIRECTION (who referred whom, source versus destination, sender versus recipient, parent versus child) must be verified against the code that RENDERS it, because the rendered wording is the authority and a backwards name silently recruits every future writer into filling it the wrong way round, with nothing anywhere reporting a problem.
 - L185. A statement that NORMALIZES a value on the way in (a COALESCE, a lowercase, a trim, a default standing for absent) must group or deduplicate by the NORMALIZED form, never by the raw one, because two raw spellings that normalize to the same thing survive as separate groups and then collide on one stored key.
 - L186. A durable record that exists to stop an action repeating is only as durable as its KEY.
+- L192. A value INFERRED from content (a name pulled out of caption text, a category guessed from a title, a type read off a filename) must never be presented as the recorded fact it stands in for.
 
 ## Security and privacy
 

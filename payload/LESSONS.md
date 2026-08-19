@@ -1055,6 +1055,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   launch reads such an entry either, so it waits thirty days for the pruner and the next attempt
   fires the script again with no guard firing at all)
 
+- **L192. A value INFERRED from content (a name pulled out of caption text, a category guessed
+  from a title, a type read off a filename) must never be presented as the recorded fact it
+  stands in for.** While every row's inference happens to agree with that fact the two are
+  indistinguishable and nothing anywhere reports a problem, so the first change that lets them
+  diverge (making the field optional, allowing a blank, admitting a new shape of input) silently
+  reattributes the data under a label still claiming to be the fact: name the dimension after
+  what it measures, or read the fact from where the system already holds it.
+  (postroll#706: Insights labels a dimension "Orgs" and hangs a follower size band off it, while
+  the value is `_extract_org`'s first non owner @mention in the caption, and `Event.org` is the
+  real organization sitting one record away. #689 made the organization optional, so the account
+  credited first is now often the venue or a performer, and the post plus its audience band are
+  filed under that account with nothing looking broken)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
