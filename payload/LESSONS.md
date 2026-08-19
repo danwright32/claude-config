@@ -1550,6 +1550,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   table with the 90, because every successful nightly run deleted 90 days and could only rebuild
   the 8 still in raw)
 
+- **L195. A newly recorded lesson governs only the code written after it, so when you record
+  one, sweep the OTHER projects for the same defect at once**, because the instance you just
+  fixed is rarely the only one and the rest sit in code that nothing will ever re-examine: the
+  rule is consulted while writing something new, never against what already exists.
+  (downbeat#336: L108 was recorded from PostRoll, where the Anthropic API key field checked
+  only that the value began sk-ant-. Downbeat's copy of that same field checked less than that,
+  only that something had been typed, and kept the gap for months until a truncated paste of a
+  different credential exposed it by accident)
+
 ## Cross-system reliability
 
 - **L33. Make the pair of a database write and an external side effect crash-safe.**
