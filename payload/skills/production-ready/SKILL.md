@@ -23,7 +23,7 @@ Take a quick read of the repo (CLAUDE.md, manifest) so you can confirm the proje
 Call the **Workflow** tool with:
 
     {
-      scriptPath: "/Users/danhankins-wright/.claude/skills/production-ready/production-audit.workflow.js",
+      scriptPath: "<HOME>/.claude/skills/production-ready/production-audit.workflow.js",
       args: {
         projectDir: "<absolute path to the repo>",
         repo: "<owner/name>",

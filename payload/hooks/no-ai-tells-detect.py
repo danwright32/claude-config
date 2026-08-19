@@ -5,6 +5,7 @@ Fires on writing requests (articles, blogs, copy, tooltips, sentences, etc.)
 but NOT on code writing requests.
 """
 import json
+import os
 import sys
 
 try:
@@ -55,7 +56,7 @@ try:
             is_writing = True
 
     if is_writing:
-        skill_path = "/Users/danielhankins-wright/.claude/skills/no-ai-tells/SKILL.md"
+        skill_path = os.path.expanduser("~/.claude/skills/no-ai-tells/SKILL.md")
         with open(skill_path, "r") as f:
             skill_content = f.read()
         print(json.dumps({

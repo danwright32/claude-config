@@ -70,8 +70,8 @@ const grounding =
 // GATE with a fix loop, not an appended note. The auditor reports whether it actually READ
 // the file, because an audit that read nothing would otherwise be indistinguishable from a
 // clean one (see LESSONS.md L68).
-const LESSONS_PATH = '/Users/danielhankins-wright/.claude/LESSONS.md'
-const RULES_PATH = '/Users/danielhankins-wright/.claude/CLAUDE.md'
+const LESSONS_PATH = '~/.claude/LESSONS.md'
+const RULES_PATH = '~/.claude/CLAUDE.md'
 const LESSONS_SCHEMA = {
   type: 'object', additionalProperties: false,
   required: ['lessonsFileRead', 'lessonsSeen', 'verdict', 'violations'],
