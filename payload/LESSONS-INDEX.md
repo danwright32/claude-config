@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 188 lessons.
+LESSONS.md, which is NOT loaded into the session. 189 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -161,6 +161,7 @@ to decide something: the body is where the failure it came from is described.
 - L69. A preview or approval surface must render the content on both light and dark backgrounds.
 - L76. A region that clips its content must show, at rest and with no interaction, that content continues past the edge, and must stop showing it once the end is reached.
 - L79. A notice placed in a container the platform may collapse, overflow or truncate (a toolbar slot, a header that condenses, a single row) is not shipped until it has been seen at the window size the person actually uses.
+- L189. A persistent surface pinned over the edge of a scrolling region must RESERVE space inside that region rather than float above it, or the last item in the scroll is permanently unreachable.
 - L80. When a message names a specific record, source or item so the person can act on it, the surface showing it must carry that action.
 - L97. An undo whose input is the very thing the action removed from the screen is not an undo, because the action destroys the only key to its own reversal.
 - L99. A client side input mask or cap must never be stricter than the validator that accepts the value, because the form then refuses input the server would take and the person is blocked by a rule nothing states.

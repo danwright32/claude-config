@@ -1190,6 +1190,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   it being overwritten, a dedupe, a retention window, is worth nothing while the surface holding it is
   off screen, and the code stays entirely correct the whole time.
   (overture#2204)
+- **L189. A persistent surface pinned over the edge of a scrolling region must RESERVE space
+  inside that region rather than float above it, or the last item in the scroll is permanently
+  unreachable.** The surface only overlaps once the content is long enough to scroll, so every
+  short fixture and every empty state shows it working, and the amount of content silently
+  decides whether the primary action of the screen can be clicked.
+  (PostRoll#695)
 - **L80. When a message names a specific record, source or item so the person can act on it, the
   surface showing it must carry that action.** Naming the target and then classifying the message as
   informational tells the person exactly what is wrong and gives them nowhere to go, and the two halves
