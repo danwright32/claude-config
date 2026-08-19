@@ -598,6 +598,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   write-time redaction that would otherwise limit exposure is switched off, so the second
   line of defence anyone would cite is the one that stopped firing)
 
+- **L191. A write into a CAPPED or rolling store (a log with a maximum, a ring buffer, a
+  recent list) does not merely add noise, it EVICTS the oldest real records**, so a cheap
+  writer (a test, a retry, a health check) destroys the expensive observations the store
+  exists to hold, and any count derived from the store then reports the junk as real.
+  (downbeat#313: the questionnaire agreement log exists to measure how often the two readers
+  disagree on a real form, and it caps at 200 entries. The unit suite sandboxed the
+  questionnaire copies but not the log, so every run appended entries stamped with its pinned
+  clock. Measured 2026-08-19, 198 of the 200 lines were test writes and only two were real
+  imports, so the observation window the product decision waits on had been flushed out, and
+  the summary in Settings counted the test imports as observed ones)
+
 ## Honest failure
 
 - **L184. Judge a command by its EXIT CODE, never by a line of its output, because a tool's final
