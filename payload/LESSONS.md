@@ -159,6 +159,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2220: ProcessInfo.systemUptime is documented as awake time only and lost 7.6
   minutes across two nights of closed lid on Apple Silicon, so a sleep-immune outage detector
   reported a false twelve hour failure every morning)
+- **L188. A limit your code SETS (a minimum size, a timeout, a cap, a default) is only in force
+  if nothing downstream recomputes it, because a framework or platform deriving the same value
+  from other inputs overwrites yours silently and the line goes on reading as protection while
+  protecting nothing, so measure the value in the RUNNING system rather than trusting the
+  assignment.** Nothing fails when the assignment is beaten: the code still contains the safe
+  number, every reader of the source sees it, and only the live object knows a different one,
+  so the gap is invisible to review and to any test that reads the constant back.
+  (PostRoll#687 and #690: the window explicitly set a minimum size of 760 by 500, SwiftUI derived
+  the window's limits from the content instead and replaced it with 353 by 2834 against a usable
+  screen height of 984, leaving a window macOS would not allow to fit on the screen and no drag
+  able to recover it)
 - **L84. A recorded expectation (a baseline screenshot, a golden file, an approved snapshot)
   captures whatever the surface happened to be showing when it was recorded, including an error
   or empty state caused by a dependency the harness never fed it, and then defends that broken
