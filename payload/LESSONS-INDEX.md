@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 194 lessons.
+LESSONS.md, which is NOT loaded into the session. 195 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -85,6 +85,7 @@ to decide something: the body is where the failure it came from is described.
 - L11. Distinct causes get distinct messages, and a message may claim only what its check actually measured.
 - L12. Show success only after the write commits, and report what verifiably happened.
 - L13. Background jobs and webhooks alert on failure and on the absence of an expected run.
+- L195. When one code path DECIDES an outward action and another decides whether to WARN about it, both must ask their shared question over the SAME population, because a warning computed over the wider set is silenced in exactly the cases the narrower action gets wrong.
 - L53. Two independent checks must never share one status field.
 - L90. A counter or category whose only input is a value nothing in the system ever writes reports ZERO, and zero is indistinguishable from a true measurement.
 - L47. A batch that partly fails must record the attempt on the items it failed, not only on the ones it completed.

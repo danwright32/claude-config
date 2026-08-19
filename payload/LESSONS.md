@@ -633,6 +633,20 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L13. Background jobs and webhooks alert on failure and on the absence of an expected
   run.** A caught error that never reaches monitoring is invisible twice; also alert on
   zero work done while a backlog grows. (30 issues, 3 repos)
+- **L195. When one code path DECIDES an outward action and another decides whether to WARN about
+  it, both must ask their shared question over the SAME population, because a warning computed over
+  the wider set is silenced in exactly the cases the narrower action gets wrong.** Each half reads as
+  correct on its own, and the state between them has no owner at all. Distinct from L45, which is
+  about filtered views covering the state space, and from L107, where a second definition drifts from
+  the code's own predicate: here there is one question, two scopes, and the narrow scope is the one
+  that acts.
+  (overture#2985: `ReplyPanel.unknownWriter` decides whether to offer Dan the "this address is a
+  stranger" flow and searches EVERY contact on the show, while `ReplyIdentity.answering` decides who
+  a reply is actually sent to and searches only the row's send group, falling back to the row itself.
+  A writer who was a contact on the show but outside that send group was therefore no stranger, so no
+  warning, and unfindable by the router, so the reply resolved to a different person at the same
+  organisation. Caught only by a live-store invariant test, months after the mechanism's own comment
+  had described the peer lookup as the thing that makes a writer recognised)
 - **L53. Two independent checks must never share one status field.** A pass from one
   silently erases the other's failure, so the alert that depends on it can never reach
   its threshold and the condition it watches becomes unreportable; give each check its
