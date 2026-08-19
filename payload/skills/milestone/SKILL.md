@@ -1,7 +1,6 @@
 ---
 name: milestone
-description: Create a GitHub milestone for a big feature and break it into one tracked issue per phase, all assigned to the milestone. Use as the escape hatch for tracking a feature that did NOT start from /plan-council or /plan-lite (those offer milestone creation automatically). User-invoked.
-disable-model-invocation: true
+description: Create a GitHub milestone for a big feature and break it into one tracked issue per phase, all assigned to the milestone. Use as the escape hatch for tracking a feature that did NOT start from /plan-council or /plan-lite (those offer milestone creation automatically). Use when a feature already in flight needs tracking, or when the user asks to open a milestone.
 allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion
 ---
 
