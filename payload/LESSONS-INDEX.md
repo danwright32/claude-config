@@ -76,7 +76,7 @@ to decide something: the body is where the failure it came from is described.
 - L136. Clearing a field to CORRECT bad data is a state change whose consequences live in every reader of that field, and a constant named for the empty case (a noManager message, a notSet label) can be a hard REFUSAL rather than a graceful fallback, so read what the null branch DOES before writing the null.
 - L168. A parameter a function needs in order to be CORRECT must never carry a default standing for absent, because a caller that forgets it then receives silently missing data instead of a compile error, and the failure surfaces far away as a blank value rather than as a refusal.
 - L174. Shortening a retention or expiry window makes every later step keyed to a longer window unreachable, and that step goes on reading as an active safeguard rather than as dead code.
-- L191. A write into a CAPPED or rolling store (a log with a maximum, a ring buffer, a recent list) does not merely add noise, it EVICTS the oldest real records
+- L191. A write into a CAPPED or rolling store (a log with a maximum, a ring buffer, a recent list) does not merely add noise, it EVICTS the oldest real records, so a cheap writer (a test, a retry, a health check) destroys the expensive observations the store exists to hold, and any count derived from the store then reports the junk as real.
 
 ## Honest failure
 

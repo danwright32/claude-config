@@ -598,9 +598,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   write-time redaction that would otherwise limit exposure is switched off, so the second
   line of defence anyone would cite is the one that stopped firing)
 - **L191. A write into a CAPPED or rolling store (a log with a maximum, a ring buffer, a
-  recent list) does not merely add noise, it EVICTS the oldest real records**, so a cheap
+  recent list) does not merely add noise, it EVICTS the oldest real records, so a cheap
   writer (a test, a retry, a health check) destroys the expensive observations the store
-  exists to hold, and any count derived from the store then reports the junk as real.
+  exists to hold, and any count derived from the store then reports the junk as real.**
   (downbeat#313: the questionnaire agreement log exists to measure how often the two readers
   disagree on a real form, and it caps at 200 entries. The unit suite sandboxed the
   questionnaire copies but not the log, so every run appended entries stamped with its pinned
