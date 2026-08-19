@@ -86,6 +86,28 @@ resolve_repo_dir() {
 
 cd "$(resolve_repo_dir)" 2>/dev/null || true
 
+# A repo carrying the commit pinned merge tool must merge through it (#711).
+#
+# The rollup read below answers about the pull request, not about a particular
+# commit, and it is read a moment BEFORE the merge. Four things slip through
+# that gap: an empty answer that reads as green, a superseded run answering for
+# a commit nobody judged, a head that moves between the reading and the merge,
+# and a green earned against a base that has since moved. `wait_for_checks.py`
+# knows about all four, and its `--merge` hands GitHub the commit as `sha`, so
+# the merge either takes the judged commit or is refused. None of that is worth
+# anything if the safe route is merely available, so here it is the only one.
+#
+# Only where the tool exists, so every other project keeps the old gate rather
+# than being blocked by a rule about a file it does not have.
+if [ -f "tools/wait_for_checks.py" ]; then
+  case "$command" in
+    *ALLOW_UNPINNED_MERGE=1*) ;;
+    *)
+      deny "This repo merges through its own commit pinned tool, not through gh pr merge. Run: venv/bin/python tools/wait_for_checks.py ${pr:-<pr>} --merge . It waits for the checks, judges them against the commit at the head, and hands GitHub that commit as the sha, so a push landing in the seconds between the two cannot be merged unjudged. A plain merge skips all of that and looks identical afterwards. Deliberate override: ALLOW_UNPINNED_MERGE=1 <the same command>."
+      ;;
+  esac
+fi
+
 rollup=$(gh pr view ${pr:+"$pr"} --json number,statusCheckRollup 2>/dev/null)
 [ -z "$rollup" ] && deny "Cannot verify CI for this PR (gh pr view returned nothing). Check the PR manually, then re-run with ALLOW_RED_MERGE=1 if it is genuinely green."
 
