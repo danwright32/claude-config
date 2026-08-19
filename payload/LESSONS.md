@@ -1383,6 +1383,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   so events it had already created were still absent from the macOS calendar half an hour later, and
   the verifier reading EventKit warned that two of two were lost on every single booking)
 
+- **L193. A feature that resolves user supplied values through a stored REFERENCE dataset (a
+  postcode to coordinates table, a currency or carrier list, a tax rate table) is only as
+  complete as that dataset, and a missing row is indistinguishable from a user who supplied
+  nothing, so measure the join's real hit rate against live data before building on it rather
+  than treating the table as authoritative because it exists.** Distinct from L113, where a
+  code level map over a known vocabulary silently takes a default: here the vocabulary is open,
+  the gap is coverage, and the affected records vanish from the feature instead of rendering
+  wrongly.
+  (nursedex#733: the zip_codes table held 218 rows for a product serving New York State, so
+  only 42 of 105 nurses could be placed on a map. The radius filter then dropped every
+  unresolvable nurse, which reads on screen as no nurses matching the search)
+
 ## Building with AI
 
 - **L27. A rule that lives only in a prompt is a hope.** Every hard constraint on AI
