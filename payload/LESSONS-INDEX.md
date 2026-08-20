@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 208 lessons.
+LESSONS.md, which is NOT loaded into the session. 209 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -185,6 +185,7 @@ to decide something: the body is where the failure it came from is described.
 - L126. An action offered only on a transient surface (a run summary, a status message, a toast) cannot serve a condition that PERSISTS in the data, because the notice clears while the state stays, so every encounter after the first finds the fault still named and the remedy gone.
 - L180. A confirmation dialog's consequence sentence must be derived from the state it is about to change, never asserted, because a warning shown on every delete carries no information and reads identically whether it is taking one row or a subtree of ten.
 - L187. A control gated on a collection holding MORE THAN ONE member is absent in the commonest case, which is one member.
+- L508. A control that renders a value the BROWSER itself validates (a date input, a number input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that value stands beside an empty control and the two halves of the screen contradict each other about what was asked for.
 
 ## External systems
 

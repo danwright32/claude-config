@@ -1443,6 +1443,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   navigation locked, and on 2026-08-18 the only remaining exit was closing the window, which is
   the one action that loses the commit)
 
+- **L508. A control that renders a value the BROWSER itself validates (a date input, a number
+  input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that
+  value stands beside an empty control and the two halves of the screen contradict each other
+  about what was asked for.** The refusal reads as being about a filter nobody can see, and any
+  Clear or Reset offered alongside it appears to clear nothing.
+  (new-agent-onboarding#660, #666: a shared audit link carrying an outcome the ledger does not
+  record showed "Couldn't show that view" beside an Outcome control reading "Any outcome", and the
+  From and To date boxes have the same gap, because an <input type="date"> blanks any value that is
+  not a valid date string)
+
 ## External systems
 
 - **L23. Treat every external response as hostile and every event stream as unordered,
