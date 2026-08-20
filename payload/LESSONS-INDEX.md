@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 197 lessons.
+LESSONS.md, which is NOT loaded into the session. 198 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -190,6 +190,7 @@ to decide something: the body is where the failure it came from is described.
 - L181. Inferring that a person DID something from a provider's record must key on that provider's own committed state marker, never on an attribute a merely started attempt shares with a finished one (its author, its recipient, its subject), because platforms routinely return drafts, pending items and abandoned attempts in the same collection as completed ones.
 - L190. A read back verifying that another application performed a write must be proved to read the store THAT application writes to, never a second system subscribed to the same account.
 - L193. A feature that resolves user supplied values through a stored REFERENCE dataset (a postcode to coordinates table, a currency or carrier list, a tax rate table) is only as complete as that dataset, and a missing row is indistinguishable from a user who supplied nothing, so measure the join's real hit rate against live data before building on it rather than treating the table as authoritative because it exists.
+- L198. A check that verifies another system's work must match values no more strictly than that system does, because a verifier stricter than the actor reports failure on every correct run and can never report anything else.
 
 ## Building with AI
 

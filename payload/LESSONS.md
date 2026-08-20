@@ -1406,6 +1406,24 @@ for reference; L6 was reviewed and deliberately not adopted.
   only 42 of 105 nurses could be placed on a map. The radius filter then dropped every
   unresolvable nurse, which reads on screen as no nurses matching the search)
 
+- **L198. A check that verifies another system's work must match values no more strictly than
+  that system does, because a verifier stricter than the actor reports failure on every
+  correct run and can never report anything else.** The stricter side is usually the new code,
+  written from the value as it appears in your own source, while the loose side is the
+  established system that has been quietly succeeding all along, so the verdict accuses the
+  half that works. Distinct from L99, where a client mask stricter than its validator blocks
+  the person's input at the point of entry: here nothing is blocked and the report is simply
+  false. Related to L16, since the two comparisons are one question and belong in one
+  predicate, and to L36, which is what the false report costs once it fires every time.
+  (downbeat, fixed in 50ea879 during #328's calibration: the seeded templates address
+  `/shoots` and `/operations`, the Google account's calendars are named `Shoots` and
+  `Operations`, and `GoogleCalendarReader` compared them exactly. Fantastical, which actually
+  files the event, does not care about the capitals, so the first real booking to use the new
+  check warned that its events might be missing while both had landed correctly, and it would
+  have said so on every booking for ever. `CalendarSentenceCheck.calendarNameDisagreements`
+  was already comparing the same names case insensitively, so the codebase held two rules for
+  one question and the stricter one was the half facing live data)
+
 ## Building with AI
 
 - **L27. A rule that lives only in a prompt is a hope.** Every hard constraint on AI
