@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 205 lessons.
+LESSONS.md, which is NOT loaded into the session. 206 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -114,6 +114,7 @@ to decide something: the body is where the failure it came from is described.
 - L158. When the text a failure is diagnosed FROM can come from more than one place (a launcher shell and the process it launched, a supervisor and its child), a rule that takes whichever place is non empty hands the diagnosis to the launcher, because the launcher speaks exactly when the real work never started.
 - L160. A condition is only OVER once it has stayed healthy for a re-arm window, never on the first healthy sample, and its duration must be measured to the last observed failure rather than to the moment the all clear is sent.
 - L164. Failure recording that lives INSIDE the program a launcher starts cannot record any failure of the launcher itself, so a missing directory, a bad path or an unreadable interpreter leaves no trace at all and reads exactly like the control never having been pressed.
+- L505. A value that resolves to undefined is DROPPED from a serialized payload rather than sent as empty, so a wrong field reference is indistinguishable from a field nobody meant to send, and both ends read the absence as normal.
 
 ## State and identity
 

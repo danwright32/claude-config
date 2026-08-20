@@ -924,6 +924,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   update-downbeat.sh, which holds every path that writes update-attempt.json, never started, and
   the panel went on saying "behind" with no record of the attempt)
 
+- **L505. A value that resolves to undefined is DROPPED from a serialized payload rather than
+  sent as empty, so a wrong field reference is indistinguishable from a field nobody meant to
+  send, and both ends read the absence as normal.** Assert that identity and correlation fields
+  are actually present on the outbound payload at the boundary, rather than trusting the
+  reference that builds them, because the sender sees a successful response and the receiver
+  sees a well-formed message, so nothing anywhere reports a problem. Distinct from L138, the
+  mirror case, where a templating layer renders a MISSING setting as an EMPTY value and an
+  absence check then accepts it: here the key vanishes entirely and there is nothing left to
+  check.
+  (bidspoke#924: eight rejection paths across four live bidding workflows shipped with no lead
+  id for months, two of them reading a payload field the partner never sends and six never
+  setting it at all, so partners received rejections they could not tie back to the lead they
+  had sent)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
