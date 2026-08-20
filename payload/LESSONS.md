@@ -1195,6 +1195,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   the upstream stopped updating, so a click-to-expand drill-down resolves every other count down to
   real clients and dead-ends on the one bucket that most needs explaining)
 
+- **L509. A shared value that consumers EXTEND (a style token, a base config, a set of default
+  props) must not set anything a consumer legitimately overrides, because the winner is then
+  decided by a merge or emit order invisible at the call site, so the call site reads as correct
+  while the override silently loses.** Either keep the contested property off the shared value, or
+  compose through a merger that resolves conflicts deterministically. The shared value is usually
+  written for the COMMON consumer, so the one that overrides is by definition the minority case and
+  the least likely to be checked.
+  (new-agent-onboarding#676: a minimum height was added to a shared field token so a select could
+  not render shorter than the input beside it. That token is also composed by the app's one
+  textarea, which sets its own far taller minimum, so the element carried both and the short one
+  won: the welcome email body editor collapsed from 288px to 64px, about a line and a half of a
+  template clipped mid-word. Nothing looked wrong at either site. It reddened 26 baselines, all
+  correctly, and 18 of those were the intended change, so regenerating them would have recorded the
+  collapsed editor as canonical and defended it (L84). A person comparing two images caught it)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
