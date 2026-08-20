@@ -527,6 +527,16 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Data safety
 
+- **L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an
+  injected path the loader alone uses) does not cover the way OUT**, because any save, set or
+  delete that names the live store directly is still reachable, and that is the half that
+  cannot be undone.
+  (PostRoll#738: HashtagStore's live initializer was compiled out of the test bundle so a test
+  has to say loadingSaved: false, which gates the LOAD only, while save() names
+  UserDefaults.standard itself and would write Dan's real global tags from any rendered screen.
+  HandleBook.shared is the same shape: its store is a property precisely so a test can point it
+  elsewhere, and the singleton is built by a private init that takes .standard)
+
 - **L5. Never destroy good state before its replacement is verified to exist.** Write to
   temp and rename, keep the prior version until the new one is confirmed, defer physical
   deletes until undo expires, and never let a blank value beat real data in a merge.

@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 200 lessons.
+LESSONS.md, which is NOT loaded into the session. 201 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -66,6 +66,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Data safety
 
+- L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an injected path the loader alone uses) does not cover the way OUT
 - L5. Never destroy good state before its replacement is verified to exist.
 - L95. Adding a WRITE to an error path re-audits every error that can reach it
 - L7. User data gets a rotating backup and a restore path from day one.
