@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 195 lessons.
+LESSONS.md, which is NOT loaded into the session. 196 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -17,6 +17,7 @@ to decide something: the body is where the failure it came from is described.
 - L182. A ratchet or violation count driven to ZERO stops being read as a measurement and starts being read as proof the thing cannot occur, so nobody re-examines it.
 - L151. Every outcome a guard's own contract ENUMERATES must have a test that PRODUCES that outcome, not merely a test that passes.
 - L2. Tests must be structurally unable to touch live data, production services, or paid APIs.
+- L196. A component that CONSTRUCTS its own dependency rather than receiving one is beyond every refusal that dependency could offer
 - L3. Built is not wired, and wired is not proven.
 - L4. A merged fix is not a deployed fix.
 - L63. A regression guard must assert the quantity it exists to protect, never a proxy for it.

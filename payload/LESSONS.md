@@ -89,6 +89,17 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L2. Tests must be structurally unable to touch live data, production services, or
   paid APIs.** Inject seams for stores, directories, clocks, and external calls, plus a
   refusal inside the service itself. (10 issues, 6 repos)
+- **L196. A component that CONSTRUCTS its own dependency rather than receiving one is beyond
+  every refusal that dependency could offer**, because the construction site is compiled and
+  shipped inside the code under test, so a build condition or a runtime refusal in the
+  dependency cannot reach it and the seam has to be the caller receiving what it uses.
+  (PostRoll#722: AnalyticsStore and HashtagStore were kept off Dan's imported Instagram
+  history by compiling the initializer that names the live file out of the test bundle, so a
+  test omitting the path stopped building. PostRoll#727: the same fix is impossible for
+  PostingPresetStore, because the screen that reads Dan's real preferences builds its own with
+  @State private var presetStore = PostingPresetStore(), and that screen is itself inside the
+  test bundle, so the refusal would break the build for a legitimate caller)
+
 - **L3. Built is not wired, and wired is not proven.** Prove every guard, integration,
   and gate actually executes in the shipping runtime, and wire the CI gate the day the
   first test lands. (45 issues, 8 repos)
