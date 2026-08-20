@@ -635,6 +635,16 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L10. An error state and an empty state are different screens.** Never render a
   cheerful empty state over a failure, and return real not-found semantics rather than a
   200 shell. (16 issues, 3 repos)
+- **L199. A marker meant to be READ BY CODE (a prefix, an error code, a sentinel) must reach its
+  reader unwrapped**, because a sentence composed around it for a person defeats every check that
+  recognises it, and a test that feeds the check the bare marker never sees the wrapped form that
+  actually ships.
+  (PostRoll#730: the Friday clip pipeline reports too few usable clips as `insufficient_clips: ...`,
+  and the review card recognises that prefix to offer the only two ways out of a state that will
+  fail identically on every retry. The screen wraps the day's error as "Friday regeneration failed:
+  <the marker>" before the card sees it, so the prefix check never matches and the escape hatch
+  cannot appear. Its unit test passes the predicate the bare marker and has always been green)
+
 - **L11. Distinct causes get distinct messages, and a message may claim only what its
   check actually measured.** A fallback or unreadable value presents as "could not
   read", never silently scored as an answer. (21 issues, 3 repos)
