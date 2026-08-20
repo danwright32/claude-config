@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 204 lessons.
+LESSONS.md, which is NOT loaded into the session. 205 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -64,6 +64,7 @@ to decide something: the body is where the failure it came from is described.
 - L146. To check that content reached a rendered surface, measure the surface WITHOUT that content and take the difference, because any quantity computed over the whole surface (ink, coverage, a pixel count) also counts the fill, the border and the controls, and can even RISE when the content is removed, since removing it changes what the commonest colour is.
 - L165. A fixture built by damaging the END of something lets the scenario finish its real work before failing, so the case under test never occurs while the test reads as convincing, and it passes for a reason unrelated to what it claims.
 - L502. A setting whose OFF state stops something being RECORDED must be monitored by asserting its current VALUE on a schedule, never only by auditing changes to it, because an application level audit cannot see a change made directly to the database, and the setting's whole effect is to remove the evidence that would reveal it.
+- L504. A test can only tell two implementations apart when the environment it runs in makes them behave differently, so when the ambient configuration (the host timezone, the locale, the filesystem's case sensitivity) is what separates a correct implementation from a wrong one, the test must SET that configuration itself rather than inherit it.
 
 ## Data safety
 

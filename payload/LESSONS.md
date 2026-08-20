@@ -540,6 +540,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   zero records of that field ever changing, so who turned it off, when, and why are unrecoverable.
   Found only by querying the column directly while investigating something else)
 
+- **L504. A test can only tell two implementations apart when the environment it runs in makes
+  them behave differently, so when the ambient configuration (the host timezone, the locale, the
+  filesystem's case sensitivity) is what separates a correct implementation from a wrong one, the
+  test must SET that configuration itself rather than inherit it.** A runner's defaults are usually
+  the exact setting under which the two agree, so the suite passes whichever version shipped, and no
+  amount of realistic fixture data closes the gap because the fixture is not what is blind.
+  (bidspoke#922: building the execution archive's day rule, two successive guards against a
+  local-time implementation were written and both were hollow, because CI runs on UTC and on a UTC
+  host `toISOString().slice(0,10)` and `getFullYear/getMonth/getDate` return the same string. The
+  committed fixture held real timestamps measured from Postgres either side of UTC midnight and a
+  DST change, and still could not fire. Only moving the host timezone inside the test caught it, and
+  the mutation was then seen to go red while running under TZ=UTC)
+
 ## Data safety
 
 - **L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an
