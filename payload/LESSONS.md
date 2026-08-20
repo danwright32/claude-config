@@ -525,6 +525,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   completed its entire job successfully and failed only on the last line, so the self-update
   it was meant to block went through normally. Four fixtures in one session failed this way)
 
+- **L502. A setting whose OFF state stops something being RECORDED must be monitored by
+  asserting its current VALUE on a schedule, never only by auditing changes to it, because an
+  application level audit cannot see a change made directly to the database, and the setting's
+  whole effect is to remove the evidence that would reveal it.** The audit here was not missing
+  and not broken: the handler had written the field into the audit log since the day the feature
+  shipped, and the log was complete and never purged. It simply cannot see a write that did not
+  go through the application, and an absence of change records reads exactly like a setting
+  nobody has touched.
+  (bidspoke#882: `workflows.capture_sightings` defaults to true, but was false on Main Flow, the
+  live flow carrying the Equifax credit report at ~3,600 executions a day. Those leads produced no
+  lead sighting, nothing in Snowflake, and their execution was truncated at 7 days, so they left no
+  durable record anywhere. `audit_log` holds 857 rows back to the project's first week and contains
+  zero records of that field ever changing, so who turned it off, when, and why are unrecoverable.
+  Found only by querying the column directly while investigating something else)
+
 ## Data safety
 
 - **L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an
