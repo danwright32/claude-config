@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 203 lessons.
+LESSONS.md, which is NOT loaded into the session. 204 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -150,6 +150,7 @@ to decide something: the body is where the failure it came from is described.
 - L72. A gate's stored DEFAULT must be its OFF value, so that FORGETTING to set it produces the safe state rather than the live one.
 - L75. When identifying WHO or WHAT an outward action targets fails, refuse the action; never fall back to a nearby candidate.
 - L124. A platform's DEFAULT grant may already give away what you are about to grant
+- L503. An over-broad permission is invisible, because the code never attempts what it is not meant to do, while a missing one fails loudly on the first run
 - L123. Declining to PROVISION someone is not declining to AUTHENTICATE them
 - L137. A grant checked only where it is GRANTED (a login, a signup, an invite) is never re-checked for anyone already holding a session, so removing someone from an access list takes nothing away from the people most likely to be removed, and the gap stays invisible until the first real removal.
 - L155. An issue or plan written with REAL measured evidence becomes the source whoever implements it copies into fixtures, so redact people's identities where the evidence is RECORDED rather than trusting the implementer to anonymise it later.

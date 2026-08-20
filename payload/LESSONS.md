@@ -1184,6 +1184,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   (bidspoke#762: Postgres grants EXECUTE to PUBLIC on every new function, so six security-definer
   functions were callable by anon over the REST API, two of which write and bypass RLS)
 
+- **L503. An over-broad permission is invisible, because the code never attempts what it is not
+  meant to do, while a missing one fails loudly on the first run**, so a least-privilege split
+  that has never been observed REFUSING anything is a claim rather than a control. Prove it by
+  attempting the forbidden action and treating SUCCESS as the finding, rather than by reading the
+  grant that describes it. Distinct from L124, where the danger is a grant the platform already
+  made: here the grant may be exactly as written and still nobody has established that.
+  (bidspoke#914: three Snowflake identities were split so that only one could delete 13 months of
+  archived identity data. The roles and users were read back and confirmed, the grants never
+  were, and the archiver never deletes, so an excessive DELETE on the writer or reader would have
+  sat unnoticed for the life of the archive. Found while checking a neighbouring setting that had
+  silently applied to only one of the three)
+
 - **L123. Declining to PROVISION someone is not declining to AUTHENTICATE them**, so a signup
   gate that only skips creating app records still hands that person a valid session carrying a
   privileged role, and every policy written against that role must then defend against someone
