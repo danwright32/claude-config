@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 211 lessons.
+LESSONS.md, which is NOT loaded into the session. 215 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -10,6 +10,7 @@ to decide something: the body is where the failure it came from is described.
 ## Proof over green
 
 - L203. A cause inferred from two things co-occurring in a log or a trace is not established until you find a case where the suspected cause is present and the effect is ABSENT, because a busy system produces near simultaneous events constantly and a coincidence reads exactly like a mechanism.
+- L205. A test that touches a shared mutable object other tests also touch can pass purely because its own fixture is SLOW enough to outlive a neighbour's reset, so making that fixture faster is what exposes it: remove the dependency on the shared object rather than serializing around it, and re-check any such test after speeding its fixture.
 - L1. A test or guard is only real once it has been seen to fail.
 - L140. A test asserting that something THREW is satisfied by ANY throw, including one raised by its own fixture, so assert on the specific failure (the message, the type, the state left behind) rather than on the mere fact of an error.
 - L154. A tool that reports whether a check CAUGHT a deliberate defect must name WHICH check fired, because a defect large enough to break everything makes every check fail and is indistinguishable from the one that should have.
@@ -70,6 +71,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Data safety
 
+- L206. A tool mode whose NAME reads like an inspection (reach, check, status, list, show, verify) must not create or modify live data, because it will be run to look around by somebody who has not re-read the docs, and being reached for in a hurry is the whole point of such a tool.
 - L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an injected path the loader alone uses) does not cover the way OUT
 - L5. Never destroy good state before its replacement is verified to exist.
 - L95. Adding a WRITE to an error path re-audits every error that can reach it
@@ -146,6 +148,7 @@ to decide something: the body is where the failure it came from is described.
 - L200. A record that permanently EXCLUDES something on the grounds that another record covers it (a night another card holds, a task another job owns, an item another order fulfils) must re-check that other record at read time, because deleting it leaves the exclusion standing over nothing and the gap is invisible on both sides.
 - L507. A category defined as a REMAINDER (the total minus every named category) records no members anywhere, so it can never be enumerated, audited or expanded, and it is exactly where the cases nobody has explained accumulate. If any surface will one day have to show what is in that bucket, record its members at the moment it is computed, because the subtraction cannot be run backwards.
 - L509. A shared value that consumers EXTEND (a style token, a base config, a set of default props) must not set anything a consumer legitimately overrides, because the winner is then decided by a merge or emit order invisible at the call site, so the call site reads as correct while the override silently loses.
+- L204. When a change removes an invariant other code silently relied on (only one of these can be alive, this only runs on one thread, this id is unique), find every reliance by searching for the invariant itself rather than by reasoning about the feature, because the reliance is usually recorded only in a comment that reads as reassurance and the code it justifies becomes actively destructive the moment the invariant goes.
 
 ## Security and privacy
 
@@ -188,6 +191,7 @@ to decide something: the body is where the failure it came from is described.
 - L180. A confirmation dialog's consequence sentence must be derived from the state it is about to change, never asserted, because a warning shown on every delete carries no information and reads identically whether it is taking one row or a subtree of ten.
 - L187. A control gated on a collection holding MORE THAN ONE member is absent in the commonest case, which is one member.
 - L508. A control that renders a value the BROWSER itself validates (a date input, a number input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that value stands beside an empty control and the two halves of the screen contradict each other about what was asked for.
+- L207. A constraint imposed by the surface your output is DISPLAYED on (a phone's notch or safe area, a host app's own overlay chrome, a fold, a print bleed) leaves no trace in the artifact you render or in any check you run over it, so it is only ever discovered on a real device.
 
 ## External systems
 

@@ -19,6 +19,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   successful grant, so it never blocked anything. A second app with the identical signing
   shape being granted then killed the replacement theory too)
 
+- **L205. A test that touches a shared mutable object other tests also touch can pass
+  purely because its own fixture is SLOW enough to outlive a neighbour's reset, so making
+  that fixture faster is what exposes it: remove the dependency on the shared object
+  rather than serializing around it, and re-check any such test after speeding its
+  fixture.**
+  (downbeat#355: a new test asserted that a commit announces its calendar check while the
+  check runs. It passed alone and in the full suite, because its stub polled for the full
+  15 second timeout, long enough to survive four sibling suites that each reset the same
+  shared check in their own setup. Shortening the fixture to 0.05s turned it red at once.
+  Serializing the suite would have restored the green while leaving the hazard; injecting
+  the bracketing so the test never touches the singleton removed it)
+
+
 - **L1. A test or guard is only real once it has been seen to fail.** Mocked guards
   asserting their own mock, wrappers treating exit 0 as a pass, vacuous assertions, and
   tests of hand-copied reimplementations all sit green while protecting nothing. Break
@@ -581,6 +594,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   financialInformation.employmentStatus === 'military', arriving 34 times in 3 hours)
 
 ## Data safety
+
+- **L206. A tool mode whose NAME reads like an inspection (reach, check, status, list,
+  show, verify) must not create or modify live data, because it will be run to look
+  around by somebody who has not re-read the docs, and being reached for in a hurry is
+  the whole point of such a tool.**
+  (downbeat#360: a calendar measuring script has modes that fire real URLs at another
+  app and modes that only read, with nothing in the naming to separate them. `reach` was
+  run purely to list which calendars existed on the account; its documented job is to
+  create one event on each REAL calendar, and it put a live event on the working
+  Shoots calendar. The cleanup removed it, so the cost was luck rather than design.
+  Distinct from L9, which is about destructive actions earning a confirmation: this one
+  is about a CREATING action hiding behind a reading name)
 
 - **L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an
   injected path the loader alone uses) does not cover the way OUT**, because any save, set or
@@ -1222,6 +1247,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   correctly, and 18 of those were the intended change, so regenerating them would have recorded the
   collapsed editor as canonical and defended it (L84). A person comparing two images caught it)
 
+- **L204. When a change removes an invariant other code silently relied on (only one of these can
+  be alive, this only runs on one thread, this id is unique), find every reliance by searching for
+  the invariant itself rather than by reasoning about the feature, because the reliance is usually
+  recorded only in a comment that reads as reassurance and the code it justifies becomes actively
+  destructive the moment the invariant goes.** Same shape as L95, where adding a write to an error
+  path re-audits every error that can reach it: the change is small and the re-audit it forces is
+  not. Distinct from L55, where a SECOND code path starts producing state an existing reader was
+  written against; here no new path appears, the same code simply stops being the only one running.
+  The comment is the tell and the trap: a line saying why something is safe names the dependency,
+  and reads as having settled it.
+  (overture#3009: `settleAnyCheckBefore` settles and then unconditionally clears the shared check
+  marker on every Prep launch, gating only on the marker existing and never on the check being dead,
+  because until now only one run could be alive. Its own comment states that as the justification.
+  Lifting the exclusion in overture#2765 would make a Prep launch destroy a live check's paid
+  answers, and make a finished Prep throw away every draft it just wrote)
+
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -1479,6 +1521,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   record showed "Couldn't show that view" beside an Outcome control reading "Any outcome", and the
   From and To date boxes have the same gap, because an <input type="date"> blanks any value that is
   not a valid date string)
+
+- **L207. A constraint imposed by the surface your output is DISPLAYED on (a phone's notch or
+  safe area, a host app's own overlay chrome, a fold, a print bleed) leaves no trace in the
+  artifact you render or in any check you run over it, so it is only ever discovered on a real
+  device.** Encode it once as a shared value every renderer reads and a test asserts, never as a
+  clearance hand applied to whichever templates happened to be open when someone first noticed it,
+  because the number then governs nothing outside those files and the ones written next are
+  written blind. Distinct from L501, where a clone copies a corrected original as first written:
+  here the correction was never expressed anywhere a later file could inherit it.
+  (postroll#752: `generate_reel_screen.py` and `generate_before_after.py` each carried
+  `170  # clears notch (~120px)` as a literal plus a comment, while `generate_reel_scroll.py`
+  drew its title at y=35 and `generate_story.py` anchored its title bottom-up from the photo with
+  no top clamp at all, so a two-line title started around y=33; every published story and scroll
+  reel had the show's name printed under the clock and the battery, and the only report was a
+  screenshot from Dan's phone)
 
 ## External systems
 
