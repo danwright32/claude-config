@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 207 lessons.
+LESSONS.md, which is NOT loaded into the session. 208 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -143,6 +143,7 @@ to decide something: the body is where the failure it came from is described.
 - L186. A durable record that exists to stop an action repeating is only as durable as its KEY.
 - L192. A value INFERRED from content (a name pulled out of caption text, a category guessed from a title, a type read off a filename) must never be presented as the recorded fact it stands in for.
 - L200. A record that permanently EXCLUDES something on the grounds that another record covers it (a night another card holds, a task another job owns, an item another order fulfils) must re-check that other record at read time, because deleting it leaves the exclusion standing over nothing and the gap is invisible on both sides.
+- L507. A category defined as a REMAINDER (the total minus every named category) records no members anywhere, so it can never be enumerated, audited or expanded, and it is exactly where the cases nobody has explained accumulate. If any surface will one day have to show what is in that bucket, record its members at the moment it is computed, because the subtraction cannot be run backwards.
 
 ## Security and privacy
 

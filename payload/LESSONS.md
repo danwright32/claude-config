@@ -1182,6 +1182,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   the covering card still exists, so dismissing that card puts the night in the queue on no card at
   all, and the run card that used to carry it can never take it back)
 
+- **L507. A category defined as a REMAINDER (the total minus every named category) records no
+  members anywhere, so it can never be enumerated, audited or expanded, and it is exactly where
+  the cases nobody has explained accumulate. If any surface will one day have to show what is in
+  that bucket, record its members at the moment it is computed, because the subtraction cannot be
+  run backwards.** The count itself is always right, which is what hides it: the number reconciles,
+  every check passes, and the gap surfaces only the first time somebody asks WHICH ones. Distinct
+  from L194, where the sender holds the value and reduces it to a flag: here nothing ever held it.
+  (project-enrollment-tracker#1094: commission cohorts push a Salesforce id onto clearedIds for a
+  cleared deal and benignIds for a recognised miss, while pending is the remainder and is
+  deliberately never stored. On a closed month that remainder is permanently full of Achieve rows
+  the upstream stopped updating, so a click-to-expand drill-down resolves every other count down to
+  real clients and dead-ends on the one bucket that most needs explaining)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
