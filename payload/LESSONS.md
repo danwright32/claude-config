@@ -628,6 +628,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   clock. Measured 2026-08-19, 198 of the 200 lines were test writes and only two were real
   imports, so the observation window the product decision waits on had been flushed out, and
   the summary in Settings counted the test imports as observed ones)
+- **L202. Evidence attached to a record that is itself swept on a retention schedule
+  inherits that schedule's lifetime, so it is gone before the investigation that needs
+  it, which by definition arrives days later.** Choose where a durable record lives from
+  how late its reader arrives, not from which row it describes. Distinct from L174,
+  which is about shortening a window and stranding a later step, and from L191, which is
+  about a capped store evicting real records: here nothing is shortened and nothing is
+  evicted, the record is simply written onto a row with a shorter life than the question
+  it answers.
+  (downbeat#343, downbeat#350: a commit's record of which calendar events it fired was
+  moved onto the saved booking so it would survive the commit, which it does. Bookings
+  are swept seven days after the shoot, and the loss that motivated the work was
+  investigated nine days after the fact, so the fix covered the check that runs minutes
+  later and not the situation that made it worth building)
 
 ## Honest failure
 
