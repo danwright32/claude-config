@@ -537,6 +537,49 @@ for reference; L6 was reviewed and deliberately not adopted.
   completed its entire job successfully and failed only on the last line, so the self-update
   it was meant to block went through normally. Four fixtures in one session failed this way)
 
+- **L502. A setting whose OFF state stops something being RECORDED must be monitored by
+  asserting its current VALUE on a schedule, never only by auditing changes to it, because an
+  application level audit cannot see a change made directly to the database, and the setting's
+  whole effect is to remove the evidence that would reveal it.** The audit here was not missing
+  and not broken: the handler had written the field into the audit log since the day the feature
+  shipped, and the log was complete and never purged. It simply cannot see a write that did not
+  go through the application, and an absence of change records reads exactly like a setting
+  nobody has touched.
+  (bidspoke#882: `workflows.capture_sightings` defaults to true, but was false on Main Flow, the
+  live flow carrying the Equifax credit report at ~3,600 executions a day. Those leads produced no
+  lead sighting, nothing in Snowflake, and their execution was truncated at 7 days, so they left no
+  durable record anywhere. `audit_log` holds 857 rows back to the project's first week and contains
+  zero records of that field ever changing, so who turned it off, when, and why are unrecoverable.
+  Found only by querying the column directly while investigating something else)
+
+- **L504. A test can only tell two implementations apart when the environment it runs in makes
+  them behave differently, so when the ambient configuration (the host timezone, the locale, the
+  filesystem's case sensitivity) is what separates a correct implementation from a wrong one, the
+  test must SET that configuration itself rather than inherit it.** A runner's defaults are usually
+  the exact setting under which the two agree, so the suite passes whichever version shipped, and no
+  amount of realistic fixture data closes the gap because the fixture is not what is blind.
+  (bidspoke#922: building the execution archive's day rule, two successive guards against a
+  local-time implementation were written and both were hollow, because CI runs on UTC and on a UTC
+  host `toISOString().slice(0,10)` and `getFullYear/getMonth/getDate` return the same string. The
+  committed fixture held real timestamps measured from Postgres either side of UTC midnight and a
+  DST change, and still could not fire. Only moving the host timezone inside the test caught it, and
+  the mutation was then seen to go red while running under TZ=UTC)
+
+- **L506. A guard that branches on a field arriving from OUTSIDE the system is only real once
+  that field's presence has been measured on live traffic, because an absent field makes a
+  strict comparison silently false and the guard then reads as an active safeguard while
+  refusing nobody.** Check whether the same fact arrives under a DIFFERENT name in the same
+  payload before concluding the sender does not provide it, because the usual cause is a field
+  renamed or never agreed rather than a fact nobody sends. Extends L90 to the external
+  boundary: there the remedy is auditing which code writes the value, here you cannot, because
+  the producer is a third party, so presence has to be measured rather than reasoned about.
+  Distinct from L147, which calibrates a guard that DOES fire against real values; this one
+  never fires at all.
+  (bidspoke#926: both RML bidding workflows exclude military applicants by testing
+  personalInformation.militaryStatus === true, a key absent on 100% of 12,992 payloads sampled,
+  so the branch has never fired in 150,110 runs, while the signal sits in the same payload as
+  financialInformation.employmentStatus === 'military', arriving 34 times in 3 hours)
+
 ## Data safety
 
 - **L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an
@@ -908,6 +951,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   update-downbeat.sh, which holds every path that writes update-attempt.json, never started, and
   the panel went on saying "behind" with no record of the attempt)
 
+- **L505. A value that resolves to undefined is DROPPED from a serialized payload rather than
+  sent as empty, so a wrong field reference is indistinguishable from a field nobody meant to
+  send, and both ends read the absence as normal.** Assert that identity and correlation fields
+  are actually present on the outbound payload at the boundary, rather than trusting the
+  reference that builds them, because the sender sees a successful response and the receiver
+  sees a well-formed message, so nothing anywhere reports a problem. Distinct from L138, the
+  mirror case, where a templating layer renders a MISSING setting as an EMPTY value and an
+  absence check then accepts it: here the key vanishes entirely and there is nothing left to
+  check.
+  (bidspoke#924: eight rejection paths across four live bidding workflows shipped with no lead
+  id for months, two of them reading a payload field the partner never sends and six never
+  setting it at all, so partners received rejections they could not tie back to the lead they
+  had sent)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
@@ -1137,6 +1194,34 @@ for reference; L6 was reviewed and deliberately not adopted.
   the covering card still exists, so dismissing that card puts the night in the queue on no card at
   all, and the run card that used to carry it can never take it back)
 
+- **L507. A category defined as a REMAINDER (the total minus every named category) records no
+  members anywhere, so it can never be enumerated, audited or expanded, and it is exactly where
+  the cases nobody has explained accumulate. If any surface will one day have to show what is in
+  that bucket, record its members at the moment it is computed, because the subtraction cannot be
+  run backwards.** The count itself is always right, which is what hides it: the number reconciles,
+  every check passes, and the gap surfaces only the first time somebody asks WHICH ones. Distinct
+  from L194, where the sender holds the value and reduces it to a flag: here nothing ever held it.
+  (project-enrollment-tracker#1094: commission cohorts push a Salesforce id onto clearedIds for a
+  cleared deal and benignIds for a recognised miss, while pending is the remainder and is
+  deliberately never stored. On a closed month that remainder is permanently full of Achieve rows
+  the upstream stopped updating, so a click-to-expand drill-down resolves every other count down to
+  real clients and dead-ends on the one bucket that most needs explaining)
+
+- **L509. A shared value that consumers EXTEND (a style token, a base config, a set of default
+  props) must not set anything a consumer legitimately overrides, because the winner is then
+  decided by a merge or emit order invisible at the call site, so the call site reads as correct
+  while the override silently loses.** Either keep the contested property off the shared value, or
+  compose through a merger that resolves conflicts deterministically. The shared value is usually
+  written for the COMMON consumer, so the one that overrides is by definition the minority case and
+  the least likely to be checked.
+  (new-agent-onboarding#676: a minimum height was added to a shared field token so a select could
+  not render shorter than the input beside it. That token is also composed by the app's one
+  textarea, which sets its own far taller minimum, so the element carried both and the short one
+  won: the welcome email body editor collapsed from 288px to 64px, about a line and a half of a
+  template clipped mid-word. Nothing looked wrong at either site. It reddened 26 baselines, all
+  correctly, and 18 of those were the intended change, so regenerating them would have recorded the
+  collapsed editor as canonical and defended it (L84). A person comparing two images caught it)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -1180,6 +1265,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   is a REVOKE that is absent, and nobody reviews for a missing line.
   (bidspoke#762: Postgres grants EXECUTE to PUBLIC on every new function, so six security-definer
   functions were callable by anon over the REST API, two of which write and bypass RLS)
+
+- **L503. An over-broad permission is invisible, because the code never attempts what it is not
+  meant to do, while a missing one fails loudly on the first run**, so a least-privilege split
+  that has never been observed REFUSING anything is a claim rather than a control. Prove it by
+  attempting the forbidden action and treating SUCCESS as the finding, rather than by reading the
+  grant that describes it. Distinct from L124, where the danger is a grant the platform already
+  made: here the grant may be exactly as written and still nobody has established that.
+  (bidspoke#914: three Snowflake identities were split so that only one could delete 13 months of
+  archived identity data. The roles and users were read back and confirmed, the grants never
+  were, and the archiver never deletes, so an excessive DELETE on the writer or reader would have
+  sat unnoticed for the life of the archive. Found while checking a neighbouring setting that had
+  silently applied to only one of the three)
 
 - **L123. Declining to PROVISION someone is not declining to AUTHENTICATE them**, so a signup
   gate that only skips creating app records still hands that person a valid session carrying a
@@ -1372,6 +1469,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   show booking, which is most of the year, was uninterruptible for up to 180 seconds with
   navigation locked, and on 2026-08-18 the only remaining exit was closing the window, which is
   the one action that loses the commit)
+
+- **L508. A control that renders a value the BROWSER itself validates (a date input, a number
+  input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that
+  value stands beside an empty control and the two halves of the screen contradict each other
+  about what was asked for.** The refusal reads as being about a filter nobody can see, and any
+  Clear or Reset offered alongside it appears to clear nothing.
+  (new-agent-onboarding#660, #666: a shared audit link carrying an outcome the ledger does not
+  record showed "Couldn't show that view" beside an Outcome control reading "Any outcome", and the
+  From and To date boxes have the same gap, because an <input type="date"> blanks any value that is
+  not a valid date string)
 
 ## External systems
 

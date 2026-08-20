@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 203 lessons.
+LESSONS.md, which is NOT loaded into the session. 211 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -64,6 +64,9 @@ to decide something: the body is where the failure it came from is described.
 - L144. A monitor reporting whether an action HAPPENED must judge by the same predicate the action used to decide whether to ACT, or the two disagree precisely when the action correctly declined, and the resulting false alarm cannot be cleared by the remedy it names, because re-running the action makes it decline again.
 - L146. To check that content reached a rendered surface, measure the surface WITHOUT that content and take the difference, because any quantity computed over the whole surface (ink, coverage, a pixel count) also counts the fill, the border and the controls, and can even RISE when the content is removed, since removing it changes what the commonest colour is.
 - L165. A fixture built by damaging the END of something lets the scenario finish its real work before failing, so the case under test never occurs while the test reads as convincing, and it passes for a reason unrelated to what it claims.
+- L502. A setting whose OFF state stops something being RECORDED must be monitored by asserting its current VALUE on a schedule, never only by auditing changes to it, because an application level audit cannot see a change made directly to the database, and the setting's whole effect is to remove the evidence that would reveal it.
+- L504. A test can only tell two implementations apart when the environment it runs in makes them behave differently, so when the ambient configuration (the host timezone, the locale, the filesystem's case sensitivity) is what separates a correct implementation from a wrong one, the test must SET that configuration itself rather than inherit it.
+- L506. A guard that branches on a field arriving from OUTSIDE the system is only real once that field's presence has been measured on live traffic, because an absent field makes a strict comparison silently false and the guard then reads as an active safeguard while refusing nobody.
 
 ## Data safety
 
@@ -113,6 +116,7 @@ to decide something: the body is where the failure it came from is described.
 - L158. When the text a failure is diagnosed FROM can come from more than one place (a launcher shell and the process it launched, a supervisor and its child), a rule that takes whichever place is non empty hands the diagnosis to the launcher, because the launcher speaks exactly when the real work never started.
 - L160. A condition is only OVER once it has stayed healthy for a re-arm window, never on the first healthy sample, and its duration must be measured to the last observed failure rather than to the moment the all clear is sent.
 - L164. Failure recording that lives INSIDE the program a launcher starts cannot record any failure of the launcher itself, so a missing directory, a bad path or an unreadable interpreter leaves no trace at all and reads exactly like the control never having been pressed.
+- L505. A value that resolves to undefined is DROPPED from a serialized payload rather than sent as empty, so a wrong field reference is indistinguishable from a field nobody meant to send, and both ends read the absence as normal.
 
 ## State and identity
 
@@ -140,6 +144,8 @@ to decide something: the body is where the failure it came from is described.
 - L186. A durable record that exists to stop an action repeating is only as durable as its KEY.
 - L192. A value INFERRED from content (a name pulled out of caption text, a category guessed from a title, a type read off a filename) must never be presented as the recorded fact it stands in for.
 - L200. A record that permanently EXCLUDES something on the grounds that another record covers it (a night another card holds, a task another job owns, an item another order fulfils) must re-check that other record at read time, because deleting it leaves the exclusion standing over nothing and the gap is invisible on both sides.
+- L507. A category defined as a REMAINDER (the total minus every named category) records no members anywhere, so it can never be enumerated, audited or expanded, and it is exactly where the cases nobody has explained accumulate. If any surface will one day have to show what is in that bucket, record its members at the moment it is computed, because the subtraction cannot be run backwards.
+- L509. A shared value that consumers EXTEND (a style token, a base config, a set of default props) must not set anything a consumer legitimately overrides, because the winner is then decided by a merge or emit order invisible at the call site, so the call site reads as correct while the override silently loses.
 
 ## Security and privacy
 
@@ -150,6 +156,7 @@ to decide something: the body is where the failure it came from is described.
 - L72. A gate's stored DEFAULT must be its OFF value, so that FORGETTING to set it produces the safe state rather than the live one.
 - L75. When identifying WHO or WHAT an outward action targets fails, refuse the action; never fall back to a nearby candidate.
 - L124. A platform's DEFAULT grant may already give away what you are about to grant
+- L503. An over-broad permission is invisible, because the code never attempts what it is not meant to do, while a missing one fails loudly on the first run
 - L123. Declining to PROVISION someone is not declining to AUTHENTICATE them
 - L137. A grant checked only where it is GRANTED (a login, a signup, an invite) is never re-checked for anyone already holding a session, so removing someone from an access list takes nothing away from the people most likely to be removed, and the gap stays invisible until the first real removal.
 - L155. An issue or plan written with REAL measured evidence becomes the source whoever implements it copies into fixtures, so redact people's identities where the evidence is RECORDED rather than trusting the implementer to anonymise it later.
@@ -180,6 +187,7 @@ to decide something: the body is where the failure it came from is described.
 - L126. An action offered only on a transient surface (a run summary, a status message, a toast) cannot serve a condition that PERSISTS in the data, because the notice clears while the state stays, so every encounter after the first finds the fault still named and the remedy gone.
 - L180. A confirmation dialog's consequence sentence must be derived from the state it is about to change, never asserted, because a warning shown on every delete carries no information and reads identically whether it is taking one row or a subtree of ten.
 - L187. A control gated on a collection holding MORE THAN ONE member is absent in the commonest case, which is one member.
+- L508. A control that renders a value the BROWSER itself validates (a date input, a number input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that value stands beside an empty control and the two halves of the screen contradict each other about what was asked for.
 
 ## External systems
 

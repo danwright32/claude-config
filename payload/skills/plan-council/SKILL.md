@@ -100,6 +100,25 @@ When the user has commented on the Discussion and wants the plan updated (e.g. "
 2. Call the **Workflow** tool with the same `scriptPath` and args, plus `mode: "revise"`, `priorPlan: "<original plan text>"`, and `comments: "<fetched comments>"`. It runs a lighter revise → reality-check path and returns `{ revised: { plan, responses, openRisks }, realityCheck }`.
 3. Post the revised plan back as an update/comment on the same Discussion (reuse the helper or `gh`), and show the user the point-by-point `responses` for how each comment was handled.
 
+## Resuming after an interrupted run
+
+If a run is killed part way (a restart, a rate limit, a stop), resume it with
+`Workflow({scriptPath, resumeFromRunId})` — but pass the **args verbatim as the original
+call**. The cache is keyed on a hash of each agent's prompt, so editing the framing even
+slightly, including "improving" it with corrections you have since discovered, changes
+every key and the panel silently re-runs from the first pass at full cost instead of
+resuming. There is no warning; it simply starts over.
+
+Measured on the 2026-08-18 PET run: resuming with an edited brief matched 0 of 6 cache
+keys and re-ran everything, then hit a weekly limit; resuming with the identical brief
+matched 2 of 2 and picked up at the final check round. If you have corrections, note them
+for the fix round rather than editing the brief, because the reality-check phase generally
+finds the same things itself.
+
+To check whether a resume actually hit the cache, compare the `key` fields in the run's
+`journal.jsonl` against the earlier entries. Do not judge it by agent transcript
+timestamps: replay and teardown touch those files too, which reads as fresh agents.
+
 ## Notes
 - **Cost is intended.** At full rigor this spawns many agents per run (independent passes + a champion and red-team per option + judge + synthesizer + verifier). That depth is the point; it is why this is user-invoked only.
 - **Grounding is mandatory.** Every agent is told to read the real code, CLAUDE.md, and the Supabase schema (MCP) and to verify files/APIs/tables exist. A plan that is internally agreed but wrong about the codebase is exactly the failure the reality-check phase exists to catch.
