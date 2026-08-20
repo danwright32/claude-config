@@ -1572,6 +1572,15 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Cross-system reliability
 
+- **L197. A function that returns whether it CLAIMED something (a lock, a slot, a run) is
+  only a guard where the caller checks the answer**, and marking that answer discardable
+  means the compiler will never say who did not, so the claim reads as protection at every
+  call site while protecting only the ones that looked.
+  (PostRoll#728: PreviewGraphicsManager.beginDayRegen returns false when a day is already
+  rebuilding, and says in its own comment that two runs are two writers on the same MP4. It
+  is @discardableResult, and three of the five callers on the caption screen start their run
+  regardless, which nothing anywhere reports)
+
 - **L33. Make the pair of a database write and an external side effect crash-safe.**
   Record intent durably before firing, confirm after, consume caps and dedup budgets
   only when the effect verifiably happened, and never put a must-not-lose write on a
