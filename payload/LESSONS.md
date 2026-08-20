@@ -1089,6 +1089,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   credited first is now often the venue or a performer, and the post plus its audience band are
   filed under that account with nothing looking broken)
 
+- **L200. A record that permanently EXCLUDES something on the grounds that another record covers
+  it (a night another card holds, a task another job owns, an item another order fulfils) must
+  re-check that other record at read time, because deleting it leaves the exclusion standing over
+  nothing and the gap is invisible on both sides.** The exclusion reads as a decision somebody
+  made, and the surface that would have shown the thing simply never shows it, so nothing anywhere
+  reports the loss. Distinct from L137, where a legitimate grant's REVOCATION fails to land, and
+  from L175, where the stale value describes something outside the program: here both records are
+  yours and one silently invalidates the other.
+  (overture#3001: dismissing one night of a multi-night run releases every later night another card
+  already holds, recorded as dropped so the next scout cannot fold it back. Nothing re-checks that
+  the covering card still exists, so dismissing that card puts the night in the queue on no card at
+  all, and the run card that used to carry it can never take it back)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**

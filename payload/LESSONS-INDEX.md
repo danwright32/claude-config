@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 199 lessons.
+LESSONS.md, which is NOT loaded into the session. 200 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -136,6 +136,7 @@ to decide something: the body is where the failure it came from is described.
 - L185. A statement that NORMALIZES a value on the way in (a COALESCE, a lowercase, a trim, a default standing for absent) must group or deduplicate by the NORMALIZED form, never by the raw one, because two raw spellings that normalize to the same thing survive as separate groups and then collide on one stored key.
 - L186. A durable record that exists to stop an action repeating is only as durable as its KEY.
 - L192. A value INFERRED from content (a name pulled out of caption text, a category guessed from a title, a type read off a filename) must never be presented as the recorded fact it stands in for.
+- L200. A record that permanently EXCLUDES something on the grounds that another record covers it (a night another card holds, a task another job owns, an item another order fulfils) must re-check that other record at read time, because deleting it leaves the exclusion standing over nothing and the gap is invisible on both sides.
 
 ## Security and privacy
 
