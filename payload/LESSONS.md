@@ -7,6 +7,18 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L203. A cause inferred from two things co-occurring in a log or a trace is not
+  established until you find a case where the suspected cause is present and the effect
+  is ABSENT, because a busy system produces near simultaneous events constantly and a
+  coincidence reads exactly like a mechanism.**
+  (downbeat#306: notification permission was refused in the same millisecond as two
+  LaunchServices `_LSBundleCreateNode ... returned -43` failures, and the issue was opened,
+  titled and worked for three sessions on the theory that the stale registrations behind
+  those lines caused the refusal. Clearing them changed nothing. The control that settled
+  it took one query: the same `-43` burst fires one millisecond before a DIFFERENT app's
+  successful grant, so it never blocked anything. A second app with the identical signing
+  shape being granted then killed the replacement theory too)
+
 - **L1. A test or guard is only real once it has been seen to fail.** Mocked guards
   asserting their own mock, wrappers treating exit 0 as a pass, vacuous assertions, and
   tests of hand-copied reimplementations all sit green while protecting nothing. Break
