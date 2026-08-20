@@ -553,6 +553,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   DST change, and still could not fire. Only moving the host timezone inside the test caught it, and
   the mutation was then seen to go red while running under TZ=UTC)
 
+- **L506. A guard that branches on a field arriving from OUTSIDE the system is only real once
+  that field's presence has been measured on live traffic, because an absent field makes a
+  strict comparison silently false and the guard then reads as an active safeguard while
+  refusing nobody.** Check whether the same fact arrives under a DIFFERENT name in the same
+  payload before concluding the sender does not provide it, because the usual cause is a field
+  renamed or never agreed rather than a fact nobody sends. Extends L90 to the external
+  boundary: there the remedy is auditing which code writes the value, here you cannot, because
+  the producer is a third party, so presence has to be measured rather than reasoned about.
+  Distinct from L147, which calibrates a guard that DOES fire against real values; this one
+  never fires at all.
+  (bidspoke#926: both RML bidding workflows exclude military applicants by testing
+  personalInformation.militaryStatus === true, a key absent on 100% of 12,992 payloads sampled,
+  so the branch has never fired in 150,110 runs, while the signal sits in the same payload as
+  financialInformation.employmentStatus === 'military', arriving 34 times in 3 hours)
+
 ## Data safety
 
 - **L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an
