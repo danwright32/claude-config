@@ -110,6 +110,17 @@ stub() { # stub <script-body>  -> writes an executable stub and points the seam 
 records() { bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null; }
 reset_spool() { rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; }
 
+# `producer | grep -q needle` is a trap under `pipefail`, which this suite sets: grep -q exits on
+# its first match, the producer is killed by SIGPIPE, and the pipeline's status becomes that death,
+# so a check can report a failure that never happened (L183). It depends on nothing but whether the
+# producer had finished writing, which makes it rare, machine specific, and maddening. So the
+# output is captured first and matched against a variable.
+spool_says() { # spool_says <needle>  -> true when `spool pending` mentions it
+  local out
+  out="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null || true)"
+  case "$out" in *"$1"*) return 0 ;; *) return 1 ;; esac
+}
+
 # A harvest that finds something records it.
 reset_spool
 stub 'echo "FINDING: EventPlace has no test for the empty case (EventPlace.swift)."'
@@ -551,7 +562,7 @@ printf '%s' "$got" | grep -q '"status": *"unparsed"' \
   && printf '%s' "$got" | grep -q "the parser is wrong" \
   && check "unparseable model output is its own status with the raw text kept" ok \
   || check "unparseable model output is its own status with the raw text kept" "spool=$got"
-bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "COULD NOT BE READ" \
+spool_says "COULD NOT BE READ" \
   && check "unparseable model output is reported to the reader" ok \
   || check "unparseable model output is reported to the reader" "not surfaced"
 
@@ -568,7 +579,7 @@ size="$(records | wc -c | tr -d ' ')"
 reset_spool
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 printf 'this is not json\n' >> "$(bash "$SPOOL_LIB" path "$REPO")"
-bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "UNREADABLE SPOOL" \
+spool_says "UNREADABLE SPOOL" \
   && check "a corrupt spool line is reported" ok \
   || check "a corrupt spool line is reported" "silently skipped"
 
@@ -684,10 +695,10 @@ reset_spool
 bash "$SPOOL_LIB" note "$REPO" "the queue rebuild is unmeasured" "fix/2693 agent" >/dev/null 2>&1 \
   && check "note records a finding" ok \
   || check "note records a finding" "note exited non-zero"
-bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "queue rebuild is unmeasured" \
+spool_says "queue rebuild is unmeasured" \
   && check "a noted finding reaches the reader" ok \
   || check "a noted finding reaches the reader" "not surfaced"
-bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "fix/2693 agent" \
+spool_says "fix/2693 agent" \
   && check "a noted finding says who reported it" ok \
   || check "a noted finding says who reported it" "source not shown"
 bash "$SPOOL_LIB" has-findings "$REPO" >/dev/null 2>&1 \
@@ -714,13 +725,13 @@ remaining="$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -c . || true)"
   && check "the pending file is compacted once it grows" ok \
   || check "the pending file is compacted once it grows" "$remaining records remain"
 
-bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "a finding that must survive compaction" \
+spool_says "a finding that must survive compaction" \
   && check "compaction never drops a finding" ok \
   || check "compaction never drops a finding" "the finding was lost"
 
 # The count a person reads must still be the true number of occurrences, or
 # compaction quietly turns 61 failures into 1 and the scale of a fault vanishes.
-bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "61 times" \
+spool_says "61 times" \
   && check "compaction preserves the true failure count" ok \
   || check "compaction preserves the true failure count" "count wrong: $(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep 'HARVEST FAILED' | cut -c1-90)"
 

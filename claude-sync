@@ -2183,7 +2183,20 @@ script_changed_between(){
   # a watcher running any older copy must restart. Treat as changed.
   [ -n "$before" ] || return 0
   [ "$before" != "$after" ] || return 1
-  git -C "$SYNC_REPO" diff --name-only "$before" "$after" 2>/dev/null | grep -qx "claude-sync"
+  # Read once into a variable, then matched. Written as `git diff ... | grep -qx`, the consumer
+  # exits on its first match, the producer dies of SIGPIPE, and under `pipefail` the pipeline's
+  # status becomes that death: the answer would then be "claude-sync did not change" precisely
+  # when it DID, and the run would go on applying stale logic on the very pull that delivered the
+  # new version (L183). Whether it fires depends on nothing but whether git finished writing
+  # first, so it is rare, silent, and worst on the biggest pulls.
+  local changed
+  changed="$(git -C "$SYNC_REPO" diff --name-only "$before" "$after" 2>/dev/null || true)"
+  case "
+$changed" in *"
+claude-sync
+"*|*"
+claude-sync") return 0 ;; esac
+  return 1
 }
 # A pull that updates claude-sync itself has been executing the OLD copy since
 # the process started, so the apply step that follows runs stale logic: anything
