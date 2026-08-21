@@ -450,6 +450,45 @@ out_s1="$(HOOK_TESTS_BUDGET=6 bash "$RUNNER" "$S1" 2>&1)"
   && check "a single suite is handed the whole budget" ok \
   || check "a single suite is handed the whole budget" "it was handed '$(slots_seen "$S1" only)', out=$out_s1"
 
+# The long pole (claude-config#139). The budget used to divide itself equally between the suites
+# running at once, so the one suite taking most of the wall clock got no more of the machine than a
+# suite finishing in a second: measured on this Mac, 124 seconds against 88 the old oversubscribed
+# way. The suites are launched longest first, so the first launch is the one worth spending on, and
+# it is granted the largest share the budget allows while still leaving every other suite that can
+# run alongside it a slot of its own.
+#
+# Never more than half the budget while anything else has to run, which is the other half of the
+# rule: a grant is fixed for the life of the suite, so handing one suite most of the machine would
+# leave a second long suite crawling on the remainder for the whole run, which is the same defect
+# one level down.
+#
+# Asserted on the FIRST launch only. Which grant a later suite receives depends on which share came
+# free first, and asserting on that would be asserting on the machine's mood.
+SLP="$TMPROOT/slots-long-pole"
+mk_slot_suite "$SLP" biggest
+for n in two three four five; do mk_slot_suite "$SLP" "$n"; done
+# Longest first is judged by file size, so the one that must launch first is made the largest.
+printf '# %s\n' "$(head -c 400 /dev/zero | tr '\0' 'x')" >> "$SLP/test-biggest.sh"
+out_lp="$(HOOK_TESTS_BUDGET=8 HOOK_TESTS_JOBS=4 bash "$RUNNER" "$SLP" 2>&1)"
+[ "$(slots_seen "$SLP" biggest)" = 4 ] \
+  && check "the suite launched first is granted half the budget, not an equal share" ok \
+  || check "the suite launched first is granted half the budget, not an equal share" "it was handed '$(slots_seen "$SLP" biggest)', out=$out_lp"
+# Every other suite still gets a real grant. A share that starves the rest to pay for the first one
+# would be the same idle budget, moved.
+# `sort -n | awk NR==1` rather than `head -1`, which leaves on its first line and can kill its own
+# producer under pipefail (#132, L183).
+lp_min="$(cat "$SLP"/*.slots 2>/dev/null | sort -n | awk 'NR==1')"
+lp_n="$(cat "$SLP"/*.slots 2>/dev/null | grep -c .)"
+[ "$lp_n" -eq 5 ] && [ -n "$lp_min" ] && [ "$lp_min" -ge 1 ] \
+  && check "and every other suite is still granted at least one slot" ok \
+  || check "and every other suite is still granted at least one slot" "5 expected, $lp_n recorded, smallest '$lp_min'"
+# And the whole point of the budget: what is in flight still adds up to it and no more.
+case "$out_lp" in
+  *"at most 8 process(es) at once, against a budget of 8"*)
+    check "and the shares still add up to the budget, not past it" ok ;;
+  *) check "and the shares still add up to the budget, not past it" "out=$out_lp" ;;
+esac
+
 # And the other end: as many suites at once as the budget, so one slot each and no more in flight
 # than before. The grant can never be zero, or a suite reading it would be told to start nothing.
 S4="$TMPROOT/slots-four"
@@ -465,6 +504,18 @@ out_s0="$(HOOK_TESTS_BUDGET=2 HOOK_TESTS_JOBS=4 bash "$RUNNER" "$S4" 2>&1)"
 [ "$(cat "$S4"/*.slots 2>/dev/null | sort -u)" = 1 ] && [ "$(cat "$S4"/*.slots 2>/dev/null | grep -c .)" -eq 4 ] \
   && check "and a budget smaller than the suites at once still grants one slot, not none" ok \
   || check "and a budget smaller than the suites at once still grants one slot, not none" "they were handed: $(cat "$S4"/*.slots 2>/dev/null | tr '\n' ' ')"
+
+# The configuration CI actually runs, pinned here rather than only described in the workflow. Two
+# cores and a budget of four, with the job count left at its default: two suites at once and two
+# slots each, so the sync suite still shards and #137's coverage check still runs somewhere other
+# than the machine of whoever wrote it (L88, L98). Nothing else in this suite covers this shape,
+# and a change to the shares could quietly take CI back to one process per suite.
+out_ci="$(HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$S2" 2>&1)"
+case "$out_ci" in
+  *"up to 2 suite(s) at once, 2 slot(s) each, so at most 4 process(es) at once, against a budget of 4"*)
+    check "the budget CI sets still buys two suites at once with two slots each" ok ;;
+  *) check "the budget CI sets still buys two suites at once with two slots each" "out=$out_ci" ;;
+esac
 
 # A small machine is where the arithmetic goes wrong quietly. The CI runner has two cores, and
 # half of two is one, which would have run 38 suites strictly one after another while holding two

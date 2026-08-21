@@ -78,8 +78,9 @@ FAIL_DETAIL_MAX="${HOOK_TESTS_FAIL_DETAIL_MAX:-40}"
 # spawning git and python of its own. That never failed outright, which is the difficulty with it.
 # Oversubscription does not go red, it makes timing sensitive checks intermittently wrong, and the
 # sync suite's own deadline guard was measured firing at 1192s against a normal 200 on a loaded
-# Mac. So the budget below is split between the suites running at once, each is TOLD its share in
-# HOOK_TESTS_SLOTS, and the product is printed rather than left to be worked out.
+# Mac. So the budget below is granted to the suites running at once, each is TOLD its share in
+# HOOK_TESTS_SLOTS, and the total is printed rather than left to be worked out. The shares are not
+# equal: see the lanes further down (#139).
 _ncpu="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) | head -1 )"
 case "$_ncpu" in ''|*[!0-9]*) _ncpu=4 ;; esac
 [ "$_ncpu" -gt 0 ] || _ncpu=4
@@ -91,9 +92,9 @@ case "$BUDGET" in
     echo "run-all-tests: HOOK_TESTS_BUDGET='$BUDGET' is not a positive whole number of processes this run may have in flight. Refusing rather than guessing, because it decides how much of the machine the tests take." >&2
     exit 1 ;;
 esac
-# Two slots per suite by default, so the suite that shards still shards and the machine is not
-# oversubscribed four times over. Setting HOOK_TESTS_JOBS overrides how many run at once and the
-# share each gets follows from it, which keeps the product one number either way.
+# Half the budget runs at once by default, so the suites that shard still shard and the machine is
+# not oversubscribed four times over. Setting HOOK_TESTS_JOBS overrides how many run at once and
+# the shares follow from it, which keeps the total one number either way.
 #
 # The floor of two is for the small machine, which is where this arithmetic goes wrong quietly: the
 # CI runner has two cores, half of two is one, and 38 suites would have run strictly one after
@@ -210,13 +211,73 @@ if [ "$ran" -gt 0 ]; then
   # start nothing would either refuse or ignore the grant.
   at_once=$(( JOBS < ran ? JOBS : ran ))
   [ "$at_once" -gt 0 ] || at_once=1
-  SLOTS=$(( BUDGET / at_once ))
-  [ "$SLOTS" -gt 0 ] || SLOTS=1
-  export HOOK_TESTS_SLOTS="$SLOTS"
-  # Said out loud, and as a product, because the number that matters is what will be in flight and
+
+  # The budget is granted to LANES, not divided equally between suites (claude-config#139). An
+  # equal division gave the one suite taking most of the wall clock no more of the machine than a
+  # suite finishing in a second, and that suite is launched first and is the only thing still
+  # running at the end, so for most of a run there was idle budget nothing could use: 124 seconds
+  # against 88 the oversubscribed way it replaced.
+  #
+  # There are `at_once` lanes, each with a share, and a suite is granted the share of the lane it
+  # launches into. Lane 1 is the first launch, which is the longest suite, because the launch order
+  # is longest first. It takes the largest share the budget allows while still leaving every other
+  # lane a slot of its own.
+  #
+  # Never more than half the budget while anything else has to run. A grant is fixed for the life
+  # of the suite, so handing one suite most of the machine would leave a second long suite crawling
+  # on the remainder for the whole run, which is the same defect one level down.
+  #
+  # Nothing here learns WHICH suite shards, or is told that any suite is slow. The shares follow
+  # from the budget and from how many suites can run at once, and a hand written list of the slow
+  # ones is the thing this script exists to avoid (L96).
+  if [ "$at_once" -eq 1 ]; then
+    _lane_first="$BUDGET"
+  else
+    _half=$(( (BUDGET + 1) / 2 ))
+    _lane_first=$(( BUDGET - (at_once - 1) ))
+    [ "$_lane_first" -le "$_half" ] || _lane_first="$_half"
+  fi
+  # The floor of 1 is not decoration: subtraction and integer division both reach 0 as soon as more
+  # suites run at once than the budget, and a suite told it may start nothing would either refuse
+  # or ignore the grant. It is also the one case where the shares add up to more than the budget,
+  # and the line below says so rather than printing the budget as if it had been kept to.
+  [ "$_lane_first" -ge 1 ] || _lane_first=1
+  LANES=("" "$_lane_first")
+  _rest=$(( BUDGET - _lane_first ))
+  [ "$_rest" -ge 0 ] || _rest=0
+  _others=$(( at_once - 1 ))
+  if [ "$_others" -gt 0 ]; then
+    _base=$(( _rest / _others ))
+    _extra=$(( _rest - _base * _others ))
+    _l=2
+    while [ "$_l" -le "$at_once" ]; do
+      _g="$_base"
+      [ "$(( _l - 1 ))" -le "$_extra" ] && _g=$(( _g + 1 ))
+      [ "$_g" -ge 1 ] || _g=1
+      LANES[$_l]="$_g"
+      _l=$(( _l + 1 ))
+    done
+  fi
+
+  # Said out loud, and as a total, because the number that matters is what will be in flight and
   # that number used to be printed nowhere at all: it could only be found by multiplying a default
-  # in this file by a default in another one (L182).
-  echo "run-all-tests: up to $at_once suite(s) at once, $SLOTS slot(s) each, so at most $(( at_once * SLOTS )) process(es) at once, against a budget of $BUDGET"
+  # in this file by a default in another one (L182). Equal shares are printed as one number, and
+  # unequal ones are listed in lane order, because a single number would be a different fact from
+  # what is actually granted.
+  _in_flight=0; _shares=""; _shares_equal=1
+  _l=1
+  while [ "$_l" -le "$at_once" ]; do
+    _in_flight=$(( _in_flight + ${LANES[$_l]} ))
+    _shares="$_shares, ${LANES[$_l]}"
+    [ "${LANES[$_l]}" = "${LANES[1]}" ] || _shares_equal=0
+    _l=$(( _l + 1 ))
+  done
+  if [ "$_shares_equal" -eq 1 ]; then
+    _how="${LANES[1]} slot(s) each"
+  else
+    _how="slots of ${_shares#, }"
+  fi
+  echo "run-all-tests: up to $at_once suite(s) at once, $_how, so at most $_in_flight process(es) at once, against a budget of $BUDGET"
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.runner.XXXXXXXX")"
   case "${WORK%/}" in
     ''|/|"${HOME%/}") echo "run-all-tests: refusing to run: throwaway directory came back as '$WORK'." >&2; exit 1 ;;
@@ -236,25 +297,28 @@ if [ "$ran" -gt 0 ]; then
     done | sort -rn -k1,1
   )"
 
-  running=0
-  pids=""
+  lane_pid=()
+  _l=1
+  while [ "$_l" -le "$at_once" ]; do lane_pid[$_l]=""; _l=$(( _l + 1 )); done
   while IFS="$(printf '\t')" read -r _size idx suite; do
     [ -n "$suite" ] || continue
-    # Wait for a slot. bash 3.2 has no `wait -n`, so the running set is polled; the sleep is short
-    # enough not to matter beside a suite that takes seconds, and the loop can never spin free
-    # because it only continues once a pid has really gone.
-    while [ "$running" -ge "$JOBS" ]; do
-      still=""
-      running=0
-      for p in $pids; do
-        if kill -0 "$p" 2>/dev/null; then still="$still $p"; running=$((running + 1)); fi
+    # Wait for a LANE, and remember which one: the share a suite is handed is its lane's, so a
+    # suite launching into a share that has just come free takes that share and the total in flight
+    # stays put. bash 3.2 has no `wait -n`, so the lanes are polled; the sleep is short enough not
+    # to matter beside a suite that takes seconds, and the loop can never spin free because it only
+    # continues once a pid has really gone.
+    lane=0
+    while [ "$lane" -eq 0 ]; do
+      _l=1
+      while [ "$_l" -le "$at_once" ]; do
+        p="${lane_pid[$_l]:-}"
+        if [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null; then lane="$_l"; break; fi
+        _l=$(( _l + 1 ))
       done
-      pids="$still"
-      [ "$running" -ge "$JOBS" ] && sleep 0.2
+      [ "$lane" -eq 0 ] && sleep 0.2
     done
-    ( bash "$suite" > "$WORK/$idx.out" 2>&1; printf '%s' "$?" > "$WORK/$idx.rc" ) &
-    pids="$pids $!"
-    running=$((running + 1))
+    ( HOOK_TESTS_SLOTS="${LANES[$lane]}" bash "$suite" > "$WORK/$idx.out" 2>&1; printf '%s' "$?" > "$WORK/$idx.rc" ) &
+    lane_pid[$lane]=$!
   done <<LAUNCH
 $launch_order
 LAUNCH
