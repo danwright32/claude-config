@@ -820,7 +820,18 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   if [ -n "$_fan_missing" ]; then
     echo "test suite: shard(s)$_fan_missing produced no result line, so their checks are NOT in the total below. Treat this run as failed." >&2
   fi
-  echo "PASS=$_fan_pass FAIL=$_fan_fail ($SUITE_JOBS shards; the prelude runs in each, so its checks are counted $SUITE_JOBS times)"
+  # The deadline's headroom, checked HERE, against the whole run. #112 asserts it too, but that
+  # section now runs inside a shard, where the elapsed time is a quarter of the real thing, so it
+  # passes trivially and the guard that was calibrated for a full run stopped biting on the only
+  # run it was written for (L135: a check matched over the wrong span is answered by the wrong
+  # thing). The shard's copy is still worth having for a one-process run; this is the one that
+  # covers the default.
+  _fan_elapsed=$SECONDS
+  if [ "$SUITE_TIMEOUT" -gt 0 ] && [ "$SUITE_TIMEOUT" -lt $(( _fan_elapsed * 2 )) ]; then
+    echo "test suite: the whole run took ${_fan_elapsed}s and SUITE_TIMEOUT is ${SUITE_TIMEOUT}s, which is less than twice it. The deadline has grown too tight to distinguish a hung run from a slow one, which is the whole reason it exists. Raise it, or find what got slower." >&2
+    _fan_rc=1
+  fi
+  echo "PASS=$_fan_pass FAIL=$_fan_fail ($SUITE_JOBS shards in ${_fan_elapsed}s; the prelude runs in each, so its checks are counted $SUITE_JOBS times)"
   printf 'SUITE-RESULT passed=%s failed=%s\n' "$_fan_pass" "$_fan_fail"
   [ "$_fan_fail" -eq 0 ] || _fan_rc=1
   exit "$_fan_rc"
