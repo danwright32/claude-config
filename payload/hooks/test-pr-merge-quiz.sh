@@ -65,6 +65,22 @@ run "wrapper override still skips"   skip 'SKIP_PR_QUIZ=1 ./scripts/merge-when-g
 run "the wrapper name only mentioned" skip 'echo "run scripts/merge-when-green.sh 42 next"'
 run "the wrapper name as a bare arg" skip 'ls merge-when-green.sh'
 
+# --- agent-onboarding's own wrapper, and the npm script that runs it. That repo's merge gate
+#     REFUSES a plain `gh pr merge`, so the wrapper is the ONLY route there: a matcher that knew only
+#     the old form would mean the quiz never fires in that repo again, silently. ---
+run "the shell wrapper by path"      fire 'bash .github/scripts/merge-pr.sh 680'
+run "the shell wrapper bare"         fire 'merge-pr.sh 680'
+run "the shell wrapper after a cd"   fire 'cd /tmp/repo && bash .github/scripts/merge-pr.sh 680'
+run "the npm script that runs it"    fire 'npm run merge -- 680'
+run "the npm script with no args"    fire 'npm run merge'
+run "npm script override still skips" skip 'SKIP_PR_QUIZ=1 npm run merge -- 680'
+run "the wrapper only mentioned"     skip 'echo "use npm run merge -- 680 instead"'
+run "the wrapper name as a bare arg" skip 'ls .github/scripts/merge-pr.sh'
+# The readiness check REPORTS and merges nothing, so quizzing on it would fire on every look at a
+# pull request. `merge` has to match exactly, not as a prefix.
+run "the readiness check alone"      skip 'npm run merge-ready -- 680'
+run "an unrelated npm script"        skip 'npm run test'
+
 # --- Things that are not a merge must stay quiet ---
 run "closing without merging"        skip 'gh pr close 42'
 run "viewing a pr"                   skip 'gh pr view 42 --json state'
