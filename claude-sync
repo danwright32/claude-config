@@ -89,6 +89,16 @@ notify(){
 # so the silent log-only failure becomes visible; interactive users see stderr.
 die(){ echo "claude-sync: $*" >&2; [ -t 2 ] || notify "$*"; exit 1; }
 
+# Is this string empty, or nothing but whitespace? Asked with `case` and never by substituting the
+# whitespace away, which is what every one of the callers below used to do. `${s// }` builds a whole
+# new string, and under the bash macOS ships (3.2) the cost is superlinear in the NUMBER OF MATCHES:
+# measured on this Mac at 1,536 matches it took 11.5 seconds and at 3,072 it took 82, while this
+# answers either in milliseconds. The strings asked about here are lists of findings, of duplicate
+# lesson numbers, of unresolved conflict copies, so they are longest exactly when something is wrong
+# and the report is worth having (claude-config#117). It also reads a value of nothing but newlines
+# as blank, which the old form did not, and which is what every caller meant.
+is_blank(){ case "${1-}" in *[![:space:]]*) return 1 ;; *) return 0 ;; esac; }
+
 # ---------- an outage is judged by how LONG, not by what kind (#22) ----------
 # Losing the network for a moment and GitHub being down for a morning arrive on exactly the
 # same code path, so classifying them by KIND makes one benign blip and a real outage
@@ -749,7 +759,7 @@ imports_in_file(){   # $1 = file
 # "${arr[@]}" on an empty array as an unbound variable under `set -u`.
 top_files_in(){   # $1 = directory
   local seen=" " pending="${TOP_FILES_SEED[*]}" f imp
-  while [ -n "${pending// }" ]; do
+  while ! is_blank "$pending"; do
     f="${pending%% *}"; pending="${pending#"$f"}"; pending="${pending# }"
     [ -n "$f" ] || continue
     case "$seen" in *" $f "*) continue ;; esac
@@ -865,7 +875,7 @@ do_lesson(){   # $1 = number, e.g. L174
   ' "$src")"
   # An empty answer is a REFUSAL, not a lesson with nothing in it: printing nothing and exiting 0
   # would read exactly like a lesson that says nothing (L98).
-  if [ -z "${out// }" ]; then
+  if is_blank "$out"; then
     die "$num is not in $src. 'claude-sync next-lesson' prints the next free number if you are adding one."
   fi
   printf '%s\n' "$out"
@@ -1078,7 +1088,7 @@ PROT
   local dupfiles="" duplines=""
   if [ "${SYNC_SKIP_LESSON_CHECK:-0}" != "1" ]; then
     duplines="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
-    if [ -n "${duplines// }" ]; then
+    if ! is_blank "$duplines"; then
       dupfiles="$(printf '%s\n' "$duplines" | cut -d: -f1 | sort -u)"
       echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because the same lesson number is used twice, which silently breaks every reference to it: $(printf '%s' "$duplines" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number) and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
       notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): duplicate lesson number"
@@ -1124,7 +1134,7 @@ scan_secrets(){
 "
   done < <(grep -rIoE "$pat|$apat" "$PAYLOAD" 2>/dev/null || true)
   findings="$(printf '%s' "$findings" | sort -u | tr '\n' ' ')"
-  [ -z "${findings// }" ] && return 0
+  is_blank "$findings" && return 0
   die "possible secret found in: ${findings}— remove it, allowlist its fingerprint in .secret-allowlist, or set SYNC_SKIP_SECRET_SCAN=1 to override"
 }
 
@@ -1226,7 +1236,7 @@ KEEP
   # Reported from $ahead, not $keep: a merged rule file is held back too, but it
   # already had its own clearer "these were MERGED" line and listing it again here
   # would read as two different things happening to the same file.
-  if [ -n "${ahead// }" ]; then
+  if ! is_blank "$ahead"; then
     local keeplist; keeplist="$(printf '%s' "$ahead" | tr '\n' ' ')"
     echo "claude-sync: kept local edits the shared repo has not seen yet, instead of reverting them; they go up on the next send: ${keeplist}" >&2
     notify "kept unsent local edits: ${keeplist}"
@@ -1341,7 +1351,7 @@ $f
   # say so at once: the L43 duplicate went unnoticed for a day because nothing
   # ever looked (#15).
   local applied_dups; applied_dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
-  if [ -n "${applied_dups// }" ]; then
+  if ! is_blank "$applied_dups"; then
     echo "claude-sync: the same lesson number is now used twice on this Mac, which breaks every reference to it: $(printf '%s' "$applied_dups" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number). Until then that file is held back from the next send." >&2
     notify "duplicate lesson number on this Mac"
   fi
@@ -1917,7 +1927,7 @@ $p"
     fi
     rm -f "$tmpb" "$tmpm" "$tmpr"
   done < <(unapplied_paths)
-  if [ -n "${reported// }" ]; then
+  if ! is_blank "$reported"; then
     echo "claude-sync: both Macs had edited these rule files, so their entries were MERGED and nothing was dropped (your previous copy is beside them as .syncbak): ${reported}" >&2
     notify "merged rule files: ${reported}"
   fi
@@ -1946,7 +1956,7 @@ only_in_first(){   # $1 = ours  $2 = theirs
   [ -f "$1" ] || return 0
   if [ ! -f "$2" ]; then printf 'the live file is gone'; return 0; fi
   detail="$(local_only_entries "$1" "$2")"
-  if [ -z "${detail// }" ]; then
+  if is_blank "$detail"; then
     n="$(comm -23 <(sort -u "$1") <(sort -u "$2") 2>/dev/null | grep -c . || true)"
     [ "${n:-0}" -gt 0 ] && detail="${n} lines"
   fi
@@ -1989,9 +1999,9 @@ $p$sfx"
     # Say what is actually at stake in this file, not just its name.
     detail=""
     [ -f "$PAYLOAD/$p" ] && detail="$(only_in_first "$local_f" "$PAYLOAD/$p")"
-    if [ -n "${detail// }" ]; then saved+="$p [only in yours: ${detail% }] "; else saved+="$p "; fi
+    if ! is_blank "$detail"; then saved+="$p [only in yours: ${detail% }] "; else saved+="$p "; fi
   done < <(unapplied_paths)
-  [ -z "${saved// }" ] && return 0
+  is_blank "$saved" && return 0
   echo "claude-sync: both Macs changed these files and they could NOT be merged automatically, so the other Mac's version was applied and YOUR version was kept next to it with the suffix $sfx: ${saved}" >&2
   notify "conflict kept as *$sfx: ${saved}"
   return 0
@@ -2101,7 +2111,7 @@ verify_rule_imports(){
       [ -e "$target" ] || missing+="${line#@} "
     done < "$CLAUDE_HOME/$f"
   done
-  [ -z "${missing// }" ] && return 0
+  is_blank "$missing" && return 0
   die "these rule files are referenced but are not on this Mac: ${missing}(referenced but never copied, so their rules load silently as nothing). Re-run 'claude-sync pull'; if it persists, check that the referencing file is itself synced."
 }
 
@@ -2290,7 +2300,7 @@ NOTICE_MAX=6
 print_new_session_notice(){   # $1 = applied list (kind<TAB>path per line)
   local names n shown
   names="$(printf '%s\n' "$1" | needs_new_session)"
-  [ -n "${names// }" ] || return 0
+  is_blank "$names" && return 0
   n="$(printf '%s' "$names" | grep -c . || true)"
   shown="$(printf '%s' "$names" | head -"$NOTICE_MAX" | tr '\n' ' ')"
   shown="${shown% }"
@@ -2589,7 +2599,7 @@ report_conflict_copies(){
     # The two states get different words, because "a conflict copy exists" says nothing about
     # whether anything is still at stake in it, and a copy whose content is now all in the live
     # file reads identically to one holding the last surviving version of a lesson (L11).
-    if [ -n "${outstanding// }" ]; then
+    if ! is_blank "$outstanding"; then
       found+="  ${f#"$CLAUDE_HOME"/} ($(duration_in_words "$age") old, STILL only here: ${outstanding})"$'\n'
     else
       found+="  ${f#"$CLAUDE_HOME"/} ($(duration_in_words "$age") old, nothing in it is missing from the live file: safe to delete)"$'\n'
@@ -2621,10 +2631,10 @@ report_pending_conflicts(){
 ${f#"$CLAUDE_HOME"/}"*) continue ;; esac   # announced by this very run, a line above
     live="$(conflict_copy_live "$f")"
     outstanding="$(only_in_first "$f" "$live")"
-    [ -n "${outstanding// }" ] || continue
+    is_blank "$outstanding" && continue
     pending+="${f#"$CLAUDE_HOME"/} [still only there: ${outstanding}] "
   done < <(conflict_copy_paths)
-  [ -z "${pending// }" ] && return 0
+  is_blank "$pending" && return 0
   echo "claude-sync: an earlier conflict set a copy of your version aside and it is STILL not resolved, so this content is in no file anything loads: ${pending}Take what you need into the live file beside it, then delete the copy. Nothing else reports this." >&2
   notify "still unresolved: ${pending}"
   return 0
@@ -3247,7 +3257,7 @@ case "$cmd" in
   check-skills) do_check_skills ;;      # read-only: is any skill provided by a plugin AND locally
   check-lessons)
     dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
-    if [ -n "${dups// }" ]; then die "duplicate lesson numbers: $(printf '%s' "$dups" | tr '\n' ';' | sed 's/;$//')"; fi
+    if ! is_blank "$dups"; then die "duplicate lesson numbers: $(printf '%s' "$dups" | tr '\n' ';' | sed 's/;$//')"; fi
     lesson_band_locked
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;

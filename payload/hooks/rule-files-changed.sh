@@ -125,6 +125,8 @@ changed="${changed% }"
 # for the rest of the session.
 printf '%s\n' "$current" > "$STATE" 2>/dev/null || true
 
-[ -n "${changed// }" ] || exit 0
+# `case` rather than stripping the spaces out: superlinear in the number of matches under the bash
+# macOS ships, and this list grows with the number of rule files (claude-config#117).
+case "$changed" in *[![:space:]]*) ;; *) exit 0 ;; esac
 echo "claude-sync: these rule files changed on disk after this session loaded them, so what is in this session's context is the older copy: ${changed}. Start a new session to pick them up, or read the changed file directly before relying on anything it says."
 exit 0

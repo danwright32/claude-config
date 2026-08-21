@@ -153,7 +153,10 @@ PY_COMPACT
 # path for any agent, since it costs no model call.
 issue_spool_note() { # note <dir> <finding text> [who reported it]
   local dir="${1:-$PWD}" text="${2:-}" source="${3:-self-reported}" record
-  [ -n "${text//[[:space:]]/}" ] || return 2
+  # `case` rather than a substitution that strips every space out of the text. The text is a
+  # finding written by a model and has no bounded length, and that substitution's cost is
+  # superlinear in the number of matches under the bash macOS ships (claude-config#117).
+  case "$text" in *[![:space:]]*) ;; *) return 2 ;; esac
   record="$(python3 -c '
 import json, sys, datetime
 print(json.dumps({
