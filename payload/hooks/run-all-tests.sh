@@ -55,6 +55,30 @@ export HOOK_TESTS_RUNNING=1
 # broken suite cannot bury the other verdicts.
 FAIL_DETAIL_MAX="${HOOK_TESTS_FAIL_DETAIL_MAX:-40}"
 
+# How many suites run at once (claude-config#125). Since #120 this reads every directory in the
+# repo, which is 37 suites and about five minutes, dominated by one that takes three of them. Five
+# minutes is how a full run stops being run at all, which is the exact failure #120 exists to
+# close, so the answer is to make the full run fast rather than to make a partial run the default.
+#
+# The suites are independent: each builds its own throwaway state and writes a self contained
+# verdict. What is NOT independent is the report, so results are collected to files and printed in
+# the order the suites were FOUND, never the order they finished, or two runs cannot be compared.
+#
+# 1 runs them one at a time, which is what to reach for when a suite only fails alongside others.
+# A value that is not a positive whole number is REFUSED rather than guessed at: this decides how
+# much runs at once, and guessing could mean no parallelism at all or a great many processes (L50).
+_ncpu="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) | head -1 )"
+case "$_ncpu" in ''|*[!0-9]*) _ncpu=4 ;; esac
+[ "$_ncpu" -gt 0 ] || _ncpu=4
+_default_jobs=$(( _ncpu > 8 ? 8 : _ncpu ))
+[ "$_default_jobs" -gt 0 ] || _default_jobs=1
+JOBS="${HOOK_TESTS_JOBS-$_default_jobs}"
+case "$JOBS" in
+  ''|*[!0-9]*|0)
+    echo "run-all-tests: HOOK_TESTS_JOBS='$JOBS' is not a positive whole number of suites to run at once. Refusing rather than guessing, because this decides how many processes start. Use 1 to run them one at a time." >&2
+    exit 1 ;;
+esac
+
 dirs=""     # newline separated, deduplicated in the order found
 add_dir(){  # add_dir <path>
   case "
@@ -119,6 +143,9 @@ failed_names=""
 empty_dirs=""
 guessed_names=""
 
+# Everything is discovered BEFORE anything runs, so the report order is fixed up front and an empty
+# directory is known without waiting for the run.
+suites=()
 while IFS= read -r d; do
   [ -n "$d" ] || continue
   if [ ! -d "$d" ]; then
@@ -133,11 +160,73 @@ while IFS= read -r d; do
     # never invokes this script bare, and the guard at the top is what makes that
     # true rather than a convention anybody has to remember.
     [ "$suite" = "$SELF" ] && continue
-    name="$(basename "$suite")"
     here=$((here + 1))
-    ran=$((ran + 1))
-    out="$(bash "$suite" 2>&1)"
-    code=$?
+    suites+=("$suite")
+  done
+  if [ "$here" -eq 0 ]; then
+    empty_dirs="$empty_dirs  $d
+"
+  fi
+done <<EOF
+$dirs
+EOF
+
+ran="${#suites[@]}"
+if [ "$ran" -gt 0 ]; then
+  WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.runner.XXXXXXXX")"
+  case "${WORK%/}" in
+    ''|/|"${HOME%/}") echo "run-all-tests: refusing to run: throwaway directory came back as '$WORK'." >&2; exit 1 ;;
+  esac
+  trap 'rm -rf "$WORK"' EXIT
+
+  # Launched LONGEST FIRST, judged by file size. It is a heuristic and says so: bytes are not
+  # seconds. What it buys is that the one suite taking three of the five minutes starts
+  # immediately instead of possibly last, and being wrong about the order costs some wall clock
+  # and nothing else, because every result is collected and reported the same way regardless.
+  launch_order="$(
+    i=0
+    for suite in "${suites[@]}"; do
+      printf '%s	%s	%s
+' "$(wc -c < "$suite" | tr -d ' ')" "$i" "$suite"
+      i=$((i + 1))
+    done | sort -rn -k1,1
+  )"
+
+  running=0
+  pids=""
+  while IFS="$(printf '\t')" read -r _size idx suite; do
+    [ -n "$suite" ] || continue
+    # Wait for a slot. bash 3.2 has no `wait -n`, so the running set is polled; the sleep is short
+    # enough not to matter beside a suite that takes seconds, and the loop can never spin free
+    # because it only continues once a pid has really gone.
+    while [ "$running" -ge "$JOBS" ]; do
+      still=""
+      running=0
+      for p in $pids; do
+        if kill -0 "$p" 2>/dev/null; then still="$still $p"; running=$((running + 1)); fi
+      done
+      pids="$still"
+      [ "$running" -ge "$JOBS" ] && sleep 0.2
+    done
+    ( bash "$suite" > "$WORK/$idx.out" 2>&1; printf '%s' "$?" > "$WORK/$idx.rc" ) &
+    pids="$pids $!"
+    running=$((running + 1))
+  done <<LAUNCH
+$launch_order
+LAUNCH
+  wait
+fi
+
+# Reported in the order they were FOUND. Two runs of the same tree then produce the same page, so a
+# difference between them is a difference in the suites rather than in the machine's mood.
+idx=0
+for suite in ${suites[@]+"${suites[@]}"}; do
+    name="$(basename "$suite")"
+    out="$(cat "$WORK/$idx.out" 2>/dev/null)"
+    code="$(cat "$WORK/$idx.rc" 2>/dev/null)"
+    case "$code" in ''|*[!0-9]*) code=1; out="$out
+run-all-tests: this suite left no exit status, so it was killed or never started." ;; esac
+    idx=$((idx + 1))
     # The suite's own result line, which is ONE agreed shape every suite in this repo prints:
     # `SUITE-RESULT passed=<n> failed=<n>`. Read exactly, so there is nothing to recognise and
     # nothing to guess (claude-config#126).
@@ -191,18 +280,7 @@ while IFS= read -r d; do
     else
       printf '  ok    %-38s %s\n' "$name" "$summary"
     fi
-  done
-  # A directory that was named and held nothing is its own outcome. With several
-  # directories in play, one of them going empty (renamed, moved, a path typed
-  # wrong in CI) loses a whole block of coverage while every remaining suite still
-  # reports green, which is the exact shape this file exists to refuse (L98).
-  if [ "$here" -eq 0 ]; then
-    empty_dirs="$empty_dirs  $d
-"
-  fi
-done <<EOF
-$dirs
-EOF
+done
 
 echo
 if [ -n "$guessed_names" ]; then

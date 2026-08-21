@@ -187,6 +187,90 @@ printf '%s' "$out_r3" | grep -q 'test-oldstyle.sh' \
   || check "and names which suite it guessed for" "out=$out_r3"
 
 # ---------------------------------------------------------------------------
+# Running several suites at once (claude-config#125). The suites are independent and each writes a
+# self contained verdict, so the only things that can go wrong are ordering and bookkeeping: a
+# report whose lines arrive in whatever order the machine finished them is not comparable between
+# runs, and a failure that lands while another suite is still going must still fail the run.
+#
+# The fixtures below finish in a deliberately different order from the one they must be REPORTED
+# in, so a runner that simply prints as results arrive cannot pass.
+# ---------------------------------------------------------------------------
+mk_slow_suite() { # mk_slow_suite <dir> <name> <sleep seconds> <failed count> <exit>
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'sleep %s\n' "$3"
+    printf 'printf %s\\\\n "%s passed=1 failed=%s"\n' "'%s'" "$MARK" "$4"
+    printf 'exit %s\n' "$5"
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+
+P="$TMPROOT/dir-parallel"
+mk_slow_suite "$P" aaa 3 0 0     # first alphabetically, finishes LAST
+mk_slow_suite "$P" bbb 1 0 0
+mk_slow_suite "$P" ccc 0 0 0     # last alphabetically, finishes FIRST
+
+par_start="$(date +%s)"
+out_par="$(HOOK_TESTS_JOBS=4 bash "$RUNNER" "$P" 2>&1)"; code_par=$?
+par_elapsed=$(( $(date +%s) - par_start ))
+
+[ "$code_par" -eq 0 ] \
+  && check "three suites run at once all pass" ok \
+  || check "three suites run at once all pass" "exit=$code_par out=$out_par"
+for n in aaa bbb ccc; do
+  printf '%s' "$out_par" | grep -q "test-$n.sh" \
+    && check "and test-$n.sh was run and reported" ok \
+    || check "and test-$n.sh was run and reported" "out=$out_par"
+done
+# The order on the page is the order they were FOUND, not the order they finished. Without this a
+# report cannot be compared against the last one, and a suite that moved is indistinguishable from
+# a suite that got slower.
+order="$(printf '%s\n' "$out_par" | grep -oE 'test-(aaa|bbb|ccc)\.sh' | tr '\n' ' ')"
+[ "$order" = "test-aaa.sh test-bbb.sh test-ccc.sh " ] \
+  && check "and they are reported in a stable order, not in the order they finished" ok \
+  || check "and they are reported in a stable order, not in the order they finished" "order was: $order"
+# The control for the fixture: the sleeps really do make them finish in the opposite order, so the
+# check above is not satisfied by three suites that all finished instantly (L159).
+[ "$par_elapsed" -ge 3 ] \
+  && check "the fixture really did stagger their finishing times" ok \
+  || check "the fixture really did stagger their finishing times" "the whole run took ${par_elapsed}s, so nothing was staggered"
+# And they really did overlap: run one at a time these take at least 4 seconds together.
+[ "$par_elapsed" -lt 4 ] \
+  && check "and they ran at the same time rather than one after another" ok \
+  || check "and they ran at the same time rather than one after another" "${par_elapsed}s, which is no better than sequential"
+
+# A failure among them still fails the run and is still named, even though it finishes first.
+PF="$TMPROOT/dir-parallel-fail"
+mk_slow_suite "$PF" slow 2 0 0
+mk_slow_suite "$PF" quick 0 2 1
+out_pf="$(HOOK_TESTS_JOBS=4 bash "$RUNNER" "$PF" 2>&1)"; code_pf=$?
+[ "$code_pf" -ne 0 ] \
+  && check "a suite that fails while another is still running fails the run" ok \
+  || check "a suite that fails while another is still running fails the run" "exit=$code_pf out=$out_pf"
+printf '%s' "$out_pf" | grep -q 'test-quick.sh' \
+  && check "and is named" ok || check "and is named" "out=$out_pf"
+
+# One at a time is the escape hatch, and it has to keep working: it is what somebody reaches for
+# when a suite only fails alongside others.
+out_seq="$(HOOK_TESTS_JOBS=1 bash "$RUNNER" "$P" 2>&1)"; code_seq=$?
+[ "$code_seq" -eq 0 ] \
+  && check "one at a time still works" ok || check "one at a time still works" "exit=$code_seq out=$out_seq"
+seq_order="$(printf '%s\n' "$out_seq" | grep -oE 'test-(aaa|bbb|ccc)\.sh' | tr '\n' ' ')"
+[ "$seq_order" = "$order" ] \
+  && check "and reports in the same order as a parallel run" ok \
+  || check "and reports in the same order as a parallel run" "sequential: $seq_order  parallel: $order"
+
+# A job count nobody can read must be refused, not guessed at: it decides how much runs at once,
+# and guessing could mean either no parallelism at all or a fork bomb (L50).
+for bad in 0 -2 lots ''; do
+  out_bad_jobs="$(HOOK_TESTS_JOBS="$bad" bash "$RUNNER" "$P" 2>&1)"; code_bad_jobs=$?
+  [ "$code_bad_jobs" -ne 0 ] \
+    && check "a job count of '$bad' is refused rather than guessed at" ok \
+    || check "a job count of '$bad' is refused rather than guessed at" "it ran anyway"
+done
+
+# ---------------------------------------------------------------------------
 # A directory it was told to read that holds no suite at all. This is the one that has to stay a
 # failure: reading nothing and reading everything green look identical otherwise (L98), and now
 # that several directories are read, one of them going empty is a real way to lose coverage.

@@ -2300,10 +2300,17 @@ check "#16 the non-payload commit reaches the remote" \
 # with nobody watching at all.
 echo '# more' >> "$UPR/NOTES.md"
 git -C "$UPR" add -A && git -C "$UPR" -c user.name=t -c user.email=t@e commit -q -m "second edit outside payload"
-CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+# What `sync` SAID is kept, because a check that throws away the output of the command it is
+# asserting about can only ever report that the thing did not happen, never why. This one failed
+# once on a CI runner and there was nothing to look at: sync can decline quietly by design, since a
+# short outage is deliberately not shouted about, so its silence is exactly what has to be readable
+# here (L11, L148).
+out_up2="$(CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_up2=$?
 bare_log_up2="$(git -C "$UPB" log --oneline main 2>/dev/null || true)"
+check "#16 sync exited cleanly before its commit is looked for" \
+  "[ '$rc_up2' -eq 0 ] || { echo \"    sync exited $rc_up2 and said: $out_up2\" >&2; false; }"
 check "#16 sync also sends a non-payload commit" \
-  "printf '%s' \"\$bare_log_up2\" | grep -q 'second edit outside payload'"
+  "printf '%s' \"\$bare_log_up2\" | grep -q 'second edit outside payload' || { echo \"    sync exited $rc_up2 saying: $out_up2\" >&2; echo \"    the remote log holds: $bare_log_up2\" >&2; false; }"
 
 # And it must still stay quiet when there is genuinely nothing to do, or the line
 # becomes noise and the real "already up to date" case stops meaning anything.
