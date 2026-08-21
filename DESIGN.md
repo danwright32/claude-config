@@ -151,6 +151,51 @@ A one-off migration that MOVED the old leftovers into the new directory was cons
 nothing: finding them to move them is the same expensive read, and it would still leave nothing
 watching the location an un-upgraded copy keeps writing to.
 
+### Keeping the test runner's boundary at one directory
+
+Rejected for #120, and it is what the runner did for its whole life.
+
+It discovered suites from disk rather than from a list, which is the right idea and is written into
+its own header. It read ONE directory though, the one it lives in, so `tests/`, `tools/` and
+`payload/skills/milestone/` were outside it. Three of those were run only because four hand written
+steps in the CI workflow named them, and the fourth was named by nothing at all: 233 checks that
+had never run anywhere, found by asking git which directories hold a `test-*.sh` rather than by
+reading the workflow. The boundary WAS the hand maintained list, drawn one level up in a file
+nobody opens when adding a test.
+
+Keeping it and adding a fifth CI step was the cheap fix and it fixes nothing: the next suite is
+exempt in exactly the same way. So the runner asks the repo. A directory it was told to read that
+holds no suite is now a failure, because with several directories in play one of them going empty
+loses a block of coverage while every remaining suite still reports green.
+
+Two things had to come with it. A run of the whole repo now discovers the runner's OWN test suite,
+which invokes the runner, so a bare re-entry is refused by name rather than by convention; without
+that the first run recursed until it was killed by hand. And the score column had to read each
+suite's tally rather than the last line containing the word "passed", because the sync suite prints
+hundreds of per-check lines and reported its verdict as `ok: #105 even though every check inside it
+passed`.
+
+### Leaving a full test run reading its own file
+
+Rejected for #121, and it was the state every unfiltered run was in.
+
+Bash reads a script incrementally from a byte offset, so editing the suite while a run is in flight
+makes the running shell resume at the wrong place. What comes out is not a crash: it is ordinary
+looking failures in sections that are perfectly fine. Measured on 2026-08-21, three at once, in a
+section unrelated to the edit, and the same run was green the moment nothing was being written.
+Nothing in the output distinguishes those from real failures, and a full run takes minutes, which
+is exactly the window somebody keeps working in.
+
+The machinery already existed: a run given SECTION_ONLY or SECTION_UNTIL writes a copy into scratch
+and executes that, because it has to extract sections anyway. So an unfiltered run does the same.
+It sits after those two paths and before the lock, so the copy is the process that takes the lock
+rather than one waiting on a parent holding it, and SCRIPT and SCRIPT_SELF are handed over
+explicitly because several checks read their own source and a temp copy is not what they mean.
+
+Doing it without a seam was considered and rejected: the two checks guarding this are only ever
+seen passing, and a check nobody has watched fail is not a check. SUITE_FROM_COPY=1 skips the copy
+and puts a run back in the old state, which is how both were watched going red.
+
 ### Reordering the pull failure classifier for newer git
 
 Written, measured, and reverted the same hour, which is the reason this section exists.

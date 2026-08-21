@@ -160,6 +160,18 @@ Accept a known string by adding the sha256 of the matched text to
 ## Tests
 
 ```bash
+bash payload/hooks/run-all-tests.sh
+```
+
+That is everything: it asks git which directories in the repo hold a `test-*.sh` and reads all of
+them, so a suite added anywhere is picked up on the day it lands. Naming directories runs only
+those (`bash payload/hooks/run-all-tests.sh tests tools`). A directory it was told to read that
+holds no suite is a failure, not a quiet pass, because reading nothing and reading everything green
+look identical otherwise.
+
+The main suite on its own, which is most of the runtime:
+
+```bash
 bash tests/test-claude-sync.sh
 ```
 
@@ -199,6 +211,12 @@ If a section turns out to depend on something an earlier one set, the run is ref
 rather than reported. That matters more than it sounds: an unbound variable inside a command
 substitution kills only that subshell, so a section missing a fixture can lose several tool
 invocations, print nothing but `ok` lines, and exit 0.
+
+Every run copies this file into the tool's scratch and runs the copy, then removes it. Bash reads a
+script incrementally, so editing the suite while a run is in flight makes the running shell resume
+at the wrong place, and what comes out is ordinary looking failures in sections that are perfectly
+fine. `SUITE_FROM_COPY=1` skips the copy and puts a run back in that state, which is how the checks
+guarding it are watched failing.
 
 Every push also runs each section the push CHANGED on its own
 (`tests/audit-changed-sections.sh`), which is the only run in which a missing prerequisite shows up.
@@ -267,6 +285,7 @@ One run at a time, and none of them open ended:
 | `SUITE_MAX_DEPTH` | `1` | How deeply a run may be nested inside another. The suite runs itself as a subprocess in many places, every one of them one level down, and past this it refuses to start rather than multiplying. |
 | `SECTION_ONLY` | unset | Run the preamble, the first four sections, and the one named, plus anything it declares it needs. Refuses an ambiguous or unmatched name. |
 | `SECTION_UNTIL` | unset | Run from the start up to and including the section named. Refuses to be combined with `SECTION_ONLY`. |
+| `SUITE_FROM_COPY` | unset | Set to `1` to run this file in place rather than from a copy. It exists so the checks that guard the copy can be watched failing, and it puts a run back in the state where editing the suite mid-run corrupts it. |
 | `SUITE_SLOW_IN` | unset | Pause deliberately in the section named. It exists so the duration column can be watched reporting a known number: most sections legitimately read 0s, and a broken clock would read 0s everywhere too. |
 
 ## Scratch left behind by a killed run

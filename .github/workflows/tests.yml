@@ -73,39 +73,32 @@ jobs:
           echo "claude-sync status exited $rc"
           [ "$rc" -eq 0 ]
 
-      - name: The hook suites
-        # Fifteen suites guard the machinery that guards every project, and until now they ran
-        # only when somebody remembered to run them on a Mac: two defects found on 2026-08-20
-        # (#95, #97) lived in exactly that code, and CI was green throughout. A suite nobody runs
-        # is indistinguishable from one that passes (#101).
+      - name: No machine specific home path in the synced config
+        # Runs on its own, and first, because this guard exists to catch a line somebody wrote a
+        # moment ago and a check that only runs when it is remembered is not a guard at all (L27).
+        # It is cheap, it fails early, and on this runner payload/ IS the synced tree, which is
+        # exactly what it has to be clean. It runs again inside the step below as one suite among
+        # the rest; that is the point, not a duplicate.
+        run: bash payload/hooks/test-check-home-paths.sh
+
+      - name: Every suite in the repo
+        # ONE step, and no list. This used to be four steps naming four directories, which is the
+        # hand maintained list the runner itself refuses to keep (L96) written one level up in a
+        # file nobody reads when adding a test. payload/skills/milestone/ was never in that list:
+        # 233 checks that ran nowhere, on this runner or on a Mac, and nothing anywhere said so
+        # (#120). The runner now asks git which directories hold a suite, so a suite added
+        # anywhere is run from the day it lands, and a directory that turns up holding none is a
+        # failure rather than a quiet pass.
         #
         # This runner is Linux and the suites were written on a Mac, so anything that depends on
         # a BSD flag or a macOS only tool will say so here rather than being assumed either way.
+        #
+        # SUITE_DEBUG prints what the sync suite actually said in the scenarios that only fail
+        # here, so a failure on this runner can be diagnosed from evidence rather than from a
+        # theory (#52).
+        env:
+          SUITE_DEBUG: 1
         run: bash payload/hooks/run-all-tests.sh
-
-      - name: No machine specific home path in the synced config
-        # Runs here, not only inside run-all-tests.sh, because this guard exists to catch a line
-        # somebody wrote a moment ago and a check that only runs when it is remembered is not a
-        # guard at all (L27). It is cheap, it fails early, and on this runner payload/ IS the
-        # synced tree, which is exactly what it has to be clean.
-        run: bash payload/hooks/test-check-home-paths.sh
-
-      - name: Run the suite
-        # SUITE_DEBUG prints what the tool actually said in the scenarios that only fail here, so a
-        # failure on this runner can be diagnosed from evidence rather than from a theory (#52).
-        run: SUITE_DEBUG=1 bash tests/test-claude-sync.sh
-
-      - name: The changed-section audit's own tests
-        # It has a suite of its own because it is the thing that decides whether a section can run
-        # alone, and it is run below against real code. A tool that judges other tests and is not
-        # itself tested is the shape this repo has been caught by before (#101).
-        run: bash tests/test-audit-changed-sections.sh
-
-      - name: The measurement tool's own tests
-        # It re-derives the figure justifying the retire window, so it is the thing that decides
-        # whether a documented number is still true. A tool that judges the docs and is not itself
-        # tested is the shape this repo has been caught by before (#101).
-        run: bash tools/test-measure-sync-gaps.sh
 
       - name: Each changed suite section, run on its own
         # The suite's sections are independent: all 73 after the prelude run alone, and the single
