@@ -425,6 +425,74 @@ printf '%s' "$out_cold" | grep -q '"decision"' \
   || check "an empty spool does not stop the ordinary review" "silent: ${out_cold:0:120}"
 
 # ---------------------------------------------------------------------------
+# A harvest failure settles itself once it has actually been REPORTED (#85).
+#
+# A HARVEST FAILED record could never be settled. The spool is emptied only by
+# `clear`, and the review's own instruction says to run that AFTER the picker is
+# answered; a spool holding nothing but failures gives the review nothing to put
+# in a picker, so no picker appears, so nothing ever runs clear. Measured
+# 2026-08-18: a record written at 18:18 UTC was still riding along on every
+# review an hour later, and the underlying fault (a nested agent leaves no
+# transcript anywhere) recurs and cannot be fixed at the source. There is no
+# action a person can take on one, so it is filed as soon as it has been
+# delivered. A real finding keeps the old rule and waits for the picker.
+# ---------------------------------------------------------------------------
+REVIEW_STAMP="${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
+reset_spool
+stub 'exit 9'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "the retry path has no failure test" "nested-agent" >/dev/null 2>&1
+rm -f "$REVIEW_STAMP"
+out_settle="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+# The positive control. Every "gone from pending" assertion below is satisfied by
+# a review that never carried the record at all, so what was delivered is checked
+# first, in the same fixture (L159).
+printf '%s' "$out_settle" | grep -q "HARVEST FAILED" \
+  && printf '%s' "$out_settle" | grep -q "retry path has no failure test" \
+  && check "the review that settles a failure really carried it" ok \
+  || check "the review that settles a failure really carried it" "out=${out_settle:0:200}"
+
+pend_settle="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null)"
+printf '%s' "$pend_settle" | grep -q "HARVEST FAILED" \
+  && check "a reported failure is not offered a second time" "still pending: ${pend_settle:0:200}" \
+  || check "a reported failure is not offered a second time" ok
+printf '%s' "$pend_settle" | grep -q "retry path has no failure test" \
+  && check "a finding in the same spool is left pending" ok \
+  || check "a finding in the same spool is left pending" "pending=${pend_settle:0:200}"
+arch_settle="$(bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null)"
+printf '%s' "$arch_settle" | grep -q '"status": *"error"' \
+  && check "the settled failure is filed, not dropped" ok \
+  || check "the settled failure is filed, not dropped" "archive=${arch_settle:0:200}"
+
+# The other half. Filing is tied to the report having GONE OUT, not to the hook
+# having run: a review that could not carry the spool text must leave the record
+# alone, or the one failure mode this fix introduces (settling something unseen)
+# happens on every injector failure as well.
+reset_spool
+stub 'exit 9'
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+rm -f "$REVIEW_STAMP"
+out_nodel="$(printf '%s' "$review_payload" | CLAUDE_INJECT_SPOOL_FORCE_FAIL=1 bash "$REVIEW" 2>/dev/null)"
+printf '%s' "$out_nodel" | grep -q "HARVEST FAILED" \
+  && check "the undelivered review really left the failure out" "it carried it: ${out_nodel:0:200}" \
+  || check "the undelivered review really left the failure out" ok
+pend_nodel="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null)"
+printf '%s' "$pend_nodel" | grep -q "HARVEST FAILED" \
+  && check "a failure nobody was shown stays pending" ok \
+  || check "a failure nobody was shown stays pending" "pending=${pend_nodel:0:200}"
+
+# An unreadable record is NOT an error record: nothing classified it, so filing it
+# would settle something nobody has read (L11). It stays until a person files it.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+printf 'this is not a record at all\n' >> "$(bash "$SPOOL_LIB" path "$REPO")"
+bash "$SPOOL_LIB" file-errors "$REPO" >/dev/null 2>&1
+pend_corrupt="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null)"
+printf '%s' "$pend_corrupt" | grep -q "UNREADABLE SPOOL RECORDS" \
+  && check "filing failures leaves an unreadable record pending" ok \
+  || check "filing failures leaves an unreadable record pending" "pending=${pend_corrupt:0:200}"
+
+# ---------------------------------------------------------------------------
 # The second round, from an agent's own review of this code. Every one of these
 # is a way a failure could be silent, a record could be lost, or something could
 # grow without bound.

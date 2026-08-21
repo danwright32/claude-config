@@ -89,6 +89,19 @@ rm -f "$pending_file"
 
 if [ -n "$injected" ]; then
   printf '%s' "$injected"
+  # The spool text really went out with this review, so the records nobody can act
+  # on are settled here rather than riding along on every future review (#85). A
+  # HARVEST FAILED line has no action attached to it: being told once is the whole
+  # of its value, and it could never be cleared, because clearing is what happens
+  # after a picker is answered and a spool holding only failures produces no
+  # picker. Findings are untouched and still wait for the picker.
+  #
+  # Only in this branch: the fallback below carries no spool text at all, so
+  # filing there would settle a failure nobody was ever shown. The known cost that
+  # remains is a review interrupted before it is read, which files one unseen.
+  if [ -n "$pending" ] && [ -f "$SPOOL_LIB" ]; then
+    bash "$SPOOL_LIB" file-errors "$proj" >/dev/null 2>&1 || true
+  fi
 else
   printf '%s' "$payload"
 fi
