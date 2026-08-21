@@ -25,9 +25,19 @@ case "${TMPROOT%/}" in
 esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
+# A HOME of this run's own, holding the skill from THIS REPO. The hook reads the skill out of the
+# config directory, so left to the ambient HOME this suite would be asking whether the machine it
+# runs on happens to have synced, not whether the hook works: it passed on a Mac where the skill is
+# installed and failed every firing check on the Linux runner where it is not (L2, L504).
+FAKEHOME="$TMPROOT/home"
+mkdir -p "$FAKEHOME/.claude/skills/no-ai-tells"
+REPO_SKILL="$DIR/../skills/no-ai-tells/SKILL.md"
+[ -f "$REPO_SKILL" ] || { echo "test-no-ai-tells-detect: the skill is not in the payload at $REPO_SKILL, so there is nothing to test against." >&2; exit 2; }
+cp "$REPO_SKILL" "$FAKEHOME/.claude/skills/no-ai-tells/SKILL.md"
+
 fires() { # fires <prompt>  -> "yes" if the skill was injected, "no" if not
   local o
-  o="$(python3 -c 'import json,sys; print(json.dumps({"prompt":sys.argv[1]}))' "$1" | python3 "$H" 2>/dev/null)"
+  o="$(python3 -c 'import json,sys; print(json.dumps({"prompt":sys.argv[1]}))' "$1" | HOME="$FAKEHOME" python3 "$H" 2>/dev/null)"
   case "$o" in *additionalContext*) printf 'yes' ;; *) printf 'no' ;; esac
 }
 
@@ -72,7 +82,7 @@ done
 # ---------------------------------------------------------------------------
 # What it injects has to be the skill itself, not merely something.
 # ---------------------------------------------------------------------------
-out="$(python3 -c 'import json; print(json.dumps({"prompt":"write a blog post"}))' | python3 "$H" 2>/dev/null)"
+out="$(python3 -c 'import json; print(json.dumps({"prompt":"write a blog post"}))' | HOME="$FAKEHOME" python3 "$H" 2>/dev/null)"
 ctx="$(printf '%s' "$out" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("hookSpecificOutput") or {}).get("additionalContext",""))' 2>/dev/null)"
 printf '%s' "$ctx" | grep -qi 'no-ai-tells' \
   && check "what it injects is the writing skill" ok \
@@ -84,11 +94,11 @@ printf '%s' "$ctx" | grep -qi 'no-ai-tells' \
 # ---------------------------------------------------------------------------
 # Payloads it must survive.
 # ---------------------------------------------------------------------------
-out_junk="$(printf 'not json' | python3 "$H" 2>/dev/null)"; code_junk=$?
+out_junk="$(printf 'not json' | HOME="$FAKEHOME" python3 "$H" 2>/dev/null)"; code_junk=$?
 [ -z "$out_junk" ] && [ "$code_junk" -eq 0 ] \
   && check "a payload that does not parse injects nothing and exits cleanly" ok \
   || check "a payload that does not parse injects nothing and exits cleanly" "out=$out_junk exit=$code_junk"
-out_noprompt="$(printf '{}' | python3 "$H" 2>/dev/null)"
+out_noprompt="$(printf '{}' | HOME="$FAKEHOME" python3 "$H" 2>/dev/null)"
 [ -z "$out_noprompt" ] \
   && check "a payload with no prompt injects nothing" ok \
   || check "a payload with no prompt injects nothing" "out=$out_noprompt"
@@ -99,8 +109,9 @@ out_noprompt="$(printf '{}' | python3 "$H" 2>/dev/null)"
 # NOTHING is the worst of the three outcomes: the copy goes out unguarded and the hook looks like
 # it decided the prompt was not writing (L11, L98).
 # ---------------------------------------------------------------------------
-err_missing="$(HOME="$TMPROOT" python3 -c 'import json; print(json.dumps({"prompt":"write a blog post"}))' 2>/dev/null | HOME="$TMPROOT" python3 "$H" 2>&1 >/dev/null)"
-out_missing="$(HOME="$TMPROOT" python3 -c 'import json; print(json.dumps({"prompt":"write a blog post"}))' 2>/dev/null | HOME="$TMPROOT" python3 "$H" 2>/dev/null)"
+NOSKILL="$TMPROOT/home-without-the-skill"; mkdir -p "$NOSKILL"
+err_missing="$(python3 -c 'import json; print(json.dumps({"prompt":"write a blog post"}))' 2>/dev/null | HOME="$NOSKILL" python3 "$H" 2>&1 >/dev/null)"
+out_missing="$(python3 -c 'import json; print(json.dumps({"prompt":"write a blog post"}))' 2>/dev/null | HOME="$NOSKILL" python3 "$H" 2>/dev/null)"
 [ -z "$out_missing" ] \
   && check "with the skill file absent it injects nothing" ok \
   || check "with the skill file absent it injects nothing" "out=$out_missing"
@@ -109,7 +120,7 @@ printf '%s' "$err_missing" | grep -qi 'no-ai-tells' \
   || check "and says so, rather than looking like a prompt it decided was not writing" "it said nothing at all"
 # The control: the same absent-HOME run on a NON writing prompt must stay silent, or the check
 # above is satisfied by a hook that complains on every prompt (L159).
-err_quiet="$(HOME="$TMPROOT" python3 -c 'import json; print(json.dumps({"prompt":"write a function"}))' 2>/dev/null | HOME="$TMPROOT" python3 "$H" 2>&1 >/dev/null)"
+err_quiet="$(python3 -c 'import json; print(json.dumps({"prompt":"write a function"}))' 2>/dev/null | HOME="$NOSKILL" python3 "$H" 2>&1 >/dev/null)"
 [ -z "$err_quiet" ] \
   && check "and stays silent when the prompt was not asking for prose anyway" ok \
   || check "and stays silent when the prompt was not asking for prose anyway" "it said: $err_quiet"
