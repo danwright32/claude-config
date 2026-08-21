@@ -105,6 +105,63 @@ code_mark2=$?
   || check "the marker does not excuse the rest of its file" "exit=$code_mark2 out=$out_mark2"
 
 # ---------------------------------------------------------------------------
+# The one allowance, and its three edges. claude-sync rewrites this Mac's config
+# directory to its token in every mirrored file on the way out and expands it per
+# Mac on the way in, so inside a LIVE config tree an absolute path under that same
+# directory is portable. Outside those conditions it is the same defect as before,
+# and each edge is asserted rather than assumed (L142: the half you do not exercise
+# is where the harm lives).
+# ---------------------------------------------------------------------------
+LIVE="$(tree live)"
+printf 'bash %s/hooks/helper.sh\n' "$LIVE" > "$LIVE/skills/demo/SKILL.md"
+out_live="$(CLAUDE_HOME_PATH_ROOTS="$TMPROOT" CLAUDE_HOME="$LIVE" bash "$CHECK" "$LIVE" 2>&1)"
+code_live=$?
+[ "$code_live" -eq 0 ] \
+  && check "this Mac's own config path passes inside its live tree" ok \
+  || check "this Mac's own config path passes inside its live tree" "exit=$code_live out=$out_live"
+
+# CLAUDE_HOME_PATH_ROOTS points the rule at this run's own temp directory, so "a home
+# directory" means a directory inside it. Without that the whole block would be inert on the
+# Linux runner, where nothing is under /Users, and four checks would pass by matching nothing.
+#
+# The SAME line, in a tree that is NOT this machine's config directory: the repo's copy of it,
+# say, where nothing has been through a send and so nothing will be rewritten. This is the case
+# the root comparison exists for, and it is only a real test when the path in the file genuinely
+# belongs to the live config directory, which is why the fixture copies the live file rather than
+# writing a different path: with CLAUDE_HOME merely pointing somewhere else, the line is refused
+# for having an unrelated home path in it and the root comparison is never consulted.
+COPY="$(tree copy)"
+cp "$LIVE/skills/demo/SKILL.md" "$COPY/skills/demo/SKILL.md"
+out_notlive="$(CLAUDE_HOME_PATH_ROOTS="$TMPROOT" CLAUDE_HOME="$LIVE" bash "$CHECK" "$COPY" 2>&1)"
+code_notlive=$?
+[ "$code_notlive" -eq 1 ] \
+  && check "the same path is refused when the tree is not this Mac's config" ok \
+  || check "the same path is refused when the tree is not this Mac's config" "exit=$code_notlive out=$out_notlive"
+
+# A rule file is merged entry by entry and deliberately never rewritten, so a home
+# path there is still wrong on the other Mac.
+printf 'name: demo\n' > "$LIVE/skills/demo/SKILL.md"
+printf 'read %s/LESSONS.md first\n' "$LIVE" > "$LIVE/CLAUDE.md"
+out_rule="$(CLAUDE_HOME_PATH_ROOTS="$TMPROOT" CLAUDE_HOME="$LIVE" bash "$CHECK" "$LIVE" 2>&1)"
+code_rule=$?
+[ "$code_rule" -eq 1 ] \
+  && check "a home path in a top level rule file is still refused" ok \
+  || check "a home path in a top level rule file is still refused" "exit=$code_rule out=$out_rule"
+
+# And another machine's home is still the original defect, in the same live tree
+# that accepts this one's, on a line sitting right beside a portable one.
+printf '# rules\n' > "$LIVE/CLAUDE.md"
+printf 'bash %s/hooks/helper.sh\nbash %s/other-mac/.claude/hooks/other.sh\n' "$LIVE" "$TMPROOT" > "$LIVE/skills/demo/SKILL.md"
+out_mixed="$(CLAUDE_HOME_PATH_ROOTS="$TMPROOT" CLAUDE_HOME="$LIVE" bash "$CHECK" "$LIVE" 2>&1)"
+code_mixed=$?
+[ "$code_mixed" -eq 1 ] \
+  && check "another Mac's home is still refused beside a portable one" ok \
+  || check "another Mac's home is still refused beside a portable one" "exit=$code_mixed out=$out_mixed"
+printf '%s' "$out_mixed" | grep -q "other.sh" \
+  && check "and the refusal names the offending line, not the portable one" ok \
+  || check "and the refusal names the offending line, not the portable one" "out=$out_mixed"
+
+# ---------------------------------------------------------------------------
 # A scan that read nothing must not report a clean tree. Both ways of reading
 # nothing are separate outcomes with separate exits, because a guard pointed at
 # the wrong directory would otherwise pass for ever (L98, L151).

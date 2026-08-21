@@ -23,7 +23,7 @@ Take a quick read of the repo (CLAUDE.md, manifest) so you can confirm the proje
 Call the **Workflow** tool with:
 
     {
-      scriptPath: "<HOME>/.claude/skills/production-ready/production-audit.workflow.js",
+      scriptPath: "__CLAUDE_HOME__/skills/production-ready/production-audit.workflow.js",
       args: {
         projectDir: "<absolute path to the repo>",
         repo: "<owner/name>",
@@ -31,7 +31,7 @@ Call the **Workflow** tool with:
       }
     }
 
-Substitute `<HOME>` with this machine's home directory (run `echo $HOME`). It is a placeholder because this config syncs between two Macs whose home directories differ, and the Workflow tool takes `scriptPath` as a literal string: it does not expand `~` or `$HOME`.
+That path is absolute and correct on this machine: the config sync rewrites the home directory in every synced file, so each Mac holds its own. Use it exactly as written. It is spelled out rather than shortened because the Workflow tool takes `scriptPath` as a literal string and expands neither `~` nor `$HOME`. If you ever see `__CLAUDE_HOME__` here instead of a real path, this file has not been applied by the sync yet: replace that token with this machine's home config directory (`echo $HOME/.claude`).
 
 Pass `date` from your own context — the workflow engine cannot read the clock. It returns `{ profile, applicable, naDomains, report }`, where `report = { executiveSummary, whatsSolid, topRisks, severityCounts, backlog }`.
 
