@@ -13,7 +13,7 @@ back.
 - `payload/skills/` — custom + installed skills (plugin-managed skills excluded, see below)
 - `payload/agents/` — the `plan-*` agents
 - `payload/commands/` — slash commands
-- `payload/settings.hooks.json` — **only** the `hooks` block of `settings.json`
+- `payload/settings.hooks.json`: **only** the `hooks` block of `settings.json`
 - `payload/CLAUDE.md` and `payload/RTK.md` — your global rules files, synced verbatim (standing cross-project instructions travel here)
 
 Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are stored with this

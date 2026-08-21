@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# check-home-paths.sh — refuse a machine specific home directory inside the
+# check-home-paths.sh: refuse a machine specific home directory inside the
 # SYNCED config (claude-config#86).
 #
 # Eight file paths across the synced skills and hooks were written as absolute
