@@ -28,6 +28,22 @@ want_test "scripts/test-cron-routes.ts"
 want_test "scripts/test-sync.js"
 want_test "scripts/test_legacy_thing.ts"   # underscore variant too
 
+# --- #95: shell suites are tests too ---
+# This repo's entire suite is shell, and the classifier could not see any of it: a push carrying a
+# one line Python change and the assertion covering it, in the same commit, was blocked as
+# untested. A gate that refuses correct work is not merely annoying, it teaches the override
+# habit, and once that is a habit it stops blocking the pushes it should (L36).
+want_test "hooks/test-subagent-issue-harvest.sh"
+want_test "test_deploy.sh"
+want_test "scripts/deploy_test.sh"
+
+# ...and the helper exclusion the JavaScript branch already has must apply here too, or the same
+# over-match arrives one language later: a file of shared fixtures is not a test of anything.
+want_nottest "hooks/test-utils.sh"
+want_nottest "hooks/test-helpers.sh"
+want_nottest "scripts/test-fixtures.sh"
+want_nottest "hooks/testimonials.sh"
+
 # --- existing conventions must still register (regression) ---
 want_test "src/components/Foo.test.ts"
 want_test "src/components/Foo.spec.tsx"

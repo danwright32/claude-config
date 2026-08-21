@@ -452,6 +452,15 @@ printf '%s' "$out_settle" | grep -q "HARVEST FAILED" \
   && check "the review that settles a failure really carried it" ok \
   || check "the review that settles a failure really carried it" "out=${out_settle:0:200}"
 
+# The instruction riding with it has to match what the code then does. It tells
+# Claude to run `clear` after the picker is answered, and a failure is never in a
+# picker, so without this line the reader is told to expect back a record that has
+# already been filed (L32: a doc states a testable claim, and this one is delivered
+# to the reader inside the same message).
+printf '%s' "$out_settle" | grep -q "it will not come back" \
+  && check "the delivered review says a failure will not come back" ok \
+  || check "the delivered review says a failure will not come back" "out=${out_settle:0:200}"
+
 pend_settle="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null)"
 printf '%s' "$pend_settle" | grep -q "HARVEST FAILED" \
   && check "a reported failure is not offered a second time" "still pending: ${pend_settle:0:200}" \

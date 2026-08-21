@@ -203,6 +203,23 @@ is_test() {
   printf '%s' "$f" | grep -Eiq '_spec\.rb$'                           && return 0
   printf '%s' "$f" | grep -Eiq 'Tests?\.(java|kt|cs|swift|scala)$'    && return 0
   printf '%s' "$f" | grep -Eiq '(^|/)conftest\.py$'                   && return 0
+  # Shell suites (claude-config#95). A whole language of tests was invisible here, and the config
+  # repo's suite is entirely shell: a push carrying a one line Python change and the assertion
+  # covering it, in the same commit, was blocked as untested and the change was dropped rather
+  # than overridden. A gate that refuses correct work teaches the override habit, and once that is
+  # habit it stops blocking the pushes it should.
+  #
+  # Same helper exclusion as the JavaScript branch above, for the same reason: a file of shared
+  # fixtures is not a test of anything, and counting one would let a real change ride in beside it.
+  #
+  # Deliberately NOT paired with adding .sh to is_source. That would start gating every shell edit
+  # in every project at once, which is a separate decision with a much wider blast radius, and one
+  # nobody has asked for. The consequence of leaving it is stated rather than hidden: a change to a
+  # shell script still needs no test of its own here.
+  if printf '%s' "$f" | grep -Eiq '(^|/)(test[-_][^/]+|[^/]+[-_]test)\.(sh|bash|zsh)$' \
+     && ! printf '%s' "$f" | grep -Eiq '(^|/)test[-_](utils?|helpers?|setup|fixtures?|mocks?|data|config)\.'; then
+    return 0
+  fi
   return 1
 }
 
