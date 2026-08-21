@@ -169,6 +169,22 @@ those (`bash payload/hooks/run-all-tests.sh tests tools`). A directory it was to
 holds no suite is a failure, not a quiet pass, because reading nothing and reading everything green
 look identical otherwise.
 
+The suites run several at a time, since they are independent. Measured on this Mac over the hook
+suites: 128 seconds one at a time, 29 seconds in parallel, with byte identical reports. The whole
+repo, 37 suites, ran in 252 seconds. That floor is `test-claude-sync.sh`, which takes most of it on
+its own: the wall clock cannot go below the single longest suite, so making that one faster is the
+only thing left that would move this number.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `HOOK_TESTS_JOBS` | CPUs, capped at 8 | How many suites run at once. `1` runs them one at a time, which is what to reach for when a suite only fails alongside others. A value that is not a positive whole number is refused rather than guessed at, because it decides how many processes start. |
+
+Results are collected and printed in the order the suites were FOUND, never the order they
+finished, so two runs of the same tree produce the same page and a difference between them is a
+difference in the suites rather than in the machine's mood. Suites are launched longest first,
+judged by file size, which is a heuristic: being wrong about the order costs some wall clock and
+nothing else.
+
 Every suite ends with one machine readable line, and that is what the runner reads:
 
 ```
