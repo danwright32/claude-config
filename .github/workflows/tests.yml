@@ -98,6 +98,15 @@ jobs:
         # theory (#52).
         env:
           SUITE_DEBUG: 1
+          # This runner has two cores, and the budget in #136 divides itself between the suites
+          # running at once, so the default here is one process each and the sync suite stops
+          # sharding: its fan-out, and #137's check that the shards covered every section between
+          # them, would then run on a Mac and NOWHERE ELSE. Measured on the run that introduced
+          # the budget: "up to 2 suite(s) at once, 1 slot(s) each". Four buys two suites at once
+          # with two shards each, which is twice this runner's cores and deliberately so: mild
+          # oversubscription here costs seconds, and a path that only ever runs on the machine of
+          # whoever wrote it is a path CI does not check at all (L88, L98).
+          HOOK_TESTS_BUDGET: 4
         run: bash payload/hooks/run-all-tests.sh
 
       - name: Each changed suite section, run on its own
