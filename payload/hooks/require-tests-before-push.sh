@@ -59,10 +59,18 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ---------------------------------------------------------------------------
 payload="$(cat)"
 
+# A newline is a command separator, exactly like a semicolon, so it is turned into
+# one rather than into a space (claude-config#97). Flattened to a space, a command
+# written on its own line was glued onto the previous one and every consumer that
+# asks what a segment STARTS with read it as part of that segment: a push after a
+# heredoc commit message, which is the shape a heredoc forces, was not seen as a
+# push at all and this hook exited 0 without looking. The failure direction is
+# deliberate: a heredoc BODY line that reads like a command is now judged, which
+# costs a gate running when it need not, against a gate not running when it must.
 parse_payload() {
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$payload" | jq -j '
-      ((.tool_input.command // "") | gsub("\n"; " ")) + "\u001f" + (.cwd // "")
+      ((.tool_input.command // "") | gsub("\n"; "; ")) + "\u001f" + (.cwd // "")
     ' 2>/dev/null && return 0
   fi
   printf '%s' "$payload" | python3 -c '
@@ -72,7 +80,7 @@ try:
 except Exception:
     sys.exit(1)
 ti = d.get("tool_input") or {}
-cmd = (ti.get("command") or "").replace("\n", " ")
+cmd = (ti.get("command") or "").replace("\n", "; ")
 sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 ' 2>/dev/null
 }
