@@ -71,6 +71,13 @@ jobs:
           echo "claude-sync status exited $rc"
           [ "$rc" -eq 0 ]
 
+      - name: No machine specific home path in the synced config
+        # Runs here, not only inside run-all-tests.sh, because this guard exists to catch a line
+        # somebody wrote a moment ago and a check that only runs when it is remembered is not a
+        # guard at all (L27). It is cheap, it fails early, and on this runner payload/ IS the
+        # synced tree, which is exactly what it has to be clean.
+        run: bash payload/hooks/test-check-home-paths.sh
+
       - name: Run the suite
         # SUITE_DEBUG prints what the tool actually said in the scenarios that only fail here, so a
         # failure on this runner can be diagnosed from evidence rather than from a theory (#52).
