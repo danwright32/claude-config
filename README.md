@@ -168,15 +168,51 @@ Every push and pull request also runs the suite on a Linux runner
 well as the code, and checks every tracked file for Python bytecode, so filtering by where the code
 lives would skip precisely the change that breaks it.
 
-Run one part while iterating, which stops after the section you name:
+Run ONE section while iterating, which is the fast path:
+
+```bash
+SECTION_ONLY="lessons index is derived" bash tests/test-claude-sync.sh
+```
+
+That runs the preamble, the first four sections, and the one you named: under four seconds against
+roughly six minutes for the whole suite. The first four sections are the only place in the file
+that changes shared state, so everything after them runs in one fixed setting and can be run on its
+own. All 73 of them can, measured by running each in isolation.
+
+Where one section genuinely does continue another, it says so in a comment directly under its
+heading, and that prerequisite is pulled in too:
+
+```
+section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
+# needs: #15: duplicate lesson numbers must not be published or go unnoticed
+```
+
+There is exactly one of those in the file. It is a comment rather than an argument to `section`
+because three separate checks in the suite read the heading line by stripping one trailing quote,
+and one of them would have gone on passing silently while checking nothing.
+
+A pattern matching nothing is an error, and so is one matching SEVERAL sections: it lists the
+candidates rather than running the first and reporting success under the text you typed. Asking for
+`SECTION_ONLY` and `SECTION_UNTIL` together is refused rather than one quietly winning.
+
+If a section turns out to depend on something an earlier one set, the run is refused outright
+rather than reported. That matters more than it sounds: an unbound variable inside a command
+substitution kills only that subshell, so a section missing a fixture can lose several tool
+invocations, print nothing but `ok` lines, and exit 0.
+
+Every push also runs each section the push CHANGED on its own
+(`tests/audit-changed-sections.sh`), which is the only run in which a missing prerequisite shows up.
+A push that does not touch the suite costs nothing there.
+
+The older knob still exists for when you want everything up to a point rather than one section:
 
 ```bash
 SECTION_UNTIL="conflict copies" bash tests/test-claude-sync.sh
 ```
 
-It runs from the start up to and including that section, because the sections build on each
-other and running one alone reports failures the code did not cause. A name matching nothing
-is an error, not a quiet pass.
+Every section closes with how many checks it ran and how long it took, and a run ends naming the
+five slowest, so "the suite is slow" names a section somebody can act on. The counts are derived by
+subtraction and the suite asserts they add up to its own total.
 
 The suite also scans itself for assertions that could pass on output the command prints anyway: two
 greps over one captured blob, or a match on nothing but a path, in output that lists paths already.
@@ -229,6 +265,9 @@ One run at a time, and none of them open ended:
 | `SUITE_NO_LOCK` | unset | Run without taking the lock. For when you know the run it names has finished. |
 | `SUITE_LOCK_MAX_AGE` | `1800` | Seconds after which a lock from ANOTHER machine is broken. A lock from this machine is judged by whether its process is alive, never by the clock, so a clock jump cannot break a live one. |
 | `SUITE_MAX_DEPTH` | `1` | How deeply a run may be nested inside another. The suite runs itself as a subprocess in places, and past this it refuses to start rather than multiplying. |
+| `SECTION_ONLY` | unset | Run the preamble, the first four sections, and the one named, plus anything it declares it needs. Refuses an ambiguous or unmatched name. |
+| `SECTION_UNTIL` | unset | Run from the start up to and including the section named. Refuses to be combined with `SECTION_ONLY`. |
+| `SUITE_SLOW_IN` | unset | Pause deliberately in the section named. It exists so the duration column can be watched reporting a known number: most sections legitimately read 0s, and a broken clock would read 0s everywhere too. |
 
 ## Scratch left behind by a killed run
 

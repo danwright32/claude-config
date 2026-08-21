@@ -308,6 +308,40 @@ regenerated on every send and every apply rather than maintained beside the file
 kept by hand next to its source drifts silently (L41). The renumber scan skips it for the same
 reason: a number in a file that is rewritten in the same run is not something to go and check.
 
+### Declaring the dependencies between suite sections rather than removing them
+
+Considered for #105 and rejected, and it is what the issue itself proposed: give each section an
+explicit declaration of what it depends on, so a filtered run can execute a section plus its
+prerequisites. The plan that came out of it had a declaration syntax, a validator for it, a static
+scanner, and an exhaustive sweep that ran every section in isolation and diffed the results.
+
+Then the dependency graph got measured instead of designed around. All 73 post-prelude sections
+were run in isolation: 68 passed alone, and the five that did not each read one variable an earlier
+section had set. Four of the five were accidents worth about fifteen lines between them. `PSH`/`PSR`
+was two lines that three separate sections all wanted, and each reached for whichever of the three
+happened to run first. Two other sections borrowed a fixture from the section immediately above
+rather than building their own.
+
+So the coupling was deleted rather than declared. One real dependency is left, #17 continuing the
+git history #15 leaves on disk, and it carries a `# needs:` comment. A syntax, a validator and a
+fifteen minute sweep to manage one edge is machinery standing in for an edit.
+
+The declaration is a comment and not an argument to `section`, which was the other half of the
+original plan. Three derivations in the suite parse the heading line by stripping one trailing
+quote. #27's would have failed loudly, which is fine. #37's would have failed SILENTLY: its marker
+would still have been non-empty and would simply never have matched, leaving the check that proves
+a filtered child stops where it was told passing while checking nothing, and that check covers the
+runaway that filled a Mac with suite processes on 2026-08-17.
+
+Two things that were in the plan and are NOT here, deliberately. There is no static scanner: the
+constructs in this file defeat one, sixteen phantom variables live in a single quoted heredoc and
+real dependencies live inside `check` expressions that are evaluated later, so it would have been
+both noisy and blind. And there is no shipped exhaustive sweep: it cannot run as a mode of the suite
+without either raising the nesting limit, which breaks the three checks in #34 that prove a too-deep
+run is refused, or disabling the lock, which breaks the checks in #32 that prove a second run is.
+What replaced both is cheaper and runs on every push: each section the push CHANGED is run on its
+own, which is the only run in which a missing prerequisite shows up at all.
+
 ## Measured numbers
 
 Every threshold here is a multiple of something real, measured on the date given. None is a round

@@ -132,13 +132,21 @@ section(){
 }
 SUITE_SECTION_MARK=""
 
-# SECTION_UNTIL=<text> runs from the beginning UP TO AND INCLUDING the matching section, then
-# stops. Deliberately not "only the matching section": the sections are not independent, they
-# build on fixtures and settings established by earlier ones (`unset SYNC_NO_GIT` alone
-# changes everything after it), so running one alone produced 24 failures that were purely
-# missing setup. A tool that reports failures the code did not cause is worse than a slow
-# one, so this trades some of the speed-up for never lying. Iterating on an early or middle
-# section is where it pays; asking for the last one is honestly just a full run.
+# SECTION_UNTIL=<text> runs from the beginning UP TO AND INCLUDING the matching section, then stops.
+#
+# This comment used to say that "only the matching section" was tried and rejected, because running
+# one alone produced 24 failures that were purely missing setup, and a tool that reports failures
+# the code did not cause is worse than a slow one. That finding was true and is no longer, so it is
+# recorded here rather than quietly deleted (claude-config#105).
+#
+# What changed is the file, not the judgement. The coupling got MEASURED: all 73 post-prelude
+# sections were run in isolation, 68 passed alone, and the five that did not each read one variable
+# an earlier section had set. Four of those five were accidents and were removed; the one real
+# dependency is declared. So SECTION_ONLY exists now, below, and it does not report failures the
+# code did not cause, because there is almost nothing left for it to get wrong.
+#
+# SECTION_UNTIL stays. It is still the right thing when you want everything up to a point rather
+# than one section, and the two refuse to run together rather than one silently winning.
 if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   # Named for the same reason as everything else this suite creates: a run killed between writing
   # this copy and removing it leaves a file nothing can attribute afterwards (#36).
@@ -338,8 +346,23 @@ SONEEDS
   fi
   # SECTION_ONLY is handed on EMPTY, not merely relied on being ignored: the copy is the run that
   # spawns children, and a child seeing it set would filter itself, which is #37's defect exactly.
-  SUITE_FILTERED=1 SECTION_ONLY= SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered"; _so_rc=$?
+  # The run's own output is kept, because the result cannot be trusted without reading it. `set -u`
+  # kills the whole shell on an unbound variable at TOP LEVEL, but only the SUBSHELL when the read
+  # sits inside a command substitution, so a section missing a prerequisite can lose several tool
+  # invocations, print nothing but ok lines, and exit 0. That is not hypothetical: one section in
+  # this file was measured printing 54 ok lines and no failures in exactly that state, saved only by
+  # a fifth read that happened to be at top level. pipefail is already set, and tee exits 0, so the
+  # status here is still the run's own.
+  _so_log="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
+  SUITE_FILTERED=1 SECTION_ONLY= SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered" 2>&1 | tee "$_so_log"; _so_rc=$?
   rm -f "$_filtered"
+  if grep -qE 'line [0-9]+: [A-Za-z_][A-Za-z0-9_]*: unbound variable' "$_so_log" 2>/dev/null; then
+    rm -f "$_so_log"
+    echo "" >&2
+    echo "test suite: running only $_so_name hit an unbound variable, so it depends on something an earlier section sets and this run's result is NOT trustworthy: an unbound read inside a command substitution kills only that subshell, so a run in this state can print nothing but ok lines while tool invocations inside it produced nothing at all. Give the section its own fixture, or add a '# needs:' line naming the section that sets it." >&2
+    exit 4
+  fi
+  rm -f "$_so_log"
   exit "$_so_rc"
 fi
 
@@ -4863,6 +4886,37 @@ _SO6="$WORK/so-badneeds.txt"
 SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$_SOBAD" SECTION_ONLY="#17: a collision the merge creates" bash "$_SOBAD" > "$_SO6" 2>&1; _so6_rc=$?
 check "#105 a declaration naming no section is refused" "[ '$_so6_rc' -ne 0 ]"
 check "#105 and the refusal names the text it could not resolve" "grep -q 'zzz-no-such-prerequisite' '$_SO6'"
+
+# A section that is missing a prerequisite must not be able to report green. This is the failure
+# mode that makes the whole mechanism dangerous rather than merely wrong: `set -u` kills the SHELL
+# on an unbound variable at top level, but only the SUBSHELL when the read is inside $( ), so a
+# section can lose four tool invocations to a missing fixture, print nothing but ok lines, and exit
+# 0. Measured on this file: one section did exactly that, 54 ok lines and no failures, and the only
+# reason it did not report success was that a fifth read happened to sit at top level.
+#
+# Proven against a REAL dependency rather than a planted one: the copy has the genuine `# needs:`
+# declaration stripped, so the section really does lose its prerequisite (L48, L159).
+_SOUB="$WORK/so-noneeds.sh"
+grep -v '^# needs: ' "$SCRIPT_SELF" > "$_SOUB"
+_soub_n="$(grep -c '^# needs: ' "$_SOUB" || true)"
+check "#105 the stripped copy really has no declarations left" "[ '$_soub_n' -eq 0 ]"
+_SO7="$WORK/so-unbound.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$_SOUB" SECTION_ONLY="#17: a collision the merge creates" bash "$_SOUB" > "$_SO7" 2>&1; _so7_rc=$?
+check "#105 a section run without its prerequisite does not report success" "[ '$_so7_rc' -ne 0 ]"
+check "#105 and says the run's result cannot be trusted" "line_has \"\$(cat '$_SO7')\" 'unbound variable' 'NOT trustworthy'"
+check "#105 and names the section it was running" "grep -q 'a collision the merge creates' '$_SO7'"
+
+# The case that makes the guard necessary rather than tidy: a read that happens ONLY inside a
+# command substitution, where set -u kills the subshell and nothing else, so every check still
+# passes. No section in this file has that shape today, so it is CONSTRUCTED. A guard whose
+# dangerous case cannot be produced has not been watched doing the thing it exists for (L151, L159).
+_SOSUB="$WORK/so-subshell.sh"
+awk '/^suite_profile$/ && !ins { print "section \"== zzz a constructed subshell only dependency ==\""; print "_zz_out=\"$(printf %s \"$ZZ_NO_SUCH_FIXTURE\")\""; print "check \"zzz this check passes regardless\" \"true\""; ins=1 } { print }' "$SCRIPT_SELF" > "$_SOSUB"
+check "#105 the constructed copy carries a subshell only read" "grep -q 'ZZ_NO_SUCH_FIXTURE' '$_SOSUB'"
+_SO8="$WORK/so-subshell.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$_SOSUB" SECTION_ONLY="zzz a constructed subshell only dependency" bash "$_SOSUB" > "$_SO8" 2>&1; _so8_rc=$?
+check "#105 a run that loses only a subshell is refused too" "[ '$_so8_rc' -ne 0 ]"
+check "#105 even though every check inside it passed" "grep -q 'FAIL=0' '$_SO8'"
 
 # The filter must not be inherited. SUITE_FILTERED had exactly this defect and it cost two runaways
 # on 2026-08-17 (#37): a child read the flag as being about ITSELF. Proven the same way #37 proves

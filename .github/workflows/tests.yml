@@ -36,9 +36,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The bytecode hygiene check runs git ls-files, and the suite's own subruns re-execute
-          # the checked-out copy. Neither needs history, so the default shallow clone is fine.
-          fetch-depth: 1
+          # History IS needed now: the changed-section step below diffs this push against its base
+          # to work out which sections to run on their own, and a shallow clone has no base commit
+          # to diff against. It would not fail loudly either, it would derive zero changed sections,
+          # which reads exactly like a clean audit (#105). The repo is small and this is cheap.
+          fetch-depth: 0
 
       - name: Record the environment the suite is judged in
         # Printed rather than assumed. Several checks shell out to pgrep, mktemp, rsync, jq and
@@ -92,3 +94,39 @@ jobs:
         # SUITE_DEBUG prints what the tool actually said in the scenarios that only fail here, so a
         # failure on this runner can be diagnosed from evidence rather than from a theory (#52).
         run: SUITE_DEBUG=1 bash tests/test-claude-sync.sh
+
+      - name: The changed-section audit's own tests
+        # It has a suite of its own because it is the thing that decides whether a section can run
+        # alone, and it is run below against real code. A tool that judges other tests and is not
+        # itself tested is the shape this repo has been caught by before (#101).
+        run: bash tests/test-audit-changed-sections.sh
+
+      - name: Each changed suite section, run on its own
+        # The suite's sections are independent: all 73 after the prelude run alone, and the single
+        # real dependency left is declared with a `# needs:` comment. The full suite cannot notice
+        # when that stops being true, because it runs everything in order and every fixture an
+        # earlier section built is always there. Running a section BY ITSELF is the only run in
+        # which a missing prerequisite shows up at all.
+        #
+        # Scoped to the diff on purpose. A push that does not touch the suite costs nothing here,
+        # and a push that adds or edits a section pays for exactly that section, which is precisely
+        # when a dependency can be introduced. Roughly 7 seconds per changed section.
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          base="$PR_BASE"
+          [ -n "$base" ] || base="$PUSH_BEFORE"
+          # A first push, a force push and a freshly created branch all hand over a base that is
+          # empty or that does not exist here. Falling back to the previous commit keeps the step
+          # meaningful; being unable to name ANY base is reported as a failure rather than as a
+          # step that found nothing to do, because those two look identical in a green run (L98).
+          if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-parse HEAD~1 2>/dev/null || true)"
+          fi
+          if [ -z "$base" ]; then
+            echo "No base commit could be resolved, so no section was scoped and NOTHING was audited. Refusing to report this as a pass." >&2
+            exit 1
+          fi
+          echo "Diffing against $base"
+          bash tests/audit-changed-sections.sh "$base"
