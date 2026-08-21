@@ -259,6 +259,12 @@ if [[ "$(printf '%s' "$rules_n" | tail -1)" = "True" ]]; then pass=$((pass + 1))
 
 # One process per Bash command, not three. This is why the refactor mattered beyond
 # tidiness: the old design spawned three interpreters on EVERY command Claude ran.
+# These two ask about the INSTALLED config on this machine, not about the code in this
+# repository, so they can only be answered where a config is installed. On a CI runner there is
+# no ~/.claude at all, and asserting there produced two failures that said nothing about the
+# change under test. They SKIP with a reason rather than passing quietly, because a check that
+# was never run must not be counted as one that passed (L98).
+if [ -f "$HOME/.claude/settings.json" ]; then
 hooks_registered="$(python3 -c "
 import json
 d = json.load(open('$HOME/.claude/settings.json'))
@@ -269,6 +275,9 @@ if [[ "$(printf '%s' "$hooks_registered" | head -1)" = "1" ]]; then pass=$((pass
   fail=$((fail + 1)); echo "FAIL: exactly one issue gate should be registered, got $(printf '%s' "$hooks_registered" | head -1)"; fi
 if [[ "$(printf '%s' "$hooks_registered" | tail -1)" == *"require-issue-fields.sh" ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: the registered gate should be require-issue-fields.sh, got $(printf '%s' "$hooks_registered" | tail -1)"; fi
+else
+  echo "SKIPPED (2 checks): there is no installed config at $HOME/.claude/settings.json, so which hooks are registered on this machine cannot be checked from here."
+fi
 
 echo
 echo "passed: $pass, failed: $fail"

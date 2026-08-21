@@ -19,6 +19,10 @@ set -uo pipefail
 DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 [ -d "$DIR" ] || { echo "run-all-tests: no such directory: $DIR" >&2; exit 1; }
 
+# How many lines of a failing suite's own output to print. Enough to act on, bounded so one
+# broken suite cannot bury the other fourteen verdicts.
+FAIL_DETAIL_MAX="${HOOK_TESTS_FAIL_DETAIL_MAX:-40}"
+
 ran=0
 failed=0
 failed_names=""
@@ -36,6 +40,18 @@ for suite in "$DIR"/test-*.sh; do
     failed=$((failed+1))
     failed_names="$failed_names $name"
     printf '  FAIL  %-38s %s\n' "$name" "$(printf '%s' "$out" | grep -Ei 'passed' | tail -1)"
+    # And WHY. A one line verdict is enough on a machine where you can just run the suite
+    # again; it is useless where you cannot, which is the whole point of running these
+    # somewhere else (claude-config#101). The failing lines are printed, and the count is
+    # said out loud when there are more than fit, so a truncated report cannot read as a
+    # complete one.
+    detail="$(printf '%s\n' "$out" | grep -E '^ *(FAIL|not ok)' || true)"
+    [ -n "$detail" ] || detail="$(printf '%s\n' "$out" | tail -n "$FAIL_DETAIL_MAX")"
+    shown="$(printf '%s\n' "$detail" | grep -c . || true)"
+    printf '%s\n' "$detail" | head -n "$FAIL_DETAIL_MAX" | sed 's/^/          /'
+    if [ "${shown:-0}" -gt "$FAIL_DETAIL_MAX" ]; then
+      printf '          ...and %s more line(s) not shown\n' "$(( shown - FAIL_DETAIL_MAX ))"
+    fi
   else
     printf '  ok    %-38s %s\n' "$name" "$(printf '%s' "$out" | grep -Ei 'passed' | tail -1)"
   fi
