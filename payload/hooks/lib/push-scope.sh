@@ -19,6 +19,51 @@
 # shell segment. Substring matching is wrong here: a command whose payload
 # merely mentions a push (an echo, a doc write, a commit message) would fire a
 # hook that has nothing to act on.
+# ---- reading the hook payload, once (claude-config#102) ----
+# This lived in five near copies across the hooks, and they had already drifted: three flattened a
+# newline into "; " and two did not, which is how claude-config#97 came to live in exactly the
+# three that guard a push. A fix applied to one copy was not applied to the others, and nothing
+# anywhere reported the difference.
+#
+# Output is always the command, then a unit separator, then the working directory, whether or not
+# the caller wants the second half. One shape means every caller reads it the same way.
+#
+# MODE decides what happens to a newline, which is the one thing the callers genuinely differ on:
+#   segmented  a newline becomes "; ", because it IS a command separator and the caller is about
+#              to ask what each segment starts with. Anything that asks "is this a push" needs it.
+#   raw        the command is left exactly as typed, for a caller that searches the whole text
+#              rather than splitting it, and would otherwise be shown something the person did
+#              not write.
+ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
+  local payload="${1:-}" mode="${2:-segmented}" sep
+  case "$mode" in
+    segmented) sep="; " ;;
+    raw)       sep="" ;;
+    # An unknown mode is refused rather than guessed at: guessing here decides whether a gate can
+    # see a command at all, and the safe side of that is not a default (L50).
+    *)         return 2 ;;
+  esac
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$payload" | jq -j --arg sep "$sep" '
+      ((.tool_input.command // "") | if $sep == "" then . else gsub("\n"; $sep) end)
+      + "\u001f" + (.cwd // "")
+    ' 2>/dev/null && return 0
+  fi
+  printf '%s' "$payload" | PS_SEP="$sep" python3 -c '
+import os, sys, json
+sep = os.environ.get("PS_SEP", "; ")
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+ti = d.get("tool_input") or {}
+cmd = ti.get("command") or ""
+if sep:
+    cmd = cmd.replace("\n", sep)
+sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
+' 2>/dev/null
+}
+
 ps_is_git_push() {
   local cmd="$1" seg
   while IFS= read -r seg; do

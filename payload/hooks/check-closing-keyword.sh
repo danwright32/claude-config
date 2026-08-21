@@ -27,22 +27,14 @@
 
 payload="$(cat)"
 
-parse_payload() {
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$payload" | jq -j '(.tool_input.command // "")' 2>/dev/null && return 0
-  fi
-  printf '%s' "$payload" | python3 -c '
-import sys, json
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-ti = d.get("tool_input") or {}
-sys.stdout.write(ti.get("command") or "")
-' 2>/dev/null
-}
 
-cmd="$(parse_payload)" || exit 0
+# The library, not a copy: six near copies of this had already drifted (claude-config#102).
+# `raw` because this hook searches the whole command rather than splitting it.
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+parsed="$(ps_parse_payload "$payload" raw)" || exit 0
+cmd="${parsed%%$'\x1f'*}"
 [ -n "$cmd" ] || exit 0
 
 # Only the commands that can actually link an issue: a PR body/title, or a commit message.

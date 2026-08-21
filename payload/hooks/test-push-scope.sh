@@ -35,18 +35,21 @@ check() { # check <description> <result>   ("ok" passes, anything else is the fa
 
 # shellcheck source=lib/push-scope.sh
 . "$LIB" || { echo "FAIL: cannot source $LIB"; exit 1; }
-eval "$(sed -n '/^parse_payload() {/,/^}/p' "$GATE")"
 
 # The whole chain a hook runs: a JSON payload in, a verdict on whether this is a
 # push out. Asked this way rather than of ps_is_git_push alone, because the
 # defect lived in the step BEFORE it and a test of the splitter on its own would
 # have passed throughout (L3).
+payload_for() { # payload_for <command text> [cwd]
+  python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}, "cwd": sys.argv[2]}))' \
+    "$1" "${2:-}"
+}
+
 seen_as_push() { # seen_as_push <command text>
   local parsed cmd
-  payload="$(python3 -c '
-import json, sys
-print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))' "$1")"
-  parsed="$(parse_payload)" || return 2
+  parsed="$(ps_parse_payload "$(payload_for "$1")" segmented)" || return 2
   cmd="${parsed%%$'\x1f'*}"
   ps_is_git_push "$cmd"
 }
@@ -85,6 +88,49 @@ want_notpush "$(printf 'echo one\necho two')" \
 # it need not, against a gate not running when it must, which is what shipped.
 want_push "$(printf 'git commit -F - <<%sMSG%s\ngit push is what this message talks about\nMSG' "'" "'")" \
   "#97 a body line that reads like a push is judged, not ignored"
+
+# ---------------------------------------------------------------------------
+# One definition, two modes (claude-config#102). Six hooks each had their own copy
+# of this, three flattening a newline and three not, which is how the defect above
+# came to live in exactly the three that guard a push.
+# ---------------------------------------------------------------------------
+two_line="$(printf 'echo one\necho two')"
+seg="$(ps_parse_payload "$(payload_for "$two_line" /tmp/somewhere)" segmented)"
+raw="$(ps_parse_payload "$(payload_for "$two_line" /tmp/somewhere)" raw)"
+seg_cmd="${seg%%$'\x1f'*}"; seg_cwd="${seg#*$'\x1f'}"
+raw_cmd="${raw%%$'\x1f'*}"; raw_cwd="${raw#*$'\x1f'}"
+[ "$seg_cmd" = "echo one; echo two" ] \
+  && check "segmented mode turns a newline into a separator" ok \
+  || check "segmented mode turns a newline into a separator" "got [$seg_cmd]"
+[ "$raw_cmd" = "$two_line" ] \
+  && check "raw mode leaves the command exactly as typed" ok \
+  || check "raw mode leaves the command exactly as typed" "got [$raw_cmd]"
+# Both modes carry the working directory, so every caller reads one shape. Losing it
+# is not visible in the command half, and the gate uses it to find the repository at
+# all: without it the whole hook exits silently.
+[ "$seg_cwd" = "/tmp/somewhere" ] && [ "$raw_cwd" = "/tmp/somewhere" ] \
+  && check "both modes carry the working directory" ok \
+  || check "both modes carry the working directory" "segmented=[$seg_cwd] raw=[$raw_cwd]"
+ps_parse_payload "$(payload_for "echo hi")" sideways >/dev/null 2>&1
+[ "$?" -eq 2 ] \
+  && check "an unknown mode is refused rather than guessed at" ok \
+  || check "an unknown mode is refused rather than guessed at" "it answered anyway"
+bad_json="$(ps_parse_payload 'not json at all' segmented 2>/dev/null)"; bad_rc=$?
+[ "$bad_rc" -ne 0 ] || [ -z "$bad_json" ] \
+  && check "a payload that does not parse does not answer with a command" ok \
+  || check "a payload that does not parse does not answer with a command" "rc=$bad_rc out=[$bad_json]"
+
+# And nothing may keep a private copy. Derived from the files rather than from a list
+# of the hooks somebody remembered, because a copy added later is exempt from exactly
+# the check meant to catch it (L96).
+own_copies="$(grep -l '^parse_payload() {' "$DIR"/*.sh 2>/dev/null | tr '\n' ' ')"
+[ -z "${own_copies// }" ] \
+  && check "no hook keeps its own copy of the payload reader" ok \
+  || check "no hook keeps its own copy of the payload reader" "still defined in: $own_copies"
+users="$(grep -l 'ps_parse_payload' "$DIR"/*.sh 2>/dev/null | grep -c . || true)"
+[ "${users:-0}" -ge 6 ] \
+  && check "and the hooks that read one go through the library" ok \
+  || check "and the hooks that read one go through the library" "only $users use it"
 
 # ---------------------------------------------------------------------------
 # End to end, through the whole hook against a real repository, because

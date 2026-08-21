@@ -23,35 +23,14 @@
 #
 # Fails OPEN: any parse/git error allows the push.
 
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+
 payload="$(cat)"
 
-# A newline is a command separator, exactly like a semicolon, so it is turned into
-# one rather than into a space (claude-config#97). Flattened to a space, a command
-# written on its own line was glued onto the previous one and every consumer that
-# asks what a segment STARTS with read it as part of that segment: a push after a
-# heredoc commit message, which is the shape a heredoc forces, was not seen as a
-# push at all and this hook exited 0 without looking. The failure direction is
-# deliberate: a heredoc BODY line that reads like a command is now judged, which
-# costs a gate running when it need not, against a gate not running when it must.
-parse_payload() {
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$payload" | jq -j '
-      ((.tool_input.command // "") | gsub("\n"; "; ")) + "" + (.cwd // "")
-    ' 2>/dev/null && return 0
-  fi
-  printf '%s' "$payload" | python3 -c '
-import sys, json
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-ti = d.get("tool_input") or {}
-cmd = (ti.get("command") or "").replace("\n", "; ")
-sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
-' 2>/dev/null
-}
 
-parsed="$(parse_payload)" || exit 0
+parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0
@@ -59,9 +38,6 @@ cwd="${parsed#*$'\x1f'}"
 # Push detection is shared with the other push hooks. The local version this
 # replaced could not see `git -C <repo> push` at all (the repo path matched
 # neither a flag nor an assignment), so those pushes were never style checked.
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
 
 ps_is_git_push "$cmd" || exit 0
 
