@@ -181,6 +181,168 @@ if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   exit "$_rc"
 fi
 
+# ---- run ONE section, plus what it needs (#105) ----
+# SECTION_UNTIL runs from the top UP TO a section, so reaching the last one costs a full run, and
+# the last one is where new work lands. SECTION_ONLY runs the PRELUDE, plus one section, plus
+# whatever that section declares it needs.
+#
+# The prelude is the preamble and every section up to and including SUITE_PRELUDE_END. That
+# boundary is measured, not guessed: the only lines in this file that change shared state are
+# `export CLAUDE_HOME="$CH2"` and `unset SYNC_NO_GIT`, both inside those first four sections, so
+# everything after them runs in one fixed ambient state. Running all 73 later sections in isolation
+# put numbers on it: 68 passed alone with no mechanism at all.
+#
+# Named by its heading TEXT rather than by a count, so inserting a section cannot silently move the
+# boundary, and asserted to match exactly one heading below, so renaming one cannot silently void it.
+SUITE_PRELUDE_END="sync (two-way) over a local fake remote"
+
+# Both at once is a refusal, never a precedence rule: whichever won, the run would be doing
+# something other than what the other knob asked for and nothing would say so.
+if [ -n "${SECTION_ONLY:-}" ] && [ -n "${SECTION_UNTIL:-}" ]; then
+  echo "test suite: SECTION_ONLY='$SECTION_ONLY' and SECTION_UNTIL='$SECTION_UNTIL' were both given. They ask for different runs, so this refuses rather than picking one and leaving you to discover which. Use one." >&2
+  exit 2
+fi
+
+if [ -n "${SECTION_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+  # Every heading, its line, and any `# needs:` lines directly beneath it. A declaration is a
+  # COMMENT and deliberately not an argument to `section`: three derivations in this file parse
+  # `^section "..."$` by stripping one trailing quote, and #37's `_late` would fail SILENTLY,
+  # leaving the guard that proves a filtered child stops where it was told passing for the wrong
+  # reason (L103).
+  _so_i=0; _so_ln=0; _so_after=0; _so_all=""
+  _so_titles=(); _so_starts=(); _so_needs=()
+  while IFS= read -r _so_l; do
+    _so_ln=$((_so_ln + 1))
+    case "$_so_l" in
+      'section "'*)
+        _so_i=$((_so_i + 1))
+        _so_titles[$_so_i]="$_so_l"
+        _so_starts[$_so_i]=$_so_ln
+        _so_needs[$_so_i]=""
+        _so_all="$_so_all$_so_l
+"
+        _so_after=1
+        ;;
+      '# needs:'*)
+        if [ "$_so_after" -eq 1 ] && [ "$_so_i" -gt 0 ]; then
+          _so_needs[$_so_i]="${_so_needs[$_so_i]}${_so_l#\# needs:}
+"
+        fi
+        ;;
+      *) _so_after=0 ;;
+    esac
+  done < "$0"
+
+  # Resolve a pattern to exactly one heading. Fixed string and case insensitive, matching what
+  # SECTION_UNTIL already does, but the COUNT is what matters here: "run up to" has a natural
+  # earliest answer and "run only" does not, so an ambiguous pattern must refuse rather than
+  # silently run a section nobody asked for and report success under the text that was typed
+  # (L100, L154).
+  _so_hits=0; _so_idx=""; _so_list=""
+  _so_match(){
+    local _m
+    _m="$(printf '%s' "$_so_all" | grep -niF -- "$1" || true)"
+    _so_hits="$(printf '%s' "$_m" | grep -c . || true)"
+    case "$_so_hits" in ''|*[!0-9]*) _so_hits=0 ;; esac
+    _so_idx="$(printf '%s' "$_m" | head -1 | cut -d: -f1)"
+    _so_list="$(printf '%s' "$_m" | sed 's/^[0-9]*:/  /')"
+    return 0
+  }
+
+  _so_match "$SUITE_PRELUDE_END"
+  if [ "$_so_hits" -ne 1 ]; then
+    echo "test suite: the prelude boundary '$SUITE_PRELUDE_END' matches $_so_hits headings rather than exactly one, so which sections make up the prelude is not decided. Refusing rather than filtering against a boundary nobody can point at." >&2
+    exit 2
+  fi
+  _so_pend="$_so_idx"
+
+  _so_match "$SECTION_ONLY"
+  if [ "$_so_hits" -eq 0 ]; then
+    echo "test suite: SECTION_ONLY='$SECTION_ONLY' matched no section. Run without it, or check the spelling against the '==' headings." >&2
+    exit 2
+  fi
+  if [ "$_so_hits" -gt 1 ]; then
+    echo "test suite: SECTION_ONLY='$SECTION_ONLY' matches $_so_hits sections, so which one to run is not decided. Narrow it. The candidates are:" >&2
+    printf '%s\n' "$_so_list" >&2
+    exit 2
+  fi
+  _so_target="$_so_idx"
+
+  # The transitive closure of what the target declares it needs. A declaration that resolves to
+  # nothing, to several, or to a LATER section is an error before anything runs: each would leave
+  # the prerequisite out while the run went on to report a result (L100, L151).
+  _so_keep=""
+  _so_queue="$_so_target"
+  while [ -n "$_so_queue" ]; do
+    _so_cur="${_so_queue%% *}"
+    case "$_so_queue" in *" "*) _so_queue="${_so_queue#* }" ;; *) _so_queue="" ;; esac
+    case " $_so_keep " in *" $_so_cur "*) continue ;; esac
+    _so_keep="$_so_keep $_so_cur"
+    while IFS= read -r _so_nd; do
+      _so_nd="$(printf '%s' "$_so_nd" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+      [ -n "$_so_nd" ] || continue
+      _so_match "$_so_nd"
+      if [ "$_so_hits" -eq 0 ]; then
+        echo "test suite: ${_so_titles[$_so_cur]} declares '# needs: $_so_nd', which matches no heading. A declaration that resolves to nothing would silently leave the prerequisite out and the run would report a result anyway." >&2
+        exit 2
+      fi
+      if [ "$_so_hits" -gt 1 ]; then
+        echo "test suite: ${_so_titles[$_so_cur]} declares '# needs: $_so_nd', which matches $_so_hits headings. Narrow it. The candidates are:" >&2
+        printf '%s\n' "$_so_list" >&2
+        exit 2
+      fi
+      if [ "$_so_idx" -ge "$_so_cur" ]; then
+        echo "test suite: ${_so_titles[$_so_cur]} declares '# needs: $_so_nd', which is not EARLIER in the file. A prerequisite that runs afterwards cannot have prepared anything." >&2
+        exit 2
+      fi
+      _so_queue="$_so_queue $_so_idx"
+    done <<SONEEDS
+${_so_needs[$_so_cur]}
+SONEEDS
+  done
+
+  _filtered="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
+  sed -n "1,$(( ${_so_starts[1]} - 1 ))p" "$0" > "$_filtered"
+  _so_k=1
+  while [ "$_so_k" -le "$_so_i" ]; do
+    _so_want=0
+    [ "$_so_k" -le "$_so_pend" ] && _so_want=1
+    case " $_so_keep " in *" $_so_k "*) _so_want=1 ;; esac
+    if [ "$_so_want" -eq 1 ]; then
+      if [ "$_so_k" -lt "$_so_i" ]; then
+        _so_end=$(( ${_so_starts[$((_so_k + 1))]} - 1 ))
+      else
+        _so_end='$'
+      fi
+      sed -n "${_so_starts[$_so_k]},${_so_end}p" "$0" >> "$_filtered"
+    fi
+    _so_k=$((_so_k + 1))
+  done
+
+  _so_name="${_so_titles[$_so_target]#section \"}"; _so_name="${_so_name%\"}"
+  printf '\nsuite_profile\necho ""\necho "PASS=$PASS FAIL=$FAIL (SECTION_ONLY resolved to %s, NOT a full run)"\n[ "$FAIL" -eq 0 ]\n' "$_so_name" >> "$_filtered"
+
+  # SECTION_ONLY drops a span out of the MIDDLE, which SECTION_UNTIL never does, so the seam that
+  # proves the parse check works has to damage the middle too. An end-appended error would be a
+  # different shape entirely and would prove nothing about this one (L165).
+  if [ -n "${SUITE_EXTRACT_BREAK:-}" ]; then
+    _so_mid="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
+    _so_half=$(( $(grep -c '' "$_filtered") / 2 ))
+    { sed -n "1,${_so_half}p" "$_filtered"; printf 'if then fi\n'; sed -n "$((_so_half + 1)),\$p" "$_filtered"; } > "$_so_mid"
+    mv "$_so_mid" "$_filtered"
+  fi
+  if ! bash -n "$_filtered" 2>/dev/null; then
+    rm -f "$_filtered"
+    echo "test suite: running only '$SECTION_ONLY' produced a script that does not parse, so it was NOT run. This is a bug in the section extractor, not in the code under test. Run the full suite." >&2
+    exit 3
+  fi
+  # SECTION_ONLY is handed on EMPTY, not merely relied on being ignored: the copy is the run that
+  # spawns children, and a child seeing it set would filter itself, which is #37's defect exactly.
+  SUITE_FILTERED=1 SECTION_ONLY= SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered"; _so_rc=$?
+  rm -f "$_filtered"
+  exit "$_so_rc"
+fi
+
 # ---- the flag above describes THIS process only (#37) ----
 # SUITE_FILTERED means "extraction already happened here, do not filter again". It arrives in the
 # ENVIRONMENT, and bash hands an inherited variable to everything this run starts, so a child read
@@ -192,7 +354,7 @@ fi
 # `export -n` rather than `unset`: this process still needs the value (the #27 subruns below read
 # it), and the only thing that has to stop is the inheritance. Done HERE, once, rather than at each
 # spawn site, because a site added later cannot remember a rule it never saw (L30, L96).
-export -n SUITE_FILTERED 2>/dev/null || true
+export -n SUITE_FILTERED SECTION_ONLY 2>/dev/null || true
 
 # SUITE_SPAWN_UNTIL=<text> starts ONE child with that section limit, says what a child of this run
 # inherits, and exits with the child's status. It is the seam that makes the paragraph above
@@ -208,6 +370,7 @@ export -n SUITE_FILTERED 2>/dev/null || true
 if [ -n "${SUITE_SPAWN_UNTIL:-}" ]; then
   _sp_until="$SUITE_SPAWN_UNTIL"
   echo "test suite: spawn probe; a child of this run inherits SUITE_FILTERED as: $(bash -c 'printf "%s" "${SUITE_FILTERED:-<unset>}"')"
+  echo "test suite: spawn probe; a child of this run inherits SECTION_ONLY as: $(bash -c 'printf "%s" "${SECTION_ONLY:-<unset>}"')"
   SUITE_SPAWN_UNTIL= SUITE_DEPTH="$SUITE_CHILD_DEPTH" SECTION_UNTIL="$_sp_until" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF"; _sp_rc=$?
   echo "test suite: spawn probe; the child exited $_sp_rc"
   exit "$_sp_rc"
@@ -511,6 +674,15 @@ cat > "$CH/settings.json" <<JSON
 JSON
 
 export CLAUDE_HOME="$CH" SYNC_REPO="$REPO" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1
+
+# A second, deliberately boring home and repo. Three later sections (#33, #38, #36) want nothing
+# more than somewhere valid to point a status call, and each of them used to reach for the pair the
+# FIRST of the three happened to create, which made two of them unable to run without it. Nothing
+# accumulates here and no section mutates it, so one pair in the preamble serves all three and
+# couples none of them (claude-config#105).
+PSH="$WORK/ps-home"; PSR="$WORK/ps-repo"
+mkdir -p "$PSH" "$PSR/payload"; echo '{"hooks":{}}' > "$PSH/settings.json"
+
 
 section "== push =="
 bash "$SCRIPT" push >/dev/null 2>&1
@@ -1081,13 +1253,20 @@ section "== the apply cleans up its own scratch file (no temp litter per run) ==
 # writes. That record has to be removed on the way out, including when the run
 # ends early via die(), or every pull and sync leaves a file in the temp dir.
 TMPD="$WORK/tmpdir"; mkdir -p "$TMPD"
-SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" pull >/dev/null 2>&1
+# Its own pair, rather than the one the section above left behind. What this section needs is any
+# home and repo a pull can run against, which is three lines, and inheriting one made it impossible
+# to run this section on its own (claude-config#105).
+TQH="$WORK/tq-home"; TQR="$WORK/tq-repo"
+mkdir -p "$TQH/hooks" "$TQR/payload/hooks"; echo '{"hooks":{}}' > "$TQH/settings.json"
+printf 'aaaa\n' > "$TQH/hooks/tiny.sh"
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" push >/dev/null 2>&1
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
 check "a clean pull leaves no temp file behind" "[ -z \"\$(ls -A '$TMPD' 2>/dev/null)\" ]"
 # same on the failure path: a pull that dies must not litter either
-printf '@NOPE.md\n' > "$QREPO/payload/CLAUDE.md"
-SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" pull >/dev/null 2>&1
+printf '@NOPE.md\n' > "$TQR/payload/CLAUDE.md"
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
 check "a failed pull leaves no temp file behind"  "[ -z \"\$(ls -A '$TMPD' 2>/dev/null)\" ]"
-rm -f "$QREPO/payload/CLAUDE.md" "$QSRC/CLAUDE.md"
+rm -f "$TQR/payload/CLAUDE.md" "$TQH/CLAUDE.md"
 
 section "== send must not publish over changes this Mac has never applied =="
 # The 2026-07-27 incident, reproduced. Mirroring ~/.claude -> payload is
@@ -1691,6 +1870,7 @@ printf -- '- **L2. theirs.** written on Mac A\n- **L4. four.** also on Mac A\n  
 git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds its L2 and L4" && git -C "$LNMA" push -q
 out_lnm="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" bash "$LNMB/claude-sync" pull 2>&1)"
 section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
+# needs: #15: duplicate lesson numbers must not be published or go unnoticed
 # The settled rule (see the 2026-08-05 note above): the published copy keeps the
 # number, because the other Mac may already reference it, and the entry that has
 # never left this Mac takes the next free number. The script already knows both
@@ -1779,12 +1959,18 @@ section "== install-autosync installs the claudesync shell alias, idempotently =
 # synced. So the alias had to be added by hand on each Mac while the skill arrived by
 # itself. SYNC_ZSHRC redirects the target, so no test can reach the real ~/.zshrc.
 ZDIR="$WORK/zsh"; mkdir -p "$ZDIR"
+# Its own launchagents directory and fake fswatch. The pair it used to borrow belongs to the
+# install-autosync section far above, which needs the fswatch binary ABSENT first and only creates
+# it part way through, so borrowing it also meant depending on how far that section had got
+# (claude-config#105).
+ALDIR="$WORK/alias-la"; mkdir -p "$ALDIR"
+ALFS="$WORK/alias-fswatch"; printf '#!/usr/bin/env bash\ntrue\n' > "$ALFS"; chmod +x "$ALFS"
 ALIAS_LINE="alias claudesync='"'"'$HOME/claude-config-sync/claude-sync pull'"'"'"
 
 # 1. a zshrc with no alias gets one appended, and existing content is preserved
 ZRC="$ZDIR/rc-plain"
 printf 'export EDITOR=bbedit\n' > "$ZRC"
-outZ="$(SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
+outZ="$(SYNC_LAUNCHAGENTS="$ALDIR" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$ALFS" \
   SYNC_ZSHRC="$ZRC" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync 2>&1)"
 check "alias added when missing"        "grep -q 'alias claudesync=' '$ZRC'"
 check "alias runs a pull"               "grep -q \"claude-sync' *pull\|claude-sync pull\" '$ZRC'"
@@ -1793,14 +1979,14 @@ check "existing zshrc content kept"     "grep -q 'EDITOR=bbedit' '$ZRC'"
 check "it says the alias was added"     "printf '%s' \"\$outZ\" | grep -qi 'Installed shell alias: claudesync'"
 
 # 2. assume it runs twice: a second install must not append a duplicate
-SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
+SYNC_LAUNCHAGENTS="$ALDIR" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$ALFS" \
   SYNC_ZSHRC="$ZRC" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync >/dev/null 2>&1
 check "no duplicate alias on re-run"    "[ \"\$(grep -c 'alias claudesync=' '$ZRC')\" = 1 ]"
 check "no duplicate comment on re-run"  "[ \"\$(grep -c 'claude-config-sync: pull shared' '$ZRC')\" = 1 ]"
 
 # 3. an absent zshrc is created rather than skipped
 ZRC2="$ZDIR/rc-absent"
-SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
+SYNC_LAUNCHAGENTS="$ALDIR" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$ALFS" \
   SYNC_ZSHRC="$ZRC2" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync >/dev/null 2>&1
 check "absent zshrc is created"         "[ -f '$ZRC2' ]"
 check "created zshrc has the alias"     "grep -q 'alias claudesync=' '$ZRC2'"
@@ -1810,7 +1996,7 @@ check "created zshrc has the alias"     "grep -q 'alias claudesync=' '$ZRC2'"
 # is worse than telling them it differs.
 ZRC3="$ZDIR/rc-conflict"
 printf "alias claudesync='echo something else'\n" > "$ZRC3"
-outZ3="$(SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
+outZ3="$(SYNC_LAUNCHAGENTS="$ALDIR" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$ALFS" \
   SYNC_ZSHRC="$ZRC3" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync 2>&1)"
 check "a different alias is untouched"  "grep -q 'echo something else' '$ZRC3'"
 check "no second alias appended"        "[ \"\$(grep -c 'alias claudesync=' '$ZRC3')\" = 1 ]"
@@ -1821,7 +2007,7 @@ check "the difference is reported"      "printf '%s' \"\$outZ3\" | grep -qi 'dif
 # rather than as somebody else's conflicting alias. A gate that cries wolf gets ignored.
 ZRC4="$ZDIR/rc-tilde"
 printf "alias claudesync='~/claude-config-sync/claude-sync pull'\n" > "$ZRC4"
-outZ4="$(SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" \
+outZ4="$(SYNC_LAUNCHAGENTS="$ALDIR" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$ALFS" \
   SYNC_ZSHRC="$ZRC4" SYNC_SELF_DIR="$HOME/claude-config-sync" CLAUDE_HOME="$CA" \
   bash "$SCRIPT" install-autosync 2>&1)"
 check "a tilde alias counts as installed"  "printf '%s' \"\$outZ4\" | grep -qi 'already installed'"
@@ -2871,8 +3057,6 @@ section "== status notices processes the tool left running (#33) =="
 # running on the real machine (L2). A real watcher IS running here while these tests execute, and
 # the empty-fixture case below is the control proving the seam is actually consulted rather than
 # silently missed, which would leave every check passing against live processes (L143).
-PSH="$WORK/ps-home"; PSR="$WORK/ps-repo"
-mkdir -p "$PSH" "$PSR/payload"; echo '{"hooks":{}}' > "$PSH/settings.json"
 _status_with(){ SYNC_PS_FIXTURE="$1" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1; }
 
 # One watcher, with the helper it forks. This is the ordinary healthy machine and must be silent,
@@ -4608,6 +4792,93 @@ CLAUDE_HOME="$TKHA" SYNC_REPO="$TKRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev
 check "#87 and lands on the other Mac as its own home" "grep -q '$TKHA/hooks/second.sh' '$TKHA/hooks/tokback.sh'"
 check "#87 with no trace of the Mac that wrote it"     "! grep -q '$TKHB' '$TKHA/hooks/tokback.sh'"
 
+
+section "== the suite can run ONE section, and what it needs (#105) =="
+# SECTION_UNTIL runs from the top UP TO a section, so reaching the last section costs a full run,
+# and the last section is where new work lands. SECTION_ONLY runs the PRELUDE plus one section plus
+# anything that section declares it needs.
+#
+# The prelude is the preamble and the first four sections. That boundary is not a guess: the only
+# lines in the whole file that change shared state are `export CLAUDE_HOME="$CH2"` and
+# `unset SYNC_NO_GIT`, both inside those four, so every section after them runs in one fixed
+# ambient state. Measured by running all 73 later sections in isolation: 68 passed alone with no
+# mechanism at all, and the five that did not needed a variable an earlier section had set.
+#
+# Four of those five were accidents and are gone (see the fixtures hoisted into the preamble). What
+# is left is declared as a `# needs:` COMMENT on the line after the heading, deliberately NOT as an
+# argument to `section`: three separate derivations in this file parse `^section "..."$` by
+# stripping one trailing quote, and one of them (#37's `_late`) would fail SILENTLY, leaving the
+# guard that proves a filtered child does not run past its limit passing for the wrong reason.
+
+_pe_hits="$(grep '^section "' "$SCRIPT_SELF" | grep -cF -- "$SUITE_PRELUDE_END")"
+check "#105 the prelude boundary names exactly one heading" "[ '$_pe_hits' -eq 1 ]"
+
+# A late, cheap section, run entirely on its own.
+_SO1="$WORK/so-one.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_ONLY="one renderer turns a length of time into words" bash "$SCRIPT_SELF" > "$_SO1" 2>&1; _so1_rc=$?
+dbg "#105 one-section run: $(tail -c 300 "$_SO1" | tr '\n' '|')"
+check "#105 a late section can be run on its own" "[ '$_so1_rc' -eq 0 ]"
+check "#105 and it ran the section asked for" "grep -q 'one renderer turns a length of time into words' '$_SO1'"
+check "#105 the prelude ran with it" "grep -q '^== push ==' '$_SO1'"
+check "#105 but the sections in between did not" "! grep -q 'repo hygiene' '$_SO1'"
+check "#105 the summary names the heading it resolved and says NOT a full run" \
+  "line_has \"\$(cat '$_SO1')\" 'SECTION_ONLY' 'one renderer' 'NOT a full run'"
+
+# Ambiguity. SECTION_UNTIL gets away with first-match-wins because "run up to" has a natural
+# earliest answer; "run only" does not, and silently running a section nobody asked for while
+# reporting success under the typed pattern is a filter that matched the wrong thing (L100, L154).
+_SO2="$WORK/so-amb.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_ONLY="pull" bash "$SCRIPT_SELF" > "$_SO2" 2>&1; _so2_rc=$?
+check "#105 an ambiguous pattern is refused" "[ '$_so2_rc' -ne 0 ]"
+check "#105 the ambiguity refusal says how many it matched" "line_has \"\$(cat '$_SO2')\" 'SECTION_ONLY' 'matches [0-9]+ sections'"
+check "#105 an ambiguous pattern runs nothing at all" "! grep -q '^PASS=' '$_SO2'"
+
+_SO3="$WORK/so-none.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_ONLY=zzz-no-such-section bash "$SCRIPT_SELF" > "$_SO3" 2>&1; _so3_rc=$?
+check "#105 a pattern matching no section is refused" "[ '$_so3_rc' -ne 0 ]"
+check "#105 and says it matched none" "grep -qi 'matched no section' '$_SO3'"
+
+# Both filters at once is a refusal, not a precedence rule: whichever won, the run would be doing
+# something other than what one of the two knobs asked for, and nothing would say so.
+_SO4="$WORK/so-both.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_ONLY=push SECTION_UNTIL=push bash "$SCRIPT_SELF" > "$_SO4" 2>&1; _so4_rc=$?
+check "#105 asking for both filters at once is refused" "[ '$_so4_rc' -ne 0 ]"
+check "#105 the both-filters refusal names both" "line_has \"\$(cat '$_SO4')\" 'SECTION_ONLY' 'SECTION_UNTIL'"
+
+# The one real dependency left in the file, declared and honoured.
+_SO5="$WORK/so-needs.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_ONLY="#17: a collision the merge creates" bash "$SCRIPT_SELF" > "$_SO5" 2>&1; _so5_rc=$?
+check "#105 a section that declares a prerequisite runs green on its own" "[ '$_so5_rc' -eq 0 ]"
+check "#105 and its prerequisite ran with it" "grep -q 'duplicate lesson numbers' '$_SO5'"
+check "#105 while the sections it does not need stayed out" "! grep -q 'repo hygiene' '$_SO5'"
+
+# A declaration that resolves to nothing is an error before anything runs. Tested on a COPY with the
+# declaration corrupted, because the real file has to stay correct (L151: every outcome the contract
+# enumerates needs a test that produces it).
+_SOBAD="$WORK/so-badneeds.sh"
+sed 's/^# needs: .*/# needs: zzz-no-such-prerequisite/' "$SCRIPT_SELF" > "$_SOBAD"
+_sobad_n="$(grep -c '^# needs: zzz-no-such-prerequisite' "$_SOBAD")"
+check "#105 the corrupted copy really carries a bad declaration" "[ '$_sobad_n' -ge 1 ]"
+_SO6="$WORK/so-badneeds.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$_SOBAD" SECTION_ONLY="#17: a collision the merge creates" bash "$_SOBAD" > "$_SO6" 2>&1; _so6_rc=$?
+check "#105 a declaration naming no section is refused" "[ '$_so6_rc' -ne 0 ]"
+check "#105 and the refusal names the text it could not resolve" "grep -q 'zzz-no-such-prerequisite' '$_SO6'"
+
+# The filter must not be inherited. SUITE_FILTERED had exactly this defect and it cost two runaways
+# on 2026-08-17 (#37): a child read the flag as being about ITSELF. Proven the same way #37 proves
+# its own, from the outside, with a real run that RECEIVED the value starting a real child.
+_SOG="$(SUITE_FILTERED=1 SUITE_DEPTH="$SUITE_DEPTH" SECTION_ONLY=push SUITE_SPAWN_UNTIL=push SUITE_TIMEOUT=90 bash "$SCRIPT_SELF" 2>&1)"
+check "#105 the spawn probe for that started a child" "printf '%s' \"\$_SOG\" | grep -q 'the child exited'"
+check "#105 a child does not inherit the one-section filter" \
+  "printf '%s' \"\$_SOG\" | grep -q 'inherits SECTION_ONLY as: <unset>'"
+
+# And the un-export has to sit ahead of every spawn site, or a site above it still hands it on.
+# Derived, and the pattern assembled from pieces so the check cannot be satisfied by its own line.
+_soexp_pat="export"" -n SUITE_FILTERED SECTION_ONLY"
+_soexp_line="$(grep -nF "$_soexp_pat" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
+_sospawn_first="$(grep -nF "bash \"\$SCRIPT""_SELF\"" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
+check "#105 the filter is un-exported before anything spawns a run" \
+  "[ -n \"\$_soexp_line\" ] && [ -n \"\$_sospawn_first\" ] && [ \"\$_soexp_line\" -lt \"\$_sospawn_first\" ]"
 
 section "== every section reports its size and how long it took (#107) =="
 # A full run reported one number, PASS, and nothing about where the minutes went. So "the suite is
