@@ -175,4 +175,5 @@ e2e_nl="$(e2e_verdict "$(printf 'git add -A && git commit -q -m x\n%s origin HEA
   || check "#97 and refuses the same change with the push on its own line" "exit=$e2e_nl"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

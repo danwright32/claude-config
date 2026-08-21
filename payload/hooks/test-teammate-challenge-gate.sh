@@ -99,4 +99,5 @@ python3 -c 'import json,sys; print(json.dumps({"agent_id": "../../.." + sys.argv
   || check "and such a teammate is still only nudged once" "it nudged again, so the marker never stuck"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

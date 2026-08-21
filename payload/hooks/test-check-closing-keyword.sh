@@ -88,5 +88,6 @@ want_flag "negation with a clause between it and the keyword" \
 
 echo
 echo "passed: $pass   failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 rm -f "$DIR/.closing-detector.tmp.py"
 [ "$fail" -eq 0 ]

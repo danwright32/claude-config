@@ -128,6 +128,9 @@ suite_filtered_tail(){   # $1 = how the run was scoped, for the summary   $2 = t
   suite_profile
   echo ""
   echo "PASS=$PASS FAIL=$FAIL ($1, NOT a full run)"
+  # The machine readable line goes on a filtered run too, so a caller reading it never has to know
+  # which knob the run was started with (claude-config#126).
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
   # A filtered run counts the PRELUDE's checks in that total, so a section that ran none of its own
   # still prints a healthy looking number underneath its own name. The total is then not evidence
   # about the thing it is printed beside, which is the same shape as a scan that read nothing
@@ -5437,4 +5440,5 @@ check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

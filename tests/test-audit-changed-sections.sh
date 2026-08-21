@@ -144,4 +144,5 @@ printf '%s' "$o6" | grep -q 'LISTED beta' \
   || check "a pure deletion still attributes to its section" "exit=$c6 out=$o6"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

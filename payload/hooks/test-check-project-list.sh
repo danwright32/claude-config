@@ -161,4 +161,5 @@ out_real="$(bash "$CHECK" 2>&1)"; code_real=$?
   || check "the real project list is correct for this machine" "exit=$code_real out=$out_real"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

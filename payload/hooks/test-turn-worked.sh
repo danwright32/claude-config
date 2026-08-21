@@ -102,4 +102,5 @@ BROKEN="$TMPROOT/broken.jsonl"; printf 'not json\n{"type":"assistant"\n' > "$BRO
   || check "the control: it can say yes at all" "it never says yes, so every 'no' above proves nothing"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

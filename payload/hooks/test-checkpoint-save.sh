@@ -139,4 +139,5 @@ out_broken="$(run "$T_BROKEN")"; code_broken=$?
   || check "a transcript whose lines do not parse is quiet and clean" "out=$out_broken exit=$code_broken"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

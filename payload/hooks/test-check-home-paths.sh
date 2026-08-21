@@ -328,4 +328,5 @@ code_real=$?
   || check "the synced config here names no machine's home directory" "exit=$code_real out=$out_real"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -100,4 +100,5 @@ o7="$(bash "$M" "$TMPROOT/not-a-repo" 2>&1)"; c7=$?
                 || check "a path that is not a git repo is refused" "exit=$c7 out=$o7"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

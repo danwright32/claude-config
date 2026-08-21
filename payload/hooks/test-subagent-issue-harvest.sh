@@ -726,4 +726,5 @@ bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -q "61 times" \
 
 echo
 echo "passed: $pass  failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

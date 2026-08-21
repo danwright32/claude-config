@@ -141,4 +141,5 @@ fi
 rm -rf "$dir"
 
 echo "  $passed passed, $failed failed"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

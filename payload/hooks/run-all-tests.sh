@@ -117,6 +117,7 @@ ran=0
 failed=0
 failed_names=""
 empty_dirs=""
+guessed_names=""
 
 while IFS= read -r d; do
   [ -n "$d" ] || continue
@@ -137,26 +138,39 @@ while IFS= read -r d; do
     ran=$((ran + 1))
     out="$(bash "$suite" 2>&1)"
     code=$?
-    # The suite's own TALLY line, which has to carry a pass count and a fail count on the same
-    # line. Matching any line holding the word "passed" picked up a per-check line instead: the
-    # sync suite reported `ok: #105 even though every check inside it passed` in the column where
-    # its score belongs, which is a line about something else standing where the verdict goes
-    # (L11). Every suite here writes its total differently, so the shapes are matched rather than
-    # a single spelling demanded.
-    summary="$(printf '%s\n' "$out" | grep -EI '[Pp][Aa][Ss][Ss][A-Za-z]*[^0-9]{0,4}[0-9]+|[0-9]+[^0-9]{0,4}[Pp][Aa][Ss][Ss]' \
-                 | grep -EI '[Ff][Aa][Ii][Ll][A-Za-z]*[^0-9]{0,4}[0-9]+|[0-9]+[^0-9]{0,4}[Ff][Aa][Ii][Ll]' | tail -1)"
-    # Trust the exit code, and fall back to the printed tally only when a suite
-    # exits 0 while its own count says otherwise. Read from that same line.
+    # The suite's own result line, which is ONE agreed shape every suite in this repo prints:
+    # `SUITE-RESULT passed=<n> failed=<n>`. Read exactly, so there is nothing to recognise and
+    # nothing to guess (claude-config#126).
     #
-    # The count AFTER the word is tried first and the count before it only if
-    # that finds nothing, because the two forms are not exclusive: read as one
-    # alternation, `PASS=805 FAIL=0` matches "805 FAIL" and the whole suite is
-    # reported as having 805 failures. Two suites here write "0 failed" and the
-    # rest write "failed: 0", so both forms are needed and the order between them
-    # is what makes them safe.
-    tally="$(printf '%s' "$summary" | grep -Eio 'fail(ed|ure)?[^0-9A-Za-z]{0,3}[0-9]+' | tail -1 | grep -Eo '[0-9]+' || true)"
-    if [ -z "$tally" ]; then
-      tally="$(printf '%s' "$summary" | grep -Eio '[0-9]+ +fail(ed|ure)?' | tail -1 | grep -Eo '[0-9]+' || true)"
+    # Before it, thirty six suites wrote their totals five different ways and this had to work out
+    # which line was the score. It got that wrong twice in one day: it printed
+    # `ok: #105 even though every check inside it passed` in the column where a verdict belongs,
+    # and once that was fixed it read `PASS=805 FAIL=0` as 805 failures, because the two count
+    # forms read as one alternation match "805 FAIL". A number the producer already knows exactly
+    # should never be recovered by pattern matching its prose (L107).
+    result="$(printf '%s\n' "$out" | grep -E '^SUITE-RESULT passed=[0-9]+ failed=[0-9]+$' | tail -1)"
+    guessed=0
+    if [ -n "$result" ]; then
+      p_count="${result#*passed=}"; p_count="${p_count%% *}"
+      tally="${result#*failed=}"
+      summary="$p_count passed, $tally failed"
+    else
+      # The fallback, kept because a suite can legitimately exit before it prints anything (no
+      # python3, no jq, a refusal), and because a suite from outside this repo would not know the
+      # convention. It SAYS it was used: a reader that quietly guesses is how the two defects above
+      # survived, and drift back to guessing has to be visible rather than comfortable (L93).
+      guessed=1
+      guessed_names="$guessed_names $name"
+      summary="$(printf '%s\n' "$out" | grep -EI '[Pp][Aa][Ss][Ss][A-Za-z]*[^0-9]{0,4}[0-9]+|[0-9]+[^0-9]{0,4}[Pp][Aa][Ss][Ss]' \
+                   | grep -EI '[Ff][Aa][Ii][Ll][A-Za-z]*[^0-9]{0,4}[0-9]+|[0-9]+[^0-9]{0,4}[Ff][Aa][Ii][Ll]' | tail -1)"
+      # The count AFTER the word is tried first and the count before it only if that finds nothing,
+      # because the two forms are not exclusive and read as one alternation `PASS=805 FAIL=0`
+      # matches "805 FAIL".
+      tally="$(printf '%s' "$summary" | grep -Eio 'fail(ed|ure)?[^0-9A-Za-z]{0,3}[0-9]+' | tail -1 | grep -Eo '[0-9]+' || true)"
+      if [ -z "$tally" ]; then
+        tally="$(printf '%s' "$summary" | grep -Eio '[0-9]+ +fail(ed|ure)?' | tail -1 | grep -Eo '[0-9]+' || true)"
+      fi
+      [ -n "$summary" ] || summary="(no result line, and no tally could be read)"
     fi
     if [ "$code" -ne 0 ] || { [ -n "$tally" ] && [ "$tally" -gt 0 ]; }; then
       failed=$((failed + 1))
@@ -191,6 +205,14 @@ $dirs
 EOF
 
 echo
+if [ -n "$guessed_names" ]; then
+  # Named, not counted. A suite whose score had to be guessed is one whose verdict this run is less
+  # sure of, and the two defects that guessing caused were both found by reading the column, so the
+  # names are what a person needs (L11).
+  echo "NO RESULT LINE from:$guessed_names"
+  echo "  Their scores were guessed from their prose. A suite that ran should print"
+  echo "  SUITE-RESULT passed=<n> failed=<n> as the last thing it says."
+fi
 if [ -n "$empty_dirs" ]; then
   echo "NO TEST SUITES FOUND in these directories, so whatever lives in them was NOT verified:"
   printf '%s' "$empty_dirs"

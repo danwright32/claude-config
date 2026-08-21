@@ -159,4 +159,5 @@ grep -qi 'not installed' "$TMPROOT/noneerr" \
   || check "and says which tool is missing" "stderr=$(cat "$TMPROOT/noneerr")"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -128,4 +128,5 @@ esac
 
 echo "test-hook-coverage: $n_now hook(s) named by no suite, baseline says $n_base."
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

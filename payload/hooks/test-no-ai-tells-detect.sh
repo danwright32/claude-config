@@ -126,4 +126,5 @@ err_quiet="$(python3 -c 'import json; print(json.dumps({"prompt":"write a functi
   || check "and stays silent when the prompt was not asking for prose anyway" "it said: $err_quiet"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

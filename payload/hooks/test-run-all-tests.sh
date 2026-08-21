@@ -123,6 +123,70 @@ bash "$RUNNER" "$Z" >/dev/null 2>&1 \
   || check "and the same shape reporting no failures still passes" "it was called a failure"
 
 # ---------------------------------------------------------------------------
+# The agreed result line. Every suite in this repo prints `SUITE-RESULT passed=<n> failed=<n>` as
+# the last thing it says, and the runner reads that EXACTLY rather than recognising a score in
+# prose (claude-config#126). The marker is assembled at runtime so this file is not itself an
+# occurrence of it.
+# ---------------------------------------------------------------------------
+MARK="SUITE""-RESULT"
+mk_result_suite() { # mk_result_suite <dir> <name> <passed> <failed> <exit>
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo "  ok: a line that mentions something that passed"\n'
+    printf 'echo "  ok: and something else that failed"\n'
+    printf 'echo "PASS=999 FAIL=42"\n'
+    printf 'printf %s\\\\n "%s passed=%s failed=%s"\n' "'%s'" "$MARK" "$3" "$4"
+    printf 'exit %s\n' "$5"
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+
+R="$TMPROOT/dir-resultline"
+mk_result_suite "$R" clean 12 0 0
+out_r="$(bash "$RUNNER" "$R" 2>&1)"; code_r=$?
+[ "$code_r" -eq 0 ] \
+  && check "a suite whose result line says no failures passes" ok \
+  || check "a suite whose result line says no failures passes" "exit=$code_r out=$out_r"
+printf '%s' "$out_r" | grep -q '12 passed, 0 failed' \
+  && check "and its score is shown in one uniform shape" ok \
+  || check "and its score is shown in one uniform shape" "out=$out_r"
+# The fixture deliberately also prints `PASS=999 FAIL=42` and two chatty lines. The result line
+# has to win, or the runner is still recognising a score rather than reading one.
+printf '%s' "$out_r" | grep -q '999' \
+  && check "and a misleading prose tally on the same run is ignored" "it read 999" \
+  || check "and a misleading prose tally on the same run is ignored" ok
+printf '%s' "$out_r" | grep -qi 'NO RESULT LINE' \
+  && check "and nothing is reported as having been guessed" "it said it guessed" \
+  || check "and nothing is reported as having been guessed" ok
+
+# A suite that exits 0 while its own result line reports failures is still a failure. The line is
+# the authority on the count, and the exit code is the authority on the run; either one saying
+# something went wrong is enough.
+R2="$TMPROOT/dir-resultliar"
+mk_result_suite "$R2" liar 3 2 0
+out_r2="$(bash "$RUNNER" "$R2" 2>&1)"; code_r2=$?
+[ "$code_r2" -ne 0 ] \
+  && check "a suite exiting 0 while its result line reports failures is caught" ok \
+  || check "a suite exiting 0 while its result line reports failures is caught" "exit=$code_r2 out=$out_r2"
+
+# A suite with NO result line is still run and still judged, and the runner SAYS it had to guess.
+# A reader that quietly falls back is how two scoring defects survived, so drift back to guessing
+# has to be visible rather than comfortable.
+R3="$TMPROOT/dir-noresult"
+mk_chatty_suite "$R3" oldstyle 'passed: 5, failed: 0'
+out_r3="$(bash "$RUNNER" "$R3" 2>&1)"; code_r3=$?
+[ "$code_r3" -eq 0 ] \
+  && check "a suite with no result line still runs and still passes" ok \
+  || check "a suite with no result line still runs and still passes" "exit=$code_r3 out=$out_r3"
+printf '%s' "$out_r3" | grep -qi 'NO RESULT LINE' \
+  && check "and the runner says out loud that it guessed" ok \
+  || check "and the runner says out loud that it guessed" "out=$out_r3"
+printf '%s' "$out_r3" | grep -q 'test-oldstyle.sh' \
+  && check "and names which suite it guessed for" ok \
+  || check "and names which suite it guessed for" "out=$out_r3"
+
+# ---------------------------------------------------------------------------
 # A directory it was told to read that holds no suite at all. This is the one that has to stay a
 # failure: reading nothing and reading everything green look identical otherwise (L98), and now
 # that several directories are read, one of them going empty is a real way to lose coverage.
@@ -221,4 +285,5 @@ else
 fi
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

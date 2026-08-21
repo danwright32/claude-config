@@ -393,4 +393,5 @@ want_code 2 "no upstream but chain staged the work: still BLOCKS on a missing te
 
 echo
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

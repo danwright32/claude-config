@@ -200,4 +200,5 @@ check_eq "a repo with no owner exits 2" "2" "$rc"
 
 echo
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
