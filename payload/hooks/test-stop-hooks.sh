@@ -83,4 +83,5 @@ expect_fires  "issue-review/edit"      "$REVIEW" "$t_edit"
 
 echo
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

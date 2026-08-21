@@ -169,6 +169,18 @@ those (`bash payload/hooks/run-all-tests.sh tests tools`). A directory it was to
 holds no suite is a failure, not a quiet pass, because reading nothing and reading everything green
 look identical otherwise.
 
+Every suite ends with one machine readable line, and that is what the runner reads:
+
+```
+SUITE-RESULT passed=29 failed=0
+```
+
+The human readable summary stays exactly as it was; this is the line for code. Suites used to write
+their totals five different ways and the runner had to work out which line was the score, which it
+got wrong twice: it printed a per-check line where a verdict belongs, and it read `PASS=805 FAIL=0`
+as 805 failures. A suite that prints no result line is still run and still judged, its score
+guessed from its prose, and the runner NAMES it at the end rather than falling back quietly.
+
 The main suite on its own, which is most of the runtime:
 
 ```bash

@@ -115,4 +115,5 @@ fi
 
 echo "----"
 echo "passed $PASS, failed $FAIL"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

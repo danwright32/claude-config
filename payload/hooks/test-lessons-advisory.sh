@@ -227,4 +227,5 @@ assert_contains "advisory names the file that triggered it" 'src/where.ts' "$out
 
 echo
 echo "passed: $PASS, failed: $FAIL"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

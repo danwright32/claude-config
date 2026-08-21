@@ -128,6 +128,9 @@ suite_filtered_tail(){   # $1 = how the run was scoped, for the summary   $2 = t
   suite_profile
   echo ""
   echo "PASS=$PASS FAIL=$FAIL ($1, NOT a full run)"
+  # The machine readable line goes on a filtered run too, so a caller reading it never has to know
+  # which knob the run was started with (claude-config#126).
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
   # A filtered run counts the PRELUDE's checks in that total, so a section that ran none of its own
   # still prints a healthy looking number underneath its own name. The total is then not evidence
   # about the thing it is printed beside, which is the same shape as a scan that read nothing
@@ -3477,6 +3480,14 @@ _rows="$(awk '/^\| Number \| Set by/{t=1; next} t && /^\| *--- /{next} t && /^\|
 check "#41 the measured-numbers table has rows to check" \
   "[ \"\$(printf '%s' \"\$_rows\" | grep -c .)\" -ge 5 ]"
 _uncited=""; _badcite=""
+# The section headings are read ONCE, into a variable, and matched with `case`. Written as
+# `grep '^section "' "$SCRIPT_SELF" | grep -qF -- "($_cite)"` this was a pipeline whose consumer
+# short circuits: `grep -q` exits on the first match, the producer is killed by SIGPIPE, and under
+# `pipefail` the pipeline's status becomes that death. So a citation that WAS found could be
+# recorded as missing, depending on nothing more than whether the producer had finished writing
+# before the consumer left (L183). It behaved on this Mac and failed on the Linux runner, and it
+# started failing there when this file grew by a few lines, which is how latent that was.
+_sections="$(grep '^section "' "$SCRIPT_SELF")"
 while IFS= read -r _row; do
   [ -n "$_row" ] || continue
   _cite="$(printf '%s' "$_row" | grep -oE 'proved by #[0-9]+' | head -1 | sed 's/.*#/#/')"
@@ -3484,18 +3495,28 @@ while IFS= read -r _row; do
     _uncited="$_uncited[$(printf '%s' "$_row" | cut -d'|' -f2 | sed 's/^ *//; s/ *$//')]"
     continue
   fi
-  grep '^section "' "$SCRIPT_SELF" | grep -qF -- "($_cite)" || _badcite="$_badcite[$_cite]"
+  case "$_sections" in
+    *"($_cite)"*) ;;
+    *) _badcite="$_badcite[$_cite]" ;;
+  esac
 done <<DESIGNROWS
 $_rows
 DESIGNROWS
 check "#41 every documented number cites the check that proves its justification" "[ -z \"\$_uncited\" ]"
-check "#41 and every citation names a section that exists" "[ -z \"\$_badcite\" ]"
+# The failure NAMES the citation it could not find, and how many section headings it read looking
+# for it. Asserted as a bare emptiness test, this said only that something was wrong, which is
+# useless on a machine you cannot re-run by hand and is exactly where this one first failed
+# (L11, claude-config#101).
+_sec_seen="$(printf '%s\n' "$_sections" | grep -c . || true)"
+check "#41 and every citation names a section that exists" \
+  "[ -z \"\$_badcite\" ] || { echo \"    citations with no matching section: \$_badcite (read \$_sec_seen section headings in \$SCRIPT_SELF)\" >&2; false; }"
 # Both halves of that need to be seen working, or an empty answer is the scan reading nothing rather
 # than the table being right (L98, L1).
 _cite_probe="$(printf '%s' '| 1 thing | `X=1` | y | because, proved by #99999 | 2026-01-01 |' | grep -oE 'proved by #[0-9]+' | sed 's/.*#/#/')"
 check "#41 the citation scan finds a citation when there is one" "[ '$_cite_probe' = '#99999' ]"
 check "#41 and a citation naming no section would be caught" \
-  "! grep '^section \"' '$SCRIPT_SELF' | grep -qF -- '(#99999)'"
+  "case \"\$_sections\" in *'(#99999)'*) false ;; *) true ;; esac"
+check "#41 the heading scan really read the headings" "[ \"\$_sec_seen\" -ge 40 ]"
 # Every default of the shape a threshold has, from BOTH files, as "NAME VALUE" pairs. Comments are
 # stripped first, or prose quoting a number satisfies the check that the number is current, and a
 # guard that is green on its own explanation is indistinguishable from one that works (L103).
@@ -5437,4 +5458,5 @@ check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

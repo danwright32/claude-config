@@ -143,4 +143,5 @@ esac
   && check "an empty command is zero creates, not unreadable" ok || check "an empty command is zero creates, not unreadable" "got $(ask count '')"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -184,4 +184,5 @@ grep -nE '\[ *-[nz] *"?\$\{[A-Za-z_][A-Za-z_0-9]*//' "$PLANT" >/dev/null 2>&1 \
   || check "and the pattern it looks for does match a planted one" "it matched nothing"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

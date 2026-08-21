@@ -74,7 +74,10 @@ if [ -f "$D/skills/grilling/SKILL.md" ]; then ok "grilling skill present"; else 
 for s in plan-council plan-lite; do
   smd="$D/skills/$s/SKILL.md"
   if grep -q '`grilling` skill' "$smd" 2>/dev/null; then ok "$s invokes grilling"; else bad "$s — no grilling step in SKILL.md"; fi
-  if awk '/^---$/{n++; next} n==1' "$smd" 2>/dev/null | grep -q '^allowed-tools:.*Skill'; then
+  # Captured first: awk feeding grep -q is a pipeline whose consumer leaves on the first match and
+  # kills the producer, which under `pipefail` reads as the check failing (L183).
+  _pc_fm="$(awk '/^---$/{n++; next} n==1' "$smd" 2>/dev/null || true)"
+  if printf '%s\n' "$_pc_fm" | grep -q '^allowed-tools:.*Skill'; then
     ok "$s allowed-tools includes Skill"
   else
     bad "$s — allowed-tools lacks Skill, so it cannot invoke grilling"

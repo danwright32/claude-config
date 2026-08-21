@@ -88,4 +88,5 @@ printf '%s' "$out3" | context_of | grep -q 'double quote' \
   || check "and the rules still come through intact" "out=$out3"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

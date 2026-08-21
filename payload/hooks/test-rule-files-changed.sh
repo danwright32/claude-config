@@ -151,4 +151,5 @@ gone_code=$?
   || check "a missing config directory exits cleanly and quietly" "exit=$gone_code out=$gone_out"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

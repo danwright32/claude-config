@@ -122,4 +122,5 @@ want_style_code 0 "clean copy pushed the same way is allowed"
 
 echo
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

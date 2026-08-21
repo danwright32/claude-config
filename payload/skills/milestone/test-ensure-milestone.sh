@@ -370,4 +370,5 @@ check_eq "the override makes exactly one write call" "1" "$(created_count)"
 
 echo
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

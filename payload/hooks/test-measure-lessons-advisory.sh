@@ -129,4 +129,5 @@ grep -q 'lessons-advisory.sh' "$M" \
   || check "and that hook is really there and runnable" "missing or not executable"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

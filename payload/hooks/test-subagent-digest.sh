@@ -134,4 +134,5 @@ printf '%s' "$out_long" | grep -qi 'trimmed' \
   || check "and says it trimmed rather than silently shortening" "out=${out_long:0:200}"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

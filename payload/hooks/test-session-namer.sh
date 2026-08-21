@@ -99,4 +99,5 @@ payload "$id3" "$TMPROOT/Ctl" | bash "$H" >/dev/null 2>&1
   || check "the control: an ordinary session id does write one" "no marker was written, so the traversal check proves nothing"
 
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

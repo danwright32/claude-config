@@ -76,4 +76,5 @@ run "an env-prefixed real command still blocked" $BLOCK \
 
 echo
 echo "passed: $pass   failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

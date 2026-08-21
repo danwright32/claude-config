@@ -338,4 +338,5 @@ check_eq "no issue lines when issues empty" "0" "$n0"
 
 echo
 echo "passed: $pass, failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

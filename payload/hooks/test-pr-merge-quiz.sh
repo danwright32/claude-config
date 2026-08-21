@@ -207,4 +207,5 @@ absent "drops the inconsequential test"    'If the change is inconsequential'
 
 echo
 echo "passed: $pass   failed: $fail"
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
