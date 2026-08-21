@@ -82,7 +82,12 @@ JSON
 # ORIGINAL payload is emitted anyway: losing the spool text is bad, losing the
 # whole review because of it is worse, and an injector failure is invisible
 # otherwise (its stderr goes nowhere and an empty stdout just means no review).
-pending_file="$(mktemp -t claude-issue-pending)"
+# An explicit template, not `mktemp -t <prefix>`. BSD mktemp appends random characters to a
+# prefix; GNU mktemp reads the same argument as a TEMPLATE and refuses it for having no trailing
+# X's. On Linux this line therefore failed, and under errexit it took the whole review with it:
+# every issue review on a machine that was not a Mac exited silently, which is indistinguishable
+# from a review that ran and found nothing to say (claude-config#101, measured on the runner).
+pending_file="$(mktemp "${TMPDIR:-/tmp}/claude-issue-pending.XXXXXX")"
 printf '%s' "$pending" > "$pending_file"
 injected="$(printf '%s' "$payload" | python3 "$(dirname "${BASH_SOURCE[0]}")/lib/inject-spool.py" "$pending_file" 2>/dev/null)" || injected=""
 rm -f "$pending_file"
