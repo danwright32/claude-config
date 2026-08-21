@@ -18,9 +18,19 @@ pass() { passed=$((passed + 1)); }
 
 # A throwaway repo, optionally carrying the merge tool, and a fake gh whose
 # answer this test chooses.
-make_repo() {  # $1 = with-tool | without-tool ; $2 = rollup json
+make_repo() {  # $1 = with-tool | without-tool | with-ci | with-ci-not-on-prs ; $2 = rollup json
   local dir; dir=$(mktemp -d)
   mkdir -p "$dir/repo/.git" "$dir/bin"
+  if [ "$1" = "with-ci" ]; then
+    mkdir -p "$dir/repo/.github/workflows"
+    printf 'name: tests\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n' \
+      > "$dir/repo/.github/workflows/tests.yml"
+  fi
+  if [ "$1" = "with-ci-not-on-prs" ]; then
+    mkdir -p "$dir/repo/.github/workflows"
+    printf 'name: nightly\non:\n  schedule:\n    - cron: "0 3 * * *"\njobs:\n  t:\n    runs-on: ubuntu-latest\n' \
+      > "$dir/repo/.github/workflows/nightly.yml"
+  fi
   if [ "$1" = "with-tool" ]; then
     mkdir -p "$dir/repo/tools"
     printf '#!/usr/bin/env python3\n' > "$dir/repo/tools/wait_for_checks.py"
@@ -51,6 +61,11 @@ run_hook() {  # $1 = repo dir, $2 = command ; prints the hook's stdout
 
 GREEN='{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}]}'
 RED='{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"FAILURE"}]}'
+# A pull request with NO checks at all. GitHub answers this way for two very different reasons,
+# and the gate has to tell them apart (claude-config#131).
+NONE_CLEAN='{"number":7,"statusCheckRollup":[],"mergeable":"MERGEABLE"}'
+NONE_CONFLICTING='{"number":7,"statusCheckRollup":[],"mergeable":"CONFLICTING"}'
+NONE_UNKNOWN='{"number":7,"statusCheckRollup":[],"mergeable":"UNKNOWN"}'
 
 denied() { printf '%s' "$1" | grep -q '"permissionDecision": *"deny"'; }
 
@@ -138,6 +153,75 @@ dir=$(make_repo with-npm-tool "$RED")
 if denied "$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; then pass; else
   fail "a red PR was allowed through once the pinned-tool rule was overridden"
 fi
+rm -rf "$dir"
+
+echo "block-red-merge: a pull request with no checks at all (#131)"
+
+# A conflicting branch has no merge commit for GitHub to build, so the workflow is never
+# SCHEDULED and the rollup comes back empty. That is indistinguishable from a repo with no CI, and
+# the gate used to allow both: it would merge a pull request whose tests never ran, which is the
+# one thing it exists to prevent (L98).
+dir=$(make_repo with-ci "$NONE_CONFLICTING")
+out=$(run_hook "$dir" "gh pr merge 7 --squash")
+if denied "$out"; then pass; else
+  fail "a conflicting PR with no checks was allowed through: $out"
+fi
+if printf '%s' "$out" | grep -qi 'conflict'; then pass; else
+  fail "the refusal does not say the branch conflicts, which is the one thing that explains it: $out"
+fi
+if printf '%s' "$out" | grep -qi 'rebase\|merge the base'; then pass; else
+  fail "the refusal does not say what to do about it: $out"
+fi
+rm -rf "$dir"
+
+# The same empty rollup in a repo that HAS a workflow triggered by pull requests. Not a conflict,
+# so something else stopped the run: a broken workflow file, Actions turned off, a queue that never
+# started. Whatever it is, the tests did not run, and merging on that is merging blind.
+dir=$(make_repo with-ci "$NONE_CLEAN")
+out=$(run_hook "$dir" "gh pr merge 7 --squash")
+if denied "$out"; then pass; else
+  fail "a PR with no checks was allowed in a repo whose workflows run on pull requests: $out"
+fi
+if printf '%s' "$out" | grep -qi 'conflict'; then
+  fail "it blamed a conflict when the branch merges cleanly: $out"
+else pass; fi
+rm -rf "$dir"
+
+# And the case the old behaviour was written for, which must keep working: a repo with no CI at
+# all has nothing that could be red, so an empty rollup is the honest answer and the merge goes
+# through. Without this the fix above would just block every merge in every repo without tests.
+dir=$(make_repo without-tool "$NONE_CLEAN")
+if denied "$(run_hook "$dir" "gh pr merge 7 --squash")"; then
+  fail "a repo with no CI at all was blocked for having no checks"
+else pass; fi
+rm -rf "$dir"
+
+# A repo whose only workflow does not run on pull requests is the same case: nothing was ever
+# going to check this PR, so an empty rollup is expected rather than suspicious.
+dir=$(make_repo with-ci-not-on-prs "$NONE_CLEAN")
+if denied "$(run_hook "$dir" "gh pr merge 7 --squash")"; then
+  fail "a repo whose workflows never run on pull requests was blocked: it has no PR checks to wait for"
+else pass; fi
+rm -rf "$dir"
+
+# GitHub answers UNKNOWN while it is still working out whether the branch merges. That is not
+# evidence of a conflict, and it is not evidence of a clean branch either, so it must not be
+# treated as either: the workflow question below still decides (L11).
+dir=$(make_repo with-ci "$NONE_UNKNOWN")
+out=$(run_hook "$dir" "gh pr merge 7 --squash")
+if denied "$out"; then pass; else
+  fail "an unknown mergeable state with no checks was allowed through: $out"
+fi
+if printf '%s' "$out" | grep -qi 'conflict'; then
+  fail "it asserted a conflict GitHub had not confirmed: $out"
+else pass; fi
+rm -rf "$dir"
+
+# The visible override still works here, or a genuine case with no other route becomes unmergeable.
+dir=$(make_repo with-ci "$NONE_CONFLICTING")
+if denied "$(run_hook "$dir" "ALLOW_RED_MERGE=1 gh pr merge 7 --squash")"; then
+  fail "the visible override did not let a no-checks merge through"
+else pass; fi
 rm -rf "$dir"
 
 echo "  $passed passed, $failed failed"

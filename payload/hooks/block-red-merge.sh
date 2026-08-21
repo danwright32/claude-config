@@ -123,7 +123,7 @@ if [ -n "$pinned_tool" ]; then
   esac
 fi
 
-rollup=$(gh pr view ${pr:+"$pr"} --json number,statusCheckRollup 2>/dev/null)
+rollup=$(gh pr view ${pr:+"$pr"} --json number,statusCheckRollup,mergeable 2>/dev/null)
 [ -z "$rollup" ] && deny "Cannot verify CI for this PR (gh pr view returned nothing). Check the PR manually, then re-run with ALLOW_RED_MERGE=1 if it is genuinely green."
 
 number=$(printf '%s' "$rollup" | jq -r '.number // "?"')
@@ -135,7 +135,41 @@ verdicts=$(printf '%s' "$rollup" | jq -r '[.statusCheckRollup[]? | {
 }]')
 
 total=$(printf '%s' "$verdicts" | jq 'length')
-[ "$total" = "0" ] && exit 0  # no checks configured: nothing can be red
+
+# NO checks at all has two very different causes and they must not share an answer
+# (claude-config#131, L11).
+#
+# The benign one is a repo with no CI: nothing can be red, and blocking would make every such
+# repo unmergeable. That is what this used to assume for every empty answer.
+#
+# The dangerous one is a pull request whose checks were never SCHEDULED. A branch that conflicts
+# with its base has no merge commit for GitHub to build, so the workflow never starts and the
+# rollup comes back empty, identical to the benign case. This gate would then merge a pull request
+# whose tests never ran, which is the one thing it exists to prevent. Measured on 2026-08-21:
+# PR #130 sat with no checks for twenty minutes and `gh pr checks` said only "no checks reported",
+# which reads exactly like a queue that has not started.
+if [ "$total" = "0" ]; then
+  mergeable=$(printf '%s' "$rollup" | jq -r '.mergeable // ""')
+  if [ "$mergeable" = "CONFLICTING" ]; then
+    deny "PR #$number has NO checks because it conflicts with its base branch. GitHub cannot build a merge commit for a conflicting branch, so it never scheduled the tests, and an empty check list looks exactly like a queue that has not started yet. Rebase onto the base branch (or merge the base into it) and the tests will run. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+  fi
+
+  # Not a conflict. Does this repo have anything that WOULD have checked a pull request? If it
+  # does, the absence of checks is unexplained, and merging on an unexplained absence is merging
+  # blind. If it does not, an empty answer is the honest one and the merge goes through.
+  #
+  # UNKNOWN is deliberately not treated as either: GitHub answers that while it is still working
+  # the mergeability out, so it is evidence of nothing and this question decides instead.
+  pr_ci=""
+  for wf in .github/workflows/*.yml .github/workflows/*.yaml; do
+    [ -f "$wf" ] || continue
+    grep -qE '^[[:space:]]*pull_request(_target)?:' "$wf" && { pr_ci="$wf"; break; }
+  done
+  if [ -n "$pr_ci" ]; then
+    deny "PR #$number has NO checks at all, but this repo runs $pr_ci on pull requests, so something stopped them being scheduled: a workflow that will not parse, Actions disabled, or a run that never started. Find out which before merging, because an empty check list is indistinguishable from a green one here. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+  fi
+  exit 0   # no CI that runs on pull requests: nothing can be red
+fi
 
 bad=$(printf '%s' "$verdicts" | jq -r '[.[] | select(.result | IN("SUCCESS","NEUTRAL","SKIPPED") | not)] | map("\(.name)=\(if .result == "" then "PENDING" else .result end)") | join(", ")')
 

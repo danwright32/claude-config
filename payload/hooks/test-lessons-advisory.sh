@@ -226,6 +226,33 @@ out=$(run_hook "git push" "$R")
 assert_contains "advisory names the file that triggered it" 'src/where.ts' "$out"
 
 echo
+# ---------------------------------------------------------------------------
+# A LARGE diff. The trigger matching used to feed the added lines to `grep -q` through a pipe, and
+# `grep -q` leaves on its first match: a string bigger than the pipe buffer means the writer is
+# killed by SIGPIPE, the pipeline reports failure under `pipefail`, and the code reads that as no
+# match. The advisory would go quiet on exactly the pushes that add the most lines, which is when
+# it has most to say (L183, claude-config#132).
+#
+# The trigger is planted FIRST, with the bulk after it, and that ordering is the whole fixture.
+# `grep -q` leaves the moment it matches. Put the trigger at the END and the reader has to consume
+# everything before it can match, so the writer always finishes and the failure can never occur:
+# the test would pass against the broken code and prove nothing. Put it FIRST and the reader
+# leaves while there are still 200KB to write, which is the case (measured: with the pipe in
+# place this fixture makes the advisory go silent).
+big_body="$(python3 -c '
+pad = "a harmless line of code that triggers nothing at all\n" * 4000
+print("rm -rf \"$target_directory\"\n" + pad)
+')"
+BIGREPO="$(make_repo bigdiff "$big_body" "cleanup.sh")"
+out_big="$(run_hook "git push" "$BIGREPO")"
+big_bytes="$(printf '%s' "$big_body" | wc -c | tr -d ' ')"
+if [ "$big_bytes" -gt 65536 ]; then
+  PASS=$((PASS+1)); echo "PASS: the large-diff fixture is bigger than a pipe buffer ($big_bytes bytes)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL: the large-diff fixture is only $big_bytes bytes, so it proves nothing"
+fi
+assert_contains "the advisory still fires on a diff too big to fit a pipe" "L5" "$out_big"
+
 echo "passed: $PASS, failed: $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

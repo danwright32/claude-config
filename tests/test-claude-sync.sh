@@ -220,7 +220,7 @@ fi
 # Collected once, and used by BOTH filters. They used to resolve a name differently: SECTION_ONLY
 # refused an ambiguous pattern and SECTION_UNTIL took the earliest match, which meant which rules
 # applied depended on which knob you reached for (claude-config#110).
-if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTION_LIST:-}" ]; } && [ -z "${SUITE_FILTERED:-}" ]; then
+if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTION_LIST:-}" ] || [ -n "${SUITE_SHARD:-}" ]; } && [ -z "${SUITE_FILTERED:-}" ]; then
   # Every heading, its line, and any `# needs:` lines directly beneath it. A declaration is a
   # COMMENT and deliberately not an argument to `section`: three derivations in this file parse
   # `^section "..."$` by stripping one trailing quote, and #37's `_late` would fail SILENTLY,
@@ -336,7 +336,56 @@ if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   exit "$_rc"
 fi
 
-if [ -n "${SECTION_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+# SUITE_SHARD=i/n runs the prelude plus every n-th section from the i-th offset (claude-config#133).
+# It shares the SECTION_ONLY extractor below rather than having one of its own: that code already
+# takes a SET of sections, pulls in whatever they declare they need, and refuses a copy that does
+# not parse, and a second implementation of any of that would drift from this one.
+#
+# Round robin rather than contiguous blocks, because the sections are wildly uneven: measured on
+# this Mac the slowest five are 22s, 13s, 11s, 11s and 9s out of about 200s across 82 sections, so
+# contiguous blocks would put several slow ones in the same shard and the whole run would wait for
+# it. Interleaving spreads them without anybody maintaining a list of which are slow.
+if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+  case "$SUITE_SHARD" in
+    [1-9]*/[1-9]*) ;;
+    *) echo "test suite: SUITE_SHARD='$SUITE_SHARD' is not of the form i/n, for example 2/4. Refusing rather than guessing which sections to run, because a guess would report a result over a set nobody chose." >&2; exit 2 ;;
+  esac
+  _sh_i="${SUITE_SHARD%%/*}"; _sh_n="${SUITE_SHARD##*/}"
+  case "$_sh_i$_sh_n" in *[!0-9]*) echo "test suite: SUITE_SHARD='$SUITE_SHARD' is not two whole numbers." >&2; exit 2 ;; esac
+  if [ "$_sh_i" -lt 1 ] || [ "$_sh_i" -gt "$_sh_n" ]; then
+    echo "test suite: SUITE_SHARD='$SUITE_SHARD' asks for shard $_sh_i of $_sh_n, which does not exist. Refusing rather than running an empty set and reporting it as a pass." >&2
+    exit 2
+  fi
+
+  _sec_match "$SUITE_PRELUDE_END"
+  if [ "$_so_hits" -ne 1 ]; then
+    echo "test suite: the prelude boundary '$SUITE_PRELUDE_END' matches $_so_hits headings rather than exactly one, so which sections make up the prelude is not decided." >&2
+    exit 2
+  fi
+  _so_pend="$_so_idx"
+
+  # Every section after the prelude that falls in this shard. Seeded as the targets; the closure
+  # below then pulls in anything they declare they need, exactly as it does for one section.
+  _sh_targets=""
+  _sh_k=$(( _so_pend + 1 ))
+  _sh_pos=0
+  while [ "$_sh_k" -le "$_so_i" ]; do
+    if [ $(( _sh_pos % _sh_n )) -eq $(( _sh_i - 1 )) ]; then _sh_targets="$_sh_targets $_sh_k"; fi
+    _sh_pos=$(( _sh_pos + 1 ))
+    _sh_k=$(( _sh_k + 1 ))
+  done
+  # A shard holding no sections at all must REFUSE, never report a clean run: a suite that checked
+  # nothing and exits 0 is indistinguishable from one where everything passed (L98).
+  case "$_sh_targets" in
+    *[![:space:]]*) ;;
+    *) echo "test suite: shard $_sh_i of $_sh_n holds no sections at all, so nothing would be run. Use fewer shards than the $(( _so_i - _so_pend )) sections there are." >&2; exit 2 ;;
+  esac
+  SECTION_ONLY=""
+  _so_shard_mode=1
+  _so_target="${_sh_targets##* }"
+fi
+
+if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${_so_shard_mode:-}" ]; } && [ -z "${SUITE_FILTERED:-}" ]; then
   _sec_match "$SUITE_PRELUDE_END"
   if [ "$_so_hits" -ne 1 ]; then
     echo "test suite: the prelude boundary '$SUITE_PRELUDE_END' matches $_so_hits headings rather than exactly one, so which sections make up the prelude is not decided. Refusing rather than filtering against a boundary nobody can point at." >&2
@@ -344,23 +393,26 @@ if [ -n "${SECTION_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   fi
   _so_pend="$_so_idx"
 
-  _sec_match "$SECTION_ONLY"
-  if [ "$_so_hits" -eq 0 ]; then
-    echo "test suite: SECTION_ONLY='$SECTION_ONLY' matched no section. Run without it, or check the spelling against the '==' headings." >&2
-    exit 2
+  if [ -z "${_so_shard_mode:-}" ]; then
+    _sec_match "$SECTION_ONLY"
+    if [ "$_so_hits" -eq 0 ]; then
+      echo "test suite: SECTION_ONLY='$SECTION_ONLY' matched no section. Run without it, or check the spelling against the '==' headings." >&2
+      exit 2
+    fi
+    if [ "$_so_hits" -gt 1 ]; then
+      echo "test suite: SECTION_ONLY='$SECTION_ONLY' matches $_so_hits sections, so which one to run is not decided. Narrow it. The candidates are:" >&2
+      printf '%s\n' "$_so_list" >&2
+      exit 2
+    fi
+    _so_target="$_so_idx"
+    _sh_targets="$_so_target"
   fi
-  if [ "$_so_hits" -gt 1 ]; then
-    echo "test suite: SECTION_ONLY='$SECTION_ONLY' matches $_so_hits sections, so which one to run is not decided. Narrow it. The candidates are:" >&2
-    printf '%s\n' "$_so_list" >&2
-    exit 2
-  fi
-  _so_target="$_so_idx"
 
   # The transitive closure of what the target declares it needs. A declaration that resolves to
   # nothing, to several, or to a LATER section is an error before anything runs: each would leave
   # the prerequisite out while the run went on to report a result (L100, L151).
   _so_keep=""
-  _so_queue="$_so_target"
+  _so_queue="$_sh_targets"
   while [ -n "$_so_queue" ]; do
     _so_cur="${_so_queue%% *}"
     case "$_so_queue" in *" "*) _so_queue="${_so_queue#* }" ;; *) _so_queue="" ;; esac
@@ -408,7 +460,12 @@ SONEEDS
   done
 
   _so_name="$(section_title "${_so_titles[$_so_target]}")"
-  printf '\nsuite_filtered_tail "SECTION_ONLY resolved to %s" "%s"; exit $?\n' "$_so_name" "$_so_name" >> "$_filtered"
+  if [ -n "${_so_shard_mode:-}" ]; then
+    _so_how="shard $_sh_i of $_sh_n, $(printf '%s' "$_so_keep" | wc -w | tr -d ' ') section(s)"
+  else
+    _so_how="SECTION_ONLY resolved to $_so_name"
+  fi
+  printf '\nsuite_filtered_tail "%s" "%s"; exit $?\n' "$_so_how" "$_so_name" >> "$_filtered"
 
   # SECTION_ONLY drops a span out of the MIDDLE, which SECTION_UNTIL never does, so the seam that
   # proves the parse check works has to damage the middle too. An end-appended error would be a
@@ -495,7 +552,13 @@ fi
 # `export -n` rather than `unset`: this process still needs the value (the #27 subruns below read
 # it), and the only thing that has to stop is the inheritance. Done HERE, once, rather than at each
 # spawn site, because a site added later cannot remember a rule it never saw (L30, L96).
-export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST SUITE_FROM_COPY 2>/dev/null || true
+#
+# SUITE_NO_LOCK is on the list for a reason worth stating: inherited, it silently disables the very
+# thing #32 is asserting. That section starts a second run and requires the lock to REFUSE it, so
+# with the flag leaking through, the child took no lock, ran happily, and the checks that prove the
+# lock works failed. Which means that before this, anybody running the suite with SUITE_NO_LOCK=1
+# was running #32 against a lock nothing was testing (L169).
+export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST SUITE_FROM_COPY SUITE_SHARD SUITE_NO_LOCK 2>/dev/null || true
 
 # SUITE_SPAWN_UNTIL=<text> starts ONE child with that section limit, says what a child of this run
 # inherits, and exits with the child's status. It is the seam that makes the paragraph above
@@ -695,6 +758,72 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
     echo "test suite: could not take the lock at $SUITE_LOCK after $_lk_try attempts, and it is not held by a run this could identify. Refusing rather than running unserialized. Check that path is writable." >&2
     exit 5
   fi
+fi
+
+# ---- a full run fans its sections out across processes (#133) ----
+# 82 sections, about 200 seconds, and no single one dominates: the slowest five measured 22s, 13s,
+# 11s, 11s and 9s here, so there is nothing to speed up, only work to spread. Since #125 the whole
+# repo's suites run side by side and this one is the single longest, which makes it the entire
+# remaining wall clock.
+#
+# HERE, after the lock: the parent holds it and the shards run with SUITE_NO_LOCK=1, so this is one
+# logical run holding one lock rather than N runs fighting over it. The depth is passed through
+# UNCHANGED for the same reason the filtered paths pass it through: this is the same logical run
+# re-executed, not a run nested inside one, and counting it would refuse the subruns that several
+# sections start (#34).
+#
+# The shards' output is printed in shard order, never completion order, so two runs of the same
+# tree produce the same page (#125).
+#
+# The total counts the PRELUDE once per shard, because every shard has to run it to have any
+# fixtures at all. That is stated rather than hidden: the number is genuinely larger than a
+# one-process run's and it is not a bug to chase.
+SUITE_JOBS="${SUITE_JOBS:-4}"
+case "$SUITE_JOBS" in
+  ''|*[!0-9]*)
+    echo "test suite: SUITE_JOBS='$SUITE_JOBS' is not a whole number of shards. Refusing rather than guessing, because it decides how many processes start. Use 1 to run in a single process." >&2
+    exit 2 ;;
+esac
+if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHARD:-}" ] && [ "$SUITE_JOBS" -gt 1 ]; then
+  _fan_dir="$(mktemp -d "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
+  _fan_pids=""
+  _fan_i=1
+  while [ "$_fan_i" -le "$SUITE_JOBS" ]; do
+    SUITE_SHARD="$_fan_i/$SUITE_JOBS" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_DEPTH"       SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF"       bash "$SCRIPT_SELF" > "$_fan_dir/$_fan_i.out" 2>&1 &
+    _fan_pids="$_fan_pids $!"
+    _fan_i=$((_fan_i + 1))
+  done
+  _fan_rc=0
+  for _fan_p in $_fan_pids; do wait "$_fan_p" || _fan_rc=1; done
+
+  _fan_pass=0; _fan_fail=0; _fan_missing=""
+  _fan_i=1
+  while [ "$_fan_i" -le "$SUITE_JOBS" ]; do
+    echo ""
+    echo "===== shard $_fan_i of $SUITE_JOBS ====="
+    cat "$_fan_dir/$_fan_i.out" 2>/dev/null
+    _fan_line="$(grep -E '^SUITE-RESULT passed=[0-9]+ failed=[0-9]+$' "$_fan_dir/$_fan_i.out" 2>/dev/null | tail -1)"
+    if [ -n "$_fan_line" ]; then
+      _fan_p2="${_fan_line#*passed=}"; _fan_p2="${_fan_p2%% *}"
+      _fan_f2="${_fan_line#*failed=}"
+      _fan_pass=$((_fan_pass + _fan_p2)); _fan_fail=$((_fan_fail + _fan_f2))
+    else
+      # A shard that printed no result line reported NOTHING, and a missing total must never be
+      # added in as a zero: that reads as a shard where everything passed (L98, L90).
+      _fan_missing="$_fan_missing $_fan_i"
+      _fan_rc=1
+    fi
+    _fan_i=$((_fan_i + 1))
+  done
+  rm -rf "$_fan_dir"
+  echo ""
+  if [ -n "$_fan_missing" ]; then
+    echo "test suite: shard(s)$_fan_missing produced no result line, so their checks are NOT in the total below. Treat this run as failed." >&2
+  fi
+  echo "PASS=$_fan_pass FAIL=$_fan_fail ($SUITE_JOBS shards; the prelude runs in each, so its checks are counted $SUITE_JOBS times)"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$_fan_pass" "$_fan_fail"
+  [ "$_fan_fail" -eq 0 ] || _fan_rc=1
+  exit "$_fan_rc"
 fi
 
 # ---- reclaim scratch a killed run left behind (#36) ----
@@ -3902,6 +4031,50 @@ check "#121 and the tool under test is still the real one" \
 _fc_seam="SUITE_""FROM_COPY"
 check "#121 the seam that puts a run back in the old state is still there" \
   "grep -q \"\$_fc_seam\" '$SCRIPT_SELF'"
+
+section "== a full run fans out across shards, and refuses a set nobody chose (#133) =="
+# 82 sections, about 200 seconds, and no single one dominates, so there is nothing to speed up and
+# only work to spread. Since #125 every suite in the repo runs side by side and this one is the
+# single longest, which makes it the whole remaining wall clock. Measured after the change: 75
+# seconds across four shards.
+#
+# Every check here is a REFUSAL, and deliberately so. Running a real fan-out from inside a section
+# would take minutes and would tell you what the run you are already in has told you. What cannot
+# be learned that way is whether a shard spec nobody can read is refused rather than guessed at,
+# and a guess would report a result over a set of sections nobody chose (L50, L98).
+_sh_run(){ SUITE_SHARD="$1" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -3; }
+for _sh_bad in "0/4" "5/4" "abc" "2" "2/0" "-1/4"; do
+  _sh_out="$(_sh_run "$_sh_bad")"
+  check "#133 a shard spec of '$_sh_bad' is refused"     "printf '%s' \"\$_sh_out\" | grep -q \"SUITE_SHARD='$_sh_bad'\""
+done
+# The control: a WELL formed spec is not refused, or every check above is satisfied by a suite that
+# refuses everything (L159). Asked for a shard count larger than the section count, which is the
+# one well formed spec that still has to refuse, and for a real one, which must not.
+_sh_ok="$(SUITE_SHARD=1/2 SUITE_NO_LOCK=1 SECTION_LIST=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -2)"
+check "#133 the control: a well formed spec gets past the refusals"   "! printf '%s' \"\$_sh_ok\" | grep -q 'is not of the form'"
+
+# A job count nobody can read decides how many processes start, so it is refused too.
+for _sh_j in "two" "1.5" "-2"; do
+  _sh_jo="$(SUITE_JOBS="$_sh_j" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -3)"
+  check "#133 a job count of '$_sh_j' is refused"     "printf '%s' \"\$_sh_jo\" | grep -q \"SUITE_JOBS='$_sh_j'\""
+done
+# An EMPTY job count means UNSET, which is what `:-` does everywhere else in this file, so it takes
+# the default rather than being refused. Checked because the refusal above is a `case` and it would
+# be natural to list the empty string in it, which would then refuse a value nobody ever sets.
+_sh_je="$(SUITE_JOBS= SUITE_SHARD=1/2 SUITE_NO_LOCK=1 SECTION_LIST=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -2)"
+check "#133 an empty job count falls back to the default rather than being refused" \
+  "! printf '%s' \"\$_sh_je\" | grep -q 'SUITE_JOBS='"
+
+# The two flags that make a shard work must not reach anything it starts. SUITE_SHARD leaking made
+# every run a section spawns become a whole shard, which turned a 48 second shard into 322 and
+# failed four checks in the section that tests SECTION_ONLY. SUITE_NO_LOCK leaking is worse and
+# was already true before sharding: it silently disabled the lock in every subrun, so #32 was
+# asserting about a lock nothing was testing (L169). Derived from the file, so a flag added later
+# to the same list is covered without anybody remembering this check.
+_sh_exp="$(grep -m1 "^export"" -n SUITE_FILTERED" "$SCRIPT_SELF")"
+for _sh_v in SUITE_SHARD SUITE_NO_LOCK; do
+  check "#133 $_sh_v is un-exported, so nothing this run starts inherits it"     "printf '%s' \"\$_sh_exp\" | grep -q '$_sh_v'"
+done
 
 section "== a grandchild is not told the filtering already happened (#37) =="
 # A run started with SECTION_UNTIL re-executes itself from a temp copy carrying SUITE_FILTERED=1,

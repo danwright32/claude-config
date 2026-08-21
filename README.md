@@ -197,11 +197,26 @@ got wrong twice: it printed a per-check line where a verdict belongs, and it rea
 as 805 failures. A suite that prints no result line is still run and still judged, its score
 guessed from its prose, and the runner NAMES it at the end rather than falling back quietly.
 
-The main suite on its own, which is most of the runtime:
+The main suite on its own:
 
 ```bash
 bash tests/test-claude-sync.sh
 ```
+
+It fans its 82 sections out across four processes and takes about 75 seconds, down from 200. No
+single section dominates (the slowest five measured 22s, 13s, 11s, 11s and 9s), so there was
+nothing to speed up, only work to spread. The parent holds the one run at a time lock and the
+shards run under it, so this is still one logical run.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `SUITE_JOBS` | `4` | How many shards a full run splits into. `1` runs the whole thing in one process, which is what to reach for when a section only fails alongside others. A value that is not a whole number is refused. |
+| `SUITE_SHARD` | unset | `i/n` runs the prelude plus every n-th section from the i-th offset, for running one slice by hand or on another machine. A spec that is not `i/n`, or that names a shard outside the range, or that would hold no sections at all, is refused rather than reporting a pass over a set nobody chose. |
+
+Sections are interleaved rather than cut into contiguous blocks, because their durations are
+uneven and blocks would put several slow ones together. The reported total counts the prelude once
+per shard, since every shard has to run it to have any fixtures, so it is larger than a
+single-process run's: 930 against 817. The summary line says so.
 
 Every push and pull request also runs the suite on a Linux runner
 (`.github/workflows/tests.yml`). No path filter: the suite reads `README.md` and `DESIGN.md` as
