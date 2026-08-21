@@ -552,7 +552,13 @@ fi
 # `export -n` rather than `unset`: this process still needs the value (the #27 subruns below read
 # it), and the only thing that has to stop is the inheritance. Done HERE, once, rather than at each
 # spawn site, because a site added later cannot remember a rule it never saw (L30, L96).
-export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST SUITE_FROM_COPY 2>/dev/null || true
+#
+# SUITE_NO_LOCK is on the list for a reason worth stating: inherited, it silently disables the very
+# thing #32 is asserting. That section starts a second run and requires the lock to REFUSE it, so
+# with the flag leaking through, the child took no lock, ran happily, and the checks that prove the
+# lock works failed. Which means that before this, anybody running the suite with SUITE_NO_LOCK=1
+# was running #32 against a lock nothing was testing (L169).
+export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST SUITE_FROM_COPY SUITE_SHARD SUITE_NO_LOCK 2>/dev/null || true
 
 # SUITE_SPAWN_UNTIL=<text> starts ONE child with that section limit, says what a child of this run
 # inherits, and exits with the child's status. It is the seam that makes the paragraph above
@@ -752,6 +758,72 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
     echo "test suite: could not take the lock at $SUITE_LOCK after $_lk_try attempts, and it is not held by a run this could identify. Refusing rather than running unserialized. Check that path is writable." >&2
     exit 5
   fi
+fi
+
+# ---- a full run fans its sections out across processes (#133) ----
+# 82 sections, about 200 seconds, and no single one dominates: the slowest five measured 22s, 13s,
+# 11s, 11s and 9s here, so there is nothing to speed up, only work to spread. Since #125 the whole
+# repo's suites run side by side and this one is the single longest, which makes it the entire
+# remaining wall clock.
+#
+# HERE, after the lock: the parent holds it and the shards run with SUITE_NO_LOCK=1, so this is one
+# logical run holding one lock rather than N runs fighting over it. The depth is passed through
+# UNCHANGED for the same reason the filtered paths pass it through: this is the same logical run
+# re-executed, not a run nested inside one, and counting it would refuse the subruns that several
+# sections start (#34).
+#
+# The shards' output is printed in shard order, never completion order, so two runs of the same
+# tree produce the same page (#125).
+#
+# The total counts the PRELUDE once per shard, because every shard has to run it to have any
+# fixtures at all. That is stated rather than hidden: the number is genuinely larger than a
+# one-process run's and it is not a bug to chase.
+SUITE_JOBS="${SUITE_JOBS:-4}"
+case "$SUITE_JOBS" in
+  ''|*[!0-9]*)
+    echo "test suite: SUITE_JOBS='$SUITE_JOBS' is not a whole number of shards. Refusing rather than guessing, because it decides how many processes start. Use 1 to run in a single process." >&2
+    exit 2 ;;
+esac
+if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHARD:-}" ] && [ "$SUITE_JOBS" -gt 1 ]; then
+  _fan_dir="$(mktemp -d "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
+  _fan_pids=""
+  _fan_i=1
+  while [ "$_fan_i" -le "$SUITE_JOBS" ]; do
+    SUITE_SHARD="$_fan_i/$SUITE_JOBS" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_DEPTH"       SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF"       bash "$SCRIPT_SELF" > "$_fan_dir/$_fan_i.out" 2>&1 &
+    _fan_pids="$_fan_pids $!"
+    _fan_i=$((_fan_i + 1))
+  done
+  _fan_rc=0
+  for _fan_p in $_fan_pids; do wait "$_fan_p" || _fan_rc=1; done
+
+  _fan_pass=0; _fan_fail=0; _fan_missing=""
+  _fan_i=1
+  while [ "$_fan_i" -le "$SUITE_JOBS" ]; do
+    echo ""
+    echo "===== shard $_fan_i of $SUITE_JOBS ====="
+    cat "$_fan_dir/$_fan_i.out" 2>/dev/null
+    _fan_line="$(grep -E '^SUITE-RESULT passed=[0-9]+ failed=[0-9]+$' "$_fan_dir/$_fan_i.out" 2>/dev/null | tail -1)"
+    if [ -n "$_fan_line" ]; then
+      _fan_p2="${_fan_line#*passed=}"; _fan_p2="${_fan_p2%% *}"
+      _fan_f2="${_fan_line#*failed=}"
+      _fan_pass=$((_fan_pass + _fan_p2)); _fan_fail=$((_fan_fail + _fan_f2))
+    else
+      # A shard that printed no result line reported NOTHING, and a missing total must never be
+      # added in as a zero: that reads as a shard where everything passed (L98, L90).
+      _fan_missing="$_fan_missing $_fan_i"
+      _fan_rc=1
+    fi
+    _fan_i=$((_fan_i + 1))
+  done
+  rm -rf "$_fan_dir"
+  echo ""
+  if [ -n "$_fan_missing" ]; then
+    echo "test suite: shard(s)$_fan_missing produced no result line, so their checks are NOT in the total below. Treat this run as failed." >&2
+  fi
+  echo "PASS=$_fan_pass FAIL=$_fan_fail ($SUITE_JOBS shards; the prelude runs in each, so its checks are counted $SUITE_JOBS times)"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$_fan_pass" "$_fan_fail"
+  [ "$_fan_fail" -eq 0 ] || _fan_rc=1
+  exit "$_fan_rc"
 fi
 
 # ---- reclaim scratch a killed run left behind (#36) ----
@@ -3959,6 +4031,50 @@ check "#121 and the tool under test is still the real one" \
 _fc_seam="SUITE_""FROM_COPY"
 check "#121 the seam that puts a run back in the old state is still there" \
   "grep -q \"\$_fc_seam\" '$SCRIPT_SELF'"
+
+section "== a full run fans out across shards, and refuses a set nobody chose (#133) =="
+# 82 sections, about 200 seconds, and no single one dominates, so there is nothing to speed up and
+# only work to spread. Since #125 every suite in the repo runs side by side and this one is the
+# single longest, which makes it the whole remaining wall clock. Measured after the change: 75
+# seconds across four shards.
+#
+# Every check here is a REFUSAL, and deliberately so. Running a real fan-out from inside a section
+# would take minutes and would tell you what the run you are already in has told you. What cannot
+# be learned that way is whether a shard spec nobody can read is refused rather than guessed at,
+# and a guess would report a result over a set of sections nobody chose (L50, L98).
+_sh_run(){ SUITE_SHARD="$1" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -3; }
+for _sh_bad in "0/4" "5/4" "abc" "2" "2/0" "-1/4"; do
+  _sh_out="$(_sh_run "$_sh_bad")"
+  check "#133 a shard spec of '$_sh_bad' is refused"     "printf '%s' \"\$_sh_out\" | grep -q \"SUITE_SHARD='$_sh_bad'\""
+done
+# The control: a WELL formed spec is not refused, or every check above is satisfied by a suite that
+# refuses everything (L159). Asked for a shard count larger than the section count, which is the
+# one well formed spec that still has to refuse, and for a real one, which must not.
+_sh_ok="$(SUITE_SHARD=1/2 SUITE_NO_LOCK=1 SECTION_LIST=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -2)"
+check "#133 the control: a well formed spec gets past the refusals"   "! printf '%s' \"\$_sh_ok\" | grep -q 'is not of the form'"
+
+# A job count nobody can read decides how many processes start, so it is refused too.
+for _sh_j in "two" "1.5" "-2"; do
+  _sh_jo="$(SUITE_JOBS="$_sh_j" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -3)"
+  check "#133 a job count of '$_sh_j' is refused"     "printf '%s' \"\$_sh_jo\" | grep -q \"SUITE_JOBS='$_sh_j'\""
+done
+# An EMPTY job count means UNSET, which is what `:-` does everywhere else in this file, so it takes
+# the default rather than being refused. Checked because the refusal above is a `case` and it would
+# be natural to list the empty string in it, which would then refuse a value nobody ever sets.
+_sh_je="$(SUITE_JOBS= SUITE_SHARD=1/2 SUITE_NO_LOCK=1 SECTION_LIST=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -2)"
+check "#133 an empty job count falls back to the default rather than being refused" \
+  "! printf '%s' \"\$_sh_je\" | grep -q 'SUITE_JOBS='"
+
+# The two flags that make a shard work must not reach anything it starts. SUITE_SHARD leaking made
+# every run a section spawns become a whole shard, which turned a 48 second shard into 322 and
+# failed four checks in the section that tests SECTION_ONLY. SUITE_NO_LOCK leaking is worse and
+# was already true before sharding: it silently disabled the lock in every subrun, so #32 was
+# asserting about a lock nothing was testing (L169). Derived from the file, so a flag added later
+# to the same list is covered without anybody remembering this check.
+_sh_exp="$(grep -m1 "^export"" -n SUITE_FILTERED" "$SCRIPT_SELF")"
+for _sh_v in SUITE_SHARD SUITE_NO_LOCK; do
+  check "#133 $_sh_v is un-exported, so nothing this run starts inherits it"     "printf '%s' \"\$_sh_exp\" | grep -q '$_sh_v'"
+done
 
 section "== a grandchild is not told the filtering already happened (#37) =="
 # A run started with SECTION_UNTIL re-executes itself from a temp copy carrying SUITE_FILTERED=1,
