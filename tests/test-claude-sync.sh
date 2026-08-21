@@ -5892,6 +5892,81 @@ _sospawn_first="$(grep -nF "bash \"\$SCRIPT""_SELF\"" "$SCRIPT_SELF" | head -1 |
 check "#105 the filter is un-exported before anything spawns a run" \
   "[ -n \"\$_soexp_line\" ] && [ -n \"\$_sospawn_first\" ] && [ \"\$_soexp_line\" -lt \"\$_sospawn_first\" ]"
 
+section "== every heading this file writes is one its own reader can see (#138) =="
+# The collector recognises exactly one shape: a `section` call at column zero whose title is a
+# literal string, and it takes the title by dropping everything from the last quote. A heading
+# written any other way still RUNS in a full run, which is what makes it invisible rather than
+# lost: it travels with the section above it, so SECTION_ONLY cannot reach it, the changed-section
+# audit never runs it alone, and #137's coverage check cannot see it either, because both sides of
+# that check read the list through this one parser. Every count in the file goes on agreeing with
+# every other count while one section has quietly stopped being independently testable.
+#
+# So the headings written ANY way are counted here, the ones the reader can see are asked of the
+# READER (SECTION_LIST, the same answer the changed-section audit reads), and a difference is
+# refused. Deliberately not a second parser written beside the first: it would drift from it, and
+# it would be the half deciding whether a section is independently testable (L107).
+_hd_any(){    # _hd_any <file> -> every line that calls section, however it is written
+  grep -nE '^[[:blank:]]*section[[:blank:]]' "$1" || true
+}
+_hd_reader(){ # _hd_reader <file> -> the headings that file's own reader can see, one per line
+  # Taken by the RECORD SHAPE the listing prints, a line number, a tab and the title, never by
+  # "every line the child said". A child started from inside a run announces its depth on stdout,
+  # and that notice counted as a heading: the reader appeared to see one MORE heading than the file
+  # writes, which is the failure this section exists to report, arriving from the harness rather
+  # than from the file (L156).
+  SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$1" SECTION_LIST=1 bash "$1" 2>/dev/null \
+    | grep -E '^[0-9]+'"$(printf '\t')" || true
+}
+_hd_calls="$(_hd_any "$SCRIPT_SELF" | grep -c . || true)"
+_hd_list="$(_hd_reader "$SCRIPT_SELF")"
+_hd_seen="$(printf '%s' "$_hd_list" | grep -c . || true)"
+echo "  (#138 headings written: $_hd_calls, headings the reader can see: $_hd_seen)"
+# The floor first, and it is a floor rather than today's count: both numbers are read from the same
+# file, and two zeros agree with each other perfectly, so a scan that read nothing would satisfy
+# the comparison below and report a clean file (L98).
+check "#138 both readings really read this suite" \
+  "[ \"\${_hd_calls:-0}\" -ge 80 ] && [ \"\${_hd_seen:-0}\" -ge 80 ]"
+check "#138 every heading written is a heading the reader can see" "[ \"\$_hd_calls\" -eq \"\$_hd_seen\" ]"
+# Named, not counted. A count tells you a heading is invisible; the line tells you which one, and
+# finding it by hand means reading every heading in the file (L11).
+[ "$_hd_calls" -eq "$_hd_seen" ] || _hd_any "$SCRIPT_SELF" | grep -v ':section "' | sed 's/^/    invisible to the reader: /'
+# Listed is not the same as REACHABLE. A title assembled from a variable IS collected, and the
+# string the reader derives for it is the unexpanded text, which no pattern anybody types can
+# match, so the section is listed and still cannot be run alone.
+# Counted rather than matched with `grep -q`, which leaves on its first hit and can kill its own
+# producer under pipefail (#132, L183), and the offenders are NAMED for the same reason as above.
+_hd_built="$(printf '%s' "$_hd_list" | grep '[$`]' || true)"
+check "#138 and every title the reader derived is literal, so a pattern can reach it" \
+  "[ -z \"\$_hd_built\" ]"
+[ -z "$_hd_built" ] || printf '%s\n' "$_hd_built" | sed 's/^/    listed, but no pattern can reach it: /'
+
+# The positive control, on the file actually being scanned rather than on a fixture built for it.
+# There are no unreadable headings today, and a zero is read as proof the shape cannot occur rather
+# than as a measurement (L182), so one of each shape is planted in a COPY and both halves are
+# required to move by exactly the planted amount. Exactly, not at least, so it says two things at
+# once: both readings are alive here, and the real file really did contribute none of either.
+# Without it a reading broken by a later edit reports the two numbers equal and reads as clean
+# (L98, L171).
+_HDPOS="$WORK/heading-positive-control.sh"
+cp "$SCRIPT_SELF" "$_HDPOS"
+# Prefixed and stripped, so the plants live in this file without the scan above finding them: a
+# control whose fixture is caught by the scan it is testing would fire on itself.
+sed 's/^@@//' >> "$_HDPOS" <<'HDPLANT'
+@@  section "== zzz planted, indented past the only column the reader looks at =="
+@@section "== zzz planted, assembled from $HD_NO_SUCH_VARIABLE =="
+HDPLANT
+_hdp_calls="$(_hd_any "$_HDPOS" | grep -c . || true)"
+_hdp_list="$(_hd_reader "$_HDPOS")"
+_hdp_seen="$(printf '%s' "$_hdp_list" | grep -c . || true)"
+dbg "#138 control: calls $_hd_calls -> $_hdp_calls, reader $_hd_seen -> $_hdp_seen"
+check "#138 the planted copy really carries both shapes" "[ \"\$_hdp_calls\" -eq \$(( _hd_calls + 2 )) ]"
+check "#138 an indented heading is one the reader cannot see, and the comparison notices" \
+  "[ \"\$_hdp_seen\" -eq \$(( _hd_seen + 1 )) ]"
+_hdp_built="$(printf '%s' "$_hdp_list" | grep -c 'HD_NO_SUCH_VARIABLE' || true)"
+check "#138 an assembled heading is listed, and its title is one nothing can match" \
+  "[ \"\${_hdp_built:-0}\" -eq 1 ]"
+rm -f "$_HDPOS"
+
 section "== every section reports its size and how long it took (#107) =="
 # A full run reported one number, PASS, and nothing about where the minutes went. So "the suite is
 # slow" could not be acted on: the slow sections were unknown, and a section that became slow later
