@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# rule-files-changed.sh — say when this session's rule files have changed on disk
+# rule-files-changed.sh: say when this session's rule files have changed on disk
 # since it started (claude-config#84).
 #
 # A pull that changes the rule files prints one line telling the person to start a

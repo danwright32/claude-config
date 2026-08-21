@@ -4392,6 +4392,88 @@ stp_left="$(git -C "$STPR" rev-list --count "origin/$STPBR..HEAD" 2>/dev/null ||
 # The count itself, not "anything other than zero": an unreadable ref answers with an error, and
 # an error is not evidence that a commit is waiting (L50).
 check "#82 and the commit it made is still unsent" "[ -n \"\$stp_left\" ] && [ \"\$stp_left\" -ge 1 ] 2>/dev/null"
+section "== a generated index is never reported as a conflict (#83) =="
+# LESSONS-INDEX.md is DERIVED from LESSONS.md and rebuilt on every send and every apply, and the
+# code says so where it generates it. Conflict detection did not know that, so on 2026-08-18 a
+# pull announced that both Macs had changed it, that it could NOT be merged, and that the local
+# copy had been set aside. Nothing was at risk: the applied file was a strict superset of the
+# preserved one, whose only unique line was a stale header count, and the apply regenerates the
+# index from the merged lessons a few lines later regardless. That is a false alarm on the most
+# safety critical message this tool prints, and false alarms are what teach a person to skim past
+# a real one (L36). It also left a .conflict copy that status went on naming until it was deleted
+# by hand.
+unset SYNC_NO_GIT
+IXB="$WORK/index-bare.git"; git init -q --bare "$IXB"
+IXRA="$WORK/index-repoA"; git clone -q "$IXB" "$IXRA" 2>/dev/null
+IXHA="$WORK/index-homeA"; mkdir -p "$IXHA"
+echo '{"hooks":{}}' > "$IXHA/settings.json"
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$IXHA/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body one\n- **L2. two.** body two\n' > "$IXHA/LESSONS.md"
+CLAUDE_HOME="$IXHA" SYNC_REPO="$IXRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#83 the index is generated and published" "[ -s '$IXRA/payload/LESSONS-INDEX.md' ]"
+
+IXRB="$WORK/index-repoB"; git clone -q "$IXB" "$IXRB" 2>/dev/null
+IXHB="$WORK/index-homeB"; mkdir -p "$IXHB"
+echo '{"hooks":{}}' > "$IXHB/settings.json"
+CLAUDE_HOME="$IXHB" SYNC_REPO="$IXRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#83 the other Mac receives lessons and index" \
+  "grep -q 'L1. one' '$IXHB/LESSONS.md' && grep -q 'L1. one' '$IXHB/LESSONS-INDEX.md'"
+
+# This Mac writes a lesson it has not sent. The apply regenerates the index from the LOCAL
+# lessons file, so from here on this Mac's index legitimately differs from the repo's, which is
+# the state the false alarm was made of.
+# TWO of them, and one on the other side, so the generated header counts differ: 4 here, 3 there,
+# 2 in the copy both were generated from. That header is a single line both sides rewrite, which
+# is what makes the index unmergeable while the lessons underneath it merge perfectly well. With
+# one lesson each the counts match, the header merges, and the false alarm never fires: the first
+# version of this fixture made exactly that mistake and passed against the unfixed script (L1).
+printf -- '- **L3. three.** written only on Mac B\n' >> "$IXHB/LESSONS.md"
+printf -- '- **L5. five.** also written only on Mac B\n' >> "$IXHB/LESSONS.md"
+CLAUDE_HOME="$IXHB" SYNC_REPO="$IXRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#83 this Mac's index carries its own unsent lessons" \
+  "grep -q 'L3. three' '$IXHB/LESSONS-INDEX.md' && grep -q 'L5. five' '$IXHB/LESSONS-INDEX.md'"
+
+# The other Mac adds a different lesson, so the lessons themselves merge cleanly and the two
+# generated indexes are simply two correct renderings of two different inputs.
+printf -- '- **L4. four.** written only on Mac A\n' >> "$IXHA/LESSONS.md"
+CLAUDE_HOME="$IXHA" SYNC_REPO="$IXRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_ix="$(CLAUDE_HOME="$IXHB" SYNC_REPO="$IXRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull with two generated indexes: $out_ix"
+# The positive control: the lessons really did merge on this run, so the assertions below are
+# about a pull that did the work, not one that never got that far (L159).
+check "#83 the lessons themselves merged" \
+  "grep -q 'L3. three' '$IXHB/LESSONS.md' && grep -q 'L4. four' '$IXHB/LESSONS.md' && grep -q 'L5. five' '$IXHB/LESSONS.md'"
+check "#83 the index is not reported as an unmergeable clash" \
+  "! line_has \"\$out_ix\" 'could NOT be merged' 'LESSONS-INDEX\.md'"
+check "#83 and no set-aside copy of it is left behind" \
+  "! ls '$IXHB'/LESSONS-INDEX.md.conflict-* >/dev/null 2>&1"
+# What replaces the conflict is the regeneration that was always going to happen: the index on
+# disk describes the MERGED lessons file, both sides included, with a header count that matches.
+check "#83 the regenerated index carries both sides" \
+  "grep -q 'L3. three' '$IXHB/LESSONS-INDEX.md' && grep -q 'L4. four' '$IXHB/LESSONS-INDEX.md'"
+ix_count="$(grep -c '^- L[0-9]' "$IXHB/LESSONS-INDEX.md" 2>/dev/null || echo 0)"
+ix_header="$(grep -oE '[0-9]+ lessons' "$IXHB/LESSONS-INDEX.md" 2>/dev/null | grep -oE '[0-9]+' | head -1)"
+ix_real="$(grep -c '^- \*\*L[0-9]' "$IXHB/LESSONS.md" 2>/dev/null || echo 0)"
+dbg "index entries=$ix_count header=$ix_header lessons=$ix_real"
+# The header count is the line that was UNIQUE to the preserved copy in the real incident, so it
+# is the one worth asserting: stale there, correct here, and derived from the merged file.
+check "#83 every merged lesson has an index line" "[ \"\$ix_count\" = \"\$ix_real\" ] && [ \"\$ix_real\" = '5' ]"
+check "#83 and the header count matches the merged file" "[ \"\$ix_header\" = \"\$ix_real\" ]"
+
+# The exclusion is for the DERIVED file only. A rule file that genuinely clashes must still be
+# preserved and still be reported, or this fix has quietly turned conflict detection off (L129).
+printf 'rtk from A\n' > "$IXHA/RTK.md"
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n@RTK.md\n' > "$IXHA/CLAUDE.md"
+CLAUDE_HOME="$IXHA" SYNC_REPO="$IXRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$IXHB" SYNC_REPO="$IXRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+printf 'rtk rewritten on B\n' > "$IXHB/RTK.md"
+printf 'rtk rewritten on A\n' > "$IXHA/RTK.md"
+CLAUDE_HOME="$IXHA" SYNC_REPO="$IXRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_ix2="$(CLAUDE_HOME="$IXHB" SYNC_REPO="$IXRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull with a real clash: $out_ix2"
+check "#83 a file that really clashes is still kept and reported" \
+  "line_has \"\$out_ix2\" 'could NOT be merged' 'RTK\.md'"
+check "#83 and its copy is still set aside" "ls '$IXHB'/RTK.md.conflict-* >/dev/null 2>&1"
 
 
 section "== one Mac's home path never travels inside a synced file (#87) =="

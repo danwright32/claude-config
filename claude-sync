@@ -796,6 +796,14 @@ duplicate_lesson_numbers(){   # $1 = tree to inspect
 # silent (L41). A hand edit here is therefore overwritten, which is the point.
 LESSON_INDEX_FILE="LESSONS-INDEX.md"
 
+# Is this synced path a file whose CONTENT is a function of another file? Asked in one place, so
+# the sites that have to know cannot drift into three different lists (L41). Two copies of a
+# derived file are not two people's work in conflict: they are two correct renderings of two
+# different inputs, and the input is what actually merges.
+is_derived_rule_file(){   # $1 = path relative to the payload
+  [ "${1:-}" = "$LESSON_INDEX_FILE" ]
+}
+
 lesson_index_body(){   # $1 = the full lessons file
   local n
   [ -f "$1" ] || return 0
@@ -1784,7 +1792,7 @@ count_citations_in(){   # $1 = number, e.g. L2; candidate paths on stdin
     [ -n "$f" ] || continue
     # The lessons index is generated from LESSONS.md on every send and every apply, so a number in
     # it is never something to go and check by hand: it is rewritten in the same run (#63).
-    [ "$f" = "$LESSON_INDEX_FILE" ] && continue
+    is_derived_rule_file "$f" && continue
     [ -f "$PAYLOAD/$f" ] || continue   # only synced files are in scope
     stale="$(stale_number_mentions "$CLAUDE_HOME/$f" "$num")"
     [ "${stale:-0}" -gt 0 ] 2>/dev/null || continue
@@ -1856,6 +1864,11 @@ merge_rule_files(){
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     case "$p" in */*) continue ;; esac   # top-level rule files only
+    # A generated file is rebuilt from its source at the end of this same apply, so merging two
+    # renderings of it is work whose result is thrown away, and FAILING to merge them is worse:
+    # it hands the file to the conflict path below, which announces that config was nearly lost
+    # (#83). What merges is LESSONS.md, and the index follows from that.
+    is_derived_rule_file "$p" && continue
     local_f="$CLAUDE_HOME/$p"
     [ -f "$local_f" ] && [ -f "$PAYLOAD/$p" ] || continue
     tmpb="$(scratch_file)"
@@ -1952,6 +1965,14 @@ preserve_local_conflicts(){
     # merged above, so both sides are already in the file: not a conflict
     case "${MERGED_RULE_FILES:-}" in *"
 $p"*) continue ;; esac
+    # Generated from another file, and regenerated later in this same apply, so the two copies
+    # cannot represent work that is at risk. On 2026-08-18 this path announced that both Macs had
+    # changed LESSONS-INDEX.md and that YOUR version had been kept beside it, when the arriving
+    # file was a strict superset of the preserved one and the only line unique to it was a stale
+    # header count. That is a false alarm on the most safety critical message this tool prints,
+    # and false alarms are what teach a person to skim past a real one (L36). It also left a
+    # .conflict copy that status went on naming until somebody deleted it by hand.
+    is_derived_rule_file "$p" && continue
     local_f="$CLAUDE_HOME/$p"
     [ -f "$local_f" ] || continue
     # unchanged here since our last apply: nothing of ours to lose. Compared as the file LOOKS
