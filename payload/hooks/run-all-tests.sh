@@ -29,6 +29,9 @@
 #   HOOK_TESTS_ROOT           read this repo instead of the one above this script
 #   HOOK_TESTS_LIST_ONLY=1    print the directories it would read, run nothing
 #   HOOK_TESTS_FAIL_DETAIL_MAX  lines of a failing suite's output to print
+#   HOOK_TESTS_JOBS           how many suites run at once
+#   HOOK_TESTS_BUDGET         processes this whole run may have in flight (default: cores, max 8)
+#   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
 
 set -uo pipefail
 
@@ -67,12 +70,39 @@ FAIL_DETAIL_MAX="${HOOK_TESTS_FAIL_DETAIL_MAX:-40}"
 # 1 runs them one at a time, which is what to reach for when a suite only fails alongside others.
 # A value that is not a positive whole number is REFUSED rather than guessed at: this decides how
 # much runs at once, and guessing could mean no parallelism at all or a great many processes (L50).
+#
+# How much of the machine the whole run may take is ONE number, and both halves are derived from
+# it (claude-config#136). This starts several suites at once, and one of those suites splits
+# ITSELF into shards, so the processes actually in flight were the product of two numbers set
+# independently and compared nowhere: a four core runner could be running a dozen heavy ones, each
+# spawning git and python of its own. That never failed outright, which is the difficulty with it.
+# Oversubscription does not go red, it makes timing sensitive checks intermittently wrong, and the
+# sync suite's own deadline guard was measured firing at 1192s against a normal 200 on a loaded
+# Mac. So the budget below is split between the suites running at once, each is TOLD its share in
+# HOOK_TESTS_SLOTS, and the product is printed rather than left to be worked out.
 _ncpu="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) | head -1 )"
 case "$_ncpu" in ''|*[!0-9]*) _ncpu=4 ;; esac
 [ "$_ncpu" -gt 0 ] || _ncpu=4
-_default_jobs=$(( _ncpu > 8 ? 8 : _ncpu ))
-[ "$_default_jobs" -gt 0 ] || _default_jobs=1
-JOBS="${HOOK_TESTS_JOBS-$_default_jobs}"
+_default_budget=$(( _ncpu > 8 ? 8 : _ncpu ))
+[ "$_default_budget" -gt 0 ] || _default_budget=1
+BUDGET="${HOOK_TESTS_BUDGET-$_default_budget}"
+case "$BUDGET" in
+  ''|*[!0-9]*|0)
+    echo "run-all-tests: HOOK_TESTS_BUDGET='$BUDGET' is not a positive whole number of processes this run may have in flight. Refusing rather than guessing, because it decides how much of the machine the tests take." >&2
+    exit 1 ;;
+esac
+# Two slots per suite by default, so the suite that shards still shards and the machine is not
+# oversubscribed four times over. Setting HOOK_TESTS_JOBS overrides how many run at once and the
+# share each gets follows from it, which keeps the product one number either way.
+#
+# The floor of two is for the small machine, which is where this arithmetic goes wrong quietly: the
+# CI runner has two cores, half of two is one, and 38 suites would have run strictly one after
+# another while two slots sat reserved for whichever of them could use them. Capped by the budget,
+# so a single core is one suite and not two.
+_jobs_default=$(( BUDGET / 2 ))
+[ "$_jobs_default" -ge 2 ] || _jobs_default=2
+[ "$_jobs_default" -le "$BUDGET" ] || _jobs_default="$BUDGET"
+JOBS="${HOOK_TESTS_JOBS-$_jobs_default}"
 case "$JOBS" in
   ''|*[!0-9]*|0)
     echo "run-all-tests: HOOK_TESTS_JOBS='$JOBS' is not a positive whole number of suites to run at once. Refusing rather than guessing, because this decides how many processes start. Use 1 to run them one at a time." >&2
@@ -173,6 +203,20 @@ EOF
 
 ran="${#suites[@]}"
 if [ "$ran" -gt 0 ]; then
+  # The share each suite may take. Worked out HERE, because it depends on how many suites there
+  # actually are: naming one directory holding one suite gives that suite the whole machine, which
+  # is what keeps a single suite run as fast as it was. The floor of 1 is not decoration, integer
+  # division reaches 0 as soon as more suites run at once than the budget, and a suite told it may
+  # start nothing would either refuse or ignore the grant.
+  at_once=$(( JOBS < ran ? JOBS : ran ))
+  [ "$at_once" -gt 0 ] || at_once=1
+  SLOTS=$(( BUDGET / at_once ))
+  [ "$SLOTS" -gt 0 ] || SLOTS=1
+  export HOOK_TESTS_SLOTS="$SLOTS"
+  # Said out loud, and as a product, because the number that matters is what will be in flight and
+  # that number used to be printed nowhere at all: it could only be found by multiplying a default
+  # in this file by a default in another one (L182).
+  echo "run-all-tests: up to $at_once suite(s) at once, $SLOTS slot(s) each, so at most $(( at_once * SLOTS )) process(es) at once, against a budget of $BUDGET"
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.runner.XXXXXXXX")"
   case "${WORK%/}" in
     ''|/|"${HOME%/}") echo "run-all-tests: refusing to run: throwaway directory came back as '$WORK'." >&2; exit 1 ;;

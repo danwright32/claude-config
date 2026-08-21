@@ -171,13 +171,30 @@ look identical otherwise.
 
 The suites run several at a time, since they are independent. Measured on this Mac over the hook
 suites: 128 seconds one at a time, 29 seconds in parallel, with byte identical reports. The whole
-repo, 37 suites, ran in 252 seconds. That floor is `test-claude-sync.sh`, which takes most of it on
-its own: the wall clock cannot go below the single longest suite, so making that one faster is the
-only thing left that would move this number.
+repo, 38 suites, runs in 124 to 155 seconds here, the spread being whatever else the Mac is doing. That floor is `test-claude-sync.sh`, which takes most of it
+on its own: the wall clock cannot go below the single longest suite, so making that one faster is
+the only thing left that would move this number.
+
+How much of the machine a run may take is ONE number (#136). The runner starts several suites at
+once and one of those suites splits ITSELF into shards, so what is actually in flight used to be
+the product of two numbers set independently and compared nowhere: a four core runner could carry a
+dozen heavy processes, each spawning git and python of its own. That never went red. It makes
+timing sensitive checks intermittently wrong instead, which is the hardest kind of failure to
+attribute, and the sync suite's own deadline guard was measured firing at 1192s against a normal
+200 on a loaded Mac. So the budget below is divided between the suites running at once, each suite
+is told its share, and the product is printed at the top of every run.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `HOOK_TESTS_JOBS` | CPUs, capped at 8 | How many suites run at once. `1` runs them one at a time, which is what to reach for when a suite only fails alongside others. A value that is not a positive whole number is refused rather than guessed at, because it decides how many processes start. |
+| `HOOK_TESTS_BUDGET` | CPUs, capped at 8 | How many processes the whole run may have in flight. Everything else is derived from it. A value that is not a positive whole number is refused rather than guessed at. |
+| `HOOK_TESTS_JOBS` | half the budget, but never fewer than 2 and never more than the budget | How many suites run at once. The floor of 2 is for the small machine: the CI runner has two cores, half of two is one, and every suite would have run strictly one after another while a second slot sat reserved. `1` runs them one at a time, which is what to reach for when a suite only fails alongside others. A value that is not a positive whole number is refused rather than guessed at, because it decides how many processes start. |
+| `HOOK_TESTS_SLOTS` | set BY the runner | Each suite's share of the budget, which is the budget divided by how many suites are running at once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its own processes it may start. Point the runner at one directory holding one suite and that suite is handed the whole budget, so running the long suite on its own is as fast as it ever was. |
+
+What the budget costs, measured on this Mac as one pair of runs back to back: 124 seconds against
+88 seconds for the same 38 suites run the old way (8 suites at once, each splitting itself four ways). The machine was 183% busy
+under the budget and 319% busy without it, which is the oversubscription this removes. 36 seconds
+is the price of every timing sensitive check in the repo being measured on a machine that is not
+fighting itself.
 
 Results are collected and printed in the order the suites were FOUND, never the order they
 finished, so two runs of the same tree produce the same page and a difference between them is a
@@ -203,20 +220,29 @@ The main suite on its own:
 bash tests/test-claude-sync.sh
 ```
 
-It fans its 82 sections out across four processes and takes about 75 seconds, down from 200. No
+It fans its 85 sections out across four processes and takes about 80 seconds, down from 200. No
 single section dominates (the slowest five measured 22s, 13s, 11s, 11s and 9s), so there was
 nothing to speed up, only work to spread. The parent holds the one run at a time lock and the
 shards run under it, so this is still one logical run.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `SUITE_JOBS` | `4` | How many shards a full run splits into. `1` runs the whole thing in one process, which is what to reach for when a section only fails alongside others. A value that is not a whole number is refused. |
+| `SUITE_JOBS` | the runner's grant, or `4` | How many shards a full run splits into. Under `run-all-tests.sh` it defaults to `HOOK_TESTS_SLOTS`, this suite's share of that run's budget; started by hand it is 4. Setting it wins over the grant, because that is somebody asking rather than a share being allocated. `1` runs the whole thing in one process, which is what to reach for when a section only fails alongside others. A value that is not a whole number is refused, and so is a grant that cannot be read. |
+| `SUITE_PLAN_ONLY` | unset | Prints `SUITE-PLAN jobs=<n> source=<where it came from>` and runs nothing. The number decides what a run costs, and the only other way to see which one was chosen is to pay that cost. |
+| `SUITE_SHARD_COVERAGE_ONLY` | unset | Prints the shard's `SUITE-SHARD-COVERAGE` line, which names the sections it would run, and runs none of them. |
 | `SUITE_SHARD` | unset | `i/n` runs the prelude plus every n-th section from the i-th offset, for running one slice by hand or on another machine. A spec that is not `i/n`, or that names a shard outside the range, or that would hold no sections at all, is refused rather than reporting a pass over a set nobody chose. |
+
+The shards' totals are added up, and separately their COVERAGE is checked: every section after the
+prelude has to be the target of exactly one shard (#137). Each shard prints what it selected and
+the parent puts them back together, so a gap, a section claimed twice, a shard that said nothing,
+and shards disagreeing about which sections exist each fail the run with their own message. The
+totals cannot do that job: 817, then 830, then 943, every one of them legitimate, so a shard that
+quietly selected fewer sections would just print a smaller number.
 
 Sections are interleaved rather than cut into contiguous blocks, because their durations are
 uneven and blocks would put several slow ones together. The reported total counts the prelude once
 per shard, since every shard has to run it to have any fixtures, so it is larger than a
-single-process run's: 930 against 817. The summary line says so.
+single-process run's: 973 against 860. The summary line says so.
 
 Every push and pull request also runs the suite on a Linux runner
 (`.github/workflows/tests.yml`). No path filter: the suite reads `README.md` and `DESIGN.md` as

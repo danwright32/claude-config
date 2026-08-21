@@ -380,6 +380,21 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
     *[![:space:]]*) ;;
     *) echo "test suite: shard $_sh_i of $_sh_n holds no sections at all, so nothing would be run. Use fewer shards than the $(( _so_i - _so_pend )) sections there are." >&2; exit 2 ;;
   esac
+  # What this shard SELECTED, in the selector's own terms, so the parent can put the shards back
+  # together and ask whether every section was somebody's target (#137). Without it each shard
+  # reports only its own totals, and a shard that quietly selected fewer sections would produce a
+  # smaller number that nothing anywhere could recognise as smaller than it should be (L98).
+  #
+  # The TARGETS, not everything that ends up running: a section pulled in because another declared
+  # it `needs:` runs in that shard too, and counting those would make a legitimate second
+  # appearance read as a duplicate, which is the one thing the parent treats as a defect.
+  printf 'SUITE-SHARD-COVERAGE shard=%s first=%s last=%s sections=%s\n' \
+    "$_sh_i" "$(( _so_pend + 1 ))" "$_so_i" "$(printf '%s' "${_sh_targets# }" | tr ' ' ',')"
+  # SUITE_SHARD_COVERAGE_ONLY=1 stops here, having said what this shard would run and run none of
+  # it. The line is emitted by the real selector and the suite's own check reads four real ones,
+  # which costs four file reads instead of four minutes. Placed after the emission and before the
+  # extractor, so what the seam skips is the RUNNING and never the deciding.
+  if [ -n "${SUITE_SHARD_COVERAGE_ONLY:-}" ]; then exit 0; fi
   SECTION_ONLY=""
   _so_shard_mode=1
   _so_target="${_sh_targets##* }"
@@ -778,12 +793,142 @@ fi
 # The total counts the PRELUDE once per shard, because every shard has to run it to have any
 # fixtures at all. That is stated rather than hidden: the number is genuinely larger than a
 # one-process run's and it is not a bug to chase.
-SUITE_JOBS="${SUITE_JOBS:-4}"
+# ---- the shards, between them, must have covered every section (#137) ----
+# Reads the shards' coverage lines and answers whether every section after the prelude was the
+# target of exactly one of them. Silent and 0 when it was; a complaint and 1 when it was not.
+#
+# A function rather than a few lines inside the fan-out, because the fan-out is the one place it
+# would be exercised and a full run is minutes: every outcome enumerated below is produced by the
+# suite against fabricated lines, and the real shards are then put through this same function, so
+# the thing proven and the thing shipped are one implementation (L151, L52).
+#
+# The order of the complaints is deliberate. An unreadable line, or a shard that said nothing,
+# leaves that shard's sections out of the union, so the gap message would fire too and would
+# accuse the selector of the reader's problem. Those return first and alone (L11).
+# Reads the shards' output files and puts the verdict over them. The reading is HERE rather than
+# inline in the fan-out so that the file names and the pattern are exercised by the suite too: a
+# grep that matches nothing looks exactly like a shard with nothing to say, and the fan-out is the
+# one place it would otherwise run, which is a full run away (L100, L143).
+shard_coverage_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards expected
+  local _cd_dir="$1" _cd_n="$2" _cd_i=1 _cd_all=""
+  while [ "$_cd_i" -le "$_cd_n" ]; do
+    _cd_all="$_cd_all$(grep -m1 '^SUITE-SHARD-COVERAGE ' "$_cd_dir/$_cd_i.out" 2>/dev/null)
+"
+    _cd_i=$((_cd_i + 1))
+  done
+  printf '%s\n' "$_cd_all" | shard_coverage_verdict "$_cd_n"
+}
+
+shard_coverage_verdict(){   # $1 = shards expected; coverage lines on stdin
+  local _cv_n="${1:-}" _cv_line _cv_i _cv_f _cv_l _cv_s _cv_x _cv_k
+  local _cv_first="" _cv_last="" _cv_seen=" " _cv_got=" "
+  local _cv_bad="" _cv_dis="" _cv_dup="" _cv_gone="" _cv_miss="" _cv_extra="" _cv_say=""
+  case "$_cv_n" in
+    ''|*[!0-9]*|0) printf 'shard coverage: asked to check against "%s" shards, which is not a count of them.\n' "$_cv_n"; return 2 ;;
+  esac
+  while IFS= read -r _cv_line; do
+    case "$_cv_line" in 'SUITE-SHARD-COVERAGE '*) ;; *) continue ;; esac
+    _cv_i="${_cv_line#*shard=}";    _cv_i="${_cv_i%% *}"
+    _cv_f="${_cv_line#*first=}";    _cv_f="${_cv_f%% *}"
+    _cv_l="${_cv_line#*last=}";     _cv_l="${_cv_l%% *}"
+    _cv_s="${_cv_line#*sections=}"; _cv_s="${_cv_s%% *}"
+    # A field that is absent leaves the whole line in place of it, which is not a number, so this
+    # catches a missing field and a mangled one by the same rule.
+    # Kept on ONE line, brackets and all. The complaint has to be readable as a single fact
+    # (which line, and that it could not be read), or a reader matching the wording finds it
+    # beside a line from somewhere else entirely (#74, L178).
+    case "$_cv_i$_cv_f$_cv_l" in ''|*[!0-9]*) _cv_bad="$_cv_bad [$_cv_line]"; continue ;; esac
+    case "$_cv_s" in ''|*[!0-9,]*) _cv_bad="$_cv_bad [$_cv_line]"; continue ;; esac
+    _cv_got="$_cv_got$_cv_i "
+    if [ -z "$_cv_first" ]; then
+      _cv_first="$_cv_f"; _cv_last="$_cv_l"
+    elif [ "$_cv_f" != "$_cv_first" ] || [ "$_cv_l" != "$_cv_last" ]; then
+      _cv_dis="$_cv_dis shard $_cv_i says $_cv_f to $_cv_l;"
+    fi
+    for _cv_x in $(printf '%s' "$_cv_s" | tr ',' ' '); do
+      case "$_cv_seen" in
+        *" $_cv_x "*) _cv_dup="$_cv_dup $_cv_x" ;;
+        *) _cv_seen="$_cv_seen$_cv_x " ;;
+      esac
+    done
+  done
+  if [ -n "$_cv_bad" ]; then
+    printf 'shard coverage: a coverage line could not be read, so what that shard selected is unknown and this run cannot claim the sections were covered:%s\n' "$_cv_bad"
+    return 1
+  fi
+  _cv_k=1
+  while [ "$_cv_k" -le "$_cv_n" ]; do
+    case "$_cv_got" in *" $_cv_k "*) ;; *) _cv_gone="$_cv_gone $_cv_k" ;; esac
+    _cv_k=$((_cv_k + 1))
+  done
+  if [ -n "$_cv_gone" ]; then
+    printf 'shard coverage: shard(s)%s printed no coverage line, so which sections they selected is unknown. Treat this run as failed rather than as covered.\n' "$_cv_gone"
+    return 1
+  fi
+  if [ -n "$_cv_dis" ]; then
+    printf 'shard coverage: the shards disagree about which sections exist (%s to %s, but%s), so there is no set for them to have covered.\n' "$_cv_first" "$_cv_last" "$_cv_dis"
+    return 1
+  fi
+  _cv_k="$_cv_first"
+  while [ "$_cv_k" -le "$_cv_last" ]; do
+    case "$_cv_seen" in *" $_cv_k "*) ;; *) _cv_miss="$_cv_miss $_cv_k" ;; esac
+    _cv_k=$((_cv_k + 1))
+  done
+  for _cv_x in $_cv_seen; do
+    if [ "$_cv_x" -lt "$_cv_first" ] || [ "$_cv_x" -gt "$_cv_last" ]; then _cv_extra="$_cv_extra $_cv_x"; fi
+  done
+  [ -z "$_cv_miss" ]  || _cv_say="$_cv_say section(s)$_cv_miss ran in no shard at all;"
+  [ -z "$_cv_dup" ]   || _cv_say="$_cv_say section(s)$_cv_dup were selected by more than one shard;"
+  [ -z "$_cv_extra" ] || _cv_say="$_cv_say section(s)$_cv_extra are outside the $_cv_first to $_cv_last the shards agreed on;"
+  if [ -n "$_cv_say" ]; then
+    printf 'shard coverage: the shards did not divide the sections between them:%s The numbers are positions in the section list, which SECTION_LIST=1 prints.\n' "$_cv_say"
+    return 1
+  fi
+  return 0
+}
+
+#
+# How many shards is a SHARE of one budget, not a number of its own (claude-config#136). The runner
+# starts several suites at once and this one splits itself again, and the two numbers were set
+# independently and compared nowhere, so a four core machine could carry a dozen heavy processes,
+# each spawning git and python. It never went red. Oversubscription makes timing sensitive checks
+# intermittently wrong instead, and this suite's own deadline guard was measured firing at 1192s
+# against a normal 200 on a loaded Mac, which is the hardest kind of failure to attribute.
+#
+# So run-all-tests.sh hands down HOOK_TESTS_SLOTS, this suite's share of the whole run's budget,
+# and that is the default. An explicit SUITE_JOBS still wins: a share is allocated to somebody, a
+# value in the environment is somebody asking. 4 remains the answer when nothing granted anything,
+# which is what a run started by hand looks like.
+#
+# An EMPTY grant is an absent one, matching what `:-` does for every other knob here. An
+# unreadable one is REFUSED rather than guessed at, and it comes from another program, so guessing
+# would leave that program wrong and nothing saying so (L50).
+_sj_src="default"
+_sj_default=4
+if [ -n "${HOOK_TESTS_SLOTS:-}" ]; then
+  case "$HOOK_TESTS_SLOTS" in
+    *[!0-9]*|0)
+      echo "test suite: HOOK_TESTS_SLOTS='$HOOK_TESTS_SLOTS' is not a positive whole number of processes this suite may take. Refusing rather than guessing: it arrives from run-all-tests.sh, so a value nobody can read means that is wrong, and running four shards anyway would hide it." >&2
+      exit 2 ;;
+  esac
+  _sj_default="$HOOK_TESTS_SLOTS"
+  _sj_src="HOOK_TESTS_SLOTS"
+fi
+[ -z "${SUITE_JOBS:-}" ] || _sj_src="SUITE_JOBS"
+SUITE_JOBS="${SUITE_JOBS:-$_sj_default}"
 case "$SUITE_JOBS" in
   ''|*[!0-9]*)
     echo "test suite: SUITE_JOBS='$SUITE_JOBS' is not a whole number of shards. Refusing rather than guessing, because it decides how many processes start. Use 1 to run in a single process." >&2
     exit 2 ;;
 esac
+# SUITE_PLAN_ONLY=1 says which number was chosen and where it came from, and runs nothing. The
+# number decides what a run costs, and the only other way to see it is to pay that cost (L102).
+# The SOURCE is part of the answer: a number that surprises somebody is only actionable once it
+# says who chose it (L11).
+if [ -n "${SUITE_PLAN_ONLY:-}" ]; then
+  printf 'SUITE-PLAN jobs=%s source=%s\n' "$SUITE_JOBS" "$_sj_src"
+  exit 0
+fi
 if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHARD:-}" ] && [ "$SUITE_JOBS" -gt 1 ]; then
   _fan_dir="$(mktemp -d "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
   _fan_pids=""
@@ -815,6 +960,11 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
     fi
     _fan_i=$((_fan_i + 1))
   done
+  # Whether the shards, between them, ran every section (#137). Read before the directory goes.
+  _fan_cov_say="$(shard_coverage_over_dir "$_fan_dir" "$SUITE_JOBS")" || {
+    echo "test suite: $_fan_cov_say" >&2
+    _fan_rc=1
+  }
   rm -rf "$_fan_dir"
   echo ""
   if [ -n "$_fan_missing" ]; then
@@ -4086,6 +4236,191 @@ _sh_exp="$(grep -m1 "^export"" -n SUITE_FILTERED" "$SCRIPT_SELF")"
 for _sh_v in SUITE_SHARD SUITE_NO_LOCK; do
   check "#133 $_sh_v is un-exported, so nothing this run starts inherits it"     "printf '%s' \"\$_sh_exp\" | grep -q '$_sh_v'"
 done
+
+section "== the shards, between them, covered every section (#137) =="
+# Each shard reports its own totals and the parent adds them up. Nothing recorded how many
+# sections a full run SHOULD produce, so a change that made one shard select fewer sections would
+# have produced a smaller number and passed. The total is no help as a reference point: it was
+# 817, then 830, then 943, every one of them legitimate, so drift in it is invisible by design and
+# a shard that read nothing is indistinguishable from a shard that found nothing wrong (L98).
+#
+# What is asserted is COVERAGE, not a count: every section after the prelude is the TARGET of
+# exactly one shard. It is derived from the selector's own arithmetic rather than from a number
+# written down beside it, so adding a section needs no maintenance here and there is no second
+# definition to drift (L107).
+#
+# Two halves, and both are needed. The verdict is driven with fabricated coverage lines, so every
+# outcome it can report is PRODUCED rather than merely reachable (L151). Then the real selector is
+# run for real, four times, and its real answers go through the same verdict: a verdict proven
+# only over lines this section wrote would say nothing about the shards anybody runs (L52, L159).
+#
+# What it cannot catch, said plainly: both sides read the section list through one parser, so a
+# heading that parser cannot see is outside this check. Such a section is not lost, it travels
+# with the one above it and still runs, which is why the gap worth closing is the arithmetic.
+_cov_v(){ printf '%s\n' "$1" | shard_coverage_verdict "$2"; }   # 0 = covered, else the complaint
+
+_cov_ok="SUITE-SHARD-COVERAGE shard=1 first=5 last=10 sections=5,7,9
+SUITE-SHARD-COVERAGE shard=2 first=5 last=10 sections=6,8,10"
+check "#137 shards that between them name every section are accepted" \
+  "_cov_v \"\$_cov_ok\" 2 >/dev/null"
+# And it says NOTHING when it is happy. A verdict that always prints would make the parent's
+# report carry a complaint on every clean run, which is how a real one stops being read (L36).
+check "#137 and a covered run is silent about it" \
+  "[ -z \"\$(_cov_v \"\$_cov_ok\" 2)\" ]"
+
+# A gap: shard 2 stops one short, which is exactly what a slice that drops one looks like.
+_cov_gap="SUITE-SHARD-COVERAGE shard=1 first=5 last=10 sections=5,7,9
+SUITE-SHARD-COVERAGE shard=2 first=5 last=10 sections=6,8"
+_cov_gap_out="$(_cov_v "$_cov_gap" 2)"
+check "#137 a section no shard ran fails the run" "! _cov_v \"\$_cov_gap\" 2 >/dev/null"
+check "#137 and the gap is named, so it can be looked up" \
+  "line_has \"\$_cov_gap_out\" 'no shard' ' 10'"
+
+# A duplicate: two shards both claim one section. The run would still be green, and the arithmetic
+# that produced it is wrong in a way that hides a gap somewhere else.
+_cov_dup="SUITE-SHARD-COVERAGE shard=1 first=5 last=10 sections=5,7,9
+SUITE-SHARD-COVERAGE shard=2 first=5 last=10 sections=6,8,9,10"
+_cov_dup_out="$(_cov_v "$_cov_dup" 2)"
+check "#137 a section claimed by two shards fails the run" "! _cov_v \"\$_cov_dup\" 2 >/dev/null"
+check "#137 and the doubled section is named" \
+  "line_has \"\$_cov_dup_out\" 'more than one shard' ' 9'"
+
+# A shard that said nothing at all. Its sections are missing from the union, so the gap message
+# would fire too and would accuse the selector of the reader's problem. Distinct causes get
+# distinct messages, and this one arrives ALONE (L11).
+_cov_none="SUITE-SHARD-COVERAGE shard=1 first=5 last=10 sections=5,7,9"
+_cov_none_out="$(_cov_v "$_cov_none" 2)"
+check "#137 a shard that reported no coverage at all fails the run" "! _cov_v \"\$_cov_none\" 2 >/dev/null"
+check "#137 and it is named as a shard that said nothing" \
+  "line_has \"\$_cov_none_out\" 'printed no coverage line' ' 2'"
+check "#137 and that is the only thing said, not a gap the missing line caused" \
+  "case \"\$_cov_none_out\" in *'no shard'*) false ;; *) true ;; esac"
+
+# Shards disagreeing about where the sections are means there is no set to check against at all,
+# and adding up two different answers would produce a coverage claim over neither.
+_cov_dis="SUITE-SHARD-COVERAGE shard=1 first=5 last=10 sections=5,7,9
+SUITE-SHARD-COVERAGE shard=2 first=6 last=10 sections=6,8,10"
+_cov_dis_out="$(_cov_v "$_cov_dis" 2)"
+check "#137 shards disagreeing about which sections exist fails the run" "! _cov_v \"\$_cov_dis\" 2 >/dev/null"
+check "#137 and the disagreement is reported as its own cause" \
+  "line_has \"\$_cov_dis_out\" 'disagree' 'shard 2'"
+
+# A line that cannot be read is not a shard with no sections. Reading it as one would report a
+# tidy list of gaps for a shard that may well have run everything it was given.
+_cov_bad="SUITE-SHARD-COVERAGE shard=1 first=5 last=10 sections=5,7,9
+SUITE-SHARD-COVERAGE shard=2 first=x last=10 sections=6,8,10"
+_cov_bad_out="$(_cov_v "$_cov_bad" 2)"
+check "#137 a coverage line that cannot be read fails the run" "! _cov_v \"\$_cov_bad\" 2 >/dev/null"
+check "#137 and an unreadable line is reported as unreadable" \
+  "line_has \"\$_cov_bad_out\" 'could not be read' 'shard=2'"
+
+# A section index outside the range every shard agreed on. It means the selector and the boundary
+# have parted company, which no gap or duplicate would say.
+_cov_out="SUITE-SHARD-COVERAGE shard=1 first=5 last=10 sections=5,7,9,11
+SUITE-SHARD-COVERAGE shard=2 first=5 last=10 sections=6,8,10"
+_cov_out_out="$(_cov_v "$_cov_out" 2)"
+check "#137 a section outside the agreed range fails the run" "! _cov_v \"\$_cov_out\" 2 >/dev/null"
+check "#137 and the out of range section is named" \
+  "line_has \"\$_cov_out_out\" 'outside' ' 11'"
+
+# The real thing. SUITE_SHARD_COVERAGE_ONLY runs the real selector and stops the moment it has
+# said what it selected, so four real shards cost four file reads instead of a full run. Every
+# check above would pass over a suite whose shards never emit a line at all, and this is the half
+# that cannot (L98, L159).
+_cov_real=""
+_cov_k=1
+while [ "$_cov_k" -le 4 ]; do
+  _cov_real="$_cov_real$(SUITE_SHARD="$_cov_k/4" SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
+    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
+"
+  _cov_k=$((_cov_k + 1))
+done
+_cov_real_out="$(_cov_v "$_cov_real" 4)"
+check "#137 the real selector's four shards cover every section between them" \
+  "_cov_v \"\$_cov_real\" 4 >/dev/null"
+check "#137 and it had four real coverage lines to say that over" \
+  "[ \"\$(printf '%s\n' \"\$_cov_real\" | grep -c '^SUITE-SHARD-COVERAGE ')\" = 4 ]"
+# And the reading the parent actually does: the shard output FILES, by the names the fan-out gives
+# them. A pattern that matches nothing is indistinguishable from a shard with nothing to say, and
+# the fan-out is the only other place this runs, which is a whole run away (L100, L143). The
+# fixtures carry the surrounding chatter a real shard prints, so the pattern has something to pick
+# the line out of.
+_cov_dir="$WORK/shard-coverage"
+rm -rf "$_cov_dir"; mkdir -p "$_cov_dir"
+printf '%s\n' "== a section ==" "  ok: something" "SUITE-SHARD-COVERAGE shard=1 first=5 last=8 sections=5,7" "SUITE-RESULT passed=9 failed=0" > "$_cov_dir/1.out"
+printf '%s\n' "== a section ==" "  ok: something" "SUITE-SHARD-COVERAGE shard=2 first=5 last=8 sections=6,8" "SUITE-RESULT passed=9 failed=0" > "$_cov_dir/2.out"
+check "#137 the parent reads the coverage out of the shards' own output files" \
+  "shard_coverage_over_dir \"\$_cov_dir\" 2 >/dev/null"
+# Then take that line away from one file, leaving the file itself intact and chatty. That is what
+# a shard whose emission was lost looks like, and it must be caught by the reading rather than
+# absorbed as a shard that covered nothing.
+grep -v '^SUITE-SHARD-COVERAGE ' "$_cov_dir/2.out" > "$_cov_dir/2.tmp" && mv "$_cov_dir/2.tmp" "$_cov_dir/2.out"
+_cov_dir_out="$(shard_coverage_over_dir "$_cov_dir" 2)"
+check "#137 and a shard whose output carries no coverage line is caught by that reading" \
+  "! shard_coverage_over_dir \"\$_cov_dir\" 2 >/dev/null"
+check "#137 and the file that was silent is the one named" \
+  "line_has \"\$_cov_dir_out\" 'printed no coverage line' ' 2'"
+
+# The control on the control: the same real lines with one shard's removed must be REFUSED, or
+# the check above is being satisfied by a verdict that accepts anything it is handed (L1).
+_cov_real_less="$(printf '%s\n' "$_cov_real" | grep -v '^SUITE-SHARD-COVERAGE shard=3 ')"
+check "#137 and dropping one of those real shards is refused" \
+  "! _cov_v \"\$_cov_real_less\" 4 >/dev/null"
+
+section "== the runner says how much of the machine this suite may take (#136) =="
+# The runner starts several suites at once and this one splits itself into shards, and the two
+# numbers were set independently: a four core runner could be running a dozen heavy processes, each
+# spawning git and python of its own. It never went red, which is the difficulty. Oversubscription
+# makes timing sensitive checks intermittently wrong, and this suite's own deadline guard was
+# measured firing at 1192s against a normal 200 on a loaded Mac.
+#
+# So the runner hands down a share of one budget in HOOK_TESTS_SLOTS and this suite takes it as how
+# many shards to run. An explicit SUITE_JOBS still wins, because that is somebody asking for a
+# number rather than a share being allocated to them.
+#
+# SUITE_PLAN_ONLY answers with the number and runs nothing. Without it the only way to see which
+# number was chosen is to run the whole suite, which is the very cost the number decides (L102).
+# On ONE line, because #34's scan reads the depth off the line that spawns and a continuation
+# would leave the spawn looking undepthed. And no `head`: a reader that leaves early kills the
+# producer under pipefail and reports a failure that never happened (L183, #132).
+_pl(){ SUITE_PLAN_ONLY=1 SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" env "$@" bash "$SCRIPT_SELF" 2>&1; }
+
+# The grant is UNSET here rather than merely absent from the arguments: this suite is itself run by
+# the runner, so it inherits a real grant, and a check that assumed nothing was set would be asking
+# about a case that never occurs on the machine it runs on (L504).
+_pl_def="$(_pl -u HOOK_TESTS_SLOTS -u SUITE_JOBS)"
+check "#136 with no grant and nothing asked for, the suite picks its own default" \
+  "line_has \"\$_pl_def\" 'SUITE-PLAN' 'jobs=4' 'source=default'"
+
+_pl_grant="$(_pl -u SUITE_JOBS HOOK_TESTS_SLOTS=2)"
+check "#136 a grant from the runner decides how many shards run" \
+  "line_has \"\$_pl_grant\" 'jobs=2' 'source=HOOK_TESTS_SLOTS'"
+
+# Asking outright wins over being allocated a share, and the answer says which it was, so a number
+# that surprises somebody can be traced to whoever chose it (L11).
+_pl_both="$(_pl HOOK_TESTS_SLOTS=2 SUITE_JOBS=3)"
+check "#136 an explicit job count still wins over the runner's grant" \
+  "line_has \"\$_pl_both\" 'jobs=3' 'source=SUITE_JOBS'"
+
+# An EMPTY grant means unset, which is what every other knob in this file does with an empty value.
+# Checked because the refusal below is a `case` and it would be natural to list the empty string in
+# it, which would then refuse a value nobody ever sets deliberately.
+_pl_empty="$(_pl -u SUITE_JOBS HOOK_TESTS_SLOTS=)"
+check "#136 an empty grant falls back to the default rather than being refused" \
+  "line_has \"\$_pl_empty\" 'jobs=4' 'source=default'"
+
+# A grant nobody can read decides how many processes start, so it is refused rather than guessed at,
+# exactly as SUITE_JOBS already is (L50). It comes from another program, so an unreadable one means
+# that program is wrong, and running four shards anyway would hide it.
+for _pl_bad in "two" "0" "-2" "1.5"; do
+  _pl_out="$(_pl -u SUITE_JOBS HOOK_TESTS_SLOTS="$_pl_bad")"
+  check "#136 a grant of '$_pl_bad' is refused rather than guessed at" \
+    "line_has \"\$_pl_out\" 'HOOK_TESTS_SLOTS' \"$_pl_bad\""
+done
+# The control: a well formed grant is not refused, or every check above is satisfied by a suite
+# that refuses everything it is handed (L159).
+check "#136 the control: a readable grant is not refused" \
+  "case \"\$_pl_grant\" in *Refusing*) false ;; *) true ;; esac"
 
 section "== a grandchild is not told the filtering already happened (#37) =="
 # A run started with SECTION_UNTIL re-executes itself from a temp copy carrying SUITE_FILTERED=1,

@@ -391,6 +391,120 @@ else
   check "the real repo could be found" "git rev-parse found no toplevel above $DIR"
 fi
 
+# ---------------------------------------------------------------------------
+# How much of the machine a run may take is ONE number (claude-config#136).
+#
+# The runner starts up to HOOK_TESTS_JOBS suites at once, and one of those suites splits itself
+# into shards of its own. Nothing related the two, so a four core runner could be running a dozen
+# heavy processes, each spawning git and python. It never failed outright, which is the problem:
+# oversubscription makes timing sensitive checks intermittently wrong rather than red, and the
+# suite's own deadline guard was measured firing at 1192s against a normal 200 on a loaded Mac.
+#
+# So the runner now holds a budget and derives BOTH halves from it: how many suites run at once,
+# and how many slots each of them may take. Their product is the budget rather than the product of
+# two numbers nobody compared. The budget is pinned in every check below rather than read off this
+# machine, because the arithmetic is what is being tested and a machine's core count would decide
+# the answer (L504).
+# ---------------------------------------------------------------------------
+# The grant is written to a FILE rather than printed. A passing suite's own output is not shown by
+# the runner at all, so a fixture that only echoed would be checked against a report that never
+# carries it, and every check below would fail for a reason unrelated to the grant.
+mk_slot_suite() { # mk_slot_suite <dir> <name>   -- a suite that records the grant it was handed
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf "%%s\\n" "${HOOK_TESTS_SLOTS:-<unset>}" > "$(dirname "$0")/%s.slots"\n' "$2"
+    printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+slots_seen() { # slots_seen <dir> <name>   -- what that suite was handed, or nothing
+  cat "$1/$2.slots" 2>/dev/null
+}
+
+S2="$TMPROOT/slots-two"
+mk_slot_suite "$S2" one
+mk_slot_suite "$S2" two
+out_sl="$(HOOK_TESTS_BUDGET=8 bash "$RUNNER" "$S2" 2>&1)"; code_sl=$?
+[ "$code_sl" -eq 0 ] \
+  && check "a run with a budget of 8 and two suites passes" ok \
+  || check "a run with a budget of 8 and two suites passes" "exit=$code_sl out=$out_sl"
+# Two suites, so two run at once, so each may take four of the eight. The grant has to REACH the
+# suite: a budget the runner works out and keeps to itself changes nothing about what starts (L3).
+[ "$(slots_seen "$S2" one)" = 4 ] && [ "$(slots_seen "$S2" two)" = 4 ] \
+  && check "and both suites were handed four slots each" ok \
+  || check "and both suites were handed four slots each" "one=$(slots_seen "$S2" one) two=$(slots_seen "$S2" two)"
+# Said out loud, on one line, with the product spelled out. The number that matters is what will
+# be in flight, and it was previously the product of two numbers printed nowhere (L182).
+case "$out_sl" in
+  *"at most 8 process(es) at once, against a budget of 8"*) check "and the run says how many processes that adds up to" ok ;;
+  *) check "and the run says how many processes that adds up to" "out=$out_sl" ;;
+esac
+
+# One suite takes the whole budget, because nothing else is running beside it. This is what keeps
+# `run-all-tests.sh tests/` fast: the long suite still shards as wide as the machine allows.
+S1="$TMPROOT/slots-one"
+mk_slot_suite "$S1" only
+out_s1="$(HOOK_TESTS_BUDGET=6 bash "$RUNNER" "$S1" 2>&1)"
+[ "$(slots_seen "$S1" only)" = 6 ] \
+  && check "a single suite is handed the whole budget" ok \
+  || check "a single suite is handed the whole budget" "it was handed '$(slots_seen "$S1" only)', out=$out_s1"
+
+# And the other end: as many suites at once as the budget, so one slot each and no more in flight
+# than before. The grant can never be zero, or a suite reading it would be told to start nothing.
+S4="$TMPROOT/slots-four"
+for n in one two three four; do mk_slot_suite "$S4" "$n"; done
+out_s4="$(HOOK_TESTS_BUDGET=4 HOOK_TESTS_JOBS=4 bash "$RUNNER" "$S4" 2>&1)"
+[ "$(cat "$S4"/*.slots 2>/dev/null | sort -u)" = 1 ] && [ "$(cat "$S4"/*.slots 2>/dev/null | grep -c .)" -eq 4 ] \
+  && check "four suites against a budget of four get one slot each" ok \
+  || check "four suites against a budget of four get one slot each" "they were handed: $(cat "$S4"/*.slots 2>/dev/null | tr '\n' ' ')"
+# The floor, proven rather than assumed: more suites at once than the budget still grants 1, never
+# 0. Integer division is where a floor like this goes missing.
+rm -f "$S4"/*.slots
+out_s0="$(HOOK_TESTS_BUDGET=2 HOOK_TESTS_JOBS=4 bash "$RUNNER" "$S4" 2>&1)"
+[ "$(cat "$S4"/*.slots 2>/dev/null | sort -u)" = 1 ] && [ "$(cat "$S4"/*.slots 2>/dev/null | grep -c .)" -eq 4 ] \
+  && check "and a budget smaller than the suites at once still grants one slot, not none" ok \
+  || check "and a budget smaller than the suites at once still grants one slot, not none" "they were handed: $(cat "$S4"/*.slots 2>/dev/null | tr '\n' ' ')"
+
+# A small machine is where the arithmetic goes wrong quietly. The CI runner has two cores, and
+# half of two is one, which would have run 38 suites strictly one after another while holding two
+# slots for whichever one of them can use them. So the count of suites at once has a floor of two,
+# capped by the budget itself, and the share follows from it. The numbers are asserted through the
+# line the runner prints, which is the same line a person reads to see what is happening.
+out_sm="$(HOOK_TESTS_BUDGET=2 bash "$RUNNER" "$S2" 2>&1)"
+case "$out_sm" in
+  *"up to 2 suite(s) at once, 1 slot(s) each, so at most 2 process(es) at once, against a budget of 2"*)
+    check "a two core machine still runs two suites at once, one slot each" ok ;;
+  *) check "a two core machine still runs two suites at once, one slot each" "out=$out_sm" ;;
+esac
+# And the floor never exceeds the budget: one core is one process, not two.
+out_sm1="$(HOOK_TESTS_BUDGET=1 bash "$RUNNER" "$S2" 2>&1)"
+case "$out_sm1" in
+  *"up to 1 suite(s) at once, 1 slot(s) each, so at most 1 process(es) at once, against a budget of 1"*)
+    check "a one core machine runs one suite at a time, one slot" ok ;;
+  *) check "a one core machine runs one suite at a time, one slot" "out=$out_sm1" ;;
+esac
+
+# A budget nobody can read decides how many processes start, so it is refused rather than guessed
+# at, exactly as HOOK_TESTS_JOBS already is (L50).
+for bad in two 1.5 -3 0; do
+  out_bb="$(HOOK_TESTS_BUDGET="$bad" bash "$RUNNER" "$S2" 2>&1)"; code_bb=$?
+  case "$out_bb" in
+    *"HOOK_TESTS_BUDGET='$bad'"*) named=1 ;;
+    *) named=0 ;;
+  esac
+  [ "$code_bb" -ne 0 ] && [ "$named" -eq 1 ] \
+    && check "a budget of '$bad' is refused, and named in the refusal" ok \
+    || check "a budget of '$bad' is refused, and named in the refusal" "exit=$code_bb out=$out_bb"
+done
+# The control: a well formed budget is NOT refused, or every check above is satisfied by a runner
+# that refuses everything (L159).
+out_bg="$(HOOK_TESTS_BUDGET=8 bash "$RUNNER" "$S2" 2>&1)"
+case "$out_bg" in
+  *"HOOK_TESTS_BUDGET="*) check "the control: a well formed budget is not refused" "it refused 8: $out_bg" ;;
+  *) check "the control: a well formed budget is not refused" ok ;;
+esac
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
