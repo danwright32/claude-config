@@ -14,7 +14,18 @@ AUDIT="$DIR/audit-changed-sections.sh"
 pass=0; fail=0
 check(){ if [[ "$2" == "ok" ]]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $1 ($2)"; fi; }
 
-TMPROOT="$(mktemp -d)"
+# Named from an explicit template, like everything else this repo creates in the temp directory, so
+# a copy an interrupted run leaves behind can be attributed to this test rather than swept by age.
+TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-audit-test.XXXXXXXX")" || TMPROOT=""
+# The cleanup below is an `rm -rf` on a path from a command that can fail. An empty or unexpected
+# value there would aim it somewhere real, so it is refused UP FRONT rather than relied on being
+# harmless (L5, L9). The suite next door already holds this line for its own lock directory.
+case "${TMPROOT%/}" in
+  ''|/|"${HOME%/}"|"${TMPDIR:-/tmp}"|"${TMPDIR:-/tmp}"/)
+    echo "test-audit-changed-sections: refusing to run: the throwaway directory came back as '${TMPROOT}', which is not a directory of this test's own." >&2
+    exit 2 ;;
+esac
+[ -d "$TMPROOT" ] || { echo "test-audit-changed-sections: '$TMPROOT' is not a directory, so nothing was created to work in." >&2; exit 2; }
 trap 'rm -rf "$TMPROOT"' EXIT
 
 # A tiny stand-in suite with the same shape as the real one: a preamble, headings, and a
