@@ -260,7 +260,7 @@ One run at a time, and none of them open ended:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `SUITE_TIMEOUT` | `900` | Seconds before a stalled run is killed and told which section it died in. Full runs measured 225 and 267 seconds on a Mac and 110 on the Linux runner on 2026-08-21, so this is at least 3x the slowest observed. The suite checks that headroom against its own elapsed time, so the ratio cannot go stale. `0` disables it. |
+| `SUITE_TIMEOUT` | `900` | Seconds before a stalled run is killed and told which section it died in. Full runs measured 191 to 267 seconds on a Mac and 110 on the Linux runner on 2026-08-21, so this is at least 3x the slowest observed. The suite checks that headroom against its own elapsed time, so the ratio cannot go stale. `0` disables it. |
 | `SUITE_LOCK` | `$TMPDIR/claude-sync-suite.lock` | Where the one run at a time lock lives. A second run REFUSES, naming the process that holds it and how long it has been going, rather than queueing. |
 | `SUITE_NO_LOCK` | unset | Run without taking the lock. For when you know the run it names has finished. |
 | `SUITE_LOCK_MAX_AGE` | `1800` | Seconds after which a lock from ANOTHER machine is broken. A lock from this machine is judged by whether its process is alive, never by the clock, so a clock jump cannot break a live one. |

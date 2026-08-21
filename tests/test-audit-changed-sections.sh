@@ -38,6 +38,19 @@ mkrepo(){                 # $1 = repo name -> prints its path
 #!/usr/bin/env bash
 set -uo pipefail
 PREAMBLE=1
+if [ -n "${SECTION_LIST:-}" ]; then
+  # Real line numbers, derived from this file, but titles deliberately NOT the text a naive grep
+  # would produce: the headings below say "== alpha ==" and this says "== LISTED alpha ==". So a
+  # caller reporting the LISTED form can only have asked, and one that greps the file cannot.
+  # The numbers have to be derived rather than written down for the same reason the real thing
+  # derives them: editing this fixture moves every line below the edit.
+  while IFS= read -r _l; do
+    _n="${_l%%:*}"; _r="${_l#*:}"
+    _t="${_r#section \"}"; _t="${_t%\"}"
+    printf '%s\t%s\n' "$_n" "== LISTED ${_t#== }"
+  done < <(grep -n '^section "' "$0")
+  exit 0
+fi
 if [ -n "${SECTION_ONLY:-}" ]; then
   echo "ran only: $SECTION_ONLY"
   case "$SECTION_ONLY" in
@@ -75,9 +88,15 @@ R2="$(mkrepo oneedit)"
 perl -pi -e 's/^echo b$/echo b-edited/' "$R2/tests/test-claude-sync.sh"
 o2="$(run "$R2")"; c2=$?
 [ "$c2" -eq 0 ] && check "a green changed section passes" ok || check "a green changed section passes" "exit=$c2 out=$o2"
-printf '%s' "$o2" | grep -q 'beta' \
+printf '%s' "$o2" | grep -q 'LISTED beta' \
   && check "the changed section is the one that ran" ok \
   || check "the changed section is the one that ran" "out=$o2"
+# The decisive one: the name can only have come from asking the suite, because the suite's own
+# heading lines say something different. Two implementations of "where do the sections start" would
+# have produced the file's text instead (claude-config#114).
+printf '%s' "$o2" | grep -q 'LISTED' \
+  && check "the audit asked the suite rather than grepping the file itself" ok \
+  || check "the audit asked the suite rather than grepping the file itself" "out=$o2"
 printf '%s' "$o2" | grep -q 'alpha' \
   && check "an untouched section is not run" "out=$o2" \
   || check "an untouched section is not run" ok
@@ -91,7 +110,7 @@ perl -pi -e 's/^echo c$/echo c-edited/' "$R3/tests/test-claude-sync.sh"
 o3="$(run "$R3")"; c3=$?
 [ "$c3" -ne 0 ] && check "a changed section that fails alone fails the audit" ok \
                 || check "a changed section that fails alone fails the audit" "exit=$c3 out=$o3"
-printf '%s' "$o3" | grep -q 'BROKEN gamma' \
+printf '%s' "$o3" | grep -q 'LISTED BROKEN gamma' \
   && check "and names which section could not run alone" ok \
   || check "and names which section could not run alone" "out=$o3"
 
@@ -120,7 +139,7 @@ printf '%s' "$o5" | grep -qE 'audited 2 ' \
 R6="$(mkrepo deletion)"
 perl -ni -e 'print unless /^echo b$/' "$R6/tests/test-claude-sync.sh"
 o6="$(run "$R6")"; c6=$?
-printf '%s' "$o6" | grep -q 'beta' \
+printf '%s' "$o6" | grep -q 'LISTED beta' \
   && check "a pure deletion still attributes to its section" ok \
   || check "a pure deletion still attributes to its section" "exit=$c6 out=$o6"
 

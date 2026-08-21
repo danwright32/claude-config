@@ -51,16 +51,25 @@ changed="$(git diff --unified=0 "$BASE" -- "$REL" | awk '
     for (i = 0; i < n; i++) print s + i
   }')"
 
-# Section spans come from the file'"'"'s own headings, never from line numbers recorded anywhere else:
-# a diff moves every line below an insertion, so a remembered number describes the wrong section the
-# first time anybody adds one.
-headings="$(grep -n '^section "' "$SUITE" | sed 's/^\([0-9]*\):section "/\1 /; s/"$//')"
+# The section spans come from the SUITE, by asking it, rather than from a second derivation here.
+# Two implementations of "where do the sections start and what are they called" drift, and this is
+# the worse half to have drift: it is what decides whether a changed section can stand on its own,
+# so a wrong answer scopes the audit to the wrong sections while still reporting a clean run
+# (claude-config#114).
+#
+# They also have to come from the file's own headings rather than from line numbers recorded
+# anywhere, because a diff moves every line below an insertion.
+headings="$(SECTION_LIST=1 bash "$SUITE" 2>/dev/null || true)"
+if [ -z "${headings%%[[:space:]]}" ] || ! printf '%s' "$headings" | grep -q '[0-9]'; then
+  echo "audit-changed-sections: $REL listed no sections, so no changed line can be attributed to one. Refusing rather than treating the whole diff as preamble, which would report a clean audit of nothing." >&2
+  exit 2
+fi
 
 preamble=0
 titles=""
 while IFS= read -r _ln; do
   case "$_ln" in ''|*[!0-9]*) continue ;; esac
-  _t="$(printf '%s\n' "$headings" | awk -v L="$_ln" '{ if ($1 + 0 <= L + 0) { $1=""; sub(/^ /,""); last=$0 } } END { print last }')"
+  _t="$(printf '%s\n' "$headings" | awk -F'\t' -v L="$_ln" '{ if ($1 + 0 <= L + 0) last=$2 } END { print last }')"
   if [ -z "$_t" ]; then preamble=1; continue; fi
   titles="$titles$_t
 "

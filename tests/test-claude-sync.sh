@@ -182,13 +182,19 @@ SUITE_SECTION_MARK=""
 # Named by its heading TEXT rather than by a count, so inserting a section cannot silently move the
 # boundary, and asserted to match exactly one heading below, so renaming one cannot silently void it.
 # How a heading line becomes a title, written ONCE and used everywhere it is needed, including by
-# the check that proves it (claude-config#111). Two sites used to trim one trailing quote, which
-# assumes the line ends in exactly one. Neither broke, but #37 feeds its result into a NEGATED
-# check, so a heading gaining a trailing comment would have turned the marker into a string nothing
-# can find, and the check would have passed while proving nothing (L159). Its companion only asserts
-# the marker is non-empty, which a mangled string satisfies.
+# the check that proves it and by the section list the changed-section audit reads
+# (claude-config#111, claude-config#114). Two sites used to trim one trailing quote, which assumes
+# the line ends in exactly one. Neither broke, but #37 feeds its result into a NEGATED check, so a
+# heading gaining a trailing comment would have turned the marker into a string nothing can find and
+# the check would have passed while proving nothing (L159). Its companion only asserts the marker is
+# non-empty, which a mangled string satisfies.
 # Everything from the LAST quote onwards is dropped, so trailing text cannot corrupt the title.
-SECTION_TITLE_SED='s/^section "//; s/"[^"]*$//'
+# A function rather than a sed expression, because the callers are a mix of shell and pipelines and
+# two spellings of one rule is the thing being removed, not added to.
+section_title(){   # $1 = a `section "..."` line -> the heading text
+  local _st="${1#section \"}"
+  printf '%s' "${_st%\"*}"
+}
 
 SUITE_PRELUDE_END="sync (two-way) over a local fake remote"
 
@@ -202,7 +208,7 @@ fi
 # Collected once, and used by BOTH filters. They used to resolve a name differently: SECTION_ONLY
 # refused an ambiguous pattern and SECTION_UNTIL took the earliest match, which meant which rules
 # applied depended on which knob you reached for (claude-config#110).
-if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ]; } && [ -z "${SUITE_FILTERED:-}" ]; then
+if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTION_LIST:-}" ]; } && [ -z "${SUITE_FILTERED:-}" ]; then
   # Every heading, its line, and any `# needs:` lines directly beneath it. A declaration is a
   # COMMENT and deliberately not an argument to `section`: three derivations in this file parse
   # `^section "..."$` by stripping one trailing quote, and #37's `_late` would fail SILENTLY,
@@ -237,6 +243,21 @@ if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ]; } && [ -z "${SUI
   # earliest answer and "run only" does not, so an ambiguous pattern must refuse rather than
   # silently run a section nobody asked for and report success under the text that was typed
   # (L100, L154).
+  # SECTION_LIST=1 prints every heading with the line it starts on, then exits. It exists so that
+  # nothing else has to work out where the sections are: the changed-section audit needs exactly
+  # that answer, and deriving it a second time would put two implementations of one question in the
+  # repo, with the audit being the half that decides whether a section can stand alone
+  # (claude-config#114). Placed here, before the lock and the deadline, because listing is a
+  # read-only question that should cost nothing and take nothing.
+  if [ -n "${SECTION_LIST:-}" ]; then
+    _sl_k=1
+    while [ "$_sl_k" -le "$_so_i" ]; do
+      printf '%s\t%s\n' "${_so_starts[$_sl_k]}" "$(section_title "${_so_titles[$_sl_k]}")"
+      _sl_k=$((_sl_k + 1))
+    done
+    exit 0
+  fi
+
   _so_hits=0; _so_idx=""; _so_list=""
   _sec_match(){
     local _m
@@ -267,7 +288,7 @@ if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
     printf '%s\n' "$_so_list" >&2
     exit 2
   fi
-  _su_name="${_so_titles[$_so_idx]#section \"}"; _su_name="${_su_name%\"}"
+  _su_name="$(section_title "${_so_titles[$_so_idx]}")"
 
   # Named for the same reason as everything else this suite creates: a run killed between writing
   # this copy and removing it leaves a file nothing can attribute afterwards (#36).
@@ -374,7 +395,7 @@ SONEEDS
     _so_k=$((_so_k + 1))
   done
 
-  _so_name="${_so_titles[$_so_target]#section \"}"; _so_name="${_so_name%\"}"
+  _so_name="$(section_title "${_so_titles[$_so_target]}")"
   printf '\nsuite_filtered_tail "SECTION_ONLY resolved to %s" "%s"; exit $?\n' "$_so_name" "$_so_name" >> "$_filtered"
 
   # SECTION_ONLY drops a span out of the MIDDLE, which SECTION_UNTIL never does, so the seam that
@@ -424,7 +445,7 @@ fi
 # `export -n` rather than `unset`: this process still needs the value (the #27 subruns below read
 # it), and the only thing that has to stop is the inheritance. Done HERE, once, rather than at each
 # spawn site, because a site added later cannot remember a rule it never saw (L30, L96).
-export -n SUITE_FILTERED SECTION_ONLY 2>/dev/null || true
+export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST 2>/dev/null || true
 
 # SUITE_SPAWN_UNTIL=<text> starts ONE child with that section limit, says what a child of this run
 # inherits, and exits with the child's status. It is the seam that makes the paragraph above
@@ -2794,8 +2815,14 @@ check "#27 and reports no test results at all"        "! grep -q '^PASS=' '$SUBO
 # its worst failure: a green partial run that quietly omitted a section reads as proof and is
 # not. Assert that every section heading up to the named one actually appears in the output,
 # derived from the file itself rather than from a list somebody has to remember to update.
-_want="$(awk '/^section "/{print; if (index($0, "sync (two-way) over a local fake remote")>0) exit}' "$SCRIPT_SELF" \
-         | sed "$SECTION_TITLE_SED")"
+_want=""
+while IFS= read -r _wl; do
+  [ -n "$_wl" ] || continue
+  _want="$_want$(section_title "$_wl")
+"
+done <<WANTED
+$(awk '/^section "/{print; if (index($0, "sync (two-way) over a local fake remote")>0) exit}' "$SCRIPT_SELF")
+WANTED
 _missing=""
 while IFS= read -r _h; do
   [ -n "$_h" ] || continue
@@ -3505,6 +3532,22 @@ check "#36 and names the command that reclaims them" "printf '%s' \"\$_scr_rep\"
 _scr_out="$(_reap)"
 check "#36 the reaper says how many it reclaimed" "printf '%s' \"\$_scr_out\" | grep -q 'reclaimed 2'"
 check "#36 and how much space it got back"        "printf '%s' \"\$_scr_out\" | grep -qE '[0-9]+ MB'"
+# The scan reads the temp directory once per NAME, and on a real Mac that directory holds six
+# figures of entries: measured 113,000 here, six passes, 1.28 seconds of every single `status` call
+# (claude-config#115). Collapsing that to one pass is only safe if it still finds a name that does
+# NOT share the others' prefix, because the obvious optimisation is to glob a hard-coded common
+# prefix and that silently stops reporting anything outside it. A leftover nobody reports is a
+# leftover nobody reclaims, and the whole feature is about noticing them (L96).
+_SCRP="$WORK/scratch-prefix"; mkdir -p "$_SCRP"
+: > "$_SCRP/claude-sync-work.SHAREDAA"
+: > "$_SCRP/totally-different-name.ODDONEA"
+touch -t 202001010000 "$_SCRP/claude-sync-work.SHAREDAA" "$_SCRP/totally-different-name.ODDONEA"
+_scr_odd="$(SYNC_SCRATCH_NAMES='claude-sync-work. totally-different-name.' SYNC_SCRATCH_ROOT="$_SCRP" SYNC_SCRATCH_MAX_AGE=60 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#115 a scratch name sharing the common prefix is reported" \
+  "printf '%s' \"\$_scr_odd\" | grep -q '2 abandoned'"
+check "#115 the control: both fixtures were old enough to count" \
+  "[ -e '$_SCRP/totally-different-name.ODDONEA' ] && [ -e '$_SCRP/claude-sync-work.SHAREDAA' ]"
+
 check "#36 an abandoned suite directory is gone"  "[ ! -e '$_SCR/claude-sync-suite-work.OLDAAAA' ]"
 check "#36 an abandoned apply log is gone"        "[ ! -e '$_SCR/claude-sync-applied.OLDBBBB' ]"
 # The three that must SURVIVE, which is where the damage would be. Each is a different reason.
@@ -3615,7 +3658,7 @@ check "#37 its child honours the section limit it was given" \
 # The other half, and the one that names the actual damage: not merely that the child stopped, but
 # that it never ran on past its limit. The marker is taken from the file rather than typed, so a
 # renamed section leaves this failing rather than quietly asserting nothing (L103).
-_late="$(grep '^section "' "$SCRIPT_SELF" | sed -n '6p' | sed "$SECTION_TITLE_SED")"
+_late="$(section_title "$(grep '^section "' "$SCRIPT_SELF" | sed -n '6p')")"
 check "#37 the late-section marker was found" "[ -n \"\$_late\" ]"
 check "#37 the child did not run on into the rest of the suite" \
   "! printf '%s' \"\$_gc\" | grep -qF -- \"\$_late\""
@@ -5021,9 +5064,9 @@ check "#105 a child does not inherit the one-section filter" \
 # The title derivation, proved on the shape that would have broken it (claude-config#111). It uses
 # the one expression the real derivations use, not a copy written beside them, or the check could
 # pass while the code did something else (L107).
-_hd_trail="$(printf '%s\n' 'section "== a heading ==" # and a trailing comment' | sed "$SECTION_TITLE_SED")"
+_hd_trail="$(section_title 'section "== a heading ==" # and a trailing comment')"
 check "#111 a heading carrying trailing text still derives just its title" "[ \"\$_hd_trail\" = '== a heading ==' ]"
-_hd_plain="$(printf '%s\n' 'section "== a heading =="' | sed "$SECTION_TITLE_SED")"
+_hd_plain="$(section_title 'section "== a heading =="')"
 check "#111 and an ordinary heading is unchanged by it" "[ \"\$_hd_plain\" = '== a heading ==' ]"
 # The old expression, asked of the same trailing-text line. It mangles it, which is the defect, and
 # keeping the evidence next to the fix is what stops somebody reverting it as noise.
@@ -5054,7 +5097,7 @@ check "#110 even though the run as a whole reported no failures" "grep -q 'FAIL=
 
 # And the un-export has to sit ahead of every spawn site, or a site above it still hands it on.
 # Derived, and the pattern assembled from pieces so the check cannot be satisfied by its own line.
-_soexp_pat="export"" -n SUITE_FILTERED SECTION_ONLY"
+_soexp_pat="export"" -n SUITE_FILTERED SECTION_ONLY SECTION_LIST"
 _soexp_line="$(grep -nF "$_soexp_pat" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
 _sospawn_first="$(grep -nF "bash \"\$SCRIPT""_SELF\"" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
 check "#105 the filter is un-exported before anything spawns a run" \

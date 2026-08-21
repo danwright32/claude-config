@@ -101,6 +101,12 @@ jobs:
         # itself tested is the shape this repo has been caught by before (#101).
         run: bash tests/test-audit-changed-sections.sh
 
+      - name: The measurement tool's own tests
+        # It re-derives the figure justifying the retire window, so it is the thing that decides
+        # whether a documented number is still true. A tool that judges the docs and is not itself
+        # tested is the shape this repo has been caught by before (#101).
+        run: bash tools/test-measure-sync-gaps.sh
+
       - name: Each changed suite section, run on its own
         # The suite's sections are independent: all 73 after the prelude run alone, and the single
         # real dependency left is declared with a `# needs:` comment. The full suite cannot notice

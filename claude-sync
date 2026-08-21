@@ -2693,9 +2693,11 @@ do_verify(){
       # so a rename abandons the old one rather than moving it (L15, and the reason #26
       # exists at all). Left as BEHIND it would hold the verdict negative for ever, and a
       # check that can only ever say no stops being read.
-      # 60 days, from the real history rather than a guess: the other Mac's longest gap
-      # between syncs in 60 days was 6.8 days, so this is roughly 9x the longest real
-      # absence and a holiday cannot trip it.
+      # 60 days, from the real history rather than a guess: the worst gap either Mac showed
+      # in the window is 6.79 days, so this is 8.8x the longest real absence and a holiday
+      # cannot trip it. Re-derive it with tools/measure-sync-gaps.sh rather than trusting
+      # this comment: the figure was frozen here for eleven days with no cheap way to check
+      # it, which is how the suite's own deadline drifted unnoticed (claude-config#113).
       # STILL NAMED, never dropped from the report: a Mac that genuinely fell behind must
       # not vanish from the surface that exists to notice exactly that.
       line="$host: RETIRED, no sign of it since $(date_from_epoch "$mtime" '+%Y-%m-%d' | grep . || echo 'an unknown date'). Run 'claude-sync forget-mac $host' to drop it."
@@ -2908,7 +2910,9 @@ case "$SYNC_SCRATCH_MAX_AGE" in
     echo "claude-sync: SYNC_SCRATCH_MAX_AGE='$SYNC_SCRATCH_MAX_AGE' is not a whole number of seconds. Refusing to run rather than sweeping to an age nobody can read. Set it to 0 to turn the sweep off." >&2
     exit 2 ;;
 esac
-SYNC_SCRATCH_NAMES="claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-suite-work. claude-sync-suite-section."
+# Overridable so a test can point the scan at names of its own. It is not a knob anybody needs in
+# normal use: the default IS the list of every prefix this tool creates.
+SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-suite-work. claude-sync-suite-section.}"
 
 # Every short-lived temp FILE in this tool is made here rather than by each call site writing its
 # own `mktemp`. One name, so every one of them is reclaimable, and one place to change it if that
@@ -2925,20 +2929,44 @@ scratch_dir(){ mktemp -d "${TMPDIR:-/tmp}/claude-sync-expand.XXXXXXXX"; }
 # the one outcome worse than the litter, so it is deliberately generous. The cost is accepted and
 # stated: a burst of interrupted runs is not reclaimed until an hour after the last of them.
 scratch_leftovers(){
-  local root="${SYNC_SCRATCH_ROOT%/}" now p n age m
+  local root="${SYNC_SCRATCH_ROOT%/}" now p n age m pre first base matched
   # Off means off: nothing is listed, so nothing is reported and nothing is removed.
   [ "$SYNC_SCRATCH_MAX_AGE" -eq 0 ] && return 0
   now="$(date +%s)"
+  # ONE pass over the directory, not one per name. Each glob reads and sorts the WHOLE directory,
+  # and the temp directory on a real Mac is enormous: 113,000 entries measured here, six names, so
+  # six full reads costing 1.28 seconds of every single `status` call, which was 79% of it and the
+  # largest single cost in the test suite as well (claude-config#115).
+  #
+  # The prefix is DERIVED from the names, never written down. Hard-coding the one they happen to
+  # share today makes this silently stop reporting anything outside it, and a leftover nobody
+  # reports is a leftover nobody reclaims, which is the entire point of the feature (L96). Derived,
+  # a name that does not share it simply shortens the prefix; in the worst case it shortens to
+  # nothing and this reads the directory once unfiltered, which is slower than ideal and still
+  # correct. That failure direction is the one worth having, and the guard for it was watched
+  # failing against the hard-coded version before this was written.
+  pre=""; first=1
   for n in $SYNC_SCRATCH_NAMES; do
-    for p in "$root/$n"*; do
-      [ -e "$p" ] || continue
-      m="$(file_mtime "$p")"
-      # An mtime that cannot be read is treated as YOUNG, so a path is never removed on no
-      # evidence at all (L50: an unparseable value must land on the safe side).
-      case "$m" in ''|*[!0-9]*) continue ;; esac
-      age=$(( now - m ))
-      if [ "$age" -ge "$SYNC_SCRATCH_MAX_AGE" ]; then printf '%s\n' "$p"; fi
+    if [ "$first" -eq 1 ]; then pre="$n"; first=0; continue; fi
+    while [ -n "$pre" ]; do
+      case "$n" in "$pre"*) break ;; esac
+      pre="${pre%?}"
     done
+  done
+  for p in "$root/$pre"*; do
+    [ -e "$p" ] || continue
+    base="${p##*/}"
+    matched=0
+    for n in $SYNC_SCRATCH_NAMES; do
+      case "$base" in "$n"*) matched=1; break ;; esac
+    done
+    [ "$matched" -eq 1 ] || continue
+    m="$(file_mtime "$p")"
+    # An mtime that cannot be read is treated as YOUNG, so a path is never removed on no
+    # evidence at all (L50: an unparseable value must land on the safe side).
+    case "$m" in ''|*[!0-9]*) continue ;; esac
+    age=$(( now - m ))
+    if [ "$age" -ge "$SYNC_SCRATCH_MAX_AGE" ]; then printf '%s\n' "$p"; fi
   done
   # Said explicitly, and not left to whatever the last comparison happened to leave behind. This
   # file runs under `set -e`, so a function ending on a false test returns 1 and kills its caller.
