@@ -1812,6 +1812,17 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Cross-system reliability
 
+- **L208. A substitution applied across a whole set of files cannot tell a line that MEANS
+  the placeholder from a line that means a value, so any file describing the mechanism has its
+  own text rewritten**, and only in the copy that was delivered: the authoring machine's copy
+  stays correct, so the damage is invisible exactly where somebody would look for it. A file
+  that has to name the placeholder must assemble it from pieces.
+  (claude-config#99: the config sync expands its home directory placeholder in every mirrored
+  file. A healthcheck running a shell substitution over that placeholder was installed as a
+  substitution over a path and reported a scriptPath made of two home directories glued
+  together, and two skills shipped a sentence explaining the placeholder that had itself been
+  rewritten into a real path. Every one of those files reads correctly in the repository)
+
 - **L197. A function that returns whether it CLAIMED something (a lock, a slot, a run) is
   only a guard where the caller checks the answer**, and marking that answer discardable
   means the compiler will never say who did not, so the claim reads as protection at every

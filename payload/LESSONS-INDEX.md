@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 215 lessons.
+LESSONS.md, which is NOT loaded into the session. 216 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -238,6 +238,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Cross-system reliability
 
+- L208. A substitution applied across a whole set of files cannot tell a line that MEANS the placeholder from a line that means a value, so any file describing the mechanism has its own text rewritten
 - L197. A function that returns whether it CLAIMED something (a lock, a slot, a run) is only a guard where the caller checks the answer
 - L33. Make the pair of a database write and an external side effect crash-safe.
 - L34. Verify domain and vendor data semantics against real samples before building on them.
