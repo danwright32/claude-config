@@ -260,11 +260,11 @@ One run at a time, and none of them open ended:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `SUITE_TIMEOUT` | `900` | Seconds before a stalled run is killed and told which section it died in. A full run measured 123 seconds on 2026-08-17, so this is roughly 7x. `0` disables it. |
+| `SUITE_TIMEOUT` | `900` | Seconds before a stalled run is killed and told which section it died in. Full runs measured 225 and 267 seconds on a Mac and 110 on the Linux runner on 2026-08-21, so this is at least 3x the slowest observed. The suite checks that headroom against its own elapsed time, so the ratio cannot go stale. `0` disables it. |
 | `SUITE_LOCK` | `$TMPDIR/claude-sync-suite.lock` | Where the one run at a time lock lives. A second run REFUSES, naming the process that holds it and how long it has been going, rather than queueing. |
 | `SUITE_NO_LOCK` | unset | Run without taking the lock. For when you know the run it names has finished. |
 | `SUITE_LOCK_MAX_AGE` | `1800` | Seconds after which a lock from ANOTHER machine is broken. A lock from this machine is judged by whether its process is alive, never by the clock, so a clock jump cannot break a live one. |
-| `SUITE_MAX_DEPTH` | `1` | How deeply a run may be nested inside another. The suite runs itself as a subprocess in places, and past this it refuses to start rather than multiplying. |
+| `SUITE_MAX_DEPTH` | `1` | How deeply a run may be nested inside another. The suite runs itself as a subprocess in many places, every one of them one level down, and past this it refuses to start rather than multiplying. |
 | `SECTION_ONLY` | unset | Run the preamble, the first four sections, and the one named, plus anything it declares it needs. Refuses an ambiguous or unmatched name. |
 | `SECTION_UNTIL` | unset | Run from the start up to and including the section named. Refuses to be combined with `SECTION_ONLY`. |
 | `SUITE_SLOW_IN` | unset | Pause deliberately in the section named. It exists so the duration column can be watched reporting a known number: most sections legitimately read 0s, and a broken clock would read 0s everywhere too. |

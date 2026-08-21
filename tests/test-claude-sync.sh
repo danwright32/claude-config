@@ -78,7 +78,7 @@ SUITE_CHILD_DEPTH=$((SUITE_DEPTH + 1))
 # figure would cost a fork per section and perturb the thing being measured. Most sections
 # legitimately read 0s, which is also why SUITE_SLOW_IN exists below: a timer that was simply
 # broken would read 0s everywhere too, and that is indistinguishable from a fast suite (L182).
-_SEC_TITLE=""; _SEC_T0=0; _SEC_P0=0; _SEC_F0=0; _SEC_PROFILE=""
+_SEC_TITLE=""; _SEC_T0=0; _SEC_P0=0; _SEC_F0=0; _SEC_PROFILE=""; _SEC_TARGET_N=0
 
 section_close(){
   [ -n "$_SEC_TITLE" ] || return 0
@@ -86,6 +86,9 @@ section_close(){
   local _d=$(( SECONDS - _SEC_T0 ))
   local _w="checks"; [ "$_n" -eq 1 ] && _w="check"
   printf '  (section: %d %s, %ds)\n' "$_n" "$_w" "$_d"
+  # SUITE_TARGET_SECTION names the section a filtered run was ASKED for. Recorded here so the tail
+  # can tell "that section passed" from "the prelude passed and that section did nothing".
+  [ "$_SEC_TITLE" = "${SUITE_TARGET_SECTION:-}" ] && _SEC_TARGET_N=$_n
   # Zero padded so a plain reverse sort is a numeric one, with no dependence on the locale's idea
   # of numeric ordering.
   _SEC_PROFILE="$_SEC_PROFILE$(printf '%06d\t%s' "$_d" "$_SEC_TITLE")
@@ -107,6 +110,24 @@ suite_profile(){
     printf '  %ds %s\n' "$((10#$_pd))" "$_pt"
   done
   return 0
+}
+
+# The tail both filtered runs append. ONE implementation: two copies of "report, then decide the
+# exit code" drift apart, and the rule below then holds for whichever knob happened to get it, which
+# is not the one somebody reaches for (claude-config#110).
+suite_filtered_tail(){   # $1 = how the run was scoped, for the summary   $2 = the resolved heading
+  suite_profile
+  echo ""
+  echo "PASS=$PASS FAIL=$FAIL ($1, NOT a full run)"
+  # A filtered run counts the PRELUDE's checks in that total, so a section that ran none of its own
+  # still prints a healthy looking number underneath its own name. The total is then not evidence
+  # about the thing it is printed beside, which is the same shape as a scan that read nothing
+  # reporting a clean tree (L98).
+  if [ "${_SEC_TARGET_N:-0}" -eq 0 ]; then
+    echo "test suite: $2 ran NO checks of its own, so this run says nothing about it. The total above is the prelude's." >&2
+    return 6
+  fi
+  [ "$FAIL" -eq 0 ]
 }
 
 section(){
@@ -147,48 +168,6 @@ SUITE_SECTION_MARK=""
 #
 # SECTION_UNTIL stays. It is still the right thing when you want everything up to a point rather
 # than one section, and the two refuse to run together rather than one silently winning.
-if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
-  # Named for the same reason as everything else this suite creates: a run killed between writing
-  # this copy and removing it leaves a file nothing can attribute afterwards (#36).
-  _filtered="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
-  awk -v pat="$SECTION_UNTIL" '
-    BEGIN{ keep=1; matched=0 }
-    /^section "/ {
-      if (matched) { keep=0 }
-      else if (index(tolower($0), tolower(pat)) > 0) { matched=1; keep=1 }
-    }
-    keep { print }
-    END{ if (!matched) exit 9 }
-  ' "$0" > "$_filtered"
-  awk_rc=$?
-  if [ "$awk_rc" -eq 9 ]; then
-    rm -f "$_filtered"
-    # A filter that matched no section is an ERROR, never a silent green run: a suite that
-    # checked nothing and exits 0 is indistinguishable from one where everything passed.
-    echo "test suite: SECTION_UNTIL='$SECTION_UNTIL' matched no section. Run without it, or check the spelling against the '==' headings." >&2
-    exit 2
-  fi
-  printf '\nsuite_profile\necho ""\necho "PASS=$PASS FAIL=$FAIL (stopped after SECTION_UNTIL=%s, NOT a full run)"\n[ "$FAIL" -eq 0 ]\n' "$SECTION_UNTIL" >> "$_filtered"
-  # The extracted file must PARSE before it is run. Cutting at section boundaries can land
-  # inside a multi-line construct and produce invalid shell, and without this the broken
-  # script runs anyway and its parse errors are reported as if the code under test failed.
-  # Found by a mutation that dropped a section and produced exactly that. The seam exists so
-  # this refusal can be tested rather than assumed.
-  [ -n "${SUITE_EXTRACT_BREAK:-}" ] && printf '\nif then fi\n' >> "$_filtered"
-  if ! bash -n "$_filtered" 2>/dev/null; then
-    rm -f "$_filtered"
-    echo "test suite: stopping after '$SECTION_UNTIL' produced a script that does not parse, so it was NOT run. This is a bug in the section extractor, not in the code under test. Run the full suite." >&2
-    exit 3
-  fi
-  # #34: the depth is passed through UNCHANGED here, deliberately. This is the same logical run
-  # re-executed from a temp copy, not a run nested inside another, and counting it would put an
-  # ordinary `SECTION_UNTIL=... bash tests/...` at depth 1, whose own #27 subruns would then be
-  # refused at depth 2 for no reason. Depth counts suites started BY a suite.
-  SUITE_FILTERED=1 SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered"; _rc=$?
-  rm -f "$_filtered"
-  exit "$_rc"
-fi
-
 # ---- run ONE section, plus what it needs (#105) ----
 # SECTION_UNTIL runs from the top UP TO a section, so reaching the last one costs a full run, and
 # the last one is where new work lands. SECTION_ONLY runs the PRELUDE, plus one section, plus
@@ -202,6 +181,15 @@ fi
 #
 # Named by its heading TEXT rather than by a count, so inserting a section cannot silently move the
 # boundary, and asserted to match exactly one heading below, so renaming one cannot silently void it.
+# How a heading line becomes a title, written ONCE and used everywhere it is needed, including by
+# the check that proves it (claude-config#111). Two sites used to trim one trailing quote, which
+# assumes the line ends in exactly one. Neither broke, but #37 feeds its result into a NEGATED
+# check, so a heading gaining a trailing comment would have turned the marker into a string nothing
+# can find, and the check would have passed while proving nothing (L159). Its companion only asserts
+# the marker is non-empty, which a mangled string satisfies.
+# Everything from the LAST quote onwards is dropped, so trailing text cannot corrupt the title.
+SECTION_TITLE_SED='s/^section "//; s/"[^"]*$//'
+
 SUITE_PRELUDE_END="sync (two-way) over a local fake remote"
 
 # Both at once is a refusal, never a precedence rule: whichever won, the run would be doing
@@ -211,7 +199,10 @@ if [ -n "${SECTION_ONLY:-}" ] && [ -n "${SECTION_UNTIL:-}" ]; then
   exit 2
 fi
 
-if [ -n "${SECTION_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+# Collected once, and used by BOTH filters. They used to resolve a name differently: SECTION_ONLY
+# refused an ambiguous pattern and SECTION_UNTIL took the earliest match, which meant which rules
+# applied depended on which knob you reached for (claude-config#110).
+if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ]; } && [ -z "${SUITE_FILTERED:-}" ]; then
   # Every heading, its line, and any `# needs:` lines directly beneath it. A declaration is a
   # COMMENT and deliberately not an argument to `section`: three derivations in this file parse
   # `^section "..."$` by stripping one trailing quote, and #37's `_late` would fail SILENTLY,
@@ -247,7 +238,7 @@ if [ -n "${SECTION_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   # silently run a section nobody asked for and report success under the text that was typed
   # (L100, L154).
   _so_hits=0; _so_idx=""; _so_list=""
-  _so_match(){
+  _sec_match(){
     local _m
     _m="$(printf '%s' "$_so_all" | grep -niF -- "$1" || true)"
     _so_hits="$(printf '%s' "$_m" | grep -c . || true)"
@@ -257,14 +248,70 @@ if [ -n "${SECTION_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
     return 0
   }
 
-  _so_match "$SUITE_PRELUDE_END"
+fi
+
+if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+  _sec_match "$SECTION_UNTIL"
+  if [ "$_so_hits" -eq 0 ]; then
+    # A filter that matched no section is an ERROR, never a silent green run: a suite that checked
+    # nothing and exits 0 is indistinguishable from one where everything passed.
+    echo "test suite: SECTION_UNTIL='$SECTION_UNTIL' matched no section. Run without it, or check the spelling against the '==' headings." >&2
+    exit 2
+  fi
+  if [ "$_so_hits" -gt 1 ]; then
+    # It used to take the earliest match, on the grounds that "run up to" has a natural earliest
+    # answer. It does, but the person did not ask for the earliest, they asked for a name, and a run
+    # that stops somewhere other than where they asked while reporting success is a filter that
+    # matched something else (L154, claude-config#110).
+    echo "test suite: SECTION_UNTIL='$SECTION_UNTIL' matches $_so_hits sections, so where to stop is not decided. Narrow it. The candidates are:" >&2
+    printf '%s\n' "$_so_list" >&2
+    exit 2
+  fi
+  _su_name="${_so_titles[$_so_idx]#section \"}"; _su_name="${_su_name%\"}"
+
+  # Named for the same reason as everything else this suite creates: a run killed between writing
+  # this copy and removing it leaves a file nothing can attribute afterwards (#36).
+  _filtered="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
+  if [ "$_so_idx" -lt "$_so_i" ]; then
+    _su_end=$(( ${_so_starts[$((_so_idx + 1))]} - 1 ))
+  else
+    _su_end='$'
+  fi
+  sed -n "1,${_su_end}p" "$0" > "$_filtered"
+
+  # The pattern is echoed back in the summary, with the two characters that would break out of the
+  # generated line removed rather than trusted.
+  _su_pat="$(printf '%s' "$SECTION_UNTIL" | tr -d '"\\')"
+  printf '\nsuite_filtered_tail "stopped after SECTION_UNTIL=%s, resolved to %s" "%s"; exit $?\n' "$_su_pat" "$_su_name" "$_su_name" >> "$_filtered"
+  # The extracted file must PARSE before it is run. Cutting at section boundaries can land inside a
+  # multi-line construct and produce invalid shell, and without this the broken script runs anyway
+  # and its parse errors are reported as if the code under test failed. Found by a mutation that
+  # dropped a section and produced exactly that. The seam exists so this refusal can be tested
+  # rather than assumed.
+  [ -n "${SUITE_EXTRACT_BREAK:-}" ] && printf '\nif then fi\n' >> "$_filtered"
+  if ! bash -n "$_filtered" 2>/dev/null; then
+    rm -f "$_filtered"
+    echo "test suite: stopping after '$SECTION_UNTIL' produced a script that does not parse, so it was NOT run. This is a bug in the section extractor, not in the code under test. Run the full suite." >&2
+    exit 3
+  fi
+  # #34: the depth is passed through UNCHANGED here, deliberately. This is the same logical run
+  # re-executed from a temp copy, not a run nested inside another, and counting it would put an
+  # ordinary `SECTION_UNTIL=... bash tests/...` at depth 1, whose own #27 subruns would then be
+  # refused at depth 2 for no reason. Depth counts suites started BY a suite.
+  SUITE_FILTERED=1 SUITE_TARGET_SECTION="$_su_name" SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered"; _rc=$?
+  rm -f "$_filtered"
+  exit "$_rc"
+fi
+
+if [ -n "${SECTION_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+  _sec_match "$SUITE_PRELUDE_END"
   if [ "$_so_hits" -ne 1 ]; then
     echo "test suite: the prelude boundary '$SUITE_PRELUDE_END' matches $_so_hits headings rather than exactly one, so which sections make up the prelude is not decided. Refusing rather than filtering against a boundary nobody can point at." >&2
     exit 2
   fi
   _so_pend="$_so_idx"
 
-  _so_match "$SECTION_ONLY"
+  _sec_match "$SECTION_ONLY"
   if [ "$_so_hits" -eq 0 ]; then
     echo "test suite: SECTION_ONLY='$SECTION_ONLY' matched no section. Run without it, or check the spelling against the '==' headings." >&2
     exit 2
@@ -289,7 +336,7 @@ if [ -n "${SECTION_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
     while IFS= read -r _so_nd; do
       _so_nd="$(printf '%s' "$_so_nd" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
       [ -n "$_so_nd" ] || continue
-      _so_match "$_so_nd"
+      _sec_match "$_so_nd"
       if [ "$_so_hits" -eq 0 ]; then
         echo "test suite: ${_so_titles[$_so_cur]} declares '# needs: $_so_nd', which matches no heading. A declaration that resolves to nothing would silently leave the prerequisite out and the run would report a result anyway." >&2
         exit 2
@@ -328,7 +375,7 @@ SONEEDS
   done
 
   _so_name="${_so_titles[$_so_target]#section \"}"; _so_name="${_so_name%\"}"
-  printf '\nsuite_profile\necho ""\necho "PASS=$PASS FAIL=$FAIL (SECTION_ONLY resolved to %s, NOT a full run)"\n[ "$FAIL" -eq 0 ]\n' "$_so_name" >> "$_filtered"
+  printf '\nsuite_filtered_tail "SECTION_ONLY resolved to %s" "%s"; exit $?\n' "$_so_name" "$_so_name" >> "$_filtered"
 
   # SECTION_ONLY drops a span out of the MIDDLE, which SECTION_UNTIL never does, so the seam that
   # proves the parse check works has to damage the middle too. An end-appended error would be a
@@ -354,7 +401,7 @@ SONEEDS
   # a fifth read that happened to be at top level. pipefail is already set, and tee exits 0, so the
   # status here is still the run's own.
   _so_log="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
-  SUITE_FILTERED=1 SECTION_ONLY= SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered" 2>&1 | tee "$_so_log"; _so_rc=$?
+  SUITE_FILTERED=1 SECTION_ONLY= SUITE_TARGET_SECTION="$_so_name" SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered" 2>&1 | tee "$_so_log"; _so_rc=$?
   rm -f "$_filtered"
   if grep -qE 'line [0-9]+: [A-Za-z_][A-Za-z0-9_]*: unbound variable' "$_so_log" 2>/dev/null; then
     rm -f "$_so_log"
@@ -2748,7 +2795,7 @@ check "#27 and reports no test results at all"        "! grep -q '^PASS=' '$SUBO
 # not. Assert that every section heading up to the named one actually appears in the output,
 # derived from the file itself rather than from a list somebody has to remember to update.
 _want="$(awk '/^section "/{print; if (index($0, "sync (two-way) over a local fake remote")>0) exit}' "$SCRIPT_SELF" \
-         | sed 's/^section "//; s/"$//')"
+         | sed "$SECTION_TITLE_SED")"
 _missing=""
 while IFS= read -r _h; do
   [ -n "$_h" ] || continue
@@ -2916,7 +2963,23 @@ _deep(){ SUITE_DEPTH="$1" SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1; }
 
 _d2="$(_deep 2)"; _d2_rc=$?
 check "#34 a run past the depth limit refuses to run at all" "[ '$_d2_rc' -ne 0 ]"
-check "#34 the refusal says how deep it was asked to go" "printf '%s' \"\$_d2\" | grep -q 'depth 2'"
+# Matched on the REFUSAL's own wording, not on the depth token. A run that is ALLOWED at depth 2
+# announces itself from the line above as "running at depth 2 (the limit is 3)", which contains
+# "depth 2", so the token alone is satisfied by a run that was never refused at all. That is not a
+# theory: this check passed in a measured run where the child ran happily and its two neighbours
+# correctly flipped to FAIL, which is the worst version, a section reporting a partial pass
+# exactly where the guard is not working (L156, claude-config#109).
+check "#34 the refusal says how deep it was asked to go" "printf '%s' \"\$_d2\" | grep -q 'refusing to run at depth 2'"
+
+# And the two states are shown to be tellable apart, in the same fixture, or the wording above is
+# just a different string nobody has watched failing to match (L159). A run inside the limit must
+# announce and must NOT carry the refusal.
+_d2ok="$(SUITE_DEPTH=2 SUITE_MAX_DEPTH=3 SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1)"
+check "#34 a run inside the limit announces rather than refuses" "printf '%s' \"\$_d2ok\" | grep -q 'running at depth 2'"
+check "#34 and an announcement does not read as a refusal" "! printf '%s' \"\$_d2ok\" | grep -q 'refusing to run at depth'"
+# The old token, asked of the run that was NOT refused. It matches, which is the defect, and saying
+# so here keeps the reason this check is worded the way it is attached to the evidence for it.
+check "#34 the bare depth token would have passed on that run" "printf '%s' \"\$_d2ok\" | grep -q 'depth 2'"
 # It must refuse EARLY, not run the suite and complain afterwards: a refusal that still pays for
 # a full run is not a limit on anything. A real run prints per-section headings and a PASS= line.
 check "#34 it refuses before running any checks" "! printf '%s' \"\$_d2\" | grep -q '^PASS='"
@@ -3316,6 +3379,35 @@ section "== the design record's numbers still match the code (#41) =="
 _DESIGN="$(dirname "$SCRIPT")/DESIGN.md"
 _README="$(dirname "$SCRIPT")/README.md"
 check "#41 the design record has a measured-numbers table" "grep -qi 'Measured numbers' '$_DESIGN'"
+
+# Every row must CITE the check that proves its justification, and that citation must resolve to a
+# real section. The comparison below covers the NUMBER; nothing covered the sentence beside it, and
+# a page carrying a passing freshness check is read as verified in full, so the unchecked half is
+# where the claim that matters lives (claude-config#112, L210). Measured: the depth row asserted the
+# suite "runs itself as a subprocess in one place" while nineteen places did.
+_rows="$(awk '/^\| Number \| Set by/{t=1; next} t && /^\| *--- /{next} t && /^\|/{print} t && !/^\|/{exit}' "$_DESIGN")"
+check "#41 the measured-numbers table has rows to check" \
+  "[ \"\$(printf '%s' \"\$_rows\" | grep -c .)\" -ge 5 ]"
+_uncited=""; _badcite=""
+while IFS= read -r _row; do
+  [ -n "$_row" ] || continue
+  _cite="$(printf '%s' "$_row" | grep -oE 'proved by #[0-9]+' | head -1 | sed 's/.*#/#/')"
+  if [ -z "$_cite" ]; then
+    _uncited="$_uncited[$(printf '%s' "$_row" | cut -d'|' -f2 | sed 's/^ *//; s/ *$//')]"
+    continue
+  fi
+  grep '^section "' "$SCRIPT_SELF" | grep -qF -- "($_cite)" || _badcite="$_badcite[$_cite]"
+done <<DESIGNROWS
+$_rows
+DESIGNROWS
+check "#41 every documented number cites the check that proves its justification" "[ -z \"\$_uncited\" ]"
+check "#41 and every citation names a section that exists" "[ -z \"\$_badcite\" ]"
+# Both halves of that need to be seen working, or an empty answer is the scan reading nothing rather
+# than the table being right (L98, L1).
+_cite_probe="$(printf '%s' '| 1 thing | `X=1` | y | because, proved by #99999 | 2026-01-01 |' | grep -oE 'proved by #[0-9]+' | sed 's/.*#/#/')"
+check "#41 the citation scan finds a citation when there is one" "[ '$_cite_probe' = '#99999' ]"
+check "#41 and a citation naming no section would be caught" \
+  "! grep '^section \"' '$SCRIPT_SELF' | grep -qF -- '(#99999)'"
 # Every default of the shape a threshold has, from BOTH files, as "NAME VALUE" pairs. Comments are
 # stripped first, or prose quoting a number satisfies the check that the number is current, and a
 # guard that is green on its own explanation is indistinguishable from one that works (L103).
@@ -3523,7 +3615,7 @@ check "#37 its child honours the section limit it was given" \
 # The other half, and the one that names the actual damage: not merely that the child stopped, but
 # that it never ran on past its limit. The marker is taken from the file rather than typed, so a
 # renamed section leaves this failing rather than quietly asserting nothing (L103).
-_late="$(awk '/^section "/{n++; if (n==6){ sub(/^section "/,""); sub(/"$/,""); print; exit }}' "$SCRIPT_SELF")"
+_late="$(grep '^section "' "$SCRIPT_SELF" | sed -n '6p' | sed "$SECTION_TITLE_SED")"
 check "#37 the late-section marker was found" "[ -n \"\$_late\" ]"
 check "#37 the child did not run on into the rest of the suite" \
   "! printf '%s' \"\$_gc\" | grep -qF -- \"\$_late\""
@@ -4926,6 +5018,40 @@ check "#105 the spawn probe for that started a child" "printf '%s' \"\$_SOG\" | 
 check "#105 a child does not inherit the one-section filter" \
   "printf '%s' \"\$_SOG\" | grep -q 'inherits SECTION_ONLY as: <unset>'"
 
+# The title derivation, proved on the shape that would have broken it (claude-config#111). It uses
+# the one expression the real derivations use, not a copy written beside them, or the check could
+# pass while the code did something else (L107).
+_hd_trail="$(printf '%s\n' 'section "== a heading ==" # and a trailing comment' | sed "$SECTION_TITLE_SED")"
+check "#111 a heading carrying trailing text still derives just its title" "[ \"\$_hd_trail\" = '== a heading ==' ]"
+_hd_plain="$(printf '%s\n' 'section "== a heading =="' | sed "$SECTION_TITLE_SED")"
+check "#111 and an ordinary heading is unchanged by it" "[ \"\$_hd_plain\" = '== a heading ==' ]"
+# The old expression, asked of the same trailing-text line. It mangles it, which is the defect, and
+# keeping the evidence next to the fix is what stops somebody reverting it as noise.
+_hd_old="$(printf '%s\n' 'section "== a heading ==" # and a trailing comment' | sed 's/^section "//; s/"$//')"
+check "#111 the old expression would have mangled it" "[ \"\$_hd_old\" != '== a heading ==' ]"
+
+# SECTION_UNTIL is held to the same rules, because two knobs sitting beside each other with
+# different rules means which rules apply depends on which one you happened to reach for
+# (claude-config#110).
+_SU1="$WORK/su-amb.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL="pull" bash "$SCRIPT_SELF" > "$_SU1" 2>&1; _su1_rc=$?
+check "#110 an ambiguous SECTION_UNTIL is refused too" "[ '$_su1_rc' -ne 0 ]"
+check "#110 and it lists the candidates" "line_has \"\$(cat '$_SU1')\" 'SECTION_UNTIL' 'matches [0-9]+ sections'"
+check "#110 an ambiguous SECTION_UNTIL runs nothing" "! grep -q '^PASS=' '$_SU1'"
+
+# A filtered run reports the PRELUDE's checks in its total as well, so a section that ran none of
+# its own still shows a healthy looking number under its name. That is the same shape as a scan
+# that read nothing reporting a clean tree (L98). Constructed, because no section in this file has
+# no checks, and the point is that the total is NOT evidence about the section named.
+_SONC="$WORK/so-nochecks.sh"
+awk '/^suite_profile$/ && !ins { print "section \"== zzz a section with no checks of its own ==\""; print "echo \"nothing is asserted here\""; ins=1 } { print }' "$SCRIPT_SELF" > "$_SONC"
+check "#110 the constructed copy carries a section that checks nothing" "grep -q 'zzz a section with no checks' '$_SONC'"
+_SO9="$WORK/so-nochecks.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$_SONC" SECTION_ONLY="zzz a section with no checks" bash "$_SONC" > "$_SO9" 2>&1; _so9_rc=$?
+check "#110 a run whose target checked nothing is refused" "[ '$_so9_rc' -ne 0 ]"
+check "#110 and says the section itself ran none" "grep -q 'ran NO checks of its own' '$_SO9'"
+check "#110 even though the run as a whole reported no failures" "grep -q 'FAIL=0' '$_SO9'"
+
 # And the un-export has to sit ahead of every spawn site, or a site above it still hands it on.
 # Derived, and the pattern assembled from pieces so the check cannot be satisfied by its own line.
 _soexp_pat="export"" -n SUITE_FILTERED SECTION_ONLY"
@@ -4989,6 +5115,38 @@ check "#107 the run ends with a profile of the slowest sections" \
   "grep -qi 'slowest sections' '$_PFO'"
 check "#107 the profile names a section and a duration on one line" \
   "line_has \"\$(cat '$_PFO')\" '^ +[0-9]+s ' 'apply is idempotent'"
+
+section "== the deadline still has real headroom over a run (#112) =="
+# The deadline is only meaningful as a MULTIPLE of a real run, and that multiple was written down
+# once and then went stale in silence: the design record said 123 seconds and "roughly 7x" for
+# eleven days while this Mac grew to 225 seconds, which is 4x. Nothing caught it, because the check
+# beside that table compares the SETTING and never the measurement the setting was derived from
+# (claude-config#112, L210).
+#
+# So the ratio is measured rather than recorded. There is no number here that can age: the run times
+# itself and requires the deadline to be at least twice what it just took.
+#
+# Calibrated against both machines this runs on rather than guessed, because a floor sitting inside
+# the normal range turns ordinary variation into a failure and an alarm that cries wolf stops being
+# read (L172, L36): 225 seconds on this Mac and 110 on the Linux runner, against a 900 second
+# deadline, so the floor is crossed only when the suite has genuinely grown into its own deadline.
+#
+# In a FILTERED run this passes trivially, because the run is shorter. That is said out loud rather
+# than hidden: it bites on a full run, which is the run the deadline exists for.
+_hr_elapsed=$SECONDS
+_hr_min=$(( _hr_elapsed * 2 ))
+if [ "$SUITE_TIMEOUT" -gt 0 ]; then
+  check "#112 the deadline is at least twice the run it just watched" "[ '$SUITE_TIMEOUT' -ge '$_hr_min' ]"
+else
+  # A run with the deadline disabled has no headroom to check, and saying so is not the same as
+  # checking it (L98). The setting is asserted instead, so this branch cannot pass by silence.
+  check "#112 the deadline was deliberately disabled for this run" "[ '$SUITE_TIMEOUT' -eq 0 ]"
+fi
+# The same comparison, asked of a deadline one second under the floor, so it has been watched
+# REFUSING rather than only agreeing (L1). Without this the check above is satisfied by any deadline
+# large enough, which is every deadline, and it would read as protection while protecting nothing.
+_hr_toosmall=$(( _hr_min - 1 ))
+check "#112 a deadline one second under that floor is refused" "! [ '$_hr_toosmall' -ge '$_hr_min' ]"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"

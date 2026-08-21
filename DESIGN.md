@@ -347,6 +347,12 @@ own, which is the only run in which a missing prerequisite shows up at all.
 Every threshold here is a multiple of something real, measured on the date given. None is a round
 number chosen because it felt safe.
 
+Each row also CITES the check that proves its justification, and the suite requires that citation to
+name a section that exists. The number was verified against the code long before the sentence beside
+it was, and a page carrying a passing freshness check gets read as verified in full: the depth row
+below asserted for months that the suite "runs itself as a subprocess in one place" while nineteen
+places did, and nothing noticed, because the check compared only the number (claude-config#112).
+
 The `Set by` column is not decoration. Each number below is also a default in the code, and nothing
 kept the two in step: a limit changed in one and not the other leaves this page confidently
 defending a number that is no longer true, and the day it was written is the only day anybody would
@@ -356,13 +362,19 @@ that is added both fail until this table is updated.
 
 | Number | Set by | What it is | Measured against | Date |
 | --- | --- | --- | --- | --- |
-| 1 hour | `SYNC_LOCK_MAX_AGE=3600` | A lock is broken as stale | A live sync of the real 4.7MB payload takes 6 seconds and a fresh clone plus first pull takes 4, so roughly 600x the slowest real run | 2026-08-17 |
-| 60 days | `SYNC_MAC_RETIRE_AFTER=5184000` | A Mac counts as retired | The other Mac's longest real gap between syncs in the preceding 60 days was 6.8 days, so roughly 9x the longest real absence, and a holiday cannot trip it | 2026-08-17 |
-| 15 minutes | `SUITE_TIMEOUT=900` | A suite run is killed as hung | A full run of the suite took 123 seconds, so roughly 7x | 2026-08-17 |
-| 30 minutes | `SUITE_LOCK_MAX_AGE=1800` | A suite lock from another machine is broken | The same 123 second run, so roughly 15x | 2026-08-17 |
-| 1 hour | `SYNC_SCRATCH_MAX_AGE=3600` | Scratch counts as abandoned | A suite run cannot outlive its own 15 minute deadline, so 4x the longest run the tool permits, and 600x the 6 second sync | 2026-08-17 |
-| 1 nested run | `SUITE_MAX_DEPTH=1` | The suite's own depth allowance | The suite legitimately runs itself as a subprocess in one place and never deeper | 2026-08-17 |
-| 2 processes | not a setting | One healthy watcher | Observed directly as a launcher with one child (pid 13658 with 13702) | 2026-08-17 |
+| 1 hour | `SYNC_LOCK_MAX_AGE=3600` | A lock is broken as stale | A live sync of the real 4.7MB payload takes 6 seconds and a fresh clone plus first pull takes 4, so roughly 600x the slowest real run, proved by #29 | 2026-08-17 |
+| 60 days | `SYNC_MAC_RETIRE_AFTER=5184000` | A Mac counts as retired | The other Mac's longest real gap between syncs in the preceding 60 days was 6.8 days, so roughly 9x the longest real absence, and a holiday cannot trip it, proved by #26 | 2026-08-17 |
+| 15 minutes | `SUITE_TIMEOUT=900` | A suite run is killed as hung | Full runs measured 225 and 267 seconds on this Mac and 110 on the Linux runner, so at least 3x the slowest observed, proved by #31 | 2026-08-21 |
+| 30 minutes | `SUITE_LOCK_MAX_AGE=1800` | A suite lock from another machine is broken | The same runs, so at least 6x the slowest observed, proved by #32 | 2026-08-21 |
+| 1 hour | `SYNC_SCRATCH_MAX_AGE=3600` | Scratch counts as abandoned | A suite run cannot outlive its own 15 minute deadline, so 4x the longest run the tool permits, and 600x the 6 second sync, proved by #36 | 2026-08-17 |
+| 1 nested run | `SUITE_MAX_DEPTH=1` | The suite's own depth allowance | Every place the suite spawns itself is one level down and nothing in it legitimately needs a run nested two deep, proved by #34 | 2026-08-17 |
+| 2 processes | not a setting | One healthy watcher | Observed directly as a launcher with one child (pid 13658 with 13702), proved by #33 | 2026-08-17 |
+
+The two suite figures above were 123 seconds and "roughly 7x" for eleven days, measured when the
+suite had 726 checks. It now has 782 and takes 225 to 267 seconds here, which is 3x, not 7x. Nothing
+noticed, because the check beside this table compares the SETTING and not the measurement the
+setting was derived from. So the suite now measures ITSELF and requires the deadline to be at least
+twice the run that just happened, which cannot go stale because there is no recorded number in it.
 
 The last row is the one exception, and it is stated rather than quietly left out: what a healthy
 watcher looks like is passed straight to `report_process_family` as arguments, so there is no
