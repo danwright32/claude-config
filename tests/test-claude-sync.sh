@@ -4321,6 +4321,79 @@ check "#78 it is not reported as a divergence"                   "! printf '%s' 
 check "#78 and it carries git's own words"                       "line_has \"\$out_dvd\" 'refused to fast-forward' 'local changes'"
 
 
+section "== a send is stamped from what happened, not from which command ran (#79 #82) =="
+# `record_sent` was called only from inside the two branches that themselves run a push, so a run
+# that sent by any other route left `.last-sent` unwritten and status reported "last sent: never,
+# nothing has gone up from this clone" over a branch provably level with origin. Measured on
+# 2026-08-18: three commits pushed, `git ls-remote` confirming the remote head matched this Mac,
+# and no stamp on disk. "Never sent" is also exactly what a genuinely wedged send looks like, so a
+# real one-way outage was indistinguishable from this bookkeeping gap (L11, L98).
+#
+# The stamp is now decided by the finished state: this run was holding work to send, and by the
+# end this clone holds nothing the repo does not have. `push` is deliberately the command under
+# test, because it is one of the routes that never stamped.
+unset SYNC_NO_GIT
+STPB="$WORK/stamp-bare.git"; git init -q --bare "$STPB"
+STPR="$WORK/stamp-repo"; git clone -q "$STPB" "$STPR"
+STPH="$WORK/stamp-home"; mkdir -p "$STPH/skills/stampone"
+echo '{"model":"opus","hooks":{}}' > "$STPH/settings.json"
+mkskill "$STPH/skills/stampone/SKILL.md" 'STAMP-ONE'
+CLAUDE_HOME="$STPH" SYNC_REPO="$STPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#79 the fixture's first sync stamps a send" "[ -s '$STPR/.last-sent' ]"
+# Asked of the clone rather than assumed to be main. git's default branch name is still master
+# where this runs, so a hardcoded name made every question below ask about a ref that does not
+# exist: the positive control failed, and the last check PASSED on an error message rather than on
+# a count (L156, L98). The tool itself derives the name the same way.
+STPBR="$(git -C "$STPR" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+check "#79 the fixture's branch is known" "[ -n \"\$STPBR\" ]"
+
+rm -f "$STPR/.last-sent"
+mkskill "$STPH/skills/stamptwo/SKILL.md" 'STAMP-TWO'
+out_stp="$(CLAUDE_HOME="$STPH" SYNC_REPO="$STPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+dbg "push: $out_stp"
+stp_ahead="$(git -C "$STPR" rev-list --count "origin/$STPBR..HEAD" 2>/dev/null || echo unknown)"
+stp_remote="$(git ls-remote "$STPB" "$STPBR" 2>/dev/null | awk '{print $1}')"
+stp_head="$(git -C "$STPR" rev-parse HEAD 2>/dev/null)"
+# The positive control, asked of the BARE repo rather than of this clone's own remote-tracking
+# ref: that ref is written by the push itself, so believing it would only prove the push agrees
+# with itself (L70). Without this, every stamp assertion below is satisfied by a fixture in which
+# nothing was ever pushed at all (L159).
+check "#79 the push really shipped this clone's commit" \
+  "[ \"\$stp_ahead\" = '0' ] && [ -n \"\$stp_remote\" ] && [ \"\$stp_remote\" = \"\$stp_head\" ]"
+check "#82 a push through a route that never stamped records the send" "[ -s '$STPR/.last-sent' ]"
+stp_stamp="$(cat "$STPR/.last-sent" 2>/dev/null)"
+stp_commit="$(git -C "$STPR" log -1 --format=%ct 2>/dev/null)"
+stp_gap=$(( ${stp_stamp:-0} - ${stp_commit:-0} ))
+[ "$stp_gap" -lt 0 ] && stp_gap=$(( 0 - stp_gap ))
+dbg "stamp=$stp_stamp commit=$stp_commit gap=${stp_gap}s"
+# Asserted against the commit that was pushed, not merely against "a file exists": a stamp left
+# by the earlier sync would satisfy presence alone and say nothing about this run.
+check "#82 and that stamp belongs to this push, not to an earlier one" "[ \"\$stp_gap\" -le 120 ]"
+
+# A run that sent NOTHING must not stamp. Stamping on every run instead would make a Mac that
+# syncs hourly with nothing to do look permanently fresh, which is the reassurance that hides a
+# real stall (L106), and it is the opposite way of being wrong from the bug above.
+rm -f "$STPR/.last-sent"
+out_stpnoop="$(CLAUDE_HOME="$STPH" SYNC_REPO="$STPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+dbg "push with nothing to send: $out_stpnoop"
+check "#79 a run with nothing to send records no send" "[ ! -e '$STPR/.last-sent' ]"
+check "#79 and says there was nothing to send"        "line_has \"\$out_stpnoop\" 'Nothing changed' 'up to date'"
+
+# A push that never reached the repo must not stamp either, and the commit it made must still be
+# waiting. This is the failure the indicator exists to make visible, so it is the one case where a
+# stamp would be actively misleading.
+git -C "$STPR" remote set-url origin "$WORK/no-such-stamp-bare.git"
+mkskill "$STPH/skills/stampthree/SKILL.md" 'STAMP-THREE'
+rm -f "$STPR/.last-sent"
+out_stpoff="$(CLAUDE_HOME="$STPH" SYNC_REPO="$STPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+dbg "push with an unreachable remote: $out_stpoff"
+check "#82 a push that never reached the repo records no send" "[ ! -e '$STPR/.last-sent' ]"
+stp_left="$(git -C "$STPR" rev-list --count "origin/$STPBR..HEAD" 2>/dev/null || echo unknown)"
+# The count itself, not "anything other than zero": an unreadable ref answers with an error, and
+# an error is not evidence that a commit is waiting (L50).
+check "#82 and the commit it made is still unsent" "[ -n \"\$stp_left\" ] && [ \"\$stp_left\" -ge 1 ] 2>/dev/null"
+
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

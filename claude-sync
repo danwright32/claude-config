@@ -100,6 +100,40 @@ record_sync_success(){ date +%s > "$LAST_SUCCESS_FILE" 2>/dev/null || true; }
 # least one file. Stamping on every run instead would make a Mac that syncs hourly with nothing to
 # do look permanently fresh, which is the reassurance that hides the drift (L106).
 record_sent(){     date +%s > "$LAST_SENT_FILE" 2>/dev/null || true; }
+
+# ---- the send stamp is a property of the RUN, not of which subcommand was typed (#79, #82) ----
+# record_sent used to be called only from inside the two branches that themselves run a push, so a
+# run that sent by any other route left .last-sent unwritten. `push` is exactly such a route, and
+# status then reported "last sent: never, nothing has gone up from this clone" over a branch
+# provably level with origin (measured 2026-08-18: three commits pushed, `git ls-remote` confirming
+# the remote head matched this Mac, and no stamp on disk). "Never sent" is also what a genuinely
+# wedged send looks like, so a real one-way outage was indistinguishable from a bookkeeping gap
+# (L11, L98). And a report of what changed must be assembled from the finished state rather than
+# from one of the code paths that change it (L78).
+#
+# So: this run was HOLDING work to send, and by the end it holds nothing the repo does not have.
+# Both halves are needed. Without the first, a Mac with nothing to do would stamp on every run and
+# read as permanently fresh (L106); without the second, a failed push would stamp anyway.
+SEND_PENDING=0
+note_unsent_work(){ SEND_PENDING=1; }
+
+record_sent_if_shipped(){
+  have_git || return 0
+  [ "${SEND_PENDING:-0}" = "1" ] || return 0
+  local up n
+  up="$(git -C "$SYNC_REPO" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  # Nothing to be level WITH, so nothing can be claimed about whether anything crossed. A message
+  # may only claim what its check measured (L11), and no stamp reads as "not yet", which is true.
+  [ -n "$up" ] || return 0
+  n="$(git -C "$SYNC_REPO" rev-list --count "$up..HEAD" 2>/dev/null || echo unknown)"
+  case "$n" in ''|*[!0-9]*) return 0 ;; esac      # unreadable is not evidence of a send (L50)
+  [ "$n" -eq 0 ] || return 0
+  # The one case this reads wrongly, said out loud rather than left to be discovered: a rebase that
+  # DROPS this Mac's commit (because the same content already went up from elsewhere) also ends
+  # level, and would stamp. The work is in the shared repo either way, which is what the indicator
+  # is asked about, so the reading is defensible where it is wrong.
+  record_sent
+}
 record_received(){ date +%s > "$LAST_RECEIVED_FILE" 2>/dev/null || true; }
 
 # The threshold below was chosen by judgement, not measurement, and BOTH ways of being wrong
@@ -366,7 +400,13 @@ with_lock(){   # $@ = the command to run while holding the lock
   # adding to it, and cleanup_applied_log is already installed at the top level. Setting
   # only release_lock here silently unregistered it and left a temp file behind on every
   # pull, which the suite caught immediately.
-  trap 'release_lock; cleanup_applied_log' EXIT
+  # Commits already waiting when this run started (a hand commit to the tool, a run that died
+  # between committing and pushing). Read BEFORE the command, because afterwards there is no way
+  # to tell work that was waiting from work that never existed.
+  if have_git && unpushed_commits; then note_unsent_work; fi
+  # In the trap, not on a line after the call: every failure in here leaves through die(), and a
+  # run that pushed and then died on something later still sent what it sent.
+  trap 'record_sent_if_shipped; release_lock; cleanup_applied_log' EXIT
   "$@" || rc=$?
   release_lock
   return $rc
@@ -1943,6 +1983,10 @@ commit_if_changed(){
   git -C "$SYNC_REPO" diff --cached --quiet -- payload && return 1
   git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" \
     commit -m "sync from $(hostname -s)" >/dev/null
+  # This run now holds something the repo does not. Recorded here, at the one place a commit is
+  # ever made, rather than at each push site: which subcommand ran is not what decides whether a
+  # send happened (#79).
+  note_unsent_work
   return 0
 }
 
@@ -2011,6 +2055,11 @@ reexec_after_self_update(){   # $1 before  $2 after  $3 command for the child
   # SYNC_LOCK travels too: the resumed run must look at the same lock this one is holding,
   # not fall back to the default path and take a second one.
   export SYNC_REEXECED=1 SYNC_PULL_BASE="$1" CLAUDE_HOME SYNC_REPO SYNC_LOCK
+  # exec REPLACES this process, so its EXIT trap never runs and the send stamp taken there would
+  # be lost. A sync whose push went up and which then handed off to the updated script would
+  # report "never sent" for work that provably left this Mac, which is the defect this stamp
+  # exists to fix arriving by a different door (#79).
+  record_sent_if_shipped
   exec bash "$SYNC_REPO/claude-sync" "$3"
 }
 
@@ -2314,9 +2363,10 @@ do_sync(){
     after="$(repo_head)"
     # Re-checked AFTER the rebase, not from $pushed alone: the daemon runs this, so a
     # hand commit to the tool would otherwise sit unsent with nobody watching.
-    if { [ "$pushed" -eq 1 ] || unpushed_commits; } && git -C "$SYNC_REPO" push -u origin "$branch" -q; then
-      record_sent
-    fi
+    # No record_sent here: whether this run sent anything is decided once, from the finished
+    # state, by record_sent_if_shipped. Stamping inside the branch that happens to push is what
+    # left `push` and every other route unstamped (#79, #82).
+    { [ "$pushed" -eq 1 ] || unpushed_commits; } && git -C "$SYNC_REPO" push -u origin "$branch" -q || true
     # send half is done; hand off so the apply below runs the pulled logic
     reexec_after_self_update "$before" "$after" apply-only || true
   fi
@@ -2357,7 +2407,6 @@ do_send(){
     # all day but synced weekly reads as "last reached GitHub days ago" while perfectly
     # online, and the next harmless blip gets reported as a long outage. (#22)
     record_sync_success
-    record_sent
     echo "Sent."; return 0
   fi
   do_sync                                # behind remote: reconcile (pull+apply+push)
