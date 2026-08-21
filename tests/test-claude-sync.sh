@@ -4345,8 +4345,11 @@ check "#137 and it had four real coverage lines to say that over" \
 # the fan-out is the only other place this runs, which is a whole run away (L100, L143). The
 # fixtures carry the surrounding chatter a real shard prints, so the pattern has something to pick
 # the line out of.
+# Made, never cleared: the two files below are written whole each time, and the reader only ever
+# opens the shards it was told to expect, so there is no stale state to remove and no derived path
+# handed to a recursive delete (L5).
 _cov_dir="$WORK/shard-coverage"
-rm -rf "$_cov_dir"; mkdir -p "$_cov_dir"
+mkdir -p "$_cov_dir"
 printf '%s\n' "== a section ==" "  ok: something" "SUITE-SHARD-COVERAGE shard=1 first=5 last=8 sections=5,7" "SUITE-RESULT passed=9 failed=0" > "$_cov_dir/1.out"
 printf '%s\n' "== a section ==" "  ok: something" "SUITE-SHARD-COVERAGE shard=2 first=5 last=8 sections=6,8" "SUITE-RESULT passed=9 failed=0" > "$_cov_dir/2.out"
 check "#137 the parent reads the coverage out of the shards' own output files" \
