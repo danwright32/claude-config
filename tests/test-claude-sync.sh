@@ -443,6 +443,44 @@ SONEEDS
   exit "$_so_rc"
 fi
 
+# ---- an unfiltered run executes from a copy too (#121) ----
+# Bash reads a script incrementally from a byte offset, so editing THIS file while a run is in
+# flight makes the running shell resume at the wrong place. Measured on 2026-08-21: inserting lines
+# above one section made a run report three failures in a DIFFERENT section, every one of them
+# fictional, and the same run passed once nothing was being edited. They name real sections and
+# read exactly like real failures, and the only thing separating them is knowing what was happening
+# at the time.
+#
+# The two filtered paths above already ran from a copy, as a side effect of having to extract
+# sections. A plain full run did not, and a full run is the one people leave going for three
+# minutes while they carry on editing. So it copies itself as well.
+#
+# It sits AFTER those paths (they exit, so this is reached only by an unfiltered run) and BEFORE
+# the lock and the deadline below, so the copy is the process that takes the lock rather than one
+# waiting on a parent that already holds it.
+#
+# SCRIPT and SCRIPT_SELF are handed over explicitly and still name the REAL files. Several checks
+# in this suite read their own source, and a temp copy is not what they mean to be reading. The
+# depth is passed through UNCHANGED for the same reason the SECTION_UNTIL path passes it through:
+# this is the same logical run re-executed, not a run nested inside another (#34).
+if [ -z "${SUITE_FROM_COPY:-}" ]; then
+  _full_copy="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
+  cat "$0" > "$_full_copy"
+  # It has to PARSE, for the same reason the extracted copies do: a copy that does not run at all
+  # would report as the code under test failing. This one is a byte for byte copy so it can only
+  # fail if the ORIGINAL is mid-edit right now, which is precisely the case being defended against,
+  # and saying so is far more use than a screenful of syntax errors.
+  if ! bash -n "$_full_copy" 2>/dev/null; then
+    rm -f "$_full_copy"
+    echo "test suite: the copy taken of this file does not parse, which means the file was being written while it was read. Nothing was run. Save your edits and start again." >&2
+    exit 3
+  fi
+  SUITE_FROM_COPY=1 SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_full_copy"
+  _fc_rc=$?
+  rm -f "$_full_copy"
+  exit "$_fc_rc"
+fi
+
 # ---- the flag above describes THIS process only (#37) ----
 # SUITE_FILTERED means "extraction already happened here, do not filter again". It arrives in the
 # ENVIRONMENT, and bash hands an inherited variable to everything this run starts, so a child read
@@ -454,7 +492,7 @@ fi
 # `export -n` rather than `unset`: this process still needs the value (the #27 subruns below read
 # it), and the only thing that has to stop is the inheritance. Done HERE, once, rather than at each
 # spawn site, because a site added later cannot remember a rule it never saw (L30, L96).
-export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST 2>/dev/null || true
+export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST SUITE_FROM_COPY 2>/dev/null || true
 
 # SUITE_SPAWN_UNTIL=<text> starts ONE child with that section limit, says what a child of this run
 # inherits, and exits with the child's status. It is the seam that makes the paragraph above
@@ -3804,6 +3842,38 @@ _dn_empty="$(SYNC_SCRATCH_DIRNAME= SYNC_SCRATCH_ROOT="$_SUBN" SYNC_NO_GIT=1 SYNC
 check "#116 an empty directory name falls back to the default" \
   "printf '%s' \"\$_dn_empty\" | grep -q 'reclaimed 1'"
 
+
+section "== every run executes from a copy, so editing the suite mid-run cannot corrupt it (#121) =="
+# Bash reads a script incrementally from a byte offset. Editing this file while a run is in flight
+# makes the running shell resume at the wrong place, and what comes out is not a crash: it is
+# ordinary looking failures in sections that are perfectly fine. Measured on 2026-08-21, three of
+# them at once, in a section unrelated to the edit, and the same run was green the moment nothing
+# was being written. Nothing in the output says which kind of failure it is.
+#
+# So no run reads this file after it has started. The two filtered paths always copied themselves
+# because they had to extract sections; an unfiltered run now does too, which is the run that is
+# left going for minutes while somebody keeps working.
+_fc_running="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+check "#121 this run is executing from a copy, not from the file in the repo" \
+  "[ '$_fc_running' != '$SCRIPT_SELF' ]"
+# Not merely somewhere else: in the tool's own scratch, under a name the sweep owns, so a run
+# killed before it can clean up leaves something attributable rather than an anonymous file (#36).
+check "#121 and the copy is scratch this tool owns" \
+  "case '$_fc_running' in */claude-sync-suite-work.*) true ;; *) false ;; esac"
+# The control, and it is the half worth having: the two paths above are satisfied by ANY $0 that
+# is not the repo file, including one from a run started by hand against some other copy. These
+# say the real files are still the ones every derivation in this suite reads.
+check "#121 the real suite file is still what SCRIPT_SELF names" \
+  "[ -f '$SCRIPT_SELF' ] && grep -q 'claude-sync-suite-section' '$SCRIPT_SELF'"
+check "#121 and the tool under test is still the real one" \
+  "[ -f '$SCRIPT' ] && grep -q 'scratch_leftovers' '$SCRIPT'"
+# The seam that lets the two checks above be watched FAILING. Without it they are only ever seen
+# passing, and a check nobody has seen fail is not a check (L1): running this file with
+# SUITE_FROM_COPY=1 skips the copy, which is exactly the state every run was in before #121, and
+# both of them go red. It is named in the suite's own documentation for that reason.
+_fc_seam="SUITE_""FROM_COPY"
+check "#121 the seam that puts a run back in the old state is still there" \
+  "grep -q \"\$_fc_seam\" '$SCRIPT_SELF'"
 
 section "== a grandchild is not told the filtering already happened (#37) =="
 # A run started with SECTION_UNTIL re-executes itself from a temp copy carrying SUITE_FILTERED=1,
