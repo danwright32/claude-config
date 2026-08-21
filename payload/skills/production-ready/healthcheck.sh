@@ -37,7 +37,13 @@ WFPATH="$(grep -o 'scriptPath: "[^"]*"' "$SKILL" | head -1 | sed 's/scriptPath: 
 # directory in every synced file on the way in. A copy that has not been through an apply (the
 # repo's own, or one edited by hand) still holds the token, so expand it here rather than
 # reporting a file that does not exist.
-WFPATH="${WFPATH/__CLAUDE_HOME__/${CLAUDE_HOME:-$HOME/.claude}}"
+# The token is ASSEMBLED, never written whole. The sync expands it in every mirrored
+# file on the way in, and it cannot tell a line that means the token from a line that
+# means a path: written out, this very line came back as
+# ${WFPATH//Users/<name>/.claude/...} and the healthcheck reported a path made of two
+# homes glued together (claude-config#99).
+_CS_TOKEN="__CLAUDE""_HOME__"
+WFPATH="${WFPATH/$_CS_TOKEN/${CLAUDE_HOME:-$HOME/.claude}}"
 [ -n "$WFPATH" ] || fail "SKILL.md declares no scriptPath for the Workflow tool"
 [ -f "$WFPATH" ] || fail "SKILL.md scriptPath does not exist on this machine: $WFPATH"
 

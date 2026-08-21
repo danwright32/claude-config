@@ -69,9 +69,13 @@ cat > "$GOOD/skills/demo/SKILL.md" <<'ALLOWED'
 bash ~/.claude/skills/x/healthcheck.sh
 bash $HOME/.claude/skills/x/healthcheck.sh
 os.path.expanduser("~/.claude/skills/x/state.json")
-__CLAUDE_HOME__/hooks/tdd-nudge.sh
 <HOME>/.claude/skills/plan-council/panel.workflow.js
 ALLOWED
+# The sync's placeholder, assembled rather than written out. Spelled in full, the
+# apply rewrites this very line into a real home directory, and then this fixture,
+# which exists to prove a portable form PASSES, is a machine path that correctly
+# fails (claude-config#99). Measured on the installed copy, not reasoned about.
+printf '%s/hooks/tdd-nudge.sh\n' "__CLAUDE""_HOME__" >> "$GOOD/skills/demo/SKILL.md"
 # An elided example, written with dots where the account name would be. One of
 # these lives in a vendored skill in the real tree below, so this is measured
 # from what is actually there rather than invented (L48).
@@ -160,6 +164,42 @@ code_mixed=$?
 printf '%s' "$out_mixed" | grep -q "other.sh" \
   && check "and the refusal names the offending line, not the portable one" ok \
   || check "and the refusal names the offending line, not the portable one" "out=$out_mixed"
+
+# ---------------------------------------------------------------------------
+# Naming the sync's placeholder in full is its own defect, because the apply
+# rewrites that text into a home directory. Only a scriptPath, which is meant to
+# be expanded, and a line carrying the marker are allowed to.
+# ---------------------------------------------------------------------------
+TOKTREE="$(tree token)"
+printf 'the %s placeholder, explained\n' "__CLAUDE""_HOME__" > "$TOKTREE/skills/demo/SKILL.md"
+out_tok="$(bash "$CHECK" "$TOKTREE" 2>&1)"
+code_tok=$?
+[ "$code_tok" -eq 1 ] \
+  && check "a file that writes the placeholder out in full is refused" ok \
+  || check "a file that writes the placeholder out in full is refused" "exit=$code_tok out=$out_tok"
+
+printf '      scriptPath: "%s/skills/x/panel.workflow.js"\n' "__CLAUDE""_HOME__" > "$TOKTREE/skills/demo/SKILL.md"
+out_tok2="$(bash "$CHECK" "$TOKTREE" 2>&1)"
+code_tok2=$?
+[ "$code_tok2" -eq 0 ] \
+  && check "it standing in front of a path is left alone" ok \
+  || check "it standing in front of a path is left alone" "exit=$code_tok2 out=$out_tok2"
+
+# The worst of the three, because it changed behaviour rather than wording: a shell substitution
+# over the placeholder. The slash after it belongs to the substitution, not to a path.
+printf 'WFPATH="${WFPATH/%s/$HOME}"\n' "__CLAUDE""_HOME__" > "$TOKTREE/skills/demo/SKILL.md"
+out_tok4="$(bash "$CHECK" "$TOKTREE" 2>&1)"
+code_tok4=$?
+[ "$code_tok4" -eq 1 ] \
+  && check "a substitution over the placeholder is refused" ok \
+  || check "a substitution over the placeholder is refused" "exit=$code_tok4 out=$out_tok4"
+
+printf 'the %s placeholder claude-sync-allow-home-path\n' "__CLAUDE""_HOME__" > "$TOKTREE/skills/demo/SKILL.md"
+out_tok3="$(bash "$CHECK" "$TOKTREE" 2>&1)"
+code_tok3=$?
+[ "$code_tok3" -eq 0 ] \
+  && check "and a marked line is excused here too" ok \
+  || check "and a marked line is excused here too" "exit=$code_tok3 out=$out_tok3"
 
 # ---------------------------------------------------------------------------
 # A scan that read nothing must not report a clean tree. Both ways of reading

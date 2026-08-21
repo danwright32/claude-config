@@ -22,6 +22,14 @@ so an absolute path inside one is correct on both machines. The top-level rules 
 exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
 in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split.
 
+One consequence, worth knowing before writing a synced file that talks about the sync: the
+placeholder is expanded wherever it appears, and nothing can tell a line that MEANS the
+placeholder from a line that means a path. A file naming it in prose, or running a shell
+substitution over it, has its own text rewritten into one machine's home directory, which is
+how a healthcheck came to report a path made of two homes glued together. Assemble it from
+pieces in those files. The same guard refuses it anywhere it is not standing in front of a path.
+(This README is not synced, so it can spell it out.)
+
 ## What NEVER syncs (stays private to each Mac)
 
 Memory store, session history, caches, the rest of `settings.json` (model / effort / plugins),

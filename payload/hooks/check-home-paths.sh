@@ -17,7 +17,8 @@
 #   ~/...                       expanded by the shell
 #   $HOME/...                   expanded by the shell
 #   os.path.expanduser("~/...") expanded by Python
-#   __CLAUDE_HOME__/...         claude-sync's own token, rewritten per Mac
+#   the sync's own placeholder, which claude-sync rewrites per Mac (it is not
+#   spelled out anywhere in this file, and must not be: see the note below)
 #   <HOME>/...                  a placeholder a person or the model substitutes by
 #                               hand, still accepted where one is genuinely wanted
 #
@@ -50,7 +51,17 @@
 # Exit 0 = clean. Exit 1 = at least one machine path. Exit 2 = nothing was
 # scanned, which is a failure rather than a pass: an empty answer from a scan
 # that read no files is indistinguishable from a clean tree (LESSONS.md L98).
+# One thing this file must never do: write the sync's placeholder out in full. The
+# apply expands that placeholder in EVERY mirrored file, and it cannot tell a line
+# that means the placeholder from a line that means a path, so a file discussing it
+# has its own text rewritten into somebody's home directory. That is not theoretical:
+# the first version of this guard said "or the <placeholder> token" in its failure
+# message and the installed copy said "or the /Users/<name>/.claude token"
+# (claude-config#99). Assembled from pieces below, and the same rule applies to any
+# synced file that has to NAME it.
 set -uo pipefail
+
+CS_TOKEN="__CLAUDE""_HOME__"
 
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 [ -d "$ROOT" ] || { echo "check-home-paths: no such directory: $ROOT" >&2; exit 2; }
@@ -146,10 +157,48 @@ if [ "$scanned" -eq 0 ]; then
   exit 2
 fi
 
+# The placeholder itself, which is a second way a machine path arrives. The apply expands it in
+# every mirrored file, so a file that NAMES it has its own text rewritten: a comment about the
+# placeholder becomes a comment about somebody's home directory, and a shell substitution over it
+# becomes a substitution over a path. Both were measured on the installed copy, and the second one
+# left a healthcheck reporting a path made of two home directories glued together
+# (claude-config#99).
+#
+# The line between the two uses is what the placeholder is FOR: standing at the front of a path.
+# So it is allowed immediately followed by a slash, and refused everywhere else, which covers
+# naming it in prose and refused again inside a ${...} substitution, where a following slash is
+# the substitution's own separator rather than a path.
+#
+# This bites in the repo, where the placeholder still exists. In a live tree there is none left to
+# find, which is the point: by then the rewriting has already happened.
+tokbad=""
+while IFS= read -r tline; do
+  [ -n "$tline" ] || continue
+  case "$tline" in *claude-sync-allow-home-path*) continue ;; esac
+  tcontent="${tline#*:}"; tcontent="${tcontent#*:}"
+  if printf '%s' "$tcontent" | grep -qE '[$][{][^}]*'"$CS_TOKEN"; then
+    tokbad="$tokbad$tline
+"
+    continue
+  fi
+  if printf '%s' "$tcontent" | grep -qE "$CS_TOKEN"'([^/]|$)'; then
+    tokbad="$tokbad$tline
+"
+  fi
+done <<TOKHITS
+$(grep -rIn "${SKIP[@]}" -F -- "$CS_TOKEN" "${targets[@]}" 2>/dev/null || true)
+TOKHITS
+if [ -n "${tokbad//[[:space:]]/}" ]; then
+  echo "check-home-paths: these lines write the sync's placeholder somewhere it is not standing in front of a path, and the apply will rewrite them into one machine's home directory:" >&2
+  printf '%s' "$tokbad" | sed 's/^/  /' >&2
+  echo "Assemble it from pieces so the apply has nothing to match, or put claude-sync-allow-home-path on the line if it genuinely has to be written whole." >&2
+  exit 1
+fi
+
 if [ -n "$hits" ]; then
   echo "check-home-paths: these lines name one machine's home directory, so they are wrong on every other Mac and fail silently there:" >&2
   printf '%s\n' "$hits" | sed 's/^/  /' >&2
-  echo "Write the path relative to the home directory instead (a tilde, \$HOME, expanduser, or the __CLAUDE_HOME__ token), or put claude-sync-allow-home-path on the line if it genuinely has to name one." >&2
+  echo "Write the path relative to the home directory instead (a tilde, \$HOME, expanduser, or the sync's own ${CS_TOKEN} placeholder), or put claude-sync-allow-home-path on the line if it genuinely has to name one." >&2
   exit 1
 fi
 
