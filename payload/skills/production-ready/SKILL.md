@@ -31,7 +31,7 @@ Call the **Workflow** tool with:
       }
     }
 
-That path is absolute and correct on this machine: the config sync rewrites the home directory in every synced file, so each Mac holds its own. Use it exactly as written. It is spelled out rather than shortened because the Workflow tool takes `scriptPath` as a literal string and expands neither `~` nor `$HOME`. If you ever see `__CLAUDE_HOME__` here instead of a real path, this file has not been applied by the sync yet: replace that token with this machine's home config directory (`echo $HOME/.claude`).
+That path is absolute and correct on this machine: the config sync rewrites the home directory in every synced file, so each Mac holds its own. Use it exactly as written. It is spelled out rather than shortened because the Workflow tool takes `scriptPath` as a literal string and expands neither `~` nor `$HOME`. If what you see there is a placeholder rather than a real path, this copy of the file has not been through the sync yet: use this machine's own config directory (`echo $HOME/.claude`) followed by the rest of the path as written.
 
 Pass `date` from your own context — the workflow engine cannot read the clock. It returns `{ profile, applicable, naDomains, report }`, where `report = { executiveSummary, whatsSolid, topRisks, severityCounts, backlog }`.
 
