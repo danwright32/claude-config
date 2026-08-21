@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 216 lessons.
+LESSONS.md, which is NOT loaded into the session. 221 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -22,6 +22,7 @@ to decide something: the body is where the failure it came from is described.
 - L196. A component that CONSTRUCTS its own dependency rather than receiving one is beyond every refusal that dependency could offer
 - L3. Built is not wired, and wired is not proven.
 - L4. A merged fix is not a deployed fix.
+- L212. A count of source sites that CREATE a resource against source sites that RELEASE it cannot measure whether anything leaks, because one shared helper runs once per caller and a single missing teardown inside it multiplies invisibly, so measure what actually survives at runtime.
 - L63. A regression guard must assert the quantity it exists to protect, never a proxy for it.
 - L103. A guard that asserts the exact rendering of a value rather than the rule behind it fails the first legitimate refinement of that value, and when the value is a file's text it can also be satisfied by a comment ABOUT the thing, including one explaining that the thing was removed.
 - L48. A test fixture that claims to come from real data must be measured from it, never shaped so the rule under test fires.
@@ -68,6 +69,7 @@ to decide something: the body is where the failure it came from is described.
 - L502. A setting whose OFF state stops something being RECORDED must be monitored by asserting its current VALUE on a schedule, never only by auditing changes to it, because an application level audit cannot see a change made directly to the database, and the setting's whole effect is to remove the evidence that would reveal it.
 - L504. A test can only tell two implementations apart when the environment it runs in makes them behave differently, so when the ambient configuration (the host timezone, the locale, the filesystem's case sensitivity) is what separates a correct implementation from a wrong one, the test must SET that configuration itself rather than inherit it.
 - L506. A guard that branches on a field arriving from OUTSIDE the system is only real once that field's presence has been measured on live traffic, because an absent field makes a strict comparison silently false and the guard then reads as an active safeguard while refusing nobody.
+- L209. A threshold measured while a co-varying component is held constant attaches itself to the wrong variable, because the part the fixture moves stands in for the sum.
 
 ## Data safety
 
@@ -86,6 +88,7 @@ to decide something: the body is where the failure it came from is described.
 - L174. Shortening a retention or expiry window makes every later step keyed to a longer window unreachable, and that step goes on reading as an active safeguard rather than as dead code.
 - L191. A write into a CAPPED or rolling store (a log with a maximum, a ring buffer, a recent list) does not merely add noise, it EVICTS the oldest real records, so a cheap writer (a test, a retry, a health check) destroys the expensive observations the store exists to hold, and any count derived from the store then reports the junk as real.
 - L202. Evidence attached to a record that is itself swept on a retention schedule inherits that schedule's lifetime, so it is gone before the investigation that needs it, which by definition arrives days later.
+- L211. A cleanup that deletes whatever its read did NOT mention turns every incompleteness in that read into permanent deletion, so it must refuse on a SHORT read and not only on a failed one
 
 ## Honest failure
 
@@ -192,6 +195,7 @@ to decide something: the body is where the failure it came from is described.
 - L187. A control gated on a collection holding MORE THAN ONE member is absent in the commonest case, which is one member.
 - L508. A control that renders a value the BROWSER itself validates (a date input, a number input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that value stands beside an empty control and the two halves of the screen contradict each other about what was asked for.
 - L207. A constraint imposed by the surface your output is DISPLAYED on (a phone's notch or safe area, a host app's own overlay chrome, a fold, a print bleed) leaves no trace in the artifact you render or in any check you run over it, so it is only ever discovered on a real device.
+- L213. A colour token that only has meaning as one half of a PAIR (a foreground against its background, a border against its fill) must be overridden as a pair, because a call site that swaps only the background silently keeps the base variant's foreground, the two can land on the same value, and the result is content that is present in the DOM, correctly named to a screen reader, and invisible on screen.
 
 ## External systems
 
@@ -225,6 +229,7 @@ to decide something: the body is where the failure it came from is described.
 - L30. Fix the class, not the instance.
 - L31. Everything the product depends on lives in git.
 - L32. Docs state testable claims.
+- L210. A check that keeps a document in sync with the code by comparing a machine readable token (a number, a name, a version) leaves the sentence beside it unverified, and the passing check makes that sentence MORE trusted rather than less.
 - L41. A list that must mirror another source of truth is derived from it, never maintained by hand beside it.
 - L96. A guard driven by a hand-written registry checks only what the registry lists, so anything missing from it is exempt from the very check meant to catch it, and the guard reports green while blind.
 - L129. A category deliberately EXEMPTED from a review or check, for a CORRECT reason, has no reviewer at all unless one is named in the same change, and the gap is invisible precisely because the exemption was right.

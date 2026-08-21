@@ -132,6 +132,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   migration applied in production, the live site serving the new commit, behavior
   confirmed in a production build. CI must exercise the artifact production actually
   runs. (20 issues, 5 repos)
+- **L212. A count of source sites that CREATE a resource against source sites that RELEASE it
+  cannot measure whether anything leaks, because one shared helper runs once per caller and a
+  single missing teardown inside it multiplies invisibly, so measure what actually survives at
+  runtime.** The two numbers look like a balance and are not comparable at all: one is a count of
+  lines, the other a count of executions. Downbeat's suite read as 96 createDirectory calls
+  against 95 defer cleanups, and the file holding the worst offender even contained a removeItem,
+  so it sorted into the cleans-up bucket; that one helper had no teardown and had left 7,616
+  directories. The measurement that settled it was running the suite and diffing the temp folder,
+  which said 52 leaked per run and then 0 after the fix. Distinct from L63, which is about a guard
+  asserting a proxy: this is the diagnosis reached before any guard exists, and the proxy is
+  convincing precisely because the two counts are nearly equal.
+  (downbeat 866e82c, overture#3065)
 - **L63. A regression guard must assert the quantity it exists to protect, never a proxy for
   it.** A pinned count, size or flag stays constant while the thing it stands in for doubles,
   so the guard passes for the whole time the defect is growing and the detector goes back to
@@ -593,6 +605,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   so the branch has never fired in 150,110 runs, while the signal sits in the same payload as
   financialInformation.employmentStatus === 'military', arriving 34 times in 3 hours)
 
+- **L209. A threshold measured while a co-varying component is held constant attaches itself to the wrong variable, because the part the fixture moves stands in for the sum.** Vary every component the real input varies, or state the measured limit as a limit on the total.
+  (downbeat#344: two confident predicates for which calendar sentences Fantastical mangles shipped and were both disproven by real bookings, one the same day it shipped. Every ladder fixture held the title short and constant while varying the venue phrase, so the phrase's length aliased the sentence's total length and took the blame: "62 to 66 characters ending in a number" was really "a total near 170 under that fixture's title". Cloning the real failing sentence and bisecting title against phrase showed total length was the only variable that flipped the outcome, at a cliff between 166 and 172.)
+
 ## Data safety
 
 - **L206. A tool mode whose NAME reads like an inspection (reach, check, status, list,
@@ -721,6 +736,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   are swept seven days after the shoot, and the loss that motivated the work was
   investigated nine days after the fact, so the fix covered the check that runs minutes
   later and not the situation that made it worth building)
+
+- **L211. A cleanup that deletes whatever its read did NOT mention turns every
+  incompleteness in that read into permanent deletion, so it must refuse on a SHORT read
+  and not only on a failed one**, because a row cap, a swallowed partial error or a
+  filtered query all come back as success. Compare against the previous run's count and
+  refuse on a collapse, because an abort on read failure guard reads as diligence and is
+  exactly why the second guard never gets written.
+  (nursedex#745: the nightly blog image sweep correctly aborts when it cannot read the
+  posts, and then deletes every storage object those posts did not reference. The read
+  it trusts is an unpaginated select PostgREST silently caps at 1000 rows, beside a
+  storage listing that logs its error and returns a partial list, so both ways it comes
+  back short are indistinguishable from a blog that genuinely shrank, and storage
+  deletion has no undo)
 
 ## Honest failure
 
@@ -1537,6 +1565,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   reel had the show's name printed under the clock and the battery, and the only report was a
   screenshot from Dan's phone)
 
+- **L213. A colour token that only has meaning as one half of a PAIR (a foreground against its
+  background, a border against its fill) must be overridden as a pair, because a call site that
+  swaps only the background silently keeps the base variant's foreground, the two can land on the
+  same value, and the result is content that is present in the DOM, correctly named to a screen
+  reader, and invisible on screen.** Every check that reads the DOM agrees it is fine: an
+  accessible name assertion passes, and a visibility assertion passes too, since text drawn in the
+  background colour still has a non empty box. Assert the two computed colours differ, or that the
+  pair clears its contrast threshold. Distinct from L509, where the override LOSES to a merge
+  order: here it wins and simply covers half of what it had to cover. The DOM side sibling of
+  L141, which is the same failure seen by a harness measuring ink.
+  (nursedex#751: `GoogleSignInButton` set `bg-warm-white` over the default variant's
+  `bg-primary text-primary-foreground`, and `--color-primary-foreground` is itself warm white, so
+  "Continue with Google" shipped as #fbf9f7 on #fbf9f7, a contrast ratio of 1.0 to 1, on both
+  /login and /signup. A unit test asserting the accessible name and a Playwright `toBeVisible`
+  both stayed green, and the only report was a screenshot from Dan)
+
 ## External systems
 
 - **L23. Treat every external response as hostile and every event stream as unordered,
@@ -1723,6 +1767,15 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L32. Docs state testable claims.** A doc stating a fact the code no longer matches
   is a bug fixed in the same PR; measured numbers are generated or omitted, never
   hand-written. (56 issues, 8 repos)
+- **L210. A check that keeps a document in sync with the code by comparing a machine readable
+  token (a number, a name, a version) leaves the sentence beside it unverified, and the passing
+  check makes that sentence MORE trusted rather than less.** Assert the behavioural claim the
+  prose makes, or move it somewhere the check can reach it, because a doc carrying a green
+  freshness check is read as verified in full and the unchecked half is exactly where the claim
+  that matters lives. (claude-config#112: a design record justified a nesting limit with "runs
+  itself as a subprocess in one place and never deeper" while the check beside it compared only
+  the number, so a change making it run two deep would have left both that sentence and the
+  README's false with everything still green)
 - **L41. A list that must mirror another source of truth is derived from it, never
   maintained by hand beside it.** The two drift the moment someone updates one and not
   the other, and the drift stays silent until something turns up missing.
