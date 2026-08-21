@@ -86,24 +86,39 @@ resolve_repo_dir() {
 
 cd "$(resolve_repo_dir)" 2>/dev/null || true
 
-# A repo carrying the commit pinned merge tool must merge through it (#711).
+# A repo carrying its own commit pinned merge tool must merge through it
+# (#711 for PostRoll, agent-onboarding #673).
 #
 # The rollup read below answers about the pull request, not about a particular
 # commit, and it is read a moment BEFORE the merge. Four things slip through
 # that gap: an empty answer that reads as green, a superseded run answering for
 # a commit nobody judged, a head that moves between the reading and the merge,
-# and a green earned against a base that has since moved. `wait_for_checks.py`
-# knows about all four, and its `--merge` hands GitHub the commit as `sha`, so
-# the merge either takes the judged commit or is refused. None of that is worth
-# anything if the safe route is merely available, so here it is the only one.
+# and a green earned against a base that has since moved. A repo's own tool
+# knows about those, and pins the merge to the commit it actually judged, so the
+# merge either takes that commit or is refused. None of that is worth anything
+# if the safe route is merely available, so where one exists it is the only one.
 #
-# Only where the tool exists, so every other project keeps the old gate rather
+# A table rather than a branch per repo. The reasoning is identical in every
+# case, and two copies of it drift: the whole point of the rule is that one
+# mechanism has one implementation.
+#
+# Only where a tool exists, so every other project keeps the old gate rather
 # than being blocked by a rule about a file it does not have.
+pinned_tool=""
+pinned_how=""
 if [ -f "tools/wait_for_checks.py" ]; then
+  pinned_tool="tools/wait_for_checks.py"
+  pinned_how="venv/bin/python tools/wait_for_checks.py ${pr:-<pr>} --merge"
+elif [ -f ".github/scripts/merge-pr.sh" ]; then
+  pinned_tool=".github/scripts/merge-pr.sh"
+  pinned_how="npm run merge -- ${pr:-<pr>}"
+fi
+
+if [ -n "$pinned_tool" ]; then
   case "$command" in
     *ALLOW_UNPINNED_MERGE=1*) ;;
     *)
-      deny "This repo merges through its own commit pinned tool, not through gh pr merge. Run: venv/bin/python tools/wait_for_checks.py ${pr:-<pr>} --merge . It waits for the checks, judges them against the commit at the head, and hands GitHub that commit as the sha, so a push landing in the seconds between the two cannot be merged unjudged. A plain merge skips all of that and looks identical afterwards. Deliberate override: ALLOW_UNPINNED_MERGE=1 <the same command>."
+      deny "This repo merges through its own commit pinned tool ($pinned_tool), not through gh pr merge. Run: $pinned_how . It judges the checks against the commit at the head and hands GitHub that commit, so a push landing in the seconds between the two cannot be merged unjudged, and it confirms afterwards that the commit landed on the base its checks were run against. A plain merge skips all of that and looks identical afterwards. Deliberate override: ALLOW_UNPINNED_MERGE=1 <the same command>."
       ;;
   esac
 fi

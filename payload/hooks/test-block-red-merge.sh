@@ -25,6 +25,10 @@ make_repo() {  # $1 = with-tool | without-tool ; $2 = rollup json
     mkdir -p "$dir/repo/tools"
     printf '#!/usr/bin/env python3\n' > "$dir/repo/tools/wait_for_checks.py"
   fi
+  if [ "$1" = "with-npm-tool" ]; then
+    mkdir -p "$dir/repo/.github/scripts"
+    printf '#!/usr/bin/env bash\n' > "$dir/repo/.github/scripts/merge-pr.sh"
+  fi
   cat > "$dir/bin/gh" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
@@ -99,6 +103,41 @@ dir=$(make_repo with-tool "$GREEN")
 if denied "$(run_hook "$dir" "gh pr view 7")"; then
   fail "the hook blocked a command that was not a merge"
 else pass; fi
+rm -rf "$dir"
+
+
+# 6. The second pinned tool: a repo whose merge goes through its own shell
+#    wrapper is held to the same rule, and the refusal names ITS command.
+#    Without this, adding a tool to the table would be untested and the rule
+#    would silently apply to one repo only.
+dir=$(make_repo with-npm-tool "$GREEN")
+out=$(run_hook "$dir" "gh pr merge 7 --squash --delete-branch")
+if denied "$out"; then pass; else
+  fail "a plain gh pr merge was allowed in a repo that carries a shell merge wrapper"
+fi
+if printf '%s' "$out" | grep -q "npm run merge -- 7"; then pass; else
+  fail "the refusal does not name the wrapper's own command: $out"
+fi
+# It must name the tool it found, not the other repo's, or the message sends
+# somebody to a file that is not there.
+if printf '%s' "$out" | grep -q "wait_for_checks"; then
+  fail "the refusal names the other repo's tool: $out"
+else pass; fi
+rm -rf "$dir"
+
+# 7. The visible override works for the second tool too.
+dir=$(make_repo with-npm-tool "$GREEN")
+if denied "$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; then
+  fail "the visible override did not let the merge through for the shell wrapper"
+else pass; fi
+rm -rf "$dir"
+
+# 8. And a red PR there is still refused by the ORIGINAL gate, reached through
+#    the override, so the two rules do not answer for each other (L178).
+dir=$(make_repo with-npm-tool "$RED")
+if denied "$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; then pass; else
+  fail "a red PR was allowed through once the pinned-tool rule was overridden"
+fi
 rm -rf "$dir"
 
 echo "  $passed passed, $failed failed"

@@ -72,16 +72,22 @@ if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_PR_QUIZ=1([[:space:]]|$
   exit 0
 fi
 
-# Does any shell segment RUN a merge (as opposed to merely mentioning it)? Two forms count:
+# Does any shell segment RUN a merge (as opposed to merely mentioning it)? Three forms count:
 #   1. `gh pr merge ...` directly.
-#   2. `scripts/merge-when-green.sh <pr>`, the wrapper that polls CI and then merges INTERNALLY via
-#      `gh pr merge` in a subprocess this hook cannot see. Matching the wrapper is the only way the
-#      quiz is not silently dodged by using the project's own recommended merge command.
-# Both are matched on the LEADING TOKENS of each segment (after stripping leading env assignments), so
-# a payload that merely NAMES either one (an echo, an ls, an issue comment) does not fire. The wrapper
-# is matched only in command position: as the first token, or the second when the first is an
-# interpreter (bash/sh/zsh). A basename match (preceded by `/` or start of token) covers ./scripts/...,
+#   2. a project's own merge wrapper, which merges INTERNALLY via `gh pr merge` in a subprocess this
+#      hook cannot see. Matching the wrapper is the only way the quiz is not silently dodged by using
+#      the project's own recommended merge command, and in agent-onboarding it is worse than
+#      recommended: the merge gate REFUSES a plain merge there, so the wrapper is the only route and
+#      matching only `gh pr merge` would mean the quiz never fires in that repo again.
+#   3. `npm run merge ...`, which is how one of those wrappers is invoked. Kept as its own rule rather
+#      than folded into the wrapper list, because what follows `npm run` is a script name and not a
+#      path, so a basename match cannot see it.
+# All are matched on the LEADING TOKENS of each segment (after stripping leading env assignments), so
+# a payload that merely NAMES one (an echo, an ls, an issue comment) does not fire. A wrapper is
+# matched only in command position: as the first token, or the second when the first is an interpreter
+# (bash/sh/zsh). A basename match (preceded by `/` or start of token) covers ./scripts/...,
 # scripts/..., and a bare name alike.
+MERGE_WRAPPERS="merge-when-green.sh merge-pr.sh"
 is_merge=0
 while IFS= read -r seg; do
   stripped="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//')"
@@ -92,11 +98,19 @@ while IFS= read -r seg; do
   fi
   first="$(printf '%s' "$stripped" | awk '{print $1}')"
   second="$(printf '%s' "$stripped" | awk '{print $2}')"
-  if [ "${first##*/}" = "merge-when-green.sh" ]; then
-    is_merge=1
-    break
-  fi
-  if printf '%s' "$first" | grep -Eq '^(bash|sh|zsh)$' && [ "${second##*/}" = "merge-when-green.sh" ]; then
+  third="$(printf '%s' "$stripped" | awk '{print $3}')"
+  for wrapper in $MERGE_WRAPPERS; do
+    if [ "${first##*/}" = "$wrapper" ]; then
+      is_merge=1
+      break 2
+    fi
+    if printf '%s' "$first" | grep -Eq '^(bash|sh|zsh)$' && [ "${second##*/}" = "$wrapper" ]; then
+      is_merge=1
+      break 2
+    fi
+  done
+  # Exactly `merge`, so `npm run merge-ready` (which only reports, and merges nothing) does not fire.
+  if [ "$first" = "npm" ] && [ "$second" = "run" ] && [ "$third" = "merge" ]; then
     is_merge=1
     break
   fi
