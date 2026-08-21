@@ -71,6 +71,25 @@ jobs:
           echo "claude-sync status exited $rc"
           [ "$rc" -eq 0 ]
 
+      - name: TEMPORARY diagnosis of the review hook on Linux
+        # Removed once it has answered. A theory built from the symptom is cheap to believe and
+        # expensive to ship, so the environment that fails is made to print the fact (L177).
+        run: |
+          set +e
+          d="$(mktemp -d)"
+          git -C "$d" init -q .
+          printf '{"type":"user","message":{"content":"do the thing"}}\n{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{}}]}}\n' > "$d/t.jsonl"
+          payload="$(python3 -c 'import json,sys;print(json.dumps({"transcript_path": sys.argv[1], "cwd": sys.argv[2], "stop_hook_active": False}))' "$d/t.jsonl" "$d")"
+          echo "--- tools present:"
+          for t in jq shasum sha1sum python3 perl git; do printf '%s: %s\n' "$t" "$(command -v $t || echo MISSING)"; done
+          echo "--- turn-worked.py says:"
+          python3 payload/hooks/turn-worked.py "$d/t.jsonl"; echo "rc=$?"
+          echo "--- review hook, plain:"
+          printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$d" bash payload/hooks/feature-issue-review.sh; echo "rc=$?"
+          echo "--- review hook, traced (tail):"
+          printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$d" bash -x payload/hooks/feature-issue-review.sh 2>&1 | tail -30
+          exit 0
+
       - name: The hook suites
         # Fifteen suites guard the machinery that guards every project, and until now they ran
         # only when somebody remembered to run them on a Mac: two defects found on 2026-08-20
