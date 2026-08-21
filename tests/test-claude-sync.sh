@@ -4233,6 +4233,94 @@ out_lxmiss="$(CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1
 check "#63 a number that is not there is refused"     "[ \"\$lx_miss_rc\" -ne 0 ]"
 check "#63 rather than printing nothing and exiting 0" "printf '%s' \"\$out_lxmiss\" | grep -q 'L99 is not in'"
 
+section "== a pull git refused must fail loudly, not report success (#78 #80 #81) =="
+# `git pull --ff-only` ran with its exit status discarded, so a pull git ABORTED fell straight
+# through to the reachability stamp, the apply and the closing "Pulled shared config onto this Mac"
+# line. A Mac that received nothing because the pull FAILED then printed the same two sentences as
+# a Mac with nothing to receive (L98, L184). Measured on 2026-08-18: seven commits behind, the pull
+# aborted with "Not possible to fast-forward", and the session went on believing its rule files
+# were current, which is the payload worst to be silently stale in.
+#
+# Three refusals, three messages, each proven here, because a single "the pull failed" names
+# nothing anybody can act on (L11, L151): the repo could not be REACHED, the two Macs have
+# DIVERGED, or git refused for a reason only git can describe.
+unset SYNC_NO_GIT
+DVB="$WORK/diverge-bare.git"; git init -q --bare "$DVB"
+DVRA="$WORK/diverge-repoA"; git clone -q "$DVB" "$DVRA"
+DVHA="$WORK/diverge-homeA"; mkdir -p "$DVHA/skills/dvfirst"
+echo '{"model":"opus","hooks":{}}' > "$DVHA/settings.json"
+mkskill "$DVHA/skills/dvfirst/SKILL.md" 'DIVERGE-FIRST'
+CLAUDE_HOME="$DVHA" SYNC_REPO="$DVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+DVRB="$WORK/diverge-repoB"; git clone -q "$DVB" "$DVRB"
+DVHB="$WORK/diverge-homeB"; mkdir -p "$DVHB"
+echo '{"model":"opus","hooks":{}}' > "$DVHB/settings.json"
+out_dvok="$(CLAUDE_HOME="$DVHB" SYNC_REPO="$DVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "first pull into B: $out_dvok"
+# The positive control, in the SAME fixture as the refusals below. Without it, every "did not
+# arrive" and "did not say" assertion further down is satisfied by a fixture where a pull could
+# never have worked at all (L159).
+check "#81 the fixture can deliver a pull that works" "[ -f '$DVHB/skills/dvfirst/SKILL.md' ]"
+check "#81 and that pull says so"  "line_has \"\$out_dvok\" 'Pulled shared config' 'memory/permissions'"
+
+# The other Mac moves on, and this one holds a commit of its own that never went up. Different
+# files on each side, so there is no content clash anywhere: the ONLY reason git refuses is that
+# --ff-only cannot fast-forward, which is exactly the case that used to report success.
+mkskill "$DVHA/skills/dvlater/SKILL.md" 'DIVERGE-LATER'
+CLAUDE_HOME="$DVHA" SYNC_REPO="$DVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+mkdir -p "$DVRB/payload/agents"
+printf 'an agent this Mac wrote and never sent\n' > "$DVRB/payload/agents/dvlocal.md"
+git -C "$DVRB" add -A -- payload
+git -C "$DVRB" -c user.name=suite -c user.email=suite@localhost commit -qm "local commit the repo has not seen"
+rm -f "$DVRB/.last-success"
+dv_rc=0
+out_dv="$(CLAUDE_HOME="$DVHB" SYNC_REPO="$DVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)" || dv_rc=$?
+dbg "diverged pull: rc=$dv_rc $out_dv"
+check "#78 a refused pull exits non zero"            "[ \"\$dv_rc\" -ne 0 ]"
+check "#78 it does not claim to have pulled"         "! printf '%s' \"\$out_dv\" | grep -q 'Pulled shared config'"
+check "#78 nor that there was nothing to receive"    "! printf '%s' \"\$out_dv\" | grep -q 'Already up to date'"
+check "#81 nothing from the repo was applied"        "[ ! -e '$DVHB/skills/dvlater/SKILL.md' ]"
+check "#80 the message names the divergence, both counts, and the command that resolves it" \
+  "line_has \"\$out_dv\" 'diverged' '1 commit here' '[0-9]+ commits? there' 'claude-sync sync'"
+# Reachability is a SEPARATE fact from whether the pull could be applied, and this run proved it
+# by fetching. Suppressing the stamp here would make status report the repo as last reached days
+# ago while it was reached seconds ago, which is a message claiming more than its check measured
+# (L11). The outage clock is not what tells anybody about a divergence: the refusal above is.
+check "#78 a refusal after a successful fetch still records the repo as reachable" \
+  "[ -s '$DVRB/.last-success' ]"
+
+# Unreachable: nothing was measured about divergence, so nothing may be claimed about it, and the
+# reachability stamp must NOT be written by a run that never reached anything (#78).
+DVRC="$WORK/diverge-repoC"; git clone -q "$DVB" "$DVRC"
+DVHC="$WORK/diverge-homeC"; mkdir -p "$DVHC"
+echo '{"model":"opus","hooks":{}}' > "$DVHC/settings.json"
+git -C "$DVRC" remote set-url origin "$WORK/no-such-bare.git"
+rm -f "$DVRC/.last-success"
+dvoff_rc=0
+out_dvoff="$(CLAUDE_HOME="$DVHC" SYNC_REPO="$DVRC" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)" || dvoff_rc=$?
+dbg "unreachable pull: rc=$dvoff_rc $out_dvoff"
+check "#78 a pull that cannot reach the repo exits non zero" "[ \"\$dvoff_rc\" -ne 0 ]"
+check "#78 and does not claim to have pulled"                "! printf '%s' \"\$out_dvoff\" | grep -q 'Pulled shared config'"
+check "#78 it records no reachability it did not observe"    "[ ! -s '$DVRC/.last-success' ]"
+check "#78 and says the repo could not be reached, in git's words" \
+  "line_has \"\$out_dvoff\" 'could not reach the shared repo' 'no-such-bare'"
+
+# git's own refusal, neither of the two above. The catch-all has to be reachable and has to quote
+# git, or a cause it cannot name is reported as one of the causes it can (#52 was exactly that).
+DVRD="$WORK/diverge-repoD"; git clone -q "$DVB" "$DVRD"
+DVHD="$WORK/diverge-homeD"; mkdir -p "$DVHD"
+echo '{"model":"opus","hooks":{}}' > "$DVHD/settings.json"
+mkskill "$DVHA/skills/dvfirst/SKILL.md" 'DIVERGE-FIRST-EDITED'
+CLAUDE_HOME="$DVHA" SYNC_REPO="$DVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+printf 'an uncommitted edit inside the sync repo itself\n' >> "$DVRD/payload/skills/dvfirst/SKILL.md"
+dvd_rc=0
+out_dvd="$(CLAUDE_HOME="$DVHD" SYNC_REPO="$DVRD" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)" || dvd_rc=$?
+dbg "refused pull (dirty repo): rc=$dvd_rc $out_dvd"
+check "#78 a pull git refuses for its own reason exits non zero" "[ \"\$dvd_rc\" -ne 0 ]"
+check "#78 that refusal does not claim to have pulled"           "! printf '%s' \"\$out_dvd\" | grep -q 'Pulled shared config'"
+check "#78 it is not reported as a divergence"                   "! printf '%s' \"\$out_dvd\" | grep -q 'have diverged'"
+check "#78 and it carries git's own words"                       "line_has \"\$out_dvd\" 'refused to fast-forward' 'local changes'"
+
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

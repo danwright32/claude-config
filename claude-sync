@@ -2146,6 +2146,70 @@ summarize_applied(){   # $1 pre-pull commit  $2 post-pull commit (for the first-
 }
 
 # ---------- pull ----------
+# A count of commits, said the way the message needs to read it. Written once rather than at each
+# call site, so the three refusals below cannot drift into describing the same number differently.
+commits_in_words(){   # $1 = a count
+  case "${1:-0}" in
+    1) printf '1 commit' ;;
+    *) printf '%s commits' "${1:-0}" ;;
+  esac
+}
+
+# The receiving half of a pull, with git's answer READ rather than discarded.
+#
+# `--ff-only` stays: refusing to invent a merge is the correct behaviour. What was wrong was that
+# its exit status was thrown away (#78), so a pull git ABORTED fell through to the reachability
+# stamp, the apply, and the closing "Pulled shared config onto this Mac" line. A Mac that received
+# nothing because the pull FAILED then said exactly what a Mac with nothing to receive says (L98),
+# which is judging a command by a line of its output instead of by its exit code (L184). Measured
+# on 2026-08-18: seven commits behind, "fatal: Not possible to fast-forward", exit 0, and the
+# session went on working against a LESSONS.md that was two lessons out of date.
+#
+# Three ways this can fail and three messages, because "the pull failed" names nothing anybody can
+# act on (L11, L151): the repo could not be REACHED, the two Macs have DIVERGED (which --ff-only
+# cannot resolve by design, so the message has to name what does, #80), or git refused for a reason
+# only git can describe. The last one quotes git rather than guessing, because a cause asserted
+# from a state is confidently wrong when it is wrong, and #52 was exactly that.
+pull_from_repo_or_die(){
+  local branch ahead behind err
+  # No origin configured is not a failure to report: a repo with no remote has nothing to receive,
+  # and the offline paths (and the suite's local-only fixtures) drive the payload directly.
+  git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1 || return 0
+  branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+  # Fetched separately, and first, for two reasons. Reaching the remote is the only thing a pull
+  # can prove about the network, and it is what the outage clock measures, so it is stamped the
+  # moment it is observed rather than at the end of a run that can still fail for reasons saying
+  # nothing about reachability (the argument do_sync already makes at its own fetch). And the
+  # ahead/behind counts below are meaningless until the remote-tracking ref has been updated.
+  if ! err="$(git -C "$SYNC_REPO" fetch -q origin 2>&1)"; then
+    die_transient "could not reach the shared repo, so nothing was received and no file on this Mac was changed. git said: ${err:-<no output>}"
+  fi
+  # A pull that went through is proof the repo was reachable, exactly as a push is. Only send and
+  # sync stamped it before, so a Mac that ONLY ever pulls reported that it had never reached the
+  # shared repo while pulling successfully every day, which #76 surfaced by putting the fact on
+  # screen. The same argument written at the push site, one command over. (#22, #76)
+  record_sync_success
+  # No remote branch yet (a fresh clone of a repo nobody has pushed to). Nothing to receive, which
+  # is not a failure.
+  git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1 || return 0
+  ahead="$(git -C "$SYNC_REPO" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo 0)"
+  behind="$(git -C "$SYNC_REPO" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)"
+  case "$ahead" in ''|*[!0-9]*) ahead=0 ;; esac
+  case "$behind" in ''|*[!0-9]*) behind=0 ;; esac
+  if [ "$ahead" -gt 0 ] && [ "$behind" -gt 0 ]; then
+    # Named as its own condition, with both counts, because a divergence cannot fix itself: every
+    # later pull refuses in the same way, so a message that reads like a transient hiccup leaves
+    # the Mac behind indefinitely. The resolution is `sync`, which rebases this Mac's commits onto
+    # the repo's and pushes them, and which already has the wording for a real content clash, so
+    # this points at it rather than writing a second explanation of the same thing (#80).
+    die "this Mac and the shared repo have diverged: $(commits_in_words "$ahead") here the repo has not seen, and $(commits_in_words "$behind") there this Mac does not have. NOTHING was received and nothing on this Mac was changed, because a pull can only fast-forward. Reconcile with: claude-sync sync"
+  fi
+  if ! err="$(git -C "$SYNC_REPO" pull --ff-only -q 2>&1)"; then
+    die "git refused to fast-forward this Mac onto the shared repo, so NOTHING was received and nothing on this Mac was changed. The two sides have not diverged ($(commits_in_words "$ahead") here the repo has not seen, $(commits_in_words "$behind") there), so this is git's own refusal: ${err:-<no output>}"
+  fi
+  return 0
+}
+
 do_pull(){
   # ${VAR-default}, not ${VAR:-default}: after a hand-off SYNC_PULL_BASE is set
   # but EMPTY on a first pull, and that empty value is meaningful (no prior
@@ -2153,12 +2217,7 @@ do_pull(){
   local before="" after=""
   if have_git; then
     before="${SYNC_PULL_BASE-$(repo_head)}"
-    git -C "$SYNC_REPO" pull --ff-only -q
-    # A pull that went through is proof the repo was reachable, exactly as a push is. Only send and
-    # sync stamped it before, so a Mac that ONLY ever pulls reported that it had never reached the
-    # shared repo while pulling successfully every day, which #76 surfaced by putting the fact on
-    # screen. The same argument written at the push site, one command over. (#22, #76)
-    record_sync_success
+    pull_from_repo_or_die
     after="$(repo_head)"
     reexec_after_self_update "$before" "$after" pull || true
   fi
