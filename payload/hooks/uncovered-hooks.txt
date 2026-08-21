@@ -1,0 +1,19 @@
+# Hooks that no test suite so much as NAMES, one per line (claude-config#124).
+#
+# This is a ratchet, not an inventory: test-hook-coverage.sh derives the real list from the files
+# and fails if anything uncovered is missing from here, so a hook added without a suite is caught
+# on the day it lands. It ALSO fails when a name here is no longer uncovered, which forces the list
+# down rather than letting it sit as a permanent excuse.
+#
+# It is EMPTY, and that is not a reason to stop reading it. A count driven to zero stops being read
+# as a measurement and starts being read as proof the thing cannot happen (L182), so the suite does
+# not lean on this number: it proves every run, against a fixture built to hold one, that the
+# derivation can still see an uncovered hook. The number here is the result, not the evidence.
+#
+# What the derivation measures is whether any test-*.sh mentions the file by name. That is a FLOOR,
+# not coverage: a suite could name a file in a comment and exercise none of it. It is still worth
+# having, because a file no suite even names cannot be covered by one, and it is the only such
+# predicate that costs nothing to keep true.
+#
+# To add a name here, you need a reason, and it goes in the same change. Writing the suite is the
+# other option and is usually quicker than arguing for the exemption (L129).
