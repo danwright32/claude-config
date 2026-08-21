@@ -53,11 +53,17 @@ case "${TMPROOT%/}" in
   ''|/|"${HOME%/}") echo "test-pipefail-shortcircuit: refusing to run: throwaway directory came back as '$TMPROOT'." >&2; exit 2 ;;
 esac
 trap 'rm -rf "$TMPROOT"' EXIT
+# The fixture lines are ASSEMBLED, never written whole. Spelled out, this file would itself contain
+# three of the thing it counts, and the ratchet would report its own probe as a defect. It cannot
+# tell the line demonstrating the pattern from the line committing it, which is the ratchet working
+# correctly (measured: it caught this file the first time it ran). The answer is to leave no
+# literal for it to find, the same trick check-style-guide.sh needs for the characters it bans.
+_PIPE='|'
 {
   printf '#!/usr/bin/env bash\nset -uo pipefail\n'
-  printf 'cat file | grep -q needle\n'
-  printf 'ls dir | head -1\n'
-  printf '# cat other | grep -q thing   <- a comment about one, not one\n'
+  printf 'cat file %s grep -q needle\n' "$_PIPE"
+  printf 'ls dir %s head -1\n' "$_PIPE"
+  printf '# cat other %s grep -q thing   <- a comment about one, not one\n' "$_PIPE"
   printf 'grep -q needle file\n'
 } > "$TMPROOT/probe.sh"
 [ "$(count_uncommented "$TMPROOT/probe.sh")" = "2" ] \

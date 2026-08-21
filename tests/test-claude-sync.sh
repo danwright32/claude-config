@@ -220,7 +220,7 @@ fi
 # Collected once, and used by BOTH filters. They used to resolve a name differently: SECTION_ONLY
 # refused an ambiguous pattern and SECTION_UNTIL took the earliest match, which meant which rules
 # applied depended on which knob you reached for (claude-config#110).
-if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTION_LIST:-}" ]; } && [ -z "${SUITE_FILTERED:-}" ]; then
+if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTION_LIST:-}" ] || [ -n "${SUITE_SHARD:-}" ]; } && [ -z "${SUITE_FILTERED:-}" ]; then
   # Every heading, its line, and any `# needs:` lines directly beneath it. A declaration is a
   # COMMENT and deliberately not an argument to `section`: three derivations in this file parse
   # `^section "..."$` by stripping one trailing quote, and #37's `_late` would fail SILENTLY,
@@ -336,7 +336,56 @@ if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   exit "$_rc"
 fi
 
-if [ -n "${SECTION_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+# SUITE_SHARD=i/n runs the prelude plus every n-th section from the i-th offset (claude-config#133).
+# It shares the SECTION_ONLY extractor below rather than having one of its own: that code already
+# takes a SET of sections, pulls in whatever they declare they need, and refuses a copy that does
+# not parse, and a second implementation of any of that would drift from this one.
+#
+# Round robin rather than contiguous blocks, because the sections are wildly uneven: measured on
+# this Mac the slowest five are 22s, 13s, 11s, 11s and 9s out of about 200s across 82 sections, so
+# contiguous blocks would put several slow ones in the same shard and the whole run would wait for
+# it. Interleaving spreads them without anybody maintaining a list of which are slow.
+if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+  case "$SUITE_SHARD" in
+    [1-9]*/[1-9]*) ;;
+    *) echo "test suite: SUITE_SHARD='$SUITE_SHARD' is not of the form i/n, for example 2/4. Refusing rather than guessing which sections to run, because a guess would report a result over a set nobody chose." >&2; exit 2 ;;
+  esac
+  _sh_i="${SUITE_SHARD%%/*}"; _sh_n="${SUITE_SHARD##*/}"
+  case "$_sh_i$_sh_n" in *[!0-9]*) echo "test suite: SUITE_SHARD='$SUITE_SHARD' is not two whole numbers." >&2; exit 2 ;; esac
+  if [ "$_sh_i" -lt 1 ] || [ "$_sh_i" -gt "$_sh_n" ]; then
+    echo "test suite: SUITE_SHARD='$SUITE_SHARD' asks for shard $_sh_i of $_sh_n, which does not exist. Refusing rather than running an empty set and reporting it as a pass." >&2
+    exit 2
+  fi
+
+  _sec_match "$SUITE_PRELUDE_END"
+  if [ "$_so_hits" -ne 1 ]; then
+    echo "test suite: the prelude boundary '$SUITE_PRELUDE_END' matches $_so_hits headings rather than exactly one, so which sections make up the prelude is not decided." >&2
+    exit 2
+  fi
+  _so_pend="$_so_idx"
+
+  # Every section after the prelude that falls in this shard. Seeded as the targets; the closure
+  # below then pulls in anything they declare they need, exactly as it does for one section.
+  _sh_targets=""
+  _sh_k=$(( _so_pend + 1 ))
+  _sh_pos=0
+  while [ "$_sh_k" -le "$_so_i" ]; do
+    if [ $(( _sh_pos % _sh_n )) -eq $(( _sh_i - 1 )) ]; then _sh_targets="$_sh_targets $_sh_k"; fi
+    _sh_pos=$(( _sh_pos + 1 ))
+    _sh_k=$(( _sh_k + 1 ))
+  done
+  # A shard holding no sections at all must REFUSE, never report a clean run: a suite that checked
+  # nothing and exits 0 is indistinguishable from one where everything passed (L98).
+  case "$_sh_targets" in
+    *[![:space:]]*) ;;
+    *) echo "test suite: shard $_sh_i of $_sh_n holds no sections at all, so nothing would be run. Use fewer shards than the $(( _so_i - _so_pend )) sections there are." >&2; exit 2 ;;
+  esac
+  SECTION_ONLY=""
+  _so_shard_mode=1
+  _so_target="${_sh_targets##* }"
+fi
+
+if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${_so_shard_mode:-}" ]; } && [ -z "${SUITE_FILTERED:-}" ]; then
   _sec_match "$SUITE_PRELUDE_END"
   if [ "$_so_hits" -ne 1 ]; then
     echo "test suite: the prelude boundary '$SUITE_PRELUDE_END' matches $_so_hits headings rather than exactly one, so which sections make up the prelude is not decided. Refusing rather than filtering against a boundary nobody can point at." >&2
@@ -344,23 +393,26 @@ if [ -n "${SECTION_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   fi
   _so_pend="$_so_idx"
 
-  _sec_match "$SECTION_ONLY"
-  if [ "$_so_hits" -eq 0 ]; then
-    echo "test suite: SECTION_ONLY='$SECTION_ONLY' matched no section. Run without it, or check the spelling against the '==' headings." >&2
-    exit 2
+  if [ -z "${_so_shard_mode:-}" ]; then
+    _sec_match "$SECTION_ONLY"
+    if [ "$_so_hits" -eq 0 ]; then
+      echo "test suite: SECTION_ONLY='$SECTION_ONLY' matched no section. Run without it, or check the spelling against the '==' headings." >&2
+      exit 2
+    fi
+    if [ "$_so_hits" -gt 1 ]; then
+      echo "test suite: SECTION_ONLY='$SECTION_ONLY' matches $_so_hits sections, so which one to run is not decided. Narrow it. The candidates are:" >&2
+      printf '%s\n' "$_so_list" >&2
+      exit 2
+    fi
+    _so_target="$_so_idx"
+    _sh_targets="$_so_target"
   fi
-  if [ "$_so_hits" -gt 1 ]; then
-    echo "test suite: SECTION_ONLY='$SECTION_ONLY' matches $_so_hits sections, so which one to run is not decided. Narrow it. The candidates are:" >&2
-    printf '%s\n' "$_so_list" >&2
-    exit 2
-  fi
-  _so_target="$_so_idx"
 
   # The transitive closure of what the target declares it needs. A declaration that resolves to
   # nothing, to several, or to a LATER section is an error before anything runs: each would leave
   # the prerequisite out while the run went on to report a result (L100, L151).
   _so_keep=""
-  _so_queue="$_so_target"
+  _so_queue="$_sh_targets"
   while [ -n "$_so_queue" ]; do
     _so_cur="${_so_queue%% *}"
     case "$_so_queue" in *" "*) _so_queue="${_so_queue#* }" ;; *) _so_queue="" ;; esac
@@ -408,7 +460,12 @@ SONEEDS
   done
 
   _so_name="$(section_title "${_so_titles[$_so_target]}")"
-  printf '\nsuite_filtered_tail "SECTION_ONLY resolved to %s" "%s"; exit $?\n' "$_so_name" "$_so_name" >> "$_filtered"
+  if [ -n "${_so_shard_mode:-}" ]; then
+    _so_how="shard $_sh_i of $_sh_n, $(printf '%s' "$_so_keep" | wc -w | tr -d ' ') section(s)"
+  else
+    _so_how="SECTION_ONLY resolved to $_so_name"
+  fi
+  printf '\nsuite_filtered_tail "%s" "%s"; exit $?\n' "$_so_how" "$_so_name" >> "$_filtered"
 
   # SECTION_ONLY drops a span out of the MIDDLE, which SECTION_UNTIL never does, so the seam that
   # proves the parse check works has to damage the middle too. An end-appended error would be a
