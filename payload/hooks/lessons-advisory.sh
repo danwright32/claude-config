@@ -141,14 +141,25 @@ files="$(printf '%s\n' "$added" | cut -f1 | sort -u)"
 
 hit_ids=""
 findings=""
+# One scratch file for the whole scan, removed on the way out. Named, so a run killed part way
+# through leaves something attributable rather than an anonymous file (claude-config#36).
+LINES_FILE="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work.advisory.XXXXXXXX")"
+trap 'rm -f "$LINES_FILE"' EXIT
 for i in "${!TRIG_IDS[@]}"; do
   hit_files=""
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     lines="$(printf '%s\n' "$added" | awk -F'\t' -v want="$f" '$1 == want { print $2 }')"
-    printf '%s\n' "$lines" | grep -Eqi -- "${TRIG_RE1[$i]}" || continue
+    # Written to a file and matched from there, rather than piped in from a printf. This runs under
+    # `pipefail`, and `grep -q` leaves on its first match: a printf whose string is larger than the
+    # pipe buffer is then killed by SIGPIPE, the pipeline reports failure, and `|| continue` reads
+    # that as NO MATCH. The advisory would go quiet on exactly the pushes that add the most lines,
+    # which is when it has most to say (L183, and the same shape as the guard in claude-config#117
+    # that got slower the more it had to report).
+    printf '%s\n' "$lines" > "$LINES_FILE"
+    grep -Eqi -- "${TRIG_RE1[$i]}" "$LINES_FILE" || continue
     if [ -n "${TRIG_RE2[$i]}" ]; then
-      printf '%s\n' "$lines" | grep -Eqi -- "${TRIG_RE2[$i]}" || continue
+      grep -Eqi -- "${TRIG_RE2[$i]}" "$LINES_FILE" || continue
     fi
     hit_files="$hit_files $f"
   done <<< "$files"
