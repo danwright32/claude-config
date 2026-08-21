@@ -172,9 +172,10 @@ SUITE_SECTION_MARK=""
 # the code did not cause is worse than a slow one. That finding was true and is no longer, so it is
 # recorded here rather than quietly deleted (claude-config#105).
 #
-# What changed is the file, not the judgement. The coupling got MEASURED: all 73 post-prelude
-# sections were run in isolation, 68 passed alone, and the five that did not each read one variable
-# an earlier section had set. Four of those five were accidents and were removed; the one real
+# What changed is the file, not the judgement. The coupling got MEASURED on 2026-08-20, over the
+# 73 post-prelude sections the file held that day: 68 passed alone, and the five that did not each
+# read one variable an earlier section had set. The file has grown since, and how many sections it
+# has now is printed by every run (#138) rather than written down here (#140). Four of those five were accidents and were removed; the one real
 # dependency is declared. So SECTION_ONLY exists now, below, and it does not report failures the
 # code did not cause, because there is almost nothing left for it to get wrong.
 #
@@ -189,7 +190,7 @@ SUITE_SECTION_MARK=""
 # boundary is measured, not guessed: the only lines in this file that change shared state are
 # `export CLAUDE_HOME="$CH2"` and `unset SYNC_NO_GIT`, both inside those first four sections, so
 # everything after them runs in one fixed ambient state. Running all 73 later sections in isolation
-# put numbers on it: 68 passed alone with no mechanism at all.
+# on 2026-08-20 put numbers on it: 68 passed alone with no mechanism at all.
 #
 # Named by its heading TEXT rather than by a count, so inserting a section cannot silently move the
 # boundary, and asserted to match exactly one heading below, so renaming one cannot silently void it.
@@ -342,9 +343,10 @@ fi
 # not parse, and a second implementation of any of that would drift from this one.
 #
 # Round robin rather than contiguous blocks, because the sections are wildly uneven: measured on
-# this Mac the slowest five are 22s, 13s, 11s, 11s and 9s out of about 200s across 82 sections, so
-# contiguous blocks would put several slow ones in the same shard and the whole run would wait for
-# it. Interleaving spreads them without anybody maintaining a list of which are slow.
+# this Mac on 2026-08-21, over the 82 sections it held then, the slowest five were 22s, 13s, 11s,
+# 11s and 9s out of about 200s, so contiguous blocks would put several slow ones in the same shard
+# and the whole run would wait for it. Interleaving spreads them without anybody maintaining a list
+# of which are slow.
 if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   case "$SUITE_SHARD" in
     [1-9]*/[1-9]*) ;;
@@ -776,10 +778,10 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
 fi
 
 # ---- a full run fans its sections out across processes (#133) ----
-# 82 sections, about 200 seconds, and no single one dominates: the slowest five measured 22s, 13s,
-# 11s, 11s and 9s here, so there is nothing to speed up, only work to spread. Since #125 the whole
-# repo's suites run side by side and this one is the single longest, which makes it the entire
-# remaining wall clock.
+# Measured on 2026-08-21, over the 82 sections it held then: about 200 seconds in all, and no
+# single one dominating, the slowest five at 22s, 13s, 11s, 11s and 9s here. So there is nothing to
+# speed up, only work to spread. Since #125 the whole repo's suites run side by side and this one
+# is the single longest, which makes it the entire remaining wall clock.
 #
 # HERE, after the lock: the parent holds it and the shards run with SUITE_NO_LOCK=1, so this is one
 # logical run holding one lock rather than N runs fighting over it. The depth is passed through
@@ -4194,10 +4196,11 @@ check "#121 the seam that puts a run back in the old state is still there" \
   "grep -q \"\$_fc_seam\" '$SCRIPT_SELF'"
 
 section "== a full run fans out across shards, and refuses a set nobody chose (#133) =="
-# 82 sections, about 200 seconds, and no single one dominates, so there is nothing to speed up and
-# only work to spread. Since #125 every suite in the repo runs side by side and this one is the
-# single longest, which makes it the whole remaining wall clock. Measured after the change: 75
-# seconds across four shards.
+# Measured on 2026-08-21, over the 82 sections it held then: about 200 seconds in all and no
+# single one dominating, so there is nothing to speed up and only work to spread. Since #125 every
+# suite in the repo runs side by side and this one is the single longest, which makes it the whole
+# remaining wall clock. Measured again after the change, the same day: 75 seconds across four
+# shards.
 #
 # Every check here is a REFUSAL, and deliberately so. Running a real fan-out from inside a section
 # would take minutes and would tell you what the run you are already in has told you. What cannot
@@ -5748,8 +5751,9 @@ section "== the suite can run ONE section, and what it needs (#105) =="
 # The prelude is the preamble and the first four sections. That boundary is not a guess: the only
 # lines in the whole file that change shared state are `export CLAUDE_HOME="$CH2"` and
 # `unset SYNC_NO_GIT`, both inside those four, so every section after them runs in one fixed
-# ambient state. Measured by running all 73 later sections in isolation: 68 passed alone with no
-# mechanism at all, and the five that did not needed a variable an earlier section had set.
+# ambient state. Measured on 2026-08-20 by running all 73 later sections in isolation: 68 passed
+# alone with no mechanism at all, and the five that did not needed a variable an earlier section
+# had set.
 #
 # Four of those five were accidents and are gone (see the fixtures hoisted into the preamble). What
 # is left is declared as a `# needs:` COMMENT on the line after the heading, deliberately NOT as an
@@ -5966,6 +5970,111 @@ _hdp_built="$(printf '%s' "$_hdp_list" | grep -c 'HD_NO_SUCH_VARIABLE' || true)"
 check "#138 an assembled heading is listed, and its title is one nothing can match" \
   "[ \"\${_hdp_built:-0}\" -eq 1 ]"
 rm -f "$_HDPOS"
+
+# The one count about this file that a check CAN derive, derived (#140). Two comments say the
+# prelude is the first four sections, and the boundary is named by its heading TEXT so that
+# inserting a section cannot move it. Nothing checked that the two agree, so moving the boundary
+# would leave both sentences wrong and every run green. Asked of the reader's own list, which is
+# the same answer everything else about section order is taken from.
+_hd_prelude_n="$(printf '%s' "$_hd_list" | grep -nF -- "$SUITE_PRELUDE_END" | awk -F: 'NR==1{print $1}')"
+check "#140 the prelude really is the first four sections, as two comments say" \
+  "[ \"\${_hd_prelude_n:-0}\" -eq 4 ]"
+
+section "== a comment that counts this suite's sections says when it counted them (#140) =="
+# Six comments and one CI step quoted how many sections this suite has, and every number was from
+# an earlier week. Each had been measured to justify a decision (where the prelude ends, whether
+# sharding was worth it, how long the changed-section audit costs), so a stale one makes the
+# reasoning beside it read as current when it is not, and a passing suite makes those sentences
+# MORE trusted rather than less (L210).
+#
+# The live number needs writing down nowhere: every run prints it (#138) and SECTION_LIST=1 answers
+# it directly. So a count in a comment can only ever be HISTORY, and history that does not say when
+# it was taken is indistinguishable from a claim about the present. The rule is one date somewhere
+# in the same comment BLOCK, which is the unit a reader takes in, and the block is what gets
+# scanned rather than the line, because these sentences wrap and the number and its date routinely
+# sit on different lines of one paragraph.
+#
+# What it measures, and does not: a count standing next to the word section, and the one other
+# phrasing this repo used for the same fact, a count of what runs after the prelude. A sentence
+# that counts them while naming neither is invisible to it, so this narrows how the number can be
+# written down rather than proving nobody can write one (L11).
+_SC_COUNT='(^|[^#[:alnum:]=])[0-9]+ +(([a-z-]+ +)?sections?([^A-Za-z=]|$)|(after|before) +the +prelude)'
+_SC_AWK="$WORK/stale-counts.awk"
+cat > "$_SC_AWK" <<'SCAWK'
+function flush() {
+  if (buf != "" && buf ~ COUNT && buf !~ /20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) printf "%s:%d: %s\n", FILENAME, start, buf
+  buf = ""; start = 0
+}
+/^[[:space:]]*#/ {
+  line = $0
+  sub(/^[[:space:]]*#[[:space:]]?/, "", line)
+  if (buf == "") { start = FNR; buf = line } else { buf = buf " " line }
+  next
+}
+{ flush() }
+END { flush() }
+SCAWK
+# One file per invocation, deliberately. A block is ended by the first line that is not a comment,
+# so two files read in one pass can have the tail of one joined to the head of the next, and the
+# report would name a line in the wrong file.
+_sc_scan(){   # _sc_scan <file>... -> the undated counting blocks, one per line
+  for _sc_f in "$@"; do awk -v COUNT="$_SC_COUNT" -f "$_SC_AWK" "$_sc_f"; done
+}
+_sc_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
+_sc_wf="$_sc_root/.github/workflows/tests.yml"
+_sc_audit="$_sc_root/tests/audit-changed-sections.sh"
+# The workflow and the audit are read as well as this file, because all three talk about this
+# suite's sections and the CI step was one of the seven that had gone stale. Their presence is
+# asserted first: a scan handed a path that is not there reports nothing and reads as clean (L98).
+check "#140 the files this scan reads are all present" \
+  "[ -f \"\$SCRIPT_SELF\" ] && [ -f '$_sc_wf' ] && [ -f '$_sc_audit' ]"
+_sc_bad="$(_sc_scan "$SCRIPT_SELF" "$_sc_wf" "$_sc_audit")"
+if [ -n "$_sc_bad" ]; then
+  echo "  (#140 comment blocks that count sections without saying when:)"
+  printf '%s\n' "$_sc_bad" | cut -c1-160 | sed 's/^/    /'
+fi
+check "#140 no comment counts this suite's sections without dating the count" "[ -z \"\$_sc_bad\" ]"
+
+# Both directions, on a fixture built for it: the scan has to LEAVE a dated count alone as well as
+# catch an undated one. A scan that reported everything would also report nothing wrong once the
+# file was clean, and the two are told apart only by the half that must stay silent (L104, L159).
+_SCFIX="$WORK/stale-counts-fixture.txt"
+{
+  printf '# a dated block: measured on 2026-01-02, when the file held 12 sections\n'
+  printf 'this line is not a comment, so it ends the block\n'
+  printf '# an undated block: the file has 12 sections, of which 3 are slow\n'
+  printf 'and this one ends that block\n'
+  printf '# a third block: 12 after the prelude, the other spelling, undated\n'
+} > "$_SCFIX"
+_sc_fix="$(_sc_scan "$_SCFIX")"
+dbg "#140 fixture scan: $(printf '%s' "$_sc_fix" | tr '\n' '|')"
+# Counted, not matched with `grep -q`: that leaves on its first hit and can kill its own producer
+# under pipefail (#132, L183). Exactly one, so a scan reporting everything cannot pass either.
+check "#140 the scan catches an undated count" \
+  "[ \"\$(printf '%s' \"\$_sc_fix\" | grep -c ':3:' | tr -d ' ')\" = 1 ]"
+check "#140 and the other spelling of the same fact" \
+  "[ \"\$(printf '%s' \"\$_sc_fix\" | grep -c ':5:' | tr -d ' ')\" = 1 ]"
+check "#140 and leaves a dated count alone" \
+  "[ \"\$(printf '%s' \"\$_sc_fix\" | grep -c ':1:' | tr -d ' ')\" = 0 ]"
+
+# And on the file actually being scanned, because a scanner alive on a fixture it was handed can
+# still be blind to the real file: the zero above is only a measurement if planting one moves it
+# (L182, L171). Prefixed and stripped so the plant lives here without the scan finding it.
+_SCPOS="$WORK/stale-counts-positive-control.sh"
+cp "$SCRIPT_SELF" "$_SCPOS"
+sed 's/^@@//' >> "$_SCPOS" <<'SCPLANT'
+@@echo "zzz this line ends whatever block came before it"
+@@# zzz planted: this suite has 999 sections and none of them are dated
+SCPLANT
+_sc_real_n="$(printf '%s' "$_sc_bad" | grep -c . || true)"
+_sc_pos="$(_sc_scan "$_SCPOS" | grep -c . || true)"
+dbg "#140 control: the real file reports $_sc_real_n, the planted copy reports $_sc_pos"
+# One MORE than the real file, never a flat 1: written as an absolute it would also fail whenever
+# the file really did carry an undated count, and a run reporting two failures for one defect makes
+# the reader look for two (L11).
+check "#140 the count above is a live measurement, not a scan reading nothing" \
+  "[ \"\${_sc_pos:-0}\" -eq \$(( _sc_real_n + 1 )) ]"
+rm -f "$_SCPOS"
 
 section "== every section reports its size and how long it took (#107) =="
 # A full run reported one number, PASS, and nothing about where the minutes went. So "the suite is

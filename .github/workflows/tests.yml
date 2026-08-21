@@ -110,8 +110,9 @@ jobs:
         run: bash payload/hooks/run-all-tests.sh
 
       - name: Each changed suite section, run on its own
-        # The suite's sections are independent: all 73 after the prelude run alone, and the single
-        # real dependency left is declared with a `# needs:` comment. The full suite cannot notice
+        # The suite's sections are independent: every one after the prelude runs alone, and the
+        # single real dependency left is declared with a `# needs:` comment. How many that is is
+        # not written down here: it changes, and a number in a comment goes stale silently (#140). The full suite cannot notice
         # when that stops being true, because it runs everything in order and every fixture an
         # earlier section built is always there. Running a section BY ITSELF is the only run in
         # which a missing prerequisite shows up at all.
