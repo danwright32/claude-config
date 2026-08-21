@@ -7,6 +7,40 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L215. A reader that answers with an EMPTY collection when its own accessor throws is
+  indistinguishable from a correct reader of an empty collection, and because the swallowing
+  construct usually sits INSIDE the loop, one element of an unexpected shape empties the whole
+  result.** Count what threw separately from what was genuinely absent, and make the empty answer
+  a loud refusal wherever emptiness would be read as a conclusion. This is L98 applied to
+  iteration rather than to a whole check: there the step found no subjects, here it found them
+  and dropped every one.
+  (downbeat#359, corrected by downbeat#375 on 2026-08-21: an AppleScript loop over the app's
+  Settings window coerced a `missing value` inside a `try`, the error was swallowed per element,
+  and the loop returned zero elements. That zero was recorded in the project guide as the fact
+  that no working automation route to this app existed on this Mac, and it was believed twice.
+  The same window returns 179 elements, with every declared identifier readable. Cost: two issues
+  were routed to Dan as go and look jobs on those grounds, one of them running three sessions to
+  collect a single sample per booking. The script that replaced the reader makes an empty listing
+  a loud failure whose message names the conclusion it refuses)
+
+- **L216. When two independent readings of the same input disagree, a disagreement rate that is
+  CONCENTRATED and TOTAL, near 100% on a few named fields and near 0% on the rest, indicts the
+  pipeline rather than the input, because a genuine data problem is spread out and partial.** The
+  signature says a stage is systematically wrong; it does NOT say WHICH stage, so locate the fault
+  by reading the code rather than by naming the likeliest one from the rate alone. Record HOW the
+  two readings differed alongside the fact that they did, because that record is usually what
+  separates two spellings of one answer from two different answers.
+  (downbeat#373: ten questionnaire imports each compared 23 fields, and the same two disagreed
+  every time while the other 21 never disagreed once. The cause written from the log alone was
+  that the check compared rendered strings, so `3:00 PM` and `15:00` would read as different. The
+  code disproved it: the cross check already matched times on hour and minute. What separated the
+  two was the recorded SHAPE, which reported a character distance rather than a minute distance,
+  so one reader was not producing a time at all. The real fault was upstream, in the label parser:
+  two lines of the form claimed one field by keyword set and the LAST won, so a 24 character
+  phrase replaced the 7 character answer the form's own field carried, and first match wins fixed
+  it across all five samples. The conservative half was doing the harm, since a disagreed field is
+  left empty, so every import had been discarding a shoot end time)
+
 - **L203. A cause inferred from two things co-occurring in a log or a trace is not
   established until you find a case where the suspected cause is present and the effect
   is ABSENT, because a busy system produces near simultaneous events constantly and a
@@ -1764,6 +1798,26 @@ for reference; L6 was reviewed and deliberately not adopted.
   in seconds)
 
 ## Codebase hygiene
+
+- **L217. A guard whose forbidden or expected values are DERIVED from a shipped dataset covers
+  only what that dataset happens to contain, so a real value that never enters it is permanently
+  exempt from the very check written to catch it.** Being generated rather than typed reads as
+  safe, which is why nobody re-examines the source, and where the real values live outside the
+  shipped data the list has to be derived from the records the system has actually written.
+  Distinct from L96, where a hand written registry forgets an entry: here nothing was forgotten
+  and the derivation is correct on its own terms, so every audit of whether the guard works
+  passes.
+  (downbeat#374: the identity guards read their needles from the shipped seed roster, so a client
+  or venue in the seed was covered and nothing else, while the real bookings routinely name venues
+  and show titles that never enter it. The machine local list built for exactly that case did not
+  exist on this Mac, so the check reported `noList` and examined nothing on the one machine where
+  a real name could reach the tree, which is correct for a clone and silently useless here. One
+  real venue from a booking committed that week sat in four test files with nothing covering it.
+  The list is now generated from the store's own committed bookings, prints counts and never a
+  name, and treats a missing or unreadable store as a refusal rather than as an empty file, since
+  an empty list turns "no list, said so" into "a list, and everything is clean" (L98). The file of
+  needles matched all 26 of its own entries on the first real run, because a file cannot tell a
+  line that IS a forbidden value from a line that declares it)
 
 - **L29. Dead code is worse than deleted code.** Wire it or delete it the moment nothing
   calls it; git remembers. (10 issues, 2 repos)

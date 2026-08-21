@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 222 lessons.
+LESSONS.md, which is NOT loaded into the session. 225 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -9,6 +9,8 @@ to decide something: the body is where the failure it came from is described.
 
 ## Proof over green
 
+- L215. A reader that answers with an EMPTY collection when its own accessor throws is indistinguishable from a correct reader of an empty collection, and because the swallowing construct usually sits INSIDE the loop, one element of an unexpected shape empties the whole result.
+- L216. When two independent readings of the same input disagree, a disagreement rate that is CONCENTRATED and TOTAL, near 100% on a few named fields and near 0% on the rest, indicts the pipeline rather than the input, because a genuine data problem is spread out and partial.
 - L203. A cause inferred from two things co-occurring in a log or a trace is not established until you find a case where the suspected cause is present and the effect is ABSENT, because a busy system produces near simultaneous events constantly and a coincidence reads exactly like a mechanism.
 - L205. A test that touches a shared mutable object other tests also touch can pass purely because its own fixture is SLOW enough to outlive a neighbour's reset, so making that fixture faster is what exposes it: remove the dependency on the shared object rather than serializing around it, and re-check any such test after speeding its fixture.
 - L1. A test or guard is only real once it has been seen to fail.
@@ -225,6 +227,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Codebase hygiene
 
+- L217. A guard whose forbidden or expected values are DERIVED from a shipped dataset covers only what that dataset happens to contain, so a real value that never enters it is permanently exempt from the very check written to catch it.
 - L29. Dead code is worse than deleted code.
 - L46. Stored data needs a reader, not just a writer.
 - L30. Fix the class, not the instance.
