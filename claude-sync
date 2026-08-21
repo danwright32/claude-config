@@ -2935,6 +2935,16 @@ SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selft
 # of entries rather than six figures, and a cost that no longer depends on an unrelated
 # machine-wide quantity.
 SYNC_SCRATCH_DIRNAME="${SYNC_SCRATCH_DIRNAME:-claude-sync}"
+# Checked, because this name is half of the pattern that decides what `reap-scratch` is allowed to
+# `rm -rf`, and a value carrying a slash or a parent reference would point both the scan and that
+# permission at a directory nobody chose. It is a single path component or nothing at all (L50).
+# An EMPTY value is not listed: `:-` above has already replaced it with the default, which is the
+# ordinary meaning of an unset variable and is not a value this ever sees.
+case "$SYNC_SCRATCH_DIRNAME" in
+  */*|.|..)
+    echo "claude-sync: SYNC_SCRATCH_DIRNAME='$SYNC_SCRATCH_DIRNAME' is not a single directory name. Refusing to run rather than pointing the scratch sweep, which removes what it finds, at a path assembled from that." >&2
+    exit 2 ;;
+esac
 # The old FLAT location is still swept, because every Mac that has run an earlier version has
 # scratch sitting in it and a change that stopped looking would abandon exactly what this feature
 # exists to reclaim. It is read on an interval rather than on every call, which is where the saving

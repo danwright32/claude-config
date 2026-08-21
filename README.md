@@ -290,7 +290,7 @@ reads it every time whatever the interval says.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `SYNC_SCRATCH_ROOT` | `$TMPDIR` | The temp root. Scratch is created in the `claude-sync` directory inside it, and the sweep looks there and, on an interval, in the root itself. |
-| `SYNC_SCRATCH_DIRNAME` | `claude-sync` | The name of that directory. |
+| `SYNC_SCRATCH_DIRNAME` | `claude-sync` | The name of that directory. It is half of the pattern deciding what `reap-scratch` may remove, so anything that is not a single directory name is refused. |
 | `SYNC_SCRATCH_MAX_AGE` | `3600` | Seconds before scratch counts as abandoned. A suite run cannot outlive its own 15 minute deadline and a sync takes 6 seconds, so this is 4x the longest run the tool permits. The cost is that a burst of interrupted runs is not reclaimed until an hour after the last of them. `0` turns the sweep off entirely, and a value that is not a whole number is refused rather than guessed at. |
 | `SYNC_SCRATCH_LEGACY_EVERY` | `86400` | Seconds between reads of the old flat location in the temp root. Reading it is what costs six figures of directory entries, so it is not done on every call. The cost is stated: something left there can go unreported for up to this long, though `reap-scratch` always reads it. `0` reads it every call, and a value that is not a whole number is refused. |
 

@@ -3784,6 +3784,26 @@ check "#116 an unreadable interval is refused, not guessed" \
   "printf '%s' \"\$_int_junk\" | grep -q \"SYNC_SCRATCH_LEGACY_EVERY='daily' is not a whole number\""
 check "#116 and it reclaimed nothing on the way out" "[ -f '$_SUBI/claude-sync-applied.SECONDONE' ]"
 
+# ---- the directory name is half of an `rm -rf` pattern ------------------------------------------
+# It decides both where the sweep reads and which paths the reaper is permitted to remove, so a
+# value that is not a single component would point both at a directory nobody chose. An
+# unparseable value must never land on the permissive side of a delete (L50).
+_SUBN="$WORK/scratch-dirname"; mkdir -p "$_SUBN"
+echo 'planted' > "$_SUBN/claude-sync-applied.NAMETEST"
+_sub_age "$_SUBN/claude-sync-applied.NAMETEST"
+for _dn in 'a/b' '..' '.'; do
+  _dn_out="$(SYNC_SCRATCH_DIRNAME="$_dn" SYNC_SCRATCH_ROOT="$_SUBN" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1 || true)"
+  check "#116 a scratch directory name of '$_dn' is refused" \
+    "printf '%s' \"\$_dn_out\" | grep -q 'is not a single directory name'"
+done
+# Planted old, so this cannot pass by there being nothing to remove (L159).
+check "#116 and none of those refusals removed anything" "[ -f '$_SUBN/claude-sync-applied.NAMETEST' ]"
+# An empty value means UNSET, which is what `:-` does everywhere else in this tool, so it takes the
+# default rather than being refused. Proved by the run working, not by it staying silent.
+_dn_empty="$(SYNC_SCRATCH_DIRNAME= SYNC_SCRATCH_ROOT="$_SUBN" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1 || true)"
+check "#116 an empty directory name falls back to the default" \
+  "printf '%s' \"\$_dn_empty\" | grep -q 'reclaimed 1'"
+
 
 section "== a grandchild is not told the filtering already happened (#37) =="
 # A run started with SECTION_UNTIL re-executes itself from a temp copy carrying SUITE_FILTERED=1,
