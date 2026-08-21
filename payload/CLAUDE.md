@@ -120,11 +120,35 @@ Global hooks and skills in `~/.claude` fire in every project:
 
 ## Projects
 
-Active projects. Each has its own CLAUDE.md with stack details:
-- `~/Documents/Bidspoke`: Next.js 14 + Cloudflare Workers + Supabase (primary)
+Active projects, each with its own CLAUDE.md holding the stack details. Grouped by which Mac holds
+the checkout, because this file is shared between both and a path that is right on one is wrong on
+the other. `hooks/check-project-list.sh` reads this section and fails when a path listed under the
+machine it is running on is not there, so a project that moves is reported rather than found by
+searching. It checks only the block for the machine it runs on, so each Mac confirms its own half.
+
+Paths use a tilde, never a real home directory: the sync rewrites this file for every Mac and
+`check-home-paths.sh` refuses an absolute one.
+
+On Daniels-MacBook-Pro-2:
+- `~/Non-icloudDocuments/Photography Assets/Dan Wright Photography/Marketing/Outreach/Overture`: Overture, which is nowhere near where its name suggests
+- `~/Non-icloudDocuments/Apps/Downbeat`
+- `~/Non-icloudDocuments/Apps/NurseDex`
+- `~/Non-icloudDocuments/Apps/PostRoll`
+- `~/Non-icloudDocuments/Apps/playeditapp`
+- `~/Non-icloudDocuments/Apps/repo-digest`
+- `~/Non-icloudDocuments/Apps/claude-config`: this config and the sync tool, where they are developed
+- `~/claude-config-sync`: the clone the scheduled sync actually runs from
+
+On Dans-MacBook-Pro:
+- `~/Documents/Bidspoke`: Next.js 14 + Cloudflare Workers + Supabase
 - `~/eavesly-web-app`: Vite + React + TypeScript + shadcn/ui + Supabase
 - `~/trypennie`: Next.js 15 + Prismic CMS + Google Maps
 - `~/Documents/Manager Goal Tracking`: data analysis workspace (Python + Google Sheets)
+
+The four above are where they were recorded before this section was split by machine, and their
+absence from Daniels-MacBook-Pro-2 is the only evidence for putting them here. Nothing has
+confirmed them on Dans-MacBook-Pro yet; the first run of the check there is what confirms or
+corrects them.
 
 ## Writing Style
 
