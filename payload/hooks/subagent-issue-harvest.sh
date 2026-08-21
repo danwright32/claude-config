@@ -89,9 +89,11 @@ print(json.dumps({"ts": sys.argv[1], "status": "error", "agent": sys.argv[2],
   # which every reader skips: the error would vanish at the exact moment the
   # machine is least healthy. A hand-built record with no interpolation at all
   # is worth more than a blank one.
-  if [ -z "${rec//[[:space:]]/}" ]; then
-    rec='{"status":"error","agent":"subagent","error":"a harvest failed and could not encode its own reason"}'
-  fi
+  # `case` rather than stripping every space out of the record: that substitution's cost is
+  # superlinear in the number of matches under the bash macOS ships (claude-config#117).
+  case "$rec" in *[![:space:]]*) ;; *)
+    rec='{"status":"error","agent":"subagent","error":"a harvest failed and could not encode its own reason"}' ;;
+  esac
   spool_append "$rec"
   exit 0
 }
@@ -216,9 +218,14 @@ ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # A harvest that could not run is recorded as an ERROR, never as an empty
 # answer. The two are indistinguishable downstream otherwise, and "no findings"
 # is the reassuring reading of the pair (LESSONS.md L11, L98).
-if [ "$status" -ne 0 ] || [ -z "${out//[[:space:]]/}" ]; then
+# Asked ONCE and kept, because $out is model output with no bounded length and the substitution
+# this replaces is superlinear in the number of matches it makes (claude-config#117). Holding the
+# answer also stops the two readings below drifting apart.
+out_blank=1
+case "$out" in *[![:space:]]*) out_blank=0 ;; esac
+if [ "$status" -ne 0 ] || [ "$out_blank" -eq 1 ]; then
   reason="the harvest model exited $status"
-  [ -z "${out//[[:space:]]/}" ] && [ "$status" -eq 0 ] && reason="the harvest model returned nothing"
+  [ "$out_blank" -eq 1 ] && [ "$status" -eq 0 ] && reason="the harvest model returned nothing"
   spool_error "$reason"
 fi
 

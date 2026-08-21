@@ -124,7 +124,8 @@ bad_json="$(ps_parse_payload 'not json at all' segmented 2>/dev/null)"; bad_rc=$
 # of the hooks somebody remembered, because a copy added later is exempt from exactly
 # the check meant to catch it (L96).
 own_copies="$(grep -l '^parse_payload() {' "$DIR"/*.sh 2>/dev/null | tr '\n' ' ')"
-[ -z "${own_copies// }" ] \
+case "$own_copies" in *[![:space:]]*) own_copies_found=1 ;; *) own_copies_found=0 ;; esac
+[ "$own_copies_found" -eq 0 ] \
   && check "no hook keeps its own copy of the payload reader" ok \
   || check "no hook keeps its own copy of the payload reader" "still defined in: $own_copies"
 users="$(grep -l 'ps_parse_payload' "$DIR"/*.sh 2>/dev/null | grep -c . || true)"

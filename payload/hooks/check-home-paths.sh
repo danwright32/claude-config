@@ -234,24 +234,29 @@ fi
 # once at the end. Exiting inside the first rule that fired is what made a tree holding several of
 # these take one run per cause to discover (claude-config#108).
 rc=0
-if [ -n "${hits//[[:space:]]/}" ]; then
+# `case` rather than `${x//[[:space:]]/}`. That substitution builds a whole new string, and under
+# the bash macOS ships its cost is superlinear in the NUMBER OF MATCHES: measured at 1,536 matches
+# it took 11.5 seconds and at 3,072 it took 82, while this answers either in milliseconds. The list
+# below is built from grep hits, so it is longest exactly when the guard has something to report
+# (claude-config#117).
+case "$hits" in *[![:space:]]*)
   echo "check-home-paths: these lines name one machine's home directory, so they are wrong on every other Mac and fail silently there:" >&2
   printf '%s\n' "$hits" | sed 's/^/  /' >&2
   echo "Write the path relative to the home directory instead (a tilde, \$HOME, expanduser, or the sync's own ${CS_TOKEN} placeholder), or put claude-sync-allow-home-path on the line if it genuinely has to name one." >&2
-  rc=1
-fi
-if [ -n "${tokbad//[[:space:]]/}" ]; then
+  rc=1 ;;
+esac
+case "$tokbad" in *[![:space:]]*)
   echo "check-home-paths: these lines write the sync's placeholder somewhere it is not standing in front of a path, and the apply will rewrite them into one machine's home directory:" >&2
   printf '%s' "$tokbad" | sed 's/^/  /' >&2
   echo "Assemble it from pieces so the apply has nothing to match, or put claude-sync-allow-home-path on the line if it genuinely has to be written whole." >&2
-  rc=1
-fi
-if [ -n "${angbad//[[:space:]]/}" ]; then
+  rc=1 ;;
+esac
+case "$angbad" in *[![:space:]]*)
   echo "check-home-paths: these lines carry the hand substituted home placeholder, which nothing fills in any more, so the path they name resolves to nothing on every Mac:" >&2
   printf '%s' "$angbad" | sed 's/^/  /' >&2
   echo "Write the path relative to the home directory instead (a tilde, \$HOME, or expanduser), or put claude-sync-allow-home-path on the line if it genuinely has to name the placeholder." >&2
-  rc=1
-fi
+  rc=1 ;;
+esac
 [ "$rc" -eq 0 ] || exit 1
 
 echo "check-home-paths: $scanned file(s) under $ROOT, no machine specific home paths."

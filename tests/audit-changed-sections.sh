@@ -77,7 +77,12 @@ done <<CHANGED
 $changed
 CHANGED
 
-if [ -z "${titles//[[:space:]]/}" ]; then
+# `case` rather than stripping every space out. That substitution is superlinear in the number of
+# matches under the bash macOS ships, and this list grows with the size of the diff being audited
+# (claude-config#117).
+titles_found=0
+case "$titles" in *[![:space:]]*) titles_found=1 ;; esac
+if [ "$titles_found" -eq 0 ]; then
   if [ "$preamble" -eq 1 ]; then
     echo "audit-changed-sections: the change is in the preamble, which every section runs anyway, so running one section at a time proves nothing extra here. The full suite covers it."
     exit 0
@@ -100,13 +105,13 @@ done <<TITLES
 $(printf '%s' "$titles" | sort -u)
 TITLES
 
-if [ -n "${bad//[[:space:]]/}" ]; then
+case "$bad" in *[![:space:]]*)
   echo "" >&2
   echo "audit-changed-sections: these changed sections do not run on their own:" >&2
   printf '%s' "$bad" | sed 's/^/  /' >&2
   echo "Give the section its own fixture, or add a '# needs:' line naming the section it depends on. Running it alone is the only run where a missing prerequisite shows up at all." >&2
-  exit 1
-fi
+  exit 1 ;;
+esac
 
 echo ""
 echo "audit-changed-sections: audited $n section(s) changed against $BASE, and each one ran on its own and passed."
