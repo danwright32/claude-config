@@ -71,6 +71,16 @@ jobs:
           echo "claude-sync status exited $rc"
           [ "$rc" -eq 0 ]
 
+      - name: The hook suites
+        # Fifteen suites guard the machinery that guards every project, and until now they ran
+        # only when somebody remembered to run them on a Mac: two defects found on 2026-08-20
+        # (#95, #97) lived in exactly that code, and CI was green throughout. A suite nobody runs
+        # is indistinguishable from one that passes (#101).
+        #
+        # This runner is Linux and the suites were written on a Mac, so anything that depends on
+        # a BSD flag or a macOS only tool will say so here rather than being assumed either way.
+        run: bash payload/hooks/run-all-tests.sh
+
       - name: No machine specific home path in the synced config
         # Runs here, not only inside run-all-tests.sh, because this guard exists to catch a line
         # somebody wrote a moment ago and a check that only runs when it is remembered is not a
