@@ -271,20 +271,28 @@ One run at a time, and none of them open ended:
 
 ## Scratch left behind by a killed run
 
-The suite and every apply create scratch under the system temp directory and remove it on the way
-out. A run that is force-killed never gets there. `claude-sync status` reports what has been
-abandoned (how many, and how much space), the suite reclaims it at the start of each run, and
+The suite and every apply create scratch in `$TMPDIR/claude-sync` and remove it on the way out. A
+run that is force-killed never gets there. `claude-sync status` reports what has been abandoned
+(how many, and how much space), the suite reclaims it at the start of each run, and
 `claude-sync reap-scratch` does it on demand.
 
 Only paths carrying this tool's own names are ever touched, never "old directories in the temp
 folder": on the day this was measured that same directory held 542 anonymous ones belonging to
 other tools. Nothing younger than `SYNC_SCRATCH_MAX_AGE` is removed either, so scratch a live run
-is still using is safe.
+is still using is safe. The directory holding them is not scratch and is never swept.
+
+Scratch used to be created directly in the temp root, and the sweep therefore had to read the
+whole of it: 113,912 entries on this Mac, 25 of them ours, which was most of what a
+`claude-sync status` call cost. Everything an earlier version left there is still reclaimed, but
+that location is now read on an interval rather than on every call, and `claude-sync reap-scratch`
+reads it every time whatever the interval says.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `SYNC_SCRATCH_ROOT` | `$TMPDIR` | Where the tool's scratch lives, and the only place the sweep looks. |
+| `SYNC_SCRATCH_ROOT` | `$TMPDIR` | The temp root. Scratch is created in the `claude-sync` directory inside it, and the sweep looks there and, on an interval, in the root itself. |
+| `SYNC_SCRATCH_DIRNAME` | `claude-sync` | The name of that directory. It is half of the pattern deciding what `reap-scratch` may remove, so anything that is not a single directory name is refused. |
 | `SYNC_SCRATCH_MAX_AGE` | `3600` | Seconds before scratch counts as abandoned. A suite run cannot outlive its own 15 minute deadline and a sync takes 6 seconds, so this is 4x the longest run the tool permits. The cost is that a burst of interrupted runs is not reclaimed until an hour after the last of them. `0` turns the sweep off entirely, and a value that is not a whole number is refused rather than guessed at. |
+| `SYNC_SCRATCH_LEGACY_EVERY` | `86400` | Seconds between reads of the old flat location in the temp root. Reading it is what costs six figures of directory entries, so it is not done on every call. The cost is stated: something left there can go unreported for up to this long, though `reap-scratch` always reads it. `0` reads it every call, and a value that is not a whole number is refused. |
 
 `claude-sync status` also reports watcher processes and test runs the tool left behind, counting
 how many started independently and how deeply they are nested. It stays silent for one watcher
