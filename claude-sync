@@ -1193,7 +1193,7 @@ apply_payload_to_local(){
   local keep; keep="$ahead${MERGED_RULE_FILES:-}"
   # Explicit template, not a bare mktemp: BSD mktemp ignores TMPDIR unless the
   # template says so, which left the tests unable to see this file at all.
-  APPLIED_LOG="$(mktemp "${TMPDIR:-/tmp}/claude-sync-applied.XXXXXX")"
+  APPLIED_LOG="$(mktemp "$(scratch_home_ready)/claude-sync-applied.XXXXXX")"
   # A merged rule file was rewritten on this Mac by merge_rule_files just above, and
   # it is EXCLUDED from the rsync below so the apply cannot clobber that merge. Both
   # facts are correct, and together they used to make the merge the one write nothing
@@ -2227,7 +2227,7 @@ pulled_script_ok(){
     local d rc=0
     # Named, not a bare `mktemp -d`: an anonymous directory cannot be attributed to this tool
     # afterwards, so a run killed here leaves scratch nothing can ever reclaim (#36).
-    d="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-selftest.XXXXXXXX")" || return 0
+    d="$(mktemp -d "$(scratch_home_ready)/claude-sync-selftest.XXXXXXXX")" || return 0
                                     # cannot test it: fall back to the parse result, which is
                                     # what this gate did before, rather than block an update
                                     # over a temp directory problem
@@ -2924,24 +2924,64 @@ esac
 # normal use: the default IS the list of every prefix this tool creates.
 SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-suite-work. claude-sync-suite-section.}"
 
+# ---------- a directory of the tool's own, inside the temp root (#116) ----------
+# The sweep above globs the temp root, and that root belongs to the whole machine: 113,912 entries
+# measured here on 2026-08-21, 25 of them ours. #115 cut six reads of it to one and took `status`
+# from 1.74s to 0.36s; the one read left is most of what remains, and the suite pays it 270 times.
+# The cost is set by how much OTHER software puts in that directory, which nothing here controls
+# and which only grows.
+#
+# So new scratch is created inside ONE directory of our own and the sweep reads that instead: tens
+# of entries rather than six figures, and a cost that no longer depends on an unrelated
+# machine-wide quantity.
+SYNC_SCRATCH_DIRNAME="${SYNC_SCRATCH_DIRNAME:-claude-sync}"
+# The old FLAT location is still swept, because every Mac that has run an earlier version has
+# scratch sitting in it and a change that stopped looking would abandon exactly what this feature
+# exists to reclaim. It is read on an interval rather than on every call, which is where the saving
+# actually comes from; `reap-scratch` reads it every time whatever this says, so there is always a
+# way back to it that does not wait. The cost is stated rather than hidden: a leftover in the old
+# location can go unreported for up to this long, and 0 means read it on every call.
+SYNC_SCRATCH_LEGACY_EVERY="${SYNC_SCRATCH_LEGACY_EVERY:-86400}"
+case "$SYNC_SCRATCH_LEGACY_EVERY" in
+  ''|*[!0-9]*)
+    echo "claude-sync: SYNC_SCRATCH_LEGACY_EVERY='$SYNC_SCRATCH_LEGACY_EVERY' is not a whole number of seconds. Refusing to run rather than sweeping the old scratch location on a schedule nobody can read. Set it to 0 to read that location on every call." >&2
+    exit 2 ;;
+esac
+
+# Where new scratch goes. Derived from SYNC_SCRATCH_ROOT rather than read from TMPDIR a second
+# time, so there is ONE answer to where scratch lives and a test can point every part of this at a
+# throwaway root (L2).
+scratch_home(){ printf '%s' "${SYNC_SCRATCH_ROOT%/}/$SYNC_SCRATCH_DIRNAME"; }
+# The stamp recording when the old flat location was last read. It lives INSIDE the new home, so a
+# test root carries its own and a temp cleaner removing it means the location is read again, which
+# is the safe direction to be wrong in.
+scratch_legacy_stamp(){ printf '%s' "$(scratch_home)/.legacy-swept"; }
+scratch_home_ready(){   # prints the directory to create scratch in; falls back to the flat root
+  local d; d="$(scratch_home)"
+  # A fallback that lands in the OLD location, deliberately, and not one that fails the run: the
+  # flat location is still swept, so scratch written there is still reclaimed. What it gets wrong
+  # is the cost, not the correctness, and it can only happen where the temp root itself is
+  # unwritable, in which case nothing else here would work either (L93).
+  if mkdir -p "$d" 2>/dev/null; then printf '%s' "$d"; else printf '%s' "${SYNC_SCRATCH_ROOT%/}"; fi
+}
+
 # Every short-lived temp FILE in this tool is made here rather than by each call site writing its
 # own `mktemp`. One name, so every one of them is reclaimable, and one place to change it if that
 # name ever has to move. Seven call sites used a bare `mktemp`, which is anonymous the moment the
 # run holding it is killed, and 92 of those were on this Mac when #36 was measured.
-scratch_file(){ mktemp "${TMPDIR:-/tmp}/claude-sync-work.XXXXXXXX"; }
+scratch_file(){ mktemp "$(scratch_home_ready)/claude-sync-work.XXXXXXXX"; }
 # The same rule for a temp DIRECTORY. Only the apply needs one, to hold the payload with this
 # Mac's home path put back (see apply_source_dir), and it is removed on every exit path.
-scratch_dir(){ mktemp -d "${TMPDIR:-/tmp}/claude-sync-expand.XXXXXXXX"; }
+scratch_dir(){ mktemp -d "$(scratch_home_ready)/claude-sync-expand.XXXXXXXX"; }
 
 # Old enough that no live run can own it. A suite run cannot outlive its own 15 minute deadline
 # and a real sync takes 6 seconds, so an hour is 4x the longest run the tool permits and 600x the
 # commonest one. Being wrong LOW here deletes the scratch of something still using it, which is
 # the one outcome worse than the litter, so it is deliberately generous. The cost is accepted and
 # stated: a burst of interrupted runs is not reclaimed until an hour after the last of them.
-scratch_leftovers(){
-  local root="${SYNC_SCRATCH_ROOT%/}" now p n age m pre first base matched
-  # Off means off: nothing is listed, so nothing is reported and nothing is removed.
-  [ "$SYNC_SCRATCH_MAX_AGE" -eq 0 ] && return 0
+scratch_in_dir(){   # $1 = a directory to read -> prints the abandoned scratch in it
+  local root="${1%/}" now p n age m pre first base matched
+  [ -d "$root" ] || return 0
   now="$(date +%s)"
   # ONE pass over the directory, not one per name. Each glob reads and sorts the WHOLE directory,
   # and the temp directory on a real Mac is enormous: 113,000 entries measured here, six names, so
@@ -2966,6 +3006,12 @@ scratch_leftovers(){
   for p in "$root/$pre"*; do
     [ -e "$p" ] || continue
     base="${p##*/}"
+    # The directory the scratch now LIVES in is not itself scratch, and sweeping it would take
+    # every live run's scratch with it. Its name cannot match a scratch prefix today (those all
+    # carry a trailing dash it does not have), but the name list is overridable and a shortened
+    # prefix makes this glob read the whole directory, so it is refused by name rather than left
+    # to a coincidence of spelling.
+    [ "$base" = "$SYNC_SCRATCH_DIRNAME" ] && continue
     matched=0
     for n in $SYNC_SCRATCH_NAMES; do
       case "$base" in "$n"*) matched=1; break ;; esac
@@ -2985,6 +3031,35 @@ scratch_leftovers(){
   # made DURING a run ended on a false age test. The command then printed nothing at all and
   # exited 1, which the self-update gate reads as a pulled script that cannot run, so it declared
   # a perfectly good version broken and kept the old one. Six checks went red for that.
+  return 0
+}
+
+# Is the old flat location due to be read? Every way of failing to answer lands on YES, because
+# reading it costs time and NOT reading it costs a leftover nobody ever hears about, and only one
+# of those two is recoverable (L93).
+scratch_legacy_due(){   # $1 = "force" to read it whatever the interval says
+  local stamp m now
+  [ "${1:-}" = "force" ] && return 0
+  [ "$SYNC_SCRATCH_LEGACY_EVERY" -eq 0 ] && return 0
+  stamp="$(scratch_legacy_stamp)"
+  [ -f "$stamp" ] || return 0
+  m="$(file_mtime "$stamp")"
+  case "$m" in ''|*[!0-9]*) return 0 ;; esac
+  now="$(date +%s)"
+  [ $(( now - m )) -ge "$SYNC_SCRATCH_LEGACY_EVERY" ]
+}
+
+scratch_leftovers(){   # $1 = "force" to read the old flat location whatever the interval says
+  # Off means off: nothing is listed, so nothing is reported and nothing is removed.
+  [ "$SYNC_SCRATCH_MAX_AGE" -eq 0 ] && return 0
+  # The tool's own directory, always. This is the read that replaced the six-figure one.
+  scratch_in_dir "$(scratch_home)"
+  # And the location every earlier version wrote to, on an interval. Stamped AFTER the read rather
+  # than before it, so a run killed part way through does not record a sweep that never finished.
+  if scratch_legacy_due "${1:-}"; then
+    scratch_in_dir "${SYNC_SCRATCH_ROOT%/}"
+    mkdir -p "$(scratch_home)" 2>/dev/null && : > "$(scratch_legacy_stamp)" 2>/dev/null || true
+  fi
   return 0
 }
 
@@ -3013,25 +3088,27 @@ report_scratch_leftovers(){
   [ "${n:-0}" -gt 0 ] || return 0
   kb="$(printf '%s\n' "$list" | scratch_total_kb)"
   echo "--- scratch the tool left behind ---"
-  echo "  $n abandoned, holding $(scratch_human_size "$kb") in $SYNC_SCRATCH_ROOT, each older than ${SYNC_SCRATCH_MAX_AGE}s."
+  echo "  $n abandoned, holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT, each older than ${SYNC_SCRATCH_MAX_AGE}s."
   echo "  Every one belongs to a run that was killed before it could clean up after itself. Reclaim them with: claude-sync reap-scratch"
   return 0
 }
 
 do_reap_scratch(){
   local list n kb p removed=0
-  list="$(scratch_leftovers)"
+  # `force`, always. This is the command somebody is TOLD to run, and it is the one way back to
+  # the old flat location that does not wait for an interval to come round.
+  list="$(scratch_leftovers force)"
   n="$(printf '%s' "$list" | grep -c . || true)"
   # Finding nothing is its own outcome, said out loud. A reaper that prints the same thing whether
   # it swept a gigabyte or was pointed at the wrong directory is one nobody can check (L98).
   # Turned OFF and found nothing are different answers, and saying "nothing to reclaim" to somebody
   # who has switched the sweep off would be a claim this never checked (L11).
   if [ "$SYNC_SCRATCH_MAX_AGE" -eq 0 ]; then
-    echo "claude-sync: the scratch sweep is off (SYNC_SCRATCH_MAX_AGE=0), so nothing in $SYNC_SCRATCH_ROOT was looked at or removed."
+    echo "claude-sync: the scratch sweep is off (SYNC_SCRATCH_MAX_AGE=0), so nothing under $SYNC_SCRATCH_ROOT was looked at or removed."
     return 0
   fi
   if [ "${n:-0}" -eq 0 ]; then
-    echo "claude-sync: no abandoned scratch to reclaim in $SYNC_SCRATCH_ROOT (nothing there older than ${SYNC_SCRATCH_MAX_AGE}s carries a name this tool owns)."
+    echo "claude-sync: no abandoned scratch to reclaim in $(scratch_home) or beside it in $SYNC_SCRATCH_ROOT (nothing in either, older than ${SYNC_SCRATCH_MAX_AGE}s, carries a name this tool owns)."
     return 0
   fi
   kb="$(printf '%s\n' "$list" | scratch_total_kb)"
@@ -3041,13 +3118,14 @@ do_reap_scratch(){
     # names above and this asks the question a second way, because everything after it is an
     # `rm -rf` on a path assembled from the environment (L5).
     case "$p" in
+      "${SYNC_SCRATCH_ROOT%/}/$SYNC_SCRATCH_DIRNAME"/claude-sync-*) rm -rf "$p" && removed=$((removed + 1)) ;;
       "${SYNC_SCRATCH_ROOT%/}"/claude-sync-*) rm -rf "$p" && removed=$((removed + 1)) ;;
       *) echo "claude-sync: refusing to remove '$p', which is not scratch this tool owns." >&2 ;;
     esac
   done <<EOF
 $list
 EOF
-  echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding $(scratch_human_size "$kb") in $SYNC_SCRATCH_ROOT."
+  echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT."
   return 0
 }
 

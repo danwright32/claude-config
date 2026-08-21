@@ -124,6 +124,33 @@ peering inside them, which is a rule that would then live for ever.
 The other half of the measurement is why "older than a day" was not kept: all 37 were created
 within one hour and 43 minutes of each other, so a day would have reclaimed nothing at all.
 
+### Never reading the old flat scratch location again
+
+Rejected for #116, and it is the obvious version of that change.
+
+Scratch used to be created directly in the temp root, so the sweep had to read the whole of it.
+Measured on this Mac: 113,912 entries, 25 of them ours. #115 cut six reads of that to one and took
+`claude-sync status` from 1.74s to 0.36s; the read left was most of what remained, paid 270 times
+by a single suite run. The cost is set by how much other software puts in that directory, which
+nothing here controls and which only grows.
+
+Moving new scratch into `$TMPDIR/claude-sync` fixes that. The question is what happens to what is
+already in the old location on every Mac that has run an earlier version, and to what an
+un-upgraded copy writes there during a rollout. Reading the old location on every call gives the
+whole saving back. Never reading it again abandons exactly what the feature exists to reclaim, and
+does so invisibly, since a leftover nobody reports is a leftover nobody reclaims.
+
+So it is read on an interval, stamped in the new directory, defaulting to a day, and
+`reap-scratch` reads it every time whatever the stamp says. Every way of failing to answer whether
+it is due lands on reading it: no stamp, an unreadable stamp, an unreadable interval. What that
+buys is a cost paid once a day instead of 270 times a run. What it costs is stated rather than
+hidden: something left in the old location can go unreported for up to a day, and `reap-scratch`
+is the way back to it that does not wait.
+
+A one-off migration that MOVED the old leftovers into the new directory was considered and adds
+nothing: finding them to move them is the same expensive read, and it would still leave nothing
+watching the location an un-upgraded copy keeps writing to.
+
 ### Reordering the pull failure classifier for newer git
 
 Written, measured, and reverted the same hour, which is the reason this section exists.

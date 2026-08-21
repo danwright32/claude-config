@@ -13,6 +13,15 @@ set -uo pipefail
 SCRIPT="${SCRIPT:-$(cd "$(dirname "$0")/.." && pwd)/claude-sync}"
 SCRIPT_SELF="${SCRIPT_SELF:-$(cd "$(dirname "$0")" && pwd)/$(basename "$0")}"
 
+# Where this suite keeps its OWN scratch, which is the same directory the tool keeps its own in
+# (claude-config#116). The temp root belongs to the whole machine (113,912 entries measured on
+# this Mac, 25 of them ours), and the sweep that reclaims abandoned scratch has to read whichever
+# directory that scratch is in, so a suite writing beside all of it makes that read expensive for
+# everything, 270 times in a single run. A root that cannot be written to falls back to the flat
+# location, which is still swept: what that loses is the saving, not the scratch.
+SUITE_SCRATCH_HOME="${SUITE_SCRATCH_HOME:-${TMPDIR:-/tmp}/claude-sync}"
+mkdir -p "$SUITE_SCRATCH_HOME" 2>/dev/null || SUITE_SCRATCH_HOME="${TMPDIR:-/tmp}"
+
 # ---- a hard limit on suite runs that spawn suite runs (#34) ----
 # #27 let this suite run itself as a subprocess, and 45528c7 fixed one way that recursed without
 # bound, after seventeen suite processes were found multiplying on this Mac. That fix was one
@@ -292,7 +301,7 @@ if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
 
   # Named for the same reason as everything else this suite creates: a run killed between writing
   # this copy and removing it leaves a file nothing can attribute afterwards (#36).
-  _filtered="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
+  _filtered="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
   if [ "$_so_idx" -lt "$_so_i" ]; then
     _su_end=$(( ${_so_starts[$((_so_idx + 1))]} - 1 ))
   else
@@ -377,7 +386,7 @@ ${_so_needs[$_so_cur]}
 SONEEDS
   done
 
-  _filtered="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
+  _filtered="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
   sed -n "1,$(( ${_so_starts[1]} - 1 ))p" "$0" > "$_filtered"
   _so_k=1
   while [ "$_so_k" -le "$_so_i" ]; do
@@ -402,7 +411,7 @@ SONEEDS
   # proves the parse check works has to damage the middle too. An end-appended error would be a
   # different shape entirely and would prove nothing about this one (L165).
   if [ -n "${SUITE_EXTRACT_BREAK:-}" ]; then
-    _so_mid="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
+    _so_mid="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
     _so_half=$(( $(grep -c '' "$_filtered") / 2 ))
     { sed -n "1,${_so_half}p" "$_filtered"; printf 'if then fi\n'; sed -n "$((_so_half + 1)),\$p" "$_filtered"; } > "$_so_mid"
     mv "$_so_mid" "$_filtered"
@@ -421,7 +430,7 @@ SONEEDS
   # this file was measured printing 54 ok lines and no failures in exactly that state, saved only by
   # a fifth read that happened to be at top level. pipefail is already set, and tee exits 0, so the
   # status here is still the run's own.
-  _so_log="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
+  _so_log="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
   SUITE_FILTERED=1 SECTION_ONLY= SUITE_TARGET_SECTION="$_so_name" SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered" 2>&1 | tee "$_so_log"; _so_rc=$?
   rm -f "$_filtered"
   if grep -qE 'line [0-9]+: [A-Za-z_][A-Za-z0-9_]*: unbound variable' "$_so_log" 2>/dev/null; then
@@ -489,7 +498,7 @@ esac
 # Named from an explicit template, and not `mktemp -t`: the name is what lets an abandoned copy be
 # attributed to this tool and reclaimed later (#36), and `-t` also means different things to BSD
 # and GNU mktemp, which matters the moment this runs anywhere but a Mac.
-SUITE_SECTION_MARK="$(mktemp "${TMPDIR:-/tmp}/claude-sync-suite-section.XXXXXXXX")"
+SUITE_SECTION_MARK="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-section.XXXXXXXX")"
 if [ "$SUITE_TIMEOUT" -gt 0 ]; then
   _suite_pid=$$
   # A watchdog must not share the abort-on-error behaviour of the work it watches, or an
@@ -720,7 +729,7 @@ dbg(){ [ -n "${SUITE_DEBUG:-}" ] && printf '  [debug] %s\n' "$1"; return 0; }
 # directory is abandoned, and an ANONYMOUS one cannot be attributed to this suite afterwards: the
 # 37 found on this Mac on 2026-08-17, holding 475 MB, had to be identified by looking inside them,
 # next to 542 belonging to other tools that a sweep by age alone would have deleted (#36).
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-suite-work.XXXXXXXX")"
+WORK="$(mktemp -d "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
 # No trap here any more. It used to remove WORK and would now REPLACE suite_cleanup, silently
 # leaving the deadline watchdog running after every run, which is the precise defect #21 shipped
 # once already. suite_cleanup removes WORK as well, so this is one handler doing all of it.
@@ -1352,11 +1361,25 @@ mkdir -p "$TQH/hooks" "$TQR/payload/hooks"; echo '{"hooks":{}}' > "$TQH/settings
 printf 'aaaa\n' > "$TQH/hooks/tiny.sh"
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" push >/dev/null 2>&1
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
-check "a clean pull leaves no temp file behind" "[ -z \"\$(ls -A '$TMPD' 2>/dev/null)\" ]"
+# Asked about SCRATCH by NAME, not about everything in the directory it lives in. The tool keeps
+# its scratch in a `claude-sync` directory inside the temp root (#116), and that directory, and the
+# stamp recording when the old flat location was last swept, are both deliberately left there: they
+# are created once, they are not scratch, and the sweep never removes them. Both locations are
+# read, so a run that fell back to writing flat is still caught here.
+_tq_litter(){ ls -A "$TMPD" "$TMPD/claude-sync" 2>/dev/null | grep '^claude-sync-' || true; }
+check "a clean pull leaves no temp file behind" "[ -z \"\$(_tq_litter)\" ]"
 # same on the failure path: a pull that dies must not litter either
 printf '@NOPE.md\n' > "$TQR/payload/CLAUDE.md"
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
-check "a failed pull leaves no temp file behind"  "[ -z \"\$(ls -A '$TMPD' 2>/dev/null)\" ]"
+check "a failed pull leaves no temp file behind"  "[ -z \"\$(_tq_litter)\" ]"
+# The control: this cannot pass by looking in the wrong place. A file planted in either location
+# has to be reported, or both checks above are satisfied by a listing of nothing (L143, L159).
+: > "$TMPD/claude-sync-work.PLANTED"
+check "and the litter check can see one"          "[ -n \"\$(_tq_litter)\" ]"
+rm -f "$TMPD/claude-sync-work.PLANTED"
+mkdir -p "$TMPD/claude-sync"; : > "$TMPD/claude-sync/claude-sync-work.PLANTED"
+check "including one inside the tool's own directory" "[ -n \"\$(_tq_litter)\" ]"
+rm -f "$TMPD/claude-sync/claude-sync-work.PLANTED"
 rm -f "$TQR/payload/CLAUDE.md" "$TQH/CLAUDE.md"
 
 section "== send must not publish over changes this Mac has never applied =="
@@ -3499,7 +3522,12 @@ _scr_dir(){    # name mb
   dd if=/dev/zero of="$_SCR/$1/filler" bs=1048576 count="$2" 2>/dev/null
 }
 _reap(){ SYNC_SCRATCH_ROOT="$_SCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1; }
-_scr_status(){ SYNC_SCRATCH_ROOT="$_SCR" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1; }
+# Every fixture in this section is planted in the FLAT root, which is where every earlier version
+# wrote and where the sweep's rules (age, name, the lock, other tools' files) have to keep holding.
+# That location is read on an interval now rather than on every call (#116), so these calls ask for
+# it every time; the interval itself, and the directory scratch actually lives in today, have their
+# own section below. `reap-scratch` reads it unconditionally, so only `status` needs saying.
+_scr_status(){ SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$_SCR" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1; }
 
 # The control first, and before anything is planted: an empty root must report NOTHING. Without
 # it, every assertion below could be satisfied by a reaper that reports on the real temp directory
@@ -3542,7 +3570,7 @@ _SCRP="$WORK/scratch-prefix"; mkdir -p "$_SCRP"
 : > "$_SCRP/claude-sync-work.SHAREDAA"
 : > "$_SCRP/totally-different-name.ODDONEA"
 touch -t 202001010000 "$_SCRP/claude-sync-work.SHAREDAA" "$_SCRP/totally-different-name.ODDONEA"
-_scr_odd="$(SYNC_SCRATCH_NAMES='claude-sync-work. totally-different-name.' SYNC_SCRATCH_ROOT="$_SCRP" SYNC_SCRATCH_MAX_AGE=60 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+_scr_odd="$(SYNC_SCRATCH_NAMES='claude-sync-work. totally-different-name.' SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$_SCRP" SYNC_SCRATCH_MAX_AGE=60 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#115 a scratch name sharing the common prefix is reported" \
   "printf '%s' \"\$_scr_odd\" | grep -q '2 abandoned'"
 check "#115 the control: both fixtures were old enough to count" \
@@ -3601,6 +3629,11 @@ check "#36 and the live mark is still there"      "[ -f '$_SCR/claude-sync-suite
 # Derived from the code, because a sweep by name protects only the names somebody remembered, and
 # a scratch path added later is exempt from the very check meant to reclaim it (L96). Any mktemp
 # in either file that does not name itself is unattributable the moment its run is killed.
+# It asks whether the template NAMES this tool, and no longer whether the line mentions TMPDIR.
+# Those agreed while every scratch path was written out of TMPDIR directly; once the directory
+# scratch lives in moved behind a helper (#116) the TMPDIR reading answered about the spelling of
+# the line rather than about the property it exists to protect, and it would have reported every
+# correctly named path as unnamed (L63).
 # Comments are STRIPPED before matching, or the prose explaining this rule satisfies it, and a
 # guard that is green on its own explanation is indistinguishable from one that works (L103). The
 # first version of this check read `grep -n` output, whose line-number prefix defeated the comment
@@ -3613,7 +3646,7 @@ _scr_code(){ sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" | grep -vF '""'; }
 _scr_unnamed=""
 while IFS= read -r _ml; do
   [ -n "$_ml" ] || continue
-  case "$_ml" in *TMPDIR*) ;; *) _scr_unnamed="$_scr_unnamed[$_ml]" ;; esac
+  case "$_ml" in *claude-sync-*) ;; *) _scr_unnamed="$_scr_unnamed[$_ml]" ;; esac
 done <<EOF
 $(_scr_code | grep -E '\bmktemp\b')
 EOF
@@ -3635,6 +3668,122 @@ EOF
 check "#36 every name it creates is one the reaper sweeps" "[ -z \"\$_scr_unswept\" ]"
 check "#36 the name derivation found names to check" \
   "[ \"\$(printf '%s' \"\$_scr_names\" | grep -c .)\" -ge 3 ]"
+
+section "== the tool's scratch lives in a directory of its own (#116) =="
+# The sweep for abandoned scratch globs the temp root, and on a real Mac that root belongs to
+# everything else on the machine: 113,912 entries measured here, 25 of them ours. #115 cut six
+# reads of it to one, taking `status` from 1.74s to 0.36s, and the one read left is most of what
+# remains, paid 270 times over by the suite. A directory of our own makes that read tens of
+# entries instead of six figures, and the cost stops depending on a machine-wide quantity nothing
+# here controls.
+#
+# The whole risk is on the migration side: scratch already sitting in the old flat location must
+# still be found, or the change silently abandons exactly what the feature exists to reclaim
+# (L173). So the flat location is still swept, on an interval rather than on every call, and
+# `reap-scratch` always sweeps it whatever the interval says.
+_SUB="$WORK/scratch-sub"; mkdir -p "$_SUB"
+_sub_run(){    # $1... = arguments to claude-sync, with the scratch root pointed at the fixture
+  SYNC_SCRATCH_ROOT="$_SUB" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+    bash "$SCRIPT" "$@" 2>&1
+}
+_sub_age(){ touch -t "$(date -v-2H +%Y%m%d%H%M)" "$1" 2>/dev/null || touch -d '2 hours ago' "$1"; }
+
+# ---- where a new scratch file is actually created ------------------------------------------
+# Proved by making the intended directory unwritable and reading the path mktemp then names, and
+# not by looking for the file afterwards: every one of these is removed on the way out, so an
+# after-the-fact check would pass just as well against a tool that created nothing at all (L159).
+_SUBRO="$WORK/scratch-ro"; mkdir -p "$_SUBRO/claude-sync"; chmod 500 "$_SUBRO/claude-sync"
+# The control for the control. Run as a user who can write to it anyway (root on some CI images),
+# the fixture cannot hold, and a check that cannot fail must say so rather than pass (L98).
+if touch "$_SUBRO/claude-sync/probe" 2>/dev/null; then
+  rm -f "$_SUBRO/claude-sync/probe"
+  check "#116 the read-only fixture holds" "false"
+else
+  check "#116 the read-only fixture holds" "true"
+  _ro_out="$(SYNC_SCRATCH_ROOT="$_SUBRO" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" cite-scan L1 2>&1 || true)"
+  check "#116 a new scratch file is created inside the subdirectory" \
+    "printf '%s' \"\$_ro_out\" | grep -q 'claude-sync/claude-sync-work'"
+fi
+chmod 700 "$_SUBRO/claude-sync"
+
+# ---- and nothing is left beside other tools' files ------------------------------------------
+_sub_run cite-scan L1 >/dev/null 2>&1 || true
+check "#116 the run made the directory it keeps its scratch in" "[ -d '$_SUB/claude-sync' ]"
+_sub_flat="$(ls -A "$_SUB" 2>/dev/null | grep -v '^claude-sync$' || true)"
+check "#116 and left nothing flat in the temp root" "[ -z \"\$_sub_flat\" ]"
+
+# ---- abandoned scratch in the new home is reported and reclaimed -----------------------------
+mkdir -p "$_SUB/claude-sync/claude-sync-suite-work.OLDSUBA"
+dd if=/dev/zero of="$_SUB/claude-sync/claude-sync-suite-work.OLDSUBA/filler" bs=1048576 count=2 2>/dev/null
+_sub_age "$_SUB/claude-sync/claude-sync-suite-work.OLDSUBA"
+mkdir -p "$_SUB/claude-sync/claude-sync-suite-work.NEWSUBB"
+_sub_st="$(_sub_run status)"
+check "#116 status reports scratch abandoned in the new home" \
+  "printf '%s' \"\$_sub_st\" | grep -q '1 abandoned'"
+_sub_reap="$(_sub_run reap-scratch)"
+check "#116 and the reaper reclaims it"          "[ ! -e '$_SUB/claude-sync/claude-sync-suite-work.OLDSUBA' ]"
+check "#116 and says so"                          "printf '%s' \"\$_sub_reap\" | grep -q 'reclaimed 1'"
+check "#116 scratch too young to be abandoned is kept" \
+  "[ -d '$_SUB/claude-sync/claude-sync-suite-work.NEWSUBB' ]"
+# The container is not scratch. Sweeping it would take every live run's scratch with it, and it is
+# the one path in the new layout whose name is closest to the ones being swept.
+check "#116 the directory holding them is never swept" "[ -d '$_SUB/claude-sync' ]"
+
+# ---- the old flat location is still reclaimed (the migration) --------------------------------
+# This is what the change could silently abandon: everything already sitting in the old location
+# on every Mac that has run an earlier version.
+_SUBL="$WORK/scratch-legacy"; mkdir -p "$_SUBL"
+_legacy_run(){ SYNC_SCRATCH_ROOT="$_SUBL" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" "$@" 2>&1; }
+echo 'applied log' > "$_SUBL/claude-sync-applied.OLDFLAT"
+_sub_age "$_SUBL/claude-sync-applied.OLDFLAT"
+echo 'not ours' > "$_SUBL/tmp.SOMEONEELSE"
+_sub_age "$_SUBL/tmp.SOMEONEELSE"
+_leg_st="$(_legacy_run status)"
+check "#116 a leftover in the old flat location is still reported" \
+  "printf '%s' \"\$_leg_st\" | grep -q '1 abandoned'"
+_leg_reap="$(_legacy_run reap-scratch)"
+check "#116 and is still reclaimed"     "[ ! -e '$_SUBL/claude-sync-applied.OLDFLAT' ]"
+check "#116 and another tool's file beside it is left alone" "[ -f '$_SUBL/tmp.SOMEONEELSE' ]"
+
+# ---- and the old location is not read on every single call ------------------------------------
+# Which is the entire point: reading it is what costs six figures of directory entries. Asserted
+# by behaviour rather than by a stopwatch, because a timing check on a fixture holding tens of
+# entries measures nothing the real directory does (L102).
+_SUBI="$WORK/scratch-interval"; mkdir -p "$_SUBI"
+_int_run(){ SYNC_SCRATCH_ROOT="$_SUBI" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" "$@" 2>&1; }
+_int_run status >/dev/null 2>&1 || true      # the first call sweeps the old location and stamps it
+check "#116 the first call records that it swept the old location" \
+  "[ -f '$_SUBI/claude-sync/.legacy-swept' ]"
+echo 'planted after the stamp' > "$_SUBI/claude-sync-applied.AFTERSTAMP"
+_sub_age "$_SUBI/claude-sync-applied.AFTERSTAMP"
+_int_quiet="$(_int_run status)"
+check "#116 a later call inside the interval does not read the old location" \
+  "! printf '%s' \"\$_int_quiet\" | grep -qi 'scratch the tool left behind'"
+# But it is never abandoned. Two ways back to it, and both are checked, because one of them is
+# what somebody is told to run and the other is what happens on its own.
+_int_forced="$(_int_run reap-scratch)"
+check "#116 reap-scratch reads the old location whatever the interval says" \
+  "printf '%s' \"\$_int_forced\" | grep -q 'reclaimed 1'"
+echo 'planted again' > "$_SUBI/claude-sync-applied.SECONDONE"
+_sub_age "$_SUBI/claude-sync-applied.SECONDONE"
+# Aged well past any interval, with a fixed date rather than an offset from now: the point is
+# that the stamp is stale, and an offset that happens to be shorter than the default interval
+# would leave this asserting nothing while reading as if it did.
+touch -t 202001010000 "$_SUBI/claude-sync/.legacy-swept"
+_int_due="$(_int_run status)"
+check "#116 and once the interval is up the old location is read again" \
+  "printf '%s' \"\$_int_due\" | grep -q '1 abandoned'"
+
+# ---- the interval knob ------------------------------------------------------------------------
+_int_zero="$(SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$_SUBI" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#116 an interval of zero reads the old location on every call" \
+  "printf '%s' \"\$_int_zero\" | grep -q '1 abandoned'"
+_int_junk="$(SYNC_SCRATCH_LEGACY_EVERY=daily SYNC_SCRATCH_ROOT="$_SUBI" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1 || true)"
+_int_junk_rc=$?
+check "#116 an unreadable interval is refused, not guessed" \
+  "printf '%s' \"\$_int_junk\" | grep -q \"SYNC_SCRATCH_LEGACY_EVERY='daily' is not a whole number\""
+check "#116 and it reclaimed nothing on the way out" "[ -f '$_SUBI/claude-sync-applied.SECONDONE' ]"
+
 
 section "== a grandchild is not told the filtering already happened (#37) =="
 # A run started with SECTION_UNTIL re-executes itself from a temp copy carrying SUITE_FILTERED=1,
