@@ -258,6 +258,40 @@ code_ang4=$?
   || check "the marker does not excuse the rest of its file here either" "exit=$code_ang4 out=$out_ang4"
 
 # ---------------------------------------------------------------------------
+# All three causes are reported by ONE run (claude-config#108). The three rules
+# grew one at a time and each walked the tree itself, exiting on the first one
+# that fired, so a tree holding all three reported one cause per run and had to
+# be fixed three runs deep. They are three distinct causes with three distinct
+# messages (L11) and they stay that way; what changes is that one run names all
+# of the ones it found instead of the first.
+# ---------------------------------------------------------------------------
+ALL="$(tree allthree)"
+printf 'bash %s/.claude/x.sh\n' "$BADHOME"       > "$ALL/skills/demo/SKILL.md"
+printf 'the %s placeholder, explained\n' "__CLAUDE""_HOME__" > "$ALL/agents/a.md"
+printf 'node "%s/.claude/panel.js"\n' "$ANGLE"   > "$ALL/commands/c.md"
+out_all="$(bash "$CHECK" "$ALL" 2>&1)"
+code_all=$?
+[ "$code_all" -eq 1 ] \
+  && check "a tree holding all three defects fails" ok \
+  || check "a tree holding all three defects fails" "exit=$code_all out=$out_all"
+
+printf '%s' "$out_all" | grep -q "skills/demo/SKILL.md" \
+  && check "one run reports the machine path" ok \
+  || check "one run reports the machine path" "out=$out_all"
+printf '%s' "$out_all" | grep -q "agents/a.md" \
+  && check "the same run also reports the placeholder" ok \
+  || check "the same run also reports the placeholder" "out=$out_all"
+printf '%s' "$out_all" | grep -q "commands/c.md" \
+  && check "and the same run also reports the hand substituted one" ok \
+  || check "and the same run also reports the hand substituted one" "out=$out_all"
+
+# The three messages stay distinct: one run naming three causes must not collapse
+# them into a single sentence that says none of them precisely.
+[ "$(printf '%s' "$out_all" | grep -c '^check-home-paths:')" -eq 3 ] \
+  && check "each cause keeps its own message" ok \
+  || check "each cause keeps its own message" "out=$out_all"
+
+# ---------------------------------------------------------------------------
 # A scan that read nothing must not report a clean tree. Both ways of reading
 # nothing are separate outcomes with separate exits, because a guard pointed at
 # the wrong directory would otherwise pass for ever (L98, L151).

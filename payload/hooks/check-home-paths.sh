@@ -46,9 +46,11 @@
 # on a live Mac and payload/ in the repo, so the same command means the same thing
 # in both places.
 #
-# Exit 0 = clean. Exit 1 = at least one machine path. Exit 2 = nothing was
-# scanned, which is a failure rather than a pass: an empty answer from a scan
-# that read no files is indistinguishable from a clean tree (LESSONS.md L98).
+# Exit 0 = clean. Exit 1 = at least one of the three rules below found something,
+# and a run reports EVERY cause it found rather than the first, so a tree holding
+# several does not take one run per cause to discover (claude-config#108). Exit 2
+# = nothing was scanned, which is a failure rather than a pass: an empty answer
+# from a scan that read no files is indistinguishable from a clean tree (L98).
 # One thing this file must never do: write the sync's placeholder out in full. The
 # apply expands that placeholder in EVERY mirrored file, and it cannot tell a line
 # that means the placeholder from a line that means a path, so a file discussing it
@@ -105,8 +107,39 @@ HOME_ROOTS="${CLAUDE_HOME_PATH_ROOTS:-/Users /home}"
 _alt=""
 for _r in $HOME_ROOTS; do _alt="${_alt:+$_alt|}${_r}"; done
 MACHINE_PATH="(${_alt})/[A-Za-z0-9][A-Za-z0-9._-]*"
-raw="$(grep -rInE "${SKIP[@]}" "$MACHINE_PATH" "${targets[@]}" 2>/dev/null \
-       | grep -v 'claude-sync-allow-home-path' || true)"
+# The hand substituted placeholder, the third rule (claude-config#106). It used to be listed as an
+# accepted portable form, because two Workflow scriptPath values could not be written as a tilde and
+# had to be filled in per Mac. Since claude-config#87 the sync rewrites this Mac's home directory in
+# every mirrored file on the way out and expands it per Mac on the way in, so both of those values
+# are concrete again and nothing writes this spelling any more.
+#
+# It is REFUSED rather than merely unmentioned. Unmentioned changes nothing: it is not a machine
+# path, so the first rule never matched it, and a line carrying it would go on passing while the
+# path it names resolves to nothing wherever it is read. That is the same silent half working this
+# whole guard exists to catch, and a placeholder standing in for a value nobody fills in is a
+# DETECTION that the value is missing rather than a label on it (L67).
+#
+# Assembled from pieces, never written whole, exactly like the sync's own token: this file lives
+# inside the tree it scans, so a comment naming the spelling in full would fail its own check.
+ANGLE_TOKEN="<""HOME>"
+
+# ---- one walk of the tree, three rules read off it (claude-config#108) ----
+# The three rules arrived one at a time (#86, #99, #106) and each brought its own recursive scan
+# and its own copy of the marker exemption, so the tree was walked three times and a change to how
+# exemptions work had to be made in three places or it was made in two. One traversal now collects
+# every candidate line and each line is put to all three rules.
+#
+# The rules stay THREE, with three messages, because they are three different causes and a single
+# sentence covering all of them would name none of them precisely (L11). What changed is that one
+# run reports every cause it found, instead of exiting at the first and sending somebody back for
+# another run to discover the next one.
+#
+# The marker is dropped line by line, here, once: one excused line never excuses the rest of its
+# file, and no rule can forget to honour it. -I so a binary that happens to hold the bytes is
+# skipped rather than reported as a line nobody can read.
+ALL_PAT="${MACHINE_PATH}|${CS_TOKEN}|${ANGLE_TOKEN}"
+raw_all="$(grep -rInE "${SKIP[@]}" "$ALL_PAT" "${targets[@]}" 2>/dev/null \
+           | grep -v 'claude-sync-allow-home-path' || true)"
 
 # Is the tree being scanned this machine's own config directory? Compared as resolved physical
 # paths, because /tmp and /private/tmp are the same directory here and a string comparison would
@@ -118,35 +151,77 @@ scan_root="$(cd "$ROOT" 2>/dev/null && pwd -P || printf '%s' "$ROOT")"
 allow_self=0
 [ -n "$self_root" ] && [ "$scan_root" = "$self_root" ] && allow_self=1
 
-hits=""
+hits=""      # rule 1: one machine's home directory
+tokbad=""    # rule 2: the sync's placeholder written where it is not fronting a path
+angbad=""    # rule 3: the hand substituted placeholder
 while IFS= read -r line; do
   [ -n "$line" ] || continue
-  if [ "$allow_self" -eq 1 ]; then
-    rel="${line%%:*}"; rel="${rel#"$ROOT"/}"
-    mirrored=0
-    for d in "${SYNCED_DIRS[@]}"; do
-      case "$rel" in "$d"/*) mirrored=1; break ;; esac
-    done
-    if [ "$mirrored" -eq 1 ]; then
-      # The file's own CONTENT, never the whole grep line. That line begins with the path of the
-      # file it came from, which is itself under somebody's home directory, so re-testing the
-      # whole line answers about the scanned tree's location rather than about what the file says
-      # (L135: a check matched over the wrong span is answered by the wrong thing, and this one
-      # passed a deliberately broken build because of it).
-      content="${line#*:}"; content="${content#*:}"
-      # This machine's own config path removed, then the content asked again: what is left is any
-      # OTHER machine's home, which is the defect. Done per line, so one portable path never
-      # excuses a stale one sitting beside it.
-      if ! printf '%s' "${content//$SELF_HOME/}" | grep -qE "$MACHINE_PATH"; then continue; fi
-    fi
-  fi
-  hits="$hits$line
+  # The file's own CONTENT, never the whole grep line. That line begins with the path of the file
+  # it came from, which is itself under somebody's home directory, so testing the whole line
+  # answers about the scanned tree's LOCATION rather than about what the file says (L135: a check
+  # matched over the wrong span is answered by the wrong thing, and this one passed a deliberately
+  # broken build because of it).
+  content="${line#*:}"; content="${content#*:}"
+
+  # Each rule is asked independently, never as an else-if: a line can commit two of these at once
+  # and reporting only the first found would hide the second behind the fix for it.
+
+  # Rule 2. The apply expands the placeholder in every mirrored file, so a file that NAMES it has
+  # its own text rewritten: a comment about the placeholder becomes a comment about somebody's home
+  # directory, and a shell substitution over it becomes a substitution over a path. Both were
+  # measured on the installed copy, and the second left a healthcheck reporting a path made of two
+  # home directories glued together (claude-config#99).
+  # The line between the two uses is what the placeholder is FOR: standing at the front of a path.
+  # So it is allowed immediately followed by a slash, and refused everywhere else, which covers
+  # naming it in prose and refuses it again inside a ${...} substitution, where a following slash
+  # is the substitution's own separator rather than a path.
+  if printf '%s' "$content" | grep -qE '[$][{][^}]*'"$CS_TOKEN" \
+     || printf '%s' "$content" | grep -qE "$CS_TOKEN"'([^/]|$)'; then
+    tokbad="$tokbad$line
 "
+  fi
+
+  # Rule 3. A literal comparison, not a regex: the spelling has no variable part.
+  case "$content" in
+    *"$ANGLE_TOKEN"*) angbad="$angbad$line
+" ;;
+  esac
+
+  # Rule 1, and its one allowance. claude-sync rewrites this Mac's config directory to its token in
+  # every mirrored file on the way out and expands it again per Mac on the way in, so inside a LIVE
+  # config tree an absolute path under that same directory is portable: it is what the sync just
+  # wrote, and it travels correctly. That applies only when the tree being scanned IS this
+  # machine's config directory, and only under the mirrored directories. In the repo, where nothing
+  # has been through a send, every machine path is still refused, and a path in a top level rule
+  # file is refused everywhere, because rule files are merged entry by entry and are deliberately
+  # not rewritten.
+  if printf '%s' "$content" | grep -qE "$MACHINE_PATH"; then
+    _keep=1
+    if [ "$allow_self" -eq 1 ]; then
+      rel="${line%%:*}"; rel="${rel#"$ROOT"/}"
+      mirrored=0
+      for d in "${SYNCED_DIRS[@]}"; do
+        case "$rel" in "$d"/*) mirrored=1; break ;; esac
+      done
+      if [ "$mirrored" -eq 1 ]; then
+        # This machine's own config path removed, then the content asked again: what is left is any
+        # OTHER machine's home, which is the defect. Done per line, so one portable path never
+        # excuses a stale one sitting beside it.
+        printf '%s' "${content//$SELF_HOME/}" | grep -qE "$MACHINE_PATH" || _keep=0
+      fi
+    fi
+    [ "$_keep" -eq 1 ] && hits="$hits$line
+"
+  fi
 done <<HITS
-$raw
+$raw_all
 HITS
 hits="${hits%$'\n'}"
 
+# Counted from a directory walk rather than from the grep above, and deliberately: grep can only
+# count files it FOUND something in, and the whole point of this number is to notice a scan that
+# read nothing at all. A clean tree matches nothing, which is indistinguishable from a scanner
+# pointed at the wrong directory unless something counts the files independently (L98).
 scanned="$(find "${targets[@]}" -type f \
              ! -path '*/.git/*' ! -path '*__pycache__*' ! -name '*.pyc' 2>/dev/null | wc -l | tr -d ' ')"
 case "$scanned" in ''|*[!0-9]*) scanned=0 ;; esac
@@ -155,75 +230,29 @@ if [ "$scanned" -eq 0 ]; then
   exit 2
 fi
 
-# The placeholder itself, which is a second way a machine path arrives. The apply expands it in
-# every mirrored file, so a file that NAMES it has its own text rewritten: a comment about the
-# placeholder becomes a comment about somebody's home directory, and a shell substitution over it
-# becomes a substitution over a path. Both were measured on the installed copy, and the second one
-# left a healthcheck reporting a path made of two home directories glued together
-# (claude-config#99).
-#
-# The line between the two uses is what the placeholder is FOR: standing at the front of a path.
-# So it is allowed immediately followed by a slash, and refused everywhere else, which covers
-# naming it in prose and refused again inside a ${...} substitution, where a following slash is
-# the substitution's own separator rather than a path.
-#
-# This bites in the repo, where the placeholder still exists. In a live tree there is none left to
-# find, which is the point: by then the rewriting has already happened.
-tokbad=""
-while IFS= read -r tline; do
-  [ -n "$tline" ] || continue
-  case "$tline" in *claude-sync-allow-home-path*) continue ;; esac
-  tcontent="${tline#*:}"; tcontent="${tcontent#*:}"
-  if printf '%s' "$tcontent" | grep -qE '[$][{][^}]*'"$CS_TOKEN"; then
-    tokbad="$tokbad$tline
-"
-    continue
-  fi
-  if printf '%s' "$tcontent" | grep -qE "$CS_TOKEN"'([^/]|$)'; then
-    tokbad="$tokbad$tline
-"
-  fi
-done <<TOKHITS
-$(grep -rIn "${SKIP[@]}" -F -- "$CS_TOKEN" "${targets[@]}" 2>/dev/null || true)
-TOKHITS
+# Every cause found is reported, in the order the rules were introduced, and the exit is decided
+# once at the end. Exiting inside the first rule that fired is what made a tree holding several of
+# these take one run per cause to discover (claude-config#108).
+rc=0
+if [ -n "${hits//[[:space:]]/}" ]; then
+  echo "check-home-paths: these lines name one machine's home directory, so they are wrong on every other Mac and fail silently there:" >&2
+  printf '%s\n' "$hits" | sed 's/^/  /' >&2
+  echo "Write the path relative to the home directory instead (a tilde, \$HOME, expanduser, or the sync's own ${CS_TOKEN} placeholder), or put claude-sync-allow-home-path on the line if it genuinely has to name one." >&2
+  rc=1
+fi
 if [ -n "${tokbad//[[:space:]]/}" ]; then
   echo "check-home-paths: these lines write the sync's placeholder somewhere it is not standing in front of a path, and the apply will rewrite them into one machine's home directory:" >&2
   printf '%s' "$tokbad" | sed 's/^/  /' >&2
   echo "Assemble it from pieces so the apply has nothing to match, or put claude-sync-allow-home-path on the line if it genuinely has to be written whole." >&2
-  exit 1
+  rc=1
 fi
-
-# The OTHER placeholder: the angle bracket home spelling a person substitutes by hand. It used to
-# be listed above as an accepted portable form, because two Workflow scriptPath values could not be
-# written as a tilde and had to be filled in per Mac. Since claude-config#87 the sync rewrites this
-# Mac's home directory in every mirrored file on the way out and expands it per Mac on the way in,
-# so both of those values are concrete again and nothing writes this spelling any more
-# (claude-config#106).
-#
-# It is REFUSED rather than merely unmentioned. Unmentioned changes nothing: it is not a machine
-# path, so the rule above never matched it, and a line carrying it would go on passing while the
-# path it names resolves to nothing wherever it is read. That is the same silent half working this
-# whole guard exists to catch, and a placeholder standing in for a value nobody fills in is a
-# DETECTION that the value is missing rather than a label on it (L67).
-#
-# Assembled from pieces, never written whole, exactly like the sync's own token above: this file
-# lives inside the tree it scans, so a comment naming the spelling in full would fail its own check.
-ANGLE_TOKEN="<""HOME>"
-angbad="$(grep -rIn "${SKIP[@]}" -F -- "$ANGLE_TOKEN" "${targets[@]}" 2>/dev/null \
-          | grep -v 'claude-sync-allow-home-path' || true)"
 if [ -n "${angbad//[[:space:]]/}" ]; then
   echo "check-home-paths: these lines carry the hand substituted home placeholder, which nothing fills in any more, so the path they name resolves to nothing on every Mac:" >&2
-  printf '%s\n' "$angbad" | sed 's/^/  /' >&2
+  printf '%s' "$angbad" | sed 's/^/  /' >&2
   echo "Write the path relative to the home directory instead (a tilde, \$HOME, or expanduser), or put claude-sync-allow-home-path on the line if it genuinely has to name the placeholder." >&2
-  exit 1
+  rc=1
 fi
-
-if [ -n "$hits" ]; then
-  echo "check-home-paths: these lines name one machine's home directory, so they are wrong on every other Mac and fail silently there:" >&2
-  printf '%s\n' "$hits" | sed 's/^/  /' >&2
-  echo "Write the path relative to the home directory instead (a tilde, \$HOME, expanduser, or the sync's own ${CS_TOKEN} placeholder), or put claude-sync-allow-home-path on the line if it genuinely has to name one." >&2
-  exit 1
-fi
+[ "$rc" -eq 0 ] || exit 1
 
 echo "check-home-paths: $scanned file(s) under $ROOT, no machine specific home paths."
 exit 0
