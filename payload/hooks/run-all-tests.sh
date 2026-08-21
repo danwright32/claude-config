@@ -32,6 +32,8 @@
 #   HOOK_TESTS_JOBS           how many suites run at once
 #   HOOK_TESTS_BUDGET         processes this whole run may have in flight (default: cores, max 8)
 #   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
+#   HOOK_TESTS_TIMINGS        where each suite's measured wall clock is kept between runs.
+#                             Empty turns the record off entirely: nothing is read, nothing written.
 
 set -uo pipefail
 
@@ -110,6 +112,50 @@ case "$JOBS" in
     exit 1 ;;
 esac
 
+# The repo this run is about, worked out BEFORE the directories are chosen, because two things
+# need it now: discovery (further down) and the timing record (#144), which keys a suite on its
+# path INSIDE this repo.
+root="${HOOK_TESTS_ROOT:-}"
+[ -n "$root" ] || root="$(git -C "$SELF_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+
+# Where each suite's measured wall clock is kept between runs (claude-config#144). NOT under the
+# config directory, which mirrors itself to another Mac within seconds: a duration measured on this
+# machine is not configuration, and shipping it would make the other Mac order its runs by numbers
+# from hardware it does not have.
+#
+# Set HOOK_TESTS_TIMINGS to move it, or to EMPTY to turn the record off, which is what a run that
+# must leave no trace needs. `-` and not `:-`, so an empty value means off rather than default.
+_timings_default="${XDG_CACHE_HOME:-$HOME/.cache}/claude-config/suite-timings"
+TIMINGS="${HOOK_TESTS_TIMINGS-$_timings_default}"
+
+# A record is keyed on the suite's path WITHIN the repo, so the same suite is recognised in a
+# worktree, in a second clone, and on the other Mac. A suite that is not under the repo has no such
+# path, so it gets no key and no record at all: there is nothing stable to key it on, and it is
+# also what keeps a run over a throwaway fixture structurally unable to write into the real store.
+# Nothing is truncated or trusted to be unique by luck: `/` and `%` are the only characters
+# encoded, and both are encoded, so two different paths cannot produce one file name (L15).
+suite_key(){   # suite_key <suite path> -> the record's file name, or nothing
+  [ -n "$root" ] || return 0
+  _sk="$1"
+  case "$_sk" in /*) ;; *) _sk="$PWD/$_sk" ;; esac
+  case "$_sk" in "$root"/*) ;; *) return 0 ;; esac
+  printf '%s' "${_sk#"$root"/}" | sed 's/%/%25/g; s#/#%2F#g'
+}
+
+# What that suite was last measured at, or NOTHING. A record that is not a whole number of seconds
+# is treated as no record rather than guessed at as a number: the store is a cache, and a corrupt
+# entry there is not a reason to refuse to run the tests. Falling back is safe here in a way it
+# usually is not, because the only thing the record decides is the launch ORDER, and being wrong
+# about that costs wall clock and nothing else.
+suite_seconds(){   # suite_seconds <suite path> -> whole seconds, or nothing
+  [ -n "$TIMINGS" ] || return 0
+  _ss_k="$(suite_key "$1")"
+  [ -n "$_ss_k" ] || return 0
+  _ss_v="$(cat "$TIMINGS/$_ss_k" 2>/dev/null)"
+  case "$_ss_v" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$_ss_v"
+}
+
 dirs=""     # newline separated, deduplicated in the order found
 add_dir(){  # add_dir <path>
   case "
@@ -126,9 +172,8 @@ if [ "$#" -gt 0 ]; then
 else
   # Asked of git rather than of `find`, so a suite living in an untracked scratch
   # copy of the repo is not picked up and an ignored build directory costs nothing
-  # to walk.
-  root="${HOOK_TESTS_ROOT:-}"
-  [ -n "$root" ] || root="$(git -C "$SELF_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+  # to walk. The root itself was worked out further up, because the timing record
+  # needs it too.
   if [ -n "$root" ] && [ -d "$root" ]; then
     while IFS= read -r f; do
       [ -n "$f" ] || continue
@@ -284,23 +329,45 @@ if [ "$ran" -gt 0 ]; then
   esac
   trap 'rm -rf "$WORK"' EXIT
 
-  # Launched LONGEST FIRST, judged by file size. It is a heuristic and says so: bytes are not
-  # seconds. What it buys is that the one suite taking three of the five minutes starts
-  # immediately instead of possibly last, and being wrong about the order costs some wall clock
-  # and nothing else, because every result is collected and reported the same way regardless.
+  # Launched LONGEST FIRST, judged by what each suite was last MEASURED to cost (#144). Lane 1
+  # carries the largest share of the budget and lane 1 is whatever launches first, so this line
+  # decides which suite the machine is actually spent on.
+  #
+  # It used to be judged by file SIZE, which was right only because the largest file happened to
+  # be the slowest suite. Bytes are not seconds, and the day those two came apart the big share
+  # would have gone to a suite that cannot use it while the slow one ran on one slot. Nothing
+  # would have reported that: the run would simply be slower, which is the symptom #139 existed
+  # to remove.
+  #
+  # Size is still the fallback, and it is the honest one for a suite nobody has measured yet: a
+  # first run and a newly added suite have no record, and inventing a duration for them would be
+  # a number the code made up sitting beside numbers the machine reported (L192).
+  #
+  # Measured suites lead, in duration order, and unmeasured ones follow in size order. The other
+  # way round would hand the largest share to a brand new suite every time one was added, purely
+  # for being unknown. Which of the two a run used is printed below, because a run that fell back
+  # to size reads exactly like one that ordered by measurement (L11).
+  #
+  # Nothing here learns WHICH suite is slow from a list anybody maintains. The record is written
+  # by the run itself, at the bottom of this file, from the clock (L96).
+  _timed=0
   launch_order="$(
     i=0
     for suite in "${suites[@]}"; do
-      printf '%s	%s	%s
-' "$(wc -c < "$suite" | tr -d ' ')" "$i" "$suite"
+      _sec="$(suite_seconds "$suite")"
+      if [ -n "$_sec" ]; then _have=1; else _have=0; _sec=0; fi
+      printf '%s	%s	%s	%s	%s\n' \
+        "$_have" "$_sec" "$(wc -c < "$suite" | tr -d ' ')" "$i" "$suite"
       i=$((i + 1))
-    done | sort -rn -k1,1
+    done | sort -t "$(printf '\t')" -k1,1nr -k2,2nr -k3,3nr
   )"
+  _timed="$(printf '%s\n' "$launch_order" | awk -F"$(printf '\t')" '$1 == 1' | grep -c . || true)"
+  echo "run-all-tests: launch order from measured wall clock for ${_timed:-0} of $ran suite(s), file size for the rest"
 
   lane_pid=()
   _l=1
   while [ "$_l" -le "$at_once" ]; do lane_pid[$_l]=""; _l=$(( _l + 1 )); done
-  while IFS="$(printf '\t')" read -r _size idx suite; do
+  while IFS="$(printf '\t')" read -r _have _sec _size idx suite; do
     [ -n "$suite" ] || continue
     # Wait for a LANE, and remember which one: the share a suite is handed is its lane's, so a
     # suite launching into a share that has just come free takes that share and the total in flight
@@ -317,12 +384,67 @@ if [ "$ran" -gt 0 ]; then
       done
       [ "$lane" -eq 0 ] && sleep 0.2
     done
-    ( HOOK_TESTS_SLOTS="${LANES[$lane]}" bash "$suite" > "$WORK/$idx.out" 2>&1; printf '%s' "$?" > "$WORK/$idx.rc" ) &
+    # SECONDS is a bash builtin reset to zero in this subshell, so timing a suite costs no
+    # process of its own and cannot perturb what it is measuring. The exit status is written
+    # LAST, because that file is what marks a suite finished and a reader of it must not find a
+    # suite that has an exit status but no duration.
+    ( SECONDS=0
+      HOOK_TESTS_SLOTS="${LANES[$lane]}" bash "$suite" > "$WORK/$idx.out" 2>&1; _src=$?
+      printf '%s' "$SECONDS" > "$WORK/$idx.sec"
+      printf '%s' "$_src" > "$WORK/$idx.rc" ) &
     lane_pid[$lane]=$!
   done <<LAUNCH
 $launch_order
 LAUNCH
   wait
+
+  # What this run MEASURED, written down for the next one (claude-config#144). This is the whole
+  # source of the launch order above: no list anywhere names the slow suites, and nobody has to
+  # remember to update one when a suite gets slower (L96).
+  #
+  # Written by the parent, after everything has finished, so there is exactly one writer and the
+  # children never touch the store. Each record is its own file, written to a temporary name and
+  # renamed over the old one, so two runs at once cannot interleave into a half written record and
+  # neither can lose the other's work beyond the last one winning, which is the correct answer for
+  # a measurement anyway.
+  #
+  # A suite that FAILED is recorded like any other. What is being measured is what the suite costs
+  # the machine, and a suite that fails after doing all its work costs exactly what it did.
+  #
+  # Nothing is ever deleted here. A record for a suite that no longer exists is never read, since
+  # records are looked up by the paths of the suites this run actually found, and a run over ONE
+  # named directory legitimately mentions almost none of them. Deleting whatever a run did not
+  # mention would turn every narrow run into a purge of everything else (L211).
+  if [ -n "$TIMINGS" ]; then
+    _rec_bad=0
+    _rec_dir=1
+    mkdir -p "$TIMINGS" 2>/dev/null || _rec_dir=0
+    if [ "$_rec_dir" -eq 1 ]; then
+      _ri=0
+      for suite in ${suites[@]+"${suites[@]}"}; do
+        _rk="$(suite_key "$suite")"
+        _rv="$(cat "$WORK/$_ri.sec" 2>/dev/null)"
+        _ri=$((_ri + 1))
+        [ -n "$_rk" ] || continue
+        case "$_rv" in ''|*[!0-9]*) continue ;; esac
+        _rt="$TIMINGS/.writing.$$.$_rk"
+        if printf '%s\n' "$_rv" > "$_rt" 2>/dev/null && mv -f "$_rt" "$TIMINGS/$_rk" 2>/dev/null; then
+          :
+        else
+          rm -f "$_rt" 2>/dev/null
+          _rec_bad=$((_rec_bad + 1))
+        fi
+      done
+    fi
+    # Said out loud, never swallowed. A store that cannot be written leaves every future run
+    # ordering by file size while reading as though it were ordering by measurement, and the only
+    # symptom of that is a run that is slower than it needs to be (L11, L98).
+    if [ "$_rec_dir" -eq 0 ]; then
+      echo "run-all-tests: could not create $TIMINGS, so nothing was recorded and the next run will order by file size. Set HOOK_TESTS_TIMINGS to somewhere writable, or to empty to turn the record off." >&2
+    elif [ "$_rec_bad" -gt 0 ]; then
+      echo "run-all-tests: $_rec_bad suite time(s) could not be written to $TIMINGS, so the next run will order those by file size." >&2
+    fi
+  fi
 fi
 
 # Reported in the order they were FOUND. Two runs of the same tree then produce the same page, so a

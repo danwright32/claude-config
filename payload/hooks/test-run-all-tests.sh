@@ -556,6 +556,105 @@ case "$out_bg" in
   *) check "the control: a well formed budget is not refused" ok ;;
 esac
 
+# ---------------------------------------------------------------------------
+# The launch order follows MEASURED wall clock, not file size (claude-config#144).
+# ---------------------------------------------------------------------------
+# Lane 1 carries the largest share of the budget, and lane 1 is whatever launches first, so the
+# launch order decides which suite the machine is spent on. It was decided by file SIZE, and the
+# comment beside it said what that costs: bytes are not seconds. It was right only because the
+# largest file happened to be the slowest suite, and the day that stopped being true the big share
+# would go to a suite that cannot use it while the slow one ran on one slot, with nothing anywhere
+# reporting a problem. The run would simply be slower, which is the symptom #139 existed to remove.
+#
+# So each run RECORDS what every suite actually cost, and the next run orders by that. The record
+# is written by the run itself, never by hand: a hand written list of the slow ones is the thing
+# the runner exists not to have (L96).
+#
+# Four suites against four lanes, deliberately. With five, the last one launches into whichever
+# lane frees first, which can be lane 1 again, and then two suites report the largest share and
+# the check cannot tell the order it was written to prove from the machine's mood.
+TR="$TMPROOT/timed"
+TSTORE="$TMPROOT/timed-store"
+mkdir -p "$TR/suites" "$TSTORE"
+for n in bigfile slowpoke three four; do mk_slot_suite "$TR/suites" "$n"; done
+# The largest FILE is a suite that will turn out to be fast. That is the whole defect in one line.
+printf '# %s\n' "$(head -c 400 /dev/zero | tr '\0' 'x')" >> "$TR/suites/test-bigfile.sh"
+
+# First run: nothing has ever been measured, so the order falls back to size and the big file
+# leads. This is also the control for every check below (L159): the store starts empty, so a run
+# that wrote nothing and a run that read nothing would look alike without it.
+out_t1="$(HOOK_TESTS_ROOT="$TR" HOOK_TESTS_TIMINGS="$TSTORE" HOOK_TESTS_BUDGET=8 HOOK_TESTS_JOBS=4 bash "$RUNNER" "$TR/suites" 2>&1)"; code_t1=$?
+[ "$code_t1" -eq 0 ] \
+  && check "#144 a first run, with nothing ever measured, passes" ok \
+  || check "#144 a first run, with nothing ever measured, passes" "exit=$code_t1 out=$out_t1"
+[ "$(slots_seen "$TR/suites" bigfile)" = 4 ] \
+  && check "#144 and with no record to read, the largest file still leads" ok \
+  || check "#144 and with no record to read, the largest file still leads" "bigfile=$(slots_seen "$TR/suites" bigfile) out=$out_t1"
+# The run has to WRITE what it measured, or the next run has nothing to order by (L3, L46).
+t_recs="$(ls "$TSTORE" 2>/dev/null | grep -c 'test-.*\.sh$' || true)"
+[ "${t_recs:-0}" -eq 4 ] \
+  && check "#144 the run records a wall clock for every suite it ran" ok \
+  || check "#144 the run records a wall clock for every suite it ran" "$t_recs record(s) in $TSTORE: $(ls "$TSTORE" 2>/dev/null | tr '\n' ' ')"
+t_slow_rec="$(ls "$TSTORE" 2>/dev/null | grep 'test-slowpoke\.sh$' | head -1)"
+case "$(cat "$TSTORE/$t_slow_rec" 2>/dev/null)" in
+  ''|*[!0-9]*) check "#144 and what it records is a whole number of seconds" "the record for test-slowpoke.sh reads '$(cat "$TSTORE/$t_slow_rec" 2>/dev/null)'" ;;
+  *) check "#144 and what it records is a whole number of seconds" ok ;;
+esac
+
+# Now the measurement disagrees with the file size, which is the case the issue is about. The
+# record is EDITED rather than fabricated from nothing, so the check runs against the same key the
+# runner itself wrote and cannot pass by agreeing with a scheme only this file believes in.
+printf '99\n' > "$TSTORE/$t_slow_rec"
+rm -f "$TR/suites"/*.slots
+out_t2="$(HOOK_TESTS_ROOT="$TR" HOOK_TESTS_TIMINGS="$TSTORE" HOOK_TESTS_BUDGET=8 HOOK_TESTS_JOBS=4 bash "$RUNNER" "$TR/suites" 2>&1)"; code_t2=$?
+[ "$code_t2" -eq 0 ] \
+  && check "#144 a run with a measured record passes" ok \
+  || check "#144 a run with a measured record passes" "exit=$code_t2 out=$out_t2"
+[ "$(slots_seen "$TR/suites" slowpoke)" = 4 ] \
+  && check "#144 the suite measured slowest leads, though its file is small" ok \
+  || check "#144 the suite measured slowest leads, though its file is small" "slowpoke=$(slots_seen "$TR/suites" slowpoke) out=$out_t2"
+# And the other half of the same fact. Without it, a runner that handed EVERY suite the largest
+# share would satisfy the check above (L178).
+[ "$(slots_seen "$TR/suites" bigfile)" != 4 ] \
+  && check "#144 and the largest file no longer takes the largest share" ok \
+  || check "#144 and the largest file no longer takes the largest share" "bigfile=$(slots_seen "$TR/suites" bigfile) out=$out_t2"
+# Said out loud. Which of the two orders a run used decides where the minutes went, and a run that
+# silently fell back to size reads exactly like one that ordered by measurement (L11).
+case "$out_t2" in
+  *"measured wall clock for 4 of 4"*) check "#144 the run says how many suites it had a measurement for" ok ;;
+  *) check "#144 the run says how many suites it had a measurement for" "out=$out_t2" ;;
+esac
+
+# A record nobody can read is not a measurement, so it falls back to size rather than being
+# guessed at as a number. It must not fail the run either: the store is a cache, and a corrupt
+# cache entry is not a broken test suite.
+printf 'not-a-number\n' > "$TSTORE/$t_slow_rec"
+rm -f "$TR/suites"/*.slots
+out_t3="$(HOOK_TESTS_ROOT="$TR" HOOK_TESTS_TIMINGS="$TSTORE" HOOK_TESTS_BUDGET=8 HOOK_TESTS_JOBS=4 bash "$RUNNER" "$TR/suites" 2>&1)"; code_t3=$?
+[ "$code_t3" -eq 0 ] && [ "$(slots_seen "$TR/suites" bigfile)" = 4 ] \
+  && check "#144 a record that is not a number falls back to size, and does not fail the run" ok \
+  || check "#144 a record that is not a number falls back to size, and does not fail the run" "exit=$code_t3 bigfile=$(slots_seen "$TR/suites" bigfile) out=$out_t3"
+
+# A suite OUTSIDE the repo gets no record at all. The key is the suite's path within the repo, so
+# a suite that has no such path has no stable identity to key one on, and this is also what keeps
+# every fixture in this file structurally unable to write into the real store (L2). Nothing here
+# sets HOOK_TESTS_ROOT, so the root is the real repo and these suites are nowhere under it.
+TOUT="$TMPROOT/outside-store"
+mkdir -p "$TOUT"
+out_t4="$(HOOK_TESTS_TIMINGS="$TOUT" HOOK_TESTS_BUDGET=8 bash "$RUNNER" "$TR/suites" 2>&1)"; code_t4=$?
+t_out_n="$(ls "$TOUT" 2>/dev/null | grep -c . || true)"
+[ "$code_t4" -eq 0 ] && [ "${t_out_n:-0}" -eq 0 ] \
+  && check "#144 a suite outside the repo is recorded nowhere" ok \
+  || check "#144 a suite outside the repo is recorded nowhere" "exit=$code_t4, $t_out_n record(s): $(ls "$TOUT" 2>/dev/null | tr '\n' ' ')"
+
+# And the store can be switched off outright, which is what a run that must leave no trace needs.
+TOFF="$TMPROOT/off-store"
+mkdir -p "$TOFF"
+out_t5="$(HOOK_TESTS_ROOT="$TR" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=8 bash "$RUNNER" "$TR/suites" 2>&1)"; code_t5=$?
+[ "$code_t5" -eq 0 ] \
+  && check "#144 an empty HOOK_TESTS_TIMINGS turns the record off and the run still passes" ok \
+  || check "#144 an empty HOOK_TESTS_TIMINGS turns the record off and the run still passes" "exit=$code_t5 out=$out_t5"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

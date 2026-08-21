@@ -188,6 +188,7 @@ is told its share, and the product is printed at the top of every run.
 | --- | --- | --- |
 | `HOOK_TESTS_BUDGET` | CPUs, capped at 8 | How many processes the whole run may have in flight. Everything else is derived from it. A value that is not a positive whole number is refused rather than guessed at. |
 | `HOOK_TESTS_JOBS` | half the budget, but never fewer than 2 and never more than the budget | How many suites run at once. The floor of 2 is for the small machine: the CI runner has two cores, half of two is one, and every suite would have run strictly one after another while a second slot sat reserved. `1` runs them one at a time, which is what to reach for when a suite only fails alongside others. A value that is not a positive whole number is refused rather than guessed at, because it decides how many processes start. |
+| `HOOK_TESTS_TIMINGS` | `~/.cache/claude-config/suite-timings` | Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a duration measured on this machine is not configuration, and mirroring it would make the other Mac order its runs by numbers from hardware it does not have. |
 | `HOOK_TESTS_SLOTS` | set BY the runner | Each suite's share of the budget, which is the budget divided by how many suites are running at once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its own processes it may start. Point the runner at one directory holding one suite and that suite is handed the whole budget, so running the long suite on its own is as fast as it ever was. |
 
 What the budget costs, measured on this Mac as one pair of runs back to back: 124 seconds against
@@ -199,8 +200,15 @@ fighting itself.
 Results are collected and printed in the order the suites were FOUND, never the order they
 finished, so two runs of the same tree produce the same page and a difference between them is a
 difference in the suites rather than in the machine's mood. Suites are launched longest first,
-judged by file size, which is a heuristic: being wrong about the order costs some wall clock and
-nothing else.
+judged by what each one was last MEASURED to cost: every run records each suite's wall clock and
+the next run orders by it. Lane 1 carries the largest share of the budget and lane 1 is whatever
+launches first, so this is what decides which suite the machine is spent on.
+
+A suite nobody has measured yet, which means a first run or a newly added suite, falls back to
+file size and follows the measured ones. Size is a heuristic and bytes are not seconds, so the
+run prints which of the two it used and for how many suites. Being wrong about the order costs
+some wall clock and nothing else, because every result is collected and reported the same way
+regardless.
 
 Every suite ends with one machine readable line, and that is what the runner reads:
 
