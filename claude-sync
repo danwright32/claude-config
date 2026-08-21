@@ -618,8 +618,111 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
 
 skill_excludes(){ for s in "${PLUGIN_SKILLS[@]}"; do printf -- "--exclude=%s\n" "$s"; done; }
 
-tok(){ sed "s|$CLAUDE_HOME|$TOKEN|g"; }   # real home -> placeholder
-detok(){ sed "s|$TOKEN|$CLAUDE_HOME|g"; } # placeholder -> this Mac's home
+# LC_ALL=C so the substitution is bytewise. A UTF-8 locale makes sed refuse a file holding a byte
+# sequence it cannot decode ("illegal byte sequence"), which would empty the stream rather than
+# fail loudly, and the caller compares what comes out.
+tok(){ LC_ALL=C sed "s|$CLAUDE_HOME|$TOKEN|g"; }   # real home -> placeholder
+detok(){ LC_ALL=C sed "s|$TOKEN|$CLAUDE_HOME|g"; } # placeholder -> this Mac's home
+
+# ---- the home path substitution covers every mirrored file, not one (#87) ----
+# tok/detok existed and were wired to settings.hooks.json ALONE, so every other payload file was
+# carried verbatim and an absolute home path inside one was simply wrong on whichever Mac did not
+# author it. #86 fixed the eight that existed and added a guard, but two of them cannot be written
+# as a tilde at all: they are scriptPath values handed to the Workflow tool, which expands neither
+# a tilde nor a variable, so they were left carrying a placeholder the model has to substitute at
+# call time. That is a rule living only in a prompt (L27). Doing it here makes it a property of
+# the file.
+#
+# Only the MIRRORED trees. The top-level rule files are deliberately left alone: they are merged
+# entry by entry by merge_rule_files, and rewriting their bytes underneath a three-way merge would
+# change what the merge is comparing. They are prose, where a tilde reads correctly anyway.
+tokenized_path(){   # $1 = path relative to the payload
+  local d
+  for d in "${MIRROR_DIRS[@]}" skills; do
+    case "${1:-}" in "$d"/*) return 0 ;; esac
+  done
+  return 1
+}
+
+# Rewrite this Mac's home path to the token, in place, across the staged payload. Runs on the way
+# UP, after the mirror and before the secret scan.
+#
+# `cat >` rather than `mv`: the mode bits belong to the file (a hook has to stay executable) and a
+# move would replace them with the temp file's. grep -I picks the candidates in one pass and skips
+# binaries, so nothing that cannot survive a text rewrite is ever handed to sed.
+tokenize_payload(){
+  local d f tmp
+  [ -n "${CLAUDE_HOME:-}" ] || return 0
+  for d in "${MIRROR_DIRS[@]}" skills; do
+    [ -d "$PAYLOAD/$d" ] || continue
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      tmp="$(scratch_file)"
+      if tok < "$f" > "$tmp" 2>/dev/null; then cat "$tmp" > "$f"; fi
+      rm -f "$tmp"
+    done < <(grep -rIl --exclude-dir=.git -F -- "$CLAUDE_HOME" "$PAYLOAD/$d" 2>/dev/null || true)
+  done
+  return 0
+}
+
+# The payload tree as it should land on THIS Mac, for the apply to copy FROM.
+#
+# A materialised copy rather than a rewrite after the fact, because the apply compares checksums:
+# with the token still in the payload, every tokenized file differs from its local counterpart on
+# every run, so rsync would copy it every time and the change summary would name files nothing had
+# changed. A report that names unchanged files is a report nobody reads (L36).
+#
+# When no file in the tree carries the token, the payload directory itself is returned and nothing
+# is copied, so the ordinary case costs one grep.
+EXPANDED_ROOT=""
+cleanup_expanded(){ if [ -n "$EXPANDED_ROOT" ]; then rm -rf "$EXPANDED_ROOT"; EXPANDED_ROOT=""; fi; return 0; }
+apply_source_dir(){   # $1 = a mirrored tree name -> prints the directory to copy from
+  local src="$PAYLOAD/$1" dst hit rel tmp
+  if ! grep -rIq --exclude-dir=.git -F -- "$TOKEN" "$src" 2>/dev/null; then
+    printf '%s' "$src"; return 0
+  fi
+  [ -n "$EXPANDED_ROOT" ] || EXPANDED_ROOT="$(scratch_dir)"
+  dst="$EXPANDED_ROOT/$1"
+  mkdir -p "$dst"
+  rsync -a --delete "${COMMON_EXCLUDES[@]}" "$src/" "$dst/" 2>/dev/null || { printf '%s' "$src"; return 0; }
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    rel="${hit#"$src"/}"
+    [ -f "$dst/$rel" ] || continue
+    tmp="$(scratch_file)"
+    if detok < "$dst/$rel" > "$tmp" 2>/dev/null; then cat "$tmp" > "$dst/$rel"; fi
+    rm -f "$tmp"
+  done < <(grep -rIl --exclude-dir=.git -F -- "$TOKEN" "$src" 2>/dev/null || true)
+  printf '%s' "$dst"
+}
+
+# The payload's copy of one path, as it should look on THIS Mac. EVERY comparison between the two
+# sides has to go through this. A tokenized file never equals its payload copy byte for byte, so a
+# raw comparison reads it as locally ahead on every single run, holds it back on every apply, and
+# the other Mac's edits to it silently stop arriving: the pull still reports success and the file
+# simply never changes again.
+payload_local_view(){   # $1 = path relative to the payload
+  [ -f "$PAYLOAD/$1" ] || return 1
+  if tokenized_path "$1" && grep -Iq -F -- "$TOKEN" "$PAYLOAD/$1" 2>/dev/null; then
+    detok < "$PAYLOAD/$1"
+  else
+    cat "$PAYLOAD/$1"
+  fi
+}
+
+# The same view of a payload file as it was at some past commit, for the conflict path, which asks
+# what this Mac last applied. grep -I decides whether the blob is text, so a binary is never
+# handed to sed.
+blob_local_view(){   # $1 = path relative to the payload  $2 = commit
+  local tmp rc=0
+  tmp="$(scratch_file)"
+  git -C "$SYNC_REPO" show "$2:payload/$1" > "$tmp" 2>/dev/null || rc=1
+  if [ "$rc" -eq 0 ]; then
+    if tokenized_path "$1" && grep -Iq -F -- "$TOKEN" "$tmp" 2>/dev/null; then detok < "$tmp"; else cat "$tmp"; fi
+  fi
+  rm -f "$tmp"
+  return "$rc"
+}
 
 # Leading "@name" import lines of one rule file, as bare names. Only plain
 # filenames are returned: an absolute or ~ path points outside the synced set, and
@@ -986,6 +1089,9 @@ $dupfiles" in *"
 $f"*) continue ;; esac      # numbering collision here; do not spread it
     [ -f "$CLAUDE_HOME/$f" ] && cp "$CLAUDE_HOME/$f" "$PAYLOAD/$f"
   done
+  # After everything has been mirrored in, and before the scan, so what is scanned and what is
+  # committed are the same bytes the other Mac will receive.
+  tokenize_payload
   scan_secrets   # never let a credential reach the shared remote
 }
 
@@ -1024,7 +1130,7 @@ APPLIED_LOG=""
 # Removed however the run ends, including the early exit die() takes, so a pull
 # never leaves a scratch file behind. Safe across the self-update hand-off: at
 # that point the apply has not run yet, so there is nothing to clean.
-cleanup_applied_log(){ if [ -n "$APPLIED_LOG" ]; then rm -f "$APPLIED_LOG"; fi; return 0; }
+cleanup_applied_log(){ if [ -n "$APPLIED_LOG" ]; then rm -f "$APPLIED_LOG"; fi; cleanup_expanded; return 0; }
 trap cleanup_applied_log EXIT
 record_applied(){   # $1 = added|updated|removed   $2 = path relative to ~/.claude
   if [ -n "$APPLIED_LOG" ]; then printf '%s\t%s\n' "$1" "$2" >> "$APPLIED_LOG"; fi
@@ -1107,7 +1213,7 @@ MERGED
     done <<KEEP
 $keep
 KEEP
-    rsync -aic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$PAYLOAD/$d/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
+    rsync -aic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
   done
   # Reported from $ahead, not $keep: a merged rule file is held back too, but it
   # already had its own clearer "these were MERGED" line and listing it again here
@@ -1317,7 +1423,11 @@ $(unapplied_paths)
 $d/$path
 "*) continue ;; esac
       printf '%s\n' "$d/$path"
-    done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$PAYLOAD/$d/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)
+      # From the expanded view, the same source the apply itself copies from. Against the raw
+      # payload every tokenized file differs by construction, so all of them read as locally
+      # ahead: held back on every apply, announced on every pull as unsent edits, and the other
+      # Mac's changes to them would never land (#87).
+    done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)
   done
   # Top-level rules files reach ~/.claude by a plain copy, not by the rsync above,
   # and were left out of this protection when it was written. So the revert this
@@ -1844,10 +1954,12 @@ preserve_local_conflicts(){
 $p"*) continue ;; esac
     local_f="$CLAUDE_HOME/$p"
     [ -f "$local_f" ] || continue
-    # unchanged here since our last apply: nothing of ours to lose
-    if git -C "$SYNC_REPO" show "$last:payload/$p" 2>/dev/null | cmp -s - "$local_f"; then continue; fi
+    # unchanged here since our last apply: nothing of ours to lose. Compared as the file LOOKS
+    # here, not as it is stored: a tokenized file differs from its stored form by construction,
+    # and reading that as an edit would set aside a copy of every one of them on every pull (#87).
+    if blob_local_view "$p" "$last" 2>/dev/null | cmp -s - "$local_f"; then continue; fi
     # already identical to what is arriving: not a conflict either
-    if [ -f "$PAYLOAD/$p" ] && cmp -s "$PAYLOAD/$p" "$local_f"; then continue; fi
+    if [ -f "$PAYLOAD/$p" ] && payload_local_view "$p" | cmp -s - "$local_f"; then continue; fi
     cp "$local_f" "$local_f$sfx"
     # This run's own copies, so the standing report below does not repeat what the line beneath is
     # about to say. It is only ever about copies an EARLIER run left behind.
@@ -1898,7 +2010,10 @@ payload_path_applied(){   # $1 = path relative to payload/
     [ ! -e "$CLAUDE_HOME/$p" ]
     return $?
   fi
-  cmp -s "$PAYLOAD/$p" "$CLAUDE_HOME/$p"
+  [ -f "$CLAUDE_HOME/$p" ] || return 1
+  # Through the local view, never the raw bytes: a tokenized file cannot equal its payload copy,
+  # so a raw comparison answers "not applied" for ever (#87).
+  payload_local_view "$p" | cmp -s - "$CLAUDE_HOME/$p"
 }
 
 unapplied_remote_changes(){
@@ -2772,13 +2887,16 @@ case "$SYNC_SCRATCH_MAX_AGE" in
     echo "claude-sync: SYNC_SCRATCH_MAX_AGE='$SYNC_SCRATCH_MAX_AGE' is not a whole number of seconds. Refusing to run rather than sweeping to an age nobody can read. Set it to 0 to turn the sweep off." >&2
     exit 2 ;;
 esac
-SYNC_SCRATCH_NAMES="claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-suite-work. claude-sync-suite-section."
+SYNC_SCRATCH_NAMES="claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-suite-work. claude-sync-suite-section."
 
 # Every short-lived temp FILE in this tool is made here rather than by each call site writing its
 # own `mktemp`. One name, so every one of them is reclaimable, and one place to change it if that
 # name ever has to move. Seven call sites used a bare `mktemp`, which is anonymous the moment the
 # run holding it is killed, and 92 of those were on this Mac when #36 was measured.
 scratch_file(){ mktemp "${TMPDIR:-/tmp}/claude-sync-work.XXXXXXXX"; }
+# The same rule for a temp DIRECTORY. Only the apply needs one, to hold the payload with this
+# Mac's home path put back (see apply_source_dir), and it is removed on every exit path.
+scratch_dir(){ mktemp -d "${TMPDIR:-/tmp}/claude-sync-expand.XXXXXXXX"; }
 
 # Old enough that no live run can own it. A suite run cannot outlive its own 15 minute deadline
 # and a real sync takes 6 seconds, so an hour is 4x the longest run the tool permits and 600x the

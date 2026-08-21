@@ -18,9 +18,18 @@
 #   $HOME/...                   expanded by the shell
 #   os.path.expanduser("~/...") expanded by Python
 #   __CLAUDE_HOME__/...         claude-sync's own token, rewritten per Mac
-#   <HOME>/...                  a placeholder the model substitutes at call time,
-#                               for the two Workflow scriptPath values that
-#                               expand neither a tilde nor a variable
+#   <HOME>/...                  a placeholder a person or the model substitutes by
+#                               hand, still accepted where one is genuinely wanted
+#
+# One more form is allowed, and only in one place. claude-sync rewrites this Mac's
+# config directory to its token in every MIRRORED file on the way out, and expands
+# it again per Mac on the way in (claude-config#87), so inside a LIVE config tree
+# an absolute path under that same directory is portable: it is what the sync just
+# wrote, and it travels correctly. That allowance applies only when the tree being
+# scanned IS this machine's config directory, and only under the mirrored
+# directories. In the repo, where nothing has been through a send, every machine
+# path is still refused, and a path in a top level rule file is refused everywhere,
+# because rule files are merged entry by entry and are deliberately not rewritten.
 #
 # Deliberate exception, for a line that genuinely has to carry one (an example in
 # prose, a test fixture): put the marker `claude-sync-allow-home-path` on the
@@ -28,6 +37,12 @@
 #
 # Usage:
 #   check-home-paths.sh [config-root]
+#
+# CLAUDE_HOME_PATH_ROOTS overrides where home directories live (default "/Users
+# /home", which covers a Mac and the Linux runner). It exists so the allowance
+# above can be exercised against a throwaway tree on any platform: with the roots
+# fixed at /Users, every test of it would be inert on the runner and green for a
+# reason that has nothing to do with the rule (L504).
 # The default root is the directory holding this hooks folder, which is ~/.claude
 # on a live Mac and payload/ in the repo, so the same command means the same thing
 # in both places.
@@ -49,8 +64,9 @@ ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # necessity, and claude-sync already rewrites that one file's home path per Mac
 # on send and on apply, which is the mechanism this guard exists to cover the
 # gap in rather than to duplicate.
+SYNCED_DIRS=(hooks agents commands skills)
 targets=()
-for d in hooks agents commands skills; do
+for d in "${SYNCED_DIRS[@]}"; do
   [ -d "$ROOT/$d" ] && targets+=("$ROOT/$d")
 done
 while IFS= read -r f; do
@@ -73,8 +89,54 @@ SKIP=(--exclude-dir=.git --exclude-dir=__pycache__ --exclude-dir=node_modules \
 # how documentation refers to the idea rather than to a machine, and one of those
 # already lives in a vendored skill here, so a class that accepted it would open
 # with a false alarm nobody could act on (L104, L147).
-hits="$(grep -rInE "${SKIP[@]}" '/Users/[A-Za-z0-9][A-Za-z0-9._-]*' "${targets[@]}" 2>/dev/null \
-        | grep -v 'claude-sync-allow-home-path' || true)"
+# A path under a home directory root, whose account name starts with a letter or digit, which is
+# what a real account looks like. Both roots by default: a /home path is as wrong in a synced file
+# as a /Users one, and the suite runs on both kinds of machine.
+HOME_ROOTS="${CLAUDE_HOME_PATH_ROOTS:-/Users /home}"
+_alt=""
+for _r in $HOME_ROOTS; do _alt="${_alt:+$_alt|}${_r}"; done
+MACHINE_PATH="(${_alt})/[A-Za-z0-9][A-Za-z0-9._-]*"
+raw="$(grep -rInE "${SKIP[@]}" "$MACHINE_PATH" "${targets[@]}" 2>/dev/null \
+       | grep -v 'claude-sync-allow-home-path' || true)"
+
+# Is the tree being scanned this machine's own config directory? Compared as resolved physical
+# paths, because /tmp and /private/tmp are the same directory here and a string comparison would
+# answer no on a path that is the same place.
+SELF_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+self_root=""
+[ -d "$SELF_HOME" ] && self_root="$(cd "$SELF_HOME" 2>/dev/null && pwd -P || true)"
+scan_root="$(cd "$ROOT" 2>/dev/null && pwd -P || printf '%s' "$ROOT")"
+allow_self=0
+[ -n "$self_root" ] && [ "$scan_root" = "$self_root" ] && allow_self=1
+
+hits=""
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  if [ "$allow_self" -eq 1 ]; then
+    rel="${line%%:*}"; rel="${rel#"$ROOT"/}"
+    mirrored=0
+    for d in "${SYNCED_DIRS[@]}"; do
+      case "$rel" in "$d"/*) mirrored=1; break ;; esac
+    done
+    if [ "$mirrored" -eq 1 ]; then
+      # The file's own CONTENT, never the whole grep line. That line begins with the path of the
+      # file it came from, which is itself under somebody's home directory, so re-testing the
+      # whole line answers about the scanned tree's location rather than about what the file says
+      # (L135: a check matched over the wrong span is answered by the wrong thing, and this one
+      # passed a deliberately broken build because of it).
+      content="${line#*:}"; content="${content#*:}"
+      # This machine's own config path removed, then the content asked again: what is left is any
+      # OTHER machine's home, which is the defect. Done per line, so one portable path never
+      # excuses a stale one sitting beside it.
+      if ! printf '%s' "${content//$SELF_HOME/}" | grep -qE "$MACHINE_PATH"; then continue; fi
+    fi
+  fi
+  hits="$hits$line
+"
+done <<HITS
+$raw
+HITS
+hits="${hits%$'\n'}"
 
 scanned="$(find "${targets[@]}" -type f \
              ! -path '*/.git/*' ! -path '*__pycache__*' ! -name '*.pyc' 2>/dev/null | wc -l | tr -d ' ')"

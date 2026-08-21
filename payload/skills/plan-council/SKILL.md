@@ -43,7 +43,7 @@ Then present the full framing (roles + criteria + scope + what you learned in th
 Call the **Workflow** tool with:
 
     {
-      scriptPath: "<HOME>/.claude/skills/plan-council/panel.workflow.js",
+      scriptPath: "__CLAUDE_HOME__/skills/plan-council/panel.workflow.js",
       args: {
         feature: "<the feature>",
         constraints: "<hard constraints>",
@@ -54,7 +54,7 @@ Call the **Workflow** tool with:
       }
     }
 
-Substitute `<HOME>` with this machine's home directory (run `echo $HOME`). It is a placeholder because this config syncs between two Macs whose home directories differ, and the Workflow tool takes `scriptPath` as a literal string: it does not expand `~` or `$HOME`.
+That path is absolute and correct on this machine: the config sync rewrites the home directory in every synced file, so each Mac holds its own. Use it exactly as written. It is spelled out rather than shortened because the Workflow tool takes `scriptPath` as a literal string and expands neither `~` nor `$HOME`. If you ever see `__CLAUDE_HOME__` here instead of a real path, this file has not been applied by the sync yet: replace that token with this machine's home config directory (`echo $HOME/.claude`).
 
 It starts with a **preflight** that confirms it can actually reach your code and database, then runs with real independent subagents: independent first-passes → distill to 2-3 rival whole options → champion + red-team each → score against the criteria and pick the survivor → synthesize the winner (grafting the runner-up's best ideas, recording overruled dissent and the ideal-vs-doable gap) → **reality-check** against the actual codebase/schema, alongside a **lessons audit** that reads `~/.claude/LESSONS.md` and flags anywhere the plan repeats a mistake already paid for on a past project → **fix-and-reverify**: if either check finds a problem (a broken file path, or a design that repeats a recorded defect), it corrects the plan *inline* and re-runs both checks (up to 2 rounds), so the plan you read carries neither known-wrong citations nor known-bad designs. The rival options always span a **cost spread** (at least one free/cheapest; a paid option only when clearly better), and every product / scope / cost trade-off — including free-vs-paid — is **escalated to you, not locked by the panel**. It returns `{ plan, selection, options, advocacy, realityCheck, lessonsAudit, preflight, rcRounds, … }`.
 

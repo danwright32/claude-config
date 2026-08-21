@@ -4394,6 +4394,85 @@ stp_left="$(git -C "$STPR" rev-list --count "origin/$STPBR..HEAD" 2>/dev/null ||
 check "#82 and the commit it made is still unsent" "[ -n \"\$stp_left\" ] && [ \"\$stp_left\" -ge 1 ] 2>/dev/null"
 
 
+section "== one Mac's home path never travels inside a synced file (#87) =="
+# tok/detok existed, and were wired to settings.hooks.json alone. Every other payload file was
+# copied verbatim, so an absolute home path inside one was simply wrong on whichever Mac did not
+# author it: #86 found eight, and the failure is invisible on the machine that wrote the line.
+# Two of them cannot be fixed by writing a tilde, because they are scriptPath values handed to the
+# Workflow tool, which expands neither a tilde nor a variable, so they were left carrying a
+# placeholder the model has to substitute at call time. That is a rule living only in a prompt
+# (L27). Substituting on send and on apply makes it a property of the file instead.
+unset SYNC_NO_GIT
+TKB="$WORK/token-bare.git"; git init -q --bare "$TKB"
+TKRA="$WORK/token-repoA"; git clone -q "$TKB" "$TKRA" 2>/dev/null
+TKHA="$WORK/token-homeA"; mkdir -p "$TKHA/hooks" "$TKHA/skills/tokskill"
+echo '{"model":"opus","hooks":{}}' > "$TKHA/settings.json"
+printf '#!/usr/bin/env bash\nbash "%s/hooks/helper.sh" --run\n' "$TKHA" > "$TKHA/hooks/tokhook.sh"
+chmod +x "$TKHA/hooks/tokhook.sh"
+mkskill "$TKHA/skills/tokskill/SKILL.md" "scriptPath: $TKHA/skills/tokskill/panel.workflow.js"
+# A binary, because the substitution is a text rewrite and corrupting one would be invisible: it
+# would still be a file, still the right name, and nothing would report a problem (L104).
+printf 'BIN\000\001\002\003ARY\000end' > "$TKHA/skills/tokskill/logo.bin"
+tk_bin_sum="$(cksum < "$TKHA/skills/tokskill/logo.bin")"
+CLAUDE_HOME="$TKHA" SYNC_REPO="$TKRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#87 the published hook carries the token"     "grep -q '__CLAUDE_HOME__/hooks/helper.sh' '$TKRA/payload/hooks/tokhook.sh'"
+check "#87 and not the home that wrote it"           "! grep -q '$TKHA' '$TKRA/payload/hooks/tokhook.sh'"
+check "#87 a skill's path is tokenized too"          "grep -q '__CLAUDE_HOME__/skills/tokskill' '$TKRA/payload/skills/tokskill/SKILL.md'"
+check "#87 a binary travels byte for byte"           "[ \"\$(cksum < '$TKRA/payload/skills/tokskill/logo.bin')\" = \"\$tk_bin_sum\" ]"
+
+TKRB="$WORK/token-repoB"; git clone -q "$TKB" "$TKRB" 2>/dev/null
+TKHB="$WORK/token-homeB"; mkdir -p "$TKHB"
+echo '{"model":"opus","hooks":{}}' > "$TKHB/settings.json"
+CLAUDE_HOME="$TKHB" SYNC_REPO="$TKRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#87 the other Mac gets its OWN home in the hook" "grep -q '$TKHB/hooks/helper.sh' '$TKHB/hooks/tokhook.sh'"
+check "#87 no token is left behind in it"              "! grep -q '__CLAUDE_HOME__' '$TKHB/hooks/tokhook.sh'"
+check "#87 and the author's home is nowhere in it"     "! grep -q '$TKHA' '$TKHB/hooks/tokhook.sh'"
+check "#87 the skill's path points at this Mac"        "grep -q '$TKHB/skills/tokskill/panel.workflow.js' '$TKHB/skills/tokskill/SKILL.md'"
+check "#87 the hook is still executable here"          "[ -x '$TKHB/hooks/tokhook.sh' ]"
+check "#87 the binary arrived unharmed"                "[ \"\$(cksum < '$TKHB/skills/tokskill/logo.bin')\" = \"\$tk_bin_sum\" ]"
+
+# The one that decides whether this is safe to ship. A tokenized file NEVER equals its payload
+# copy byte for byte, so a comparison that does not know about the token reads every one of them
+# as locally ahead, holds it back on every apply, and the other Mac's edits to it stop arriving
+# for good. Nothing announces that: the pull reports success and the file simply never changes.
+printf '#!/usr/bin/env bash\nbash "%s/hooks/helper.sh" --run --verbose\n' "$TKHA" > "$TKHA/hooks/tokhook.sh"
+CLAUDE_HOME="$TKHA" SYNC_REPO="$TKRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_tk="$(CLAUDE_HOME="$TKHB" SYNC_REPO="$TKRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull of an edited tokenized hook: $out_tk"
+check "#87 an edit to a tokenized file still reaches the other Mac" \
+  "grep -q -- '--run --verbose' '$TKHB/hooks/tokhook.sh'"
+check "#87 rewritten for this Mac, again"  "grep -q '$TKHB/hooks/helper.sh' '$TKHB/hooks/tokhook.sh'"
+check "#87 and the pull reports it as a received change" "line_has \"\$out_tk\" 'updated' 'hooks/tokhook\.sh'"
+
+# ...and the other way round: a pull with nothing new must report nothing. The substitution makes
+# the payload copy differ from the local copy by construction, so a comparison done on raw bytes
+# would report every tokenized file as updated on EVERY pull. A change report that names files
+# nothing changed is a change report nobody reads (L36).
+out_tk2="$(CLAUDE_HOME="$TKHB" SYNC_REPO="$TKRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "second pull, nothing changed: $out_tk2"
+check "#87 a pull with nothing new says so"        "printf '%s' \"\$out_tk2\" | grep -q 'Already up to date'"
+check "#87 and names no file as received"          "! printf '%s' \"\$out_tk2\" | grep -q 'tokhook\.sh'"
+
+# Nor may a send invent a commit out of the substitution. If the payload were rewritten to
+# something different every time, the watcher would push a commit per run for ever.
+tk_head_before="$(git -C "$TKRB" rev-parse HEAD 2>/dev/null)"
+CLAUDE_HOME="$TKHB" SYNC_REPO="$TKRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+tk_head_after="$(git -C "$TKRB" rev-parse HEAD 2>/dev/null)"
+check "#87 a send with nothing to say makes no commit" "[ -n \"\$tk_head_before\" ] && [ \"\$tk_head_before\" = \"\$tk_head_after\" ]"
+check "#87 and the payload still holds the token"      "grep -q '__CLAUDE_HOME__/hooks/helper.sh' '$TKRB/payload/hooks/tokhook.sh'"
+
+# The round trip in the other direction: this Mac writes an absolute path of its own, and the
+# first Mac must receive it pointing at ITS home, not at the author's.
+printf '#!/usr/bin/env bash\nbash "%s/hooks/second.sh"\n' "$TKHB" > "$TKHB/hooks/tokback.sh"
+chmod +x "$TKHB/hooks/tokback.sh"
+CLAUDE_HOME="$TKHB" SYNC_REPO="$TKRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#87 a path written here is tokenized on the way up" \
+  "grep -q '__CLAUDE_HOME__/hooks/second.sh' '$TKRB/payload/hooks/tokback.sh'"
+CLAUDE_HOME="$TKHA" SYNC_REPO="$TKRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#87 and lands on the other Mac as its own home" "grep -q '$TKHA/hooks/second.sh' '$TKHA/hooks/tokback.sh'"
+check "#87 with no trace of the Mac that wrote it"     "! grep -q '$TKHB' '$TKHA/hooks/tokback.sh'"
+
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"

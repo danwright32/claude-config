@@ -13,8 +13,14 @@ back.
 - `payload/skills/` — custom + installed skills (plugin-managed skills excluded, see below)
 - `payload/agents/` — the `plan-*` agents
 - `payload/commands/` — slash commands
-- `payload/settings.hooks.json` — **only** the `hooks` block of `settings.json`, with the home path stored as `__CLAUDE_HOME__` so it works on any Mac
+- `payload/settings.hooks.json` — **only** the `hooks` block of `settings.json`
 - `payload/CLAUDE.md` and `payload/RTK.md` — your global rules files, synced verbatim (standing cross-project instructions travel here)
+
+Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are stored with this
+Mac's config directory written as `__CLAUDE_HOME__`, and expanded to each Mac's own on the way in,
+so an absolute path inside one is correct on both machines. The top-level rules files are the
+exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
+in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split.
 
 ## What NEVER syncs (stays private to each Mac)
 
