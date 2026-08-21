@@ -64,9 +64,63 @@ SUITE_CHILD_DEPTH=$((SUITE_DEPTH + 1))
 # (#31), and carries the seam that makes that deadline testable. Both are inert until the
 # deadline is armed further down, which is after the section runner has decided whether this
 # process is the one that will actually execute the sections.
+# ---- every section reports its size and how long it took (#107) ----
+# A full run reported one number and nothing about where the minutes went, so "the suite is slow"
+# named no section anybody could act on, and a section that became slow later had nothing to show
+# up in.
+#
+# The count is derived by subtracting the running totals at the section's start from the totals at
+# its end, so it cannot drift from what actually ran. The suite asserts the per-section counts SUM
+# to the run's own total, which a plausible-looking number would not survive.
+#
+# SECONDS is a bash builtin, so the clock costs no process per section. Whole seconds is the right
+# resolution deliberately: what a reader needs is which sections cost seconds, and a sub-second
+# figure would cost a fork per section and perturb the thing being measured. Most sections
+# legitimately read 0s, which is also why SUITE_SLOW_IN exists below: a timer that was simply
+# broken would read 0s everywhere too, and that is indistinguishable from a fast suite (L182).
+_SEC_TITLE=""; _SEC_T0=0; _SEC_P0=0; _SEC_F0=0; _SEC_PROFILE=""
+
+section_close(){
+  [ -n "$_SEC_TITLE" ] || return 0
+  local _n=$(( (PASS - _SEC_P0) + (FAIL - _SEC_F0) ))
+  local _d=$(( SECONDS - _SEC_T0 ))
+  local _w="checks"; [ "$_n" -eq 1 ] && _w="check"
+  printf '  (section: %d %s, %ds)\n' "$_n" "$_w" "$_d"
+  # Zero padded so a plain reverse sort is a numeric one, with no dependence on the locale's idea
+  # of numeric ordering.
+  _SEC_PROFILE="$_SEC_PROFILE$(printf '%06d\t%s' "$_d" "$_SEC_TITLE")
+"
+  _SEC_TITLE=""
+  return 0
+}
+
+# Closes the last section of a run and prints the profile. Called from the bottom of this file AND
+# from the tail the section extractor appends, because a filtered run stops at a section too and its
+# last section would otherwise be the one section never reported (which is the one being worked on).
+suite_profile(){
+  section_close
+  [ -n "$_SEC_PROFILE" ] || return 0
+  echo ""
+  echo "slowest sections:"
+  printf '%s' "$_SEC_PROFILE" | sort -r | head -5 | while IFS="$(printf '\t')" read -r _pd _pt; do
+    [ -n "$_pt" ] || continue
+    printf '  %ds %s\n' "$((10#$_pd))" "$_pt"
+  done
+  return 0
+}
+
 section(){
+  section_close
   echo "$1"
+  _SEC_TITLE="$1"; _SEC_T0=$SECONDS; _SEC_P0=$PASS; _SEC_F0=$FAIL
   if [ -n "$SUITE_SECTION_MARK" ]; then printf '%s\n' "$1" > "$SUITE_SECTION_MARK"; fi
+  # SUITE_SLOW_IN=<text> pauses deliberately in the first matching section, so the duration column
+  # can be watched reporting a KNOWN number. Without it every section reads 0s on a fast machine and
+  # a broken clock looks exactly like a fast suite (L1, L182).
+  if [ -n "${SUITE_SLOW_IN:-}" ] && printf '%s' "$1" | grep -qi -- "$SUITE_SLOW_IN"; then
+    echo "  (test seam: pausing deliberately in this section)"
+    sleep 2
+  fi
   # SUITE_HANG_IN=<text> stalls deliberately in the first matching section. A deadline can only
   # be trusted once it has been watched killing something (L1), and waiting for a real stall to
   # turn up is not a test.
@@ -106,7 +160,7 @@ if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
     echo "test suite: SECTION_UNTIL='$SECTION_UNTIL' matched no section. Run without it, or check the spelling against the '==' headings." >&2
     exit 2
   fi
-  printf '\necho ""\necho "PASS=$PASS FAIL=$FAIL (stopped after SECTION_UNTIL=%s, NOT a full run)"\n[ "$FAIL" -eq 0 ]\n' "$SECTION_UNTIL" >> "$_filtered"
+  printf '\nsuite_profile\necho ""\necho "PASS=$PASS FAIL=$FAIL (stopped after SECTION_UNTIL=%s, NOT a full run)"\n[ "$FAIL" -eq 0 ]\n' "$SECTION_UNTIL" >> "$_filtered"
   # The extracted file must PARSE before it is run. Cutting at section boundaries can land
   # inside a multi-line construct and produce invalid shell, and without this the broken
   # script runs anyway and its parse errors are reported as if the code under test failed.
@@ -4555,10 +4609,67 @@ check "#87 and lands on the other Mac as its own home" "grep -q '$TKHA/hooks/sec
 check "#87 with no trace of the Mac that wrote it"     "! grep -q '$TKHB' '$TKHA/hooks/tokback.sh'"
 
 
+section "== every section reports its size and how long it took (#107) =="
+# A full run reported one number, PASS, and nothing about where the minutes went. So "the suite is
+# slow" could not be acted on: the slow sections were unknown, and a section that became slow later
+# had nothing to show up in. Every section now closes with its own check count and duration.
+#
+# The count is the STRONG half. It is derived by subtracting the running totals at the section's
+# start from the totals at its end, so it cannot drift from what actually ran, and the checks below
+# assert the per-section counts SUM to the run's own total: a check attributed to no section, or to
+# two, breaks that sum. A per-section number that merely looks plausible would not.
+#
+# The duration needs a positive control or it is worthless. Whole seconds means most sections read
+# 0s quite legitimately, and a timer that was simply broken would ALSO read 0s everywhere, which is
+# indistinguishable from a fast suite (L182, L1). SUITE_SLOW_IN=<text> stalls a chosen section for a
+# known couple of seconds, and the check below requires that section's line to report at least that.
+_PFO="$WORK/profile-child.txt"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_SLOW_IN="apply is idempotent" SECTION_UNTIL="apply is idempotent" bash "$SCRIPT_SELF" > "$_PFO" 2>&1
+dbg "#107 child output: $(head -c 400 "$_PFO" | tr '\n' '|')"
+
+check "#107 a section closes with its check count and duration" \
+  "grep -qE '^  \(section: [0-9]+ checks?, [0-9]+s\)' '$_PFO'"
+
+# Derived: every heading the child printed must be followed by one of those lines. A format that
+# appears once and then stops would satisfy a bare grep.
+_pf_heads="$(grep -c '^== ' "$_PFO")"
+_pf_lines="$(grep -cE '^  \(section: [0-9]+ checks?, [0-9]+s\)' "$_PFO")"
+check "#107 every section that ran got one, not just the first" "[ '$_pf_heads' -eq '$_pf_lines' ]"
+check "#107 the comparison had sections to compare" "[ '$_pf_heads' -ge 3 ]"
+
+# The sum. This is what makes the per-section counts real rather than decorative.
+_pf_sum=0
+while IFS= read -r _pfn; do
+  [ -n "$_pfn" ] || continue
+  _pf_sum=$((_pf_sum + _pfn))
+done <<PFEOF
+$(grep -oE '^  \(section: [0-9]+' "$_PFO" | grep -oE '[0-9]+')
+PFEOF
+_pf_pass="$(grep -oE '^PASS=[0-9]+' "$_PFO" | head -1 | cut -d= -f2)"
+_pf_fail="$(grep -oE 'FAIL=[0-9]+' "$_PFO" | head -1 | cut -d= -f2)"
+case "$_pf_pass" in ''|*[!0-9]*) _pf_pass=-1 ;; esac
+case "$_pf_fail" in ''|*[!0-9]*) _pf_fail=-1 ;; esac
+check "#107 the per section counts add up to the run's own total" \
+  "[ '$_pf_sum' -eq \"\$((_pf_pass + _pf_fail))\" ] && [ '$_pf_sum' -gt 0 ]"
+
+# The positive control: the deliberately slowed section must REPORT being slow. Paired with its
+# own heading rather than searched for anywhere, or any slow section in the run would satisfy it.
+_pf_slow="$(awk '/^== apply is idempotent/{f=1;next} f && /^  \(section:/{print;exit}' "$_PFO" \
+            | grep -oE '[0-9]+s\)' | grep -oE '[0-9]+')"
+case "$_pf_slow" in ''|*[!0-9]*) _pf_slow=-1 ;; esac
+check "#107 a section made slow on purpose reports the time it took" "[ '$_pf_slow' -ge 2 ]"
+
+# And the run ends with the slowest sections named, which is the thing somebody reads.
+check "#107 the run ends with a profile of the slowest sections" \
+  "grep -qi 'slowest sections' '$_PFO'"
+check "#107 the profile names a section and a duration on one line" \
+  "line_has \"\$(cat '$_PFO')\" '^ +[0-9]+s ' 'apply is idempotent'"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
 
+suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
