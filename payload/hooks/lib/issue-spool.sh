@@ -28,6 +28,8 @@
 #   issue-spool.sh has-findings <dir>          exit 0 only if a real finding is pending
 #   issue-spool.sh archive      <dir>          everything already filed
 #   issue-spool.sh clear        <dir>          move pending into the archive
+#   issue-spool.sh file-errors  <dir>          file ONLY the harvest failures,
+#                                              once they have been reported
 #
 # `raw` and `archive` exit 0 on an empty spool. They used to exit non-zero,
 # which kills any caller running under errexit on the ordinary empty case, and
@@ -295,15 +297,102 @@ issue_spool_clear() { # clear <dir>  -> file the pending records into the archiv
 
   cat "$staged" >> "$archive" 2>/dev/null && rm -f "$staged"
 
-  # Cap the archive. It is history that nothing reads automatically, so the only
-  # thing unbounded growth buys is a file that eventually matters.
-  if [ -f "$archive" ]; then
-    count="$(wc -l < "$archive" 2>/dev/null | tr -d ' ')"
-    if [ -n "$count" ] && [ "$count" -gt "$ARCHIVE_MAX_RECORDS" ]; then
-      tail -n "$ARCHIVE_MAX_RECORDS" "$archive" > "${archive}.trimmed" 2>/dev/null \
-        && mv "${archive}.trimmed" "$archive"
-    fi
+  issue_spool_cap_archive "$archive"
+}
+
+# Cap the archive. It is history that nothing reads automatically, so the only
+# thing unbounded growth buys is a file that eventually matters. One definition,
+# called by both filing paths, so they cannot drift into capping differently.
+issue_spool_cap_archive() { # cap-archive <archive-file>
+  local archive="$1" count
+  [ -f "$archive" ] || return 0
+  count="$(wc -l < "$archive" 2>/dev/null | tr -d ' ')"
+  if [ -n "$count" ] && [ "$count" -gt "$ARCHIVE_MAX_RECORDS" ]; then
+    tail -n "$ARCHIVE_MAX_RECORDS" "$archive" > "${archive}.trimmed" 2>/dev/null \
+      && mv "${archive}.trimmed" "$archive"
   fi
+  return 0
+}
+
+# File away the records a person cannot act on, once they have actually been
+# REPORTED (claude-config#85).
+#
+# A HARVEST FAILED record used to be unsettleable. The spool is emptied only by
+# `clear`, and the review tells Claude to run that AFTER the picker is answered;
+# a spool holding nothing but failures gives the review nothing to put in a
+# picker, so no picker appears and nothing ever runs clear. The record then rode
+# along on every review for that project until somebody cleared the spool by
+# hand (measured 2026-08-18: one from 18:18 UTC still being reported at 19:13).
+# The fault underneath is real and recurring and cannot be fixed at the source: a
+# nested subagent leaves no transcript anywhere to read.
+#
+# There is nothing to do about one, so being told once is the whole of its value.
+# FINDINGS ARE NOT TOUCHED: those keep the old rule and survive until the picker
+# is answered, because a finding a person has not decided about is exactly what
+# this spool exists to protect. Neither is an UNREADABLE line: nothing classified
+# it, so filing it would settle something nobody has read (L11).
+#
+# The known cost, worth stating: a review that is interrupted before it is read
+# files that failure unseen. That is why the caller may only run this once the
+# report has actually gone out, and why nothing else is settled this way.
+#
+# Same rename-then-drain shape as issue_spool_clear, for the same reason: a
+# record appended by a finishing agent between a read and a rewrite would be
+# destroyed, and filing runs exactly when agents are finishing. After the rename
+# an appender is writing to a fresh file, and the records kept back are APPENDED
+# to whatever is there rather than written over it.
+issue_spool_file_errors() { # file-errors <dir>
+  local file archive staged keep errs
+  file="$(issue_spool_path "$1")"
+  archive="$(issue_spool_archive_path "$1")"
+  [ -s "$file" ] || return 0
+  mkdir -p "$SPOOL_ROOT" 2>/dev/null || return 1
+  staged="${file}.filing-errors.$$"
+  keep="${staged}.keep"
+  errs="${staged}.errors"
+  mv "$file" "$staged" 2>/dev/null || return 1
+
+  # The same named seam clear() carries, at the same instant, so the concurrent
+  # append can be tested here rather than raced for.
+  [ -n "${CLAUDE_ISSUE_SPOOL_MIDCLEAR:-}" ] && eval "${CLAUDE_ISSUE_SPOOL_MIDCLEAR}"
+
+  if ! python3 - "$staged" "$keep" "$errs" <<'PY_SPLIT'
+import json, sys
+
+src, keep_path, err_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+with open(keep_path, "w", encoding="utf-8") as keep, \
+     open(err_path, "w", encoding="utf-8") as errs:
+    for line in open(src, encoding="utf-8", errors="replace"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            rec = json.loads(stripped)
+        except Exception:
+            keep.write(stripped + "\n")     # unreadable: nobody has classified it
+            continue
+        if isinstance(rec, dict) and rec.get("status") == "error":
+            errs.write(stripped + "\n")
+        else:
+            keep.write(stripped + "\n")
+PY_SPLIT
+  then
+    # Nothing was moved anywhere, so everything goes back. Failing towards
+    # keeping a record is the only safe direction here.
+    cat "$staged" >> "$file" 2>/dev/null
+    rm -f "$staged" "$keep" "$errs"
+    return 1
+  fi
+
+  cat "$errs" >> "$archive" 2>/dev/null && rm -f "$errs"
+  # Appended, never moved into place: a record written by an agent that finished
+  # after the rename above is already sitting in this file.
+  cat "$keep" >> "$file" 2>/dev/null && rm -f "$keep"
+  rm -f "$staged"
+
+  issue_spool_cap_archive "$archive"
+  return 0
 }
 
 # Direct invocation dispatch. Sourcing the file defines the functions and runs
@@ -322,6 +411,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     has-findings) issue_spool_has_findings "${1:-$PWD}" ;;
     archive)      f="$(issue_spool_archive_path "${1:-$PWD}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
     clear)        issue_spool_clear "${1:-$PWD}" ;;
+    file-errors)  issue_spool_file_errors "${1:-$PWD}" ;;
     *)            echo "issue-spool.sh: unknown command '${cmd}'" >&2; exit 2 ;;
   esac
 fi
