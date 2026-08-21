@@ -69,7 +69,6 @@ cat > "$GOOD/skills/demo/SKILL.md" <<'ALLOWED'
 bash ~/.claude/skills/x/healthcheck.sh
 bash $HOME/.claude/skills/x/healthcheck.sh
 os.path.expanduser("~/.claude/skills/x/state.json")
-<HOME>/.claude/skills/plan-council/panel.workflow.js
 ALLOWED
 # The sync's placeholder, assembled rather than written out. Spelled in full, the
 # apply rewrites this very line into a real home directory, and then this fixture,
@@ -200,6 +199,63 @@ code_tok3=$?
 [ "$code_tok3" -eq 0 ] \
   && check "and a marked line is excused here too" ok \
   || check "and a marked line is excused here too" "exit=$code_tok3 out=$out_tok3"
+
+# ---------------------------------------------------------------------------
+# The hand substituted placeholder, which is refused now rather than allowed
+# (claude-config#106). It was only ever needed for two Workflow scriptPath values
+# that could not be written as a tilde; since #87 the sync rewrites this Mac's
+# home directory in every mirrored file, so both are concrete again and nothing
+# writes it. Left merely unmentioned it would still pass, because it is not a
+# machine path and never matched that rule, so what is asserted here is the
+# REFUSAL: an unsubstituted placeholder in a live file resolves to nothing, which
+# is the same silent half working the guard exists to catch (L67).
+#
+# Assembled, never written whole, for the same reason as BADHOME above: this file
+# is itself inside the scanned tree, and the real tree scan at the bottom would
+# fail on the line demonstrating the defect.
+# ---------------------------------------------------------------------------
+ANGLE="<""HOME>"
+ANGTREE="$(tree angle)"
+printf 'node "%s/.claude/skills/plan-council/panel.workflow.js"\n' "$ANGLE" > "$ANGTREE/skills/demo/SKILL.md"
+out_ang="$(bash "$CHECK" "$ANGTREE" 2>&1)"
+code_ang=$?
+[ "$code_ang" -eq 1 ] \
+  && check "the hand substituted placeholder is refused" ok \
+  || check "the hand substituted placeholder is refused" "exit=$code_ang out=$out_ang"
+printf '%s' "$out_ang" | grep -q "skills/demo/SKILL.md" \
+  && check "and the refusal names the file it found it in" ok \
+  || check "and the refusal names the file it found it in" "out=$out_ang"
+
+# Its own exit is 1, not 2: it is a finding, and it must be reported as the same
+# kind of finding as a machine path rather than as a scan that read nothing.
+printf '%s' "$out_ang" | grep -qi "substitut" \
+  && check "the refusal says what to do about it" ok \
+  || check "the refusal says what to do about it" "out=$out_ang"
+
+# A rule file is not rewritten by the sync either, so it is refused there too.
+printf 'name: demo\n' > "$ANGTREE/skills/demo/SKILL.md"
+printf 'see %s/LESSONS.md\n' "$ANGLE" > "$ANGTREE/CLAUDE.md"
+out_ang2="$(bash "$CHECK" "$ANGTREE" 2>&1)"
+code_ang2=$?
+[ "$code_ang2" -eq 1 ] \
+  && check "it is refused in a top level rule file too" ok \
+  || check "it is refused in a top level rule file too" "exit=$code_ang2 out=$out_ang2"
+
+# The same escape hatch as everything else here, and it excuses its own line only.
+printf '# rules\n' > "$ANGTREE/CLAUDE.md"
+printf 'an example, %s/x claude-sync-allow-home-path\n' "$ANGLE" > "$ANGTREE/skills/demo/SKILL.md"
+out_ang3="$(bash "$CHECK" "$ANGTREE" 2>&1)"
+code_ang3=$?
+[ "$code_ang3" -eq 0 ] \
+  && check "a marked line is excused here too" ok \
+  || check "a marked line is excused here too" "exit=$code_ang3 out=$out_ang3"
+
+printf 'and this one is not %s/y\n' "$ANGLE" >> "$ANGTREE/skills/demo/SKILL.md"
+out_ang4="$(bash "$CHECK" "$ANGTREE" 2>&1)"
+code_ang4=$?
+[ "$code_ang4" -eq 1 ] \
+  && check "the marker does not excuse the rest of its file here either" ok \
+  || check "the marker does not excuse the rest of its file here either" "exit=$code_ang4 out=$out_ang4"
 
 # ---------------------------------------------------------------------------
 # A scan that read nothing must not report a clean tree. Both ways of reading

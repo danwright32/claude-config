@@ -19,8 +19,6 @@
 #   os.path.expanduser("~/...") expanded by Python
 #   the sync's own placeholder, which claude-sync rewrites per Mac (it is not
 #   spelled out anywhere in this file, and must not be: see the note below)
-#   <HOME>/...                  a placeholder a person or the model substitutes by
-#                               hand, still accepted where one is genuinely wanted
 #
 # One more form is allowed, and only in one place. claude-sync rewrites this Mac's
 # config directory to its token in every MIRRORED file on the way out, and expands
@@ -192,6 +190,31 @@ if [ -n "${tokbad//[[:space:]]/}" ]; then
   echo "check-home-paths: these lines write the sync's placeholder somewhere it is not standing in front of a path, and the apply will rewrite them into one machine's home directory:" >&2
   printf '%s' "$tokbad" | sed 's/^/  /' >&2
   echo "Assemble it from pieces so the apply has nothing to match, or put claude-sync-allow-home-path on the line if it genuinely has to be written whole." >&2
+  exit 1
+fi
+
+# The OTHER placeholder: the angle bracket home spelling a person substitutes by hand. It used to
+# be listed above as an accepted portable form, because two Workflow scriptPath values could not be
+# written as a tilde and had to be filled in per Mac. Since claude-config#87 the sync rewrites this
+# Mac's home directory in every mirrored file on the way out and expands it per Mac on the way in,
+# so both of those values are concrete again and nothing writes this spelling any more
+# (claude-config#106).
+#
+# It is REFUSED rather than merely unmentioned. Unmentioned changes nothing: it is not a machine
+# path, so the rule above never matched it, and a line carrying it would go on passing while the
+# path it names resolves to nothing wherever it is read. That is the same silent half working this
+# whole guard exists to catch, and a placeholder standing in for a value nobody fills in is a
+# DETECTION that the value is missing rather than a label on it (L67).
+#
+# Assembled from pieces, never written whole, exactly like the sync's own token above: this file
+# lives inside the tree it scans, so a comment naming the spelling in full would fail its own check.
+ANGLE_TOKEN="<""HOME>"
+angbad="$(grep -rIn "${SKIP[@]}" -F -- "$ANGLE_TOKEN" "${targets[@]}" 2>/dev/null \
+          | grep -v 'claude-sync-allow-home-path' || true)"
+if [ -n "${angbad//[[:space:]]/}" ]; then
+  echo "check-home-paths: these lines carry the hand substituted home placeholder, which nothing fills in any more, so the path they name resolves to nothing on every Mac:" >&2
+  printf '%s\n' "$angbad" | sed 's/^/  /' >&2
+  echo "Write the path relative to the home directory instead (a tilde, \$HOME, or expanduser), or put claude-sync-allow-home-path on the line if it genuinely has to name the placeholder." >&2
   exit 1
 fi
 
