@@ -199,11 +199,25 @@ mk_slow_suite() { # mk_slow_suite <dir> <name> <sleep seconds> <failed count> <e
   mkdir -p "$1"
   {
     printf '#!/usr/bin/env bash\n'
+    # Each one records when it STARTED and when it FINISHED. The check below asks whether their
+    # intervals OVERLAP, which is a fact about what happened rather than a duration, so a loaded
+    # machine cannot turn it into a false failure. Comparing wall clock did exactly that: with the
+    # whole repo running side by side, three sleeps of 3, 1 and 0 seconds took 4 seconds together
+    # and the check called that "no better than sequential" when they had in fact all overlapped.
+    printf 'date +%%s > "$(dirname "$0")/%s.start"\n' "$2"
     printf 'sleep %s\n' "$3"
+    printf 'date +%%s > "$(dirname "$0")/%s.end"\n' "$2"
     printf 'printf %s\\\\n "%s passed=1 failed=%s"\n' "'%s'" "$MARK" "$4"
     printf 'exit %s\n' "$5"
   } > "$1/test-$2.sh"
   chmod +x "$1/test-$2.sh"
+}
+overlaps() { # overlaps <dir> <nameA> <nameB>  -> true when the two ran at the same time
+  local as ae bs be
+  as="$(cat "$1/$2.start" 2>/dev/null)"; ae="$(cat "$1/$2.end" 2>/dev/null)"
+  bs="$(cat "$1/$3.start" 2>/dev/null)"; be="$(cat "$1/$3.end" 2>/dev/null)"
+  case "$as$ae$bs$be" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$as" -le "$be" ] && [ "$bs" -le "$ae" ]
 }
 
 P="$TMPROOT/dir-parallel"
@@ -231,14 +245,23 @@ order="$(printf '%s\n' "$out_par" | grep -oE 'test-(aaa|bbb|ccc)\.sh' | tr '\n' 
   && check "and they are reported in a stable order, not in the order they finished" ok \
   || check "and they are reported in a stable order, not in the order they finished" "order was: $order"
 # The control for the fixture: the sleeps really do make them finish in the opposite order, so the
-# check above is not satisfied by three suites that all finished instantly (L159).
+# ordering check is not satisfied by three suites that all finished instantly (L159).
 [ "$par_elapsed" -ge 3 ] \
   && check "the fixture really did stagger their finishing times" ok \
   || check "the fixture really did stagger their finishing times" "the whole run took ${par_elapsed}s, so nothing was staggered"
-# And they really did overlap: run one at a time these take at least 4 seconds together.
-[ "$par_elapsed" -lt 4 ] \
+# And they really did run AT THE SAME TIME. Asked as an overlap of the intervals they recorded for
+# themselves, never as a wall clock comparison: this suite runs alongside every other one in the
+# repo, so an absolute duration measures the machine's load rather than the runner (L102, L209).
+overlaps "$P" aaa ccc \
   && check "and they ran at the same time rather than one after another" ok \
-  || check "and they ran at the same time rather than one after another" "${par_elapsed}s, which is no better than sequential"
+  || check "and they ran at the same time rather than one after another" "aaa ran $(cat "$P/aaa.start" 2>/dev/null) to $(cat "$P/aaa.end" 2>/dev/null), ccc ran $(cat "$P/ccc.start" 2>/dev/null) to $(cat "$P/ccc.end" 2>/dev/null)"
+# The control for THAT: one at a time, they must NOT overlap, or the check above is satisfied by an
+# overlap test that always says yes (L159).
+rm -f "$P"/*.start "$P"/*.end
+HOOK_TESTS_JOBS=1 bash "$RUNNER" "$P" >/dev/null 2>&1
+overlaps "$P" aaa ccc \
+  && check "and one at a time they do not overlap, so the test can tell the difference" "they overlapped anyway" \
+  || check "and one at a time they do not overlap, so the test can tell the difference" ok
 
 # A failure among them still fails the run and is still named, even though it finishes first.
 PF="$TMPROOT/dir-parallel-fail"
