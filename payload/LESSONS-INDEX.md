@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 221 lessons.
+LESSONS.md, which is NOT loaded into the session. 222 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -45,6 +45,7 @@ to decide something: the body is where the failure it came from is described.
 - L179. A status query about work in flight must be scoped to the exact revision it asks about, because a superseded run reports under the same check names and answers for the new one in both directions: a stale failure blocks a commit nothing has judged, and a stale pass merges one.
 - L119. A detection that ACCUSES on an empty answer from an external provider's derived index (a commit-to-PR association, a search index, a related-records lookup) must confirm against the primary record before acting, because a missing index entry and a real violation are indistinguishable and the index can stay permanently incomplete rather than catch up.
 - L173. A fallback added because a lookup failed must be reachable on EVERY way that lookup can fail, not only the flavour that was observed, because the remedy gets scoped to the symptom named in the incident report and is then absent in the neighbouring, worse failure.
+- L214. A fallback written for a source being ABSENT must not be reached when that source is PRESENT but EMPTY, because those are different situations: taking the absent branch on empty silently redirects the work to a different target than the one it was pointed at, and everything downstream then reports about something nobody asked about.
 - L120. A fan out that delivers only to recipients matching a subscription list reports SUCCESS when it matches ZERO of them, so a newly added event, topic or category is silently delivered to nobody while the send path looks healthy.
 - L100. An operation that finds its target by matching text (a marker to insert at, a file to stash, a pattern to replace, a helper name to call) reports SUCCESS when it matches NOTHING, so the next step acts on a state nobody created.
 - L143. A test double that selects what it intercepts by PATTERN (a route glob, a URL matcher, a path prefix) silently becomes NO double at all when the pattern misses, so the test talks to the real dependency and reports whatever that produces as the behaviour under test.

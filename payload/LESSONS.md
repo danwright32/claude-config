@@ -331,6 +331,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   transient, measured against a controlled permission experiment, which makes the point sharper: a
   blip is precisely what the second route was for)
 
+- **L214. A fallback written for a source being ABSENT must not be reached when that source is
+  PRESENT but EMPTY, because those are different situations: taking the absent branch on empty
+  silently redirects the work to a different target than the one it was pointed at, and everything
+  downstream then reports about something nobody asked about.** Distinct from L173, where the
+  fallback never fires at all, and from L93, where it fires and ships a known worse defect: here it
+  fires for the wrong reason and quietly changes the subject, so the output is about a real thing
+  and answers a question nobody put.
+  (claude-config#120: the test runner's fallback for "no repo above this script, so read its own
+  directory" was also reached when a repo WAS found and held no suites. A run pointed at an empty
+  fixture repo silently read the REAL hooks directory instead, found the runner's own test suite
+  there, ran it, and that suite invokes the runner, which recursed until it was killed by hand. The
+  check asserting an empty repo is refused is what caught it, and it caught it by hanging rather
+  than by failing)
+
 - **L120. A fan out that delivers only to recipients matching a subscription list reports SUCCESS
   when it matches ZERO of them, so a newly added event, topic or category is silently delivered to
   nobody while the send path looks healthy.** Assert that every value the code can emit has at least
