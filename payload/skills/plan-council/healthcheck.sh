@@ -88,7 +88,10 @@ echo "== lessons audit (wired, and pointed at a real file) =="
 # An audit against a missing or empty lessons file would report "clean" forever.
 lessons="$D/LESSONS.md"
 if [ -s "$lessons" ]; then
-  n_lessons=$(grep -c '^\s*-\s*\*\*L[0-9]' "$lessons" 2>/dev/null || echo 0)
+  # `grep -c` prints 0 AND fails when it counts nothing, so `|| echo 0` runs too and the value is
+  # two lines, which errors every numeric test on it (claude-config#172).
+  n_lessons=$(grep -c '^\s*-\s*\*\*L[0-9]' "$lessons" 2>/dev/null || true)
+  case "$n_lessons" in ''|*[!0-9]*) n_lessons=0 ;; esac
   if [ "$n_lessons" -gt 0 ]; then ok "LESSONS.md present ($n_lessons lessons)"; else bad "LESSONS.md has no L-numbered lessons — an audit against it is vacuous"; fi
 else
   bad "LESSONS.md missing or empty — the lessons audit would pass on everything"

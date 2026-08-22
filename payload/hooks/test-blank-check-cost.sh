@@ -103,7 +103,10 @@ rc_big=$?
 [ "$rc_big" -eq 1 ] \
   && check "and it still fails on them rather than reporting a clean tree" ok \
   || check "and it still fails on them rather than reporting a clean tree" "exit=$rc_big"
-named_big="$(grep -c 'skills/demo/SKILL.md' "$BIGOUT" 2>/dev/null || echo 0)"
+# `grep -c` prints 0 AND fails when it counts nothing, so `|| echo 0` runs too and the value is
+# two lines, which errors every numeric test on it (claude-config#172).
+named_big="$(grep -c 'skills/demo/SKILL.md' "$BIGOUT" 2>/dev/null || true)"
+case "$named_big" in ''|*[!0-9]*) named_big=0 ;; esac
 [ "${named_big:-0}" -ge 120 ] \
   && check "and every one of the 120 lines is named" ok \
   || check "and every one of the 120 lines is named" "named $named_big"

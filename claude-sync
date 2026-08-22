@@ -163,7 +163,13 @@ record_outage_decision(){   # $1 = quiet|alert   $2 = gap in seconds, or empty i
   # Bounded, and the trim is stated rather than silent: an unbounded local log is the kind of
   # thing nobody notices until it matters.
   local n
-  n="$(grep -c . "$OUTAGE_LOG" 2>/dev/null || echo 0)"
+  # `grep -c` prints its answer AND reports failure when it counts nothing, so an `|| echo 0`
+  # fallback runs as well and the value becomes two lines. Every numeric test on it then errors
+  # with "integer expression expected" rather than answering, while it still reads like a number
+  # wherever it is printed (claude-config#172). A MISSING file exits 2 with no output and the
+  # fallback is right; only an existing but EMPTY one doubles it, which is why it survives.
+  n="$(grep -c . "$OUTAGE_LOG" 2>/dev/null || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
   if [ "${n:-0}" -gt "$OUTAGE_LOG_MAX" ]; then
     tail -n "$OUTAGE_LOG_MAX" "$OUTAGE_LOG" > "$OUTAGE_LOG.trim" 2>/dev/null \
       && mv -f "$OUTAGE_LOG.trim" "$OUTAGE_LOG" 2>/dev/null || true

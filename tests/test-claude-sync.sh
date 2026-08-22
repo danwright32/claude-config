@@ -931,25 +931,24 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
       # measured 60 on 2026-08-17, the length of the sleep the run happened to be sitting in. Its children are
       # also precisely what is still holding whatever the hung run acquired, which is half the
       # reason a hang is worse than a failure.
-      # This one keeps its OWN copy. The other two share payload/hooks/lib/kill-tree.sh since
-      # claude-config#169; calling it from here was tried on 2026-08-22 and left this section hung,
-      # and it was reverted rather than shipped on the theory that it ought to have worked.
+      # STOPPED FIRST, and that is the whole point (claude-config#174). A run that is still running
+      # replaces what has just been killed underneath it: measured 2026-08-22, this run stalled in
+      # `sleep 3600 & wait` had its sleep killed, its `wait` returned at once, and it started a new
+      # one before the walk finished. Killing the run then left that replacement as an orphan
+      # holding open the pipe its output was being read through, and the check reading that output
+      # waited for an end of file that could never come.
       #
-      # WHY it hung is NOT established, and that is said here rather than dressed up. There is an
-      # argument that a watchdog should not depend on an extra process at the moment of killing,
-      # since it exists for the case where something has already gone wrong (L71), and it is a good
-      # argument, but it is not evidence: a cause inferred from two things happening together is
-      # not a cause until the effect has been seen to disappear when it is removed (L203). It has
-      # not been. claude-config#172 is open to find out, and until it is answered this copy stays.
-      self=$$
-      kill_tree() {
-        [ "$1" = "$self" ] && return 0    # never the watchdog: it is a child of the run too
-        for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done
-        kill -9 "$1" 2>/dev/null
-      }
-      kill_tree "$1"
+      # A stopped process cannot fork, so the window is closed rather than narrowed.
+      #
+      # The inline walk this replaces was measured in the SAME fixture and was clean without any
+      # stop, so it did NOT have this race and the first version of this comment saying it did was
+      # an inference that turned out to be wrong. Why the identical walk loses when it is called out
+      # to a separate process is not established; stopping first removes the class either way.
+      kill -STOP "$1" 2>/dev/null
+      "$5" "$1" "" 2>/dev/null
+      kill -9 "$1" 2>/dev/null
       rm -f "$3"    # the victim was killed outright and cannot clean up after itself
-    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK" "$SUITE_STALL_TIMEOUT"
+    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK" "$SUITE_STALL_TIMEOUT" "$SUITE_KILL_TREE"
   ) &
   SUITE_WATCHDOG_PID=$!
   # Taken out of the job table, or bash announces the kill at cleanup by printing the whole
@@ -995,7 +994,7 @@ suite_kill_tree(){   # $1 = a pid whose descendants are to go   $2 = optional fi
 # it then is how somebody's unrelated work gets killed: a judgement formed before the act is not a
 # judgement about the thing being acted on (L157).
 suite_clear_registered_strays(){   # $1 = the lock directory of the run that is gone
-  local reg p cmd n=0
+  local reg p cmd n=0 stuck=""
   reg="$(cat "$1/registry" 2>/dev/null || true)"
   [ -n "$reg" ] || return 0
   [ -f "$reg" ] || return 0
@@ -1005,8 +1004,25 @@ suite_clear_registered_strays(){   # $1 = the lock directory of the run that is 
     kill -0 "$p" 2>/dev/null || continue
     cmd="$(ps -o command= -p "$p" 2>/dev/null || true)"
     case "$cmd" in *"$SCRIPT_SELF"*) ;; *) continue ;; esac
+    # Stopped before its tree is walked, for the reason spelt out in the watchdog above: a process
+    # that is still running replaces what has just been killed underneath it (claude-config#174).
+    kill -STOP "$p" 2>/dev/null
     suite_kill_tree "$p"
-    kill -9 "$p" 2>/dev/null || true
+    # Woken again if the kill did not take. A stopped process that is never killed is WORSE than
+    # the leftover this exists to clear: it uses nothing, it never exits, and it does not look
+    # wrong in a process listing, so nobody finds it. A failure has to leave things as they were
+    # rather than in a state this created (L5).
+    #
+    # And SAID. The first version of this woke it and moved on, so the report gave a count of what
+    # it cleared and nothing at all about what it could not, which means the one case a reader has
+    # to act on was the one case it went quiet on (L11, L98). SUITE_CLEAR_KILL_FAILS is the seam
+    # that produces it: there is no process here this suite genuinely cannot kill, and arranging one
+    # would be a fixture about permissions rather than about the report.
+    if [ -n "${SUITE_CLEAR_KILL_FAILS:-}" ] || ! kill -9 "$p" 2>/dev/null; then
+      kill -CONT "$p" 2>/dev/null
+      kill -0 "$p" 2>/dev/null && stuck="$stuck $p"
+      continue
+    fi
     n=$(( n + 1 ))
   done < "$reg"
   # Consumed, or the next run over the same lock reports clearing the same processes again and the
@@ -1015,6 +1031,10 @@ suite_clear_registered_strays(){   # $1 = the lock directory of the run that is 
   # Said only when it actually cleared something. A takeover that found nothing to clear and one
   # that cleared four are different facts, and a line printed either way is neither (L98, L11).
   [ "$n" -gt 0 ] && echo "test suite: and cleared $n process(es) that run left running. A run killed outright cannot clean up after itself, so this happens here rather than there, which means it is after the fact: anything it started that no longer names this suite is deliberately NOT touched." >&2
+  # Separately, and named. A count of what was cleared says nothing about what was not, and these
+  # are still going: they are left RUNNING rather than frozen, so they are at least visible in a
+  # process listing, and this says which ones and what to do about them.
+  [ -n "$stuck" ] && echo "test suite: and could not kill$stuck, which that run also left running. They are still going and this could not stop them, so end them yourself with: kill -9$stuck" >&2
   return 0
 }
 
@@ -4645,6 +4665,42 @@ check "#166 and a number that is no longer this suite is left alone" \
 # again and the count stops meaning anything.
 check "#166 the dead run's registry is not left behind" "[ ! -f '$_or_reg' ]"
 
+# A leftover it could NOT clear has to be said, not dropped (claude-config#174). The clearing pauses
+# a process before killing it and wakes it again if the kill does not take, which is right, but the
+# first version of that then skipped it silently: the report said how many it cleared and nothing
+# at all about the one still running, so the single case a reader has to act on was the one case it
+# went quiet on (L11, L98). Written while fixing a different silent failure three lines above.
+#
+# Driven through a seam rather than by finding a process this suite genuinely cannot kill, because
+# there is no such process here and arranging one would be a fixture about permissions rather than
+# about the report.
+_or2_lock="$_lockdir/orphans-unkillable"
+rm -rf "$_or2_lock"
+_or2_reg="$WORK/orphan-registry-2"
+bash -c 'exec -a "bash '"$SCRIPT_SELF"' --orphan-fixture-2" sleep 600' &
+_or2_stray=$!
+_or2_w=0
+while [ "$_or2_w" -lt 20 ]; do
+  case "$(ps -o command= -p "$_or2_stray" 2>/dev/null || true)" in *orphan-fixture-2*) break ;; esac
+  sleep 1; _or2_w=$(( _or2_w + 1 ))
+done
+printf '%s
+' "$_or2_stray" > "$_or2_reg"
+_mklock "$_or2_lock" "99999997" "$_thishost" "$((_now - 5))"
+printf '%s
+' "$_or2_reg" > "$_or2_lock/registry"
+check "#174 the unkillable fixture is running before anything acts on it" \
+  "kill -0 '$_or2_stray' 2>/dev/null"
+_or2_out="$(SUITE_CLEAR_KILL_FAILS=1 _try_lock "$_or2_lock")"
+sleep 1
+check "#174 a leftover that could not be killed is named, not dropped" \
+  "line_has \"\$_or2_out\" 'could not' '$_or2_stray'"
+check "#174 and it is left RUNNING rather than frozen where nobody finds it" \
+  "kill -0 '$_or2_stray' 2>/dev/null && case \"\$(ps -o stat= -p '$_or2_stray' 2>/dev/null)\" in *T*) false ;; *) true ;; esac"
+check "#174 and the count does not include it" \
+  "! case \"\$_or2_out\" in *'cleared 1 process'*) true ;; *) false ;; esac"
+kill -9 "$_or2_stray" 2>/dev/null || true
+
 # And a takeover with NOTHING left to clear must not claim it cleared something, which is the same
 # distinction the reaper draws between finding nothing and being switched off (L98, L11).
 rm -rf "$_or_lock"
@@ -7091,9 +7147,13 @@ check "#83 and no set-aside copy of it is left behind" \
 # disk describes the MERGED lessons file, both sides included, with a header count that matches.
 check "#83 the regenerated index carries both sides" \
   "grep -q 'L3. three' '$IXHB/LESSONS-INDEX.md' && grep -q 'L4. four' '$IXHB/LESSONS-INDEX.md'"
-ix_count="$(grep -c '^- L[0-9]' "$IXHB/LESSONS-INDEX.md" 2>/dev/null || echo 0)"
+# `grep -c` prints 0 AND fails when it counts nothing, so `|| echo 0` runs too and the value is
+# two lines (claude-config#172).
+ix_count="$(grep -c '^- L[0-9]' "$IXHB/LESSONS-INDEX.md" 2>/dev/null || true)"
+case "$ix_count" in ''|*[!0-9]*) ix_count=0 ;; esac
 ix_header="$(grep -oE '[0-9]+ lessons' "$IXHB/LESSONS-INDEX.md" 2>/dev/null | grep -oE '[0-9]+' | head -1)"
-ix_real="$(grep -c '^- \*\*L[0-9]' "$IXHB/LESSONS.md" 2>/dev/null || echo 0)"
+ix_real="$(grep -c '^- \*\*L[0-9]' "$IXHB/LESSONS.md" 2>/dev/null || true)"
+case "$ix_real" in ''|*[!0-9]*) ix_real=0 ;; esac
 dbg "index entries=$ix_count header=$ix_header lessons=$ix_real"
 # The header count is the line that was UNIQUE to the preserved copy in the real incident, so it
 # is the one worth asserting: stale there, correct here, and derived from the merged file.

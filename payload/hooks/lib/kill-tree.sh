@@ -12,10 +12,33 @@
 # neither is a library. The cost is one process per cleanup, paid on a path that is already tearing
 # a run down.
 #
-# TWO callers, not three. The deadline watchdog still has its own copy. Calling this from there was
-# tried on 2026-08-22 and left a run hung; why is NOT established, and claude-config#172 is open to
-# find out. There is a good argument that a watchdog should not depend on an extra process at the
-# moment of killing (L71), and it may well be the reason, but it has not been shown to be (L203).
+# A PROCESS THAT IS STILL RUNNING CAN REPLACE WHAT YOU JUST KILLED, and that is the whole reason
+# this file has the shape it does (claude-config#174). Measured 2026-08-22: a run stalled in
+# `while :; do sleep 3600 & wait "$!"; done` had its sleep killed, its `wait` returned at once, and
+# it started a NEW sleep before the walk had finished. The run was then killed outright and the
+# replacement survived as an orphan, holding open the pipe its output was being read through, so
+# the thing waiting on that output never saw end of file and hung for ever.
+#
+# So every process is STOPPED before its children are walked. A stopped process cannot fork, which
+# closes the window rather than narrowing it.
+#
+# What is measured and what is not, said plainly. MEASURED, twice each: with this helper and no
+# stop, that run hung for ever; with the stop, it finished in 8 seconds and left nothing; and the
+# inline walk this replaced, in the SAME fixture, was clean without any stop at all. So the earlier
+# claim here that the old version had the same race and won it by being faster was wrong, and it
+# was an inference rather than a measurement, which is how it came to be wrong (L203).
+#
+# NOT established: why calling this out to a separate process loses a race the identical walk wins
+# in-line. The likeliest candidate is the gap between the last child dying and the parent being
+# killed, which is wider when the walk has to exit a process first, but that has not been shown. It
+# does not change what to do, because stopping first removes the whole class rather than that one
+# mechanism, and a smaller version of the same fixture would not reproduce it at all, so a probe
+# built at that scale answers nothing.
+#
+# A caller killing a tree that is not its own must stop the ROOT itself before calling, for the
+# same reason: the root is a process too, and it is usually the one doing the spawning. That cannot
+# be done here, because a caller passing its own pid would be stopping itself and would never come
+# back to kill anything.
 #
 # It kills DESCENDANTS, never the pid it is given and never anything above it. Two callers pass
 # their own pid, so killing the argument would kill the cleanup mid-way through.
@@ -62,9 +85,19 @@ kill_tree(){   # $1 = a pid whose descendants are to go
     # acted on (L157).
     pp="$(ps -o ppid= -p "$c" 2>/dev/null | tr -d ' ')"
     [ "$pp" = "$1" ] || continue
+    # Stopped BEFORE its own children are walked, so it cannot start a replacement for anything
+    # killed underneath it while that is happening. SIGKILL works on a stopped process, so nothing
+    # needs waking up again.
+    kill -STOP "$c" 2>/dev/null
     kill_tree "$c"
     if kill -9 "$c" 2>/dev/null; then
       [ -n "$REPORT" ] && printf '%s\n' "$c" >> "$REPORT" 2>/dev/null
+    else
+      # Woken again if the kill did not take. A process left stopped and never killed is worse than
+      # one left running: it uses nothing, it never exits, and it does not look wrong in a process
+      # listing, so nobody finds it. A failure must leave things as they were rather than in a
+      # state this created (L5).
+      kill -CONT "$c" 2>/dev/null
     fi
   done
   return 0
