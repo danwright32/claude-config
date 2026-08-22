@@ -115,6 +115,11 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/rule-files-changed.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/project-list-nudge.sh",
+            "timeout": 5
           }
         ]
       }
