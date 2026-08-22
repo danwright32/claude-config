@@ -2985,7 +2985,7 @@ SYNC_SCRATCH_ROOT="${SYNC_SCRATCH_ROOT:-${TMPDIR:-/tmp}}"
 # off switch and it is the same one the deadline uses: 0 means never sweep. Anything that is not a
 # whole number is REFUSED rather than guessed at, because this value guards an `rm -rf` and an
 # unparseable one must not land on the permissive side of it (L50).
-SYNC_SCRATCH_MAX_AGE="${SYNC_SCRATCH_MAX_AGE:-3600}"
+SYNC_SCRATCH_MAX_AGE="${SYNC_SCRATCH_MAX_AGE:-14400}"
 case "$SYNC_SCRATCH_MAX_AGE" in
   ''|*[!0-9]*)
     echo "claude-sync: SYNC_SCRATCH_MAX_AGE='$SYNC_SCRATCH_MAX_AGE' is not a whole number of seconds. Refusing to run rather than sweeping to an age nobody can read. Set it to 0 to turn the sweep off." >&2
@@ -3055,11 +3055,20 @@ scratch_file(){ mktemp "$(scratch_home_ready)/claude-sync-work.XXXXXXXX"; }
 # Mac's home path put back (see apply_source_dir), and it is removed on every exit path.
 scratch_dir(){ mktemp -d "$(scratch_home_ready)/claude-sync-expand.XXXXXXXX"; }
 
-# Old enough that no live run can own it. A suite run cannot outlive its own 15 minute deadline
-# and a real sync takes 6 seconds, so an hour is 4x the longest run the tool permits and 600x the
-# commonest one. Being wrong LOW here deletes the scratch of something still using it, which is
-# the one outcome worse than the litter, so it is deliberately generous. The cost is accepted and
-# stated: a burst of interrupted runs is not reclaimed until an hour after the last of them.
+# Old enough that no live run can own it, and that is a RATIO against the longest run the tool
+# permits rather than a duration that sounds generous. The suite's own ceiling is what sets it:
+# four hours is 4x the 3600s ceiling and 2400x the 6 second sync measured on 2026-08-17.
+#
+# It was an hour, and for as long as the ceiling was 900 that was the same 4x. #152 raised the
+# ceiling to 3600 and left this at 3600, so the margin went to zero without either number moving in
+# the file it lives in: a run near its own deadline could have this very sweep delete its working
+# directory, its extracted copy and its section mark, and the scheduled sync is exactly the
+# concurrent invocation that would do it (claude-config#160). The two are now compared against each
+# other by a check in the suite, so the margin cannot close again in silence (L174).
+#
+# Being wrong LOW here deletes the scratch of something still using it, which is the one outcome
+# worse than the litter, so it is deliberately generous. The cost is accepted and stated: a burst
+# of interrupted runs is not reclaimed until four hours after the last of them.
 scratch_in_dir(){   # $1 = a directory to read -> prints the abandoned scratch in it
   local root="${1%/}" now p n age m pre first base matched
   [ -d "$root" ] || return 0

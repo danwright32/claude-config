@@ -1457,6 +1457,29 @@ ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1 (expr: $2)"; fi; }
 
+# ---- how old a scratch fixture has to be (#160) ----
+# Two sections plant scratch and expect the sweep to reclaim it, and both aged it by a flat two
+# hours. That is not a duration, it is a RELATIONSHIP with SYNC_SCRATCH_MAX_AGE, and it held only
+# while that default was 3600. #160 raised the default to 14400 and every one of those fixtures
+# silently became too young, so eight checks went red about a sweep behaving exactly as asked
+# (L130: a fixture whose meaning is the relationship between a stored date and a threshold has to
+# pin both ends). So the offset is DERIVED from the default the tool ships, with a margin over it,
+# and there are no longer two copies of the number to keep in step (L41).
+#
+# The default is read here once. A pattern that stops matching, because somebody rewrote that
+# assignment, must not leave the fixtures looking fresh and the sweep looking broken, so it is
+# asserted where it is read rather than falling back to a guess.
+scratch_default_age(){ sed -n 's/^SYNC_SCRATCH_MAX_AGE="\${SYNC_SCRATCH_MAX_AGE:-\([0-9][0-9]*\)}"$/\1/p' "$SCRIPT"; }
+SCRATCH_DEFAULT_AGE="$(scratch_default_age)"
+case "$SCRATCH_DEFAULT_AGE" in ''|*[!0-9]*) SCRATCH_DEFAULT_AGE="" ;; esac
+# Twice the default and an hour on top, so a fixture is unambiguously past it however the default
+# moves next. Written back as a whole number of seconds because `touch` takes a stamp, not an age.
+SCRATCH_OLD_SECS=$(( ${SCRATCH_DEFAULT_AGE:-0} * 2 + 3600 ))
+scratch_age_out(){   # $1 = a path to backdate past the sweep's default age
+  touch -t "$(date -v-"${SCRATCH_OLD_SECS}"S +%Y%m%d%H%M 2>/dev/null)" "$1" 2>/dev/null \
+    || touch -d "$SCRATCH_OLD_SECS seconds ago" "$1"
+}
+
 # ---- assert that ONE line carries several facts (#74) ----
 # The correct form for an assertion over a command's whole output, made the SHORT form. Every
 # family the #55 scan bans is a way of asking for several facts and accepting them from different
@@ -4423,6 +4446,20 @@ _uncited=""; _badcite=""
 # before the consumer left (L183). It behaved on this Mac and failed on the Linux runner, and it
 # started failing there when this file grew by a few lines, which is how latent that was.
 _sections="$(grep '^section "' "$SCRIPT_SELF")"
+# A section can legitimately prove more than one row: #160's checks belong beside the sweep #36
+# already owns, and demanding a heading of exactly "(#160)" would force either a duplicate section
+# or a row citing a heading that does not hold its proof. So the citation is looked for INSIDE the
+# heading's parenthesised list, and the closing delimiter is part of every pattern, or "#16" would
+# be answered by a section named "(#160)".
+#
+# One definition of the question, taking the headings as an argument, so the probes below exercise
+# this matcher rather than a second one written beside it that drifts (L107).
+_cite_found(){   # $1 = a citation like "#160"   $2 = the section headings to look in
+  case "$2" in
+    *"($1)"*|*"($1,"*|*", $1)"*|*", $1,"*) return 0 ;;
+  esac
+  return 1
+}
 while IFS= read -r _row; do
   [ -n "$_row" ] || continue
   _cite="$(printf '%s' "$_row" | grep -oE 'proved by #[0-9]+' | head -1 | sed 's/.*#/#/')"
@@ -4430,10 +4467,7 @@ while IFS= read -r _row; do
     _uncited="$_uncited[$(printf '%s' "$_row" | cut -d'|' -f2 | sed 's/^ *//; s/ *$//')]"
     continue
   fi
-  case "$_sections" in
-    *"($_cite)"*) ;;
-    *) _badcite="$_badcite[$_cite]" ;;
-  esac
+  _cite_found "$_cite" "$_sections" || _badcite="$_badcite[$_cite]"
 done <<DESIGNROWS
 $_rows
 DESIGNROWS
@@ -4450,7 +4484,26 @@ check "#41 and every citation names a section that exists" \
 _cite_probe="$(printf '%s' '| 1 thing | `X=1` | y | because, proved by #99999 | 2026-01-01 |' | grep -oE 'proved by #[0-9]+' | sed 's/.*#/#/')"
 check "#41 the citation scan finds a citation when there is one" "[ '$_cite_probe' = '#99999' ]"
 check "#41 and a citation naming no section would be caught" \
-  "case \"\$_sections\" in *'(#99999)'*) false ;; *) true ;; esac"
+  "! _cite_found '#99999' \"\$_sections\""
+# The matcher itself, against headings built here, because the tree is allowed to stop containing
+# a shared heading and this must go on being the thing that decides (L48).
+# ASSEMBLED, never written whole, the same trick #34's spawn pattern needs. Spelt out, each probe
+# line begins with the word this file uses to declare a heading, and two separate guards read them
+# as headings of this file: the section extractor stops being able to parse a filtered run, and
+# #138 counts two headings written that its reader cannot see. Both of those are those guards
+# working correctly (measured: each caught this in turn), and the answer is to leave no literal for
+# them to find. The shape is otherwise exactly what the real listing produces, which is what the
+# matcher is being asked about.
+_sec_word="sec""tion"
+_cite_probes="$(printf '%s "== one issue (#41) =="\n%s "== two issues (#36, #160) =="\n' "$_sec_word" "$_sec_word")"
+check "#41 the matcher finds a citation a heading names alone" "_cite_found '#41' \"\$_cite_probes\""
+check "#41 and one a heading shares, in either position" \
+  "_cite_found '#36' \"\$_cite_probes\" && _cite_found '#160' \"\$_cite_probes\""
+# The delimiter is what stops a shorter number being answered by a longer one, so it is asserted
+# rather than assumed: without the closing bracket and comma in every pattern, "#16" is found in a
+# heading about #160 and the row reads as proved by a section that says nothing about it (L178).
+check "#41 and does not answer a shorter number with a longer one" \
+  "! _cite_found '#16' \"\$_cite_probes\" && ! _cite_found '#4' \"\$_cite_probes\""
 check "#41 the heading scan really read the headings" "[ \"\$_sec_seen\" -ge 40 ]"
 # Every default of the shape a threshold has, from BOTH files, as "NAME VALUE" pairs. Comments are
 # stripped first, or prose quoting a number satisfies the check that the number is current, and a
@@ -4498,7 +4551,7 @@ check "#41 and it really did name some of them" "[ \"\$_readme_seen\" -ge 3 ]"
 check "#41 the derivation found the thresholds to check" \
   "[ \"\$(_thresholds | grep -c .)\" -ge 6 ]"
 
-section "== scratch a killed run left behind is reclaimed, and nothing else is (#36) =="
+section "== scratch a killed run left behind is reclaimed, and nothing else is (#36, #160) =="
 # A run that is force-killed never reaches its cleanup, so its scratch directory is abandoned and
 # nothing ever reclaimed one. 37 of them were measured on this Mac on 2026-08-17 holding 475 MB,
 # from one day of interrupted runs, alongside 92 abandoned apply logs.
@@ -4508,9 +4561,7 @@ section "== scratch a killed run left behind is reclaimed, and nothing else is (
 # the temp folder" would have deleted them. Every fixture below therefore points at a THROWAWAY
 # root (L2), and the checks that matter most are the ones asserting what SURVIVES.
 _SCR="$WORK/scratch-root"; mkdir -p "$_SCR"
-_scr_age(){    # path
-  touch -t "$(date -v-2H +%Y%m%d%H%M)" "$1" 2>/dev/null || touch -d '2 hours ago' "$1"
-}
+_scr_age(){ scratch_age_out "$1"; }
 _scr_dir(){    # name mb
   mkdir -p "$_SCR/$1"
   dd if=/dev/zero of="$_SCR/$1/filler" bs=1048576 count="$2" 2>/dev/null
@@ -4664,6 +4715,51 @@ check "#36 every name it creates is one the reaper sweeps" "[ -z \"\$_scr_unswep
 check "#36 the name derivation found names to check" \
   "[ \"\$(printf '%s' \"\$_scr_names\" | grep -c .)\" -ge 3 ]"
 
+# ---- the sweep's age against the suite's own ceiling (#160) ----
+# These are one setting living in two files, and #152 moved half of it. Until then the ceiling was
+# 900 against an age of 3600, so a run's scratch was at most a quarter of the way to being swept.
+# #152 raised the ceiling to 3600 for a good reason and the margin became zero: a run approaching
+# its own deadline can have its working directory, its extracted copy and its section mark deleted
+# out from under it by any concurrent claude-sync, and the scheduled sync is exactly such an
+# invocation. What that produces is missing fixtures in unrelated sections, which read as real test
+# failures rather than as a sweep, so it costs an investigation every time.
+#
+# So the ratio is CHECKED here rather than asserted in the design record, which is where it was
+# living and which cannot notice either number moving (L210, L174). Four times, which is the margin
+# that existed before #152 rather than a figure chosen now.
+#
+# Both numbers are read from the DEFAULTS in the two files, never from the variables this run
+# carries. The run that gets swept is the scheduled sync, which carries no override at all, so
+# comparing this run's environment would answer about a pair nobody ships.
+# The age comes from the same reader the fixtures above are backdated with, so the number this
+# compares is the number they were planted against (L107: one definition of the question).
+_mg_age="$SCRATCH_DEFAULT_AGE"
+_mg_ceil="$(sed -n 's/^SUITE_TIMEOUT="\${SUITE_TIMEOUT:-\([0-9][0-9]*\)}"$/\1/p' "$SCRIPT_SELF")"
+# An extraction that came back with NOTHING has compared nothing, and nothing must never read as a
+# pass: a pattern that stops matching because somebody rewrote the assignment would leave this
+# green for ever while the margin it guards was gone (L98, L90). Two matches fail the same way,
+# because the captured value then carries a newline.
+case "$_mg_age" in
+  ''|*[!0-9]*) check "#160 the sweep's age could be read from claude-sync" "false" ;;
+  *)           check "#160 the sweep's age could be read from claude-sync" "true" ;;
+esac
+case "$_mg_ceil" in
+  ''|*[!0-9]*) check "#160 the suite ceiling could be read from this file" "false" ;;
+  *)           check "#160 the suite ceiling could be read from this file" "true" ;;
+esac
+case "$_mg_age$_mg_ceil" in
+  ''|*[!0-9]*) ;;
+  *)
+    _mg_floor=$(( _mg_ceil * 4 ))
+    check "#160 abandoned scratch is aged out at four times the suite ceiling (${_mg_age}s against ${_mg_ceil}s)" \
+      "[ '$_mg_age' -ge '$_mg_floor' ]"
+    # Watched refusing, or any age large enough satisfies it, which is every age, and it reads as
+    # protection while protecting nothing (L1).
+    check "#160 and an age one second under that floor is refused" \
+      "! [ $(( _mg_floor - 1 )) -ge '$_mg_floor' ]"
+    ;;
+esac
+
 section "== the tool's scratch lives in a directory of its own (#116) =="
 # The sweep for abandoned scratch globs the temp root, and on a real Mac that root belongs to
 # everything else on the machine: 113,912 entries measured here on 2026-08-21, 25 of them ours.
@@ -4681,7 +4777,7 @@ _sub_run(){    # $1... = arguments to claude-sync, with the scratch root pointed
   SYNC_SCRATCH_ROOT="$_SUB" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
     bash "$SCRIPT" "$@" 2>&1
 }
-_sub_age(){ touch -t "$(date -v-2H +%Y%m%d%H%M)" "$1" 2>/dev/null || touch -d '2 hours ago' "$1"; }
+_sub_age(){ scratch_age_out "$1"; }
 
 # ---- where a new scratch file is actually created ------------------------------------------
 # Proved by making the intended directory unwritable and reading the path mktemp then names, and
