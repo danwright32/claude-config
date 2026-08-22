@@ -2697,11 +2697,93 @@ pull_from_repo_or_die(){
   return 0
 }
 
+# What a pull says about the config it just installed (claude-config#178).
+#
+# `pull` printed its received-changes summary and ended with "Pulled shared config onto this Mac"
+# without executing any of it. The 2026-08-22 pull landed a hook whose own suite failed on this
+# Mac, and that was found only because somebody ran the tests by hand afterwards. A pull is exactly
+# the moment config arrives that has never executed here, and a conflict resolved in favour of the
+# other Mac is the strongest case of it: success reported without running anything is
+# indistinguishable from success actually verified (L98).
+#
+# Three things this is careful about.
+#
+# It is judged by the runner's EXIT CODE and by nothing else. A test runner's last line of output
+# is routinely a different measurement than its verdict, and usually the more reassuring of the two
+# (L184).
+#
+# A suite that could not be RUN is its own outcome, never folded into failed. One says a check on
+# this config does not pass; the other says nothing checked it, and a reader sent looking for a
+# fault that is not there is its own defect (L11, L98).
+#
+# It only runs when a HOOK actually landed. The suite is minutes of work, and the watch daemon
+# pulls constantly: a pull carrying a rule file has installed nothing this runner checks. That,
+# rather than an unconditional run somebody would end up switching off, is what keeps the cost
+# where the value is. SYNC_NO_HOOK_TESTS=1 turns it off outright, and the runner is TOLD that in
+# its own environment, because the suite's fixtures run pulls of their own and a pull that runs the
+# suite would otherwise recurse without end.
+hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
+  local runner out pid started now limit rc=0 killed=0
+  [ "${SYNC_NO_HOOK_TESTS:-0}" = "1" ] && return 0
+  [ -n "${APPLIED_LOG:-}" ] || return 0
+  [ -s "$APPLIED_LOG" ] || return 0
+  # The log is kind<TAB>path, so the tab is part of the match: without it a file merely NAMED
+  # hooks/something in a label would answer for one.
+  grep -q "$(printf '\t')hooks/" "$APPLIED_LOG" 2>/dev/null || return 0
+  runner="$CLAUDE_HOME/hooks/run-all-tests.sh"
+  if [ ! -f "$runner" ]; then
+    notify "hooks arrived with no run-all-tests.sh to check them"
+    printf ', and the hook suite could NOT be run here: hooks arrived and there is no %s to check them with, so nothing that just landed has been verified' "$runner"
+    return 0
+  fi
+  out="$(scratch_file)" || {
+    printf ', and the hook suite could NOT be run here: no scratch file could be made to hold its output'
+    return 0
+  }
+  # A wait with no deadline cannot fail, it can only hang, and this one holds the sync lock while
+  # it does (L110). Generous rather than tight: the real suite was measured between 220 and 400
+  # seconds on this hardware, and a deadline that fires on a loaded Mac would report a stopped run
+  # as an unverified one on exactly the days everything is busy.
+  limit="${SYNC_HOOK_TESTS_TIMEOUT:-1800}"
+  case "$limit" in ''|*[!0-9]*) limit=1800 ;; esac
+  SYNC_NO_HOOK_TESTS=1 bash "$runner" > "$out" 2>&1 &
+  pid=$!
+  started="$(date +%s)"
+  while kill -0 "$pid" 2>/dev/null; do
+    # Against the clock, never by adding up the sleeps below: a timer built from its own sleeps
+    # measures iterations rather than elapsed time (L226).
+    now="$(date +%s)"
+    if [ "$limit" -gt 0 ] && [ "$(( now - started ))" -ge "$limit" ]; then
+      killed=1
+      kill -TERM "$pid" 2>/dev/null || true
+      break
+    fi
+    sleep 2
+  done
+  wait "$pid" 2>/dev/null || rc=$?
+  if [ "$killed" -eq 1 ]; then
+    notify "the hook suite was still running after ${limit}s and was stopped"
+    printf ', and the hook suite could NOT be completed here: it was still running after %ss and was stopped, so nothing that just landed has been verified' "$limit"
+    return 0
+  fi
+  if [ "$rc" -eq 0 ]; then
+    printf ', and the hook suite passed here'
+    return 0
+  fi
+  # The runner's own report goes to stderr, where the rest of this run's diagnostics are, so the
+  # closing line stays one sentence and the detail is still in front of whoever reads it.
+  echo "claude-sync: the hook suite on this Mac exited $rc after the pull. What it said:" >&2
+  tail -25 "$out" >&2 || true
+  notify "the hook suite FAILED after a pull"
+  printf ', but the hook suite FAILED here (it exited %s). The config is on disk and at least one check on it does not pass: run  bash %s  to see which' "$rc" "$runner"
+  return 0
+}
+
 do_pull(){
   # ${VAR-default}, not ${VAR:-default}: after a hand-off SYNC_PULL_BASE is set
   # but EMPTY on a first pull, and that empty value is meaningful (no prior
   # commit). :- would discard it and lose the "first pull" case.
-  local before="" after=""
+  local before="" after="" verdict=""
   if have_git; then
     before="${SYNC_PULL_BASE-$(repo_head)}"
     pull_from_repo_or_die
@@ -2711,7 +2793,8 @@ do_pull(){
   apply_payload_to_local
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   summarize_applied "$before" "$after"
-  echo "Pulled shared config onto this Mac (memory/permissions untouched)."
+  verdict="$(hook_suite_verdict)"
+  echo "Pulled shared config onto this Mac (memory/permissions untouched)${verdict}."
 }
 
 # Resume point after claude-sync updated itself mid-`sync` (internal use only).

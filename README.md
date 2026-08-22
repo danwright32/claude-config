@@ -99,9 +99,34 @@ line naming what was only in yours. That copy is then the ONLY place that conten
 later apply keeps reporting it, and `claude-sync status` lists it too, naming what it still holds
 that the live file does not.
 
+A file whose version here holds no line the arriving one lacks is not kept beside it at all. The
+arriving version already contains everything this Mac had, so it is taken, no copy is written, and
+the pull names the files it settled that way rather than passing over them in silence. A local
+DELETION is not treated as contained even though its lines are all present in the arriving version:
+the deleted line is work too, and the version this Mac last applied is what tells the two apart.
+
 Both reports go quiet on their own: as soon as the content is back in the live file, or the copy is
 deleted, there is nothing outstanding to report. A copy whose content is already in the live file is
 still listed by `status`, named as safe to delete, because only you can decide to remove it.
+## A pull checks what it just installed
+
+A pull that lands anything under `hooks/` runs `~/.claude/hooks/run-all-tests.sh` before it reports,
+and folds the verdict into its closing line. A pull is the moment config arrives that has never
+executed on this Mac, and success reported without running any of it says exactly what a verified
+success says.
+
+The verdict comes from the runner's exit code, never from a line of its output, and there are three
+outcomes rather than two: the suite passed, the suite FAILED (the config is on disk and a check on it
+does not pass), or the suite could NOT be run or completed at all (nothing checked it). The last one
+is deliberately not folded into the second, since they send a reader to different places.
+
+It runs only when a hook actually arrived, because the suite is minutes of work and the watch daemon
+pulls constantly: a pull carrying a rule file has installed nothing this runner checks. Set
+`SYNC_NO_HOOK_TESTS=1` to skip it outright, and `SYNC_HOOK_TESTS_TIMEOUT` (default `1800` seconds)
+bounds how long the pull will wait before stopping it and saying nothing was verified. The runner is
+told `SYNC_NO_HOOK_TESTS=1` in its own environment, because the test suite runs pulls of its own and
+a pull that runs the suite would otherwise recurse without end.
+
 ## Lesson numbers
 
 Each Mac mints lesson numbers from a band it owns, so two lessons written between syncs can never

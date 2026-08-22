@@ -7294,6 +7294,97 @@ out_cn2="$(CLAUDE_HOME="$CNHB" SYNC_REPO="$CNRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT"
 check "#177 a later quiet pull does not repeat it" \
   "! line_has \"\$out_cn2\" 'nothing was set aside' 'cn-shared\.sh'"
 
+section "== a pull runs the hook suite it just installed (#178) =="
+# `claude-sync pull` printed its received-changes summary and ended with "Pulled shared config onto
+# this Mac" without executing anything it had just installed. The 2026-08-22 pull landed a hook
+# whose own suite failed on this Mac, and that was found only because somebody ran the tests by
+# hand afterwards. Success reported without running anything is indistinguishable from success
+# actually verified (L98).
+#
+# The runner under test here is a stub: what is being checked is how the pull READS it, and a stub
+# is the only way to make it pass, fail, or be missing on demand. It records the environment it was
+# given, because a pull that runs the suite while the suite's own fixtures run pulls would recurse
+# without end, so the guard against that is part of the behaviour rather than a detail.
+unset SYNC_NO_GIT
+HTB="$WORK/hooktests-bare.git"; git init -q --bare "$HTB"
+HTRA="$WORK/hooktests-repoA"; git clone -q "$HTB" "$HTRA" 2>/dev/null
+HTHA="$WORK/hooktests-homeA"; mkdir -p "$HTHA/hooks"
+echo '{"hooks":{}}' > "$HTHA/settings.json"
+printf '# rules v1\n' > "$HTHA/CLAUDE.md"
+echo 'one' > "$HTHA/hooks/ht-one.sh"
+mkrunner(){   # mkrunner <exit status>  -> writes Mac A's stub runner
+  cat > "$HTHA/hooks/run-all-tests.sh" <<HTRUNNER
+#!/usr/bin/env bash
+printf '%s ran, SYNC_NO_HOOK_TESTS=%s\n' "\$(basename "\$0")" "\${SYNC_NO_HOOK_TESTS:-unset}" \
+  >> "\$(dirname "\$0")/ht-ran.txt"
+echo "ALL 1 SUITES PASSED"
+exit $1
+HTRUNNER
+}
+mkrunner 0
+CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+HTRB="$WORK/hooktests-repoB"; git clone -q "$HTB" "$HTRB" 2>/dev/null
+HTHB="$WORK/hooktests-homeB"; mkdir -p "$HTHB"
+echo '{"hooks":{}}' > "$HTHB/settings.json"
+out_ht="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "first pull with a passing stub runner: $out_ht"
+ht_ran(){ n="$(grep -c . "$HTHB/hooks/ht-ran.txt" 2>/dev/null || true)"; case "$n" in ''|*[!0-9]*) n=0 ;; esac; printf '%s' "$n"; }
+check "#178 the hook suite the pull installed is the one it runs" "[ \"\$(ht_ran)\" = '1' ]"
+check "#178 and the closing line carries its verdict" \
+  "line_has \"\$out_ht\" 'Pulled shared config' 'hook suite passed here'"
+# The recursion guard. The suite's own fixtures run pulls, so a pull that runs the suite must tell
+# the suite not to run it again, and that has to be in the environment the runner receives rather
+# than a rule somebody remembers to follow (L27).
+check "#178 the suite is told not to run itself again" \
+  "line_has \"\$(cat '$HTHB/hooks/ht-ran.txt')\" 'run-all-tests\.sh ran' 'SYNC_NO_HOOK_TESTS=1'"
+
+# Judged by its EXIT CODE and by nothing else (L184). This stub prints the runner's own success
+# line and exits 1, which is the pair a reader of the last line of output gets wrong.
+mkrunner 1
+CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_ht2="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull with a runner that prints success and exits 1: $out_ht2"
+check "#178 a failing suite is reported as failed" \
+  "line_has \"\$out_ht2\" 'Pulled shared config' 'hook suite FAILED here'"
+check "#178 and its printed success line does not decide it" \
+  "! line_has \"\$out_ht2\" 'Pulled shared config' 'hook suite passed here'"
+
+# A suite that could not be run AT ALL is its own outcome, never folded into failed: one says a
+# check on this config does not pass, the other says nothing checked it, and sending a reader to
+# look for a fault that is not there is its own defect (L11, L98).
+rm -f "$HTHA/hooks/run-all-tests.sh"
+CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_ht3="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull that removed the runner: $out_ht3"
+check "#178 hooks arriving with no runner says so" \
+  "line_has \"\$out_ht3\" 'Pulled shared config' 'hook suite could NOT be run here'"
+check "#178 and does not call that a failure" \
+  "! line_has \"\$out_ht3\" 'Pulled shared config' 'hook suite FAILED here'"
+
+# Cost. The suite is minutes of work, so a pull that landed no hook must not pay it: there is
+# nothing newly installed for it to check.
+mkrunner 0
+CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+ht_before="$(ht_ran)"
+printf '# rules v2\n' > "$HTHA/CLAUDE.md"
+CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_ht4="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull carrying only a rule file: $out_ht4"
+check "#178 a pull that landed the rule file really applied it" \
+  "grep -q 'rules v2' '$HTHB/CLAUDE.md'"
+check "#178 but a pull with no hook in it does not run the suite" "[ \"\$(ht_ran)\" = \"\$ht_before\" ]"
+check "#178 and says nothing about a suite it did not run" \
+  "! line_has \"\$out_ht4\" 'Pulled shared config' 'hook suite'"
+
+# And the off switch, for a run that must not pay the cost at all.
+echo 'two' > "$HTHA/hooks/ht-one.sh"
+CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+ht_before2="$(ht_ran)"
+out_ht5="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
+check "#178 the hook really arrived on that pull"  "grep -q 'two' '$HTHB/hooks/ht-one.sh'"
+check "#178 SYNC_NO_HOOK_TESTS=1 skips the suite"  "[ \"\$(ht_ran)\" = \"\$ht_before2\" ]"
+
 section "== one Mac's home path never travels inside a synced file (#87) =="
 # tok/detok existed, and were wired to settings.hooks.json alone. Every other payload file was
 # copied verbatim, so an absolute home path inside one was simply wrong on whichever Mac did not
