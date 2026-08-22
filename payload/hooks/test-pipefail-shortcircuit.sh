@@ -35,12 +35,18 @@ check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)
 # The pattern, in ONE place, so the baseline records an answer this produced rather than a second
 # definition of the question drifting beside it (L107). Comment lines are skipped, or the prose
 # explaining the rule counts as breaking it.
+#
+# The quiet flag is matched in ANY cluster spelling (claude-config#153). It read `-[a-zA-Z]*q`,
+# which requires the cluster to end in q, so `-q` and `-Eq` counted while `-qi`, `-qE` and `-qF`
+# did not: the same hazard with the letters the other way round, permanently exempt from the check
+# written to catch it (L217). The cluster must still CONTAIN a q, so a piped `grep -i`, `-c` or
+# `-o` reads its producer to the end and is not counted, which the probes below assert both ways.
 count_in() { # count_in <file>  -> how many short circuiting pipelines it has
-  grep -cE '\| *(grep +-[a-zA-Z]*q|head)( |$)' "$1" 2>/dev/null | tr -d ' ' || echo 0
+  grep -cE '\| *(grep +(--quiet|-[a-zA-Z]*q[a-zA-Z]*)|head)( |$)' "$1" 2>/dev/null | tr -d ' ' || echo 0
 }
 count_uncommented() { # count_uncommented <file>
   local n
-  n="$(grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | grep -cE '\| *(grep +-[a-zA-Z]*q|head)( |$)' || true)"
+  n="$(grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | grep -cE '\| *(grep +(--quiet|-[a-zA-Z]*q[a-zA-Z]*)|head)( |$)' || true)"
   printf '%s' "${n:-0}"
 }
 
@@ -69,6 +75,37 @@ _PIPE='|'
 [ "$(count_uncommented "$TMPROOT/probe.sh")" = "2" ] \
   && check "the counter sees a piped grep -q and a piped head, and nothing else" ok \
   || check "the counter sees a piped grep -q and a piped head, and nothing else" "it counted $(count_uncommented "$TMPROOT/probe.sh")"
+
+# Every SPELLING of the quiet flag, not only the ones ending in `q` (claude-config#153). The
+# pattern read `-[a-zA-Z]*q`, which requires the cluster to END in q, so `-q` and `-Eq` counted and
+# `-qi`, `-qE` and `-qF` did not. Those are the identical hazard with the letters the other way
+# round, and being exempt from the check written to catch them is L217 exactly. Measured on
+# 2026-08-22: widening this found 182 sites the ratchet had never seen, including four in
+# check-home-paths.sh and two in claude-sync itself, in a file whose own header said every site
+# whose producer is a whole program had been converted.
+{
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf 'cat file %s grep -qi needle\n' "$_PIPE"
+  printf 'cat file %s grep -qE needle\n' "$_PIPE"
+  printf 'cat file %s grep -qF needle\n' "$_PIPE"
+  printf 'cat file %s grep -iq needle\n' "$_PIPE"
+  printf '# cat other %s grep -qi thing   <- a comment about one, not one\n' "$_PIPE"
+} > "$TMPROOT/probe-flags.sh"
+[ "$(count_uncommented "$TMPROOT/probe-flags.sh")" = "4" ] \
+  && check "the counter sees the quiet flag however its cluster is spelt" ok \
+  || check "the counter sees the quiet flag however its cluster is spelt" "it counted $(count_uncommented "$TMPROOT/probe-flags.sh") of 4"
+# And still does NOT count a piped grep that has no quiet flag at all, which reads its producer to
+# the end and is the thing this rule permits. Without this, widening the cluster to any letters
+# would be satisfied by a pattern that counts every piped grep there is (L104, L178).
+{
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf 'cat file %s grep -i needle\n' "$_PIPE"
+  printf 'cat file %s grep -cE needle\n' "$_PIPE"
+  printf 'cat file %s grep -oE needle\n' "$_PIPE"
+} > "$TMPROOT/probe-loud.sh"
+[ "$(count_uncommented "$TMPROOT/probe-loud.sh")" = "0" ] \
+  && check "and does not count a piped grep that reads its producer to the end" ok \
+  || check "and does not count a piped grep that reads its producer to the end" "it counted $(count_uncommented "$TMPROOT/probe-loud.sh")"
 
 # ---------------------------------------------------------------------------
 # The real tree, against the recorded counts.

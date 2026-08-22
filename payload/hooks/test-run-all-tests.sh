@@ -706,12 +706,17 @@ case "$d_quick" in
 esac
 # The run ends with the slowest named, which is what somebody reads when a run got slower. Same
 # shape as #107's profile one level down.
-printf '%s' "$out_dur" | grep -qi 'slowest suites' \
+#
+# Written to a file and grepped from the file, rather than piped into a quiet grep, which leaves on
+# its first match and can kill its own producer under pipefail (claude-config#132, #153, L183).
+printf '%s\n' "$out_dur" > "$TMPROOT/durations.out"
+grep -qi 'slowest suites' "$TMPROOT/durations.out" \
   && check "#150 the run ends with a profile of the slowest suites" ok \
   || check "#150 the run ends with a profile of the slowest suites" "out=$out_dur"
-printf '%s\n' "$out_dur" | sed -n '/[Ss]lowest suites/,$p' | grep -qE '^ +[0-9]+s +test-longone\.sh' \
+sed -n '/[Ss]lowest suites/,$p' "$TMPROOT/durations.out" > "$TMPROOT/durations.profile"
+grep -qE '^ +[0-9]+s +test-longone\.sh' "$TMPROOT/durations.profile" \
   && check "#150 and the slowest suite is the one that slept longest" ok \
-  || check "#150 and the slowest suite is the one that slept longest" "profile was: $(printf '%s\n' "$out_dur" | sed -n '/[Ss]lowest suites/,$p' | tr '\n' '|')"
+  || check "#150 and the slowest suite is the one that slept longest" "profile was: $(tr '\n' '|' < "$TMPROOT/durations.profile")"
 
 # The measurement, not the store. With the record switched off entirely, nothing is written and
 # nothing is read back, and the durations must still be there: a report fed from the store would go

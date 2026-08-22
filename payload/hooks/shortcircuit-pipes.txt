@@ -23,35 +23,49 @@
 # The ones left are overwhelmingly `printf '%s' "$var" | grep -q` inside tests, where the text is a
 # fixture the test itself built. That is a real distinction and not a comfortable one: it holds
 # only while the fixture stays small.
-7 claude-sync
+
+# The counts jumped from 335 to 515 on 2026-08-22, and NOT because 180 sites were added that day.
+# The pattern read `-[a-zA-Z]*q`, which requires the flag cluster to END in q, so `-q` and `-Eq` were
+# counted while `-qi`, `-qE` and `-qF` were not: the identical hazard with the letters the other way
+# round, permanently exempt from the check written to catch it (claude-config#153, L217). Widening it
+# made sites that were always here visible for the first time. Read the jump as the measurement being
+# corrected, never as the tree getting worse, and read the number from here on as a ratchet again.
+
+9 claude-sync
 1 payload/hooks/block-red-merge.sh
+4 payload/hooks/check-home-paths.sh
 3 payload/hooks/durable-lesson-check.sh
 1 payload/hooks/lessons-advisory.sh
 3 payload/hooks/pr-merge-quiz.sh
 2 payload/hooks/run-all-tests.sh
-4 payload/hooks/test-block-red-merge.sh
-7 payload/hooks/test-check-home-paths.sh
-4 payload/hooks/test-check-project-list.sh
-1 payload/hooks/test-checkpoint-save.sh
+8 payload/hooks/test-block-red-merge.sh
+8 payload/hooks/test-check-home-paths.sh
+5 payload/hooks/test-check-project-list.sh
+4 payload/hooks/test-checkpoint-save.sh
 2 payload/hooks/test-durable-lesson-check.sh
-1 payload/hooks/test-measure-lessons-advisory.sh
-3 payload/hooks/test-post-compact.sh
-2 payload/hooks/test-pr-merge-quiz.sh
+2 payload/hooks/test-feature-discovery-nudge.sh
+2 payload/hooks/test-lessons-advisory.sh
+8 payload/hooks/test-measure-lessons-advisory.sh
+2 payload/hooks/test-no-ai-tells-detect.sh
+5 payload/hooks/test-post-compact.sh
+5 payload/hooks/test-pr-merge-quiz.sh
 5 payload/hooks/test-require-issue-fields.sh
 1 payload/hooks/test-require-tests-before-push.sh
 2 payload/hooks/test-rtk-rewrite.sh
 9 payload/hooks/test-rule-files-changed.sh
-12 payload/hooks/test-run-all-tests.sh
+19 payload/hooks/test-run-all-tests.sh
 3 payload/hooks/test-session-namer.sh
 1 payload/hooks/test-stop-hooks.sh
-7 payload/hooks/test-subagent-digest.sh
+8 payload/hooks/test-subagent-digest.sh
 41 payload/hooks/test-subagent-issue-harvest.sh
 2 payload/hooks/test-suite-result-line.sh
+2 payload/hooks/test-teammate-challenge-gate.sh
 2 payload/skills/milestone/create-milestone.sh
+1 payload/skills/milestone/ensure-priority-labels.sh
 2 payload/skills/plan-council/healthcheck.sh
 1 payload/skills/plan-council/post-discussion.sh
 4 payload/skills/production-ready/healthcheck.sh
 1 tests/audit-changed-sections.sh
-5 tests/test-audit-changed-sections.sh
-193 tests/test-claude-sync.sh
-3 tools/test-measure-sync-gaps.sh
+9 tests/test-audit-changed-sections.sh
+319 tests/test-claude-sync.sh
+9 tools/test-measure-sync-gaps.sh
