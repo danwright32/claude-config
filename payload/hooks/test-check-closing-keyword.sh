@@ -13,15 +13,26 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/check-closing-keyword.sh"
 
+# The extracted detector goes in a directory of this RUN's own, never beside this file
+# (claude-config#180). A fixed name in payload/hooks is one path shared by every run on the
+# machine: two at once truncate and then delete each other's copy, and the second reads a half
+# written file and reports that the detector found nothing. It also put a stray file inside the
+# tree the sync mirrors whenever a run was killed between writing it and removing it.
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.closingkw.XXXXXXXX")" || WORKDIR=""
+case "${WORKDIR%/}" in
+  ''|/|"${HOME%/}") echo "$(basename "${BASH_SOURCE[0]}"): refusing to run: throwaway directory came back as '$WORKDIR'." >&2; exit 2 ;;
+esac
+trap 'rm -rf "$WORKDIR"' EXIT
+
 awk '
   /^findings="\$\(printf/ { flag=1; next }
   flag && /2>\/dev\/null\)"$/ { flag=0; next }
   flag { print }
-' "$HOOK" > "$DIR/.closing-detector.tmp.py"
-[ -s "$DIR/.closing-detector.tmp.py" ] || { echo "FAIL: could not extract detector block"; exit 1; }
+' "$HOOK" > "$WORKDIR/.closing-detector.tmp.py"
+[ -s "$WORKDIR/.closing-detector.tmp.py" ] || { echo "FAIL: could not extract detector block"; exit 1; }
 
 detect() {
-  printf '%s' "$1" | python3 "$DIR/.closing-detector.tmp.py"
+  printf '%s' "$1" | python3 "$WORKDIR/.closing-detector.tmp.py"
 }
 
 pass=0
@@ -89,5 +100,4 @@ want_flag "negation with a clause between it and the keyword" \
 echo
 echo "passed: $pass   failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
-rm -f "$DIR/.closing-detector.tmp.py"
 [ "$fail" -eq 0 ]

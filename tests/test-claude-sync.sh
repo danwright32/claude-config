@@ -2189,7 +2189,21 @@ check "the new version really does sync NOTES.md" "grep -q 'TOP_FILES_SEED=(NOTE
 out_up="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$UPB/claude-sync" pull 2>&1)"
 check "file added by the new script version lands on the SAME pull" "[ -f '$UPBH/NOTES.md' ]"
 check "that file has the right content"        "grep -q 'notes from the new version' '$UPBH/NOTES.md' 2>/dev/null"
-check "the self-updating pull still reports the change" "printf '%s' \"\$out_up\" | grep -q 'added  *NOTES\.md'"
+# This one failed once, on 2026-08-22, in a run competing with three other full runs, and has not
+# been reproduced since (claude-config#180). The other two failures from that run had a real cause
+# (a suite writing its working file beside itself, fixed by test-suite-scratch-isolation.sh); this
+# one has no established cause at all, and a guess dressed as a diagnosis is worse than none.
+#
+# So rather than labelling it, it is made to PRINT the fact next time. A failure that reproduces
+# only in a state you cannot summon has to carry its own evidence, or every occurrence starts the
+# investigation from nothing (L177). The output is folded into the description, which is the line a
+# failure prints, and it is empty on a pass so the passing line stays clean.
+if line_has "$out_up" 'added' 'NOTES\.md'; then
+  _up_why=""
+else
+  _up_why=" (the pull actually said: $(printf '%s' "$out_up" | tr '\n' '~'))"
+fi
+check "the self-updating pull still reports the change$_up_why" "[ -z \"\$_up_why\" ]"
 check "the self-updating pull still succeeds"  "printf '%s' \"\$out_up\" | grep -q 'Pulled shared config'"
 # and it must not loop: exactly one hand-off, so one daemon-restart notice
 restarts="$(printf '%s\n' "$out_up" | grep -ci 'watch daemon' || true)"

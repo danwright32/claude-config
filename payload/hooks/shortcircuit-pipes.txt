@@ -81,5 +81,5 @@
 4 payload/skills/production-ready/healthcheck.sh
 1 tests/audit-changed-sections.sh
 9 tests/test-audit-changed-sections.sh
-319 tests/test-claude-sync.sh
+318 tests/test-claude-sync.sh
 9 tools/test-measure-sync-gaps.sh

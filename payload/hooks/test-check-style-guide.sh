@@ -7,6 +7,17 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/check-style-guide.sh"
 
+# The extracted detector goes in a directory of this RUN's own, never beside this file
+# (claude-config#180). A fixed name in payload/hooks is one path shared by every run on the
+# machine: two at once truncate and then delete each other's copy, and the second reads a half
+# written file and reports that the detector found nothing. It also put a stray file inside the
+# tree the sync mirrors whenever a run was killed between writing it and removing it.
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.styleguide.XXXXXXXX")" || WORKDIR=""
+case "${WORKDIR%/}" in
+  ''|/|"${HOME%/}") echo "$(basename "${BASH_SOURCE[0]}"): refusing to run: throwaway directory came back as '$WORKDIR'." >&2; exit 2 ;;
+esac
+trap 'rm -rf "$WORKDIR"' EXIT
+
 # Pull the python3 -c '...' detector body out of the hook into its own file
 # (the lines strictly between the opening `findings=...python3 -c '` line and
 # the closing `' 2>/dev/null)"` line).
@@ -14,11 +25,11 @@ awk '
   /^findings="\$\(printf/ { flag=1; next }
   flag && /2>\/dev\/null\)"$/ { flag=0; next }
   flag { print }
-' "$HOOK" > "$DIR/.style-detector.tmp.py"
-[ -s "$DIR/.style-detector.tmp.py" ] || { echo "FAIL: could not extract detector block"; exit 1; }
+' "$HOOK" > "$WORKDIR/.style-detector.tmp.py"
+[ -s "$WORKDIR/.style-detector.tmp.py" ] || { echo "FAIL: could not extract detector block"; exit 1; }
 
 detect() {
-  printf '%s' "$1" | python3 "$DIR/.style-detector.tmp.py"
+  printf '%s' "$1" | python3 "$WORKDIR/.style-detector.tmp.py"
 }
 
 pass=0
@@ -63,7 +74,6 @@ want_flag "em dash in a brand-new untracked file" "--- NEW FILE: app/new.ts ---
 want_clean "plain new file with no violations" "--- NEW FILE: app/new.ts ---
 +export const x = 1;"
 
-rm -f "$DIR/.style-detector.tmp.py"
 
 # --- end to end: the hook must find the repo even when the session is elsewhere -
 # The payload's cwd is the SESSION's directory, not the project's. A session
