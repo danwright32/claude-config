@@ -89,7 +89,19 @@ if [[ "$existing" == "PARSE-ERROR" ]]; then
 fi
 
 has_label() { # has_label <lowercased name>
-  printf '%s\n' "$existing" | grep -qxF "$1"
+  # `case` over the list rather than `printf ... | grep -qxF` (claude-config#162). `grep -q` leaves
+  # on its first match, its producer is killed by SIGPIPE, and under `pipefail` the pipeline's
+  # status becomes that death, so a label that IS present reads as missing and this tries to create
+  # it again. Whether it bites depends on how long the label list is and where in it the match
+  # falls, which is a size threshold nobody watches: a repo with many labels is the one that breaks
+  # (L183). The newlines on both sides are what makes this a whole-line match, exactly as -x was,
+  # and the name is quoted inside the pattern so a label carrying a glob character stays literal.
+  case "
+$existing
+" in *"
+$1
+"*) return 0 ;; esac
+  return 1
 }
 
 # --- create whatever is missing -------------------------------------------

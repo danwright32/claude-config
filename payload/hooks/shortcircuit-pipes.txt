@@ -23,6 +23,14 @@
 # The ones left are overwhelmingly `printf '%s' "$var" | grep -q` inside tests, where the text is a
 # fixture the test itself built. That is a real distinction and not a comfortable one: it holds
 # only while the fixture stays small.
+#
+# It is now true again that no site in SHIPPED code is left, which the header claimed while three
+# files disproved it (claude-config#162). Widening the pattern in #153 made 180 sites visible that
+# had always been here, and three of them were not tests: the frontmatter validation in claude-sync,
+# four rules in check-home-paths.sh, and the label lookup in ensure-priority-labels.sh. The last two
+# are guards that fail OPEN when the pipeline reports the producer's death instead of the match,
+# which is the direction that matters. All three are converted and their counts here are lowered in
+# the same change, which is what keeps this a ratchet rather than an allowance.
 
 # The counts jumped from 335 to 515 on 2026-08-22, and NOT because 180 sites were added that day.
 # The pattern read `-[a-zA-Z]*q`, which requires the flag cluster to END in q, so `-q` and `-Eq` were
@@ -31,9 +39,9 @@
 # made sites that were always here visible for the first time. Read the jump as the measurement being
 # corrected, never as the tree getting worse, and read the number from here on as a ratchet again.
 
-9 claude-sync
+7 claude-sync
 1 payload/hooks/block-red-merge.sh
-4 payload/hooks/check-home-paths.sh
+0 payload/hooks/check-home-paths.sh
 3 payload/hooks/durable-lesson-check.sh
 1 payload/hooks/lessons-advisory.sh
 3 payload/hooks/pr-merge-quiz.sh
@@ -61,7 +69,7 @@
 2 payload/hooks/test-suite-result-line.sh
 2 payload/hooks/test-teammate-challenge-gate.sh
 2 payload/skills/milestone/create-milestone.sh
-1 payload/skills/milestone/ensure-priority-labels.sh
+0 payload/skills/milestone/ensure-priority-labels.sh
 2 payload/skills/plan-council/healthcheck.sh
 1 payload/skills/plan-council/post-discussion.sh
 4 payload/skills/production-ready/healthcheck.sh

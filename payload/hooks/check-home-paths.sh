@@ -154,6 +154,19 @@ allow_self=0
 hits=""      # rule 1: one machine's home directory
 tokbad=""    # rule 2: the sync's placeholder written where it is not fronting a path
 angbad=""    # rule 3: the hand substituted placeholder
+
+# The two regex rules are matched with bash's own ERE engine rather than by piping each line into
+# `grep -qE` (claude-config#162). `grep -q` leaves on its first match, its producer is killed by
+# SIGPIPE, and under `pipefail` the pipeline's status becomes that death, so a line that DID match
+# can be reported as clean. That is fail-open in a guard whose whole job is refusing, and it is a
+# size threshold nobody watches rather than a bug that shows up once (L183). Bash's `=~` is POSIX
+# ERE, the same dialect `grep -E` reads, so the patterns are unchanged; there is no second process
+# to kill, and four sites become none.
+#
+# Held in variables because that is the only reliable way to feed a pattern to `=~`: written inline,
+# an unquoted `$)` and a `${` are read by the shell before the regex engine ever sees them.
+_RE_TOK_SUBST='[$][{][^}]*'"$CS_TOKEN"
+_RE_TOK_LOOSE="$CS_TOKEN"'([^/]|$)'
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   # The file's own CONTENT, never the whole grep line. That line begins with the path of the file
@@ -175,8 +188,7 @@ while IFS= read -r line; do
   # So it is allowed immediately followed by a slash, and refused everywhere else, which covers
   # naming it in prose and refuses it again inside a ${...} substitution, where a following slash
   # is the substitution's own separator rather than a path.
-  if printf '%s' "$content" | grep -qE '[$][{][^}]*'"$CS_TOKEN" \
-     || printf '%s' "$content" | grep -qE "$CS_TOKEN"'([^/]|$)'; then
+  if [[ $content =~ $_RE_TOK_SUBST ]] || [[ $content =~ $_RE_TOK_LOOSE ]]; then
     tokbad="$tokbad$line
 "
   fi
@@ -195,7 +207,7 @@ while IFS= read -r line; do
   # has been through a send, every machine path is still refused, and a path in a top level rule
   # file is refused everywhere, because rule files are merged entry by entry and are deliberately
   # not rewritten.
-  if printf '%s' "$content" | grep -qE "$MACHINE_PATH"; then
+  if [[ $content =~ $MACHINE_PATH ]]; then
     _keep=1
     if [ "$allow_self" -eq 1 ]; then
       rel="${line%%:*}"; rel="${rel#"$ROOT"/}"
@@ -207,7 +219,8 @@ while IFS= read -r line; do
         # This machine's own config path removed, then the content asked again: what is left is any
         # OTHER machine's home, which is the defect. Done per line, so one portable path never
         # excuses a stale one sitting beside it.
-        printf '%s' "${content//$SELF_HOME/}" | grep -qE "$MACHINE_PATH" || _keep=0
+        _stripped="${content//$SELF_HOME/}"
+        [[ $_stripped =~ $MACHINE_PATH ]] || _keep=0
       fi
     fi
     [ "$_keep" -eq 1 ] && hits="$hits$line

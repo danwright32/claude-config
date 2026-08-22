@@ -547,6 +547,35 @@ skill_frontmatter(){   # $1 = a SKILL.md
   awk 'NR==1 && $0 !~ /^---[[:space:]]*$/ { exit } NR==1 { next } /^---[[:space:]]*$/ { exit } { print }' "$1" 2>/dev/null
 }
 
+# Whether a frontmatter block carries FIELD with a value that is not just blanks.
+#
+# A loop over the text rather than `printf '%s' "$fm" | grep -qE` (claude-config#162). `grep -q`
+# leaves on its first match, its producer is killed by SIGPIPE, and under `pipefail` the pipeline's
+# status becomes that death, so a field that WAS there is reported as missing. Whether it bites
+# depends on how big the block is and where in it the match falls, which makes it a size threshold
+# nobody is watching, and the file's own header claimed every site whose producer is a whole program
+# had been converted while these two sat in it (L183, L217).
+#
+# It reads to the END rather than stopping at the first match, deliberately: an early break out of a
+# loop fed by a here-document is the same shape again, and there is nothing to gain from leaving
+# early on a block this size.
+skill_frontmatter_has(){   # $1 = a field name   $2 = the frontmatter block
+  local line rest found=0
+  while IFS= read -r line; do
+    case "$line" in
+      "$1:"*)
+        rest="${line#"$1:"}"
+        # The leading blanks stripped off, so "name:   " counts as empty exactly as the regex it
+        # replaced did: it required a non-space character after the colon.
+        rest="${rest#"${rest%%[![:space:]]*}"}"
+        [ -n "$rest" ] && found=1 ;;
+    esac
+  done <<FRONTMATTER
+$2
+FRONTMATTER
+  [ "$found" -eq 1 ]
+}
+
 unloadable_skill_entries(){   # $1 = a skills directory
   local dir="$1" e base sk fm s
   [ -d "$dir" ] || return 0
@@ -569,11 +598,11 @@ unloadable_skill_entries(){   # $1 = a skills directory
     # The frontmatter block only. A file whose BODY happens to carry "name:" would otherwise
     # answer for a file that has no frontmatter at all (L135).
     fm="$(skill_frontmatter "$sk")"
-    if ! printf '%s\n' "$fm" | grep -qE '^name:[[:space:]]*[^[:space:]]'; then
+    if ! skill_frontmatter_has name "$fm"; then
       printf '%s\tits SKILL.md carries no name in the frontmatter\n' "$base"
       continue
     fi
-    if ! printf '%s\n' "$fm" | grep -qE '^description:[[:space:]]*[^[:space:]]'; then
+    if ! skill_frontmatter_has description "$fm"; then
       printf '%s\tits SKILL.md carries no description in the frontmatter, so nothing can tell when to use it\n' "$base"
       continue
     fi

@@ -7,7 +7,14 @@
 #
 # It bites only when the reader leaves while the writer still has data, so whether it fires depends
 # on how big the text is and where in it the match falls. That makes it a SIZE THRESHOLD nobody is
-# watching, and two of these were correct for months before their input grew:
+# watching, and two of these were correct for months before their input grew.
+#
+# Measured here on 2026-08-22 rather than left as a claim about somebody else's runner: the probe
+# further down runs one deliberately and it fired on this Mac, exit 141 over 3.7MB with `cat` as the
+# producer and the match on the first line. An earlier attempt at 5MB did not fire, which is the
+# point: what decides it is where the match falls and how much the writer still has queued, not the
+# size alone, so a site that is correct today is not correct at any particular size tomorrow. Two of
+# these were correct for months before their input grew:
 #
 #   the sync suite's #41 citation check started failing on the Linux runner the week the file it
 #   reads gained one line per suite, and reported a citation it HAD found as missing;
@@ -16,9 +23,11 @@
 #   precisely when it has the most to say. That one is measured, not theorised: its suite has a
 #   fixture that makes it happen.
 #
-# Every site whose producer is a whole PROGRAM has been converted. What is left is overwhelmingly
-# `printf '%s' "$var" | grep -q` inside tests, where the text is a fixture the test itself built.
-# The count is written down so it can only go down.
+# No site in SHIPPED code is left. That sentence was here while three files disproved it: widening
+# the pattern in #153 made 180 sites visible that had always been present, and three of them were
+# not tests (claude-config#162). What is left is overwhelmingly `printf '%s' "$var" | grep -q`
+# inside tests, where the text is a fixture the test itself built. The count is written down so it
+# can only go down.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -114,6 +123,43 @@ _PIPE='|'
 [ "$(count_uncommented "$TMPROOT/probe-loud.sh")" = "0" ] \
   && check "and does not count a piped grep that reads its producer to the end" ok \
   || check "and does not count a piped grep that reads its producer to the end" "it counted $(count_uncommented "$TMPROOT/probe-loud.sh")"
+
+# ---------------------------------------------------------------------------
+# The hazard itself, on THIS machine, rather than taken from a note (claude-config#162).
+# ---------------------------------------------------------------------------
+# Everything above is a ratchet on a pattern. What justifies the ratchet is a claim about how the
+# platform behaves, and that claim has only ever been recorded in prose here: it was seen biting on
+# the Linux runner and could not be reproduced on a Mac. A premise nobody re-takes is a premise
+# nobody notices going stale, so it is measured on whatever machine this runs on and the answer is
+# printed either way.
+#
+# It is deliberately NOT a failure. The two outcomes are both facts about the platform rather than
+# about this tree, and a red suite on the runner would say nothing anybody could act on (L112). The
+# check beside it is the CONTROL: the needle really is in the file and a direct read really does
+# find it, so "the pipeline succeeded" means the hazard did not fire here and never means the probe
+# read nothing (L98, L159).
+#
+# The pipeline is assembled rather than written, for the same reason the fixtures above are: spelt
+# out, this file would hold one of the things it counts and the ratchet would report its own probe.
+_SC_BIG="$TMPROOT/short-circuit-probe.txt"
+{ printf 'needle\n'; awk 'BEGIN{for(i=0;i<200000;i++) print "filler line " i}'; } > "$_SC_BIG"
+_sc_bytes="$(wc -c < "$_SC_BIG" 2>/dev/null | tr -d ' ')"
+case "$_sc_bytes" in ''|*[!0-9]*) _sc_bytes=0 ;; esac
+{
+  printf '#!/usr/bin/env bash\nset -o pipefail\n'
+  printf 'cat "$1" %s grep -q "^needle$"\n' "$_PIPE"
+} > "$TMPROOT/probe-hazard.sh"
+grep -q '^needle$' "$_SC_BIG"; _sc_direct=$?
+bash "$TMPROOT/probe-hazard.sh" "$_SC_BIG" >/dev/null 2>&1; _sc_piped=$?
+[ "$_sc_direct" = "0" ] && [ "$_sc_bytes" -gt 65536 ] \
+  && check "the hazard probe really has a match to find, past a pipe buffer ($_sc_bytes bytes)" ok \
+  || check "the hazard probe really has a match to find, past a pipe buffer ($_sc_bytes bytes)" \
+       "direct read said $_sc_direct over $_sc_bytes bytes, so nothing was measured"
+if [ "$_sc_piped" = "0" ]; then
+  echo "test-pipefail-shortcircuit: on this machine the short circuiting pipeline reported success over ${_sc_bytes} bytes, so the hazard did NOT fire here. The ratchet rests on it firing elsewhere, which is what makes it a platform dependent threshold rather than a bug you can see."
+else
+  echo "test-pipefail-shortcircuit: on this machine the short circuiting pipeline exited $_sc_piped over ${_sc_bytes} bytes while a direct read of the same file found the match. The hazard is LIVE here: every remaining site in the list below can report a failure that never happened."
+fi
 
 # ---------------------------------------------------------------------------
 # The real tree, against the recorded counts.
