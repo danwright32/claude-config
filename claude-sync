@@ -807,15 +807,71 @@ top_files_in(){   # $1 = directory
 # reference to it. Seen 2026-07-29: six lessons claiming three numbers, plus an
 # earlier duplicate that had gone unnoticed for a day (#15).
 # Prints one line per duplicate, per file. Empty output means the numbering is sound.
+# ---- what counts as a lesson entry at all (claude-config#164) ----
+# The canonical form is `- **Lnnn. ...`, and every tool in this file reads only that: the duplicate
+# checker, the number minter, the index generator and `claude-sync lesson`. So an entry written any
+# other way is invisible to ALL of them at once, they agree with each other, and all of them are
+# wrong together.
+#
+# Measured 2026-08-22: a `### L511.` heading and a bare `- L511.` list item sat in LESSONS.md read
+# by nothing. They were absent from the generated index that loads into every session, `lesson L511`
+# answered that it was not in the file while the file held two entries labelled L511, and
+# `next-lesson` went on offering 511 as free, so the next lesson written on either Mac would have
+# collided with `check-lessons` still reporting the numbering sound.
+#
+# The recogniser is deliberately LOOSER than the canonical form: leading blanks, any list marker,
+# any heading depth, and the bold optional. What it finds that is not canonical is a hard failure
+# naming the file and the line, because a checker that only sees what it can parse reports success
+# when it matches nothing, and that is the one class it can otherwise never report (L100, L96).
+LESSON_DECL_RE='^[[:blank:]]*([-*+][[:blank:]]+|#{1,6}[[:blank:]]+)?(\*\*)?L[0-9]+\.'
+
+# Is this rule file one lessons are WRITTEN in, rather than one they are rendered into? Asked in
+# one place, so the three readers below cannot drift into three different answers (L41).
+lesson_source_file(){   # $1 = path relative to the config root
+  ! is_derived_rule_file "$1"
+}
+
+# Every lesson number a file CLAIMS, in whatever shape it is written. This is what decides which
+# numbers are taken, so a malformed entry can never have its number handed out a second time even
+# when the refusal below has been overridden. Being wrong here costs a collision, which is the one
+# thing the whole band mechanism exists to prevent, and a refusal somebody has switched off must
+# not take the numbering with it.
+lesson_numbers_in(){   # $1.. = files -> one bare number per line, unsorted
+  grep -hoE "$LESSON_DECL_RE" "$@" 2>/dev/null | grep -oE 'L[0-9]+' | grep -oE '[0-9]+' || true
+}
+
+# The entries nothing here can read. Prints "file:line: text" for each, so the report can name what
+# to go and fix rather than only that something is wrong (L11, L80).
+malformed_lesson_entries(){   # $1 = tree to inspect
+  local f line
+  for f in $(top_files_in "$1"); do
+    [ -f "$1/$f" ] || continue
+    # The generated index is EXCLUDED, and by the predicate that already decides a file is derived
+    # rather than by naming it a second time here. Its own entries are `- Lnnn.` with no bold,
+    # which is exactly the shape refused here, because it is a RENDERING of these lessons rather
+    # than a place any of them live. Without this the check is red on every machine for ever, about
+    # a file nobody writes by hand.
+    lesson_source_file "$f" || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf '%s:%s\n' "$f" "$line"
+    done < <(grep -nE "$LESSON_DECL_RE" "$1/$f" 2>/dev/null | grep -vE "^[0-9]+:- \*\*L[0-9]+\." || true)
+  done
+  return 0
+}
+
 duplicate_lesson_numbers(){   # $1 = tree to inspect
   local f line
   for f in $(top_files_in "$1"); do
     [ -f "$1/$f" ] || continue
+    lesson_source_file "$f" || continue
+    # Counted from the numbers a file CLAIMS, not from the canonical entries alone, or two entries
+    # sharing one number are a duplicate only while both happen to be written correctly, and the
+    # pair that is hardest to notice is the pair the scan cannot see (claude-config#164).
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       printf '%s: %s\n' "$f" "$line"
-    done < <(grep -oE '^- \*\*L[0-9]+\.' "$1/$f" 2>/dev/null \
-             | grep -oE 'L[0-9]+' | sort | uniq -c \
+    done < <(lesson_numbers_in "$1/$f" | sed 's/^/L/' | sort | uniq -c \
              | awk '$1 > 1 { printf "%s used %s times\n", $2, $1 }')
   done
   return 0
@@ -905,6 +961,14 @@ do_lesson(){   # $1 = number, e.g. L174
   # An empty answer is a REFUSAL, not a lesson with nothing in it: printing nothing and exiting 0
   # would read exactly like a lesson that says nothing (L98).
   if is_blank "$out"; then
+    # Not found in the canonical form is not the same fact as not present, and answering the second
+    # when the first is what happened is how the state in claude-config#164 stayed believable:
+    # three tools agreed the number was free, and the one that could have contradicted them said
+    # the entry did not exist while the file plainly held it (L11).
+    local unreadable; unreadable="$(malformed_lesson_entries "$CLAUDE_HOME" | grep -E "(^|:)[[:blank:]#*+-]*(\*\*)?${num}\." || true)"
+    if ! is_blank "$unreadable"; then
+      die "$num is in $src but not written as '- **$num. ...', so nothing here can read it: $(printf '%s' "$unreadable" | tr '\n' ';' | sed 's/;$//'). Rewrite it to start with '- **$num. ' and it becomes readable."
+    fi
     die "$num is not in $src. 'claude-sync next-lesson' prints the next free number if you are adding one."
   fi
   printf '%s\n' "$out"
@@ -1043,7 +1107,7 @@ highest_lesson_in_band(){   # $1 = band start  $2.. = files
   while IFS= read -r n; do
     [ -n "$n" ] || continue
     [ "$n" -ge "$band" ] && [ "$n" -le "$top" ] && [ "$n" -gt "$highest" ] && highest="$n"
-  done < <(grep -hoE '^- \*\*L[0-9]+\.' "$@" 2>/dev/null | grep -oE '[0-9]+' || true)
+  done < <(lesson_numbers_in "$@")
   printf '%s' "$highest"
   return 0
 }
@@ -1052,6 +1116,10 @@ next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whol
   local f highest=0 n band="${2:-}" files=()
   for f in $(top_files_in "$1"); do
     [ -f "$1/$f" ] || continue
+    # The generated index is skipped here too. It mirrors the numbers beside it, so including it
+    # normally changes nothing, and the one time it differs is the time it is stale, which would
+    # let a number no lesson holds any more decide what the next one is.
+    lesson_source_file "$f" || continue
     files+=("$1/$f")
   done
   if [ -n "$band" ] && [ "${#files[@]}" -gt 0 ]; then
@@ -1070,7 +1138,7 @@ next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whol
     # nothing fails the whole substitution, and an assignment that fails is fatal
     # under set -e, so a rule file with no lessons in it aborted the command
     # outright and printed nothing at all.
-    n="$(grep -oE '^- \*\*L[0-9]+\.' "$f" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
+    n="$(lesson_numbers_in "$f" | sort -n | tail -1 || true)"
     if [ -n "$n" ] && [ "$n" -gt "$highest" ]; then highest="$n"; fi
   done
   printf 'L%s\n' "$((highest + 1))"
@@ -1114,11 +1182,22 @@ PROT
   # published, so the broken numbering does not spread to the other Mac. Only that
   # file waits: failing the whole send would stop hooks and skills moving between
   # Macs, which is the wedge this tool has already been bitten by twice.
-  local dupfiles="" duplines=""
+  local dupfiles="" duplines="" badlines=""
   if [ "${SYNC_SKIP_LESSON_CHECK:-0}" != "1" ]; then
+    # An entry nothing can read is held back for the same reason a collided number is: it is not
+    # merely useless where it sits, it claims a number the other Mac's minter cannot see, so
+    # sending it plants the collision there rather than here (claude-config#164). Same override,
+    # same "only that file waits" rule, and reported separately from a duplicate because the two
+    # need different fixes (L11).
+    badlines="$(malformed_lesson_entries "$CLAUDE_HOME")"
+    if ! is_blank "$badlines"; then
+      dupfiles="$(printf '%s\n' "$badlines" | cut -d: -f1 | sort -u)"
+      echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because it holds lesson entries not written as '- **Lnnn. ...', which nothing here can read: $(printf '%s' "$badlines" | tr '\n' ';' | sed 's/;$//'). Rewrite each one to start with '- **L<number>. ' and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
+      notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): unreadable lesson entry"
+    fi
     duplines="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
     if ! is_blank "$duplines"; then
-      dupfiles="$(printf '%s\n' "$duplines" | cut -d: -f1 | sort -u)"
+      dupfiles="$(printf '%s\n%s\n' "$dupfiles" "$duplines" | cut -d: -f1 | grep -v '^$' | sort -u)"
       echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because the same lesson number is used twice, which silently breaks every reference to it: $(printf '%s' "$duplines" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number) and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
       notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): duplicate lesson number"
     fi
@@ -3453,8 +3532,23 @@ case "$cmd" in
   lesson) do_lesson "${2:-}" ;;         # read-only: one lesson in full, with its provenance
   check-skills) do_check_skills ;;      # read-only: is any skill provided by a plugin AND locally
   check-lessons)
+    # Asked FIRST, because an entry nothing can read is also an entry the duplicate scan below
+    # cannot count, so reporting sound numbering before this has been settled is reporting about a
+    # file only partly read (claude-config#164).
+    # BOTH faults are asked, and both are reported, never as an else-if: a file routinely commits
+    # the two at once (an entry nobody can read is exactly the entry whose number gets claimed
+    # twice), and dying at the first sends somebody back for a second run to discover the second.
+    # The same rule check-home-paths follows for its three (claude-config#164, #108).
+    badlessons="$(malformed_lesson_entries "$CLAUDE_HOME")"
     dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
-    if ! is_blank "$dups"; then die "duplicate lesson numbers: $(printf '%s' "$dups" | tr '\n' ';' | sed 's/;$//')"; fi
+    lessonfaults=""
+    if ! is_blank "$badlessons"; then
+      lessonfaults="these lesson entries are not written as '- **Lnnn. ...', so nothing here can read them: not the index that loads into every session, not 'claude-sync lesson', not the duplicate check, and not the number minter. $(printf '%s' "$badlessons" | tr '\n' ';' | sed 's/;$//'). Rewrite each one to start with '- **L<number>. ' and it becomes visible to all four."
+    fi
+    if ! is_blank "$dups"; then
+      lessonfaults="${lessonfaults:+$lessonfaults }duplicate lesson numbers: $(printf '%s' "$dups" | tr '\n' ';' | sed 's/;$//')"
+    fi
+    if ! is_blank "$lessonfaults"; then die "$lessonfaults"; fi
     lesson_band_locked
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;

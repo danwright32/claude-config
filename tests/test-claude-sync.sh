@@ -2404,9 +2404,16 @@ section "== a pull must not revert an unsent edit to a top-level rules file =="
 # expensive one in the sync.
 TFBARE="$WORK/tfbare.git"; git init -q --bare -b main "$TFBARE"
 TFA="$WORK/tfrepoA"; git clone -q "$TFBARE" "$TFA" 2>/dev/null
+# The lesson fixtures below are in the CANONICAL `- **Lnnn. ...` form, which is what a real
+# LESSONS.md holds. They used to be bare `- Lnnn.` lines, and every check here passed on them
+# because the merge is a three way merge over lines and never looked at what an entry is. So these
+# sections proved the merge preserves LINES, while claiming to prove it preserves LESSONS, and the
+# entry-aware step that runs after the merge (dropping a local copy the other Mac has renumbered)
+# was never reached at all (L48: a fixture that is not shaped like the real data answers a
+# different question). Found when claude-config#164 started refusing the shape.
 TFAH="$WORK/tfhomeA"; mkdir -p "$TFAH/hooks"; echo '{"hooks":{}}' > "$TFAH/settings.json"
 printf '# rules\n' > "$TFAH/CLAUDE.md"
-printf -- '- L1. first lesson\n' > "$TFAH/LESSONS.md"
+printf -- '- **L1. first lesson.** body\n' > "$TFAH/LESSONS.md"
 echo 'other-v1' > "$TFAH/hooks/tf-other.sh"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFAH" SYNC_REPO="$TFA" bash "$SCRIPT" sync >/dev/null 2>&1
 TFB="$WORK/tfrepoB"; git clone -q "$TFBARE" "$TFB" 2>/dev/null
@@ -2414,7 +2421,7 @@ TFBH="$WORK/tfhomeB"; mkdir -p "$TFBH"; echo '{"hooks":{}}' > "$TFBH/settings.js
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" pull >/dev/null 2>&1
 check "B starts with the shared lessons file" "grep -q 'first lesson' '$TFBH/LESSONS.md'"
 # B appends a lesson. Nothing sends it (the watcher is down, or it is seconds old).
-printf -- '- L2. MY-NEW-LESSON\n' >> "$TFBH/LESSONS.md"
+printf -- '- **L2. MY-NEW-LESSON.** body\n' >> "$TFBH/LESSONS.md"
 # A changes something unrelated and publishes, so B's next pull has real work.
 echo 'other-v2' > "$TFAH/hooks/tf-other.sh"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFAH" SYNC_REPO="$TFA" bash "$SCRIPT" sync >/dev/null 2>&1
@@ -2436,9 +2443,9 @@ check "the lesson round-trips to the other Mac" "grep -q MY-NEW-LESSON '$TFAH/LE
 # copy was set aside, which is the loss #14 exists to stop. Both Macs appending a
 # different entry is a merge, not a conflict, so both entries must now end up in
 # the one file that sessions actually load.
-printf -- '- L3. FROM-MAC-A\n' >> "$TFAH/LESSONS.md"
+printf -- '- **L3. FROM-MAC-A.** body\n' >> "$TFAH/LESSONS.md"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFAH" SYNC_REPO="$TFA" bash "$SCRIPT" sync >/dev/null 2>&1
-printf -- '- L4. FROM-MAC-B-SAME-TIME\n' >> "$TFBH/LESSONS.md"
+printf -- '- **L4. FROM-MAC-B-SAME-TIME.** body\n' >> "$TFBH/LESSONS.md"
 out_tfc="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" pull 2>&1)"
 check "the other Mac's entry arrives"           "grep -q FROM-MAC-A '$TFBH/LESSONS.md'"
 check "this Mac's entry is still in the file"   "grep -q FROM-MAC-B-SAME-TIME '$TFBH/LESSONS.md'"
@@ -2460,7 +2467,7 @@ SBBARE="$WORK/sbbare.git"; git init -q --bare -b main "$SBBARE"
 SBA="$WORK/sbrepoA"; git clone -q "$SBBARE" "$SBA" 2>/dev/null
 SBAH="$WORK/sbhomeA"; mkdir -p "$SBAH/hooks"; echo '{"hooks":{}}' > "$SBAH/settings.json"
 printf '# rules\n' > "$SBAH/CLAUDE.md"
-printf -- '- L1. first lesson\n' > "$SBAH/LESSONS.md"
+printf -- '- **L1. first lesson.** body\n' > "$SBAH/LESSONS.md"
 echo 'sb-other-v1' > "$SBAH/hooks/sb-other.sh"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBAH" SYNC_REPO="$SBA" bash "$SCRIPT" sync >/dev/null 2>&1
 SBB="$WORK/sbrepoB"; git clone -q "$SBBARE" "$SBB" 2>/dev/null
@@ -2478,9 +2485,9 @@ check "#158 a pull that left no previous copy says nothing about .syncbak" \
   "case \"\$out_sb_none\" in *syncbak*) false ;; *) true ;; esac"
 
 # Now both Macs append to the same rules file, which is the merge that writes one.
-printf -- '- L3. SB-FROM-MAC-A\n' >> "$SBAH/LESSONS.md"
+printf -- '- **L3. SB-FROM-MAC-A.** body\n' >> "$SBAH/LESSONS.md"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBAH" SYNC_REPO="$SBA" bash "$SCRIPT" sync >/dev/null 2>&1
-printf -- '- L4. SB-FROM-MAC-B\n' >> "$SBBH/LESSONS.md"
+printf -- '- **L4. SB-FROM-MAC-B.** body\n' >> "$SBBH/LESSONS.md"
 out_sb="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBBH" SYNC_REPO="$SBB" bash "$SCRIPT" pull 2>&1)"
 # The fixture really did produce one, or every check below passes by having nothing to find (L98).
 check "#158 the merge really did leave a previous copy behind" "[ -f '$SBBH/LESSONS.md.syncbak' ]"
@@ -2499,9 +2506,9 @@ check "#158 and it still holds this Mac's pre-merge copy" \
 # the dates are printed. Made older by hand rather than by waiting.
 printf 'stale\n' > "$SBBH/CLAUDE.md.syncbak"
 touch -t 202601011200 "$SBBH/CLAUDE.md.syncbak"
-printf -- '- L5. SB-FROM-MAC-A-AGAIN\n' >> "$SBAH/LESSONS.md"
+printf -- '- **L5. SB-FROM-MAC-A-AGAIN.** body\n' >> "$SBAH/LESSONS.md"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBAH" SYNC_REPO="$SBA" bash "$SCRIPT" sync >/dev/null 2>&1
-printf -- '- L6. SB-FROM-MAC-B-AGAIN\n' >> "$SBBH/LESSONS.md"
+printf -- '- **L6. SB-FROM-MAC-B-AGAIN.** body\n' >> "$SBBH/LESSONS.md"
 out_sb2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBBH" SYNC_REPO="$SBB" bash "$SCRIPT" pull 2>&1)"
 check "#158 an older copy left from before is listed too" \
   "line_has \"\$out_sb2\" 'CLAUDE\.md\.syncbak' '2026-01-01'"
@@ -2902,6 +2909,113 @@ printf -- 'see L2 for the rule\n' >> "$LNMBH/skills/demo/SKILL.md"
 printf -- '- **L2. theirs.** written on Mac A\n- **L4. four.** also on Mac A\n  distinct from L2, which it cites\n' >> "$LNMA/payload/LESSONS.md"
 git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds its L2 and L4" && git -C "$LNMA" push -q
 out_lnm="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" bash "$LNMB/claude-sync" pull 2>&1)"
+section "== a lesson entry no tool can read is a failure, not a silent skip (#164) =="
+# The canonical form is `- **Lnnn. ...`, and every tool here reads only that: the duplicate
+# checker, the number minter, the index generator, and `claude-sync lesson`. So an entry written
+# any other way is invisible to ALL of them at once, and they all agree with each other while all
+# being wrong. Two were found on 2026-08-22, a `### L511.` heading and a bare `- L511.` list item:
+# absent from the generated index that loads into every session, unretrievable by `lesson`,
+# uncounted by the duplicate checker, and holding a number `next-lesson` went on offering as free,
+# so the next lesson added on either Mac would have collided with `check-lessons` still reporting
+# sound.
+#
+# The defect is not the two entries, it is that a checker which only sees what it can parse
+# reports success when it matches nothing, so it can never report this class at all (L100, L96).
+LM="$WORK/lmrepo"; mkdir -p "$LM/payload"
+LMH="$WORK/lmhome"; mkdir -p "$LMH/hooks"
+echo '{"hooks":{}}' > "$LMH/settings.json"
+echo '#!/bin/sh' > "$LMH/hooks/keep-syncing.sh"
+printf '# rules\n@LESSONS.md\n' > "$LMH/CLAUDE.md"
+_lm(){ SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LMH" SYNC_REPO="$LM" bash "$SCRIPT" "$@" 2>&1; }
+
+# The control FIRST, and on a file that really does hold lessons: a check that fires on everything
+# is as useless as one that fires on nothing, and this one has to stay quiet on the canonical form
+# every rule file is written in (L104).
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body\n- **L2. two.** body\n' > "$LMH/LESSONS.md"
+_lm_ok="$(_lm check-lessons)"; _lm_ok_rc=$?
+check "#164 canonical entries pass" "[ '$_lm_ok_rc' -eq 0 ]"
+check "#164 and it still reports the next free number" \
+  "case \"\$_lm_ok\" in *'next free: L3'*) true ;; *) false ;; esac"
+
+# A heading. This is one of the two real shapes found.
+printf -- '\n### L3. A test that times out names the assertion that was running.\n  body\n' >> "$LMH/LESSONS.md"
+_lm_head="$(_lm check-lessons)"; _lm_head_rc=$?
+# The line number is READ from the fixture, never written down beside it: a number typed here is
+# right until somebody adds a line to the fixture above, and then this asserts about a line that
+# holds something else while still looking like a precise check (L48, measured: it did).
+_lm_head_ln="$(grep -n '^### L3\.' "$LMH/LESSONS.md" | cut -d: -f1)"
+check "#164 an entry written as a heading is refused" "[ '$_lm_head_rc' -ne 0 ]"
+check "#164 and the refusal names the file and the line (line $_lm_head_ln)" \
+  "line_has \"\$_lm_head\" 'LESSONS\.md' ':$_lm_head_ln:'"
+check "#164 and quotes the entry, so it can be found" \
+  "case \"\$_lm_head\" in *'L3. A test that times out'*) true ;; *) false ;; esac"
+# It must say what is WRONG with it, not merely that something is. A reader who cannot see the
+# difference between their line and the canonical one has been told nothing they can act on (L11).
+check "#164 and says what shape it should have been" \
+  "case \"\$_lm_head\" in *'- **L'*) true ;; *) false ;; esac"
+
+# The other shape: a list item with the bold left off. Told apart from the heading by nothing but
+# its own text, which is why both are checked rather than one standing in for the other.
+printf '# Lessons\n\n- **L1. one.** body\n- L4. A lookup that requires exactly one match must treat MANY matches as a refusal.\n' > "$LMH/LESSONS.md"
+_lm_bare="$(_lm check-lessons)"; _lm_bare_rc=$?
+check "#164 an entry with the bold left off is refused" "[ '$_lm_bare_rc' -ne 0 ]"
+check "#164 and that one is named too" \
+  "case \"\$_lm_bare\" in *'L4. A lookup that requires'*) true ;; *) false ;; esac"
+
+# The number is CLAIMED even though no tool could read it. Without this the next lesson minted on
+# either Mac takes it and the two collide, which is the consequence that actually costs something,
+# and it has to hold even when the failure above is overridden.
+_lm_next="$(SYNC_SKIP_LESSON_CHECK=1 _lm next-lesson)"
+check "#164 a malformed entry's number is not offered as free" \
+  "! case \"\$_lm_next\" in *L4*) true ;; *) false ;; esac"
+check "#164 and the next number is one past it" \
+  "case \"\$_lm_next\" in *L5*) true ;; *) false ;; esac"
+# And two entries claiming one number are a duplicate however either of them is written, which the
+# canonical-only scan could not see even when BOTH were malformed. Reported in the SAME run as the
+# shape fault above rather than after it is fixed: an entry nobody can read is exactly the entry
+# whose number gets claimed twice, so these two arrive together and reporting one at a time costs a
+# second run to discover the second.
+printf -- '\n### L4. same number, other shape.\n' >> "$LMH/LESSONS.md"
+_lm_dup="$(_lm check-lessons)"
+check "#164 two entries claiming one number are caught across shapes" \
+  "case \"\$_lm_dup\" in *'L4 used 2 times'*) true ;; *) false ;; esac"
+check "#164 and the shape fault is reported in the same run, not after it" \
+  "case \"\$_lm_dup\" in *'not written as'*) true ;; *) false ;; esac"
+
+# Held back from the send exactly as a duplicate is, and only that file. Failing the whole send
+# would stop hooks and skills moving between Macs, which is the wedge this tool has been bitten by
+# twice.
+printf '# Lessons\n\n- **L1. one.** body\n- L9. no bold on this one.\n' > "$LMH/LESSONS.md"
+_lm_push="$(_lm push)"
+check "#164 a file holding one is NOT published"  "[ ! -f '$LM/payload/LESSONS.md' ] || ! grep -q 'no bold on this one' '$LM/payload/LESSONS.md'"
+check "#164 and the send says which file and why" \
+  "line_has \"\$_lm_push\" 'NOT publishing' 'LESSONS\.md'"
+check "#164 while everything else still publishes" "[ -f '$LM/payload/hooks/keep-syncing.sh' ]"
+SYNC_SKIP_LESSON_CHECK=1 _lm push >/dev/null 2>&1
+check "#164 the documented override publishes it anyway" "grep -q 'no bold on this one' '$LM/payload/LESSONS.md'"
+
+# `lesson` must not answer "not in this file" about a number the file plainly holds. That reading
+# is what made the state believable: three tools agreeing, and the one that could have contradicted
+# them saying the entry does not exist (L11).
+_lm_look="$(_lm lesson L9)"; _lm_look_rc=$?
+check "#164 looking one up does not deny it exists" "[ '$_lm_look_rc' -ne 0 ]"
+check "#164 and says it is there but unreadable, naming the line" \
+  "line_has \"\$_lm_look\" 'L9' ':4:'"
+check "#164 and does not claim it is absent" \
+  "! case \"\$_lm_look\" in *'is not in'*) true ;; *) false ;; esac"
+
+# The false positive that would make this fire on every run: the generated index is a RENDERING of
+# these entries and its own form is `- Lnnn.` with no bold, which is precisely the shape refused
+# above. It is excluded by the predicate that already decides a file is derived, not by naming it
+# again here (L41). Without this the check is red on every machine, for ever, about a file nobody
+# writes by hand.
+printf '# Lessons\n\n- **L1. one.** body\n- **L2. two.** body\n' > "$LMH/LESSONS.md"
+printf '# Lessons index (generated, do not edit)\n\n- L1. one.\n- L2. two.\n' > "$LMH/LESSONS-INDEX.md"
+_lm_idx="$(_lm check-lessons)"; _lm_idx_rc=$?
+check "#164 the generated index is not judged by this rule" "[ '$_lm_idx_rc' -eq 0 ]"
+check "#164 and the index really did hold the refused shape" \
+  "grep -qE '^- L[0-9]+\.' '$LMH/LESSONS-INDEX.md'"
+
 section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
 # needs: #15: duplicate lesson numbers must not be published or go unnoticed
 # The settled rule (see the 2026-08-05 note above): the published copy keeps the

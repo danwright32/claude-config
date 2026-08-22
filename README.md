@@ -108,6 +108,16 @@ Each Mac mints lesson numbers from a band it owns, so two lessons written betwee
 claim the same number. `claude-sync next-lesson` prints the next free number in this Mac's band, and
 `check-lessons` fails on a duplicate anywhere in the file.
 
+An entry has to be written as `- **Lnnn. ...` to be a lesson at all. Everything here reads only that
+form, so one written any other way (a heading, a list item with the bold left off) is invisible to
+all of it at once: absent from the generated index that loads into every session, unretrievable by
+`claude-sync lesson`, uncounted by the duplicate check, and holding a number `next-lesson` goes on
+offering as free. `check-lessons` now refuses one, naming the file and the line, and a file holding
+one is held back from the send the same way a collided number is. The number it claims is counted
+whatever shape it is in, so even with the refusal overridden it cannot be handed out twice. The
+generated index is exempt, since its own form is `- Lnnn.` and it is a rendering rather than a place
+lessons live.
+
 A Mac claims its band the first time it asks for a number: the first Mac gets 1 to 500, the next 501
 to 1000, and so on. The claim is one file per Mac under `lesson-bands/` in the repo, committed so the
 other Mac can see it, and one file per writer means a claim can never produce a merge conflict. Two
