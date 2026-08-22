@@ -477,7 +477,7 @@ that is added both fail until this table is updated.
 | --- | --- | --- | --- | --- |
 | 1 hour | `SYNC_LOCK_MAX_AGE=3600` | A lock is broken as stale | Re-checked 2026-08-21: the payload is 4.9MB, a fresh clone from origin takes 1 second and a whole-payload copy under 1, so the original 6 second figure is conservative and this is at least 600x the slowest real run, proved by #29 | 2026-08-21 |
 | 60 days | `SYNC_MAC_RETIRE_AFTER=5184000` | A Mac counts as retired | Re-derived 2026-08-21 by `tools/measure-sync-gaps.sh`: the worst gap either Mac showed in the window is 6.79 days, so 8.8x the longest real absence, and a holiday cannot trip it, proved by #26 | 2026-08-21 |
-| 1 hour | `SUITE_TIMEOUT=3600` | A suite run is killed after this much wall clock however well it is going | No longer the thing that catches a hang, which is why it is generous: SUITE_STALL_TIMEOUT does that. A full single process run measured 348 seconds idle and 1943 at load 160 to 188 on 2026-08-22, so the old 900 would have killed a healthy run on a busy Mac, proved by #152 | 2026-08-22 |
+| 1 hour | `SUITE_TIMEOUT=3600` | A suite run is killed after this much wall clock however well it is going | No longer the thing that catches a hang, which is why it is generous: SUITE_STALL_TIMEOUT does that. A full single process run measured 348 seconds idle and 1943 at load 160 to 188 on 2026-08-22, so the old 900 would have killed a healthy run on a busy Mac, proved by #152. It is now bounded from below as well, at twice the stall bound, or the stall can never be reached and every real hang is reported as a ceiling overrun instead, which #112 checks | 2026-08-22 |
 | 10 minutes | `SUITE_STALL_TIMEOUT=600` | A suite run is killed as hung after this long without reaching a new section | This is what actually catches a hang. The slowest single section measured 34 seconds on 2026-08-22, and about 190 if the whole machine runs five times slower as it did under load, so at least 3x the worst observed. Checked against the sections this run ACTUALLY took rather than against this sentence, proved by #152 | 2026-08-22 |
 | 30 minutes | `SUITE_LOCK_MAX_AGE=1800` | A suite lock from another machine is broken | The same runs, so at least 6x the slowest observed, proved by #32 | 2026-08-21 |
 | 4 hours | `SYNC_SCRATCH_MAX_AGE=14400` | Scratch counts as abandoned | 4x the 3600 second suite ceiling, so the longest permitted run is a quarter of the way to being swept, and 2400x the 6 second sync. It was 3600 against a 900 second ceiling, which was the same 4x, and #152 raised the ceiling alone and closed the margin to nothing. The two are now compared against each other by a check rather than by this sentence, proved by #160 | 2026-08-22 |
@@ -489,8 +489,19 @@ The two suite figures above were 123 seconds and "roughly 7x" for eleven days, w
 checks were added and one of them was made five times faster. Every one of those figures was true
 when written and wrong within days, and nothing noticed, because the check beside this table
 compares the SETTING and not the measurement the setting was derived from. So the suite measures
-ITSELF and requires the deadline to be at least twice the run that just happened. That number
-cannot go stale because it is not recorded anywhere.
+ITSELF at the end of every full run and says whether the ceiling still has room over what that run
+actually took. That number cannot go stale because it is not recorded anywhere.
+
+What that self-measurement judges changed in #161. It was a floor of twice the run's own PROCESSOR
+time, which was right while the ceiling was what caught a hang. #152 moved that job to
+SUITE_STALL_TIMEOUT and raised the ceiling fourfold in the same change, and the floor went from
+1.7x to about 7x: 262 seconds of processor time against a 3600 second ceiling, so the suite would
+have had to grow sevenfold before it said anything. It was not wrong, it just could not fire, and
+a check that cannot fire stops being read. The measurement now judges the WALL CLOCK, which is what
+the ceiling actually bounds, and uses the processor time to say which of two different things is
+happening: a run filling its own clock with its own work has grown into its deadline and fails,
+while one merely waiting on a busy Mac gets a note naming the load. Both were measured on the same
+tree on 2026-08-22, at 348 seconds idle and 1943 under load with only 262 of those seconds its own.
 
 The last row is the one exception, and it is stated rather than quietly left out: what a healthy
 watcher looks like is passed straight to `report_process_family` as arguments, so there is no

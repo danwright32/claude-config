@@ -1423,25 +1423,34 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   # thing). The shard's copy is still worth having for a one-process run; this is the one that
   # covers the default.
   #
-  # Judged on PROCESSOR time, not on wall clock (claude-config#149). Wall clock measures what else
-  # was running on the Mac: the same tree took 243s idle and 854s at load 38 to 103 on 2026-08-21,
-  # and against a 900s deadline the second of those went red with nothing broken. What the check
-  # is FOR is noticing that the suite has grown into its own deadline, and growth shows up in the
-  # work rather than in the waiting.
+  # Judged on the clock the ceiling actually USES, which is wall clock (claude-config#161). #149
+  # moved this to processor time to stop a loaded Mac going red, and that was right for what the
+  # ceiling was then: the thing that caught a hang. #152 took that job away and gave it to
+  # SUITE_STALL_TIMEOUT, and raised the ceiling to 3600 at the same time, which left this
+  # comparison with a margin of about 7x (262s of processor time across four shards on 2026-08-22
+  # against a 3600s ceiling). It could not fire, and a check that cannot fire stops being read
+  # while still occupying a line in this report (L182).
   #
-  # The wall clock is still measured and still said, because a run that really has no wall clock
-  # headroom is worth knowing about. It is a NOTE naming the load rather than a failure: it is a
-  # fact about the machine, and "find what got slower" is not an action anybody can take on it
-  # (L112). The two are worded differently, so a reader can tell which one they are looking at
-  # (L11).
+  # So the wall clock decides whether there is anything to say, because that is what runs out
+  # against the ceiling, and the processor time decides WHICH of the two things is happening. The
+  # separation is the whole point of measuring both, and it is what #149 established: a run filling
+  # its own wall clock with its own work has grown into its deadline and is worth failing over,
+  # while one that is merely waiting on a busy Mac is a fact about the machine and "find what got
+  # slower" is not an action anybody can take on it (L112). The two are worded differently, so a
+  # reader can tell which one they are looking at (L11).
+  #
+  # Measured against both states of the same tree on 2026-08-22: 348s of wall clock idle, which is
+  # a tenth of the ceiling and says nothing at all, and 1943s at load 160 to 188, which is over half
+  # of it and gets the note, because only 262s of it was this suite's own work.
   _fan_elapsed=$SECONDS
   suite_cpu_read; _fan_cpu="$SUITE_CPU_SECONDS"
   if [ "$SUITE_TIMEOUT" -gt 0 ] && [ -z "$_fan_cpu" ]; then
     # The reader came back with nothing, so this run has NOT been checked. Said out loud, because a
     # headroom check that silently measured nothing reads exactly like one that passed (L98).
-    echo "test suite: the processor time for this run could not be read, so the deadline's headroom was NOT checked. The run itself is unaffected." >&2
-  elif [ "$SUITE_TIMEOUT" -gt 0 ] && [ "$SUITE_TIMEOUT" -lt $(( _fan_cpu * 2 )) ]; then
-    echo "test suite: the whole run used ${_fan_cpu}s of processor time and SUITE_TIMEOUT is ${SUITE_TIMEOUT}s, which is less than twice it. The deadline has grown too tight to distinguish a hung run from a slow one, which is the whole reason it exists. Raise it, or find what got slower." >&2
+    echo "test suite: the processor time for this run could not be read, so what filled its ${_fan_elapsed}s of wall clock is not known and the deadline's headroom was NOT checked. The run itself is unaffected." >&2
+  elif [ "$SUITE_TIMEOUT" -gt 0 ] && [ "$SUITE_TIMEOUT" -lt $(( _fan_elapsed * 2 )) ] \
+       && [ $(( _fan_cpu * 2 )) -ge "$_fan_elapsed" ]; then
+    echo "test suite: this run took ${_fan_elapsed}s of wall clock against a ${SUITE_TIMEOUT}s deadline, which is less than twice it, and ${_fan_cpu}s of that was the suite's own work. It has grown into its own deadline rather than waited on a busy machine. Raise SUITE_TIMEOUT, or find what got slower." >&2
     _fan_rc=1
   elif [ "$SUITE_TIMEOUT" -gt 0 ] && [ "$SUITE_TIMEOUT" -lt $(( _fan_elapsed * 2 )) ]; then
     echo "test suite: note, this run took ${_fan_elapsed}s of wall clock against a ${SUITE_TIMEOUT}s deadline, but only ${_fan_cpu}s of processor time, so the machine was busy with something else rather than the suite having grown. Not treated as a failure." >&2
@@ -7430,48 +7439,52 @@ check "#149 a field it cannot parse is read as nothing, never as zero" \
 check "#149 the control: a field it CAN parse is read as its seconds" \
   "[ \"\$(_cpu_field '1m5.230s')\" = 65 ]"
 
-section "== the deadline still has real headroom over a run (#112) =="
-# The deadline is only meaningful as a MULTIPLE of a real run, and that multiple was written down
-# once and then went stale in silence: the design record said 123 seconds and "roughly 7x" for
-# eleven days while this Mac grew to 225 seconds, which is 4x, all of it written down 2026-08-21. Nothing caught it, because the check
-# beside that table compares the SETTING and never the measurement the setting was derived from
-# (claude-config#112, L210).
+section "== the two bounds on a run leave room for each other (#112) =="
+# What sat here was a floor on SUITE_TIMEOUT of twice the processor time the run had just used. It
+# is retired, and this says so where it sat rather than disappearing quietly, because #112 is cited
+# in DESIGN.md and because a check nobody can find the remains of is a check nobody can argue with
+# (claude-config#161).
 #
-# So the ratio is measured rather than recorded. There is no number here that can age: the run times
-# itself and requires the deadline to be at least twice what it just took.
+# It was right for a ceiling whose job was catching a hang. #152 took that job away and gave it to
+# SUITE_STALL_TIMEOUT, then raised the ceiling from 900 to 3600 precisely because it is no longer
+# what catches one. The floor went from 1.7x to about 7x in a single change: 262 seconds of
+# processor time across four shards on 2026-08-22 against a 3600 second ceiling. The suite would
+# have to grow sevenfold before it said anything. It was not wrong, it simply could not fire, and a
+# check that cannot fire stops being read while still occupying a line in the report and a reader's
+# attention (L182). Its actual job, noticing that the suite has grown into its own deadline, is done
+# by the fan-out's copy, which now judges the wall clock the ceiling really bounds and uses the
+# processor time to tell growth from load.
 #
-# Calibrated against both machines this runs on rather than guessed, because a floor sitting inside
-# the normal range turns ordinary variation into a failure and an alarm that cries wolf stops being
-# read (L172, L36): 225 seconds on this Mac and 110 on the Linux runner, against a 900 second
-# deadline, so the floor is crossed only when the suite has genuinely grown into its own deadline.
+# What is here instead is the one thing about the ceiling that nothing was checking, and that this
+# section is the right place for: the two bounds have to leave room for EACH OTHER. A run is judged
+# hung when it has not reached a new section for SUITE_STALL_TIMEOUT, so a ceiling that expires
+# first means the stall can never be reached: the watchdog's hang message, and the diagnosis in it,
+# can never be spoken, and every real hang is reported as "still making progress and simply ran past
+# the absolute ceiling", which sends the reader to raise a number rather than to find a hang (L109,
+# L11).
 #
-# In a FILTERED run this passes trivially, because the run is shorter. That is said out loud rather
-# than hidden: it bites on a full run, which is the run the deadline exists for.
+# Twice, not merely more: a stall beginning after the run is already past half the ceiling would be
+# reported as a ceiling overrun even when the ordering holds, so the ceiling needs room for a whole
+# stall window beyond the point one can start. At the shipped 3600 against 600 that is 6x.
 #
-# Judged on PROCESSOR time since #149, for the reason spelt out beside the fan-out's copy: wall
-# clock measures what else the Mac was doing, and eight runs on 2026-08-21 at load 38 to 103 made
-# this check red on a tree where nothing had grown. The suite's own processor time does not move
-# with somebody else's Lightroom export.
-_hr_elapsed=$SECONDS
-suite_cpu_read; _hr_cpu="$SUITE_CPU_SECONDS"
-_hr_min=$(( ${_hr_cpu:-0} * 2 ))
-if [ "$SUITE_TIMEOUT" -gt 0 ] && [ -n "$_hr_cpu" ]; then
-  check "#112 the deadline is at least twice the processor time of the run it just watched" "[ '$SUITE_TIMEOUT' -ge '$_hr_min' ]"
+# Both are SETTINGS, so this says the same thing in a shard as in a full run, which the retired
+# check did not: it ran inside a shard whose elapsed time is a quarter of the real thing, so it
+# passed trivially in exactly the run the deadline exists for (L135, L220).
+if [ "$SUITE_TIMEOUT" -gt 0 ] && [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
+  _hr_min=$(( SUITE_STALL_TIMEOUT * 2 ))
+  check "#112 the ceiling leaves room for the stall bound to fire (${SUITE_TIMEOUT}s against ${SUITE_STALL_TIMEOUT}s)" \
+    "[ '$SUITE_TIMEOUT' -ge '$_hr_min' ]"
+  # Watched REFUSING, or the check above is satisfied by any ceiling large enough, which is every
+  # ceiling, and it reads as protection while protecting nothing (L1).
+  check "#112 and a ceiling one second under that floor is refused" \
+    "! [ $(( _hr_min - 1 )) -ge '$_hr_min' ]"
 elif [ "$SUITE_TIMEOUT" -gt 0 ]; then
-  # A reader that came back with nothing has checked NOTHING, and saying so is not the same as
-  # checking it (L98). Asserted as a failure rather than skipped, because the figure comes from a
-  # bash builtin and its absence means something is wrong with the reader itself.
-  check "#112 the processor time this run used could be read" "false"
+  # One of them off is not a state this comparison is about, and saying so is not the same as
+  # checking it (L98). The setting is asserted, so neither branch can pass by silence.
+  check "#112 the stall bound was deliberately disabled for this run" "[ '$SUITE_STALL_TIMEOUT' -eq 0 ]"
 else
-  # A run with the deadline disabled has no headroom to check, and saying so is not the same as
-  # checking it (L98). The setting is asserted instead, so this branch cannot pass by silence.
-  check "#112 the deadline was deliberately disabled for this run" "[ '$SUITE_TIMEOUT' -eq 0 ]"
+  check "#112 the ceiling was deliberately disabled for this run" "[ '$SUITE_TIMEOUT' -eq 0 ]"
 fi
-# The same comparison, asked of a deadline one second under the floor, so it has been watched
-# REFUSING rather than only agreeing (L1). Without this the check above is satisfied by any deadline
-# large enough, which is every deadline, and it would read as protection while protecting nothing.
-_hr_toosmall=$(( _hr_min - 1 ))
-check "#112 a deadline one second under that floor is refused" "! [ '$_hr_toosmall' -ge '$_hr_min' ]"
 
 # And the bound that actually catches a hang (claude-config#152). The stall timeout is only
 # meaningful while it is longer than the longest SECTION: the run is judged to have stopped when it
