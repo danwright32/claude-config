@@ -115,6 +115,11 @@ and folds the verdict into its closing line. A pull is the moment config arrives
 executed on this Mac, and success reported without running any of it says exactly what a verified
 success says.
 
+The verdict is also recorded in `.hook-tests`, with the runner's own words beside it, so a pull from
+the background daemon (which has no terminal, and whose notification is gone once dismissed) can
+still be asked about afterwards. `claude-sync status` reports it while it is outstanding and goes
+quiet once a later run passes.
+
 The verdict comes from the runner's exit code, never from a line of its output, and there are three
 outcomes rather than two: the suite passed, the suite FAILED (the config is on disk and a check on it
 does not pass), or the suite could NOT be run or completed at all (nothing checked it). The last one
@@ -450,7 +455,7 @@ and one run, which is what a healthy machine looks like.
 
 ## Local state (per Mac, never synced)
 
-Eight things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
+Nine things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
 so a fresh clone starts without them. (`lesson-bands/` also sits outside `payload/` and is the one
 exception: it is tracked and shared on purpose, because a band nobody else can see cannot stop
 anybody else claiming it. See Lesson numbers above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
@@ -462,6 +467,7 @@ defined answer for being absent or untrustworthy.
 | `.last-success` | a successful pull, fetch or push | the outage clock | absent, unparseable, or dated in the FUTURE all mean "no record", which alerts rather than staying quiet |
 | `.last-sent` | a push that went through | `claude-sync status` | absent means nothing has ever gone up from this clone, which is said in those words rather than shown as a date; a value that will not parse is reported as unreadable, never as never |
 | `.last-received` | an apply that wrote at least one file | `claude-sync status` | same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block, since that is regenerated from whatever payload is present, including one this Mac just staged itself |
+| `.hook-tests` | a pull that reached a verdict on the hook suite it installed | `claude-sync status` | absent means no pull has verified anything here yet and status says nothing, since it reports what needs attention. A record that will not parse is reported as unreadable, never as a pass. A pass is silent; every other outcome keeps its own wording, so a suite that FAILED and one that could NOT be run stay apart |
 | `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
 | `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |
 | `state/` | every apply | nothing reads the local copy; it exists so a marker is only republished when it changes | absent just means the next apply republishes |

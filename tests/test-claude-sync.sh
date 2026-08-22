@@ -7328,6 +7328,7 @@ if [ -d "$HTRB/.sync-lock" ]; then _ht_lock=held; else _ht_lock=free; fi
 printf '%s ran, SYNC_NO_HOOK_TESTS=%s, lock=%s\n' "\$(basename "\$0")" "\${SYNC_NO_HOOK_TESTS:-unset}" "\$_ht_lock" \
   >> "\$(dirname "\$0")/ht-ran.txt"
 echo "ALL 1 SUITES PASSED"
+echo "ht-detail: this line is what the runner had to say"
 exit $1
 HTRUNNER
 }
@@ -7404,6 +7405,53 @@ ht_before2="$(ht_ran)"
 out_ht5="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
 check "#178 the hook really arrived on that pull"  "grep -q 'two' '$HTHB/hooks/ht-one.sh'"
 check "#178 SYNC_NO_HOOK_TESTS=1 skips the suite"  "[ \"\$(ht_ran)\" = \"\$ht_before2\" ]"
+
+# The verdict has to outlive the pull that produced it (claude-config#182). A pull from the watch
+# daemon has no terminal, so the closing line goes nowhere a person will ever see and the
+# notification is gone as soon as it is dismissed. Config landed unattended, its own checks do not
+# pass, and a minute later there was no way to find that out. A failure reason written only to a
+# surface that dies with the attempt leaves somebody facing the same state with no way to learn why
+# (L148).
+mkrunner 1
+CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+out_st1="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "status after a failing suite: $out_st1"
+check "#182 status still names the failure after the pull has ended" \
+  "line_has \"\$out_st1\" 'hook suite' 'FAILED'"
+check "#182 and says how long ago it was run" \
+  "line_has \"\$out_st1\" 'hook suite' '(just now|ago)'"
+# The runner's own words are kept WITH the record rather than in scratch, which is swept on a
+# schedule of its own and would be gone before anybody came looking (L202).
+check "#182 and the record keeps what the runner said" \
+  "grep -q 'ht-detail' '$HTRB/.hook-tests'"
+
+# It goes quiet on its own once a later run actually passes, the same way the conflict report does.
+mkrunner 0
+CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+out_st2="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#182 a later passing run clears the report" "! line_has \"\$out_st2\" 'hook suite' 'FAILED'"
+
+# A suite that could NOT be run keeps its own wording here too, or the record collapses the two
+# outcomes the closing line was careful to keep apart (L11).
+rm -f "$HTHA/hooks/run-all-tests.sh"
+CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+out_st3="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#182 a suite that could not run is reported as that" \
+  "line_has \"\$out_st3\" 'hook suite' 'could NOT be run'"
+check "#182 and is not reported as a failure"  "! line_has \"\$out_st3\" 'hook suite' 'FAILED'"
+
+# And a record nothing can read is said to be unreadable, never treated as a pass: a file restored
+# from a backup or half written by a killed run is exactly when this matters (L98).
+printf 'not a record at all\n' > "$HTRB/.hook-tests"
+out_st4="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#182 an unreadable record is reported as unreadable" \
+  "line_has \"\$out_st4\" 'hook suite' 'unreadable'"
+rm -f "$HTRB/.hook-tests"
+out_st5="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#182 and no record at all says nothing" "! line_has \"\$out_st5\" 'hook suite' '(FAILED|unreadable|could NOT)'"
 
 section "== one Mac's home path never travels inside a synced file (#87) =="
 # tok/detok existed, and were wired to settings.hooks.json alone. Every other payload file was

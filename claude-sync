@@ -44,6 +44,10 @@ LAST_SUCCESS_FILE="$SYNC_REPO/.last-success"   # last time the shared repo was r
 # crosses in either direction, and that is precisely the drift status exists to make visible.
 LAST_SENT_FILE="$SYNC_REPO/.last-sent"
 LAST_RECEIVED_FILE="$SYNC_REPO/.last-received"
+# The last verdict the post-pull hook suite reached, and the runner's own words with it
+# (claude-config#182). One file, not two: evidence kept somewhere with a retention schedule of its
+# own is gone before the investigation that needs it arrives (L202), and scratch is swept hourly.
+HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
 STATE_DIR="$SYNC_REPO/state"   # what each Mac has applied, published so verify can compare (#23)
 # One file per Mac, holding the first number of the band that Mac mints lesson numbers from. Unlike
 # everything else outside payload/, this is TRACKED and shared: a band nobody else can see cannot
@@ -2722,6 +2726,20 @@ pull_from_repo_or_die(){
 # where the value is. SYNC_NO_HOOK_TESTS=1 turns it off outright, and the runner is TOLD that in
 # its own environment, because the suite's fixtures run pulls of their own and a pull that runs the
 # suite would otherwise recurse without end.
+# The verdict, kept where something other than this terminal can find it (claude-config#182).
+# Written only when a verdict was actually REACHED: a pull that carried no hook, or one told to
+# skip, has verified nothing, and overwriting an outstanding failure with its silence would clear a
+# report nothing had settled.
+record_hook_suite_result(){   # $1 = outcome  $2 = exit status  $3 = a file of output, or nothing
+  local tmp
+  tmp="$(scratch_file)" || return 0
+  printf '%s\t%s\t%s\n' "$1" "$(date +%s)" "$2" > "$tmp"
+  # Capped: the point is the reason, not a transcript, and this file is read by a person.
+  [ -n "${3:-}" ] && [ -f "$3" ] && tail -50 "$3" >> "$tmp"
+  mv "$tmp" "$HOOK_TESTS_FILE" 2>/dev/null || rm -f "$tmp"
+  return 0
+}
+
 hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
   local runner out pid started now limit rc=0 killed=0
   [ "${SYNC_NO_HOOK_TESTS:-0}" = "1" ] && return 0
@@ -2733,6 +2751,7 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   runner="$CLAUDE_HOME/hooks/run-all-tests.sh"
   if [ ! -f "$runner" ]; then
     notify "hooks arrived with no run-all-tests.sh to check them"
+    record_hook_suite_result notrun 0 ""
     printf ', and the hook suite could NOT be run here: hooks arrived and there is no %s to check them with, so nothing that just landed has been verified' "$runner"
     return 0
   fi
@@ -2763,10 +2782,12 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   wait "$pid" 2>/dev/null || rc=$?
   if [ "$killed" -eq 1 ]; then
     notify "the hook suite was still running after ${limit}s and was stopped"
+    record_hook_suite_result incomplete 0 "$out"
     printf ', and the hook suite could NOT be completed here: it was still running after %ss and was stopped, so nothing that just landed has been verified' "$limit"
     return 0
   fi
   if [ "$rc" -eq 0 ]; then
+    record_hook_suite_result passed 0 ""
     printf ', and the hook suite passed here'
     return 0
   fi
@@ -2775,6 +2796,7 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   echo "claude-sync: the hook suite on this Mac exited $rc after the pull. What it said:" >&2
   tail -25 "$out" >&2 || true
   notify "the hook suite FAILED after a pull"
+  record_hook_suite_result failed "$rc" "$out"
   printf ', but the hook suite FAILED here (it exited %s). The config is on disk and at least one check on it does not pass: run  bash %s  to see which' "$rc" "$runner"
   return 0
 }
@@ -3198,6 +3220,44 @@ report_sync_times(){
   echo "  The third only means the repo could be reached; it moves on every successful run and says nothing about whether anything crossed."
 }
 
+# What the last post-pull hook suite decided, while it is still outstanding (claude-config#182).
+#
+# Quiet on a pass and quiet with no record at all, because status reports what needs attention and
+# neither of those does. Loud on every other outcome, and each in its own words: a suite that FAILED
+# says a check on this config does not pass, one that could NOT be run says nothing checked it, and
+# they send a reader to different places (L11). A record nothing can read is said to be unreadable
+# rather than skipped, or a half written or restored file reads as a clean Mac (L98).
+report_hook_suite_result(){
+  local line outcome when code now age
+  [ -f "$HOOK_TESTS_FILE" ] || return 0
+  line="$(head -1 "$HOOK_TESTS_FILE" 2>/dev/null || true)"
+  IFS="$(printf '\t')" read -r outcome when code <<HSREOF
+$line
+HSREOF
+  case "$when" in ''|*[!0-9]*) when="" ;; esac
+  case "$outcome" in
+    passed) return 0 ;;
+    failed|notrun|incomplete)
+      [ -n "$when" ] || outcome="" ;;
+    *) outcome="" ;;
+  esac
+  if [ -z "$outcome" ]; then
+    echo "hook suite: the record in $HOOK_TESTS_FILE is unreadable, so what the last pull's checks decided cannot be answered from here. Re-run them with: bash $CLAUDE_HOME/hooks/run-all-tests.sh"
+    return 0
+  fi
+  now="$(date +%s)"
+  age="$(age_in_words "$(( now - when ))")"
+  case "$outcome" in
+    failed)
+      echo "hook suite: FAILED $age (it exited ${code:-?}). The config that pull installed is on disk and at least one check on it does not pass. What it said is in $HOOK_TESTS_FILE; re-run with: bash $CLAUDE_HOME/hooks/run-all-tests.sh" ;;
+    notrun)
+      echo "hook suite: could NOT be run $age, because hooks arrived and there was no $CLAUDE_HOME/hooks/run-all-tests.sh to check them with. Nothing that landed has been verified." ;;
+    incomplete)
+      echo "hook suite: could NOT be completed $age, because it was still running when the pull stopped waiting. Nothing that landed has been verified. What it managed to say is in $HOOK_TESTS_FILE" ;;
+  esac
+  return 0
+}
+
 do_status(){
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
   report_sync_times
@@ -3222,6 +3282,7 @@ do_status(){
   report_user_scope_plugins
   report_duplicate_plugin_skills || true
   report_conflict_copies
+  report_hook_suite_result
   report_outage_tally
   report_stray_processes
   report_scratch_leftovers

@@ -13,3 +13,4 @@ state/
 .outage-log
 .last-sent
 .last-received
+.hook-tests
