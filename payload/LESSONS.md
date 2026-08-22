@@ -7,6 +7,15 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L224. A check that compares elapsed time against a FIXED number is a check on what else the
+  machine is running, so compare it against a duration measured in the same run.** External load
+  makes it fail on commits that changed nothing, and raising the threshold to stop that removes the
+  very thing it was set to catch.
+  (claude-config#149, 2026-08-21: across eight full runs of one tree, four checks failed only while
+  Lightroom, Xcode and Backblaze held the Mac at load 38 to 103, and every one of them passed on the
+  same commit at load 15. The suite's own deadline guard reported a run of 854 seconds against a
+  normal 243, and the pre-push gate blocks on these, so a busy Mac blocks a correct push.)
+
 - **L215. A reader that answers with an EMPTY collection when its own accessor throws is
   indistinguishable from a correct reader of an empty collection, and because the swallowing
   construct usually sits INSIDE the loop, one element of an unexpected shape empties the whole
@@ -422,6 +431,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   (PostRoll#549: stale analytics were to be found by their publish time carrying no timezone offset,
   but AnalyticsStore encodes with .iso8601, so the first save after any import had already rewritten
   every naive time as an absolute instant)
+- **L223. A check that finds records made BEFORE a change by reading a marker those records
+  carry can never see anything written before the marker itself shipped, which is exactly the
+  population it exists to find, so cover the unmarked backlog with evidence the store already
+  holds (a file date, a created time) rather than letting a missing marker read as up to date.**
+  The mechanism looks complete because it is: the comparison is right, the tests pass, and the
+  first record written after it ships is judged correctly. Everything older is silently exempt,
+  and it is the old records that are wrong. L133 says to key on a recorded stamp rather than on
+  the value; this is the other half of that, what to do about everything predating the stamp.
+  (PostRoll#804: the before/after colophon fix bumped the template's design version, but the
+  staleness badge only reports a folder holding a design.json recording an older version, and
+  measured on the day of the fix not one folder in the library carried one, so Dan published a
+  two week old render of the broken layout with nothing to warn him)
 - **L101. A code path that switches behaviour on the SIZE of its input will always take the
   small branch under test, because a fixture is minimal by construction, so the mode that
   actually ships is the one never exercised and the suite is green the whole time.** Size
@@ -548,6 +569,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   earlier scenario's booking is still cached, so the two landed on the same instant, the API deduped
   correctly, and the same two checks paged three times in ten days)
 
+- **L220. A change that SPLITS work into parts silently re-aims every guard calibrated against the
+  whole: the guard goes on running, and passing, while now measuring a fragment, so it can no
+  longer reach the threshold it was set to catch.** When you divide something up, find each check
+  whose meaning was the TOTAL and give it back the total. Distinct from L135, where the span was
+  wrong when the check was written: here it was right, and a later change moved it.
+  (claude-config#133: the sync suite asserts its own deadline still has twice the headroom of the
+  run it just watched, and its comment said it bites on a full run, "which is the run the deadline
+  exists for". Sharding made the default full run four smaller runs, so the check measured a
+  quarter of the elapsed time and could no longer fail on any path. Nothing reported a problem: it
+  passed, faster than before, and was only found by going back to ask what else had changed span)
+
 - **L135. A guard that matches source text over a WHOLE FILE is satisfied by any occurrence in it, so a
   second legitimate use of the same construct elsewhere in that file answers the check while the region
   it was written about is broken.** Scope every source assertion to the function or declaration it is
@@ -655,6 +687,14 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 - **L209. A threshold measured while a co-varying component is held constant attaches itself to the wrong variable, because the part the fixture moves stands in for the sum.** Vary every component the real input varies, or state the measured limit as a limit on the total.
   (downbeat#344: two confident predicates for which calendar sentences Fantastical mangles shipped and were both disproven by real bookings, one the same day it shipped. Every ladder fixture held the title short and constant while varying the venue phrase, so the phrase's length aliased the sentence's total length and took the blame: "62 to 66 characters ending in a number" was really "a total near 170 under that fixture's title". Cloning the real failing sentence and bisecting title against phrase showed total length was the only variable that flipped the outcome, at a cliff between 166 and 172.)
+
+- **L225. An invariant between two stored values must be checked by something that reads
+  the VALUES, never only inside the tool that normally writes them**, because an edit made
+  by hand takes the other route and escapes it entirely while the tool goes on reading as
+  the safeguard.
+  (PostRoll#808: the day a template's design last changed was held to its version number
+  only inside `make record-design-change`, so a version bumped by editing the file kept a
+  stale date and every preview made since read as current)
 
 ## Data safety
 
@@ -797,6 +837,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   storage listing that logs its error and returns a partial list, so both ways it comes
   back short are indistinguishable from a blog that genuinely shrank, and storage
   deletion has no undo)
+
+- **L219. A test that drives a real browser and does not assert on its CONSOLE discards a
+  diagnosis the browser already made**, so a blocked resource, a policy refusal or a
+  hydration mismatch reaches production having been correctly reported and never read.
+  Listen to the console in the suite you already run, because these defects are invisible
+  to code review and to every assertion about what the page renders.
+  (nursedex#761, nursedex#763: a CSP with no worker-src blocked Sentry's replay worker on
+  every page for every visitor. The browser printed the directive, the blocked URL and the
+  reason that script-src was used as a fallback. The e2e suite drove that same browser
+  through the whole sign in flow and had no console listener anywhere, so the defect was
+  found by a person opening the page and looking)
 
 ## Honest failure
 
@@ -1065,6 +1116,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   id for months, two of them reading a payload field the partner never sends and six never
   setting it at all, so partners received rejections they could not tie back to the lead they
   had sent)
+
+- **L218. A policy with a defined fallback chain (a CSP directive, a CSS cascade, an
+  inherited config) treats an OMITTED rule as a NEIGHBOURING rule rather than as no rule,
+  so the omission silently applies a restriction written for different content.** Name
+  every directive the thing actually needs, because the only place this surfaces is a
+  runtime console on a real page, never in the source and never in any test that reads it.
+  (nursedex#761: the CSP set script-src and no worker-src, so the browser fell back to
+  script-src, which does not permit blob:. Sentry's session replay creates its compression
+  worker from a blob URL, so the worker was blocked on every page for every visitor and
+  replay was degraded, while privacy work on that same replay shipped the same week on the
+  assumption it was recording. Nothing in the source looked wrong: the omitted directive
+  reads as unrestricted)
 
 ## State and identity
 
@@ -1414,6 +1477,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   while the gate serving the dashboard and every data file checked just that the session cookie was
   valid, and sessions rotated silently for 30 days)
 
+- **L222. A privacy guard that scans your REPOSITORY cannot see what a tool PRINTS, so any tool
+  that reads a live system (its screen, its database, its API) delivers real customer names and
+  addresses straight into transcripts, terminal scrollback and logs by a route the guard never
+  inspects, and from there into whatever somebody pastes them into.** Give such a tool no mode that
+  dumps content wholesale: let it return one named field at a time, so the dangerous shape is ABSENT
+  rather than discouraged, because a rule saying do not dump everything lives only in a comment
+  (L27). Distinct from L155, which is about evidence somebody DELIBERATELY writes into an issue:
+  this is incidental capture, and it happens while doing something else entirely, which is why
+  nobody is watching for it. The tell is that the guard and the tool were built for different
+  surfaces and nobody ever compared their scopes.
+  (downbeat#389: the repo forbids any real client name, venue, address or phone number reaching the
+  tree, a test output, a log or an issue, enforced by scanning the repository. An accessibility
+  driver built an hour earlier was pointed at the running app to check a sentence on one screen, and
+  a walk that printed every text node landed on the Clients tab, putting the whole roster, display
+  names and email addresses, into the session output. The end of turn issue review reads session
+  transcripts, so it was one paste away from a GitHub issue the guards would never have allowed)
+
 - **L155. An issue or plan written with REAL measured evidence becomes the source whoever implements
   it copies into fixtures, so redact people's identities where the evidence is RECORDED rather than
   trusting the implementer to anonymise it later.** The evidence-rich issue is the right habit and is
@@ -1612,6 +1692,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   no top clamp at all, so a two-line title started around y=33; every published story and scroll
   reel had the show's name printed under the clock and the battery, and the only report was a
   screenshot from Dan's phone)
+
+- **L221. A limit calibrated against the DEVICE somebody owns is looser than the same device
+  turned down, because display scaling, text size and browser zoom are settings a person changes
+  with no code change and nothing re-runs the check, so calibrate against the most constrained
+  SETTING the hardware can be put into rather than against the hardware itself.** The trap is
+  that the guess feels conservative while being the opposite: reaching for a smaller machine than
+  the one on the desk reads as caution, and it still lands above the floor the real machine can
+  reach on its own. Nor can the running device be measured instead, because the check then passes
+  most easily at the comfortable setting where the fault cannot happen (L101), and a person
+  dragging a slider in System Settings triggers no build. Declare the floor, and write into the
+  constant which part of it was measured and which part was taken from the platform's published
+  options, so the next reader knows the direction of any error.
+  (downbeat#388: a guard on whether the New client sheet fits a short screen was calibrated at 956
+  points for a 13 inch MacBook Air, a machine Dan does not own; he runs one Mac, a 16 inch whose
+  panel measures 3456 by 2234 and sits at 1728 by 1117, and whose smallest scaled step is 1352 by
+  878, so the floor guessed from imagined hardware was 78 points looser than the setting he can
+  pick at any moment. Headroom fell from 696 to 618 against the same 460 cap once corrected)
 
 - **L213. A colour token that only has meaning as one half of a PAIR (a foreground against its
   background, a border against its fill) must be overridden as a pair, because a call site that
@@ -2006,3 +2103,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2585: 105 Xcode DerivedData folders at roughly 1.6 GB each, 101 of them belonging to
   agent worktrees and throwaway verify worktrees that had already been deleted, filled a 926 GiB
   volume to 132 MiB free and left no command able to write even its own output)
+- **L226. A timer built by ADDING UP its own sleeps measures iterations, not elapsed time**,
+  because every iteration also pays for the processes it starts and for the delay before it is
+  scheduled again, and that overhead grows exactly when the machine is loaded, which is when the
+  deadline matters most. Anchor to a clock read once at the start and compare against that.
+  (claude-config#152: a watchdog counting `waited=$((waited + 2))` once per `sleep 2` did not kill
+  a run measured at 1943s of wall clock against its nominal 900s deadline, and the same loop asked
+  for 60 seconds ran past 400 under load. Every iteration forks `sleep` and a process check, and
+  process launches are what a busy Mac is slowest at, so the deadline silently meant somewhere
+  between 900 and several thousand seconds depending on the mood of the machine)

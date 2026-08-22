@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 225 lessons.
+LESSONS.md, which is NOT loaded into the session. 234 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -9,6 +9,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Proof over green
 
+- L224. A check that compares elapsed time against a FIXED number is a check on what else the machine is running, so compare it against a duration measured in the same run.
 - L215. A reader that answers with an EMPTY collection when its own accessor throws is indistinguishable from a correct reader of an empty collection, and because the swallowing construct usually sits INSIDE the loop, one element of an unexpected shape empties the whole result.
 - L216. When two independent readings of the same input disagree, a disagreement rate that is CONCENTRATED and TOTAL, near 100% on a few named fields and near 0% on the rest, indicts the pipeline rather than the input, because a genuine data problem is spread out and partial.
 - L203. A cause inferred from two things co-occurring in a log or a trace is not established until you find a case where the suspected cause is present and the effect is ABSENT, because a busy system produces near simultaneous events constantly and a coincidence reads exactly like a mechanism.
@@ -52,6 +53,7 @@ to decide something: the body is where the failure it came from is described.
 - L100. An operation that finds its target by matching text (a marker to insert at, a file to stash, a pattern to replace, a helper name to call) reports SUCCESS when it matches NOTHING, so the next step acts on a state nobody created.
 - L143. A test double that selects what it intercepts by PATTERN (a route glob, a URL matcher, a path prefix) silently becomes NO double at all when the pattern misses, so the test talks to the real dependency and reports whatever that produces as the behaviour under test.
 - L133. A detector that identifies records written BEFORE a fix must key on a recorded stamp, never on a property of the stored value itself, because a store that re-encodes on save normalizes that property away and the detector then reports every row as already correct.
+- L223. A check that finds records made BEFORE a change by reading a marker those records carry can never see anything written before the marker itself shipped, which is exactly the population it exists to find, so cover the unmarked backlog with evidence the store already holds (a file date, a created time) rather than letting a missing marker read as up to date.
 - L101. A code path that switches behaviour on the SIZE of its input will always take the small branch under test, because a fixture is minimal by construction, so the mode that actually ships is the one never exercised and the suite is green the whole time.
 - L102. A cost or latency measured while the expensive path is switched off measures the short circuit, not the work, so the number reads as reassurance for exactly the case nobody has tested.
 - L104. A filter that identifies data by its SHAPE (a redaction regex, a content classifier, a profanity or spam rule) must be tested against the content it has to PRESERVE, not only against the content it has to catch, because the shape it matches is rarely unique to its target and an over match reads exactly like the feature working.
@@ -64,6 +66,7 @@ to decide something: the body is where the failure it came from is described.
 - L117. A per-item ceiling judged against a POOLED total cannot notice one item running away, because the expensive item is paid for out of the cheap ones' headroom, and a single-item run is the only size where the ceiling and the total are the same number.
 - L130. A test fixture whose meaning is the RELATIONSHIP between a stored date and the clock (a show still ahead, a licence not yet expired, a record inside its retention window) must pin BOTH ends, because pinning only the fixture lets real time walk the pair into a different state and the test then passes while asserting about a case nobody chose.
 - L134. A test that derives two inputs from the same LIVE shared resource read at different moments must ASSERT the separation it depends on, never assume it, because the healthy margin is usually one unit of that resource's own granularity and a single stale read closes it exactly.
+- L220. A change that SPLITS work into parts silently re-aims every guard calibrated against the whole: the guard goes on running, and passing, while now measuring a fragment, so it can no longer reach the threshold it was set to catch.
 - L135. A guard that matches source text over a WHOLE FILE is satisfied by any occurrence in it, so a second legitimate use of the same construct elsewhere in that file answers the check while the region it was written about is broken.
 - L142. When phasing a risky change into observe then enforce, check WHICH half the observation covers: the observed half is usually the one you understand, and the harm usually lives in the other, so an observe phase that never exercises the dangerous path buys confidence about the wrong thing.
 - L144. A monitor reporting whether an action HAPPENED must judge by the same predicate the action used to decide whether to ACT, or the two disagree precisely when the action correctly declined, and the resulting false alarm cannot be cleared by the remedy it names, because re-running the action makes it decline again.
@@ -73,6 +76,7 @@ to decide something: the body is where the failure it came from is described.
 - L504. A test can only tell two implementations apart when the environment it runs in makes them behave differently, so when the ambient configuration (the host timezone, the locale, the filesystem's case sensitivity) is what separates a correct implementation from a wrong one, the test must SET that configuration itself rather than inherit it.
 - L506. A guard that branches on a field arriving from OUTSIDE the system is only real once that field's presence has been measured on live traffic, because an absent field makes a strict comparison silently false and the guard then reads as an active safeguard while refusing nobody.
 - L209. A threshold measured while a co-varying component is held constant attaches itself to the wrong variable, because the part the fixture moves stands in for the sum.
+- L225. An invariant between two stored values must be checked by something that reads the VALUES, never only inside the tool that normally writes them
 
 ## Data safety
 
@@ -92,6 +96,7 @@ to decide something: the body is where the failure it came from is described.
 - L191. A write into a CAPPED or rolling store (a log with a maximum, a ring buffer, a recent list) does not merely add noise, it EVICTS the oldest real records, so a cheap writer (a test, a retry, a health check) destroys the expensive observations the store exists to hold, and any count derived from the store then reports the junk as real.
 - L202. Evidence attached to a record that is itself swept on a retention schedule inherits that schedule's lifetime, so it is gone before the investigation that needs it, which by definition arrives days later.
 - L211. A cleanup that deletes whatever its read did NOT mention turns every incompleteness in that read into permanent deletion, so it must refuse on a SHORT read and not only on a failed one
+- L219. A test that drives a real browser and does not assert on its CONSOLE discards a diagnosis the browser already made
 
 ## Honest failure
 
@@ -125,6 +130,7 @@ to decide something: the body is where the failure it came from is described.
 - L160. A condition is only OVER once it has stayed healthy for a re-arm window, never on the first healthy sample, and its duration must be measured to the last observed failure rather than to the moment the all clear is sent.
 - L164. Failure recording that lives INSIDE the program a launcher starts cannot record any failure of the launcher itself, so a missing directory, a bad path or an unreadable interpreter leaves no trace at all and reads exactly like the control never having been pressed.
 - L505. A value that resolves to undefined is DROPPED from a serialized payload rather than sent as empty, so a wrong field reference is indistinguishable from a field nobody meant to send, and both ends read the absence as normal.
+- L218. A policy with a defined fallback chain (a CSP directive, a CSS cascade, an inherited config) treats an OMITTED rule as a NEIGHBOURING rule rather than as no rule, so the omission silently applies a restriction written for different content.
 
 ## State and identity
 
@@ -168,6 +174,7 @@ to decide something: the body is where the failure it came from is described.
 - L503. An over-broad permission is invisible, because the code never attempts what it is not meant to do, while a missing one fails loudly on the first run
 - L123. Declining to PROVISION someone is not declining to AUTHENTICATE them
 - L137. A grant checked only where it is GRANTED (a login, a signup, an invite) is never re-checked for anyone already holding a session, so removing someone from an access list takes nothing away from the people most likely to be removed, and the gap stays invisible until the first real removal.
+- L222. A privacy guard that scans your REPOSITORY cannot see what a tool PRINTS, so any tool that reads a live system (its screen, its database, its API) delivers real customer names and addresses straight into transcripts, terminal scrollback and logs by a route the guard never inspects, and from there into whatever somebody pastes them into.
 - L155. An issue or plan written with REAL measured evidence becomes the source whoever implements it copies into fixtures, so redact people's identities where the evidence is RECORDED rather than trusting the implementer to anonymise it later.
 
 ## UX completeness
@@ -198,6 +205,7 @@ to decide something: the body is where the failure it came from is described.
 - L187. A control gated on a collection holding MORE THAN ONE member is absent in the commonest case, which is one member.
 - L508. A control that renders a value the BROWSER itself validates (a date input, a number input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that value stands beside an empty control and the two halves of the screen contradict each other about what was asked for.
 - L207. A constraint imposed by the surface your output is DISPLAYED on (a phone's notch or safe area, a host app's own overlay chrome, a fold, a print bleed) leaves no trace in the artifact you render or in any check you run over it, so it is only ever discovered on a real device.
+- L221. A limit calibrated against the DEVICE somebody owns is looser than the same device turned down, because display scaling, text size and browser zoom are settings a person changes with no code change and nothing re-runs the check, so calibrate against the most constrained SETTING the hardware can be put into rather than against the hardware itself.
 - L213. A colour token that only has meaning as one half of a PAIR (a foreground against its background, a border against its fill) must be overridden as a pair, because a call site that swaps only the background silently keeps the base variant's foreground, the two can land on the same value, and the result is content that is present in the DOM, correctly named to a screen reader, and invisible on screen.
 
 ## External systems
@@ -261,3 +269,4 @@ to decide something: the body is where the failure it came from is described.
 - L73. Independent steps sharing one handler each need their own failure boundary.
 - L74. A deadline, age or due date computed from the current clock at read time can never age, because every evaluation moves it forward with the clock.
 - L114. A tool that creates a throwaway workspace must also remove what that workspace caused to be created OUTSIDE it.
+- L226. A timer built by ADDING UP its own sleeps measures iterations, not elapsed time
