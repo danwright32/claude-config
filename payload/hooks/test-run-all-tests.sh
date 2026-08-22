@@ -242,7 +242,10 @@ done
 # The order on the page is the order they were FOUND, not the order they finished. Without this a
 # report cannot be compared against the last one, and a suite that moved is indistinguishable from
 # a suite that got slower.
-order="$(printf '%s\n' "$out_par" | grep -oE 'test-(aaa|bbb|ccc)\.sh' | tr '\n' ' ')"
+# Read off the RESULT LINES alone, not off the whole page. Since #150 the run also ends with the
+# slowest suites named, which is deliberately in duration order, so a match over everything counts
+# each suite twice and the two orders are read as one (L135).
+order="$(printf '%s\n' "$out_par" | grep -E '^ +(ok|FAIL) +test-' | grep -oE 'test-(aaa|bbb|ccc)\.sh' | tr '\n' ' ')"
 [ "$order" = "test-aaa.sh test-bbb.sh test-ccc.sh " ] \
   && check "and they are reported in a stable order, not in the order they finished" ok \
   || check "and they are reported in a stable order, not in the order they finished" "order was: $order"
@@ -281,7 +284,7 @@ printf '%s' "$out_pf" | grep -q 'test-quick.sh' \
 out_seq="$(HOOK_TESTS_JOBS=1 bash "$RUNNER" "$P" 2>&1)"; code_seq=$?
 [ "$code_seq" -eq 0 ] \
   && check "one at a time still works" ok || check "one at a time still works" "exit=$code_seq out=$out_seq"
-seq_order="$(printf '%s\n' "$out_seq" | grep -oE 'test-(aaa|bbb|ccc)\.sh' | tr '\n' ' ')"
+seq_order="$(printf '%s\n' "$out_seq" | grep -E '^ +(ok|FAIL) +test-' | grep -oE 'test-(aaa|bbb|ccc)\.sh' | tr '\n' ' ')"
 [ "$seq_order" = "$order" ] \
   && check "and reports in the same order as a parallel run" ok \
   || check "and reports in the same order as a parallel run" "sequential: $seq_order  parallel: $order"
@@ -659,6 +662,98 @@ out_t5="$(HOOK_TESTS_ROOT="$TR" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=8 bash "$R
 [ "$code_t5" -eq 0 ] \
   && check "#144 an empty HOOK_TESTS_TIMINGS turns the record off and the run still passes" ok \
   || check "#144 an empty HOOK_TESTS_TIMINGS turns the record off and the run still passes" "exit=$code_t5 out=$out_t5"
+
+# ---------------------------------------------------------------------------
+# Each suite's measured duration reaches the report (claude-config#150).
+# ---------------------------------------------------------------------------
+# #144 made every run measure what each suite cost and write it down, and the next run orders the
+# launches by it. Nothing said that number to a PERSON: the report printed a pass and fail count
+# per suite and no duration at all, so "the full run got slower" named no suite anybody could act
+# on. That is the same gap #107 closed one level down, inside the sync suite, by giving every
+# section its own duration and ending the run with the slowest ones named.
+#
+# The number comes from the run's OWN measurement rather than from the timing store. Both hold the
+# same figure by the time the report is printed, and the measurement is the one that survives the
+# store being switched off, unwritable, or absent for a suite that lives outside the repo.
+D="$TMPROOT/dir-durations"
+mk_slow_suite "$D" longone 3 0 0
+mk_slow_suite "$D" quick 0 0 0
+out_dur="$(HOOK_TESTS_JOBS=1 bash "$RUNNER" "$D" 2>&1)"; code_dur=$?
+[ "$code_dur" -eq 0 ] \
+  && check "#150 a run whose suites are timed passes" ok \
+  || check "#150 a run whose suites are timed passes" "exit=$code_dur out=$out_dur"
+# The duration is read off the slow suite's OWN line, so a figure printed against the wrong suite
+# cannot pass (L135: a match over the whole page is answered by any part of it).
+dur_of() { # dur_of <output> <suite name> -> the seconds on that suite's result line, or nothing
+  printf '%s\n' "$1" | grep -E "^ +(ok|FAIL) +test-$2\.sh " | tail -1 \
+    | grep -oE '\(([0-9]+)s\)' | grep -oE '[0-9]+'
+}
+d_long="$(dur_of "$out_dur" longone)"
+d_quick="$(dur_of "$out_dur" quick)"
+case "$d_long" in
+  ''|*[!0-9]*) check "#150 a suite's own result line carries the seconds it took" "test-longone.sh line: $(printf '%s\n' "$out_dur" | grep -E 'test-longone\.sh')" ;;
+  *) [ "$d_long" -ge 3 ] \
+       && check "#150 a suite's own result line carries the seconds it took" ok \
+       || check "#150 a suite's own result line carries the seconds it took" "it slept 3s and reported ${d_long}s" ;;
+esac
+# And the control (L159, L178). Without it, a runner printing one constant against every suite, or
+# printing the whole run's duration on each line, would satisfy the check above.
+case "$d_quick" in
+  ''|*[!0-9]*) check "#150 and a suite that took no time reports its own smaller figure" "test-quick.sh line: $(printf '%s\n' "$out_dur" | grep -E 'test-quick\.sh')" ;;
+  *) [ "$d_quick" -lt "${d_long:-0}" ] \
+       && check "#150 and a suite that took no time reports its own smaller figure" ok \
+       || check "#150 and a suite that took no time reports its own smaller figure" "longone=${d_long}s quick=${d_quick}s, so the figure is not per suite" ;;
+esac
+# The run ends with the slowest named, which is what somebody reads when a run got slower. Same
+# shape as #107's profile one level down.
+printf '%s' "$out_dur" | grep -qi 'slowest suites' \
+  && check "#150 the run ends with a profile of the slowest suites" ok \
+  || check "#150 the run ends with a profile of the slowest suites" "out=$out_dur"
+printf '%s\n' "$out_dur" | sed -n '/[Ss]lowest suites/,$p' | grep -qE '^ +[0-9]+s +test-longone\.sh' \
+  && check "#150 and the slowest suite is the one that slept longest" ok \
+  || check "#150 and the slowest suite is the one that slept longest" "profile was: $(printf '%s\n' "$out_dur" | sed -n '/[Ss]lowest suites/,$p' | tr '\n' '|')"
+
+# The measurement, not the store. With the record switched off entirely, nothing is written and
+# nothing is read back, and the durations must still be there: a report fed from the store would go
+# blank here and a run would read as one where everything was instant (L90, L98).
+out_dur_off="$(HOOK_TESTS_JOBS=1 HOOK_TESTS_TIMINGS= bash "$RUNNER" "$D" 2>&1)"; code_dur_off=$?
+d_long_off="$(dur_of "$out_dur_off" longone)"
+case "$d_long_off" in
+  ''|*[!0-9]*) check "#150 the durations survive the timing store being switched off" "exit=$code_dur_off, test-longone.sh line: $(printf '%s\n' "$out_dur_off" | grep -E 'test-longone\.sh')" ;;
+  *) [ "$d_long_off" -ge 3 ] \
+       && check "#150 the durations survive the timing store being switched off" ok \
+       || check "#150 the durations survive the timing store being switched off" "it reported ${d_long_off}s with the store off" ;;
+esac
+
+# A suite that left NO measurement must say so, never read as 0s. A suite killed before it could
+# write one is exactly that case, and zero is the most reassuring figure available: it reads as a
+# suite that cost nothing rather than as one nobody measured (L11, L90).
+DK="$TMPROOT/dir-duration-killed"
+mkdir -p "$DK"
+mk_slow_suite "$DK" survivor 1 0 0
+# It kills the subshell that is timing it, which is its own parent, so neither the duration nor the
+# exit status is ever written. Built by killing rather than by planting a missing file, because the
+# runner's throwaway directory is its own and nothing here can reach into it.
+printf '#!/usr/bin/env bash\nkill -9 "$PPID"\nsleep 30\n' > "$DK/test-vanish.sh"
+chmod +x "$DK/test-vanish.sh"
+out_dk="$(HOOK_TESTS_JOBS=2 bash "$RUNNER" "$DK" 2>&1)"; code_dk=$?
+[ "$code_dk" -ne 0 ] \
+  && check "#150 a suite that vanished still fails the run" ok \
+  || check "#150 a suite that vanished still fails the run" "exit=$code_dk out=$out_dk"
+vanish_line="$(printf '%s\n' "$out_dk" | grep -E '^ +(ok|FAIL) +test-vanish\.sh ' | tail -1)"
+printf '%s' "$vanish_line" | grep -qE '\(0s\)' \
+  && check "#150 and it is not reported as having taken no time" "its line reads: $vanish_line" \
+  || check "#150 and it is not reported as having taken no time" ok
+printf '%s' "$vanish_line" | grep -qi 'not measured' \
+  && check "#150 and its line says outright that nothing measured it" ok \
+  || check "#150 and its line says outright that nothing measured it" "its line reads: $vanish_line"
+# The control for that pair: the suite beside it in the same run WAS measured, so "not measured" is
+# a fact about the one that vanished and not about a runner that measures nothing (L159).
+d_survivor="$(dur_of "$out_dk" survivor)"
+case "$d_survivor" in
+  ''|*[!0-9]*) check "#150 the suite beside it in the same run was measured" "test-survivor.sh line: $(printf '%s\n' "$out_dk" | grep -E 'test-survivor\.sh')" ;;
+  *) check "#150 the suite beside it in the same run was measured" ok ;;
+esac
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

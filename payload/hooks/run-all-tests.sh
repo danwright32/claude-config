@@ -453,11 +453,40 @@ fi
 
 # Reported in the order they were FOUND. Two runs of the same tree then produce the same page, so a
 # difference between them is a difference in the suites rather than in the machine's mood.
+#
+# Each line also carries what that suite COST (claude-config#150). #144 already measured it and
+# wrote it down, and the launch order is decided by it, but nothing said the number to a person, so
+# "the full run got slower" named no suite anybody could act on. That is the gap #107 closed one
+# level down, inside the sync suite, by giving every section its own duration and ending with the
+# slowest ones named.
+#
+# Read from what THIS run measured, never from the timing store. The two hold the same figure by
+# the time this loop runs, and the measurement is the one that survives the store being switched
+# off, unwritable, or absent for a suite that lives outside the repo and has no key. The store also
+# keeps records for suites that no longer exist, deliberately unpruned, so a summary fed from it
+# would name suites this run never found.
+slow_profile=""
+unmeasured_names=""
 idx=0
 for suite in ${suites[@]+"${suites[@]}"}; do
     name="$(basename "$suite")"
     out="$(cat "$WORK/$idx.out" 2>/dev/null)"
     code="$(cat "$WORK/$idx.rc" 2>/dev/null)"
+    # A suite that left no duration is SAID to have left none. Printing 0s instead would be the
+    # most reassuring figure available: it reads as a suite that cost nothing rather than as one
+    # nobody measured, and a run where everything was killed would read as an instant run (L11,
+    # L90). The duration is written before the exit status, so a suite with neither was killed or
+    # never started and the line below already says that too.
+    secs="$(cat "$WORK/$idx.sec" 2>/dev/null)"
+    case "$secs" in
+      ''|*[!0-9]*)
+        dur="(not measured)"
+        unmeasured_names="$unmeasured_names $name" ;;
+      *)
+        dur="(${secs}s)"
+        slow_profile="$slow_profile$(printf '%06d\t%s' "$secs" "$name")
+" ;;
+    esac
     case "$code" in ''|*[!0-9]*) code=1; out="$out
 run-all-tests: this suite left no exit status, so it was killed or never started." ;; esac
     idx=$((idx + 1))
@@ -498,7 +527,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
     if [ "$code" -ne 0 ] || { [ -n "$tally" ] && [ "$tally" -gt 0 ]; }; then
       failed=$((failed + 1))
       failed_names="$failed_names $name"
-      printf '  FAIL  %-38s %s\n' "$name" "$summary"
+      printf '  FAIL  %-38s %-26s %s\n' "$name" "$summary" "$dur"
       # And WHY. A one line verdict is enough on a machine where you can just run the suite
       # again; it is useless where you cannot, which is the whole point of running these
       # somewhere else (claude-config#101). The failing lines are printed, and the count is
@@ -512,11 +541,27 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         printf '          ...and %s more line(s) not shown\n' "$(( shown - FAIL_DETAIL_MAX ))"
       fi
     else
-      printf '  ok    %-38s %s\n' "$name" "$summary"
+      printf '  ok    %-38s %-26s %s\n' "$name" "$summary" "$dur"
     fi
 done
 
 echo
+# The slowest, named, which is what somebody reads when a run got slower (claude-config#150). Built
+# from the suites this run actually FOUND and actually measured, so it can never name a suite that
+# is no longer in the repo, and a suite nobody measured is named separately rather than sorted in
+# at zero.
+if [ -n "$slow_profile" ]; then
+  echo "slowest suites:"
+  printf '%s' "$slow_profile" | sort -r | head -5 | while IFS="$(printf '\t')" read -r _pd _pn; do
+    [ -n "$_pn" ] || continue
+    printf '  %ds %s\n' "$((10#$_pd))" "$_pn"
+  done
+  echo
+fi
+if [ -n "$unmeasured_names" ]; then
+  echo "NO DURATION was measured for:$unmeasured_names"
+  echo "  They are missing from the timings above rather than counted as instant."
+fi
 if [ -n "$guessed_names" ]; then
   # Named, not counted. A suite whose score had to be guessed is one whose verdict this run is less
   # sure of, and the two defects that guessing caused were both found by reading the column, so the
