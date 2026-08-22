@@ -346,7 +346,42 @@ if [ "$ran" -gt 0 ]; then
   case "${WORK%/}" in
     ''|/|"${HOME%/}") echo "run-all-tests: refusing to run: throwaway directory came back as '$WORK'." >&2; exit 1 ;;
   esac
-  trap 'rm -rf "$WORK"' EXIT
+  # Everything this run started, killed from the leaves up, and only ever DESCENDANTS: this must
+  # never reach whatever started the runner (claude-config#165).
+  runner_kill_tree(){   # $1 = a pid whose descendants are to go
+    local c pp
+    for c in $(pgrep -P "$1" 2>/dev/null); do
+      [ "$c" = "$$" ] && continue
+      # The parent is read again immediately before acting. The list above comes from a command
+      # substitution, which is itself a child of this shell and is therefore IN it, and has exited
+      # by the time the loop reaches it, so a kill on that number would land on whatever the system
+      # has since given it to. Confirming the parent is what tells a live child from a recycled
+      # number (L157).
+      pp="$(ps -o ppid= -p "$c" 2>/dev/null | tr -d ' ')"
+      [ "$pp" = "$1" ] || continue
+      runner_kill_tree "$c"
+      kill -9 "$c" 2>/dev/null || true
+    done
+    return 0
+  }
+  runner_cleanup(){
+    # The suites first, then the scratch. This runner launches as many suites at once as the budget
+    # worked out above allows, and a run killed from outside left every one of them going, each still
+    # holding whatever lock its own suite takes and all of them competing for the machine. Removing WORK while they are alive
+    # would take their output files with them and leave the processes behind, which is the worse
+    # half of the same problem.
+    runner_kill_tree "$$"
+    [ -n "${WORK:-}" ] && rm -rf "$WORK"
+    return 0
+  }
+  trap runner_cleanup EXIT
+  # And on the signals an interrupt actually arrives as, which is how a run in development stops: a
+  # harness timeout, a Ctrl-C, a terminal closing. EXIT alone covers a run that finishes, which is
+  # the case that needed no help. Each handler ends in the status its own signal means; the EXIT
+  # trap fires again on the way out and everything here is safe to do twice.
+  trap 'runner_cleanup; exit 130' INT
+  trap 'runner_cleanup; exit 143' TERM
+  trap 'runner_cleanup; exit 129' HUP
 
   # Launched LONGEST FIRST, judged by what each suite was last MEASURED to cost (#144). Lane 1
   # carries the largest share of the budget and lane 1 is whatever launches first, so this line

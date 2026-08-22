@@ -891,6 +891,78 @@ case "$out_nr_clean" in
   *) check "#155 a run with nothing skipped still says ALL SUITES PASSED" "out=$out_nr_clean" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A runner killed from outside takes the suites it started with it (claude-config#165).
+# ---------------------------------------------------------------------------
+# The runner installs a cleanup on EXIT, which covers a run that ENDS. It did not cover one killed
+# from OUTSIDE, which is how a run in development actually stops: a harness timeout, a Ctrl-C, a
+# terminal closing. It launches as many suites at once as its own budget allows, so what was left
+# behind was every one of them, each still holding whatever lock its own suite takes and all of them
+# competing for the machine. That is the same gap claude-config#163 closed one level down, and the runner is the
+# thing a person actually interrupts.
+mk_hanging_suite() { # mk_hanging_suite <dir> <name>
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo $$ > "$(dirname "$0")/%s.pid"\n' "$2"
+    # Blocked on a child it is WAITING for, not sitting in a foreground sleep. Bash defers a
+    # trapped signal until the foreground command finishes, so a suite stalled inside a long sleep
+    # could not run any handler of its own, and the durable child is what makes an orphan
+    # observable after the parent has gone.
+    printf 'while :; do sleep 3600 & wait "$!" || true; done\n'
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+K="$TMPROOT/dir-killed"
+mk_hanging_suite "$K" hang
+bash "$RUNNER" "$K" > "$TMPROOT/killed.out" 2>&1 &
+k_runner=$!
+# The suite names its own pid, so what gets checked afterwards is the process the runner really
+# started rather than whatever the process table happens to hold. Waited for rather than assumed:
+# a fixture that never got going would satisfy every assertion below while proving nothing.
+k_wait=0
+while [ "$k_wait" -lt 60 ] && [ ! -s "$K/hang.pid" ]; do sleep 1; k_wait=$((k_wait + 1)); done
+k_suite="$(cat "$K/hang.pid" 2>/dev/null || true)"
+case "$k_suite" in ''|*[!0-9]*) k_suite="" ;; esac
+k_kids=""
+[ -n "$k_suite" ] && k_kids="$(pgrep -P "$k_suite" 2>/dev/null | tr '\n' ' ')"
+if [ -n "$k_suite" ] && kill -0 "$k_suite" 2>/dev/null; then
+  check "#165 the runner really started a suite, and it is running" ok
+else
+  check "#165 the runner really started a suite, and it is running" "waited ${k_wait}s, pid='$k_suite'"
+fi
+case "$(printf '%s' "$k_kids" | tr -d ' ')" in
+  ?*) check "#165 and that suite had a child of its own to leave behind" ok ;;
+  *)  check "#165 and that suite had a child of its own to leave behind" "no children found for $k_suite" ;;
+esac
+
+kill -TERM "$k_runner" 2>/dev/null || true
+k_gone=0
+while [ "$k_gone" -lt 30 ] && kill -0 "$k_runner" 2>/dev/null; do sleep 1; k_gone=$((k_gone + 1)); done
+sleep 1
+if kill -0 "$k_runner" 2>/dev/null; then
+  check "#165 the interrupted runner itself is gone" "still alive after ${k_gone}s"
+else
+  check "#165 the interrupted runner itself is gone" ok
+fi
+if [ -n "$k_suite" ] && kill -0 "$k_suite" 2>/dev/null; then
+  check "#165 and the suite it started is gone too" "pid $k_suite is still running"
+else
+  check "#165 and the suite it started is gone too" ok
+fi
+k_left=""
+for k in $k_kids; do kill -0 "$k" 2>/dev/null && k_left="$k_left $k"; done
+case "$k_left" in
+  "") check "#165 and so is everything that suite started" ok ;;
+  *)  check "#165 and so is everything that suite started" "still running:$k_left" ;;
+esac
+# Whatever survived is cleared here rather than left on the machine: a test that leaks the process
+# it was written about is the defect it is testing.
+for k in $k_kids; do kill -9 "$k" 2>/dev/null || true; done
+[ -n "$k_suite" ] && kill -9 "$k_suite" 2>/dev/null
+kill -9 "$k_runner" 2>/dev/null
+wait "$k_runner" 2>/dev/null || true
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
