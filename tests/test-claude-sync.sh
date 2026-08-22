@@ -213,7 +213,12 @@ section(){
   # turn up is not a test.
   if [ -n "${SUITE_HANG_IN:-}" ] && printf '%s' "$1" | grep -qi -- "$SUITE_HANG_IN"; then
     echo "  (test seam: hanging deliberately in this section)"
-    while true; do sleep 60; done
+    # Hung on a child it is WAITING for, not sitting in a foreground sleep. Bash defers a trapped
+    # signal until the foreground command finishes, so a run stalled inside `sleep 60` cannot run
+    # its own interrupt handler for up to a minute, and #163's cleanup could not be observed at all
+    # (bash returns from `wait` immediately on a trapped signal, which is the difference). It is
+    # also the shape a real hang has: a run blocked on something it started rather than on a timer.
+    while :; do sleep 3600 & wait "$!" || true; done
   fi
   return 0
 }
@@ -911,8 +916,36 @@ SUITE_LOCK_HELD=""
 # than replaced further down: #21 shipped a defect of exactly that shape here, an exit handler
 # that replaced the one removing the pull temp file, and nothing noticed because both handlers
 # were individually correct.
+# Everything this run started, killed from the leaves up. Only ever DESCENDANTS: this must not
+# reach the process that started the suite, and it must not reach the shell running it.
+#
+# The same walk the deadline watchdog does, and for the same reason: killing the run alone leaves
+# its children alive, and they are what holds whatever the run acquired (claude-config#163).
+suite_kill_tree(){   # $1 = a pid whose descendants are to go
+  local c pp
+  for c in $(pgrep -P "$1" 2>/dev/null); do
+    [ "$c" = "$$" ] && continue
+    # The parent is read again, immediately before acting. The list above was produced by a command
+    # substitution, which is itself a child of this shell and is therefore IN that list, and by the
+    # time the loop reaches it, it has exited: a `kill -9` on that number would land on whatever
+    # the system has since given it to. Confirming the parent is what tells a live child from a
+    # recycled number, and a judgement formed before the kill is not a judgement about the process
+    # being killed (L157).
+    pp="$(ps -o ppid= -p "$c" 2>/dev/null | tr -d ' ')"
+    [ "$pp" = "$1" ] || continue
+    suite_kill_tree "$c"
+    kill -9 "$c" 2>/dev/null || true
+  done
+  return 0
+}
+
 suite_cleanup(){
   [ -n "${SUITE_WATCHDOG_PID:-}" ] && kill "$SUITE_WATCHDOG_PID" 2>/dev/null
+  # And everything else this run started, not only the watchdog (claude-config#163). On a run that
+  # ends normally there is nothing left to find and this is a no-op; on one killed from outside it
+  # is the whole point, because the re-executed copy and the shards are what go on running as
+  # orphans and go on holding the lock.
+  suite_kill_tree "$$"
   [ -n "${SUITE_SECTION_MARK:-}" ] && rm -f "$SUITE_SECTION_MARK"
   # Only a run that actually TOOK the lock releases it, or a run that refused would delete the
   # lock belonging to the run it just refused for.
@@ -921,6 +954,16 @@ suite_cleanup(){
   return 0
 }
 trap suite_cleanup EXIT
+# And on the signals an interrupt actually arrives as, which EXIT alone does not cover in any way
+# anybody should rely on (claude-config#163). Bash happens to run an EXIT trap on a fatal signal
+# today, which is why the lock was already being released; nothing states that it must, the exit
+# status it leaves is the run's last one rather than the signal, and HUP (a terminal closing) is a
+# real way for a run in development to end. Said explicitly, one handler, each ending in the status
+# its own signal means. The EXIT trap fires again on the way out, and everything the handler does
+# is safe to do twice.
+trap 'suite_cleanup; exit 130' INT
+trap 'suite_cleanup; exit 143' TERM
+trap 'suite_cleanup; exit 129' HUP
 
 # A run killed by the deadline above cannot release its lock, and deliberately nothing tries to do
 # it on the run's behalf: the next run finds a recorded process that is gone and takes over saying
@@ -975,13 +1018,22 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
     # lock from ELSEWHERE, whose recorded process id refers to a machine that is not this one.
     if [ "$_lk_host" = "$(hostname)" ]; then
       if [ -n "$_lk_pid" ] && kill -0 "$_lk_pid" 2>/dev/null; then
-        echo "test suite: another run is already going (process $_lk_pid on $_lk_host, started ${_lk_age}s ago). Refusing rather than queueing behind it: two suites competing for this machine make each other slower and make every timing either of them reports wrong. Wait for it, or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
+        # What is holding it, how old it is, and the command that ends it (claude-config#163). A
+        # pid on its own is not something anybody can act on: it has no visible connection to the
+        # run they killed minutes ago, and a refusal naming only a number sent two separate
+        # investigations looking for a bug in the suite (L80, L148). The orphan case is named
+        # explicitly, because it is the commonest reason a live run is here that nobody expects.
+        echo "test suite: another run is already going: a suite run, process $_lk_pid on $_lk_host, started ${_lk_age}s ago. Refusing rather than queueing behind it: two suites competing for this machine make each other slower and make every timing either of them reports wrong. Wait for it to finish. If you killed a run and this is the orphan it left behind, end it and everything it started with: pkill -9 -P $_lk_pid; kill -9 $_lk_pid. Or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
         exit 5
       fi
       echo "test suite: took over a lock whose run is gone (process $_lk_pid is not running)." >&2
     else
       if [ "$_lk_age" -lt "${SUITE_LOCK_MAX_AGE:-1800}" ]; then
-        echo "test suite: another run is already going (process $_lk_pid on $_lk_host, started ${_lk_age}s ago). Refusing rather than queueing behind it. Wait for it, or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
+        # Deliberately NOT the message above. That one hands over a command to kill the holder,
+        # and the holder here is a process on a DIFFERENT machine: the number means nothing on this
+        # one, and a kill aimed at it would land on an unrelated local process. Distinct causes,
+        # distinct remedies (L11, L111).
+        echo "test suite: another run is already going: a suite run on $_lk_host, which is not this machine, process $_lk_pid there, started ${_lk_age}s ago. Refusing rather than queueing behind it. Nothing here can end it, and its process id means nothing on this machine, so wait for it, clear $SUITE_LOCK yourself if that machine is gone, or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
         exit 5
       fi
       # 30 minutes against a full run, which was measured at 123 seconds on 2026-08-17 and at 243
@@ -4181,6 +4233,82 @@ check "#32 and it is not deleted"                    "[ -f '$_notlock/important.
 _hp="$(_try_lock "$HOME")"; _hp_rc=$?
 check "#32 a lock path naming a real home directory is refused" "[ '$_hp_rc' -ne 0 ]"
 check "#32 and that home directory still exists"                "[ -d '$HOME' ]"
+
+section "== a run killed from outside cleans up after itself (#163) =="
+# needs: only one suite run at a time
+# `trap suite_cleanup EXIT` covers a run that ENDS. It does not cover one killed from OUTSIDE,
+# which is how a run in development actually stops: a harness timeout, a Ctrl-C, a terminal
+# closing. The re-executed copy and the shards then keep going as orphans and they keep holding the
+# run lock, and every later run refuses naming a process id that means nothing to the reader.
+#
+# It cost two separate false failure investigations in one session on 2026-08-22: run-all-tests.sh
+# reported this file as FAILED with no result line at all, twice in a row, and the cause both times
+# was an orphan left by a load experiment somebody had killed minutes earlier.
+#
+# So a run is started, hung on purpose, and killed the way a harness kills one. The fixture is
+# asserted to be REAL before the kill: a run that never took the lock, or that had no children to
+# leave behind, would satisfy every assertion after it while proving nothing (L159, L98).
+_int_lock="$_lockdir/interrupted"
+rm -rf "$_int_lock"
+_int_log="$WORK/interrupted.log"
+# Its own deadline is left long and its stall bound switched off, so the only thing that ends this
+# run is the signal below. A run its own watchdog killed would be cleaned up by the watchdog's
+# kill_tree and would say nothing about the handler under test.
+# All on ONE line, and not wrapped: #34 requires every line that spawns this suite to carry a
+# depth, and it asks that of the line the spawn is on. Written over two lines the depth sits on the
+# first and the spawn on the second, and the guard reports it, which is the guard being right about
+# a per-line rule rather than something to route around (measured: it caught this).
+SUITE_LOCK="$_int_lock" SUITE_DEPTH=0 SECTION_UNTIL=push SUITE_HANG_IN=push SUITE_TIMEOUT=300 SUITE_STALL_TIMEOUT=0 bash "$SCRIPT_SELF" > "$_int_log" 2>&1 &
+_int_outer=$!
+# The run that HOLDS the lock is the one to interrupt, and it names itself in the lock: a filtered
+# run re-executes itself, so the process started above is a wrapper and killing it would test the
+# wrapper. Read from the lock rather than worked out from the process table (L15).
+_int_pid=""; _int_kids=""; _int_waited=0
+while [ "$_int_waited" -lt 90 ]; do
+  _int_pid="$(cat "$_int_lock/pid" 2>/dev/null || true)"
+  case "$_int_pid" in ''|*[!0-9]*) _int_pid="" ;; esac
+  if [ -n "$_int_pid" ] && grep -q 'hanging deliberately' "$_int_log" 2>/dev/null; then
+    _int_kids="$(pgrep -P "$_int_pid" 2>/dev/null | tr '\n' ' ')"
+    [ -n "$(printf '%s' "$_int_kids" | tr -d ' ')" ] && break
+  fi
+  sleep 1; _int_waited=$(( _int_waited + 1 ))
+done
+check "#163 a run was started, took its lock and reached the hang (${_int_waited}s)" \
+  "[ -n '$_int_pid' ] && [ -f '$_int_lock/pid' ]"
+check "#163 and it had children of its own to leave behind" \
+  "[ -n \"\$(printf '%s' '$_int_kids' | tr -d ' ')\" ]"
+
+kill -TERM "$_int_pid" 2>/dev/null || true
+_int_gone=0
+while [ "$_int_gone" -lt 30 ] && kill -0 "$_int_pid" 2>/dev/null; do sleep 1; _int_gone=$(( _int_gone + 1 )); done
+# A moment for the handler's own kills to land, and then the state it left.
+sleep 1
+check "#163 the interrupted run itself is gone" "! kill -0 '$_int_pid' 2>/dev/null"
+_int_alive=""
+for _int_k in $_int_kids; do
+  kill -0 "$_int_k" 2>/dev/null && _int_alive="$_int_alive $_int_k"
+done
+check "#163 and it took the children it started with it" "[ -z '$_int_alive' ]"
+# The half that actually cost the investigations: an orphan holding the lock makes every later run
+# refuse, and refuse about a run nobody can find.
+check "#163 and it released the lock it was holding" "[ ! -e '$_int_lock/pid' ]"
+# Whatever survived, cleared here rather than left for the machine: a test that leaks the process
+# it was written about is the defect it is testing (L114).
+for _int_k in $_int_kids; do kill -9 "$_int_k" 2>/dev/null || true; done
+kill -9 "$_int_outer" 2>/dev/null || true
+wait "$_int_outer" 2>/dev/null || true
+
+# And the refusal itself, read as the person killing a run actually meets it (#163). A pid on its
+# own is not something anybody can act on: it has no visible connection to the run they killed, and
+# the message that carried only a pid sent two investigations looking for a bug in the suite. So it
+# has to say WHAT is holding the lock and give the command that ends it.
+_int_ref="$(_try_lock "$_lockdir/live")"
+check "#163 the refusal says a suite run is what holds the lock" \
+  "case \"\$_int_ref\" in *'a suite run'*) true ;; *) false ;; esac"
+check "#163 and gives a command that would end it" \
+  "case \"\$_int_ref\" in *'kill -9'*) true ;; *) false ;; esac"
+check "#163 and names the process that command would act on" \
+  "line_has \"\$_int_ref\" 'kill -9' '$$'"
 
 section "== status notices processes the tool left running (#33) =="
 # Seventeen suite processes were running and spawning each other on 2026-08-17, found only because

@@ -85,9 +85,14 @@ anybody iterating on the section runner would want.
 Considered for #32 and rejected. A run that waits without saying so is indistinguishable from the
 stall the issue was filed about, which is how three concurrent runs went unnoticed on 2026-08-17.
 
-A second run refuses and names the process holding the lock and how long it has been going. The
-cost is real and was accepted knowingly: a push can now be rejected because of a lock rather than
-because of the code. `SUITE_NO_LOCK=1` is the escape hatch.
+A second run refuses and names what is holding the lock, how long it has been going, and the
+command that ends it. That last part is #163: the message carried only a process id for months, and
+a bare pid has no visible connection to the run somebody killed minutes earlier, so an orphan
+holding the lock read as a bug in the suite and cost two separate false failure investigations in
+one session. A run killed from outside now kills its own children and releases the lock on the way
+out, so the orphan is rarer as well as easier to recognise. The cost is real and was accepted
+knowingly: a push can now be rejected because of a lock rather than because of the code.
+`SUITE_NO_LOCK=1` is the escape hatch.
 
 ### Detecting a runaway by counting processes
 
