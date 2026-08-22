@@ -1458,6 +1458,15 @@ $f
   # on the other Mac), or it predates the sync entirely. It is in the file now, so
   # say so at once: the L43 duplicate went unnoticed for a day because nothing
   # ever looked (#15).
+  # And an entry that arrived in a shape nothing here can read (claude-config#164). Reported when it
+  # LANDS rather than only when the next send declines to publish it: until a send runs there is
+  # nothing to hold back, and this is the path such an entry actually arrives on, since the other
+  # Mac is where somebody wrote it. Same reason the duplicate below is reported here.
+  local applied_bad; applied_bad="$(malformed_lesson_entries "$CLAUDE_HOME")"
+  if ! is_blank "$applied_bad"; then
+    echo "claude-sync: a lesson entry that arrived is not written as '- **Lnnn. ...', so nothing here can read it: not the index that loads into every session, not 'claude-sync lesson', not the duplicate check, and not the number minter. $(printf '%s' "$applied_bad" | tr '\n' ';' | sed 's/;$//'). Rewrite it to start with '- **L<number>. '. Until then that file is held back from the next send." >&2
+    notify "unreadable lesson entry arrived on this Mac"
+  fi
   local applied_dups; applied_dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
   if ! is_blank "$applied_dups"; then
     echo "claude-sync: the same lesson number is now used twice on this Mac, which breaks every reference to it: $(printf '%s' "$applied_dups" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number). Until then that file is held back from the next send." >&2

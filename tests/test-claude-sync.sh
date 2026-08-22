@@ -3108,6 +3108,32 @@ check "#164 the generated index is not judged by this rule" "[ '$_lm_idx_rc' -eq
 check "#164 and the index really did hold the refused shape" \
   "grep -qE '^- L[0-9]+\.' '$LMH/LESSONS-INDEX.md'"
 
+# An entry ARRIVING from the other Mac has to be reported when it LANDS, not only when the next
+# send declines to publish it. This is the path the two real ones will come in on: both are on the
+# other Mac, so the first thing that happens here is a pull, and until one runs there is nothing to
+# hold back. The duplicate check beside this one already says so at once, for the reason recorded
+# there: the L43 duplicate went unnoticed for a day because nothing ever looked (#15).
+printf '# Lessons\n\n- **L1. one.** body\n' > "$LMH/LESSONS.md"
+rm -f "$LMH/LESSONS-INDEX.md"
+_lm_ab="$WORK/lmarrive.git"; git init -q --bare -b main "$_lm_ab"
+_lm_aa="$WORK/lmarriveA"; git clone -q "$_lm_ab" "$_lm_aa" 2>/dev/null
+cp "$SCRIPT" "$_lm_aa/claude-sync"
+mkdir -p "$_lm_aa/payload"
+printf '# rules\n@LESSONS.md\n' > "$_lm_aa/payload/CLAUDE.md"
+printf '# Lessons\n\n- **L1. one.** body\n\n### L7. arrived unreadable.\n' > "$_lm_aa/payload/LESSONS.md"
+echo '{"hooks":{}}' > "$_lm_aa/payload/settings.hooks.json"
+git -C "$_lm_aa" checkout -q -b main 2>/dev/null || true
+git -C "$_lm_aa" add -A && git -C "$_lm_aa" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$_lm_aa" push -q -u origin main
+_lm_abh="$WORK/lmarrivehomeB"; mkdir -p "$_lm_abh"; echo '{"hooks":{}}' > "$_lm_abh/settings.json"
+_lm_abr="$WORK/lmarriveB"; git clone -q "$_lm_ab" "$_lm_abr" 2>/dev/null
+_lm_arr="$(CLAUDE_HOME="$_lm_abh" SYNC_REPO="$_lm_abr" SYNC_NO_NOTIFY=1 bash "$_lm_abr/claude-sync" pull 2>&1)"
+check "#164 an unreadable entry arriving from the other Mac really did land" \
+  "grep -q 'arrived unreadable' '$_lm_abh/LESSONS.md'"
+check "#164 and the pull says so when it lands, not only on the next send" \
+  "line_has \"\$_lm_arr\" 'LESSONS\.md' 'L7'"
+check "#164 and the arrival report says what shape it should have been" \
+  "case \"\$_lm_arr\" in *'- **L'*) true ;; *) false ;; esac"
+
 section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
 # needs: #15: duplicate lesson numbers must not be published or go unnoticed
 # The settled rule (see the 2026-08-05 note above): the published copy keeps the
