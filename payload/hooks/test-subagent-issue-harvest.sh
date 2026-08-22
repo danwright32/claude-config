@@ -542,15 +542,39 @@ printf '%s' "$lost" | grep -q "read-only spool" \
 rm -f "${TMPDIR:-/tmp}/claude-issue-spool-lost.jsonl"
 
 # A hung model must not take the whole hook down with it and leave no trace.
+#
+# How long that took is judged against a run of the SAME hook whose model answers at once, timed
+# here, rather than against a number chosen here (claude-config#149). It was "under 15 seconds",
+# and on 2026-08-21 a Mac at load 38 to 103 pushed ordinary runs of this suite's neighbours past
+# bounds of that kind: a red result that has to be re-run before it is believed stops being read
+# (L36), and the pre-push gate blocks on it, so a busy Mac blocked a correct push. The reference
+# pays the same startup this one does and stretches with the machine in the same way.
+#
+# The slack over it is three of the hook's OWN deadlines, set on the line below rather than being
+# a constant that can age. What has to be caught is the hook sitting there for the model's full
+# 30 seconds, or for ever.
 reset_spool
+stub 'echo NONE'
+quick_start=$SECONDS
+payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
+quick_elapsed=$((SECONDS - quick_start))
+reset_spool
+hang_timeout=2
 stub 'sleep 30'
 start=$SECONDS
-payload "$REPO" | CLAUDE_ISSUE_HARVEST_TIMEOUT=2 bash "$HARVEST" >/dev/null 2>&1
+payload "$REPO" | CLAUDE_ISSUE_HARVEST_TIMEOUT=$hang_timeout bash "$HARVEST" >/dev/null 2>&1
 elapsed=$((SECONDS - start))
+hang_max=$(( quick_elapsed + 3 * hang_timeout ))
 got="$(records)"
-[ "$elapsed" -lt 15 ] && printf '%s' "$got" | grep -q '"status": *"error"' \
+[ "$elapsed" -le "$hang_max" ] && printf '%s' "$got" | grep -q '"status": *"error"' \
   && check "a hung model is cut off and recorded" ok \
-  || check "a hung model is cut off and recorded" "took ${elapsed}s spool=$got"
+  || check "a hung model is cut off and recorded" "took ${elapsed}s against a bound of ${hang_max}s, spool=$got"
+# The same comparison, asked of one second over that bound, so it has been watched REFUSING rather
+# than only agreeing. Without it any bound large enough satisfies the check above, which is every
+# bound, and it would read as protection while protecting nothing (L1).
+[ $(( hang_max + 1 )) -le "$hang_max" ] \
+  && check "and a hook one second over that bound would be caught" "the bound accepted $(( hang_max + 1 ))s" \
+  || check "and a hook one second over that bound would be caught" ok
 
 # Model output that is neither NONE nor FINDING lines is its own outcome, and
 # the raw text is kept. Today it is silently indistinguishable from a clean NONE.

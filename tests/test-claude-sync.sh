@@ -1199,6 +1199,59 @@ if [ -n "${SUITE_PLAN_ONLY:-}" ]; then
   printf 'SUITE-PLAN jobs=%s source=%s\n' "$SUITE_JOBS" "$_sj_src"
   exit 0
 fi
+# ---- what this run COST, in a unit the rest of the machine cannot move (claude-config#149) ----
+# Wall clock measures the machine's mood as much as the suite's size. Eight full runs on
+# 2026-08-21, while Lightroom, Xcode and Backblaze had this Mac at load 38 to 103, made four
+# different checks go red that all passed on the same tree at load 15, and the single process run
+# that normally takes 243 seconds took 854. A red result that has to be re-run before it is
+# believed stops being read, which is the exact failure the deadline it guards exists to avoid
+# (L36), and the pre-push gate blocks on these, so a busy Mac blocked a correct push.
+#
+# Processor time does not move like that. Other software competing for the machine stretches how
+# long this run WAITS; it does not make this run's own work cost more instructions. Measured on
+# this Mac, all of it written down 2026-08-21: 202s of processor time for a single process run and
+# 262s across four shards, against wall clocks of 348s and 160s over the same tree.
+#
+# `times` is a bash builtin, so asking costs no process. It reports this shell and everything it
+# has WAITED for, which is the whole run: the shards are started here and waited for here, and a
+# waited child's own children are already folded into its figure.
+#
+# Whole seconds, and a figure that cannot be read comes back as NOTHING rather than as zero. Zero
+# is the most reassuring answer available: it would satisfy every headroom check for ever, and a
+# broken reader would be indistinguishable from a suite that costs nothing (L90).
+_cpu_field(){   # 0m12.34s -> whole seconds, or nothing
+  local _cf_v="$1" _cf_m _cf_s
+  case "$_cf_v" in *m*s) ;; *) return 0 ;; esac
+  _cf_m="${_cf_v%%m*}"
+  _cf_s="${_cf_v#*m}"; _cf_s="${_cf_s%s}"; _cf_s="${_cf_s%%.*}"
+  case "$_cf_m$_cf_s" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' $(( _cf_m * 60 + _cf_s ))
+}
+# Answers in a VARIABLE rather than on stdout, and is called directly rather than inside `$( )`.
+# `times` reports the shell it runs in, and a command substitution is a fork: a subshell starts
+# with both its own and its children's clocks at zero, so a reader that printed its answer would
+# be reporting the cost of the subshell that was asked, which is a few milliseconds old. It read
+# 0s for a run of any size. Redirecting a builtin to a file does NOT fork, so that is how the
+# figure is got out (L196: a component that constructs its own context is beyond what the caller
+# can see).
+SUITE_CPU_SECONDS=""
+suite_cpu_read(){   # sets SUITE_CPU_SECONDS to whole seconds, or to nothing
+  local _cs_f _cs_a _cs_b _cs_x _cs_n _cs_tot=0 _cs_any=0
+  SUITE_CPU_SECONDS=""
+  _cs_f="$SUITE_SCRATCH_HOME/claude-sync-suite-cpu.$$"
+  times > "$_cs_f" 2>/dev/null || return 0
+  while read -r _cs_a _cs_b; do
+    for _cs_x in "$_cs_a" "$_cs_b"; do
+      _cs_n="$(_cpu_field "$_cs_x")"
+      [ -n "$_cs_n" ] || continue
+      _cs_tot=$(( _cs_tot + _cs_n )); _cs_any=1
+    done
+  done < "$_cs_f"
+  rm -f "$_cs_f"
+  [ "$_cs_any" -eq 1 ] || return 0
+  SUITE_CPU_SECONDS="$_cs_tot"
+}
+
 if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHARD:-}" ] && [ "$SUITE_JOBS" -gt 1 ]; then
   _fan_dir="$(mktemp -d "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
   _fan_pids=""
@@ -1249,10 +1302,29 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   # run it was written for (L135: a check matched over the wrong span is answered by the wrong
   # thing). The shard's copy is still worth having for a one-process run; this is the one that
   # covers the default.
+  #
+  # Judged on PROCESSOR time, not on wall clock (claude-config#149). Wall clock measures what else
+  # was running on the Mac: the same tree took 243s idle and 854s at load 38 to 103 on 2026-08-21,
+  # and against a 900s deadline the second of those went red with nothing broken. What the check
+  # is FOR is noticing that the suite has grown into its own deadline, and growth shows up in the
+  # work rather than in the waiting.
+  #
+  # The wall clock is still measured and still said, because a run that really has no wall clock
+  # headroom is worth knowing about. It is a NOTE naming the load rather than a failure: it is a
+  # fact about the machine, and "find what got slower" is not an action anybody can take on it
+  # (L112). The two are worded differently, so a reader can tell which one they are looking at
+  # (L11).
   _fan_elapsed=$SECONDS
-  if [ "$SUITE_TIMEOUT" -gt 0 ] && [ "$SUITE_TIMEOUT" -lt $(( _fan_elapsed * 2 )) ]; then
-    echo "test suite: the whole run took ${_fan_elapsed}s and SUITE_TIMEOUT is ${SUITE_TIMEOUT}s, which is less than twice it. The deadline has grown too tight to distinguish a hung run from a slow one, which is the whole reason it exists. Raise it, or find what got slower." >&2
+  suite_cpu_read; _fan_cpu="$SUITE_CPU_SECONDS"
+  if [ "$SUITE_TIMEOUT" -gt 0 ] && [ -z "$_fan_cpu" ]; then
+    # The reader came back with nothing, so this run has NOT been checked. Said out loud, because a
+    # headroom check that silently measured nothing reads exactly like one that passed (L98).
+    echo "test suite: the processor time for this run could not be read, so the deadline's headroom was NOT checked. The run itself is unaffected." >&2
+  elif [ "$SUITE_TIMEOUT" -gt 0 ] && [ "$SUITE_TIMEOUT" -lt $(( _fan_cpu * 2 )) ]; then
+    echo "test suite: the whole run used ${_fan_cpu}s of processor time and SUITE_TIMEOUT is ${SUITE_TIMEOUT}s, which is less than twice it. The deadline has grown too tight to distinguish a hung run from a slow one, which is the whole reason it exists. Raise it, or find what got slower." >&2
     _fan_rc=1
+  elif [ "$SUITE_TIMEOUT" -gt 0 ] && [ "$SUITE_TIMEOUT" -lt $(( _fan_elapsed * 2 )) ]; then
+    echo "test suite: note, this run took ${_fan_elapsed}s of wall clock against a ${SUITE_TIMEOUT}s deadline, but only ${_fan_cpu}s of processor time, so the machine was busy with something else rather than the suite having grown. Not treated as a failure." >&2
   fi
   # The headline: every section once (#146). The sum of the shards' own totals is still worked out
   # above, and it is used here as a SECOND reading of the same run: the raw sum has to be the
@@ -3713,15 +3785,11 @@ section "== a run that hangs fails on a deadline instead of waiting (#31) =="
 # assertion that none exist at all can only ever fail. What has to be true is that the children
 # below leave none of THEIRS behind.
 _wd_before="$(pgrep -f suite-deadline-watchdog 2>/dev/null | wc -l | tr -d ' ')"
+_hang_deadline=6
 _t0="$(date +%s)"
-_hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_TIMEOUT=6 SUITE_HANG_IN=push bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
+_hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_TIMEOUT=$_hang_deadline SUITE_HANG_IN=push bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
 _elapsed=$(( $(date +%s) - _t0 ))
 check "#31 a hung run ends instead of waiting for ever" "[ '$_hang_rc' -ne 0 ]"
-# 30s against a 6s deadline, both of them chosen here and not measured. Deliberately not a tight
-# bound: what this has to catch is the run
-# taking as long as whatever it was sitting in, which is what happened when only the run itself
-# was killed and its children were left holding the output open.
-check "#31 it ends near its deadline rather than long after" "[ '$_elapsed' -lt 30 ]"
 check "#31 it says plainly that it timed out"   "printf '%s' \"\$_hang\" | grep -q 'TIMED OUT'"
 check "#31 it names the section it died in"     "printf '%s' \"\$_hang\" | grep -q 'still inside section: == push =='"
 # The whole point is that a hang stops reading as an ordinary run, so it must never leave behind
@@ -3731,9 +3799,32 @@ check "#31 a hung run is never reported as green" "! printf '%s' \"\$_hang\" | g
 # The other half, and the one that would do real damage if it were wrong: a deadline that fires
 # on a HEALTHY run turns every ordinary run into a false failure. A guard has to be seen not
 # firing when it should not, not only firing when it should.
+# TIMED, because it is also the reference the hung run above is judged against (claude-config#149).
+_ok_t0="$(date +%s)"
 _okrun="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push SUITE_TIMEOUT=300 bash "$SCRIPT_SELF" 2>&1)"; _okrun_rc=$?
+_ok_elapsed=$(( $(date +%s) - _ok_t0 ))
 check "#31 a healthy run is not killed by its own deadline" "! printf '%s' \"\$_okrun\" | grep -q 'TIMED OUT'"
 check "#31 and still reports its result"        "[ '$_okrun_rc' -eq 0 ]"
+
+# How long the hung run took, judged against the HEALTHY one just measured rather than against a
+# number written here (claude-config#149). It used to be "under 30 seconds", chosen not measured,
+# and on 2026-08-21 a Mac at load 38 to 103 pushed an ordinary run of this past it: a red result
+# that has to be re-run before it is believed stops being read (L36).
+#
+# The healthy run reaches the same section this one hangs in, so it is an upper bound on the work
+# the hung run got through, and it stretches with the machine exactly as the hung run does. The
+# slack over it is three of the hung run's OWN deadlines, which is a knob set on the line above
+# rather than a constant that can age. What this has to catch is the run taking as long as
+# whatever it was sitting in, which is what happened when only the run itself was killed and its
+# children were left holding the output open.
+_hang_max=$(( _ok_elapsed + 3 * _hang_deadline ))
+check "#31 it ends near its deadline rather than long after (${_elapsed}s against a bound of ${_hang_max}s)" \
+  "[ '$_elapsed' -le '$_hang_max' ]"
+# The same comparison, asked of one second over that bound, so it has been watched REFUSING rather
+# than only agreeing. Without it any bound large enough satisfies the check, which is every bound,
+# and it would read as protection while protecting nothing (L1).
+check "#31 and a run one second over that bound is refused" \
+  "! [ $(( _hang_max + 1 )) -le '$_hang_max' ]"
 
 # A watchdog that outlives the run it watches is holding a process id that the system is free to
 # hand to something else, and it kills what it finds there. Each one exits within a poll of its
@@ -3778,16 +3869,38 @@ _held_elapsed=$(( $(date +%s) - _t0 ))
 check "#32 a second run does not start while one is going" "[ '$_held_rc' -ne 0 ]"
 check "#32 it names the run that holds the lock"  "printf '%s' \"\$_held\" | grep -q '$$'"
 check "#32 it says how long that run has been going" "printf '%s' \"\$_held\" | grep -qE '[0-9]+s'"
-# Refuse, never queue: a run that waits silently is the stall this issue was filed about.
-check "#32 it refuses rather than queueing behind it" "[ '$_held_elapsed' -lt 20 ]"
 check "#32 and runs none of the checks"           "! printf '%s' \"\$_held\" | grep -q '^PASS='"
 
 # A crashed run must not wedge the suite for good. The owner being gone is the evidence, not the
 # clock, because this lock only ever holds a process id from THIS machine.
 _mklock "$_lockdir/dead" "99999999" "$_thishost" "$((_now - 5))"
+# TIMED, because it is the reference the refusal above is judged against (claude-config#149).
+_dead_t0="$(date +%s)"
 _dead="$(_try_lock "$_lockdir/dead")"; _dead_rc=$?
+_dead_elapsed=$(( $(date +%s) - _dead_t0 ))
 check "#32 a lock whose owner is gone is taken over" "[ '$_dead_rc' -eq 0 ]"
 check "#32 and says it took it over"                 "printf '%s' \"\$_dead\" | grep -qi 'took over'"
+
+# Refuse, never queue: a run that waits silently is the stall this issue was filed about. Judged
+# against the run just above, which took the lock and went on to do the work, rather than against
+# a fixed twenty seconds (claude-config#149). Both start the same suite the same way and only one
+# of them proceeds, so a refusal that cost MORE than a run which did the work is the queueing this
+# forbids, and both figures stretch together when the Mac is busy. The old constant did not: on
+# 2026-08-21 a loaded Mac pushed an ordinary refusal past it and the check went red with the lock
+# working perfectly.
+# Twice that run, plus one second. Both figures are whole seconds off the same clock, so two
+# genuinely equal durations can read a second apart and the floor is the instrument's resolution
+# rather than an allowance for a slow machine. Twice, because both runs pay the same startup and
+# only one of them then does the work, so the two land close together (2s against 2s, measured
+# 2026-08-21) and a bound with no room is a coin toss. What it has to catch is not a second of
+# drift: a run that QUEUED would sit here until its own deadline, which is 900 seconds away.
+_held_max=$(( _dead_elapsed * 2 + 1 ))
+check "#32 it refuses rather than queueing behind it (${_held_elapsed}s against a bound of ${_held_max}s)" \
+  "[ '$_held_elapsed' -le '$_held_max' ]"
+# And watched REFUSING, or the comparison is satisfied by any refusal fast enough, which is every
+# refusal (L1).
+check "#32 and a refusal one second over that bound would be caught" \
+  "! [ $(( _held_max + 1 )) -le '$_held_max' ]"
 
 # A lock carried in from ELSEWHERE (a restored folder, a shared temp dir) records a process id that
 # means nothing here, so age is the only evidence available. Same split as claude-sync #25 and #29.
@@ -4837,7 +4950,7 @@ _bw_sizes(){   # _bw_sizes <coverage lines> -> one target count per line
 }
 _bw8="$(_bw_lines 8)"
 _bw_hi="$(_bw_sizes "$_bw8" | sort -n | tail -1)"
-_bw_lo="$(_bw_sizes "$_bw8" | sort -n | head -1)"
+_bw_lo="$(_bw_sizes "$_bw8" | sort -n | awk 'NR==1')"
 check "#151 the shard sizes could be read as numbers (high='$_bw_hi' low='$_bw_lo')" \
   "case \"\$_bw_hi\$_bw_lo\" in ''|*[!0-9]*) false ;; *) true ;; esac"
 # Three sections of slack, not zero. One group of two pinned together already puts one shard one
@@ -4851,7 +4964,9 @@ check "#151 and no shard is left carrying far more sections than another" \
 # prerequisite in when it genuinely has to. SECTION_ONLY on the dependent section runs one section
 # that is not the prelude and not itself, so the borrowing machinery is watched working rather
 # than only watched reporting nothing (L159, L1).
-_bw_dep="$(grep -n '^# needs: ' "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
+# `awk NR==1` rather than `head -1`, which leaves on its first line and can kill its own producer
+# under pipefail (#132, L183).
+_bw_dep="$(grep -n '^# needs: ' "$SCRIPT_SELF" | awk -F: 'NR==1 {print $1}')"
 if [ -n "$_bw_dep" ]; then
   _bw_dep_title="$(awk -v n="$_bw_dep" 'NR < n && /^section "/ { last = $0 } NR == n { print last }' "$SCRIPT_SELF" \
     | sed 's/^section "//; s/"$//')"
@@ -6813,6 +6928,62 @@ check "#107 the run ends with a profile of the slowest sections" \
 check "#107 the profile names a section and a duration on one line" \
   "line_has \"\$(cat '$_PFO')\" '^ +[0-9]+s ' 'apply is idempotent'"
 
+section "== a busy Mac does not turn a timing check red (#149) =="
+# Eight full runs on 2026-08-21, while Lightroom, Xcode and Backblaze had this Mac at load 38 to
+# 103: four different checks went red, and every one of them passed on the same tree at load 15.
+# The single process run that normally takes 243 seconds took 854. A red result that has to be
+# re-run before it is believed stops being read, which is the exact failure the deadline those
+# checks guard exists to avoid (L36), and the pre-push gate blocks on them, so a busy Mac blocked
+# a correct push.
+#
+# The remedy is not a bigger threshold. A threshold moved to survive load stops catching the thing
+# it was set for (L172). What changed is the REFERENCE: a check that compared elapsed time against
+# a number written here now compares it against something measured in the same run, and the
+# deadline's headroom is judged on the suite's own PROCESSOR time, which other software competing
+# for the Mac does not move.
+#
+# What is checked here is the reader and the comparison, which is this file's own code. That
+# processor time is load immune is a property of the operating system, measured and written into
+# the comment beside the reader rather than asserted here, because a check that tries to slow its
+# own machine down passes or fails on whether the machine happened to be busy (L102).
+suite_cpu_read; _cpu_before="$SUITE_CPU_SECONDS"
+case "$_cpu_before" in
+  ''|*[!0-9]*) check "#149 the processor time this run has used reads as a whole number" \
+                 "false" ;;
+  *) check "#149 the processor time this run has used reads as a whole number" "true" ;;
+esac
+# It counts what CHILDREN cost, not only this shell. That is the whole reason it can stand in for
+# a run: nearly everything this suite costs is spent in git, in python and in the shards, none of
+# which run in this process. A reader that saw only this shell would report a figure near zero for
+# a run of any size, and near zero satisfies every headroom check there is (L90).
+_cpu_burn(){   # a fixed amount of work, done in a CHILD, costing about a second of processor time
+  bash -c 'i=0; while [ "$i" -lt 500000 ]; do i=$((i + 1)); done'
+}
+_cpu_burn
+suite_cpu_read; _cpu_after="$SUITE_CPU_SECONDS"
+case "$_cpu_before$_cpu_after" in
+  ''|*[!0-9]*) check "#149 and it rises when a child does real work" "false" ;;
+  *) check "#149 and it rises when a child does real work" \
+       "[ '$_cpu_after' -gt '$_cpu_before' ]" ;;
+esac
+
+# The headroom comparison, watched REFUSING. A deadline one second under twice the processor time
+# just measured has to be refused, or the check in #112 is satisfied by any deadline large enough,
+# which is every deadline, and it reads as protection while protecting nothing (L1).
+_cpu_floor=$(( ${_cpu_after:-0} * 2 ))
+check "#149 a deadline one second under twice that is refused" \
+  "! [ $(( _cpu_floor - 1 )) -ge '$_cpu_floor' ]"
+check "#149 while the deadline this run is using clears it" \
+  "[ \"\$SUITE_TIMEOUT\" -eq 0 ] || [ \"\$SUITE_TIMEOUT\" -ge '$_cpu_floor' ]"
+
+# A reader that comes back with NOTHING has measured nothing, and nothing must never read as a
+# figure of zero: zero clears every headroom check for ever, and a broken reader would then be
+# indistinguishable from a suite that costs nothing at all (L90, L98).
+check "#149 a field it cannot parse is read as nothing, never as zero" \
+  "[ -z \"\$(_cpu_field 'not-a-time')\" ]"
+check "#149 the control: a field it CAN parse is read as its seconds" \
+  "[ \"\$(_cpu_field '1m5.230s')\" = 65 ]"
+
 section "== the deadline still has real headroom over a run (#112) =="
 # The deadline is only meaningful as a MULTIPLE of a real run, and that multiple was written down
 # once and then went stale in silence: the design record said 123 seconds and "roughly 7x" for
@@ -6830,10 +7001,21 @@ section "== the deadline still has real headroom over a run (#112) =="
 #
 # In a FILTERED run this passes trivially, because the run is shorter. That is said out loud rather
 # than hidden: it bites on a full run, which is the run the deadline exists for.
+#
+# Judged on PROCESSOR time since #149, for the reason spelt out beside the fan-out's copy: wall
+# clock measures what else the Mac was doing, and eight runs on 2026-08-21 at load 38 to 103 made
+# this check red on a tree where nothing had grown. The suite's own processor time does not move
+# with somebody else's Lightroom export.
 _hr_elapsed=$SECONDS
-_hr_min=$(( _hr_elapsed * 2 ))
-if [ "$SUITE_TIMEOUT" -gt 0 ]; then
-  check "#112 the deadline is at least twice the run it just watched" "[ '$SUITE_TIMEOUT' -ge '$_hr_min' ]"
+suite_cpu_read; _hr_cpu="$SUITE_CPU_SECONDS"
+_hr_min=$(( ${_hr_cpu:-0} * 2 ))
+if [ "$SUITE_TIMEOUT" -gt 0 ] && [ -n "$_hr_cpu" ]; then
+  check "#112 the deadline is at least twice the processor time of the run it just watched" "[ '$SUITE_TIMEOUT' -ge '$_hr_min' ]"
+elif [ "$SUITE_TIMEOUT" -gt 0 ]; then
+  # A reader that came back with nothing has checked NOTHING, and saying so is not the same as
+  # checking it (L98). Asserted as a failure rather than skipped, because the figure comes from a
+  # bash builtin and its absence means something is wrong with the reader itself.
+  check "#112 the processor time this run used could be read" "false"
 else
   # A run with the deadline disabled has no headroom to check, and saying so is not the same as
   # checking it (L98). The setting is asserted instead, so this branch cannot pass by silence.

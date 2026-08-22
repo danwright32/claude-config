@@ -552,7 +552,9 @@ echo
 # at zero.
 if [ -n "$slow_profile" ]; then
   echo "slowest suites:"
-  printf '%s' "$slow_profile" | sort -r | head -5 | while IFS="$(printf '\t')" read -r _pd _pn; do
+  # `awk NR<=5` rather than `head -5`, which leaves on its fifth line and can kill its own producer
+  # under pipefail (claude-config#132, L183).
+  printf '%s' "$slow_profile" | sort -r | awk 'NR <= 5' | while IFS="$(printf '\t')" read -r _pd _pn; do
     [ -n "$_pn" ] || continue
     printf '  %ds %s\n' "$((10#$_pd))" "$_pn"
   done
