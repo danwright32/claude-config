@@ -6330,11 +6330,9 @@ section "== a comment that quotes a measured number says when it was measured (#
 # count of something this list does not name. It narrows how a perishable number can be written
 # down rather than proving nobody can write one (L11).
 #
-# And it reads shell and workflows, not MARKDOWN, which is a deliberate exemption with an issue of
-# its own rather than a silent one (L129). The block rule here is "a run of lines beginning with
-# #", and in markdown that character starts a HEADING, so every heading would read as a one line
-# block and every paragraph as a block ender. README.md carries at least one undated measurement
-# today. Covering it needs a paragraph rule, which is claude-config#148.
+# Markdown needs a different block rule, because the rule here is "a run of lines beginning with
+# #" and in markdown that character starts a HEADING. It has one, further down (#148), and this
+# part reads shell and workflows only.
 _SC_MEASURED='(^|[^#[:alnum:]=.])[1-9][0-9]*(,[0-9][0-9][0-9])*([.][0-9]+)? *(s|ms|secs?|seconds?|mins?|minutes?|hours?)([^A-Za-z=]|$)|(^|[^#[:alnum:]=.])[1-9][0-9]*(,[0-9][0-9][0-9])* +([a-z-]+ +)?(sections?|suites?|checks?|files?|lines?|director(y|ies))([^A-Za-z=]|$)|(^|[^#[:alnum:]=.])[0-9]+ +(after|before) +the +prelude'
 _SC_AWK="$WORK/stale-counts.awk"
 cat > "$_SC_AWK" <<'SCAWK'
@@ -6447,6 +6445,111 @@ dbg "#145 control: the real file reports $_sc_self_n, the planted copy reports $
 check "#145 the count above is a live measurement, not a scan reading nothing" \
   "[ \"\${_sc_pos:-0}\" -eq \$(( _sc_self_n + 1 )) ]"
 rm -f "$_SCPOS"
+
+# ---- the same rule over this repo's own markdown (#148) ----
+# #145 read shell and workflows and left markdown out, because the block rule there is a run of
+# lines beginning with #, and in markdown that character starts a HEADING: every heading would
+# read as a one line block and every paragraph as the thing that ends one. The exemption was named
+# rather than left silent (L129), and this is it being closed.
+#
+# Markdown needs its own idea of a block, and it is not the same idea:
+#
+#   a paragraph      a run of non-blank lines, ended by a blank one
+#   a table row      its own block, because a table is not a paragraph and a date in one row says
+#                    nothing about the row under it
+#   a list item      its own block, continuing over the lines that wrap it
+#   a fenced block   skipped entirely, for the same reason a code span is: it is code, not a claim
+#
+# Scoped to markdown at the REPO ROOT, which is this repo's own documentation. Everything under
+# payload/ is content this repo FERRIES to other machines rather than writes, and most of it is
+# third party skills whose numbers are somebody else's claims to date or not: measured on
+# 2026-08-21, 76 blocks across the tracked markdown, 52 of them in vendored skills. LESSONS.md is
+# deliberately outside it too, and for a better reason than volume: every lesson carries the issue
+# it came from, which is provenance a date cannot improve on.
+_SC_MD_AWK="$WORK/stale-counts-md.awk"
+cat > "$_SC_MD_AWK" <<'SCMDAWK'
+function flush() {
+  t = buf
+  gsub(/`[^`]*`/, " ", t)
+  if (t != "" && t ~ COUNT && t !~ /20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ && t !~ /not( a)? measure/) printf "%s:%d: %s\n", FILENAME, start, buf
+  buf = ""; start = 0
+}
+/^[[:space:]]*```/ { flush(); fence = !fence; next }
+fence { next }
+/^[[:space:]]*$/ { flush(); next }
+/^[[:space:]]*[|]/ { flush(); start = FNR; buf = $0; flush(); next }
+/^[[:space:]]*([-*+]|[0-9]+[.])[[:space:]]/ { flush(); start = FNR; buf = $0; next }
+{ if (buf == "") { start = FNR; buf = $0 } else { buf = buf " " $0 } }
+END { flush() }
+SCMDAWK
+_sc_md_scan(){   # _sc_md_scan <file>... -> the undated measurements, one block per line
+  for _sc_mf in "$@"; do awk -v COUNT="$_SC_MEASURED" -f "$_SC_MD_AWK" "$_sc_mf"; done
+}
+# Root level markdown, asked of git and filtered by having no directory in its path, so a document
+# added beside README.md is covered on the day it lands and nothing here needs maintaining.
+_sc_md_files="$(git -C "$_sc_root" ls-files '*.md' 2>/dev/null | grep -v /)"
+_sc_md_n="$(printf '%s' "$_sc_md_files" | grep -c . || true)"
+check "#148 the markdown scan has this repo's own documents to read" \
+  "[ \"\${_sc_md_n:-0}\" -ge 3 ]"
+for _sc_md_want in README.md DESIGN.md SETUP.md; do
+  check "#148 and $_sc_md_want is one of them" \
+    "printf '%s\n' \"\$_sc_md_files\" | grep -qx '$_sc_md_want'"
+done
+_sc_md_bad="$(printf '%s\n' "$_sc_md_files" | while IFS= read -r _sc_md_one; do
+  [ -n "$_sc_md_one" ] || continue
+  _sc_md_scan "$_sc_root/$_sc_md_one"
+done)"
+if [ -n "$_sc_md_bad" ]; then
+  echo "  (#148 markdown blocks quoting a measured number without saying when:)"
+  printf '%s\n' "$_sc_md_bad" | cut -c1-160 | sed 's/^/    /'
+fi
+check "#148 no document quotes a measured number without saying when" "[ -z \"\$_sc_md_bad\" ]"
+
+# Both directions again, on a fixture shaped like markdown rather than like shell, because the
+# block rule is the thing that changed and the shell fixture says nothing about it.
+_SCMDFIX="$WORK/stale-counts-md-fixture.md"
+{
+  printf '# A heading\n\n'
+  printf 'A dated paragraph: measured on 2026-01-02, the run took 200 seconds.\n\n'
+  printf 'An undated paragraph, wrapped the way these actually are, saying the run\n'
+  printf 'took 200 seconds and nothing about when.\n\n'
+  printf '| setting | default | what it does |\n'
+  printf '| --- | --- | --- |\n'
+  printf '| `A` | `1` | dated: on 2026-01-02 a full run took 30 seconds |\n'
+  printf '| `B` | `2` | undated: a full run took 30 seconds |\n\n'
+  printf -- '- a list item that is dated: 2026-01-02, 12 sections\n'
+  printf -- '- a list item that is not: 12 sections\n\n'
+  printf 'A number this code sets: it gives up after 900s, not measured.\n\n'
+  printf '```\n'
+  printf 'inside a fence: the run took 200 seconds with no date anywhere\n'
+  printf '```\n'
+} > "$_SCMDFIX"
+_sc_md_fix="$(_sc_md_scan "$_SCMDFIX")"
+dbg "#148 markdown fixture scan: $(printf '%s' "$_sc_md_fix" | tr '\n' '|')"
+for _sc_md_hit in 5 11 14; do
+  check "#148 the markdown scan catches the undated block on line $_sc_md_hit" \
+    "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c ':$_sc_md_hit:' | tr -d ' ')\" = 1 ]"
+done
+for _sc_md_quiet in 3 10 13 16 19; do
+  check "#148 and leaves the block on line $_sc_md_quiet alone" \
+    "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c ':$_sc_md_quiet:' | tr -d ' ')\" = 0 ]"
+done
+# A table row dated in ONE row must not excuse the row beneath it, which is the whole reason a row
+# is its own block. Asserted by the pair above and by the count here: three and no more.
+check "#148 and reports those three and nothing else" \
+  "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c . | tr -d ' ')\" = 3 ]"
+
+# And on a real document, so the zero above is a measurement rather than a scan reading nothing
+# (L182, L171). README.md is the one every other check in this file already depends on being read.
+_SCMDPOS="$WORK/stale-counts-md-positive-control.md"
+cp "$_sc_root/README.md" "$_SCMDPOS"
+printf '\nzzz planted: this run took 999 seconds and nothing here says when\n' >> "$_SCMDPOS"
+_sc_md_self="$(_sc_md_scan "$_sc_root/README.md" | grep -c . || true)"
+_sc_md_pos="$(_sc_md_scan "$_SCMDPOS" | grep -c . || true)"
+dbg "#148 control: README.md reports $_sc_md_self, the planted copy reports $_sc_md_pos"
+check "#148 the markdown count above is a live measurement, not a scan reading nothing" \
+  "[ \"\${_sc_md_pos:-0}\" -eq \$(( _sc_md_self + 1 )) ]"
+rm -f "$_SCMDPOS"
 
 section "== every section reports its size and how long it took (#107) =="
 # A full run reported one number, PASS, and nothing about where the minutes went. So "the suite is

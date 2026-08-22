@@ -169,9 +169,10 @@ those (`bash payload/hooks/run-all-tests.sh tests tools`). A directory it was to
 holds no suite is a failure, not a quiet pass, because reading nothing and reading everything green
 look identical otherwise.
 
-The suites run several at a time, since they are independent. Measured on this Mac over the hook
+The suites run several at a time, since they are independent. Measured on this Mac on 2026-08-21 over the hook
 suites: 128 seconds one at a time, 29 seconds in parallel, with byte identical reports. The whole
-repo, 38 suites, runs in 124 to 155 seconds here, the spread being whatever else the Mac is doing. That floor is `test-claude-sync.sh`, which takes most of it
+repo, 38 suites, ran in 84 seconds on an idle Mac and 115 on a busy one, both measured on
+2026-08-21, the spread being whatever else the Mac is doing. That floor is `test-claude-sync.sh`, which takes most of it
 on its own: the wall clock cannot go below the single longest suite, so making that one faster is
 the only thing left that would move this number.
 
@@ -181,7 +182,7 @@ the product of two numbers set independently and compared nowhere: a four core r
 dozen heavy processes, each spawning git and python of its own. That never went red. It makes
 timing sensitive checks intermittently wrong instead, which is the hardest kind of failure to
 attribute, and the sync suite's own deadline guard was measured firing at 1192s against a normal
-200 on a loaded Mac. So the budget below is divided between the suites running at once, each suite
+200 on a loaded Mac, on 2026-08-19. So the budget below is divided between the suites running at once, each suite
 is told its share, and the product is printed at the top of every run.
 
 | Setting | Default | What it does |
@@ -191,7 +192,7 @@ is told its share, and the product is printed at the top of every run.
 | `HOOK_TESTS_TIMINGS` | `~/.cache/claude-config/suite-timings` | Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a duration measured on this machine is not configuration, and mirroring it would make the other Mac order its runs by numbers from hardware it does not have. |
 | `HOOK_TESTS_SLOTS` | set BY the runner | Each suite's share of the budget, which is the budget divided by how many suites are running at once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its own processes it may start. Point the runner at one directory holding one suite and that suite is handed the whole budget, so running the long suite on its own is as fast as it ever was. |
 
-What the budget costs, measured on this Mac as one pair of runs back to back: 124 seconds against
+What the budget costs, measured on this Mac on 2026-08-21 as one pair of runs back to back: 124 seconds against
 88 seconds for the same 38 suites run the old way (8 suites at once, each splitting itself four ways). The machine was 183% busy
 under the budget and 319% busy without it, which is the oversubscription this removes. 36 seconds
 is the price of every timing sensitive check in the repo being measured on a machine that is not
@@ -228,9 +229,9 @@ The main suite on its own:
 bash tests/test-claude-sync.sh
 ```
 
-It fans its 85 sections out across four processes and takes about 80 seconds, down from 200. No
-single section dominates (the slowest five measured 22s, 13s, 11s, 11s and 9s), so there was
-nothing to speed up, only work to spread. The parent holds the one run at a time lock and the
+It fans its sections out across four processes. Measured on 2026-08-21, 87 sections taking 82
+seconds that way and 243 in a single process, with no single section dominating (the slowest five
+were 22s, 13s, 11s, 11s and 9s), so there was nothing to speed up, only work to spread. The parent holds the one run at a time lock and the
 shards run under it, so this is still one logical run.
 
 | Setting | Default | What it does |
@@ -400,7 +401,7 @@ reads it every time whatever the interval says.
 | --- | --- | --- |
 | `SYNC_SCRATCH_ROOT` | `$TMPDIR` | The temp root. Scratch is created in the `claude-sync` directory inside it, and the sweep looks there and, on an interval, in the root itself. |
 | `SYNC_SCRATCH_DIRNAME` | `claude-sync` | The name of that directory. It is half of the pattern deciding what `reap-scratch` may remove, so anything that is not a single directory name is refused. |
-| `SYNC_SCRATCH_MAX_AGE` | `3600` | Seconds before scratch counts as abandoned. A suite run cannot outlive its own 15 minute deadline and a sync takes 6 seconds, so this is 4x the longest run the tool permits. The cost is that a burst of interrupted runs is not reclaimed until an hour after the last of them. `0` turns the sweep off entirely, and a value that is not a whole number is refused rather than guessed at. |
+| `SYNC_SCRATCH_MAX_AGE` | `3600` | Seconds before scratch counts as abandoned. A suite run cannot outlive its own 15 minute deadline, both of those set rather than measured, and a sync took 6 seconds when it was timed on 2026-08-17, so this is 4x the longest run the tool permits. The cost is that a burst of interrupted runs is not reclaimed until an hour after the last of them. `0` turns the sweep off entirely, and a value that is not a whole number is refused rather than guessed at. |
 | `SYNC_SCRATCH_LEGACY_EVERY` | `86400` | Seconds between reads of the old flat location in the temp root. Reading it is what costs six figures of directory entries, so it is not done on every call. The cost is stated: something left there can go unreported for up to this long, though `reap-scratch` always reads it. `0` reads it every call, and a value that is not a whole number is refused. |
 
 `claude-sync status` also reports watcher processes and test runs the tool left behind, counting

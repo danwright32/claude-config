@@ -108,11 +108,11 @@ seventeen went unnoticed in the first place.
 
 ### Sweeping abandoned scratch by age
 
-Rejected for #36, which is what the issue proposed. The issue reported 586 abandoned directories
+Rejected for #36, which is what the issue proposed. The issue reported, on 2026-08-17, 586 abandoned directories
 holding 491 MB and read them all as the suite's, because a bare `mktemp -d` produces an anonymous
 name and there is nothing else to go on.
 
-Measured before building it: of 579 anonymous `tmp.*` directories in that folder holding 508 MB,
+Measured before building it, on 2026-08-17: of 579 anonymous `tmp.*` directories in that folder holding 508 MB,
 only 37 were the suite's, holding 475 MB. The other 542 belonged to other tools on this Mac, and a
 sweep of old temp directories would have deleted every one of them.
 
@@ -121,7 +121,7 @@ The age floor stayed, as the second line rather than the first. The 37 already o
 name and were removed by hand once, rather than teaching the sweep to recognise directories by
 peering inside them, which is a rule that would then live for ever.
 
-The other half of the measurement is why "older than a day" was not kept: all 37 were created
+The other half of that 2026-08-17 measurement is why "older than a day" was not kept: all 37 were created
 within one hour and 43 minutes of each other, so a day would have reclaimed nothing at all.
 
 ### Never reading the old flat scratch location again
@@ -130,7 +130,7 @@ Rejected for #116, and it is the obvious version of that change.
 
 Scratch used to be created directly in the temp root, so the sweep had to read the whole of it.
 Measured on this Mac: 113,912 entries, 25 of them ours. #115 cut six reads of that to one and took
-`claude-sync status` from 1.74s to 0.36s; the read left was most of what remained, paid 270 times
+`claude-sync status` from 1.74s to 0.36s, measured on 2026-08-21; the read left was most of what remained, paid 270 times
 by a single suite run. The cost is set by how much other software puts in that directory, which
 nothing here controls and which only grows.
 
@@ -158,7 +158,7 @@ Rejected for #120, and it is what the runner did for its whole life.
 It discovered suites from disk rather than from a list, which is the right idea and is written into
 its own header. It read ONE directory though, the one it lives in, so `tests/`, `tools/` and
 `payload/skills/milestone/` were outside it. Three of those were run only because four hand written
-steps in the CI workflow named them, and the fourth was named by nothing at all: 233 checks that
+steps in the CI workflow named them, and the fourth was named by nothing at all: 233 checks, counted on 2026-08-10, that
 had never run anywhere, found by asking git which directories hold a `test-*.sh` rather than by
 reading the workflow. The boundary WAS the hand maintained list, drawn one level up in a file
 nobody opens when adding a test.
@@ -240,7 +240,7 @@ checks every tracked file.
 
 So the suite was made portable instead, which turned out to be two helpers and eleven call sites,
 and it now runs on Linux on every push with no filter at all, for about 1,400 minutes a month at
-the 1x rate.
+the 1x rate, on the usage measured over 2026-08-17.
 
 The port also found a real defect that had nothing to do with Linux. BSD `date -r ""` does not
 fail: it succeeds and answers 1969-12-31. A Mac marker whose timestamp could not be read would
@@ -380,6 +380,39 @@ regenerated on every send and every apply rather than maintained beside the file
 kept by hand next to its source drifts silently (L41). The renumber scan skips it for the same
 reason: a number in a file that is rewritten in the same run is not something to go and check.
 
+### Handing the freed budget to the last suite still running
+
+Rejected for #147, which is what the issue proposed. A full run measured 84 seconds on an idle Mac
+on 2026-08-21, and 37 of its 38 suites had finished by 39 seconds, so the longest suite held the
+machine alone for 45 seconds with 4 of the 8 slots idle. A grant is fixed when a suite launches, so
+using that idle half means the runner telling a RUNNING suite it may take more, and the suite
+splitting into more shards than it was first granted and widening its own fan-out mid run.
+
+Two things were measured wrong on the way to the answer, and both are recorded here because the
+wrong ones are more instructive than the right one.
+
+The first was reading the growth in total section time, 256 seconds across four shards against 392
+across eight on 2026-08-21, as work the extra shards added. It is not. Taking only the sections that ran the same
+number of times in both, the total still rose from 244 to 376 seconds: identical work, 54% slower,
+which is 8 concurrent shards saturating a budget of 8. That is L209 exactly, a quantity measured
+while a co-varying component moves attaching itself to the wrong variable. Repeating the prelude
+costs about 1 second per shard, not the 34 that fit implied.
+
+The second was treating a run that hands the long suite the whole budget from the start as the
+upper bound on what a handover could do. It is not that either: it runs 8 sync shards alongside the
+other suites' 4 lanes, 12 processes against a budget of 8, so it pays for oversubscription through
+the whole first half. A handover would stay at 4 until the others finish. That arm is worse than a
+handover, not better, so it bounds nothing.
+
+What is left is a real opportunity, correctly sized: the suite took 82 seconds at four shards and
+63 at eight when it was timed on 2026-08-21, so widening only once the slots are genuinely idle should put a full run near 70
+seconds instead of 84. About 15%, for a cross process protocol between the runner and a running
+suite plus a suite that can widen its own fan-out mid run, in two programs every other test in this
+repo depends on being correct. Judged not worth the price.
+
+The number to watch is the fraction of a run the last suite holds alone. It is over half today. If
+it grows, the trade changes.
+
 ### Declaring the dependencies between suite sections rather than removing them
 
 Considered for #105 and rejected, and it is what the issue itself proposed: give each section an
@@ -387,7 +420,7 @@ explicit declaration of what it depends on, so a filtered run can execute a sect
 prerequisites. The plan that came out of it had a declaration syntax, a validator for it, a static
 scanner, and an exhaustive sweep that ran every section in isolation and diffed the results.
 
-Then the dependency graph got measured instead of designed around. All 73 post-prelude sections
+Then the dependency graph got measured instead of designed around. Measured on 2026-08-20, all 73 post-prelude sections
 were run in isolation: 68 passed alone, and the five that did not each read one variable an earlier
 section had set. Four of the five were accidents worth about fifteen lines between them. `PSH`/`PSR`
 was two lines that three separate sections all wanted, and each reached for whichever of the three
@@ -445,8 +478,8 @@ that is added both fail until this table is updated.
 | 1 nested run | `SUITE_MAX_DEPTH=1` | The suite's own depth allowance | Every place the suite spawns itself is one level down and nothing in it legitimately needs a run nested two deep, proved by #34 | 2026-08-17 |
 | 2 processes | not a setting | One healthy watcher | Observed directly as a launcher with one child (pid 13658 with 13702), proved by #33 | 2026-08-17 |
 
-The two suite figures above were 123 seconds and "roughly 7x" for eleven days, measured when the
-suite had 726 checks. It now has 784, and the run time has been 123, then 267, then 191 seconds as
+The two suite figures above were 123 seconds and "roughly 7x" for eleven days, taken on 2026-08-08
+when the suite had 726 checks. It now has 784, and the run time has been 123, then 267, then 191 seconds as
 checks were added and one of them was made five times faster. Every one of those figures was true
 when written and wrong within days, and nothing noticed, because the check beside this table
 compares the SETTING and not the measurement the setting was derived from. So the suite measures
