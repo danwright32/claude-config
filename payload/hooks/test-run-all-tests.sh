@@ -57,6 +57,18 @@ mk_chatty_suite() { # mk_chatty_suite <dir> <name> <tally line>   -- a suite tha
   chmod +x "$1/test-$2.sh"
 }
 
+# A suite that says it cannot run HERE rather than reporting a score (claude-config#155).
+mk_notrun_suite() { # mk_notrun_suite <dir> <name> <reason>
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo "%s: %s"\n' "test-$2" "$3"
+    printf 'printf %s\\\\n "SUITE-NOT-RUN %s"\n' "'%s'" "$3"
+    printf 'exit 2\n'
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+
 # ---------------------------------------------------------------------------
 # Several directories, named outright.
 # ---------------------------------------------------------------------------
@@ -393,8 +405,51 @@ if [ -n "$REAL" ]; then
     && check "the listing answered rather than refusing" ok \
     || check "the listing answered rather than refusing" "it printed $(printf '%s\n' "$out_list" | grep -c .) line(s)"
 else
-  check "the real repo could be found" "git rev-parse found no toplevel above $DIR"
+  # No repository above this file, which is what a deployed copy under the config directory looks
+  # like. The four checks above cannot be asked here, and this branch used to REFUSE, which is one
+  # of the three failures that made the documented command report red on a tree where nothing was
+  # wrong (claude-config#155). What is true here is asserted instead, so the branch still checks
+  # something rather than only explaining why it cannot (L98).
+  out_list="$(HOOK_TESTS_LIST_ONLY=1 bash "$RUNNER" 2>/dev/null)"
+  n_list="$(printf '%s\n' "$out_list" | grep -c . || true)"
+  [ "${n_list:-0}" = 1 ] && [ "$out_list" = "$DIR" ] \
+    && check "with no repo above it, the runner reads only its own directory" ok \
+    || check "with no repo above it, the runner reads only its own directory" "it would read: $out_list"
 fi
+
+# ---------------------------------------------------------------------------
+# A deployed copy, reproduced rather than reasoned about (claude-config#155).
+# ---------------------------------------------------------------------------
+# The branch above only runs where there is no repository, which is never true from the checkout,
+# so on its own it is a branch nothing exercises: every outcome a contract names has to be
+# PRODUCED by a test, not merely be reachable (L151). So a copy of the runner and two suites is
+# put somewhere with no repository above it, and run exactly as the documented command runs it.
+DEP="$TMPROOT/deployed"
+mkdir -p "$DEP"
+cp "$RUNNER" "$DEP/run-all-tests.sh"
+mk_suite "$DEP" plain 0
+mk_notrun_suite "$DEP" auditsrepo "needs the repository, and there is none here"
+# HOOK_TESTS_RUNNING is unset for this one call. It is set whenever this suite is itself being run
+# by the runner, and a bare invocation from inside a run is refused outright because that is how
+# the runner recurses into itself without end. Here it cannot: this directory holds two fixture
+# suites and neither invokes a runner. Unsetting it is also what the real case looks like, since
+# the documented command is typed into a fresh shell.
+out_dep="$(cd "$DEP" && env -u HOOK_TESTS_RUNNING bash "$DEP/run-all-tests.sh" 2>&1)"; code_dep=$?
+[ "$code_dep" -eq 0 ] \
+  && check "#155 a deployed copy with no repo above it does not report red" ok \
+  || check "#155 a deployed copy with no repo above it does not report red" "exit=$code_dep out=$out_dep"
+# The control for the fixture (L159): it really is a place with no repository, or the check above
+# is passing because it quietly found one and ran normally.
+case "$out_dep" in
+  *"no repo above"*) check "#155 the fixture really is a copy with no repo above it" ok ;;
+  *) check "#155 the fixture really is a copy with no repo above it" "out=$out_dep" ;;
+esac
+printf '%s\n' "$out_dep" | grep -E '^ +NOT RUN +test-auditsrepo\.sh' > /dev/null \
+  && check "#155 and the repo-auditing suite there is reported as NOT RUN" ok \
+  || check "#155 and the repo-auditing suite there is reported as NOT RUN" "out=$out_dep"
+printf '%s\n' "$out_dep" | grep -E '^ +ok +test-plain\.sh' > /dev/null \
+  && check "#155 while the suite beside it is still run and still reported" ok \
+  || check "#155 while the suite beside it is still run and still reported" "out=$out_dep"
 
 # ---------------------------------------------------------------------------
 # How much of the machine a run may take is ONE number (claude-config#136).
@@ -758,6 +813,82 @@ d_survivor="$(dur_of "$out_dk" survivor)"
 case "$d_survivor" in
   ''|*[!0-9]*) check "#150 the suite beside it in the same run was measured" "test-survivor.sh line: $(printf '%s\n' "$out_dk" | grep -E 'test-survivor\.sh')" ;;
   *) check "#150 the suite beside it in the same run was measured" ok ;;
+esac
+
+# ---------------------------------------------------------------------------
+# A suite that CANNOT run here is not a suite that failed (claude-config#155).
+# ---------------------------------------------------------------------------
+# `bash ~/.claude/hooks/run-all-tests.sh` is the command CLAUDE.md tells people to run, and it
+# reported "3 of 32 SUITES FAILED" on 2026-08-22. All three fail for one reason: they audit the
+# REPOSITORY, and a deployed copy under the config directory has no repository above it. The same
+# tree passes 38 of 38 from the checkout. Repeated fake failures are how a real one gets skimmed
+# past (L36), and this one was on the documented command.
+#
+# So a suite may say `SUITE-NOT-RUN <reason>` instead of a result line, and that is reported as its
+# own outcome, never folded into either ok or FAIL. A suite that did not run must never read as one
+# that passed (L98), and it must not read as broken code either (L11).
+NR_DIR="$TMPROOT/dir-notrun"
+mk_suite "$NR_DIR" ran 0
+mk_notrun_suite "$NR_DIR" needsrepo "needs the repo, and this is a deployed copy"
+# HOOK_TESTS_ROOT names somewhere that is NOT a git work tree, which is what the deployed hooks
+# directory looks like to the runner: it has no repository above it.
+NOREPO="$TMPROOT/not-a-repo"; mkdir -p "$NOREPO"
+out_nr="$(HOOK_TESTS_ROOT="$NOREPO" bash "$RUNNER" "$NR_DIR" 2>&1)"; code_nr=$?
+[ "$code_nr" -eq 0 ] \
+  && check "#155 a suite that could not run here does not fail the run" ok \
+  || check "#155 a suite that could not run here does not fail the run" "exit=$code_nr out=$out_nr"
+printf '%s\n' "$out_nr" | grep -E '^ +NOT RUN +test-needsrepo\.sh' > /dev/null \
+  && check "#155 and it is reported as its own outcome, not as ok and not as FAIL" ok \
+  || check "#155 and it is reported as its own outcome, not as ok and not as FAIL" "out=$out_nr"
+# The reason, or the reader is told a suite did not run and not why (L11).
+case "$out_nr" in
+  *"needs the repo, and this is a deployed copy"*) check "#155 and the reason it gave is printed" ok ;;
+  *) check "#155 and the reason it gave is printed" "out=$out_nr" ;;
+esac
+# The suite beside it still ran and is still reported, so this is not a runner that gave up.
+printf '%s\n' "$out_nr" | grep -E '^ +ok +test-ran\.sh' > /dev/null \
+  && check "#155 the suite beside it still ran and is still reported" ok \
+  || check "#155 the suite beside it still ran and is still reported" "out=$out_nr"
+# And the verdict must not claim everything passed, because everything did not run (L98).
+# Matched with `case` rather than a piped quiet grep, which leaves on its first match and can kill
+# its own producer under pipefail (claude-config#132, #153, L183). The glob is exact enough to tell
+# the two verdicts apart: "ALL 30 SUITES THAT COULD RUN PASSED" does not contain " SUITES PASSED".
+case "$out_nr" in
+  *"ALL "*" SUITES PASSED"*) check "#155 the verdict does not read as a run where everything passed" "it said ALL SUITES PASSED while one did not run: $out_nr" ;;
+  *) check "#155 the verdict does not read as a run where everything passed" ok ;;
+esac
+case "$out_nr" in
+  *"COULD NOT RUN"*) check "#155 the verdict says how many could not run here" ok ;;
+  *) check "#155 the verdict says how many could not run here" "out=$out_nr" ;;
+esac
+
+# The guard, and the half that stops this becoming a way for any suite to excuse itself. The
+# claim is "there is no repository here", and the RUNNER knows that answer independently. Where a
+# repository IS present, the same line is a broken suite and must fail the run: without this, a
+# suite could opt out of being run anywhere at all and the runner would agree with it (L70, the
+# two sides of this comparison come from different places on purpose).
+# A repository is named OUTRIGHT rather than relied on from the surroundings. This suite runs both
+# from the checkout and from the deployed copy, and in the second there is no repository at all, so
+# a check meaning "where a repo IS present" has to bring one (L134).
+WITHREPO="$TMPROOT/with-repo"; mkdir -p "$WITHREPO"; git -C "$WITHREPO" init -q
+out_nr_repo="$(HOOK_TESTS_ROOT="$WITHREPO" bash "$RUNNER" "$NR_DIR" 2>&1)"; code_nr_repo=$?
+[ "$code_nr_repo" -ne 0 ] \
+  && check "#155 the same claim where a repo IS present fails the run" ok \
+  || check "#155 the same claim where a repo IS present fails the run" "exit=$code_nr_repo out=$out_nr_repo"
+case "$out_nr_repo" in
+  *test-needsrepo.sh*) check "#155 and it names the suite that claimed it" ok ;;
+  *) check "#155 and it names the suite that claimed it" "out=$out_nr_repo" ;;
+esac
+
+# A run where nothing could not run keeps the wording it had, so an ordinary green run reads
+# exactly as it did before (L103: a guard that asserts a rendering fails the first refinement of
+# it, and this is the rendering everybody reads).
+OK_DIR="$TMPROOT/dir-notrun-clean"
+mk_suite "$OK_DIR" onlyone 0
+out_nr_clean="$(bash "$RUNNER" "$OK_DIR" 2>&1)"
+case "$out_nr_clean" in
+  *"ALL "*" SUITES PASSED"*) check "#155 a run with nothing skipped still says ALL SUITES PASSED" ok ;;
+  *) check "#155 a run with nothing skipped still says ALL SUITES PASSED" "out=$out_nr_clean" ;;
 esac
 
 echo "passed: $pass, failed: $fail"

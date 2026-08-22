@@ -28,7 +28,15 @@ check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)
 MARK="SUITE""-RESULT"
 PATTERN="^${MARK} passed=[0-9]\{1,\} failed=[0-9]\{1,\}$"
 
-[ -n "$ROOT" ] && [ -d "$ROOT" ] || { echo "test-suite-result-line: no repo above $DIR, so there were no suites to read. Refusing rather than reporting them all correct." >&2; exit 2; }
+# No repository here is not a failure of this suite's subject, it is a place this suite cannot be
+# asked (claude-config#155). Said in the one agreed shape the runner reads exactly, so it is
+# reported as NOT RUN rather than as broken code, and never as a pass: the runner refuses the same
+# claim wherever a repository IS present, so this cannot become a way to opt out of being run.
+if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
+  echo "test-suite-result-line: no repo above $DIR, so there were no suites to read. Refusing rather than reporting them all correct." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository to find every suite in it, and there is none above $DIR"
+  exit 2
+fi
 
 # ---------------------------------------------------------------------------
 # The pattern has to be able to tell a good line from a bad one before the real tree is asked, or a

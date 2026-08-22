@@ -30,7 +30,15 @@ fail=0
 check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
 
 [ -f "$BASELINE" ] || { echo "test-pipefail-shortcircuit: no baseline at $BASELINE, so there is nothing to compare against and nothing was verified." >&2; exit 2; }
-[ -n "$ROOT" ] && [ -d "$ROOT" ] || { echo "test-pipefail-shortcircuit: no repo above $DIR, so there were no files to read." >&2; exit 2; }
+# No repository here is not a failure of this suite's subject, it is a place this suite cannot be
+# asked (claude-config#155). Said in the one agreed shape the runner reads exactly, so it is
+# reported as NOT RUN rather than as broken code, and never as a pass: the runner refuses the same
+# claim wherever a repository IS present, so this cannot become a way to opt out of being run.
+if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
+  echo "test-pipefail-shortcircuit: no repo above $DIR, so there were no files to read." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository to read its tracked files, and there is none above $DIR"
+  exit 2
+fi
 
 # The pattern, in ONE place, so the baseline records an answer this produced rather than a second
 # definition of the question drifting beside it (L107). Comment lines are skipped, or the prose

@@ -122,6 +122,21 @@ esac
 root="${HOOK_TESTS_ROOT:-}"
 [ -n "$root" ] || root="$(git -C "$SELF_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 
+# Whether there is a REPOSITORY here at all (claude-config#155). Three suites in this repo audit
+# the repository itself: the tracked files, and every suite in it. A deployed copy under the config
+# directory has no repository above it, so those three cannot run there, and they reported that as
+# a FAILURE: `bash ~/.claude/hooks/run-all-tests.sh`, which is the command CLAUDE.md tells people
+# to run, said "3 of 32 SUITES FAILED" on 2026-08-22 while the same tree passed 38 of 38 from the
+# checkout. Repeated fake failures are how a real one gets skimmed past (L36).
+#
+# So a suite may say it could not run here, and this is the runner's OWN answer to the same
+# question, worked out from a different place than the suite's claim. Where a repository is
+# present the claim is refused, so no suite can excuse itself from running anywhere at all (L70).
+repo_present=0
+if [ -n "$root" ] && git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  repo_present=1
+fi
+
 # Where each suite's measured wall clock is kept between runs (claude-config#144). NOT under the
 # config directory, which mirrors itself to another Mac within seconds: a duration measured on this
 # machine is not configuration, and shipping it would make the other Mac order its runs by numbers
@@ -467,6 +482,8 @@ fi
 # would name suites this run never found.
 slow_profile=""
 unmeasured_names=""
+notrun=0
+notrun_names=""
 idx=0
 for suite in ${suites[@]+"${suites[@]}"}; do
     name="$(basename "$suite")"
@@ -490,6 +507,28 @@ for suite in ${suites[@]+"${suites[@]}"}; do
     case "$code" in ''|*[!0-9]*) code=1; out="$out
 run-all-tests: this suite left no exit status, so it was killed or never started." ;; esac
     idx=$((idx + 1))
+    # A suite that could not run HERE, said in one agreed shape exactly as the score is
+    # (claude-config#155). Its own outcome, never folded into ok and never into FAIL: a suite that
+    # did not run must not read as one that passed (L98), and it must not read as broken code
+    # either, or the reader is sent looking for a fault that is not there (L11).
+    nr_line="$(printf '%s\n' "$out" | grep -E '^SUITE-NOT-RUN ' | tail -1)"
+    if [ -n "$nr_line" ]; then
+      nr_reason="${nr_line#SUITE-NOT-RUN }"
+      if [ "$repo_present" -eq 1 ]; then
+        # It says it cannot run, and the runner found a repository, so the two disagree. That is a
+        # broken suite rather than a place it cannot run, and it fails the run.
+        failed=$((failed + 1))
+        failed_names="$failed_names $name"
+        printf '  FAIL  %-38s %-26s %s\n' "$name" "claimed it could not run" "$dur"
+        printf '          It printed SUITE-NOT-RUN, but a repository WAS found at %s, so nothing was stopping it.\n' "$root"
+        printf '          The reason it gave: %s\n' "$nr_reason"
+        continue
+      fi
+      notrun=$((notrun + 1))
+      notrun_names="$notrun_names $name"
+      printf '  NOT RUN %-37s %s\n' "$name" "$nr_reason"
+      continue
+    fi
     # The suite's own result line, which is ONE agreed shape every suite in this repo prints:
     # `SUITE-RESULT passed=<n> failed=<n>`. Read exactly, so there is nothing to recognise and
     # nothing to guess (claude-config#126).
@@ -580,8 +619,20 @@ if [ "$ran" -eq 0 ]; then
   echo "NOTHING WAS RUN. Treat this as a failure."
   exit 1
 fi
+if [ "$notrun" -gt 0 ]; then
+  # Named and counted, above the verdict, because the verdict below deliberately no longer says
+  # "ALL n SUITES PASSED" when some of them never ran (claude-config#155, L98).
+  echo "$notrun SUITE(S) COULD NOT RUN HERE:$notrun_names"
+  echo "  They audit the repository, and this is a copy with no repository above it."
+  echo "  Run them from the checkout to have them verified."
+  echo
+fi
 if [ "$failed" -eq 0 ] && [ -z "$empty_dirs" ]; then
-  echo "ALL $ran SUITES PASSED"
+  if [ "$notrun" -gt 0 ]; then
+    echo "ALL $(( ran - notrun )) SUITES THAT COULD RUN PASSED, and $notrun could not run here"
+  else
+    echo "ALL $ran SUITES PASSED"
+  fi
   exit 0
 fi
 [ "$failed" -eq 0 ] || echo "$failed of $ran SUITES FAILED:$failed_names"
