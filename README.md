@@ -100,8 +100,11 @@ later apply keeps reporting it, and `claude-sync status` lists it too, naming wh
 that the live file does not.
 
 A file whose version here holds no line the arriving one lacks is not kept beside it at all. The
-arriving version already contains everything this Mac had, so it is taken, no copy is written, and
-the pull names the files it settled that way rather than passing over them in silence. A local
+arriving version already contains everything this Mac had, so it is taken, nothing is left beside
+the file, and the pull names the files it settled that way rather than passing over them in silence.
+A copy of the dropped version does go to `.resolved/` in the repo clone, outside the mirrored
+config, and is swept after two weeks, so a wrong resolution is recoverable without leaving a file in
+`~/.claude/hooks` for somebody to delete by hand. A local
 DELETION is not treated as contained even though its lines are all present in the arriving version:
 the deleted line is work too, and the version this Mac last applied is what tells the two apart.
 
@@ -455,7 +458,7 @@ and one run, which is what a healthy machine looks like.
 
 ## Local state (per Mac, never synced)
 
-Nine things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
+Ten things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
 so a fresh clone starts without them. (`lesson-bands/` also sits outside `payload/` and is the one
 exception: it is tracked and shared on purpose, because a band nobody else can see cannot stop
 anybody else claiming it. See Lesson numbers above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
@@ -468,6 +471,7 @@ defined answer for being absent or untrustworthy.
 | `.last-sent` | a push that went through | `claude-sync status` | absent means nothing has ever gone up from this clone, which is said in those words rather than shown as a date; a value that will not parse is reported as unreadable, never as never |
 | `.last-received` | an apply that wrote at least one file | `claude-sync status` | same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block, since that is regenerated from whatever payload is present, including one this Mac just staged itself |
 | `.hook-tests` | a pull that reached a verdict on the hook suite it installed | `claude-sync status` | absent means no pull has verified anything here yet and status says nothing, since it reports what needs attention. A record that will not parse is reported as unreadable, never as a pass. A pass is silent; every other outcome keeps its own wording, so a suite that FAILED and one that could NOT be run stay apart |
+| `.resolved/` | a conflict resolved automatically because this Mac's version held nothing extra | nothing reads it; it exists so a wrong resolution is recoverable | absent means no conflict has resolved itself here. Entries are swept once older than two weeks, and one whose date cannot be read is KEPT rather than deleted on a guess, since this directory holds the only copy of something |
 | `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
 | `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |
 | `state/` | every apply | nothing reads the local copy; it exists so a marker is only republished when it changes | absent just means the next apply republishes |

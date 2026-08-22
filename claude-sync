@@ -48,6 +48,10 @@ LAST_RECEIVED_FILE="$SYNC_REPO/.last-received"
 # (claude-config#182). One file, not two: evidence kept somewhere with a retention schedule of its
 # own is gone before the investigation that needs it arrives (L202), and scratch is swept hourly.
 HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
+# Where a version dropped by an automatic conflict resolution is kept (claude-config#183). Outside
+# the mirrored config on purpose: under $CLAUDE_HOME it would become exactly the stale file nobody
+# deletes that #177 exists to stop leaving behind, and it would then travel to the other Mac.
+RESOLVED_DIR="$SYNC_REPO/.resolved"
 STATE_DIR="$SYNC_REPO/state"   # what each Mac has applied, published so verify can compare (#23)
 # One file per Mac, holding the first number of the band that Mac mints lesson numbers from. Unlike
 # everything else outside payload/, this is TRACKED and shared: a band nobody else can see cannot
@@ -2161,6 +2165,43 @@ only_in_first(){   # $1 = ours  $2 = theirs
 # the version this Mac last applied, is the only thing that tells them apart, so a base that cannot
 # be read is a refusal rather than a permission: nothing is resolved on a question this could not
 # ask (L42).
+# A copy of what an automatic resolution dropped, and the sweep that eventually removes it
+# (claude-config#183).
+#
+# #177 takes the arriving version and writes no .conflict copy when this Mac's version held nothing
+# extra. That is the single path where a locally modified file is replaced with nothing kept
+# anywhere, and while the judgement is guarded in both directions a guard is not a recovery (L5).
+#
+# It expires on its own rather than being reported until somebody deletes it, which is the standing
+# nag #177 removed. Two weeks is twice the longest real gap between one Mac's syncs, re-derived
+# 2026-08-21 by tools/measure-sync-gaps.sh as 6.79 days, so a Mac that was away for the worst
+# absence ever measured still comes back to find the copy there.
+SYNC_RESOLVED_MAX_AGE_DEFAULT=1209600
+keep_resolved_copy(){   # $1 = payload path  $2 = the live local file about to be replaced
+  local flat
+  mkdir -p "$RESOLVED_DIR" 2>/dev/null || return 0
+  flat="${1//\//_}"
+  cp "$2" "$RESOLVED_DIR/$flat.$(date +%s)" 2>/dev/null || true
+  return 0
+}
+sweep_resolved_copies(){
+  local now f m max
+  max="${SYNC_RESOLVED_MAX_AGE:-1209600}"
+  case "$max" in ''|*[!0-9]*) max="$SYNC_RESOLVED_MAX_AGE_DEFAULT" ;; esac
+  [ "$max" -gt 0 ] || return 0
+  [ -d "$RESOLVED_DIR" ] || return 0
+  now="$(date +%s)"
+  for f in "$RESOLVED_DIR"/*; do
+    [ -f "$f" ] || continue
+    m="$(file_mtime "$f")"
+    # Unreadable age counts as recent, so a copy whose date cannot be read is kept rather than
+    # deleted on a guess: this directory exists to hold the only copy of something (L5).
+    case "$m" in ''|*[!0-9]*) continue ;; esac
+    [ "$(( now - m ))" -gt "$max" ] && rm -f "$f" 2>/dev/null
+  done
+  return 0
+}
+
 local_side_contained(){   # $1 = payload path  $2 = the live local file  $3 = last applied commit
   local ours theirs base rc=0 left
   [ -f "$PAYLOAD/$1" ] || return 1
@@ -2193,6 +2234,7 @@ preserve_local_conflicts(){
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
   sfx="$(conflict_suffix)"
+  sweep_resolved_copies
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     # merged above, so both sides are already in the file: not a conflict
@@ -2219,6 +2261,7 @@ $p"*) continue ;; esac
     # SAID: this file did conflict and was decided in favour of the other Mac, and a decision
     # settled in silence is one nobody can disagree with (L11, claude-config#177).
     if local_side_contained "$p" "$local_f" "$last"; then
+      keep_resolved_copy "$p" "$local_f"
       resolved+="$p "
       continue
     fi
@@ -2236,7 +2279,7 @@ $p$sfx"
     # Its own message, and deliberately not folded into the one below: a file that needed no copy
     # and one whose only copy is now sitting beside it are different outcomes, and reporting them
     # in one sentence would make the second read as reassuring as the first (L11).
-    echo "claude-sync: both Macs changed these files, but this Mac's version held no line the other Mac's version did not already have, so the other Mac's version was applied and nothing was set aside: ${resolved}" >&2
+    echo "claude-sync: both Macs changed these files, but this Mac's version held no line the other Mac's version did not already have, so the other Mac's version was applied and nothing was set aside beside them. A copy of what this Mac had is in $RESOLVED_DIR for $(duration_in_words "${SYNC_RESOLVED_MAX_AGE:-$SYNC_RESOLVED_MAX_AGE_DEFAULT}"): ${resolved}" >&2
   fi
   is_blank "$saved" && return 0
   echo "claude-sync: both Macs changed these files and they could NOT be merged automatically, so the other Mac's version was applied and YOUR version was kept next to it with the suffix $sfx: ${saved}" >&2

@@ -7298,6 +7298,61 @@ out_cn2="$(CLAUDE_HOME="$CNHB" SYNC_REPO="$CNRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT"
 check "#177 a later quiet pull does not repeat it" \
   "! line_has \"\$out_cn2\" 'nothing was set aside' 'cn-shared\.sh'"
 
+section "== a resolved conflict leaves a copy that expires on its own (#183) =="
+# #177 stopped writing a .conflict copy when this Mac's version held no line the arriving one
+# lacked. That is right, and it leaves one path where a locally modified file is replaced with
+# nothing kept anywhere: every other conflict outcome leaves the local version on disk. The
+# containment judgement is guarded in both directions, but a guard is not a recovery, and a line in
+# a terminal is not one either (L5).
+#
+# So the dropped version goes somewhere with a life of its own: outside the mirrored config, so it
+# cannot become the stale file in ~/.claude/hooks that #177 exists to stop accumulating, and swept
+# on age, so nobody has to remember to delete it.
+unset SYNC_NO_GIT
+RVB="$WORK/resolved-bare.git"; git init -q --bare "$RVB"
+RVRA="$WORK/resolved-repoA"; git clone -q "$RVB" "$RVRA" 2>/dev/null
+RVHA="$WORK/resolved-homeA"; mkdir -p "$RVHA/hooks"
+echo '{"hooks":{}}' > "$RVHA/settings.json"
+printf 'alpha\nbravo\n' > "$RVHA/hooks/rv-file.sh"
+CLAUDE_HOME="$RVHA" SYNC_REPO="$RVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+RVRB="$WORK/resolved-repoB"; git clone -q "$RVB" "$RVRB" 2>/dev/null
+RVHB="$WORK/resolved-homeB"; mkdir -p "$RVHB"
+echo '{"hooks":{}}' > "$RVHB/settings.json"
+CLAUDE_HOME="$RVHB" SYNC_REPO="$RVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+
+# This Mac adds a line the other Mac is about to add as well, so the arriving version contains
+# everything this one has and the conflict resolves itself.
+printf 'alpha\nbravo\nonly-here-for-now\n' > "$RVHB/hooks/rv-file.sh"
+printf 'alpha\nbravo\nonly-here-for-now\nand-theirs\n' > "$RVHA/hooks/rv-file.sh"
+CLAUDE_HOME="$RVHA" SYNC_REPO="$RVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_rv="$(CLAUDE_HOME="$RVHB" SYNC_REPO="$RVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull resolving a contained conflict: $out_rv"
+check "#183 the arriving version really was taken" "grep -q 'and-theirs' '$RVHB/hooks/rv-file.sh'"
+check "#183 a copy of the dropped version is kept" \
+  "ls '$RVRB'/.resolved/* >/dev/null 2>&1"
+check "#183 and it holds what this Mac had"  "grep -rq 'only-here-for-now' '$RVRB/.resolved'"
+# The copy must not carry the line the arriving version added, or it is a copy of the wrong side
+# and would prove nothing on the day somebody needed it (L48).
+check "#183 and not what the other Mac added"  "! grep -rq 'and-theirs' '$RVRB/.resolved'"
+check "#183 the pull says where it went"       "line_has \"\$out_rv\" 'nothing was set aside' 'resolved'"
+# Outside the mirrored config, or it becomes exactly the stale file in ~/.claude/hooks that #177
+# was written to stop leaving behind.
+check "#183 nothing is left in the config directory" \
+  "! ls '$RVHB'/hooks/rv-file.sh.* >/dev/null 2>&1 && [ ! -d '$RVHB/.resolved' ]"
+
+# It expires without anybody deleting it, and the sweep is watched keeping a recent one as well as
+# removing an old one: a sweep that removed everything would satisfy the first half alone (L1).
+mkdir -p "$RVRB/.resolved"
+_rv_old="$RVRB/.resolved/rv-old-copy"
+_rv_new="$RVRB/.resolved/rv-new-copy"
+printf 'old\n' > "$_rv_old"; printf 'new\n' > "$_rv_new"
+touch -t "$(date -v-30d +%Y%m%d%H%M)" "$_rv_old" 2>/dev/null || touch -d '30 days ago' "$_rv_old"
+printf 'alpha\nbravo\nonly-here-for-now\nand-theirs\nlater\n' > "$RVHA/hooks/rv-file.sh"
+CLAUDE_HOME="$RVHA" SYNC_REPO="$RVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$RVHB" SYNC_REPO="$RVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#183 a copy past its age is swept"      "[ ! -f '$_rv_old' ]"
+check "#183 and a recent one is left alone"    "[ -f '$_rv_new' ]"
+
 section "== a pull runs the hook suite it just installed (#178) =="
 # `claude-sync pull` printed its received-changes summary and ended with "Pulled shared config onto
 # this Mac" without executing anything it had just installed. The 2026-08-22 pull landed a hook

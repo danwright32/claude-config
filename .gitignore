@@ -14,3 +14,4 @@ state/
 .last-sent
 .last-received
 .hook-tests
+.resolved/
