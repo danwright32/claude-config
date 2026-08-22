@@ -845,9 +845,13 @@ fi
 # So SUITE_STALL_TIMEOUT is what normally fires: how long the run may sit without reaching a new
 # section. The run already records where it has got to, so a stopped run leaves that mark alone
 # while a slow one keeps moving it, and a loaded machine moves it slowly rather than not at all.
-# 600s is comfortably longer than the slowest section this suite has (34s measured 2026-08-22, and
-# 190s if the whole machine is five times slower), and the check at the end of the run compares it
-# against what the sections ACTUALLY took rather than trusting that sentence to stay true.
+# 1200s is comfortably longer than the slowest section this suite has, and the check at the end of
+# the run compares it against what the sections ACTUALLY took rather than trusting this sentence to
+# stay true. It was 600, chosen against a 34 second measurement, and the suite grew: on 2026-08-22
+# the slowest section measured 44s idle, 62s with another full run competing, 88s with three, and
+# once 208s, which put the 3x floor at 624 and turned the run red while nothing was wrong. The
+# floor and the bound had met in the middle of the real spread (L172), so the bound moved rather
+# than the floor: what the floor demands is the safety margin, and the margin was genuinely gone.
 #
 # SUITE_TIMEOUT stays as an absolute ceiling for a runaway that somehow keeps moving, and is now
 # real wall clock. Raised to 3600 because it is no longer the thing that catches a hang: at 900 it
@@ -862,7 +866,7 @@ case "$SUITE_TIMEOUT" in
     echo "test suite: SUITE_TIMEOUT='$SUITE_TIMEOUT' is not a whole number of seconds. Refusing to run rather than running with no deadline at all, which is the state this exists to end." >&2
     exit 4 ;;
 esac
-SUITE_STALL_TIMEOUT="${SUITE_STALL_TIMEOUT:-600}"
+SUITE_STALL_TIMEOUT="${SUITE_STALL_TIMEOUT:-1200}"
 case "$SUITE_STALL_TIMEOUT" in
   ''|*[!0-9]*)
     echo "test suite: SUITE_STALL_TIMEOUT='$SUITE_STALL_TIMEOUT' is not a whole number of seconds. Refusing to run rather than running with no stall bound, which is what actually catches a hang." >&2
@@ -8132,7 +8136,35 @@ fi
 # weaker one: whichever shard holds the slowest section is the shard that checks it.
 _hr_longest="$(printf '%s' "$_SEC_PROFILE" | sort -r | awk -F"$(printf '\t')" 'NR==1 {print $1+0}')"
 case "$_hr_longest" in ''|*[!0-9]*) _hr_longest=0 ;; esac
+# The margin as a NUMBER every run prints, not only as a pass or a fail (claude-config#179).
+#
+# The bound was 600 against a floor of 3x, so it went red the moment the slowest section passed 200
+# seconds, and the slowest section is around 200 seconds on a busy Mac already: measured here on
+# 2026-08-22 at 44s idle, 62s with one other full run competing, 88s with three, and once at 208s,
+# which failed while nothing was wrong. A threshold sitting inside the spread of the thing it
+# judges turns its own verdict into noise, and a suite that goes red on busy afternoons is one
+# people learn to skim (L172, L36).
+#
+# Raising it is half the fix. The other half is that the margin is now REPORTED on every run rather
+# than only being discovered on the day it runs out, so the next time it shrinks somebody sees it
+# coming. The ratio is in tenths because this shell has no decimals, and it REFUSES when no section
+# was measured: a margin over nothing would print as an enormous number and read as the safest run
+# ever taken (L98).
+_hr_margin(){   # $1 = the bound  $2 = the slowest section  -> the ratio in tenths
+  [ "${2:-0}" -gt 0 ] || return 1
+  printf '%s' "$(( $1 * 10 / $2 ))"
+}
+check "#179 the margin derivation reports a known pair" "[ \"\$(_hr_margin 1200 100)\" = '120' ]"
+# The real incident, kept as a fixture: measured 2026-08-22, 600 against a 208 second section is
+# 2.8x, under the 3.0x floor, which is exactly the run that failed.
+check "#179 and reports the pair that failed on 2026-08-22 as under the floor" \
+  "[ \"\$(_hr_margin 600 208)\" = '28' ]"
+check "#179 and refuses when no section was measured" "! _hr_margin 1200 0"
 if [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
+  _hr_m="$(_hr_margin "$SUITE_STALL_TIMEOUT" "$_hr_longest" 2>/dev/null || true)"
+  if [ -n "$_hr_m" ]; then
+    echo "  (#179 the stall bound is ${SUITE_STALL_TIMEOUT}s, which is $(( _hr_m / 10 )).$(( _hr_m % 10 ))x this run's slowest section (${_hr_longest}s))"
+  fi
   check "#152 the stall timeout is at least three times the slowest section this run had (${_hr_longest}s)" \
     "[ '$SUITE_STALL_TIMEOUT' -ge $(( _hr_longest * 3 )) ]"
   # Watched refusing, or any stall timeout large enough satisfies it, which is every one (L1).
