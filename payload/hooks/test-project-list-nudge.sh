@@ -172,14 +172,40 @@ esac
 # Wired, not merely written. The defect this closes is a check nothing invokes, so the hook being
 # named in the settings the sync ships is part of the fix and not a separate chore (L3, L27).
 # ---------------------------------------------------------------------------
-SETTINGS="$DIR/../settings.hooks.json"
-if [ -f "$SETTINGS" ]; then
-  grep -F 'project-list-nudge.sh' "$SETTINGS" > /dev/null \
-    && check "the hook is named in the settings the sync ships" ok \
-    || check "the hook is named in the settings the sync ships" "settings.hooks.json does not mention it"
-else
-  check "the settings the sync ships could be read" "no settings.hooks.json beside $DIR"
+# The file to ask is whichever one registers THIS copy of the hook, and that differs by where the
+# copy is (claude-config#175). In the checkout the hooks live under payload/ beside
+# settings.hooks.json, which is the statement of what the sync will install. On a deployed Mac they
+# live in ~/.claude/hooks, one level under settings.json, which is what Claude Code actually reads,
+# so the deployed answer is the more meaningful of the two rather than a place the question cannot
+# be asked (L63). Asking only for the shipped file made this check report
+# `FAIL: the settings the sync ships could be read` on every deployed run, on both Macs, and a
+# permanently red suite is one nobody reads (L36).
+SETTINGS_DIR="${PROJECT_LIST_NUDGE_SETTINGS_DIR:-$DIR/..}"
+SETTINGS=""
+SETTINGS_KIND=""
+if [ -f "$SETTINGS_DIR/settings.hooks.json" ]; then
+  # Preferred where both exist: inside the checkout an installed copy sitting beside the shipped
+  # one would otherwise answer for the version about to be shipped.
+  SETTINGS="$SETTINGS_DIR/settings.hooks.json"
+  SETTINGS_KIND="the settings the sync ships"
+elif [ -f "$SETTINGS_DIR/settings.json" ]; then
+  SETTINGS="$SETTINGS_DIR/settings.json"
+  SETTINGS_KIND="the settings installed on this Mac"
 fi
+if [ -z "$SETTINGS" ]; then
+  # Neither file is there, so there is nothing that could answer the question. Said in the one
+  # agreed shape the runner reads, in wording of its own, so a settings file that could not be READ
+  # and a place with no settings file at ALL stay distinguishable from each other and from the two
+  # sibling suites that refuse for want of a repository (L11, L98).
+  echo "test-project-list-nudge: neither settings.hooks.json nor settings.json is in $SETTINGS_DIR, so nothing there states which hooks are registered and the wiring could not be checked." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the settings file that registers the hook, and $SETTINGS_DIR holds neither settings.hooks.json nor settings.json"
+  echo "passed: $pass, failed: $fail"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+  exit 2
+fi
+grep -F 'project-list-nudge.sh' "$SETTINGS" > /dev/null \
+  && check "the hook is named in $SETTINGS_KIND" ok \
+  || check "the hook is named in $SETTINGS_KIND" "$(basename "$SETTINGS") does not mention project-list-nudge.sh"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
