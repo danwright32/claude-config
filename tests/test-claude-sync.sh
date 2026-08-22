@@ -1418,6 +1418,45 @@ _cpu_field(){   # 0m12.34s -> whole seconds, or nothing
 # figure is got out (L196: a component that constructs its own context is beyond what the caller
 # can see).
 SUITE_CPU_SECONDS=""
+# What the end of a full run says about the deadline's headroom, and whether that fails the run.
+#
+# A FUNCTION rather than a block at the end of the fan-out (claude-config#167). It has three things
+# it can say and a silence, and while it sat inline the only way to reach any of them was a full
+# unfiltered run on a machine in the right state, so the arm that FAILS a run had never run at all.
+# A guard is only real once it has been watched failing (L1), and this is the one that decides
+# whether the suite has outgrown its own deadline.
+#
+# The WALL CLOCK decides whether there is anything to say, because that is what runs out against the
+# ceiling. The PROCESSOR time decides which of two different things is happening, and they need
+# different remedies (L11): a run that filled its own clock with its own work has grown into its
+# deadline and is worth failing over, while one that merely waited on a busy Mac is a fact about the
+# machine, and "find what got slower" is not an action anybody can take on it (L112, L36).
+#
+# Measured on the same tree on 2026-08-22: 348s of wall clock idle, which is a tenth of the ceiling
+# and says nothing at all, and 1943s at load 160 to 188 with only 262s of it this suite's own work.
+suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or empty  $3 = ceiling
+  local elapsed="$1" cpu="$2" ceiling="$3"
+  case "$ceiling" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$ceiling" -gt 0 ] || return 0
+  case "$elapsed" in ''|*[!0-9]*) return 0 ;; esac
+  # A reader that came back with NOTHING has measured nothing, and nothing must never be read as a
+  # figure of zero: zero clears every headroom test there is, so a broken reader would be
+  # indistinguishable from a suite that costs nothing at all (L90, L98). Said out loud rather than
+  # skipped, because a check that silently measured nothing reads exactly like one that passed.
+  case "$cpu" in
+    ''|*[!0-9]*)
+      echo "test suite: the processor time for this run could not be read, so what filled its ${elapsed}s of wall clock is not known and the deadline's headroom was NOT checked. The run itself is unaffected." >&2
+      return 0 ;;
+  esac
+  [ "$ceiling" -lt $(( elapsed * 2 )) ] || return 0
+  if [ $(( cpu * 2 )) -ge "$elapsed" ]; then
+    echo "test suite: this run took ${elapsed}s of wall clock against a ${ceiling}s deadline, which is less than twice it, and ${cpu}s of that was the suite's own work. It has grown into its own deadline rather than waited on a busy machine. Raise SUITE_TIMEOUT, or find what got slower." >&2
+    return 1
+  fi
+  echo "test suite: note, this run took ${elapsed}s of wall clock against a ${ceiling}s deadline, but only ${cpu}s of processor time, so the machine was busy with something else rather than the suite having grown. Not treated as a failure." >&2
+  return 0
+}
+
 suite_cpu_read(){   # sets SUITE_CPU_SECONDS to whole seconds, or to nothing
   local _cs_f _cs_a _cs_b _cs_x _cs_n _cs_tot=0 _cs_any=0
   SUITE_CPU_SECONDS=""
@@ -1507,17 +1546,7 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   # of it and gets the note, because only 262s of it was this suite's own work.
   _fan_elapsed=$SECONDS
   suite_cpu_read; _fan_cpu="$SUITE_CPU_SECONDS"
-  if [ "$SUITE_TIMEOUT" -gt 0 ] && [ -z "$_fan_cpu" ]; then
-    # The reader came back with nothing, so this run has NOT been checked. Said out loud, because a
-    # headroom check that silently measured nothing reads exactly like one that passed (L98).
-    echo "test suite: the processor time for this run could not be read, so what filled its ${_fan_elapsed}s of wall clock is not known and the deadline's headroom was NOT checked. The run itself is unaffected." >&2
-  elif [ "$SUITE_TIMEOUT" -gt 0 ] && [ "$SUITE_TIMEOUT" -lt $(( _fan_elapsed * 2 )) ] \
-       && [ $(( _fan_cpu * 2 )) -ge "$_fan_elapsed" ]; then
-    echo "test suite: this run took ${_fan_elapsed}s of wall clock against a ${SUITE_TIMEOUT}s deadline, which is less than twice it, and ${_fan_cpu}s of that was the suite's own work. It has grown into its own deadline rather than waited on a busy machine. Raise SUITE_TIMEOUT, or find what got slower." >&2
-    _fan_rc=1
-  elif [ "$SUITE_TIMEOUT" -gt 0 ] && [ "$SUITE_TIMEOUT" -lt $(( _fan_elapsed * 2 )) ]; then
-    echo "test suite: note, this run took ${_fan_elapsed}s of wall clock against a ${SUITE_TIMEOUT}s deadline, but only ${_fan_cpu}s of processor time, so the machine was busy with something else rather than the suite having grown. Not treated as a failure." >&2
-  fi
+  suite_headroom_report "$_fan_elapsed" "$_fan_cpu" "$SUITE_TIMEOUT" || _fan_rc=1
   # The headline: every section once (#146). The sum of the shards' own totals is still worked out
   # above, and it is used here as a SECOND reading of the same run: the raw sum has to be the
   # headline plus everything that was run over again. The two are arrived at differently, one from
@@ -7760,6 +7789,72 @@ if [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
 else
   check "#152 the stall bound was deliberately disabled for this run" "[ '$SUITE_STALL_TIMEOUT' -eq 0 ]"
 fi
+
+section "== the end-of-run headroom report, watched saying each thing it can say (#167) =="
+# #161 changed what the end of a full run judges: the ceiling bounds WALL CLOCK, so that is what
+# decides whether there is anything to say, and the processor time decides WHICH of two things is
+# happening. It has three outcomes and a silence, and only the silence was ever produced, because
+# the code sat inline at the end of a fan-out and the only way to reach it was a full run on a
+# machine that was already fine. A guard is real once it has been watched failing (L1), and the arm
+# that FAILS a run is the one that had never run at all.
+#
+# So the decision is a function, and it is asked here with numbers rather than by arranging a slow
+# machine. The numbers are the ones actually measured on 2026-08-22 rather than convenient ones:
+# 348 seconds of wall clock idle, and 1943 under load 160 to 188 with only 262 of those seconds the
+# suite's own work (L48).
+_hd_say(){ suite_headroom_report "$1" "$2" "$3" 2>&1; }
+_hd_rc(){ suite_headroom_report "$1" "$2" "$3" >/dev/null 2>&1; }
+
+# Idle, against the shipped ceiling. Nothing to say, and saying nothing has to be an outcome this
+# can actually reach, or every check below is about a function that always speaks.
+_hd_idle="$(_hd_say 348 262 3600)"; _hd_rc 348 262 3600; _hd_idle_rc=$?
+check "#167 a run with real headroom says nothing" "[ -z \"\$_hd_idle\" ]"
+check "#167 and a run with headroom does not fail" "[ '$_hd_idle_rc' -eq 0 ]"
+
+# The same tree, on a busy Mac. This is the case #149 was filed about: it is a fact about the
+# machine, "find what got slower" is not an action anybody can take on it, and treating it as a
+# failure is how an alarm stops being read (L112, L36).
+_hd_load="$(_hd_say 1943 262 3600)"; _hd_rc 1943 262 3600; _hd_load_rc=$?
+check "#167 a run that WAITED is reported as a note" \
+  "case \"\$_hd_load\" in *'note,'*) true ;; *) false ;; esac"
+check "#167 and it names the load rather than blaming the suite" \
+  "line_has \"\$_hd_load\" '1943' '262'"
+check "#167 and does NOT fail the run"             "[ '$_hd_load_rc' -eq 0 ]"
+
+# The arm that had never fired: the same wall clock, but the suite's own work is what filled it.
+_hd_grown="$(_hd_say 1943 1500 3600)"; _hd_rc 1943 1500 3600; _hd_grown_rc=$?
+check "#167 a run that GREW into its deadline fails" "[ '$_hd_grown_rc' -ne 0 ]"
+check "#167 and says so in different words from the note" \
+  "! case \"\$_hd_grown\" in *'note,'*) true ;; *) false ;; esac"
+check "#167 and names both figures and the ceiling" \
+  "line_has \"\$_hd_grown\" '1943' '1500' '3600'"
+# The two arms are told apart by ONE thing, so it is asked at the boundary rather than only where
+# the answer is obvious: at exactly half the wall clock the run's own work is what filled it.
+_hd_rc 1943 971 3600; _hd_edge_lo=$?
+_hd_rc 1943 972 3600; _hd_edge_hi=$?
+check "#167 just under half the wall clock is the machine's fault, not the suite's" "[ '$_hd_edge_lo' -eq 0 ]"
+check "#167 and just over it is the suite's"                                        "[ '$_hd_edge_hi' -ne 0 ]"
+
+# A reader that came back with nothing has measured nothing, and nothing must never read as a
+# figure of zero: zero clears every headroom test there is, so a broken reader would be
+# indistinguishable from a suite that costs nothing (L90, L98).
+_hd_none="$(_hd_say 1943 '' 3600)"; _hd_rc 1943 '' 3600; _hd_none_rc=$?
+check "#167 an unreadable processor time is said out loud" \
+  "case \"\$_hd_none\" in *'NOT checked'*) true ;; *) false ;; esac"
+check "#167 and is not treated as a run that grew" "[ '$_hd_none_rc' -eq 0 ]"
+check "#167 and is not silently read as zero seconds" \
+  "! case \"\$_hd_none\" in *'0s of processor'*) true ;; *) false ;; esac"
+
+# A ceiling that is switched off has no headroom to report, and must not produce a figure about one.
+_hd_off="$(_hd_say 99999 99999 0)"; _hd_rc 99999 99999 0; _hd_off_rc=$?
+check "#167 a disabled ceiling reports nothing"   "[ -z \"\$_hd_off\" ]"
+check "#167 and does not fail the run"            "[ '$_hd_off_rc' -eq 0 ]"
+
+# And the report the fan-out actually prints is THIS function, not a second copy of the rule that
+# drifts beside it (L107). Read from the file, because the fan-out only runs on a full unfiltered
+# run and this section is reached inside a shard.
+check "#167 the fan-out asks this function rather than repeating the rule" \
+  "[ \"\$(grep -c 'suite_headroom_report ' '$SCRIPT_SELF')\" -ge 2 ]"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
