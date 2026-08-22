@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 234 lessons.
+LESSONS.md, which is NOT loaded into the session. 240 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -77,6 +77,7 @@ to decide something: the body is where the failure it came from is described.
 - L506. A guard that branches on a field arriving from OUTSIDE the system is only real once that field's presence has been measured on live traffic, because an absent field makes a strict comparison silently false and the guard then reads as an active safeguard while refusing nobody.
 - L209. A threshold measured while a co-varying component is held constant attaches itself to the wrong variable, because the part the fixture moves stands in for the sum.
 - L225. An invariant between two stored values must be checked by something that reads the VALUES, never only inside the tool that normally writes them
+- L228. A comparison asking whether two things hold the SAME ELEMENTS says nothing about their ORDER
 
 ## Data safety
 
@@ -111,6 +112,8 @@ to decide something: the body is where the failure it came from is described.
 - L47. A batch that partly fails must record the attempt on the items it failed, not only on the ones it completed.
 - L67. A placeholder rendered in place of a missing required value (no subject, unknown, not set) is a DETECTION that the value is absent, so it must block the action it appears in, never merely label it.
 - L138. A templating or interpolation layer usually renders a MISSING setting as an EMPTY value rather than an absent one, so every absence check written as a null fallback silently accepts it and the default it promises never applies.
+- L229. Literal text handed to an interpolating evaluator can have a sigil prefixed span silently deleted from it, so the tool acts on text nobody wrote and every verdict it reports afterwards is about something else.
+- L230. A redaction or anonymisation step that changes the CONTAINER while leaving the identity inside it has anonymised nothing, and a guard written the same way passes every real person wearing a safe container.
 - L152. A change is usually reported by the surfaces that show what is still OUTSTANDING (a badge, a waiting list, a standing question), so an operation that RESOLVES everything silences every one of them and the most complete success is the one the product says least about.
 - L50. A value parsed from storage or input must never feed a comparison directly.
 - L71. A watchdog must not share the abort-on-error behaviour of the work it watches
@@ -207,6 +210,8 @@ to decide something: the body is where the failure it came from is described.
 - L207. A constraint imposed by the surface your output is DISPLAYED on (a phone's notch or safe area, a host app's own overlay chrome, a fold, a print bleed) leaves no trace in the artifact you render or in any check you run over it, so it is only ever discovered on a real device.
 - L221. A limit calibrated against the DEVICE somebody owns is looser than the same device turned down, because display scaling, text size and browser zoom are settings a person changes with no code change and nothing re-runs the check, so calibrate against the most constrained SETTING the hardware can be put into rather than against the hardware itself.
 - L213. A colour token that only has meaning as one half of a PAIR (a foreground against its background, a border against its fill) must be overridden as a pair, because a call site that swaps only the background silently keeps the base variant's foreground, the two can land on the same value, and the result is content that is present in the DOM, correctly named to a screen reader, and invisible on screen.
+- L231. A container's background is only the background until something that paints its OWN is placed inside it (a platform list or table, a text view, an embedded frame, a third party widget), so every call site can name the correct token and still render differently, and any check that reads the declaration passes while the screen disagrees.
+- L232. A minimum reserved for one part of a shared space (a pane's floor, a sidebar's minimum width, a gutter, a buffer) is SUBTRACTED from whatever shares that space, so it must be checked for being too LARGE as much as too small, because over reserving breaks nothing and fails no test: the neighbour simply cannot grow, and the number goes on reading as prudence.
 
 ## External systems
 
@@ -270,3 +275,4 @@ to decide something: the body is where the failure it came from is described.
 - L74. A deadline, age or due date computed from the current clock at read time can never age, because every evaluation moves it forward with the clock.
 - L114. A tool that creates a throwaway workspace must also remove what that workspace caused to be created OUTSIDE it.
 - L226. A timer built by ADDING UP its own sleeps measures iterations, not elapsed time
+- L227. A limit cannot be raised on its own

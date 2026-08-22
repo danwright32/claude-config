@@ -695,6 +695,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   (PostRoll#808: the day a template's design last changed was held to its version number
   only inside `make record-design-change`, so a version bumped by editing the file kept a
   stale date and every preview made since read as current)
+- **L228. A comparison asking whether two things hold the SAME ELEMENTS says nothing about their
+  ORDER**, so for anything whose meaning is sequential (source code, a list of migrations, a
+  sequence of steps) a sorted or set based check passes on a file that cannot run, and it is most
+  tempting exactly when a real byte comparison has already reported a difference you are looking
+  for a reason to dismiss. (claude-config#160: a commit series was rebuilt by re-applying split
+  patches, and a plain diff reported the result differed from the version that had just passed a
+  full test run. Comparing the sorted lines said "same lines, different order", which was read as
+  harmless placement. A helper function had in fact moved BELOW the five checks that call it, and
+  the next full run failed on all five. The set comparison was correct and answered a question
+  nobody needed asking)
 
 ## Data safety
 
@@ -918,6 +928,33 @@ for reference; L6 was reviewed and deliberately not adopted.
   canary failed 11 minutes after the merge with `Failed to parse URL from /api/availability`. Two
   scripts had been converted to an empty-safe read and the shared helper every request goes through
   had not: slate#1498, slate#1500)
+
+- **L229. Literal text handed to an interpolating evaluator can have a sigil prefixed span silently
+  deleted from it, so the tool acts on text nobody wrote and every verdict it reports afterwards is
+  about something else.** Compare what actually LANDED against what was supplied, before running
+  anything on it. Distinct from L138, where a MISSING value renders as empty: here the text was fully
+  supplied and the layer ate a piece of it. Applies to a perl expression, a double quoted shell
+  string, an SQL literal and a template alike.
+  (overture#3109: scripts/mutate.sh passes its expression to `perl -0pi -e`, so the replacement
+  "someone@arealpersonsite.com" reached the file as "someone.com" because `@arealpersonsite` is a
+  perl array variable that interpolated to nothing. The guard under test correctly said nothing about
+  a string that is no longer an address, and mutate.sh reported SURVIVED for a guard that was real and
+  working. Re-run with `\@` it reported CAUGHT. Same class as the `$0` refusal added in overture#2995,
+  which did not cover `@`, and the aim check cannot catch it because the change lands on exactly the
+  line it was aimed at)
+
+- **L230. A redaction or anonymisation step that changes the CONTAINER while leaving the identity
+  inside it has anonymised nothing, and a guard written the same way passes every real person
+  wearing a safe container.** Redact the identity, and check for the identity. Distinct from L104,
+  which is about a shape filter OVER matching: this is a safe shape carrying real data straight
+  through. The container is the domain half of an address, a masked account number, a test account
+  wrapper, a reserved TLD, a staging URL.
+  (overture#2839. A 2026-08-16 sweep replaced the domain half of every real address in a PUBLIC
+  repository's test data, so caseen.gaines@gmail.com became caseen.gaines@example.com and went on
+  naming a real person, alongside 37 display names and 20 references to their personal domain that
+  the sweep never looked at. The guard written afterwards judged an address by its TLD, so
+  realpersonsname.example passes it cleanly, and two such were already in the tree from an earlier
+  partial scrub: the identical mistake made twice, independently, six days apart. overture#3110)
 
 - **L152. A change is usually reported by the surfaces that show what is still OUTSTANDING (a badge, a
   waiting list, a standing question), so an operation that RESOLVES everything silences every one of
@@ -1726,6 +1763,40 @@ for reference; L6 was reviewed and deliberately not adopted.
   /login and /signup. A unit test asserting the accessible name and a Playwright `toBeVisible`
   both stayed green, and the only report was a screenshot from Dan)
 
+- **L231. A container's background is only the background until something that paints its OWN is
+  placed inside it (a platform list or table, a text view, an embedded frame, a third party
+  widget), so every call site can name the correct token and still render differently, and any
+  check that reads the declaration passes while the screen disagrees.** The value is not what
+  differs, the child is, which is why consolidating the call sites onto one shared colour changes
+  nothing on screen. Put the fill and the suppression of the child's own background in ONE shared
+  container every such pane is built from, rather than a colour constant plus a convention, or the
+  next surface gets one half and not the other.
+  (downbeat#395: five Settings tabs all end their sidebar with `.background(DBColor.canvas)`. Task
+  Templates fills its pane with a transparent `ScrollView` and reads as canvas; Clients, Venues,
+  Calendar Events and Email Templates fill theirs with a SwiftUI `List`, which paints over it and
+  which `.listStyle(.plain)` does not stop, so they read as the ordinary grey. The header strip is
+  a sibling of the list rather than a row in it, so the split was visible INSIDE one pane, canvas
+  above the rule and grey below it, and was reported by Dan from a screenshot)
+
+- **L232. A minimum reserved for one part of a shared space (a pane's floor, a sidebar's minimum
+  width, a gutter, a buffer) is SUBTRACTED from whatever shares that space, so it must be checked
+  for being too LARGE as much as too small, because over reserving breaks nothing and fails no
+  test: the neighbour simply cannot grow, and the number goes on reading as prudence.**
+  (Downbeat #394, 2026-08-22. The Settings detail pane reserved 480 points, a constant whose own
+  doc comment REASONED about the pane rather than deriving anything. The tree pane's ceiling is
+  `available - 480`, and Dan's Settings window gives that tab 664 points, so the tree was pinned at
+  its own 240 floor with a 16 point band the divider could move in, and he reported that he could
+  make the pane narrower but not wider. Measured from AppKit, the widest thing in that pane that
+  clips rather than reflowing needed 225, so 255 points were being reserved for nothing and taken
+  straight off the pane beside it. Nothing could have caught this: every test asked whether the
+  floor was big enough, which it emphatically was, and the failure has no error, no exception and
+  no visual defect in the pane that over reserves. It is only visible from the OTHER side, as a
+  neighbour that will not grow. Note also that the first fix, lowering the floor to the measured
+  225 plus headroom, bought Dan almost nothing on its own: the real gain came from making the
+  reserving side REFLOW, wrapping its button rows and tightening its gutters when narrow, which
+  took the requirement from 385 to 225. So the question to ask of a reserved minimum is not only
+  "is this number right" but "does this side have to be rigid at all")
+
 ## External systems
 
 - **L23. Treat every external response as hostile and every event stream as unordered,
@@ -2112,3 +2183,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   for 60 seconds ran past 400 under load. Every iteration forks `sleep` and a process check, and
   process launches are what a busy Mac is slowest at, so the deadline silently meant somewhere
   between 900 and several thousand seconds depending on the mood of the machine)
+- **L227. A limit cannot be raised on its own**, because any OTHER limit whose safety margin was
+  calculated as a multiple of it silently loses that margin, and the sentence recording that
+  margin usually stays literally true while describing no headroom at all. Find every number
+  derived from the one you are changing, and re-state the ratio as a check rather than as prose.
+  (claude-config#160: a test run's ceiling was raised from 15 minutes to 1 hour so a loaded Mac
+  would stop being killed as hung. The temp sweep that deletes a running job's own working files
+  at 1 hour had been justified in the design record as "4x the longest run the tool permits",
+  which became 1x. The record was updated to say "a suite run cannot outlive its own ceiling,
+  which is also 1 hour", a true sentence describing zero margin, and it read as reassurance)
