@@ -5,7 +5,7 @@
 # It discovered suites from disk rather than from a list, which was the right idea, but it looked
 # in ONE directory: the one it lives in. Three suites live outside it and were run only because
 # four hand-written steps in the CI workflow named them, and a fourth, payload/skills/milestone,
-# was named by nothing at all and had never run anywhere. 233 checks, counted on 2026-08-10 by
+# was named by nothing at all and had never run anywhere. 233 checks, written down 2026-08-21, found by
 # asking the repo
 # rather than by reading the workflow. A suite nobody runs is indistinguishable from one that
 # passes (L98), and a boundary drawn at one directory is the same hand-maintained list the runner's
@@ -204,7 +204,7 @@ mk_slow_suite() { # mk_slow_suite <dir> <name> <sleep seconds> <failed count> <e
     # intervals OVERLAP, which is a fact about what happened rather than a duration, so a loaded
     # machine cannot turn it into a false failure. Comparing wall clock did exactly that: with the
     # whole repo running side by side, three sleeps of 3, 1 and 0 seconds took 4 seconds together,
-    # measured on 2026-08-14, and the check called that "no better than sequential" when they had
+    # written down 2026-08-21, and the check called that "no better than sequential" when they had
     # in fact all overlapped.
     printf 'date +%%s > "$(dirname "$0")/%s.start"\n' "$2"
     printf 'sleep %s\n' "$3"
@@ -401,7 +401,7 @@ fi
 # heavy processes, each spawning git and python. It never failed outright, which is the problem:
 # oversubscription makes timing sensitive checks intermittently wrong rather than red, and the
 # suite's own deadline guard was measured firing at 1192s against a normal 200 on a loaded Mac,
-# on 2026-08-19.
+# written down 2026-08-21.
 #
 # So the runner now holds a budget and derives BOTH halves from it: how many suites run at once,
 # and how many slots each of them may take. Their product is the budget rather than the product of

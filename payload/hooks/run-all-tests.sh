@@ -11,8 +11,8 @@
 # directory, the one it lives in, so `tests/`, `tools/` and
 # `payload/skills/milestone/` were outside it. The first three were run only
 # because four hand written steps in .github/workflows/tests.yml named them, and
-# the fourth was named by nothing at all: 233 checks, counted on 2026-08-10, that
-# had never run anywhere.
+# the fourth was named by nothing at all: 233 checks, written down 2026-08-21,
+# that had never run anywhere.
 # The boundary was the same hand maintained list, drawn one level up.
 #
 # So with no arguments it asks the REPO which directories hold a suite, and reads

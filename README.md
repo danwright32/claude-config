@@ -182,7 +182,7 @@ the product of two numbers set independently and compared nowhere: a four core r
 dozen heavy processes, each spawning git and python of its own. That never went red. It makes
 timing sensitive checks intermittently wrong instead, which is the hardest kind of failure to
 attribute, and the sync suite's own deadline guard was measured firing at 1192s against a normal
-200 on a loaded Mac, on 2026-08-19. So the budget below is divided between the suites running at once, each suite
+200 on a loaded Mac, written down 2026-08-21. So the budget below is divided between the suites running at once, each suite
 is told its share, and the product is printed at the top of every run.
 
 | Setting | Default | What it does |

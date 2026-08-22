@@ -562,7 +562,7 @@ SONEEDS
   # kills the whole shell on an unbound variable at TOP LEVEL, but only the SUBSHELL when the read
   # sits inside a command substitution, so a section missing a prerequisite can lose several tool
   # invocations, print nothing but ok lines, and exit 0. That is not hypothetical: one section in
-  # this file was measured on 2026-08-20 printing 54 ok lines and no failures in exactly that
+  # this file was measured printing 54 ok lines and no failures, written down 2026-08-21, in exactly that
   # state, saved only by
   # a fifth read that happened to be at top level. pipefail is already set, and tee exits 0, so the
   # status here is still the run's own.
@@ -1063,7 +1063,7 @@ fan_totals_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards expe
 # independently and compared nowhere, so a four core machine could carry a dozen heavy processes,
 # each spawning git and python. It never went red. Oversubscription makes timing sensitive checks
 # intermittently wrong instead, and this suite's own deadline guard was measured firing at 1192s
-# against a normal 200 on a loaded Mac on 2026-08-19, which is the hardest kind of failure to
+# against a normal 200 on a loaded Mac, written down 2026-08-21, which is the hardest kind of failure to
 # attribute.
 #
 # So run-all-tests.sh hands down HOOK_TESTS_SLOTS, this suite's share of the whole run's budget,
@@ -4433,7 +4433,7 @@ check "#133 an empty job count falls back to the default rather than being refus
   "! printf '%s' \"\$_sh_je\" | grep -q 'SUITE_JOBS='"
 
 # The two flags that make a shard work must not reach anything it starts. SUITE_SHARD leaking made
-# every run a section spawns become a whole shard, which on 2026-08-20 turned a 48 second shard
+# every run a section spawns become a whole shard, which turned a 48 second shard, written down 2026-08-21,
 # into 322 and failed four checks in the section that tests SECTION_ONLY. SUITE_NO_LOCK leaking is worse and
 # was already true before sharding: it silently disabled the lock in every subrun, so #32 was
 # asserting about a lock nothing was testing (L169). Derived from the file, so a flag added later
@@ -4688,7 +4688,7 @@ section "== the runner says how much of the machine this suite may take (#136) =
 # numbers were set independently: a four core runner could be running a dozen heavy processes, each
 # spawning git and python of its own. It never went red, which is the difficulty. Oversubscription
 # makes timing sensitive checks intermittently wrong, and this suite's own deadline guard was
-# measured firing at 1192s against a normal 200 on a loaded Mac, on 2026-08-19.
+# measured firing at 1192s against a normal 200 on a loaded Mac, written down 2026-08-21.
 #
 # So the runner hands down a share of one budget in HOOK_TESTS_SLOTS and this suite takes it as how
 # many shards to run. An explicit SUITE_JOBS still wins, because that is somebody asking for a
@@ -6129,7 +6129,7 @@ check "#105 and the refusal names the text it could not resolve" "grep -q 'zzz-n
 # mode that makes the whole mechanism dangerous rather than merely wrong: `set -u` kills the SHELL
 # on an unbound variable at top level, but only the SUBSHELL when the read is inside $( ), so a
 # section can lose four tool invocations to a missing fixture, print nothing but ok lines, and exit
-# 0. Measured on this file on 2026-08-20: one section did exactly that, 54 ok lines and no
+# 0. Measured on this file, written down 2026-08-21: one section did exactly that, 54 ok lines and no
 # failures, and the only
 # reason it did not report success was that a fifth read happened to sit at top level.
 #
@@ -6610,7 +6610,7 @@ check "#107 the profile names a section and a duration on one line" \
 section "== the deadline still has real headroom over a run (#112) =="
 # The deadline is only meaningful as a MULTIPLE of a real run, and that multiple was written down
 # once and then went stale in silence: the design record said 123 seconds and "roughly 7x" for
-# eleven days while this Mac grew to 225 seconds, which is 4x, all of that measured on 2026-08-19. Nothing caught it, because the check
+# eleven days while this Mac grew to 225 seconds, which is 4x, all of it written down 2026-08-21. Nothing caught it, because the check
 # beside that table compares the SETTING and never the measurement the setting was derived from
 # (claude-config#112, L210).
 #

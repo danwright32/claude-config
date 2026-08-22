@@ -158,8 +158,8 @@ Rejected for #120, and it is what the runner did for its whole life.
 It discovered suites from disk rather than from a list, which is the right idea and is written into
 its own header. It read ONE directory though, the one it lives in, so `tests/`, `tools/` and
 `payload/skills/milestone/` were outside it. Three of those were run only because four hand written
-steps in the CI workflow named them, and the fourth was named by nothing at all: 233 checks, counted on 2026-08-10, that
-had never run anywhere, found by asking git which directories hold a `test-*.sh` rather than by
+steps in the CI workflow named them, and the fourth was named by nothing at all: 233 checks, written down
+2026-08-21, that had never run anywhere, found by asking git which directories hold a `test-*.sh` rather than by
 reading the workflow. The boundary WAS the hand maintained list, drawn one level up in a file
 nobody opens when adding a test.
 
@@ -420,7 +420,7 @@ explicit declaration of what it depends on, so a filtered run can execute a sect
 prerequisites. The plan that came out of it had a declaration syntax, a validator for it, a static
 scanner, and an exhaustive sweep that ran every section in isolation and diffed the results.
 
-Then the dependency graph got measured instead of designed around. Measured on 2026-08-20, all 73 post-prelude sections
+Then the dependency graph got measured instead of designed around. Written down 2026-08-21, all 73 post-prelude sections
 were run in isolation: 68 passed alone, and the five that did not each read one variable an earlier
 section had set. Four of the five were accidents worth about fifteen lines between them. `PSH`/`PSR`
 was two lines that three separate sections all wanted, and each reached for whichever of the three
@@ -478,8 +478,8 @@ that is added both fail until this table is updated.
 | 1 nested run | `SUITE_MAX_DEPTH=1` | The suite's own depth allowance | Every place the suite spawns itself is one level down and nothing in it legitimately needs a run nested two deep, proved by #34 | 2026-08-17 |
 | 2 processes | not a setting | One healthy watcher | Observed directly as a launcher with one child (pid 13658 with 13702), proved by #33 | 2026-08-17 |
 
-The two suite figures above were 123 seconds and "roughly 7x" for eleven days, taken on 2026-08-08
-when the suite had 726 checks. It now has 784, and the run time has been 123, then 267, then 191 seconds as
+The two suite figures above were 123 seconds and "roughly 7x" for eleven days, written down
+2026-08-21, when the suite had 726 checks. It now has 784, and the run time has been 123, then 267, then 191 seconds as
 checks were added and one of them was made five times faster. Every one of those figures was true
 when written and wrong within days, and nothing noticed, because the check beside this table
 compares the SETTING and not the measurement the setting was derived from. So the suite measures
