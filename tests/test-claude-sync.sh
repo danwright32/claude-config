@@ -95,10 +95,16 @@ _SEC_TITLE=""; _SEC_T0=0; _SEC_P0=0; _SEC_F0=0; _SEC_PROFILE=""; _SEC_TARGET_N=0
 # reasons unrelated to the tests cannot be used to notice that checks were LOST, which is the one
 # question a total exists to answer (L63).
 #
-# Two things repeat, not one. Every shard runs the PRELUDE, which is 33 of those checks. And a
-# shard runs any section its own targets declare with `# needs:`, even when another shard owns it,
+# Two things repeated, not one. Every shard runs the PRELUDE, which is 33 of those checks. And a
+# shard ran any section its own targets declared with `# needs:`, even when another shard owned it,
 # so one 14 check section ran twice as well. Both are counted here as they happen, so the parent
 # can report each section once and say separately how much was run over again.
+#
+# The second of the two is gone since #151: a section is now dealt to the same shard as the
+# prerequisite it needs, so there is nothing left to borrow. The bucket stays, because it is what
+# MEASURES that, and a count that can only ever read zero is still the thing that would notice the
+# grouping breaking (L182 cuts the other way here: the zero is a live measurement, not a retired
+# one).
 #
 # A run with no target list is a run where every section is its own target, which is what a full
 # single process run is. That is the honest default rather than a special case: it makes the
@@ -330,6 +336,48 @@ if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTIO
     return 0
   }
 
+  # The transitive closure of what a set of sections declares it needs, in _so_keep. ONE
+  # implementation, called by the shard selector to work out what a shard would BORROW
+  # (claude-config#151) and by the extractor further down to decide what is copied into the
+  # filtered run. Deriving the same closure twice would put two answers to one question in this
+  # file, and they would agree with each other rather than with what actually runs (L107).
+  #
+  # A declaration that resolves to nothing, to several, or to a LATER section is an error before
+  # anything runs: each would leave the prerequisite out while the run went on to report a result
+  # (L100, L151).
+  _needs_closure(){   # _needs_closure "<section indices>" -> sets _so_keep
+    local _nc_queue="$1" _nc_cur _nc_nd
+    _so_keep=""
+    while [ -n "$_nc_queue" ]; do
+      _nc_cur="${_nc_queue%% *}"
+      case "$_nc_queue" in *" "*) _nc_queue="${_nc_queue#* }" ;; *) _nc_queue="" ;; esac
+      [ -n "$_nc_cur" ] || continue
+      case " $_so_keep " in *" $_nc_cur "*) continue ;; esac
+      _so_keep="$_so_keep $_nc_cur"
+      while IFS= read -r _nc_nd; do
+        _nc_nd="$(printf '%s' "$_nc_nd" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [ -n "$_nc_nd" ] || continue
+        _sec_match "$_nc_nd"
+        if [ "$_so_hits" -eq 0 ]; then
+          echo "test suite: ${_so_titles[$_nc_cur]} declares '# needs: $_nc_nd', which matches no heading. A declaration that resolves to nothing would silently leave the prerequisite out and the run would report a result anyway." >&2
+          exit 2
+        fi
+        if [ "$_so_hits" -gt 1 ]; then
+          echo "test suite: ${_so_titles[$_nc_cur]} declares '# needs: $_nc_nd', which matches $_so_hits headings. Narrow it. The candidates are:" >&2
+          printf '%s\n' "$_so_list" >&2
+          exit 2
+        fi
+        if [ "$_so_idx" -ge "$_nc_cur" ]; then
+          echo "test suite: ${_so_titles[$_nc_cur]} declares '# needs: $_nc_nd', which is not EARLIER in the file. A prerequisite that runs afterwards cannot have prepared anything." >&2
+          exit 2
+        fi
+        _nc_queue="$_nc_queue $_so_idx"
+      done <<SONEEDS
+${_so_needs[$_nc_cur]}
+SONEEDS
+    done
+  }
+
 fi
 
 if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
@@ -414,14 +462,82 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   fi
   _so_pend="$_so_idx"
 
-  # Every section after the prelude that falls in this shard. Seeded as the targets; the closure
-  # below then pulls in anything they declare they need, exactly as it does for one section.
+  # Every section after the prelude that falls in this shard.
+  #
+  # A section and the sections it declares it NEEDS are dealt out TOGETHER (claude-config#151).
+  # They used to be dealt out one at a time, and the closure below then pulled a prerequisite into
+  # whichever shard borrowed it, so that section ran in its own shard AND in the borrower: one
+  # section worth 14 checks ran twice at two, four, six and eight shards, measured 2026-08-21.
+  # #146 made that visible by reporting the repeats beside the headline rather than folding them
+  # in, which is not the same as removing them.
+  #
+  # So the sections are grouped first, each with its prerequisites, and whole groups are dealt out.
+  # A prerequisite is always EARLIER in the file, which the closure refuses to run without, so a
+  # group is always a set of sections that can run in one shard in file order.
+  #
+  # Dealt to the shard carrying the FEWEST sections so far, ties to the lowest numbered one.
+  # Pinning dependents to their prerequisite's shard can pile one shard up, and a shard carrying
+  # far more than the others costs more wall clock than the duplicate it removed. With no
+  # declarations at all every group is one section and this deals out exactly as the plain round
+  # robin it replaces did.
+  _sh_grp=(); _sh_size=(); _sh_load=(); _sh_of=()
+  _sh_k=$(( _so_pend + 1 ))
+  while [ "$_sh_k" -le "$_so_i" ]; do _sh_grp[$_sh_k]=$_sh_k; _sh_k=$(( _sh_k + 1 )); done
+  _sh_root(){   # _sh_root <section> -> the group it is in, named by its earliest member
+    local _r="$1"
+    while [ "${_sh_grp[$_r]}" -ne "$_r" ]; do _r="${_sh_grp[$_r]}"; done
+    printf '%s' "$_r"
+  }
+  # SUITE_SHARD_NO_GROUPING=1 deals the sections out one at a time, which is what this did before
+  # #151. It exists so the borrowing can be WATCHED HAPPENING: with grouping in place no section is
+  # ever borrowed, so an empty borrowed= field is equally what a working derivation and a
+  # derivation that reports nothing at all would print, and the check would read as protection
+  # while protecting nothing (L1, L159). Nothing sets it but that check.
+  _sh_k=$(( _so_pend + 1 ))
+  while [ "$_sh_k" -le "$_so_i" ] && [ -z "${SUITE_SHARD_NO_GROUPING:-}" ]; do
+    while IFS= read -r _sh_nd; do
+      _sh_nd="$(printf '%s' "$_sh_nd" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+      [ -n "$_sh_nd" ] || continue
+      _sec_match "$_sh_nd"
+      # A declaration that cannot be resolved is not diagnosed HERE. _needs_closure below refuses
+      # the whole run over it, with the wording that says which declaration and why, and one
+      # refusal in one place is what keeps the two from drifting apart (L11).
+      [ "$_so_hits" -eq 1 ] || continue
+      # A prerequisite inside the PRELUDE needs no grouping: every shard runs the prelude, so
+      # nothing is ever borrowed to satisfy it.
+      [ "$_so_idx" -gt "$_so_pend" ] || continue
+      [ "$_so_idx" -lt "$_sh_k" ] || continue
+      _sh_a="$(_sh_root "$_sh_k")"; _sh_b="$(_sh_root "$_so_idx")"
+      if [ "$_sh_a" -ne "$_sh_b" ]; then
+        if [ "$_sh_a" -lt "$_sh_b" ]; then _sh_grp[$_sh_b]=$_sh_a; else _sh_grp[$_sh_a]=$_sh_b; fi
+      fi
+    done <<SHNEEDS
+${_so_needs[$_sh_k]}
+SHNEEDS
+    _sh_k=$(( _sh_k + 1 ))
+  done
+  _sh_k=$(( _so_pend + 1 ))
+  while [ "$_sh_k" -le "$_so_i" ]; do
+    _sh_r="$(_sh_root "$_sh_k")"
+    _sh_size[$_sh_r]=$(( ${_sh_size[$_sh_r]:-0} + 1 ))
+    _sh_k=$(( _sh_k + 1 ))
+  done
+  _sh_k=1
+  while [ "$_sh_k" -le "$_sh_n" ]; do _sh_load[$_sh_k]=0; _sh_k=$(( _sh_k + 1 )); done
   _sh_targets=""
   _sh_k=$(( _so_pend + 1 ))
-  _sh_pos=0
   while [ "$_sh_k" -le "$_so_i" ]; do
-    if [ $(( _sh_pos % _sh_n )) -eq $(( _sh_i - 1 )) ]; then _sh_targets="$_sh_targets $_sh_k"; fi
-    _sh_pos=$(( _sh_pos + 1 ))
+    _sh_r="$(_sh_root "$_sh_k")"
+    if [ -z "${_sh_of[$_sh_r]:-}" ]; then
+      _sh_pick=1; _sh_j=2
+      while [ "$_sh_j" -le "$_sh_n" ]; do
+        if [ "${_sh_load[$_sh_j]}" -lt "${_sh_load[$_sh_pick]}" ]; then _sh_pick=$_sh_j; fi
+        _sh_j=$(( _sh_j + 1 ))
+      done
+      _sh_of[$_sh_r]=$_sh_pick
+      _sh_load[$_sh_pick]=$(( ${_sh_load[$_sh_pick]} + ${_sh_size[$_sh_r]} ))
+    fi
+    if [ "${_sh_of[$_sh_r]}" -eq "$_sh_i" ]; then _sh_targets="$_sh_targets $_sh_k"; fi
     _sh_k=$(( _sh_k + 1 ))
   done
   # A shard holding no sections at all must REFUSE, never report a clean run: a suite that checked
@@ -438,8 +554,19 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   # The TARGETS, not everything that ends up running: a section pulled in because another declared
   # it `needs:` runs in that shard too, and counting those would make a legitimate second
   # appearance read as a duplicate, which is the one thing the parent treats as a defect.
-  printf 'SUITE-SHARD-COVERAGE shard=%s first=%s last=%s sections=%s\n' \
-    "$_sh_i" "$(( _so_pend + 1 ))" "$_so_i" "$(printf '%s' "${_sh_targets# }" | tr ' ' ',')"
+  # And what it would BORROW: the sections it will run that it does not own (claude-config#151).
+  # Grouping above is what makes this empty, and an empty field is a measurement rather than a
+  # promise: it comes from the same closure that decides what actually runs, so a grouping that
+  # stopped working would say so here rather than quietly cost a section's worth of checks twice.
+  _needs_closure "$_sh_targets"
+  _sh_borrowed=""
+  for _sh_x in $_so_keep; do
+    case " $_sh_targets " in *" $_sh_x "*) ;; *) _sh_borrowed="$_sh_borrowed,$_sh_x" ;; esac
+  done
+  _sh_borrowed="${_sh_borrowed#,}"
+  printf 'SUITE-SHARD-COVERAGE shard=%s first=%s last=%s sections=%s borrowed=%s\n' \
+    "$_sh_i" "$(( _so_pend + 1 ))" "$_so_i" "$(printf '%s' "${_sh_targets# }" | tr ' ' ',')" \
+    "$_sh_borrowed"
   # SUITE_SHARD_COVERAGE_ONLY=1 stops here, having said what this shard would run and run none of
   # it. The line is emitted by the real selector and the suite's own check reads four real ones,
   # which costs four file reads instead of four minutes. Placed after the emission and before the
@@ -473,38 +600,10 @@ if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${_so_shard_mode:-}" ]; } && [ -z "${SU
     _sh_targets="$_so_target"
   fi
 
-  # The transitive closure of what the target declares it needs. A declaration that resolves to
-  # nothing, to several, or to a LATER section is an error before anything runs: each would leave
-  # the prerequisite out while the run went on to report a result (L100, L151).
-  _so_keep=""
-  _so_queue="$_sh_targets"
-  while [ -n "$_so_queue" ]; do
-    _so_cur="${_so_queue%% *}"
-    case "$_so_queue" in *" "*) _so_queue="${_so_queue#* }" ;; *) _so_queue="" ;; esac
-    case " $_so_keep " in *" $_so_cur "*) continue ;; esac
-    _so_keep="$_so_keep $_so_cur"
-    while IFS= read -r _so_nd; do
-      _so_nd="$(printf '%s' "$_so_nd" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-      [ -n "$_so_nd" ] || continue
-      _sec_match "$_so_nd"
-      if [ "$_so_hits" -eq 0 ]; then
-        echo "test suite: ${_so_titles[$_so_cur]} declares '# needs: $_so_nd', which matches no heading. A declaration that resolves to nothing would silently leave the prerequisite out and the run would report a result anyway." >&2
-        exit 2
-      fi
-      if [ "$_so_hits" -gt 1 ]; then
-        echo "test suite: ${_so_titles[$_so_cur]} declares '# needs: $_so_nd', which matches $_so_hits headings. Narrow it. The candidates are:" >&2
-        printf '%s\n' "$_so_list" >&2
-        exit 2
-      fi
-      if [ "$_so_idx" -ge "$_so_cur" ]; then
-        echo "test suite: ${_so_titles[$_so_cur]} declares '# needs: $_so_nd', which is not EARLIER in the file. A prerequisite that runs afterwards cannot have prepared anything." >&2
-        exit 2
-      fi
-      _so_queue="$_so_queue $_so_idx"
-    done <<SONEEDS
-${_so_needs[$_so_cur]}
-SONEEDS
-  done
+  # What this run will actually execute: its targets plus everything they declare they need. The
+  # same closure the shard selector uses, so what a shard REPORTS it would borrow and what a run
+  # actually copies in can never be two different answers (L107).
+  _needs_closure "$_sh_targets"
 
   _filtered="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
   sed -n "1,$(( ${_so_starts[1]} - 1 ))p" "$0" > "$_filtered"
@@ -634,7 +733,7 @@ fi
 # with the flag leaking through, the child took no lock, ran happily, and the checks that prove the
 # lock works failed. Which means that before this, anybody running the suite with SUITE_NO_LOCK=1
 # was running #32 against a lock nothing was testing (L169).
-export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST SUITE_FROM_COPY SUITE_SHARD SUITE_NO_LOCK 2>/dev/null || true
+export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST SUITE_FROM_COPY SUITE_SHARD SUITE_NO_LOCK SUITE_SHARD_NO_GROUPING 2>/dev/null || true
 
 # SUITE_SPAWN_UNTIL=<text> starts ONE child with that section limit, says what a child of this run
 # inherits, and exits with the child's status. It is the seam that makes the paragraph above
@@ -4682,6 +4781,113 @@ check "#146 and a real line's buckets add up to what that run reported" \
 _ft_prel="$(printf '%s' "$_ft_line" | sed -n 's/.*prelude_pass=\([0-9]*\).*/\1/p')"
 check "#146 and its prelude bucket is the bulk of the checks, which is why repeating it mattered" \
   "[ \"\${_ft_prel:-0}\" -gt 10 ]"
+
+section "== a section is never run twice to satisfy a needs declaration (#151) =="
+# A shard ran any section its own targets declared with a `# needs:` line, including sections
+# another shard owned, so that section ran in BOTH. Measured on 2026-08-21: one section worth 14
+# checks ran twice at two, four, six and eight shards. #146 made the cost visible by reporting
+# those repeats beside the headline instead of folding them in; it did not remove them.
+#
+# The fix is in the ASSIGNMENT rather than in the closure: a section is put in the same shard as
+# the prerequisite it needs, so the closure finds nothing left to borrow. A prerequisite must be
+# EARLIER in the file, which the selector already refuses to run without, so the grouping always
+# has a direction to follow.
+#
+# Asserted from the selector's OWN answer. Each coverage line now says what that shard would
+# BORROW: the sections it will run that it does not own. Deriving that here instead would be a
+# second implementation of the closure, sitting beside the one that decides what actually runs,
+# and it would agree with itself rather than with the run (L107).
+_bw_lines(){   # _bw_lines <shards> -> the real coverage lines for that many shards
+  local _bw_n="$1" _bw_k=1 _bw_all=""
+  while [ "$_bw_k" -le "$_bw_n" ]; do
+    _bw_all="$_bw_all$(SUITE_SHARD="$_bw_k/$_bw_n" SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
+      SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
+"
+    _bw_k=$((_bw_k + 1))
+  done
+  printf '%s' "$_bw_all"
+}
+_bw_borrowed(){   # _bw_borrowed <coverage lines> -> every borrowed section, space separated
+  printf '%s\n' "$1" | grep '^SUITE-SHARD-COVERAGE ' \
+    | sed -n 's/.* borrowed=\([^ ]*\).*/\1/p' | tr ',' ' ' | tr '\n' ' ' \
+    | sed 's/  */ /g; s/^ //; s/ $//'
+}
+# The shard counts the repeat was measured at. Every one of them, not a sample: the borrowing
+# depends on where the round robin happened to put two particular sections, so a count that
+# happens not to separate them proves nothing about the ones that do (L147).
+for _bw_n in 2 4 6 8; do
+  _bw_out="$(_bw_lines "$_bw_n")"
+  check "#151 the real selector's $_bw_n shards each print what they would borrow" \
+    "[ \"\$(printf '%s\n' \"\$_bw_out\" | grep -c ' borrowed=')\" = $_bw_n ]"
+  check "#151 and at $_bw_n shards no section is borrowed from another shard" \
+    "[ -z \"\$(_bw_borrowed \"\$_bw_out\")\" ]"
+  # Still a partition: pinning a dependent to its prerequisite's shard must not lose a section or
+  # give one to two shards, which is exactly what #137 asks (L204).
+  check "#151 and at $_bw_n shards the sections are still divided between them" \
+    "printf '%s\\n' \"\$_bw_out\" | shard_coverage_verdict $_bw_n >/dev/null"
+done
+
+# The balance, measured rather than assumed. Pinning dependents to their prerequisite's shard can
+# pile one shard up, and a shard carrying far more than the others costs more wall clock than the
+# duplicate it removed, which would be a worse answer wearing a green tick (#151's own warning).
+_bw_sizes(){   # _bw_sizes <coverage lines> -> one target count per line
+  printf '%s\n' "$1" | grep '^SUITE-SHARD-COVERAGE ' \
+    | sed -n 's/.* sections=\([^ ]*\).*/\1/p' \
+    | awk -F, '{print NF}'
+}
+_bw8="$(_bw_lines 8)"
+_bw_hi="$(_bw_sizes "$_bw8" | sort -n | tail -1)"
+_bw_lo="$(_bw_sizes "$_bw8" | sort -n | head -1)"
+check "#151 the shard sizes could be read as numbers (high='$_bw_hi' low='$_bw_lo')" \
+  "case \"\$_bw_hi\$_bw_lo\" in ''|*[!0-9]*) false ;; *) true ;; esac"
+# Three sections of slack, not zero. One group of two pinned together already puts one shard one
+# ahead, and a floor of zero would refuse the very grouping this section exists to introduce. It
+# is a bound on the SPREAD rather than a threshold on a duration, so it cannot be satisfied by a
+# slow machine (L172).
+check "#151 and no shard is left carrying far more sections than another" \
+  "[ \$(( ${_bw_hi:-0} - ${_bw_lo:-0} )) -le 3 ]"
+
+# The control, and the half that would do the damage if it were wrong: the closure still PULLS a
+# prerequisite in when it genuinely has to. SECTION_ONLY on the dependent section runs one section
+# that is not the prelude and not itself, so the borrowing machinery is watched working rather
+# than only watched reporting nothing (L159, L1).
+_bw_dep="$(grep -n '^# needs: ' "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
+if [ -n "$_bw_dep" ]; then
+  _bw_dep_title="$(awk -v n="$_bw_dep" 'NR < n && /^section "/ { last = $0 } NR == n { print last }' "$SCRIPT_SELF" \
+    | sed 's/^section "//; s/"$//')"
+  _bw_pre_title="$(sed -n "${_bw_dep}p" "$SCRIPT_SELF" | sed 's/^# needs: //')"
+  check "#151 the file really does carry a needs declaration to test this over" \
+    "[ -n \"\$_bw_dep_title\" ] && [ -n \"\$_bw_pre_title\" ]"
+  _bw_only="$(SECTION_ONLY="$_bw_dep_title" SUITE_NO_LOCK=1 SCRIPT="$SCRIPT" \
+    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+  check "#151 running only the dependent section still pulls its prerequisite in" \
+    "printf '%s' \"\$_bw_only\" | grep -qF -- \"\$_bw_pre_title\""
+else
+  # Said out loud rather than skipped. A file with no declaration left in it makes every check
+  # above pass by having nothing to find, which reads exactly like the defect being fixed (L98).
+  check "#151 the file carries a needs declaration for these checks to be about" \
+    "false"
+fi
+
+# The control, and the one that decides whether any of the above means anything. An empty
+# borrowed= field is what a working derivation prints AND what a derivation that reports nothing
+# ever would print, so the two are told apart by dealing the sections out the way this did before
+# #151 and watching a section be borrowed (L1, L159). It is the measured defect reproduced: at four
+# shards, one section pulled into a shard that does not own it.
+_bw_old="$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
+$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD=2/4 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
+$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD=3/4 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
+$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD=4/4 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+check "#151 dealt out the old way, a section really is borrowed by a shard that does not own it" \
+  "[ -n \"\$(_bw_borrowed \"\$_bw_old\")\" ]"
+# And the same four shards still divide the sections between them that way, so what the check
+# above caught is the BORROWING and not a selector that fell over (L140).
+check "#151 and that old dealing is otherwise a sound division too" \
+  "printf '%s\\n' \"\$_bw_old\" | shard_coverage_verdict 4 >/dev/null"
 
 section "== the runner says how much of the machine this suite may take (#136) =="
 # The runner starts several suites at once and this one splits itself into shards, and the two
