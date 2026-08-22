@@ -768,17 +768,57 @@ fi
 # 2026-08-17, so 15 minutes is roughly 7x the real thing. Deliberately generous, because wrong
 # LOW turns a slow or contended machine into a false failure, and an alarm that cries wolf stops
 # being read (L36), which would leave the suite worse off than with no deadline at all.
-SUITE_TIMEOUT="${SUITE_TIMEOUT:-900}"
+# Two numbers since #152, and the one that does the work is the SECOND.
+#
+# This used to be a single total, and the watchdog measured it by adding 2 to a counter once per
+# `sleep 2`, so it counted ITERATIONS rather than time. Every iteration also forks `sleep` and a
+# process check, and process launches are what a busy Mac is slowest at, so the counter ran far
+# behind the clock: a full run measured at 1943s of wall clock on 2026-08-22 was never killed by
+# its nominal 900s deadline, and the same loop asked for 60 seconds ran past 400 under load. The
+# deadline silently meant somewhere between 900 and several thousand seconds depending on the mood
+# of the machine (L82: the primitive's behaviour was the whole reason the guard was safe, and it
+# had never been measured on the real target).
+#
+# Making it read a real clock is two lines, and on its own it would have KILLED that 1943s run,
+# which was healthy and merely on a loaded machine. That is the false failure #149 exists to
+# remove, arriving by another route. A wall clock total cannot tell a hung run from a slow one,
+# which is the only distinction this deadline is for.
+#
+# So SUITE_STALL_TIMEOUT is what normally fires: how long the run may sit without reaching a new
+# section. The run already records where it has got to, so a stopped run leaves that mark alone
+# while a slow one keeps moving it, and a loaded machine moves it slowly rather than not at all.
+# 600s is comfortably longer than the slowest section this suite has (34s measured 2026-08-22, and
+# 190s if the whole machine is five times slower), and the check at the end of the run compares it
+# against what the sections ACTUALLY took rather than trusting that sentence to stay true.
+#
+# SUITE_TIMEOUT stays as an absolute ceiling for a runaway that somehow keeps moving, and is now
+# real wall clock. Raised to 3600 because it is no longer the thing that catches a hang: at 900 it
+# would kill the 1943s run above, and being wrong LOW turns a contended machine into a false
+# failure, which is how an alarm stops being read (L36).
+#
+# Either may be set to 0 to disable it. Both at 0 is a run with no bound at all, which is the state
+# this exists to end, so it is refused.
+SUITE_TIMEOUT="${SUITE_TIMEOUT:-3600}"
 case "$SUITE_TIMEOUT" in
   ''|*[!0-9]*)
     echo "test suite: SUITE_TIMEOUT='$SUITE_TIMEOUT' is not a whole number of seconds. Refusing to run rather than running with no deadline at all, which is the state this exists to end." >&2
     exit 4 ;;
 esac
+SUITE_STALL_TIMEOUT="${SUITE_STALL_TIMEOUT:-600}"
+case "$SUITE_STALL_TIMEOUT" in
+  ''|*[!0-9]*)
+    echo "test suite: SUITE_STALL_TIMEOUT='$SUITE_STALL_TIMEOUT' is not a whole number of seconds. Refusing to run rather than running with no stall bound, which is what actually catches a hang." >&2
+    exit 4 ;;
+esac
+if [ "$SUITE_TIMEOUT" -eq 0 ] && [ "$SUITE_STALL_TIMEOUT" -eq 0 ]; then
+  echo "test suite: SUITE_TIMEOUT and SUITE_STALL_TIMEOUT are both 0, so this run would have no bound of any kind. A wait with no deadline cannot fail, it can only hang, and a hang reads as an ordinary slow run (L110). Set at least one." >&2
+  exit 4
+fi
 # Named from an explicit template, and not `mktemp -t`: the name is what lets an abandoned copy be
 # attributed to this tool and reclaimed later (#36), and `-t` also means different things to BSD
 # and GNU mktemp, which matters the moment this runs anywhere but a Mac.
 SUITE_SECTION_MARK="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-section.XXXXXXXX")"
-if [ "$SUITE_TIMEOUT" -gt 0 ]; then
+if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
   _suite_pid=$$
   # A watchdog must not share the abort-on-error behaviour of the work it watches, or an
   # incidental failure kills the watchdog and leaves the work running unobserved, which looks
@@ -795,16 +835,39 @@ if [ "$SUITE_TIMEOUT" -gt 0 ]; then
     # nothing to do with the runs being watched (L205, L134). Nothing sets this but the #31
     # section; a run with no tag is named exactly as before.
     exec -a "suite-deadline-watchdog${SUITE_WATCHDOG_TAG:+.$SUITE_WATCHDOG_TAG}" sh -c '
-      waited=0
-      while [ "$waited" -lt "$2" ]; do
+      # Both clocks are read from `date`, never accumulated from the sleeps (claude-config#152).
+      # Each turn of this loop costs its sleep PLUS a fork of sleep and a process check, and on a
+      # busy Mac that overhead is not small, so a counter built by adding the sleep length runs far
+      # behind the clock and the deadline silently means whatever the machine felt like.
+      ceiling="$2"; mark="$3"; stall="$4"
+      start="$(date +%s)"
+      last="$(cat "$mark" 2>/dev/null || true)"
+      moved="$start"
+      why=""
+      while :; do
         sleep 2
-        waited=$((waited + 2))
         kill -0 "$1" 2>/dev/null || exit 0
+        now="$(date +%s)"
+        # Progress is the run reaching a NEW section. A stopped run leaves this alone; a slow one
+        # keeps moving it, however slowly the machine is going.
+        cur="$(cat "$mark" 2>/dev/null || true)"
+        if [ "$cur" != "$last" ]; then last="$cur"; moved="$now"; fi
+        if [ "$stall" -gt 0 ] && [ "$(( now - moved ))" -ge "$stall" ]; then why=stall; break; fi
+        if [ "$ceiling" -gt 0 ] && [ "$(( now - start ))" -ge "$ceiling" ]; then why=ceiling; break; fi
       done
-      where="$(cat "$3" 2>/dev/null)"
+      where="$(cat "$mark" 2>/dev/null)"
       echo "" >&2
-      echo "test suite: TIMED OUT after ${2}s, still inside section: ${where:-<no section reached>}" >&2
-      echo "It was killed rather than left waiting. A run with no deadline cannot fail, it can only hang, and a hang reads as an ordinary slow run (L110). Raise SUITE_TIMEOUT if this machine is genuinely slower than that." >&2
+      # Two causes, two messages, because they need different remedies: a run that STOPPED is a
+      # hang to diagnose, and a run that merely went on too long is a ceiling to raise (L11). Both
+      # keep the words TIMED OUT and the section name, which is what anything reading this looks
+      # for.
+      if [ "$why" = stall ]; then
+        echo "test suite: TIMED OUT: no progress for ${stall}s, still inside section: ${where:-<no section reached>}" >&2
+        echo "It was killed rather than left waiting. A run that has stopped reaching new sections is hung, and a hang reads as an ordinary slow run (L110). A machine that is merely slow keeps moving between sections and is left alone, so raise SUITE_STALL_TIMEOUT only if one SECTION genuinely takes longer than that." >&2
+      else
+        echo "test suite: TIMED OUT: ${ceiling}s of wall clock, still inside section: ${where:-<no section reached>}" >&2
+        echo "It was still making progress and simply ran past the absolute ceiling. Raise SUITE_TIMEOUT if this machine is genuinely that slow, or find what got slower." >&2
+      fi
       # Kill the run AND everything it started. Killing only the run itself leaves its children
       # alive, and anything reading the run output then waits for THEM: a 6 second deadline
       # measured 60 on 2026-08-17, the length of the sleep the run happened to be sitting in. Its children are
@@ -818,7 +881,7 @@ if [ "$SUITE_TIMEOUT" -gt 0 ]; then
       }
       kill_tree "$1"
       rm -f "$3"    # the victim was killed outright and cannot clean up after itself
-    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK"
+    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK" "$SUITE_STALL_TIMEOUT"
   ) &
   SUITE_WATCHDOG_PID=$!
   # Taken out of the job table, or bash announces the kill at cleanup by printing the whole
@@ -3920,6 +3983,82 @@ if [ "$SUITE_TIMEOUT" -gt 0 ]; then
 else
   check "#31 this run has no deadline, so it has no watchdog to find" "[ '$SUITE_TIMEOUT' -eq 0 ]"
 fi
+
+section "== the deadline kills a run that STOPPED, not one that is merely slow (#152) =="
+# The watchdog measured its deadline by adding 2 to a counter once per `sleep 2`, so it counted
+# ITERATIONS and not time. Every iteration also forks `sleep` and a process check, and process
+# launches are what a busy Mac is slowest at, so the counter ran far behind the clock: a full run
+# measured at 1943s of wall clock on 2026-08-22 was never killed by its nominal 900s deadline, and
+# the same loop asked for 60 seconds ran past 400 under load.
+#
+# Making it read a real clock is two lines, and on its own it would have KILLED that 1943s run,
+# which was healthy and merely on a loaded machine. That is the false failure #149 exists to
+# remove, arriving by another route. A wall clock total cannot tell a hung run from a slow one,
+# which is the only distinction this deadline is for.
+#
+# So it watches PROGRESS. The run already records which section it has reached, which is how the
+# timeout names where it died; a stopped run leaves that mark alone while a slow one keeps moving
+# it. The total is kept as a generous ceiling for a runaway that somehow keeps moving, and both
+# timers now read a real clock.
+_st_tag="sttag$$-$SECONDS"
+
+# Killed for stopping, with the ceiling set far away so what killed it is not in doubt. The 6 and
+# the 600 below are chosen here for the fixture, not measured from anything.
+_st_t0="$(date +%s)"
+_st_hang="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=6 SUITE_HANG_IN=push \
+  SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_hang_rc=$?
+_st_hang_elapsed=$(( $(date +%s) - _st_t0 ))
+check "#152 a run that stopped making progress is killed" "[ '$_st_hang_rc' -ne 0 ]"
+check "#152 and it says plainly that there was no progress" \
+  "case \"\$_st_hang\" in *'no progress'*) true ;; *) false ;; esac"
+check "#152 and still names the section it stopped in" \
+  "case \"\$_st_hang\" in *'still inside section: == push =='*) true ;; *) false ;; esac"
+# It was the STALL timer and not the ceiling. The ceiling was set a hundred times further away, so
+# anything ending near the stall timeout can only have come from the stall timer. None of these
+# three numbers is measured, they are the fixture's own: the bound separates the two settings from
+# each other rather than being calibrated against how fast this Mac is, and twenty times the stall
+# timeout is still nowhere near the ceiling (L172).
+check "#152 and the ceiling 600s away was not what killed it (took ${_st_hang_elapsed}s)" \
+  "[ '$_st_hang_elapsed' -lt 120 ]"
+
+# The half that matters most, and the one the old total-time deadline got wrong: a run that keeps
+# MOVING is left alone however long it takes. Every section is made to pause, so the run outlasts
+# its own stall timeout several times over while never once stopping.
+_st_t1="$(date +%s)"
+# Far enough in that several sections run, since `push` is the FIRST one and a two section run
+# cannot outlast anything. Every section pauses, so the run spends a few seconds in each and many
+# times the stall timeout in total, without ever once stopping.
+_st_slow="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=8 SUITE_SLOW_IN='==' \
+  SECTION_UNTIL='apply is idempotent' SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_slow_rc=$?
+_st_slow_elapsed=$(( $(date +%s) - _st_t1 ))
+# The control for the fixture first: if it did not actually outlast the stall timeout, the check
+# below passes by never having tested anything (L159, L101).
+check "#152 the fixture really did outlast its own stall timeout (${_st_slow_elapsed}s against 8s)" \
+  "[ '$_st_slow_elapsed' -gt 8 ]"
+check "#152 a run that keeps progressing is not killed, however long it takes" \
+  "case \"\$_st_slow\" in *'TIMED OUT'*) false ;; *) true ;; esac"
+check "#152 and it still reports its own result" "[ '$_st_slow_rc' -eq 0 ]"
+
+# The ceiling still exists, for a runaway that somehow keeps moving. Its message must be DIFFERENT
+# from the stall one, or the reader cannot tell a run that stopped from one that simply went on too
+# long, and those need different remedies (L11).
+_st_ceil="$(SUITE_TIMEOUT=6 SUITE_STALL_TIMEOUT=600 SUITE_HANG_IN=push \
+  SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_ceil_rc=$?
+check "#152 the absolute ceiling still kills a run that reaches it" "[ '$_st_ceil_rc' -ne 0 ]"
+check "#152 and says it was the ceiling" \
+  "case \"\$_st_ceil\" in *'wall clock'*) true ;; *) false ;; esac"
+check "#152 and that is worded differently from the no-progress message" \
+  "case \"\$_st_ceil\" in *'no progress'*) false ;; *) true ;; esac"
+
+# Neither of those runs may leave a watchdog behind, the same claim #31 makes and for the same
+# reason: a watchdog outliving its run holds a process id the system may reuse.
+_st_wd=0; _st_wait=0
+while [ "$_st_wait" -lt 10 ]; do
+  _st_wd="$(pgrep -f "suite-deadline-watchdog.$_st_tag" 2>/dev/null | wc -l | tr -d ' ')"
+  [ "${_st_wd:-0}" -eq 0 ] && break
+  sleep 1; _st_wait=$((_st_wait + 1))
+done
+check "#152 none of those runs left a watchdog behind" "[ '${_st_wd:-0}' -eq 0 ]"
 
 section "== only one suite run at a time (#32) =="
 # Nothing stopped several copies of this suite running at once. Three did on 2026-08-17, competing
@@ -7109,6 +7248,27 @@ fi
 # large enough, which is every deadline, and it would read as protection while protecting nothing.
 _hr_toosmall=$(( _hr_min - 1 ))
 check "#112 a deadline one second under that floor is refused" "! [ '$_hr_toosmall' -ge '$_hr_min' ]"
+
+# And the bound that actually catches a hang (claude-config#152). The stall timeout is only
+# meaningful while it is longer than the longest SECTION: the run is judged to have stopped when it
+# has not reached a new one, so a single section growing past it would make the watchdog kill
+# healthy runs. Compared against what the sections in THIS run really took, never against the
+# sentence in DESIGN.md that says the same thing, because that sentence cannot notice a section
+# getting slower (L210, and #149's rule that the reference be measured in the same run).
+#
+# In a filtered run this sees only that shard's sections, which is the right answer rather than a
+# weaker one: whichever shard holds the slowest section is the shard that checks it.
+_hr_longest="$(printf '%s' "$_SEC_PROFILE" | sort -r | awk -F"$(printf '\t')" 'NR==1 {print $1+0}')"
+case "$_hr_longest" in ''|*[!0-9]*) _hr_longest=0 ;; esac
+if [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
+  check "#152 the stall timeout is at least three times the slowest section this run had (${_hr_longest}s)" \
+    "[ '$SUITE_STALL_TIMEOUT' -ge $(( _hr_longest * 3 )) ]"
+  # Watched refusing, or any stall timeout large enough satisfies it, which is every one (L1).
+  check "#152 and a stall timeout one second under that floor is refused" \
+    "! [ $(( _hr_longest * 3 - 1 )) -ge $(( _hr_longest * 3 )) ]"
+else
+  check "#152 the stall bound was deliberately disabled for this run" "[ '$SUITE_STALL_TIMEOUT' -eq 0 ]"
+fi
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
