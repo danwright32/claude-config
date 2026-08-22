@@ -2783,7 +2783,7 @@ do_pull(){
   # ${VAR-default}, not ${VAR:-default}: after a hand-off SYNC_PULL_BASE is set
   # but EMPTY on a first pull, and that empty value is meaningful (no prior
   # commit). :- would discard it and lose the "first pull" case.
-  local before="" after="" verdict=""
+  local before="" after=""
   if have_git; then
     before="${SYNC_PULL_BASE-$(repo_head)}"
     pull_from_repo_or_die
@@ -2793,6 +2793,26 @@ do_pull(){
   apply_payload_to_local
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   summarize_applied "$before" "$after"
+}
+
+# The closing line, and the verification behind it, deliberately OUTSIDE the locked region
+# (claude-config#181).
+#
+# The suite is minutes of work. Run inside do_pull it held the sync lock for its whole duration, so
+# every watch daemon pull starting in that window refused rather than queueing: the job whose only
+# purpose is keeping this Mac current was starved by the step that checks this Mac is current, and
+# an interactive run in the same window simply looked wedged.
+#
+# Nothing is left for the lock to protect by then. The payload is applied, the summary is printed,
+# and this reads files that are already on disk. What it must NOT do is move: the verdict still
+# belongs in the closing line, because a pull that reports success without running any of what it
+# installed says exactly what a verified one says (L98), so the line is printed here, after the
+# suite, rather than before it.
+#
+# The applied log outlives the lock: it is removed by the EXIT trap, not by release_lock, so the
+# decision about whether a hook landed can still be taken here from the same record.
+do_pull_report(){
+  local verdict
   verdict="$(hook_suite_verdict)"
   echo "Pulled shared config onto this Mac (memory/permissions untouched)${verdict}."
 }
@@ -3708,7 +3728,11 @@ do_install_autosync(){
 cmd="${1:-help}"
 case "$cmd" in
   push) with_lock do_push ;;
-  pull) with_lock do_pull ;;
+  # Two commands, not one chained pair: with_lock leaves through die() on every failure, and under
+  # set -e a non-zero return here stops the run before the report, which is what should happen. A
+  # pull that failed has nothing to verify and nothing to report as pulled.
+  pull) with_lock do_pull
+        do_pull_report ;;
   sync) with_lock do_sync ;;
   send) with_lock do_send ;;
   # NOT locked as a whole: watch is a long-lived loop that would then hold the lock for

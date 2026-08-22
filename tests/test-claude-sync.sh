@@ -7312,14 +7312,20 @@ section "== a pull runs the hook suite it just installed (#178) =="
 unset SYNC_NO_GIT
 HTB="$WORK/hooktests-bare.git"; git init -q --bare "$HTB"
 HTRA="$WORK/hooktests-repoA"; git clone -q "$HTB" "$HTRA" 2>/dev/null
+# Named before the stub is written, not where it is cloned: the stub bakes this path in, and under
+# set -u a name that does not exist yet aborts the heredoc and leaves no stub at all.
+HTRB="$WORK/hooktests-repoB"
 HTHA="$WORK/hooktests-homeA"; mkdir -p "$HTHA/hooks"
 echo '{"hooks":{}}' > "$HTHA/settings.json"
 printf '# rules v1\n' > "$HTHA/CLAUDE.md"
 echo 'one' > "$HTHA/hooks/ht-one.sh"
+# The stub carries Mac B's lock path even though Mac A writes it, because Mac B is where it runs:
+# the point of the line is what the lock looks like from INSIDE the run (claude-config#181).
 mkrunner(){   # mkrunner <exit status>  -> writes Mac A's stub runner
   cat > "$HTHA/hooks/run-all-tests.sh" <<HTRUNNER
 #!/usr/bin/env bash
-printf '%s ran, SYNC_NO_HOOK_TESTS=%s\n' "\$(basename "\$0")" "\${SYNC_NO_HOOK_TESTS:-unset}" \
+if [ -d "$HTRB/.sync-lock" ]; then _ht_lock=held; else _ht_lock=free; fi
+printf '%s ran, SYNC_NO_HOOK_TESTS=%s, lock=%s\n' "\$(basename "\$0")" "\${SYNC_NO_HOOK_TESTS:-unset}" "\$_ht_lock" \
   >> "\$(dirname "\$0")/ht-ran.txt"
 echo "ALL 1 SUITES PASSED"
 exit $1
@@ -7327,7 +7333,7 @@ HTRUNNER
 }
 mkrunner 0
 CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
-HTRB="$WORK/hooktests-repoB"; git clone -q "$HTB" "$HTRB" 2>/dev/null
+git clone -q "$HTB" "$HTRB" 2>/dev/null
 HTHB="$WORK/hooktests-homeB"; mkdir -p "$HTHB"
 echo '{"hooks":{}}' > "$HTHB/settings.json"
 out_ht="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
@@ -7341,6 +7347,16 @@ check "#178 and the closing line carries its verdict" \
 # than a rule somebody remembers to follow (L27).
 check "#178 the suite is told not to run itself again" \
   "line_has \"\$(cat '$HTHB/hooks/ht-ran.txt')\" 'run-all-tests\.sh ran' 'SYNC_NO_HOOK_TESTS=1'"
+# And it runs with the sync lock RELEASED (claude-config#181). The suite is minutes of work, and
+# holding the lock for it means every watch daemon pull starting in that window refuses rather than
+# queueing, so the job whose whole purpose is keeping this Mac current is starved by the step that
+# checks this Mac is current. The config is already applied and on disk by the time this runs, so
+# there is nothing left for the lock to protect.
+check "#181 the suite runs with the sync lock released" \
+  "line_has \"\$(cat '$HTHB/hooks/ht-ran.txt')\" 'run-all-tests\.sh ran' 'lock=free'"
+# The fixture can tell the two apart, or "free" would mean only that it never looked (L1, L159).
+check "#181 and the stub can tell a held lock from a free one" \
+  "mkdir -p '$HTRB/.sync-lock' && bash '$HTHB/hooks/run-all-tests.sh' >/dev/null 2>&1; _ht_probe=\$?; rmdir '$HTRB/.sync-lock' 2>/dev/null; line_has \"\$(cat '$HTHB/hooks/ht-ran.txt')\" 'run-all-tests\.sh ran' 'lock=held'"
 
 # Judged by its EXIT CODE and by nothing else (L184). This stub prints the runner's own success
 # line and exits 1, which is the pair a reader of the last line of output gets wrong.

@@ -120,6 +120,10 @@ outcomes rather than two: the suite passed, the suite FAILED (the config is on d
 does not pass), or the suite could NOT be run or completed at all (nothing checked it). The last one
 is deliberately not folded into the second, since they send a reader to different places.
 
+It runs with the sync lock RELEASED, after the config is already applied and on disk, so a pull
+starting while it works is not refused. Holding the lock for it would starve the watch daemon,
+whose only purpose is keeping this Mac current, with the very step that checks this Mac is current.
+
 It runs only when a hook actually arrived, because the suite is minutes of work and the watch daemon
 pulls constantly: a pull carrying a rule file has installed nothing this runner checks. Set
 `SYNC_NO_HOOK_TESTS=1` to skip it outright, and `SYNC_HOOK_TESTS_TIMEOUT` (default `1800` seconds)
