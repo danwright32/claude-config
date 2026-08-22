@@ -7214,6 +7214,86 @@ check "#83 a file that really clashes is still kept and reported" \
 check "#83 and its copy is still set aside" "ls '$IXHB'/RTK.md.conflict-* >/dev/null 2>&1"
 
 
+section "== a conflict whose local side holds nothing new resolves itself (claude-config#177) =="
+# The 2026-08-22 pull declared three files unmergeable and wrote a .conflict copy of each. One of
+# them, hooks/test-run-all-tests.sh, held ZERO lines the applied version did not already have: the
+# incoming version was a strict superset. Every such conflict costs a manual line by line
+# comparison to find out that nothing was at stake, and leaves a stale copy in ~/.claude/hooks that
+# nobody remembers to delete.
+#
+# So containment is resolved automatically. It is NOT enough that the local side adds nothing: a
+# local DELETION is also contained (the local file is the applied one minus a line) and discarding
+# it would destroy work while reporting a clean resolution, which is the worst shape this tool
+# could take (L5). The base, which is the version this Mac last applied, is what tells the two
+# apart, and both directions are checked below.
+unset SYNC_NO_GIT
+CNB="$WORK/contain-bare.git"; git init -q --bare "$CNB"
+CNRA="$WORK/contain-repoA"; git clone -q "$CNB" "$CNRA" 2>/dev/null
+CNHA="$WORK/contain-homeA"; mkdir -p "$CNHA/hooks"
+echo '{"hooks":{}}' > "$CNHA/settings.json"
+printf 'alpha\nbravo\ncharlie\n' > "$CNHA/hooks/cn-shared.sh"
+printf 'alpha\nbravo\ncharlie\n' > "$CNHA/hooks/cn-clash.sh"
+printf 'alpha\nbravo\ncharlie\n' > "$CNHA/hooks/cn-deleted.sh"
+CLAUDE_HOME="$CNHA" SYNC_REPO="$CNRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CNRB="$WORK/contain-repoB"; git clone -q "$CNB" "$CNRB" 2>/dev/null
+CNHB="$WORK/contain-homeB"; mkdir -p "$CNHB"
+echo '{"hooks":{}}' > "$CNHB/settings.json"
+CLAUDE_HOME="$CNHB" SYNC_REPO="$CNRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#177 both Macs start from the same three files" \
+  "[ -f '$CNHB/hooks/cn-shared.sh' ] && [ -f '$CNHB/hooks/cn-clash.sh' ] && [ -f '$CNHB/hooks/cn-deleted.sh' ]"
+
+# This Mac's unsent edits. cn-shared gains a line the other Mac is about to add as well, so the
+# arriving version will contain everything this one has. cn-clash gains a line the other Mac will
+# never have. cn-deleted LOSES a line the other Mac keeps, which is the case that looks contained
+# and is not.
+printf 'alpha\nbravo\ncharlie\ndelta\n' > "$CNHB/hooks/cn-shared.sh"
+printf 'alpha\nbravo\ncharlie\nonly on B\n' > "$CNHB/hooks/cn-clash.sh"
+printf 'alpha\ncharlie\n' > "$CNHB/hooks/cn-deleted.sh"
+# The other Mac's versions, published from its own healthy clone.
+printf 'alpha\nbravo\ncharlie\ndelta\necho\n' > "$CNHA/hooks/cn-shared.sh"
+printf 'alpha\nbravo\ncharlie\nonly on A\n' > "$CNHA/hooks/cn-clash.sh"
+printf 'alpha\nbravo\ncharlie\necho\n' > "$CNHA/hooks/cn-deleted.sh"
+CLAUDE_HOME="$CNHA" SYNC_REPO="$CNRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_cn="$(CLAUDE_HOME="$CNHB" SYNC_REPO="$CNRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull with one contained side, one real clash and one local deletion: $out_cn"
+
+# The contained one. The other Mac's version is applied, no copy is set aside, and the pull SAYS
+# so: a file that did conflict and was decided in favour of the other Mac must not be settled in
+# silence (L11).
+check "#177 the contained file takes the other Mac's version" \
+  "grep -q 'delta' '$CNHB/hooks/cn-shared.sh' && grep -q 'echo' '$CNHB/hooks/cn-shared.sh'"
+check "#177 and no copy of it is set aside" \
+  "! ls '$CNHB'/hooks/cn-shared.sh.conflict-* >/dev/null 2>&1"
+check "#177 and the pull reports it as resolved" \
+  "line_has \"\$out_cn\" 'nothing was set aside' 'cn-shared\.sh'"
+check "#177 and does not call it unmergeable" \
+  "! line_has \"\$out_cn\" 'could NOT be merged' 'cn-shared\.sh'"
+
+# The real clash, which is the control: without it, a fix that simply stopped preserving anything
+# would pass every check above (L1, L129).
+check "#177 a file with a line of its own is still preserved" \
+  "ls '$CNHB'/hooks/cn-clash.sh.conflict-* >/dev/null 2>&1"
+check "#177 and is still reported as unmergeable" \
+  "line_has \"\$out_cn\" 'could NOT be merged' 'cn-clash\.sh'"
+
+# The local deletion. Its lines are all present in the arriving version, so line containment alone
+# would throw it away and call that a clean resolution.
+check "#177 a local deletion is NOT treated as contained" \
+  "ls '$CNHB'/hooks/cn-deleted.sh.conflict-* >/dev/null 2>&1"
+# The glob, not `ls ... | head -1`: a pipeline whose consumer exits first can kill its producer
+# under pipefail and report a failure that never happened (L183, claude-config#122).
+check "#177 and the deleted line is recoverable from the copy" \
+  "! grep -q 'bravo' '$CNHB'/hooks/cn-deleted.sh.conflict-*"
+check "#177 and it is reported as unmergeable too" \
+  "line_has \"\$out_cn\" 'could NOT be merged' 'cn-deleted\.sh'"
+
+# A second pull with nothing new must not repeat the resolution line: it describes what THIS pull
+# decided, and a standing announcement about a file nobody is deciding anything about is the noise
+# the conflict report already avoids.
+out_cn2="$(CLAUDE_HOME="$CNHB" SYNC_REPO="$CNRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+check "#177 a later quiet pull does not repeat it" \
+  "! line_has \"\$out_cn2\" 'nothing was set aside' 'cn-shared\.sh'"
+
 section "== one Mac's home path never travels inside a synced file (#87) =="
 # tok/detok existed, and were wired to settings.hooks.json alone. Every other payload file was
 # copied verbatim, so an absolute home path inside one was simply wrong on whichever Mac did not

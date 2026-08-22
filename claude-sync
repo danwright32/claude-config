@@ -2145,8 +2145,46 @@ only_in_first(){   # $1 = ours  $2 = theirs
   return 0
 }
 
+# Does the local side hold anything the arriving side does not already have (claude-config#177)?
+#
+# The 2026-08-22 pull wrote a .conflict copy of hooks/test-run-all-tests.sh whose every line was
+# already in the applied version. Each of those costs a manual line by line comparison to find out
+# that nothing was at stake, and leaves a stale file in ~/.claude/hooks that nobody deletes.
+#
+# It is TWO questions, not one, and answering only the first would destroy work. A local file that
+# adds nothing is contained. So is a local file that DELETED a line the arriving side still
+# carries, and that one has work to lose with no other copy of it anywhere (L5). The base, meaning
+# the version this Mac last applied, is the only thing that tells them apart, so a base that cannot
+# be read is a refusal rather than a permission: nothing is resolved on a question this could not
+# ask (L42).
+local_side_contained(){   # $1 = payload path  $2 = the live local file  $3 = last applied commit
+  local ours theirs base rc=0 left
+  [ -f "$PAYLOAD/$1" ] || return 1
+  ours="$(scratch_file)" || return 1
+  theirs="$(scratch_file)" || { rm -f "$ours"; return 1; }
+  base="$(scratch_file)" || { rm -f "$ours" "$theirs"; return 1; }
+  # Line ORDER is deliberately not part of this. Two files holding the same lines in a different
+  # order are a reordering, and the applied version's order is the one both Macs will converge on.
+  sort -u "$2" > "$ours" 2>/dev/null || rc=1
+  payload_local_view "$1" 2>/dev/null | sort -u > "$theirs" || rc=1
+  blob_local_view "$1" "$3" 2>/dev/null | sort -u > "$base" || rc=1
+  if [ "$rc" -eq 0 ]; then
+    # Anything only in ours is work that exists nowhere else.
+    left="$(comm -23 "$ours" "$theirs" 2>/dev/null | grep -c . || true)"
+    case "$left" in ''|*[!0-9]*) rc=1 ;; *) [ "$left" -eq 0 ] || rc=1 ;; esac
+  fi
+  if [ "$rc" -eq 0 ]; then
+    # A line the base and the arriving side BOTH still carry, missing from ours, is a deletion this
+    # Mac made and has not sent. Contained by lines, and not contained by intent.
+    left="$(comm -12 "$base" "$theirs" 2>/dev/null | comm -23 - "$ours" 2>/dev/null | grep -c . || true)"
+    case "$left" in ''|*[!0-9]*) rc=1 ;; *) [ "$left" -eq 0 ] || rc=1 ;; esac
+  fi
+  rm -f "$ours" "$theirs" "$base"
+  return "$rc"
+}
+
 preserve_local_conflicts(){
-  local last p local_f sfx saved="" detail
+  local last p local_f sfx saved="" detail resolved=""
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
@@ -2172,6 +2210,14 @@ $p"*) continue ;; esac
     if blob_local_view "$p" "$last" 2>/dev/null | cmp -s - "$local_f"; then continue; fi
     # already identical to what is arriving: not a conflict either
     if [ -f "$PAYLOAD/$p" ] && payload_local_view "$p" | cmp -s - "$local_f"; then continue; fi
+    # Nothing of ours is missing from what is arriving, and nothing of ours was a deletion, so the
+    # arriving version already holds every line this one had. Taken, with no copy set aside, and
+    # SAID: this file did conflict and was decided in favour of the other Mac, and a decision
+    # settled in silence is one nobody can disagree with (L11, claude-config#177).
+    if local_side_contained "$p" "$local_f" "$last"; then
+      resolved+="$p "
+      continue
+    fi
     cp "$local_f" "$local_f$sfx"
     # This run's own copies, so the standing report below does not repeat what the line beneath is
     # about to say. It is only ever about copies an EARLIER run left behind.
@@ -2182,6 +2228,12 @@ $p$sfx"
     [ -f "$PAYLOAD/$p" ] && detail="$(only_in_first "$local_f" "$PAYLOAD/$p")"
     if ! is_blank "$detail"; then saved+="$p [only in yours: ${detail% }] "; else saved+="$p "; fi
   done < <(unapplied_paths)
+  if ! is_blank "$resolved"; then
+    # Its own message, and deliberately not folded into the one below: a file that needed no copy
+    # and one whose only copy is now sitting beside it are different outcomes, and reporting them
+    # in one sentence would make the second read as reassuring as the first (L11).
+    echo "claude-sync: both Macs changed these files, but this Mac's version held no line the other Mac's version did not already have, so the other Mac's version was applied and nothing was set aside: ${resolved}" >&2
+  fi
   is_blank "$saved" && return 0
   echo "claude-sync: both Macs changed these files and they could NOT be merged automatically, so the other Mac's version was applied and YOUR version was kept next to it with the suffix $sfx: ${saved}" >&2
   notify "conflict kept as *$sfx: ${saved}"
