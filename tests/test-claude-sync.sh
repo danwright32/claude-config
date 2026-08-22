@@ -789,7 +789,12 @@ if [ "$SUITE_TIMEOUT" -gt 0 ]; then
   # lingering. A watchdog outliving its run holds a process id the system may reuse, and would
   # then kill whatever inherited it.
   (
-    exec -a suite-deadline-watchdog sh -c '
+    # Named with a TAG when one is given, so a run can find the watchdogs belonging to the runs IT
+    # started rather than every watchdog on the machine (claude-config#159). The default run is
+    # four shards and each has one of its own, so a global count moves for reasons that have
+    # nothing to do with the runs being watched (L205, L134). Nothing sets this but the #31
+    # section; a run with no tag is named exactly as before.
+    exec -a "suite-deadline-watchdog${SUITE_WATCHDOG_TAG:+.$SUITE_WATCHDOG_TAG}" sh -c '
       waited=0
       while [ "$waited" -lt "$2" ]; do
         sleep 2
@@ -3843,13 +3848,19 @@ section "== a run that hangs fails on a deadline instead of waiting (#31) =="
 # Driven through a named seam that hangs in a chosen section, rather than by waiting for a real
 # stall, so the deadline is PROVEN rather than assumed. The child hangs in the very first
 # section, so this costs about as long as the deadline it sets.
-# Counted BEFORE anything is spawned, because this run has a watchdog of its own and an
-# assertion that none exist at all can only ever fail. What has to be true is that the children
-# below leave none of THEIRS behind.
-_wd_before="$(pgrep -f suite-deadline-watchdog 2>/dev/null | wc -l | tr -d ' ')"
+# The runs below are TAGGED, so the watchdogs they leave can be told from every other watchdog on
+# the machine (claude-config#159). It used to count `pgrep -f suite-deadline-watchdog` before and
+# after and require the second number to be no larger: that count is global, the default run is
+# four shards each with a watchdog of its own, and any of them starting a child inside that window
+# raised it for reasons unrelated to these runs. It failed once in three full runs on 2026-08-22
+# on an unchanged tree, and an intermittent red blocks a legitimate push (L205, L134).
+#
+# With a tag there is no window and no subtraction: nothing else on the machine can carry it, so
+# the assertion is simply that none survive.
+_wd_tag="wdtag$$-$SECONDS"
 _hang_deadline=6
 _t0="$(date +%s)"
-_hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_TIMEOUT=$_hang_deadline SUITE_HANG_IN=push bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
+_hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_TIMEOUT=$_hang_deadline SUITE_HANG_IN=push SUITE_WATCHDOG_TAG="$_wd_tag" bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
 _elapsed=$(( $(date +%s) - _t0 ))
 check "#31 a hung run ends instead of waiting for ever" "[ '$_hang_rc' -ne 0 ]"
 check "#31 it says plainly that it timed out"   "printf '%s' \"\$_hang\" | grep -q 'TIMED OUT'"
@@ -3863,7 +3874,7 @@ check "#31 a hung run is never reported as green" "! printf '%s' \"\$_hang\" | g
 # firing when it should not, not only firing when it should.
 # TIMED, because it is also the reference the hung run above is judged against (claude-config#149).
 _ok_t0="$(date +%s)"
-_okrun="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push SUITE_TIMEOUT=300 bash "$SCRIPT_SELF" 2>&1)"; _okrun_rc=$?
+_okrun="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push SUITE_TIMEOUT=300 SUITE_WATCHDOG_TAG="$_wd_tag" bash "$SCRIPT_SELF" 2>&1)"; _okrun_rc=$?
 _ok_elapsed=$(( $(date +%s) - _ok_t0 ))
 check "#31 a healthy run is not killed by its own deadline" "! printf '%s' \"\$_okrun\" | grep -q 'TIMED OUT'"
 check "#31 and still reports its result"        "[ '$_okrun_rc' -eq 0 ]"
@@ -3891,14 +3902,24 @@ check "#31 and a run one second over that bound is refused" \
 # A watchdog that outlives the run it watches is holding a process id that the system is free to
 # hand to something else, and it kills what it finds there. Each one exits within a poll of its
 # own run ending, so this waits a few seconds for that rather than reading the instant after.
-_wd_now="$_wd_before"
+_wd_now=0
 _wd_wait=0
 while [ "$_wd_wait" -lt 10 ]; do
-  _wd_now="$(pgrep -f suite-deadline-watchdog 2>/dev/null | wc -l | tr -d ' ')"
-  [ "$_wd_now" -le "$_wd_before" ] && break
+  _wd_now="$(pgrep -f "suite-deadline-watchdog.$_wd_tag" 2>/dev/null | wc -l | tr -d ' ')"
+  [ "${_wd_now:-0}" -eq 0 ] && break
   sleep 1; _wd_wait=$((_wd_wait + 1))
 done
-check "#31 the runs above left no watchdog of their own behind" "[ '$_wd_now' -le '$_wd_before' ]"
+check "#31 the runs above left no watchdog of their own behind" "[ '${_wd_now:-0}' -eq 0 ]"
+# The control, and it is what stops the check above passing by looking for something that could
+# never exist. A pattern that matches nothing reads exactly like a clean answer (L98, L1), and a
+# mistyped tag would give zero for ever. So the UNTAGGED pattern must still find at least one:
+# this very run has a watchdog of its own whenever it has a deadline at all.
+if [ "$SUITE_TIMEOUT" -gt 0 ]; then
+  _wd_any="$(pgrep -f suite-deadline-watchdog 2>/dev/null | wc -l | tr -d ' ')"
+  check "#31 and the search really can find a watchdog, so zero means zero" "[ '${_wd_any:-0}' -ge 1 ]"
+else
+  check "#31 this run has no deadline, so it has no watchdog to find" "[ '$SUITE_TIMEOUT' -eq 0 ]"
+fi
 
 section "== only one suite run at a time (#32) =="
 # Nothing stopped several copies of this suite running at once. Three did on 2026-08-17, competing
