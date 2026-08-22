@@ -162,6 +162,52 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# WHERE it starts, so "the fixture is small" stops being a word (claude-config#168).
+# ---------------------------------------------------------------------------
+# The tolerance above is that the remaining sites are printf of a small fixture piped into a quiet
+# grep. That held on nothing but the word "small", and two of these were correct for months before
+# their input grew, so the number nobody had is exactly the number that decides it.
+#
+# Bracketed rather than bisected to the byte: the answer is not a constant. What decides it is where
+# the match falls and how much the writer still has queued when the reader leaves, so a precise
+# figure would be a precise fact about this one fixture. A bracket ("clean at this size, fires at
+# that one") is what the claim actually needs, and it is honest about being approximate.
+#
+# The match is on the FIRST line every time, which is the worst case and the one a real site meets
+# when its needle is common. A site whose match falls late has more headroom than this reports.
+_sc_probe_at(){   # $1 = approximate bytes -> exit 0 when the fault FIRED at that size
+  local f="$TMPROOT/sc-at.txt" lines
+  lines=$(( $1 / 18 + 1 ))
+  { printf 'needle\n'; awk -v n="$lines" 'BEGIN{for(i=0;i<n;i++) print "filler line " i}'; } > "$f"
+  bash "$TMPROOT/probe-hazard.sh" "$f" >/dev/null 2>&1 && return 1
+  return 0
+}
+_sc_clean=""      # the largest size that did NOT fire
+_sc_fires=""      # the smallest size that DID
+for _sc_try in 4096 16384 65536 262144 1048576 4194304; do
+  if _sc_probe_at "$_sc_try"; then
+    [ -z "$_sc_fires" ] && _sc_fires="$_sc_try"
+  else
+    _sc_clean="$_sc_try"
+  fi
+done
+# Both sides, or nothing was bracketed. A run that only ever saw one answer has measured that this
+# machine is entirely one way, which is a different fact and is reported as one rather than as a
+# threshold nobody found (L98, L11).
+if [ -n "$_sc_clean" ] && [ -n "$_sc_fires" ]; then
+  echo "test-pipefail-shortcircuit: it is clean at ${_sc_clean} bytes and fires at ${_sc_fires}, with the match on the first line. That is the headroom the remaining sites have: a fixture under ${_sc_clean} bytes is safe here today, and one approaching ${_sc_fires} is not."
+  check "the hazard was bracketed on this machine (clean ${_sc_clean}, fires ${_sc_fires})" ok
+elif [ -n "$_sc_fires" ]; then
+  echo "test-pipefail-shortcircuit: it fired at every size tried, from ${_sc_fires} bytes up. There is no safe size here, so the tolerated sites are safe only because their fixtures are smaller than anything measured."
+  check "the hazard was bracketed on this machine" "it fired at every size tried, so no clean side was found"
+elif [ -n "$_sc_clean" ]; then
+  echo "test-pipefail-shortcircuit: it was clean at every size tried, up to ${_sc_clean} bytes. The hazard is not reachable here at these sizes, which is why the ratchet exists on a platform dependent threshold rather than on a bug this machine can show."
+  check "the hazard was bracketed on this machine" ok
+else
+  check "the hazard was bracketed on this machine" "neither side was found, so the sizes probed measured nothing"
+fi
+
+# ---------------------------------------------------------------------------
 # The real tree, against the recorded counts.
 # ---------------------------------------------------------------------------
 grew=""

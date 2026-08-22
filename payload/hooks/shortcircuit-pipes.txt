@@ -22,7 +22,13 @@
 #
 # The ones left are overwhelmingly `printf '%s' "$var" | grep -q` inside tests, where the text is a
 # fixture the test itself built. That is a real distinction and not a comfortable one: it holds
-# only while the fixture stays small.
+# only while the fixture stays small, and "small" now has a number rather than being a word
+# (claude-config#168). The probe in test-pipefail-shortcircuit.sh brackets it on whatever machine
+# the suite runs on and prints the answer every run, so it cannot go stale the way a figure written
+# down here would: measured on this Mac 2026-08-22, clean at 64 KB and firing at 256 KB with the
+# match on the first line, which is the pipe buffer and is the mechanism rather than a coincidence.
+# A site whose match falls late in its input has more headroom than that; one whose needle is
+# common has exactly this much.
 #
 # It is now true again that no site in SHIPPED code is left, which the header claimed while three
 # files disproved it (claude-config#162). Widening the pattern in #153 made 180 sites visible that
