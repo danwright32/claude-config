@@ -2802,6 +2802,44 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/
 out_ns3="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
 check "a removed skill also earns the notice"    "printf '%s' \"\$out_ns3\" | grep -i 'new Claude Code session' | grep -q 'rs-added'"
 
+# A hook REGISTRATION added or removed is the same kind of change (claude-config#176). Claude Code
+# takes its snapshot of the hooks block at session start, so a hook the pull just registered is
+# inert in every session already running, and before this the pull said nothing at all: the
+# 2026-08-22 pull registered project-list-nudge.sh in silence. The SCRIPTS stay excluded, because
+# those really are re-read from disk on every fire; it is the registration that is read once.
+cat > "$NSAH/settings.json" <<'NSHOOKS'
+{"hooks":{"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"bash ~/.claude/hooks/rs-newhook.sh"}]}]}}
+NSHOOKS
+echo 'newhook' > "$NSAH/hooks/rs-newhook.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_ns4="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
+check "a newly registered hook earns the notice"  "line_has \"\$out_ns4\" 'new Claude Code session' 'rs-newhook'"
+# It has to be the REGISTRATION that earned it and not the script arriving beside it, or this
+# passes for the wrong reason on a pull that carried both.
+check "and the script alone would not have"       "! line_has \"\$out_ns4\" 'new Claude Code session' 'rs-hook\.sh'"
+
+# An edit that leaves the same hooks registered changes nothing a running session holds, so it
+# stays quiet, exactly as an edit to an already listed skill does. Here the matcher changes and the
+# command does not.
+cat > "$NSAH/settings.json" <<'NSHOOKS2'
+{"hooks":{"UserPromptSubmit":[{"matcher":"Edit","hooks":[{"type":"command","command":"bash ~/.claude/hooks/rs-newhook.sh"}]}]}}
+NSHOOKS2
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_ns5="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
+check "an edit to an already registered entry is reported" "line_has \"\$out_ns5\" 'updated' 'settings\.json \\(hooks section\\)'"
+# And it is reported as a plain edit: the merge appends "registered" or "unregistered" to that
+# label only when the set of commands actually moved, which is the same fact the notice is decided
+# from, so its absence here is what makes the silence correct rather than merely observed.
+check "and the label claims no registration moved" "! line_has \"\$out_ns5\" 'settings\.json' 'registered:'"
+check "but earns no restart notice"               "! line_has \"\$out_ns5\" 'Start a new Claude Code session' 'pick these up'"
+
+# And losing a registration is as wrong for a running session as gaining one, the same way a
+# removed skill is.
+echo '{"hooks":{}}' > "$NSAH/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_ns6="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
+check "an unregistered hook also earns the notice" "line_has \"\$out_ns6\" 'new Claude Code session' 'rs-newhook'"
+
 section "== #13: an apply must not delete a hook registration this Mac has not sent yet =="
 # Seen for real on 2026-07-29 (and once before, during the send-wedge): the hooks
 # block was applied by REPLACING it wholesale, so a hook registered here since the

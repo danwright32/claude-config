@@ -2458,18 +2458,64 @@ restart_watch_daemon_if_installed(){
 # Which of the received paths a session that is ALREADY running will keep
 # ignoring. Claude Code reads the rule files (CLAUDE.md and its @imports) once, at
 # session start, and builds its list of available skills/agents/commands then too,
-# so those changes reach only the NEXT session. Hook scripts are deliberately NOT
-# listed: Claude Code re-reads the script from disk every time the hook fires, and
-# picks up the hooks block of settings.json with its own file watcher, so both are
-# already live. Naming them would turn this into a line that prints on nearly every
-# pull, and a notice people scroll past protects nobody.
+# so those changes reach only the NEXT session. Hook SCRIPTS are deliberately NOT
+# listed: Claude Code re-reads the script from disk every time the hook fires, so
+# an edit to one is already live. Naming them would turn this into a line that
+# prints on nearly every pull, and a notice people scroll past protects nobody.
+#
+# Which hooks are REGISTERED is the opposite, and used to be skipped with the
+# scripts (claude-config#176). Claude Code takes its snapshot of the hooks block at
+# session start, so a hook this pull just registered is inert in every session
+# already running, and the pull said nothing: the 2026-08-22 pull registered
+# project-list-nudge.sh in silence and it fired for nobody until the next session.
+# The old line claimed a file watcher picked the block up live, which is the claim
+# that made the skip look reasoned; it was not true.
+#
+# The set that moved is not recomputed here. The merge above already worked it out
+# from the incoming and last-applied fragments, and wrote it into the label it
+# records, so this reads the producer's own answer rather than a second definition
+# of the same question drifting beside it (L107).
 # Reads the applied list (kind<TAB>path) on stdin, prints one name per line.
+REGISTERED_MARK=", registered: "
+UNREGISTERED_MARK=", unregistered: "
+registration_names(){   # $1 = an applied label -> one hook script name per line
+  local rest part
+  rest="$1"
+  case "$rest" in
+    *"$REGISTERED_MARK"*)
+      part="${rest#*"$REGISTERED_MARK"}"
+      part="${part%%"$UNREGISTERED_MARK"*}"
+      printf '%s\n' "$part" | tr ',' '\n'
+      ;;
+  esac
+  case "$rest" in
+    *"$UNREGISTERED_MARK"*)
+      part="${rest#*"$UNREGISTERED_MARK"}"
+      part="${part%%"$REGISTERED_MARK"*}"
+      printf '%s\n' "$part" | tr ',' '\n'
+      ;;
+  esac
+}
 needs_new_session(){
-  local kind name out=""
+  local kind name out="" hook
   while IFS=$'\t' read -r kind name; do
     [ -n "$name" ] || continue
     case "$name" in
-      settings.json*) continue ;;
+      settings.json*)
+        # An edit that leaves the same hooks registered (a matcher reworded, an
+        # entry moved between events) changes nothing a running session holds, so
+        # it stays quiet, exactly as an edit to an already listed skill does.
+        while IFS= read -r hook; do
+          hook="${hook#"${hook%%[![:space:]]*}"}"
+          hook="${hook%"${hook##*[![:space:]]}"}"
+          [ -n "$hook" ] || continue
+          out+="hooks/$hook
+"
+        done <<REGEOF
+$(registration_names "$name")
+REGEOF
+        continue
+        ;;
       skills/*|agents/*|commands/*)
         # Only gaining or losing one changes what the running session can reach.
         # An edit to one already in its list is re-read when it is next invoked.
