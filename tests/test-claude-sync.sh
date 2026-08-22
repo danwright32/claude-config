@@ -22,6 +22,24 @@ SCRIPT_SELF="${SCRIPT_SELF:-$(cd "$(dirname "$0")" && pwd)/$(basename "$0")}"
 SUITE_SCRATCH_HOME="${SUITE_SCRATCH_HOME:-${TMPDIR:-/tmp}/claude-sync}"
 mkdir -p "$SUITE_SCRATCH_HOME" 2>/dev/null || SUITE_SCRATCH_HOME="${TMPDIR:-/tmp}"
 
+# ---- which processes belong to this run (claude-config#166) ----
+# A run killed with SIGKILL cannot run #163's cleanup, because nothing runs inside a process that
+# has been killed outright, so its shards and its re-executed copy go on running and go on holding
+# the machine. The only place a remedy can live is the run that takes the lock over afterwards, and
+# that run needs to know WHICH processes were the dead one's.
+#
+# Not "every suite process that is not mine": this file starts nested runs constantly and that rule
+# would kill the fixtures of every check in it. So each run appends itself to a registry the
+# top-level run creates, the lock names that file, and a takeover clears exactly what it lists.
+#
+# Registered here, before anything else can fork, so a run that dies early is still accounted for.
+# A run that INHERITED the variable appends to the file it was given; the one that takes the lock
+# makes its own further down and exports that, which is what makes the lock's registry the lock
+# holder's own rather than whatever it happened to be started from.
+if [ -n "${SUITE_RUN_REGISTRY:-}" ] && [ -f "${SUITE_RUN_REGISTRY:-}" ]; then
+  printf '%s\n' "$$" >> "$SUITE_RUN_REGISTRY" 2>/dev/null || true
+fi
+
 # ---- a hard limit on suite runs that spawn suite runs (#34) ----
 # #27 let this suite run itself as a subprocess, and 45528c7 fixed one way that recursed without
 # bound, after seventeen suite processes were found multiplying on this Mac. That fix was one
@@ -939,6 +957,37 @@ suite_kill_tree(){   # $1 = a pid whose descendants are to go
   return 0
 }
 
+# What a run killed OUTRIGHT left behind (claude-config#166). Read from that run's own registry,
+# named by its lock, so this can only ever reach processes that run started.
+#
+# Every number is confirmed to still BE a run of this suite immediately before the kill. A registry
+# is a list of numbers, numbers get reused, and killing whatever holds one now rather than what held
+# it then is how somebody's unrelated work gets killed: a judgement formed before the act is not a
+# judgement about the thing being acted on (L157).
+suite_clear_registered_strays(){   # $1 = the lock directory of the run that is gone
+  local reg p cmd n=0
+  reg="$(cat "$1/registry" 2>/dev/null || true)"
+  [ -n "$reg" ] || return 0
+  [ -f "$reg" ] || return 0
+  while IFS= read -r p; do
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    [ "$p" = "$$" ] && continue
+    kill -0 "$p" 2>/dev/null || continue
+    cmd="$(ps -o command= -p "$p" 2>/dev/null || true)"
+    case "$cmd" in *"$SCRIPT_SELF"*) ;; *) continue ;; esac
+    suite_kill_tree "$p"
+    kill -9 "$p" 2>/dev/null || true
+    n=$(( n + 1 ))
+  done < "$reg"
+  # Consumed, or the next run over the same lock reports clearing the same processes again and the
+  # count stops being a measurement of anything.
+  rm -f "$reg"
+  # Said only when it actually cleared something. A takeover that found nothing to clear and one
+  # that cleared four are different facts, and a line printed either way is neither (L98, L11).
+  [ "$n" -gt 0 ] && echo "test suite: and cleared $n process(es) that run left running. A run killed outright cannot clean up after itself, so this happens here rather than there, which means it is after the fact: anything it started that no longer names this suite is deliberately NOT touched." >&2
+  return 0
+}
+
 suite_cleanup(){
   [ -n "${SUITE_WATCHDOG_PID:-}" ] && kill "$SUITE_WATCHDOG_PID" 2>/dev/null
   # And everything else this run started, not only the watchdog (claude-config#163). On a run that
@@ -950,6 +999,9 @@ suite_cleanup(){
   # Only a run that actually TOOK the lock releases it, or a run that refused would delete the
   # lock belonging to the run it just refused for.
   [ -n "${SUITE_LOCK_HELD:-}" ] && rm -rf "$SUITE_LOCK"
+  # Only the run that CREATED it, or a nested run would delete the registry its parent is still
+  # registering into and the parent's own leftovers would become unclearable.
+  [ -n "${SUITE_RUN_REGISTRY_OWNED:-}" ] && [ -n "${SUITE_RUN_REGISTRY:-}" ] && rm -f "$SUITE_RUN_REGISTRY"
   [ -n "${WORK:-}" ] && rm -rf "$WORK"
   return 0
 }
@@ -1003,6 +1055,15 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
       printf '%s\n' "$(hostname)" > "$SUITE_LOCK/host"
       printf '%s\n' "$(date +%s)" > "$SUITE_LOCK/started"
       SUITE_LOCK_HELD=1
+      # Its OWN, overriding anything inherited: a run that takes the lock is the top of a run, and
+      # recording somebody else's registry in the lock would point a later takeover at processes
+      # this run never started. Exported, so everything it starts from here lands in it: the shards
+      # and the re-executed copy are exactly what survives a force-kill.
+      SUITE_RUN_REGISTRY="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-run.XXXXXXXX")"
+      SUITE_RUN_REGISTRY_OWNED=1
+      export SUITE_RUN_REGISTRY
+      printf '%s\n' "$$" > "$SUITE_RUN_REGISTRY"
+      printf '%s\n' "$SUITE_RUN_REGISTRY" > "$SUITE_LOCK/registry"
       break
     fi
     _lk_pid="$(cat "$SUITE_LOCK/pid" 2>/dev/null || true)"
@@ -1027,6 +1088,8 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
         exit 5
       fi
       echo "test suite: took over a lock whose run is gone (process $_lk_pid is not running)." >&2
+      # Before the lock directory is removed below, since that is where the registry is named.
+      suite_clear_registered_strays "$SUITE_LOCK"
     else
       if [ "$_lk_age" -lt "${SUITE_LOCK_MAX_AGE:-1800}" ]; then
         # Deliberately NOT the message above. That one hands over a command to kill the holder,
@@ -4432,6 +4495,83 @@ check "#163 and gives a command that would end it" \
   "case \"\$_int_ref\" in *'kill -9'*) true ;; *) false ;; esac"
 check "#163 and names the process that command would act on" \
   "line_has \"\$_int_ref\" 'kill -9' '$$'"
+
+section "== a force-killed run's leftovers are cleared by the next one (#166) =="
+# needs: only one suite run at a time
+# #163 traps the signals a run can be told about, so an interrupted run kills its own children.
+# SIGKILL cannot be trapped by anything, so a force-killed run still leaves its re-executed copy
+# and its shards going. The lock recovers correctly on its own (the next run finds a recorded
+# process that is gone and takes over saying so), but those processes keep running and keep
+# competing for the machine, which is the half that makes every timing the next run reports wrong.
+#
+# So the remedy lives in the run that TAKES OVER rather than in the one that died. That is weaker
+# than #163 and it is the only place it can live: nothing runs inside a process that has been
+# killed outright. It is after the fact, and the message says so rather than claiming the machine
+# is now clean.
+#
+# What it must NOT do is kill a suite process belonging to something else. This file starts nested
+# runs constantly, and a rule of "any suite process that is not mine" would kill the fixtures of
+# every check in it. So a run registers its own processes in a file of its own, the lock names that
+# file, and a takeover clears exactly what that dead run registered.
+#
+# The state is CONSTRUCTED here rather than raced for, the same way the planted locks above are: a
+# force-killed run leaves a state that is awkward to reach on purpose and trivial to describe, and
+# constructing it is what makes each part of the rule checkable on its own.
+_or_lock="$_lockdir/orphans"
+rm -rf "$_or_lock"
+_or_reg="$WORK/orphan-registry"
+# One process that still NAMES this suite, which is what a surviving shard looks like, and one that
+# does not. Both are real processes of this test's own, so nothing here can reach anything else.
+bash -c 'exec -a "bash '"$SCRIPT_SELF"' --orphan-fixture" sleep 600' &
+_or_stray=$!
+sleep 600 &
+_or_bystander=$!
+# Given a moment to become what they claim to be: `exec -a` replaces the process, and reading its
+# command line before that has happened would test the shell that is about to be replaced.
+_or_w=0
+while [ "$_or_w" -lt 20 ]; do
+  case "$(ps -o command= -p "$_or_stray" 2>/dev/null || true)" in *orphan-fixture*) break ;; esac
+  sleep 1; _or_w=$(( _or_w + 1 ))
+done
+printf '%s\n%s\n' "$_or_stray" "$_or_bystander" > "$_or_reg"
+_mklock "$_or_lock" "99999999" "$_thishost" "$((_now - 5))"
+printf '%s\n' "$_or_reg" > "$_or_lock/registry"
+
+# The fixture, asserted before anything acts on it. Two processes that are both alive, one of which
+# reads as a run of this suite and one of which does not: without that the checks below are
+# satisfied by a pair that was never running (L159).
+check "#166 the fixture leaves a process that reads as this suite" \
+  "kill -0 '$_or_stray' 2>/dev/null && case \"\$(ps -o command= -p '$_or_stray' 2>/dev/null)\" in *orphan-fixture*) true ;; *) false ;; esac"
+check "#166 and one that does not"  "kill -0 '$_or_bystander' 2>/dev/null"
+
+_or_take="$(_try_lock "$_or_lock")"; _or_take_rc=$?
+sleep 1
+check "#166 the next run takes the dead run's lock over" "[ '$_or_take_rc' -eq 0 ]"
+check "#166 and says how many processes it cleared" \
+  "line_has \"\$_or_take\" 'left running' '[0-9]+'"
+check "#166 the leftover that named this suite is gone" "! kill -0 '$_or_stray' 2>/dev/null"
+# The check that decides whether the idea is safe at all. A registry is a list of numbers, numbers
+# are reused, and a takeover that kills whatever holds one NOW is a takeover that kills somebody's
+# unrelated work. The number is confirmed to still be a run of this suite immediately before the
+# kill, so a recycled one is left alone (L157, L15).
+check "#166 and a number that is no longer this suite is left alone" \
+  "kill -0 '$_or_bystander' 2>/dev/null"
+# The registry is consumed, or the next run over the same lock reports clearing the same processes
+# again and the count stops meaning anything.
+check "#166 the dead run's registry is not left behind" "[ ! -f '$_or_reg' ]"
+
+# And a takeover with NOTHING left to clear must not claim it cleared something, which is the same
+# distinction the reaper draws between finding nothing and being switched off (L98, L11).
+rm -rf "$_or_lock"
+_mklock "$_or_lock" "99999998" "$_thishost" "$((_now - 5))"
+_or_empty="$(_try_lock "$_or_lock")"
+check "#166 a takeover with nothing to clear says nothing about clearing" \
+  "! case \"\$_or_empty\" in *'left running'*) true ;; *) false ;; esac"
+check "#166 and still reports the takeover itself" \
+  "case \"\$_or_empty\" in *'took over a lock'*) true ;; *) false ;; esac"
+
+kill -9 "$_or_bystander" 2>/dev/null || true
+kill -9 "$_or_stray" 2>/dev/null || true
 
 section "== status notices processes the tool left running (#33) =="
 # Seventeen suite processes were running and spawning each other on 2026-08-17, found only because

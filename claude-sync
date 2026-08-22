@@ -3101,7 +3101,7 @@ case "$SYNC_SCRATCH_MAX_AGE" in
 esac
 # Overridable so a test can point the scan at names of its own. It is not a knob anybody needs in
 # normal use: the default IS the list of every prefix this tool creates.
-SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-suite-work. claude-sync-suite-section.}"
+SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-suite-work. claude-sync-suite-section. claude-sync-suite-run.}"
 
 # ---------- a directory of the tool's own, inside the temp root (#116) ----------
 # The sweep above globs the temp root, and that root belongs to the whole machine: 113,912 entries
