@@ -4,7 +4,8 @@
 # subagents, and the ONE definition of the spool's shape.
 #
 # Why a spool at all. The end of turn issue review is a Stop hook: it fires when
-# the MAIN session stops, on a 30 minute per project cooldown, reading the main
+# the MAIN session stops, on a 30 minute per project cooldown (a window the hook sets, not
+# measured), reading the main
 # transcript. None of that reaches a subagent. A batch of agents working in
 # parallel therefore produced observations that were never offered to anyone,
 # and a review suppressed by the cooldown lost whatever that turn found.

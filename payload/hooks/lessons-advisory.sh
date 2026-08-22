@@ -29,7 +29,8 @@
 #   - CLAUDE_DETACHED_RUN set: nobody is reading advice in a headless run. Skip.
 #   - Not a git push, or not inside a work tree ................. silent
 #   - Nothing matched .......................................... silent
-#   - Cooldown stamp (90s per repo AND per finding): pushing again after acting
+#   - Cooldown stamp (90s per repo AND per finding, a window this hook sets and not measured):
+#     pushing again after acting
 #     on the advice does not repeat it, while a DIFFERENT finding still gets
 #     through rather than being swallowed by the window.
 #

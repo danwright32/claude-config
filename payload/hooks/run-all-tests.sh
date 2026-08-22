@@ -11,7 +11,8 @@
 # directory, the one it lives in, so `tests/`, `tools/` and
 # `payload/skills/milestone/` were outside it. The first three were run only
 # because four hand written steps in .github/workflows/tests.yml named them, and
-# the fourth was named by nothing at all: 233 checks that had never run anywhere.
+# the fourth was named by nothing at all: 233 checks, counted on 2026-08-10, that
+# had never run anywhere.
 # The boundary was the same hand maintained list, drawn one level up.
 #
 # So with no arguments it asks the REPO which directories hold a suite, and reads
@@ -61,9 +62,11 @@ export HOOK_TESTS_RUNNING=1
 FAIL_DETAIL_MAX="${HOOK_TESTS_FAIL_DETAIL_MAX:-40}"
 
 # How many suites run at once (claude-config#125). Since #120 this reads every directory in the
-# repo, which is 37 suites and about five minutes, dominated by one that takes three of them. Five
-# minutes is how a full run stops being run at all, which is the exact failure #120 exists to
-# close, so the answer is to make the full run fast rather than to make a partial run the default.
+# repo, which was 37 suites and about five minutes run one after another when #125 was written,
+# and is 38 suites in 84 seconds measured on 2026-08-21, over half of that spent on the single
+# longest suite after every other one has finished. Five minutes is how a full run stops being run
+# at all, which is the exact failure #120 exists to close, so the answer is to make the full run
+# fast rather than to make a partial run the default.
 #
 # The suites are independent: each builds its own throwaway state and writes a self contained
 # verdict. What is NOT independent is the report, so results are collected to files and printed in
@@ -99,8 +102,9 @@ esac
 # the shares follow from it, which keeps the total one number either way.
 #
 # The floor of two is for the small machine, which is where this arithmetic goes wrong quietly: the
-# CI runner has two cores, half of two is one, and 38 suites would have run strictly one after
-# another while two slots sat reserved for whichever of them could use them. Capped by the budget,
+# CI runner has two cores, half of two is one, and the 38 suites counted on 2026-08-21 would have
+# run strictly one after another while two slots sat reserved for whichever of them could use
+# them. Capped by the budget,
 # so a single core is one suite and not two.
 _jobs_default=$(( BUDGET / 2 ))
 [ "$_jobs_default" -ge 2 ] || _jobs_default=2
@@ -260,8 +264,8 @@ if [ "$ran" -gt 0 ]; then
   # The budget is granted to LANES, not divided equally between suites (claude-config#139). An
   # equal division gave the one suite taking most of the wall clock no more of the machine than a
   # suite finishing in a second, and that suite is launched first and is the only thing still
-  # running at the end, so for most of a run there was idle budget nothing could use: 124 seconds
-  # against 88 the oversubscribed way it replaced.
+  # running at the end, so for most of a run there was idle budget nothing could use: measured on
+  # 2026-08-21, 124 seconds against 88 the oversubscribed way it replaced.
   #
   # There are `at_once` lanes, each with a share, and a suite is granted the share of the lane it
   # launches into. Lane 1 is the first launch, which is the longest suite, because the launch order

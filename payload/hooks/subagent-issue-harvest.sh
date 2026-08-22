@@ -162,7 +162,8 @@ nothing else: no preamble, no summary, no closing line.
 The transcript follows.
 PROMPT_END
 
-# The model call gets a DEADLINE. The hook itself is killed at 180 seconds by
+# The model call gets a DEADLINE. The hook itself is killed at 180 seconds (a limit Claude Code
+# sets, not measured) by
 # Claude Code, and a kill leaves no record at all: absence of a record is the one
 # state this design cannot represent, so a hang would be indistinguishable from
 # an agent that never ran. The default sits below the hook's own limit so the

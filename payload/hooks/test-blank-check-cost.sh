@@ -3,8 +3,9 @@
 # character out of it (claude-config#117).
 #
 # `${s//[[:space:]]/}` builds a whole new string, and under the bash macOS ships (3.2) the cost is
-# superlinear in the NUMBER OF MATCHES: measured on this Mac at 1,536 matches it took 11.5 seconds
-# and at 3,072 it took 82, while `case "$s" in *[![:space:]]*)` answered both in 3 milliseconds.
+# superlinear in the NUMBER OF MATCHES: measured on this Mac on 2026-08-21, at 1,536 matches it
+# took 11.5 seconds and at 3,072 it took 82, while `case "$s" in *[![:space:]]*)` answered both in
+# 3 milliseconds.
 # It hung tools/measure-sync-gaps.sh for minutes on the real repo while every one of that tool's
 # tests passed, because a fixture has almost no matches by construction and a size-dependent path
 # always takes the small branch under test (L101).
@@ -75,7 +76,8 @@ BADHOME="/Users""/someone-elses-mac"
 # ---------------------------------------------------------------------------
 # The guard that gets slower the more it has to report.
 #
-# 120 violating lines, each padded with 100 spaces: about 12,000 whitespace matches, while the
+# 120 violating lines, each padded with 100 spaces: about 12,000 whitespace matches. Those are
+# sizes this fixture chooses and not measured, so they carry no date. While the
 # per-line work inside the scanner (which spawns greps and is nothing to do with the blank test)
 # stays at 120 lines. Sizing it by MATCHES rather than by lines is the point: a threshold measured
 # while a co-varying component moves too attaches itself to the wrong variable (L209).

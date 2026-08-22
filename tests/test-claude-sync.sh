@@ -562,7 +562,8 @@ SONEEDS
   # kills the whole shell on an unbound variable at TOP LEVEL, but only the SUBSHELL when the read
   # sits inside a command substitution, so a section missing a prerequisite can lose several tool
   # invocations, print nothing but ok lines, and exit 0. That is not hypothetical: one section in
-  # this file was measured printing 54 ok lines and no failures in exactly that state, saved only by
+  # this file was measured on 2026-08-20 printing 54 ok lines and no failures in exactly that
+  # state, saved only by
   # a fifth read that happened to be at top level. pipefail is already set, and tee exits 0, so the
   # status here is still the run's own.
   _so_log="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
@@ -702,7 +703,7 @@ if [ "$SUITE_TIMEOUT" -gt 0 ]; then
       echo "It was killed rather than left waiting. A run with no deadline cannot fail, it can only hang, and a hang reads as an ordinary slow run (L110). Raise SUITE_TIMEOUT if this machine is genuinely slower than that." >&2
       # Kill the run AND everything it started. Killing only the run itself leaves its children
       # alive, and anything reading the run output then waits for THEM: a 6 second deadline
-      # measured 60, the length of the sleep the run happened to be sitting in. Its children are
+      # measured 60 on 2026-08-17, the length of the sleep the run happened to be sitting in. Its children are
       # also precisely what is still holding whatever the hung run acquired, which is half the
       # reason a hang is worse than a failure.
       self=$$
@@ -816,8 +817,9 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
         echo "test suite: another run is already going (process $_lk_pid on $_lk_host, started ${_lk_age}s ago). Refusing rather than queueing behind it. Wait for it, or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
         exit 5
       fi
-      # 30 minutes against a full run measured at 123 seconds, so roughly 15x the real thing. It is
-      # the one threshold where being wrong LOW starts a second run on top of a live one.
+      # 30 minutes against a full run, which was measured at 123 seconds on 2026-08-17 and at 243
+      # seconds in a single process on 2026-08-21, so between 7x and 15x the real thing. It is the
+      # one threshold where being wrong LOW starts a second run on top of a live one.
       echo "test suite: took over a lock from $_lk_host that is ${_lk_age}s old, older than any run can be." >&2
     fi
     if ! suite_lock_is_ours; then
@@ -1061,7 +1063,8 @@ fan_totals_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards expe
 # independently and compared nowhere, so a four core machine could carry a dozen heavy processes,
 # each spawning git and python. It never went red. Oversubscription makes timing sensitive checks
 # intermittently wrong instead, and this suite's own deadline guard was measured firing at 1192s
-# against a normal 200 on a loaded Mac, which is the hardest kind of failure to attribute.
+# against a normal 200 on a loaded Mac on 2026-08-19, which is the hardest kind of failure to
+# attribute.
 #
 # So run-all-tests.sh hands down HOOK_TESTS_SLOTS, this suite's share of the whole run's budget,
 # and that is the default. An explicit SUITE_JOBS still wins: a share is allocated to somebody, a
@@ -3615,7 +3618,8 @@ _t0="$(date +%s)"
 _hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_TIMEOUT=6 SUITE_HANG_IN=push bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
 _elapsed=$(( $(date +%s) - _t0 ))
 check "#31 a hung run ends instead of waiting for ever" "[ '$_hang_rc' -ne 0 ]"
-# 30s against a 6s deadline. Deliberately not a tight bound: what this has to catch is the run
+# 30s against a 6s deadline, both of them chosen here and not measured. Deliberately not a tight
+# bound: what this has to catch is the run
 # taking as long as whatever it was sitting in, which is what happened when only the run itself
 # was killed and its children were left holding the output open.
 check "#31 it ends near its deadline rather than long after" "[ '$_elapsed' -lt 30 ]"
@@ -4117,7 +4121,8 @@ _scr_out="$(_reap)"
 check "#36 the reaper says how many it reclaimed" "printf '%s' \"\$_scr_out\" | grep -q 'reclaimed 2'"
 check "#36 and how much space it got back"        "printf '%s' \"\$_scr_out\" | grep -qE '[0-9]+ MB'"
 # The scan reads the temp directory once per NAME, and on a real Mac that directory holds six
-# figures of entries: measured 113,000 here, six passes, 1.28 seconds of every single `status` call
+# figures of entries: measured 113,000 here on 2026-08-21, six passes, 1.28 seconds of every
+# single `status` call
 # (claude-config#115). Collapsing that to one pass is only safe if it still finds a name that does
 # NOT share the others' prefix, because the obvious optimisation is to glob a hard-coded common
 # prefix and that silently stops reporting anything outside it. A leftover nobody reports is a
@@ -4227,8 +4232,8 @@ check "#36 the name derivation found names to check" \
 
 section "== the tool's scratch lives in a directory of its own (#116) =="
 # The sweep for abandoned scratch globs the temp root, and on a real Mac that root belongs to
-# everything else on the machine: 113,912 entries measured here, 25 of them ours. #115 cut six
-# reads of it to one, taking `status` from 1.74s to 0.36s, and the one read left is most of what
+# everything else on the machine: 113,912 entries measured here on 2026-08-21, 25 of them ours.
+# #115 cut six reads of it to one, taking `status` from 1.74s to 0.36s, and the one read left is most of what
 # remains, paid 270 times over by the suite. A directory of our own makes that read tens of
 # entries instead of six figures, and the cost stops depending on a machine-wide quantity nothing
 # here controls.
@@ -4428,8 +4433,8 @@ check "#133 an empty job count falls back to the default rather than being refus
   "! printf '%s' \"\$_sh_je\" | grep -q 'SUITE_JOBS='"
 
 # The two flags that make a shard work must not reach anything it starts. SUITE_SHARD leaking made
-# every run a section spawns become a whole shard, which turned a 48 second shard into 322 and
-# failed four checks in the section that tests SECTION_ONLY. SUITE_NO_LOCK leaking is worse and
+# every run a section spawns become a whole shard, which on 2026-08-20 turned a 48 second shard
+# into 322 and failed four checks in the section that tests SECTION_ONLY. SUITE_NO_LOCK leaking is worse and
 # was already true before sharding: it silently disabled the lock in every subrun, so #32 was
 # asserting about a lock nothing was testing (L169). Derived from the file, so a flag added later
 # to the same list is covered without anybody remembering this check.
@@ -4608,7 +4613,8 @@ check "#146 shards that agree about the prelude produce a headline" "_ft_v \"\$_
 check "#146 and it is the prelude once plus every target, not the sum of the shards" \
   "[ \"\$_ft_two_out\" = '873 0 33 0 47 0' ]"
 # Reported BESIDE the headline rather than folded into it: one prelude run over again, plus the
-# section worth 14 checks that the needs: declaration pulled into the other shard.
+# section worth 14 checks that the needs: declaration pulled into the other shard. Made up for the
+# fixture above, not measured.
 check "#146 and the repeated runs are counted and reported separately" \
   "[ \"\$(printf '%s' \"\$_ft_two_out\" | awk '{print \$5}')\" = 47 ]"
 
@@ -4682,7 +4688,7 @@ section "== the runner says how much of the machine this suite may take (#136) =
 # numbers were set independently: a four core runner could be running a dozen heavy processes, each
 # spawning git and python of its own. It never went red, which is the difficulty. Oversubscription
 # makes timing sensitive checks intermittently wrong, and this suite's own deadline guard was
-# measured firing at 1192s against a normal 200 on a loaded Mac.
+# measured firing at 1192s against a normal 200 on a loaded Mac, on 2026-08-19.
 #
 # So the runner hands down a share of one budget in HOOK_TESTS_SLOTS and this suite takes it as how
 # many shards to run. An explicit SUITE_JOBS still wins, because that is somebody asking for a
@@ -4840,9 +4846,9 @@ check "#45 a pull with no copies left says nothing about conflicts" \
 
 section "== a renumber's citation scan opens only the files that match (#53) =="
 # The scan walked every synced file and ran a text test plus a matcher on each of them, once per
-# renumbered lesson: 800 files (747 under skills/) at 8.4 seconds per lesson on the real config,
-# roughly 2,400 processes, run in the background on every config edit. One grep answers the same
-# question in 0.022 seconds.
+# renumbered lesson, measured on 2026-08-17: 800 files (747 under skills/) at 8.4 seconds per
+# lesson on the real config, roughly 2,400 processes, run in the background on every config edit.
+# One grep answers the same question in 0.022 seconds.
 #
 # Asserted as the quantity being protected, how many files the scan OPENS, rather than as elapsed
 # time (L63): a wall-clock threshold on a shared runner is noise, and a number that moved cannot
@@ -6123,7 +6129,8 @@ check "#105 and the refusal names the text it could not resolve" "grep -q 'zzz-n
 # mode that makes the whole mechanism dangerous rather than merely wrong: `set -u` kills the SHELL
 # on an unbound variable at top level, but only the SUBSHELL when the read is inside $( ), so a
 # section can lose four tool invocations to a missing fixture, print nothing but ok lines, and exit
-# 0. Measured on this file: one section did exactly that, 54 ok lines and no failures, and the only
+# 0. Measured on this file on 2026-08-20: one section did exactly that, 54 ok lines and no
+# failures, and the only
 # reason it did not report success was that a fifth read happened to sit at top level.
 #
 # Proven against a REAL dependency rather than a planted one: the copy has the genuine `# needs:`
@@ -6284,29 +6291,57 @@ _hd_prelude_n="$(printf '%s' "$_hd_list" | grep -nF -- "$SUITE_PRELUDE_END" | aw
 check "#140 the prelude really is the first four sections, as two comments say" \
   "[ \"\${_hd_prelude_n:-0}\" -eq 4 ]"
 
-section "== a comment that counts this suite's sections says when it counted them (#140) =="
+section "== a comment that quotes a measured number says when it was measured (#140, #145) =="
 # Six comments and one CI step quoted how many sections this suite has, and every number was from
 # an earlier week. Each had been measured to justify a decision (where the prelude ends, whether
 # sharding was worth it, how long the changed-section audit costs), so a stale one makes the
 # reasoning beside it read as current when it is not, and a passing suite makes those sentences
 # MORE trusted rather than less (L210).
 #
-# The live number needs writing down nowhere: every run prints it (#138) and SECTION_LIST=1 answers
-# it directly. So a count in a comment can only ever be HISTORY, and history that does not say when
-# it was taken is indistinguishable from a claim about the present. The rule is one date somewhere
-# in the same comment BLOCK, which is the unit a reader takes in, and the block is what gets
-# scanned rather than the line, because these sentences wrap and the number and its date routinely
-# sit on different lines of one paragraph.
+# #140 covered ONE kind of number, a count of this suite's sections, and the same comments quoted
+# durations and counts of other things that are just as perishable and had no reviewer at all
+# (#145, L129). So the rule is the same and the scope is wider: a comment block that quotes a
+# measured quantity says WHEN, and the date is one date anywhere in the same BLOCK, which is the
+# unit a reader takes in and the reason the block rather than the line is scanned. These sentences
+# wrap, and the number and its date routinely sit on different lines of one paragraph.
 #
-# What it measures, and does not: a count standing next to the word section, and the one other
-# phrasing this repo used for the same fact, a count of what runs after the prelude. A sentence
-# that counts them while naming neither is invisible to it, so this narrows how the number can be
-# written down rather than proving nobody can write one (L11).
-_SC_COUNT='(^|[^#[:alnum:]=])[0-9]+ +(([a-z-]+ +)?sections?([^A-Za-z=]|$)|(after|before) +the +prelude)'
+# What counts as a measured quantity, and what does not, because a regex cannot tell a number
+# somebody MEASURED from a number somebody CHOSE and pretending otherwise would put dates on
+# settings that never go stale:
+#
+#   a duration           200 seconds, 1192s, 8.4 seconds, 3 hours
+#   a count of the       38 suites, 82 sections, 233 checks, 800 files, 6500 lines
+#     things this repo
+#     is made of
+#
+# and two ways out, both of them visible at the site rather than in a list somewhere else:
+#
+#   a date              anywhere in the block, in the form 2026-08-21
+#   "not measured"      for a number the code SETS, which cannot go stale because the code beside
+#     or "not a           it is the authority. A deadline of 900s, a 90s cooldown and a size a
+#     measurement"        fixture builds are facts about the program, not observations of it.
+#
+# A number inside a code span is code and not a claim, so `head -20 file` is left alone.
+#
+# Zero is not a measurement of anything. Sections legitimately read 0s, and a broken timer reads 0s
+# everywhere too, which is why SUITE_SLOW_IN exists; dating those sentences would say nothing.
+#
+# What it still cannot see, said plainly: a quantity written in words rather than digits, and a
+# count of something this list does not name. It narrows how a perishable number can be written
+# down rather than proving nobody can write one (L11).
+#
+# And it reads shell and workflows, not MARKDOWN, which is a deliberate exemption with an issue of
+# its own rather than a silent one (L129). The block rule here is "a run of lines beginning with
+# #", and in markdown that character starts a HEADING, so every heading would read as a one line
+# block and every paragraph as a block ender. README.md carries at least one undated measurement
+# today. Covering it needs a paragraph rule, which is claude-config#148.
+_SC_MEASURED='(^|[^#[:alnum:]=.])[1-9][0-9]*(,[0-9][0-9][0-9])*([.][0-9]+)? *(s|ms|secs?|seconds?|mins?|minutes?|hours?)([^A-Za-z=]|$)|(^|[^#[:alnum:]=.])[1-9][0-9]*(,[0-9][0-9][0-9])* +([a-z-]+ +)?(sections?|suites?|checks?|files?|lines?|director(y|ies))([^A-Za-z=]|$)|(^|[^#[:alnum:]=.])[0-9]+ +(after|before) +the +prelude'
 _SC_AWK="$WORK/stale-counts.awk"
 cat > "$_SC_AWK" <<'SCAWK'
 function flush() {
-  if (buf != "" && buf ~ COUNT && buf !~ /20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) printf "%s:%d: %s\n", FILENAME, start, buf
+  t = buf
+  gsub(/`[^`]*`/, " ", t)
+  if (t != "" && t ~ COUNT && t !~ /20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ && t !~ /not( a)? measure/) printf "%s:%d: %s\n", FILENAME, start, buf
   buf = ""; start = 0
 }
 /^[[:space:]]*#/ {
@@ -6321,27 +6356,42 @@ SCAWK
 # One file per invocation, deliberately. A block is ended by the first line that is not a comment,
 # so two files read in one pass can have the tail of one joined to the head of the next, and the
 # report would name a line in the wrong file.
-_sc_scan(){   # _sc_scan <file>... -> the undated counting blocks, one per line
-  for _sc_f in "$@"; do awk -v COUNT="$_SC_COUNT" -f "$_SC_AWK" "$_sc_f"; done
+_sc_scan(){   # _sc_scan <file>... -> the undated measurements, one block per line
+  for _sc_f in "$@"; do awk -v COUNT="$_SC_MEASURED" -f "$_SC_AWK" "$_sc_f"; done
 }
 _sc_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
-_sc_wf="$_sc_root/.github/workflows/tests.yml"
-_sc_audit="$_sc_root/tests/audit-changed-sections.sh"
-# The workflow and the audit are read as well as this file, because all three talk about this
-# suite's sections and the CI step was one of the seven that had gone stale. Their presence is
-# asserted first: a scan handed a path that is not there reports nothing and reads as clean (L98).
-check "#140 the files this scan reads are all present" \
-  "[ -f \"\$SCRIPT_SELF\" ] && [ -f '$_sc_wf' ] && [ -f '$_sc_audit' ]"
-_sc_bad="$(_sc_scan "$SCRIPT_SELF" "$_sc_wf" "$_sc_audit")"
+# Every shell script and workflow the repo TRACKS, asked of git rather than named here. #140 read
+# three files, chosen because they were the three that talked about this suite's sections. That is
+# the hand written list this repo keeps removing: a file missing from it is exempt from the very
+# check meant to catch it, and the numbers #145 was opened about were in a fourth file nobody had
+# added (L96, L41).
+_sc_files="$(git -C "$_sc_root" ls-files '*.sh' '*.yml' '*.yaml' 2>/dev/null)"
+_sc_n_files="$(printf '%s' "$_sc_files" | grep -c . || true)"
+# A scan handed no files reports nothing and reads as a clean tree (L98). The floor is a real
+# count rather than "more than zero", because one file coming back would also read as clean.
+check "#145 the scan has the repo's shell and workflow files to read" \
+  "[ \"\${_sc_n_files:-0}\" -gt 30 ]"
+# And the files the rule was WRITTEN about are actually among them, so a pathspec that quietly
+# stopped matching workflows could not leave the scan looking healthy (L100).
+for _sc_want in tests/test-claude-sync.sh .github/workflows/tests.yml tests/audit-changed-sections.sh payload/hooks/run-all-tests.sh; do
+  check "#145 and $_sc_want is one of them" \
+    "printf '%s\n' \"\$_sc_files\" | grep -qx '$_sc_want'"
+done
+_sc_bad="$(printf '%s\n' "$_sc_files" | while IFS= read -r _sc_one; do
+  [ -n "$_sc_one" ] || continue
+  _sc_scan "$_sc_root/$_sc_one"
+done)"
 if [ -n "$_sc_bad" ]; then
-  echo "  (#140 comment blocks that count sections without saying when:)"
+  echo "  (#145 comment blocks quoting a measured number without saying when:)"
   printf '%s\n' "$_sc_bad" | cut -c1-160 | sed 's/^/    /'
+  echo "    Either say when it was measured, or say it is not measured if the code sets it."
 fi
-check "#140 no comment counts this suite's sections without dating the count" "[ -z \"\$_sc_bad\" ]"
+check "#145 no comment quotes a measured number without saying when" "[ -z \"\$_sc_bad\" ]"
 
-# Both directions, on a fixture built for it: the scan has to LEAVE a dated count alone as well as
-# catch an undated one. A scan that reported everything would also report nothing wrong once the
-# file was clean, and the two are told apart only by the half that must stay silent (L104, L159).
+# Both directions, on a fixture built for it: the scan has to LEAVE the dated, the set and the
+# quoted-as-code alone as well as catch the undated. A scan that reported everything would also
+# report nothing wrong once the files were clean, and the two are told apart only by the half that
+# must stay silent (L104, L159).
 _SCFIX="$WORK/stale-counts-fixture.txt"
 {
   printf '# a dated block: measured on 2026-01-02, when the file held 12 sections\n'
@@ -6349,35 +6399,53 @@ _SCFIX="$WORK/stale-counts-fixture.txt"
   printf '# an undated block: the file has 12 sections, of which 3 are slow\n'
   printf 'and this one ends that block\n'
   printf '# a third block: 12 after the prelude, the other spelling, undated\n'
+  printf 'ends it\n'
+  printf '# an undated duration: the whole thing took 200 seconds\n'
+  printf 'ends it\n'
+  printf '# a duration written against the number: it fired at 1192s\n'
+  printf 'ends it\n'
+  printf '# an undated count of another thing: the repo holds 38 suites\n'
+  printf 'ends it\n'
+  printf '# a number this code sets: it gives up after 900s, not measured\n'
+  printf 'ends it\n'
+  printf '# a number quoted as code: run `head -20 file` to see the frontmatter\n'
+  printf 'ends it\n'
+  printf '# a degenerate reading: most sections read 0s and a broken timer reads 0s too\n'
 } > "$_SCFIX"
 _sc_fix="$(_sc_scan "$_SCFIX")"
-dbg "#140 fixture scan: $(printf '%s' "$_sc_fix" | tr '\n' '|')"
+dbg "#145 fixture scan: $(printf '%s' "$_sc_fix" | tr '\n' '|')"
 # Counted, not matched with `grep -q`: that leaves on its first hit and can kill its own producer
-# under pipefail (#132, L183). Exactly one, so a scan reporting everything cannot pass either.
-check "#140 the scan catches an undated count" \
-  "[ \"\$(printf '%s' \"\$_sc_fix\" | grep -c ':3:' | tr -d ' ')\" = 1 ]"
-check "#140 and the other spelling of the same fact" \
-  "[ \"\$(printf '%s' \"\$_sc_fix\" | grep -c ':5:' | tr -d ' ')\" = 1 ]"
-check "#140 and leaves a dated count alone" \
-  "[ \"\$(printf '%s' \"\$_sc_fix\" | grep -c ':1:' | tr -d ' ')\" = 0 ]"
+# under pipefail (#132, L183).
+for _sc_hit in 3 5 7 9 11; do
+  check "#145 the scan catches the undated block on line $_sc_hit" \
+    "[ \"\$(printf '%s' \"\$_sc_fix\" | grep -c ':$_sc_hit:' | tr -d ' ')\" = 1 ]"
+done
+for _sc_quiet in 1 13 15 17; do
+  check "#145 and leaves the block on line $_sc_quiet alone" \
+    "[ \"\$(printf '%s' \"\$_sc_fix\" | grep -c ':$_sc_quiet:' | tr -d ' ')\" = 0 ]"
+done
+# And nothing else at all, so a scan that reported every block would fail here even though each
+# check above passed (L178).
+check "#145 and reports those five and nothing else" \
+  "[ \"\$(printf '%s' \"\$_sc_fix\" | grep -c . | tr -d ' ')\" = 5 ]"
 
-# And on the file actually being scanned, because a scanner alive on a fixture it was handed can
-# still be blind to the real file: the zero above is only a measurement if planting one moves it
-# (L182, L171). Prefixed and stripped so the plant lives here without the scan finding it.
+# And on a real file, because a scanner alive on a fixture it was handed can still be blind to the
+# files it actually reads: the zero above is only a measurement if planting one moves it (L182,
+# L171). Prefixed and stripped so the plant lives here without the scan finding it.
 _SCPOS="$WORK/stale-counts-positive-control.sh"
 cp "$SCRIPT_SELF" "$_SCPOS"
 sed 's/^@@//' >> "$_SCPOS" <<'SCPLANT'
 @@echo "zzz this line ends whatever block came before it"
-@@# zzz planted: this suite has 999 sections and none of them are dated
+@@# zzz planted: this run took 999 seconds and nothing here says when
 SCPLANT
-_sc_real_n="$(printf '%s' "$_sc_bad" | grep -c . || true)"
+_sc_self_n="$(_sc_scan "$SCRIPT_SELF" | grep -c . || true)"
 _sc_pos="$(_sc_scan "$_SCPOS" | grep -c . || true)"
-dbg "#140 control: the real file reports $_sc_real_n, the planted copy reports $_sc_pos"
-# One MORE than the real file, never a flat 1: written as an absolute it would also fail whenever
-# the file really did carry an undated count, and a run reporting two failures for one defect makes
-# the reader look for two (L11).
-check "#140 the count above is a live measurement, not a scan reading nothing" \
-  "[ \"\${_sc_pos:-0}\" -eq \$(( _sc_real_n + 1 )) ]"
+dbg "#145 control: the real file reports $_sc_self_n, the planted copy reports $_sc_pos"
+# One MORE than the same file unplanted, never a flat 1: written as an absolute it would also fail
+# whenever the file really did carry an undated measurement, and a run reporting two failures for
+# one defect makes the reader look for two (L11).
+check "#145 the count above is a live measurement, not a scan reading nothing" \
+  "[ \"\${_sc_pos:-0}\" -eq \$(( _sc_self_n + 1 )) ]"
 rm -f "$_SCPOS"
 
 section "== every section reports its size and how long it took (#107) =="
@@ -6439,7 +6507,7 @@ check "#107 the profile names a section and a duration on one line" \
 section "== the deadline still has real headroom over a run (#112) =="
 # The deadline is only meaningful as a MULTIPLE of a real run, and that multiple was written down
 # once and then went stale in silence: the design record said 123 seconds and "roughly 7x" for
-# eleven days while this Mac grew to 225 seconds, which is 4x. Nothing caught it, because the check
+# eleven days while this Mac grew to 225 seconds, which is 4x, all of that measured on 2026-08-19. Nothing caught it, because the check
 # beside that table compares the SETTING and never the measurement the setting was derived from
 # (claude-config#112, L210).
 #

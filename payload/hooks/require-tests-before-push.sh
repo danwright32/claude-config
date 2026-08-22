@@ -5,7 +5,8 @@
 #
 # Goal: every `git push` must carry a test for each DISTINCT logical change in
 # it. Not one-test-per-file and not one-test-per-push: a single sweeping change
-# across many files (e.g. deleting em dashes from 10 files) needs one test, but
+# across many files (e.g. deleting em dashes from 10 files, a figure invented for the example
+# and not measured) needs one test, but
 # two unrelated bug fixes need two. That judgment is semantic, so when tests are
 # present this hook asks a model (sonnet, via the local `claude` CLI) to grade
 # whether each distinct change is covered, and blocks if any is not.

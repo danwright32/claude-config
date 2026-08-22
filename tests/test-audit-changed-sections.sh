@@ -29,7 +29,8 @@ esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
 # A tiny stand-in suite with the same shape as the real one: a preamble, headings, and a
-# SECTION_ONLY knob. Using the real 4700 line suite here would make every check cost minutes and
+# SECTION_ONLY knob. Using the real suite here, 6500 lines of it measured on 2026-08-21, would
+# make every check cost minutes and
 # would test the sync tool rather than this script.
 mkrepo(){                 # $1 = repo name -> prints its path
   local r="$TMPROOT/$1"

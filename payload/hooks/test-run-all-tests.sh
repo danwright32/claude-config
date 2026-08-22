@@ -5,7 +5,8 @@
 # It discovered suites from disk rather than from a list, which was the right idea, but it looked
 # in ONE directory: the one it lives in. Three suites live outside it and were run only because
 # four hand-written steps in the CI workflow named them, and a fourth, payload/skills/milestone,
-# was named by nothing at all and had never run anywhere. 233 checks, discovered by asking the repo
+# was named by nothing at all and had never run anywhere. 233 checks, counted on 2026-08-10 by
+# asking the repo
 # rather than by reading the workflow. A suite nobody runs is indistinguishable from one that
 # passes (L98), and a boundary drawn at one directory is the same hand-maintained list the runner's
 # own header says it exists to avoid (L96).
@@ -202,8 +203,9 @@ mk_slow_suite() { # mk_slow_suite <dir> <name> <sleep seconds> <failed count> <e
     # Each one records when it STARTED and when it FINISHED. The check below asks whether their
     # intervals OVERLAP, which is a fact about what happened rather than a duration, so a loaded
     # machine cannot turn it into a false failure. Comparing wall clock did exactly that: with the
-    # whole repo running side by side, three sleeps of 3, 1 and 0 seconds took 4 seconds together
-    # and the check called that "no better than sequential" when they had in fact all overlapped.
+    # whole repo running side by side, three sleeps of 3, 1 and 0 seconds took 4 seconds together,
+    # measured on 2026-08-14, and the check called that "no better than sequential" when they had
+    # in fact all overlapped.
     printf 'date +%%s > "$(dirname "$0")/%s.start"\n' "$2"
     printf 'sleep %s\n' "$3"
     printf 'date +%%s > "$(dirname "$0")/%s.end"\n' "$2"
@@ -398,7 +400,8 @@ fi
 # into shards of its own. Nothing related the two, so a four core runner could be running a dozen
 # heavy processes, each spawning git and python. It never failed outright, which is the problem:
 # oversubscription makes timing sensitive checks intermittently wrong rather than red, and the
-# suite's own deadline guard was measured firing at 1192s against a normal 200 on a loaded Mac.
+# suite's own deadline guard was measured firing at 1192s against a normal 200 on a loaded Mac,
+# on 2026-08-19.
 #
 # So the runner now holds a budget and derives BOTH halves from it: how many suites run at once,
 # and how many slots each of them may take. Their product is the budget rather than the product of
@@ -452,8 +455,8 @@ out_s1="$(HOOK_TESTS_BUDGET=6 bash "$RUNNER" "$S1" 2>&1)"
 
 # The long pole (claude-config#139). The budget used to divide itself equally between the suites
 # running at once, so the one suite taking most of the wall clock got no more of the machine than a
-# suite finishing in a second: measured on this Mac, 124 seconds against 88 the old oversubscribed
-# way. The suites are launched longest first, so the first launch is the one worth spending on, and
+# suite finishing in a second: measured on this Mac on 2026-08-21, 124 seconds against 88 the old
+# oversubscribed way. The suites are launched longest first, so the first launch is the one worth spending on, and
 # it is granted the largest share the budget allows while still leaving every other suite that can
 # run alongside it a slot of its own.
 #
@@ -518,8 +521,8 @@ case "$out_ci" in
 esac
 
 # A small machine is where the arithmetic goes wrong quietly. The CI runner has two cores, and
-# half of two is one, which would have run 38 suites strictly one after another while holding two
-# slots for whichever one of them can use them. So the count of suites at once has a floor of two,
+# half of two is one, which would have run the 38 suites counted on 2026-08-21 strictly one after
+# another while holding two slots for whichever one of them can use them. So the count of suites at once has a floor of two,
 # capped by the budget itself, and the share follows from it. The numbers are asserted through the
 # line the runner prints, which is the same line a person reads to see what is happening.
 out_sm="$(HOOK_TESTS_BUDGET=2 bash "$RUNNER" "$S2" 2>&1)"
@@ -595,7 +598,9 @@ t_recs="$(ls "$TSTORE" 2>/dev/null | grep -c 'test-.*\.sh$' || true)"
 [ "${t_recs:-0}" -eq 4 ] \
   && check "#144 the run records a wall clock for every suite it ran" ok \
   || check "#144 the run records a wall clock for every suite it ran" "$t_recs record(s) in $TSTORE: $(ls "$TSTORE" 2>/dev/null | tr '\n' ' ')"
-t_slow_rec="$(ls "$TSTORE" 2>/dev/null | grep 'test-slowpoke\.sh$' | head -1)"
+# `awk NR==1` rather than `head -1`, which leaves on its first line and can kill its own producer
+# under pipefail (#132, L183).
+t_slow_rec="$(ls "$TSTORE" 2>/dev/null | grep 'test-slowpoke\.sh$' | awk 'NR==1')"
 case "$(cat "$TSTORE/$t_slow_rec" 2>/dev/null)" in
   ''|*[!0-9]*) check "#144 and what it records is a whole number of seconds" "the record for test-slowpoke.sh reads '$(cat "$TSTORE/$t_slow_rec" 2>/dev/null)'" ;;
   *) check "#144 and what it records is a whole number of seconds" ok ;;

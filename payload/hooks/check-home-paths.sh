@@ -235,8 +235,9 @@ fi
 # these take one run per cause to discover (claude-config#108).
 rc=0
 # `case` rather than `${x//[[:space:]]/}`. That substitution builds a whole new string, and under
-# the bash macOS ships its cost is superlinear in the NUMBER OF MATCHES: measured at 1,536 matches
-# it took 11.5 seconds and at 3,072 it took 82, while this answers either in milliseconds. The list
+# the bash macOS ships its cost is superlinear in the NUMBER OF MATCHES: measured on 2026-08-21,
+# at 1,536 matches it took 11.5 seconds and at 3,072 it took 82, while this answers either in
+# milliseconds. The list
 # below is built from grep hits, so it is longest exactly when the guard has something to report
 # (claude-config#117).
 case "$hits" in *[![:space:]]*)
