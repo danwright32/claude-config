@@ -347,23 +347,22 @@ if [ "$ran" -gt 0 ]; then
     ''|/|"${HOME%/}") echo "run-all-tests: refusing to run: throwaway directory came back as '$WORK'." >&2; exit 1 ;;
   esac
   # Everything this run started, killed from the leaves up, and only ever DESCENDANTS: this must
-  # never reach whatever started the runner (claude-config#165).
+  # never reach whatever started the runner (claude-config#165). Through the one shared
+  # implementation, which used to be a third copy of the same walk living here (#169).
+  # Overridable so a test can point it at a deliberately broken copy and check that the difference
+  # is visible. Nothing in normal use sets it, and the default IS the helper beside this file.
+  RUNNER_KILL_TREE="${HOOK_KILL_TREE:-$(dirname "$SELF")/lib/kill-tree.sh}"
   runner_kill_tree(){   # $1 = a pid whose descendants are to go
-    local c pp
-    for c in $(pgrep -P "$1" 2>/dev/null); do
-      [ "$c" = "$$" ] && continue
-      # The parent is read again immediately before acting. The list above comes from a command
-      # substitution, which is itself a child of this shell and is therefore IN it, and has exited
-      # by the time the loop reaches it, so a kill on that number would land on whatever the system
-      # has since given it to. Confirming the parent is what tells a live child from a recycled
-      # number (L157).
-      pp="$(ps -o ppid= -p "$c" 2>/dev/null | tr -d ' ')"
-      [ "$pp" = "$1" ] || continue
-      runner_kill_tree "$c"
-      kill -9 "$c" 2>/dev/null || true
-    done
+    [ -f "$RUNNER_KILL_TREE" ] || return 0
+    bash "$RUNNER_KILL_TREE" "$1" "" 2>/dev/null || true
     return 0
   }
+  if [ ! -f "$RUNNER_KILL_TREE" ]; then
+    # Said out loud rather than degraded to doing nothing: a cleanup that silently stops killing
+    # anything looks exactly like a run that had nothing to clean up (L98), and leaving the suites
+    # running is the state #165 exists to end.
+    echo "run-all-tests: no kill-tree helper at $RUNNER_KILL_TREE, so an interrupted run will NOT clean up the suites it started. They will keep running and keep competing for this machine." >&2
+  fi
   runner_cleanup(){
     # The suites first, then the scratch. This runner launches as many suites at once as the budget
     # worked out above allows, and a run killed from outside left every one of them going, each still

@@ -913,55 +913,94 @@ mk_hanging_suite() { # mk_hanging_suite <dir> <name>
   } > "$1/test-$2.sh"
   chmod +x "$1/test-$2.sh"
 }
+# SEVERAL of them, not one (claude-config#171). Running many at once is the runner's whole shape,
+# and leaving all of them behind is what made this worth closing. With a single suite in flight, a
+# cleanup that reaped only the most recently launched child, or stopped at the first one it found,
+# would pass every check here (L101: a fixture is minimal by construction, so the mode that
+# actually ships is the one never exercised). The negative control at the end of this block is what
+# proves the difference is visible.
 K="$TMPROOT/dir-killed"
-mk_hanging_suite "$K" hang
-bash "$RUNNER" "$K" > "$TMPROOT/killed.out" 2>&1 &
-k_runner=$!
-# The suite names its own pid, so what gets checked afterwards is the process the runner really
-# started rather than whatever the process table happens to hold. Waited for rather than assumed:
-# a fixture that never got going would satisfy every assertion below while proving nothing.
-k_wait=0
-while [ "$k_wait" -lt 60 ] && [ ! -s "$K/hang.pid" ]; do sleep 1; k_wait=$((k_wait + 1)); done
-k_suite="$(cat "$K/hang.pid" 2>/dev/null || true)"
-case "$k_suite" in ''|*[!0-9]*) k_suite="" ;; esac
-k_kids=""
-[ -n "$k_suite" ] && k_kids="$(pgrep -P "$k_suite" 2>/dev/null | tr '\n' ' ')"
-if [ -n "$k_suite" ] && kill -0 "$k_suite" 2>/dev/null; then
-  check "#165 the runner really started a suite, and it is running" ok
-else
-  check "#165 the runner really started a suite, and it is running" "waited ${k_wait}s, pid='$k_suite'"
-fi
+for k_n in one two three; do mk_hanging_suite "$K" "$k_n"; done
+
+# Runs the interrupt and leaves the surviving pids in k_left. Taken as a function because the
+# negative control below has to do the identical thing against a deliberately broken copy of the
+# runner, and two spellings of "do the identical thing" is how a control ends up proving something
+# else (L107).
+k_left=""; k_started=""
+run_and_interrupt() { # run_and_interrupt <runner path>
+  local r="$1" w=0 n p
+  rm -f "$K"/*.pid
+  HOOK_KILL_TREE="${HOOK_KILL_TREE:-}" bash "$r" "$K" > "$TMPROOT/killed.out" 2>&1 &
+  k_runner=$!
+  # Each suite names its own pid, so what is checked afterwards is what the runner really started
+  # rather than whatever the process table happens to hold. Waited for, never assumed: a fixture
+  # that never got going satisfies every assertion after it while proving nothing (L159).
+  while [ "$w" -lt 60 ]; do
+    k_started=""
+    for n in one two three; do
+      p="$(cat "$K/$n.pid" 2>/dev/null || true)"
+      case "$p" in ''|*[!0-9]*) continue ;; esac
+      kill -0 "$p" 2>/dev/null && k_started="$k_started $p"
+    done
+    [ "$(printf '%s' "$k_started" | wc -w | tr -d ' ')" -ge 2 ] && break
+    sleep 1; w=$((w + 1))
+  done
+  k_kids=""
+  for p in $k_started; do k_kids="$k_kids $(pgrep -P "$p" 2>/dev/null | tr '\n' ' ')"; done
+  kill -TERM "$k_runner" 2>/dev/null || true
+  local g=0
+  while [ "$g" -lt 30 ] && kill -0 "$k_runner" 2>/dev/null; do sleep 1; g=$((g + 1)); done
+  sleep 1
+  k_runner_left=""
+  kill -0 "$k_runner" 2>/dev/null && k_runner_left="$k_runner"
+  k_left=""
+  for p in $k_started $k_kids; do kill -0 "$p" 2>/dev/null && k_left="$k_left $p"; done
+  for p in $k_started $k_kids; do kill -9 "$p" 2>/dev/null || true; done
+  kill -9 "$k_runner" 2>/dev/null
+  wait "$k_runner" 2>/dev/null || true
+}
+
+run_and_interrupt "$RUNNER"
+k_n_started="$(printf '%s' "$k_started" | wc -w | tr -d ' ')"
+[ "${k_n_started:-0}" -ge 2 ] \
+  && check "#171 the runner really had several suites going at once ($k_n_started)" ok \
+  || check "#171 the runner really had several suites going at once" "only $k_n_started started, so one suite could satisfy the rest"
 case "$(printf '%s' "$k_kids" | tr -d ' ')" in
-  ?*) check "#165 and that suite had a child of its own to leave behind" ok ;;
-  *)  check "#165 and that suite had a child of its own to leave behind" "no children found for $k_suite" ;;
+  ?*) check "#165 and those suites had children of their own to leave behind" ok ;;
+  *)  check "#165 and those suites had children of their own to leave behind" "no children found" ;;
+esac
+case "$k_runner_left" in
+  "") check "#165 the interrupted runner itself is gone" ok ;;
+  *)  check "#165 the interrupted runner itself is gone" "pid $k_runner_left is still running" ;;
+esac
+case "$k_left" in
+  "") check "#165 an interrupted runner takes every suite and child with it" ok ;;
+  *)  check "#165 an interrupted runner takes every suite and child with it" "still running:$k_left" ;;
 esac
 
-kill -TERM "$k_runner" 2>/dev/null || true
-k_gone=0
-while [ "$k_gone" -lt 30 ] && kill -0 "$k_runner" 2>/dev/null; do sleep 1; k_gone=$((k_gone + 1)); done
-sleep 1
-if kill -0 "$k_runner" 2>/dev/null; then
-  check "#165 the interrupted runner itself is gone" "still alive after ${k_gone}s"
+# The negative control. A cleanup that stops after the first child it finds leaves the rest behind,
+# and with one suite in flight that is indistinguishable from a correct one. Run against a COPY
+# with exactly that defect, so the difference between the two is measured rather than argued
+# (L1: a guard is only real once it has been watched failing).
+# The negative control. A cleanup that reaches only the runner's DIRECT children leaves each
+# suite's own children behind, and with one suite in flight that is indistinguishable from a
+# correct one. Run against a copy of the shared helper with exactly that defect, pointed at through
+# the seam, so the difference between the two is measured rather than argued (L1).
+REALTREE="$(dirname "$RUNNER")/lib/kill-tree.sh"
+BROKEN="$TMPROOT/kill-tree-no-recursion.sh"
+sed '/^    kill_tree "\$c"$/d' "$REALTREE" > "$BROKEN"
+if [ ! -f "$REALTREE" ]; then
+  check "#171 the negative control really is a different implementation" "no helper at $REALTREE to break"
+elif cmp -s "$BROKEN" "$REALTREE"; then
+  check "#171 the negative control really is a different implementation" "the edit matched nothing, so this control tests the same code twice"
 else
-  check "#165 the interrupted runner itself is gone" ok
+  check "#171 the negative control really is a different implementation" ok
+  HOOK_KILL_TREE="$BROKEN" run_and_interrupt "$RUNNER"
+  case "$k_left" in
+    "") check "#171 and a cleanup that misses grandchildren WOULD be caught" "it left nothing behind, so these checks cannot tell the two apart" ;;
+    *)  check "#171 and a cleanup that misses grandchildren WOULD be caught" ok ;;
+  esac
 fi
-if [ -n "$k_suite" ] && kill -0 "$k_suite" 2>/dev/null; then
-  check "#165 and the suite it started is gone too" "pid $k_suite is still running"
-else
-  check "#165 and the suite it started is gone too" ok
-fi
-k_left=""
-for k in $k_kids; do kill -0 "$k" 2>/dev/null && k_left="$k_left $k"; done
-case "$k_left" in
-  "") check "#165 and so is everything that suite started" ok ;;
-  *)  check "#165 and so is everything that suite started" "still running:$k_left" ;;
-esac
-# Whatever survived is cleared here rather than left on the machine: a test that leaks the process
-# it was written about is the defect it is testing.
-for k in $k_kids; do kill -9 "$k" 2>/dev/null || true; done
-[ -n "$k_suite" ] && kill -9 "$k_suite" 2>/dev/null
-kill -9 "$k_runner" 2>/dev/null
-wait "$k_runner" 2>/dev/null || true
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

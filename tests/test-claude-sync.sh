@@ -22,6 +22,24 @@ SCRIPT_SELF="${SCRIPT_SELF:-$(cd "$(dirname "$0")" && pwd)/$(basename "$0")}"
 SUITE_SCRATCH_HOME="${SUITE_SCRATCH_HOME:-${TMPDIR:-/tmp}/claude-sync}"
 mkdir -p "$SUITE_SCRATCH_HOME" 2>/dev/null || SUITE_SCRATCH_HOME="${TMPDIR:-/tmp}"
 
+# ---- the one process-tree kill (claude-config#169) ----
+# There were three: one here for #163, one in run-all-tests.sh for #165, and the watchdog's own
+# since #31. All three carried the same non-obvious rule about confirming a child's parent
+# immediately before killing it, and a correction would have had to reach three places or it
+# reaches two (L30).
+#
+# A COMMAND rather than a sourced function, because the watchdog's copy lives inside an `sh -c`
+# string handed to `exec -a` and can source nothing at all. A shared function would have
+# consolidated the two easy ones and left the third, which is the one hardest to notice.
+SUITE_KILL_TREE="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks/lib/kill-tree.sh"
+if [ ! -f "$SUITE_KILL_TREE" ]; then
+  # Said out loud rather than degraded to doing nothing. A cleanup that silently stops killing
+  # anything looks exactly like a run that had nothing to clean up (L98), and that is the state
+  # #163 and #165 exist to end.
+  echo "test suite: no kill-tree helper at $SUITE_KILL_TREE, so an interrupted run will NOT be able to clean up the processes it started. Refusing rather than running with a cleanup that quietly does nothing." >&2
+  exit 4
+fi
+
 # ---- which processes belong to this run (claude-config#166) ----
 # A run killed with SIGKILL cannot run #163's cleanup, because nothing runs inside a process that
 # has been killed outright, so its shards and its re-executed copy go on running and go on holding
@@ -29,16 +47,33 @@ mkdir -p "$SUITE_SCRATCH_HOME" 2>/dev/null || SUITE_SCRATCH_HOME="${TMPDIR:-/tmp
 # that run needs to know WHICH processes were the dead one's.
 #
 # Not "every suite process that is not mine": this file starts nested runs constantly and that rule
-# would kill the fixtures of every check in it. So each run appends itself to a registry the
-# top-level run creates, the lock names that file, and a takeover clears exactly what it lists.
+# would kill the fixtures of every check in it. So the run registers its own processes in a file
+# the lock names, and a takeover clears exactly what that file lists.
+# ---- the registry is small on purpose (#170) ----
+# The first version had EVERY run append itself, and this file starts hundreds of nested runs in a
+# full pass, so the registry ended up holding several hundred numbers of which almost all belonged
+# to processes that had finished long ago. A takeover then asked the system about every one of
+# them, so the cost of recovering from a force-kill grew with how long the killed run had been
+# going, which is backwards.
 #
-# Registered here, before anything else can fork, so a run that dies early is still accounted for.
-# A run that INHERITED the variable appends to the file it was given; the one that takes the lock
-# makes its own further down and exports that, which is what makes the lock's registry the lock
-# holder's own rather than whatever it happened to be started from.
-if [ -n "${SUITE_RUN_REGISTRY:-}" ] && [ -f "${SUITE_RUN_REGISTRY:-}" ]; then
+# What actually has to be listed is what SURVIVES the top-level being killed outright, and that is
+# only the processes it started directly that carry on independently: the shards. Everything else a
+# run makes is a descendant of one of those, or of the top-level itself, and the takeover walks the
+# tree from each number it clears, so a nested run started by a shard is reached through the shard
+# and does not need a line of its own.
+#
+# So a run registers itself when it is a SHARD, and the top-level registers itself when it takes the
+# lock. A nested run neither registers nor is lost: it is reachable, which is the property that
+# matters. That takes a full run's registry from several hundred entries to about five.
+#
+# Registered before anything else can fork, so a shard that dies early is still accounted for.
+suite_register_self(){
+  [ -n "${SUITE_RUN_REGISTRY:-}" ] || return 0
+  [ -f "$SUITE_RUN_REGISTRY" ] || return 0
   printf '%s\n' "$$" >> "$SUITE_RUN_REGISTRY" 2>/dev/null || true
-fi
+  return 0
+}
+[ -n "${SUITE_SHARD:-}" ] && suite_register_self || true
 
 # ---- a hard limit on suite runs that spawn suite runs (#34) ----
 # #27 let this suite run itself as a subprocess, and 45528c7 fixed one way that recursed without
@@ -896,6 +931,16 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
       # measured 60 on 2026-08-17, the length of the sleep the run happened to be sitting in. Its children are
       # also precisely what is still holding whatever the hung run acquired, which is half the
       # reason a hang is worse than a failure.
+      # This one keeps its OWN copy. The other two share payload/hooks/lib/kill-tree.sh since
+      # claude-config#169; calling it from here was tried on 2026-08-22 and left this section hung,
+      # and it was reverted rather than shipped on the theory that it ought to have worked.
+      #
+      # WHY it hung is NOT established, and that is said here rather than dressed up. There is an
+      # argument that a watchdog should not depend on an extra process at the moment of killing,
+      # since it exists for the case where something has already gone wrong (L71), and it is a good
+      # argument, but it is not evidence: a cause inferred from two things happening together is
+      # not a cause until the effect has been seen to disappear when it is removed (L203). It has
+      # not been. claude-config#172 is open to find out, and until it is answered this copy stays.
       self=$$
       kill_tree() {
         [ "$1" = "$self" ] && return 0    # never the watchdog: it is a child of the run too
@@ -934,26 +979,11 @@ SUITE_LOCK_HELD=""
 # than replaced further down: #21 shipped a defect of exactly that shape here, an exit handler
 # that replaced the one removing the pull temp file, and nothing noticed because both handlers
 # were individually correct.
-# Everything this run started, killed from the leaves up. Only ever DESCENDANTS: this must not
-# reach the process that started the suite, and it must not reach the shell running it.
-#
-# The same walk the deadline watchdog does, and for the same reason: killing the run alone leaves
-# its children alive, and they are what holds whatever the run acquired (claude-config#163).
-suite_kill_tree(){   # $1 = a pid whose descendants are to go
-  local c pp
-  for c in $(pgrep -P "$1" 2>/dev/null); do
-    [ "$c" = "$$" ] && continue
-    # The parent is read again, immediately before acting. The list above was produced by a command
-    # substitution, which is itself a child of this shell and is therefore IN that list, and by the
-    # time the loop reaches it, it has exited: a `kill -9` on that number would land on whatever
-    # the system has since given it to. Confirming the parent is what tells a live child from a
-    # recycled number, and a judgement formed before the kill is not a judgement about the process
-    # being killed (L157).
-    pp="$(ps -o ppid= -p "$c" 2>/dev/null | tr -d ' ')"
-    [ "$pp" = "$1" ] || continue
-    suite_kill_tree "$c"
-    kill -9 "$c" 2>/dev/null || true
-  done
+# Everything this run started, killed from the leaves up (claude-config#163), through the one
+# shared implementation (#169). Only ever DESCENDANTS: this must not reach the process that started
+# the suite, and it must not reach the shell running it.
+suite_kill_tree(){   # $1 = a pid whose descendants are to go   $2 = optional file to list them in
+  bash "$SUITE_KILL_TREE" "$1" "${2:-}" 2>/dev/null || true
   return 0
 }
 
@@ -4624,6 +4654,33 @@ check "#166 a takeover with nothing to clear says nothing about clearing" \
   "! case \"\$_or_empty\" in *'left running'*) true ;; *) false ;; esac"
 check "#166 and still reports the takeover itself" \
   "case \"\$_or_empty\" in *'took over a lock'*) true ;; *) false ;; esac"
+
+# What goes IN the registry, and what deliberately does not (claude-config#170). Every run used to
+# append itself, and this file starts hundreds of nested runs in a full pass, so the registry ended
+# up holding several hundred numbers of processes that had finished long ago and a takeover asked
+# the system about each one. What has to be listed is only what survives the top-level being killed
+# outright and carries on independently, which is the shards; everything else is reached by walking
+# the tree from one of those.
+#
+# Asked of a real run rather than by reading the code, and both ways round, because "it did not
+# register" is also what a run that never started looks like (L159).
+_rg_file="$WORK/registry-probe"
+: > "$_rg_file"
+SUITE_RUN_REGISTRY="$_rg_file" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SUITE_NO_LOCK=1 SECTION_ONLY=push bash "$SCRIPT_SELF" >/dev/null 2>&1
+# `grep -c` prints 0 AND exits 1 when it counts nothing, so `|| echo 0` runs as well and the value
+# becomes two lines. Every numeric test on it then fails while reading as if it had a number.
+_rg_nested="$(grep -c . "$_rg_file" 2>/dev/null || true)"
+case "$_rg_nested" in ''|*[!0-9]*) _rg_nested=0 ;; esac
+: > "$_rg_file"
+# One shard of ninety-nine, so it carries about one section: this is asking whether a shard
+# REGISTERS, not what a shard costs, and a shard of one is the whole suite.
+SUITE_RUN_REGISTRY="$_rg_file" SUITE_SHARD="1/99" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SUITE_NO_LOCK=1 bash "$SCRIPT_SELF" >/dev/null 2>&1
+_rg_shard="$(grep -c . "$_rg_file" 2>/dev/null || true)"
+case "$_rg_shard" in ''|*[!0-9]*) _rg_shard=0 ;; esac
+check "#170 a shard registers itself, because it outlives a killed parent ($_rg_shard)" \
+  "[ '${_rg_shard:-0}' -ge 1 ]"
+check "#170 and a nested run does not, because it is reached through one ($_rg_nested)" \
+  "[ '${_rg_nested:-0}' -eq 0 ]"
 
 kill -9 "$_or_bystander" 2>/dev/null || true
 kill -9 "$_or_stray" 2>/dev/null || true
