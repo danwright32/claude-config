@@ -2099,6 +2099,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   only that something had been typed, and kept the gap for months until a truncated paste of a
   different credential exposed it by accident)
 
+- **L233. In a list of exclusions or skip cases, an entry carrying no written reason while its
+  neighbours each carry one is evidence it was never reasoned about rather than deliberately
+  chosen**, so re-derive it from what the list is FOR before trusting it. The reasoned entries
+  make the list read as considered in review, and the unexplained one inherits that credibility
+  without ever having earned it.
+  (claude-config#176: claude-sync's needs_new_session() skipped settings.json outright, beside two
+  other skips that each explained themselves. Claude Code reads settings.json only at session
+  start, so a pull that registered a brand new hook printed no restart notice and left the hook
+  inactive in every open session, while reporting the pull as a plain success)
+
 ## Cross-system reliability
 
 - **L208. A substitution applied across a whole set of files cannot tell a line that MEANS

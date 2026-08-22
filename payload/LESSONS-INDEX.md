@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 240 lessons.
+LESSONS.md, which is NOT loaded into the session. 241 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -257,6 +257,7 @@ to decide something: the body is where the failure it came from is described.
 - L170. A criterion placed last in a strictly ordered comparison chain is consulted only on an exact tie of everything above it, so any earlier criterion carrying many distinct values (a count, a rating, a timestamp) makes it permanently inert while the code reads as a criterion that ranks.
 - L501. A new thing built by cloning a proven pattern copies that pattern AS FIRST WRITTEN, including every value already corrected in the original, so clone the CURRENT version and re-check each constant against the rule it has to satisfy.
 - L195. A newly recorded lesson governs only the code written after it, so when you record one, sweep the OTHER projects for the same defect at once
+- L233. In a list of exclusions or skip cases, an entry carrying no written reason while its neighbours each carry one is evidence it was never reasoned about rather than deliberately chosen
 
 ## Cross-system reliability
 
