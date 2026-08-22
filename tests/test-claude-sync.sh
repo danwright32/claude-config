@@ -89,10 +89,52 @@ SUITE_CHILD_DEPTH=$((SUITE_DEPTH + 1))
 # broken would read 0s everywhere too, and that is indistinguishable from a fast suite (L182).
 _SEC_TITLE=""; _SEC_T0=0; _SEC_P0=0; _SEC_F0=0; _SEC_PROFILE=""; _SEC_TARGET_N=0
 
+# ---- every section run is the prelude, a target, or a repeat (#146) ----
+# The headline total moved with how much of the machine the run was granted: 873 checks in one
+# process and 1118 across eight shards, of the same file on 2026-08-21. A total that changes for
+# reasons unrelated to the tests cannot be used to notice that checks were LOST, which is the one
+# question a total exists to answer (L63).
+#
+# Two things repeat, not one. Every shard runs the PRELUDE, which is 33 of those checks. And a
+# shard runs any section its own targets declare with `# needs:`, even when another shard owns it,
+# so one 14 check section ran twice as well. Both are counted here as they happen, so the parent
+# can report each section once and say separately how much was run over again.
+#
+# A run with no target list is a run where every section is its own target, which is what a full
+# single process run is. That is the honest default rather than a special case: it makes the
+# buckets add up to the same total either way.
+_SEC_IN_PRELUDE=1
+_SEC_PP=0; _SEC_PF=0; _SEC_TP=0; _SEC_TF=0; _SEC_RP=0; _SEC_RF=0
+
 section_close(){
   [ -n "$_SEC_TITLE" ] || return 0
   local _n=$(( (PASS - _SEC_P0) + (FAIL - _SEC_F0) ))
   local _d=$(( SECONDS - _SEC_T0 ))
+  # Which bucket this section's checks belong to (#146). Worked out HERE, from the running totals,
+  # so it cannot drift from what actually ran, exactly as the per-section count above cannot.
+  local _bp=$(( PASS - _SEC_P0 ))
+  local _bf=$(( FAIL - _SEC_F0 ))
+  if [ "${_SEC_IN_PRELUDE:-1}" -eq 1 ]; then
+    _SEC_PP=$(( _SEC_PP + _bp )); _SEC_PF=$(( _SEC_PF + _bf ))
+    # The boundary is named by its heading TEXT, and the prelude is everything up to and INCLUDING
+    # it, so the switch happens after this section has been counted. Only ever tested when the
+    # boundary is non-empty: `*""*` matches every title, which would end the prelude at the first
+    # section and quietly put the whole run in the wrong bucket.
+    if [ -n "${SUITE_PRELUDE_END:-}" ]; then
+      case "$_SEC_TITLE" in *"$SUITE_PRELUDE_END"*) _SEC_IN_PRELUDE=0 ;; esac
+    fi
+  elif [ -z "${SUITE_TARGET_TITLES:-}" ]; then
+    _SEC_TP=$(( _SEC_TP + _bp )); _SEC_TF=$(( _SEC_TF + _bf ))
+  else
+    case "
+${SUITE_TARGET_TITLES}
+" in
+      *"
+$_SEC_TITLE
+"*) _SEC_TP=$(( _SEC_TP + _bp )); _SEC_TF=$(( _SEC_TF + _bf )) ;;
+      *)  _SEC_RP=$(( _SEC_RP + _bp )); _SEC_RF=$(( _SEC_RF + _bf )) ;;
+    esac
+  fi
   local _w="checks"; [ "$_n" -eq 1 ] && _w="check"
   printf '  (section: %d %s, %ds)\n' "$_n" "$_w" "$_d"
   # SUITE_TARGET_SECTION names the section a filtered run was ASKED for. Recorded here so the tail
@@ -128,6 +170,12 @@ suite_filtered_tail(){   # $1 = how the run was scoped, for the summary   $2 = t
   suite_profile
   echo ""
   echo "PASS=$PASS FAIL=$FAIL ($1, NOT a full run)"
+  # How those checks were divided up (#146), so a parent putting shards back together can count
+  # each section once. Its own total goes on the same line: without it the buckets could quietly
+  # leave checks out and the parent would report the smaller number as if it were the whole thing
+  # (L16). Printed BEFORE the result line, because that one has to stay the last thing said.
+  printf 'SUITE-SECTIONS prelude_pass=%s prelude_fail=%s target_pass=%s target_fail=%s repeat_pass=%s repeat_fail=%s total_pass=%s total_fail=%s\n' \
+    "$_SEC_PP" "$_SEC_PF" "$_SEC_TP" "$_SEC_TF" "$_SEC_RP" "$_SEC_RF" "$PASS" "$FAIL"
   # The machine readable line goes on a filtered run too, so a caller reading it never has to know
   # which knob the run was started with (claude-config#126).
   printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
@@ -476,6 +524,16 @@ SONEEDS
     _so_k=$((_so_k + 1))
   done
 
+  # The titles this run is actually the target OF (#146). A shard also runs whatever its targets
+  # declare with `# needs:`, including sections another shard owns, so without this the child
+  # cannot tell a section it is responsible for from one it is only borrowing, and the parent
+  # would count that section twice in the headline.
+  _so_titles_list=""
+  for _so_t in $_sh_targets; do
+    _so_titles_list="$_so_titles_list$(section_title "${_so_titles[$_so_t]}")
+"
+  done
+
   _so_name="$(section_title "${_so_titles[$_so_target]}")"
   if [ -n "${_so_shard_mode:-}" ]; then
     _so_how="shard $_sh_i of $_sh_n, $(printf '%s' "$_so_keep" | wc -w | tr -d ' ') section(s)"
@@ -508,7 +566,7 @@ SONEEDS
   # a fifth read that happened to be at top level. pipefail is already set, and tee exits 0, so the
   # status here is still the run's own.
   _so_log="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
-  SUITE_FILTERED=1 SECTION_ONLY= SUITE_TARGET_SECTION="$_so_name" SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered" 2>&1 | tee "$_so_log"; _so_rc=$?
+  SUITE_FILTERED=1 SECTION_ONLY= SUITE_TARGET_SECTION="$_so_name" SUITE_TARGET_TITLES="$_so_titles_list" SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered" 2>&1 | tee "$_so_log"; _so_rc=$?
   rm -f "$_filtered"
   if grep -qE 'line [0-9]+: [A-Za-z_][A-Za-z0-9_]*: unbound variable' "$_so_log" 2>/dev/null; then
     rm -f "$_so_log"
@@ -889,6 +947,114 @@ shard_coverage_verdict(){   # $1 = shards expected; coverage lines on stdin
   return 0
 }
 
+# ---- the shards, between them, ran every section ONCE (#146) ----
+# The headline used to be the sum of the shards' totals, which counted the prelude once per shard
+# and any `# needs:` prerequisite once per borrowing shard, so it moved with how much of the
+# machine the run was granted: 873 in one process and 1118 across eight, of the same file on
+# 2026-08-21. A number that moves for reasons unrelated to the tests cannot answer the one question
+# it exists for, which is whether checks were lost (L63).
+#
+# So each shard says what its checks were worth in three buckets and the headline is the prelude
+# ONCE plus every shard's targets, which is every section exactly once, since #137 already proves
+# the targets are divided between the shards with nothing missing and nothing doubled.
+#
+# One value getter, not eight, because eight copies of the same `${x#*key=}` would be eight places
+# for one of them to name the wrong key and read a neighbouring number instead.
+_fv_get(){   # _fv_get <line> <key> -> the value, or nothing if it is not a whole number
+  case "$1" in *" $2="*) ;; *) return 0 ;; esac
+  _fg="${1#*" $2="}"; _fg="${_fg%% *}"
+  case "$_fg" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$_fg"
+}
+
+# Prints "<pass> <fail> <prelude pass> <prelude fail> <repeated pass> <repeated fail>" and returns
+# 0 when the lines can carry a headline; otherwise prints why and returns non-zero.
+#
+# The order of the complaints matters. A line that cannot be read leaves that shard's targets out
+# of the sum, so the totals would be wrong too and reporting both would send the reader looking for
+# two faults where there is one (L11).
+fan_totals_verdict(){   # $1 = shards expected; SUITE-SECTIONS lines on stdin
+  _fv_n="$1"
+  case "$_fv_n" in
+    ''|*[!0-9]*|0) printf 'section totals: asked to check against "%s" shards, which is not a count of them.\n' "$_fv_n"; return 2 ;;
+  esac
+  _fv_seen=""; _fv_bad=""; _fv_pp=""; _fv_pf=""; _fv_dis=""
+  _fv_tp=0; _fv_tf=0; _fv_rp=0; _fv_rf=0; _fv_short=""
+  while IFS= read -r _fv_l; do
+    case "$_fv_l" in 'SUITE-SECTIONS '*) ;; *) continue ;; esac
+    _fv_i="$(_fv_get "$_fv_l" shard)"
+    _fv_a="$(_fv_get "$_fv_l" prelude_pass)"; _fv_b="$(_fv_get "$_fv_l" prelude_fail)"
+    _fv_c="$(_fv_get "$_fv_l" target_pass)";  _fv_d="$(_fv_get "$_fv_l" target_fail)"
+    _fv_e="$(_fv_get "$_fv_l" repeat_pass)";  _fv_g="$(_fv_get "$_fv_l" repeat_fail)"
+    _fv_h="$(_fv_get "$_fv_l" total_pass)";   _fv_j="$(_fv_get "$_fv_l" total_fail)"
+    if [ -z "$_fv_i" ] || [ -z "$_fv_a" ] || [ -z "$_fv_b" ] || [ -z "$_fv_c" ] || [ -z "$_fv_d" ] \
+       || [ -z "$_fv_e" ] || [ -z "$_fv_g" ] || [ -z "$_fv_h" ] || [ -z "$_fv_j" ]; then
+      _fv_bad="$_fv_bad $(printf '%s' "$_fv_l" | cut -c1-60);"
+      continue
+    fi
+    _fv_seen="$_fv_seen $_fv_i"
+    # The buckets have to account for that shard's OWN total, or checks ran in no bucket at all and
+    # the headline would leave them out while looking exactly like a correct one (L16).
+    if [ "$(( _fv_a + _fv_c + _fv_e ))" -ne "$_fv_h" ] || [ "$(( _fv_b + _fv_d + _fv_g ))" -ne "$_fv_j" ]; then
+      _fv_short="$_fv_short shard $_fv_i says $_fv_h passed and $_fv_j failed, but its buckets add up to $(( _fv_a + _fv_c + _fv_e )) and $(( _fv_b + _fv_d + _fv_g ));"
+      continue
+    fi
+    if [ -z "$_fv_pp" ]; then
+      _fv_pp="$_fv_a"; _fv_pf="$_fv_b"
+    elif [ "$_fv_a" -ne "$_fv_pp" ] || [ "$_fv_b" -ne "$_fv_pf" ]; then
+      _fv_dis="$_fv_dis shard $_fv_i says $_fv_a passed and $_fv_b failed;"
+    fi
+    _fv_tp=$(( _fv_tp + _fv_c )); _fv_tf=$(( _fv_tf + _fv_d ))
+    _fv_rp=$(( _fv_rp + _fv_e )); _fv_rf=$(( _fv_rf + _fv_g ))
+  done
+  if [ -n "$_fv_bad" ]; then
+    printf 'section totals: a line could not be read, so what that shard ran is unknown and this run cannot claim a total:%s\n' "$_fv_bad"
+    return 1
+  fi
+  if [ -n "$_fv_short" ]; then
+    printf 'section totals: a shard has checks that belong to no section at all, so a headline built from its buckets would leave them out:%s\n' "$_fv_short"
+    return 1
+  fi
+  _fv_gone=""
+  _fv_k=1
+  while [ "$_fv_k" -le "$_fv_n" ]; do
+    case " $_fv_seen " in *" $_fv_k "*) ;; *) _fv_gone="$_fv_gone $_fv_k" ;; esac
+    _fv_k=$(( _fv_k + 1 ))
+  done
+  if [ -n "$_fv_gone" ]; then
+    printf 'section totals: shard(s)%s said nothing about which sections their checks came from, so those checks are in no bucket and the total below would be missing them. Treat this run as failed rather than as counted.\n' "$_fv_gone"
+    return 1
+  fi
+  if [ -n "$_fv_dis" ]; then
+    printf 'section totals: the shards disagree about the prelude, which is the same sections in every one of them (%s passed and %s failed, but%s), so one of them ran something different and neither number can be subtracted.\n' "$_fv_pp" "$_fv_pf" "$_fv_dis"
+    return 1
+  fi
+  # The prelude once, plus every target. The repeats are the prelude's other runs plus whatever was
+  # borrowed through a needs: declaration, and they are reported, never folded in.
+  printf '%s %s %s %s %s %s\n' \
+    "$(( _fv_pp + _fv_tp ))" "$(( _fv_pf + _fv_tf ))" \
+    "$_fv_pp" "$_fv_pf" \
+    "$(( _fv_rp + (_fv_n - 1) * _fv_pp ))" "$(( _fv_rf + (_fv_n - 1) * _fv_pf ))"
+  return 0
+}
+
+# Reads the shards' output files and puts the verdict over them. Here rather than inside the
+# verdict for the same reason the coverage reader is: the verdict has to be drivable with lines
+# this suite writes, and a grep that matches nothing looks exactly like a shard with nothing to
+# say. The shard NUMBER is attached here, because the shard itself is a filtered run and does not
+# know which of them it is.
+fan_totals_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards expected
+  _fd_all=""
+  _fd_i=1
+  while [ "$_fd_i" -le "$2" ]; do
+    _fd_l="$(grep -m1 '^SUITE-SECTIONS ' "$1/$_fd_i.out" 2>/dev/null)"
+    [ -z "$_fd_l" ] || _fd_all="$_fd_all$_fd_l shard=$_fd_i
+"
+    _fd_i=$(( _fd_i + 1 ))
+  done
+  printf '%s\n' "$_fd_all" | fan_totals_verdict "$2"
+}
+
 #
 # How many shards is a SHARE of one budget, not a number of its own (claude-config#136). The runner
 # starts several suites at once and this one splits itself again, and the two numbers were set
@@ -967,6 +1133,9 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
     echo "test suite: $_fan_cov_say" >&2
     _fan_rc=1
   }
+  # And how their checks divide up, so every section is counted once (#146). Read here, from the
+  # same directory, before it goes.
+  _fan_tot="$(fan_totals_over_dir "$_fan_dir" "$SUITE_JOBS")"; _fan_tot_rc=$?
   rm -rf "$_fan_dir"
   echo ""
   if [ -n "$_fan_missing" ]; then
@@ -983,7 +1152,36 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
     echo "test suite: the whole run took ${_fan_elapsed}s and SUITE_TIMEOUT is ${SUITE_TIMEOUT}s, which is less than twice it. The deadline has grown too tight to distinguish a hung run from a slow one, which is the whole reason it exists. Raise it, or find what got slower." >&2
     _fan_rc=1
   fi
-  echo "PASS=$_fan_pass FAIL=$_fan_fail ($SUITE_JOBS shards in ${_fan_elapsed}s; the prelude runs in each, so its checks are counted $SUITE_JOBS times)"
+  # The headline: every section once (#146). The sum of the shards' own totals is still worked out
+  # above, and it is used here as a SECOND reading of the same run: the raw sum has to be the
+  # headline plus everything that was run over again. The two are arrived at differently, one from
+  # each shard's result line and one from its buckets, so an identity that fails means the shards
+  # are contradicting themselves and neither number can be trusted (L70 is about the opposite
+  # case, two sides of one lookup; these really are two lookups).
+  _fan_note="$SUITE_JOBS shards in ${_fan_elapsed}s"
+  if [ "$_fan_tot_rc" -eq 0 ] && [ -z "$_fan_missing" ]; then
+    _fan_hp="$(printf '%s' "$_fan_tot" | awk '{print $1}')"
+    _fan_hf="$(printf '%s' "$_fan_tot" | awk '{print $2}')"
+    _fan_pre="$(printf '%s' "$_fan_tot" | awk '{print $3}')"
+    _fan_prf="$(printf '%s' "$_fan_tot" | awk '{print $4}')"
+    _fan_rp="$(printf '%s' "$_fan_tot" | awk '{print $5}')"
+    _fan_rf="$(printf '%s' "$_fan_tot" | awk '{print $6}')"
+    if [ "$(( _fan_hp + _fan_rp ))" -ne "$_fan_pass" ] || [ "$(( _fan_hf + _fan_rf ))" -ne "$_fan_fail" ]; then
+      echo "test suite: the shards' result lines add up to $_fan_pass passed and $_fan_fail failed, but their own account of which sections those checks came from adds up to $(( _fan_hp + _fan_rp )) and $(( _fan_hf + _fan_rf )). Those are two readings of one run and they disagree, so neither total is trustworthy." >&2
+      _fan_rc=1
+    else
+      _fan_note="$_fan_note; every section counted once, and $_fan_rp check(s) that ran again are not in it: the prelude's $_fan_pre in each of the other $(( SUITE_JOBS - 1 )) shard(s), plus anything a section needed from another shard"
+      _fan_pass="$_fan_hp"; _fan_fail="$_fan_hf"
+    fi
+  else
+    # No usable account of which sections the checks came from, so the raw sum is what there is.
+    # It is REPORTED as the raw sum rather than dressed up as the headline, because a number that
+    # counts the prelude once per shard is a different fact from one that counts it once (L11).
+    [ "$_fan_tot_rc" -eq 0 ] || echo "test suite: $_fan_tot" >&2
+    [ "$_fan_tot_rc" -eq 0 ] || _fan_rc=1
+    _fan_note="$_fan_note; the prelude runs in each, so its checks are counted $SUITE_JOBS times in the total below"
+  fi
+  echo "PASS=$_fan_pass FAIL=$_fan_fail ($_fan_note)"
   printf 'SUITE-RESULT passed=%s failed=%s\n' "$_fan_pass" "$_fan_fail"
   [ "$_fan_fail" -eq 0 ] || _fan_rc=1
   exit "$_fan_rc"
@@ -4372,6 +4570,112 @@ check "#137 and the file that was silent is the one named" \
 _cov_real_less="$(printf '%s\n' "$_cov_real" | grep -v '^SUITE-SHARD-COVERAGE shard=3 ')"
 check "#137 and dropping one of those real shards is refused" \
   "! _cov_v \"\$_cov_real_less\" 4 >/dev/null"
+
+section "== the headline total counts every section once, whatever the shard count (#146) =="
+# The suite reported a different number of checks depending on how much of the machine the run was
+# granted. Measured on 2026-08-21 over one file: 873 checks in a single process, 920 across two
+# shards, 986 across four, 1052 across six, 1118 across eight. Nothing was hidden, the summary
+# line said the prelude was counted once per shard, but the headline still moved with the machine,
+# and a total that changes for reasons unrelated to the tests cannot be used to notice that checks
+# were LOST, which is the one question a total exists to answer (L63).
+#
+# Measured rather than reasoned about, because the prelude was not the whole story. Over those
+# same runs the prelude is 33 checks and runs in every shard, and one 14 check section runs a
+# SECOND time in a shard that did not target it, because a section there declares it with a
+# `# needs:` line. 873 plus three preludes plus that one repeat is 986 exactly. Subtracting only
+# the prelude would have left the headline still moving between 873 and 887, and the sentence
+# promising otherwise would have been wrong with nothing to catch it (L210).
+#
+# So every section run is one of three things and each shard says what each was worth: the
+# PRELUDE, which every shard runs; this shard's TARGETS, which #137 already proves are divided
+# between the shards with nothing missing and nothing doubled; and REPEATS, any other section a
+# shard ran to satisfy a `# needs:`. The headline is the prelude once plus every target, which is
+# every section exactly once, and the repeats are reported beside it rather than folded into it.
+#
+# Driven with fabricated lines first, so every outcome the verdict can report is PRODUCED rather
+# than merely reachable (L151). A real filtered run goes through the same function at the end,
+# because a verdict proven only over lines this section wrote would say nothing about the shards
+# anybody actually runs (L52).
+_ft_v(){ printf '%s\n' "$1" | fan_totals_verdict "$2"; }   # 0 = usable, else the complaint
+
+# Two shards. These are numbers this section made up, not measurements of anything: the prelude
+# is 33 checks in both, the targets are 400 and 440 between them, and a section worth 14 checks was
+# repeated to satisfy a needs: declaration.
+_ft_two="SUITE-SECTIONS prelude_pass=33 prelude_fail=0 target_pass=400 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=433 total_fail=0 shard=1
+SUITE-SECTIONS prelude_pass=33 prelude_fail=0 target_pass=440 target_fail=0 repeat_pass=14 repeat_fail=0 total_pass=487 total_fail=0 shard=2"
+_ft_two_out="$(_ft_v "$_ft_two" 2)"
+check "#146 shards that agree about the prelude produce a headline" "_ft_v \"\$_ft_two\" 2 >/dev/null"
+check "#146 and it is the prelude once plus every target, not the sum of the shards" \
+  "[ \"\$_ft_two_out\" = '873 0 33 0 47 0' ]"
+# Reported BESIDE the headline rather than folded into it: one prelude run over again, plus the
+# section worth 14 checks that the needs: declaration pulled into the other shard.
+check "#146 and the repeated runs are counted and reported separately" \
+  "[ \"\$(printf '%s' \"\$_ft_two_out\" | awk '{print \$5}')\" = 47 ]"
+
+# The same suite sliced four ways instead of two: same prelude, same targets between them, same
+# one repeat. The headline has to be the SAME number, which is the entire point of the issue.
+_ft_four="SUITE-SECTIONS prelude_pass=33 prelude_fail=0 target_pass=200 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=233 total_fail=0 shard=1
+SUITE-SECTIONS prelude_pass=33 prelude_fail=0 target_pass=200 target_fail=0 repeat_pass=14 repeat_fail=0 total_pass=247 total_fail=0 shard=2
+SUITE-SECTIONS prelude_pass=33 prelude_fail=0 target_pass=220 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=253 total_fail=0 shard=3
+SUITE-SECTIONS prelude_pass=33 prelude_fail=0 target_pass=220 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=253 total_fail=0 shard=4"
+_ft_four_out="$(_ft_v "$_ft_four" 4)"
+check "#146 the same sections sliced four ways give the same headline as two" \
+  "[ \"\${_ft_four_out%% *}\" = \"\${_ft_two_out%% *}\" ]"
+# And the repeat count is the half that MOVES, so a headline that stayed still because the verdict
+# ignores its input would not survive this pair (L178).
+check "#146 while the count of repeated runs rises with the shard count" \
+  "[ \"\$(printf '%s' \"\$_ft_four_out\" | awk '{print \$5}')\" = 113 ]"
+
+# Failures go through the same arithmetic. A failing prelude check counted once per shard reads as
+# four broken checks where there is one, and the reader then looks for four (L11).
+_ft_fail="SUITE-SECTIONS prelude_pass=32 prelude_fail=1 target_pass=200 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=232 total_fail=1 shard=1
+SUITE-SECTIONS prelude_pass=32 prelude_fail=1 target_pass=200 target_fail=2 repeat_pass=0 repeat_fail=0 total_pass=232 total_fail=3 shard=2"
+_ft_fail_out="$(_ft_v "$_ft_fail" 2)"
+check "#146 a failing prelude check is counted once, not once per shard" \
+  "[ \"\$_ft_fail_out\" = '432 3 32 1 32 1' ]"
+
+# A shard that said nothing about its sections. Its checks are in no bucket, so the headline
+# cannot be worked out, and a missing total must never be treated as a zero: that reads as a shard
+# where everything passed (L98, L90).
+_ft_gone="SUITE-SECTIONS prelude_pass=33 prelude_fail=0 target_pass=400 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=433 total_fail=0 shard=1"
+_ft_gone_out="$(_ft_v "$_ft_gone" 2)"
+check "#146 a shard that declared nothing about its sections is refused" "! _ft_v \"\$_ft_gone\" 2 >/dev/null"
+check "#146 and the silent shard is named" "line_has \"\$_ft_gone_out\" 'shard' ' 2'"
+
+# Shards that disagree about the prelude. The prelude is the same sections in every shard, so a
+# disagreement means one of them ran something different, and subtracting either number produces a
+# headline that is simply wrong while looking exactly like a correct one.
+_ft_dis="SUITE-SECTIONS prelude_pass=33 prelude_fail=0 target_pass=400 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=433 total_fail=0 shard=1
+SUITE-SECTIONS prelude_pass=31 prelude_fail=0 target_pass=440 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=471 total_fail=0 shard=2"
+_ft_dis_out="$(_ft_v "$_ft_dis" 2)"
+check "#146 shards that disagree about the prelude are refused" "! _ft_v \"\$_ft_dis\" 2 >/dev/null"
+check "#146 and both numbers are named, so the disagreement can be looked at" \
+  "line_has \"\$_ft_dis_out\" 'prelude' '33' '31'"
+
+# The buckets have to account for the shard's OWN total. If they do not, checks ran in no bucket at
+# all and the headline would quietly leave them out, which is the same defect one level down and
+# the reason each shard reports its own total beside the buckets (L16).
+_ft_short="SUITE-SECTIONS prelude_pass=33 prelude_fail=0 target_pass=400 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=999 total_fail=0 shard=1
+SUITE-SECTIONS prelude_pass=33 prelude_fail=0 target_pass=440 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=473 total_fail=0 shard=2"
+_ft_short_out="$(_ft_v "$_ft_short" 2)"
+check "#146 buckets that do not add up to the shard's own total are refused" "! _ft_v \"\$_ft_short\" 2 >/dev/null"
+check "#146 and the shard whose checks went unattributed is named" \
+  "line_has \"\$_ft_short_out\" 'shard 1' '999'"
+
+# And the real thing. A shard IS a filtered run, so this proves the line is emitted by the code
+# that ships rather than only by the fixtures above, and that its buckets add up on real numbers.
+# One cheap section, so it costs the prelude and almost nothing else.
+_ft_real="$(SECTION_ONLY='repo hygiene' SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1)"
+_ft_line="$(printf '%s\n' "$_ft_real" | grep -m1 '^SUITE-SECTIONS ')"
+dbg "#146 real filtered run reported: $_ft_line"
+check "#146 a real filtered run says how its checks were divided up" "[ -n \"\$_ft_line\" ]"
+check "#146 and a real line's buckets add up to what that run reported" \
+  "printf '%s\n' \"\$_ft_line shard=1\" | fan_totals_verdict 1 >/dev/null"
+# The prelude really is the bulk of what a one section run does, which is the fact the whole issue
+# rests on. A run whose prelude bucket was zero would satisfy every arithmetic check above (L182).
+_ft_prel="$(printf '%s' "$_ft_line" | sed -n 's/.*prelude_pass=\([0-9]*\).*/\1/p')"
+check "#146 and its prelude bucket is the bulk of the checks, which is why repeating it mattered" \
+  "[ \"\${_ft_prel:-0}\" -gt 10 ]"
 
 section "== the runner says how much of the machine this suite may take (#136) =="
 # The runner starts several suites at once and this one splits itself into shards, and the two

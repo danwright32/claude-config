@@ -248,9 +248,22 @@ totals cannot do that job: 817, then 830, then 943, every one of them legitimate
 quietly selected fewer sections would just print a smaller number.
 
 Sections are interleaved rather than cut into contiguous blocks, because their durations are
-uneven and blocks would put several slow ones together. The reported total counts the prelude once
-per shard, since every shard has to run it to have any fixtures, so it is larger than a
-single-process run's: 973 against 860. The summary line says so.
+uneven and blocks would put several slow ones together.
+
+The reported total counts every section ONCE, whatever the shard count (#146). It used to be the
+sum of the shards' own totals, which moved with how much of the machine the run was granted:
+measured on 2026-08-21, 873 checks in a single process, 920 across two shards, 986 across four and
+1118 across eight, all of one file. Two things repeat, not one. Every shard runs the prelude, and
+a shard also runs any section its own targets declare with a `# needs:` line even when another
+shard owns it. So each shard now reports what its checks were worth in three buckets, the prelude,
+its own targets, and anything it borrowed, and the headline is the prelude once plus every target.
+The repeated runs are counted and reported beside it rather than folded in.
+
+Two readings have to agree: the sum of the shards' result lines must equal that headline plus
+everything that ran again. They are arrived at differently, one from each shard's result line and
+one from its buckets, so a run where they disagree reports neither number as trustworthy. A shard
+that says nothing about its sections, or shards that disagree about the prelude, fail the run with
+their own message rather than being folded into a total that would silently be missing them.
 
 Every push and pull request also runs the suite on a Linux runner
 (`.github/workflows/tests.yml`). No path filter: the suite reads `README.md` and `DESIGN.md` as
