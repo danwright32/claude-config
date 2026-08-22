@@ -1258,7 +1258,7 @@ $f
 "*) continue ;; esac
     if [ -f "$CLAUDE_HOME/$f" ] && cmp -s "$PAYLOAD/$f" "$CLAUDE_HOME/$f"; then continue; fi
     if [ -f "$CLAUDE_HOME/$f" ]; then
-      cp "$CLAUDE_HOME/$f" "$CLAUDE_HOME/$f.syncbak"
+      keep_prior_copy "$CLAUDE_HOME/$f"
       record_applied updated "$f"
     else
       record_applied added "$f"
@@ -1333,7 +1333,7 @@ $f
         label="settings.json (hooks section)"
         [ -n "$added" ] && label="$label, registered: $added"
         [ -n "$removed" ] && label="$label, unregistered: $removed"
-        cp "$settings" "$settings.syncbak"
+        keep_prior_copy "$settings"
         mv "$tmp" "$settings"
         record_applied updated "$label"
       fi
@@ -1381,6 +1381,64 @@ $f
   # .last-applied stays local (it is this Mac's own bookkeeping); this is the published
   # half, so the OTHER Mac can be told apart from a Mac nobody has heard from. (#23)
   publish_applied_marker
+  # Last, so the list of kept copies sits under everything this run reported doing, and only on a
+  # run that actually wrote one (claude-config#158).
+  report_syncbaks
+}
+
+# The previous copy of a file about to be overwritten, kept beside it (claude-config#158).
+#
+# ONE place, because the flag below has to be set wherever a backup is written and three call sites
+# each setting it is three chances to forget: a fact assembled in several places has nowhere its
+# completeness can be seen (L94).
+#
+# Nothing here ever deletes one. An automatic retention policy is a product decision and not a
+# silent default (L9), and the whole value of the file is still being there when somebody reaches
+# for it (L5, L7). What was missing was never the deleting, it was that nobody was TOLD they
+# existed or how old they were.
+SYNCBAK_WRITTEN=0
+keep_prior_copy(){   # keep_prior_copy <file>   -> copies it to <file>.syncbak
+  cp "$1" "$1.syncbak" || return 1
+  SYNCBAK_WRITTEN=1
+  return 0
+}
+
+# What is sitting beside the rule files now, with a date each. Said only on a run that WROTE one,
+# which is the moment their age is knowable and also the only moment worth interrupting for: on
+# every pull it would be the noise it exists to cut through (L36).
+#
+# Every copy is listed, not only the one just written. Telling a fresh backup from one left over
+# days ago is the entire point, and the stale one is invisible precisely because nothing mentions
+# it: four were sitting on each Mac on 2026-08-22, one two days older than the others, and no pull
+# had ever named any of them.
+report_syncbaks(){
+  [ "${SYNCBAK_WRITTEN:-0}" -eq 1 ] || return 0
+  [ -d "$CLAUDE_HOME" ] || return 0
+  local list n
+  # Bounded depth deliberately: these are written beside the top-level rule files and settings, and
+  # an unbounded walk here would read every project transcript under the config directory on every
+  # merge. If a backup is ever written deeper than this, the line below stops naming it, which is
+  # why the wording says where it looked rather than claiming to have found them all (L11).
+  list="$(find "$CLAUDE_HOME" -maxdepth 2 -name '*.syncbak' -type f 2>/dev/null | sort || true)"
+  case "$list" in *[![:space:]]*) ;; *) return 0 ;; esac
+  n="$(printf '%s\n' "$list" | grep -c . || true)"
+  echo "claude-sync: $n previous copy(ies) are kept beside their files as .syncbak, in $CLAUDE_HOME and one level below it:" >&2
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    # Through the portable helpers, never `date -r <file>`: that takes a TIMESTAMP on BSD and a
+    # FILE on GNU, so the same line means two different things on the two machines this runs on
+    # (#38). A date that cannot be read says so rather than being rendered as some default, since
+    # the date is the entire reason this list exists (L67).
+    local when
+    when="$(date_from_epoch "$(file_mtime "$f")" '+%Y-%m-%d %H:%M' || true)"
+    [ -n "$when" ] || when="date unreadable"
+    printf '  %-16s  %s\n' "$when" "${f#"$CLAUDE_HOME"/}" >&2
+  done <<SYNCBAKS
+$list
+SYNCBAKS
+  echo "  Delete any you no longer need. Nothing here removes them, so an old one stays until you do." >&2
+  return 0
 }
 
 # Is the shared repo holding payload content this Mac has never applied? That is
@@ -1919,7 +1977,7 @@ RENUMBERED
 $collided
 COLLIDED
       fi
-      cp "$local_f" "$local_f.syncbak"
+      keep_prior_copy "$local_f"
       cp "$tmpr" "$local_f"
       MERGED_RULE_FILES="$MERGED_RULE_FILES
 $p"

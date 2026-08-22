@@ -2293,6 +2293,68 @@ check "this Mac's entry is still in the file"   "grep -q FROM-MAC-B-SAME-TIME '$
 check "so no conflict copy was needed"          "! ls '$TFBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
 check "and the merge is reported"               "line_has \"\$out_tfc\" 'entries were MERGED' 'LESSONS\.md'"
 
+section "== a pull says what .syncbak copies it left behind (#158) =="
+# Every merge writes the previous copy beside the file as `<name>.syncbak`, which is the right
+# safety net, and then nothing else ever happens to it. Four were sitting on each Mac on
+# 2026-08-22, one of them two days older than the other three, and no pull had ever mentioned any
+# of them. An old backup is indistinguishable from a fresh one, so a restore reaches for a file of
+# unknown vintage and can roll settings back by days without anybody noticing.
+#
+# The pull that writes one is the only moment their age is known, so that is when they are listed,
+# with a date each. They are NOT deleted: an automatic retention policy is a product decision and
+# not a silent default (L9, L116), and the whole point of the file is to still be there when
+# somebody wants it (L5, L7).
+SBBARE="$WORK/sbbare.git"; git init -q --bare -b main "$SBBARE"
+SBA="$WORK/sbrepoA"; git clone -q "$SBBARE" "$SBA" 2>/dev/null
+SBAH="$WORK/sbhomeA"; mkdir -p "$SBAH/hooks"; echo '{"hooks":{}}' > "$SBAH/settings.json"
+printf '# rules\n' > "$SBAH/CLAUDE.md"
+printf -- '- L1. first lesson\n' > "$SBAH/LESSONS.md"
+echo 'sb-other-v1' > "$SBAH/hooks/sb-other.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBAH" SYNC_REPO="$SBA" bash "$SCRIPT" sync >/dev/null 2>&1
+SBB="$WORK/sbrepoB"; git clone -q "$SBBARE" "$SBB" 2>/dev/null
+SBBH="$WORK/sbhomeB"; mkdir -p "$SBBH"; echo '{"hooks":{}}' > "$SBBH/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBBH" SYNC_REPO="$SBB" bash "$SCRIPT" pull >/dev/null 2>&1
+
+# The control first, and it is the half that decides whether any of this is worth having: a pull
+# that wrote NO backup must not print the block at all, or the notice appears on every pull and
+# becomes the noise it exists to cut through (L36, L159).
+echo 'sb-other-v2' > "$SBAH/hooks/sb-other.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBAH" SYNC_REPO="$SBA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_sb_none="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBBH" SYNC_REPO="$SBB" bash "$SCRIPT" pull 2>&1)"
+check "#158 the unrelated change arrived, so this pull really did work"  "grep -q sb-other-v2 '$SBBH/hooks/sb-other.sh'"
+check "#158 a pull that left no previous copy says nothing about .syncbak" \
+  "case \"\$out_sb_none\" in *syncbak*) false ;; *) true ;; esac"
+
+# Now both Macs append to the same rules file, which is the merge that writes one.
+printf -- '- L3. SB-FROM-MAC-A\n' >> "$SBAH/LESSONS.md"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBAH" SYNC_REPO="$SBA" bash "$SCRIPT" sync >/dev/null 2>&1
+printf -- '- L4. SB-FROM-MAC-B\n' >> "$SBBH/LESSONS.md"
+out_sb="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBBH" SYNC_REPO="$SBB" bash "$SCRIPT" pull 2>&1)"
+# The fixture really did produce one, or every check below passes by having nothing to find (L98).
+check "#158 the merge really did leave a previous copy behind" "[ -f '$SBBH/LESSONS.md.syncbak' ]"
+check "#158 the pull lists the previous copies it left behind" \
+  "line_has \"\$out_sb\" 'syncbak' 'LESSONS\.md'"
+# A date for each, which is the entire point: without one an old copy and a fresh one read alike.
+check "#158 and gives a date for each, not just a count" \
+  "line_has \"\$out_sb\" 'LESSONS\.md\.syncbak' '[0-9]{4}-[0-9]{2}-[0-9]{2}'"
+check "#158 and says plainly that nothing removes them" \
+  "case \"\$out_sb\" in *'removes them'*) true ;; *) false ;; esac"
+# And nothing was deleted, which is the promise the sentence above makes (L5).
+check "#158 the previous copy is still on disk afterwards" "[ -f '$SBBH/LESSONS.md.syncbak' ]"
+check "#158 and it still holds this Mac's pre-merge copy" \
+  "grep -q SB-FROM-MAC-B '$SBBH/LESSONS.md.syncbak'"
+# An OLDER copy beside a fresh one is named too, since telling those two apart is the whole reason
+# the dates are printed. Made older by hand rather than by waiting.
+printf 'stale\n' > "$SBBH/CLAUDE.md.syncbak"
+touch -t 202601011200 "$SBBH/CLAUDE.md.syncbak"
+printf -- '- L5. SB-FROM-MAC-A-AGAIN\n' >> "$SBAH/LESSONS.md"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBAH" SYNC_REPO="$SBA" bash "$SCRIPT" sync >/dev/null 2>&1
+printf -- '- L6. SB-FROM-MAC-B-AGAIN\n' >> "$SBBH/LESSONS.md"
+out_sb2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBBH" SYNC_REPO="$SBB" bash "$SCRIPT" pull 2>&1)"
+check "#158 an older copy left from before is listed too" \
+  "line_has \"\$out_sb2\" 'CLAUDE\.md\.syncbak' '2026-01-01'"
+check "#158 and the older one is not deleted either" "[ -f '$SBBH/CLAUDE.md.syncbak' ]"
+
 section "== a commit made outside send/sync must not wedge the watcher (#12) =="
 # 2026-07-28: a session edited claude-sync itself and committed with plain git.
 # .last-applied is written only by the apply step and by a clean send, so HEAD
