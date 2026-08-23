@@ -32,6 +32,20 @@ check() { # check <description> <result>   ("ok" passes, anything else is the fa
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
 export CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool"
+# The hook under test writes the records it could not spool to a fixed name in the shared temp
+# directory, and this suite used to read and remove that exact path. Two runs at once therefore
+# destroyed each other's file, which is the same fault claude-config#180 was written for, in a
+# different directory (claude-config#186).
+#
+# Pointing TMPDIR at this run's OWN throwaway directory moves every such path inside it, so the
+# hook keeps computing the name it computes in production and this run still cannot collide with
+# another. It is exported after TMPROOT exists, so TMPROOT itself is still made in the real temp
+# directory and the trap above still reclaims the lot.
+export TMPDIR="$TMPROOT/tmp"
+mkdir -p "$TMPDIR"
+# Named once, from that directory, rather than spelled out at each use: a path written out in full
+# is a path the next person copies, and the guard cannot tell one copy from three.
+LOST_RECORDS="$TMPDIR/claude-issue-spool-lost.jsonl"
 
 # Two transcripts, because the real payload carries two and picking the wrong
 # one is the defect these tests exist for. `transcript_path` is the transcript of
@@ -535,11 +549,11 @@ chmod 500 "$CLAUDE_ISSUE_SPOOL_DIR"
 stub 'echo "FINDING: written to a read-only spool."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 chmod 700 "$CLAUDE_ISSUE_SPOOL_DIR"
-lost="$(cat "${TMPDIR:-/tmp}/claude-issue-spool-lost.jsonl" 2>/dev/null)"
+lost="$(cat "$LOST_RECORDS" 2>/dev/null)"
 printf '%s' "$lost" | grep -q "read-only spool" \
   && check "a record that cannot be written lands in the lost file" ok \
   || check "a record that cannot be written lands in the lost file" "lost=$lost"
-rm -f "${TMPDIR:-/tmp}/claude-issue-spool-lost.jsonl"
+rm -f "$LOST_RECORDS"
 
 # A hung model must not take the whole hook down with it and leave no trace.
 #
