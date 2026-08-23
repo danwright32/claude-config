@@ -433,6 +433,11 @@ with_lock(){   # $@ = the command to run while holding the lock
   trap 'record_sent_if_shipped; release_lock; cleanup_applied_log' EXIT
   "$@" || rc=$?
   release_lock
+  # After release_lock, never before: this is where the minutes of hook suite behind the closing
+  # line are paid, and #181 measured what paying them under the lock does to the watch daemon.
+  # Only on success, because a run that failed installed nothing to report and left through die()
+  # anyway; `if` rather than `&&`, which under set -e would abort the run when rc is non-zero.
+  if [ "$rc" -eq 0 ]; then flush_pending_report; fi
   return $rc
 }
 
@@ -2773,18 +2778,57 @@ pull_from_repo_or_die(){
 # Written only when a verdict was actually REACHED: a pull that carried no hook, or one told to
 # skip, has verified nothing, and overwriting an outstanding failure with its silence would clear a
 # report nothing had settled.
+# Five fields since claude-config#185, and the last two are the coverage: how many suites ran and
+# how many could not. `?` where the runner's report could not be read, never 0, because 0 is the
+# reassuring answer and would be indistinguishable from a run that genuinely covered everything.
 record_hook_suite_result(){   # $1 = outcome  $2 = exit status  $3 = a file of output, or nothing
+                              # $4 = suites that ran  $5 = suites that could not; number or ?
   local tmp
   tmp="$(scratch_file)" || return 0
-  printf '%s\t%s\t%s\n' "$1" "$(date +%s)" "$2" > "$tmp"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$(date +%s)" "$2" "${4:-?}" "${5:-?}" > "$tmp"
   # Capped: the point is the reason, not a transcript, and this file is read by a person.
   [ -n "${3:-}" ] && [ -f "$3" ] && tail -50 "$3" >> "$tmp"
   mv "$tmp" "$HOOK_TESTS_FILE" 2>/dev/null || rm -f "$tmp"
   return 0
 }
 
+# How much of the suite a passing run actually COVERED, read from the runner's own report
+# (claude-config#185).
+#
+# run-all-tests.sh exits 0 when suites merely COULD NOT RUN, and says so itself. Six of them audit
+# the repository and declare SUITE-NOT-RUN anywhere else, which is every deployed Mac, so "the hook
+# suite passed here" covered materially less than it sounded like. That is the fold this tool
+# refuses everywhere else: a check that did not run must not read as one that passed (L98).
+#
+# The count is READ from the line the runner already prints, never counted a second time here. A
+# second definition of one quantity drifts, and drifts towards flattering the sentence quoting it
+# (L107).
+#
+# It reads the VERDICT line, which a passing run always prints in one of exactly two shapes, rather
+# than the "N SUITE(S) COULD NOT RUN HERE" block, which appears only when N is non-zero. An absent
+# block would be indistinguishable from a runner too old to report one, and would be read as full
+# coverage: the pleasant answer, arrived at by matching nothing (L98, L215). A report matching
+# neither shape is answered with `?`, and the closing line says so in its own words.
+hook_suite_coverage(){   # $1 = the file holding the runner's output -> "<ran>\t<notrun>", ? if unread
+  local line
+  line="$(grep -E '^ALL [0-9]+ SUITES PASSED$' "$1" 2>/dev/null | tail -1 || true)"
+  if [ -n "$line" ]; then
+    printf '%s\t0' "$(printf '%s' "$line" | sed -E 's/^ALL ([0-9]+) SUITES PASSED$/\1/')"
+    return 0
+  fi
+  line="$(grep -E '^ALL [0-9]+ SUITES THAT COULD RUN PASSED, and [0-9]+ could not run here$' "$1" 2>/dev/null | tail -1 || true)"
+  if [ -n "$line" ]; then
+    printf '%s\t%s' \
+      "$(printf '%s' "$line" | sed -E 's/^ALL ([0-9]+) SUITES THAT COULD RUN PASSED.*$/\1/')" \
+      "$(printf '%s' "$line" | sed -E 's/^.*, and ([0-9]+) could not run here$/\1/')"
+    return 0
+  fi
+  printf '?\t?'
+  return 0
+}
+
 hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
-  local runner out pid started now limit rc=0 killed=0
+  local runner out pid started now limit rc=0 killed=0 ran='?' notrun='?'
   [ "${SYNC_NO_HOOK_TESTS:-0}" = "1" ] && return 0
   [ -n "${APPLIED_LOG:-}" ] || return 0
   [ -s "$APPLIED_LOG" ] || return 0
@@ -2794,7 +2838,7 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   runner="$CLAUDE_HOME/hooks/run-all-tests.sh"
   if [ ! -f "$runner" ]; then
     notify "hooks arrived with no run-all-tests.sh to check them"
-    record_hook_suite_result notrun 0 ""
+    record_hook_suite_result notrun 0 "" "?" "?"
     printf ', and the hook suite could NOT be run here: hooks arrived and there is no %s to check them with, so nothing that just landed has been verified' "$runner"
     return 0
   fi
@@ -2825,13 +2869,24 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   wait "$pid" 2>/dev/null || rc=$?
   if [ "$killed" -eq 1 ]; then
     notify "the hook suite was still running after ${limit}s and was stopped"
-    record_hook_suite_result incomplete 0 "$out"
+    record_hook_suite_result incomplete 0 "$out" "?" "?"
     printf ', and the hook suite could NOT be completed here: it was still running after %ss and was stopped, so nothing that just landed has been verified' "$limit"
     return 0
   fi
   if [ "$rc" -eq 0 ]; then
-    record_hook_suite_result passed 0 ""
-    printf ', and the hook suite passed here'
+    IFS="$(printf '\t')" read -r ran notrun <<HSCOVEOF
+$(hook_suite_coverage "$out")
+HSCOVEOF
+    case "$ran$notrun" in *[!0-9]*) ran='?'; notrun='?' ;; esac
+    record_hook_suite_result passed 0 "" "$ran" "$notrun"
+    if [ "$ran" = '?' ]; then
+      printf ', and the hook suite passed here, though its own report did not say how many of its suites ran, so how much of the suite that covers is unknown'
+    elif [ "$notrun" -gt 0 ]; then
+      printf ', and the hook suite passed here, but only %s of its %s suites could run on this Mac, so %s of them are unverified here' \
+        "$ran" "$(( ran + notrun ))" "$notrun"
+    else
+      printf ', and the hook suite passed here, all %s of its suites' "$ran"
+    fi
     return 0
   fi
   # The runner's own report goes to stderr, where the rest of this run's diagnostics are, so the
@@ -2839,7 +2894,7 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   echo "claude-sync: the hook suite on this Mac exited $rc after the pull. What it said:" >&2
   tail -25 "$out" >&2 || true
   notify "the hook suite FAILED after a pull"
-  record_hook_suite_result failed "$rc" "$out"
+  record_hook_suite_result failed "$rc" "$out" "?" "?"
   printf ', but the hook suite FAILED here (it exited %s). The config is on disk and at least one check on it does not pass: run  bash %s  to see which' "$rc" "$runner"
   return 0
 }
@@ -2858,10 +2913,12 @@ do_pull(){
   apply_payload_to_local
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   summarize_applied "$before" "$after"
+  report_when_lock_released "Pulled shared config onto this Mac (memory/permissions untouched)"
 }
 
 # The closing line, and the verification behind it, deliberately OUTSIDE the locked region
-# (claude-config#181).
+# (claude-config#181), on EVERY path that receives config rather than on pull alone
+# (claude-config#184).
 #
 # The suite is minutes of work. Run inside do_pull it held the sync lock for its whole duration, so
 # every watch daemon pull starting in that window refused rather than queueing: the job whose only
@@ -2870,16 +2927,34 @@ do_pull(){
 #
 # Nothing is left for the lock to protect by then. The payload is applied, the summary is printed,
 # and this reads files that are already on disk. What it must NOT do is move: the verdict still
-# belongs in the closing line, because a pull that reports success without running any of what it
-# installed says exactly what a verified one says (L98), so the line is printed here, after the
-# suite, rather than before it.
+# belongs in the closing line, because a run that reports success without running any of what it
+# installed says exactly what a verified one says (L98), so the line is printed after the suite
+# rather than before it.
+#
+# Why it is flushed from with_lock rather than added beside each command. #178 and #181 both hung
+# off do_pull, and do_sync applies the payload through the same apply_payload_to_local without ever
+# reaching that code, so config arriving by sync was installed with nothing checking it. The
+# scheduled job runs pull and was covered; the watch daemon runs send, which falls through to
+# do_sync, and the timer's reconcile runs sync, so the two UNATTENDED receive paths were the
+# unverified ones. Asking every future receive path to remember one more call is a rule that lives
+# in somebody's head (L27), and the path that forgot would be the one nobody is watching. So the
+# lock's own release point flushes it, once, and a receive path cannot be added without it.
 #
 # The applied log outlives the lock: it is removed by the EXIT trap, not by release_lock, so the
 # decision about whether a hook landed can still be taken here from the same record.
-do_pull_report(){
-  local verdict
+REPORT_PENDING=""
+report_when_lock_released(){   # $1 = the closing sentence, without its verdict clause or full stop
+  REPORT_PENDING="$1"
+  return 0
+}
+flush_pending_report(){
+  local stem="$REPORT_PENDING" verdict
+  # Cleared FIRST, so a second flush cannot print the same line twice however this is reached.
+  REPORT_PENDING=""
+  [ -n "$stem" ] || return 0
   verdict="$(hook_suite_verdict)"
-  echo "Pulled shared config onto this Mac (memory/permissions untouched)${verdict}."
+  echo "${stem}${verdict}."
+  return 0
 }
 
 # Resume point after claude-sync updated itself mid-`sync` (internal use only).
@@ -2891,7 +2966,7 @@ do_apply_only(){
   have_git && after="$(repo_head)"
   apply_payload_to_local
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
-  echo "Synced (sent local changes, pulled remote; memory/permissions untouched)."
+  report_when_lock_released "Synced (sent local changes, pulled remote; memory/permissions untouched)"
 }
 
 # ---------- sync (two-way, used by the background job) ----------
@@ -2978,7 +3053,7 @@ do_sync(){
   fi
   apply_payload_to_local
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
-  echo "Synced (sent local changes, pulled remote; memory/permissions untouched)."
+  report_when_lock_released "Synced (sent local changes, pulled remote; memory/permissions untouched)"
 }
 
 # ---------- send (one-way, used by the change watcher) ----------
@@ -3263,18 +3338,69 @@ report_sync_times(){
   echo "  The third only means the repo could be reached; it moves on every successful run and says nothing about whether anything crossed."
 }
 
-# What the last post-pull hook suite decided, while it is still outstanding (claude-config#182).
+# Other clones of this repo on this Mac (claude-config#187).
+#
+# .hook-tests lives in $SYNC_REPO, so it belongs to whichever clone did the work. This Mac has two
+# on purpose: ~/claude-config-sync, which the scheduled job and the watch daemon run from and which
+# holds .last-applied and .last-received, and the development checkout, which holds none of them.
+# status run from the development checkout therefore could not see a failure the scheduled clone
+# had recorded, and the scheduled clone is the one that pulls unattended, so its failures are
+# exactly the ones nobody is watching for.
+#
+# They are found from the launch agent plists, which NAME the script each job runs, so this reads
+# what actually runs rather than a list maintained beside it, which would only ever check what
+# somebody remembered to add (L41, L96).
+#
+# A plist naming a script that is not there is skipped rather than reported. That job is broken,
+# which is worth saying, but it is not this line's business and saying it here would put a second
+# unrelated fault in the middle of a verdict.
+#
+# Compared with pwd -P on both sides, because the two clones can be reached through symlinked paths
+# and a textual comparison would report a clone as a stranger to itself.
+other_sync_clones(){   # prints one absolute directory per line, this clone excluded
+  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}" plist path dir mine
+  [ -d "$agentdir" ] || return 0
+  mine="$(cd "$SYNC_REPO" 2>/dev/null && pwd -P)" || mine=""
+  for plist in "$agentdir"/com.claudesync.*.plist; do
+    [ -f "$plist" ] || continue
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      [ -f "$path" ] || continue
+      dir="$(cd "$(dirname "$path")" 2>/dev/null && pwd -P)" || continue
+      [ -n "$dir" ] || continue
+      [ "$dir" = "$mine" ] && continue
+      printf '%s\n' "$dir"
+    done <<CLONEEOF
+$(sed -n 's|.*<string>\(/[^<]*/claude-sync\)</string>.*|\1|p' "$plist" 2>/dev/null)
+CLONEEOF
+  done | sort -u
+  return 0
+}
+
+# What the last hook suite decided, while it is still outstanding (claude-config#182), for THIS
+# clone and for every other clone on this Mac (claude-config#187).
 #
 # Quiet on a pass and quiet with no record at all, because status reports what needs attention and
 # neither of those does. Loud on every other outcome, and each in its own words: a suite that FAILED
 # says a check on this config does not pass, one that could NOT be run says nothing checked it, and
 # they send a reader to different places (L11). A record nothing can read is said to be unreadable
 # rather than skipped, or a half written or restored file reads as a clean Mac (L98).
-report_hook_suite_result(){
-  local line outcome when code now age
-  [ -f "$HOOK_TESTS_FILE" ] || return 0
-  line="$(head -1 "$HOOK_TESTS_FILE" 2>/dev/null || true)"
-  IFS="$(printf '\t')" read -r outcome when code <<HSREOF
+#
+# A record found in ANOTHER clone says so, and names it. Which clone recorded a verdict is which
+# config was verified, and a line that leaves that out tells a reader a suite failed while denying
+# them the one fact they need to act on it (L11).
+# The record carries the coverage counts too since claude-config#185. They are read here so the
+# exit code stops at its own field: `read` puts every remaining field in the LAST name, so a widened
+# record read by the old three-name form reports "it exited 3<tab>?<tab>?". Nothing is SAID about
+# coverage here, because this surface is quiet on a pass by design and a partial pass is still a
+# pass; where that number belongs is the closing line of the pull that produced it, and the record
+# keeps it for anyone reading the file afterwards.
+report_hook_suite_record(){   # $1 = the record file  $2 = the clone it belongs to, or empty for this one
+  local line outcome when code ran notrun now age prefix="hook suite: "
+  [ -n "${2:-}" ] && prefix="hook suite (recorded by another clone on this Mac, $2, which a background job runs from): "
+  [ -f "$1" ] || return 0
+  line="$(head -1 "$1" 2>/dev/null || true)"
+  IFS="$(printf '\t')" read -r outcome when code ran notrun <<HSREOF
 $line
 HSREOF
   case "$when" in ''|*[!0-9]*) when="" ;; esac
@@ -3285,19 +3411,33 @@ HSREOF
     *) outcome="" ;;
   esac
   if [ -z "$outcome" ]; then
-    echo "hook suite: the record in $HOOK_TESTS_FILE is unreadable, so what the last pull's checks decided cannot be answered from here. Re-run them with: bash $CLAUDE_HOME/hooks/run-all-tests.sh"
+    echo "${prefix}the record in $1 is unreadable, so what that run's checks decided cannot be answered from here. Re-run them with: bash $CLAUDE_HOME/hooks/run-all-tests.sh"
     return 0
   fi
   now="$(date +%s)"
   age="$(age_in_words "$(( now - when ))")"
   case "$outcome" in
     failed)
-      echo "hook suite: FAILED $age (it exited ${code:-?}). The config that pull installed is on disk and at least one check on it does not pass. What it said is in $HOOK_TESTS_FILE; re-run with: bash $CLAUDE_HOME/hooks/run-all-tests.sh" ;;
+      echo "${prefix}FAILED $age (it exited ${code:-?}). The config that run installed is on disk, and at least one check on it does not pass. What it said is in $1; re-run with: bash $CLAUDE_HOME/hooks/run-all-tests.sh" ;;
     notrun)
-      echo "hook suite: could NOT be run $age, because hooks arrived and there was no $CLAUDE_HOME/hooks/run-all-tests.sh to check them with. Nothing that landed has been verified." ;;
+      echo "${prefix}could NOT be run $age, because hooks arrived and there was no $CLAUDE_HOME/hooks/run-all-tests.sh to check them with. Nothing that landed has been verified." ;;
     incomplete)
-      echo "hook suite: could NOT be completed $age, because it was still running when the pull stopped waiting. Nothing that landed has been verified. What it managed to say is in $HOOK_TESTS_FILE" ;;
+      echo "${prefix}could NOT be completed $age, because it was still running when the run that started it stopped waiting. Nothing that landed has been verified. What it managed to say is in $1" ;;
   esac
+  return 0
+}
+
+# This clone first, then any other on this Mac, so the record a reader is most likely to be asking
+# about leads and the rest are labelled as coming from somewhere else.
+report_hook_suite_result(){
+  local d
+  report_hook_suite_record "$HOOK_TESTS_FILE" ""
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    report_hook_suite_record "$d/.hook-tests" "$d"
+  done <<OTHERCLONEEOF
+$(other_sync_clones)
+OTHERCLONEEOF
   return 0
 }
 
@@ -3832,11 +3972,11 @@ do_install_autosync(){
 cmd="${1:-help}"
 case "$cmd" in
   push) with_lock do_push ;;
-  # Two commands, not one chained pair: with_lock leaves through die() on every failure, and under
-  # set -e a non-zero return here stops the run before the report, which is what should happen. A
-  # pull that failed has nothing to verify and nothing to report as pulled.
-  pull) with_lock do_pull
-        do_pull_report ;;
+  # No report step here. Every command that RECEIVES config hands its closing line to
+  # report_when_lock_released, and with_lock prints it after releasing the lock, so `sync`, `send`'s
+  # fall-through reconcile and the `apply-only` resume point all get the same verification as `pull`
+  # without a call site being able to forget one (claude-config#184).
+  pull) with_lock do_pull ;;
   sync) with_lock do_sync ;;
   send) with_lock do_send ;;
   # NOT locked as a whole: watch is a long-lived loop that would then hold the lock for

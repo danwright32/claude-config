@@ -7522,6 +7522,317 @@ rm -f "$HTRB/.hook-tests"
 out_st5="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#182 and no record at all says nothing" "! line_has \"\$out_st5\" 'hook suite' '(FAILED|unreadable|could NOT)'"
 
+section "== a passing pull says how much of the suite actually ran (#185) =="
+# needs: a pull runs the hook suite it just installed
+# "the hook suite passed here" was printed whenever the runner exited 0. run-all-tests.sh exits 0
+# when suites merely COULD NOT RUN, and it says so itself: six of them audit the repository and
+# declare SUITE-NOT-RUN anywhere else, which is every deployed Mac. So the most reassuring line the
+# pull can print covered materially less than it sounded like, which is the fold this tool refuses
+# everywhere else: a check that did not run must not read as one that passed (L98).
+#
+# What DECIDES the outcome is still the exit code and nothing else (L184). This is about what the
+# sentence CLAIMS, and the count is read from the runner's own report rather than derived a second
+# time here, so the two cannot drift (L107).
+#
+# The three readings are asserted separately, because a coverage figure that could only ever be
+# read one way would be satisfied by a parser that matched nothing and reported the pleasant
+# default (L98, L215): a runner that ran everything, one that could not run some of it, and one
+# whose report this cannot read at all each get their own words.
+mkrunner_v(){   # mkrunner_v <exit status> <the verdict line it prints> -> Mac A's stub runner
+  cat > "$HTHA/hooks/run-all-tests.sh" <<HTRUNNERV
+#!/usr/bin/env bash
+printf 'ran\n' >> "\$(dirname "\$0")/ht-ran.txt"
+echo "$2"
+exit $1
+HTRUNNERV
+}
+# Each call writes a DIFFERENT verdict line into the runner, which is itself a hook, so every
+# scenario below genuinely lands a hook on Mac B and genuinely triggers the suite. A fixture that
+# changed nothing would leave the pull with no hook to check and the closing line would say nothing
+# at all, which reads exactly like a coverage clause that was never written.
+ht_cover(){   # ht_cover <exit> <verdict line> -> Mac B's whole closing output
+  mkrunner_v "$1" "$2"
+  CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+  CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1
+}
+ht_field(){   # ht_field <n> -> the nth tab field of Mac B's recorded verdict
+  awk -F'\t' -v n="$1" 'NR==1{print $n}' "$HTRB/.hook-tests" 2>/dev/null
+}
+
+out_cv1="$(ht_cover 0 'ALL 12 SUITES PASSED')"
+dbg "pull whose runner ran everything: $out_cv1"
+check "#185 a pass that covered the whole suite says so" \
+  "line_has \"\$out_cv1\" 'Pulled shared config' 'hook suite passed here' 'all 12 of its suites'"
+check "#185 and records the counts it reported" \
+  "[ \"\$(ht_field 4)\" = '12' ] && [ \"\$(ht_field 5)\" = '0' ]"
+
+out_cv2="$(ht_cover 0 'ALL 6 SUITES THAT COULD RUN PASSED, and 4 could not run here')"
+dbg "pull whose runner could not run some of itself: $out_cv2"
+check "#185 a pass with suites that could not run says how many" \
+  "line_has \"\$out_cv2\" 'Pulled shared config' 'hook suite passed here' 'only 6 of its 10 suites could run' '4 of them are unverified'"
+# The negative control, in the same fixture. "all N of its suites" is the reassuring reading, and a
+# clause that printed it here would be the exact defect this section exists to end (L159).
+check "#185 and does not claim the whole suite was covered" \
+  "! line_has \"\$out_cv2\" 'Pulled shared config' 'all 6 of its suites'"
+check "#185 and records what could not run" \
+  "[ \"\$(ht_field 4)\" = '6' ] && [ \"\$(ht_field 5)\" = '4' ]"
+
+out_cv3="$(ht_cover 0 'the suite is happy, honestly')"
+dbg "pull whose runner said nothing this can count: $out_cv3"
+check "#185 a report this cannot read says the coverage is unknown" \
+  "line_has \"\$out_cv3\" 'Pulled shared config' 'hook suite passed here' 'did not say how many of its suites ran'"
+check "#185 and still reports the pass it was told about" \
+  "line_has \"\$out_cv3\" 'Pulled shared config' 'hook suite passed here'"
+check "#185 and records the counts as unread rather than as zero" \
+  "[ \"\$(ht_field 4)\" = '?' ] && [ \"\$(ht_field 5)\" = '?' ]"
+
+# The record grew two fields, and status reads it positionally. A reader that took the rest of the
+# line as the exit code would report "it exited 3\t?\t?", which is the shape a widened record
+# breaks its own reader in (claude-config#182 wrote three fields).
+out_cv4="$(ht_cover 3 '2 of 5 SUITES FAILED: alpha bravo')"
+dbg "pull whose runner failed: $out_cv4"
+out_cv5="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "status reading the widened record: $out_cv5"
+check "#185 a failure still reports its exit code and nothing after it" \
+  "line_has \"\$out_cv5\" 'hook suite' 'FAILED' 'it exited 3\)'"
+# A record written by the older three-field version must still be read, or the first status after
+# an update reports every outstanding failure as unreadable and clears a real report (L105).
+printf 'failed\t%s\t9\n' "$(date +%s)" > "$HTRB/.hook-tests"
+out_cv6="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#185 and a record from before the counts existed is still read" \
+  "line_has \"\$out_cv6\" 'hook suite' 'FAILED' 'it exited 9\)'"
+rm -f "$HTRB/.hook-tests"
+
+section "== every receive path runs the suite it installed, not only pull (#184) =="
+# #178 runs the suite after a pull that landed a hook, and #181 moved it outside the lock. Both
+# hung off do_pull. do_sync applies the payload through apply_payload_to_local and never reached
+# that code, so config arriving by SYNC was installed with nothing checking it.
+#
+# That matters because of which job takes which path. The scheduled receive timer runs `pull`, so
+# it was covered. The watch daemon runs `send`, which falls through to do_sync whenever this Mac is
+# behind, and `sync` is what the timer's own reconcile does. One of the two unattended receive paths
+# verified what it installed and the other did not, which is the hole #178 exists to close, still
+# open on the path nobody watches.
+#
+# So the verdict is flushed from with_lock, once, after the lock is released, rather than added to
+# each command that receives. A rule that every future receive path must remember to call it is a
+# rule living in somebody's head (L27), and this is exactly the class where the one that forgot was
+# the one running unattended.
+#
+# Its own fixture rather than the #178 pair, and its counter lives OUTSIDE both homes: `sync` mirrors
+# the home upward, so a tally kept under hooks/ would travel to the other Mac and be overwritten by
+# it, and the count would then measure the sync rather than the suite.
+unset SYNC_NO_GIT
+SYB="$WORK/synctests-bare.git"; git init -q --bare "$SYB"
+SYRA="$WORK/synctests-repoA"; git clone -q "$SYB" "$SYRA" 2>/dev/null
+# Named before the stub is written: the stub bakes this path in, and under set -u a name that does
+# not exist yet aborts the heredoc and leaves no stub at all.
+SYRB="$WORK/synctests-repoB"
+SYRAN="$WORK/synctests-ran.txt"
+SYHA="$WORK/synctests-homeA"; mkdir -p "$SYHA/hooks"
+echo '{"hooks":{}}' > "$SYHA/settings.json"
+printf '# rules v1\n' > "$SYHA/CLAUDE.md"
+echo 'one' > "$SYHA/hooks/sy-one.sh"
+# Each version differs, because the runner IS a hook: a stub rewritten to the same bytes lands
+# nothing, and a scenario that installed nothing would report no verdict for the honest reason,
+# which reads exactly like a verdict that was never written (L159).
+mksyrunner(){   # mksyrunner <exit status> <version marker> -> Mac A's stub runner
+  cat > "$SYHA/hooks/run-all-tests.sh" <<SYRUNNER
+#!/usr/bin/env bash
+# v$2
+if [ -d "$SYRB/.sync-lock" ]; then _sy_lock=held; else _sy_lock=free; fi
+# The home is read from the ENVIRONMENT, not derived from \$0 with pwd: the temp root here is
+# reached through a symlink, so pwd answers with the resolved path and never matches the name
+# the fixture holds, which reads as a suite that never ran (L215).
+printf 'lock=%s norun=%s home=%s\n' "\$_sy_lock" "\${SYNC_NO_HOOK_TESTS:-unset}" \
+  "\${CLAUDE_HOME:-none}" >> "$SYRAN"
+echo "ALL 4 SUITES PASSED"
+echo "sy-detail: what the runner had to say"
+exit $1
+SYRUNNER
+}
+mksyrunner 0 1
+CLAUDE_HOME="$SYHA" SYNC_REPO="$SYRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+git clone -q "$SYB" "$SYRB" 2>/dev/null
+SYHB="$WORK/synctests-homeB"; mkdir -p "$SYHB"
+echo '{"hooks":{}}' > "$SYHB/settings.json"
+syB(){ CLAUDE_HOME="$SYHB" SYNC_REPO="$SYRB" SYNC_NO_NOTIFY=1 SYNC_NO_LAUNCHCTL=1 bash "$SCRIPT" "$@" 2>&1; }
+syA(){ CLAUDE_HOME="$SYHA" SYNC_REPO="$SYRA" SYNC_NO_NOTIFY=1 SYNC_NO_LAUNCHCTL=1 bash "$SCRIPT" "$@" >/dev/null 2>&1; }
+sy_ran(){   # how many times the suite has run in Mac B's home
+  n="$(grep -c "home=$SYHB\$" "$SYRAN" 2>/dev/null || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+mksyrunner 0 2; syA sync
+sy_before1="$(sy_ran)"
+out_sy1="$(syB sync)"
+dbg "sync that landed a hook: $out_sy1"
+check "#184 a sync that landed a hook runs the suite" "[ \"\$(sy_ran)\" -gt \"\$sy_before1\" ]"
+check "#184 and its closing line carries the verdict" \
+  "line_has \"\$out_sy1\" 'Synced \(' 'hook suite passed here'"
+check "#184 and the suite is told not to run itself again" \
+  "line_has \"\$(grep \"home=$SYHB\\\$\" '$SYRAN')\" 'norun=1' 'home='"
+# Outside the locked region, for the reason #181 measured: the suite is minutes of work, and holding
+# the lock for it starves the daemon whose whole job is keeping this Mac current.
+check "#184 and it runs with the sync lock released" \
+  "line_has \"\$(grep \"home=$SYHB\\\$\" '$SYRAN')\" 'lock=free' 'home='"
+check "#184 and the stub can tell a held lock from a free one" \
+  "mkdir -p '$SYRB/.sync-lock' && CLAUDE_HOME='$SYHB' bash '$SYHB/hooks/run-all-tests.sh' >/dev/null 2>&1; rmdir '$SYRB/.sync-lock' 2>/dev/null; line_has \"\$(cat '$SYRAN')\" 'lock=held' 'home='"
+
+# Cost, the same rule the pull path follows: a sync that landed no hook has installed nothing this
+# runner checks, so it must not pay minutes for it.
+printf '# rules v2\n' > "$SYHA/CLAUDE.md"; syA sync
+sy_before2="$(sy_ran)"
+out_sy2="$(syB sync)"
+check "#184 a sync carrying only a rule file really applied it" "grep -q 'rules v2' '$SYHB/CLAUDE.md'"
+check "#184 but does not run the suite" "[ \"\$(sy_ran)\" = \"\$sy_before2\" ]"
+check "#184 and says nothing about a suite it did not run" \
+  "! line_has \"\$out_sy2\" 'Synced \(' 'hook suite'"
+
+# A failure on this path has to reach the same durable record, or a sync from the daemon leaves the
+# fault in a line nobody was there to read (#182, L148).
+mksyrunner 1 3; syA sync
+out_sy3="$(syB sync)"
+dbg "sync whose suite failed: $out_sy3"
+check "#184 a failing suite is reported as failed on a sync" \
+  "line_has \"\$out_sy3\" 'Synced \(' 'hook suite FAILED here'"
+out_sy3s="$(syB status)"
+check "#184 and status still names it after the sync has ended" \
+  "line_has \"\$out_sy3s\" 'hook suite' 'FAILED'"
+check "#184 and the record keeps what the runner said" "grep -q 'sy-detail' '$SYRB/.hook-tests'"
+
+mksyrunner 0 4; syA sync
+sy_before4="$(sy_ran)"
+out_sy4="$(CLAUDE_HOME="$SYHB" SYNC_REPO="$SYRB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync 2>&1)"
+check "#184 the hook really arrived on that sync" "grep -q '# v4' '$SYHB/hooks/run-all-tests.sh'"
+check "#184 SYNC_NO_HOOK_TESTS=1 skips the suite on a sync too" "[ \"\$(sy_ran)\" = \"\$sy_before4\" ]"
+
+# The resume point after claude-sync updates itself mid-sync. It applies the payload and is the only
+# thing that does on that run, so a verdict that lived in do_sync would be lost exactly when the tool
+# has just changed underneath the Mac, which is when it is most worth having.
+mksyrunner 0 5; syA sync
+git -C "$SYRB" pull -q --ff-only 2>/dev/null
+sy_before5="$(sy_ran)"
+out_sy5="$(syB apply-only)"
+dbg "apply-only resuming after a hand-off: $out_sy5"
+check "#184 apply-only runs the suite it applied" "[ \"\$(sy_ran)\" -gt \"\$sy_before5\" ]"
+check "#184 and carries the verdict in its closing line" \
+  "line_has \"\$out_sy5\" 'Synced \(' 'hook suite passed here'"
+
+# The watch daemon's own path. `send` has no apply step, so it refuses while this Mac is behind and
+# falls through to a full reconcile when its push is rejected. .last-applied absent is the state the
+# refusal is deliberately switched off in (a fresh clone, or the first run of a new version), which
+# is what makes the fall-through reachable here rather than only in a race.
+mksyrunner 0 6; syA sync
+rm -f "$SYRB/.last-applied"
+mkdir -p "$SYHB/agents"; printf 'a local edit\n' > "$SYHB/agents/sy-local.md"
+sy_before6="$(sy_ran)"
+out_sy6="$(syB send)"
+dbg "send that fell through to a reconcile: $out_sy6"
+check "#184 a send that fell through to a reconcile really received the hook" \
+  "grep -q '# v6' '$SYHB/hooks/run-all-tests.sh'"
+check "#184 and ran the suite on what it installed" "[ \"\$(sy_ran)\" -gt \"\$sy_before6\" ]"
+check "#184 and carried the verdict in its closing line" \
+  "line_has \"\$out_sy6\" 'Synced \(' 'hook suite passed here'"
+
+section "== status sees a verdict the other clone on this Mac recorded (#187) =="
+# .hook-tests lives in $SYNC_REPO, so it belongs to whichever clone did the work. This Mac has two
+# on purpose: ~/claude-config-sync, which the scheduled job and the watch daemon run from, and the
+# development checkout, which holds none of that state. Running status from the development checkout
+# therefore could not see a failure the scheduled clone had recorded, and the scheduled clone is the
+# one that pulls unattended, so its failures are exactly the ones nobody is watching for.
+#
+# The other clone is found from the launch agent plists, which NAME the script each job runs, and
+# the fixture below writes them with the tool's own installer rather than by hand: a list of clones
+# maintained beside the thing it describes checks only what somebody remembered to put in it (L41,
+# L96), and a hand written plist would be a second opinion about a format only one writer produces.
+#
+# Whichever clone a record came from is SAID, because a reader who cannot tell which clone was
+# verified cannot tell which config was verified either.
+CLB="$WORK/clone-scheduled"; mkdir -p "$CLB/payload"
+cp "$SCRIPT" "$CLB/claude-sync"
+CLD="$WORK/clone-dev"; mkdir -p "$CLD/payload"
+CLLA="$WORK/clone-agents"; mkdir -p "$CLLA"
+CLH="$WORK/clone-home"; mkdir -p "$CLH/hooks"
+echo '{"hooks":{}}' > "$CLH/settings.json"
+# Written by the copy that lives in the scheduled clone, so the plist names THAT script, which is
+# how the real pair is arranged.
+SYNC_LAUNCHAGENTS="$CLLA" SYNC_NO_LAUNCHCTL=1 bash "$CLB/claude-sync" install-schedule >/dev/null 2>&1
+# The temp root here is reached through a symlink, so the plist records the path it was GIVEN while
+# the discovery resolves it, and the two spellings differ. Each assertion below therefore uses the
+# spelling of whichever side it is reading: the plist holds the one the fixture named, and the line
+# a reader is shown holds the resolved one (L215 in miniature, since comparing the wrong spelling
+# would report a clone that WAS found as one that was not).
+CLB_REAL="$(cd "$CLB" && pwd -P)"
+CLB_ASWRITTEN="$(cd "$CLB" && pwd)"
+check "#187 the fixture's plist really names the other clone" \
+  "grep -q '$CLB_ASWRITTEN/claude-sync' '$CLLA/com.claudesync.pull.plist'"
+clstatus(){   # status, run from the DEVELOPMENT clone, with the fixture's launch agents
+  SYNC_LAUNCHAGENTS="${1:-$CLLA}" CLAUDE_HOME="$CLH" SYNC_REPO="$CLD" \
+    SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1
+}
+
+printf 'failed\t%s\t4\t?\t?\n' "$(date +%s)" > "$CLB/.hook-tests"
+out_cl1="$(clstatus)"
+dbg "status from the dev clone with a failure in the scheduled one: $out_cl1"
+check "#187 status names a failure the other clone recorded" \
+  "line_has \"\$out_cl1\" 'hook suite' 'FAILED' 'it exited 4\)'"
+check "#187 and says which clone recorded it" \
+  "line_has \"\$out_cl1\" 'hook suite' 'another clone on this Mac' '$CLB_REAL'"
+# The label is the whole point: without it the reader is told a suite failed and cannot tell which
+# config was checked, which is worse than being told nothing (L11).
+check "#187 and does not present it as this clone's own record" \
+  "! line_has \"\$out_cl1\" '^hook suite: ' 'FAILED'"
+
+# This clone's own record still comes first and still reads as its own. Both at once is the real
+# arrangement, and a reader has to be able to tell the two apart by their exit codes alone.
+printf 'failed\t%s\t7\t?\t?\n' "$(date +%s)" > "$CLD/.hook-tests"
+out_cl2="$(clstatus)"
+dbg "status with a failure in each clone: $out_cl2"
+check "#187 this clone's own failure is still reported as its own" \
+  "line_has \"\$out_cl2\" '^hook suite: ' 'FAILED' 'it exited 7\)'"
+check "#187 and the other clone's is reported beside it" \
+  "line_has \"\$out_cl2\" 'another clone on this Mac' 'FAILED' 'it exited 4\)'"
+rm -f "$CLD/.hook-tests"
+
+# Quiet on a pass over there too, for the same reason it is quiet on one here: status reports what
+# needs attention, and a pass does not.
+printf 'passed\t%s\t0\t9\t0\n' "$(date +%s)" > "$CLB/.hook-tests"
+out_cl3="$(clstatus)"
+check "#187 a pass in the other clone says nothing" \
+  "! line_has \"\$out_cl3\" 'hook suite' '(FAILED|unreadable|could NOT)'"
+
+# A record nothing can read over there is said to be unreadable, and still labelled, or a half
+# written file in the clone that pulls unattended reads as a clean Mac (L98).
+printf 'not a record at all\n' > "$CLB/.hook-tests"
+out_cl4="$(clstatus)"
+check "#187 an unreadable record in the other clone is reported as such" \
+  "line_has \"\$out_cl4\" 'hook suite' 'unreadable' '$CLB_REAL'"
+
+# The negative control. With no launch agent naming another clone there is no other clone, and a
+# discovery that reported one anyway would be inventing the thing it exists to find (L1, L159).
+CLLA_EMPTY="$WORK/clone-agents-empty"; mkdir -p "$CLLA_EMPTY"
+printf 'failed\t%s\t4\t?\t?\n' "$(date +%s)" > "$CLB/.hook-tests"
+out_cl5="$(clstatus "$CLLA_EMPTY")"
+check "#187 with no launch agent there is no other clone to report" \
+  "! line_has \"\$out_cl5\" 'hook suite' 'another clone'"
+
+# And a plist naming THIS clone is not a second clone. The scheduled job's own Mac runs status from
+# the same directory the job runs from, and a record reported twice, once as its own and once as a
+# stranger's, is a reader's problem rather than a checker's.
+CLLA_SELF="$WORK/clone-agents-self"; mkdir -p "$CLLA_SELF"
+cp "$SCRIPT" "$CLD/claude-sync"
+SYNC_LAUNCHAGENTS="$CLLA_SELF" SYNC_NO_LAUNCHCTL=1 bash "$CLD/claude-sync" install-schedule >/dev/null 2>&1
+printf 'failed\t%s\t7\t?\t?\n' "$(date +%s)" > "$CLD/.hook-tests"
+out_cl6="$(clstatus "$CLLA_SELF")"
+dbg "status whose only launch agent names its own clone: $out_cl6"
+check "#187 that clone's own record is still reported" \
+  "line_has \"\$out_cl6\" '^hook suite: ' 'FAILED' 'it exited 7\)'"
+check "#187 and a plist naming this very clone is not reported as another one" \
+  "! line_has \"\$out_cl6\" 'hook suite' 'another clone'"
+rm -f "$CLD/.hook-tests"
+
 section "== one Mac's home path never travels inside a synced file (#87) =="
 # tok/detok existed, and were wired to settings.hooks.json alone. Every other payload file was
 # copied verbatim, so an absolute home path inside one was simply wrong on whichever Mac did not

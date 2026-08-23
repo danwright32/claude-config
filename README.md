@@ -111,22 +111,37 @@ the deleted line is work too, and the version this Mac last applied is what tell
 Both reports go quiet on their own: as soon as the content is back in the live file, or the copy is
 deleted, there is nothing outstanding to report. A copy whose content is already in the live file is
 still listed by `status`, named as safe to delete, because only you can decide to remove it.
-## A pull checks what it just installed
+## Receiving config checks what it just installed
 
-A pull that lands anything under `hooks/` runs `~/.claude/hooks/run-all-tests.sh` before it reports,
-and folds the verdict into its closing line. A pull is the moment config arrives that has never
+A run that lands anything under `hooks/` runs `~/.claude/hooks/run-all-tests.sh` before it reports,
+and folds the verdict into its closing line. Receiving is the moment config arrives that has never
 executed on this Mac, and success reported without running any of it says exactly what a verified
 success says.
 
-The verdict is also recorded in `.hook-tests`, with the runner's own words beside it, so a pull from
+Every path that receives, not `pull` alone: `sync`, which is what the receive timer's reconcile
+runs, the reconcile that `send` falls through to when this Mac is behind (the watch daemon's own
+path), and the `apply-only` resume point after the tool updates itself mid-run. The closing line is
+printed once, by the lock's own release step, rather than added to each command, so a receive path
+cannot be added without it and the suite is never run while the lock is held.
+
+The verdict is also recorded in `.hook-tests`, with the runner's own words beside it, so a run from
 the background daemon (which has no terminal, and whose notification is gone once dismissed) can
 still be asked about afterwards. `claude-sync status` reports it while it is outstanding and goes
-quiet once a later run passes.
+quiet once a later run passes. It reports the record held by any OTHER clone of this repo on this
+Mac as well, found from the launch agent plists that name the script each background job runs, and
+says which clone each record came from: which clone verified something is which config was verified.
 
 The verdict comes from the runner's exit code, never from a line of its output, and there are three
 outcomes rather than two: the suite passed, the suite FAILED (the config is on disk and a check on it
 does not pass), or the suite could NOT be run or completed at all (nothing checked it). The last one
 is deliberately not folded into the second, since they send a reader to different places.
+
+A pass says how much of the suite it covered. `run-all-tests.sh` exits 0 when suites merely could
+not RUN, and several of them need the git checkout and declare that anywhere else, which is every
+deployed Mac, so a bare "the hook suite passed here" covers materially less than it sounds like. The
+counts are read from the runner's own report rather than worked out a second time, they go into
+`.hook-tests` too, and a report that cannot be read is said to be unknown rather than reported as
+full coverage.
 
 It runs with the sync lock RELEASED, after the config is already applied and on disk, so a pull
 starting while it works is not refused. Holding the lock for it would starve the watch daemon,
@@ -470,7 +485,7 @@ defined answer for being absent or untrustworthy.
 | `.last-success` | a successful pull, fetch or push | the outage clock | absent, unparseable, or dated in the FUTURE all mean "no record", which alerts rather than staying quiet |
 | `.last-sent` | a push that went through | `claude-sync status` | absent means nothing has ever gone up from this clone, which is said in those words rather than shown as a date; a value that will not parse is reported as unreadable, never as never |
 | `.last-received` | an apply that wrote at least one file | `claude-sync status` | same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block, since that is regenerated from whatever payload is present, including one this Mac just staged itself |
-| `.hook-tests` | a pull that reached a verdict on the hook suite it installed | `claude-sync status` | absent means no pull has verified anything here yet and status says nothing, since it reports what needs attention. A record that will not parse is reported as unreadable, never as a pass. A pass is silent; every other outcome keeps its own wording, so a suite that FAILED and one that could NOT be run stay apart |
+| `.hook-tests` | any run that reached a verdict on the hook suite it installed: `pull`, `sync`, the reconcile `send` falls through to, or `apply-only` | `claude-sync status`, in this clone and in any other clone on this Mac | absent means nothing has verified anything here yet and status says nothing, since it reports what needs attention. A record that will not parse is reported as unreadable, never as a pass. A pass is silent; every other outcome keeps its own wording, so a suite that FAILED and one that could NOT be run stay apart. It also carries how many suites ran and how many could not, with `?` where the runner's report could not be read, which is never written as zero |
 | `.resolved/` | a conflict resolved automatically because this Mac's version held nothing extra | nothing reads it; it exists so a wrong resolution is recoverable | absent means no conflict has resolved itself here. Entries are swept once older than two weeks, and one whose date cannot be read is KEPT rather than deleted on a guess, since this directory holds the only copy of something |
 | `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
 | `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |
