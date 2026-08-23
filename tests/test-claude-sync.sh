@@ -1733,6 +1733,18 @@ dbg(){ [ -n "${SUITE_DEBUG:-}" ] && printf '  [debug] %s\n' "$1"; return 0; }
 # 37 found on this Mac on 2026-08-17, holding 475 MB, had to be identified by looking inside them,
 # next to 542 belonging to other tools that a sweep by age alone would have deleted (#36).
 WORK="$(mktemp -d "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
+# The register of clones on this Mac (claude-config#189) is $HOME based by default, and every
+# mutating run in this file would otherwise append its throwaway repo to the REAL one. Pointed
+# somewhere unusable once, here, rather than at each of the hundreds of call sites, so no scenario
+# can reach the live file by forgetting (L2).
+#
+# A path inside a directory that does not exist, not a real file: a register SHARED by every
+# scenario in this file would hand each of them the others' fixture clones, and those hold records,
+# so an unrelated section asserting that status says nothing would be answered by somebody else's
+# failure. This way a run can neither read it nor write it, which is also the state a Mac is in
+# before any clone has registered. The two sections that assert about clone discovery point it at a
+# real file of their own.
+export SYNC_CLONE_REGISTRY="$WORK/no-such-directory/clone-registry"
 # No trap here any more. It used to remove WORK and would now REPLACE suite_cleanup, silently
 # leaving the deadline watchdog running after every run, which is the precise defect #21 shipped
 # once already. suite_cleanup removes WORK as well, so this is one handler doing all of it.
@@ -4227,6 +4239,14 @@ check "#30 the README has a state section" "grep -qi 'Local state' '$_README'"
 _statepaths(){
   grep -E '^[A-Z_]+="[^"]*\$SYNC_REPO/' "$SCRIPT" \
     | grep -oE '\$SYNC_REPO/[^"}]*' | sed 's|\$SYNC_REPO/||' | grep -v '^payload$' | sort -u
+  # And state that lives OUTSIDE every clone, which claude-config#189 was the first of. Deriving
+  # only from $SYNC_REPO made a new category of state file exempt from the very check written to
+  # notice a new state file, and the exemption would have been invisible because it was correct for
+  # everything that existed when it was written (L129, L96).
+  # $HOME/.claude is excluded for the same reason payload is: it is the synced content itself,
+  # documented at length elsewhere, not a record this tool keeps about this Mac.
+  grep -E '^[A-Z_]+="[^"]*\$HOME/' "$SCRIPT" \
+    | grep -oE '\$HOME/[^"}]*' | sed 's|\$HOME/||' | grep -v '^\.claude$' | sort -u
   grep -oE 'refs/claude-sync-state' "$SCRIPT" | sort -u
 }
 _undocumented=""
@@ -5022,13 +5042,16 @@ _bsdisms(){
     | sed -e :a -e '/\\$/N; s/\\\n//; ta' \
     | grep -nF -e "$a" -e "$b" -e "$c" -e "$d" -e "$e" \
     | grep -vF "$a %m \"\$1\"" | grep -vF "$b\"\$1\"" \
+    | grep -vF "$a \"%m%t%N\"" \
     | grep -vE '\|\| +touch -d' || true
 }
-check "#38 no BSD-only spelling survives outside the two helpers" "[ -z \"\$(_bsdisms)\" ]"
+check "#38 no BSD-only spelling survives outside the helpers that own them" "[ -z \"\$(_bsdisms)\" ]"
 # And the helpers really are there to be excluded, or the check above passes by matching nothing
-# at all in a file that has been emptied or renamed.
+# at all in a file that has been emptied or renamed. file_mtimes is the batch form of file_mtime
+# and holds the only other BSD spelling excluded above (claude-config#191); without this line that
+# exclusion could outlive the helper it was written for and quietly cover a spelling anywhere.
 check "#38 the portable helpers exist" \
-  "grep -q '^file_mtime(){' '$SCRIPT' && grep -q '^date_from_epoch(){' '$SCRIPT' && grep -q '^_suite_mtime(){' '$SCRIPT_SELF'"
+  "grep -q '^file_mtime(){' '$SCRIPT' && grep -q '^file_mtimes(){' '$SCRIPT' && grep -q '^date_from_epoch(){' '$SCRIPT' && grep -q '^_suite_mtime(){' '$SCRIPT_SELF'"
 
 section "== the design record's numbers still match the code (#41) =="
 # DESIGN.md records every threshold as a MEASURED value with the reasoning behind it, and all of
@@ -7768,8 +7791,12 @@ CLB_REAL="$(cd "$CLB" && pwd -P)"
 CLB_ASWRITTEN="$(cd "$CLB" && pwd)"
 check "#187 the fixture's plist really names the other clone" \
   "grep -q '$CLB_ASWRITTEN/claude-sync' '$CLLA/com.claudesync.pull.plist'"
+# Its own register, deliberately empty and deliberately not the suite-wide one: this section is
+# about what the LAUNCH AGENTS find, and a register shared with every other scenario in this file
+# would answer for them (claude-config#189).
+CLREG="$WORK/clone-registry-187"
 clstatus(){   # status, run from the DEVELOPMENT clone, with the fixture's launch agents
-  SYNC_LAUNCHAGENTS="${1:-$CLLA}" CLAUDE_HOME="$CLH" SYNC_REPO="$CLD" \
+  SYNC_LAUNCHAGENTS="${1:-$CLLA}" SYNC_CLONE_REGISTRY="$CLREG" CLAUDE_HOME="$CLH" SYNC_REPO="$CLD" \
     SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1
 }
 
@@ -7832,6 +7859,256 @@ check "#187 that clone's own record is still reported" \
 check "#187 and a plist naming this very clone is not reported as another one" \
   "! line_has \"\$out_cl6\" 'hook suite' 'another clone'"
 rm -f "$CLD/.hook-tests"
+
+section "== the coverage figures agree with the real runner's own words (#188) =="
+# claude-config#185 reads how much of the suite ran out of the verdict line run-all-tests.sh prints,
+# and it matches two exact sentences. Nothing held the two in step: reworded on either side, the
+# reader matches neither shape and every pass reports its coverage as unknown from then on. That
+# fails honestly rather than lying, which is why it was built that way, but it fails PERMANENTLY and
+# silently, and a Mac that has stopped reporting coverage looks exactly like one whose runner is
+# simply older (L41: a value that must mirror another source is derived from it, never written out
+# beside it and hoped over).
+#
+# So both sentences are produced by the REAL runner here, and read by the REAL reader, over a
+# fixture whose answer is known from how it was built. The runner is copied to a directory with NO
+# repository above it, because that is the only state in which a suite may legitimately say it could
+# not run, and it is the state every deployed Mac is in.
+#
+# Each scenario also asks the runner DIRECTLY what it said, in the same fixture. That control is the
+# point: if the wording moves, the control fails and names the side that moved, rather than leaving
+# a reader with a coverage figure that went quiet for no stated reason (L11, L159).
+unset SYNC_NO_GIT
+AGB="$WORK/agree-bare.git"; git init -q --bare "$AGB"
+AGRA="$WORK/agree-repoA"; git clone -q "$AGB" "$AGRA" 2>/dev/null
+AGRB="$WORK/agree-repoB"
+AGHA="$WORK/agree-homeA"; mkdir -p "$AGHA/hooks"
+echo '{"hooks":{}}' > "$AGHA/settings.json"
+AGRUN="$WORK/agree-runner"; mkdir -p "$AGRUN"
+cp "$(dirname "$SCRIPT")/payload/hooks/run-all-tests.sh" "$AGRUN/run-all-tests.sh"
+cp -R "$(dirname "$SCRIPT")/payload/hooks/lib" "$AGRUN/lib" 2>/dev/null || true
+AGSUITES="$WORK/agree-suites"; mkdir -p "$AGSUITES"
+check "#188 the runner under test is the repo's own, not a stand-in" \
+  "cmp -s '$(dirname "$SCRIPT")/payload/hooks/run-all-tests.sh' '$AGRUN/run-all-tests.sh'"
+# No repository above it, asserted rather than assumed: with one there, the runner correctly calls a
+# suite that claims it cannot run a FAILURE, and the partial-coverage shape could never be produced.
+check "#188 and it sits where a suite may legitimately say it could not run" \
+  "! git -C '$AGRUN' rev-parse --show-toplevel >/dev/null 2>&1"
+
+mk_ag_suite(){    # a suite that runs and passes
+  printf '#!/usr/bin/env bash\nprintf "SUITE-RESULT passed=1 failed=0\\n"\nexit 0\n' > "$AGSUITES/test-$1.sh"
+  chmod +x "$AGSUITES/test-$1.sh"
+}
+mk_ag_notrun(){   # a suite that declares it cannot run here
+  printf '#!/usr/bin/env bash\nprintf "SUITE-NOT-RUN it audits a repository and there is none here\\n"\nexit 2\n' > "$AGSUITES/test-$1.sh"
+  chmod +x "$AGSUITES/test-$1.sh"
+}
+# The hook Mac B installs. It is a hook, so writing a new version of it is what makes a pull carry
+# one and run the suite at all.
+mk_ag_wrapper(){   # $1 = version marker
+  printf '#!/usr/bin/env bash\n# v%s\nexec bash "%s/run-all-tests.sh" "%s"\n' "$1" "$AGRUN" "$AGSUITES" \
+    > "$AGHA/hooks/run-all-tests.sh"
+}
+ag_field(){ awk -F'\t' -v n="$1" 'NR==1{print $n}' "$AGRB/.hook-tests" 2>/dev/null; }
+
+rm -f "$AGSUITES"/test-*.sh
+mk_ag_suite alpha; mk_ag_suite gamma
+mk_ag_wrapper 1
+CLAUDE_HOME="$AGHA" SYNC_REPO="$AGRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+git clone -q "$AGB" "$AGRB" 2>/dev/null
+AGHB="$WORK/agree-homeB"; mkdir -p "$AGHB"
+echo '{"hooks":{}}' > "$AGHB/settings.json"
+ag_direct1="$(bash "$AGRUN/run-all-tests.sh" "$AGSUITES" 2>&1)"
+dbg "the runner, asked directly, with everything runnable: $(printf '%s' "$ag_direct1" | tail -1)"
+check "#188 the runner still says a full pass in the shape the reader matches" \
+  "line_has \"\$ag_direct1\" '^ALL 2 SUITES PASSED\$' 'SUITES'"
+out_ag1="$(CLAUDE_HOME="$AGHB" SYNC_REPO="$AGRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull whose runner ran everything: $out_ag1"
+check "#188 and the closing line reads the same two suites out of it" \
+  "line_has \"\$out_ag1\" 'Pulled shared config' 'hook suite passed here' 'all 2 of its suites'"
+check "#188 and records both suites as having run" "[ \"\$(ag_field 4)\" = '2' ] && [ \"\$(ag_field 5)\" = '0' ]"
+
+rm -f "$AGSUITES"/test-*.sh
+mk_ag_suite alpha; mk_ag_notrun beta
+mk_ag_wrapper 2
+CLAUDE_HOME="$AGHA" SYNC_REPO="$AGRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+ag_direct2="$(bash "$AGRUN/run-all-tests.sh" "$AGSUITES" 2>&1)"
+dbg "the runner, asked directly, with one suite unable to run: $(printf '%s' "$ag_direct2" | tail -1)"
+check "#188 the runner still says a partial pass in the shape the reader matches" \
+  "line_has \"\$ag_direct2\" '^ALL 1 SUITES THAT COULD RUN PASSED, and 1 could not run here\$' 'PASSED'"
+out_ag2="$(CLAUDE_HOME="$AGHB" SYNC_REPO="$AGRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "pull whose runner could not run one of its suites: $out_ag2"
+check "#188 and the closing line reads the same counts out of it" \
+  "line_has \"\$out_ag2\" 'Pulled shared config' 'hook suite passed here' 'only 1 of its 2 suites could run' '1 of them are unverified'"
+check "#188 and records the one that ran and the one that could not" "[ \"\$(ag_field 4)\" = '1' ] && [ \"\$(ag_field 5)\" = '1' ]"
+# The failure this whole section exists to make loud: a reader that could not match either sentence
+# still reports a pass, and says the coverage is unknown. Asserted here so the two scenarios above
+# cannot both be satisfied by a reader that always answers unknown (L159).
+check "#188 neither scenario was answered with the unknown fallback" \
+  "! line_has \"\$out_ag1\$(printf '\\n')\$out_ag2\" 'Pulled shared config' 'did not say how many of its suites ran'"
+
+section "== the scratch sweep reads every mtime in one call (#191) =="
+# scratch_in_dir asked file_mtime for each matching entry, which is a stat PROCESS each.
+# claude-config#115 removed the six full directory reads and left this behind. Measured 2026-08-23
+# with 963 entries in the tool's own scratch directory after a day of interrupted runs: status took
+# 6.5 seconds, of which the sweep was 5.6 and everything else 0.8 (SYNC_SCRATCH_MAX_AGE=0 isolates
+# it). The cost grows with exactly the condition the report exists to describe, so the worse the
+# leftovers, the slower the command that tells you about them, and status is the command a person
+# is told to run.
+#
+# Which reading actually ran is COUNTED, through a stat that records its own calls, rather than
+# inferred from how long the run took: a threshold on elapsed time is a threshold on what else the
+# machine is doing (L224). And the two readings are required to AGREE on the same directory, which
+# is what makes a batch answering with nothing a failure here rather than a directory that looks
+# swept: an empty answer and no leftovers are indistinguishable otherwise (L215).
+_BSROOT="$WORK/batch-scratch"; mkdir -p "$_BSROOT/claude-sync"
+_BSH="$WORK/batch-home"; mkdir -p "$_BSH"; echo '{"hooks":{}}' > "$_BSH/settings.json"
+_BSREPO="$WORK/batch-repo"; mkdir -p "$_BSREPO/payload"
+_BSBIN="$WORK/batch-bin"; mkdir -p "$_BSBIN"
+_BSCOUNT="$WORK/batch-stat-calls.txt"
+_bs_real_stat="$(command -v stat)"
+cat > "$_BSBIN/stat" <<BSSTAT
+#!/usr/bin/env bash
+printf 'call\n' >> "$_BSCOUNT"
+exec "$_bs_real_stat" "\$@"
+BSSTAT
+chmod +x "$_BSBIN/stat"
+_BS_AGED=40
+_bs_i=1
+while [ "$_bs_i" -le "$_BS_AGED" ]; do
+  mkdir -p "$_BSROOT/claude-sync/claude-sync-suite-work.BATCH$_bs_i"
+  scratch_age_out "$_BSROOT/claude-sync/claude-sync-suite-work.BATCH$_bs_i"
+  _bs_i=$(( _bs_i + 1 ))
+done
+# Young ones too, so a reading that simply listed everything it found would not agree with a
+# reading that judged the age (L146: the difference is what carries the information).
+mkdir -p "$_BSROOT/claude-sync/claude-sync-suite-work.YOUNGA" "$_BSROOT/claude-sync/claude-sync-suite-work.YOUNGB"
+_bs_run(){   # claude-sync, with the scratch root and the counting stat in front of it
+  SYNC_SCRATCH_ROOT="$_BSROOT" CLAUDE_HOME="$_BSH" SYNC_REPO="$_BSREPO" \
+    SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 PATH="$_BSBIN:$PATH" bash "$SCRIPT" "$@" 2>&1
+}
+# Called with no flags on purpose: the shim records whatever it is asked, and every FLAGGED
+# spelling of stat is BSD-only or GNU-only, which the guard on portable spellings correctly refuses
+# to see written outside the two helpers that own them (#38).
+check "#191 the counting stat really is the one that gets run" \
+  "rm -f '$_BSCOUNT'; PATH=\"$_BSBIN:\$PATH\" stat '$_BSROOT' >/dev/null 2>&1; [ -s '$_BSCOUNT' ]"
+
+: > "$_BSCOUNT"
+_bs_batch="$(_bs_run status | grep 'abandoned' || true)"
+_bs_calls_batch="$(grep -c . "$_BSCOUNT" 2>/dev/null || true)"
+case "$_bs_calls_batch" in ''|*[!0-9]*) _bs_calls_batch=0 ;; esac
+: > "$_BSCOUNT"
+_bs_each="$(SYNC_NO_BATCH_STAT=1 _bs_run status | grep 'abandoned' || true)"
+_bs_calls_each="$(grep -c . "$_BSCOUNT" 2>/dev/null || true)"
+case "$_bs_calls_each" in ''|*[!0-9]*) _bs_calls_each=0 ;; esac
+dbg "batch reading said [$_bs_batch] in $_bs_calls_batch stat call(s); per entry said [$_bs_each] in $_bs_calls_each"
+
+check "#191 the sweep counted the aged scratch and left the young alone" \
+  "line_has \"\$_bs_batch\" '$_BS_AGED abandoned' 'holding'"
+check "#191 and reading it one entry at a time reaches the same answer" \
+  "[ -n \"\$_bs_batch\" ] && [ \"\$_bs_batch\" = \"\$_bs_each\" ]"
+# Compared against the OTHER reading's count, measured in the same run, never against a number
+# written here: what "few" means is set by how many entries the fixture holds (L224 in spirit).
+check "#191 the per-entry reading really does ask once per entry" \
+  "[ \"\$_bs_calls_each\" -ge \"$_BS_AGED\" ]"
+check "#191 and the default reading asks a small fraction of that" \
+  "[ \"\$_bs_calls_batch\" -gt 0 ] && [ \$(( _bs_calls_batch * 4 )) -lt \"\$_bs_calls_each\" ]"
+# The fallback has to be reachable, and it has to be reached by every way the batch can fail to
+# answer, not only by the switch that turns it off (L173). A stat that answers with something of
+# the wrong SHAPE is the real one: GNU stat reads -f as "file system status" rather than as a
+# format, so it answers that spelling with plenty of output that is not a list of mtimes, and a
+# non-empty answer is not the same as a usable one (L156).
+cat > "$_BSBIN/stat" <<BSSTAT2
+#!/usr/bin/env bash
+printf 'call\n' >> "$_BSCOUNT"
+# Only the BATCH forms are broken, which are the two whose format names the path (%N or %n).
+# Breaking every form would break the fallback as well, and the check would then pass because
+# nothing worked at all rather than because the fallback ran (L178).
+case "\$2" in
+  *%N|*%n|*%N*|*%n*) printf '  File: "%s"\n  ID: 0 Namelen: 255\n' "\$3"; exit 0 ;;
+esac
+exec "$_bs_real_stat" "\$@"
+BSSTAT2
+chmod +x "$_BSBIN/stat"
+_bs_shape="$(_bs_run status | grep 'abandoned' || true)"
+check "#191 a batch answering in the wrong shape falls back rather than reporting nothing" \
+  "[ \"\$_bs_shape\" = \"\$_bs_each\" ]"
+cat > "$_BSBIN/stat" <<BSSTAT3
+#!/usr/bin/env bash
+printf 'call\n' >> "$_BSCOUNT"
+exec "$_bs_real_stat" "\$@"
+BSSTAT3
+chmod +x "$_BSBIN/stat"
+
+section "== a clone registers itself so a sibling can find its verdict (#189) =="
+# claude-config#187 finds another clone from the launch agent plists, and those name only the clone
+# a background job runs from, so discovery ran in ONE direction: status from the development
+# checkout saw the scheduled clone, and status from the scheduled clone saw nothing at all.
+#
+# A clone now writes itself down the first time it takes the lock, which is the first time it can
+# hold a verdict at all, so the list is derived from what has actually RUN rather than from what
+# somebody remembered to name (L41, L96). Registering from a read-only command was deliberately not
+# done: status changes nothing, and a clone that has only ever been asked questions has no record
+# for anybody to find.
+RGREG="$WORK/reg-registry"
+RGH="$WORK/reg-home"; mkdir -p "$RGH"; echo '{"hooks":{}}' > "$RGH/settings.json"
+RGA="$WORK/reg-cloneA"; mkdir -p "$RGA/payload"; cp "$SCRIPT" "$RGA/claude-sync"
+RGB="$WORK/reg-cloneB"; mkdir -p "$RGB/payload"; cp "$SCRIPT" "$RGB/claude-sync"
+# Deliberately empty. No launch agent names either clone here, so anything found is found by the
+# register and by nothing else.
+RGLA="$WORK/reg-agents"; mkdir -p "$RGLA"
+rgstatus(){   # status, run from the clone named
+  SYNC_CLONE_REGISTRY="$RGREG" SYNC_LAUNCHAGENTS="$RGLA" CLAUDE_HOME="$RGH" SYNC_REPO="$1" \
+    SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1
+}
+rgpull(){     # a run that takes the lock, from the clone named
+  SYNC_CLONE_REGISTRY="$RGREG" SYNC_LAUNCHAGENTS="$RGLA" CLAUDE_HOME="$RGH" SYNC_REPO="$1" \
+    SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+}
+RGA_REAL="$(cd "$RGA" && pwd -P)"
+
+printf 'failed\t%s\t5\t?\t?\n' "$(date +%s)" > "$RGA/.hook-tests"
+# Before anything has registered, there is nothing to find. Without this the checks below would be
+# satisfied by a discovery that reported every directory it could think of (L1, L159).
+out_rg0="$(rgstatus "$RGB")"
+check "#189 nothing is found before any clone has recorded itself" \
+  "! line_has \"\$out_rg0\" 'hook suite' 'another clone'"
+
+rgpull "$RGA"
+check "#189 a run that took the lock wrote its clone down" "grep -qxF '$RGA_REAL' '$RGREG'"
+out_rg1="$(rgstatus "$RGB")"
+dbg "status from the sibling once clone A had registered: $out_rg1"
+check "#189 and the sibling now reports the record it holds" \
+  "line_has \"\$out_rg1\" 'hook suite' 'another clone on this Mac' 'it exited 5\)'"
+check "#189 and names the clone it came from" \
+  "line_has \"\$out_rg1\" 'hook suite' 'another clone on this Mac' '$RGA_REAL'"
+
+rgpull "$RGA"
+check "#189 registering twice adds one line, not two" \
+  "[ \"\$(grep -cxF '$RGA_REAL' '$RGREG')\" = '1' ]"
+
+# A clone must not read its OWN record as a stranger's, or the same failure is reported twice and a
+# reader cannot tell how many clones are actually in trouble.
+out_rg2="$(rgstatus "$RGA")"
+check "#189 the registered clone still reads its own record as its own" \
+  "line_has \"\$out_rg2\" '^hook suite: ' 'it exited 5\)'"
+check "#189 and not also as another clone's" \
+  "! line_has \"\$out_rg2\" 'hook suite' 'another clone'"
+
+# A register entry outlives the clone it names, because nothing prunes it. The reader has to notice,
+# or a deleted clone becomes a permanent report about a verdict nobody can go and look at.
+mv "$RGA/claude-sync" "$RGA/claude-sync.gone"
+out_rg3="$(rgstatus "$RGB")"
+check "#189 an entry naming a clone that has gone is skipped" \
+  "! line_has \"\$out_rg3\" 'hook suite' 'another clone'"
+mv "$RGA/claude-sync.gone" "$RGA/claude-sync"
+out_rg4="$(rgstatus "$RGB")"
+check "#189 and comes back when the clone does" \
+  "line_has \"\$out_rg4\" 'hook suite' 'another clone on this Mac' 'it exited 5\)'"
+
+# The default has to be per Mac and outside every clone, or the feature describes the wrong machine.
+# Read off the script rather than asserted from memory, so moving it has to move this too (L41).
+check "#189 the register lives outside every clone by default" \
+  "grep -q 'CLONE_REGISTRY=\"\${SYNC_CLONE_REGISTRY:-\$HOME/.claude-sync-clones}\"' '$SCRIPT'"
 
 section "== one Mac's home path never travels inside a synced file (#87) =="
 # tok/detok existed, and were wired to settings.hooks.json alone. Every other payload file was

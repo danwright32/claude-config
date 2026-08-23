@@ -128,8 +128,12 @@ The verdict is also recorded in `.hook-tests`, with the runner's own words besid
 the background daemon (which has no terminal, and whose notification is gone once dismissed) can
 still be asked about afterwards. `claude-sync status` reports it while it is outstanding and goes
 quiet once a later run passes. It reports the record held by any OTHER clone of this repo on this
-Mac as well, found from the launch agent plists that name the script each background job runs, and
-says which clone each record came from: which clone verified something is which config was verified.
+Mac as well, and says which clone each record came from: which clone verified something is which
+config was verified. Clones are found two ways, both derived from what actually runs rather than
+from a list kept by hand: the launch agent plists name the script each background job runs, and
+every clone writes itself into `~/.claude-sync-clones` the first time it takes the lock. The second
+is what makes it work in both directions, since a launch agent only ever names the clone a
+background job runs from.
 
 The verdict comes from the runner's exit code, never from a line of its output, and there are three
 outcomes rather than two: the suite passed, the suite FAILED (the config is on disk and a check on it
@@ -487,6 +491,7 @@ defined answer for being absent or untrustworthy.
 | `.last-received` | an apply that wrote at least one file | `claude-sync status` | same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block, since that is regenerated from whatever payload is present, including one this Mac just staged itself |
 | `.hook-tests` | any run that reached a verdict on the hook suite it installed: `pull`, `sync`, the reconcile `send` falls through to, or `apply-only` | `claude-sync status`, in this clone and in any other clone on this Mac | absent means nothing has verified anything here yet and status says nothing, since it reports what needs attention. A record that will not parse is reported as unreadable, never as a pass. A pass is silent; every other outcome keeps its own wording, so a suite that FAILED and one that could NOT be run stay apart. It also carries how many suites ran and how many could not, with `?` where the runner's report could not be read, which is never written as zero |
 | `.resolved/` | a conflict resolved automatically because this Mac's version held nothing extra | nothing reads it; it exists so a wrong resolution is recoverable | absent means no conflict has resolved itself here. Entries are swept once older than two weeks, and one whose date cannot be read is KEPT rather than deleted on a guess, since this directory holds the only copy of something |
+| `.claude-sync-clones` (in your home, not in a clone) | every clone on this Mac, the first time it takes the lock | `claude-sync status`, to find the records other clones hold | absent means no clone has done work since this was added, so status reports only what it can reach through the launch agents. An entry naming a clone that has gone is skipped rather than reported, and nothing prunes it: the file is only ever appended to, so a run that dies part way cannot lose the entries already there |
 | `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
 | `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |
 | `state/` | every apply | nothing reads the local copy; it exists so a marker is only republished when it changes | absent just means the next apply republishes |

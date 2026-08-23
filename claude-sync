@@ -52,6 +52,13 @@ HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
 # the mirrored config on purpose: under $CLAUDE_HOME it would become exactly the stale file nobody
 # deletes that #177 exists to stop leaving behind, and it would then travel to the other Mac.
 RESOLVED_DIR="$SYNC_REPO/.resolved"
+# Every clone on this Mac that has done work of its own (claude-config#189). Outside every clone
+# on purpose, because its whole job is to be readable from a clone other than the one that wrote
+# it, and outside $CLAUDE_HOME because anything in there travels to the other Mac and this
+# describes THIS one. A clone appends itself the first time it takes the lock, which is the first
+# time it can hold a verdict at all, so the list is derived from what has actually run rather than
+# from what somebody remembered to write down (L41, L96).
+CLONE_REGISTRY="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
 STATE_DIR="$SYNC_REPO/state"   # what each Mac has applied, published so verify can compare (#23)
 # One file per Mac, holding the first number of the band that Mac mints lesson numbers from. Unlike
 # everything else outside payload/, this is TRACKED and shared: a band nobody else can see cannot
@@ -274,6 +281,60 @@ file_mtime(){   # path -> unix timestamp, or nothing
   printf '%s\n' "$m"
 }
 
+# Every mtime in ONE call rather than a process per entry (claude-config#191).
+#
+# scratch_in_dir asked file_mtime for each matching entry, which is a `stat` process each.
+# claude-config#115 removed the six full directory reads and left this behind. Measured 2026-08-23,
+# with 963 entries in the tool's own scratch directory after a day of interrupted runs:
+# `claude-sync status` took 6.5 seconds of which the sweep was 5.6, and 0.8 without it. The cost
+# grows with exactly the condition the report exists to describe, so the worse the leftovers, the
+# slower the command that tells you about them, and status is the command a person is told to run.
+#
+# Three ways of asking, in order, and the shape of the answer decides whether it is used. Not
+# merely whether it is EMPTY: GNU stat reads -f as "file system status" rather than as a format, so
+# the BSD spelling there produces plenty of output that is not a list of mtimes at all, and taking
+# non-empty for usable would feed that straight into the age test (L156, L215). So every line has
+# to look like one, and anything else falls through to the next way of asking.
+#
+# The last way is the original one, a process per path. It is not a formality: an answer of nothing
+# would be indistinguishable from a directory with no leftovers in it, which is the reassuring
+# reading and the wrong one, and it is what stops a sweep silently reclaiming nothing.
+# SYNC_NO_BATCH_STAT=1 forces it, so the fallback is reachable in a test rather than only on a
+# machine that has neither spelling (L173).
+file_mtimes(){   # newline separated paths on stdin -> "<mtime><TAB><path>" per line
+  local list out p m tab bad
+  list="$(cat)"
+  [ -n "$list" ] || return 0
+  tab="$(printf '\t')"
+  if [ "${SYNC_NO_BATCH_STAT:-0}" != "1" ]; then
+    for out in bsd gnu; do
+      case "$out" in
+        bsd) out="$(printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 stat -f "%m%t%N" 2>/dev/null || true)" ;;
+        gnu) out="$(printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 stat -c "%Y${tab}%n" 2>/dev/null || true)" ;;
+      esac
+      [ -n "$out" ] || continue
+      # Rejected if ANY line is the wrong shape, never if merely some are: a half understood answer
+      # would silently drop whatever it could not express, and those are leftovers nobody reclaims.
+      # `grep -v`, never `grep -qv`: the quiet form leaves on its first match and kills the
+      # producer, and under pipefail the pipeline then reports that death rather than the answer
+      # (L183). This one reads all of its input, so there is no early exit to be killed by.
+      bad="$(printf '%s\n' "$out" | grep -vE "^[0-9]+${tab}" || true)"
+      [ -n "$bad" ] && continue
+      printf '%s\n' "$out"
+      return 0
+    done
+  fi
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    m="$(file_mtime "$p")"
+    [ -n "$m" ] || continue
+    printf '%s\t%s\n' "$m" "$p"
+  done <<SCRATCHMTEOF
+$list
+SCRATCHMTEOF
+  return 0
+}
+
 # Same split. `date -r` takes a timestamp on BSD and a FILE on GNU, so the GNU form is tried only
 # when the BSD one produced nothing.
 date_from_epoch(){   # unix timestamp, strftime format -> formatted date, or nothing
@@ -410,6 +471,26 @@ release_lock(){
   return 0
 }
 
+# This clone, written down where a sibling can read it (claude-config#189).
+#
+# Appended once, never rewritten, so a run that dies part way through cannot lose the entries
+# already there (L105). A clone that has gone is not pruned either: the reader checks each entry
+# still holds a claude-sync, and pruning would mean a read, modify, write over the one record that
+# says where the other clones are.
+#
+# Silent on every failure. This is a convenience for a later status, and a run that pulled config
+# must not fail because a note about itself could not be written.
+register_this_clone(){
+  local me
+  me="$(cd "$SYNC_REPO" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$me" ] || return 0
+  # A directory holding no claude-sync is not a clone of this tool, whatever else it is.
+  [ -f "$SYNC_REPO/claude-sync" ] || return 0
+  if [ -f "$CLONE_REGISTRY" ] && grep -qxF "$me" "$CLONE_REGISTRY" 2>/dev/null; then return 0; fi
+  printf '%s\n' "$me" >> "$CLONE_REGISTRY" 2>/dev/null || true
+  return 0
+}
+
 with_lock(){   # $@ = the command to run while holding the lock
   local rc=0
   # Re-entrant within one run: do_send falls through to do_sync, and a second acquire
@@ -417,6 +498,9 @@ with_lock(){   # $@ = the command to run while holding the lock
   if [ "${LOCK_HELD:-0}" = 1 ]; then "$@"; return $?; fi
   acquire_lock || die "another claude-sync run is already running and still holds $SYNC_LOCK, so this one stopped instead of working on the same files at the same time. Nothing was changed. Run 'claude-sync status' to see where things stand."
   LOCK_HELD=1
+  # Here rather than in each command, and here rather than in a read-only one: a clone that has
+  # taken the lock is a clone that can leave a record behind, and status changes nothing by design.
+  register_this_clone
   # An EXIT trap, not a line after the call: every failure in here leaves through die(),
   # and a lock kept by a run that died would mean the first network blip wedges syncing
   # until somebody noticed by hand.
@@ -3359,21 +3443,30 @@ report_sync_times(){
 # and a textual comparison would report a clone as a stranger to itself.
 other_sync_clones(){   # prints one absolute directory per line, this clone excluded
   local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}" plist path dir mine
-  [ -d "$agentdir" ] || return 0
   mine="$(cd "$SYNC_REPO" 2>/dev/null && pwd -P)" || mine=""
-  for plist in "$agentdir"/com.claudesync.*.plist; do
-    [ -f "$plist" ] || continue
-    while IFS= read -r path; do
+  {
+    if [ -d "$agentdir" ]; then
+      for plist in "$agentdir"/com.claudesync.*.plist; do
+        [ -f "$plist" ] || continue
+        sed -n 's|.*<string>\(/[^<]*/claude-sync\)</string>.*|\1|p' "$plist" 2>/dev/null || true
+      done
+    fi
+    # And every clone that has recorded itself (claude-config#189). A launch agent only ever names
+    # the clone a background job runs from, so on its own this found the scheduled clone from the
+    # development checkout and never the other way round.
+    if [ -f "$CLONE_REGISTRY" ]; then
+      sed -n 's|.*|&/claude-sync|p' "$CLONE_REGISTRY" 2>/dev/null || true
+    fi
+  } | while IFS= read -r path; do
       [ -n "$path" ] || continue
+      # An entry naming a directory that no longer holds a claude-sync is skipped rather than
+      # reported: a clone that has been deleted is not a clone whose verdict anybody can read.
       [ -f "$path" ] || continue
       dir="$(cd "$(dirname "$path")" 2>/dev/null && pwd -P)" || continue
       [ -n "$dir" ] || continue
       [ "$dir" = "$mine" ] && continue
       printf '%s\n' "$dir"
-    done <<CLONEEOF
-$(sed -n 's|.*<string>\(/[^<]*/claude-sync\)</string>.*|\1|p' "$plist" 2>/dev/null)
-CLONEEOF
-  done | sort -u
+    done | sort -u
   return 0
 }
 
@@ -3638,7 +3731,7 @@ scratch_dir(){ mktemp -d "$(scratch_home_ready)/claude-sync-expand.XXXXXXXX"; }
 # worse than the litter, so it is deliberately generous. The cost is accepted and stated: a burst
 # of interrupted runs is not reclaimed until four hours after the last of them.
 scratch_in_dir(){   # $1 = a directory to read -> prints the abandoned scratch in it
-  local root="${1%/}" now p n age m pre first base matched
+  local root="${1%/}" now p n age m pre first base matched cand=""
   [ -d "$root" ] || return 0
   now="$(date +%s)"
   # ONE pass over the directory, not one per name. Each glob reads and sorts the WHOLE directory,
@@ -3675,13 +3768,22 @@ scratch_in_dir(){   # $1 = a directory to read -> prints the abandoned scratch i
       case "$base" in "$n"*) matched=1; break ;; esac
     done
     [ "$matched" -eq 1 ] || continue
-    m="$(file_mtime "$p")"
+    cand="$cand$p
+"
+  done
+  [ -n "$cand" ] || return 0
+  # The names are collected first and their mtimes read together, because asking one process per
+  # entry is what made this the largest cost in the command (claude-config#191).
+  while IFS="$(printf '\t')" read -r m p; do
+    [ -n "$p" ] || continue
     # An mtime that cannot be read is treated as YOUNG, so a path is never removed on no
     # evidence at all (L50: an unparseable value must land on the safe side).
     case "$m" in ''|*[!0-9]*) continue ;; esac
     age=$(( now - m ))
     if [ "$age" -ge "$SYNC_SCRATCH_MAX_AGE" ]; then printf '%s\n' "$p"; fi
-  done
+  done <<SCRATCHDIREOF
+$(printf '%s' "$cand" | file_mtimes)
+SCRATCHDIREOF
   # Said explicitly, and not left to whatever the last comparison happened to leave behind. This
   # file runs under `set -e`, so a function ending on a false test returns 1 and kills its caller.
   # Written as a trailing `&&` it did exactly that, and the trigger is not rare: the LAST name in

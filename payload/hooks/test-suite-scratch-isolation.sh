@@ -65,9 +65,96 @@ LITERAL_TAIL='[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*'
 FIXED_TMP="(\"${TMPROOT_PATTERN}/${LITERAL_TAIL}\"|${TMPROOT_PATTERN}/${LITERAL_TAIL}([[:space:]]|;|$))"
 SHARED_PATTERN="(${GT}{1,2}[[:space:]]*${FIXED_TMP}|(^|[[:space:]])rm([[:space:]]+-[A-Za-z]+)*[[:space:]]+${FIXED_TMP})"
 
+# ---- and the same path reached through a NAME (claude-config#190) ----
+#
+# The two patterns above judge the text of the target, so a suite that stores the shared path in a
+# variable first and writes through that name was invisible to them, one edit away from the shape
+# they exist to catch. So the names a file assigns are classified before the tree is read.
+#
+# Per run wins over fixed, and is worked out FIRST, to a fixpoint: a name assigned from mktemp is
+# per run, so is one built from the shell's own per process values, and so is any name whose value
+# mentions a name already known to be per run. That last step is what matters in practice, because
+# the usual shape is a throwaway root followed by two or three names derived from it, and stopping
+# after one hop would accuse every one of them.
+#
+# What it deliberately does NOT resolve: a value that reaches the temp root through ANOTHER
+# defaulted expansion, as in NAME="${NAME:-${TMPDIR:-/tmp}/thing}". Those are read as neither, so
+# they are not accused and not cleared. This suite's own shared lock is one, and it is shared on
+# purpose; widening to reach it would mean an exemption list, and an exemption is only worth having
+# when somebody has written down why (L233).
+_alternation(){   # " A B C " -> "A|B|C", empty for an empty set
+  printf '%s' "$1" | sed 's/^ *//; s/ *$//; s/  */|/g'
+}
+PER_RUN_NAMES=" "
+FIXED_TMP_NAMES=" "
+classify_names(){   # classify_names <file>
+  local assigns entry name value alt hop
+  PER_RUN_NAMES=" "; FIXED_TMP_NAMES=" "
+  # Nothing to classify unless the file assigns a name a fixed temp path in the first place, and
+  # almost none do. Exactly equivalent to running the whole thing, because FIXED_TMP_NAMES can only
+  # ever be filled from an assignment of this shape, and it is one grep instead of a pass per hop
+  # over every assignment in the file: without it this guard went from under a second to fifty,
+  # since the sync suite alone holds thousands of assignments.
+  grep -qE "=[[:space:]]*${FIXED_TMP}" "$1" 2>/dev/null || return 0
+  assigns="$(grep -hE '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$1" 2>/dev/null || true)"
+  [ -n "$assigns" ] || return 0
+  # Four hops is measured against the real files rather than chosen: the longest chain in this repo
+  # is three (a mktemp root, a temp directory under it, a file under that). A chain longer than this
+  # stops being resolved, which leaves it unaccused rather than wrongly accused.
+  for hop in 1 2 3 4; do
+    alt="$(_alternation "$PER_RUN_NAMES")"
+    while IFS= read -r entry; do
+      [ -n "$entry" ] || continue
+      entry="${entry#"${entry%%[![:space:]]*}"}"
+      entry="${entry#export }"
+      name="${entry%%=*}"
+      value="${entry#*=}"
+      case "$name" in ''|*[!A-Za-z0-9_]*) continue ;; esac
+      case "$PER_RUN_NAMES" in *" $name "*) continue ;; esac
+      # Matched in the shell rather than through `producer | grep -q`. That shape leaves on its
+      # first match and kills the producer, so under pipefail the pipeline reports the death
+      # instead of the answer (L183), and this runs once per assignment in every suite in the
+      # tree, which turned a guard that took under a second into one that took fifty.
+      case "$value" in
+        *mktemp*|*'$$'*|*'$RANDOM'*) PER_RUN_NAMES="$PER_RUN_NAMES$name "; continue ;;
+      esac
+      [ -n "$alt" ] || continue
+      if [[ "$value" =~ \$[{]?($alt)([^A-Za-z0-9_]|$) ]]; then
+        PER_RUN_NAMES="$PER_RUN_NAMES$name "
+      fi
+    done <<CLASSEOF
+$assigns
+CLASSEOF
+  done
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    entry="${entry#export }"
+    name="${entry%%=*}"
+    value="${entry#*=}"
+    case "$name" in ''|*[!A-Za-z0-9_]*) continue ;; esac
+    case "$PER_RUN_NAMES" in *" $name "*) continue ;; esac
+    [[ "$value" =~ ^[[:space:]]*${FIXED_TMP} ]] || continue
+    FIXED_TMP_NAMES="$FIXED_TMP_NAMES$name "
+  done <<CLASSEOF2
+$assigns
+CLASSEOF2
+  return 0
+}
+
 shares_a_path(){   # shares_a_path <file>  -> the offending lines, if any
+  local alt varref pattern
   grep -nE "$OWN_PATTERN" "$1" 2>/dev/null || true
   grep -nE "$SHARED_PATTERN" "$1" 2>/dev/null || true
+  classify_names "$1"
+  alt="$(_alternation "$FIXED_TMP_NAMES")"
+  # No names to look for is not the same question as no matches, so the pattern is never built from
+  # an empty set: an alternation with nothing in it matches an empty string and would report every
+  # write in the file (L215 the other way up).
+  [ -n "$alt" ] || return 0
+  varref="\\\$[{]?($alt)[}]?"
+  pattern="(${GT}{1,2}[[:space:]]*\"?${varref}|(^|[[:space:]])rm([[:space:]]+-[A-Za-z]+)*[[:space:]]+\"?${varref})"
+  grep -nE "$pattern" "$1" 2>/dev/null || true
 }
 writes_into_own_dir(){   # kept as the narrower question, for the fixtures that ask only that
   grep -nE "$OWN_PATTERN" "$1" 2>/dev/null || true
@@ -132,6 +219,34 @@ shared_blank="$(shares_a_path "$GOODTMP")"
 [ -z "$shared_blank" ] \
   && check "and leaves a per-run path in that directory alone" ok \
   || check "and leaves a per-run path in that directory alone" "it flagged: $shared_blank"
+# ---- the same path reached through a NAME (claude-config#190) ----
+# The variable half needs its own pair, and the good fixture is deliberately THREE hops (a mktemp
+# root, a temp directory under it, a file under that), because a resolver that stopped after one
+# would clear the bad fixture's shape and accuse this one, and a single-hop fixture could not tell
+# the two apart.
+BADVAR="$TMPROOT/badvar.sh"
+GOODVAR="$TMPROOT/goodvar.sh"
+{
+  printf 'L="%s/shared-name.txt"\n' "$TD"
+  printf 'printf x %s "$L"\n' "$GT$GT"
+  printf 'rm -f "$L"\n'
+} > "$BADVAR"
+{
+  printf 'W="$(mktemp -d)"\n'
+  printf 'export TD2="$W/tmp"\n'
+  printf 'L2="$TD2/shared-name.txt"\n'
+  printf 'printf x %s "$L2"\n' "$GT$GT"
+  printf 'rm -f "$L2"\n'
+} > "$GOODVAR"
+
+[ "$(shares_a_path "$BADVAR" | grep -c .)" = 2 ] \
+  && check "it catches a shared path reached through a name" ok \
+  || check "it catches a shared path reached through a name" "it found $(shares_a_path "$BADVAR" | grep -c .) of the 2 planted"
+var_blank="$(shares_a_path "$GOODVAR")"
+[ -z "$var_blank" ] \
+  && check "and follows a name back to the throwaway directory it came from" ok \
+  || check "and follows a name back to the throwaway directory it came from" "it flagged: $var_blank"
+
 # The two halves must both still be live in the combined question, or one of them could be broken
 # while the pair reads as working (L178).
 [ "$(shares_a_path "$BADFIX" | grep -c .)" = 2 ] \
