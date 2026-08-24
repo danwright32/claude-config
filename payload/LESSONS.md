@@ -154,6 +154,29 @@ for reference; L6 was reviewed and deliberately not adopted.
   because a stale file reached main once, and the one state it was written for was the one state no
   test built)
 
+- **L246. A feasibility check must exercise the HARDEST thing the plan depends on, not the easiest
+  thing that proves the tool runs at all, because a green on the easy case reads as permission to
+  build and the capability nobody measured is the one the plan actually rests on.**
+  (postroll#867, 2026-08-23. #509 had closed a UI test target on the recorded grounds that a runner
+  cannot drive XCUIApplication. That premise was two months old and worth re-checking, so it was
+  measured: the runner has an Aqua session, the app launched, and two tests passed in nine seconds.
+  All true, and all of it the easy half. The plan needed the target to close a window, read a form
+  and commit a keystroke, and none of those was measured before the target, its scheme and its
+  workflow were built and merged. Every one turned out to be unreachable, and five of the seven
+  tests written against it were deleted within the day. The tell was there at the time: the
+  measurement asked whether the tool RUNS, and the plan needed to know what the tool can REACH)
+- **L248. A finding that rules a capability OUT must be measured under the same control as one
+  that rules it in, because nothing downstream ever re-tests a closed door: the work that would
+  have exercised it is exactly the work the finding stopped anyone writing.** The mirror of L246.
+  An over optimistic feasibility check is corrected by the build failing; an over pessimistic one
+  corrects nothing, because the code that would have contradicted it is never written.
+  (postroll#877, 2026-08-23. #860 recorded that XCUITest goes blind on a PostRoll window, reporting
+  the application Disabled with an empty element subtree, and concluded neither a pass nor a
+  failure from that harness means anything. Five tests were deleted on it, three questions moved to
+  a manual checklist, and a note on #855 repeated it as settled fact. A controlled run months later,
+  one build with the suspect switched on and off and the state sampled once a second, measured the
+  opposite: the app reports runningForeground and the tree is about 17,800 characters throughout.
+  Only the close ACTION fails. Reading, which is what had been written off, works perfectly)
 - **L2. Tests must be structurally unable to touch live data, production services, or
   paid APIs.** Inject seams for stores, directories, clocks, and external calls, plus a
   refusal inside the service itself. (10 issues, 6 repos)
@@ -758,6 +781,42 @@ window is a count rather than a boundary.
 (PET#1137, #1107)
 
 
+- **L239. Sampling a TRANSIENT surface to decide whether an action happened cannot tell "it never
+  appeared" from "it appeared and was already dismissed", so judge by the durable record the
+  action would have written instead.** The two readings are identical, and the second is the one
+  that has already changed something, so the mistake is always in the reassuring direction. This
+  covers any check that looks at a screen, a sheet, a toast, a spinner or a window count some
+  seconds after the trigger, including a screenshot: what the sample proves is the state at the
+  moment of sampling, never the state in between.
+  (postroll#844, 2026-08-22: a postroll:// link was fired at the running app and the reading a few
+  seconds later was "windows: 1, sheets: 0", reported as the link having done nothing. The store
+  showed otherwise: the sheet had opened and an event had been created and the sheet dismissed
+  inside that gap. The correct check was `events.json`, which cannot be dismissed)
+
+- **L250. A list written to mean one thing (a `.gitignore`, an exclude file, a skip list) is read by
+  every OTHER tool that consults it as a DIFFERENT instruction, so a guard built on a question that
+  tool answers inherits an exclusion nobody chose for it, and goes blind exactly where unowned writes
+  land.** (overture#3161: `check-tree-untouched.sh` exists to notice a test run modifying the
+  repository, and it decides from `git status --porcelain -uall`, which lists untracked files but
+  never ignored ones. The `.gitignore` entry was written to mean "this is per machine, do not commit
+  it"; the guard read it as "do not look at this". Measured 2026-08-23, a new fixture drove the real
+  test wrapper and wrote a record into the repository root asserting that both live-store invariants
+  had measured rows on a day the store held zero of both. The guard passed clean. It was found by
+  reading the file by hand. Ignored paths are where scratch and state files land, so the blindness is
+  in the likeliest place rather than an unlikely one)
+
+- **L252. A test asserting a decision that has since been REVERSED stops being coverage and becomes the
+  guard DEFENDING the rejected behaviour, so a reversal must hunt those tests down across every file
+  and DELETE them rather than adjust them, because their whole content is the thing being removed.**
+  (overture#3163: Dan reversed the rule so a show dismissed after being emailed owes no nudge. Two
+  tests asserted the opposite, in two different files, and both had been written the SAME DAY, one of
+  them by the change that had shipped against his most recent recorded call. The first was found by
+  reading and replaced; the second was MISSED and surfaced only by a full suite run twenty minutes
+  later. Adjusting such a test is the trap: its assertions look repairable one line at a time, while
+  what it exists to prove is exactly what was rejected. The cost here was one wasted suite run; the
+  risk is the reversed assertion sitting in a file nobody re-runs, quietly becoming the authority for
+  the old rule)
+
 ## Data safety
 
 - **L206. A tool mode whose NAME reads like an inspection (reach, check, status, list,
@@ -1120,6 +1179,32 @@ window is a count rather than a boundary.
   an hour writing 21MB of repeated CoreData errors while holding the machine wide xcodebuild lock,
   a second run sat blocked behind it for 50 minutes, and three consecutive status reports said
   "waiting on the suite" when the work had been dead the whole time)
+- **L236. A platform call that may need the PERSON to authorize it (a keychain read, a permission
+  check, a credential store) must never run on the thread that would have to draw the question,
+  because the two wait on each other and the whole app disappears rather than the one surface that
+  asked.** Run it off that thread under a deadline and give the surface a visibly distinct checking,
+  answered and gave up state. Distinct from L110, which is about a wait having no deadline at all,
+  and from L91, which is a slow derivation making a control feel broken: here the wait is for the
+  person, the person is never asked, and the blast radius is every window rather than the one that
+  asked. The tell is a process that is alive with no windows, no menu bar and no response to its own
+  deep links, which no crash reporter and no log will ever mention.
+  (downbeat#402, 2026-08-22: two `.onAppear` handlers on the Integrations tab read the keychain
+  synchronously on the main thread, so `SecItemCopyMatching` blocked inside a SwiftUI update while
+  `SecurityAgent` waited for an answer; one click on that tab from a fresh launch left the app
+  needing a force quit, reproduced three times across two builds)
+
+- **L241. Work that BLOCKS must never run on a bounded shared worker pool (Swift's cooperative pool,
+  a fixed size thread pool, an event loop), because such pools do not grow and a few blocked items
+  starve every other piece of concurrent work in the process.** Give blocking work a pool that
+  grows or a thread of its own. The tell is a failure far larger than its cause and pointing
+  everywhere at once: not the blocked operation reporting a problem, but everything else stopping.
+  Distinct from L110, which is a wait with no deadline, and from L236, which is a wait for a person
+  on the thread that would ask them: a deadline does not help here, because the damage is done by
+  occupying the thread at all.
+  (downbeat#406, 2026-08-22: the fix for a keychain hang ran the blocking call with `Task.detached`,
+  putting it on the cooperative pool; a suite whose fixtures blocked a handful of them killed the
+  test process partway through and reported 1835 failures that were one starved runtime. The same
+  trap was already documented in a comment two files away, which did not prevent the repeat, L57)
 
 - **L121. A retry or self heal step that decides from a RECORDED success marker (a stored
   status, an effects string, an ok field) cannot notice that the artifact it created has since
@@ -1263,6 +1348,16 @@ window is a count rather than a boundary.
   could ever have reported that same empty object, while the status sat on the response
   unread. The root cause was a missing index, 7.1 s warm against a 30 s limit, and it was
   found only by digging through the provider's own logs)
+
+- **L251. A substitution can only rewrite text that is PRESENT, so one used to also supply a
+  separator when joining two pieces inserts nothing at all on the input that lacks it, and the
+  pieces fuse into a single corrupted value.** Join explicitly and normalize separately, because
+  the inputs that DO carry the whitespace join correctly and make the defect intermittent, which
+  is what keeps it out of the case anyone thinks to test.
+  (claude-config#192: the lessons index generator joined a wrapped rule by replacing a
+  continuation line's leading whitespace with a single space, which does the right thing for an
+  indented line and nothing whatever for an unindented one, so those fused onto the previous word
+  and shipped into the index that loads into every session in every project)
 
 ## State and identity
 
@@ -1917,6 +2012,50 @@ window is a count rather than a boundary.
   reserving side REFLOW, wrapping its button rows and tightening its gutters when narrow, which
   took the requirement from 385 to 225. So the question to ask of a reserved minimum is not only
   "is this number right" but "does this side have to be rigid at all")
+- **L238. A modal or sheet driven by a single flag on shared application state is presented once
+  per SURFACE bound to it, not once, so a second window puts up a second copy of the same thing
+  and dismissing one leaves the others standing.** Scope the flag to the surface that raised it,
+  or make the app single window on purpose, because how many surfaces exist is usually decided by
+  the framework rather than by you: SwiftUI's `WindowGroup` opens a NEW window in response to an
+  incoming URL open event, on top of whatever window is already there, so the count grows by one
+  per link and survives a quit through window restoration.
+  (postroll#842, 2026-08-22: verifying the new `postroll://` handler on the real machine, the
+  window count went 1, then 2 after one link, then 3 after a quit and another link, with System
+  Events reporting a New Event sheet on every one of them, all showing the same prefill. Every
+  unit test passed and none of them could see it: the app entry point is not compiled into the
+  test bundle, and no test bundle can open a second window anyway)
+
+- **L242. A surface that can show only ONE of something at a time (a sheet, a modal, a dialog)
+  silently ignores every request past the first, so attaching several independent presenters to
+  one surface means all but one of those conditions can vanish with nothing said.** Route them
+  through one piece of state that names which is showing, so a second request is a decision
+  (queue it, refuse it, replace it) rather than whichever one the framework happens to honour.
+  The mirror of L238: that one is a single condition reaching many surfaces and being shown many
+  times, this one is many conditions reaching one surface and all but one being shown never. Both
+  come from the same unexamined assumption, that the count of conditions and the count of surfaces
+  are both one.
+  (postroll#846, 2026-08-22: MainWindowView attached three sheets to one view, a New Event form, an
+  outdated designs list and a build behind warning. It cost nothing while all three were things a
+  person opened by hand and could only ask for one at a time, and became live the moment a
+  postroll:// link could raise one at any moment. Both losers are bad in different ways: a
+  swallowed form is a link that appears to do nothing, and a swallowed build behind warning is the
+  notice that exists to stop a shipped fix looking like it never worked, cleared by an unrelated
+  click)
+- **L243. A surface presented from a boolean saying that SOMETHING is showing cannot notice that
+  WHICH thing is showing has changed, so replacing one modal, alert or toast with another while it
+  is open leaves the previous content on screen.** Bind the presentation to the identity of the
+  thing being shown, and where the framework offers only a boolean, pass the value being presented
+  as well so the content is rebuilt with it. The trap sits one step PAST L242: routing every
+  condition through one presenter is the right fix and does nothing on its own about identity, and
+  the two halves of a screen can then disagree, one heading over another's buttons, which is worse
+  than either condition alone because each half reads as correct.
+  (postroll#855, 2026-08-23: #846 replaced three sheets and three alerts with one presenter each.
+  The sheets were safe by accident, because `.sheet(item:)` takes an identity and each case
+  supplied a different one, while `.alert(_:isPresented:)` takes only a Bool. The queue lets the
+  refusal to open the events displace the code folder warning, and both are raised by launch
+  checks that run on every launch, so the swap is the everyday case rather than a rare one. Every
+  model level test passed and none of them could see it: what a framework redraws is not a fact
+  about the state, and nothing that runs the app was watching the alerts)
 
 ## External systems
 
@@ -2000,6 +2139,19 @@ window is a count rather than a boundary.
   sent ones, so an abandoned draft would have stamped the conversation answered for good, with no badge
   and no task, and the stamp never moves backwards. Measured on a live thread the same day, an abandoned
   draft sat 29 minutes above a real reply, and only the timing of the next check saved it)
+- **L237. Addressing something by its POSITION rather than its identity (screen coordinates, an
+  array index, an nth child selector, a row number) measures whatever currently OCCUPIES that
+  position, so prove the thing you named is the thing there, and refuse when you cannot.** A
+  reading taken from the wrong place looks exactly like a correct one, and it fails in the
+  reassuring direction: neighbouring things usually resemble each other, so the check passes on the
+  wrong target rather than returning nonsense somebody would notice. Distinct from L190, which is
+  about reading the wrong STORE, and from L84, where a baseline defends whatever was on screen when
+  it was recorded: here the address itself is the thing that cannot be trusted.
+  (downbeat#403, 2026-08-22: the Settings pixel checker asked System Events where the Settings
+  window was and handed those coordinates to screencapture, so with the booking window on top it
+  measured the booking window and reported its colours as the Settings panes; it was caught only
+  because two different tabs came back byte identical)
+
 - **L190. A read back verifying that another application performed a write must be proved to read
   the store THAT application writes to, never a second system subscribed to the same account.**
   Two subscribers to one server are separate replicas, so the read measures replication lag rather
@@ -2097,6 +2249,21 @@ window is a count rather than a boundary.
   correctly discarded both, so the card told Dan the show had no way in while he found one himself
   in seconds)
 
+- **L249. A decision ATTRIBUTED to somebody inside your own artifact (a PR body, a plan, an issue
+  comment) must be quoted from the record that holds it and carry that record's own date, because a
+  paraphrase with a date on it reads as authority and is the one claim a reviewer will not go and
+  check, so a decision nobody made can ship with tests written to defend it.**
+  (overture#3159: PR #3142 opened with "Dan's call, 2026-08-22: one number, and the sheet grows a
+  section" and merged. No comment of that date exists on #2967, #2968 or #3076. The two real calls
+  were both dated 2026-08-21 and the PR went against both, keeping `conversationsToConfirm` in the
+  Due total where the call said to take it out, and counting a show dismissed after it was emailed
+  where the call said a dismissal stops asking for work. The shipped tests then asserted the
+  superseded behaviour, so the guard defended it. The same PR declared `Closes #2967, #2968, #3076`
+  and closed only the first, so the issue holding the contradicted decision stayed open with nobody
+  reading it. The body is already a gate here (`pr-completeness-guard.sh` refuses one missing its
+  four enumerations); the one claim in it that only the person quoted can settle was the one
+  unchecked thing)
+
 ## Codebase hygiene
 
 - **L217. A guard whose forbidden or expected values are DERIVED from a shipped dataset covers
@@ -2156,6 +2323,17 @@ window is a count rather than a boundary.
   (PostRoll#273: the payload contract enforced that every declared payload was fully declared,
   and six payloads crossing the same boundary were never declared at all, so the sweep that
   claimed to cover all of them passed)
+- **L247. A sweep that requires every place doing X to also do Y must enumerate its subjects by
+  the STATE they reach, never by one spelling of X, because a place reaching that state by
+  another route is never enumerated and is exempt from the rule the sweep exists to enforce,
+  while the sweep goes on passing the subjects it did find.** Distinct from L96, where the
+  subject list is written by hand: here it IS derived, and derived correctly, from a proxy for
+  the population rather than the population itself, so it reads as real coverage.
+  (PostRoll#872: a sweep required every failure path to announce itself and found its subjects
+  by searching for calls to one tracker method. The export manager records a failure by setting
+  a failed phase and deactivating instead, so the longest running work in the app was the one
+  kind that still failed in silence, and the sweep reported all clear while checking five real
+  sites)
 - **L129. A category deliberately EXEMPTED from a review or check, for a CORRECT reason, has no
   reviewer at all unless one is named in the same change, and the gap is invisible precisely
   because the exemption was right.** The excluded content still needs reviewing, just by something
@@ -2241,6 +2419,18 @@ window is a count rather than a boundary.
   start, so a pull that registered a brand new hook printed no restart notice and left the hook
   inactive in every open session, while reporting the pull as a plain success)
 
+- **L244. A file that is auto loaded into every session is believed without being re-checked, so
+  any status it records (an open question, a pending issue, a not yet done) must be derived from
+  the system that owns that truth or carry a check that fails when it drifts.** A question left
+  standing after it is answered stops reading as a question and becomes a false claim the next
+  session acts on. Distinct from L41, which is about a hand kept mirror drifting: the drift here
+  is ordinary and expected, and the harm comes from WHERE it sits, in front of every session
+  before anything else runs, so it is trusted rather than looked up.
+  (downbeat#411: all nine entries under Open questions in CLAUDE.md were closed issues, and one
+  had gone past stale into false, asserting a contrast script had never been run when it had been
+  measured the day before. Claude read that line and repeated it to Dan as fact in the same
+  session it was found, which is the harm the lesson names)
+
 ## Cross-system reliability
 
 - **L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a
@@ -2256,6 +2446,52 @@ window is a count rather than a boundary.
   returned an already-used 511, which is claude-config#164)
 
 
+- **L240. A background job killed in the same breath it is started can outlive the kill, because
+  the signal can arrive before the job has finished starting, and a `wait` on it then blocks for
+  that job's whole lifetime while every assertion still passes.** So it reads as a hang rather
+  than a failure, and nothing goes red to say otherwise. When you need a pid naming a process
+  that has already finished, let a short job exit on its own and wait for that, rather than
+  starting a long one and signalling it. Note which way this fails: the run is GREEN, so no
+  failure list names it, and the only symptom is a duration nobody is measuring.
+  (overture#3125: `sleep 300 & STALE_PID=$!` followed on the very next line by
+  `kill "${STALE_PID}"; wait "${STALE_PID}"`, in a fixture that runs in 7 seconds. Measured
+  2026-08-22 under the repo's parallel fixture runner: roughly one round in ten took 306
+  seconds, every assertion passing. Marks placed either side of those two lines read +1s before
+  and +301s after while every other mark in the fixture stayed at +1s, and inserting any command
+  between the two lines made it stop happening, which is the race being closed. The first
+  diagnosis blamed the stand-in's unredirected stdout, L235's shape, and that was disproved by
+  reading the stalled process's open files)
+
+- **L235. A background process inherits the stdout it was started with, so one still running
+  holds a `$(...)` capture or a runner's pipe open long after its parent has exited, and the
+  caller then waits for the CHILD rather than for the work.** Redirect a background helper's
+  output away unless the caller is meant to read it. Two things make this expensive to diagnose:
+  the wait presents as a hang in the PARENT, which has already finished, so the investigation
+  starts on the wrong process; and any assertion made after the wait can pass for the wrong
+  reason, because by then the thing being waited on has expired on its own.
+  (overture#3125 was FIRST DIAGNOSED this way and the diagnosis was WRONG, which is worth keeping:
+  the stalled process was caught live and its stdout was a regular log file, not a pipe, so
+  redirecting would have changed nothing. That stall was L240 instead. What stands here is the
+  second case in the same repo the same day, where a `$(...)` capture of a script with an
+  unredirected background job stalled for the job's whole sleep and then let an
+  is-it-still-alive assertion pass because the job had expired, and `sleep-guard.sh`, which
+  documents the trap at its own call site because a capture really did hang on it)
+
+- **L234. A test runner or linter that finds its inputs by a default recursive glob also
+  collects every nested checkout inside the repo (an agent worktree, a vendored clone), so name
+  the directories your own sources live in rather than trusting the tool's default excludes.**
+  Two things go wrong, and neither looks like a failure: the run reports a file count that moves
+  with how many agents happen to be running, so the number reads as thorough while being one
+  suite counted many times, and a failure from a half finished branch in a worktree is reported
+  as the verdict on the change in front of you. An include naming your own directories cannot be
+  defeated by a future worktree folder with a different name; an exclude can.
+  (overture#3120: `pnpm test` is a bare `vitest run`, whose default include excludes only
+  node_modules and dist. Measured 2026-08-22 in the ordinary working checkout: 16 real
+  `*.test.ts` files on disk under `src/`, 14 agent worktrees under `.claude/worktrees/`, and
+  `Test Files  240 passed (240)`. The sibling runner in the same repo,
+  `scripts/run-shell-fixtures.sh`, has the identical exposure and no defect, because it names
+  its directories: `find scripts mac/scripts -name '*.test.sh'`)
+
 - **L208. A substitution applied across a whole set of files cannot tell a line that MEANS
   the placeholder from a line that means a value, so any file describing the mechanism has its
   own text rewritten**, and only in the copy that was delivered: the authoring machine's copy
@@ -2266,6 +2502,22 @@ window is a count rather than a boundary.
   substitution over a path and reported a scriptPath made of two home directories glued
   together, and two skills shipped a sentence explaining the placeholder that had itself been
   rewritten into a real path. Every one of those files reads correctly in the repository)
+
+- **L245. A script that finds other scripts by searching for a marker phrase will match ITSELF,
+  because it has to name the marker in order to search for it, and when the matched list is then
+  EXECUTED the result is unbounded recursion rather than a wrong answer.** Exclude the caller in
+  the derivation AND refuse re-entry, because the two mistakes look identical right up until one
+  of them takes the machine down. The sibling of L208, which is the same self match under a
+  SUBSTITUTION and costs a corrupted file; here what is done with the list decides whether the
+  cost is an answer nobody can trust or a machine nobody can use.
+  (downbeat#417: both halves happened in one afternoon. `test-claude-md-status-claims.sh` matched
+  the CLAUDE.md sentence describing what it looks for and accused the issue that built it, which
+  was merely wrong. `check-screen-readings.sh` derived its list by grepping scripts for the ones
+  needing the app frontmost, its own header says exactly that, so it ran itself: over 300
+  processes and a load average of 12 before it was killed by process group, and the test written
+  to prove the fix did it a second time by omitting the injected runner and taking the live path.
+  claude-config#120 is a third, where a runner found its own suite and recursed until killed by
+  hand)
 
 - **L197. A function that returns whether it CLAIMED something (a lock, a slot, a run) is
   only a guard where the caller checks the answer**, and marking that answer discardable
