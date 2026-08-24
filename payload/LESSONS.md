@@ -706,11 +706,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   the next full run failed on all five. The set comparison was correct and answered a question
   nobody needed asking)
 
-- **L511. A test that TIMES OUT names the assertion that happened to be running, never the
-  accumulated cost that caused it**, so a file whose per test setup repeats expensive work reports
-  its growth as a failure somewhere unrelated. Compute a costly fixture once per file, and read a
-  timeout on an assertion that does no waiting as a measurement of the FILE rather than a fault in
-  that assertion.
+- **L511. A test that times out names the assertion that was running, not the cost that caused
+  it.** A test that TIMES OUT names the assertion that happened to be running, never the accumulated
+  cost that caused it, so a file whose per test setup repeats expensive work reports its growth as a
+  failure somewhere unrelated. Compute a costly fixture once per file, and read a timeout on an
+  assertion that does no waiting as a measurement of the FILE rather than a fault in that assertion.
 
 A suite went red with `Test timed out in 5000ms` on a date formatting test whose whole body was
 three synchronous calls. The issue filed against it theorised about the one unusual thing that test

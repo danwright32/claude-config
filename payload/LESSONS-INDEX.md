@@ -78,7 +78,7 @@ to decide something: the body is where the failure it came from is described.
 - L209. A threshold measured while a co-varying component is held constant attaches itself to the wrong variable, because the part the fixture moves stands in for the sum.
 - L225. An invariant between two stored values must be checked by something that reads the VALUES, never only inside the tool that normally writes them
 - L228. A comparison asking whether two things hold the SAME ELEMENTS says nothing about their ORDER
-- L511. A test that TIMES OUT names the assertion that happened to be running, never the accumulated cost that caused it
+- L511. A test that times out names the assertion that was running, not the cost that caused it.
 - L517. When code sorts items into output buckets (paged versus logged, retried versus deadlettered, shown versus hidden), assert that every item lands in exactly ONE bucket across everycombination of inputs.
 - L518. A check that reads source by taking a FIXED NUMBER OF LINES from an anchor stopscontaining the code it checks the moment a comment is added above it, and it then fails on thecomment rather than the code.
 
