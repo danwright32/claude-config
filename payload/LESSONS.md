@@ -706,6 +706,58 @@ for reference; L6 was reviewed and deliberately not adopted.
   the next full run failed on all five. The set comparison was correct and answered a question
   nobody needed asking)
 
+- **L511. A test that TIMES OUT names the assertion that happened to be running, never the
+  accumulated cost that caused it**, so a file whose per test setup repeats expensive work reports
+  its growth as a failure somewhere unrelated. Compute a costly fixture once per file, and read a
+  timeout on an assertion that does no waiting as a measurement of the FILE rather than a fault in
+  that assertion.
+
+A suite went red with `Test timed out in 5000ms` on a date formatting test whose whole body was
+three synchronous calls. The issue filed against it theorised about the one unusual thing that test
+did, and that theory was measured and disproved twice, on two operating systems. The real cause was
+in a different file entirely: it rebuilt a whole TypeScript parse of the app thirteen times, several
+of them inside one test, and had grown from 4450ms to 5841ms that same day as tests were added to
+it. Nothing reported the growth, because a test file has no budget, and the timeout pointed at
+whichever assertion was unlucky. Building the fixture once took the file to 3776ms and its slowest
+test to 963ms.
+
+(new-agent-onboarding#670, #689)
+
+- **L517. When code sorts items into output buckets (paged versus logged, retried versus dead
+lettered, shown versus hidden), assert that every item lands in exactly ONE bucket across every
+combination of inputs.** A test that checks only one bucket is satisfied by an item that fell out of
+all of them, and silence caused by vanishing reads exactly like silence caused by health.
+
+PET#1107 changed a build watchdog three rounds running. Round 12 added a suppression so a step
+already alerting its own failure would not page twice, with seven tests covering it, every one
+asserting that no alert fired. The alert was correctly silent. A step that had never succeeded, was
+attempting daily and was self alerting was excluded from the paged list for self alerting and from
+the not paged list for attempting, so it was in neither, and the watchdog printed "All daily-build
+write steps have a fresh heartbeat" about a step that had never once worked. The same author had
+made the same class of mistake one round earlier. The fix that stuck was not another case: it was a
+loop over all sixteen combinations of the two stamps asserting each entry appears in exactly one
+output, plus a seam for what the watchdog PRINTS, which it had never had, so every test in the file
+had been asserting on the alert text alone.
+
+(PET#1133, #1107)
+
+- **L518. A check that reads source by taking a FIXED NUMBER OF LINES from an anchor stops
+containing the code it checks the moment a comment is added above it, and it then fails on the
+comment rather than the code.** Slice from the anchor to the next structural boundary and strip
+comment lines, because the obvious fix of widening the number only resets the trap.
+
+PET#1107 round 17: a guard asserted that a workflow step reads a marker file and exits non zero,
+by slicing fourteen lines from the step's name. Adding a six line comment to that step pushed its
+`run:` body out of the window, so the guard failed while the step was correct, and the failure read
+as the assertion being wrong. Widening the slice would have passed and left the same trap one
+comment later. The fix was a shared reader returning everything from the heading to the next step
+with comment lines removed. Two sibling specs in the same repo still count lines. The same shape
+is waiting in any guard that reads "the line, or the comment block directly above it", whenever the
+window is a count rather than a boundary.
+
+(PET#1137, #1107)
+
+
 ## Data safety
 
 - **L206. A tool mode whose NAME reads like an inspection (reach, check, status, list,
@@ -860,6 +912,25 @@ for reference; L6 was reviewed and deliberately not adopted.
   found by a person opening the page and looking)
 
 ## Honest failure
+
+- **L515. Cleanup placed in a `finally` is only reached by the paths that THROW**, so a process
+  exit on a failure path skips it in silence, and the cleanup reads as present in the source while
+  being absent for exactly the failures that take the exit. Verify by RUNNING which paths reach it,
+  never by reading. The companion to L514: L514 says record that it ran on every exit path, and this
+  is the mechanism that quietly defeats that instruction.
+  (project-enrollment-tracker#1124: the roster sync stamped its attempt heartbeat in a finally while
+  the two Salesforce failure paths called process.exit, so a rotated credential, the one failure the
+  heartbeat existed to diagnose, was the one it never witnessed)
+
+- **L514. A signal that records THAT something ran must be written on every exit path, in a
+  `finally`, never only on the success path**, because one written only on success turns a step
+  FAILING every run into a step that appears to have STOPPED running, and those two send the reader
+  after different problems: a scheduling or trigger fault instead of the real cause. The mirror of
+  L106 (a live signal over dead work): here the work is alive and failing, and the silence lies the
+  other way.
+  (project-enrollment-tracker#1122: the roster sync stamped its "did this step run" heartbeat as the
+  last line of the run, so a rotated credential failed the step every morning, the heartbeat went
+  stale three days later, and the monitor reported the sync as no longer running)
 
 - **L184. Judge a command by its EXIT CODE, never by a line of its output, because a tool's final
   line is routinely a different measurement than its verdict and is usually the more reassuring of
@@ -1166,6 +1237,33 @@ for reference; L6 was reviewed and deliberately not adopted.
   assumption it was recording. Nothing in the source looked wrong: the omitted directive
   reads as unrestricted)
 
+- **L516. A repair that BACKFILLS a field after the fact (a duration from a child record, a
+  finish time from the last known activity) writes the value the work would have had if
+  nothing had gone wrong, so it erases the evidence of the delay it repaired.** Any later
+  query measuring lateness from that field then returns the same answer on a fully broken
+  system as on a healthy one, so measure from state the repair does not touch and prove the
+  query can tell the two apart before trusting a zero.
+  (bidspoke#1005: both stranded-execution finalisers set duration_ms from the last completed
+  step, so an execution rescued 26 hours late records a few seconds. The obvious question
+  "how many finalised more than 2 hours after they started" was asked as duration_ms >
+  2 hours and returned zero over 704,253 executions, which is exactly what it would return
+  if every one of them had been stranded. The real answer came from state the repair does
+  not write: rows still marked running, and rows carrying the finaliser's own outcome marker)
+- **L520. A failure message built only from a response BODY says nothing when the request
+  could not carry a body (an HTTP HEAD, a 204), and the empty payload then reads as no
+  information rather than as the diagnosis it is.** Carry the status code, which is the only
+  thing that survives such a response, and NAME the empty body rather than printing it, so
+  the emptiness is reported as the method's own guarantee instead of as a lost error.
+  (bidspoke#1040: the execution archive counts an hour's rows with a HEAD request before
+  reading them. That count hit the 30 second statement timeout, which Supabase's edge log
+  recorded precisely as `PostgREST; error=57014`, HTTP 500, but a HEAD response carries no
+  body, so PostgREST's error text was stripped in transit and supabase-js built
+  `{ message: '' }` out of the empty body. The alert said only `counting steps failed:
+  {"message":""}`. Both of the archive's counts are HEAD requests, so EVERY count failure it
+  could ever have reported that same empty object, while the status sat on the response
+  unread. The root cause was a missing index, 7.1 s warm against a 30 s limit, and it was
+  found only by digging through the provider's own logs)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
@@ -1439,6 +1537,29 @@ for reference; L6 was reviewed and deliberately not adopted.
   Lifting the exclusion in overture#2765 would make a Prep launch destroy a live check's paid
   answers, and make a finished Prep throw away every draft it just wrote)
 
+- **L510. Code that recomputes part of an object must override the fields it changes on a COPY of
+  the original, never rebuild the object from a list of the fields it happens to know about,
+  because every field added later is then silently dropped and the loss surfaces far away as a
+  blank rather than as an error.** The rebuild reads as careful, since the list is explicit and
+  each field on it is correct; what it cannot express is the fields nobody has written yet, so it
+  is a defect that arrives later, on a change that looks unrelated to it.
+  (pet#1102, and the same shape twice before it in the same repo: `applyLiveEligibility` rebuilds
+  every rep row on a team from five named stats whenever one rep's eligibility moves, so any other
+  per rep field vanishes for the whole team with no error, which is what the commission drill down
+  would have walked into; `toRepPayload` lost `alias` on 2026-06-12 and `hireDate`/`termDate` on
+  2026-06-08 the same way, each producing wrong data with nothing failing)
+
+
+- **L521. A lookup that requires exactly one match must treat MANY matches as its own refusal,
+  never as absence**, because a fall-through to the create-new path manufactures a duplicate identity that
+  every later writer then feeds. The zero-match and many-match cases need separate branches and
+  separate reporting.
+  (project-enrollment-tracker#1120: the roster sync's pass 1 accepted only a single fuzzy key
+  match and recorded nothing on two or more, so an ambiguously named Salesforce rep fell through
+  to the insert path and became a duplicate row; PR #1107 then had the duplicate born carrying the
+  permanent salesforce_user_id, pinning an external system's join to a row no board shows while
+  the real rep read clean. The sync refused two-names-one-row but never the mirror
+  one-name-two-rows its own matcher had just detected.)
 
 ## Security and privacy
 
@@ -1799,6 +1920,17 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## External systems
 
+- **L513. A value a platform REPORTS is what is currently configured, never what is available**,
+  so a design that reads an observed setting as the ceiling silently inherits a default nobody
+  chose. Ask what the maximum is, by probe if the console will not say it, before building a
+  guarantee on the number you can see. Distinct from L82, where the documented guarantee itself
+  goes unmeasured: here the observation is CORRECT and the error is treating it as a limit.
+  (bidspoke#911: the execution archive's Snowflake undo window read 1 day, which an ADR recorded
+  as near the best case available and reasoned from, including what an erasure could honestly
+  claim. It was the account default, not the cap: the account permits 90, established by creating
+  a table with a 2 day window and reading the setting back. Thirteen months of execution history
+  was about to become the only copy behind a one day window nobody had chosen)
+
 - **L23. Treat every external response as hostile and every event stream as unordered,
   late, and duplicated.** Check status and shape before indexing, map the other system's
   vocabulary at the boundary, and give webhook handlers event-timestamp ordering guards.
@@ -2111,6 +2243,19 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Cross-system reliability
 
+- **L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a
+  high water mark) needs a targeted redo path built in from the start whenever anything
+  downstream requires completeness**, because the first gap is permanent and the only escape
+  left is to weaken the completeness requirement itself. The forward-only shape is usually
+  correct for the steady state, which is why the missing redo path is invisible until a gap
+  exists, and by then the thing that would have fixed it is a feature nobody scheduled.
+  (bidspoke#976: the execution archive advances one hour at a time and never goes back, while
+  the deletion gate reads a day as unverifiable unless every hour of it was archived, so one
+  missed hour holds that day's partition forever and the only sanctioned escape was a human
+  release that deletes data with no backup. Numbered by hand at 512 because `next-lesson`
+  returned an already-used 511, which is claude-config#164)
+
+
 - **L208. A substitution applied across a whole set of files cannot tell a line that MEANS
   the placeholder from a line that means a value, so any file describing the mechanism has its
   own text rewritten**, and only in the copy that was delivered: the authoring machine's copy
@@ -2202,3 +2347,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   at 1 hour had been justified in the design record as "4x the longest run the tool permits",
   which became 1x. The record was updated to say "a suite run cannot outlive its own ceiling,
   which is also 1 hour", a true sentence describing zero margin, and it read as reassurance)
+- **L519. A repair, backfill or catch-up tool must not take the same exclusion lock as the live
+  job it repairs**, because it then displaces that job for as long as it runs, and the only symptom
+  is the LIVE job reporting nothing to do, which sends the investigation to the live job's own
+  dependencies rather than to the repair. Give the repair its own lock, or lock the unit of work
+  rather than the run, and make a repair that stands down SAY so.
+  (bidspoke#1027: a backlog walker driving the archive's re-archive route every three minutes for
+  three hours took the hourly archiver's run lock on every call, so every hourly run from 19:23 UTC
+  answered `skipped-locked` and the live watermark sat at 15:00 while the repair advanced six day
+  old days. The standstill alert that eventually fired advised checking Snowflake availability and
+  the export credentials, both of which were fine, because the check never read the run outcomes
+  that said `skipped-locked` in plain text)

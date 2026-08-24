@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 241 lessons.
+LESSONS.md, which is NOT loaded into the session. 253 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -78,6 +78,9 @@ to decide something: the body is where the failure it came from is described.
 - L209. A threshold measured while a co-varying component is held constant attaches itself to the wrong variable, because the part the fixture moves stands in for the sum.
 - L225. An invariant between two stored values must be checked by something that reads the VALUES, never only inside the tool that normally writes them
 - L228. A comparison asking whether two things hold the SAME ELEMENTS says nothing about their ORDER
+- L511. A test that TIMES OUT names the assertion that happened to be running, never the accumulated cost that caused it
+- L517. When code sorts items into output buckets (paged versus logged, retried versus deadlettered, shown versus hidden), assert that every item lands in exactly ONE bucket across everycombination of inputs.
+- L518. A check that reads source by taking a FIXED NUMBER OF LINES from an anchor stopscontaining the code it checks the moment a comment is added above it, and it then fails on thecomment rather than the code.
 
 ## Data safety
 
@@ -101,6 +104,8 @@ to decide something: the body is where the failure it came from is described.
 
 ## Honest failure
 
+- L515. Cleanup placed in a `finally` is only reached by the paths that THROW
+- L514. A signal that records THAT something ran must be written on every exit path, in a `finally`, never only on the success path
 - L184. Judge a command by its EXIT CODE, never by a line of its output, because a tool's final line is routinely a different measurement than its verdict and is usually the more reassuring of the two.
 - L10. An error state and an empty state are different screens.
 - L199. A marker meant to be READ BY CODE (a prefix, an error code, a sentinel) must reach its reader unwrapped
@@ -134,6 +139,8 @@ to decide something: the body is where the failure it came from is described.
 - L164. Failure recording that lives INSIDE the program a launcher starts cannot record any failure of the launcher itself, so a missing directory, a bad path or an unreadable interpreter leaves no trace at all and reads exactly like the control never having been pressed.
 - L505. A value that resolves to undefined is DROPPED from a serialized payload rather than sent as empty, so a wrong field reference is indistinguishable from a field nobody meant to send, and both ends read the absence as normal.
 - L218. A policy with a defined fallback chain (a CSP directive, a CSS cascade, an inherited config) treats an OMITTED rule as a NEIGHBOURING rule rather than as no rule, so the omission silently applies a restriction written for different content.
+- L516. A repair that BACKFILLS a field after the fact (a duration from a child record, a finish time from the last known activity) writes the value the work would have had if nothing had gone wrong, so it erases the evidence of the delay it repaired.
+- L520. A failure message built only from a response BODY says nothing when the request could not carry a body (an HTTP HEAD, a 204), and the empty payload then reads as no information rather than as the diagnosis it is.
 
 ## State and identity
 
@@ -164,6 +171,8 @@ to decide something: the body is where the failure it came from is described.
 - L507. A category defined as a REMAINDER (the total minus every named category) records no members anywhere, so it can never be enumerated, audited or expanded, and it is exactly where the cases nobody has explained accumulate. If any surface will one day have to show what is in that bucket, record its members at the moment it is computed, because the subtraction cannot be run backwards.
 - L509. A shared value that consumers EXTEND (a style token, a base config, a set of default props) must not set anything a consumer legitimately overrides, because the winner is then decided by a merge or emit order invisible at the call site, so the call site reads as correct while the override silently loses.
 - L204. When a change removes an invariant other code silently relied on (only one of these can be alive, this only runs on one thread, this id is unique), find every reliance by searching for the invariant itself rather than by reasoning about the feature, because the reliance is usually recorded only in a comment that reads as reassurance and the code it justifies becomes actively destructive the moment the invariant goes.
+- L510. Code that recomputes part of an object must override the fields it changes on a COPY of the original, never rebuild the object from a list of the fields it happens to know about, because every field added later is then silently dropped and the loss surfaces far away as a blank rather than as an error.
+- L521. A lookup that requires exactly one match must treat MANY matches as its own refusal, never as absence
 
 ## Security and privacy
 
@@ -215,6 +224,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## External systems
 
+- L513. A value a platform REPORTS is what is currently configured, never what is available
 - L23. Treat every external response as hostile and every event stream as unordered, late, and duplicated.
 - L24. State the expected data volume before writing any query or loop.
 - L81. A batch must be sized in the UNIT the limit is actually expressed in, measured from the real inputs, never in a proxy unit calibrated on one sample.
@@ -261,6 +271,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Cross-system reliability
 
+- L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a high water mark) needs a targeted redo path built in from the start whenever anything downstream requires completeness
 - L208. A substitution applied across a whole set of files cannot tell a line that MEANS the placeholder from a line that means a value, so any file describing the mechanism has its own text rewritten
 - L197. A function that returns whether it CLAIMED something (a lock, a slot, a run) is only a guard where the caller checks the answer
 - L33. Make the pair of a database write and an external side effect crash-safe.
@@ -277,3 +288,4 @@ to decide something: the body is where the failure it came from is described.
 - L114. A tool that creates a throwaway workspace must also remove what that workspace caused to be created OUTSIDE it.
 - L226. A timer built by ADDING UP its own sleeps measures iterations, not elapsed time
 - L227. A limit cannot be raised on its own
+- L519. A repair, backfill or catch-up tool must not take the same exclusion lock as the live job it repairs
