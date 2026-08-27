@@ -817,6 +817,21 @@ window is a count rather than a boundary.
   risk is the reversed assertion sitting in a file nobody re-runs, quietly becoming the authority for
   the old rule)
 
+- **L253. A detector whose signature is a small TIME GAP between two stored instants is answered by
+  any single write that stamps both from one clock variable, so the gap measures the WRITE rather
+  than the events, and such a row must be told apart by evidence of that write (a third field
+  carrying the same instant) rather than by treating the suspicious value as noise.**
+  (overture#3171: an invariant looked for an answer recorded within 90 seconds of the message it
+  answers, which is what an autoresponder stamping "Dan answered" looks like. It found one row on the
+  live store with a gap of exactly 0.0 seconds. The attach path writes `conversationAttachedAt`,
+  `repliedAt` and `replyHandledAt` from a single `now`, so a conversation Dan answered in Gmail and
+  then attached has those instants equal by construction, and its gap is arithmetic rather than a
+  measurement of anything. The trap in the obvious remedy: excluding a gap of zero as "too round to
+  be real" would have blinded the rule to the fastest possible autoresponder, which is the worst case
+  it exists for, so the exclusion has to key on the third field proving one write happened. Related to
+  L203, which is the same coincidence read the other way round: there, near simultaneous events in a
+  log read as a mechanism; here, one write reads as two events)
+
 ## Data safety
 
 - **L206. A tool mode whose NAME reads like an inspection (reach, check, status, list,
