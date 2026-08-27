@@ -855,7 +855,7 @@ window is a count rather than a boundary.
   Related to L150, which catches a writer LOOSER than its reader; this catches the looseness
   hiding inside something that reads as a validator. (postroll#899: `isRealHandle` rejected only
   `unknown`, `n/a`, `na`, `none`, `-`, `no` and `skip`, so a dance company whose Instagram handle
-  field held its own name, `DPR Dance`, passed as a real handle at all six call sites, went into
+  field held its own name, `DPR Dance`, passed as a real handle at all eight call sites across five files, went into
   the caption prompt as a handle to mention, and was written into a caption bound for Instagram
   where `@DPR` resolves to a stranger. The credit checker's own regex, `@[A-Za-z0-9._]+`, is the
   shape that should have been asked for, and it then reported the pipeline's own bad value as a
