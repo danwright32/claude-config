@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 275 lessons.
+LESSONS.md, which is NOT loaded into the session. 276 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -108,6 +108,7 @@ to decide something: the body is where the failure it came from is described.
 - L202. Evidence attached to a record that is itself swept on a retention schedule inherits that schedule's lifetime, so it is gone before the investigation that needs it, which by definition arrives days later.
 - L211. A cleanup that deletes whatever its read did NOT mention turns every incompleteness in that read into permanent deletion, so it must refuse on a SHORT read and not only on a failed one
 - L219. A test that drives a real browser and does not assert on its CONSOLE discards a diagnosis the browser already made
+- L256. Before dropping a stored column, measure what it holds against its DECLARED DEFAULT rather than against null, because a defaulted column is non-null on every row whether anybody set it or not, and a never-written optional is null on every row, so a null test reports a harmless column as full of data and can equally let a column holding real values read as empty.
 
 ## Honest failure
 

@@ -1000,6 +1000,21 @@ window is a count rather than a boundary.
   through the whole sign in flow and had no console listener anywhere, so the defect was
   found by a person opening the page and looking)
 
+- **L256. Before dropping a stored column, measure what it holds against its DECLARED DEFAULT rather
+  than against null, because a defaulted column is non-null on every row whether anybody set it or
+  not, and a never-written optional is null on every row, so a null test reports a harmless column as
+  full of data and can equally let a column holding real values read as empty.**
+  (overture#1665/#1640: a rehearsal for the app's first subtractive migration asked "how many rows
+  hold a value" as `IS NOT NULL`. It reported 1018 of 1018 prospects about to lose data on two
+  columns, and the truth was 1018 copies of a Swift property's default that nothing had ever written.
+  Asked against the default instead, the same columns came back with 505 rows really marked
+  `uncertain` by a retired classifier and two marked reviewed by the owner, which is the opposite
+  finding and the one that changed what the change was allowed to delete: the issue had described
+  those columns as "read and written by nothing" and they held records of his own judgement. The
+  third column in the same change was an optional nothing ever wrote, where null genuinely does mean
+  empty, so one query shape could not answer for both. Make the default a required argument of
+  whatever asks, so the easier question cannot be asked by accident)
+
 ## Honest failure
 
 - **L515. Cleanup placed in a `finally` is only reached by the paths that THROW**, so a process
