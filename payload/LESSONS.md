@@ -2640,3 +2640,18 @@ window is a count rather than a boundary.
   old days. The standstill alert that eventually fired advised checking Snowflake availability and
   the export credentials, both of which were fine, because the check never read the run outcomes
   that said `skipped-locked` in plain text)
+
+- **L255. A consumer that gates on an exact SET of accepted format versions turns the producer's
+  next additive bump into a total outage of itself**, because an unrecognised version is refused
+  WHOLE rather than read partially, and the consumer then reports EMPTY data that is
+  indistinguishable from the data genuinely being gone. Gate on a minimum and accept anything
+  above it wherever the format's own contract says changes are additive. Distinct from L113,
+  where a missing key takes a silent DEFAULT branch: here the whole payload is rejected, and the
+  rejection is correct behaviour for a gate that was simply written too narrow.
+  (overture#3193, 2026-08-27: `DownbeatBridge.supportedVersions` is `[1, 2]`, so Downbeat bumping
+  its shared export to v3 for a third consumer would make `loadWithHealth` return empty clients,
+  empty bookings and empty blockedDates, and the scout would stop suppressing nights Dan is
+  already shooting. The same repository had already learned this in `PrepResultsDecoder`, which
+  gates on `minimumVersion...supportedVersion` and carries a comment that an exact match gate
+  "was the brittle pattern that broke the results reader when its version bumped (#132)". The
+  fix was never generalised to the second decoder, which is L30 in the same codebase)
