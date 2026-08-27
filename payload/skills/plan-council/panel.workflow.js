@@ -182,8 +182,18 @@ const preflight = await agent(
   `Quick grounding probe for planning "${feature}". Project directory: ${a.projectDir || '(current working directory)'}.\n(1) Can you actually read this project's source files and its CLAUDE.md? Try listing/reading one or two.\n(2) Can you reach the live database schema via the Supabase MCP tools? Try one cheap call.\nReport a boolean for each plus a short note on anything you could NOT access. Be honest — a "false" here is valuable, not a failure.`,
   { label: 'preflight', phase: 'Preflight', schema: PREFLIGHT_SCHEMA }
 )
-if (!preflight.repoReadable || !preflight.schemaReachable) {
-  log(`GROUNDING GAP — repoReadable=${preflight.repoReadable} schemaReachable=${preflight.schemaReachable}: ${preflight.notes}. The plan will explicitly mark where it is ungrounded.`)
+// THREE states, not two. `agent()` returns null when the subagent dies on a terminal
+// API error after retries, and reading a field off that null used to crash the whole
+// run with "null is not an object", which names the wrong thing and loses every agent
+// that had not started (observed 2026-08-27: "Connection lost mid-response" during the
+// probe killed a six-role run before any panelist worked). A probe that NEVER RAN is
+// its own outcome and must not read as one that ran clean (L98, L11): the skill tells
+// the caller to warn the user on a grounding gap, so silence here would be reported as
+// verified reachability.
+if (!preflight) {
+  log(`PREFLIGHT DID NOT RUN: the probe agent died, usually a transient API error. Continuing, but reachability is UNVERIFIED rather than confirmed, and the plan must be reported that way.`)
+} else if (!preflight.repoReadable || !preflight.schemaReachable) {
+  log(`GROUNDING GAP: repoReadable=${preflight.repoReadable} schemaReachable=${preflight.schemaReachable}: ${preflight.notes}. The plan will explicitly mark where it is ungrounded.`)
 }
 
 const PASS_SCHEMA = {
