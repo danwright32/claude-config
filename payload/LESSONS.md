@@ -2684,3 +2684,20 @@ window is a count rather than a boundary.
   gates on `minimumVersion...supportedVersion` and carries a comment that an exact match gate
   "was the brittle pattern that broke the results reader when its version bumped (#132)". The
   fix was never generalised to the second decoder, which is L30 in the same codebase)
+
+- **L258. A consumer that acknowledges work by DELETING the record makes an absent record mean
+  both "consumed successfully" and "never written"**, so the producer can never detect a handoff
+  it failed to write, and no amount of looking at the queue will tell it. The usual crash safe
+  remedy of recording intent and confirming afterwards does not close this on its own, because
+  the intent marker has the same two step problem it was added to solve: set it before the write
+  and a crash leaves it claiming a record that does not exist, set it after and a crash leaves a
+  written record reading as unwritten. What closes it is the pair, a durable mark on the
+  producer's side that it wrote, plus a consumer that ignores an identifier it has already
+  consumed, and the second half has to actually exist before the first is built against it.
+  (downbeat#432, 2026-08-27: the Ovation handoff queue saves the Booking row and then writes the
+  queue file, two steps with no lock. Ovation deletes each file once it has saved the invoice, so
+  a booking lost to a crash between the two is invisible from Downbeat, and the seven day
+  retention sweep then removes it from both apps. Re-queueing anything with no file, the obvious
+  repair, would draft a duplicate invoice carrying a real invoice number for every booking
+  already consumed. Ovation PRD 36 commits to the consumed-identifier record that makes the
+  repair safe, citing L512, and it is not built yet)

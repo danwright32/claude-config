@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 277 lessons.
+LESSONS.md, which is NOT loaded into the session. 278 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -313,3 +313,4 @@ to decide something: the body is where the failure it came from is described.
 - L227. A limit cannot be raised on its own
 - L519. A repair, backfill or catch-up tool must not take the same exclusion lock as the live job it repairs
 - L255. A consumer that gates on an exact SET of accepted format versions turns the producer's next additive bump into a total outage of itself
+- L258. A consumer that acknowledges work by DELETING the record makes an absent record mean both "consumed successfully" and "never written"
