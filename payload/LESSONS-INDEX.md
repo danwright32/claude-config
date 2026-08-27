@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 276 lessons.
+LESSONS.md, which is NOT loaded into the session. 277 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -88,6 +88,7 @@ to decide something: the body is where the failure it came from is described.
 - L252. A test asserting a decision that has since been REVERSED stops being coverage and becomes the guard DEFENDING the rejected behaviour, so a reversal must hunt those tests down across every file and DELETE them rather than adjust them, because their whole content is the thing being removed.
 - L253. A detector whose signature is a small TIME GAP between two stored instants is answered by any single write that stamps both from one clock variable, so the gap measures the WRITE rather than the events, and such a row must be told apart by evidence of that write (a third field carrying the same instant) rather than by treating the suspicious value as noise.
 - L254. A control whose press only RECORDS a request, while the work happens later in a shared batch, must not have its progress timed from the press against a window sized for the work, because that window then spans a queue wait the control does not govern and accuses a healthy run of being stuck.
+- L257. A check that decides whether a value is VALID by listing the values that are NOT valid (a sentinel blacklist, a set of known placeholders) admits every malformed value nobody thought to list, and because it is named for the question it appears to answer, every call site treats it as real validation.
 
 ## Data safety
 

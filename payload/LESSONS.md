@@ -847,6 +847,20 @@ window is a count rather than a boundary.
   L106, which is the same confusion the other way round: there a live signal proves only its emitter
   is alive, here an elapsed clock is read as proof of what the work is doing)
 
+- **L257. A check that decides whether a value is VALID by listing the values that are NOT valid
+  (a sentinel blacklist, a set of known placeholders) admits every malformed value nobody thought
+  to list, and because it is named for the question it appears to answer, every call site treats
+  it as real validation.** Judge the value against the SHAPE its consumer can actually parse
+  instead, so an unlisted bad value is refused where it is entered rather than carried onward.
+  Related to L150, which catches a writer LOOSER than its reader; this catches the looseness
+  hiding inside something that reads as a validator. (postroll#899: `isRealHandle` rejected only
+  `unknown`, `n/a`, `na`, `none`, `-`, `no` and `skip`, so a dance company whose Instagram handle
+  field held its own name, `DPR Dance`, passed as a real handle at all six call sites, went into
+  the caption prompt as a handle to mention, and was written into a caption bound for Instagram
+  where `@DPR` resolves to a stranger. The credit checker's own regex, `@[A-Za-z0-9._]+`, is the
+  shape that should have been asked for, and it then reported the pipeline's own bad value as a
+  handle the model had invented)
+
 ## Data safety
 
 - **L206. A tool mode whose NAME reads like an inspection (reach, check, status, list,
