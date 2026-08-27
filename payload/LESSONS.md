@@ -832,6 +832,21 @@ window is a count rather than a boundary.
   L203, which is the same coincidence read the other way round: there, near simultaneous events in a
   log read as a mechanism; here, one write reads as two events)
 
+- **L254. A control whose press only RECORDS a request, while the work happens later in a shared
+  batch, must not have its progress timed from the press against a window sized for the work,
+  because that window then spans a queue wait the control does not govern and accuses a healthy
+  run of being stuck.**
+  (overture#3186: a card's "Check again" button sets a flag and nothing else; the research arrives
+  from the next batch run, which can carry any number of shows and may not start for a while. The
+  row's spinner counted from the press against a flat ten minutes drawn from what one lookup costs,
+  so the clock covered three different things at once: the wait for a run to start, the depth of
+  whatever run picked it up, and the lookup itself. The sibling surface had just been fixed to scale
+  its window with the run's depth, and this one was explicitly scoped OUT on the reasoning that a
+  row's re-check is one lookup, which reads as obviously true and is about the REQUEST rather than
+  about the work. The tell is that the control cannot name the run it is waiting for. Related to
+  L106, which is the same confusion the other way round: there a live signal proves only its emitter
+  is alive, here an elapsed clock is read as proof of what the work is doing)
+
 ## Data safety
 
 - **L206. A tool mode whose NAME reads like an inspection (reach, check, status, list,
