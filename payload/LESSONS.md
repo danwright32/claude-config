@@ -2701,3 +2701,18 @@ window is a count rather than a boundary.
   repair, would draft a duplicate invoice carrying a real invoice number for every booking
   already consumed. Ovation PRD 36 commits to the consumed-identifier record that makes the
   repair safe, citing L512, and it is not built yet)
+
+- **L259. An escape hatch that switches a gate OFF is inherited by every process that command
+  starts, including the gate's OWN self-test**, so reaching for it silently reduces the checking
+  that polices the very gate being escaped, at the one moment somebody has already decided to
+  push past a refusal. The variable is written to mean "skip this gate for this push" and is
+  read by anything downstream that consults it, which includes the harness that drives the gate
+  as a subprocess and asserts it BLOCKS. Scope it where the gate is invoked, and have any
+  harness driving that gate UNSET it, setting it back explicitly only for the cases that are
+  about the override. Distinct from L504, which is a test inheriting ambient configuration in
+  general: this is a bypass flag having a blast radius wider than the single gate it names.
+  (downbeat#433, 2026-08-27: `scripts/test-pre-push-hook.sh` reports 36 passed and 0 failed on a
+  clean environment, and 15 passed with 21 failed under `SKIP_TEST_RUN=1`, so the documented one
+  push escape hatch switches off 21 of the checks verifying the gate it escapes. Found because
+  the identical shape had just bitten a newly written gate's harness, where `env -u` fixed it;
+  the class was only visible by asking whether the older harnesses had the same hole)
