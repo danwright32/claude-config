@@ -1029,6 +1029,21 @@ window is a count rather than a boundary.
   empty, so one query shape could not answer for both. Make the default a required argument of
   whatever asks, so the easier question cannot be asked by accident)
 
+- **L260. Two outcomes a guard gives distinct MESSAGES but the same CONSEQUENCE are one outcome
+  in practice**, because nothing downstream reads the wording, so a state that needs somebody to
+  act must change what the guard DOES and not only what it says. (downbeat#430, #435: a push gate
+  comparing this repo's export version against a consumer in another repository had two carefully
+  separated answers for "no Overture checkout on this machine" and "Overture is here and its
+  version gate could not be found", the second being the alarming one, since the check had gone
+  blind to a consumer that still exists and that somebody is evidently in the middle of changing.
+  Both printed a paragraph and both exited 0. The issue filed against it described the two as
+  "indistinguishable in their effect", which was exactly right and was not what the code looked
+  like: read the source and the two branches are visibly different, each with its own sentence,
+  which is what made it read as handled. The fix was not more wording, it was making the blind
+  case block, with the existing one-command override as the way past it. L11 asks for distinct
+  messages and L98 for an absent answer not to read as a pass; both were already satisfied here,
+  and neither noticed that the two states were the same event to everything except a reader)
+
 ## Honest failure
 
 - **L515. Cleanup placed in a `finally` is only reached by the paths that THROW**, so a process
