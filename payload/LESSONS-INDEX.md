@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 280 lessons.
+LESSONS.md, which is NOT loaded into the session. 281 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -186,6 +186,7 @@ to decide something: the body is where the failure it came from is described.
 - L204. When a change removes an invariant other code silently relied on (only one of these can be alive, this only runs on one thread, this id is unique), find every reliance by searching for the invariant itself rather than by reasoning about the feature, because the reliance is usually recorded only in a comment that reads as reassurance and the code it justifies becomes actively destructive the moment the invariant goes.
 - L510. Code that recomputes part of an object must override the fields it changes on a COPY of the original, never rebuild the object from a list of the fields it happens to know about, because every field added later is then silently dropped and the loss surfaces far away as a blank rather than as an error.
 - L521. A lookup that requires exactly one match must treat MANY matches as its own refusal, never as absence
+- L261. Several behaviours a design treats as ONE condition (this run is not real, this tenant is internal, this build is disposable) must all read ONE predicate
 
 ## Security and privacy
 

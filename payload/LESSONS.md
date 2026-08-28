@@ -1730,6 +1730,21 @@ window is a count rather than a boundary.
   the real rep read clean. The sync refused two-names-one-row but never the mirror
   one-name-two-rows its own matcher had just detected.)
 
+- **L261. Several behaviours a design treats as ONE condition (this run is not real, this
+  tenant is internal, this build is disposable) must all read ONE predicate**, because separate
+  predicates drift into disagreement in silence and the safety reasoning written for one then
+  ships attached to the other. (downbeat#436: "this launch is not a real one" drove two
+  behaviours. The database asked `isRunningUnderTests()` and the Ovation invoice queue asked
+  `isDebugBuild`, and nothing anywhere put the two side by side. A Debug run from Xcode is not a
+  test process, so it opens the REAL database while its invoice records go to a throwaway
+  directory the consumer never reads: a real booking, with real folders, real tasks and real
+  calendar events, structurally guaranteed never to be invoiced. The comment justifying the
+  queue split had been written as though both gates were the same one, asserting "launched from
+  Xcode with a throwaway in-memory store, so anything it commits is fictional", which was never
+  true of any build. Nothing could have caught it, because each gate is correct read alone and
+  the contradiction exists only between two files. L32 covers a doc that has gone stale and L204
+  an invariant a change removed; this is neither, the two gates were never the same)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
