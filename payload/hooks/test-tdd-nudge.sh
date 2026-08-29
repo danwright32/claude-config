@@ -24,13 +24,13 @@ out="$(printf '{}' | "$HOOK" 2>/dev/null)"
 status=$?
 check "the hook exits 0" "$status"
 
-printf '%s' "$out" | grep -qF 'superpowers:test-driven-development'
+grep -qF 'superpowers:test-driven-development' <<< "$out"
 check "it still names the test-first skill" $?
 
-printf '%s' "$out" | grep -qF '## Test speed'
+grep -qF '## Test speed' <<< "$out"
 check "it points a coding turn at the Test speed lessons section" $?
 
-printf '%s' "$out" | grep -qF 'LESSONS-INDEX.md'
+grep -qF 'LESSONS-INDEX.md' <<< "$out"
 check "it names the index the section is read from" $?
 
 # The section it names must exist in the lessons file, or the pointer is a dead link that
@@ -40,7 +40,7 @@ check "LESSONS.md actually has a '## Test speed' section" $?
 
 # No dashes as punctuation and no emoji in what every prompt receives (the style rule applies
 # to generated output, and this text lands in every session).
-if printf '%s' "$out" | grep -q $'—\|–'; then check "no em or en dash in the injected text" 1
+if grep -q $'\u2014\|\u2013' <<< "$out"; then check "no em or en dash in the injected text" 1
 else check "no em or en dash in the injected text" 0; fi
 
 echo "passed: $PASS, failed: $FAIL"

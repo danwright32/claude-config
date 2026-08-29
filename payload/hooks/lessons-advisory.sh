@@ -168,7 +168,9 @@ for i in "${!TRIG_IDS[@]}"; do
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     if [ -n "${TRIG_PATH[$i]}" ]; then
-      printf '%s' "$f" | grep -Eq -- "${TRIG_PATH[$i]}" || continue
+      # A here-string, not a pipe: `printf | grep -q` is the short circuit class this hook was
+      # once silenced by (L183), and the repo's ratchet refuses a new one.
+      grep -Eq -- "${TRIG_PATH[$i]}" <<< "$f" || continue
     fi
     lines="$(printf '%s\n' "$added" | awk -F'\t' -v want="$f" '$1 == want { print $2 }')"
     # Written to a file and matched from there, rather than piped in from a printf. This runs under
