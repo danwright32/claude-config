@@ -521,6 +521,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   (slate#1365: an on demand availability search timed at 2.9s against a deliberately dark
   roster, where every pass returned before touching a single calendar)
 
+- **L289. A fast path that falls back to doing the work when it cannot read its own record
+  (a cache, a memo, a skip if unchanged gate) fails SILENTLY, because the fallback is
+  correct and merely slower, so every test stays green while the saving quietly stops
+  happening.** Any change to that record's format needs a test asserting the fast path
+  still FIRES, not merely that the work still passes. (downbeat#471: adding a test count as
+  a third field to the green suite memo broke the reader, which used `read -r fingerprint
+  stored_at` and so absorbed "1788042511 3281" into the timestamp and rejected it as
+  corrupt; every push then re-ran a full suite it had just been told was green, which is
+  the exact cost the memo exists to avoid, and it was inside the milestone whose whole
+  subject was what a push waits for. The memo file was present, the fingerprint matched and
+  could be shown to match by hand, the count was recorded correctly, all 43 guard scripts
+  passed and the suite was green. It was found only by asking why the gate said it was
+  running the suite on a push where nothing had changed)
+
 - **L104. A filter that identifies data by its SHAPE (a redaction regex, a content
   classifier, a profanity or spam rule) must be tested against the content it has to
   PRESERVE, not only against the content it has to catch, because the shape it matches is
