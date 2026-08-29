@@ -39,6 +39,7 @@ SPOOL = os.environ.get("CLAUDE_ISSUE_SPOOL_DIR") or os.path.expanduser("~/.claud
 PROJECTS = os.environ.get("CLAUDE_PROJECTS_DIR") or os.path.expanduser("~/.claude/projects")
 LIB = os.environ.get("CLAUDE_ISSUE_SPOOL_LIB") or os.path.join(HERE, "lib", "issue-spool.sh")
 HOME = os.environ.get("CLAUDE_MIGRATE_HOME") or os.path.expanduser("~")
+EXAMPLE_DIRS = 10   # how many distinct unplaceable directories to name
 
 
 def key_for_project(project_dir, cache={}):
@@ -117,6 +118,7 @@ def plan():
     moves = collections.defaultdict(list)   # destination key -> record lines
     keeps = {}                              # source file -> lines that stay
     stay = collections.Counter()
+    unplaceable = collections.Counter()      # the directories nothing could place, by path
     placed_by = collections.Counter()       # which route found each record a home
     already = [0]                           # found a home, and was already in it
     for path in sorted(glob.glob(os.path.join(SPOOL, "*.jsonl"))):
@@ -144,19 +146,28 @@ def plan():
                 home = project_for_cwd(rec.get("cwd") if isinstance(rec, dict) else None,
                                        PROJECTS)
                 if not home:
-                    kept.append(line); stay["directory matched no project"] += 1; continue
+                    kept.append(line)
+                    stay["directory matched no project"] += 1
+                    # Keep the DIRECTORY, not just the tally. A count cannot say
+                    # whether these are deleted worktrees, paths from another
+                    # machine, or something nobody has thought of, and guessing
+                    # that from a number is how the first two attempts at this
+                    # went wrong.
+                    unplaceable[(rec.get("cwd") if isinstance(rec, dict) else None)
+                                or "(no directory recorded)"] += 1
+                    continue
                 placed_by["directory"] += 1
             dst = key_for_project(home)
             if dst == src_key:
                 kept.append(line); already[0] += 1; continue
             moves[dst].append(line)
         keeps[path] = kept
-    return moves, keeps, stay, placed_by, already[0]
+    return moves, keeps, stay, placed_by, already[0], unplaceable
 
 
 def main():
     apply = "--apply" in sys.argv
-    moves, keeps, stay, placed_by, already = plan()
+    moves, keeps, stay, placed_by, already, unplaceable = plan()
     total = sum(len(v) for v in moves.values())
     before = sum(len(v) for v in keeps.values()) + total
 
@@ -169,6 +180,17 @@ def main():
     print("  found a home by:", dict(placed_by) or "{}")
     print("  already in the right place:", already)
     print("  could not be placed:", dict(stay) or "{}")
+    if unplaceable:
+        # A sample, one line per distinct directory, capped: a spool with
+        # hundreds of these has to stay readable or nobody reads any of it.
+        shown = unplaceable.most_common(EXAMPLE_DIRS)
+        print("  directories nothing could place (%d distinct, showing %d):"
+              % (len(unplaceable), len(shown)))
+        for d, n in shown:
+            state = "still there" if os.path.isdir(d) else "gone"
+            print("    %4d x  [%s]  %s" % (n, state, d))
+        if len(unplaceable) > len(shown):
+            print("    ...and %d more distinct director(ies)." % (len(unplaceable) - len(shown)))
     print("  moving:", total)
     # The routes must account for every record that found a home, and no record
     # may be counted on two of these lines. Printed rather than assumed, because

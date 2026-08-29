@@ -295,6 +295,46 @@ contains "COUNTS DO NOT ADD UP" "$out_tally" \
   && check "the placement tally adds up" "it does not: ${out_tally: -300}" \
   || check "the placement tally adds up" ok
 
+# ---------------------------------------------------------------------------
+# A record that cannot be placed must SHOW why, not just be counted.
+#
+# Measured on the second Mac, 2026-08-29: 119 records carried no session id at
+# all and 118 of those matched no project folder either, so the fallback rescued
+# one. A count alone cannot say whether those directories are worktrees that
+# were deleted, paths from another machine, or something nobody has thought of,
+# and guessing at it from a number is how the previous two attempts at this went
+# wrong. The tool names the directories instead.
+# ---------------------------------------------------------------------------
+seed_cwd
+rm -rf "$CLAUDE_PROJECTS_DIR/$ENC_REPO"
+out_ex="$(python3 "$MIGRATE" 2>&1)"
+contains "$CLAUDE_MIGRATE_HOME/elsewhere" "$out_ex" \
+  && check "the dry run names a directory it could not place" ok \
+  || check "the dry run names a directory it could not place" "out=${out_ex: -400}"
+
+# It must also say whether that directory is still on disk, because a path that
+# no longer exists (a deleted worktree) and one that exists but was never opened
+# as a project are different problems with different answers.
+contains "gone" "$out_ex" \
+  && check "the dry run says whether the directory still exists" ok \
+  || check "the dry run says whether the directory still exists" "no existence marker in ${out_ex: -400}"
+
+# The examples are a sample, not a dump: one line per distinct directory, capped,
+# so a spool with hundreds of unplaceable records stays readable.
+i=0
+while [ "$i" -lt 30 ]; do
+  rec_cwd "" "$CLAUDE_MIGRATE_HOME/nowhere-$i" "unplaceable $i" >> "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+  i=$((i + 1))
+done
+out_many="$(python3 "$MIGRATE" 2>&1)"
+ex_lines=0
+while IFS= read -r l_ex; do
+  case "$l_ex" in *"nowhere-"*) ex_lines=$((ex_lines + 1)) ;; esac
+done <<< "$out_many"
+[ "$ex_lines" -gt 0 ] && [ "$ex_lines" -le 12 ] \
+  && check "the examples are capped rather than dumped" ok \
+  || check "the examples are capped rather than dumped" "$ex_lines example lines"
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
