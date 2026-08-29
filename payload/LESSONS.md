@@ -7,6 +7,19 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is
+  written, because a hard-coded setTimeout forces every end-to-end test that crosses it to wait
+  for real.** A test that records the delays the code asked for is both instant and stronger than
+  one that survives them: it asserts the schedule (500 then 1000) rather than the fact of a wait,
+  and it cannot become the suite's slowest test or its first flake under load. Retrofitting the
+  seam works, but building it in means never paying the tax.
+  (bidspoke#1063, 2026-08-29: the three slowest tests in the worker suite each sat at exactly
+  1,500ms, the engine's default backoff lived through for real, because engine/retry.ts sleeps
+  through a private setTimeout with no seam; the retry tests that call withRetry directly already
+  used fake timers, the three that go through the engine could not. PET carries about 11 seconds
+  of the same shape for the same reason; Slate carries none because every retry path there takes
+  a clock.)
+
 - **L224. A check that compares elapsed time against a FIXED number is a check on what else the
   machine is running, so compare it against a duration measured in the same run.** External load
   makes it fail on commits that changed nothing, and raising the threshold to stop that removes the
@@ -2704,6 +2717,17 @@ window is a count rather than a boundary.
   only by reading both while fixing something else)
 
 ## Cross-system reliability
+
+- **L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state (an
+  open that is also a close, a mute that is also an unmute) is inverted by the second attempt,
+  and the loop can report success while leaving the state nobody asked for.** Retry only
+  idempotent bodies: test whether the target state already holds before acting, or move the
+  toggle outside the loop and retry only the wait. Raising the inner timeout only moves the load
+  level at which it races, which is why this survives being "fixed" once.
+  (project-enrollment-tracker#1161, 2026-08-29: a browser test wrapped focus, press Enter and
+  "the picker exists" in a toPass loop. Under load the picker took longer than the inner 600ms
+  to appear, so the attempt failed, the loop pressed Enter again on a picker that was now open,
+  and the assertion after the loop found nothing on the page)
 
 - **L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a
   high water mark) needs a targeted redo path built in from the start whenever anything

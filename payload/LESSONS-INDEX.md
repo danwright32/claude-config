@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 295 lessons.
+LESSONS.md, which is NOT loaded into the session. 297 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -9,6 +9,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Proof over green
 
+- L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is written, because a hard-coded setTimeout forces every end-to-end test that crosses it to wait for real.
 - L224. A check that compares elapsed time against a FIXED number is a check on what else the machine is running, so compare it against a duration measured in the same run.
 - L215. A reader that answers with an EMPTY collection when its own accessor throws is indistinguishable from a correct reader of an empty collection, and because the swallowing construct usually sits INSIDE the loop, one element of an unexpected shape empties the whole result.
 - L216. When two independent readings of the same input disagree, a disagreement rate that is CONCENTRATED and TOTAL, near 100% on a few named fields and near 0% on the rest, indicts the pipeline rather than the input, because a genuine data problem is spread out and partial.
@@ -305,6 +306,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Cross-system reliability
 
+- L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state (an open that is also a close, a mute that is also an unmute) is inverted by the second attempt, and the loop can report success while leaving the state nobody asked for.
 - L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a high water mark) needs a targeted redo path built in from the start whenever anything downstream requires completeness
 - L240. A background job killed in the same breath it is started can outlive the kill, because the signal can arrive before the job has finished starting, and a `wait` on it then blocks for that job's whole lifetime while every assertion still passes.
 - L235. A background process inherits the stdout it was started with, so one still running holds a `$(...)` capture or a runner's pipe open long after its parent has exited, and the caller then waits for the CHILD rather than for the work.
