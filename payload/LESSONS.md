@@ -940,6 +940,17 @@ window is a count rather than a boundary.
   baseline gate built for this could not parse the new format and said so in a line nobody read.
   Found by the 2026-08-29 test speed audit across nine repos)
 
+- **L320. A tool that takes a target as an argument must REFUSE one it cannot use, never fall back
+  to its default scope, because a silently ignored target makes a run about everything look exactly
+  like a run about the one thing that was asked for.** The output is full of real passing work, so
+  nothing on screen says the question was changed, and the reader takes the verdict as being about
+  their target. It has bitten in both directions: an argument DROPPED, and an argument FORWARDED to
+  an inner command that did not understand it either.
+  (Overture#3245, 2026-08-29: `run-shell-fixtures.sh` globs its own list and ignores its arguments,
+  so a run asked for one fixture ran all 81 and reported on them; earlier, Overture#2993, `mutate.sh`
+  passed a misplaced `--at` through as a test scope, xcodebuild rejected it as an unknown option and
+  ran the PURE suite instead, so a targeted proof became a full-suite run with the aim check off)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key

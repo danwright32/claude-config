@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 344 lessons.
+LESSONS.md, which is NOT loaded into the session. 345 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -95,6 +95,7 @@ to decide something: the body is where the failure it came from is described.
 - L257. A check that decides whether a value is VALID by listing the values that are NOT valid (a sentinel blacklist, a set of known placeholders) admits every malformed value nobody thought to list, and because it is named for the question it appears to answer, every call site treats it as real validation.
 - L278. A check that decides whether content was LOST by comparing whole LINES is defeated by reformatting, because re-wrapping a paragraph changes every line boundary while losing no words, so compare in the unit the meaning lives in (words, or a whitespace collapsed body) rather than the unit the file happens to be stored in.
 - L288. A test run is judged first by the count it EXECUTED against the count expected, and only then by its failures, because a run that loses a worker's share or matches half a selection still prints a verdict, and a check for zero catches none of it. Record the expected count, refuse a run below it, and do that BEFORE any change to how the suite runs (parallel workers, sharding, a new scheme or reporter), which is the moment the half run appears.
+- L320. A tool that takes a target as an argument must REFUSE one it cannot use, never fall back to its default scope, because a silently ignored target makes a run about everything look exactly like a run about the one thing that was asked for.
 
 ## Data safety
 
