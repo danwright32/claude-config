@@ -2520,6 +2520,21 @@ window is a count rather than a boundary.
   measured the day before. Claude read that line and repeated it to Dan as fact in the same
   session it was found, which is the harm the lesson names)
 
+- **L262. A constraint that has only ever been satisfied as a side effect of somebody doing the
+  work by hand is recorded nowhere and checked by nothing, so the first time that work is
+  GENERATED rather than placed the constraint silently stops holding, and every existing check
+  passes because each one was written against the hand made cases.** The constraint is invisible
+  precisely because it has never once been violated: there was no moment at which anyone had to
+  state it, so it lives in the muscle memory of whoever positioned each instance and in no
+  artifact at all. Distinct from L96 and L129, which are about a rule that IS written down and
+  whose coverage has holes: here nothing was ever written, and the generated case is not an
+  omission from a list, it is the first member of a category the list was never asked about.
+  (postroll#921: five full frame templates are laid out by hand and each clears the band
+  Instagram lays its caption over, so the phone chrome check only ever measured TEXT. The collage
+  is the one template whose arrangement the program picks, and its pool included one that put
+  three of seven photographs behind the caption. The picture file was correct, every test was
+  green, and it was found only by drawing the phone chrome over a render by hand)
+
 ## Cross-system reliability
 
 - **L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a
