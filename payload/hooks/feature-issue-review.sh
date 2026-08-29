@@ -54,6 +54,33 @@ if [ -f "$SPOOL_LIB" ]; then
   if bash "$SPOOL_LIB" has-findings "$proj" >/dev/null 2>&1; then urgent="yes"; fi
 fi
 
+# One failure reason has no remedy at all: an agent spawned by another agent
+# names a transcript that is never written, so the harvest can never read it.
+# The spool holds those back from every review (see MUTED_ERROR_REASONS) because
+# a notice carrying no action, delivered every turn, is what teaches a person to
+# skip the whole review. Holding them back is only honest if the fault still
+# surfaces, so the count rides along with whatever review speaks next once a
+# week has passed.
+#
+# It never MAKES a review speak. `urgent` above is untouched, for the same
+# reason it excludes ordinary failures: a fault nobody can act on must not be
+# able to interrupt a turn.
+MUTED_REPORT_SECONDS="${CLAUDE_ISSUE_MUTED_REPORT_SECONDS:-604800}"  # 7 days
+muted_stamp="${TMPDIR:-/tmp}/claude-feature-issue-muted-$(printf '%s' "$proj" | shasum | cut -c1-12).stamp"
+muted_line=""
+if [ -f "$SPOOL_LIB" ]; then
+  muted_last=0
+  [ -f "$muted_stamp" ] && muted_last=$(cat "$muted_stamp" 2>/dev/null || echo 0)
+  case "$muted_last" in ''|*[!0-9]*) muted_last=0 ;; esac
+  if [ $(( $(date +%s) - muted_last )) -ge "$MUTED_REPORT_SECONDS" ]; then
+    muted_line=$(bash "$SPOOL_LIB" muted-summary "$proj" 2>/dev/null) || muted_line=""
+  fi
+fi
+if [ -n "$muted_line" ]; then
+  if [ -n "$pending" ]; then pending="$pending
+$muted_line"; else pending="$muted_line"; fi
+fi
+
 # Throttle: only re-prompt once per cooldown window, tracked per project.
 COOLDOWN_SECONDS=1800  # 30 minutes
 hash=$(printf '%s' "$proj" | shasum | cut -c1-12)
@@ -106,6 +133,14 @@ if [ -n "$injected" ]; then
   # remains is a review interrupted before it is read, which files one unseen.
   if [ -n "$pending" ] && [ -f "$SPOOL_LIB" ]; then
     bash "$SPOOL_LIB" file-errors "$proj" >/dev/null 2>&1 || true
+  fi
+  # The held-back records are settled and the week restarted ONLY when their
+  # count actually went out with this review. Doing either on a review that
+  # could not be delivered would lose the report AND silence the next week of
+  # them, which is the one way holding them back could hide a fault for good.
+  if [ -n "$muted_line" ] && [ -f "$SPOOL_LIB" ]; then
+    bash "$SPOOL_LIB" file-muted "$proj" >/dev/null 2>&1 || true
+    printf '%s' "$(date +%s)" > "$muted_stamp" 2>/dev/null || true
   fi
 else
   printf '%s' "$payload"

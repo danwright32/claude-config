@@ -29,8 +29,12 @@
 #   issue-spool.sh has-findings <dir>          exit 0 only if a real finding is pending
 #   issue-spool.sh archive      <dir>          everything already filed
 #   issue-spool.sh clear        <dir>          move pending into the archive
-#   issue-spool.sh file-errors  <dir>          file ONLY the harvest failures,
-#                                              once they have been reported
+#   issue-spool.sh file-errors  <dir>          file ONLY the harvest failures
+#                                              that were shown, once reported
+#   issue-spool.sh file-muted   <dir>          file the held-back failures, once
+#                                              their periodic count has gone out
+#   issue-spool.sh muted-summary <dir>         the periodic count of held-back
+#                                              failures; exit 1 if none
 #
 # `raw` and `archive` exit 0 on an empty spool. They used to exit non-zero,
 # which kills any caller running under errexit on the ordinary empty case, and
@@ -49,6 +53,23 @@ ARCHIVE_MAX_RECORDS="${CLAUDE_ISSUE_SPOOL_ARCHIVE_MAX:-5000}"
 # How large the PENDING file may grow before it is compacted. Findings are
 # never dropped by that; only records that repeat are folded together.
 PENDING_MAX_RECORDS="${CLAUDE_ISSUE_SPOOL_PENDING_MAX:-500}"
+
+# Failure reasons that are reported as a periodic COUNT rather than on every
+# review. One reason qualifies: an agent spawned by another agent fires
+# SubagentStop naming a transcript that is never written, anywhere, so the
+# harvest can never succeed and there is nothing anybody can do about it.
+# Measured 2026-08-29: 235 of one project's 236 pending failures and all 62 of
+# another's were this single reason, and it reached the end of almost every
+# turn. A notice carrying no action, printed every time, is what teaches a
+# person to skip the whole review, so it is held back and counted.
+#
+# This list is deliberately tiny and deliberately EXACT. Every other reason
+# keeps printing every time, because the rest are real faults: the same
+# measurement found a "the harvest model exited 1" in the same file, and a mute
+# written as "hide the failures" rather than "hide THIS failure" would have
+# buried it (L104). Newline separated; override for a test, not to add to it
+# casually.
+MUTED_ERROR_REASONS="${CLAUDE_ISSUE_SPOOL_MUTED_REASONS:-the named agent transcript does not exist}"
 
 # The key must survive a worktree. An agent usually runs in .claude/worktrees/<x>,
 # whose path hashes differently from the checkout the session reading the spool
@@ -180,10 +201,11 @@ print(json.dumps({
 issue_spool_pending() { # pending <dir>  -> exit 1 when there is nothing to show
   local file; file="$(issue_spool_path "$1")"
   [ -s "$file" ] || return 1
-  python3 - "$file" <<'PY'
-import json, sys
+  CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" <<'PY'
+import json, os, sys
 
 MAX_FINDINGS = 200
+MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
 
 shown = 0
 seen = set()
@@ -218,6 +240,11 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         # otherwise appends a fresh record every time, the spool is never empty,
         # and the review would carry N copies of one line.
         reason = rec.get("error") or "no reason recorded"
+        # A reason with no remedy is held back for the periodic count instead of
+        # being printed here. It stays in the spool: held back is not discarded,
+        # and `muted-summary` reads these same records.
+        if reason in MUTED:
+            continue
         e = errors.setdefault(reason, {"count": 0, "agents": set(), "last": "?"})
         e["count"] += rec.get("count", 1)
         e["agents"].add(where)
@@ -276,6 +303,51 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         sys.exit(0)
 sys.exit(1)
 PY_HF
+}
+
+# The periodic count for the failures `pending` holds back. Reads the SAME
+# records `pending` skips, so the two cannot disagree about what is muted, and
+# sums each record's folded `count` rather than counting lines: compaction folds
+# repeats into one record carrying the true total, and counting lines would
+# understate the fault by exactly the amount compaction tidied away.
+#
+# Exits 1 when nothing is held back, so a caller can tell "still happening" from
+# "stopped" rather than printing a reassuring zero (L98).
+issue_spool_muted_summary() { # muted-summary <dir> -> exit 1 when nothing is held back
+  local file; file="$(issue_spool_path "$1")"
+  [ -s "$file" ] || return 1
+  CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" <<'PY_MUTED'
+import json, os, sys
+
+MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
+total = 0
+first = None
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    if not isinstance(rec, dict) or rec.get("status") != "error":
+        continue
+    if (rec.get("error") or "no reason recorded") not in MUTED:
+        continue
+    total += rec.get("count", 1)
+    ts = rec.get("ts")
+    if ts and (first is None or ts < first):
+        first = ts
+
+if not total:
+    sys.exit(1)
+print("HARVEST UNREADABLE: %d agent harvest(s) could not be read since %s. These are agents "
+      "spawned by other agents, which leave no transcript anywhere to read, so there is nothing "
+      "to fix and nothing for you to do. This is a periodic count, not a new problem, and it is "
+      "held back from every other review so it does not become noise."
+      % (total, first or "an unrecorded time"))
+sys.exit(0)
+PY_MUTED
 }
 
 # Filing RENAMES the pending file out of the way first, then drains the renamed
@@ -345,8 +417,22 @@ issue_spool_cap_archive() { # cap-archive <archive-file>
 # destroyed, and filing runs exactly when agents are finishing. After the rename
 # an appender is writing to a fresh file, and the records kept back are APPENDED
 # to whatever is there rather than written over it.
+# Both filing paths are ONE implementation with one predicate, because they are
+# the same delicate rename-then-drain and a second copy of it would drift in the
+# half nobody re-reads. `errors` files the failures a review actually carried;
+# `muted` files the held-back ones, and only once their periodic count has gone
+# out.
 issue_spool_file_errors() { # file-errors <dir>
-  local file archive staged keep errs
+  issue_spool_file_subset "$1" errors
+}
+
+issue_spool_file_muted() { # file-muted <dir>
+  issue_spool_file_subset "$1" muted
+}
+
+issue_spool_file_subset() { # file-subset <dir> <errors|muted>
+  local file archive staged keep errs mode
+  mode="${2:-errors}"
   file="$(issue_spool_path "$1")"
   archive="$(issue_spool_archive_path "$1")"
   [ -s "$file" ] || return 0
@@ -360,10 +446,11 @@ issue_spool_file_errors() { # file-errors <dir>
   # append can be tested here rather than raced for.
   [ -n "${CLAUDE_ISSUE_SPOOL_MIDCLEAR:-}" ] && eval "${CLAUDE_ISSUE_SPOOL_MIDCLEAR}"
 
-  if ! python3 - "$staged" "$keep" "$errs" <<'PY_SPLIT'
-import json, sys
+  if ! CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$staged" "$keep" "$errs" "$mode" <<'PY_SPLIT'
+import json, os, sys
 
-src, keep_path, err_path = sys.argv[1], sys.argv[2], sys.argv[3]
+src, keep_path, err_path, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
 
 with open(keep_path, "w", encoding="utf-8") as keep, \
      open(err_path, "w", encoding="utf-8") as errs:
@@ -376,7 +463,14 @@ with open(keep_path, "w", encoding="utf-8") as keep, \
         except Exception:
             keep.write(stripped + "\n")     # unreadable: nobody has classified it
             continue
+        take = False
         if isinstance(rec, dict) and rec.get("status") == "error":
+            is_muted = (rec.get("error") or "no reason recorded") in MUTED
+            # A muted failure was never shown, so filing it here would settle
+            # something nobody read AND reset the count the periodic line
+            # reports, making a continuing fault look like one that stopped.
+            take = is_muted if mode == "muted" else not is_muted
+        if take:
             errs.write(stripped + "\n")
         else:
             keep.write(stripped + "\n")
@@ -416,6 +510,8 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     archive)      f="$(issue_spool_archive_path "${1:-$PWD}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
     clear)        issue_spool_clear "${1:-$PWD}" ;;
     file-errors)  issue_spool_file_errors "${1:-$PWD}" ;;
+    file-muted)   issue_spool_file_muted "${1:-$PWD}" ;;
+    muted-summary) issue_spool_muted_summary "${1:-$PWD}" ;;
     *)            echo "issue-spool.sh: unknown command '${cmd}'" >&2; exit 2 ;;
   esac
 fi

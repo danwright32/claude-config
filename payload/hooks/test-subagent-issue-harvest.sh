@@ -755,9 +755,9 @@ reset_spool
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 bash "$SPOOL_LIB" note "$REPO" "a finding that must survive compaction" "early agent" >/dev/null 2>&1
 for i in $(seq 1 60); do
-  bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+  bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the harvest model exited 1"}' >/dev/null 2>&1
 done
-CLAUDE_ISSUE_SPOOL_PENDING_MAX=20 bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+CLAUDE_ISSUE_SPOOL_PENDING_MAX=20 bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the harvest model exited 1"}' >/dev/null 2>&1
 remaining="$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -c . || true)"
 [ "$remaining" -lt 40 ] \
   && check "the pending file is compacted once it grows" ok \
@@ -772,6 +772,148 @@ spool_says "a finding that must survive compaction" \
 spool_says "61 times" \
   && check "compaction preserves the true failure count" ok \
   || check "compaction preserves the true failure count" "count wrong: $(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep 'HARVEST FAILED' | cut -c1-90)"
+
+# ---------------------------------------------------------------------------
+# Muting the one failure reason that has no remedy.
+#
+# A nested subagent leaves no transcript anywhere, so its harvest can never
+# succeed and there is no action attached to being told. Measured 2026-08-29:
+# 235 of PET's 236 pending failures and all 62 of Bidspoke's were this one
+# reason, and it reached the end of almost every turn. A notice nobody can act
+# on, printed every time, is the noise that teaches the whole review to be
+# skipped, so this reason alone is held back and reported as a periodic count.
+#
+# EVERY OTHER REASON KEEPS PRINTING EVERY TIME. That is the half that matters:
+# the same measurement found one "the harvest model exited 1" sitting in the
+# same file, which is a real and fixable fault, and a blanket mute would have
+# buried it (L104: a filter must be tested against what it has to PRESERVE).
+# ---------------------------------------------------------------------------
+MUTED_REASON='the named agent transcript does not exist'
+
+muted_rec() { printf '{"ts":"%s","status":"error","agent":"subagent","error":"%s"}' "${1:-2026-08-29T12:00:00Z}" "$MUTED_REASON"; }
+
+reset_spool
+bash "$SPOOL_LIB" append "$REPO" "$(muted_rec)" >/dev/null 2>&1
+out_muted="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null)"
+rc_muted=$?
+[ -z "$out_muted" ] && [ "$rc_muted" -ne 0 ] \
+  && check "a spool holding only the unfixable failure shows nothing" ok \
+  || check "a spool holding only the unfixable failure shows nothing" "rc=$rc_muted out=${out_muted:0:120}"
+
+# The half that must be preserved: a DIFFERENT failure reason is still reported
+# on every review, exactly as before.
+reset_spool
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T12:00:00Z","status":"error","agent":"subagent","error":"the harvest model exited 1"}' >/dev/null 2>&1
+spool_says "the harvest model exited 1" \
+  && check "a fixable failure reason still prints every time" ok \
+  || check "a fixable failure reason still prints every time" "pending=$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | cut -c1-140)"
+
+# A muted failure must not suppress anything else sharing the spool with it.
+reset_spool
+bash "$SPOOL_LIB" append "$REPO" "$(muted_rec)" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "a real finding that must still be shown" "tester" >/dev/null 2>&1
+spool_says "a real finding that must still be shown" \
+  && check "a muted failure does not hide a finding beside it" ok \
+  || check "a muted failure does not hide a finding beside it" "finding missing"
+spool_says "HARVEST FAILED" \
+  && check "the muted line stays out when a finding is shown" "it printed anyway" \
+  || check "the muted line stays out when a finding is shown" ok
+
+# Held back is not thrown away. The count has to survive, including the folded
+# `count` a compaction leaves behind, or the periodic report understates a fault
+# by exactly the amount compaction tidied away.
+reset_spool
+bash "$SPOOL_LIB" append "$REPO" "$(muted_rec 2026-08-27T09:00:00Z)" >/dev/null 2>&1
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-28T09:00:00Z","status":"error","agent":"subagent","count":40,"error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+summary="$(bash "$SPOOL_LIB" muted-summary "$REPO" 2>/dev/null)"
+case "$summary" in
+  *41*) check "the held-back count includes folded records" ok ;;
+  *)    check "the held-back count includes folded records" "summary=${summary:0:160}" ;;
+esac
+
+# Nothing held back means nothing to report, so the periodic line can tell
+# "still happening" from "stopped" (L98).
+reset_spool
+bash "$SPOOL_LIB" note "$REPO" "only a finding here" "tester" >/dev/null 2>&1
+bash "$SPOOL_LIB" muted-summary "$REPO" >/dev/null 2>&1 \
+  && check "no held-back failures reports nothing" "it reported something" \
+  || check "no held-back failures reports nothing" ok
+
+# Filing the failures a review CARRIED must not sweep up the muted ones: they
+# were never shown, and filing them resets the count the periodic line reads,
+# so the fault would be silently forgotten instead of reported.
+reset_spool
+bash "$SPOOL_LIB" append "$REPO" "$(muted_rec)" >/dev/null 2>&1
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T12:00:00Z","status":"error","agent":"subagent","error":"the harvest model exited 1"}' >/dev/null 2>&1
+bash "$SPOOL_LIB" file-errors "$REPO" >/dev/null 2>&1
+raw_after="$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null)"
+printf '%s' "$raw_after" | grep -q "$MUTED_REASON" \
+  && check "filing a shown failure leaves the muted one pending" ok \
+  || check "filing a shown failure leaves the muted one pending" "muted record was filed too"
+printf '%s' "$raw_after" | grep -q "the harvest model exited 1" \
+  && check "filing still files the failure that was shown" "it stayed pending" \
+  || check "filing still files the failure that was shown" ok
+
+# And once the periodic line HAS gone out, the muted records are settled, or the
+# next report counts them a second time and the fault appears to be growing.
+bash "$SPOOL_LIB" file-muted "$REPO" >/dev/null 2>&1
+bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -q "$MUTED_REASON" \
+  && check "filing the muted failures settles them" "they are still pending" \
+  || check "filing the muted failures settles them" ok
+bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null | grep -q "$MUTED_REASON" \
+  && check "the muted failures are kept in the archive" ok \
+  || check "the muted failures are kept in the archive" "they were dropped, not archived"
+
+# ---------------------------------------------------------------------------
+# The periodic report for the held-back failures.
+#
+# Holding them back is only honest if the fault still surfaces somewhere. It
+# rides along with whatever review speaks next once a week has passed, and it
+# never MAKES a review speak: a fault nobody can act on must not be able to
+# interrupt a turn (the same reason it does not beat the cooldown).
+# ---------------------------------------------------------------------------
+MUTED_STAMP="${TMPDIR:-/tmp}/claude-feature-issue-muted-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
+
+reset_spool
+rm -f "$REVIEW_STAMP" "$MUTED_STAMP"
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":7,"error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+out_muted_rev="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+printf '%s' "$out_muted_rev" | grep -q "HARVEST UNREADABLE" \
+  && check "the periodic report reaches a review when it is due" ok \
+  || check "the periodic report reaches a review when it is due" "out=${out_muted_rev:0:200}"
+printf '%s' "$out_muted_rev" | grep -q "7 agent harvest" \
+  && check "the periodic report carries the true count" ok \
+  || check "the periodic report carries the true count" "count missing from ${out_muted_rev:0:200}"
+
+# Delivered, so settled: the records are filed and the clock is restarted.
+bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -q "the named agent transcript does not exist" \
+  && check "a delivered periodic report files its records" "they are still pending" \
+  || check "a delivered periodic report files its records" ok
+[ -f "$MUTED_STAMP" ] \
+  && check "a delivered periodic report restarts its clock" ok \
+  || check "a delivered periodic report restarts its clock" "no stamp written"
+
+# And it does not repeat on the next review, which is the whole point.
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T09:00:00Z","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+rm -f "$REVIEW_STAMP"
+out_again="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+printf '%s' "$out_again" | grep -q "HARVEST UNREADABLE" \
+  && check "the periodic report stays quiet until it is due again" "it repeated" \
+  || check "the periodic report stays quiet until it is due again" ok
+
+# A report that could not be DELIVERED must settle nothing. Otherwise one
+# injector failure both loses the report and silences the next week of them,
+# which is the one way this change could hide a fault permanently.
+reset_spool
+rm -f "$REVIEW_STAMP" "$MUTED_STAMP"
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":3,"error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+printf '%s' "$review_payload" | CLAUDE_INJECT_SPOOL_FORCE_FAIL=1 bash "$REVIEW" >/dev/null 2>&1
+bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -q "the named agent transcript does not exist" \
+  && check "an undelivered periodic report leaves its records pending" ok \
+  || check "an undelivered periodic report leaves its records pending" "they were filed unseen"
+[ -f "$MUTED_STAMP" ] \
+  && check "an undelivered periodic report does not restart its clock" "the stamp was written" \
+  || check "an undelivered periodic report does not restart its clock" ok
 
 echo
 echo "passed: $pass  failed: $fail"
