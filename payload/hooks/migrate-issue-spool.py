@@ -119,6 +119,7 @@ def plan():
     keeps = {}                              # source file -> lines that stay
     stay = collections.Counter()
     unplaceable = collections.Counter()      # the directories nothing could place, by path
+    unplaceable_kind = collections.Counter() # and WHAT those records are
     placed_by = collections.Counter()       # which route found each record a home
     already = [0]                           # found a home, and was already in it
     for path in sorted(glob.glob(os.path.join(SPOOL, "*.jsonl"))):
@@ -155,6 +156,11 @@ def plan():
                     # went wrong.
                     unplaceable[(rec.get("cwd") if isinstance(rec, dict) else None)
                                 or "(no directory recorded)"] += 1
+                    # A stranded finding an agent deliberately wrote down is
+                    # worth real effort to rescue; a stranded record of a
+                    # harvest that failed is worth none, and a count of records
+                    # cannot tell them apart.
+                    unplaceable_kind[rec.get("status") or "(no status)"] += 1
                     continue
                 placed_by["directory"] += 1
             dst = key_for_project(home)
@@ -162,12 +168,12 @@ def plan():
                 kept.append(line); already[0] += 1; continue
             moves[dst].append(line)
         keeps[path] = kept
-    return moves, keeps, stay, placed_by, already[0], unplaceable
+    return moves, keeps, stay, placed_by, already[0], unplaceable, unplaceable_kind
 
 
 def main():
     apply = "--apply" in sys.argv
-    moves, keeps, stay, placed_by, already, unplaceable = plan()
+    moves, keeps, stay, placed_by, already, unplaceable, unplaceable_kind = plan()
     total = sum(len(v) for v in moves.values())
     before = sum(len(v) for v in keeps.values()) + total
 
@@ -180,6 +186,8 @@ def main():
     print("  found a home by:", dict(placed_by) or "{}")
     print("  already in the right place:", already)
     print("  could not be placed:", dict(stay) or "{}")
+    if unplaceable_kind:
+        print("  what those unplaceable records are:", dict(unplaceable_kind))
     if unplaceable:
         # A sample, one line per distinct directory, capped: a spool with
         # hundreds of these has to stay readable or nobody reads any of it.

@@ -335,6 +335,19 @@ done <<< "$out_many"
   && check "the examples are capped rather than dumped" ok \
   || check "the examples are capped rather than dumped" "$ex_lines example lines"
 
+# Whether the unplaceable records are worth rescuing at all depends on WHAT they
+# are. A stranded finding an agent deliberately wrote down is worth real effort;
+# a stranded record of a harvest that failed is worth none, and the two are
+# indistinguishable in a count of records.
+seed_cwd
+rm -rf "$CLAUDE_PROJECTS_DIR/$ENC_REPO"
+printf '{"ts":"2026-08-29T10:00:00Z","status":"error","cwd":"%s","error":"the harvest model exited 1"}\n' \
+  "$CLAUDE_MIGRATE_HOME/elsewhere" >> "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+out_kind="$(python3 "$MIGRATE" 2>&1)"
+contains "found" "$out_kind" && contains "error" "$out_kind" \
+  && check "the dry run says what kind of records it could not place" ok \
+  || check "the dry run says what kind of records it could not place" "out=${out_kind: -400}"
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
