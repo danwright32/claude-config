@@ -277,6 +277,24 @@ contains "already" "$why_line" \
   && check "records already in place are not counted as failures" "counted as one: $why_line" \
   || check "records already in place are not counted as failures" ok
 
+# The tally has to add up: every record that found a home is either moving or
+# already where it belongs, and none may appear on two lines. The first version
+# reported the same 332 records under two headings at once.
+#
+# The fixture must CONTAIN records already in the right place, or the double
+# count cannot happen and the check passes without ever being exercised: a run
+# with nothing already in place was seen to pass with the counting deliberately
+# broken.
+seed
+python3 "$MIGRATE" --apply >/dev/null 2>&1
+out_tally="$(python3 "$MIGRATE" 2>&1)"
+contains "already in the right place: 1" "$out_tally" \
+  && check "the tally fixture really holds a settled record" ok \
+  || check "the tally fixture really holds a settled record" "out=${out_tally: -300}"
+contains "COUNTS DO NOT ADD UP" "$out_tally" \
+  && check "the placement tally adds up" "it does not: ${out_tally: -300}" \
+  || check "the placement tally adds up" ok
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

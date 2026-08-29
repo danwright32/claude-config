@@ -118,6 +118,7 @@ def plan():
     keeps = {}                              # source file -> lines that stay
     stay = collections.Counter()
     placed_by = collections.Counter()       # which route found each record a home
+    already = [0]                           # found a home, and was already in it
     for path in sorted(glob.glob(os.path.join(SPOOL, "*.jsonl"))):
         if path.endswith(".filed.jsonl"):
             continue
@@ -147,15 +148,15 @@ def plan():
                 placed_by["directory"] += 1
             dst = key_for_project(home)
             if dst == src_key:
-                kept.append(line); placed_by["already in the right place"] += 1; continue
+                kept.append(line); already[0] += 1; continue
             moves[dst].append(line)
         keeps[path] = kept
-    return moves, keeps, stay, placed_by
+    return moves, keeps, stay, placed_by, already[0]
 
 
 def main():
     apply = "--apply" in sys.argv
-    moves, keeps, stay, placed_by = plan()
+    moves, keeps, stay, placed_by, already = plan()
     total = sum(len(v) for v in moves.values())
     before = sum(len(v) for v in keeps.values()) + total
 
@@ -165,9 +166,17 @@ def main():
         print("  %s: %d record(s) stay" % (src, len(kept)))
     for dst, lines in sorted(moves.items()):
         print("  -> %s: %d record(s) arrive" % (dst, len(lines)))
-    print("  why records could not be placed by their session:", dict(stay) or "{}")
-    print("  placed by:", dict(placed_by) or "{}")
+    print("  found a home by:", dict(placed_by) or "{}")
+    print("  already in the right place:", already)
+    print("  could not be placed:", dict(stay) or "{}")
     print("  moving:", total)
+    # The routes must account for every record that found a home, and no record
+    # may be counted on two of these lines. Printed rather than assumed, because
+    # a tally nobody checks is how the first version reported 332 records twice.
+    if placed_by and sum(placed_by.values()) != total + already:
+        print("  COUNTS DO NOT ADD UP: %d found a home but %d are moving and %d were already "
+              "in place. Do not run --apply." % (sum(placed_by.values()), total, already))
+        return 1
 
     if not apply:
         print("\nDRY RUN. Nothing was changed. Pass --apply to move them.")
