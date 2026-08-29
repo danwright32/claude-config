@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 621 lessons.
+LESSONS.md, which is NOT loaded into the session. 622 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -563,6 +563,7 @@ to decide something: the body is where the failure it came from is described.
 - L272. A check that can DERIVE the correct value it is demanding must APPLY it rather than report it, because a panel of findings the system could have fixed itself is work handed back to the person, and it teaches them to skim the panel where the findings that genuinely need their judgement live.
 - L526. A store that collects items for a PERSON to act on is only as useful as the rate they can be taken out of it, so size the drain against the rate it fills.
 - L279. A record's usefulness that depends on a COMBINATION of individually optional inputs is stated nowhere, because each field reads as independently optional at the point of entry, so name the requirement on the form itself and give the partly filled state its own label saying what is still missing.
+- L287. A notice computed over a WIDER scope than the screen it is placed on inherits that screen's scope from its position, so a sentence that is accurate about the whole collection reads as a false claim about the one record on view. State the scope inside the message rather than trusting the reader to know where its numbers came from.
 
 ## External systems
 
