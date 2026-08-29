@@ -2899,7 +2899,7 @@ window is a count rather than a boundary.
   their own input are the tests OF the builder and must keep building, and the memo needs the
   same refusal an empty scan already has (L98), or one bad walk is remembered as clean for the
   whole run.
-  (overture: the copy inventory built twelve times a run, its surfaces reported four times and its
+  (overture#3235: the copy inventory built twelve times a run, its surfaces reported four times and its
   source walk four, 130 seconds of a 507 second suite recomputing one document. downbeat#470: a
   repository walk that 24 guard suites each recompute per test, 206 tests taking 10.9 of the
   suite's 27 seconds, a `static func` where a `static let` would do. Found by the 2026-08-29 test
