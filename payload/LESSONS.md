@@ -2716,6 +2716,21 @@ window is a count rather than a boundary.
   bridge that assembles CAPTIONS.txt, nothing asserted they agreed, and the divergence was found
   only by reading both while fixing something else)
 
+- **L274. An exception a collection singles out for ONE item (skip this one, do not touch that
+  one) must be answered by the ITEM itself, never by a predicate repeated inline at each place
+  that iterates the collection, because a second loop written later omits it and the item is then
+  protected at one site and handled normally at the other.** Both sites read as correct alone, so
+  the gap is invisible until somebody exercises the unprotected one. Related to L233 (an
+  unexplained entry in a skip list) and L129 (an exemption with no reviewer named), but distinct
+  from both: here the exemption IS reasoned about and IS written down, in the item's own type, and
+  it still fails to reach one of its consumers.
+  (postroll#965: `CollageDivider.actualGapPx` carries the comment "~90 for the strip divider
+  (which should not be dragged or filled)". The gap fill loop enforced it with
+  `if div.actualGapPx <= 16`; the divider handle loop twenty lines further down the same file
+  iterated every divider with no filter, so the branded title strip got a drag handle and Dan
+  dragged a photo straight over the collage's title and logo. Had the exception been a property
+  on the divider, the handle loop could not have missed it)
+
 ## Cross-system reliability
 
 - **L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state (an
