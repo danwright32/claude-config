@@ -911,6 +911,21 @@ window is a count rather than a boundary.
   the only thing anywhere that names content surviving in no file the tool loads, and its own
   comment records a lesson that survived only because somebody read it once)
 
+- **L288. A test run is judged first by the count it EXECUTED against the count expected, and only
+  then by its failures, because a run that loses a worker's share or matches half a selection still
+  prints a verdict, and a check for zero catches none of it. Record the expected count, refuse a run
+  below it, and do that BEFORE any change to how the suite runs (parallel workers, sharding, a new
+  scheme or reporter), which is the moment the half run appears.** The failures are the visible
+  half of a run and the absences are the half that matters (L98, L11): nothing in a summary naming
+  twelve failures says three thousand tests never ran. A zero check is the special case that is
+  easy to write and does not generalise, because the runs that lose part of a suite are exactly the
+  ones that changed how the suite is divided. (postroll#1017: `suite_counts.py` refuses a leg that
+  ran zero tests and passes one that ran half, and the CI Swift step never reads a count at all,
+  in the same milestone that queues a switch to parallel execution. overture#3233: the parallel
+  experiment executed 4,875 of 8,595 tests with no crash line and reported twelve failures; the
+  baseline gate built for this could not parse the new format and said so in a line nobody read.
+  Found by the 2026-08-29 test speed audit across nine repos)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
