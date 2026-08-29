@@ -403,6 +403,20 @@ if [ "$ran" -gt 0 ]; then
   #
   # Nothing here learns WHICH suite is slow from a list anybody maintains. The record is written
   # by the run itself, at the bottom of this file, from the clock (L96).
+  # THE LIVE SPOOL, before anything runs. No suite may write into Dan's real
+  # store of subagent findings, and for weeks one did: test-blank-check-cost.sh
+  # sourced the spool library and only then set the override, so the location had
+  # already been bound to the real one and every run left a fake finding behind.
+  # 120 of them accumulated on one machine, and nothing anywhere said so; they
+  # were found by looking at what a migration could not place (L2).
+  #
+  # Fixing that suite does not stop the next one, so this is a ratchet on the
+  # class: the whole run is bracketed by a listing of the real spool, and any
+  # change at all is reported (L30).
+  _live_spool="${CLAUDE_ISSUE_SPOOL_DIR:-$HOME/.claude-issue-spool}"
+  _spool_before="$(ls -1 "$_live_spool" 2>/dev/null | sort)"
+  _spool_before_bytes="$(cat "$_live_spool"/*.jsonl 2>/dev/null | wc -c | tr -d ' ')"
+
   _timed=0
   launch_order="$(
     i=0
@@ -632,6 +646,21 @@ if [ -n "$slow_profile" ]; then
     printf '  %ds %s\n' "$((10#$_pd))" "$_pn"
   done
   echo
+fi
+# Did the run leave anything in the real spool? Compared on BOTH the file list
+# and the total size, because a suite that appends to a file that already exists
+# changes no name at all, and a listing alone would report that as clean (L63).
+_spool_after="$(ls -1 "${_live_spool:-}" 2>/dev/null | sort)"
+_spool_after_bytes="$(cat "${_live_spool:-}"/*.jsonl 2>/dev/null | wc -c | tr -d ' ')"
+if [ "${_spool_before:-}" != "$_spool_after" ] || [ "${_spool_before_bytes:-}" != "$_spool_after_bytes" ]; then
+  echo "SUITES WROTE INTO THE LIVE SPOOL at $_live_spool. A test must be structurally unable to"
+  echo "  touch live data (L2). Bytes went from ${_spool_before_bytes:-?} to ${_spool_after_bytes:-?}."
+  echo "  Find the suite that sources lib/issue-spool.sh, or runs a hook, without setting"
+  echo "  CLAUDE_ISSUE_SPOOL_DIR to its own throwaway directory FIRST."
+  # Counted as a failed suite, so the run's own verdict says so rather than
+  # leaving the notice to be scrolled past.
+  failed=$((failed + 1))
+  failed_names="$failed_names live-spool-pollution"
 fi
 if [ -n "$unmeasured_names" ]; then
   echo "NO DURATION was measured for:$unmeasured_names"
