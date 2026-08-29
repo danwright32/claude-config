@@ -605,8 +605,33 @@ printf '%s' "$got" | grep -q '"status": *"unparsed"' \
   && check "unparseable model output is its own status with the raw text kept" ok \
   || check "unparseable model output is its own status with the raw text kept" "spool=$got"
 spool_says "COULD NOT BE READ" \
-  && check "unparseable model output is reported to the reader" ok \
-  || check "unparseable model output is reported to the reader" "not surfaced"
+  && check "an unparseable reply is held back from every review" "it printed" \
+  || check "an unparseable reply is held back from every review" ok
+contains "reply" "$(bash "$SPOOL_LIB" muted-summary "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" \
+  && check "an unparseable reply is counted in the periodic report" ok \
+  || check "an unparseable reply is counted in the periodic report" "summary=$(bash "$SPOOL_LIB" muted-summary "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | cut -c1-160)"
+
+# The two kinds must stay TOLD APART in that line. An unreadable transcript can
+# never be fixed; a reply the harvest could not parse is a prompt that can be,
+# so folding them into one number would bury the fixable half in the hopeless
+# one, which is the mistake the mute was written to avoid.
+# Both kinds have to be PRESENT for "told apart" to mean anything: a fixture
+# holding one of them is satisfied by a report that can only ever name one.
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T12:00:00Z","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+sum_kinds="$(bash "$SPOOL_LIB" muted-summary "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
+contains "could not be read" "$sum_kinds" && contains "repl" "$sum_kinds" \
+  && check "the periodic report tells the two kinds apart" ok \
+  || check "the periodic report tells the two kinds apart" "summary=${sum_kinds:0:200}"
+
+# And they settle only when that report has gone out, exactly as the failures do.
+bash "$SPOOL_LIB" file-errors "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+contains '"status": "unparsed"' "$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" \
+  && check "filing shown failures leaves the unparseable reply pending" ok \
+  || check "filing shown failures leaves the unparseable reply pending" "it was filed unseen"
+bash "$SPOOL_LIB" file-muted "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+contains '"status": "unparsed"' "$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" \
+  && check "the periodic report settles the unparseable reply" "it is still pending" \
+  || check "the periodic report settles the unparseable reply" ok
 
 # A runaway reply must not become a multi-megabyte record.
 reset_spool
@@ -1024,22 +1049,19 @@ k_same="$(bash "$SPOOL_LIB" key "$TMPROOT" "$SESSION_PROJECT/session-three.jsonl
 # still pending and still waiting for a picker.
 # ---------------------------------------------------------------------------
 reset_spool
-bash "$SPOOL_LIB" note "$REPO" "The retry path in sync-team-rosters.js has no failure test." "agent-one" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
-bash "$SPOOL_LIB" note "$REPO" "the retry path in sync-team-rosters.js has no failure test" "agent-two" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
-bash "$SPOOL_LIB" note "$REPO" "The  retry  path in sync-team-rosters.js  has no failure test!!" "agent-three" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "The retry path has no failure test." "agent-one" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "The retry path has no failure test." "agent-two" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 dup_out="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-dup_count="$(printf '%s\n' "$dup_out" | grep -c "sync-team-rosters" || true)"
+dup_count="$(printf '%s\n' "$dup_out" | grep -c "retry path" || true)"
 [ "$dup_count" = "1" ] \
-  && check "the same observation in different words is shown once" ok \
-  || check "the same observation in different words is shown once" "shown $dup_count times"
+  && check "the identical observation twice is shown once" ok \
+  || check "the identical observation twice is shown once" "shown $dup_count times"
 
-# Folding the view must not fold the spool. All three records stay, because
-# which one a person eventually files is their choice, not this code's.
 raw_dup="$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-raw_dup_count="$(printf '%s\n' "$raw_dup" | grep -c "sync-team-rosters" || true)"
-[ "$raw_dup_count" = "3" ] \
-  && check "folding the view leaves every record in the spool" ok \
-  || check "folding the view leaves every record in the spool" "$raw_dup_count records remain"
+raw_dup_count="$(printf '%s\n' "$raw_dup" | grep -c "retry path" || true)"
+[ "$raw_dup_count" = "2" ] \
+  && check "collapsing the view leaves every record in the spool" ok \
+  || check "collapsing the view leaves every record in the spool" "$raw_dup_count records remain"
 
 # The size cap. Each finding is distinct, so nothing here is foldable and only
 # the budget can bound it.

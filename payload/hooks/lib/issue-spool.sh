@@ -288,23 +288,6 @@ MAX_FINDINGS = 200
 # 500 character finding costs what twenty short ones do, so the limit is on size.
 FINDING_BUDGET = int(os.environ.get("CLAUDE_ISSUE_SPOOL_FINDING_BUDGET") or 8000)
 MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
-
-
-def fold_key(text):
-    """What counts as the SAME observation twice.
-
-    Several agents reviewing one thing restate one observation in slightly
-    different words, and the raw text differs every time, so an exact match folds
-    almost nothing: of one project's 47 finding records, most were five
-    observations reworded. Case, punctuation and runs of whitespace are the
-    differences that carry no meaning, so they are removed before comparing.
-
-    Deliberately no stemming or similarity scoring: a fold that is clever enough
-    to be wrong would hide a finding, and a finding hidden is the one outcome
-    this whole mechanism exists to prevent.
-    """
-    return " ".join("".join(c if c.isalnum() else " " for c in text.lower()).split())
-
 shown = 0
 seen = set()
 errors = {}
@@ -328,10 +311,15 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
     status = rec.get("status")
     if status == "found":
         for f in rec.get("findings") or []:
-            k = fold_key(f)
-            if k in seen:
+            # Exact repeats only. A fold that normalised case, punctuation and
+            # whitespace was tried and REMOVED: measured against one project's
+            # real spool it collapsed nothing at all (246 finding texts in, 246
+            # out), because genuine restatements by different agents share none
+            # of those differences. It bought no reduction and added a way to
+            # hide a finding, which is the one thing this must never do.
+            if f in seen:
                 continue
-            seen.add(k)
+            seen.add(f)
             findings.append((where, rec.get("ts", "?"), f))
     elif status == "error":
         # Deduped by REASON, and counted. A recurring fault (a subagent kind that
@@ -349,6 +337,11 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         e["agents"].add(where)
         e["last"] = rec.get("ts", "?")
     elif status == "unparsed":
+        # Held back for the periodic count, like the failures with no remedy.
+        # The harvest model replying that it cannot read a transcript is the
+        # SAME dead end wearing a different status, and it reached the reader at
+        # every single review by this route while the mute was busy stopping the
+        # other one (L173).
         unparsed.append((where, rec.get("ts", "?"), (rec.get("raw") or "")[:400]))
 
 spent = 0
@@ -376,11 +369,9 @@ for reason, info in errors.items():
           "is not the same as them finding nothing."
           % (", ".join(sorted(info["agents"])), info["last"], times, reason))
 
-for where, ts, raw in unparsed:
-    shown += 1
-    print("REPLY COULD NOT BE READ (%s, %s): the harvest model answered in a shape this code "
-          "could not parse, so anything it found was not captured. Its words were: %s"
-          % (where, ts, raw))
+# Deliberately NOT printed here. The raw text is kept in the record and reaches
+# the archive, so a prompt fix can still be informed by it; what stops is the
+# interruption at every review.
 
 if corrupt:
     shown += 1
@@ -435,8 +426,10 @@ issue_spool_muted_summary() { # muted-summary <dir> [session-transcript] -> exit
 import json, os, sys
 
 MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
-total = 0
+unreadable = 0      # a transcript that was never written: nothing can fix this
+unparsed = 0        # a reply the harvest could not parse: a prompt CAN fix this
 first = None
+
 for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
     line = line.strip()
     if not line:
@@ -445,22 +438,36 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         rec = json.loads(line)
     except Exception:
         continue
-    if not isinstance(rec, dict) or rec.get("status") != "error":
+    if not isinstance(rec, dict):
         continue
-    if (rec.get("error") or "no reason recorded") not in MUTED:
+    status = rec.get("status")
+    if status == "error" and (rec.get("error") or "no reason recorded") in MUTED:
+        unreadable += rec.get("count", 1)
+    elif status == "unparsed":
+        unparsed += rec.get("count", 1)
+    else:
         continue
-    total += rec.get("count", 1)
     ts = rec.get("ts")
     if ts and (first is None or ts < first):
         first = ts
 
-if not total:
+if not (unreadable or unparsed):
     sys.exit(1)
-print("HARVEST UNREADABLE: %d agent harvest(s) could not be read since %s. These are agents "
-      "spawned by other agents, which leave no transcript anywhere to read, so there is nothing "
-      "to fix and nothing for you to do. This is a periodic count, not a new problem, and it is "
+
+# The two are REPORTED SEPARATELY on purpose. An unwritten transcript can never
+# be fixed; a reply the harvest could not parse is a prompt that can be. One
+# combined number would bury the fixable half inside the hopeless one, which is
+# exactly the mistake this mute was written to avoid.
+parts = []
+if unreadable:
+    parts.append("%d agent harvest(s) could not be read (agents spawned by other agents leave no "
+                 "transcript anywhere, so there is nothing to fix)" % unreadable)
+if unparsed:
+    parts.append("%d harvest reply/replies could not be parsed (their words are kept in the "
+                 "archive, and a prompt change could reduce these)" % unparsed)
+print("HARVEST UNREADABLE, since %s: %s. This is a periodic count, not a new problem, and it is "
       "held back from every other review so it does not become noise."
-      % (total, first or "an unrecorded time"))
+      % (first or "an unrecorded time", "; ".join(parts)))
 sys.exit(0)
 PY_MUTED
   rc=$?
@@ -604,12 +611,19 @@ with open(keep_path, "w", encoding="utf-8") as keep, \
             keep.write(stripped + "\n")     # unreadable: nobody has classified it
             continue
         take = False
-        if isinstance(rec, dict) and rec.get("status") == "error":
-            is_muted = (rec.get("error") or "no reason recorded") in MUTED
-            # A muted failure was never shown, so filing it here would settle
-            # something nobody read AND reset the count the periodic line
-            # reports, making a continuing fault look like one that stopped.
-            take = is_muted if mode == "muted" else not is_muted
+        if isinstance(rec, dict):
+            status = rec.get("status")
+            # Held back from every review, so settled only by the periodic
+            # report: filing either here would settle something nobody read AND
+            # reset the count that report reads, making a continuing fault look
+            # like one that stopped.
+            held = (status == "error"
+                    and (rec.get("error") or "no reason recorded") in MUTED) \
+                or status == "unparsed"
+            if mode == "muted":
+                take = held
+            else:
+                take = status == "error" and not held
         if take:
             errs.write(stripped + "\n")
         else:
