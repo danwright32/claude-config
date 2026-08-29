@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 282 lessons.
+LESSONS.md, which is NOT loaded into the session. 283 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -290,6 +290,7 @@ to decide something: the body is where the failure it came from is described.
 - L233. In a list of exclusions or skip cases, an entry carrying no written reason while its neighbours each carry one is evidence it was never reasoned about rather than deliberately chosen
 - L244. A file that is auto loaded into every session is believed without being re-checked, so any status it records (an open question, a pending issue, a not yet done) must be derived from the system that owns that truth or carry a check that fails when it drifts.
 - L262. A constraint that has only ever been satisfied as a side effect of somebody doing the work by hand is recorded nowhere and checked by nothing, so the first time that work is GENERATED rather than placed the constraint silently stops holding, and every existing check passes because each one was written against the hand made cases.
+- L263. A shared NAME is read as evidence of shared BEHAVIOUR, so two same-named functions on either side of a boundary are never compared and can implement different rules indefinitely, while every caller on each side reads as correct in isolation.
 
 ## Cross-system reliability
 

@@ -2535,6 +2535,20 @@ window is a count rather than a boundary.
   three of seven photographs behind the caption. The picture file was correct, every test was
   green, and it was found only by drawing the phone chrome over a render by hand)
 
+- **L263. A shared NAME is read as evidence of shared BEHAVIOUR, so two same-named functions on
+  either side of a boundary are never compared and can implement different rules indefinitely,
+  while every caller on each side reads as correct in isolation.** The name is what suppresses
+  the check: nobody diffs two things they already believe are the same, and no reviewer of
+  either half sees anything wrong, because each half is internally consistent. Distinct from
+  L26, which is the REMEDY (twins share one committed fixture) without saying why nobody
+  reaches for it, and from L198, where the stricter side reports a false failure and is at
+  least LOUD: here both sides simply carry on, each right about a different question.
+  (postroll#926: `PythonBridge.isRealHandle` in Swift required a value to be handle SHAPED and
+  not a sentinel; `generate_captions._is_real_handle` in Python checked only the sentinel half,
+  so 'DPR Dance' was a real handle to Python and not to Swift. The two sit on either side of the
+  bridge that assembles CAPTIONS.txt, nothing asserted they agreed, and the divergence was found
+  only by reading both while fixing something else)
+
 ## Cross-system reliability
 
 - **L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a
