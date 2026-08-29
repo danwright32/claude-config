@@ -2747,6 +2747,18 @@ window is a count rather than a boundary.
 
 ## Cross-system reliability
 
+- **L276. A CI job is priced in allowance minutes, which is the runner's multiplier (macOS ten,
+  Windows two) times its rounded-up minutes, and that price is set before the job is added**,
+  because an exhausted allowance refuses every later run before its first step, and a refused
+  run is indistinguishable from a failed one in every list, so the remaining allowance must also
+  be visible somewhere before the day it is zero.
+  (playedit#344, 2026-08-29: the Swift job runs on a macOS runner at ten to one. Fourteen
+  ordinary runs on 27 and 28 July, 197 macOS minutes, drew 1,970 of a personal account's 2,000
+  free minutes in 26 hours, and the fifteenth run was refused with a billing message before
+  either job started. For a month the only trace was a red check on one PR, read as a failing
+  test; no push happened in that month, so the shortfall was never noticed as one. With no
+  timeout on the job, a single six hour hang would have cost 3,600 allowance minutes)
+
 - **L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state (an
   open that is also a close, a mute that is also an unmute) is inverted by the second attempt,
   and the loop can report success while leaving the state nobody asked for.** Retry only
