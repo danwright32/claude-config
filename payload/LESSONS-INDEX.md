@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 340 lessons.
+LESSONS.md, which is NOT loaded into the session. 312 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -320,34 +320,6 @@ to decide something: the body is where the failure it came from is described.
 
 ## Cross-system reliability
 
-- L276. A CI job is priced in allowance minutes, which is the runner's multiplier (macOS ten, Windows two) times its rounded-up minutes, and that price is set before the job is added
-- L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state (an open that is also a close, a mute that is also an unmute) is inverted by the second attempt, and the loop can report success while leaving the state nobody asked for.
-- L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a high water mark) needs a targeted redo path built in from the start whenever anything downstream requires completeness
-- L240. A background job killed in the same breath it is started can outlive the kill, because the signal can arrive before the job has finished starting, and a `wait` on it then blocks for that job's whole lifetime while every assertion still passes.
-- L235. A background process inherits the stdout it was started with, so one still running holds a `$(...)` capture or a runner's pipe open long after its parent has exited, and the caller then waits for the CHILD rather than for the work.
-- L234. A test runner or linter that finds its inputs by a default recursive glob also collects every nested checkout inside the repo (an agent worktree, a vendored clone), so name the directories your own sources live in rather than trusting the tool's default excludes.
-- L208. A substitution applied across a whole set of files cannot tell a line that MEANS the placeholder from a line that means a value, so any file describing the mechanism has its own text rewritten
-- L245. A script that finds other scripts by searching for a marker phrase will match ITSELF, because it has to name the marker in order to search for it, and when the matched list is then EXECUTED the result is unbounded recursion rather than a wrong answer.
-- L197. A function that returns whether it CLAIMED something (a lock, a slot, a run) is only a guard where the caller checks the answer
-- L33. Make the pair of a database write and an external side effect crash-safe.
-- L34. Verify domain and vendor data semantics against real samples before building on them.
-- L35. Classify errors once, explicitly.
-- L36. An alert that cries wolf gets ignored.
-- L37. History is stamped at write time.
-- L38. Deletes, renames, and state exits enumerate every derived resource.
-- L39. One timezone, one date helper.
-- L51. A time based threshold is only as timely as the schedule that evaluates it.
-- L66. When several records are collapsed onto one shared external identifier (one email thread, one payment, one batch call), decide for EACH downstream fact whether it belongs to the group or to one member, and refuse to write a member level fact the external system does not name.
-- L73. Independent steps sharing one handler each need their own failure boundary.
-- L74. A deadline, age or due date computed from the current clock at read time can never age, because every evaluation moves it forward with the clock.
-- L114. A tool that creates a throwaway workspace must also remove what that workspace caused to be created OUTSIDE it.
-- L226. A timer built by ADDING UP its own sleeps measures iterations, not elapsed time
-- L227. A limit cannot be raised on its own
-- L519. A repair, backfill or catch-up tool must not take the same exclusion lock as the live job it repairs
-- L255. A consumer that gates on an exact SET of accepted format versions turns the producer's next additive bump into a total outage of itself
-- L258. A consumer that acknowledges work by DELETING the record makes an absent record mean both "consumed successfully" and "never written"
-- L259. An escape hatch that switches a gate OFF is inherited by every process that command starts, including the gate's OWN self-test
-- L522. A time or size budget calibrated for ONE execution context is wrong when the same code is reached from another (a scheduled job versus a request, a worker versus a CLI, a foreground run versus a background one), because the platform ceiling differs
 - L276. A CI job is priced in allowance minutes, which is the runner's multiplier (macOS ten, Windows two) times its rounded-up minutes, and that price is set before the job is added
 - L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state (an open that is also a close, a mute that is also an unmute) is inverted by the second attempt, and the loop can report success while leaving the state nobody asked for.
 - L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a high water mark) needs a targeted redo path built in from the start whenever anything downstream requires completeness

@@ -2355,6 +2355,21 @@ window is a count rather than a boundary.
   string used for an account nobody had ever opened, immediately after a follower count and a date
   had been stored for it)
 
+- **L287. A notice computed over a WIDER scope than the screen it is placed on inherits that
+  screen's scope from its position, so a sentence that is accurate about the whole collection
+  reads as a false claim about the one record on view. State the scope inside the message rather
+  than trusting the reader to know where its numbers came from.** The message itself is never
+  wrong, which is why nothing catches it: the check measured the right thing and the wording
+  reports it faithfully, and the falsehood is created entirely by where it was rendered. L11
+  covers a message claiming more than its check measured; this is the opposite failure, a
+  message whose check measured MORE than the surface implies, and the reader closes the gap in
+  the wrong direction. The tell is a surface where every other element is about one record.
+  (PostRoll#1012: the export screen for one event showed "@carnegiehall, @dciny, and
+  @decodamusic and 4 more are tagged again and again with no numbers yet", between a banner
+  describing that event's export and a list of that event's posting days. The seven accounts are
+  counted across the whole library and none of the three appear anywhere in the event on screen,
+  so it was read as a claim about photographs that do not exist)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
@@ -2874,6 +2889,21 @@ window is a count rather than a boundary.
   profile shows to nobody. Nothing anywhere decided private accounts should be excluded, and
   postroll#977 proposes making a followers only entry rankable, which would have started
   suggesting them with no test failing)
+
+- **L286. A derivation every test in a suite needs (a tree walk, a parse, a store clone) is
+  recomputed once per test unless its default input is memoised, so memoise the no-argument form,
+  keep the callers that inject their own input building, and make the memo unable to capture an
+  empty result, because a memoised empty scan passes every guard at once.** Each test legitimately
+  needs the result and none knows the others exist, so the cost is invisible from any one test and
+  only shows as a suite that is slower than the sum of what its tests do. The callers that inject
+  their own input are the tests OF the builder and must keep building, and the memo needs the
+  same refusal an empty scan already has (L98), or one bad walk is remembered as clean for the
+  whole run.
+  (overture: the copy inventory built twelve times a run, its surfaces reported four times and its
+  source walk four, 130 seconds of a 507 second suite recomputing one document. downbeat#470: a
+  repository walk that 24 guard suites each recompute per test, 206 tests taking 10.9 of the
+  suite's 27 seconds, a `static func` where a `static let` would do. Found by the 2026-08-29 test
+  speed audit, combined lesson 30)
 
 ## Cross-system reliability
 
