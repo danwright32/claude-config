@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 309 lessons.
+LESSONS.md, which is NOT loaded into the session. 310 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -96,6 +96,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Data safety
 
+- L285. A store that several independent consumers draw from must be drained by the same key it is written by, because a clear keyed more coarsely than the writes destroys work belonging to consumers the clearing one does not represent, and the loss is silent on both sides: the clearer sees a successful cleanup and the others simply never receive anything.
 - L206. A tool mode whose NAME reads like an inspection (reach, check, status, list, show, verify) must not create or modify live data, because it will be run to look around by somebody who has not re-read the docs, and being reached for in a hurry is the whole point of such a tool.
 - L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an injected path the loader alone uses) does not cover the way OUT
 - L5. Never destroy good state before its replacement is verified to exist.

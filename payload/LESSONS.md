@@ -913,6 +913,22 @@ window is a count rather than a boundary.
 
 ## Data safety
 
+- **L285. A store that several independent consumers draw from must be drained by the same key
+  it is written by, because a clear keyed more coarsely than the writes destroys work belonging
+  to consumers the clearing one does not represent, and the loss is silent on both sides: the
+  clearer sees a successful cleanup and the others simply never receive anything.** Distinct from
+  L258, which is one producer and one consumer disagreeing about whether a record was ever
+  written, and from L211, which deletes what a short read failed to mention: here every read is
+  complete and the delete is exactly as instructed, and it is the KEY that is wrong. The tell is a
+  store keyed on a container (a project, a tenant, a day) while its writers and readers are
+  something finer inside it. (claude-config#222: the subagent finding spool is keyed on the
+  project through git's common dir, correctly, so a worktree reaches its spawning session's
+  spool. But several sessions run against one project at once, so the first to finish a task is
+  handed every session's findings and told to clear the project spool. Measured on PostRoll on
+  2026-08-29: four consecutive reviews in one session were each offered the same 25 findings
+  belonging to a different session's work, and only survived because they were copied aside by
+  hand each time)
+
 - **L206. A tool mode whose NAME reads like an inspection (reach, check, status, list,
   show, verify) must not create or modify live data, because it will be run to look
   around by somebody who has not re-read the docs, and being reached for in a hurry is
