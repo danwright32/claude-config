@@ -2208,6 +2208,22 @@ window is a count rather than a boundary.
   no longer in the caption. The stale wording exists precisely to stop the panel outliving the fix,
   and it cannot, because only the person knows whether the fix was the one asked for)
 
+- **L272. A check that can DERIVE the correct value it is demanding must APPLY it rather than
+  report it, because a panel of findings the system could have fixed itself is work handed back to
+  the person, and it teaches them to skim the panel where the findings that genuinely need their
+  judgement live.**
+  (postroll#962, 2026-08-29: one blog post came back with 23 checks to fix. Seven markers naming a
+  file that was never sent, the same seven photos reported as never placed, seven alt texts over
+  the app's own 25 word cap, one repeated opening, one stacked pair. Not one needed Dan's
+  knowledge: every one was a rule the app wrote, evaluated, and stated precisely enough to act on.
+  The code's stated reason for reporting rather than rewriting was that alt text cannot be
+  rewritten without seeing the photograph, which was already false in the same repository, since
+  the photo swap path writes alt text with the images attached. The genuine risk, stacking a second
+  guess on the first, is answered by re-running the check and keeping the original unless the fault
+  is gone, which the caption side was already doing. Distinct from L269, where the system CANNOT
+  observe the fix and so needs the person to close the finding: here it can compute the fix, so
+  asking at all is the defect)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
