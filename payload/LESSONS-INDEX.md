@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 294 lessons.
+LESSONS.md, which is NOT loaded into the session. 295 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -265,6 +265,7 @@ to decide something: the body is where the failure it came from is described.
 - L265. Before building a path that carries on past an external service's negative verdict, check whether that service is also the GATE on the action
 - L266. Removing a prefix by SUBSTRING REPLACEMENT matches anywhere in the value, not only at the start
 - L271. A cross repository deliverable phrased as what YOUR side must WRITE says nothing about whether the consuming side can READ it
+- L273. A normalization written to make a comparison forgiving covers only the character class its author happened to think of, so state the reason it exists and apply it to EVERY class that reason covers, because the classes left out are total mismatches rather than near misses.
 
 ## Building with AI
 

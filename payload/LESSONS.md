@@ -2402,6 +2402,22 @@ window is a count rather than a boundary.
   Distinct from L3: nothing here is unwired inside either codebase, the gap is only visible from
   the boundary, and the deliverable's own wording is what hid it by naming a write and no reader)
 
+- **L273. A normalization written to make a comparison forgiving covers only the character class
+  its author happened to think of, so state the reason it exists and apply it to EVERY class that
+  reason covers, because the classes left out are total mismatches rather than near misses.**
+  Distinct from L147, where the too-strict comparison makes a guard NEVER fire and so look like it
+  has nothing to catch: here it makes the guard fire on everything, and the false report is
+  indistinguishable from the fault it names. Distinct from L185, which is about grouping by the
+  normalized form once you have one.
+  (postroll#963, 2026-08-29: the blog photo check folds CASE before matching a marker's filename
+  against the photos actually sent, and says why in its own docstring, that a case difference is not
+  a different photo on this filesystem and reporting it would be the check crying wolf. Dan's event
+  was named with typographic quotes, the model wrote the marker with ASCII ones, and casefold
+  normalizes letters and nothing else, so all seven photos reported BOTH "names a file that was not
+  sent" and "was never placed", 14 of the 23 findings on one post. The stated reason covers quotes,
+  apostrophes and accents exactly as well as it covers case; only case was written. The next event
+  named with a possessive would have hit it again)
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and
