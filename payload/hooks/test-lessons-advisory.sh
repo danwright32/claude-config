@@ -225,6 +225,32 @@ R=$(make_repo location 'try { x() } catch (e) { return [] }' src/where.ts)
 out=$(run_hook "git push" "$R")
 assert_contains "advisory names the file that triggered it" 'src/where.ts' "$out"
 
+# --- 14. A fixed timer wait added to a TEST file raises the test speed lessons -----------
+# The trigger is path scoped: a sleep in production code is a retry's business (section 15),
+# a sleep in a test is a test waiting on the machine's load instead of on a condition.
+R=$(make_repo sleepy 'await page.waitForTimeout(500)' e2e/rows.spec.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "a waitForTimeout in a spec file raises the fixed-wait lesson" 'L290' "$out"
+assert_contains "and the injectable sleep lesson" 'L524' "$out"
+assert_contains "it says what it spotted" 'a test that waits a fixed time' "$out"
+
+R=$(make_repo sleepy-swift 'try await Task.sleep(nanoseconds: 2_050_000_000)' Tests/RepoTests/ClockTests.swift)
+out=$(run_hook "git push" "$R")
+assert_contains "a Task.sleep in a Swift test target raises it too" 'L290' "$out"
+
+R=$(make_repo sleepy-shell 'sleep 2' hooks/test-lock.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "a bare sleep in a test-*.sh raises it too" 'L290' "$out"
+
+R=$(make_repo not-a-test 'await page.waitForTimeout(500)' src/lib/scrape.ts)
+out=$(run_hook "git push" "$R")
+assert_absent "the same line outside a test file does not raise the test lesson" 'L290' "$out"
+
+# --- 15. New retry logic carries the injectable sleep lesson -----------------
+R=$(make_repo retry-seam 'const backoff = attempt * 1000; await new Promise(r => setTimeout(r, backoff)); // retry' src/lib/fetch.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "a retry in production code points at the injectable sleep lesson" 'L524' "$out"
+
 echo
 # ---------------------------------------------------------------------------
 # A LARGE diff. The trigger matching used to feed the added lines to `grep -q` through a pipe, and
