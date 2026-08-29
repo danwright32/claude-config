@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 286 lessons.
+LESSONS.md, which is NOT loaded into the session. 291 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -111,6 +111,7 @@ to decide something: the body is where the failure it came from is described.
 - L219. A test that drives a real browser and does not assert on its CONSOLE discards a diagnosis the browser already made
 - L256. Before dropping a stored column, measure what it holds against its DECLARED DEFAULT rather than against null, because a defaulted column is non-null on every row whether anybody set it or not, and a never-written optional is null on every row, so a null test reports a harmless column as full of data and can equally let a column holding real values read as empty.
 - L260. Two outcomes a guard gives distinct MESSAGES but the same CONSEQUENCE are one outcome in practice
+- L267. Running a new version that AUTO MIGRATES a shared store consumes your ability to run the PREVIOUS version against it
 
 ## Honest failure
 
@@ -204,6 +205,7 @@ to decide something: the body is where the failure it came from is described.
 - L137. A grant checked only where it is GRANTED (a login, a signup, an invite) is never re-checked for anyone already holding a session, so removing someone from an access list takes nothing away from the people most likely to be removed, and the gap stays invisible until the first real removal.
 - L222. A privacy guard that scans your REPOSITORY cannot see what a tool PRINTS, so any tool that reads a live system (its screen, its database, its API) delivers real customer names and addresses straight into transcripts, terminal scrollback and logs by a route the guard never inspects, and from there into whatever somebody pastes them into.
 - L155. An issue or plan written with REAL measured evidence becomes the source whoever implements it copies into fixtures, so redact people's identities where the evidence is RECORDED rather than trusting the implementer to anonymise it later.
+- L268. A BULK query over a protected collection leaks the WHOLE collection in its ERROR message
 
 ## UX completeness
 
@@ -240,6 +242,7 @@ to decide something: the body is where the failure it came from is described.
 - L238. A modal or sheet driven by a single flag on shared application state is presented once per SURFACE bound to it, not once, so a second window puts up a second copy of the same thing and dismissing one leaves the others standing.
 - L242. A surface that can show only ONE of something at a time (a sheet, a modal, a dialog) silently ignores every request past the first, so attaching several independent presenters to one surface means all but one of those conditions can vanish with nothing said.
 - L243. A surface presented from a boolean saying that SOMETHING is showing cannot notice that WHICH thing is showing has changed, so replacing one modal, alert or toast with another while it is open leaves the previous content on screen.
+- L269. A finding the system cannot verify was acted on (an advisory check, a review warning, a flagged suggestion) must carry its own resolve and dismiss controls, because the person acts on it in text or in the world where nothing can observe the fix, so the notice goes on standing after the work is done and teaches them to ignore the whole panel.
 
 ## External systems
 
@@ -258,6 +261,8 @@ to decide something: the body is where the failure it came from is described.
 - L190. A read back verifying that another application performed a write must be proved to read the store THAT application writes to, never a second system subscribed to the same account.
 - L193. A feature that resolves user supplied values through a stored REFERENCE dataset (a postcode to coordinates table, a currency or carrier list, a tax rate table) is only as complete as that dataset, and a missing row is indistinguishable from a user who supplied nothing, so measure the join's real hit rate against live data before building on it rather than treating the table as authoritative because it exists.
 - L198. A check that verifies another system's work must match values no more strictly than that system does, because a verifier stricter than the actor reports failure on every correct run and can never report anything else.
+- L265. Before building a path that carries on past an external service's negative verdict, check whether that service is also the GATE on the action
+- L266. Removing a prefix by SUBSTRING REPLACEMENT matches anywhere in the value, not only at the start
 
 ## Building with AI
 

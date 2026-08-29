@@ -1044,6 +1044,20 @@ window is a count rather than a boundary.
   messages and L98 for an absent answer not to read as a pass; both were already satisfied here,
   and neither noticed that the two states were the same event to everything except a reader)
 
+- **L267. Running a new version that AUTO MIGRATES a shared store consumes your ability to run
+  the PREVIOUS version against it**, so take any baseline measurement, comparison or rollback you
+  may want BEFORE the new version opens that store for the first time. The migration is one way,
+  nothing warns you, and the moment you need the old version to answer a question it will no
+  longer start.
+  (downbeat#446: a Data tab was found to take 64 seconds to walk through accessibility, and the
+  obvious question was whether that change had caused it. The previous build had already been
+  installed and launched, which migrated the real store forward, so it then died at launch on
+  `Could not create local ModelContainer` and could not be measured at all. Attribution was
+  recovered only by building the SAME commit with the one suspect change removed, which is a
+  better experiment anyway since it moves one variable, but it was reached by luck rather than
+  by plan. L7 already says to rehearse a destructive migration against a copy of the real store,
+  and that was done; what it does not say is that the FIRST REAL LAUNCH spends the old version)
+
 ## Honest failure
 
 - **L515. Cleanup placed in a `finally` is only reached by the paths that THROW**, so a process
@@ -1873,6 +1887,20 @@ window is a count rather than a boundary.
   wider habit: roughly 90 occurrences of twelve addresses across 18 files, eight or nine of them real
   people, one in an app source comment and one in a checked-in fixture)
 
+- **L268. A BULK query over a protected collection leaks the WHOLE collection in its ERROR
+  message**, because an error quotes the operand it could not handle, so a tool's safe path and
+  its failing path have OPPOSITE disclosure properties and no guard written for the safe path
+  can see it. Query one element at a time, or discard the error text and report only its code,
+  wherever the collection is the thing being protected.
+  (downbeat#446: `drive-downbeat.sh` exists so automation cannot put Dan's client roster into a
+  transcript, and it reads text ONLY where an identifier has already matched. Bypassing it with a
+  raw `osascript` asking for one attribute across `entire contents as list` failed with -1728,
+  because many nodes lack that attribute, and the refusal quoted every node it had been given:
+  the entire Settings window, every booking row, real client names, show titles and venues, into
+  the session. The tool's own guard was irrelevant, since the leak came from the error path of a
+  query the tool would never have made. Related to L156, where a failure message quoting its
+  target defeats a substring success check; here the same property defeats a privacy control)
+
 ## UX completeness
 
 - **L20. Accessibility is part of building each control.** Labels on icon-only controls,
@@ -2169,6 +2197,17 @@ window is a count rather than a boundary.
   model level test passed and none of them could see it: what a framework redraws is not a fact
   about the state, and nothing that runs the app was watching the alerts)
 
+- **L269. A finding the system cannot verify was acted on (an advisory check, a review
+  warning, a flagged suggestion) must carry its own resolve and dismiss controls, because the
+  person acts on it in text or in the world where nothing can observe the fix, so the notice goes
+  on standing after the work is done and teaches them to ignore the whole panel.**
+  (postroll#958, 2026-08-29: a caption check correctly reported a handle that was not on the tag
+  list. Dan deleted the handle, and the panel's only response was to call itself stale, which says
+  the text moved and not that the finding was dealt with. Stale reads identically whether he fixed
+  the exact thing named or edited an unrelated word, so the panel went on quoting a handle that was
+  no longer in the caption. The stale wording exists precisely to stop the panel outliving the fix,
+  and it cannot, because only the person knows whether the fix was the one asked for)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
@@ -2301,6 +2340,37 @@ window is a count rather than a boundary.
   have said so on every booking for ever. `CalendarSentenceCheck.calendarNameDisagreements`
   was already comparing the same names case insensitively, so the codebase held two rules for
   one question and the stricter one was the half facing live data)
+
+- **L265. Before building a path that carries on past an external service's negative verdict, check
+  whether that service is also the GATE on the action**, because a verdict you can prove wrong locally
+  still refuses the action and everything done past it is spent and then thrown away. The tempting
+  shape is a local check with more context than the service has: it is genuinely right, and being
+  right buys nothing while the service is the one that has to say yes. What such a finding is worth
+  is the DIAGNOSIS, told in seconds, rather than a longer road to the same refusal.
+  (overture#3210: GitHub computes a PR's `mergeable` flag with a plain text merge and cannot see the
+  repo's `.gitattributes` merge driver, so a PR whose only collisions are generated files reports as
+  CONFLICTING while `git merge-tree` resolves it locally and exits 0. The plan was to notice that and
+  carry on. GitHub will not merge a PR it reports as CONFLICTING however the local clone merges it, so
+  carrying on would have run the full eleven minute suite and then failed at `gh pr merge`, worse than
+  refusing in two seconds. The evidence was in the incident's own PR: #3196 carries a pushed
+  `Merge remote-tracking branch 'origin/main'` AND a pushed `Regenerate project.pbxproj after merging
+  main` before GitHub would take it. What shipped instead names which of the two kinds of collision it
+  is and hands over the three commands, and the automatic branch update became overture#3216, because
+  it means pushing a regenerated file to somebody's branch)
+
+- **L266. Removing a prefix by SUBSTRING REPLACEMENT matches anywhere in the value, not only at the
+  start**, so when the two sides come from sources that can disagree about it (a compile time path
+  against a resolved one, a symlink against its target) the removal takes a bite out of the middle
+  and produces a plausible wrong value rather than an error. Resolve both sides to one canonical
+  form before comparing them, or ask the API for the relative part rather than computing it.
+  (PostRoll#941: `DeepLinkWiringTests` derives each source file's relative path by replacing
+  `root.path + "/"` with nothing, where `root` comes from `#filePath`, recorded by the compiler, and
+  the file URLs come from a `FileManager` enumerator, which resolves symlinks. On macOS `/tmp` is a
+  symlink to `/private/tmp`, so a checkout under `/tmp` left the trim removing a substring from the
+  middle: `/private/tmp/.../Sources/AppState.swift` became `/private` + `AppState.swift`, fused into
+  `privateAppState.swift`, and the test failed naming a file nobody had written. It refused loudly
+  only because that fused name happened not to exist; a trim landing on a real file would have read
+  the wrong one and reported about it)
 
 ## Building with AI
 
