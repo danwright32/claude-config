@@ -2284,6 +2284,20 @@ window is a count rather than a boundary.
   the only way out of it was an end of turn picker showing 4, on a 30 minute cooldown, so clearing
   the backlog would have taken sixty odd reviews and in practice never happened)
 
+- **L279. A record's usefulness that depends on a COMBINATION of individually optional inputs is
+  stated nowhere, because each field reads as independently optional at the point of entry, so
+  name the requirement on the form itself and give the partly filled state its own label saying
+  what is still missing.** Otherwise somebody enters a real value and is told, correctly by the
+  rule and falsely as English, that nothing was entered. L11 covers the label once the record
+  exists; this covers the requirement being invisible while the person is still filling the form,
+  which is the only moment they could act on it.
+  (PostRoll#977: the collaborator numbers dialog takes followers, likes and comments, all
+  optional, and ranks only on an engagement rate needing followers plus at least one of the other
+  two. Its copy said "Leave a field empty if you do not know it", true of each field alone and
+  silent about the pairing, and a followers only record then reported "Not counted yet", the same
+  string used for an account nobody had ever opened, immediately after a follower count and a date
+  had been stored for it)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
