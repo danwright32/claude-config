@@ -496,6 +496,51 @@ contains "LOST" "$out_count" \
   && check "a correct delete does not warn about losses" "it warned: ${out_count: -250}" \
   || check "a correct delete does not warn about losses" ok
 
+# ---------------------------------------------------------------------------
+# A record ARRIVING while the tool runs is not a record lost.
+#
+# The second Mac writes to its spool constantly: two new keys appeared between
+# one dry run and the next. So a record can land between the plan and the final
+# count, and the guard compared the two totals for INEQUALITY, which would then
+# announce lost records and tell the person to restore from the backup and not
+# re-run. Following that advice would DISCARD the record that had just arrived,
+# so the false alarm is more destructive than the thing it warns about (L11).
+# ---------------------------------------------------------------------------
+seed
+python3 "$MIGRATE" --apply >/dev/null 2>&1     # settle everything first
+rec_cwd "" "$TMPROOT/anywhere" "an arrival mid-run" > "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+out_arrive="$(CLAUDE_MIGRATE_ARRIVAL_SEAM="$CLAUDE_ISSUE_SPOOL_DIR/arrived.jsonl" \
+  python3 "$MIGRATE" --apply 2>&1)"
+contains "LOST RECORDS" "$out_arrive" \
+  && check "a record arriving mid-run is not called a loss" "it said records were lost" \
+  || check "a record arriving mid-run is not called a loss" ok
+contains "arrived while this ran" "$out_arrive" \
+  && check "a record arriving mid-run is reported as what it is" ok \
+  || check "a record arriving mid-run is reported as what it is" "out=${out_arrive: -250}"
+
+# The positive control: a genuine LOSS must still be reported as one, in the
+# same fixture, or the change above has simply switched the guard off.
+seed
+out_loss="$(CLAUDE_MIGRATE_LOSS_SEAM=1 python3 "$MIGRATE" --apply 2>&1)"
+contains "LOST RECORDS" "$out_loss" \
+  && check "a genuine loss is still reported" ok \
+  || check "a genuine loss is still reported" "out=${out_loss: -250}"
+
+# The delete carries the same split, and it needs its own test: a branch that
+# ships on the strength of its twin being tested is a branch nobody has run.
+seed_cwd
+rm -rf "$CLAUDE_PROJECTS_DIR/$ENC_REPO"
+rec_cwd "" "${TMPDIR:-/tmp}/arrivecheck-$$/spool-project" "a leftover to remove" \
+  >> "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+out_del_arr="$(CLAUDE_MIGRATE_ARRIVAL_SEAM="$CLAUDE_ISSUE_SPOOL_DIR/arrived.jsonl" \
+  python3 "$MIGRATE" --forget-test-records --apply 2>&1)"
+contains "TOOK MORE THAN IT NAMED" "$out_del_arr" \
+  && check "the delete does not call an arrival an over-delete" "it did" \
+  || check "the delete does not call an arrival an over-delete" ok
+contains "arrived while this ran" "$out_del_arr" \
+  && check "the delete reports an arrival as what it is" ok \
+  || check "the delete reports an arrival as what it is" "out=${out_del_arr: -250}"
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

@@ -252,16 +252,24 @@ def forget_test_records(apply):
         with open(path, "w", encoding="utf-8") as fh:
             for line in kept:
                 fh.write(line + "\n")
+    if os.environ.get("CLAUDE_MIGRATE_ARRIVAL_SEAM"):
+        with open(os.environ["CLAUDE_MIGRATE_ARRIVAL_SEAM"], "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": "seam", "status": "found",
+                                 "findings": ["arrived while the tool ran"]}) + "\n")
     after = count_records()
     print("\nFORGOTTEN. %d record(s) removed. %d record(s) before, %d after. The whole spool as "
           "it was is in %s." % (total, before, after, backup))
     # The same check the migration carries, for the same reason: it is the only
     # thing that noticed a lost record there, and a delete shipped without one
     # can take more than it named and say nothing.
-    if after != before - total:
+    # Same split as the migration, for the same reason.
+    if after < before - total:
         print("DELETE TOOK MORE THAN IT NAMED: expected %d after, got %d. Restore from %s and do "
               "not re-run." % (before - total, after, backup))
         return 1
+    if after > before - total:
+        print("%d record(s) arrived while this ran, from a session finishing alongside it. "
+              "Nothing extra was taken." % (after - (before - total)))
     return 0
 
 
@@ -370,11 +378,36 @@ def main():
             for line in arriving:
                 fh.write(line + "\n")
 
+    # Test seams: the two ways the final count can differ from the first, driven
+    # deliberately rather than by racing a real writer.
+    if os.environ.get("CLAUDE_MIGRATE_ARRIVAL_SEAM"):
+        with open(os.environ["CLAUDE_MIGRATE_ARRIVAL_SEAM"], "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": "seam", "status": "found",
+                                 "findings": ["arrived while the tool ran"]}) + "\n")
+    if os.environ.get("CLAUDE_MIGRATE_LOSS_SEAM"):
+        for path in glob.glob(os.path.join(SPOOL, "*.jsonl")):
+            if path.endswith(".filed.jsonl"):
+                continue
+            lines = [l for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
+            if lines:
+                open(path, "w", encoding="utf-8").writelines(lines[1:])
+                break
+
     after = count_records()
     print("\nAPPLIED. %d record(s) before, %d after." % (before, after))
-    if before != after:
-        print("MIGRATION LOST RECORDS. Restore from %s and do not re-run." % backup)
+    # LESS is a loss and MORE is an arrival, and they are nothing like each
+    # other. This machine writes to its spool constantly, so a record can land
+    # between the plan and this count; calling that a loss would send a person
+    # to restore from the backup, which would then DISCARD the record that had
+    # just arrived. The false alarm would be worse than the fault (L11).
+    if after < before:
+        print("MIGRATION LOST RECORDS: %d before, %d after. Restore from %s and do not re-run."
+              % (before, after, backup))
         return 1
+    if after > before:
+        print("%d record(s) arrived while this ran, from a session finishing alongside it. "
+              "Nothing was lost; they are still pending and will be offered as normal."
+              % (after - before))
     return 0
 
 
