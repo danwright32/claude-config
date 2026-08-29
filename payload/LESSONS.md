@@ -3197,3 +3197,335 @@ window is a count rather than a boundary.
   the trap in fixing it: WHICH ceiling fires has to be measured, because if it is CPU then
   changing a wall clock budget cannot prevent the kill and reads as a fix that changed
   nothing)
+
+## Test speed
+
+Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
+PlayedIt, claude-config, Downbeat, PostRoll, Overture). Full text with the measurements:
+~/.claude/audits/2026-08-29-test-speed-audit/. These are the rules that apply while WRITING a
+test; the ones that apply while shaping CI or a pre-push hook are in "Pipeline speed" below.
+Read alongside L524 (an injectable sleep from day one), L284 (every seam set or named), L286
+(one derivation per suite) and L288 (judge a run by its executed count first).
+
+- **L290. A test that waits a FIXED time for something (a click to land, a clock to move, a poll
+  to fire) is asserting about the machine's load, so wait on the condition itself, or SET the
+  clock, and the instant version is the stronger test.** A fixed 300ms after a click is a budget
+  that stops being enough under CI load, which is exactly when it is judged (L522), while a wait
+  on the row appearing is faster on the happy path and cannot flake for that reason. A fixture
+  that sleeps so two timestamps differ can set them instead (GIT_AUTHOR_DATE and
+  GIT_COMMITTER_DATE), which pins both ends (L130, L134). A poll interval is a sleep with a
+  condition attached, and its granularity is the seam: a watchdog that polls every 2 seconds
+  makes the smallest stall a test can stage several seconds long.
+  (PET, 2026-08-29: about 28 seconds of its browser suite is fixed timer sleeps, fourteen specs
+  sleeping 100 to 600ms after a click and two waits with nothing conditional after them at all.
+  PostRoll: one Swift file sleeping 2.05 seconds between git commits, 24 seconds a run.
+  claude-config and Downbeat: lock and tracker polls fixed at 1 and 2 seconds, about 40 and 25
+  seconds of their shell suites)
+
+- **L291. A test that can only pass by REACHING something (a network, a live service, a real
+  client) is either an integration test that lives with the others, or a test with a missing
+  seam, and one that asserts only that a failure happened is satisfied by the environment failing
+  and pays a timeout to prove nothing.** L140 says any throw satisfies "it threw"; the speed form
+  is that the throw it gets in CI is a network timeout, so the test waits for the timeout on the
+  way to a pass that means nothing. A file comment saying "no protocol seam, so test the real
+  thing" is the whole cost written down as a design.
+  (playedit#344, 2026-08-29: the Apple sign-in tests call the real client with a junk token and
+  assert it returned false and set an error. In CI the client points at a placeholder host, so
+  the network fails, the assertion passes, and four tests wait 10 to 308 seconds per run)
+
+- **L292. A subsumption sweep (which tests are strictly weaker than a neighbour, which titles are
+  duplicated) is worth running even when it finds nothing, and when it does find a deletion, name
+  which surviving test covers each deleted assertion.** A clean sweep is not wasted: it is what
+  licenses spending the whole speed effort on the pipeline instead of the tests, and in eight of
+  nine repos that is where the time was. A deletion without a named survivor is coverage removed
+  on a promise.
+  (2026-08-29 audit: PET found weak tests standing beside strictly stronger neighbours and the
+  same auth-gate tests copied into six files; Bidspoke's 400 file sweep, Slate's 499, NurseDex's
+  226, and the sweeps at Downbeat, PostRoll and Overture all came back clean. Bidspoke's first
+  pass had CLAIMED the sweep without doing it, which the second pass caught)
+
+- **L293. A flake is a speed cost priced at a full re-run, and a retry hides the price, so count
+  flakes on every run, put the count where a reviewer looks, and rank a recurring one with the
+  speed findings rather than the reliability backlog.** Retries are the right call (a red PR and a
+  manual re-run is worse), but they convert a failure that would have been investigated into a
+  delay nobody sees, and an html reporter nobody opens is the same as no reporter. The opposite
+  failure hides the same way: a parallel run that loses a whole worker's share has no retry and
+  no crash line, and only a count against a baseline sees either (L288).
+  (project-enrollment-tracker#931, 2026-08-29: filed as a flake and priced a month later at a 7
+  to 9 minute re-run in both currencies. NurseDex: two of ten E2E runs took 413 and 462 seconds
+  against 210 to 230, both green, because `retries: 2` absorbed the failure. Overture: 4,875 of
+  8,595 tests executed and a verdict naming twelve failures)
+
+- **L294. On a starved runner, per-test durations measure the runner, not the tests, and some
+  runner formats print elapsed-since-start rather than cost, so read the format and the core
+  count before reading the numbers, and keep only what is slow in every one of several runs.**
+  A 3 or 4 core machine hosting a build toolchain, two simulator clones and the test process
+  reports whichever test happened to be running while it was frozen (L203). xcodebuild's parallel
+  format and Swift Testing under Xcode 26 print `passed after N seconds` where N is elapsed since
+  the worker began, so a one line boolean reads as 64 seconds and the column sums to ten times
+  the wall clock: that table is a start order, not a cost table.
+  (PlayedIt, 2026-08-29: a struct constructor at 70.8 seconds and a one-line boolean at 21.8,
+  and the next run names a different set of trivial tests; exactly one group survived the
+  several-run filter and it was the real finding. Downbeat: 3,211 of 3,267 tests read as half a
+  second or more inside a 27 second run. Overture: the same suite prints real costs in its serial
+  log and elapsed-since-start in its parallel one)
+
+- **L295. When the tests are the time, the suite's own concurrency setting is the first thing to
+  read, in the runner you actually use, and the reading is arithmetic: sum the per-test durations
+  and compare with the wall clock, because equal means one core and no reading of the source will
+  tell you that.** Swift Testing runs in parallel under `swift test` and serially under an Xcode
+  scheme whose testable says `parallelizable = "NO"`, which is what the generator writes when
+  nobody says otherwise, and a belief about the default can be recorded in a lock's own header as
+  fact for months.
+  (Overture, 2026-08-29: a process-wide lock written on the belief that suites run concurrently
+  by default, in a scheme where nothing ever had. PostRoll: 416.7 seconds of summed test bodies
+  against a 417.8 second testing phase, both numbers already printed in the log, in a project
+  whose scheme carries no `parallelizable` at all because xcodegen wrote none)
+
+- **L296. Anything that divides work between workers (shards, a launch order, a balance check)
+  divides by a MEASURED cost, never by a count of items, and the check that guards the balance
+  measures in the same unit (L63), or it passes while measuring the wrong thing.** Counting
+  sections balances nothing when the slowest five are 52, 38, 27, 27 and 24 seconds against a
+  median under 2. And a measurement that only exists on the machine it was taken on is not in
+  CI: a timing store under `~/.cache` orders nothing on a runner that starts cold, and an `npm ci`
+  deletes vitest's own results cache on every run, so both order by file size every time and
+  happen to be right until the day they are not.
+  (claude-config#144 and #107, 2026-08-29: the runner one level up kept a per-suite timing store
+  and ordered by it, the suite one level down printed every section's duration and used none of
+  it; at four shards one carried 165 seconds and the lightest 76. Every CI run prints "measured
+  wall clock for 0 of 42 suites, file size for the rest")
+
+- **L297. A scanner that guards a class of fault across the whole tree pays per line, so it is
+  written as one pass per file from the start, and a failing guard's full output is kept (L148)
+  so an intermittent failure can be diagnosed instead of retried.** A per line subprocess loop is
+  fine at a hundred lines and is the whole wait at twenty thousand, and its cost grows with the
+  tree it guards, which is the one thing about it that never stops growing.
+  (Downbeat, 2026-08-29: the pipefail scanner is the right guard (four hand fixes, then a check,
+  L30) and it spawned a `sed` and a `grep` per line for 17,353 lines of shell: 80 to 177 seconds,
+  and one unexplained failure in three runs that nothing kept the output of)
+
+- **L298. A harness that reruns the suite once per case (a mutation sweep, a property sweep, a
+  matrix, a suite that tests itself by launching itself) pays the boot once per case, so the
+  lever is the boot, then the cadence, and never the tests; the per-case verdict semantics that
+  make the tool trustworthy must survive the change unchanged.** N boots dominate N runs of a
+  24 second suite. After the boot is as cheap as it gets, ask how often the sweep runs: a proof
+  that changes only when a guard or its target changes does not need re-proving on every merge.
+  (NurseDex, 2026-08-29: 105 mutants, each a fresh vitest process, 207 to 219 seconds on every
+  push to main for about 24 seconds of test bodies. claude-config: 39 launch sites at 1.4 seconds
+  each before the first section runs. PostRoll: 433 guards re-proved 33 times a week at four
+  macOS runners for 23 minutes, for facts the per-pull-request job already proves)
+
+## Pipeline speed
+
+The rules that apply while shaping CI, a deploy workflow or a pre-push hook. Same audit as
+"Test speed" above. The recurring shape: the tests took seconds, the wait took minutes, and the
+difference was plumbing.
+
+- **L299. The tests are innocent until measured guilty and the pipeline rarely is, so the first
+  move in any speed pass is per-step timing of every stage a push or merge waits on, read off the
+  CI API, before a single test is opened.** In every repo audited the suites ran in seconds to a
+  minute locally while pull requests waited minutes, and an audit that started from the test code
+  would have found almost nothing. When there is no CI, the gate's own guards ARE the pipeline
+  and need the same per-step timing.
+  (2026-08-29 audit: Bidspoke 9 seconds of tests against a 3.2 minute wait, PET 71 seconds
+  against 7 to 9.5 minutes, Slate 15 seconds against 5.5, NurseDex 12 seconds against 8.5.
+  PlayedIt could not be timed locally at all and the CI log still told the story: one to eight
+  minutes of test bodies inside a 10 to 35 minute job)
+
+- **L300. A gate's own guards are a pipeline and they are never timed because nobody thinks of
+  them as tests, so time every stage a push waits on including the ones that guard the guards,
+  and put the measurement where the claim about it lives, so the next drift is a diff rather
+  than a discovery.** The only number anyone sees is the whole push, and a comment saying the
+  self tests take about a second was true the day it was written and wrong by a factor of four
+  hundred for weeks (L32, L210). A receive-path run that records a verdict with no duration has
+  only a comment beside its timeout to say how long it is.
+  (Downbeat#190, 2026-08-29: the pre-push hook runs 45 shell self tests, serially, before the 27
+  second suite it exists to run, and they took 402 seconds under that comment. Overture's merge
+  script records nothing about its own length, so its 13.6 minutes was reconstructed from the
+  API, a build log's timestamp and an xcresult)
+
+- **L301. Look for the same work done twice per event: a suite run by two jobs, an artifact built
+  twice per pull request, a merge verified by two workflows, migrations applied by two adjacent
+  steps, a target compiled for a runner that never launches it.** In all nine repos the
+  redundancy at the pipeline level dwarfed redundancy at the assertion level, and the duplicate
+  title sweep came back clean in most of them. `-only-testing` chooses what executes, not what
+  builds.
+  (2026-08-29 audit: Bidspoke's guard suite ran twice per CI run and every merge was verified by
+  ci.yml and deploy.yml at once; Slate's coverage job re-ran the entire suite per PR; NurseDex
+  applied 65 migrations in `supabase start` and again in `supabase db reset` the next step, 47
+  times a month; PlayedIt compiled and signed a UI test runner for 425 tests the job never ran)
+
+- **L302. Serial steps with no dependency on each other are free wall clock, so split them, but
+  only what is independent and only when the split leg is on the critical path, because a split
+  buys the shorter leg at the price of a duplicated setup.** Two steps that each need the
+  service the job just started are not independent: splitting them starts the service twice. A
+  loop of self-sandboxed cases run one after another waits their sum when it could wait their
+  maximum.
+  (Bidspoke#1063 area, 2026-08-29: worker and web suites back to back in one job, the single
+  biggest wall-clock win in the first three audits. NurseDex is the limit: its steps share one
+  Supabase, and a split would win 30 seconds on a PR that waits 8 minutes for the other job.
+  Downbeat: 45 self tests at 402 seconds summed against about 22 at their maximum)
+
+- **L303. Cache or kill the cold starts (a build cache, a browser download, container images,
+  package checkouts), keyed on the thing that invalidates them; a tool invoked through `npx` that
+  is not in `package.json` is downloaded on every run at whatever version is latest that day and
+  wants a pinned devDependency, not a cache; a cold start that cannot be cached can often be
+  started earlier; and a cache that RESTORES on every run is only a log line until a measured
+  difference in what gets rebuilt says it saves anything (L3, L98).** The cheapest cache is the
+  work not done: exclude the services the suite never reaches rather than cache their images.
+  (2026-08-29 audit: NurseDex pulled twelve Docker images cold per run, 115 of a 160 second step,
+  seven of them for services nothing in the suite reaches. PET's wrangler and Bidspoke's vercel
+  were both npx downloads. PlayedIt booted its simulator after a two to six minute build instead
+  of during it. PostRoll restored a DerivedData cache on all 16 recent runs, two exact hits, and
+  all 16 recompiled every one of about 527 units, while the 58 copies at 276 MB each evicted the
+  caches that did work)
+
+- **L304. A report-only check still gates in practice: if the merge flow waits for every check
+  to go green, "report-only" describes the workflow file and not the waiting, so price an
+  informational job as if it were a gate, because to the person waiting it is one.** It also
+  becomes the critical path silently the moment the real gate gets faster.
+  (Slate, 2026-08-29: a coverage job that gates nothing on paper re-ran the whole suite on every
+  PR and delayed every merge in fact)
+
+- **L305. Job and check names are load-bearing: workflow files, guard scripts and branch rulesets
+  all key on them, and the ruleset is the one a search of the repo cannot find, so a job split
+  or rename ships a fan-in job holding the old name plus a pin that its requirements list stays
+  complete.** A rename that breaks an automation is a coverage loss wearing a speed win's
+  clothes.
+  (2026-08-29 audit: Bidspoke's deploy re-asserts `needs.verify.result` by hand inside an
+  `always()`; Slate's merge guard reads the check literally named "ci"; NurseDex's required
+  checks are named in a branch ruleset)
+
+- **L306. Wall-clock minutes and billed minutes are different budgets, so price every pipeline
+  change in both, read the paid currency off the billing system rather than the plan page, and
+  read the multiplier off the runner label, because a macOS runner draws ten allowance minutes
+  per minute and a self-hosted one draws none.** Which currency bites is a fact about the
+  account the repo lives in: an org allowance shared by every repo can be gone by the 7th of the
+  month, a personal private repo may pay nothing, and the largest lever on a metered Mac runner
+  is the choice of runner rather than any cache or split.
+  (2026-08-29 audit: the org's 2,000 free minutes were gone by 7 August and every minute after
+  was metered, 16,341 minutes and $82.53 across the org; PlayedIt spent 1,970 of a personal
+  2,000 minute allowance in 26 hours on fourteen ordinary macOS runs and the fifteenth was
+  refused. Every audit had at least one recommendation declined or reshaped by the paid
+  currency)
+
+- **L307. On a free public repository the runner concurrency limit is the budget, so a job is
+  priced in the slots it holds times how long it holds them, whoever is waiting, and every job
+  launched over the limit delays every other.** Neither currency in L306 is non-zero there and
+  the wait can still be the longest of all, because a workflow comment pricing a duplicate job at
+  "nothing else" is right about money and wrong about the pool; the queue shows up attributed to
+  GitHub rather than to the jobs filling it, and only a minute by minute model of the pool shows
+  which job is the cause.
+  (PostRoll, 2026-08-29: five concurrent macOS jobs allowed, six launched per pull request and
+  ten per merge, median PR wait 18.6 minutes and p90 35; in 524 of the 877 minutes something was
+  queued exactly five of its own jobs were running, the post-merge sweep alone holding 48
+  percent of the contended slot-minutes)
+
+- **L308. The speed lever you refuse is part of the audit: name in writing the biggest lever you
+  deliberately did not pull and what it would change in what is measured or caught, so a future
+  speed pass does not "discover" it.** Each repo's largest available lever changed the meaning of
+  a check (vitest `isolate:false`, killing animations before accessibility scans, rewriting
+  rendered-style checks as text greps, dropping a double check).
+  (2026-08-29 audit, one per repo, each recorded under "What was deliberately not proposed")
+
+- **L309. A structural change to how a suite runs (a job split, a worker count, a shard scheme,
+  a new reporter) rides on an instrument that already reports the thing the change could break,
+  and if no instrument exists, or the existing one only reads the shape of run it has already
+  seen, building or re-fitting it is the first issue, ahead of anything it would judge.** A flake
+  count nobody publishes cannot judge a worker-count experiment; a baseline gate that cannot
+  parse the new log format goes quiet exactly when it is needed.
+  (2026-08-29 audit: NurseDex's reporter was html only, so the flake count was made the first
+  issue in its milestone. Overture HAD a short-run gate and the parallel experiment changed the
+  format under it, so it printed that it could not read the totals while 3,720 tests went
+  unexecuted behind a verdict)
+
+- **L310. Every job bills a minimum of one minute, so a tiny always-on job is expensive when its
+  isolation is decorative and worth keeping when the isolation does work (it gates something on
+  its own, it must be able to fail alone); and a job sitting just OVER the minute is worth the
+  same look as one just under it.** Three read-only comparisons as three jobs bill three minutes
+  for under 30 seconds of work; a job-level `if` learns "this PR is not Dependabot's" for free
+  where a job bills a minute to learn it; a 30 second `npm ci` whose only purpose is to make one
+  script runnable tips a 65 second job into a two minute bill.
+  (2026-08-29 audit: PET's 5 second lint job burned about 100 minutes a month and folded away;
+  Slate's 11 second migration gate bills the same minute and stays because it gates deploys
+  alone; NurseDex's Production Smoke bills two minutes 48 times a month)
+
+- **L311. An audit of "PR testing" stops at the PR unless it walks to production, so time the
+  path from merge to live as carefully as the path from push to green, because it is the wait a
+  person actually sits through after clicking merge, and it may hold the largest serial block in
+  the whole pipeline.** The walk can come back with the opposite answer (a deploy gated on
+  nothing, so the post-merge runs are signals after the fact, and whether production should ship
+  before its sweep finishes is a product decision for its own issue), and that answer has to be
+  written down too, or someone optimises the main-push jobs on the belief that they hold the
+  deploy.
+  (Bidspoke, 2026-08-29: the first pass timed every PR job to the second and never timed Deploy's
+  Verify job, 250 serial seconds every deploy waits on. NurseDex: merge-to-live is one minute and
+  the 6.5 minute CI run on main gates nothing)
+
+- **L312. Name the consumer of every run before ranking anything, because a run whose only
+  reader is a person is priced in that person's minutes and a run with no reader is priced
+  entirely in the paid currency; and when the merge tool proves the merged tree is byte for byte
+  the pull request's tree (linear history, up to date branch, squash merge, identical tree
+  hash), the post-merge re-run is provably redundant and can be skipped fail closed on that
+  proof, never on a path or a trigger.** The proof matters: where the two runs prove the branch
+  beside two different bases they are not redundant, and one PR has been green on one and red on
+  the other.
+  (2026-08-29 audit: PostRoll's, NurseDex's and PlayedIt's last six merges each have tree hashes
+  identical to their PR heads, 27 macOS runner-minutes a merge re-testing for nobody; Overture's
+  PR #2345 is the counterexample, so its answer was to make both runs faster)
+
+- **L313. Every CI job carries an explicit timeout (a hang is worse than a failure: L110, and on
+  a metered Mac runner a six hour default costs two months of allowance), and the guard that
+  requires it points at the directory and at every repo the class can appear in, not at the one
+  file it was written for.** A guard scoped to one file passes forever while the defect it names
+  sits next door (L135, L30), and a FIX obeys the same law until the class is swept in the same
+  change (L195). Where there is no CI the class lives in the pre-push hook: a self test stuck on
+  a machine wide `lsof` hangs the push with nothing printed.
+  (2026-08-29 audit: nine for nine. Bidspoke's guard covers ci.yml with a comment explaining why,
+  and three sibling workflow files had no timeout on any job; Slate, NurseDex, PlayedIt and
+  claude-config had files with none; PostRoll's guard names three of its four files in a tuple)
+
+- **L314. CI that has stopped is the slowest test suite there is and it stops quietly: a refused
+  run looks like a failed run in every list, nothing alerts on an exhausted allowance, and a repo
+  that goes quiet for a month looks like a repo nobody is working on, so a speed pass begins by
+  confirming the tests are running at all, and a repo on a capped or metered runner needs a
+  visible surface showing how much of the month is left before the day it is zero (L13, L523).**
+  (PlayedIt, 2026-08-29: the allowance ran out on 28 July and every run since was refused before
+  its first step; the only trace was a red check on one PR. NurseDex is the same account type one
+  step earlier, at 38 percent with no surface showing it)
+
+- **L315. Anything divided into fixed-size pieces under a fixed deadline needs a test holding the
+  measured size of the largest piece to a fraction of the deadline (L172, L224) and pieces dealt
+  by measured cost rather than by count (L296), because a sweep sized by count grows into its
+  own deadline and the red it then produces names the sweep's size as a broken guard (L11).**
+  The mirror image is a platform deadline set BELOW the suite's own, so the deadline that exists
+  to name the section never gets to speak.
+  (PostRoll, 2026-08-29: four shards of about 100 entries under 1,800 seconds, medians at 1,264
+  to 1,391 and a p90 near 1,500, four shards red in one week with entries "never reached before
+  the deadline, so they are UNPROVEN". claude-config: the job timeout stayed at 20 minutes while
+  the suite's own ceiling was raised to an hour)
+
+- **L316. A recorded decision carries the premise it was made on, and the premise can expire
+  while the decision stands, so record the premise in a form that can be re-measured (a pin, a
+  command, a number with its source) rather than as a dated sentence, because a date on a number
+  makes it MORE trusted, not less (L61, L244, L210).** "Do not re-open this on the strength of
+  the wall clock alone" was true when the runners had spare slots; a closed issue rejecting a
+  lighter scheme on the premise that the build was the cost was never measured before the
+  decision and measured months later to save nothing; a design justified by "a Swift suite of
+  177s" was three times wrong sixteen days later in the one file that elsewhere refuses to state
+  the run time for exactly this reason.
+  (2026-08-29 audit: PostRoll#571 priced a duplicate render at "about 200s and nothing else";
+  Overture#2487 and its AGENTS.md; claude-config had seven dated numbers all a week stale;
+  Downbeat's gate still says two to three minutes in six places against 46 seconds measured)
+
+- **L317. A pipeline change is judged first by the count of tests it executed against the count
+  expected, before a single failure is read, and the readout is built BEFORE the change that
+  could produce a partial run, because a partial run that reports a verdict is worse than a failed
+  run (L288, L98).** The failures are the visible half and the absences are the half that matters.
+  A count readout that refuses zero and passes half, or one the CI step never goes through, is
+  not a readout. A filtered run whose identifiers match nothing prints `Executed 0 tests` and
+  exits 0 unless something reads the number.
+  (2026-08-29 audit: Overture executed 4,875 of 8,595 and named twelve failures; PlayedIt's
+  parallel issue got the readout as its first task; PostRoll's `suite_counts.py` refuses a leg
+  that ran zero and passes one that ran half, and the CI Swift step never goes through it;
+  Downbeat's filtered run printed `Executed 0 tests` and exited 0)
