@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 343 lessons.
+LESSONS.md, which is NOT loaded into the session. 344 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -129,6 +129,7 @@ to decide something: the body is where the failure it came from is described.
 - L10. An error state and an empty state are different screens.
 - L199. A marker meant to be READ BY CODE (a prefix, an error code, a sentinel) must reach its reader unwrapped
 - L11. Distinct causes get distinct messages, and a message may claim only what its check actually measured.
+- L319. A marker that exists to prove a run is in a SPECIAL mode (a synthetic or test store banner, a staging watermark, a dry run notice) must be produced by whatever ESTABLISHES that mode, never by one surface that happens to display it, because a surface that never opens makes the marker's absence mean both "not in that mode" and "in it, and saying nothing".
 - L12. Show success only after the write commits, and report what verifiably happened.
 - L13. Background jobs and webhooks alert on failure and on the absence of an expected run.
 - L53. Two independent checks must never share one status field.

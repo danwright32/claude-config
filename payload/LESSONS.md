@@ -1214,6 +1214,22 @@ window is a count rather than a boundary.
 - **L11. Distinct causes get distinct messages, and a message may claim only what its
   check actually measured.** A fallback or unreadable value presents as "could not
   read", never silently scored as an answer. (21 issues, 3 repos)
+
+- **L319. A marker that exists to prove a run is in a SPECIAL mode (a synthetic or test
+  store banner, a staging watermark, a dry run notice) must be produced by whatever
+  ESTABLISHES that mode, never by one surface that happens to display it, because a
+  surface that never opens makes the marker's absence mean both "not in that mode" and
+  "in it, and saying nothing".** Absence is the reading people actually rely on, so the
+  announcement belongs to the state's own lifetime rather than to a view's.
+  (downbeat#478, 2026-08-29: the synthetic store banner and the seeding both sat in one
+  `.task` on the MAIN window. Launched with the store variable set and only Settings
+  opened, which is the state a fresh launch lands in, neither ran: Settings showed "No
+  clients yet" with no banner, on a launch that really was synthetic. The banner is
+  absent on a real launch too, so its absence had stopped distinguishing them, and
+  somebody checking a screen they believed was invented could have been reading the real
+  client roster, which is the exposure downbeat#447 had already cost once. The store
+  itself was correct and in memory throughout, and the real file was never touched, so
+  every test passed and only launching it and looking showed the silence, which is L3)
 - **L12. Show success only after the write commits, and report what verifiably
   happened.** No success UI over a detached save; "sent" means the external system
   confirmed. (12 issues, 4 repos)
