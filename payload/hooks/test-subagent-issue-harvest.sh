@@ -1089,6 +1089,45 @@ raw_big_count="$(printf '%s\n' "$raw_big" | grep -c "Distinct finding number" ||
   && check "capping the view leaves every finding pending" ok \
   || check "capping the view leaves every finding pending" "$raw_big_count of 60 remain"
 
+# ---------------------------------------------------------------------------
+# The spool's location must be read when a record is WRITTEN, not when this file
+# is sourced.
+#
+# Found 2026-08-29 by looking at what the migration could not place: 120 records
+# on one machine and 5 on another, every one of them naming a temp directory
+# called "spool-project", which is a FIXTURE from test-blank-check-cost.sh. That
+# suite sources this library and only then sets CLAUDE_ISSUE_SPOOL_DIR, so the
+# root had already been bound to the real one and every run wrote a fake finding
+# into Dan's live spool (L2: a test must be structurally unable to touch live
+# data; L175: a value read once at startup is only true at startup).
+#
+# Fixing only the caller would leave the trap set for the next one, so the
+# library is what changes (L30).
+# ---------------------------------------------------------------------------
+LATE="$TMPROOT/late-spool"
+FAKE_HOME="$TMPROOT/fake-home"
+mkdir -p "$FAKE_HOME"
+late_out="$(
+  HOME="$FAKE_HOME" bash -c '
+    unset CLAUDE_ISSUE_SPOOL_DIR
+    . "$1"                                   # sourced with no spool dir set
+    export CLAUDE_ISSUE_SPOOL_DIR="$2"       # set only afterwards
+    issue_spool_note "$3" "a finding written after the library was sourced" tester >/dev/null 2>&1
+    printf "%s" "$(cat "$2"/*.jsonl 2>/dev/null)"
+  ' _ "$SPOOL_LIB" "$LATE" "$REPO"
+)"
+contains "written after the library was sourced" "$late_out" \
+  && check "the spool location is read when a record is written" ok \
+  || check "the spool location is read when a record is written" "nothing landed in the late spool"
+
+# The positive control, and the whole point: it must not have gone to the
+# default location instead. Checked against a FAKE home, so this assertion can
+# never depend on, or disturb, the real spool.
+[ -e "$FAKE_HOME/.claude-issue-spool" ] \
+  && check "nothing is written to the default spool when one is set" \
+       "it wrote to $FAKE_HOME/.claude-issue-spool" \
+  || check "nothing is written to the default spool when one is set" ok
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

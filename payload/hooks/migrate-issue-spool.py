@@ -41,6 +41,29 @@ LIB = os.environ.get("CLAUDE_ISSUE_SPOOL_LIB") or os.path.join(HERE, "lib", "iss
 HOME = os.environ.get("CLAUDE_MIGRATE_HOME") or os.path.expanduser("~")
 EXAMPLE_DIRS = 10   # how many distinct unplaceable directories to name
 
+# Where a temp directory lives. A record naming a path under one of these, for a
+# directory that no longer exists, and which nothing could place, was written by
+# a test into the live spool: no real project is ever checked out inside a temp
+# directory, so this cannot reach a genuine finding.
+TEMP_ROOTS = tuple(
+    os.path.normpath(p) + os.sep
+    for p in filter(None, [os.environ.get("TMPDIR"), "/tmp", "/private/tmp",
+                           "/var/folders", "/private/var/folders"]))
+
+
+def looks_like_a_test_leftover(cwd):
+    """Could not be placed, sits in a temp directory, and that directory is gone.
+
+    All three, deliberately. A temp path that still exists proves nothing, and a
+    vanished path outside a temp directory could be a project that moved.
+    """
+    if not cwd:
+        return False
+    d = os.path.normpath(cwd)
+    if not d.startswith(TEMP_ROOTS):
+        return False
+    return not os.path.isdir(d)
+
 
 def key_for_project(project_dir, cache={}):
     """The key the library gives a session living in this project directory.
@@ -171,8 +194,73 @@ def plan():
     return moves, keeps, stay, placed_by, already[0], unplaceable, unplaceable_kind
 
 
+def forget_test_records(apply):
+    """Drop the records a test wrote into the live spool."""
+    doomed = collections.Counter()
+    keeps = {}
+    for path in sorted(glob.glob(os.path.join(SPOOL, "*.jsonl"))):
+        if path.endswith(".filed.jsonl"):
+            continue
+        kept, dropped = [], 0
+        for line in open(path, encoding="utf-8", errors="replace"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                kept.append(line); continue
+            cwd = rec.get("cwd") if isinstance(rec, dict) else None
+            if looks_like_a_test_leftover(cwd):
+                doomed[cwd] += 1
+                dropped += 1
+                continue
+            kept.append(line)
+        if dropped:
+            keeps[path] = kept
+    total = sum(doomed.values())
+    print("TEST LEFTOVERS")
+    print("  %d record(s) name a temp directory that is gone, across %d distinct director(ies)."
+          % (total, len(doomed)))
+    for d, n in doomed.most_common(EXAMPLE_DIRS):
+        print("    %4d x  %s" % (n, d))
+    if len(doomed) > EXAMPLE_DIRS:
+        print("    ...and %d more." % (len(doomed) - EXAMPLE_DIRS))
+    if not total:
+        print("\nNothing to forget.")
+        return 0
+    if not apply:
+        print("\nDRY RUN. Nothing was changed. This would forget %d record(s); "
+              "add --apply to do it." % total)
+        return 0
+    backup = take_backup()
+    for path, kept in keeps.items():
+        with open(path, "w", encoding="utf-8") as fh:
+            for line in kept:
+                fh.write(line + "\n")
+    print("\nFORGOTTEN. %d record(s) removed. The whole spool as it was is in %s."
+          % (total, backup))
+    return 0
+
+
+def take_backup():
+    """A copy of the whole spool, under a name nothing else holds."""
+    base = os.path.join(
+        os.path.dirname(SPOOL.rstrip("/")) or ".",
+        os.path.basename(SPOOL.rstrip("/")) + ".backup-" + time.strftime("%Y%m%d-%H%M%S"))
+    backup, n = base, 1
+    while os.path.exists(backup):
+        backup = "%s-%d" % (base, n)
+        n += 1
+    shutil.copytree(SPOOL, backup)
+    print("backup: %s" % backup)
+    return backup
+
+
 def main():
     apply = "--apply" in sys.argv
+    if "--forget-test-records" in sys.argv:
+        return forget_test_records(apply)
     moves, keeps, stay, placed_by, already, unplaceable, unplaceable_kind = plan()
     total = sum(len(v) for v in moves.values())
     before = sum(len(v) for v in keeps.values()) + total
@@ -216,19 +304,7 @@ def main():
     # a second machine, it moves the only copy of records nobody has read, and
     # nothing here can be put back by hand. A dry run takes none: it changes
     # nothing, so a backup would only be litter that looks like a recovery point.
-    # The stamp is only good to the second, and two runs inside one second are
-    # ordinary in a test and possible by hand. A colliding name must not take the
-    # run down before anything is backed up, so the name is made unique rather
-    # than assumed to be.
-    base = os.path.join(
-        os.path.dirname(SPOOL.rstrip("/")) or ".",
-        os.path.basename(SPOOL.rstrip("/")) + ".backup-" + time.strftime("%Y%m%d-%H%M%S"))
-    backup, n = base, 1
-    while os.path.exists(backup):
-        backup = "%s-%d" % (base, n)
-        n += 1
-    shutil.copytree(SPOOL, backup)
-    print("backup: %s" % backup)
+    backup = take_backup()
 
     # DESTINATIONS FIRST, sources second. Killed between the two, a record is
     # present TWICE rather than nowhere. A duplicate is visible and can be

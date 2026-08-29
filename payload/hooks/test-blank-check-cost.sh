@@ -124,6 +124,12 @@ out_clean="$(bash "$CHECK" "$CLEAN" 2>&1)"; code_clean=$?
 # ---------------------------------------------------------------------------
 # The spool's own blank test, whose input is model output of unbounded length.
 # ---------------------------------------------------------------------------
+# EXPORTED BEFORE SOURCING. The library now resolves its location on every write,
+# so setting this afterwards would work anyway, but a test that depends on that
+# to stay out of the real spool is one library change away from writing into it
+# again. This suite wrote a fake finding into Dan's live spool on every run for
+# as long as it existed, 120 of them on one machine (L2).
+export CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool"
 # shellcheck source=/dev/null
 . "$SPOOL"
 SPOOLDIR="$TMPROOT/spool-project"; mkdir -p "$SPOOLDIR"
@@ -131,7 +137,7 @@ git -C "$SPOOLDIR" init -q 2>/dev/null
 
 LONG="$(seq 1 4000 | tr '\n' ' ')"   # 4,000 whitespace matches, built without a shell loop
 
-note_long() { CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool" issue_spool_note "$SPOOLDIR" "$LONG" tester; }
+note_long() { issue_spool_note "$SPOOLDIR" "$LONG" tester; }
 run_by "$DEADLINE" "$TMPROOT/note.out" note_long
 rc_note=$?
 [ "$rc_note" -ne 124 ] \
@@ -139,7 +145,7 @@ rc_note=$?
   || check "a long finding is spooled inside $DEADLINE seconds" "it was still running at the deadline"
 
 # A finding that really is blank is still refused, so the speed above is not the check being gone.
-CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool" issue_spool_note "$SPOOLDIR" "$(printf ' \n\t ')" tester >/dev/null 2>&1
+issue_spool_note "$SPOOLDIR" "$(printf ' \n\t ')" tester >/dev/null 2>&1
 [ "$?" -eq 2 ] \
   && check "an all-whitespace finding is still refused" ok \
   || check "an all-whitespace finding is still refused" "it was accepted"

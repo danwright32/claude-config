@@ -45,7 +45,14 @@
 # derived notes are not config.
 set -uo pipefail
 
-SPOOL_ROOT="${CLAUDE_ISSUE_SPOOL_DIR:-$HOME/.claude-issue-spool}"
+# WHERE THE SPOOL LIVES, resolved every time it is needed rather than once when
+# this file is read. A caller that SOURCES this library and sets
+# CLAUDE_ISSUE_SPOOL_DIR afterwards used to be silently ignored, because the
+# root had already been bound to the default: test-blank-check-cost.sh did
+# exactly that and wrote a fake finding into the real spool on every run,
+# 120 of them on one machine before anyone noticed (L2, L175). Fixing that one
+# caller would have left the trap armed for the next, so it is fixed here (L30).
+issue_spool_root() { printf '%s' "${CLAUDE_ISSUE_SPOOL_DIR:-$HOME/.claude-issue-spool}"; }
 
 # How many records the archive keeps. It is only history, and nothing reads it
 # automatically, but left uncapped it grows for as long as the machine lives.
@@ -129,8 +136,8 @@ issue_spool_key() { # key <dir> [session-transcript]
   printf '%s' "$root" | shasum | cut -c1-12
 }
 
-issue_spool_path()         { printf '%s/%s.jsonl' "$SPOOL_ROOT" "$(issue_spool_key "${1:-$PWD}" "${2:-}")"; }
-issue_spool_archive_path() { printf '%s/%s.filed.jsonl' "$SPOOL_ROOT" "$(issue_spool_key "${1:-$PWD}" "${2:-}")"; }
+issue_spool_path()         { printf '%s/%s.jsonl' "$(issue_spool_root)" "$(issue_spool_key "${1:-$PWD}" "${2:-}")"; }
+issue_spool_archive_path() { printf '%s/%s.filed.jsonl' "$(issue_spool_root)" "$(issue_spool_key "${1:-$PWD}" "${2:-}")"; }
 
 # Every key a reader must consult: the session's, plus the directory's, so that
 # nothing already spooled the old way is stranded the moment this ships. The
@@ -139,8 +146,8 @@ issue_spool_archive_path() { printf '%s/%s.filed.jsonl' "$SPOOL_ROOT" "$(issue_s
 #
 # Deduplicated, because when no transcript is supplied the two are the same key
 # and reading it twice would double every count a person is shown.
-issue_spool_path_for_key()    { printf '%s/%s.jsonl' "$SPOOL_ROOT" "$1"; }
-issue_spool_archive_for_key() { printf '%s/%s.filed.jsonl' "$SPOOL_ROOT" "$1"; }
+issue_spool_path_for_key()    { printf '%s/%s.jsonl' "$(issue_spool_root)" "$1"; }
+issue_spool_archive_for_key() { printf '%s/%s.filed.jsonl' "$(issue_spool_root)" "$1"; }
 
 # The pending records a reader should see, from every key it must consult,
 # concatenated into one throwaway file. Every reader goes through this so that
@@ -179,7 +186,7 @@ issue_spool_append() { # append <dir> <json-record>
   [ -n "$record" ] || return 2
   case "$record" in *$'\n'*) return 2 ;; esac
   printf '%s' "$record" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null || return 2
-  mkdir -p "$SPOOL_ROOT" 2>/dev/null || return 1
+  mkdir -p "$(issue_spool_root)" 2>/dev/null || return 1
   printf '%s\n' "$record" >> "$file" 2>/dev/null || return 1
 
   # Keep the pending file bounded (claude-config#19). A fault that recurs adds a
@@ -498,7 +505,7 @@ issue_spool_clear_key() { # clear-key <key>
   file="$(issue_spool_path_for_key "$1")"
   archive="$(issue_spool_archive_for_key "$1")"
   [ -s "$file" ] || return 0
-  mkdir -p "$SPOOL_ROOT" 2>/dev/null || return 1
+  mkdir -p "$(issue_spool_root)" 2>/dev/null || return 1
   staged="${file}.filing.$$"
   mv "$file" "$staged" 2>/dev/null || return 1
 
@@ -583,7 +590,7 @@ issue_spool_file_subset_key() { # file-subset-key <key> <errors|muted>
   file="$(issue_spool_path_for_key "$1")"
   archive="$(issue_spool_archive_for_key "$1")"
   [ -s "$file" ] || return 0
-  mkdir -p "$SPOOL_ROOT" 2>/dev/null || return 1
+  mkdir -p "$(issue_spool_root)" 2>/dev/null || return 1
   staged="${file}.filing-errors.$$"
   keep="${staged}.keep"
   errs="${staged}.errors"

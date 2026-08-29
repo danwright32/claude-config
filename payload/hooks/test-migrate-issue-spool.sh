@@ -348,6 +348,69 @@ contains "found" "$out_kind" && contains "error" "$out_kind" \
   && check "the dry run says what kind of records it could not place" ok \
   || check "the dry run says what kind of records it could not place" "out=${out_kind: -400}"
 
+# ---------------------------------------------------------------------------
+# Forgetting records that were never real.
+#
+# 120 of one machine's records, and 5 of the other's, were written by a test
+# suite into the live spool: findings about a fixture, naming a temp directory
+# that no longer exists. They can never be placed, because no project ever lived
+# there, and they are not worth placing.
+#
+# The rule is deliberately narrow and evidence based: the record could not be
+# placed, the directory it names is inside a temp directory, and that directory
+# is gone. No real project lives in a temp directory, so this cannot reach a
+# genuine finding, and all three conditions must hold.
+# ---------------------------------------------------------------------------
+seed_cwd
+rm -rf "$CLAUDE_PROJECTS_DIR/$ENC_REPO"
+TMPGONE="${TMPDIR:-/tmp}/gone-fixture-$$/spool-project"
+rec_cwd "" "$TMPGONE" "a finding about a test fixture" >> "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+
+# A dry run must not delete anything, and must say what it would take.
+out_forget_dry="$(python3 "$MIGRATE" --forget-test-records 2>&1)"
+contains "a finding about a test fixture" "$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl")" \
+  && check "forgetting is a dry run until it is applied" ok \
+  || check "forgetting is a dry run until it is applied" "it deleted without --apply"
+contains "would forget" "$out_forget_dry" \
+  && check "the dry run says what it would forget" ok \
+  || check "the dry run says what it would forget" "out=${out_forget_dry: -300}"
+
+python3 "$MIGRATE" --forget-test-records --apply >/dev/null 2>&1
+left="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl" 2>/dev/null)"
+contains "a finding about a test fixture" "$left" \
+  && check "a record naming a vanished temp directory is forgotten" "it is still there" \
+  || check "a record naming a vanished temp directory is forgotten" ok
+
+# What it must NOT touch, checked in the same fixture so the deletion above is
+# not passing because nothing matched at all.
+#
+# The path has to sit OUTSIDE any temp directory: this whole suite runs inside
+# one, so a fixture built from its own scratch directory is indistinguishable
+# from the leftovers being deleted, and the first version of this check failed
+# for exactly that reason.
+rec_cwd "" "/Users/no-such-person/a-real-looking-project" "a vanished project outside any temp directory" \
+  >> "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+python3 "$MIGRATE" --forget-test-records --apply >/dev/null 2>&1
+left="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl" 2>/dev/null)"
+contains "a vanished project outside any temp directory" "$left" \
+  && check "an unplaceable record outside a temp directory is kept" ok \
+  || check "an unplaceable record outside a temp directory is kept" "it was deleted too"
+
+# A temp directory that STILL EXISTS is not evidence of anything, so it stays.
+TMPHERE="${TMPDIR:-/tmp}/still-here-$$/spool-project"
+mkdir -p "$TMPHERE"
+rec_cwd "" "$TMPHERE" "a finding in a temp directory that still exists" >> "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+python3 "$MIGRATE" --forget-test-records --apply >/dev/null 2>&1
+contains "temp directory that still exists" "$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl" 2>/dev/null)" \
+  && check "a record in a temp directory that still exists is kept" ok \
+  || check "a record in a temp directory that still exists is kept" "it was deleted"
+rm -rf "${TMPDIR:-/tmp}/still-here-$$"
+
+# And forgetting takes a backup too, since it is the only destructive mode here.
+contains "backup:" "$(python3 "$MIGRATE" --forget-test-records --apply 2>&1)" \
+  && check "forgetting takes a backup first" ok \
+  || check "forgetting takes a backup first" "no backup was named"
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
