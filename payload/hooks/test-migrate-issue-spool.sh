@@ -445,6 +445,42 @@ done <<< "$out_all"
   && check "the delete lists every directory it would take" ok \
   || check "the delete lists every directory it would take" "listed $listed of 25"
 
+# ---------------------------------------------------------------------------
+# A file that is BOTH a source and a destination.
+#
+# Hit on the second Mac, 2026-08-29: 30 records before, 29 after, and the tool's
+# own loss check stopped the run. One spool file had records staying in it AND a
+# record arriving into it. Arrivals are appended first, for crash safety, and the
+# sources are then rewritten from a list computed BEFORE that append, so the
+# rewrite destroyed the record that had just arrived.
+#
+# Reordering the two phases is not the answer: sources-first is what loses
+# records when a run is killed. The rewrite has to include what arrived.
+# ---------------------------------------------------------------------------
+rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+mkdir -p "$CLAUDE_PROJECTS_DIR/-project-one" "$CLAUDE_PROJECTS_DIR/-project-two"
+touch "$CLAUDE_PROJECTS_DIR/-project-one/session-one.jsonl"
+touch "$CLAUDE_PROJECTS_DIR/-project-two/session-two.jsonl"
+K_ONE="$(bash "$SPOOL_LIB" key "$TMPROOT" "$CLAUDE_PROJECTS_DIR/-project-one/any.jsonl")"
+K_TWO="$(bash "$SPOOL_LIB" key "$TMPROOT" "$CLAUDE_PROJECTS_DIR/-project-two/any.jsonl")"
+
+# K_ONE holds a record that belongs there (it stays) and also receives one from
+# K_TWO, so it is a source and a destination at once.
+rec_cwd session-one "$TMPROOT/anywhere" "the record that already lived here" > "$CLAUDE_ISSUE_SPOOL_DIR/$K_ONE.jsonl"
+rec_cwd session-one "$TMPROOT/anywhere" "the record that has to move here" > "$CLAUDE_ISSUE_SPOOL_DIR/$K_TWO.jsonl"
+
+out_both="$(python3 "$MIGRATE" --apply 2>&1)"
+landed_both="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$K_ONE.jsonl" 2>/dev/null)"
+contains "the record that has to move here" "$landed_both" \
+  && check "a record moving into a file that also has residents survives" ok \
+  || check "a record moving into a file that also has residents survives" "it was overwritten"
+contains "the record that already lived here" "$landed_both" \
+  && check "the residents of that file survive too" ok \
+  || check "the residents of that file survive too" "they were overwritten"
+contains "LOST RECORDS" "$out_both" \
+  && check "the run does not report losing records" "it did: ${out_both: -200}" \
+  || check "the run does not report losing records" ok
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

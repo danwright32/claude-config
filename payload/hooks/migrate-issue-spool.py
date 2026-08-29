@@ -334,9 +334,21 @@ def main():
         print("aborting after the write, on purpose (test seam)")
         return 1
 
+    # The rewrite must include what just ARRIVED in this file. A spool file can
+    # be a source and a destination at once (records staying in it, and one
+    # moving into it), and `kept` was computed before the append above, so
+    # writing it alone destroys the arrival. Hit for real on the second Mac:
+    # 30 records before, 29 after, caught only by the count check below.
+    #
+    # Reordering the two phases is not the answer. Sources-first is what loses
+    # records when a run is killed, which is the failure this ordering exists to
+    # prevent; the rewrite simply has to know about the arrivals.
     for path, kept in keeps.items():
+        arriving = moves.get(os.path.basename(path)[:-len(".jsonl")], [])
         with open(path, "w", encoding="utf-8") as fh:
             for line in kept:
+                fh.write(line + "\n")
+            for line in arriving:
                 fh.write(line + "\n")
 
     after = 0
