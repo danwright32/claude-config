@@ -37,6 +37,11 @@ worked=$(python3 "$(dirname "${BASH_SOURCE[0]}")/turn-worked.py" "$transcript" 2
 # otherwise get one review between them, and the rest of what they found would
 # sit unread until the window reopened, by which point the session is usually
 # over. Reading does not consume the spool; only filing does.
+# The session's own transcript path is handed to every spool call. It is what
+# keys the spool, so that an agent working in a repo nested inside this folder
+# lands where this review will actually look: keying each side on its own
+# directory let the two drift apart, and 47 findings sat unread for a week
+# because of it (see issue_spool_key).
 proj="${CLAUDE_PROJECT_DIR:-$PWD}"
 SPOOL_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/issue-spool.sh"
 # `pending` exits non-zero when there is nothing to show, and this script runs
@@ -46,12 +51,12 @@ SPOOL_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/issue-spool.sh"
 pending=""
 urgent="no"
 if [ -f "$SPOOL_LIB" ]; then
-  pending=$(bash "$SPOOL_LIB" pending "$proj" 2>/dev/null) || pending=""
+  pending=$(bash "$SPOOL_LIB" pending "$proj" "$transcript" 2>/dev/null) || pending=""
   # Only a real FINDING earns the cooldown bypass. A harvest that FAILED is
   # reported whenever the review next speaks, but does not itself make it speak:
   # a recurring failure keeps the spool permanently non-empty, which would fire
   # the review on every single turn and teach us both to ignore it.
-  if bash "$SPOOL_LIB" has-findings "$proj" >/dev/null 2>&1; then urgent="yes"; fi
+  if bash "$SPOOL_LIB" has-findings "$proj" "$transcript" >/dev/null 2>&1; then urgent="yes"; fi
 fi
 
 # One failure reason has no remedy at all: an agent spawned by another agent
@@ -73,7 +78,7 @@ if [ -f "$SPOOL_LIB" ]; then
   [ -f "$muted_stamp" ] && muted_last=$(cat "$muted_stamp" 2>/dev/null || echo 0)
   case "$muted_last" in ''|*[!0-9]*) muted_last=0 ;; esac
   if [ $(( $(date +%s) - muted_last )) -ge "$MUTED_REPORT_SECONDS" ]; then
-    muted_line=$(bash "$SPOOL_LIB" muted-summary "$proj" 2>/dev/null) || muted_line=""
+    muted_line=$(bash "$SPOOL_LIB" muted-summary "$proj" "$transcript" 2>/dev/null) || muted_line=""
   fi
 fi
 if [ -n "$muted_line" ]; then
@@ -132,14 +137,14 @@ if [ -n "$injected" ]; then
   # filing there would settle a failure nobody was ever shown. The known cost that
   # remains is a review interrupted before it is read, which files one unseen.
   if [ -n "$pending" ] && [ -f "$SPOOL_LIB" ]; then
-    bash "$SPOOL_LIB" file-errors "$proj" >/dev/null 2>&1 || true
+    bash "$SPOOL_LIB" file-errors "$proj" "$transcript" >/dev/null 2>&1 || true
   fi
   # The held-back records are settled and the week restarted ONLY when their
   # count actually went out with this review. Doing either on a review that
   # could not be delivered would lose the report AND silence the next week of
   # them, which is the one way holding them back could hide a fault for good.
   if [ -n "$muted_line" ] && [ -f "$SPOOL_LIB" ]; then
-    bash "$SPOOL_LIB" file-muted "$proj" >/dev/null 2>&1 || true
+    bash "$SPOOL_LIB" file-muted "$proj" "$transcript" >/dev/null 2>&1 || true
     printf '%s' "$(date +%s)" > "$muted_stamp" 2>/dev/null || true
   fi
 else

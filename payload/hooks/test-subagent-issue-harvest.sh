@@ -121,7 +121,7 @@ stub() { # stub <script-body>  -> writes an executable stub and points the seam 
   export CLAUDE_ISSUE_HARVEST_CMD="$TMPROOT/stub.sh"
 }
 
-records() { bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null; }
+records() { bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null; }
 reset_spool() { rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; }
 
 # `producer | grep -q needle` is a trap under `pipefail`, which this suite sets: grep -q exits on
@@ -131,7 +131,7 @@ reset_spool() { rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; }
 # output is captured first and matched against a variable.
 spool_says() { # spool_says <needle>  -> true when `spool pending` mentions it
   local out
-  out="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null || true)"
+  out="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null || true)"
   case "$out" in *"$1"*) return 0 ;; *) return 1 ;; esac
 }
 
@@ -287,7 +287,7 @@ stub 'exit 7'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
-lines="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -c "HARVEST FAILED" || true)"
+lines="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -c "HARVEST FAILED" || true)"
 [ "$lines" = "1" ] \
   && check "one repeated failure is reported once, not once per occurrence" ok \
   || check "one repeated failure is reported once, not once per occurrence" "printed $lines lines"
@@ -297,7 +297,7 @@ reset_spool
 stub 'exit 7'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 payload "$REPO" OMIT | bash "$HARVEST" >/dev/null 2>&1
-lines="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep -c "HARVEST FAILED" || true)"
+lines="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -c "HARVEST FAILED" || true)"
 [ "$lines" = "2" ] \
   && check "two different failures are still reported separately" ok \
   || check "two different failures are still reported separately" "printed $lines lines"
@@ -317,11 +317,11 @@ stub 'echo "FINDING: filed before the clear."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 
 export CLAUDE_ISSUE_SPOOL_MIDCLEAR="bash '$SPOOL_LIB' append '$REPO' '{\"ts\":\"t\",\"status\":\"found\",\"findings\":[\"arrived-mid-clear\"]}'"
-bash "$SPOOL_LIB" clear "$REPO" >/dev/null 2>&1
+bash "$SPOOL_LIB" clear "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 unset CLAUDE_ISSUE_SPOOL_MIDCLEAR
 
-still_pending="$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null)"
-archived="$(bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null)"
+still_pending="$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
+archived="$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 printf '%s' "$still_pending" | grep -q "arrived-mid-clear" \
   && check "a finding arriving during filing is not eaten by it" ok \
   || check "a finding arriving during filing is not eaten by it" "pending=$still_pending"
@@ -338,7 +338,7 @@ payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 stub 'echo NONE'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 
-pending="$(bash "$SPOOL_LIB" pending "$REPO" 2>&1)"
+pending="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>&1)"
 pending_code=$?
 printf '%s' "$pending" | grep -q "queue rebuild is not measured" \
   && [ "$pending_code" -eq 0 ] \
@@ -352,18 +352,18 @@ lines="$(printf '%s\n' "$pending" | grep -c "FINDING" || true)"
 
 # Reading must NOT clear. A review that is read and then interrupted has to leave
 # the finding behind for the next one.
-pending_again="$(bash "$SPOOL_LIB" pending "$REPO" 2>&1)"
+pending_again="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>&1)"
 printf '%s' "$pending_again" | grep -q "queue rebuild is not measured" \
   && check "reading pending does not consume it" ok \
   || check "reading pending does not consume it" "out=$pending_again"
 
-bash "$SPOOL_LIB" clear "$REPO" >/dev/null 2>&1
-bash "$SPOOL_LIB" pending "$REPO" >/dev/null 2>&1
+bash "$SPOOL_LIB" clear "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 [ $? -ne 0 ] \
   && check "clear empties pending" ok \
   || check "clear empties pending" "pending survived clear"
 
-archive="$(bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null)"
+archive="$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 printf '%s' "$archive" | grep -q "queue rebuild is not measured" \
   && check "clear keeps the record in the archive" ok \
   || check "clear keeps the record in the archive" "archive=$archive"
@@ -433,7 +433,7 @@ printf '%s' "$out_err_cold" | grep -q "HARVEST FAILED" \
   || check "a failure is still reported at the next ordinary review" "not mentioned"
 
 # With the spool empty, the cooldown must still hold, or the review fires every turn.
-bash "$SPOOL_LIB" clear "$REPO" >/dev/null 2>&1
+bash "$SPOOL_LIB" clear "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 out_quiet="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
 [ -z "$out_quiet" ] \
   && check "an empty spool leaves the cooldown in force" ok \
@@ -466,7 +466,7 @@ REVIEW_STAMP="${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" 
 reset_spool
 stub 'exit 9'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
-bash "$SPOOL_LIB" note "$REPO" "the retry path has no failure test" "nested-agent" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "the retry path has no failure test" "nested-agent" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 rm -f "$REVIEW_STAMP"
 out_settle="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
 # The positive control. Every "gone from pending" assertion below is satisfied by
@@ -486,14 +486,14 @@ printf '%s' "$out_settle" | grep -q "it will not come back" \
   && check "the delivered review says a failure will not come back" ok \
   || check "the delivered review says a failure will not come back" "out=${out_settle:0:200}"
 
-pend_settle="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null)"
+pend_settle="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 printf '%s' "$pend_settle" | grep -q "HARVEST FAILED" \
   && check "a reported failure is not offered a second time" "still pending: ${pend_settle:0:200}" \
   || check "a reported failure is not offered a second time" ok
 printf '%s' "$pend_settle" | grep -q "retry path has no failure test" \
   && check "a finding in the same spool is left pending" ok \
   || check "a finding in the same spool is left pending" "pending=${pend_settle:0:200}"
-arch_settle="$(bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null)"
+arch_settle="$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 printf '%s' "$arch_settle" | grep -q '"status": *"error"' \
   && check "the settled failure is filed, not dropped" ok \
   || check "the settled failure is filed, not dropped" "archive=${arch_settle:0:200}"
@@ -510,7 +510,7 @@ out_nodel="$(printf '%s' "$review_payload" | CLAUDE_INJECT_SPOOL_FORCE_FAIL=1 ba
 printf '%s' "$out_nodel" | grep -q "HARVEST FAILED" \
   && check "the undelivered review really left the failure out" "it carried it: ${out_nodel:0:200}" \
   || check "the undelivered review really left the failure out" ok
-pend_nodel="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null)"
+pend_nodel="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 printf '%s' "$pend_nodel" | grep -q "HARVEST FAILED" \
   && check "a failure nobody was shown stays pending" ok \
   || check "a failure nobody was shown stays pending" "pending=${pend_nodel:0:200}"
@@ -519,9 +519,9 @@ printf '%s' "$pend_nodel" | grep -q "HARVEST FAILED" \
 # would settle something nobody has read (L11). It stays until a person files it.
 reset_spool
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-printf 'this is not a record at all\n' >> "$(bash "$SPOOL_LIB" path "$REPO")"
-bash "$SPOOL_LIB" file-errors "$REPO" >/dev/null 2>&1
-pend_corrupt="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null)"
+printf 'this is not a record at all\n' >> "$(bash "$SPOOL_LIB" path "$REPO" "$PARENT_TRANSCRIPT")"
+bash "$SPOOL_LIB" file-errors "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+pend_corrupt="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 printf '%s' "$pend_corrupt" | grep -q "UNREADABLE SPOOL RECORDS" \
   && check "filing failures leaves an unreadable record pending" ok \
   || check "filing failures leaves an unreadable record pending" "pending=${pend_corrupt:0:200}"
@@ -616,32 +616,32 @@ size="$(records | wc -c | tr -d ' ')"
 # A corrupt line must be reported, not skipped in silence.
 reset_spool
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-printf 'this is not json\n' >> "$(bash "$SPOOL_LIB" path "$REPO")"
+printf 'this is not json\n' >> "$(bash "$SPOOL_LIB" path "$REPO" "$PARENT_TRANSCRIPT")"
 spool_says "UNREADABLE SPOOL" \
   && check "a corrupt spool line is reported" ok \
   || check "a corrupt spool line is reported" "silently skipped"
 
 # append must refuse anything that would break one record per line.
 reset_spool
-bash "$SPOOL_LIB" append "$REPO" 'not json at all' 2>/dev/null \
+bash "$SPOOL_LIB" append "$REPO" 'not json at all' "$PARENT_TRANSCRIPT" 2>/dev/null \
   && check "append refuses a non-JSON record" "it accepted it" \
   || check "append refuses a non-JSON record" ok
 bash "$SPOOL_LIB" append "$REPO" '{"a":1}
-{"b":2}' 2>/dev/null \
+{"b":2}' "$PARENT_TRANSCRIPT" 2>/dev/null \
   && check "append refuses a multi-line record" "it accepted it" \
   || check "append refuses a multi-line record" ok
 
 # The archive must not grow forever.
 reset_spool
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-arch="$(bash "$SPOOL_LIB" archive-path "$REPO" 2>/dev/null)"
+arch="$(bash "$SPOOL_LIB" archive-path "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 if [ -n "$arch" ]; then
   python3 -c "
 import sys
 open(sys.argv[1],'w').write(''.join('{\"ts\":\"t\",\"status\":\"none\",\"n\":%d}\n' % i for i in range(9000)))
 " "$arch"
-  bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"found","findings":["trigger"]}'
-  bash "$SPOOL_LIB" clear "$REPO" >/dev/null 2>&1
+  bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"found","findings":["trigger"]}' "$PARENT_TRANSCRIPT"
+  bash "$SPOOL_LIB" clear "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
   lines="$(wc -l < "$arch" | tr -d ' ')"
   [ "$lines" -le 5100 ] \
     && check "the archive is capped" ok \
@@ -653,10 +653,10 @@ fi
 # raw and archive must not exit non-zero just because the spool is empty: a
 # caller under errexit dies on the ordinary case.
 reset_spool
-bash "$SPOOL_LIB" raw "$REPO" >/dev/null 2>&1 \
+bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1 \
   && check "raw exits 0 on an empty spool" ok \
   || check "raw exits 0 on an empty spool" "exited non-zero"
-bash "$SPOOL_LIB" archive "$REPO" >/dev/null 2>&1 \
+bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1 \
   && check "archive exits 0 on an empty spool" ok \
   || check "archive exits 0 on an empty spool" "exited non-zero"
 
@@ -717,7 +717,7 @@ p = sys.argv[1]
 with open(p, 'w') as fh:
     for i in range(4000):
         fh.write(json.dumps({'ts':'t','status':'found','findings':['finding number %d %s' % (i, 'y'*200)]}) + '\n')
-" "$(bash "$SPOOL_LIB" path "$REPO")"
+" "$(bash "$SPOOL_LIB" path "$REPO" "$PARENT_TRANSCRIPT")"
 rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
 out_big="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
 printf '%s' "$out_big" | grep -q '"decision"' \
@@ -730,7 +730,7 @@ printf '%s' "$out_big" | grep -q '"decision"' \
 # anywhere, so for that shape of agent this is the only capture path there is.
 # ---------------------------------------------------------------------------
 reset_spool
-bash "$SPOOL_LIB" note "$REPO" "the queue rebuild is unmeasured" "fix/2693 agent" >/dev/null 2>&1 \
+bash "$SPOOL_LIB" note "$REPO" "the queue rebuild is unmeasured" "fix/2693 agent" "$PARENT_TRANSCRIPT" >/dev/null 2>&1 \
   && check "note records a finding" ok \
   || check "note records a finding" "note exited non-zero"
 spool_says "queue rebuild is unmeasured" \
@@ -739,7 +739,7 @@ spool_says "queue rebuild is unmeasured" \
 spool_says "fix/2693 agent" \
   && check "a noted finding says who reported it" ok \
   || check "a noted finding says who reported it" "source not shown"
-bash "$SPOOL_LIB" has-findings "$REPO" >/dev/null 2>&1 \
+bash "$SPOOL_LIB" has-findings "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1 \
   && check "a noted finding counts as a real finding" ok \
   || check "a noted finding counts as a real finding" "did not count"
 bash "$SPOOL_LIB" note "$REPO" "   " >/dev/null 2>&1 \
@@ -753,12 +753,12 @@ bash "$SPOOL_LIB" note "$REPO" "   " >/dev/null 2>&1 \
 # ---------------------------------------------------------------------------
 reset_spool
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-bash "$SPOOL_LIB" note "$REPO" "a finding that must survive compaction" "early agent" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "a finding that must survive compaction" "early agent" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 for i in $(seq 1 60); do
-  bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the harvest model exited 1"}' >/dev/null 2>&1
+  bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the harvest model exited 1"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 done
-CLAUDE_ISSUE_SPOOL_PENDING_MAX=20 bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the harvest model exited 1"}' >/dev/null 2>&1
-remaining="$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -c . || true)"
+CLAUDE_ISSUE_SPOOL_PENDING_MAX=20 bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the harvest model exited 1"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+remaining="$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -c . || true)"
 [ "$remaining" -lt 40 ] \
   && check "the pending file is compacted once it grows" ok \
   || check "the pending file is compacted once it grows" "$remaining records remain"
@@ -771,7 +771,7 @@ spool_says "a finding that must survive compaction" \
 # compaction quietly turns 61 failures into 1 and the scale of a fault vanishes.
 spool_says "61 times" \
   && check "compaction preserves the true failure count" ok \
-  || check "compaction preserves the true failure count" "count wrong: $(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | grep 'HARVEST FAILED' | cut -c1-90)"
+  || check "compaction preserves the true failure count" "count wrong: $(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep 'HARVEST FAILED' | cut -c1-90)"
 
 # ---------------------------------------------------------------------------
 # Muting the one failure reason that has no remedy.
@@ -793,8 +793,8 @@ MUTED_REASON='the named agent transcript does not exist'
 muted_rec() { printf '{"ts":"%s","status":"error","agent":"subagent","error":"%s"}' "${1:-2026-08-29T12:00:00Z}" "$MUTED_REASON"; }
 
 reset_spool
-bash "$SPOOL_LIB" append "$REPO" "$(muted_rec)" >/dev/null 2>&1
-out_muted="$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null)"
+bash "$SPOOL_LIB" append "$REPO" "$(muted_rec)" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+out_muted="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 rc_muted=$?
 [ -z "$out_muted" ] && [ "$rc_muted" -ne 0 ] \
   && check "a spool holding only the unfixable failure shows nothing" ok \
@@ -803,15 +803,15 @@ rc_muted=$?
 # The half that must be preserved: a DIFFERENT failure reason is still reported
 # on every review, exactly as before.
 reset_spool
-bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T12:00:00Z","status":"error","agent":"subagent","error":"the harvest model exited 1"}' >/dev/null 2>&1
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T12:00:00Z","status":"error","agent":"subagent","error":"the harvest model exited 1"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 spool_says "the harvest model exited 1" \
   && check "a fixable failure reason still prints every time" ok \
-  || check "a fixable failure reason still prints every time" "pending=$(bash "$SPOOL_LIB" pending "$REPO" 2>/dev/null | cut -c1-140)"
+  || check "a fixable failure reason still prints every time" "pending=$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | cut -c1-140)"
 
 # A muted failure must not suppress anything else sharing the spool with it.
 reset_spool
-bash "$SPOOL_LIB" append "$REPO" "$(muted_rec)" >/dev/null 2>&1
-bash "$SPOOL_LIB" note "$REPO" "a real finding that must still be shown" "tester" >/dev/null 2>&1
+bash "$SPOOL_LIB" append "$REPO" "$(muted_rec)" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "a real finding that must still be shown" "tester" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 spool_says "a real finding that must still be shown" \
   && check "a muted failure does not hide a finding beside it" ok \
   || check "a muted failure does not hide a finding beside it" "finding missing"
@@ -823,9 +823,9 @@ spool_says "HARVEST FAILED" \
 # `count` a compaction leaves behind, or the periodic report understates a fault
 # by exactly the amount compaction tidied away.
 reset_spool
-bash "$SPOOL_LIB" append "$REPO" "$(muted_rec 2026-08-27T09:00:00Z)" >/dev/null 2>&1
-bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-28T09:00:00Z","status":"error","agent":"subagent","count":40,"error":"the named agent transcript does not exist"}' >/dev/null 2>&1
-summary="$(bash "$SPOOL_LIB" muted-summary "$REPO" 2>/dev/null)"
+bash "$SPOOL_LIB" append "$REPO" "$(muted_rec 2026-08-27T09:00:00Z)" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-28T09:00:00Z","status":"error","agent":"subagent","count":40,"error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+summary="$(bash "$SPOOL_LIB" muted-summary "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 case "$summary" in
   *41*) check "the held-back count includes folded records" ok ;;
   *)    check "the held-back count includes folded records" "summary=${summary:0:160}" ;;
@@ -834,8 +834,8 @@ esac
 # Nothing held back means nothing to report, so the periodic line can tell
 # "still happening" from "stopped" (L98).
 reset_spool
-bash "$SPOOL_LIB" note "$REPO" "only a finding here" "tester" >/dev/null 2>&1
-bash "$SPOOL_LIB" muted-summary "$REPO" >/dev/null 2>&1 \
+bash "$SPOOL_LIB" note "$REPO" "only a finding here" "tester" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" muted-summary "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1 \
   && check "no held-back failures reports nothing" "it reported something" \
   || check "no held-back failures reports nothing" ok
 
@@ -843,10 +843,10 @@ bash "$SPOOL_LIB" muted-summary "$REPO" >/dev/null 2>&1 \
 # were never shown, and filing them resets the count the periodic line reads,
 # so the fault would be silently forgotten instead of reported.
 reset_spool
-bash "$SPOOL_LIB" append "$REPO" "$(muted_rec)" >/dev/null 2>&1
-bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T12:00:00Z","status":"error","agent":"subagent","error":"the harvest model exited 1"}' >/dev/null 2>&1
-bash "$SPOOL_LIB" file-errors "$REPO" >/dev/null 2>&1
-raw_after="$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null)"
+bash "$SPOOL_LIB" append "$REPO" "$(muted_rec)" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T12:00:00Z","status":"error","agent":"subagent","error":"the harvest model exited 1"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" file-errors "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+raw_after="$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 printf '%s' "$raw_after" | grep -q "$MUTED_REASON" \
   && check "filing a shown failure leaves the muted one pending" ok \
   || check "filing a shown failure leaves the muted one pending" "muted record was filed too"
@@ -856,11 +856,11 @@ printf '%s' "$raw_after" | grep -q "the harvest model exited 1" \
 
 # And once the periodic line HAS gone out, the muted records are settled, or the
 # next report counts them a second time and the fault appears to be growing.
-bash "$SPOOL_LIB" file-muted "$REPO" >/dev/null 2>&1
-bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -q "$MUTED_REASON" \
+bash "$SPOOL_LIB" file-muted "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -q "$MUTED_REASON" \
   && check "filing the muted failures settles them" "they are still pending" \
   || check "filing the muted failures settles them" ok
-bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null | grep -q "$MUTED_REASON" \
+bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -q "$MUTED_REASON" \
   && check "the muted failures are kept in the archive" ok \
   || check "the muted failures are kept in the archive" "they were dropped, not archived"
 
@@ -876,7 +876,7 @@ MUTED_STAMP="${TMPDIR:-/tmp}/claude-feature-issue-muted-$(printf '%s' "$REPO" | 
 
 reset_spool
 rm -f "$REVIEW_STAMP" "$MUTED_STAMP"
-bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":7,"error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":7,"error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 out_muted_rev="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
 printf '%s' "$out_muted_rev" | grep -q "HARVEST UNREADABLE" \
   && check "the periodic report reaches a review when it is due" ok \
@@ -886,7 +886,7 @@ printf '%s' "$out_muted_rev" | grep -q "7 agent harvest" \
   || check "the periodic report carries the true count" "count missing from ${out_muted_rev:0:200}"
 
 # Delivered, so settled: the records are filed and the clock is restarted.
-bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -q "the named agent transcript does not exist" \
+bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -q "the named agent transcript does not exist" \
   && check "a delivered periodic report files its records" "they are still pending" \
   || check "a delivered periodic report files its records" ok
 [ -f "$MUTED_STAMP" ] \
@@ -894,7 +894,7 @@ bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -q "the named agent transcript 
   || check "a delivered periodic report restarts its clock" "no stamp written"
 
 # And it does not repeat on the next review, which is the whole point.
-bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T09:00:00Z","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T09:00:00Z","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 rm -f "$REVIEW_STAMP"
 out_again="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
 printf '%s' "$out_again" | grep -q "HARVEST UNREADABLE" \
@@ -906,14 +906,103 @@ printf '%s' "$out_again" | grep -q "HARVEST UNREADABLE" \
 # which is the one way this change could hide a fault permanently.
 reset_spool
 rm -f "$REVIEW_STAMP" "$MUTED_STAMP"
-bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":3,"error":"the named agent transcript does not exist"}' >/dev/null 2>&1
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":3,"error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 printf '%s' "$review_payload" | CLAUDE_INJECT_SPOOL_FORCE_FAIL=1 bash "$REVIEW" >/dev/null 2>&1
-bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null | grep -q "the named agent transcript does not exist" \
+bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -q "the named agent transcript does not exist" \
   && check "an undelivered periodic report leaves its records pending" ok \
   || check "an undelivered periodic report leaves its records pending" "they were filed unseen"
 [ -f "$MUTED_STAMP" ] \
   && check "an undelivered periodic report does not restart its clock" "the stamp was written" \
   || check "an undelivered periodic report does not restart its clock" ok
+
+# ---------------------------------------------------------------------------
+# The spool key must come from the SESSION, not from the agent's cwd.
+#
+# Measured 2026-08-29, on a real project. A session running in
+# ".../Project Enrollment Tracker (PET)" dispatched agents that worked in the
+# git repo NESTED inside it, ".../PET/pet". SubagentStop's `cwd` names the
+# AGENT's directory, so the harvest filed under the repo; the review keys on the
+# session's own directory, so it read the parent. Every record for that project
+# was checked and all 318 showed the same split. The review for the parent ran
+# that afternoon while 47 real findings, 32 "looked and found nothing" records
+# and 236 failures sat in a spool it has never once opened, going back to
+# Aug 21. The stamp proves it: the parent's review stamp was written that day,
+# and the repo's has never existed.
+#
+# Normalising through git cannot fix this. It was added for worktrees and does
+# exactly the wrong thing here: it makes the nested repo MORE distinct from the
+# folder the session is sitting in, not less.
+#
+# So both sides now derive the key from the ONE thing they are each handed about
+# the same conversation: the parent session's transcript path. A writer and a
+# reader that compute a key from two independent guesses can only ever agree by
+# luck (L70).
+# ---------------------------------------------------------------------------
+SESSION_PROJECT="$TMPROOT/projects/-fake-project"
+mkdir -p "$SESSION_PROJECT"
+SESSION_TRANSCRIPT="$SESSION_PROJECT/session-one.jsonl"
+cp "$PARENT_TRANSCRIPT" "$SESSION_TRANSCRIPT"
+
+OUTER="$TMPROOT/outer"          # where the session sits: not a repo
+INNER="$OUTER/inner"            # where the agent works: a repo nested inside it
+mkdir -p "$INNER"
+git -C "$INNER" init -q 2>/dev/null
+git -C "$INNER" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init 2>/dev/null
+
+reset_spool
+payload "$INNER" "$FAKE_TRANSCRIPT" "$SESSION_TRANSCRIPT" \
+  | CLAUDE_ISSUE_HARVEST_CMD="$TMPROOT/stub.sh" bash "$HARVEST" >/dev/null 2>&1
+stub 'echo "FINDING: the nested repo split marker."'
+payload "$INNER" "$FAKE_TRANSCRIPT" "$SESSION_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
+
+out_split="$(bash "$SPOOL_LIB" pending "$OUTER" "$SESSION_TRANSCRIPT" 2>/dev/null)"
+case "$out_split" in
+  *"nested repo split marker"*) check "an agent in a nested repo reaches its session's spool" ok ;;
+  *) check "an agent in a nested repo reaches its session's spool" "pending=${out_split:0:200}" ;;
+esac
+
+# The positive control for that: without the session transcript, the reader keys
+# on its own directory and finds nothing, which is precisely the live defect.
+out_nosession="$(bash "$SPOOL_LIB" pending "$OUTER" 2>/dev/null)"
+case "$out_nosession" in
+  *"nested repo split marker"*) check "the old directory keying really did miss it" "it found it anyway" ;;
+  *) check "the old directory keying really did miss it" ok ;;
+esac
+
+# Nothing already spooled may be stranded by the change of key. A record written
+# the old way must still be read by a session supplying its transcript, or every
+# finding waiting on disk becomes invisible the moment this ships.
+reset_spool
+bash "$SPOOL_LIB" note "$INNER" "a legacy record written under the old key" "tester" >/dev/null 2>&1
+out_legacy="$(bash "$SPOOL_LIB" pending "$INNER" "$SESSION_TRANSCRIPT" 2>/dev/null)"
+case "$out_legacy" in
+  *"legacy record written under the old key"*) check "records under the old key are still read" ok ;;
+  *) check "records under the old key are still read" "pending=${out_legacy:0:200}" ;;
+esac
+
+# And filing has to reach both, or a legacy record can never be settled and
+# comes back at every review for good.
+bash "$SPOOL_LIB" clear "$INNER" "$SESSION_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" pending "$INNER" "$SESSION_TRANSCRIPT" 2>/dev/null | grep -q "legacy record" \
+  && check "filing reaches records under the old key" "it stayed pending" \
+  || check "filing reaches records under the old key" ok
+
+# Two different sessions must still key apart, or everything lands in one heap.
+OTHER_PROJECT="$TMPROOT/projects/-other-project"
+mkdir -p "$OTHER_PROJECT"
+cp "$PARENT_TRANSCRIPT" "$OTHER_PROJECT/session-two.jsonl"
+k_one="$(bash "$SPOOL_LIB" key "$OUTER" "$SESSION_TRANSCRIPT" 2>/dev/null)"
+k_two="$(bash "$SPOOL_LIB" key "$OUTER" "$OTHER_PROJECT/session-two.jsonl" 2>/dev/null)"
+[ -n "$k_one" ] && [ "$k_one" != "$k_two" ] \
+  && check "two different session projects key apart" ok \
+  || check "two different session projects key apart" "one=$k_one two=$k_two"
+
+# Two sessions of the SAME project share one spool, which is the whole point:
+# a finding left by yesterday's session is offered to today's.
+k_same="$(bash "$SPOOL_LIB" key "$TMPROOT" "$SESSION_PROJECT/session-three.jsonl" 2>/dev/null)"
+[ -n "$k_one" ] && [ "$k_one" = "$k_same" ] \
+  && check "two sessions of one project share a spool" ok \
+  || check "two sessions of one project share a spool" "one=$k_one same=$k_same"
 
 echo
 echo "passed: $pass  failed: $fail"

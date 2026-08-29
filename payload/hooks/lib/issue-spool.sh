@@ -78,8 +78,37 @@ MUTED_ERROR_REASONS="${CLAUDE_ISSUE_SPOOL_MUTED_REASONS:-the named agent transcr
 # checkout share one common git dir. The result is then resolved to its physical
 # path, because /tmp and /private/tmp are the same directory on macOS and the
 # writer and the reader do not always arrive by the same route.
-issue_spool_key() {
-  local dir="${1:-$PWD}" common root
+# THE KEY COMES FROM THE SESSION, not from whatever directory the writer happens
+# to be standing in. A SubagentStop payload's `cwd` is the AGENT's directory, and
+# an agent routinely works in a git repo NESTED inside the folder its session was
+# started in. Measured 2026-08-29 on a real project: a session in
+# ".../Project Enrollment Tracker (PET)" dispatched agents working in
+# ".../PET/pet", so the harvest filed under the repo while the review read the
+# parent. All 318 records showed the split, and 47 real findings sat in a spool
+# that project's reviews have never once opened. Normalising through git makes it
+# worse, not better: it resolves the nested repo further away from the folder the
+# session is in.
+#
+# The parent session's transcript path is the one thing BOTH sides are handed
+# about the same conversation, so both derive the key from it and cannot
+# disagree. A writer and a reader computing a key from two independent guesses
+# agree only by luck (L70).
+#
+# It also subsumes the worktree case this used to solve: an agent in a worktree
+# still reports its parent session's transcript, so it lands in the session's
+# spool rather than under a path nobody opens.
+issue_spool_key() { # key <dir> [session-transcript]
+  local dir="${1:-$PWD}" transcript="${2:-}" common root
+  if [ -n "$transcript" ]; then
+    root="$(dirname "$transcript")"
+    if [ -d "$root" ]; then
+      root="$(cd "$root" 2>/dev/null && pwd -P || printf '%s' "$root")"
+      printf '%s' "$root" | shasum | cut -c1-12
+      return 0
+    fi
+  fi
+  # No transcript to key on (a direct `note`, a test, an older caller): fall back
+  # to the directory, exactly as before.
   common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
   if [ -n "$common" ] && [ -d "$common" ]; then
     root="$(dirname "$common")"
@@ -90,15 +119,53 @@ issue_spool_key() {
   printf '%s' "$root" | shasum | cut -c1-12
 }
 
-issue_spool_path()         { printf '%s/%s.jsonl' "$SPOOL_ROOT" "$(issue_spool_key "${1:-$PWD}")"; }
-issue_spool_archive_path() { printf '%s/%s.filed.jsonl' "$SPOOL_ROOT" "$(issue_spool_key "${1:-$PWD}")"; }
+issue_spool_path()         { printf '%s/%s.jsonl' "$SPOOL_ROOT" "$(issue_spool_key "${1:-$PWD}" "${2:-}")"; }
+issue_spool_archive_path() { printf '%s/%s.filed.jsonl' "$SPOOL_ROOT" "$(issue_spool_key "${1:-$PWD}" "${2:-}")"; }
+
+# Every key a reader must consult: the session's, plus the directory's, so that
+# nothing already spooled the old way is stranded the moment this ships. The
+# directory key is a TRANSITION path, not a second home: writes only ever go to
+# the first key, so these files drain and stop being written to.
+#
+# Deduplicated, because when no transcript is supplied the two are the same key
+# and reading it twice would double every count a person is shown.
+issue_spool_path_for_key()    { printf '%s/%s.jsonl' "$SPOOL_ROOT" "$1"; }
+issue_spool_archive_for_key() { printf '%s/%s.filed.jsonl' "$SPOOL_ROOT" "$1"; }
+
+# The pending records a reader should see, from every key it must consult,
+# concatenated into one throwaway file. Every reader goes through this so that
+# "which spools count as mine" is answered in ONE place: two readers answering it
+# separately is how the split this fixes came about.
+#
+# Prints the temp file's path. The caller removes it.
+issue_spool_collect() { # collect <dir> [session-transcript]
+  local tmp key file
+  tmp="$(mktemp "${TMPDIR:-/tmp}/claude-spool-read.XXXXXX")" || return 1
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    file="$(issue_spool_path_for_key "$key")"
+    [ -s "$file" ] && cat "$file" >> "$tmp" 2>/dev/null
+  done <<COLLECT_KEYS
+$(issue_spool_read_keys "${1:-$PWD}" "${2:-}")
+COLLECT_KEYS
+  printf '%s' "$tmp"
+}
+
+issue_spool_read_keys() { # read-keys <dir> [session-transcript]
+  local primary legacy
+  primary="$(issue_spool_key "${1:-$PWD}" "${2:-}")"
+  printf '%s\n' "$primary"
+  [ -n "${2:-}" ] || return 0
+  legacy="$(issue_spool_key "${1:-$PWD}")"
+  [ "$legacy" = "$primary" ] || printf '%s\n' "$legacy"
+}
 
 # A record is one line of JSON. Anything else breaks the one-record-per-line
 # invariant every reader depends on, and a broken line is then dropped by the
 # reader, so a bad caller would corrupt the spool and see no complaint. Refusing
 # here means the caller can fall back to somewhere the record still survives.
 issue_spool_append() { # append <dir> <json-record>
-  local file record count; file="$(issue_spool_path "$1")"; record="${2:-}"
+  local file record count; file="$(issue_spool_path "$1" "${3:-}")"; record="${2:-}"
   [ -n "$record" ] || return 2
   case "$record" in *$'\n'*) return 2 ;; esac
   printf '%s' "$record" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null || return 2
@@ -173,8 +240,8 @@ PY_COMPACT
 # A nested subagent leaves no transcript anywhere, so it cannot be harvested at
 # all; this is the only capture path that works for one. It is also the cheaper
 # path for any agent, since it costs no model call.
-issue_spool_note() { # note <dir> <finding text> [who reported it]
-  local dir="${1:-$PWD}" text="${2:-}" source="${3:-self-reported}" record
+issue_spool_note() { # note <dir> <finding text> [who reported it] [session-transcript]
+  local dir="${1:-$PWD}" text="${2:-}" source="${3:-self-reported}" transcript="${4:-}" record
   # `case` rather than a substitution that strips every space out of the text. The text is a
   # finding written by a model and has no bounded length, and that substitution's cost is
   # superlinear in the number of matches under the bash macOS ships (claude-config#117).
@@ -190,7 +257,7 @@ print(json.dumps({
     "self_reported": True,
 }))' "$source" "$dir" "$text" 2>/dev/null)"
   [ -n "$record" ] || return 1
-  issue_spool_append "$dir" "$record"
+  issue_spool_append "$dir" "$record" "$transcript"
 }
 
 # What a person should read. Records that looked and found nothing are kept in
@@ -198,9 +265,9 @@ print(json.dumps({
 # there is nothing to act on. Everything else is printed and says which it is: a
 # harvest that could not run is not a project with no findings, and neither is a
 # reply nobody could parse.
-issue_spool_pending() { # pending <dir>  -> exit 1 when there is nothing to show
-  local file; file="$(issue_spool_path "$1")"
-  [ -s "$file" ] || return 1
+issue_spool_pending() { # pending <dir> [session-transcript] -> exit 1 when there is nothing to show
+  local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
+  if [ ! -s "$file" ]; then rm -f "$file"; return 1; fi
   CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" <<'PY'
 import json, os, sys
 
@@ -280,15 +347,18 @@ if corrupt:
 
 sys.exit(0 if shown else 1)
 PY
+  rc=$?
+  rm -f "$file"
+  return $rc
 }
 
 # Does the spool hold an actual FINDING, as opposed to only records of harvests
 # that failed or looked and found nothing? The review bypasses its cooldown on
 # this answer alone: a recurring failure keeps the spool permanently non-empty,
 # and interrupting every turn over it would train the review to be ignored.
-issue_spool_has_findings() { # has-findings <dir> -> exit 0 when a finding is pending
-  local file; file="$(issue_spool_path "$1")"
-  [ -s "$file" ] || return 1
+issue_spool_has_findings() { # has-findings <dir> [session-transcript] -> exit 0 when a finding is pending
+  local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
+  if [ ! -s "$file" ]; then rm -f "$file"; return 1; fi
   python3 - "$file" <<'PY_HF'
 import json, sys
 for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
@@ -303,6 +373,9 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         sys.exit(0)
 sys.exit(1)
 PY_HF
+  rc=$?
+  rm -f "$file"
+  return $rc
 }
 
 # The periodic count for the failures `pending` holds back. Reads the SAME
@@ -313,9 +386,9 @@ PY_HF
 #
 # Exits 1 when nothing is held back, so a caller can tell "still happening" from
 # "stopped" rather than printing a reassuring zero (L98).
-issue_spool_muted_summary() { # muted-summary <dir> -> exit 1 when nothing is held back
-  local file; file="$(issue_spool_path "$1")"
-  [ -s "$file" ] || return 1
+issue_spool_muted_summary() { # muted-summary <dir> [session-transcript] -> exit 1 when nothing is held back
+  local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
+  if [ ! -s "$file" ]; then rm -f "$file"; return 1; fi
   CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" <<'PY_MUTED'
 import json, os, sys
 
@@ -348,6 +421,9 @@ print("HARVEST UNREADABLE: %d agent harvest(s) could not be read since %s. These
       % (total, first or "an unrecorded time"))
 sys.exit(0)
 PY_MUTED
+  rc=$?
+  rm -f "$file"
+  return $rc
 }
 
 # Filing RENAMES the pending file out of the way first, then drains the renamed
@@ -357,10 +433,21 @@ PY_MUTED
 # likely to be finishing (right after the picker is answered), so that window is
 # the normal case rather than a corner. After the rename an appender writes to a
 # fresh file and cannot be caught by the drain at all.
-issue_spool_clear() { # clear <dir>  -> file the pending records into the archive
+issue_spool_clear() { # clear <dir> [session-transcript] -> file the pending records
+  local key rc=0
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    issue_spool_clear_key "$key" || rc=1
+  done <<CLEAR_KEYS
+$(issue_spool_read_keys "${1:-$PWD}" "${2:-}")
+CLEAR_KEYS
+  return $rc
+}
+
+issue_spool_clear_key() { # clear-key <key>
   local file archive staged count
-  file="$(issue_spool_path "$1")"
-  archive="$(issue_spool_archive_path "$1")"
+  file="$(issue_spool_path_for_key "$1")"
+  archive="$(issue_spool_archive_for_key "$1")"
   [ -s "$file" ] || return 0
   mkdir -p "$SPOOL_ROOT" 2>/dev/null || return 1
   staged="${file}.filing.$$"
@@ -422,19 +509,30 @@ issue_spool_cap_archive() { # cap-archive <archive-file>
 # half nobody re-reads. `errors` files the failures a review actually carried;
 # `muted` files the held-back ones, and only once their periodic count has gone
 # out.
-issue_spool_file_errors() { # file-errors <dir>
-  issue_spool_file_subset "$1" errors
+issue_spool_file_errors() { # file-errors <dir> [session-transcript]
+  issue_spool_file_subset "$1" errors "${2:-}"
 }
 
-issue_spool_file_muted() { # file-muted <dir>
-  issue_spool_file_subset "$1" muted
+issue_spool_file_muted() { # file-muted <dir> [session-transcript]
+  issue_spool_file_subset "$1" muted "${2:-}"
 }
 
-issue_spool_file_subset() { # file-subset <dir> <errors|muted>
+issue_spool_file_subset() { # file-subset <dir> <errors|muted> [session-transcript]
+  local key rc=0
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    issue_spool_file_subset_key "$key" "${2:-errors}" || rc=1
+  done <<SUBSET_KEYS
+$(issue_spool_read_keys "${1:-$PWD}" "${3:-}")
+SUBSET_KEYS
+  return $rc
+}
+
+issue_spool_file_subset_key() { # file-subset-key <key> <errors|muted>
   local file archive staged keep errs mode
   mode="${2:-errors}"
-  file="$(issue_spool_path "$1")"
-  archive="$(issue_spool_archive_path "$1")"
+  file="$(issue_spool_path_for_key "$1")"
+  archive="$(issue_spool_archive_for_key "$1")"
   [ -s "$file" ] || return 0
   mkdir -p "$SPOOL_ROOT" 2>/dev/null || return 1
   staged="${file}.filing-errors.$$"
@@ -499,19 +597,20 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   cmd="${1:-}"
   shift || true
   case "$cmd" in
-    key)          issue_spool_key "${1:-$PWD}" ;;
-    path)         issue_spool_path "${1:-$PWD}" ;;
-    archive-path) issue_spool_archive_path "${1:-$PWD}" ;;
-    append)       issue_spool_append "${1:-$PWD}" "${2:-}" ;;
-    note)         issue_spool_note "${1:-$PWD}" "${2:-}" "${3:-}" ;;
-    raw)          f="$(issue_spool_path "${1:-$PWD}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
-    pending)      issue_spool_pending "${1:-$PWD}" ;;
-    has-findings) issue_spool_has_findings "${1:-$PWD}" ;;
-    archive)      f="$(issue_spool_archive_path "${1:-$PWD}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
-    clear)        issue_spool_clear "${1:-$PWD}" ;;
-    file-errors)  issue_spool_file_errors "${1:-$PWD}" ;;
-    file-muted)   issue_spool_file_muted "${1:-$PWD}" ;;
-    muted-summary) issue_spool_muted_summary "${1:-$PWD}" ;;
+    key)          issue_spool_key "${1:-$PWD}" "${2:-}" ;;
+    read-keys)    issue_spool_read_keys "${1:-$PWD}" "${2:-}" ;;
+    path)         issue_spool_path "${1:-$PWD}" "${2:-}" ;;
+    archive-path) issue_spool_archive_path "${1:-$PWD}" "${2:-}" ;;
+    append)       issue_spool_append "${1:-$PWD}" "${2:-}" "${3:-}" ;;
+    note)         issue_spool_note "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
+    raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; rm -f "$f"; exit 0 ;;
+    pending)      issue_spool_pending "${1:-$PWD}" "${2:-}" ;;
+    has-findings) issue_spool_has_findings "${1:-$PWD}" "${2:-}" ;;
+    archive)      f="$(issue_spool_archive_path "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
+    clear)        issue_spool_clear "${1:-$PWD}" "${2:-}" ;;
+    file-errors)  issue_spool_file_errors "${1:-$PWD}" "${2:-}" ;;
+    file-muted)   issue_spool_file_muted "${1:-$PWD}" "${2:-}" ;;
+    muted-summary) issue_spool_muted_summary "${1:-$PWD}" "${2:-}" ;;
     *)            echo "issue-spool.sh: unknown command '${cmd}'" >&2; exit 2 ;;
   esac
 fi

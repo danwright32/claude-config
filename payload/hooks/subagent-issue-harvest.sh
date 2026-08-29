@@ -50,8 +50,13 @@ fi
 # Appending is the last step of every path through this file, and it can fail.
 # Reporting success over a record that was never written is the same defect this
 # whole mechanism exists to stop, one layer down.
+# The record is keyed on the PARENT SESSION, not on `cwd`. `cwd` is the AGENT's
+# directory, and an agent routinely works in a git repo nested inside the folder
+# its session was started in, which files its findings under a key that session's
+# review never opens (see issue_spool_key). `cwd` is still RECORDED on the
+# record: it is how that split was found, and it is worth keeping.
 spool_append() { # spool_append <record>
-  if bash "$SPOOL" append "$cwd" "$1" 2>/dev/null; then
+  if bash "$SPOOL" append "$cwd" "$1" "${parent:-}" 2>/dev/null; then
     return 0
   fi
   printf '%s\n' "$1" >> "$lost_records" 2>/dev/null
