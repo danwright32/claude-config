@@ -2492,6 +2492,17 @@ window is a count rather than a boundary.
   apostrophes and accents exactly as well as it covers case; only case was written. The next event
   named with a possessive would have hit it again)
 
+- **L280. A rule enforced at ONE stage of a pipeline is not enforced by the pipeline, because
+  every later stage that rewrites the same content can reintroduce exactly what the rule removed,
+  and the enforcing stage has already run, so nothing reports the regression.** Enforce at the
+  last stage that can write, or re-check after every writer. The failure is silent by
+  construction: the only thing that ever measured the property ran before the property changed,
+  so the artifact ships violating a rule the codebase visibly contains.
+  (PostRoll#979: a repair pass shortens over-long alt text at generation, and the revise and
+  photo swap paths both rewrite the body afterwards with no length check, so a revision can put a
+  long image description straight back. Nobody sighted notices, which makes it the defect class
+  least likely to be caught by review)
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and
