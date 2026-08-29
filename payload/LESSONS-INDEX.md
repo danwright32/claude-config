@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 305 lessons.
+LESSONS.md, which is NOT loaded into the session. 306 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -310,6 +310,7 @@ to decide something: the body is where the failure it came from is described.
 - L262. A constraint that has only ever been satisfied as a side effect of somebody doing the work by hand is recorded nowhere and checked by nothing, so the first time that work is GENERATED rather than placed the constraint silently stops holding, and every existing check passes because each one was written against the hand made cases.
 - L263. A shared NAME is read as evidence of shared BEHAVIOUR, so two same-named functions on either side of a boundary are never compared and can implement different rules indefinitely, while every caller on each side reads as correct in isolation.
 - L274. An exception a collection singles out for ONE item (skip this one, do not touch that one) must be answered by the ITEM itself, never by a predicate repeated inline at each place that iterates the collection, because a second loop written later omits it and the item is then protected at one site and handled normally at the other.
+- L281. Behaviour that is correct only as a SIDE EFFECT of an unrelated rule has no test, no comment and no owner, so the first change to that rule removes it silently while every check stays green.
 
 ## Cross-system reliability
 

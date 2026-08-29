@@ -2803,6 +2803,21 @@ window is a count rather than a boundary.
   dragged a photo straight over the collage's title and logo. Had the exception been a property
   on the divider, the handle loop could not have missed it)
 
+- **L281. Behaviour that is correct only as a SIDE EFFECT of an unrelated rule has no test, no
+  comment and no owner, so the first change to that rule removes it silently while every check
+  stays green.** When you find the code already doing the right thing, establish which rule says
+  so, and if none does, write it and test it before building on it. The absence is hidden by the
+  behaviour being right: nobody writes a test for an outcome they have just observed working, and
+  no reviewer questions a decision that was never made. Distinct from L262, where the constraint
+  is held by somebody's hand work outside the code, and from L96, where a rule IS written and its
+  registry has holes: here the rule was never stated at all, and the code that happens to enforce
+  it is answering a different question.
+  (postroll#982: a private Instagram account was never suggested as a collaborator, but only
+  because ranking needs an engagement rate, which needs likes or comments, which a private
+  profile shows to nobody. Nothing anywhere decided private accounts should be excluded, and
+  postroll#977 proposes making a followers only entry rankable, which would have started
+  suggesting them with no test failing)
+
 ## Cross-system reliability
 
 - **L276. A CI job is priced in allowance minutes, which is the runner's multiplier (macOS ten,
