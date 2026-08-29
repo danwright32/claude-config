@@ -18,6 +18,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   stops those findings firing, and with them the only trace of the choice. Re-deriving the seven
   from the stored list gave a different seven, so the stored list cannot answer for it either)
 
+- **L284. A test that sets some of a script's seams runs every unset collaborator for real, and
+  the real ones are the slow and the dangerous ones, so enumerate every seam the script honours
+  beside the test and assert each is either set once for the whole suite or deliberately left real
+  by a section that tests it.** A seam that exists is not a seam that is set: the test author
+  stubs the collaborators they were thinking about, and the one they were not stays live, where it
+  is both the time (a real process list walk, a real registration dump) and the write nobody
+  authorised (L2, L52, L196). The check is mechanical: list the seams the script reads, list the
+  ones the test sets, and refuse the difference.
+  (claude-config#220, 2026-08-29: 65 of 343 tool invocations in the sync suite carry no
+  SYNC_NO_NOTIFY on a Mac where the notifier is installed, found clean only by sampling; the same
+  audit's Downbeat installer test stubbed the build, codesign and open and forgot the LaunchServices
+  cleanup, so eleven runs per push unregistered bundles from the live database.)
+
 - **L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is
   written, because a hard-coded setTimeout forces every end-to-end test that crosses it to wait
   for real.** A test that records the delays the code asked for is both instant and stronger than
@@ -1097,6 +1110,19 @@ window is a count rather than a boundary.
 
 ## Honest failure
 
+- **L283. A guard asserting that a rewrite does not CONTAIN something is satisfied by a rewrite
+  that DELETED it, so wherever the thing is a reference to a resource (a photo marker, a link, a
+  citation, a merge field), check for its LOSS as well as its presence, because disappearance is
+  the worse failure and the only one the guard cannot see.** Distinct from L104, which is about a
+  shape filter over-matching what it must preserve: here the filter is correct and simply faces
+  the wrong way. The tell is a guard phrased as a negative over the output alone, with no
+  comparison against the input. (PostRoll#998: `_fix_second_person` splices a reworded paragraph
+  back only `if "[PHOTO:" not in reworded`, which refuses the harmless case, a model that kept the
+  marker, and accepts the harmful one, a model that dropped it, so a photograph vanishes from the
+  post with nothing printed and nothing red. The same repo had already written the correct shape
+  on the caption side, `rewrite_lost_a_credit`, which compares against the original and refuses a
+  rewrite that LOST a credit, and it was never carried across)
+
 - **L515. Cleanup placed in a `finally` is only reached by the paths that THROW**, so a process
   exit on a failure path skips it in silence, and the cleanup reads as present in the source while
   being absent for exactly the failures that take the exit. Verify by RUNNING which paths reach it,
@@ -1506,6 +1532,21 @@ window is a count rather than a boundary.
   check from fourteen hours earlier that predated all of them. The fix is for the tool to write
   its own record. L164 is the inverse, recording inside a program cannot capture its launcher's
   failures; this is the launcher owning a record of runs it did not start)
+
+- **L282. Seeded, demo or fixture data that sets a STATUS field must also satisfy every
+  record that status implies, because the schema does not enforce a derived invariant and
+  the app's own checks will correctly report the fabricated rows as corrupt.** Read what
+  the code DERIVES from that status, not only what the columns require.
+  (downbeat#450, 2026-08-29: a synthetic store seeded four bookings with
+  `commitStatus: .committed` and no handoff mark. Every NOT NULL, every foreign key and
+  every enum was satisfied, and the whole unit suite passed. Launching the app showed a
+  warning over its own invented data: `BookingHandoffMark` reads a row created after the
+  mark shipped with no intent as DAMAGED, since reporting it as written would launder
+  corruption into success. The check was right and the fabricated data was wrong. A demo
+  store whose rows trip the product's own warnings is worse than none, because every
+  screen on it then carries a warning nobody can act on and the reader learns to skim the
+  banner. Found only by running the thing, which is L3; the existing seeder rule about
+  reading the full schema first cannot catch this, because the schema was never violated)
 
 ## State and identity
 

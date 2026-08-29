@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 306 lessons.
+LESSONS.md, which is NOT loaded into the session. 309 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -10,6 +10,7 @@ to decide something: the body is where the failure it came from is described.
 ## Proof over green
 
 - L277. A defect's output can be the only record of a fact the system never stored deliberately, so shipping the fix silently removes the evidence the diagnosis was made from. Before shipping one, name what the failure was incidentally reporting and record that fact directly.
+- L284. A test that sets some of a script's seams runs every unset collaborator for real, and the real ones are the slow and the dangerous ones, so enumerate every seam the script honours beside the test and assert each is either set once for the whole suite or deliberately left real by a section that tests it.
 - L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is written, because a hard-coded setTimeout forces every end-to-end test that crosses it to wait for real.
 - L224. A check that compares elapsed time against a FIXED number is a check on what else the machine is running, so compare it against a duration measured in the same run.
 - L215. A reader that answers with an EMPTY collection when its own accessor throws is indistinguishable from a correct reader of an empty collection, and because the swallowing construct usually sits INSIDE the loop, one element of an unexpected shape empties the whole result.
@@ -118,6 +119,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Honest failure
 
+- L283. A guard asserting that a rewrite does not CONTAIN something is satisfied by a rewrite that DELETED it, so wherever the thing is a reference to a resource (a photo marker, a link, a citation, a merge field), check for its LOSS as well as its presence, because disappearance is the worse failure and the only one the guard cannot see.
 - L515. Cleanup placed in a `finally` is only reached by the paths that THROW
 - L514. A signal that records THAT something ran must be written on every exit path, in a `finally`, never only on the success path
 - L184. Judge a command by its EXIT CODE, never by a line of its output, because a tool's final line is routinely a different measurement than its verdict and is usually the more reassuring of the two.
@@ -160,6 +162,7 @@ to decide something: the body is where the failure it came from is described.
 - L523. A suppression set by hand (a mute, a snooze, a maintenance window, a disabled check) must carry an EXPIRY and be listed somewhere visible.
 - L251. A substitution can only rewrite text that is PRESENT, so one used to also supply a separator when joining two pieces inserts nothing at all on the input that lacks it, and the pieces fuse into a single corrupted value.
 - L264. A durable record that exists only because a CALLER redirects the tool's output belongs to that caller, not the tool
+- L282. Seeded, demo or fixture data that sets a STATUS field must also satisfy every record that status implies, because the schema does not enforce a derived invariant and the app's own checks will correctly report the fabricated rows as corrupt.
 
 ## State and identity
 
