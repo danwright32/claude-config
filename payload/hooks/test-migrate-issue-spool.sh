@@ -411,6 +411,40 @@ contains "backup:" "$(python3 "$MIGRATE" --forget-test-records --apply 2>&1)" \
   && check "forgetting takes a backup first" ok \
   || check "forgetting takes a backup first" "no backup was named"
 
+# A record that CAN be placed is not a test leftover, whatever directory it
+# names. Sitting in a vanished temp directory is only evidence when nothing else
+# accounts for the record: an agent that genuinely worked in a temp directory,
+# for a session that still exists, left a real finding.
+rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+touch "$CLAUDE_PROJECTS_DIR/-a-project/session-aaa.jsonl"
+rec_cwd session-aaa "${TMPDIR:-/tmp}/vanished-$$/spool-project" "a real finding from a temp directory" \
+  > "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+python3 "$MIGRATE" --forget-test-records --apply >/dev/null 2>&1
+kept_placeable="$(cat "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null)"
+contains "a real finding from a temp directory" "$kept_placeable" \
+  && check "a record its session can place is never forgotten" ok \
+  || check "a record its session can place is never forgotten" "it was deleted"
+
+# The destructive path must show EVERY directory it would take, not a sample.
+# The list is the only thing standing between a person and a delete, and the
+# migration plan's ten-line cap would hide most of it: 120 records across 120
+# distinct directories were about to be deleted on the strength of ten of them.
+rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+i=0
+while [ "$i" -lt 25 ]; do
+  rec_cwd "" "${TMPDIR:-/tmp}/leftover-$$-$i/spool-project" "leftover $i" \
+    >> "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+  i=$((i + 1))
+done
+out_all="$(python3 "$MIGRATE" --forget-test-records 2>&1)"
+listed=0
+while IFS= read -r l_all; do
+  case "$l_all" in *"leftover-$$-"*) listed=$((listed + 1)) ;; esac
+done <<< "$out_all"
+[ "$listed" -eq 25 ] \
+  && check "the delete lists every directory it would take" ok \
+  || check "the delete lists every directory it would take" "listed $listed of 25"
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

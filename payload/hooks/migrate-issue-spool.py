@@ -195,7 +195,15 @@ def plan():
 
 
 def forget_test_records(apply):
-    """Drop the records a test wrote into the live spool."""
+    """Drop the records a test wrote into the live spool.
+
+    THREE conditions, all required. Nothing could place the record, the
+    directory it names is inside a temp directory, and that directory is gone.
+    The first is what makes the other two evidence rather than coincidence: an
+    agent that genuinely worked in a temp directory, for a session that still
+    exists, left a real finding, and an earlier version of this deleted it.
+    """
+    homes = session_homes()
     doomed = collections.Counter()
     keeps = {}
     for path in sorted(glob.glob(os.path.join(SPOOL, "*.jsonl"))):
@@ -211,7 +219,10 @@ def forget_test_records(apply):
             except Exception:
                 kept.append(line); continue
             cwd = rec.get("cwd") if isinstance(rec, dict) else None
-            if looks_like_a_test_leftover(cwd):
+            sid = rec.get("session") if isinstance(rec, dict) else None
+            placeable = bool((homes.get(sid) if sid else None)
+                             or project_for_cwd(cwd, PROJECTS))
+            if not placeable and looks_like_a_test_leftover(cwd):
                 doomed[cwd] += 1
                 dropped += 1
                 continue
@@ -222,10 +233,12 @@ def forget_test_records(apply):
     print("TEST LEFTOVERS")
     print("  %d record(s) name a temp directory that is gone, across %d distinct director(ies)."
           % (total, len(doomed)))
-    for d, n in doomed.most_common(EXAMPLE_DIRS):
+    # EVERY one of them, never a sample. The migration plan truncates its list
+    # because it is only informational; this one is what a person reads to
+    # decide whether to delete, and 120 records were once about to go on the
+    # strength of the ten that fitted.
+    for d, n in doomed.most_common():
         print("    %4d x  %s" % (n, d))
-    if len(doomed) > EXAMPLE_DIRS:
-        print("    ...and %d more." % (len(doomed) - EXAMPLE_DIRS))
     if not total:
         print("\nNothing to forget.")
         return 0
