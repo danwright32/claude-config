@@ -129,6 +129,10 @@ reset_spool() { rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; }
 # so a check can report a failure that never happened (L183). It depends on nothing but whether the
 # producer had finished writing, which makes it rare, machine specific, and maddening. So the
 # output is captured first and matched against a variable.
+contains() { # contains <needle> <haystack>
+  case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac
+}
+
 spool_says() { # spool_says <needle>  -> true when `spool pending` mentions it
   local out
   out="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null || true)"
@@ -847,20 +851,20 @@ bash "$SPOOL_LIB" append "$REPO" "$(muted_rec)" "$PARENT_TRANSCRIPT" >/dev/null 
 bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T12:00:00Z","status":"error","agent":"subagent","error":"the harvest model exited 1"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 bash "$SPOOL_LIB" file-errors "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 raw_after="$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-printf '%s' "$raw_after" | grep -q "$MUTED_REASON" \
+contains "$MUTED_REASON" "$raw_after" \
   && check "filing a shown failure leaves the muted one pending" ok \
   || check "filing a shown failure leaves the muted one pending" "muted record was filed too"
-printf '%s' "$raw_after" | grep -q "the harvest model exited 1" \
+contains "the harvest model exited 1" "$raw_after" \
   && check "filing still files the failure that was shown" "it stayed pending" \
   || check "filing still files the failure that was shown" ok
 
 # And once the periodic line HAS gone out, the muted records are settled, or the
 # next report counts them a second time and the fault appears to be growing.
 bash "$SPOOL_LIB" file-muted "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
-bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -q "$MUTED_REASON" \
+contains "$MUTED_REASON" "$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" \
   && check "filing the muted failures settles them" "they are still pending" \
   || check "filing the muted failures settles them" ok
-bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -q "$MUTED_REASON" \
+contains "$MUTED_REASON" "$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" \
   && check "the muted failures are kept in the archive" ok \
   || check "the muted failures are kept in the archive" "they were dropped, not archived"
 
@@ -878,15 +882,15 @@ reset_spool
 rm -f "$REVIEW_STAMP" "$MUTED_STAMP"
 bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":7,"error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 out_muted_rev="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
-printf '%s' "$out_muted_rev" | grep -q "HARVEST UNREADABLE" \
+contains "HARVEST UNREADABLE" "$out_muted_rev" \
   && check "the periodic report reaches a review when it is due" ok \
   || check "the periodic report reaches a review when it is due" "out=${out_muted_rev:0:200}"
-printf '%s' "$out_muted_rev" | grep -q "7 agent harvest" \
+contains "7 agent harvest" "$out_muted_rev" \
   && check "the periodic report carries the true count" ok \
   || check "the periodic report carries the true count" "count missing from ${out_muted_rev:0:200}"
 
 # Delivered, so settled: the records are filed and the clock is restarted.
-bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -q "the named agent transcript does not exist" \
+contains "the named agent transcript does not exist" "$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" \
   && check "a delivered periodic report files its records" "they are still pending" \
   || check "a delivered periodic report files its records" ok
 [ -f "$MUTED_STAMP" ] \
@@ -897,7 +901,7 @@ bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -q "the na
 bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T09:00:00Z","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 rm -f "$REVIEW_STAMP"
 out_again="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
-printf '%s' "$out_again" | grep -q "HARVEST UNREADABLE" \
+contains "HARVEST UNREADABLE" "$out_again" \
   && check "the periodic report stays quiet until it is due again" "it repeated" \
   || check "the periodic report stays quiet until it is due again" ok
 
@@ -908,7 +912,7 @@ reset_spool
 rm -f "$REVIEW_STAMP" "$MUTED_STAMP"
 bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":3,"error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 printf '%s' "$review_payload" | CLAUDE_INJECT_SPOOL_FORCE_FAIL=1 bash "$REVIEW" >/dev/null 2>&1
-bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -q "the named agent transcript does not exist" \
+contains "the named agent transcript does not exist" "$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" \
   && check "an undelivered periodic report leaves its records pending" ok \
   || check "an undelivered periodic report leaves its records pending" "they were filed unseen"
 [ -f "$MUTED_STAMP" ] \
@@ -983,7 +987,7 @@ esac
 # And filing has to reach both, or a legacy record can never be settled and
 # comes back at every review for good.
 bash "$SPOOL_LIB" clear "$INNER" "$SESSION_TRANSCRIPT" >/dev/null 2>&1
-bash "$SPOOL_LIB" pending "$INNER" "$SESSION_TRANSCRIPT" 2>/dev/null | grep -q "legacy record" \
+contains "legacy record" "$(bash "$SPOOL_LIB" pending "$INNER" "$SESSION_TRANSCRIPT" 2>/dev/null)" \
   && check "filing reaches records under the old key" "it stayed pending" \
   || check "filing reaches records under the old key" ok
 
@@ -1003,6 +1007,65 @@ k_same="$(bash "$SPOOL_LIB" key "$TMPROOT" "$SESSION_PROJECT/session-three.jsonl
 [ -n "$k_one" ] && [ "$k_one" = "$k_same" ] \
   && check "two sessions of one project share a spool" ok \
   || check "two sessions of one project share a spool" "one=$k_one same=$k_same"
+
+# ---------------------------------------------------------------------------
+# What a review CARRIES has to stay readable.
+#
+# Measured 2026-08-29: one project's pending list rendered to 50,030 characters,
+# and every one of them would have been pushed into a single message the next
+# time its review fired. Its 47 finding records were largely five observations
+# restated by several agents in one run, so most of that length was the same
+# handful of sentences in different words.
+#
+# Two separate limits, because they fail differently. Near-duplicates are folded
+# (the same observation twice helps nobody), and what is left is capped by SIZE
+# rather than by count, since one 500 character finding costs what twenty short
+# ones do. Neither touches the spool: a finding that is not shown this time is
+# still pending and still waiting for a picker.
+# ---------------------------------------------------------------------------
+reset_spool
+bash "$SPOOL_LIB" note "$REPO" "The retry path in sync-team-rosters.js has no failure test." "agent-one" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "the retry path in sync-team-rosters.js has no failure test" "agent-two" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "The  retry  path in sync-team-rosters.js  has no failure test!!" "agent-three" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+dup_out="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
+dup_count="$(printf '%s\n' "$dup_out" | grep -c "sync-team-rosters" || true)"
+[ "$dup_count" = "1" ] \
+  && check "the same observation in different words is shown once" ok \
+  || check "the same observation in different words is shown once" "shown $dup_count times"
+
+# Folding the view must not fold the spool. All three records stay, because
+# which one a person eventually files is their choice, not this code's.
+raw_dup="$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
+raw_dup_count="$(printf '%s\n' "$raw_dup" | grep -c "sync-team-rosters" || true)"
+[ "$raw_dup_count" = "3" ] \
+  && check "folding the view leaves every record in the spool" ok \
+  || check "folding the view leaves every record in the spool" "$raw_dup_count records remain"
+
+# The size cap. Each finding is distinct, so nothing here is foldable and only
+# the budget can bound it.
+reset_spool
+i=0
+while [ "$i" -lt 60 ]; do
+  bash "$SPOOL_LIB" note "$REPO" "Distinct finding number $i: $(printf 'x%.0s' $(seq 1 200))" "agent-$i" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+  i=$((i + 1))
+done
+big_out="$(CLAUDE_ISSUE_SPOOL_FINDING_BUDGET=2000 bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
+big_len="${#big_out}"
+[ "$big_len" -lt 4000 ] \
+  && check "a huge pending list is capped before it is carried" ok \
+  || check "a huge pending list is capped before it is carried" "rendered $big_len characters"
+
+contains "not shown here" "$big_out" \
+  && check "the cap says what it held back" ok \
+  || check "the cap says what it held back" "no notice in ${big_out: -200}"
+
+# Held back is not dropped: the review that carried the first few must leave the
+# rest pending for the next one, or the cap becomes a quiet delete.
+raw_big="$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
+raw_big_count="$(printf '%s\n' "$raw_big" | grep -c "Distinct finding number" || true)"
+[ "$raw_big_count" = "60" ] \
+  && check "capping the view leaves every finding pending" ok \
+  || check "capping the view leaves every finding pending" "$raw_big_count of 60 remain"
 
 echo
 echo "passed: $pass  failed: $fail"

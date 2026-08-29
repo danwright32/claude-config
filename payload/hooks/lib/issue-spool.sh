@@ -272,7 +272,28 @@ issue_spool_pending() { # pending <dir> [session-transcript] -> exit 1 when ther
 import json, os, sys
 
 MAX_FINDINGS = 200
+# How many characters of FINDINGS one review may carry. Measured 2026-08-29: a
+# real project's pending list rendered to 50,030 characters, all of which would
+# have gone into a single message. A count cap does not bound that, because one
+# 500 character finding costs what twenty short ones do, so the limit is on size.
+FINDING_BUDGET = int(os.environ.get("CLAUDE_ISSUE_SPOOL_FINDING_BUDGET") or 8000)
 MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
+
+
+def fold_key(text):
+    """What counts as the SAME observation twice.
+
+    Several agents reviewing one thing restate one observation in slightly
+    different words, and the raw text differs every time, so an exact match folds
+    almost nothing: of one project's 47 finding records, most were five
+    observations reworded. Case, punctuation and runs of whitespace are the
+    differences that carry no meaning, so they are removed before comparing.
+
+    Deliberately no stemming or similarity scoring: a fold that is clever enough
+    to be wrong would hide a finding, and a finding hidden is the one outcome
+    this whole mechanism exists to prevent.
+    """
+    return " ".join("".join(c if c.isalnum() else " " for c in text.lower()).split())
 
 shown = 0
 seen = set()
@@ -297,9 +318,10 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
     status = rec.get("status")
     if status == "found":
         for f in rec.get("findings") or []:
-            if f in seen:
+            k = fold_key(f)
+            if k in seen:
                 continue
-            seen.add(f)
+            seen.add(k)
             findings.append((where, rec.get("ts", "?"), f))
     elif status == "error":
         # Deduped by REASON, and counted. A recurring fault (a subagent kind that
@@ -319,13 +341,23 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
     elif status == "unparsed":
         unparsed.append((where, rec.get("ts", "?"), (rec.get("raw") or "")[:400]))
 
+spent = 0
+printed = 0
 for where, ts, f in findings[:MAX_FINDINGS]:
+    line = "FINDING (%s, %s): %s" % (where, ts, f)
+    # The budget is checked BEFORE printing, so one very long finding cannot
+    # overrun it, and at least one is always printed however long it is: a report
+    # that carries nothing is worse than one that carries a single item.
+    if printed and spent + len(line) > FINDING_BUDGET:
+        break
+    print(line)
+    spent += len(line)
+    printed += 1
     shown += 1
-    print("FINDING (%s, %s): %s" % (where, ts, f))
-if len(findings) > MAX_FINDINGS:
+if printed < len(findings):
     shown += 1
     print("...and %d more findings not shown here. They stay in the spool until filed."
-          % (len(findings) - MAX_FINDINGS))
+          % (len(findings) - printed))
 
 for reason, info in errors.items():
     shown += 1
