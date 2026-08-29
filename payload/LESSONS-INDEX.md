@@ -247,6 +247,7 @@ to decide something: the body is where the failure it came from is described.
 - L243. A surface presented from a boolean saying that SOMETHING is showing cannot notice that WHICH thing is showing has changed, so replacing one modal, alert or toast with another while it is open leaves the previous content on screen.
 - L269. A finding the system cannot verify was acted on (an advisory check, a review warning, a flagged suggestion) must carry its own resolve and dismiss controls, because the person acts on it in text or in the world where nothing can observe the fix, so the notice goes on standing after the work is done and teaches them to ignore the whole panel.
 - L272. A check that can DERIVE the correct value it is demanding must APPLY it rather than report it, because a panel of findings the system could have fixed itself is work handed back to the person, and it teaches them to skim the panel where the findings that genuinely need their judgement live.
+- L526. A store that collects items for a PERSON to act on is only as useful as the rate they can be taken out of it, so size the drain against the rate it fills.
 
 ## External systems
 

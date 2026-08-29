@@ -2262,6 +2262,15 @@ window is a count rather than a boundary.
   observe the fix and so needs the person to close the finding: here it can compute the fix, so
   asking at all is the defect)
 
+- **L526. A store that collects items for a PERSON to act on is only as useful as the rate they
+  can be taken out of it, so size the drain against the rate it fills.** A surface offering four at
+  a time on a cooldown cannot empty a store gaining hundreds, and an item that is never offered is
+  indistinguishable from one that was never captured, which is the loss the store was built to
+  prevent.
+  (claude-config#201: the subagent finding spool held 246 pending findings for one project while
+  the only way out of it was an end of turn picker showing 4, on a 30 minute cooldown, so clearing
+  the backlog would have taken sixty odd reviews and in practice never happened)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
