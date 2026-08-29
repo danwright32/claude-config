@@ -110,8 +110,9 @@ TRIG_IDS=(
   "L13,L71"
   "L18,L19"
   "L5,L7,L9"
-  "L33,L35,L77"
+  "L33,L35,L77,L524"
   "L50"
+  "L290,L524"
 )
 TRIG_WHAT=(
   "an error path that returns an empty or success value"
@@ -120,6 +121,7 @@ TRIG_WHAT=(
   "a destructive data operation"
   "new retry or failure-handling logic"
   "a parsed value flowing into a comparison"
+  "a test that waits a fixed time instead of waiting on a condition or setting the clock"
 )
 TRIG_RE1=(
   '(^|[^[:alnum:]_])(catch[[:space:]]*[({]|except[[:space:]:])'
@@ -128,6 +130,7 @@ TRIG_RE1=(
   '(DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|TRUNCATE[[:space:]]|DELETE[[:space:]]+FROM|rm[[:space:]]+-rf|fs\.rm\(|unlinkSync|\.drop\()'
   '(retry|retries|backoff|maxAttempts|exponential)'
   '(parseInt|parseFloat|JSON\.parse|Number\()'
+  '(waitForTimeout\(|setTimeout\(|Task\.sleep|Thread\.sleep|time\.sleep\(|usleep\(|(^|[^[:alnum:]_.])sleep[[:space:]]*(\(|[0-9]))'
 )
 TRIG_RE2=(
   '(return[[:space:]]*(\[\]|\{\}|null|None|true|""|'"''"'|;|$)|^[[:space:]]*pass[[:space:]]*$)'
@@ -136,6 +139,20 @@ TRIG_RE2=(
   ''
   ''
   '([<>]=?|[=!]==?)'
+  ''
+)
+# Which FILES a trigger may fire on (a regex over the path; empty means any file). The fixed
+# wait trigger is scoped to test files on purpose: the same setTimeout in production code is a
+# retry's business and is covered by the retry trigger above, while in a test it is a wait on
+# the machine's load. A trigger with no scope fires everywhere, exactly as before this was added.
+TRIG_PATH=(
+  ''
+  ''
+  ''
+  ''
+  ''
+  ''
+  '(^|/)(tests?|__tests__|specs?|e2e|spec|Tests)/|\.(test|spec)\.[A-Za-z]+$|(Tests?|Spec)\.swift$|(^|/)test[-_][^/]*\.(sh|py|ts|js)$|_test\.(py|go|rb)$'
 )
 
 files="$(printf '%s\n' "$added" | cut -f1 | sort -u)"
@@ -150,6 +167,9 @@ for i in "${!TRIG_IDS[@]}"; do
   hit_files=""
   while IFS= read -r f; do
     [ -z "$f" ] && continue
+    if [ -n "${TRIG_PATH[$i]}" ]; then
+      printf '%s' "$f" | grep -Eq -- "${TRIG_PATH[$i]}" || continue
+    fi
     lines="$(printf '%s\n' "$added" | awk -F'\t' -v want="$f" '$1 == want { print $2 }')"
     # Written to a file and matched from there, rather than piped in from a printf. This runs under
     # `pipefail`, and `grep -q` leaves on its first match: a printf whose string is larger than the

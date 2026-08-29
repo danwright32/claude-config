@@ -3517,15 +3517,3 @@ difference was plumbing.
   (2026-08-29 audit: PostRoll#571 priced a duplicate render at "about 200s and nothing else";
   Overture#2487 and its AGENTS.md; claude-config had seven dated numbers all a week stale;
   Downbeat's gate still says two to three minutes in six places against 46 seconds measured)
-
-- **L317. A pipeline change is judged first by the count of tests it executed against the count
-  expected, before a single failure is read, and the readout is built BEFORE the change that
-  could produce a partial run, because a partial run that reports a verdict is worse than a failed
-  run (L288, L98).** The failures are the visible half and the absences are the half that matters.
-  A count readout that refuses zero and passes half, or one the CI step never goes through, is
-  not a readout. A filtered run whose identifiers match nothing prints `Executed 0 tests` and
-  exits 0 unless something reads the number.
-  (2026-08-29 audit: Overture executed 4,875 of 8,595 and named twelve failures; PlayedIt's
-  parallel issue got the readout as its first task; PostRoll's `suite_counts.py` refuses a leg
-  that ran zero and passes one that ran half, and the CI Swift step never goes through it;
-  Downbeat's filtered run printed `Executed 0 tests` and exited 0)
