@@ -1433,6 +1433,18 @@ window is a count rather than a boundary.
   indented line and nothing whatever for an unindented one, so those fused onto the previous word
   and shipped into the index that loads into every session in every project)
 
+- **L264. A durable record that exists only because a CALLER redirects the tool's output belongs
+  to that caller, not the tool**, so every invocation started another way does the work and
+  leaves nothing behind, and the record then understates what has been verified at exactly the
+  moments somebody checked by hand. (downbeat#444: a scheduled agent ran the clean Release build
+  nightly and its plist redirected stdout into a log; a push then read that log to say when the
+  invariant was last confirmed. Running the check by hand, which is what you do after changing a
+  lot of code, printed the same stamp to a terminal and recorded nothing. Measured 2026-08-28,
+  five clean manual runs after substantial changes, and the next push still named a scheduled
+  check from fourteen hours earlier that predated all of them. The fix is for the tool to write
+  its own record. L164 is the inverse, recording inside a program cannot capture its launcher's
+  failures; this is the launcher owning a record of runs it did not start)
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates

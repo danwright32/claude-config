@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 283 lessons.
+LESSONS.md, which is NOT loaded into the session. 284 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -154,6 +154,7 @@ to decide something: the body is where the failure it came from is described.
 - L516. A repair that BACKFILLS a field after the fact (a duration from a child record, a finish time from the last known activity) writes the value the work would have had if nothing had gone wrong, so it erases the evidence of the delay it repaired.
 - L520. A failure message built only from a response BODY says nothing when the request could not carry a body (an HTTP HEAD, a 204), and the empty payload then reads as no information rather than as the diagnosis it is.
 - L251. A substitution can only rewrite text that is PRESENT, so one used to also supply a separator when joining two pieces inserts nothing at all on the input that lacks it, and the pieces fuse into a single corrupted value.
+- L264. A durable record that exists only because a CALLER redirects the tool's output belongs to that caller, not the tool
 
 ## State and identity
 
