@@ -2372,6 +2372,20 @@ window is a count rather than a boundary.
   only because that fused name happened not to exist; a trim landing on a real file would have read
   the wrong one and reported about it)
 
+- **L271. A cross repository deliverable phrased as what YOUR side must WRITE says nothing about
+  whether the consuming side can READ it**, so check the consumer's access to the value before
+  calling it done. Writing exactly what was asked satisfies the letter while leaving the
+  comparison it exists for with one unreachable side, and nothing reports that until somebody
+  tries to build the comparison, which is the expensive moment to find a missing field.
+  (downbeat#452: Ovation's implementation plan named, as a cross-repo deliverable, that Downbeat
+  write a durable per-booking handoff-intended mark. Downbeat wrote exactly that, in the same
+  save transaction as the row, with a reader and tests. The mark lives in Downbeat's SwiftData
+  store, which Ovation cannot read, and it appears in neither the export nor the queue record,
+  while the same Ovation plan specifies a reconciliation with that mark as ONE SIDE of the
+  comparison. Both repositories read as complete on their own, which is why neither reports it.
+  Distinct from L3: nothing here is unwired inside either codebase, the gap is only visible from
+  the boundary, and the deliverable's own wording is what hid it by naming a write and no reader)
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and
