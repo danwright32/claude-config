@@ -28,6 +28,7 @@ import collections
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SPOOL = os.environ.get("CLAUDE_ISSUE_SPOOL_DIR") or os.path.expanduser("~/.claude-issue-spool")
 PROJECTS = os.environ.get("CLAUDE_PROJECTS_DIR") or os.path.expanduser("~/.claude/projects")
 LIB = os.environ.get("CLAUDE_ISSUE_SPOOL_LIB") or os.path.join(HERE, "lib", "issue-spool.sh")
+HOME = os.environ.get("CLAUDE_MIGRATE_HOME") or os.path.expanduser("~")
 
 
 def key_for_project(project_dir, cache={}):
@@ -60,6 +62,42 @@ def key_for_project(project_dir, cache={}):
     return key
 
 
+def project_for_cwd(cwd, projects):
+    """The project directory for an agent's working directory, or None.
+
+    Claude Code names a project's folder after the path it was started in, with
+    every character that is not a letter or digit replaced by a dash. That makes
+    this a CHECK rather than a guess: the encoded name either is a folder that
+    exists or it is not.
+
+    Needed because a session id only places a record while that session's
+    transcript is still on disk. Measured on a second machine 2026-08-29: 117 of
+    128 records named a session that was gone, and keying on the session alone
+    stranded every one of them.
+
+    The walk goes UP, because a session sits at or above where its agents work
+    (a nested repo, a worktree). It STOPS BEFORE the home directory: everything
+    lives under home, so a match there proves nothing and would sweep every
+    unplaceable record on the machine into one heap.
+
+    No realpath anywhere: the folder name was derived from the path string
+    Claude Code held, so the comparison has to be made against that same string.
+    """
+    if not cwd:
+        return None
+    home = os.path.normpath(HOME)
+    d = os.path.normpath(cwd)
+    while d and d not in (home, os.sep):
+        cand = os.path.join(projects, re.sub(r"[^A-Za-z0-9]", "-", d))
+        if os.path.isdir(cand):
+            return cand
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None
+
+
 def session_homes():
     """session id -> the project directory that session belongs to."""
     homes = {}
@@ -79,6 +117,7 @@ def plan():
     moves = collections.defaultdict(list)   # destination key -> record lines
     keeps = {}                              # source file -> lines that stay
     stay = collections.Counter()
+    placed_by = collections.Counter()       # which route found each record a home
     for path in sorted(glob.glob(os.path.join(SPOOL, "*.jsonl"))):
         if path.endswith(".filed.jsonl"):
             continue
@@ -94,19 +133,29 @@ def plan():
                 kept.append(line); stay["unreadable record"] += 1; continue
             sid = rec.get("session") if isinstance(rec, dict) else None
             home = homes.get(sid) if sid else None
-            if not home:
-                kept.append(line); stay["session not found"] += 1; continue
+            if home:
+                placed_by["session"] += 1
+            else:
+                # The two ways the session can fail to place a record are
+                # different problems and are counted apart (L11): one never
+                # named a session, the other named one whose transcript is gone.
+                stay["no session recorded" if not sid else "session not found"] += 1
+                home = project_for_cwd(rec.get("cwd") if isinstance(rec, dict) else None,
+                                       PROJECTS)
+                if not home:
+                    kept.append(line); stay["directory matched no project"] += 1; continue
+                placed_by["directory"] += 1
             dst = key_for_project(home)
             if dst == src_key:
-                kept.append(line); stay["already correct"] += 1; continue
+                kept.append(line); placed_by["already in the right place"] += 1; continue
             moves[dst].append(line)
         keeps[path] = kept
-    return moves, keeps, stay
+    return moves, keeps, stay, placed_by
 
 
 def main():
     apply = "--apply" in sys.argv
-    moves, keeps, stay = plan()
+    moves, keeps, stay, placed_by = plan()
     total = sum(len(v) for v in moves.values())
     before = sum(len(v) for v in keeps.values()) + total
 
@@ -116,7 +165,8 @@ def main():
         print("  %s: %d record(s) stay" % (src, len(kept)))
     for dst, lines in sorted(moves.items()):
         print("  -> %s: %d record(s) arrive" % (dst, len(lines)))
-    print("  left in place:", dict(stay) or "{}")
+    print("  why records could not be placed by their session:", dict(stay) or "{}")
+    print("  placed by:", dict(placed_by) or "{}")
     print("  moving:", total)
 
     if not apply:

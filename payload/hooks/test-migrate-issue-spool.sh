@@ -153,7 +153,10 @@ survived_src="$(contains "a finding whose session is known" "$(cat "$CLAUDE_ISSU
 seed
 original="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl")"
 out_bk="$(python3 "$MIGRATE" --apply 2>&1)"
-backup_dir="$(printf '%s\n' "$out_bk" | sed -n 's/^backup: //p' | head -1)"
+backup_dir=""
+while IFS= read -r line_bk; do
+  case "$line_bk" in "backup: "*) [ -n "$backup_dir" ] || backup_dir="${line_bk#backup: }" ;; esac
+done <<< "$out_bk"
 [ -n "$backup_dir" ] && [ -d "$backup_dir" ] \
   && check "the move takes a backup first" ok \
   || check "the move takes a backup first" "no backup named in ${out_bk:0:200}"
@@ -168,6 +171,111 @@ out_dry2="$(python3 "$MIGRATE" 2>&1)"
 contains "backup:" "$out_dry2" \
   && check "a dry run takes no backup" "it made one" \
   || check "a dry run takes no backup" ok
+
+# ---------------------------------------------------------------------------
+# When the session id leads nowhere.
+#
+# Measured on the second Mac, 2026-08-29: 128 spool keys holding one record
+# each, and 117 of them named a session with no transcript left on disk. Keying
+# on the session alone therefore rescued 11 records and stranded the rest, which
+# is the same silence this whole exercise is about.
+#
+# The record also carries the directory the agent worked in, and Claude Code
+# names a project's folder after that path with every character that is not a
+# letter or digit replaced by a dash. That is checkable rather than guessed: the
+# encoded name either IS a folder that exists or it is not.
+#
+# The walk goes UP from the agent's directory, because a session sits at or
+# above where its agents work. It STOPS BEFORE the home directory: everything
+# lives under home, so matching it proves nothing and would sweep every
+# unmatched record in the machine into one heap.
+# ---------------------------------------------------------------------------
+export CLAUDE_MIGRATE_HOME="$TMPROOT/home"
+mkdir -p "$CLAUDE_MIGRATE_HOME/work/repo/nested"
+ENC_REPO="$(printf '%s' "$CLAUDE_MIGRATE_HOME/work/repo" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$CLAUDE_PROJECTS_DIR/$ENC_REPO"
+REPO_KEY="$(bash "$SPOOL_LIB" key "$TMPROOT" "$CLAUDE_PROJECTS_DIR/$ENC_REPO/any-session.jsonl")"
+
+rec_cwd() { # rec_cwd <session-or-empty> <cwd> <text>
+  python3 -c '
+import json, sys
+r = {"ts": "2026-08-29T10:00:00Z", "status": "found", "cwd": sys.argv[2],
+     "findings": [sys.argv[3]]}
+if sys.argv[1]:
+    r["session"] = sys.argv[1]
+print(json.dumps(r))' "$1" "$2" "$3"
+}
+
+seed_cwd() {
+  rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+  { rec_cwd "" "$CLAUDE_MIGRATE_HOME/work/repo" "no session recorded at all"
+    rec_cwd session-gone "$CLAUDE_MIGRATE_HOME/work/repo/nested" "session gone, worked deeper"
+    rec_cwd session-gone "$CLAUDE_MIGRATE_HOME/elsewhere" "session gone, nothing matches"
+  } > "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+}
+
+seed_cwd
+python3 "$MIGRATE" --apply >/dev/null 2>&1
+landed="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$REPO_KEY.jsonl" 2>/dev/null)"
+contains "no session recorded at all" "$landed" \
+  && check "a record with no session is placed by the directory it worked in" ok \
+  || check "a record with no session is placed by the directory it worked in" "not in $REPO_KEY"
+contains "session gone, worked deeper" "$landed" \
+  && check "a record from a subdirectory walks up to its project" ok \
+  || check "a record from a subdirectory walks up to its project" "not in $REPO_KEY"
+
+# The refusal that keeps the rest honest: nothing matches, so it stays put
+# rather than being swept somewhere nobody looks.
+contains "session gone, nothing matches" "$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl" 2>/dev/null)" \
+  && check "a record matching no project stays where it is" ok \
+  || check "a record matching no project stays where it is" "it was moved anyway"
+
+# The home directory must never be the match that rescues a record, or every
+# unplaceable record on the machine ends up in one pile.
+ENC_HOME="$(printf '%s' "$CLAUDE_MIGRATE_HOME" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$CLAUDE_PROJECTS_DIR/$ENC_HOME"
+HOME_KEY="$(bash "$SPOOL_LIB" key "$TMPROOT" "$CLAUDE_PROJECTS_DIR/$ENC_HOME/any-session.jsonl")"
+seed_cwd
+python3 "$MIGRATE" --apply >/dev/null 2>&1
+contains "nothing matches" "$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$HOME_KEY.jsonl" 2>/dev/null)" \
+  && check "the walk stops before the home directory" "it was swept into home" \
+  || check "the walk stops before the home directory" ok
+
+# A session that CAN be found still wins: it is what the review actually keys
+# on, and the directory is only a fallback for when it is gone.
+rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+touch "$CLAUDE_PROJECTS_DIR/-a-project/session-aaa.jsonl"
+rec_cwd session-aaa "$CLAUDE_MIGRATE_HOME/work/repo" "session known, directory says otherwise" \
+  > "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+python3 "$MIGRATE" --apply >/dev/null 2>&1
+contains "session known" "$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$DEST.jsonl" 2>/dev/null)" \
+  && check "a findable session beats the directory fallback" ok \
+  || check "a findable session beats the directory fallback" "it went by the directory instead"
+
+# The two ways a session can fail to place a record are different problems and
+# must be reported as different lines (L11): one is a record that never named a
+# session, the other is a session whose transcript is gone.
+seed_cwd
+rm -rf "$CLAUDE_PROJECTS_DIR/$ENC_REPO" "$CLAUDE_PROJECTS_DIR/$ENC_HOME"
+out_why="$(python3 "$MIGRATE" 2>&1)"
+contains "no session recorded" "$out_why" && contains "session not found" "$out_why" \
+  && check "the two ways a record cannot be placed are named apart" ok \
+  || check "the two ways a record cannot be placed are named apart" "out=${out_why: -300}"
+
+# A record that was ALREADY in the right place is not a record that could not be
+# placed, and must not be counted under that heading: the line naming why things
+# failed is the line a person reads to decide whether the run went well.
+seed
+out_lbl="$(python3 "$MIGRATE" 2>&1)"
+# A herestring, not a pipe: `producer | grep` under this suite's pipefail can
+# report the producer's death rather than the match (L183).
+why_line=""
+while IFS= read -r line_lbl; do
+  case "$line_lbl" in *"could not be placed"*) why_line="$line_lbl" ;; esac
+done <<< "$out_lbl"
+contains "already" "$why_line" \
+  && check "records already in place are not counted as failures" "counted as one: $why_line" \
+  || check "records already in place are not counted as failures" ok
 
 echo
 echo "passed: $pass  failed: $fail"
