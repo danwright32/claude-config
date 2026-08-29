@@ -125,6 +125,50 @@ rc=$?
   && check "no record is sent to an empty key" "it created .jsonl" \
   || check "no record is sent to an empty key" ok
 
+# ---------------------------------------------------------------------------
+# Order and recoverability. This tool moves the only copy of records nobody has
+# read yet, and it will be run unsupervised on another machine.
+# ---------------------------------------------------------------------------
+
+# The destination must be written BEFORE the source is emptied. Killed between
+# the two, the worst outcome must be a record present twice, never a record
+# present nowhere: a duplicate is visible and fixable, a loss is neither (L5).
+seed
+CLAUDE_MIGRATE_ABORT_AFTER_WRITE=1 python3 "$MIGRATE" --apply >/dev/null 2>&1
+survived_dest="$(contains "a finding whose session is known" "$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$DEST.jsonl" 2>/dev/null)" && echo yes || echo no)"
+survived_src="$(contains "a finding whose session is known" "$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl" 2>/dev/null)" && echo yes || echo no)"
+[ "$survived_dest" = "yes" ] || [ "$survived_src" = "yes" ] \
+  && check "a run killed midway loses no record" ok \
+  || check "a run killed midway loses no record" "gone from both"
+# The positive control for that: the abort must really have happened partway,
+# not before anything was done, or the check above is satisfied by a run that
+# never started.
+[ "$survived_dest" = "yes" ] \
+  && check "the abort really happened after the write" ok \
+  || check "the abort really happened after the write" "nothing was written first"
+
+# A backup is taken before anything moves, and it holds the original content.
+# The person running this on the other Mac has no copy of their spool otherwise,
+# and nothing here can be undone by hand (L7).
+seed
+original="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl")"
+out_bk="$(python3 "$MIGRATE" --apply 2>&1)"
+backup_dir="$(printf '%s\n' "$out_bk" | sed -n 's/^backup: //p' | head -1)"
+[ -n "$backup_dir" ] && [ -d "$backup_dir" ] \
+  && check "the move takes a backup first" ok \
+  || check "the move takes a backup first" "no backup named in ${out_bk:0:200}"
+[ "$(cat "$backup_dir/$WRONG.jsonl" 2>/dev/null)" = "$original" ] \
+  && check "the backup holds what was there before the move" ok \
+  || check "the backup holds what was there before the move" "backup differs"
+
+# A dry run must not take one: it changes nothing, so a backup would only be
+# litter that looks like a real recovery point.
+seed
+out_dry2="$(python3 "$MIGRATE" 2>&1)"
+contains "backup:" "$out_dry2" \
+  && check "a dry run takes no backup" "it made one" \
+  || check "a dry run takes no backup" ok
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

@@ -28,8 +28,10 @@ import collections
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPOOL = os.environ.get("CLAUDE_ISSUE_SPOOL_DIR") or os.path.expanduser("~/.claude-issue-spool")
@@ -121,16 +123,42 @@ def main():
         print("\nDRY RUN. Nothing was changed. Pass --apply to move them.")
         return 0
 
-    # Rewrite the sources FIRST, then append to the destinations. A record is
-    # briefly absent from both rather than briefly present in both: a duplicate
-    # would be shown twice and filed once, which strands the copy.
-    for path, kept in keeps.items():
-        with open(path, "w", encoding="utf-8") as fh:
-            for line in kept:
-                fh.write(line + "\n")
+    # A copy of the whole spool BEFORE anything moves. This runs unsupervised on
+    # a second machine, it moves the only copy of records nobody has read, and
+    # nothing here can be put back by hand. A dry run takes none: it changes
+    # nothing, so a backup would only be litter that looks like a recovery point.
+    # The stamp is only good to the second, and two runs inside one second are
+    # ordinary in a test and possible by hand. A colliding name must not take the
+    # run down before anything is backed up, so the name is made unique rather
+    # than assumed to be.
+    base = os.path.join(
+        os.path.dirname(SPOOL.rstrip("/")) or ".",
+        os.path.basename(SPOOL.rstrip("/")) + ".backup-" + time.strftime("%Y%m%d-%H%M%S"))
+    backup, n = base, 1
+    while os.path.exists(backup):
+        backup = "%s-%d" % (base, n)
+        n += 1
+    shutil.copytree(SPOOL, backup)
+    print("backup: %s" % backup)
+
+    # DESTINATIONS FIRST, sources second. Killed between the two, a record is
+    # present TWICE rather than nowhere. A duplicate is visible and can be
+    # cleared up; a record that exists in neither file is gone, and it is
+    # precisely a record nobody has read yet (L5).
     for dst, lines in moves.items():
         with open(os.path.join(SPOOL, dst + ".jsonl"), "a", encoding="utf-8") as fh:
             for line in lines:
+                fh.write(line + "\n")
+
+    # Test seam: the one instant that decides whether a kill loses records, so
+    # it can be tested rather than raced for.
+    if os.environ.get("CLAUDE_MIGRATE_ABORT_AFTER_WRITE"):
+        print("aborting after the write, on purpose (test seam)")
+        return 1
+
+    for path, kept in keeps.items():
+        with open(path, "w", encoding="utf-8") as fh:
+            for line in kept:
                 fh.write(line + "\n")
 
     after = 0
@@ -140,7 +168,7 @@ def main():
         after += sum(1 for l in open(path, encoding="utf-8", errors="replace") if l.strip())
     print("\nAPPLIED. %d record(s) before, %d after." % (before, after))
     if before != after:
-        print("MIGRATION LOST RECORDS. Restore from your backup and do not re-run.")
+        print("MIGRATION LOST RECORDS. Restore from %s and do not re-run." % backup)
         return 1
     return 0
 
