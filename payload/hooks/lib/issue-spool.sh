@@ -69,6 +69,16 @@ PENDING_MAX_RECORDS="${CLAUDE_ISSUE_SPOOL_PENDING_MAX:-500}"
 # written as "hide the failures" rather than "hide THIS failure" would have
 # buried it (L104). Newline separated; override for a test, not to add to it
 # casually.
+#
+# KNOWN GAP (L77): classifying a failure as expected does not excuse anyone from
+# watching its RATE, and this reports a count without escalating on one. A
+# threshold is deliberately NOT set here, because the real distribution will not
+# support one: measured across two projects over eight days, the daily volume ran
+# 4, 12, 3, 19, 29, 188, 19. Any threshold lands inside that spread, so it would
+# fire on an ordinary busy day and say nothing on a quiet broken one, which is
+# the noise a threshold is supposed to remove (L172). The count in the periodic
+# line is what a person reads instead; if a real baseline ever exists, this is
+# where the escalation belongs.
 MUTED_ERROR_REASONS="${CLAUDE_ISSUE_SPOOL_MUTED_REASONS:-the named agent transcript does not exist}"
 
 # The key must survive a worktree. An agent usually runs in .claude/worktrees/<x>,
