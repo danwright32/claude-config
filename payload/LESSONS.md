@@ -2374,6 +2374,21 @@ window is a count rather than a boundary.
 
 ## Building with AI
 
+- **L270. A rule stated in a prompt is contradicted by every example, reference document and
+  line of surrounding prose that breaks it, and the demonstration outweighs the instruction, so
+  anything a prompt BANS must be absent from the whole payload the model receives, not merely
+  forbidden in one sentence of it.** The ban reads as satisfied because the sentence is there, and
+  the only thing that would reveal otherwise is counting the banned thing in the rest of the
+  payload, which nobody does once the rule is written. Distinct from L27, where the rule reaches
+  no code at all: here the rule reaches the model and is outvoted by its own context.
+  (postroll#959, 2026-08-29. The caption prompt, the blog prompt and the brand voice document all
+  instruct Claude "NO em dashes anywhere. Ever." and are themselves written with em dashes
+  throughout: 66, 56 and 63 of them respectively in text sent to the model, plus the brand voice
+  file which is the single strongest example of how the writing should read. Nothing had gone
+  visibly wrong only because a deterministic cleaner strips them from what comes back, so a
+  backstop was quietly doing the prompt's job. Found while measuring an unrelated backlog, not by
+  reading the prompts, because a prompt is read for what it SAYS)
+
 - **L27. A rule that lives only in a prompt is a hope.** Every hard constraint on AI
   output also gets a deterministic code check at the boundary, and every field a prompt
   references must provably exist in the payload sent, or the model fabricates it.
