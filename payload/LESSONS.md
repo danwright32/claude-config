@@ -1422,6 +1422,17 @@ window is a count rather than a boundary.
   could ever have reported that same empty object, while the status sat on the response
   unread. The root cause was a missing index, 7.1 s warm against a 30 s limit, and it was
   found only by digging through the provider's own logs)
+- **L523. A suppression set by hand (a mute, a snooze, a maintenance window, a disabled
+  check) must carry an EXPIRY and be listed somewhere visible.** It produces exactly the
+  same silence as a healthy system, and usually only the person who set it knows it
+  exists, so one without a deadline is not temporary, it is permanent and undetectable.
+  (bidspoke#1047: muting an archive's alerts for a week meant setting seven separate
+  suppression keys found across five files, and three were missed on the first pass,
+  including the two conditions most likely to fire. Nothing anywhere lists an active mute
+  or when it lifts. The suppression mechanism was a cooldown key whose normal life is 8
+  hours, so writing one with no TTL would have silenced those alerts forever with no
+  trace. Two write attempts also failed silently first, an unknown CLI flag and an
+  ambiguous account, and reading each key back is the only reason that was noticed)
 
 - **L251. A substitution can only rewrite text that is PRESENT, so one used to also supply a
   separator when joining two pieces inserts nothing at all on the input that lacks it, and the
@@ -2787,3 +2798,17 @@ window is a count rather than a boundary.
   push escape hatch switches off 21 of the checks verifying the gate it escapes. Found because
   the identical shape had just bitten a newly written gate's harness, where `env -u` fixed it;
   the class was only visible by asking whether the older harnesses had the same hole)
+- **L522. A time or size budget calibrated for ONE execution context is wrong when the same
+  code is reached from another (a scheduled job versus a request, a worker versus a CLI, a
+  foreground run versus a background one), because the platform ceiling differs**, so the
+  code commits to work it will not be allowed to finish and dies mid task instead of
+  stopping cleanly, leaving whatever its cleanup would have released.
+  (bidspoke#1048: the archive's 10 minute wall budget is documented as sized "inside the
+  platform's cron limit", and the manual recovery route runs that same run loop from a
+  fetch handler. Measured, the scheduled path did two hours in 390 s while the request path
+  was killed at 218 s with "exceeded resource limits" partway through its second hour. A
+  killed isolate never runs its `finally`, so its lock stayed held and the next scheduled
+  run reported a killed predecessor, which is where the operator's alerts came from. Note
+  the trap in fixing it: WHICH ceiling fires has to be measured, because if it is CPU then
+  changing a wall clock budget cannot prevent the kill and reads as a fix that changed
+  nothing)

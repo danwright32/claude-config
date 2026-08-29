@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 284 lessons.
+LESSONS.md, which is NOT loaded into the session. 286 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -153,6 +153,7 @@ to decide something: the body is where the failure it came from is described.
 - L218. A policy with a defined fallback chain (a CSP directive, a CSS cascade, an inherited config) treats an OMITTED rule as a NEIGHBOURING rule rather than as no rule, so the omission silently applies a restriction written for different content.
 - L516. A repair that BACKFILLS a field after the fact (a duration from a child record, a finish time from the last known activity) writes the value the work would have had if nothing had gone wrong, so it erases the evidence of the delay it repaired.
 - L520. A failure message built only from a response BODY says nothing when the request could not carry a body (an HTTP HEAD, a 204), and the empty payload then reads as no information rather than as the diagnosis it is.
+- L523. A suppression set by hand (a mute, a snooze, a maintenance window, a disabled check) must carry an EXPIRY and be listed somewhere visible.
 - L251. A substitution can only rewrite text that is PRESENT, so one used to also supply a separator when joining two pieces inserts nothing at all on the input that lacks it, and the pieces fuse into a single corrupted value.
 - L264. A durable record that exists only because a CALLER redirects the tool's output belongs to that caller, not the tool
 
@@ -320,3 +321,4 @@ to decide something: the body is where the failure it came from is described.
 - L255. A consumer that gates on an exact SET of accepted format versions turns the producer's next additive bump into a total outage of itself
 - L258. A consumer that acknowledges work by DELETING the record makes an absent record mean both "consumed successfully" and "never written"
 - L259. An escape hatch that switches a gate OFF is inherited by every process that command starts, including the gate's OWN self-test
+- L522. A time or size budget calibrated for ONE execution context is wrong when the same code is reached from another (a scheduled job versus a request, a worker versus a CLI, a foreground run versus a background one), because the platform ceiling differs
