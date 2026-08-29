@@ -7,6 +7,17 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L277. A defect's output can be the only record of a fact the system never stored
+  deliberately, so shipping the fix silently removes the evidence the diagnosis was made from.
+  Before shipping one, name what the failure was incidentally reporting and record that fact
+  directly.** Distinct from L507, which is about a selection whose members were never recorded at
+  all: here they WERE recorded, by accident, in the wrong place, and the repair is what deletes
+  them. (PostRoll#962, #972: a blog post is written around seven photos subsampled from the twelve
+  assigned, and which seven is discarded. It was recoverable only because a filename bug reported
+  every unplaced photo by its true on-disk name, which is how the fix was verified at all; the fix
+  stops those findings firing, and with them the only trace of the choice. Re-deriving the seven
+  from the stored list gave a different seven, so the stored list cannot answer for it either)
+
 - **L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is
   written, because a hard-coded setTimeout forces every end-to-end test that crosses it to wait
   for real.** A test that records the delays the code asked for is both instant and stronger than
