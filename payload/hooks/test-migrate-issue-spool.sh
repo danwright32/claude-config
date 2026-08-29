@@ -388,7 +388,7 @@ contains "a finding about a test fixture" "$left" \
 # one, so a fixture built from its own scratch directory is indistinguishable
 # from the leftovers being deleted, and the first version of this check failed
 # for exactly that reason.
-rec_cwd "" "/Users/no-such-person/a-real-looking-project" "a vanished project outside any temp directory" \
+rec_cwd "" "$HOME/no-such-project-for-this-test" "a vanished project outside any temp directory" \
   >> "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
 python3 "$MIGRATE" --forget-test-records --apply >/dev/null 2>&1
 left="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl" 2>/dev/null)"
