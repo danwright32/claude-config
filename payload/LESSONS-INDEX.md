@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 298 lessons.
+LESSONS.md, which is NOT loaded into the session. 299 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -174,6 +174,7 @@ to decide something: the body is where the failure it came from is described.
 - L86. A short lived component that registers actions, observers or callbacks into a longer lived shared host (an undo stack, a notification center, an event target, a subscription registry) must either own a private instance of that host or deregister on teardown, because these hosts routinely hold unowned references and outlive the component.
 - L89. When two controls can write the same stored field, their option lists are one vocabulary and must be reconciled against each other, not each against some third reference.
 - L91. A user action's visible response must not wait on a derivation whose cost scales with the whole collection rather than with what changed.
+- L275. An image drawn small must be DECODED small, because the renderer decodes the WHOLE source file to build its texture, and the platform discards that texture whenever the app leaves the foreground.
 - L131. A map keyed by a value the real data can repeat (a date, a name, a day) silently keeps the LAST writer and discards every earlier one, and because the surface renders one row per key the loss is invisible on the very screen that exists to report it.
 - L162. A completion flag whose only writers are actions performed INSIDE your product is permanently wrong for anyone who does the work in the tool that work actually lives in (a mail client, a CRM, a calendar), so when the truth is visible in a system you already read, derive it from there rather than waiting to be told.
 - L163. When the model has no field for a fact, never express that fact by NEGATING a neighbouring one, because the negated field goes on being read as its own fact everywhere else and the system then confidently asserts the opposite of what happened.

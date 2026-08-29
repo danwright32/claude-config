@@ -1567,6 +1567,20 @@ window is a count rather than a boundary.
   invalidated the queue's whole query and rebuilt every card, whole-corpus derivations included,
   on the main thread; the same lag struck an address off a card, and Dan named the pattern before
   anyone had looked at the cause)
+- **L275. An image drawn small must be DECODED small, because the renderer decodes the WHOLE
+  source file to build its texture, and the platform discards that texture whenever the app
+  leaves the foreground.** The full decode is then repaid on the main thread every time the
+  person comes back, so a grid of thumbnails backed by originals blocks the window on every
+  return to it, and nothing in the code reads as expensive: the cost sits inside the draw
+  rather than inside anything the app calls. Produce a copy at the size it will actually be
+  shown, cache that, and hand the view the copy. Related to L91, which is a derivation the
+  app itself runs; here the app runs nothing and the platform charges it anyway.
+  (PostRoll#966: switching away from the app and back froze it for a second or two. A 24
+  second sample over three activations put 890 of 1051 main thread samples in the
+  CoreAnimation commit, inside JPEGDecompressSurface, while the app's own Swift code took 16
+  samples in the whole profile. Photos were 2500x1667 drawn into 80pt cells, with no
+  downsampling anywhere in the codebase, and a RenderBox SurfacePool thread was visibly
+  collecting the cached surfaces)
 - **L131. A map keyed by a value the real data can repeat (a date, a name, a day) silently keeps the
   LAST writer and discards every earlier one, and because the surface renders one row per key the
   loss is invisible on the very screen that exists to report it.** Check the live data for a repeat
