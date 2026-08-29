@@ -247,13 +247,32 @@ def forget_test_records(apply):
               "add --apply to do it." % total)
         return 0
     backup = take_backup()
+    before = count_records()
     for path, kept in keeps.items():
         with open(path, "w", encoding="utf-8") as fh:
             for line in kept:
                 fh.write(line + "\n")
-    print("\nFORGOTTEN. %d record(s) removed. The whole spool as it was is in %s."
-          % (total, backup))
+    after = count_records()
+    print("\nFORGOTTEN. %d record(s) removed. %d record(s) before, %d after. The whole spool as "
+          "it was is in %s." % (total, before, after, backup))
+    # The same check the migration carries, for the same reason: it is the only
+    # thing that noticed a lost record there, and a delete shipped without one
+    # can take more than it named and say nothing.
+    if after != before - total:
+        print("DELETE TOOK MORE THAN IT NAMED: expected %d after, got %d. Restore from %s and do "
+              "not re-run." % (before - total, after, backup))
+        return 1
     return 0
+
+
+def count_records():
+    """Every pending record in the spool, right now."""
+    n = 0
+    for path in glob.glob(os.path.join(SPOOL, "*.jsonl")):
+        if path.endswith(".filed.jsonl"):
+            continue
+        n += sum(1 for l in open(path, encoding="utf-8", errors="replace") if l.strip())
+    return n
 
 
 def take_backup():
@@ -351,11 +370,7 @@ def main():
             for line in arriving:
                 fh.write(line + "\n")
 
-    after = 0
-    for path in glob.glob(os.path.join(SPOOL, "*.jsonl")):
-        if path.endswith(".filed.jsonl"):
-            continue
-        after += sum(1 for l in open(path, encoding="utf-8", errors="replace") if l.strip())
+    after = count_records()
     print("\nAPPLIED. %d record(s) before, %d after." % (before, after))
     if before != after:
         print("MIGRATION LOST RECORDS. Restore from %s and do not re-run." % backup)

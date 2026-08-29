@@ -481,6 +481,21 @@ contains "LOST RECORDS" "$out_both" \
   && check "the run does not report losing records" "it did: ${out_both: -200}" \
   || check "the run does not report losing records" ok
 
+# The delete path must check its own arithmetic too. The migration does, and it
+# is the only reason a lost record was noticed at all; the delete was shipped
+# without one, which means it could take more than it named and say nothing.
+seed_cwd
+rm -rf "$CLAUDE_PROJECTS_DIR/$ENC_REPO"
+rec_cwd "" "${TMPDIR:-/tmp}/countcheck-$$/spool-project" "a leftover to remove" \
+  >> "$CLAUDE_ISSUE_SPOOL_DIR/$WRONG.jsonl"
+out_count="$(python3 "$MIGRATE" --forget-test-records --apply 2>&1)"
+contains "record(s) before" "$out_count" \
+  && check "the delete reports its own before and after counts" ok \
+  || check "the delete reports its own before and after counts" "out=${out_count: -250}"
+contains "LOST" "$out_count" \
+  && check "a correct delete does not warn about losses" "it warned: ${out_count: -250}" \
+  || check "a correct delete does not warn about losses" ok
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
