@@ -885,6 +885,19 @@ window is a count rather than a boundary.
   shape that should have been asked for, and it then reported the pipeline's own bad value as a
   handle the model had invented)
 
+- **L278. A check that decides whether content was LOST by comparing whole LINES is defeated by
+  reformatting, because re-wrapping a paragraph changes every line boundary while losing no words,
+  so compare in the unit the meaning lives in (words, or a whitespace collapsed body) rather than
+  the unit the file happens to be stored in.** The failure is a FALSE loss, which is the expensive
+  direction here: the report goes on naming files that need no action, and a warning that fires on
+  files needing nothing trains the reader to skim the one case that matters (L36). Distinct from
+  L251, which is about a substitution PRODUCING wrapped text; this is about a comparison JUDGING
+  it. (claude-config#212: the unresolved conflict report kept insisting a set aside copy of
+  `test-pipefail-shortcircuit.sh` held 4 lines found in no loaded file, and all four sentences were
+  present verbatim in the live header, merely wrapped across different line breaks. That report is
+  the only thing anywhere that names content surviving in no file the tool loads, and its own
+  comment records a lesson that survived only because somebody read it once)
+
 ## Data safety
 
 - **L206. A tool mode whose NAME reads like an inspection (reach, check, status, list,
