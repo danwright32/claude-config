@@ -42,11 +42,17 @@ jobs:
     # the check named below is what holds them in order now.
     #
     # So the suite's deadlines are set HERE, for this runner, rather than inherited from a Mac's
-    # defaults, and they are ordered with room between them. All three numbers are SET below and
-    # in the job, not measured: a stall is noticed at ten minutes, the absolute ceiling is fifteen,
+    # defaults, and they are ordered with room between them. All three numbers are SET below and in
+    # the job, not measured: a stall is noticed at eight minutes, the absolute ceiling is sixteen,
     # and the platform's backstop is twenty. The suite's whole run on this runner was measured at
-    # roughly 200 seconds on 2026-08-30, so the stall bound is about three times the entire run and
+    # roughly 200 seconds on 2026-08-30, so the stall bound is more than twice the entire run and
     # many times the longest single section.
+    #
+    # The ceiling is exactly twice the stall bound, which is its own separate requirement: #112
+    # refuses a ceiling under twice the stall, because a ceiling that close fires FIRST and every
+    # real hang is then reported as a run that merely went on too long, which sends the reader to
+    # raise a limit rather than to find the hang (L11). The first version of these values had a
+    # 900s ceiling over a 600s stall and CI caught it on the next push.
     #
     # A check in the suite now holds this ordering for every job in every workflow file, so a
     # second workflow cannot arrive without a timeout and none of these three numbers can cross
@@ -146,8 +152,8 @@ jobs:
           # Below the job's own backstop, and in order, so the suite is always the thing that
           # reports a hang and always gets to name the section (claude-config#210). Set here, not
           # measured; a check in the suite holds the ordering.
-          SUITE_STALL_TIMEOUT: 600
-          SUITE_TIMEOUT: 900
+          SUITE_STALL_TIMEOUT: 480
+          SUITE_TIMEOUT: 960
           # This runner has two cores, and the budget in #136 is granted to the suites running at
           # once, so the default here is one process each and the sync suite stops sharding: its
           # fan-out, and #137's check that the shards covered every section between them, would

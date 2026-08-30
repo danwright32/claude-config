@@ -734,6 +734,16 @@ SHNEEDS
     _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
     if [ "$_sh_by_time" -eq 1 ]; then
       _sh_weight[$_sh_r]=$(( ${_sh_secs[$_sh_r]:-0} + ${_sh_unk[$_sh_r]:-0} * _sh_median ))
+      # A group NEVER weighs less than the number of sections in it. A section that measured zero
+      # seconds still occupies a slot and still has to be spread, and without this floor a store in
+      # which everything rounds to zero gives every group a weight of zero, no shard is ever
+      # strictly less loaded than shard 1, and the whole suite is dealt to shard 1 while the others
+      # are refused for holding nothing. Caught by the suite's own balance checks against a store
+      # of very short sections.
+      #
+      # It is also exactly the fallback: where the seconds carry no information the count is the
+      # best thing left, which is what the run says it is doing when it has no records at all.
+      [ "${_sh_weight[$_sh_r]}" -ge "${_sh_size[$_sh_r]}" ] || _sh_weight[$_sh_r]="${_sh_size[$_sh_r]}"
     else
       _sh_weight[$_sh_r]="${_sh_size[$_sh_r]}"
     fi
@@ -6317,6 +6327,95 @@ check "#151 dealt out the old way, a section really is borrowed by a shard that 
 check "#151 and that old dealing is otherwise a sound division too" \
   "printf '%s\\n' \"\$_bw_old\" | shard_coverage_verdict 4 >/dev/null"
 
+section "== the receive path records how long its suite took, and how much room is left (#218) =="
+# Every pull that lands a hook runs the whole suite on the receiving Mac and writes the verdict to
+# .hook-tests as outcome, epoch, exit status, suites ran, suites not run. There was no DURATION in
+# it. The only statement of how long that run costs was a comment beside the timeout quoting a
+# range measured on 2026-08-22, which is a claim nothing re-measures (L32, L210), and the number of
+# suites grew by a sixth in the fortnight after it was written.
+#
+# The failure that shape produces is a deadline arriving with no warning, reported as "the hook
+# suite could NOT be completed here", which sends the reader to look for a HANG rather than for a
+# suite that simply got longer (L11).
+HDH="$WORK/headroom-home"; mkdir -p "$HDH/hooks"
+echo '{"hooks":{}}' > "$HDH/settings.json"
+HDR="$WORK/headroom-repo"; mkdir -p "$HDR/payload/hooks"
+hd_arrive(){ printf '# marker %s\n' "$1" > "$HDR/payload/hooks/hd-marker.sh"; }
+hd_runner(){ { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$1"; } > "$HDR/payload/hooks/run-all-tests.sh"; chmod +x "$HDR/payload/hooks/run-all-tests.sh"; }
+hd_runner 'echo "ALL 3 SUITES PASSED"
+exit 0'
+hd_arrive one
+CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+hd_rec="$(head -1 "$HDR/.hook-tests" 2>/dev/null || true)"
+dbg "#218 the record a real receive wrote: $hd_rec"
+check "#218 a real receive writes a record with an outcome and a duration" \
+  "printf '%s' \"\$hd_rec\" | grep -qE '^passed\t[0-9]+\t0\t3\t0\t[0-9]+\$'"
+# The duration is a MEASUREMENT taken from the clock, not a number parsed out of the runner's
+# printed words. That distinction is the whole of L325: a figure that reaches its reader only by
+# being printed disappears the moment the work moves behind a worker or a background lane, while
+# the work itself goes on succeeding. The runner here prints no timing at all, so the only way a
+# record can carry one is if this end timed it.
+#
+# Proved by making the runner take a KNOWN time and reading what was recorded. The instant stub
+# above recorded 0, so a stub that takes two seconds recording at least 1 is the difference
+# between a clock and a constant (L1, L159). The clock is whole seconds, so two seconds of real
+# time reads as 1 or 2 and the bound is 1.
+hd_runner 'sleep 2
+echo "ALL 3 SUITES PASSED"
+exit 0'
+hd_arrive two
+CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+hd_slow_d="$(head -1 "$HDR/.hook-tests" 2>/dev/null | cut -f6)"
+dbg "#218 a runner made to take two seconds was recorded at ${hd_slow_d}s"
+check "#218 and the duration is timed here, not parsed: a two second runner recorded ${hd_slow_d}s against the instant one's 0s" \
+  "case \"\$hd_slow_d\" in ''|*[!0-9]*) false ;; *) [ \"\$hd_slow_d\" -ge 1 ] ;; esac"
+
+# status SAYS it, with the verdict, including on a pass. This surface is quiet on a pass
+# everywhere else by design, and speaks here because the headroom only ever shrinks: the moment it
+# stops being reported is the moment the next timeout arrives with no warning.
+hd_st="$(CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#218 status reports the last run's duration beside its verdict" \
+  "line_has \"\$hd_st\" 'hook suite: passed' 's of the' 's it is given'"
+
+# A run past HALF its deadline says so, in words that name the consequence rather than the number.
+# Driven through the record itself, which is what the reader actually reads.
+hd_over="$WORK/headroom-over"; mkdir -p "$hd_over"
+printf 'passed\t%s\t0\t44\t0\t1200\n' "$(date +%s)" > "$hd_over/.hook-tests"
+hd_st_over="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_over" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_HOOK_TESTS_TIMEOUT=1800 bash "$SCRIPT" status 2>&1)"
+check "#218 a run over half its deadline is reported as running out of room" \
+  "line_has \"\$hd_st_over\" 'hook suite: passed' 'over HALF'"
+# And the control: one comfortably under it is NOT, or the warning is on every run and stops being
+# read (L36, L159).
+hd_under="$WORK/headroom-under"; mkdir -p "$hd_under"
+printf 'passed\t%s\t0\t44\t0\t200\n' "$(date +%s)" > "$hd_under/.hook-tests"
+hd_st_under="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_under" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_HOOK_TESTS_TIMEOUT=1800 bash "$SCRIPT" status 2>&1)"
+check "#218 and one well inside it is not" \
+  "! line_has \"\$hd_st_under\" 'hook suite: passed' 'over HALF'"
+check "#218 though it still says what it took and what it is given" \
+  "line_has \"\$hd_st_under\" 'hook suite: passed' '200s of the 1800s'"
+
+# A record with NO duration says so, distinctly. Every record written before this existed carries
+# none, and reading that absence as comfortable is the reassuring default this refuses (L98, L11).
+hd_none="$WORK/headroom-none"; mkdir -p "$hd_none"
+printf 'passed\t%s\t0\t44\t0\n' "$(date +%s)" > "$hd_none/.hook-tests"
+hd_st_none="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_none" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#218 a record from before durations existed says none was recorded" \
+  "line_has \"\$hd_st_none\" 'hook suite: passed' 'no duration recorded'"
+check "#218 and that is not phrased as being within budget" \
+  "! line_has \"\$hd_st_none\" 'no duration recorded' 'it is given'"
+
+# A FAILED run carries its duration too. What is recorded is what the receive path cost this Mac,
+# and a suite that failed after doing its work cost exactly what it did.
+hd_fail="$WORK/headroom-failed"; mkdir -p "$hd_fail"
+printf 'failed\t%s\t1\t?\t?\t1500\n' "$(date +%s)" > "$hd_fail/.hook-tests"
+hd_st_fail="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_fail" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_HOOK_TESTS_TIMEOUT=1800 bash "$SCRIPT" status 2>&1)"
+check "#218 a failed run reports its duration and its headroom too" \
+  "line_has \"\$hd_st_fail\" 'FAILED' 'over HALF'"
+# The reader stops at its own field. `read` puts every remaining field in the LAST name, so a
+# record widened again without widening the read would report the duration as part of it (#185).
+check "#218 the reader stops at the duration field, not past it" \
+  "! line_has \"\$hd_st_fail\" 'FAILED' 'exited 1	'"
+
 section "== every workflow job carries a timeout, above this suite's own deadline (#210) =="
 # A CI job with no `timeout-minutes` gets the platform default of six HOURS. A hang is worse than a
 # failure because it is indistinguishable from slowness (L110), and on a metered runner it is also
@@ -6374,12 +6473,44 @@ _wf_default="$(sed 's/#.*//' "$SCRIPT_SELF" | grep -oE '\$\{SUITE_TIMEOUT:-[0-9]
 case "$_wf_default" in ''|*[!0-9]*) _wf_default=3600 ;; esac
 check "#210 the suite's own default deadline could be read from the code (${_wf_default}s)" \
   "[ "\${_wf_default:-0}" -gt 0 ]"
-_wf_deadline_for(){   # _wf_deadline_for <workflow file> -> the seconds that file's jobs run under
+_wf_setting_in(){   # _wf_setting_in <file> <name> <default> -> the seconds that file sets, or the default
   local _wd
-  _wd="$(grep -E '^[[:space:]]*SUITE_TIMEOUT:[[:space:]]*[0-9]+[[:space:]]*$' "$1" 2>/dev/null | grep -oE '[0-9]+' | awk 'NR==1')"
-  case "$_wd" in ''|*[!0-9]*) _wd="$_wf_default" ;; esac
+  _wd="$(grep -E "^[[:space:]]*$2:[[:space:]]*[0-9]+[[:space:]]*\$" "$1" 2>/dev/null | grep -oE '[0-9]+' | awk 'NR==1')"
+  case "$_wd" in ''|*[!0-9]*) _wd="$3" ;; esac
   printf '%s' "$_wd"
 }
+_wf_deadline_for(){   # _wf_deadline_for <workflow file> -> the seconds that file's jobs run under
+  _wf_setting_in "$1" SUITE_TIMEOUT "$_wf_default"
+}
+
+# The workflow's OWN two deadlines have to satisfy the same rule #112 enforces at runtime: the
+# ceiling must be at least twice the stall bound, or the ceiling fires first and every real hang is
+# reported as a run that merely went on too long, which sends the reader to raise a limit instead
+# of to find the hang (L11).
+#
+# #112 checks the values the suite is RUNNING under, which on a Mac are the code's defaults. A
+# workflow that sets bad ones is therefore invisible until the suite runs there, and that is
+# exactly what happened on 2026-08-30: a ceiling only one and a half times its stall bound was
+# written into the workflow, passed every local run, and went red on the next CI push. A rule that
+# can only be checked in the environment it governs is a rule nobody can check before shipping
+# (L88, L177).
+_wf_stall_default="$(sed 's/#.*//' "$SCRIPT_SELF" | grep -oE '\$\{SUITE_STALL_TIMEOUT:-[0-9]+\}' | grep -oE '[0-9]+' | awk 'NR==1')"
+case "$_wf_stall_default" in ''|*[!0-9]*) _wf_stall_default=1200 ;; esac
+_wf_ratio_bad=""
+for _wf_one in $_wf_files; do
+  _wf_c="$(_wf_setting_in "$_wf_one" SUITE_TIMEOUT "$_wf_default")"
+  _wf_s="$(_wf_setting_in "$_wf_one" SUITE_STALL_TIMEOUT "$_wf_stall_default")"
+  [ "$_wf_c" -ge $(( _wf_s * 2 )) ] || _wf_ratio_bad="$_wf_ratio_bad [$(basename "$_wf_one"): ceiling ${_wf_c}s against a ${_wf_s}s stall]"
+done
+check "#210 a workflow's own ceiling is at least twice its stall bound$_wf_ratio_bad" \
+  "[ -z \"\$_wf_ratio_bad\" ]"
+# Seen to fail, on a fixture with the ratio the first version of this workflow actually shipped.
+_WFX="$WORK/workflow-fixtures"; mkdir -p "$_WFX"
+printf 'name: fixture\non: [push]\njobs:\n  j:\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n    steps:\n      - run: true\n        env:\n          SUITE_STALL_TIMEOUT: 600\n          SUITE_TIMEOUT: 900\n' > "$_WFX/bad-ratio.yml"
+_wf_bad_c="$(_wf_setting_in "$_WFX/bad-ratio.yml" SUITE_TIMEOUT "$_wf_default")"
+_wf_bad_s="$(_wf_setting_in "$_WFX/bad-ratio.yml" SUITE_STALL_TIMEOUT "$_wf_stall_default")"
+check "#210 and a ceiling under twice the stall would be caught (${_wf_bad_c}s against ${_wf_bad_s}s)" \
+  "! [ \"\$_wf_bad_c\" -ge \$(( _wf_bad_s * 2 )) ]"
 
 _wf_missing=""; _wf_short=""; _wf_seen=0
 while IFS="$(printf '\t')" read -r _wf_f _wf_j _wf_t; do
@@ -6401,7 +6532,6 @@ check "#210 and every one of them exceeds the suite's own deadline$_wf_short" "[
 
 # Both refusals, seen firing on a fixture built for them, or the two checks above are green because
 # the repo happens to be clean today and would stay green if the rule stopped working (L1, L151).
-_WFX="$WORK/workflow-fixtures"; mkdir -p "$_WFX"
 cat > "$_WFX/no-timeout.yml" <<'WFNONE'
 name: fixture
 on: [push]
@@ -6545,11 +6675,37 @@ check "#203 and it is still a partition of every section" \
 # A quarter of the mean shard: the greedy deal's worst case is one item of unusual size arriving
 # last, and the heaviest section here is a large fraction of a shard, so anything tighter would be
 # a check on which sections happen to exist rather than on the deal.
+# The BALANCE is checked against a store whose numbers are known, not against whatever the machine
+# happened to measure a moment ago. What is under test here is the deal's arithmetic, and a store
+# built from a short filtered run holds a handful of sections that all round to a second or two, so
+# the mean shard is about a second and any spread at all fails: that check would be reading the
+# machine's mood rather than the rule (L224, L290).
+#
+# The store's FORMAT is not invented here. The checks above prove the suite writes exactly this
+# shape, keyed this way, so what follows fills a store of the same shape with a deliberately uneven
+# distribution: one section far larger than the rest, which is the case greedy gets wrong when it
+# deals in file order rather than heaviest first.
+ST_FIX="$WORK/section-timings-fixture"; rm -rf "$ST_FIX"; mkdir -p "$ST_FIX"
+st_i=0
+while IFS= read -r st_t; do
+  [ -n "$st_t" ] || continue
+  st_i=$(( st_i + 1 ))
+  # One section in twenty is worth 40, the rest 2. The big ones are what a count based deal spreads
+  # wrongly, and 40 against 2 is close to the real spread measured 2026-08-29, where the slowest
+  # section was 52 seconds against a median under two.
+  if [ $(( st_i % 20 )) -eq 0 ]; then st_w=40; else st_w=2; fi
+  printf '%s\n' "$st_w" > "$ST_FIX/$(printf '%s' "$st_t" | sed 's/%/%25/g; s#/#%2F#g')"
+done <<STFIXT
+$(grep '^section "' "$SCRIPT_SELF" | sed 's/^section "//; s/"$//')
+STFIXT
+check "#203 the fixture store was written for every section in the file ($(ls "$ST_FIX" | grep -c . | tr -d ' ') of $st_i)" \
+  "[ \"\$(ls '$ST_FIX' | grep -c . | tr -d ' ')\" = '$st_i' ]"
+
 # At several shard counts, not one. The balance depends on how the biggest sections happen to fall
 # against the number of shards, so a count that happens to divide them evenly proves nothing about
 # the ones that do not (L147). These are the counts #151 already exercises.
 for st_n in 2 4 8; do
-  st_out="$(SUITE_SHARD="1/$st_n" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_STORE" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+  st_out="$(SUITE_SHARD="1/$st_n" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_FIX" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
   st_s="$(st_seconds "$st_out")"
   st_total=0
   for st_x in $st_s; do st_total=$(( st_total + st_x )); done
@@ -6567,6 +6723,27 @@ for st_n in 2 4 8; do
   check "#203 and at $st_n shards a spread one second wider would be caught" \
     "! [ \$(( st_allow + 1 )) -le \"\$st_allow\" ]"
 done
+
+# Every section measuring ZERO. This is not a hypothetical: a store built from a fast filtered run
+# holds nothing but zeroes, and the first version of the deal gave every group a weight of zero, so
+# no shard was ever strictly less loaded than shard 1, every group went to shard 1, and the selector
+# refused the other three for holding no sections at all. A whole run, dealt to one shard, from a
+# store that was working exactly as designed.
+#
+# A group now never weighs less than the number of sections in it, which is the same thing the deal
+# falls back to when it has no records, so this degrades to the count deal rather than collapsing.
+ST_ZERO="$WORK/section-timings-zero"; rm -rf "$ST_ZERO"; mkdir -p "$ST_ZERO"
+while IFS= read -r st_t; do
+  [ -n "$st_t" ] || continue
+  printf '0\n' > "$ST_ZERO/$(printf '%s' "$st_t" | sed 's/%/%25/g; s#/#%2F#g')"
+done <<STZEROT
+$(grep '^section "' "$SCRIPT_SELF" | sed 's/^section "//; s/"$//')
+STZEROT
+st_zero="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_ZERO" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+check "#203 a store in which every section measured zero still divides the sections between shards" \
+  "printf '%s\n' \"\$st_zero\" | shard_coverage_verdict 4 >/dev/null"
+check "#203 and it does not pile them all onto one shard" \
+  "[ \"\$(st_spread \"\$(st_seconds \"\$st_zero\")\")\" -le 1 ]"
 
 # The store switched off entirely, which is what a run that must leave no trace needs, and what CI
 # has until its cache is warm.

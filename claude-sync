@@ -2901,9 +2901,10 @@ pull_from_repo_or_die(){
 # reassuring answer and would be indistinguishable from a run that genuinely covered everything.
 record_hook_suite_result(){   # $1 = outcome  $2 = exit status  $3 = a file of output, or nothing
                               # $4 = suites that ran  $5 = suites that could not; number or ?
+                              # $6 = how many seconds it took, or ? when it was never timed
   local tmp
   tmp="$(scratch_file)" || return 0
-  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$(date +%s)" "$2" "${4:-?}" "${5:-?}" > "$tmp"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$(date +%s)" "$2" "${4:-?}" "${5:-?}" "${6:-?}" > "$tmp"
   # Capped: the point is the reason, not a transcript, and this file is read by a person.
   [ -n "${3:-}" ] && [ -f "$3" ] && tail -50 "$3" >> "$tmp"
   mv "$tmp" "$HOOK_TESTS_FILE" 2>/dev/null || rm -f "$tmp"
@@ -2946,7 +2947,7 @@ hook_suite_coverage(){   # $1 = the file holding the runner's output -> "<ran>\t
 }
 
 hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
-  local runner out pid started now limit rc=0 killed=0 ran='?' notrun='?'
+  local runner out pid started now limit rc=0 killed=0 ran='?' notrun='?' took='?'
   [ "${SYNC_NO_HOOK_TESTS:-0}" = "1" ] && return 0
   [ -n "${APPLIED_LOG:-}" ] || return 0
   [ -s "$APPLIED_LOG" ] || return 0
@@ -2985,9 +2986,20 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
     sleep "$SYNC_POLL_INTERVAL"
   done
   wait "$pid" 2>/dev/null || rc=$?
+  # How long it actually took (claude-config#218). Measured from THIS process's clock, which
+  # already holds `started` for the deadline, rather than read out of the runner's printed report.
+  # The runner prints a per suite profile and no total, and a measurement that reaches its reader
+  # only by being printed is lost the moment the work moves behind a worker, a background job or a
+  # parallel lane, while the work itself goes on succeeding (L325).
+  #
+  # There was no duration anywhere. The only statement of how long a receive costs was a comment
+  # beside the timeout, which is a claim nothing re-measures (L32, L210), and the suite had grown
+  # from 38 to 42 to 44 suites in a fortnight.
+  took=$(( $(date +%s) - started ))
+  [ "$took" -ge 0 ] || took=0
   if [ "$killed" -eq 1 ]; then
     notify "the hook suite was still running after ${limit}s and was stopped"
-    record_hook_suite_result incomplete 0 "$out" "?" "?"
+    record_hook_suite_result incomplete 0 "$out" "?" "?" "$took"
     printf ', and the hook suite could NOT be completed here: it was still running after %ss and was stopped, so nothing that just landed has been verified' "$limit"
     return 0
   fi
@@ -2996,7 +3008,7 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
 $(hook_suite_coverage "$out")
 HSCOVEOF
     case "$ran$notrun" in *[!0-9]*) ran='?'; notrun='?' ;; esac
-    record_hook_suite_result passed 0 "" "$ran" "$notrun"
+    record_hook_suite_result passed 0 "" "$ran" "$notrun" "$took"
     if [ "$ran" = '?' ]; then
       printf ', and the hook suite passed here, though its own report did not say how many of its suites ran, so how much of the suite that covers is unknown'
     elif [ "$notrun" -gt 0 ]; then
@@ -3012,7 +3024,9 @@ HSCOVEOF
   echo "claude-sync: the hook suite on this Mac exited $rc after the pull. What it said:" >&2
   tail -25 "$out" >&2 || true
   notify "the hook suite FAILED after a pull"
-  record_hook_suite_result failed "$rc" "$out" "?" "?"
+  # A run that FAILED is timed like any other. What is being recorded is what the receive path
+  # costs this Mac, and a suite that failed after doing its work cost exactly what it did.
+  record_hook_suite_result failed "$rc" "$out" "?" "?" "$took"
   printf ', but the hook suite FAILED here (it exited %s). The config is on disk and at least one check on it does not pass: run  bash %s  to see which' "$rc" "$runner"
   return 0
 }
@@ -3522,17 +3536,51 @@ other_sync_clones(){   # prints one absolute directory per line, this clone excl
 # coverage here, because this surface is quiet on a pass by design and a partial pass is still a
 # pass; where that number belongs is the closing line of the pull that produced it, and the record
 # keeps it for anyone reading the file afterwards.
+# How much of the deadline the last receive actually used (claude-config#218). The whole point is
+# that growth shows up as HEADROOM SHRINKING rather than as a timeout on the day it runs out: a
+# suite that outgrows SYNC_HOOK_TESTS_TIMEOUT reports "the hook suite could NOT be completed here",
+# which sends the reader to look for a hang rather than for a suite that simply got longer (L11).
+#
+# Half is the line. A run past that has doubled its share of a deadline that was set at four times
+# the worst observed, so it is the point at which the number is worth re-deriving rather than the
+# point at which anything is wrong.
+#
+# "No duration recorded" is its own answer and never folded into "within budget": every record
+# written before this existed carries none, and reading that absence as comfortable is exactly the
+# reassuring default this refuses (L98, L11).
+hook_suite_headroom(){   # $1 = seconds the run took, or ? -> a clause, or nothing
+  local d="${1:-?}" limit half
+  case "$d" in ''|*[!0-9]*) printf ' with no duration recorded, so how much of the deadline it used is unknown'; return 0 ;; esac
+  limit="${SYNC_HOOK_TESTS_TIMEOUT:-1800}"
+  case "$limit" in ''|*[!0-9]*) limit=1800 ;; esac
+  [ "$limit" -gt 0 ] || { printf ' in %ss' "$d"; return 0; }
+  half=$(( limit / 2 ))
+  if [ "$d" -ge "$half" ]; then
+    printf ' in %ss, which is over HALF the %ss it is given. It is on course to be cut off, and a run that is cut off reports that nothing was verified rather than that the suite got longer' "$d" "$limit"
+  else
+    printf ' in %ss of the %ss it is given' "$d" "$limit"
+  fi
+  return 0
+}
+
 report_hook_suite_record(){   # $1 = the record file  $2 = the clone it belongs to, or empty for this one
-  local line outcome when code ran notrun now age prefix="hook suite: "
+  local line outcome when code ran notrun took now age prefix="hook suite: "
   [ -n "${2:-}" ] && prefix="hook suite (recorded by another clone on this Mac, $2, which a background job runs from): "
   [ -f "$1" ] || return 0
   line="$(head -1 "$1" 2>/dev/null || true)"
-  IFS="$(printf '\t')" read -r outcome when code ran notrun <<HSREOF
+  IFS="$(printf '\t')" read -r outcome when code ran notrun took <<HSREOF
 $line
 HSREOF
   case "$when" in ''|*[!0-9]*) when="" ;; esac
   case "$outcome" in
-    passed) return 0 ;;
+    passed)
+      # This surface is otherwise quiet on a pass, deliberately. It speaks here because the
+      # headroom is the one thing a passing run has to say: it only ever shrinks, and the moment
+      # it stops being reported is the moment the next timeout arrives with no warning.
+      [ -n "$when" ] || return 0
+      now="$(date +%s)"
+      echo "${prefix}passed $(age_in_words "$(( now - when ))")$(hook_suite_headroom "$took")."
+      return 0 ;;
     failed|notrun|incomplete)
       [ -n "$when" ] || outcome="" ;;
     *) outcome="" ;;
@@ -3545,7 +3593,7 @@ HSREOF
   age="$(age_in_words "$(( now - when ))")"
   case "$outcome" in
     failed)
-      echo "${prefix}FAILED $age (it exited ${code:-?}). The config that run installed is on disk, and at least one check on it does not pass. What it said is in $1; re-run with: bash $CLAUDE_HOME/hooks/run-all-tests.sh" ;;
+      echo "${prefix}FAILED $age (it exited ${code:-?})$(hook_suite_headroom "$took"). The config that run installed is on disk, and at least one check on it does not pass. What it said is in $1; re-run with: bash $CLAUDE_HOME/hooks/run-all-tests.sh" ;;
     notrun)
       echo "${prefix}could NOT be run $age, because hooks arrived and there was no $CLAUDE_HOME/hooks/run-all-tests.sh to check them with. Nothing that landed has been verified." ;;
     incomplete)
