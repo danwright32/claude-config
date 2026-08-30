@@ -430,6 +430,16 @@ if [ "$ran" -gt 0 ]; then
   )"
   _timed="$(printf '%s\n' "$launch_order" | awk -F"$(printf '\t')" '$1 == 1' | grep -c . || true)"
   echo "run-all-tests: launch order from measured wall clock for ${_timed:-0} of $ran suite(s), file size for the rest"
+  # And the order itself, named, before anything starts (claude-config#209). The line above says
+  # which RULE was used and this one says what that rule produced, which are different facts: a
+  # run can order by measurement and still put the wrong suite first if the records are stale.
+  #
+  # It is also the only load-proof way to check the rule. The lane a suite is handed is two removes
+  # from the order (a lane is reused the moment the suite in it finishes), so a check that reads a
+  # lane is really reading how busy the machine was, and one did: it failed once in 233 CI runs and
+  # cost a full re-run to learn nothing (L293). This is computed here, before the first launch, so
+  # nothing the machine does afterwards can move it.
+  echo "run-all-tests: launch order: $(printf '%s\n' "$launch_order" | awk -F"$(printf '\t')" 'NF{printf "%s%s", (NR>1 ? " " : ""), $5}' | sed "s#[^ ]*/##g")"
 
   lane_pid=()
   _l=1

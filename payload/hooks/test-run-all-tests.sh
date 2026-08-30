@@ -676,11 +676,19 @@ out_t2="$(HOOK_TESTS_ROOT="$TR" HOOK_TESTS_TIMINGS="$TSTORE" HOOK_TESTS_BUDGET=8
 [ "$(slots_seen "$TR/suites" slowpoke)" = 4 ] \
   && check "#144 the suite measured slowest leads, though its file is small" ok \
   || check "#144 the suite measured slowest leads, though its file is small" "slowpoke=$(slots_seen "$TR/suites" slowpoke) out=$out_t2"
-# And the other half of the same fact. Without it, a runner that handed EVERY suite the largest
-# share would satisfy the check above (L178).
-[ "$(slots_seen "$TR/suites" bigfile)" != 4 ] \
-  && check "#144 and the largest file no longer takes the largest share" ok \
-  || check "#144 and the largest file no longer takes the largest share" "bigfile=$(slots_seen "$TR/suites" bigfile) out=$out_t2"
+# And the other half of the same fact, read off the announced order rather than off a lane
+# (claude-config#209). Without it, a runner that launched everything in one fixed order would
+# satisfy the check above (L178). It used to assert that bigfile did NOT come out holding lane 1's
+# share, which is true only while lane 1 is still occupied when the second suite launches: these
+# fixtures finish in milliseconds, so a runner that paused between two launches would recycle lane
+# 1 to bigfile and this would fail with nothing wrong (L290).
+order_t2="$(printf '%s\n' "$out_t2" | sed -n 's/^run-all-tests: launch order: //p' | tail -1)"
+case "$order_t2" in
+  "test-slowpoke.sh "*)
+    check "#144 and the largest file no longer leads" ok ;;
+  *)
+    check "#144 and the largest file no longer leads" "launch order was '$order_t2'" ;;
+esac
 # Said out loud. Which of the two orders a run used decides where the minutes went, and a run that
 # silently fell back to size reads exactly like one that ordered by measurement (L11).
 case "$out_t2" in
@@ -691,12 +699,45 @@ esac
 # A record nobody can read is not a measurement, so it falls back to size rather than being
 # guessed at as a number. It must not fail the run either: the store is a cache, and a corrupt
 # cache entry is not a broken test suite.
+#
+# What is read here is the DECISION and the ORDER IT PRODUCED, never the lane a suite was handed
+# (claude-config#209). This check used to assert that bigfile came out of the run holding lane 1's
+# share, and a lane is two removes from the rule under test: the launch order decides it, and the
+# launch order among the three suites that DO have a record is decided by whatever those fixtures
+# happened to measure on the previous run. Three suites that all measure 0s are separated by file
+# size and bigfile leads; one of them measuring 1s on a loaded two core runner puts it in front,
+# and the check reads bigfile=2 and fails. That is the machine's mood, not the runner's rule. It
+# happened once in 233 CI runs, on 2026-08-27 (run 33119513948), and cost a full re-run of
+# everything to learn nothing at all (L293, L294).
+#
+# The runner now says both things before a single suite launches, so neither can be perturbed by
+# load: how many suites it had a measurement for, and the order it is about to launch them in.
 printf 'not-a-number\n' > "$TSTORE/$t_slow_rec"
 rm -f "$TR/suites"/*.slots
 out_t3="$(HOOK_TESTS_ROOT="$TR" HOOK_TESTS_TIMINGS="$TSTORE" HOOK_TESTS_BUDGET=8 HOOK_TESTS_JOBS=4 bash "$RUNNER" "$TR/suites" 2>&1)"; code_t3=$?
-[ "$code_t3" -eq 0 ] && [ "$(slots_seen "$TR/suites" bigfile)" = 4 ] \
-  && check "#144 a record that is not a number falls back to size, and does not fail the run" ok \
-  || check "#144 a record that is not a number falls back to size, and does not fail the run" "exit=$code_t3 bigfile=$(slots_seen "$TR/suites" bigfile) out=$out_t3"
+[ "$code_t3" -eq 0 ] \
+  && check "#144 a record that is not a number does not fail the run" ok \
+  || check "#144 a record that is not a number does not fail the run" "exit=$code_t3 out=$out_t3"
+# The decision. Three of the four records are readable numbers this run wrote itself; the fourth
+# was made unreadable above, so the run must count three. Its pair is the check a few lines up,
+# where every record is readable and the same sentence reads 4 of 4: without that one, a runner
+# that had given up on the store entirely would satisfy this (L159, L178).
+case "$out_t3" in
+  *"measured wall clock for 3 of 4 suite(s)"*)
+    check "#209 an unreadable record is counted as unmeasured, not guessed at as a number" ok ;;
+  *)
+    check "#209 an unreadable record is counted as unmeasured, not guessed at as a number" "out=$out_t3" ;;
+esac
+# And what that decision DID: the suite whose record cannot be read is ordered by size, so it goes
+# behind the three that were measured. bigfile is the largest file in the fixture and slowpoke is
+# the one with the broken record, so slowpoke is last no matter what the other three measured.
+order_t3="$(printf '%s\n' "$out_t3" | sed -n 's/^run-all-tests: launch order: //p' | tail -1)"
+case "$order_t3" in
+  *"test-slowpoke.sh")
+    check "#209 and the suite it could not measure is launched last, behind the three it could" ok ;;
+  *)
+    check "#209 and the suite it could not measure is launched last, behind the three it could" "launch order was '$order_t3'" ;;
+esac
 
 # A suite OUTSIDE the repo gets no record at all. The key is the suite's path within the repo, so
 # a suite that has no such path has no stable identity to key one on, and this is also what keeps
