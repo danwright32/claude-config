@@ -3047,6 +3047,21 @@ window is a count rather than a boundary.
   diagnosis blamed the stand-in's unredirected stdout, L235's shape, and that was disproved by
   reading the stalled process's open files)
 
+- **L321. The pid a shell records for a background job names the WRAPPER, not the work, because the
+  command it is sleeping in is a child of that pid and survives a kill aimed at it, so start such a
+  job under job control and signal its process GROUP.** Keep a plain kill of the pid beside the group
+  kill: a group that was never created makes the group kill a silent no op and the wait behind it an
+  unbounded hang, which is the one failure the guard written to catch it can never report, since it
+  can only speak once the run is over. Reading the children with `pgrep -P` first is not the same
+  remedy and looks like one: it reaches a single generation and races the fork between the read and
+  the kill.
+  (overture#3248, measured 2026-08-29. Three helpers in one repo had the pgrep shape or no remedy at
+  all. A fixture leaked two `sleep 300` processes per run into a folder macOS clears only at boot,
+  and its own comment claimed it left no process behind. Taking job control away from the fixed
+  version with only the group kill present turned the proof run into an endless hang rather than a
+  red, which is what the plain kill beside it is for. overture#3253 covers the same shape in three
+  POSIX `sh` runners, where the group behaviour has not been measured yet)
+
 - **L235. A background process inherits the stdout it was started with, so one still running
   holds a `$(...)` capture or a runner's pipe open long after its parent has exited, and the
   caller then waits for the CHILD rather than for the work.** Redirect a background helper's

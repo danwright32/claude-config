@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 345 lessons.
+LESSONS.md, which is NOT loaded into the session. 346 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -330,6 +330,7 @@ to decide something: the body is where the failure it came from is described.
 - L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state (an open that is also a close, a mute that is also an unmute) is inverted by the second attempt, and the loop can report success while leaving the state nobody asked for.
 - L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a high water mark) needs a targeted redo path built in from the start whenever anything downstream requires completeness
 - L240. A background job killed in the same breath it is started can outlive the kill, because the signal can arrive before the job has finished starting, and a `wait` on it then blocks for that job's whole lifetime while every assertion still passes.
+- L321. The pid a shell records for a background job names the WRAPPER, not the work, because the command it is sleeping in is a child of that pid and survives a kill aimed at it, so start such a job under job control and signal its process GROUP.
 - L235. A background process inherits the stdout it was started with, so one still running holds a `$(...)` capture or a runner's pipe open long after its parent has exited, and the caller then waits for the CHILD rather than for the work.
 - L234. A test runner or linter that finds its inputs by a default recursive glob also collects every nested checkout inside the repo (an agent worktree, a vendored clone), so name the directories your own sources live in rather than trusting the tool's default excludes.
 - L208. A substitution applied across a whole set of files cannot tell a line that MEANS the placeholder from a line that means a value, so any file describing the mechanism has its own text rewritten
