@@ -236,11 +236,27 @@ holds no suite is a failure, not a quiet pass, because reading nothing and readi
 look identical otherwise.
 
 The suites run several at a time, since they are independent. Measured on this Mac on 2026-08-21 over the hook
-suites: 128 seconds one at a time, 29 seconds in parallel, with byte identical reports. The whole
-repo, 38 suites, ran in 84 seconds on an idle Mac and 115 on a busy one, both measured on
-2026-08-21, the spread being whatever else the Mac is doing. That floor is `test-claude-sync.sh`, which takes most of it
-on its own: the wall clock cannot go below the single longest suite, so making that one faster is
-the only thing left that would move this number.
+suites: 128 seconds one at a time, 29 seconds in parallel, with byte identical reports.
+
+For the whole repo, take the number rather than trusting one written here. This command prints it,
+along with the suites that account for most of it:
+
+    time bash payload/hooks/run-all-tests.sh
+
+Last taken on 2026-08-30: 3 minutes 11 seconds for the whole repo, of which `test-claude-sync.sh`
+was 188 seconds. The wall clock cannot go below the single longest suite, so that one is the floor
+and the only thing that moves this number.
+
+The figure is given as a command and a date rather than as a sentence because the sentence here was
+wrong for nine days and nothing could tell. It said 38 suites in 84 seconds, measured 2026-08-21,
+and by 2026-08-29 the repo held 42 suites taking 195 seconds: 2.3x out, with the suite count stale
+too. #41 pins DESIGN.md's thresholds to the code and this paragraph was outside it, because a
+duration is not a setting and there is nothing to compare it against (#211, L210, L316).
+
+Nothing here states a CURRENT suite count either, and that is deliberate rather than an oversight.
+Every count above is part of a dated account of what was measured when, which cannot go stale
+because it does not claim to be true now. A number describing the repo as it stands today would
+need a check holding it to the repo, and until there is one the honest form is the command.
 
 How much of the machine a run may take is ONE number (#136). The runner starts several suites at
 once and one of those suites splits ITSELF into shards, so what is actually in flight used to be

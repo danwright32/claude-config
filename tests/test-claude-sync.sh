@@ -6348,8 +6348,10 @@ hd_arrive one
 CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 hd_rec="$(head -1 "$HDR/.hook-tests" 2>/dev/null || true)"
 dbg "#218 the record a real receive wrote: $hd_rec"
+# A here-string, not a pipe. `printf | grep -q` leaves on its first match and can be killed by its
+# own producer under pipefail, which is the class this repo ratchets down (#132, L183).
 check "#218 a real receive writes a record with an outcome and a duration" \
-  "printf '%s' \"\$hd_rec\" | grep -qE '^passed\t[0-9]+\t0\t3\t0\t[0-9]+\$'"
+  "grep -qE '^passed\t[0-9]+\t0\t3\t0\t[0-9]+\$' <<< \"\$hd_rec\""
 # The duration is a MEASUREMENT taken from the clock, not a number parsed out of the runner's
 # printed words. That distinction is the whole of L325: a figure that reaches its reader only by
 # being printed disappears the moment the work moves behind a worker or a background lane, while
