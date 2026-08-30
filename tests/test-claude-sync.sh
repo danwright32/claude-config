@@ -259,7 +259,11 @@ section(){
   # a broken clock looks exactly like a fast suite (L1, L182).
   if [ -n "${SUITE_SLOW_IN:-}" ] && printf '%s' "$1" | grep -qi -- "$SUITE_SLOW_IN"; then
     echo "  (test seam: pausing deliberately in this section)"
-    sleep 2
+    # The SAME unit the watchdog polls in (claude-config#206). These two numbers only mean anything
+    # relative to each other: this pause exists to keep a run moving faster than the watchdog can
+    # call it stopped, and holding them apart as two constants three hundred lines from each other
+    # is how one gets changed alone.
+    sleep "$SUITE_POLL_INTERVAL"
   fi
   # SUITE_HANG_IN=<text> stalls deliberately in the first matching section. A deadline can only
   # be trusted once it has been watched killing something (L1), and waiting for a real stall to
@@ -872,6 +876,25 @@ case "$SUITE_STALL_TIMEOUT" in
     echo "test suite: SUITE_STALL_TIMEOUT='$SUITE_STALL_TIMEOUT' is not a whole number of seconds. Refusing to run rather than running with no stall bound, which is what actually catches a hang." >&2
     exit 4 ;;
 esac
+# The GRANULARITY of everything above (claude-config#206). Both deadlines are read off a clock, so
+# this changes no deadline; what it decides is the smallest stall this suite can STAGE, and that is
+# a test property rather than a production one.
+#
+# It was two hard coded 2s sleeps that had to agree and were written three hundred lines apart: the
+# watchdog's poll, and the pause SUITE_SLOW_IN puts in every section to make a run that is slow
+# without ever stopping. A stall smaller than the larger of them cannot be staged at all, so the
+# three sections that prove the deadline works had to spend real seconds doing it, and #152 alone
+# cost 35 seconds of section time measured 2026-08-30.
+#
+# One unit, and the default is unchanged: a production run polls every 2 seconds exactly as before.
+# The three sections set it to a tenth and scale their timeouts with it, which changes nothing
+# about what they assert.
+SUITE_POLL_INTERVAL="${SUITE_POLL_INTERVAL:-2}"
+case "$SUITE_POLL_INTERVAL" in
+  ''|*[!0-9.]*|.|*.*.*|0|0.0|0.00)
+    echo "test suite: SUITE_POLL_INTERVAL='$SUITE_POLL_INTERVAL' is not a positive number of seconds. Refusing rather than guessing: zero would spin the watchdog against the clock with no sleep at all, and this decides how finely a stall can be noticed." >&2
+    exit 4 ;;
+esac
 if [ "$SUITE_TIMEOUT" -eq 0 ] && [ "$SUITE_STALL_TIMEOUT" -eq 0 ]; then
   echo "test suite: SUITE_TIMEOUT and SUITE_STALL_TIMEOUT are both 0, so this run would have no bound of any kind. A wait with no deadline cannot fail, it can only hang, and a hang reads as an ordinary slow run (L110). Set at least one." >&2
   exit 4
@@ -901,13 +924,13 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
       # Each turn of this loop costs its sleep PLUS a fork of sleep and a process check, and on a
       # busy Mac that overhead is not small, so a counter built by adding the sleep length runs far
       # behind the clock and the deadline silently means whatever the machine felt like.
-      ceiling="$2"; mark="$3"; stall="$4"
+      ceiling="$2"; mark="$3"; stall="$4"; poll="$6"
       start="$(date +%s)"
       last="$(cat "$mark" 2>/dev/null || true)"
       moved="$start"
       why=""
       while :; do
-        sleep 2
+        sleep "$poll"
         kill -0 "$1" 2>/dev/null || exit 0
         now="$(date +%s)"
         # Progress is the run reaching a NEW section. A stopped run leaves this alone; a slow one
@@ -952,7 +975,7 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
       "$5" "$1" "" 2>/dev/null
       kill -9 "$1" 2>/dev/null
       rm -f "$3"    # the victim was killed outright and cannot clean up after itself
-    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK" "$SUITE_STALL_TIMEOUT" "$SUITE_KILL_TREE"
+    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK" "$SUITE_STALL_TIMEOUT" "$SUITE_KILL_TREE" "$SUITE_POLL_INTERVAL"
   ) &
   SUITE_WATCHDOG_PID=$!
   # Taken out of the job table, or bash announces the kill at cleanup by printing the whole
@@ -4363,9 +4386,18 @@ section "== a run that hangs fails on a deadline instead of waiting (#31) =="
 # With a tag there is no window and no subtraction: nothing else on the machine can carry it, so
 # the assertion is simply that none survive.
 _wd_tag="wdtag$$-$SECONDS"
-_hang_deadline=6
+# The runs below poll in tenths (claude-config#206). While the watchdog polled every 2 seconds the
+# deadline was noticed up to 2 seconds late, and that overshoot was the only slack this fixture
+# had: the ceiling is measured from the START, so it has to outlast everything before `push`.
+# Nothing chose that slack, it was a side effect of a constant three hundred lines away (L281).
+#
+# Measured instead. A child reaches `push` in 0.8 seconds, over three runs on 2026-08-30, so the
+# ceiling is set at five times that rather than at a 6 nobody derived, and the poll no longer has
+# to make up the difference.
+_hang_poll=0.1
+_hang_deadline=4
 _t0="$(date +%s)"
-_hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_TIMEOUT=$_hang_deadline SUITE_HANG_IN=push SUITE_WATCHDOG_TAG="$_wd_tag" bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
+_hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_TIMEOUT=$_hang_deadline SUITE_HANG_IN=push SUITE_POLL_INTERVAL=$_hang_poll SUITE_WATCHDOG_TAG="$_wd_tag" bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
 _elapsed=$(( $(date +%s) - _t0 ))
 check "#31 a hung run ends instead of waiting for ever" "[ '$_hang_rc' -ne 0 ]"
 check "#31 it says plainly that it timed out"   "printf '%s' \"\$_hang\" | grep -q 'TIMED OUT'"
@@ -4379,7 +4411,7 @@ check "#31 a hung run is never reported as green" "! printf '%s' \"\$_hang\" | g
 # firing when it should not, not only firing when it should.
 # TIMED, because it is also the reference the hung run above is judged against (claude-config#149).
 _ok_t0="$(date +%s)"
-_okrun="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push SUITE_TIMEOUT=300 SUITE_WATCHDOG_TAG="$_wd_tag" bash "$SCRIPT_SELF" 2>&1)"; _okrun_rc=$?
+_okrun="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push SUITE_TIMEOUT=300 SUITE_POLL_INTERVAL=$_hang_poll SUITE_WATCHDOG_TAG="$_wd_tag" bash "$SCRIPT_SELF" 2>&1)"; _okrun_rc=$?
 _ok_elapsed=$(( $(date +%s) - _ok_t0 ))
 check "#31 a healthy run is not killed by its own deadline" "! printf '%s' \"\$_okrun\" | grep -q 'TIMED OUT'"
 check "#31 and still reports its result"        "[ '$_okrun_rc' -eq 0 ]"
@@ -4444,10 +4476,25 @@ section "== the deadline kills a run that STOPPED, not one that is merely slow (
 # timers now read a real clock.
 _st_tag="sttag$$-$SECONDS"
 
-# Killed for stopping, with the ceiling set far away so what killed it is not in doubt. The 6 and
-# the 600 below are chosen here for the fixture, not measured from anything.
+# Every run below sets SUITE_POLL_INTERVAL (claude-config#206). It is the granularity of the
+# watchdog and of the pause SUITE_SLOW_IN puts in each section, and while it was two hard coded
+# two second sleeps the smallest stall this section could STAGE was several seconds. It changes
+# nothing about what is asserted: both deadlines are read off a clock either way, and the numbers
+# below move together with it.
+#
+# What it cannot go below is the slowest section the run passes through, because the stall bound
+# has to clear that or a healthy prelude trips it. Measured 2026-08-30, the run up to `apply is
+# idempotent` is 7 sections and 9.6 seconds with no pauses at all, and its slowest single section
+# is 3 seconds. So the bounds here are set against THAT rather than against the poll.
+_st_poll=0.1
+
+# Killed for stopping, with the ceiling set far away so what killed it is not in doubt. This run
+# hangs in `push`, which a child reaches in 0.8 seconds measured 2026-08-30 over three runs, and
+# the stall timer restarts at every section, so what the bound has to clear is the widest gap
+# inside those 0.8 seconds and not the whole prelude. 4 is roughly five times the entire run up to
+# that point, which leaves room for a runner several times slower than this Mac.
 _st_t0="$(date +%s)"
-_st_hang="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=6 SUITE_HANG_IN=push \
+_st_hang="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=4 SUITE_HANG_IN=push SUITE_POLL_INTERVAL=$_st_poll \
   SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_hang_rc=$?
 _st_hang_elapsed=$(( $(date +%s) - _st_t0 ))
 check "#152 a run that stopped making progress is killed" "[ '$_st_hang_rc' -ne 0 ]"
@@ -4470,13 +4517,25 @@ _st_t1="$(date +%s)"
 # Far enough in that several sections run, since `push` is the FIRST one and a two section run
 # cannot outlast anything. Every section pauses, so the run spends a few seconds in each and many
 # times the stall timeout in total, without ever once stopping.
-_st_slow="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=8 SUITE_SLOW_IN='==' \
+# This run needs BOTH things at once, and they pull against each other. Every gap between two
+# sections must stay under the bound, or a healthy run is called stopped; and the whole run must
+# exceed the bound, or the check below passes without ever testing anything. The pause is what
+# supplies the second, so this run polls in whole seconds where the two above poll in tenths: at a
+# tenth the pauses contributed 0.7 seconds to a run whose natural length varies between 5 and 10
+# seconds on this Mac, and the control landed on exactly its own bound and went red.
+#
+# Measured 2026-08-30: 7 sections, 9.6 seconds with no pauses at all, widest single section 3
+# seconds. So a 1 second pause makes the widest gap 4 against a bound of 6, and the total at least
+# 12, which is both margins wider than the two second pause against a bound of 8 this replaces.
+_st_slow_poll=1
+_st_slow_stall=6
+_st_slow="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=$_st_slow_stall SUITE_SLOW_IN='==' SUITE_POLL_INTERVAL=$_st_slow_poll \
   SECTION_UNTIL='apply is idempotent' SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_slow_rc=$?
 _st_slow_elapsed=$(( $(date +%s) - _st_t1 ))
 # The control for the fixture first: if it did not actually outlast the stall timeout, the check
 # below passes by never having tested anything (L159, L101).
-check "#152 the fixture really did outlast its own stall timeout (${_st_slow_elapsed}s against 8s)" \
-  "[ '$_st_slow_elapsed' -gt 8 ]"
+check "#152 the fixture really did outlast its own stall timeout (${_st_slow_elapsed}s against ${_st_slow_stall}s)" \
+  "[ '$_st_slow_elapsed' -gt '$_st_slow_stall' ]"
 check "#152 a run that keeps progressing is not killed, however long it takes" \
   "case \"\$_st_slow\" in *'TIMED OUT'*) false ;; *) true ;; esac"
 check "#152 and it still reports its own result" "[ '$_st_slow_rc' -eq 0 ]"
@@ -4484,7 +4543,10 @@ check "#152 and it still reports its own result" "[ '$_st_slow_rc' -eq 0 ]"
 # The ceiling still exists, for a runaway that somehow keeps moving. Its message must be DIFFERENT
 # from the stall one, or the reader cannot tell a run that stopped from one that simply went on too
 # long, and those need different remedies (L11).
-_st_ceil="$(SUITE_TIMEOUT=6 SUITE_STALL_TIMEOUT=600 SUITE_HANG_IN=push \
+# The ceiling is measured from the START of the run and not from the last section, so unlike the
+# two above it has nothing to clear: whatever this run is doing when it fires, a ceiling that
+# fires is what these three checks are about, and none of them names a section.
+_st_ceil="$(SUITE_TIMEOUT=3 SUITE_STALL_TIMEOUT=600 SUITE_HANG_IN=push SUITE_POLL_INTERVAL=$_st_poll \
   SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_ceil_rc=$?
 check "#152 the absolute ceiling still kills a run that reaches it" "[ '$_st_ceil_rc' -ne 0 ]"
 check "#152 and says it was the ceiling" \
@@ -4494,11 +4556,14 @@ check "#152 and that is worded differently from the no-progress message" \
 
 # Neither of those runs may leave a watchdog behind, the same claim #31 makes and for the same
 # reason: a watchdog outliving its run holds a process id the system may reuse.
+# Polled finely rather than in whole seconds: this waits on a CONDITION, and the common case is
+# that it is already true, so a one second granularity only ever costs the case where it is not
+# (L290). The ceiling it gives up at is the same five seconds as before.
 _st_wd=0; _st_wait=0
-while [ "$_st_wait" -lt 10 ]; do
+while [ "$_st_wait" -lt 25 ]; do
   _st_wd="$(pgrep -f "suite-deadline-watchdog.$_st_tag" 2>/dev/null | wc -l | tr -d ' ')"
   [ "${_st_wd:-0}" -eq 0 ] && break
-  sleep 1; _st_wait=$((_st_wait + 1))
+  sleep 0.2; _st_wait=$((_st_wait + 1))
 done
 check "#152 none of those runs left a watchdog behind" "[ '${_st_wd:-0}' -eq 0 ]"
 
@@ -4630,26 +4695,42 @@ _int_outer=$!
 # The run that HOLDS the lock is the one to interrupt, and it names itself in the lock: a filtered
 # run re-executes itself, so the process started above is a wrapper and killing it would test the
 # wrapper. Read from the lock rather than worked out from the process table (L15).
+# Polled in tenths, not in whole seconds (claude-config#206, L290). Every wait in this section is
+# on a CONDITION with a deadline behind it, and the condition is normally true within a second: a
+# child reaches `push` in 0.8 seconds, measured 2026-08-30. A one second granularity therefore
+# rounded each of these three waits up to a whole second for nothing. The deadlines are unchanged
+# in seconds, only their resolution moves.
 _int_pid=""; _int_kids=""; _int_waited=0
-while [ "$_int_waited" -lt 90 ]; do
+while [ "$_int_waited" -lt 900 ]; do
   _int_pid="$(cat "$_int_lock/pid" 2>/dev/null || true)"
   case "$_int_pid" in ''|*[!0-9]*) _int_pid="" ;; esac
   if [ -n "$_int_pid" ] && grep -q 'hanging deliberately' "$_int_log" 2>/dev/null; then
     _int_kids="$(pgrep -P "$_int_pid" 2>/dev/null | tr '\n' ' ')"
     [ -n "$(printf '%s' "$_int_kids" | tr -d ' ')" ] && break
   fi
-  sleep 1; _int_waited=$(( _int_waited + 1 ))
+  sleep 0.1; _int_waited=$(( _int_waited + 1 ))
 done
-check "#163 a run was started, took its lock and reached the hang (${_int_waited}s)" \
+check "#163 a run was started, took its lock and reached the hang (${_int_waited} tenths)" \
   "[ -n '$_int_pid' ] && [ -f '$_int_lock/pid' ]"
 check "#163 and it had children of its own to leave behind" \
   "[ -n \"\$(printf '%s' '$_int_kids' | tr -d ' ')\" ]"
 
 kill -TERM "$_int_pid" 2>/dev/null || true
 _int_gone=0
-while [ "$_int_gone" -lt 30 ] && kill -0 "$_int_pid" 2>/dev/null; do sleep 1; _int_gone=$(( _int_gone + 1 )); done
-# A moment for the handler's own kills to land, and then the state it left.
-sleep 1
+while [ "$_int_gone" -lt 300 ] && kill -0 "$_int_pid" 2>/dev/null; do sleep 0.1; _int_gone=$(( _int_gone + 1 )); done
+# And then for the handler's own kills to LAND, which used to be a flat `sleep 1`: a fixed wait for
+# something to finish is a bet on how loaded the machine is, and it is both too long when the
+# machine is idle and too short when it is not (L290). Waited on instead, with the same ceiling: the
+# handler releases the lock and takes its children, so the condition is that both have happened.
+# It is not asserted here, only waited for. The checks below are what judge it, and they must be
+# able to fail, so this gives up rather than looping until they would pass.
+_int_settle=0
+while [ "$_int_settle" -lt 300 ]; do
+  _int_still=""
+  for _int_k in $_int_kids; do kill -0 "$_int_k" 2>/dev/null && _int_still="$_int_still $_int_k"; done
+  [ -z "$_int_still" ] && [ ! -e "$_int_lock/pid" ] && break
+  sleep 0.1; _int_settle=$(( _int_settle + 1 ))
+done
 check "#163 the interrupted run itself is gone" "! kill -0 '$_int_pid' 2>/dev/null"
 _int_alive=""
 for _int_k in $_int_kids; do
@@ -5146,9 +5227,21 @@ check "#41 the heading scan really read the headings" "[ \"\$_sec_seen\" -ge 40 
 # Every default of the shape a threshold has, from BOTH files, as "NAME VALUE" pairs. Comments are
 # stripped first, or prose quoting a number satisfies the check that the number is current, and a
 # guard that is green on its own explanation is indistinguishable from one that works (L103).
+# POLL_INTERVAL is in the list since #206. Both poll intervals are thresholds in every sense that
+# matters here: each is a default in the code that this table describes, and each was a hard coded
+# constant before it was a setting, which is the state the table exists to end. The value may now
+# carry a decimal point, because one of them is a tenth of a second and an integer only pattern
+# would have skipped it silently rather than reporting it as undocumented (L98).
+#
+# POLL_INTERVAL and not INTERVAL, and the reason is written here rather than left to be inferred
+# (L233). Widening to INTERVAL also catches SYNC_INTERVAL, the receive timer's period, which is a
+# product decision about how often to sync and not a multiple of anything anybody measured. Every
+# row in this table states what its number is derived FROM, so a row for that one would have to
+# invent a derivation. It is tracked separately as its own README accuracy question rather than
+# being quietly exempt.
 _thresholds(){
   sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" \
-    | grep -ohE '\$\{(SYNC|SUITE)_[A-Z_]*(MAX_AGE|TIMEOUT|MAX_DEPTH|RETIRE_AFTER)[A-Z_]*:-[0-9]+\}' \
+    | grep -ohE '\$\{(SYNC|SUITE)_[A-Z_]*(MAX_AGE|TIMEOUT|MAX_DEPTH|RETIRE_AFTER|POLL_INTERVAL)[A-Z_]*:-[0-9]+(\.[0-9]+)?\}' \
     | sed 's/^\${//; s/}$//; s/:-/ /' | sort -u
 }
 _undocumented=""
@@ -7476,7 +7569,8 @@ pi_arrive three
 # Two seconds is the SHORTEST ceiling this can be proved against, and the reason is the clock, not
 # caution. claude-sync reads whole seconds, so a ceiling of N expires somewhere between N-1 and N
 # seconds of real time, and a ceiling of 1 can therefore expire immediately. Two leaves a full
-# second of separation to assert on, against the 200ms a poll counting deadline would take.
+# second of separation to assert on, against the two polls a deadline counting them would take,
+# which the interval below SETS at a fifth of a second rather than anything measuring it.
 pi_h0="$(pi_ms)"
 out_pih="$(CLAUDE_HOME="$PIH" SYNC_REPO="$PIR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
   SYNC_POLL_INTERVAL=0.1 SYNC_HOOK_TESTS_TIMEOUT=2 bash "$SCRIPT" pull 2>&1)"
@@ -7509,8 +7603,8 @@ rm -rf "$PILOCK"
 dbg "#205 a contended lock with a 2s ceiling and a 0.1s poll waited ${pi_lwait}ms"
 # Milliseconds, and a bound of one second rather than two, for the reason above: a whole second
 # clock reading a two second ceiling expires anywhere in the second second, so `-ge 2` measured in
-# whole seconds is a coin toss on its own boundary while `-ge 1000` cannot be reached by a
-# deadline counting 200ms of polls (L224, L290).
+# whole seconds is a coin toss on its own boundary, while a second cannot be reached by a deadline
+# counting the two polls the interval above SETS, not measures (L224, L290).
 check "#205 the lock's wait is seconds, not turns of its loop (waited ${pi_lwait}ms of a 2s ceiling)" \
   "[ '$pi_lwait' -ge 1000 ]"
 check "#205 and it gives up at that ceiling rather than waiting on (${pi_lwait}ms against 2s)" \

@@ -237,10 +237,17 @@ make_remote_repo() {  # $1 = owner/name ; $2 = which fake gh
   mkdir -p "$dir/repo" "$dir/bin"
   ( cd "$dir/repo" && git init -q && git remote add origin "https://github.com/$1.git" )
 
-  # The real situation: the ACTIVE account 404s on this repo and answers
+  # The real situation: the ACTIVE account answers 404 on this repo and returns
   # nothing, while a second logged-in account can see it. The hook read that
   # empty answer, could not tell it from a pull request that does not exist,
   # and refused every merge in the repo.
+  #
+  # The word "answers" is doing real work there. The #145 scan reads a run of
+  # digits followed immediately by an s as a duration, which is how it catches a
+  # stale timing left in a comment, and it cannot tell that spelling from a
+  # status code written the same way. The prose moved rather than the rule:
+  # loosening the rule would exempt every genuine duration too, and a guard that
+  # is green on the sentence explaining it is no guard at all (L103).
   if [ "$2" = "second-account-green" ]; then
     cat > "$dir/bin/gh" <<'SH'
 #!/usr/bin/env bash
