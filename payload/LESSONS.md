@@ -390,6 +390,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2422: an importer skipped matching whenever a batch held two contacts of the same
   kind, which is every multi performer show, so every re-run appended duplicates instead of
   correcting rows)
+- **L324. A guard's STAND DOWN condition must be no broader than the reason for standing down, because
+  the broader form silently disables it in cases nobody meant to exempt, and those are the runs least
+  like the ones it was tested on.** Write the condition as the exemption itself (this run was
+  deliberately narrowed) rather than as a proxy for it (this run was given any argument at all). The
+  failure is invisible from both sides: the guard's own tests pass, because they exercise the case it
+  was written for, and the exempted runs look ordinary, because a guard that says nothing and a guard
+  that is switched off are the same silence.
+  (overture#3264, measured 2026-08-30. A short-run gate compared each test run against the last green
+  one and refused a materially short one, standing down for a deliberately scoped run by asking whether
+  ANY argument had been passed. Every parallel-testing experiment passed a flag, so every one ran with
+  the gate off: one executed 5,217 tests against a baseline of 8,618, lost an entire worker's share with
+  no crash line anywhere, and printed an ordinary verdict. The same thing had already happened silently
+  to an earlier experiment nobody re-examined)
+
 - **L98. A watcher, poller or wait-for-completion step that reports SUCCESS when it found NOTHING
   to watch is indistinguishable from one that saw everything pass.** Finding zero subjects has to be
   its own non-success outcome, because the empty result arrives exactly when the work has not started
