@@ -246,6 +246,72 @@ R=$(make_repo not-a-test 'await page.waitForTimeout(500)' src/lib/scrape.ts)
 out=$(run_hook "git push" "$R")
 assert_absent "the same line outside a test file does not raise the test lesson" 'L290' "$out"
 
+# --- 16. A workflow job added with no timeout raises L313 (claude-config#223) -------------
+# The 2026-08-29 audit found a CI job with no timeout-minutes in nine repositories out of nine.
+# The platform default is six HOURS, a hang is worse than a failure because it reads as slowness,
+# and on a metered macOS runner at the 10x multiplier one such hang costs two months of a free
+# account's whole allowance. Raising it here, in the push that adds the job, is the only moment
+# anybody is looking at that block.
+#
+# It cannot be a regex over the added lines, because what is wrong is a key that is ABSENT. So the
+# trigger takes a small awk pass over the added hunk instead: a two space job key, followed inside
+# its own block by runs-on or uses, and no timeout-minutes before the next such key.
+WF_JOB_NONE='jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: make test'
+R=$(make_repo wf-no-timeout "$WF_JOB_NONE" .github/workflows/ci.yml)
+out=$(run_hook "git push" "$R")
+assert_contains "a workflow job added with no timeout raises the CI timeout lesson" 'L313' "$out"
+assert_contains "it says what it spotted" 'no timeout' "$out"
+assert_contains "and it names the workflow file" '.github/workflows/ci.yml' "$out"
+
+# The negative case the issue asks for by name. A job that DOES carry one must say nothing, or the
+# trigger fires on every workflow push and stops being read (L36).
+WF_JOB_OK='jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - run: make test'
+R=$(make_repo wf-with-timeout "$WF_JOB_OK" .github/workflows/ci.yml)
+out=$(run_hook "git push" "$R")
+assert_absent "a workflow job that carries a timeout raises nothing" 'L313' "$out"
+
+# Scoped to workflow files. The same shape of YAML elsewhere is somebody else's config, and a
+# trigger that fires on every two space key in every file is noise (L104).
+R=$(make_repo wf-not-a-workflow "$WF_JOB_NONE" deploy/k8s.yml)
+out=$(run_hook "git push" "$R")
+assert_absent "the same block outside .github/workflows raises nothing" 'L313' "$out"
+
+# Two jobs, one of each. The one without a timeout is what matters, and a reader that stopped at
+# the first job would miss it (L215).
+WF_JOB_MIXED='jobs:
+  fine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: true
+  careless:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true'
+R=$(make_repo wf-mixed "$WF_JOB_MIXED" .github/workflows/ci.yml)
+out=$(run_hook "git push" "$R")
+assert_contains "a second job with no timeout is caught beside one that has it" 'L313' "$out"
+
+# A block that is NOT a job. `on:` has two space keys of its own, and treating those as jobs would
+# fire on every workflow that adds a trigger. What makes a job a job is runs-on or uses.
+WF_NOT_A_JOB='on:
+  push:
+    branches: [main]
+  pull_request:'
+R=$(make_repo wf-on-block "$WF_NOT_A_JOB" .github/workflows/ci.yml)
+out=$(run_hook "git push" "$R")
+assert_absent "a two space key that is not a job raises nothing" 'L313' "$out"
+
+echo
 # --- 15. New retry logic carries the injectable sleep lesson -----------------
 R=$(make_repo retry-seam 'const backoff = attempt * 1000; await new Promise(r => setTimeout(r, backoff)); // retry' src/lib/fetch.ts)
 out=$(run_hook "git push" "$R")

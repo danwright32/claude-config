@@ -113,6 +113,7 @@ TRIG_IDS=(
   "L33,L35,L77,L524"
   "L50"
   "L290,L524"
+  "L313"
 )
 TRIG_WHAT=(
   "an error path that returns an empty or success value"
@@ -122,6 +123,7 @@ TRIG_WHAT=(
   "new retry or failure-handling logic"
   "a parsed value flowing into a comparison"
   "a test that waits a fixed time instead of waiting on a condition or setting the clock"
+  "a workflow job added with no timeout, so a hang runs to the platform's six hour default"
 )
 TRIG_RE1=(
   '(^|[^[:alnum:]_])(catch[[:space:]]*[({]|except[[:space:]:])'
@@ -131,6 +133,7 @@ TRIG_RE1=(
   '(retry|retries|backoff|maxAttempts|exponential)'
   '(parseInt|parseFloat|JSON\.parse|Number\()'
   '(waitForTimeout\(|setTimeout\(|Task\.sleep|Thread\.sleep|time\.sleep\(|usleep\(|(^|[^[:alnum:]_.])sleep[[:space:]]*(\(|[0-9]))'
+  ''
 )
 TRIG_RE2=(
   '(return[[:space:]]*(\[\]|\{\}|null|None|true|""|'"''"'|;|$)|^[[:space:]]*pass[[:space:]]*$)'
@@ -139,6 +142,7 @@ TRIG_RE2=(
   ''
   ''
   '([<>]=?|[=!]==?)'
+  ''
   ''
 )
 # Which FILES a trigger may fire on (a regex over the path; empty means any file). The fixed
@@ -153,7 +157,50 @@ TRIG_PATH=(
   ''
   ''
   '(^|/)(tests?|__tests__|specs?|e2e|spec|Tests)/|\.(test|spec)\.[A-Za-z]+$|(Tests?|Spec)\.swift$|(^|/)test[-_][^/]*\.(sh|py|ts|js)$|_test\.(py|go|rb)$'
+  '^\.github/workflows/[^/]*\.ya?ml$'
 )
+
+# Some triggers cannot be a regex over the added lines, because what is wrong is a key that is
+# ABSENT (claude-config#223). Those name a FUNCTION here instead, which is handed the file of added
+# lines and answers by its exit status. Empty means the ordinary regex pair decides, exactly as
+# before, so nothing that existed changes shape.
+TRIG_FN=(
+  ''
+  ''
+  ''
+  ''
+  ''
+  ''
+  ''
+  'trig_workflow_job_without_timeout'
+)
+
+# A workflow job added with no `timeout-minutes` (L313). The platform default is six hours, and a
+# hang that runs to it is both invisible, because it reads as slowness, and expensive on a metered
+# runner.
+#
+# What makes a two-space key a JOB is `runs-on` or `uses` inside its own block. Without that test
+# every `on:` block's `push:` and `pull_request:` would read as jobs with no timeout, and the
+# advisory would fire on every workflow change anyone ever made, which is how a guard stops being
+# read (L36).
+#
+# It sees only the ADDED lines, so what it catches is a job written in this push. A job whose
+# timeout was added in some earlier push is not visible here and is not meant to be: this is the
+# moment somebody is looking at that block, and the suite's own check (claude-config#210) is what
+# holds the whole tree afterwards.
+trig_workflow_job_without_timeout(){   # $1 = a file holding the added lines
+  awk '
+    function close_job() {
+      if (job != "" && isjob && !hastimeout) bad = 1
+      job = ""; isjob = 0; hastimeout = 0
+    }
+    /^[[:space:]]{2}[A-Za-z0-9_-]+:[[:space:]]*$/ { close_job(); job = $1; next }
+    job != "" && /^[[:space:]]{4}(runs-on|uses):/ { isjob = 1 }
+    job != "" && /^[[:space:]]{4}timeout-minutes:/ { hastimeout = 1 }
+    /^[^[:space:]#]/ { close_job() }
+    END { close_job(); exit !bad }
+  ' "$1"
+}
 
 files="$(printf '%s\n' "$added" | cut -f1 | sort -u)"
 
@@ -180,9 +227,15 @@ for i in "${!TRIG_IDS[@]}"; do
     # which is when it has most to say (L183, and the same shape as the guard in claude-config#117
     # that got slower the more it had to report).
     printf '%s\n' "$lines" > "$LINES_FILE"
-    grep -Eqi -- "${TRIG_RE1[$i]}" "$LINES_FILE" || continue
-    if [ -n "${TRIG_RE2[$i]}" ]; then
-      grep -Eqi -- "${TRIG_RE2[$i]}" "$LINES_FILE" || continue
+    if [ -n "${TRIG_FN[$i]:-}" ]; then
+      # The predicate reads the same file the regexes would, so it is subject to the same path
+      # scope above and sees exactly the same lines.
+      "${TRIG_FN[$i]}" "$LINES_FILE" || continue
+    else
+      grep -Eqi -- "${TRIG_RE1[$i]}" "$LINES_FILE" || continue
+      if [ -n "${TRIG_RE2[$i]}" ]; then
+        grep -Eqi -- "${TRIG_RE2[$i]}" "$LINES_FILE" || continue
+      fi
     fi
     hit_files="$hit_files $f"
   done <<< "$files"
