@@ -10,7 +10,14 @@
 set -uo pipefail
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tdd-nudge.sh"
-LESSONS="${LESSONS_FILE:-$HOME/.claude/LESSONS.md}"
+# The REPO's lessons file, not the deployed copy under the config directory. This read
+# `$HOME/.claude/LESSONS.md`, which is where the sync PUTS this file, and a CI runner has no
+# such copy: `grep` on a path that is not there exits 1, so "the runner has no deployed config"
+# and "the section the hook points at has been renamed" produced the same red line, and every
+# push to main since 2026-08-29 carried it. This repo is where the file is maintained, so this is
+# the copy whose headings the hook's pointer has to agree with (L41), and it is present wherever
+# the suite can run at all.
+LESSONS="${LESSONS_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/LESSONS.md}"
 PASS=0
 FAIL=0
 
@@ -33,10 +40,20 @@ check "it points a coding turn at the Test speed lessons section" $?
 grep -qF 'LESSONS-INDEX.md' <<< "$out"
 check "it names the index the section is read from" $?
 
+# Whether the file is THERE is asked first, and separately. Without this, an absent file answers
+# the question below in the same word as a renamed section, and the reader is sent to look for a
+# heading that is exactly where it always was (L11, L98).
+[ -f "$LESSONS" ]
+check "the lessons file the pointer is checked against is present at $LESSONS" $?
+
 # The section it names must exist in the lessons file, or the pointer is a dead link that
 # reads as guidance (L41: a list mirroring another source is derived from it, or it drifts).
-grep -qE '^## Test speed[[:space:]]*$' "$LESSONS"
-check "LESSONS.md actually has a '## Test speed' section" $?
+if [ -f "$LESSONS" ]; then
+  grep -qE '^## Test speed[[:space:]]*$' "$LESSONS"
+  check "LESSONS.md actually has a '## Test speed' section" $?
+else
+  check "LESSONS.md actually has a '## Test speed' section" 1
+fi
 
 # No dashes as punctuation and no emoji in what every prompt receives (the style rule applies
 # to generated output, and this text lands in every session).

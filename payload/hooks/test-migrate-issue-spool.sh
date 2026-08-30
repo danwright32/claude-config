@@ -427,8 +427,9 @@ contains "a real finding from a temp directory" "$kept_placeable" \
 
 # The destructive path must show EVERY directory it would take, not a sample.
 # The list is the only thing standing between a person and a delete, and the
-# migration plan's ten-line cap would hide most of it: 120 records across 120
-# distinct directories were about to be deleted on the strength of ten of them.
+# migration plan's ten-line cap would hide most of it: measured 2026-08-29,
+# 120 records across 120 distinct directories were about to be deleted on the
+# strength of ten of them.
 rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 i=0
 while [ "$i" -lt 25 ]; do
