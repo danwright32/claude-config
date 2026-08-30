@@ -166,13 +166,55 @@ suite_key(){   # suite_key <suite path> -> the record's file name, or nothing
 # entry there is not a reason to refuse to run the tests. Falling back is safe here in a way it
 # usually is not, because the only thing the record decides is the launch ORDER, and being wrong
 # about that costs wall clock and nothing else.
-suite_seconds(){   # suite_seconds <suite path> -> whole seconds, or nothing
+# A record is `<seconds>` or `<seconds> <checks>`. It was seconds alone until #219 needed a second
+# perishable number about the same suite, and one record with two fields is the answer rather than
+# a second store: the two facts are written by the same run, read by the same reader, and switched
+# off by the same empty HOOK_TESTS_TIMINGS. A second store would be a second absence to announce
+# and a second thing to key correctly (L15).
+#
+# Every record on disk the day this ships holds seconds alone, so the second field is OPTIONAL on
+# the way in and the first is read the same way either way. A reader of one field that refused a
+# record carrying two would have turned the next run into a cold start (L255).
+suite_record_field(){   # suite_record_field <suite path> <1 or 2> -> that field, or nothing
   [ -n "$TIMINGS" ] || return 0
-  _ss_k="$(suite_key "$1")"
-  [ -n "$_ss_k" ] || return 0
-  _ss_v="$(cat "$TIMINGS/$_ss_k" 2>/dev/null)"
-  case "$_ss_v" in ''|*[!0-9]*) return 0 ;; esac
-  printf '%s' "$_ss_v"
+  _sr_k="$(suite_key "$1")"
+  [ -n "$_sr_k" ] || return 0
+  _sr_v="$(awk -v f="$2" 'NR == 1 { print $f }' "$TIMINGS/$_sr_k" 2>/dev/null)"
+  case "$_sr_v" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$_sr_v"
+}
+
+suite_seconds(){   # suite_seconds <suite path> -> whole seconds, or nothing
+  suite_record_field "$1" 1
+}
+
+# How many checks that suite ran last time (claude-config#219), or NOTHING, which is what a first
+# run, a newly added suite and every record written before this field existed all report. Nothing
+# is not zero here and must never be rendered as one: a suite compared against a stored zero has
+# dropped nothing by definition, so the one case this exists to catch would be the one it stayed
+# quiet about (L90, L98).
+suite_checks(){   # suite_checks <suite path> -> whole checks, or nothing
+  suite_record_field "$1" 2
+}
+
+# The ONE place a suite's own score is read (claude-config#126). Exactly, so there is nothing to
+# recognise and nothing to guess: thirty six suites once wrote their totals five different ways and
+# the reader got it wrong twice in one day. Two things now need this line, the verdict and the
+# check count #219 compares between runs, and a second copy of the parse would be a second rule
+# about what a score is (L263).
+suite_result_line(){   # suite_result_line <a suite's output> -> the exact line, or nothing
+  printf '%s\n' "$1" | grep -E '^SUITE-RESULT passed=[0-9]+ failed=[0-9]+$' | tail -1
+}
+
+# How many checks that line reports: passed PLUS failed, which is how many checks RAN. Passed alone
+# would read a suite whose checks turned red as a suite that lost checks, and those are opposite
+# problems needing opposite reactions (L63).
+suite_result_checks(){   # suite_result_checks <a suite's output> -> the count, or nothing
+  _src_l="$(suite_result_line "$1")"
+  [ -n "$_src_l" ] || return 0
+  _src_p="${_src_l#*passed=}"; _src_p="${_src_p%% *}"
+  _src_f="${_src_l#*failed=}"
+  printf '%s' "$(( _src_p + _src_f ))"
 }
 
 dirs=""     # newline separated, deduplicated in the order found
@@ -492,6 +534,18 @@ LAUNCH
   # records are looked up by the paths of the suites this run actually found, and a run over ONE
   # named directory legitimately mentions almost none of them. Deleting whatever a run did not
   # mention would turn every narrow run into a purge of everything else (L211).
+  # What this run ran, and what the LAST one ran, both read before a single record is rewritten
+  # (claude-config#219). The order matters and is the whole of it: the write below replaces the
+  # record this comparison is against, so reading afterwards would compare every suite with itself
+  # and no drop could ever be seen (L105).
+  now_checks=(); prev_checks=()
+  _ci=0
+  for suite in ${suites[@]+"${suites[@]}"}; do
+    now_checks[$_ci]="$(suite_result_checks "$(cat "$WORK/$_ci.out" 2>/dev/null)")"
+    prev_checks[$_ci]="$(suite_checks "$suite")"
+    _ci=$((_ci + 1))
+  done
+
   if [ -n "$TIMINGS" ]; then
     _rec_bad=0
     _rec_dir=1
@@ -501,11 +555,17 @@ LAUNCH
       for suite in ${suites[@]+"${suites[@]}"}; do
         _rk="$(suite_key "$suite")"
         _rv="$(cat "$WORK/$_ri.sec" 2>/dev/null)"
+        # The check count joins the duration in the same record. A suite that left no score line
+        # (it was killed, it refused, it comes from outside this repo) records its seconds alone
+        # rather than a fabricated zero, so the next run reads no count for it and says it had
+        # none, instead of reporting that everything it had is gone (L90).
+        _rc="${now_checks[$_ri]:-}"
         _ri=$((_ri + 1))
         [ -n "$_rk" ] || continue
         case "$_rv" in ''|*[!0-9]*) continue ;; esac
+        case "$_rc" in ''|*[!0-9]*) _rline="$_rv" ;; *) _rline="$_rv $_rc" ;; esac
         _rt="$TIMINGS/.writing.$$.$_rk"
-        if printf '%s\n' "$_rv" > "$_rt" 2>/dev/null && mv -f "$_rt" "$TIMINGS/$_rk" 2>/dev/null; then
+        if printf '%s\n' "$_rline" > "$_rt" 2>/dev/null && mv -f "$_rt" "$TIMINGS/$_rk" 2>/dev/null; then
           :
         else
           rm -f "$_rt" 2>/dev/null
@@ -538,6 +598,23 @@ fi
 # off, unwritable, or absent for a suite that lives outside the repo and has no key. The store also
 # keeps records for suites that no longer exist, deliberately unpruned, so a summary fed from it
 # would name suites this run never found.
+# How many suites this run could compare against the last one (claude-config#219). Said out loud
+# for the same reason the launch order's rule is: a run that compared NOTHING prints exactly the
+# silence of a run in which nothing dropped, and the silence is the entire signal here (L98). A
+# first run, a store switched off, a store nobody could write and a suite added today all reach
+# this line as a smaller number rather than as no line at all.
+if [ "$ran" -gt 0 ]; then
+  _cmp=0
+  _ci=0
+  while [ "$_ci" -lt "$ran" ]; do
+    if [ -n "${prev_checks[$_ci]:-}" ] && [ -n "${now_checks[$_ci]:-}" ]; then
+      _cmp=$((_cmp + 1))
+    fi
+    _ci=$((_ci + 1))
+  done
+  echo "run-all-tests: check counts compared against the last run for $_cmp of $ran suite(s)"
+fi
+
 slow_profile=""
 unmeasured_names=""
 notrun=0
@@ -597,7 +674,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
     # and once that was fixed it read `PASS=805 FAIL=0` as 805 failures, because the two count
     # forms read as one alternation match "805 FAIL". A number the producer already knows exactly
     # should never be recovered by pattern matching its prose (L107).
-    result="$(printf '%s\n' "$out" | grep -E '^SUITE-RESULT passed=[0-9]+ failed=[0-9]+$' | tail -1)"
+    result="$(suite_result_line "$out")"
     guessed=0
     if [ -n "$result" ]; then
       p_count="${result#*passed=}"; p_count="${p_count%% *}"
@@ -639,6 +716,24 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       fi
     else
       printf '  ok    %-38s %-26s %s\n' "$name" "$summary" "$dur"
+    fi
+    # Fewer checks than last time, said where the verdict is read (claude-config#219). Under both
+    # branches, because a suite can lose checks and go red in the same change and the drop is then
+    # the more useful half of the two.
+    #
+    # Not a failure. Counts legitimately fall when tests are deleted, and a guard that goes red on
+    # a deliberate deletion is one somebody learns to work around. What it cannot be is invisible:
+    # a suite that finished early and honestly (a fixture glob matching nothing, a loop over an
+    # empty list, a case table that lost a row) reports its smaller number as a clean pass, and
+    # nothing else in this run is comparing it with anything (L288).
+    #
+    # BOTH numbers, on the line. "fewer checks" alone sends the reader to run the suite again to
+    # find out how many fewer, which is the whole cost this is meant to save (L11, L80).
+    _pc="${prev_checks[$((idx - 1))]:-}"
+    _nc="${now_checks[$((idx - 1))]:-}"
+    if [ -n "$_pc" ] && [ -n "$_nc" ] && [ "$_nc" -lt "$_pc" ]; then
+      printf '          %s ran fewer checks than the last run: %s now, %s then. Deliberate, or did it finish early?\n' \
+        "$name" "$_nc" "$_pc"
     fi
 done
 

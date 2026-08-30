@@ -659,10 +659,25 @@ t_recs="$(ls "$TSTORE" 2>/dev/null | grep -c 'test-.*\.sh$' || true)"
 # `awk NR==1` rather than `head -1`, which leaves on its first line and can kill its own producer
 # under pipefail (#132, L183).
 t_slow_rec="$(ls "$TSTORE" 2>/dev/null | grep 'test-slowpoke\.sh$' | awk 'NR==1')"
-case "$(cat "$TSTORE/$t_slow_rec" 2>/dev/null)" in
-  ''|*[!0-9]*) check "#144 and what it records is a whole number of seconds" "the record for test-slowpoke.sh reads '$(cat "$TSTORE/$t_slow_rec" 2>/dev/null)'" ;;
+# The record is `<seconds>` or `<seconds> <checks>` since #219 put a second perishable number about
+# the same suite beside the first. Read the FIELD rather than the whole line, and pin the shape of
+# the whole record too, so a third field cannot be added without this saying so (L317).
+t_slow_line="$(cat "$TSTORE/$t_slow_rec" 2>/dev/null)"
+case "$(printf '%s\n' "$t_slow_line" | awk 'NR == 1 { print $1 }')" in
+  ''|*[!0-9]*) check "#144 and what it records is a whole number of seconds" "the record for test-slowpoke.sh reads '$t_slow_line'" ;;
   *) check "#144 and what it records is a whole number of seconds" ok ;;
 esac
+# Matched with `case` on a variable rather than `printf | grep -q`, which leaves on its first
+# match and can be killed by its own producer under pipefail (#132, L183). The shape is pinned in
+# three parts: it begins and ends with a digit, and taking the digits out leaves at most one
+# single space, so a third field cannot be added without this saying so (L317).
+t_shape_ok=1
+case "$t_slow_line" in [0-9]*) ;; *) t_shape_ok=0 ;; esac
+case "$t_slow_line" in *[0-9]) ;; *) t_shape_ok=0 ;; esac
+case "$(printf '%s' "$t_slow_line" | tr -d '0-9')" in ''|' ') ;; *) t_shape_ok=0 ;; esac
+[ "$t_shape_ok" -eq 1 ] \
+  && check "#219 and the record is that field, or that field and a check count, and nothing else" ok \
+  || check "#219 and the record is that field, or that field and a check count, and nothing else" "the record reads '$t_slow_line'"
 
 # Now the measurement disagrees with the file size, which is the case the issue is about. The
 # record is EDITED rather than fabricated from nothing, so the check runs against the same key the
@@ -1042,6 +1057,125 @@ else
     *)  check "#171 and a cleanup that misses grandchildren WOULD be caught" ok ;;
   esac
 fi
+
+# ---------------------------------------------------------------------------
+# A suite that finishes early with FEWER checks is SAID to have (claude-config#219).
+# ---------------------------------------------------------------------------
+# The runner reads each suite's `SUITE-RESULT passed=N failed=M` line exactly, and a suite that
+# dies leaves none, which it catches. What it could not catch is a suite that finishes honestly
+# and EARLY: a fixture glob that matches nothing, a loop over an empty list, a case table that
+# lost a row. That suite reports `12 passed, 0 failed` and reads as green, and the only thing
+# wrong with it is a number nobody is comparing against anything (L288).
+#
+# So the store that already holds what each suite COST also holds how many checks it ran, and a
+# suite reporting fewer than last time says so where the verdict is read. Not a failure: counts
+# legitimately fall when tests are deleted. Visible, so the fall is a decision rather than a
+# discovery (L11).
+CK="$TMPROOT/checks"
+CKSTORE="$TMPROOT/checks-store"
+mkdir -p "$CK/suites" "$CKSTORE"
+mk_counting_suite() { # mk_counting_suite <dir> <name> <how many checks it reports>
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf "SUITE-RESULT passed=%%s failed=0\\n" "%s"\n' "$3"
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+mk_counting_suite "$CK/suites" steady 40
+mk_counting_suite "$CK/suites" shrinker 30
+
+# The first run has nothing to compare against. It must say so: a run that compared nothing and a
+# run in which nothing dropped print the same silence otherwise, and the silence is the whole
+# signal here (L98).
+out_c1="$(HOOK_TESTS_ROOT="$CK" HOOK_TESTS_TIMINGS="$CKSTORE" HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$CK/suites" 2>&1)"; code_c1=$?
+[ "$code_c1" -eq 0 ] \
+  && check "#219 a first run, with no counts to compare against, passes" ok \
+  || check "#219 a first run, with no counts to compare against, passes" "exit=$code_c1 out=$out_c1"
+case "$out_c1" in
+  *"check counts compared against the last run for 0 of 2 suite(s)"*)
+    check "#219 and it says it had no stored count for any of them" ok ;;
+  *)
+    check "#219 and it says it had no stored count for any of them" "out=$out_c1" ;;
+esac
+case "$out_c1" in
+  *"fewer checks"*)
+    check "#219 and a suite with no stored count is not reported as having dropped everything" "out=$out_c1" ;;
+  *)
+    check "#219 and a suite with no stored count is not reported as having dropped everything" ok ;;
+esac
+
+# Now one of them shrinks and the other holds. The run that just finished wrote both counts, so
+# what this compares against is what the runner itself recorded, not a number this file invented
+# (L48).
+mk_counting_suite "$CK/suites" shrinker 12
+out_c2="$(HOOK_TESTS_ROOT="$CK" HOOK_TESTS_TIMINGS="$CKSTORE" HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$CK/suites" 2>&1)"; code_c2=$?
+[ "$code_c2" -eq 0 ] \
+  && check "#219 a drop is reported, not failed: counts legitimately fall when tests are deleted" ok \
+  || check "#219 a drop is reported, not failed: counts legitimately fall when tests are deleted" "exit=$code_c2 out=$out_c2"
+case "$out_c2" in
+  *"check counts compared against the last run for 2 of 2 suite(s)"*)
+    check "#219 and the second run says it had a count for both" ok ;;
+  *)
+    check "#219 and the second run says it had a count for both" "out=$out_c2" ;;
+esac
+# BOTH numbers, on the line, because "fewer checks" alone sends the reader to run the suite again
+# to find out how many fewer (L11, L80).
+c2_drop="$(printf '%s\n' "$out_c2" | grep -F 'fewer checks' | tr -s ' ')"
+c2_ok=1
+case "$c2_drop" in *shrinker*) ;; *) c2_ok=0 ;; esac
+case "$c2_drop" in *12*) ;; *) c2_ok=0 ;; esac
+case "$c2_drop" in *30*) ;; *) c2_ok=0 ;; esac
+[ "$c2_ok" -eq 1 ] \
+  && check "#219 the shrinking suite's line names it and both counts" ok \
+  || check "#219 the shrinking suite's line names it and both counts" "the drop line was '$c2_drop'"
+# And the suite that did NOT shrink says nothing, or the line is noise on every run and stops
+# being read (L36).
+[ "$(printf '%s\n' "$out_c2" | grep -cF 'fewer checks' | tr -d ' ')" = 1 ] \
+  && check "#219 and the suite whose count held is not mentioned" ok \
+  || check "#219 and the suite whose count held is not mentioned" "$(printf '%s\n' "$out_c2" | grep -F 'fewer checks')"
+
+# A count that GROWS is not a drop. Without this, a runner reporting every change would satisfy
+# the checks above (L178, L159).
+mk_counting_suite "$CK/suites" shrinker 99
+out_c3="$(HOOK_TESTS_ROOT="$CK" HOOK_TESTS_TIMINGS="$CKSTORE" HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$CK/suites" 2>&1)"; code_c3=$?
+[ "$code_c3" -eq 0 ] && [ "$(printf '%s\n' "$out_c3" | grep -cF 'fewer checks' | tr -d ' ')" = 0 ] \
+  && check "#219 a count that grew is not reported as a drop" ok \
+  || check "#219 a count that grew is not reported as a drop" "exit=$code_c3 out=$out_c3"
+
+# The store switched off compares nothing, and says so rather than reading as a run in which
+# nothing dropped, exactly as the timing half of the same store already does.
+out_c4="$(HOOK_TESTS_ROOT="$CK" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$CK/suites" 2>&1)"; code_c4=$?
+[ "$code_c4" -eq 0 ] \
+  && check "#219 an empty HOOK_TESTS_TIMINGS turns the comparison off and the run still passes" ok \
+  || check "#219 an empty HOOK_TESTS_TIMINGS turns the comparison off and the run still passes" "exit=$code_c4 out=$out_c4"
+case "$out_c4" in
+  *"check counts compared against the last run for 0 of 2 suite(s)"*)
+    check "#219 and a run with the store off says it compared nothing" ok ;;
+  *)
+    check "#219 and a run with the store off says it compared nothing" "out=$out_c4" ;;
+esac
+
+# The count lives BESIDE the duration in one record, so nothing that reads the duration may be
+# disturbed by it. A record holding seconds alone is what every store on disk contains the first
+# time this ships, and it must still order the launches (L255, L267).
+CKOLD="$TMPROOT/checks-old-store"
+mkdir -p "$CKOLD"
+ck_key="$(ls "$CKSTORE" 2>/dev/null | grep 'test-shrinker\.sh$' | awk 'NR==1')"
+printf '77\n' > "$CKOLD/$ck_key"
+out_c5="$(HOOK_TESTS_ROOT="$CK" HOOK_TESTS_TIMINGS="$CKOLD" HOOK_TESTS_BUDGET=4 HOOK_TESTS_JOBS=2 bash "$RUNNER" "$CK/suites" 2>&1)"; code_c5=$?
+order_c5="$(printf '%s\n' "$out_c5" | sed -n 's/^run-all-tests: launch order: //p' | tail -1)"
+c5_ok=0
+case "$order_c5" in "test-shrinker.sh "*) c5_ok=1 ;; esac
+[ "$code_c5" -eq 0 ] && [ "$c5_ok" -eq 1 ] \
+  && check "#219 a record written before counts existed still orders the launches by its seconds" ok \
+  || check "#219 a record written before counts existed still orders the launches by its seconds" "exit=$code_c5 launch order was '$order_c5'"
+case "$out_c5" in
+  *"check counts compared against the last run for 0 of 2 suite(s)"*)
+    check "#219 and it carries no count, so nothing is compared against it" ok ;;
+  *)
+    check "#219 and it carries no count, so nothing is compared against it" "out=$out_c5" ;;
+esac
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
