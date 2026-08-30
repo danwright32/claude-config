@@ -7473,20 +7473,24 @@ check "#205 and a runner finishing in 50ms is noticed within 200ms of it (${pi_f
 # so a run that survives past one second proves the ceiling is time and not turns (L226, L1).
 pi_runner 'while :; do sleep 3600 & wait "$!" || true; done'
 pi_arrive three
-pi_h0="$(date +%s)"
+# Two seconds is the SHORTEST ceiling this can be proved against, and the reason is the clock, not
+# caution. claude-sync reads whole seconds, so a ceiling of N expires somewhere between N-1 and N
+# seconds of real time, and a ceiling of 1 can therefore expire immediately. Two leaves a full
+# second of separation to assert on, against the 200ms a poll counting deadline would take.
+pi_h0="$(pi_ms)"
 out_pih="$(CLAUDE_HOME="$PIH" SYNC_REPO="$PIR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
-  SYNC_POLL_INTERVAL=0.1 SYNC_HOOK_TESTS_TIMEOUT=3 bash "$SCRIPT" pull 2>&1)"
-pi_held=$(( $(date +%s) - pi_h0 ))
-dbg "#205 a runner that never ends, with a 3s ceiling and a 0.1s poll, was stopped after ${pi_held}s"
+  SYNC_POLL_INTERVAL=0.1 SYNC_HOOK_TESTS_TIMEOUT=2 bash "$SCRIPT" pull 2>&1)"
+pi_held=$(( $(pi_ms) - pi_h0 ))
+dbg "#205 a runner that never ends, with a 2s ceiling and a 0.1s poll, was stopped after ${pi_held}ms"
 # There WAS no test anywhere that this deadline fires. It is the error path of a wait that holds
 # nothing and reports an unverified config, and an error path with no test is the half that ships
 # broken (L1).
 check "#205 a runner that never ends is stopped at its deadline" \
-  "line_has \"\$out_pih\" 'could NOT be completed here' 'still running after 3s'"
-check "#205 and the deadline is seconds, not polls (it survived ${pi_held}s of a 3s ceiling)" \
-  "[ '$pi_held' -ge 2 ]"
-check "#205 and it did not outlast the ceiling by more than the poll (${pi_held}s against 3s)" \
-  "[ '$pi_held' -le 8 ]"
+  "line_has \"\$out_pih\" 'could NOT be completed here' 'still running after 2s'"
+check "#205 and the deadline is seconds, not polls (it survived ${pi_held}ms of a 2s ceiling)" \
+  "[ '$pi_held' -ge 1000 ]"
+check "#205 and it did not outlast the ceiling by more than the poll (${pi_held}ms against 2s)" \
+  "[ '$pi_held' -le 8000 ]"
 
 # The lock's ceiling is seconds too, and it is the one that was counting turns. A lock held by a
 # live process on this machine is waited for, so a two second ceiling with a tenth of a second
@@ -7495,18 +7499,22 @@ PILOCK="$WORK/poll-lock"; rm -rf "$PILOCK"; mkdir -p "$PILOCK"
 sleep 120 & PI_LIVE=$!
 printf '%s\n' "$PI_LIVE" > "$PILOCK/pid"
 printf '%s\n' "$(hostname)" > "$PILOCK/host"
-pi_l0="$(date +%s)"
+pi_l0="$(pi_ms)"
 CLAUDE_HOME="$PIH" SYNC_REPO="$PIR" SYNC_LOCK="$PILOCK" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
   SYNC_POLL_INTERVAL=0.1 SYNC_LOCK_WAIT=2 bash "$SCRIPT" sync >/dev/null 2>&1
-pi_lwait=$(( $(date +%s) - pi_l0 ))
+pi_lwait=$(( $(pi_ms) - pi_l0 ))
 kill "$PI_LIVE" 2>/dev/null || true
 wait "$PI_LIVE" 2>/dev/null || true
 rm -rf "$PILOCK"
-dbg "#205 a contended lock with a 2s ceiling and a 0.1s poll waited ${pi_lwait}s"
-check "#205 the lock's wait is seconds, not turns of its loop (waited ${pi_lwait}s of a 2s ceiling)" \
-  "[ '$pi_lwait' -ge 2 ]"
-check "#205 and it gives up at that ceiling rather than waiting on (${pi_lwait}s against 2s)" \
-  "[ '$pi_lwait' -le 8 ]"
+dbg "#205 a contended lock with a 2s ceiling and a 0.1s poll waited ${pi_lwait}ms"
+# Milliseconds, and a bound of one second rather than two, for the reason above: a whole second
+# clock reading a two second ceiling expires anywhere in the second second, so `-ge 2` measured in
+# whole seconds is a coin toss on its own boundary while `-ge 1000` cannot be reached by a
+# deadline counting 200ms of polls (L224, L290).
+check "#205 the lock's wait is seconds, not turns of its loop (waited ${pi_lwait}ms of a 2s ceiling)" \
+  "[ '$pi_lwait' -ge 1000 ]"
+check "#205 and it gives up at that ceiling rather than waiting on (${pi_lwait}ms against 2s)" \
+  "[ '$pi_lwait' -le 8000 ]"
 
 # An unreadable interval is SAID, never silently swapped for the default: a setting that is
 # ignored in silence reads exactly like one that is in force (L320, L11).
