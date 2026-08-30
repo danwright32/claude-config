@@ -6348,10 +6348,21 @@ hd_arrive one
 CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 hd_rec="$(head -1 "$HDR/.hook-tests" 2>/dev/null || true)"
 dbg "#218 the record a real receive wrote: $hd_rec"
-# A here-string, not a pipe. `printf | grep -q` leaves on its first match and can be killed by its
-# own producer under pipefail, which is the class this repo ratchets down (#132, L183).
-check "#218 a real receive writes a record with an outcome and a duration" \
-  "grep -qE '^passed\t[0-9]+\t0\t3\t0\t[0-9]+\$' <<< \"\$hd_rec\""
+# The record is READ field by field, not matched with a regex. `\t` inside a grep pattern is a
+# backslash and a t to GNU grep and something else again to BSD grep, so a pattern written that way
+# passes on a Mac and fails on the runner with the record perfectly correct: it did, twice, on
+# 2026-08-30 (L38, the same BSD against GNU split the portable helpers exist for).
+#
+# Reading the fields is also the stronger check, because it says which field is wrong rather than
+# that the line as a whole did not match.
+IFS="$(printf '\t')" read -r hd_o hd_w hd_c hd_r hd_n hd_d <<HDREC
+$hd_rec
+HDREC
+dbg "#218 fields: outcome=$hd_o when=$hd_w code=$hd_c ran=$hd_r notrun=$hd_n took=$hd_d"
+check "#218 a real receive records the outcome, the counts and a duration (outcome=$hd_o ran=$hd_r notrun=$hd_n took=$hd_d)" \
+  "[ \"\$hd_o\" = passed ] && [ \"\$hd_c\" = 0 ] && [ \"\$hd_r\" = 3 ] && [ \"\$hd_n\" = 0 ] && case \"\$hd_d\" in ''|*[!0-9]*) false ;; *) true ;; esac"
+check "#218 and the epoch it was written at is a whole number (when=$hd_w)" \
+  "case \"\$hd_w\" in ''|*[!0-9]*) false ;; *) true ;; esac"
 # The duration is a MEASUREMENT taken from the clock, not a number parsed out of the runner's
 # printed words. That distinction is the whole of L325: a figure that reaches its reader only by
 # being printed disappears the moment the work moves behind a worker or a background lane, while
