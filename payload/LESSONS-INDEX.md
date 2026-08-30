@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 351 lessons.
+LESSONS.md, which is NOT loaded into the session. 352 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -209,6 +209,7 @@ to decide something: the body is where the failure it came from is described.
 - L521. A lookup that requires exactly one match must treat MANY matches as its own refusal, never as absence
 - L326. A chain of fallback matchers gives no redundancy when every arm reads a field from the SAME upstream payload
 - L261. Several behaviours a design treats as ONE condition (this run is not real, this tenant is internal, this build is disposable) must all read ONE predicate
+- L327. When a record's identifier is minted from whichever route it happens to carry (an email, else a prefixed URL, else a generated handle), any sort that breaks ties on that identifier orders by which KIND of route the record has
 
 ## Security and privacy
 

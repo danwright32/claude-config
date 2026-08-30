@@ -2051,6 +2051,21 @@ window is a count rather than a boundary.
   the contradiction exists only between two files. L32 covers a doc that has gone stale and L204
   an invariant a change removed; this is neither, the two gates were never the same)
 
+- **L327. When a record's identifier is minted from whichever route it happens to carry (an
+  email, else a prefixed URL, else a generated handle), any sort that breaks ties on that
+  identifier orders by which KIND of route the record has** rather than by anything anybody
+  chose, so which item comes first is an alphabetical accident between two namespaces while the
+  code reads as a deliberate ranking. (overture#3284: `Recipient.makeId` mints the canonical
+  email when there is one and the literal string "form:" plus the URL otherwise. Contacts sort
+  by role rank with ties broken by id, and on a self produced show every performer shares one
+  rank, so the tie break decides. "form:https://..." sorts ahead of every address beginning g
+  through z, which meant the card's "who this draft is addressed to" line named a contact with
+  no address, and therefore one the send path structurally excludes, on both live cards Dan
+  looked at. The two ordering rules are each defensible alone: rank by role, then something
+  stable. Nothing said the stable thing sorts by route type. L15 is about keying on a stable
+  identifier and L170 about a criterion that never fires; this is a criterion that fires and
+  ranks by an attribute nobody meant to rank by)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
