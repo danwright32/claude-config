@@ -123,8 +123,64 @@ if [ -n "$pinned_tool" ]; then
   esac
 fi
 
-rollup=$(gh pr view ${pr:+"$pr"} --json number,statusCheckRollup,mergeable 2>/dev/null)
-[ -z "$rollup" ] && deny "Cannot verify CI for this PR (gh pr view returned nothing). Check the PR manually, then re-run with ALLOW_RED_MERGE=1 if it is genuinely green."
+# The account gh has ACTIVE cannot necessarily see this repo. Dan runs
+# concurrent sessions under different GitHub accounts, and a repo owned by one
+# 404s under the other: `gh pr view` then returns nothing, which is
+# indistinguishable from a pull request that does not exist, and this gate
+# correctly refused to merge blind. Measured 2026-08-30 on nursedexapp/nursedex,
+# where it blocked every merge.
+#
+# So: try the active account, then each other logged-in account, scoping the
+# token PER CALL. Never `gh auth switch`, which changes the shared keyring's
+# active account and would break whatever other session is using it.
+#
+# And prove the answer is about THIS repo. The identity comes from the git
+# remote, not from gh, because a check whose two sides come from one lookup can
+# only confirm that lookup is self-consistent, never that it is correct (L70).
+# The hook did not verify this before; an answer about a different repo would
+# have been read as this pull request's verdict.
+remote_slug=$(git config --get remote.origin.url 2>/dev/null \
+  | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
+
+pr_view() {  # $1 = token, or empty for the active account
+  if [ -n "${1:-}" ]; then
+    GH_TOKEN="$1" gh pr view ${pr:+"$pr"} --json number,statusCheckRollup,mergeable,url 2>/dev/null
+  else
+    gh pr view ${pr:+"$pr"} --json number,statusCheckRollup,mergeable,url 2>/dev/null
+  fi
+}
+
+# An answer is usable when it is non-empty AND names the repo the remote names.
+# With no parseable remote there is nothing to compare against, so the identity
+# half is skipped rather than failing every repo that has no GitHub origin.
+usable_answer() {  # $1 = rollup json
+  [ -n "$1" ] || return 1
+  [ -n "$remote_slug" ] || return 0
+  local url; url=$(printf '%s' "$1" | jq -r '.url // ""' 2>/dev/null)
+  [ -n "$url" ] || return 0
+  case "$url" in
+    "https://github.com/$remote_slug/pull/"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+rollup=$(pr_view "")
+if ! usable_answer "$rollup"; then
+  wrong_repo=""
+  [ -n "$rollup" ] && wrong_repo=$(printf '%s' "$rollup" | jq -r '.url // ""' 2>/dev/null)
+  rollup=""
+  for account in $(gh auth status 2>/dev/null \
+      | grep -oE 'account [A-Za-z0-9_.-]+' | awk '{print $2}' | sort -u); do
+    token=$(gh auth token -u "$account" 2>/dev/null) || continue
+    [ -n "$token" ] || continue
+    candidate=$(pr_view "$token")
+    if usable_answer "$candidate"; then rollup="$candidate"; break; fi
+  done
+  if [ -z "$rollup" ] && [ -n "$wrong_repo" ]; then
+    deny "Refusing to merge: the only answer gh gave was about $wrong_repo, not about $remote_slug. Verifying one pull request's checks and merging another is the exact mistake this gate exists to stop. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+  fi
+fi
+[ -z "$rollup" ] && deny "Cannot verify CI for this PR (gh pr view returned nothing under any logged-in account). Check the PR manually, then re-run with ALLOW_RED_MERGE=1 if it is genuinely green."
 
 number=$(printf '%s' "$rollup" | jq -r '.number // "?"')
 

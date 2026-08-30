@@ -1663,6 +1663,24 @@ window is a count rather than a boundary.
   banner. Found only by running the thing, which is L3; the existing seeder rule about
   reading the full schema first cannot catch this, because the schema was never violated)
 
+- **L325. A measurement a process reports by PRINTING reaches its reader only while that
+  process's stdout does, so any change in how the work is EXECUTED (a worker process, a
+  background job, a sandbox, a parallel lane) silently removes the measurement while the work
+  itself still succeeds.** Carry a measurement somebody must read on a channel the reader owns,
+  such as a file, rather than on the output stream of whatever happened to run it.
+
+  Overture #3276, found while working #3266 (2026-08-30). `ReplyInvariantsLiveStoreTests` prints
+  a corpus line saying how many rows each live-store invariant could examine, and the test runner
+  reads it out of xcodebuild's output. That readout exists (#2991) because both invariants had sat
+  at zero for months while passing, and only a printed line thousands of lines up a log nobody
+  reads separated that from a clean bill of health (L182). Running the same suite under
+  `-parallel-testing-enabled YES` put those tests in worker processes whose stdout xcodebuild does
+  not forward: measured over a full run, the suite RAN and passed, its per-test lines are in the
+  log, and the corpus line appears ZERO times in 10,059 lines. Nothing failed. The verdict was
+  green. The one thing built to notice a silently empty corpus had been switched off by a flag
+  about scheduling, and the readout's own message then blamed a scope the run did not have, which
+  is the same absence wearing a second wrong explanation (L11).
+
 ## State and identity
 
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
@@ -2005,6 +2023,18 @@ window is a count rather than a boundary.
   permanent salesforce_user_id, pinning an external system's join to a row no board shows while
   the real rep read clean. The sync refused two-names-one-row but never the mirror
   one-name-two-rows its own matcher had just detected.)
+
+- **L326. A chain of fallback matchers gives no redundancy when every arm reads a field from the
+  SAME upstream payload**, because one change at that source moves all of them together and the
+  chain falls through to create a duplicate. List what each arm actually depends on, and keep at
+  least one keyed on something the source does not restate (its own id, a stored relationship, an
+  overlap in time).
+  (overture#3278: five ways to recognise a stored show, the natural key of title plus date plus
+  venue, two URL arms, a production-id arm and a stable-source arm, and one source changing its
+  listing URLs and dropping a subtitle from every title on 2026-08-09 defeated all five in a single
+  sweep. Ten duplicate rows were minted, the orphans then accrued a miss per scout and rendered as
+  "No longer in the feed, may be cancelled" on shows still playing: 13 of the 31 warnings on screen
+  were wrong, and Dan dismissed three shows twice.)
 
 - **L261. Several behaviours a design treats as ONE condition (this run is not real, this
   tenant is internal, this build is disposable) must all read ONE predicate**, because separate

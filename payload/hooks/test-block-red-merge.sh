@@ -224,6 +224,123 @@ if denied "$(run_hook "$dir" "ALLOW_RED_MERGE=1 gh pr merge 7 --squash")"; then
 else pass; fi
 rm -rf "$dir"
 
+echo "block-red-merge: repos the active gh account cannot see (nursedex, 2026-08-30)"
+
+# A REAL git repo with a GitHub remote, so the hook has an identity to check the
+# answer against. The repos above deliberately have none, which is why they
+# exercise the no-remote path and why this needs its own builder.
+#
+# The fake gh is written by a plain heredoc, never one inside $(...): macOS
+# ships bash 3.2, which mis-parses that and the whole suite fails to parse.
+make_remote_repo() {  # $1 = owner/name ; $2 = which fake gh
+  local dir; dir=$(mktemp -d)
+  mkdir -p "$dir/repo" "$dir/bin"
+  ( cd "$dir/repo" && git init -q && git remote add origin "https://github.com/$1.git" )
+
+  # The real situation: the ACTIVE account 404s on this repo and answers
+  # nothing, while a second logged-in account can see it. The hook read that
+  # empty answer, could not tell it from a pull request that does not exist,
+  # and refused every merge in the repo.
+  if [ "$2" = "second-account-green" ]; then
+    cat > "$dir/bin/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALL_LOG"
+case "$*" in
+  *"auth status"*)
+    printf 'Logged in to github.com account danwright32 (keyring)\n'
+    printf 'Logged in to github.com account nursedexapp (keyring)\n'
+    ;;
+  *"auth token -u nursedexapp"*) printf 'tok-nursedexapp\n' ;;
+  *"auth token -u "*) printf 'tok-other\n' ;;
+  *"pr view"*)
+    if [ "${GH_TOKEN:-}" = "tok-nursedexapp" ]; then
+      printf '%s\n' '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"url":"https://github.com/acme/widget/pull/7"}'
+    fi
+    ;;
+esac
+SH
+  fi
+
+  if [ "$2" = "second-account-red" ]; then
+    cat > "$dir/bin/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALL_LOG"
+case "$*" in
+  *"auth status"*) printf 'Logged in to github.com account nursedexapp (keyring)\n' ;;
+  *"auth token -u "*) printf 'tok-nursedexapp\n' ;;
+  *"pr view"*)
+    if [ "${GH_TOKEN:-}" = "tok-nursedexapp" ]; then
+      printf '%s\n' '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"FAILURE"}],"url":"https://github.com/acme/widget/pull/7"}'
+    fi
+    ;;
+esac
+SH
+  fi
+
+  # Every account answers, but about a DIFFERENT repo.
+  if [ "$2" = "wrong-repo" ]; then
+    cat > "$dir/bin/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALL_LOG"
+case "$*" in
+  *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
+  *"auth token -u "*) printf 'tok\n' ;;
+  *"pr view"*)
+    printf '%s\n' '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"url":"https://github.com/someone/else/pull/7"}'
+    ;;
+esac
+SH
+  fi
+
+  chmod +x "$dir/bin/gh"
+  printf '%s' "$dir"
+}
+
+dir=$(make_remote_repo acme/widget second-account-green)
+GH_CALL_LOG="$dir/gh-calls.log"; export GH_CALL_LOG; : > "$GH_CALL_LOG"
+out=$(run_hook "$dir" "gh pr merge 7 --squash")
+if denied "$out"; then
+  fail "a green pull request was blocked because the ACTIVE account cannot see the repo: $out"
+else pass; fi
+
+# Dan runs concurrent sessions under different accounts. Switching the shared
+# keyring's active account to read one repo would break whatever else is using
+# it, so the token is scoped per call and the active account is never touched.
+if grep -q "auth switch" "$GH_CALL_LOG"; then
+  fail "the hook ran gh auth switch, which changes the shared active account"
+else pass; fi
+
+# The fallback has to have actually been taken, or a fake that answered on the
+# first call would pass this identically and prove nothing (L159).
+if grep -q "auth token -u" "$GH_CALL_LOG"; then pass; else
+  fail "the hook never asked for a scoped token, so the fallback was not exercised"
+fi
+rm -rf "$dir"
+
+# Reaching the answer by a new route must not change how the answer is READ.
+dir=$(make_remote_repo acme/widget second-account-red)
+GH_CALL_LOG="$dir/gh-calls.log"; export GH_CALL_LOG; : > "$GH_CALL_LOG"
+if denied "$(run_hook "$dir" "gh pr merge 7 --squash")"; then pass; else
+  fail "a FAILING check reached through the scoped-token fallback was allowed to merge"
+fi
+rm -rf "$dir"
+
+# New strictness. An answer about ANOTHER repo used to be read as this pull
+# request's verdict, and verifying one pull request's checks while merging a
+# different one is the exact mistake this gate exists to stop.
+dir=$(make_remote_repo acme/widget wrong-repo)
+GH_CALL_LOG="$dir/gh-calls.log"; export GH_CALL_LOG; : > "$GH_CALL_LOG"
+out=$(run_hook "$dir" "gh pr merge 7 --squash")
+if denied "$out"; then pass; else
+  fail "a green rollup about a DIFFERENT repo was accepted as this pull request's verdict"
+fi
+# Distinct causes get distinct messages: this must not read like "gh said nothing" (L11).
+if printf '%s' "$out" | grep -q "someone/else"; then pass; else
+  fail "the refusal does not name the repo it was actually told about: $out"
+fi
+rm -rf "$dir"
+unset GH_CALL_LOG
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
