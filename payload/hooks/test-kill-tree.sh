@@ -121,9 +121,17 @@ ALL_PIDS="$ALL_PIDS $s_child"
 [ -f "$TMPROOT/survived" ] \
   && check "a caller that asks about its own tree lives to see it finish" ok \
   || check "a caller that asks about its own tree lives to see it finish" "it did not reach the line after the call"
-[ -n "$s_child" ] && ! alive "$s_child" \
-  && check "and its own child was killed all the same" ok \
-  || check "and its own child was killed all the same" "child='$s_child' alive=$(alive "${s_child:-1}" && echo yes || echo no)"
+# WAITED for, not sampled once. The walk signals the child and returns; the kernel reaps it a
+# moment later, so a single reading taken the instant the call returns is a reading of how busy the
+# machine is. It failed on the CI runner on 2026-08-30 and the failure message printed alive=no,
+# because the message re-read the state after the child had finished dying: a check whose own
+# evidence contradicts it (L11, L290). Every other check in this file already uses wait_gone.
+[ -n "$s_child" ] && wait_gone "$s_child" 10
+if [ -n "$s_child" ] && ! alive "$s_child"; then
+  check "and its own child was killed all the same" ok
+else
+  check "and its own child was killed all the same" "child='$s_child' alive=$(alive "${s_child:-1}" && echo yes || echo no)"
+fi
 
 # ---------------------------------------------------------------------------
 # A number that has been recycled since the list was taken is LEFT ALONE.
