@@ -1177,6 +1177,204 @@ case "$out_c5" in
     check "#219 and it carries no count, so nothing is compared against it" "out=$out_c5" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A timing that measured a REFUSAL is not a measurement (claude-config#229).
+# ---------------------------------------------------------------------------
+# The store held 0 for tests/test-claude-sync.sh, which is the slowest suite in this repo by a
+# factor of four and was measured at 231 seconds in the same session. The launch order that record
+# produced put it 41st of 44, so the slowest suite ran last on the smallest share of the budget
+# with everything else already finished, while this runner reported "launch order from measured
+# wall clock for 44 of 44 suite(s)". The run is simply slower, which is the symptom #139 existed to
+# remove, and nothing in the output reads as wrong.
+#
+# A suite that exits at once leaves a real measurement of zero, and the runner recorded what a
+# suite COST without asking whether it did anything. The sync suite exits in well under a second
+# when it refuses its own lock, so a moment of overlap between two runs governs every run
+# afterwards until a clean one happens to overwrite it (L330).
+#
+# What tells the two apart is already in front of the runner: a suite that did its work prints its
+# own SUITE-RESULT line, and one that refused, died or could not run here does not.
+RF="$TMPROOT/refusal"
+RFSTORE="$TMPROOT/refusal-store"
+mkdir -p "$RF/suites" "$RFSTORE"
+mk_counting_suite "$RF/suites" honest 12
+# A suite that refuses at once, exactly as the sync suite does when it meets its own lock: no
+# result line, non-zero, instantly.
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'echo "another run is already going. Refusing rather than queueing behind it." >&2\n'
+  printf 'exit 2\n'
+} > "$RF/suites/test-refuser.sh"
+chmod +x "$RF/suites/test-refuser.sh"
+
+out_rf="$(HOOK_TESTS_ROOT="$RF" HOOK_TESTS_TIMINGS="$RFSTORE" HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$RF/suites" 2>&1)"; code_rf=$?
+[ "$code_rf" -ne 0 ] \
+  && check "#229 a suite that refused still fails the run" ok \
+  || check "#229 a suite that refused still fails the run" "exit=$code_rf out=$out_rf"
+rf_key="$(ls "$RFSTORE" 2>/dev/null | grep 'test-refuser\.sh$' | awk 'NR==1')"
+[ -z "$rf_key" ] \
+  && check "#229 and no timing is recorded for it, because it measured a refusal" ok \
+  || check "#229 and no timing is recorded for it, because it measured a refusal" "it recorded '$(cat "$RFSTORE/$rf_key" 2>/dev/null)' under $rf_key"
+# The control, and the whole of what makes the check above mean anything: the suite that DID its
+# work in the same run is recorded. Without it a runner that stopped recording altogether would
+# pass (L159, L1).
+rf_ok_key="$(ls "$RFSTORE" 2>/dev/null | grep 'test-honest\.sh$' | awk 'NR==1')"
+[ -n "$rf_ok_key" ] \
+  && check "#229 and the suite that did its work in the same run IS recorded" ok \
+  || check "#229 and the suite that did its work in the same run IS recorded" "$(ls "$RFSTORE" 2>/dev/null | tr '\n' ' ')"
+
+# A record that already exists is LEFT ALONE by a run that refused, rather than overwritten with
+# the refusal's zero. That is the case that actually bit on 2026-08-30: the store held a good
+# record, measured at 231 seconds in that same session, and one overlapping run replaced it.
+printf '231 900\n' > "$RFSTORE/$(ls "$RFSTORE" | grep 'test-honest' | awk 'NR==1')" 2>/dev/null || true
+RFK="$(printf '%s' "suites/test-refuser.sh" | sed 's/%/%25/g; s#/#%2F#g')"
+printf '231 900\n' > "$RFSTORE/$RFK"
+HOOK_TESTS_ROOT="$RF" HOOK_TESTS_TIMINGS="$RFSTORE" HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$RF/suites" >/dev/null 2>&1
+[ "$(awk 'NR==1{print $1}' "$RFSTORE/$RFK" 2>/dev/null)" = 231 ] \
+  && check "#229 a good record survives a run in which that suite refused" ok \
+  || check "#229 a good record survives a run in which that suite refused" "it now reads '$(cat "$RFSTORE/$RFK" 2>/dev/null)'"
+
+# And the run SAYS when the suite it launched first is not the one that took longest, which is the
+# single line that would have made the original defect visible without reading the cache by hand
+# (L11). The refuser has no record so it is launched last by size among the unmeasured, and the
+# honest suite leads; the fixture below is the other way round.
+LEAD="$TMPROOT/lead"
+LEADSTORE="$TMPROOT/lead-store"
+mkdir -p "$LEAD/suites" "$LEADSTORE"
+mk_slot_suite "$LEAD/suites" quick
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'sleep 2\n'
+  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+} > "$LEAD/suites/test-slowest.sh"
+chmod +x "$LEAD/suites/test-slowest.sh"
+# A record that makes the FAST suite lead, which is exactly the shape a poisoned store produces.
+printf '99\n' > "$LEADSTORE/$(printf '%s' "suites/test-quick.sh" | sed 's/%/%25/g; s#/#%2F#g')"
+printf '0\n'  > "$LEADSTORE/$(printf '%s' "suites/test-slowest.sh" | sed 's/%/%25/g; s#/#%2F#g')"
+out_lead="$(HOOK_TESTS_ROOT="$LEAD" HOOK_TESTS_TIMINGS="$LEADSTORE" HOOK_TESTS_BUDGET=4 HOOK_TESTS_JOBS=2 bash "$RUNNER" "$LEAD/suites" 2>&1)"
+case "$out_lead" in
+  *"launched first is not the one that took longest"*)
+    check "#229 the run says when the suite it launched first was not the slowest" ok ;;
+  *)
+    check "#229 the run says when the suite it launched first was not the slowest" "out=$out_lead" ;;
+esac
+# The control: a run whose order was right says nothing, or the line is on every run and stops
+# being read (L36, L159). The store now holds what the run above measured, so this one leads with
+# the suite that really is slowest.
+out_lead2="$(HOOK_TESTS_ROOT="$LEAD" HOOK_TESTS_TIMINGS="$LEADSTORE" HOOK_TESTS_BUDGET=4 HOOK_TESTS_JOBS=2 bash "$RUNNER" "$LEAD/suites" 2>&1)"
+case "$out_lead2" in
+  *"launched first is not the one that took longest"*)
+    check "#229 and a run that led with the slowest suite says nothing" "out=$out_lead2" ;;
+  *)
+    check "#229 and a run that led with the slowest suite says nothing" ok ;;
+esac
+
+# ---------------------------------------------------------------------------
+# A spool write is ATTRIBUTED before the run is failed for it (claude-config#230).
+# ---------------------------------------------------------------------------
+# The runner brackets every run with a listing and a byte count of the live issue spool, and
+# reports ANY change as a suite violating L2. That is the right shape for the defect it was built
+# for, a suite that sources lib/issue-spool.sh before setting CLAUDE_ISSUE_SPOOL_DIR. But the spool
+# is a machine wide store with other legitimate writers, and this Mac routinely runs several Claude
+# sessions at once: measured 2026-08-30, a run in which all 44 suites passed was failed by 1,180
+# bytes a session working in a completely different repository had written while it ran.
+#
+# Every record carries the working directory it came from, so the added lines are read and judged
+# one at a time. This is the same shape as #159, where a global watchdog count was made specific by
+# tagging so it could only ever include the run's own.
+SPOOL="$TMPROOT/live-spool"
+SP="$TMPROOT/spooltest"
+mkdir -p "$SPOOL" "$SP/suites"
+sp_record(){   # sp_record <cwd> -> one spool line
+  printf '{"ts":"2026-08-30T12:00:00Z","status":"found","agent":"","session":"s","cwd":"%s","findings":["x"]}\n' "$1"
+}
+# A suite that writes into the live spool from ELSEWHERE, standing in for another session's
+# harvest firing mid-run. It is a suite only so that something writes while the runner is watching.
+mk_spool_writer(){   # mk_spool_writer <name> <cwd to record>
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf %s >> "%s/other.jsonl"\n' "'$(sp_record "$2")'" "$SPOOL"
+    printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+  } > "$SP/suites/test-$1.sh"
+  chmod +x "$SP/suites/test-$1.sh"
+}
+
+# Another project's session. The run must PASS, and must say the spool grew without blaming itself.
+# A path outside this repo and outside any temp directory, which is what makes it somebody else's.
+# Not under /Users: check-home-paths refuses a line naming one machine's home directory, and it is
+# right to, because such a line is wrong on every other Mac (measured, it caught this).
+mk_spool_writer elsewhere "/opt/another-project/checkout"
+out_sp="$(CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" HOOK_TESTS_ROOT="$SP" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$SP/suites" 2>&1)"; code_sp=$?
+[ "$code_sp" -eq 0 ] \
+  && check "#230 a spool write from another project does not fail the run" ok \
+  || check "#230 a spool write from another project does not fail the run" "exit=$code_sp out=$out_sp"
+case "$out_sp" in
+  *"from work in other directories"*)
+    check "#230 and the run says the spool grew and that it was not its doing" ok ;;
+  *)
+    check "#230 and the run says the spool grew and that it was not its doing" "out=$out_sp" ;;
+esac
+case "$out_sp" in
+  *"SUITES WROTE INTO THE LIVE SPOOL"*)
+    check "#230 and it does not accuse a suite of writing it" "out=$out_sp" ;;
+  *)
+    check "#230 and it does not accuse a suite of writing it" ok ;;
+esac
+
+# The half that must still work, and the reason none of this may be loosened: a suite writing from
+# inside the repo under test is the real violation and still fails the run (L1, L159).
+rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-elsewhere.sh
+mk_spool_writer inside "$SP/a/b"
+out_sp2="$(CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" HOOK_TESTS_ROOT="$SP" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$SP/suites" 2>&1)"; code_sp2=$?
+[ "$code_sp2" -ne 0 ] \
+  && check "#230 a suite writing from inside the repo still fails the run" ok \
+  || check "#230 a suite writing from inside the repo still fails the run" "exit=$code_sp2 out=$out_sp2"
+case "$out_sp2" in
+  *"SUITES WROTE INTO THE LIVE SPOOL"*)
+    check "#230 and it is named as the L2 violation it is" ok ;;
+  *)
+    check "#230 and it is named as the L2 violation it is" "out=$out_sp2" ;;
+esac
+case "$out_sp2" in
+  *"$SP/a/b"*)
+    check "#230 and the directory the record came from is printed" ok ;;
+  *)
+    check "#230 and the directory the record came from is printed" "out=$out_sp2" ;;
+esac
+
+# A record with no working directory at all cannot be attributed, and an unattributable change must
+# not read as a clean one (L98, L11).
+rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-inside.sh
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf %s >> "%s/other.jsonl"\n' "'{\"ts\":\"2026-08-30T12:00:00Z\",\"status\":\"found\"}'" "$SPOOL"
+  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+} > "$SP/suites/test-anon.sh"
+chmod +x "$SP/suites/test-anon.sh"
+out_sp3="$(CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" HOOK_TESTS_ROOT="$SP" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$SP/suites" 2>&1)"; code_sp3=$?
+[ "$code_sp3" -ne 0 ] \
+  && check "#230 a record that cannot be attributed fails the run" ok \
+  || check "#230 a record that cannot be attributed fails the run" "exit=$code_sp3 out=$out_sp3"
+case "$out_sp3" in
+  *"could not be attributed"*)
+    check "#230 and it says so, rather than asserting a suite wrote it" ok ;;
+  *)
+    check "#230 and it says so, rather than asserting a suite wrote it" "out=$out_sp3" ;;
+esac
+
+# And the control for all of it: a run that touched the spool not at all says nothing about it.
+rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-anon.sh
+mk_counting_suite "$SP/suites" quiet 3
+out_sp4="$(CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" HOOK_TESTS_ROOT="$SP" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$SP/suites" 2>&1)"; code_sp4=$?
+case "$out_sp4" in
+  *"LIVE SPOOL"*|*"other directories"*)
+    check "#230 a run that wrote nothing to the spool says nothing about it" "out=$out_sp4" ;;
+  *)
+    [ "$code_sp4" -eq 0 ] \
+      && check "#230 a run that wrote nothing to the spool says nothing about it" ok \
+      || check "#230 a run that wrote nothing to the spool says nothing about it" "exit=$code_sp4" ;;
+esac
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

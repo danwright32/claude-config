@@ -458,6 +458,16 @@ if [ "$ran" -gt 0 ]; then
   _live_spool="${CLAUDE_ISSUE_SPOOL_DIR:-$HOME/.claude-issue-spool}"
   _spool_before="$(ls -1 "$_live_spool" 2>/dev/null | sort)"
   _spool_before_bytes="$(cat "$_live_spool"/*.jsonl 2>/dev/null | wc -c | tr -d ' ')"
+  # Each file's own size, so what was ADDED can be read back rather than only counted
+  # (claude-config#230). The totals alone cannot say WHO wrote, and the spool is a machine wide
+  # store with other legitimate writers: this Mac routinely has several Claude sessions going, and
+  # a harvest firing in another project during a run reads here as a suite violating L2. Measured
+  # 2026-08-30, a green run of all 44 suites was failed by 1,180 bytes written by a session working
+  # in a different repository entirely.
+  _spool_sizes_before="$(for _sp_f in "$_live_spool"/*.jsonl; do
+    [ -e "$_sp_f" ] || continue
+    printf '%s\t%s\n' "$(wc -c < "$_sp_f" | tr -d ' ')" "$_sp_f"
+  done)"
 
   _timed=0
   launch_order="$(
@@ -563,6 +573,23 @@ LAUNCH
         _ri=$((_ri + 1))
         [ -n "$_rk" ] || continue
         case "$_rv" in ''|*[!0-9]*) continue ;; esac
+        # A suite that left NO result line is not recorded at all (claude-config#229). It was
+        # recorded, and what it recorded was however long it took to refuse: the sync suite exits
+        # in well under a second when it meets its own lock, so one overlapping run wrote a zero
+        # over a real measurement, and the launch order then put the slowest suite in this repo
+        # second from last while this script reported a measured order for all of them. Observed
+        # 2026-08-30, where the record read zero against a suite measured at 231 seconds in the
+        # same session. The run is simply slower and nothing reads as wrong (L330).
+        #
+        # Zero seconds is a true measurement of a suite that did nothing and an honest measurement
+        # of a suite that had nothing to do, and the store holds only the number. What separates
+        # them is already here: a suite that did its work prints its own SUITE-RESULT line, and one
+        # that refused, died, or could not run here does not.
+        #
+        # The existing record is LEFT ALONE rather than cleared, because the last run that really
+        # did the work is a better answer than none, and being wrong about launch order costs wall
+        # clock and nothing else.
+        case "$_rc" in ''|*[!0-9]*) continue ;; esac
         case "$_rc" in ''|*[!0-9]*) _rline="$_rv" ;; *) _rline="$_rv $_rc" ;; esac
         _rt="$TIMINGS/.writing.$$.$_rk"
         if printf '%s\n' "$_rline" > "$_rt" 2>/dev/null && mv -f "$_rt" "$TIMINGS/$_rk" 2>/dev/null; then
@@ -742,6 +769,25 @@ echo
 # from the suites this run actually FOUND and actually measured, so it can never name a suite that
 # is no longer in the repo, and a suite nobody measured is named separately rather than sorted in
 # at zero.
+# Did the run LEAD with the suite that turned out to be slowest (claude-config#229)? The launch
+# order decides which suite gets the largest share of the budget and is the only thing still
+# running at the end, so getting it wrong costs the whole run. Nothing said so: a store holding a
+# bad record still produces a confident "launch order from measured wall clock" line naming every
+# suite it ran, and the only symptom is a run that took longer than it needed to.
+#
+# Said only when it is WRONG. A run that led correctly is the ordinary case and a line on every run
+# is one nobody reads (L36).
+if [ -n "$slow_profile" ] && [ -n "${launch_order:-}" ]; then
+  _lead_first="$(printf '%s\n' "$launch_order" | awk -F"$(printf '\t')" 'NR == 1 { print $5 }')"
+  _lead_first="${_lead_first##*/}"
+  _lead_slowest="$(printf '%s' "$slow_profile" | sort -r | awk -F"$(printf '\t')" 'NR == 1 { print $2 }')"
+  if [ -n "$_lead_first" ] && [ -n "$_lead_slowest" ] && [ "$_lead_first" != "$_lead_slowest" ]; then
+    echo "run-all-tests: the suite launched first is not the one that took longest: it led with $_lead_first and $_lead_slowest took the longest."
+    echo "  Lane 1 carries the largest share of the budget and is whatever launches first, so this run spent the machine on the wrong suite."
+    echo "  The order comes from $TIMINGS. A record there that measured a refusal rather than a run is how this happens (#229)."
+  fi
+fi
+
 if [ -n "$slow_profile" ]; then
   echo "slowest suites:"
   # `awk NR<=5` rather than `head -5`, which leaves on its fifth line and can kill its own producer
@@ -758,14 +804,64 @@ fi
 _spool_after="$(ls -1 "${_live_spool:-}" 2>/dev/null | sort)"
 _spool_after_bytes="$(cat "${_live_spool:-}"/*.jsonl 2>/dev/null | wc -c | tr -d ' ')"
 if [ "${_spool_before:-}" != "$_spool_after" ] || [ "${_spool_before_bytes:-}" != "$_spool_after_bytes" ]; then
-  echo "SUITES WROTE INTO THE LIVE SPOOL at $_live_spool. A test must be structurally unable to"
-  echo "  touch live data (L2). Bytes went from ${_spool_before_bytes:-?} to ${_spool_after_bytes:-?}."
-  echo "  Find the suite that sources lib/issue-spool.sh, or runs a hook, without setting"
-  echo "  CLAUDE_ISSUE_SPOOL_DIR to its own throwaway directory FIRST."
-  # Counted as a failed suite, so the run's own verdict says so rather than
-  # leaving the notice to be scrolled past.
-  failed=$((failed + 1))
-  failed_names="$failed_names live-spool-pollution"
+  # Something wrote. WHO is a separate question, and asking it is the whole of #230: the old form
+  # reported any change at all as a suite violating L2, and on a machine running several Claude
+  # sessions that is a false red on a green run, priced at a full re-run (L293) and arriving
+  # exactly when the machine is busy.
+  #
+  # Every record carries the working directory it came from, so the added lines are read and each
+  # one is judged. A record naming a path inside THIS repo, or inside a throwaway directory, is a
+  # suite's doing and is the defect this exists to catch: a suite that sources lib/issue-spool.sh
+  # or runs a hook without setting CLAUDE_ISSUE_SPOOL_DIR first. A record naming another project's
+  # checkout was written by somebody else's session and is not this run's business.
+  _sp_mine=""; _sp_theirs=""; _sp_unknown=0
+  for _sp_f in "${_live_spool:-}"/*.jsonl; do
+    [ -e "$_sp_f" ] || continue
+    _sp_was="$(printf '%s\n' "${_spool_sizes_before:-}" | awk -F"$(printf '\t')" -v f="$_sp_f" '$2 == f { print $1; exit }')"
+    case "$_sp_was" in ''|*[!0-9]*) _sp_was=0 ;; esac
+    _sp_now="$(wc -c < "$_sp_f" | tr -d ' ')"
+    [ "$_sp_now" -gt "$_sp_was" ] || continue
+    # Only the bytes this run added, so an existing record cannot be re-reported for ever.
+    while IFS= read -r _sp_line; do
+      [ -n "$_sp_line" ] || continue
+      _sp_cwd="$(printf '%s' "$_sp_line" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+      if [ -z "$_sp_cwd" ]; then
+        # No working directory to judge it by. Reported as unattributable and counted against the
+        # run, because that is also the shape a writer nobody expected would take, and a change
+        # this cannot explain must not read as a clean one (L98, L11).
+        _sp_unknown=$(( _sp_unknown + 1 ))
+      elif [ -n "$root" ] && [ "${_sp_cwd#"$root"}" != "$_sp_cwd" ]; then
+        _sp_mine="$_sp_mine
+    $_sp_cwd"
+      elif [ "${_sp_cwd#"${TMPDIR:-/tmp}"}" != "$_sp_cwd" ] || [ "${_sp_cwd#/tmp}" != "$_sp_cwd" ]; then
+        _sp_mine="$_sp_mine
+    $_sp_cwd (a throwaway directory, so a suite wrote it)"
+      else
+        _sp_theirs="$_sp_theirs
+    $_sp_cwd"
+      fi
+    done <<SPOOLADDED
+$(tail -c "+$(( _sp_was + 1 ))" "$_sp_f" 2>/dev/null)
+SPOOLADDED
+  done
+  if [ -n "$_sp_mine" ] || [ "$_sp_unknown" -gt 0 ]; then
+    echo "SUITES WROTE INTO THE LIVE SPOOL at $_live_spool. A test must be structurally unable to"
+    echo "  touch live data (L2). Bytes went from ${_spool_before_bytes:-?} to ${_spool_after_bytes:-?}."
+    [ -n "$_sp_mine" ] && { echo "  Records written from inside this repo or a throwaway directory:"; printf '%s\n' "$_sp_mine"; }
+    [ "$_sp_unknown" -gt 0 ] && echo "  And $_sp_unknown record(s) with no working directory recorded, which could not be attributed to anything."
+    echo "  Find the suite that sources lib/issue-spool.sh, or runs a hook, without setting"
+    echo "  CLAUDE_ISSUE_SPOOL_DIR to its own throwaway directory FIRST."
+    # Counted as a failed suite, so the run's own verdict says so rather than
+    # leaving the notice to be scrolled past.
+    failed=$((failed + 1))
+    failed_names="$failed_names live-spool-pollution"
+  elif [ -n "$_sp_theirs" ]; then
+    # Said, not silent. The spool changed and this run did not do it, which is worth knowing when
+    # reading any timing this run reports, but it is not a fault in these tests.
+    echo "The live spool at $_live_spool grew while this ran, from work in other directories:"
+    printf '%s\n' "$_sp_theirs" | sort -u
+    echo "  Another Claude session was working elsewhere on this machine. Not this run's doing, and not counted against it."
+  fi
 fi
 if [ -n "$unmeasured_names" ]; then
   echo "NO DURATION was measured for:$unmeasured_names"
