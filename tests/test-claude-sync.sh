@@ -210,8 +210,89 @@ $_SEC_TITLE
 # Closes the last section of a run and prints the profile. Called from the bottom of this file AND
 # from the tail the section extractor appends, because a filtered run stops at a section too and its
 # last section would otherwise be the one section never reported (which is the one being worked on).
+# Where each section's measured wall clock is kept between runs (claude-config#203). The same
+# design as the runner's own suite store one level up (#144) and for the same reasons: NOT under
+# the config directory, which mirrors itself to the other Mac within seconds, because a duration
+# measured on this machine is not configuration and shipping it would make the other Mac deal its
+# shards by numbers from hardware it does not have.
+#
+# `-` and not `:-`, so an empty value means OFF rather than default. A run that must leave no trace
+# needs that, and so does CI until its cache is warm.
+SUITE_SECTION_TIMINGS="${SUITE_SECTION_TIMINGS-${XDG_CACHE_HOME:-$HOME/.cache}/claude-config/section-timings}"
+
+# A record is keyed on the section's TITLE, never its position. Sections are added and removed
+# constantly and every index after the insertion point shifts, so an index keyed store would
+# silently attribute one section's duration to its neighbour (L15). Only `/` and `%` are encoded,
+# and both are, so two different titles cannot produce one file name.
+# The title as `section` was CALLED with, from the raw `section "..."` line the heading scan keeps.
+# The two must agree or the store is written under one name and read under another, which is not an
+# error anywhere: every lookup simply misses and the run reports that nothing has been measured
+# while the records sit there (L100).
+suite_section_title(){   # suite_section_title <a raw `section "..."` line> -> the title
+  local _st_t="${1:-}"
+  _st_t="${_st_t#section \"}"
+  printf '%s' "${_st_t%\"}"
+}
+
+suite_section_key(){   # suite_section_key <section title> -> the record's file name
+  printf '%s' "${1:-}" | sed 's/%/%25/g; s#/#%2F#g'
+}
+
+# What that section was last measured at, or NOTHING. A record that is not a whole number of
+# seconds is treated as no record rather than guessed at as a number: the store is a cache, and
+# being wrong about it costs the shard balance and nothing else.
+suite_section_seconds(){   # suite_section_seconds <section title> -> whole seconds, or nothing
+  [ -n "$SUITE_SECTION_TIMINGS" ] || return 0
+  [ -n "${1:-}" ] || return 0
+  local _ss_v
+  _ss_v="$(awk 'NR == 1 { print $1 }' "$SUITE_SECTION_TIMINGS/$(suite_section_key "$1")" 2>/dev/null)"
+  case "$_ss_v" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$_ss_v"
+}
+
+# What this run measured, written down for the next one. Called from suite_profile, so it happens
+# once at the end rather than once per section, and a run that was killed records nothing at all.
+#
+# A run driven through the SLOW or HANG seams records NOTHING. Those seams pause and stall on
+# purpose, so their durations measure the seam rather than the section, and a store holding them
+# would deal every later run against a number nobody meant. That is #229 one level up, where a
+# suite exiting at once because it refused its own lock was recorded as costing nothing and then
+# led nothing, with the run reporting a measured order the whole time (L330).
+suite_record_sections(){
+  [ -n "$SUITE_SECTION_TIMINGS" ] || return 0
+  [ -n "$_SEC_PROFILE" ] || return 0
+  [ -z "${SUITE_SLOW_IN:-}" ] || return 0
+  [ -z "${SUITE_HANG_IN:-}" ] || return 0
+  mkdir -p "$SUITE_SECTION_TIMINGS" 2>/dev/null || {
+    echo "test suite: could not create $SUITE_SECTION_TIMINGS, so nothing was recorded and the next run will deal its shards by counting sections. Set SUITE_SECTION_TIMINGS somewhere writable, or to empty to turn the record off." >&2
+    return 0
+  }
+  local _sr_d _sr_t _sr_k _sr_tmp _sr_bad=0
+  while IFS="$(printf '\t')" read -r _sr_d _sr_t; do
+    [ -n "$_sr_t" ] || continue
+    _sr_k="$(suite_section_key "$_sr_t")"
+    _sr_tmp="$SUITE_SECTION_TIMINGS/.writing.$$.$_sr_k"
+    # Written to a temporary name and renamed over the old one, so two runs at once cannot
+    # interleave into a half written record. The shards of one run write disjoint sets of sections,
+    # so they never contend for the same record at all.
+    if printf '%s\n' "$((10#$_sr_d))" > "$_sr_tmp" 2>/dev/null && mv -f "$_sr_tmp" "$SUITE_SECTION_TIMINGS/$_sr_k" 2>/dev/null; then
+      :
+    else
+      rm -f "$_sr_tmp" 2>/dev/null
+      _sr_bad=$(( _sr_bad + 1 ))
+    fi
+  done <<SRPROFILE
+$_SEC_PROFILE
+SRPROFILE
+  # Said out loud, never swallowed. A store that cannot be written leaves every future run dealing
+  # by count while reading as though it dealt by measurement (L11, L98).
+  [ "$_sr_bad" -eq 0 ] || echo "test suite: $_sr_bad section time(s) could not be written to $SUITE_SECTION_TIMINGS, so the next run will deal those by counting." >&2
+  return 0
+}
+
 suite_profile(){
   section_close
+  suite_record_sections
   [ -n "$_SEC_PROFILE" ] || return 0
   echo ""
   echo "slowest sections:"
@@ -551,7 +632,7 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   # far more than the others costs more wall clock than the duplicate it removed. With no
   # declarations at all every group is one section and this deals out exactly as the plain round
   # robin it replaces did.
-  _sh_grp=(); _sh_size=(); _sh_load=(); _sh_of=()
+  _sh_grp=(); _sh_size=(); _sh_load=(); _sh_of=(); _sh_weight=()
   _sh_k=$(( _so_pend + 1 ))
   while [ "$_sh_k" -le "$_so_i" ]; do _sh_grp[$_sh_k]=$_sh_k; _sh_k=$(( _sh_k + 1 )); done
   # Answers in a VARIABLE rather than on stdout, because every caller here read it through `$(...)`
@@ -600,10 +681,62 @@ ${_so_needs[$_sh_k]}
 SHNEEDS
     _sh_k=$(( _sh_k + 1 ))
   done
+  # Each group's SIZE in sections and its WEIGHT in seconds (claude-config#203). Sections are not
+  # the same size, so a deal balanced on how many of them a shard holds balances nothing: measured
+  # 2026-08-29 over 463 seconds of section time, the slowest five sections were 52, 38, 27, 27 and
+  # 24 seconds against a median under two, and four shards came out at 76, 165, 115 and 105 where
+  # balanced is 116 each.
+  #
+  # A section nobody has measured is not invented a duration. It is counted, and what stands in for
+  # it in the arithmetic is the MEDIAN of the sections that WERE measured, which is the one figure
+  # here that is not made up: it is what a section of unknown size is most likely to cost. How many
+  # of those there were is said out loud below, so a balance mostly made of stand-ins cannot read
+  # as a measured one (L11, L192).
+  _sh_secs=(); _sh_unk=()
+  _sh_measured=0; _sh_total=0
+  _sh_all_secs=""
   _sh_k=$(( _so_pend + 1 ))
   while [ "$_sh_k" -le "$_so_i" ]; do
     _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
     _sh_size[$_sh_r]=$(( ${_sh_size[$_sh_r]:-0} + 1 ))
+    _sh_total=$(( _sh_total + 1 ))
+    _sh_sec="$(suite_section_seconds "$(suite_section_title "${_so_titles[$_sh_k]:-}")")"
+    if [ -n "$_sh_sec" ]; then
+      _sh_secs[$_sh_r]=$(( ${_sh_secs[$_sh_r]:-0} + _sh_sec ))
+      _sh_measured=$(( _sh_measured + 1 ))
+      _sh_all_secs="$_sh_all_secs$_sh_sec
+"
+    else
+      _sh_unk[$_sh_r]=$(( ${_sh_unk[$_sh_r]:-0} + 1 ))
+    fi
+    _sh_k=$(( _sh_k + 1 ))
+  done
+  # The median of what was measured, or nothing at all when nothing was.
+  _sh_median=0
+  if [ "$_sh_measured" -gt 0 ]; then
+    _sh_median="$(printf '%s' "$_sh_all_secs" | sort -n | awk -v n="$_sh_measured" 'NR == int((n + 1) / 2) { print; exit }')"
+    case "$_sh_median" in ''|*[!0-9]*) _sh_median=0 ;; esac
+  fi
+  # Which rule this run is about to use, said before it deals, because a run that fell back to
+  # counting reads exactly like one that balanced by time (L11).
+  if [ "$_sh_measured" -eq 0 ]; then
+    _sh_by_time=0
+    echo "test suite: shards dealt by section count, because no section has a measured time here yet. Set SUITE_SECTION_TIMINGS, or run the suite once to record them."
+  else
+    _sh_by_time=1
+    echo "test suite: shards dealt by measured section time for $_sh_measured of $_sh_total section(s), the rest at the median of those (${_sh_median}s)"
+  fi
+  # The weight a group is dealt on. With nothing measured this is exactly the section count the
+  # deal used before #203, so the fallback is not a second scheme to keep working, it is this one
+  # with every term equal (L263).
+  _sh_k=$(( _so_pend + 1 ))
+  while [ "$_sh_k" -le "$_so_i" ]; do
+    _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
+    if [ "$_sh_by_time" -eq 1 ]; then
+      _sh_weight[$_sh_r]=$(( ${_sh_secs[$_sh_r]:-0} + ${_sh_unk[$_sh_r]:-0} * _sh_median ))
+    else
+      _sh_weight[$_sh_r]="${_sh_size[$_sh_r]}"
+    fi
     _sh_k=$(( _sh_k + 1 ))
   done
   _sh_k=1
@@ -622,20 +755,36 @@ SHNEEDS
     done
     printf '%s' "$_sf_out"
   }
-  _sh_k=$(( _so_pend + 1 ))
-  while [ "$_sh_k" -le "$_so_i" ]; do
-    _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
-    if [ -z "${_sh_of[$_sh_r]:-}" ]; then
-      _sh_pick=1; _sh_j=2
-      while [ "$_sh_j" -le "$_sh_n" ]; do
-        if [ "${_sh_load[$_sh_j]}" -lt "${_sh_load[$_sh_pick]}" ]; then _sh_pick=$_sh_j; fi
-        _sh_j=$(( _sh_j + 1 ))
-      done
-      _sh_of[$_sh_r]=$_sh_pick
-      _sh_load[$_sh_pick]=$(( ${_sh_load[$_sh_pick]} + ${_sh_size[$_sh_r]} ))
-    fi
-    _sh_k=$(( _sh_k + 1 ))
-  done
+  # HEAVIEST FIRST, and that ordering is half of what makes this work (claude-config#203). Dealing
+  # in file order to the least loaded shard is a greedy fit over an arbitrary sequence, and greedy
+  # only balances when the big items go first: the largest section measured 2026-08-29 was 52
+  # seconds, and one of those arriving last lands on a shard already even with the others and puts
+  # it that far ahead of everything.
+  #
+  # Ties broken by the group's own root, so two groups of equal weight deal in the same order every
+  # time. Without it the deal depends on how `sort` happens to order equal keys and two runs of the
+  # same tree can produce different partitions, which nothing downstream could tell from a real
+  # change (L228).
+  _sh_order="$(
+    _sh_k=$(( _so_pend + 1 ))
+    while [ "$_sh_k" -le "$_so_i" ]; do
+      _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
+      [ "$_sh_r" -eq "$_sh_k" ] && printf '%s\t%s\n' "${_sh_weight[$_sh_r]}" "$_sh_r"
+      _sh_k=$(( _sh_k + 1 ))
+    done | sort -t "$(printf '\t')" -k1,1nr -k2,2n
+  )"
+  while IFS="$(printf '\t')" read -r _sh_w _sh_r; do
+    [ -n "$_sh_r" ] || continue
+    _sh_pick=1; _sh_j=2
+    while [ "$_sh_j" -le "$_sh_n" ]; do
+      if [ "${_sh_load[$_sh_j]}" -lt "${_sh_load[$_sh_pick]}" ]; then _sh_pick=$_sh_j; fi
+      _sh_j=$(( _sh_j + 1 ))
+    done
+    _sh_of[$_sh_r]=$_sh_pick
+    _sh_load[$_sh_pick]=$(( ${_sh_load[$_sh_pick]} + _sh_w ))
+  done <<SHORDER
+$_sh_order
+SHORDER
   _sh_targets="$(_sh_targets_for "$_sh_i")"
   # A shard holding no sections at all must REFUSE, never report a clean run: a suite that checked
   # nothing and exits 0 is indistinguishable from one where everything passed (L98).
@@ -664,9 +813,17 @@ SHNEEDS
     for _cl_x in $_so_keep; do
       case " $_cl_targets " in *" $_cl_x "*) ;; *) _cl_borrowed="$_cl_borrowed,$_cl_x" ;; esac
     done
-    printf 'SUITE-SHARD-COVERAGE shard=%s first=%s last=%s sections=%s borrowed=%s\n' \
+    # `seconds=` is what the shard was DEALT, in the unit the deal balanced on (claude-config#203).
+    # Without it the balance can only be checked by counting sections, which is the very thing that
+    # was measuring the wrong quantity, so a check written over these lines would go on passing
+    # while the shards came out 76 and 165 (L63).
+    #
+    # Reported for the shard whatever rule dealt it: when nothing was measured this is the section
+    # count, which is exactly what the load was, so the field never lies about what it is a total
+    # of and the sentence printed above says which.
+    printf 'SUITE-SHARD-COVERAGE shard=%s first=%s last=%s sections=%s seconds=%s borrowed=%s\n' \
       "$_cl_i" "$(( _so_pend + 1 ))" "$_so_i" "$(printf '%s' "${_cl_targets# }" | tr ' ' ',')" \
-      "${_cl_borrowed#,}"
+      "${_sh_load[$_cl_i]:-0}" "${_cl_borrowed#,}"
   }
   # EVERY shard's line, from this one launch (claude-config#204). The deal above decides the whole
   # partition, so the second and the eighth shard's answers are already sitting in _sh_of by the
@@ -6100,12 +6257,24 @@ _bw_hi="$(_bw_sizes "$_bw8" | sort -n | tail -1)"
 _bw_lo="$(_bw_sizes "$_bw8" | sort -n | awk 'NR==1')"
 check "#151 the shard sizes could be read as numbers (high='$_bw_hi' low='$_bw_lo')" \
   "case \"\$_bw_hi\$_bw_lo\" in ''|*[!0-9]*) false ;; *) true ;; esac"
-# Three sections of slack, not zero. One group of two pinned together already puts one shard one
-# ahead, and a floor of zero would refuse the very grouping this section exists to introduce. It
-# is a bound on the SPREAD rather than a threshold on a duration, so it cannot be satisfied by a
-# slow machine (L172).
-check "#151 and no shard is left carrying far more sections than another" \
-  "[ \$(( ${_bw_hi:-0} - ${_bw_lo:-0} )) -le 3 ]"
+# There is deliberately NO bound on how far apart the section COUNTS are, and that is the point of
+# #203. The deal balances SECONDS now, so a shard holding two long sections while another holds
+# thirty short ones is the CORRECT answer, and the check that used to live here forbade exactly
+# that: it bounded the difference at three, and with the real measurements in place the eight
+# shard deal came out at 32 sections against 2 while every shard sat within four seconds of the
+# mean (measured 2026-08-30).
+#
+# It was measuring a proxy for the thing that matters, and a guard holding a proxy flat while the
+# real quantity drifts is worse than no guard, because it reads as protection (L63). Deleted
+# rather than loosened: its whole content was the rejected rule, and a loosened version would
+# still be defending it (L252).
+#
+# What replaced it is in #203, which bounds the SECONDS each shard is dealt, at several shard
+# counts, against the seconds= field the deal now prints. The one count-based refusal that remains
+# is the selector's own, which rejects a shard holding no sections at all.
+#
+# The two numbers above are still read and still checked for being numbers, because that is what
+# proves the coverage lines could be parsed at all.
 
 # The control, and the half that would do the damage if it were wrong: the closure still PULLS a
 # prerequisite in when it genuinely has to. SECTION_ONLY on the dependent section runs one section
@@ -6147,6 +6316,266 @@ check "#151 dealt out the old way, a section really is borrowed by a shard that 
 # above caught is the BORROWING and not a selector that fell over (L140).
 check "#151 and that old dealing is otherwise a sound division too" \
   "printf '%s\\n' \"\$_bw_old\" | shard_coverage_verdict 4 >/dev/null"
+
+section "== every workflow job carries a timeout, above this suite's own deadline (#210) =="
+# A CI job with no `timeout-minutes` gets the platform default of six HOURS. A hang is worse than a
+# failure because it is indistinguishable from slowness (L110), and on a metered runner it is also
+# expensive: the 2026-08-29 audit found a job with no timeout in nine repositories out of nine, and
+# on a macOS runner at the 10x multiplier a single six hour hang costs two months of a free
+# account's whole allowance (L313).
+#
+# The job here does carry one. What nothing checked is that it still will, or that a SECOND
+# workflow file could not arrive without one, which is the shape this repo keeps removing: a rule
+# that holds because somebody remembered it is a rule that lives in a prompt (L27, L96).
+#
+# Both halves are checked. Present, and BIGGER than the deadline the suite sets for itself: a job
+# timeout at or below it fires first, and the suite's own message, which names the section it died
+# in, is the far more useful of the two (L11).
+_wf_dir="$(cd "$(dirname "$SCRIPT")" && pwd)/.github/workflows"
+_wf_files="$(ls "$_wf_dir"/*.yml "$_wf_dir"/*.yaml 2>/dev/null || true)"
+_wf_n="$(printf '%s\n' "$_wf_files" | grep -c . || true)"
+# A scan handed no files reports nothing and reads as a clean tree (L98).
+check "#210 there are workflow files to check" "[ \"\${_wf_n:-0}\" -ge 1 ]"
+
+# One reader, used by the real files and by the fixtures below, so the probes exercise THIS rule
+# rather than a second one written beside it (L107). A job is a two-space key under `jobs:`, and
+# its block runs to the next such key or the end of the file.
+_WF_AWK="$WORK/workflow-timeouts.awk"
+cat > "$_WF_AWK" <<'WFAWK'
+function close_job() {
+  if (job != "") printf "%s\t%s\t%s\n", FILENAME, job, (t == "" ? "NONE" : t)
+  job = ""; t = ""
+}
+/^jobs:[[:space:]]*$/ { injobs = 1; next }
+injobs && /^[^[:space:]#]/ { close_job(); injobs = 0 }
+injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+  close_job()
+  job = $1; sub(/:$/, "", job)
+  next
+}
+injobs && job != "" && /^    timeout-minutes:[[:space:]]*[0-9]+[[:space:]]*$/ {
+  t = $2
+}
+END { close_job() }
+WFAWK
+_wf_jobs(){   # _wf_jobs <file>... -> "<file>\t<job>\t<minutes or NONE>" per job
+  for _wf_f in "$@"; do awk -f "$_WF_AWK" "$_wf_f"; done
+}
+
+# The deadline to compare against is the one THAT WORKFLOW will run under, never the one this
+# process happens to be running under. A Mac uses the code's default of an hour and CI sets its
+# own, so reading `$SUITE_TIMEOUT` from here would compare a workflow file against whatever
+# machine the suite is on and report a different answer in the two places (L522).
+#
+# So: the value the file sets, if it sets one, and otherwise the default the code would supply.
+# The default is read out of the code rather than repeated here, or this holds the workflow to a
+# number that stopped being true (L41).
+_wf_default="$(sed 's/#.*//' "$SCRIPT_SELF" | grep -oE '\$\{SUITE_TIMEOUT:-[0-9]+\}' | grep -oE '[0-9]+' | awk 'NR==1')"
+case "$_wf_default" in ''|*[!0-9]*) _wf_default=3600 ;; esac
+check "#210 the suite's own default deadline could be read from the code (${_wf_default}s)" \
+  "[ "\${_wf_default:-0}" -gt 0 ]"
+_wf_deadline_for(){   # _wf_deadline_for <workflow file> -> the seconds that file's jobs run under
+  local _wd
+  _wd="$(grep -E '^[[:space:]]*SUITE_TIMEOUT:[[:space:]]*[0-9]+[[:space:]]*$' "$1" 2>/dev/null | grep -oE '[0-9]+' | awk 'NR==1')"
+  case "$_wd" in ''|*[!0-9]*) _wd="$_wf_default" ;; esac
+  printf '%s' "$_wd"
+}
+
+_wf_missing=""; _wf_short=""; _wf_seen=0
+while IFS="$(printf '\t')" read -r _wf_f _wf_j _wf_t; do
+  [ -n "$_wf_j" ] || continue
+  _wf_seen=$(( _wf_seen + 1 ))
+  _wf_dl="$(_wf_deadline_for "$_wf_f")"
+  _wf_dl_min=$(( (_wf_dl + 59) / 60 ))
+  if [ "$_wf_t" = NONE ]; then
+    _wf_missing="$_wf_missing [$(basename "$_wf_f"):$_wf_j]"
+  elif [ "$_wf_t" -le "$_wf_dl_min" ]; then
+    _wf_short="$_wf_short [$(basename "$_wf_f"):$_wf_j is ${_wf_t}m against a ${_wf_dl_min}m deadline]"
+  fi
+done <<WFJOBS
+$(_wf_jobs $_wf_files)
+WFJOBS
+check "#210 the scan found jobs to check ($_wf_seen)" "[ \"\${_wf_seen:-0}\" -ge 1 ]"
+check "#210 every workflow job carries a timeout$_wf_missing" "[ -z \"\$_wf_missing\" ]"
+check "#210 and every one of them exceeds the suite's own deadline$_wf_short" "[ -z \"\$_wf_short\" ]"
+
+# Both refusals, seen firing on a fixture built for them, or the two checks above are green because
+# the repo happens to be clean today and would stay green if the rule stopped working (L1, L151).
+_WFX="$WORK/workflow-fixtures"; mkdir -p "$_WFX"
+cat > "$_WFX/no-timeout.yml" <<'WFNONE'
+name: fixture
+on: [push]
+jobs:
+  fine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - run: true
+  careless:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+WFNONE
+_wf_probe="$(_wf_jobs "$_WFX/no-timeout.yml")"
+check "#210 the scan reads both jobs of a fixture file" \
+  "[ \"\$(printf '%s\n' \"\$_wf_probe\" | grep -c .)\" = 2 ]"
+# Here-strings, not pipes. `printf | grep -q` leaves on its first match and can be killed by its
+# own producer under pipefail, which is the class this repo ratchets down (#132, L183). `grep -c`
+# above reads all of its input and is safe either way.
+check "#210 and it reports the job with no timeout as NONE" \
+  "grep -q '	careless	NONE' <<< \"\$_wf_probe\""
+check "#210 and it reads the minutes of the job that has one" \
+  "grep -q '	fine	90' <<< \"\$_wf_probe\""
+# A timeout BELOW the deadline is its own failure, and a different one: the job is bounded, it is
+# just bounded so tightly that the platform kills the run before the suite can say where it died.
+cat > "$_WFX/short-timeout.yml" <<'WFSHORT'
+name: fixture
+on: [push]
+jobs:
+  tooshort:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: true
+WFSHORT
+_wf_probe2="$(_wf_jobs "$_WFX/short-timeout.yml")"
+check "#210 and a job whose timeout is below the deadline is read as a number, not as absent" \
+  "grep -q '	tooshort	1' <<< \"\$_wf_probe2\""
+# And the comparison itself fires on it, which is the half the two checks above cannot show.
+_wf_short_probe=""
+while IFS="$(printf '\t')" read -r _wf_f _wf_j _wf_t; do
+  [ -n "$_wf_j" ] || continue
+  [ "$_wf_t" = NONE ] && continue
+  [ "$_wf_t" -le "$(( ($(_wf_deadline_for "$_wf_f") + 59) / 60 ))" ] && _wf_short_probe="$_wf_short_probe $_wf_j"
+done <<WFSHORTP
+$(_wf_jobs "$_WFX/short-timeout.yml")
+WFSHORTP
+check "#210 and the deadline comparison would catch it" \
+  "[ -n \"\$_wf_short_probe\" ]"
+
+section "== the shards are dealt by measured section time, not by counting them (#203) =="
+# The selector grouped sections by `# needs:` and dealt whole groups round robin to the shard
+# carrying the FEWEST SECTIONS so far. Sections are not the same size. Measured 2026-08-29 from a
+# serial run of 463 seconds of section time, the slowest five were 52, 38, 27, 27 and 24 seconds
+# against a median under two, so counting them balanced nothing: at two shards the split was 185s
+# against 276s where a time balanced deal is 231 and 230, and at four it was 76, 165, 115 and 105
+# where balanced is 116 each.
+#
+# The runner one level up already had this: it keeps what each suite was last measured at and
+# launches longest first (#144). This is the same idea one level down, and it carries the same two
+# obligations. A section nobody has measured must not be invented a duration for, and the run has
+# to SAY which rule it used, because a run that fell back to counting reads exactly like one that
+# balanced by time (L11).
+ST_STORE="$WORK/section-timings"; mkdir -p "$ST_STORE"
+st_seconds(){   # st_seconds <coverage lines> -> the seconds= field of each, space separated
+  printf '%s\n' "$1" | grep '^SUITE-SHARD-COVERAGE ' \
+    | sed -n 's/.* seconds=\([0-9]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//'
+}
+st_spread(){   # st_spread <seconds, space separated> -> highest minus lowest, or nothing
+  printf '%s' "$1" | tr ' ' '\n' | sort -n | awk 'NR==1{lo=$1} {hi=$1} END{ if (NF || hi != "") print hi - lo }'
+}
+
+# An EMPTY store first. Nothing has been measured, so the deal falls back to counting and says so,
+# and that sentence is the control for every check below: without it a run that balanced by time
+# and a run that could not are told apart by nothing (L98).
+ST_EMPTY="$WORK/section-timings-empty"; mkdir -p "$ST_EMPTY"
+st_empty="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_EMPTY" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+check "#203 with nothing measured the deal falls back to counting, and says so" \
+  "case \"\$st_empty\" in *'dealt by section count'*) true ;; *) false ;; esac"
+check "#203 and it still divides every section between the shards" \
+  "printf '%s\n' \"\$st_empty\" | shard_coverage_verdict 4 >/dev/null"
+
+# Now a store the SUITE ITSELF wrote, not one this file made up. A real filtered run records what
+# its sections cost, and that is the record the selector reads: a fixture written here would prove
+# only that the reader agrees with this file's idea of the format (L48, L52).
+SECTION_UNTIL='apply is idempotent' SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_STORE" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
+st_recs="$(ls "$ST_STORE" 2>/dev/null | grep -c . | tr -d ' ')"
+check "#203 a run records what each of its sections cost (${st_recs:-0} record(s))" \
+  "[ \"\${st_recs:-0}\" -ge 5 ]"
+# Read the FIELD, not the whole file, so a second field added later cannot silently make every
+# record unreadable (L255). `awk NR==1` rather than `head -1`, which leaves on its first line and
+# can kill its own producer under pipefail (#132, L183).
+st_one="$(ls "$ST_STORE" 2>/dev/null | awk 'NR==1')"
+st_val="$(awk 'NR == 1 { print $1 }' "$ST_STORE/$st_one" 2>/dev/null)"
+check "#203 and what it records is a whole number of seconds (the record for '$st_one' reads '$st_val')" \
+  "case \"\$st_val\" in ''|*[!0-9]*) false ;; *) true ;; esac"
+# And it is keyed on the section's TITLE, so a section that moves in the file keeps its record.
+# Checked by NAME rather than by count, or a store keyed on position would satisfy the check above
+# and be wrong about every section the day one is inserted (L15).
+check "#203 and the record is keyed on the section's title, not its position" \
+  "[ -f \"\$ST_STORE/== push ==\" ]"
+
+# A run driven through the SLOW seam records nothing at all. SUITE_SLOW_IN pauses deliberately in
+# every section, so those durations measure the seam and not the section, and a store holding them
+# would deal every later run against a number nobody meant. That is #229 one level up, where a
+# suite exiting at once because it refused its own lock was recorded as costing nothing and then
+# led nothing, with the run reporting a measured order the whole time (L330).
+ST_SEAM="$WORK/section-timings-seam"; mkdir -p "$ST_SEAM"
+SECTION_UNTIL=push SUITE_SLOW_IN='==' SUITE_POLL_INTERVAL=0.1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_SEAM" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
+st_seam_n="$(ls "$ST_SEAM" 2>/dev/null | grep -c . | tr -d ' ')"
+check "#203 a run whose sections were slowed on purpose records nothing (${st_seam_n:-0} record(s))" \
+  "[ \"\${st_seam_n:-0}\" -eq 0 ]"
+# The control: the very same run WITHOUT the seam does record, or the check above is satisfied by a
+# run that records nothing under any circumstances (L159, L1).
+ST_CTRL="$WORK/section-timings-ctrl"; mkdir -p "$ST_CTRL"
+SECTION_UNTIL=push SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_CTRL" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
+st_ctrl_n="$(ls "$ST_CTRL" 2>/dev/null | grep -c . | tr -d ' ')"
+check "#203 and the same run without the seam does record (${st_ctrl_n:-0} record(s))" \
+  "[ \"\${st_ctrl_n:-0}\" -gt 0 ]"
+
+# With records present the deal says it used them, and every shard's line carries the seconds it
+# was dealt, so the balance can be READ rather than inferred (L63: a guard asserts the quantity it
+# exists to protect, which here is seconds and not sections).
+st_timed="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_STORE" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+check "#203 with records present the deal says it used them" \
+  "case \"\$st_timed\" in *'dealt by measured section time'*) true ;; *) false ;; esac"
+st_secs="$(st_seconds "$st_timed")"
+check "#203 and every shard's line carries the seconds it was dealt ($st_secs)" \
+  "[ \"\$(printf '%s' \"\$st_secs\" | wc -w | tr -d ' ')\" = 4 ]"
+check "#203 and it is still a partition of every section" \
+  "printf '%s\n' \"\$st_timed\" | shard_coverage_verdict 4 >/dev/null"
+
+# The balance itself, in SECONDS, which is the quantity the deal is for. This replaces the check
+# that compared how many SECTIONS each shard held: that number is now expected to differ between
+# shards, because balancing seconds means giving a shard fewer of the big ones, and holding it flat
+# would forbid the very thing #203 asks for (L63).
+#
+# The bound is a FRACTION of the total rather than a fixed number of seconds, so it means the same
+# thing on a fast machine and a slow one and does not need re-deriving when the suite grows (L224).
+# A quarter of the mean shard: the greedy deal's worst case is one item of unusual size arriving
+# last, and the heaviest section here is a large fraction of a shard, so anything tighter would be
+# a check on which sections happen to exist rather than on the deal.
+# At several shard counts, not one. The balance depends on how the biggest sections happen to fall
+# against the number of shards, so a count that happens to divide them evenly proves nothing about
+# the ones that do not (L147). These are the counts #151 already exercises.
+for st_n in 2 4 8; do
+  st_out="$(SUITE_SHARD="1/$st_n" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_STORE" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+  st_s="$(st_seconds "$st_out")"
+  st_total=0
+  for st_x in $st_s; do st_total=$(( st_total + st_x )); done
+  st_mean=$(( st_total / st_n ))
+  st_allow=$(( st_mean / 4 ))
+  [ "$st_allow" -ge 1 ] || st_allow=1
+  st_gap="$(st_spread "$st_s")"
+  check "#203 at $st_n shards the seconds are balanced (spread ${st_gap:-?}s of a ${st_mean}s mean, allowed ${st_allow}s)" \
+    "[ \"\${st_gap:-99999}\" -le \"\$st_allow\" ]"
+  # The bound is a FRACTION of the mean shard rather than a fixed number of seconds, so it means
+  # the same thing on a fast machine and a slow one and needs no re-deriving as the suite grows
+  # (L224). A quarter: greedy's worst case is one item of unusual size arriving last, and the
+  # largest section here is a real fraction of a shard, so anything tighter would be a check on
+  # which sections happen to exist rather than on the deal.
+  check "#203 and at $st_n shards a spread one second wider would be caught" \
+    "! [ \$(( st_allow + 1 )) -le \"\$st_allow\" ]"
+done
+
+# The store switched off entirely, which is what a run that must leave no trace needs, and what CI
+# has until its cache is warm.
+ST_OFF="$WORK/section-timings-off"; mkdir -p "$ST_OFF"
+st_off="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+check "#203 an empty SUITE_SECTION_TIMINGS turns the record off and says so" \
+  "case \"\$st_off\" in *'dealt by section count'*) true ;; *) false ;; esac"
+st_off_n="$(ls "$ST_OFF" 2>/dev/null | grep -c . | tr -d ' ')"
+check "#203 and with it off nothing is written anywhere" "[ \"\${st_off_n:-0}\" -eq 0 ]"
 
 section "== the runner says how much of the machine this suite may take (#136) =="
 # The runner starts several suites at once and this one splits itself into shards, and the two

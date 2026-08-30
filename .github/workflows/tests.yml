@@ -29,10 +29,28 @@ permissions:
 jobs:
   suite:
     runs-on: ubuntu-latest
-    # The suite kills itself at 900s, a deadline set there and not measured, and says which
-    # section it died in, which is a far more useful
-    # failure than a job the platform cuts off. This is the backstop for a hang that escapes that,
-    # set well above it so it never fires first.
+    # The BACKSTOP, and it must never be the thing that fires. The suite sets its own two
+    # deadlines and, when one of them fires, says which SECTION it died in, which is a far more
+    # useful failure than a job the platform cuts off with no explanation at all.
+    #
+    # That ordering was quietly false for a while and nothing checked it (claude-config#210). The
+    # comment here said the suite kills itself at 900s and that 20 minutes was set well above it.
+    # #152 then raised SUITE_TIMEOUT for good reasons of its own, and this sentence went stale in
+    # the direction that reads as safe: the job's backstop sat BELOW the suite's own ceiling, so on
+    # any real hang the platform would have won and the section name would never have been printed.
+    # A number in a comment goes stale silently (L210, L244). None of the figures here is measured;
+    # the check named below is what holds them in order now.
+    #
+    # So the suite's deadlines are set HERE, for this runner, rather than inherited from a Mac's
+    # defaults, and they are ordered with room between them. All three numbers are SET below and
+    # in the job, not measured: a stall is noticed at ten minutes, the absolute ceiling is fifteen,
+    # and the platform's backstop is twenty. The suite's whole run on this runner was measured at
+    # roughly 200 seconds on 2026-08-30, so the stall bound is about three times the entire run and
+    # many times the longest single section.
+    #
+    # A check in the suite now holds this ordering for every job in every workflow file, so a
+    # second workflow cannot arrive without a timeout and none of these three numbers can cross
+    # over without something saying so.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +60,26 @@ jobs:
           # to diff against. It would not fail loudly either, it would derive zero changed sections,
           # which reads exactly like a clean audit (#105). The repo is small and this is cheap.
           fetch-depth: 0
+
+      # What the last runs MEASURED, carried between them (claude-config#203, #144). Two stores
+      # live here: what each suite cost, which decides the order the runner launches them in, and
+      # what each SECTION of the sync suite cost, which decides how its shards are dealt.
+      #
+      # Without this the runner reported a measured launch order for none of the suites it ran, on
+      # every single run, so CI ordered by file size and dealt its shards by counting sections while
+      # both were measured on a Mac. The one machine whose timing actually matters to a person
+      # waiting was the one machine with no measurements at all.
+      #
+      # A key unique to this run with a prefix to restore from, which is the rolling form: every
+      # run saves what it measured and the next restores the most recent. A cold cache is not a
+      # failure and is not silent either, because both readers SAY which rule they used.
+      - name: Restore what earlier runs measured
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/claude-config
+          key: claude-config-timings-${{ github.run_id }}
+          restore-keys: |
+            claude-config-timings-
 
       - name: Record the environment the suite is judged in
         # Printed rather than assumed. Several checks shell out to pgrep, mktemp, rsync, jq and
@@ -55,6 +93,11 @@ jobs:
           perl --version | sed -n '2p'
           echo "pgrep: $(command -v pgrep || echo MISSING)"
           echo "TMPDIR: ${TMPDIR:-<unset, /tmp will be used>}"
+          # How many cores this runner actually has (claude-config#210). The HOOK_TESTS_BUDGET
+          # below is set to 4 on the stated grounds that this runner has two, and that is a claim
+          # about the machine that nothing measured. Printed, so the next person to reason about
+          # the budget reads the number rather than the sentence (L188).
+          echo "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"
 
       - name: A read-only run of the tool itself
         # The self-update gate decides whether a pulled claude-sync is safe to hand control to by
@@ -100,6 +143,11 @@ jobs:
         # theory (#52).
         env:
           SUITE_DEBUG: 1
+          # Below the job's own backstop, and in order, so the suite is always the thing that
+          # reports a hang and always gets to name the section (claude-config#210). Set here, not
+          # measured; a check in the suite holds the ordering.
+          SUITE_STALL_TIMEOUT: 600
+          SUITE_TIMEOUT: 900
           # This runner has two cores, and the budget in #136 is granted to the suites running at
           # once, so the default here is one process each and the sync suite stops sharding: its
           # fan-out, and #137's check that the shards covered every section between them, would
