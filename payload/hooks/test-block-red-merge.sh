@@ -335,9 +335,12 @@ if denied "$out"; then pass; else
   fail "a green rollup about a DIFFERENT repo was accepted as this pull request's verdict"
 fi
 # Distinct causes get distinct messages: this must not read like "gh said nothing" (L11).
-if printf '%s' "$out" | grep -q "someone/else"; then pass; else
-  fail "the refusal does not name the repo it was actually told about: $out"
-fi
+# `case`, not a pipeline into grep -q: a short circuiting consumer can kill the
+# producer and report a failure that never happened (L183).
+case "$out" in
+  *someone/else*) pass ;;
+  *) fail "the refusal does not name the repo it was actually told about: $out" ;;
+esac
 rm -rf "$dir"
 unset GH_CALL_LOG
 
