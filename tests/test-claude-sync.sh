@@ -416,6 +416,15 @@ if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTIO
       [ -n "$_nc_cur" ] || continue
       case " $_so_keep " in *" $_nc_cur "*) continue ;; esac
       _so_keep="$_so_keep $_nc_cur"
+      # Nothing declared, nothing to resolve, and skipped BEFORE the heredoc below rather than by
+      # letting it read an empty string (claude-config#204). Bash writes a heredoc to a temporary
+      # file every time it runs one, and this runs once per section in the closure: a shard of
+      # roughly a quarter of them, of which at most one declares anything, paid one per section.
+      # `_so_keep` is appended
+      # to on the line above, so the section is still kept, exactly as before. Measured 2026-08-30
+      # with the grouping loop's own skip: the two together took a coverage launch from 1.1 seconds
+      # to a quarter of one, with every shard of every count answering identically.
+      [ -n "${_so_needs[$_nc_cur]}" ] || continue
       while IFS= read -r _nc_nd; do
         _nc_nd="$(printf '%s' "$_nc_nd" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
         [ -n "$_nc_nd" ] || continue
@@ -545,10 +554,16 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   _sh_grp=(); _sh_size=(); _sh_load=(); _sh_of=()
   _sh_k=$(( _so_pend + 1 ))
   while [ "$_sh_k" -le "$_so_i" ]; do _sh_grp[$_sh_k]=$_sh_k; _sh_k=$(( _sh_k + 1 )); done
-  _sh_root(){   # _sh_root <section> -> the group it is in, named by its earliest member
+  # Answers in a VARIABLE rather than on stdout, because every caller here read it through `$(...)`
+  # and each of those forks a subshell (claude-config#204). Three loops over the sections plus one
+  # over the declarations called it several hundred times per launch, and a coverage launch was
+  # measured 2026-08-30 at 1.1 seconds of which 1.09 was this selection. Nothing about the answer
+  # changes: what moves is how it gets back.
+  _sh_root_out=""
+  _sh_root(){   # _sh_root <section> -> sets _sh_root_out to the group it is in, named by its earliest member
     local _r="$1"
     while [ "${_sh_grp[$_r]}" -ne "$_r" ]; do _r="${_sh_grp[$_r]}"; done
-    printf '%s' "$_r"
+    _sh_root_out="$_r"
   }
   # SUITE_SHARD_NO_GROUPING=1 deals the sections out one at a time, which is what this did before
   # #151. It exists so the borrowing can be WATCHED HAPPENING: with grouping in place no section is
@@ -557,6 +572,13 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   # while protecting nothing (L1, L159). Nothing sets it but that check.
   _sh_k=$(( _so_pend + 1 ))
   while [ "$_sh_k" -le "$_so_i" ] && [ -z "${SUITE_SHARD_NO_GROUPING:-}" ]; do
+    # Sections with NO declaration are skipped before the loop below rather than fed an empty
+    # string (claude-config#204). The heredoc that loop reads from is written to a temporary FILE,
+    # once per turn, and this ran once per section whether that section declared anything or not:
+    # measured 2026-08-30, 106 sections of which 4 carry a declaration, and the 102 empty ones were
+    # 986ms of the 1.1 seconds a coverage launch cost. Reading an empty heredoc produces no lines,
+    # so the loop body never ran for them and nothing about the answer changes.
+    if [ -z "${_so_needs[$_sh_k]}" ]; then _sh_k=$(( _sh_k + 1 )); continue; fi
     while IFS= read -r _sh_nd; do
       _sh_nd="$(printf '%s' "$_sh_nd" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
       [ -n "$_sh_nd" ] || continue
@@ -569,7 +591,7 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
       # nothing is ever borrowed to satisfy it.
       [ "$_so_idx" -gt "$_so_pend" ] || continue
       [ "$_so_idx" -lt "$_sh_k" ] || continue
-      _sh_a="$(_sh_root "$_sh_k")"; _sh_b="$(_sh_root "$_so_idx")"
+      _sh_root "$_sh_k"; _sh_a="$_sh_root_out"; _sh_root "$_so_idx"; _sh_b="$_sh_root_out"
       if [ "$_sh_a" -ne "$_sh_b" ]; then
         if [ "$_sh_a" -lt "$_sh_b" ]; then _sh_grp[$_sh_b]=$_sh_a; else _sh_grp[$_sh_a]=$_sh_b; fi
       fi
@@ -580,16 +602,29 @@ SHNEEDS
   done
   _sh_k=$(( _so_pend + 1 ))
   while [ "$_sh_k" -le "$_so_i" ]; do
-    _sh_r="$(_sh_root "$_sh_k")"
+    _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
     _sh_size[$_sh_r]=$(( ${_sh_size[$_sh_r]:-0} + 1 ))
     _sh_k=$(( _sh_k + 1 ))
   done
   _sh_k=1
   while [ "$_sh_k" -le "$_sh_n" ]; do _sh_load[$_sh_k]=0; _sh_k=$(( _sh_k + 1 )); done
-  _sh_targets=""
+  # The deal itself, which assigns EVERY group to a shard and only then keeps the ones belonging
+  # to this one. That is worth saying because it is what makes the all-shards mode below almost
+  # free: the expensive part is deciding the whole partition, and the partition is already decided
+  # here for every shard whether one of them is asked for or all of them are.
+  _sh_targets_for(){   # _sh_targets_for <shard number> -> its sections, space separated
+    local _sf_i="$1" _sf_k _sf_r _sf_out=""
+    _sf_k=$(( _so_pend + 1 ))
+    while [ "$_sf_k" -le "$_so_i" ]; do
+      _sh_root "$_sf_k"; _sf_r="$_sh_root_out"
+      if [ "${_sh_of[$_sf_r]}" -eq "$_sf_i" ]; then _sf_out="$_sf_out $_sf_k"; fi
+      _sf_k=$(( _sf_k + 1 ))
+    done
+    printf '%s' "$_sf_out"
+  }
   _sh_k=$(( _so_pend + 1 ))
   while [ "$_sh_k" -le "$_so_i" ]; do
-    _sh_r="$(_sh_root "$_sh_k")"
+    _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
     if [ -z "${_sh_of[$_sh_r]:-}" ]; then
       _sh_pick=1; _sh_j=2
       while [ "$_sh_j" -le "$_sh_n" ]; do
@@ -599,9 +634,9 @@ SHNEEDS
       _sh_of[$_sh_r]=$_sh_pick
       _sh_load[$_sh_pick]=$(( ${_sh_load[$_sh_pick]} + ${_sh_size[$_sh_r]} ))
     fi
-    if [ "${_sh_of[$_sh_r]}" -eq "$_sh_i" ]; then _sh_targets="$_sh_targets $_sh_k"; fi
     _sh_k=$(( _sh_k + 1 ))
   done
+  _sh_targets="$(_sh_targets_for "$_sh_i")"
   # A shard holding no sections at all must REFUSE, never report a clean run: a suite that checked
   # nothing and exits 0 is indistinguishable from one where everything passed (L98).
   case "$_sh_targets" in
@@ -620,20 +655,49 @@ SHNEEDS
   # Grouping above is what makes this empty, and an empty field is a measurement rather than a
   # promise: it comes from the same closure that decides what actually runs, so a grouping that
   # stopped working would say so here rather than quietly cost a section's worth of checks twice.
-  _needs_closure "$_sh_targets"
-  _sh_borrowed=""
-  for _sh_x in $_so_keep; do
-    case " $_sh_targets " in *" $_sh_x "*) ;; *) _sh_borrowed="$_sh_borrowed,$_sh_x" ;; esac
-  done
-  _sh_borrowed="${_sh_borrowed#,}"
-  printf 'SUITE-SHARD-COVERAGE shard=%s first=%s last=%s sections=%s borrowed=%s\n' \
-    "$_sh_i" "$(( _so_pend + 1 ))" "$_so_i" "$(printf '%s' "${_sh_targets# }" | tr ' ' ',')" \
-    "$_sh_borrowed"
+  # One shard's coverage line, from the deal above. Pulled out into a function so the all-shards
+  # mode below emits it through THIS code rather than through a second copy that would agree with
+  # itself (L52, L107).
+  _sh_coverage_line(){   # _sh_coverage_line <shard number> <its sections>
+    local _cl_i="$1" _cl_targets="$2" _cl_borrowed="" _cl_x
+    _needs_closure "$_cl_targets"
+    for _cl_x in $_so_keep; do
+      case " $_cl_targets " in *" $_cl_x "*) ;; *) _cl_borrowed="$_cl_borrowed,$_cl_x" ;; esac
+    done
+    printf 'SUITE-SHARD-COVERAGE shard=%s first=%s last=%s sections=%s borrowed=%s\n' \
+      "$_cl_i" "$(( _so_pend + 1 ))" "$_so_i" "$(printf '%s' "${_cl_targets# }" | tr ' ' ',')" \
+      "${_cl_borrowed#,}"
+  }
+  # EVERY shard's line, from this one launch (claude-config#204). The deal above decides the whole
+  # partition, so the second and the eighth shard's answers are already sitting in _sh_of by the
+  # time the first one is printed, and asking for them one process at a time paid for the same
+  # decision N times over. Measured 2026-08-30: a coverage launch costs 1.1 seconds, of which 1.09
+  # is this selection, and #151 was making 20 of them to ask about 2, 4, 6 and 8 shards.
+  #
+  # It runs the REAL selector, which is the whole point: a faster answer produced by a copy of this
+  # logic would agree with itself and with nothing else (L52). #151 checks that directly, by
+  # requiring the line this prints for a shard to be identical to the one a real single shard
+  # launch prints for it.
+  #
+  # _needs_closure writes _so_keep, so each shard's line is computed in its own call and read
+  # before the next overwrites it. That is why this is a loop of calls and not one pass.
+  if [ -n "${SUITE_SHARD_COVERAGE_ALL:-}" ]; then
+    _sh_j=1
+    while [ "$_sh_j" -le "$_sh_n" ]; do
+      _sh_coverage_line "$_sh_j" "$(_sh_targets_for "$_sh_j")"
+      _sh_j=$(( _sh_j + 1 ))
+    done
+    exit 0
+  fi
+  _sh_coverage_line "$_sh_i" "$_sh_targets"
   # SUITE_SHARD_COVERAGE_ONLY=1 stops here, having said what this shard would run and run none of
   # it. The line is emitted by the real selector and the suite's own check reads four real ones,
   # which costs four file reads instead of four minutes. Placed after the emission and before the
   # extractor, so what the seam skips is the RUNNING and never the deciding.
   if [ -n "${SUITE_SHARD_COVERAGE_ONLY:-}" ]; then exit 0; fi
+  # The closure the run itself needs, recomputed here because the line above consumed _so_keep for
+  # its own shard and the value that must survive into the run is this one.
+  _needs_closure "$_sh_targets"
   SECTION_ONLY=""
   _so_shard_mode=1
   _so_target="${_sh_targets##* }"
@@ -5959,7 +6023,21 @@ section "== a section is never run twice to satisfy a needs declaration (#151) =
 # BORROW: the sections it will run that it does not own. Deriving that here instead would be a
 # second implementation of the closure, sitting beside the one that decides what actually runs,
 # and it would agree with itself rather than with the run (L107).
+# ONE launch for all of a count's shards, not one launch per shard (claude-config#204). The
+# selector decides the whole partition in a single pass and only then keeps the sections belonging
+# to the shard that was asked for, so asking N times paid for the same decision N times: measured
+# 2026-08-30 a coverage launch costs 1.1 seconds and 1.09 of that IS the selection, and the four
+# counts below were 20 launches and 22 seconds of it.
+#
+# It is the REAL selector either way. The equivalence is not assumed, it is checked below.
 _bw_lines(){   # _bw_lines <shards> -> the real coverage lines for that many shards
+  SUITE_SHARD="1/$1" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 \
+    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1
+}
+# The one launch per shard form, kept for exactly one purpose: proving the form above answers the
+# same. A fast path that is a COPY of the selector's logic would agree with itself and with
+# nothing else, and the only way to tell the two apart is to run the slow path and compare (L52).
+_bw_lines_one_at_a_time(){   # _bw_lines_one_at_a_time <shards> -> the same, the expensive way
   local _bw_n="$1" _bw_k=1 _bw_all=""
   while [ "$_bw_k" -le "$_bw_n" ]; do
     _bw_all="$_bw_all$(SUITE_SHARD="$_bw_k/$_bw_n" SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
@@ -5969,6 +6047,9 @@ _bw_lines(){   # _bw_lines <shards> -> the real coverage lines for that many sha
   done
   printf '%s' "$_bw_all"
 }
+_bw_cov_only(){   # _bw_cov_only <text> -> just the coverage lines, in order
+  printf '%s\n' "$1" | grep '^SUITE-SHARD-COVERAGE ' || true
+}
 _bw_borrowed(){   # _bw_borrowed <coverage lines> -> every borrowed section, space separated
   printf '%s\n' "$1" | grep '^SUITE-SHARD-COVERAGE ' \
     | sed -n 's/.* borrowed=\([^ ]*\).*/\1/p' | tr ',' ' ' | tr '\n' ' ' \
@@ -5977,6 +6058,23 @@ _bw_borrowed(){   # _bw_borrowed <coverage lines> -> every borrowed section, spa
 # The shard counts the repeat was measured at. Every one of them, not a sample: the borrowing
 # depends on where the round robin happened to put two particular sections, so a count that
 # happens not to separate them proves nothing about the ones that do (L147).
+# The equivalence, at one count, against every shard launched on its own. One count and not four:
+# what is in doubt is whether the two paths are the same CODE, which a single disagreement would
+# settle and four would not settle any better, and the slow path is the thing being paid for here.
+# Four shards, because that is the default a Mac actually runs.
+_bw_fast4="$(_bw_cov_only "$(_bw_lines 4)")"
+_bw_slow4="$(_bw_cov_only "$(_bw_lines_one_at_a_time 4)")"
+# Counted into plain variables first, so the expressions handed to `check` stay simple enough to
+# read. Both halves matter: that the two paths agree, and that they agreed about four real lines
+# rather than about two empty strings (L98).
+_bw_fast_n="$(printf '%s\n' "$_bw_fast4" | grep -c 'SUITE-SHARD-COVERAGE' | tr -d ' ')"
+_bw_slow_n="$(printf '%s\n' "$_bw_slow4" | grep -c 'SUITE-SHARD-COVERAGE' | tr -d ' ')"
+if [ "$_bw_fast4" = "$_bw_slow4" ]; then _bw_same=1; else _bw_same=0; fi
+check "#204 one launch answers for every shard exactly as launching each one does" \
+  "[ '$_bw_same' -eq 1 ]"
+check "#204 and that comparison read four real coverage lines from each ($_bw_fast_n and $_bw_slow_n)" \
+  "[ '$_bw_fast_n' = '4' ] && [ '$_bw_slow_n' = '4' ]"
+
 for _bw_n in 2 4 6 8; do
   _bw_out="$(_bw_lines "$_bw_n")"
   check "#151 the real selector's $_bw_n shards each print what they would borrow" \
@@ -6038,13 +6136,10 @@ fi
 # ever would print, so the two are told apart by dealing the sections out the way this did before
 # #151 and watching a section be borrowed (L1, L159). It is the measured defect reproduced: at four
 # shards, one section pulled into a shard that does not own it.
-_bw_old="$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
-  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
-$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD=2/4 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
-  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
-$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD=3/4 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
-  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
-$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD=4/4 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
+# One launch for all four, exactly as the grouped form above (claude-config#204). This was four
+# processes spelt out one after another, each paying the whole selection over again to be told
+# about one shard of a partition it had already worked out in full.
+_bw_old="$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 \
   SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
 check "#151 dealt out the old way, a section really is borrowed by a shard that does not own it" \
   "[ -n \"\$(_bw_borrowed \"\$_bw_old\")\" ]"
