@@ -7390,6 +7390,139 @@ CLAUDE_HOME="$RVHB" SYNC_REPO="$RVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev
 check "#183 a copy past its age is swept"      "[ ! -f '$_rv_old' ]"
 check "#183 and a recent one is left alone"    "[ -f '$_rv_new' ]"
 
+section "== every wait polls on one shared interval, and no deadline counts polls (#205) =="
+# Three loops in claude-sync waited for something to end: the hook suite runner it had just
+# started, and the sync lock, twice. Each had its own sleep, one of two seconds and two of one, and
+# nothing recorded why they differed. In production the granularity is invisible beside a suite
+# that runs for minutes. In THIS suite it was the whole cost: fifteen real pulls run against a stub
+# runner that returns in milliseconds, each sitting in a two second sleep waiting for a process
+# that had already gone. 59 seconds of section time, measured 2026-08-30, spent on nothing.
+#
+# So there is one setting, and the deadlines are measured against the CLOCK rather than by adding
+# up the sleeps (L226). That distinction is the whole risk in this change: the lock's ceiling used
+# to be counted in turns of its loop, so shortening the poll by twenty would have divided a 90
+# second wait by twenty with nothing anywhere saying so.
+PIH="$WORK/poll-home"; mkdir -p "$PIH/hooks"
+echo '{"hooks":{}}' > "$PIH/settings.json"
+PIR="$WORK/poll-repo"; mkdir -p "$PIR/payload/hooks"
+# The suite only runs when a HOOK actually arrived, so every timed pull below has to land one.
+# `pi_arrive` changes a hook in the repo, which is what puts a hooks/ line in the applied log and
+# is the whole trigger. A pull that applied nothing would skip the wait entirely and every timing
+# here would be measuring a code path that never ran (L101).
+pi_arrive(){ printf '# marker %s\n' "$1" > "$PIR/payload/hooks/pi-marker.sh"; }
+# The runner is installed BY the pull, like a real one, rather than placed in the home directory
+# where the pull would treat it as a local file it has to remove. It returns AT ONCE: what is
+# being measured is how long the caller takes to notice, so the work itself must cost nothing
+# (L146).
+pi_runner(){ # pi_runner <the body of the stub runner>
+  { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$1"; } > "$PIR/payload/hooks/run-all-tests.sh"
+  chmod +x "$PIR/payload/hooks/run-all-tests.sh"
+}
+# It takes 50 milliseconds, not zero. A runner that has ALREADY exited by the time the caller
+# first looks never reaches the sleep at all, so a zero cost stub measures the poll interval as
+# nought whatever it is set to, and both a two second poll and a tenth of a second one pass (L165:
+# a fixture that finishes before the case under test can occur).
+pi_runner 'sleep 0.05
+echo "ALL 1 SUITES PASSED"
+exit 0'
+# Milliseconds, because the whole claim is about a tenth of a second and `date +%s` cannot see it.
+# perl rather than a newer date: BSD date has no %N, and CI already prints perl's version in the
+# step that records what the suite is judged in.
+pi_ms(){ perl -MTime::HiRes -e 'printf "%.0f", Time::HiRes::time()*1000'; }
+
+# Timed with the same clock at both ends, and compared against a duration measured in this same
+# run rather than against a constant, because a constant measures what else the machine is doing
+# (L224). The reference is the SAME pull with the poll deliberately set long: everything except
+# the interval is identical, so the difference between them is the interval and nothing else.
+pi_run(){   # pi_run <poll interval> <marker> -> milliseconds that pull took
+  local _pi_t0 _pi_t1
+  pi_arrive "$2"
+  _pi_t0="$(pi_ms)"
+  CLAUDE_HOME="$PIH" SYNC_REPO="$PIR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+    SYNC_POLL_INTERVAL="$1" bash "$SCRIPT" pull > "$WORK/poll-out.txt" 2>&1
+  _pi_t1="$(pi_ms)"
+  printf '%s' "$(( _pi_t1 - _pi_t0 ))"
+}
+# The control that makes every number below mean anything: the timed pulls must actually REACH the
+# wait. A pull that applied no hook skips it, costs nothing either way, and would satisfy a
+# comparison of two identical zeroes (L98, L159).
+pi_slow="$(pi_run 4 one)"
+pi_reached="$(cat "$WORK/poll-out.txt" 2>/dev/null)"
+check "#205 the timed pulls really do run the hook suite" \
+  "line_has \"\$pi_reached\" 'Pulled shared config' 'hook suite passed here'"
+pi_fast="$(pi_run 0.1 two)"
+dbg "#205 pull with a 4s poll took ${pi_slow}ms, with the default 0.1s poll took ${pi_fast}ms"
+# The setting is HONOURED, which is the only thing that makes the default meaningful. A four
+# second poll against a runner that ends after the 50ms the stub above SETS (not measured: the
+# fixture sleeps exactly that long) must cost at least two seconds more than a tenth of a second
+# poll. Anything less means the sleep is not where the time goes and this whole section is
+# measuring something else (L1, L159).
+check "#205 the poll interval is honoured (4s poll took ${pi_slow}ms, 0.1s poll took ${pi_fast}ms)" \
+  "[ \"\$(( pi_slow - pi_fast ))\" -ge 2000 ]"
+# And the difference the issue was opened about, said as the number it promised: a runner that
+# finishes in 50 milliseconds is noticed within a fifth of a second of doing so. Bounded against
+# the SLOW run's own overhead rather than against a bare 200, because a pull does real work either
+# way and only the wait is under test here (L146, L224).
+pi_overhead=$(( pi_slow - 4000 ))
+[ "$pi_overhead" -ge 0 ] || pi_overhead=0
+check "#205 and a runner finishing in 50ms is noticed within 200ms of it (${pi_fast}ms, of which ${pi_overhead}ms is the pull itself)" \
+  "[ \"\$(( pi_fast - pi_overhead ))\" -le 200 ]"
+
+# The deadline is against the CLOCK. A runner that never ends, and a ceiling of three seconds: if
+# the deadline counted polls it would fire after three TENTHS of a second at the default interval,
+# so a run that survives past one second proves the ceiling is time and not turns (L226, L1).
+pi_runner 'while :; do sleep 3600 & wait "$!" || true; done'
+pi_arrive three
+pi_h0="$(date +%s)"
+out_pih="$(CLAUDE_HOME="$PIH" SYNC_REPO="$PIR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+  SYNC_POLL_INTERVAL=0.1 SYNC_HOOK_TESTS_TIMEOUT=3 bash "$SCRIPT" pull 2>&1)"
+pi_held=$(( $(date +%s) - pi_h0 ))
+dbg "#205 a runner that never ends, with a 3s ceiling and a 0.1s poll, was stopped after ${pi_held}s"
+# There WAS no test anywhere that this deadline fires. It is the error path of a wait that holds
+# nothing and reports an unverified config, and an error path with no test is the half that ships
+# broken (L1).
+check "#205 a runner that never ends is stopped at its deadline" \
+  "line_has \"\$out_pih\" 'could NOT be completed here' 'still running after 3s'"
+check "#205 and the deadline is seconds, not polls (it survived ${pi_held}s of a 3s ceiling)" \
+  "[ '$pi_held' -ge 2 ]"
+check "#205 and it did not outlast the ceiling by more than the poll (${pi_held}s against 3s)" \
+  "[ '$pi_held' -le 8 ]"
+
+# The lock's ceiling is seconds too, and it is the one that was counting turns. A lock held by a
+# live process on this machine is waited for, so a two second ceiling with a tenth of a second
+# poll must take about two seconds rather than about a fifth of one.
+PILOCK="$WORK/poll-lock"; rm -rf "$PILOCK"; mkdir -p "$PILOCK"
+sleep 120 & PI_LIVE=$!
+printf '%s\n' "$PI_LIVE" > "$PILOCK/pid"
+printf '%s\n' "$(hostname)" > "$PILOCK/host"
+pi_l0="$(date +%s)"
+CLAUDE_HOME="$PIH" SYNC_REPO="$PIR" SYNC_LOCK="$PILOCK" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+  SYNC_POLL_INTERVAL=0.1 SYNC_LOCK_WAIT=2 bash "$SCRIPT" sync >/dev/null 2>&1
+pi_lwait=$(( $(date +%s) - pi_l0 ))
+kill "$PI_LIVE" 2>/dev/null || true
+wait "$PI_LIVE" 2>/dev/null || true
+rm -rf "$PILOCK"
+dbg "#205 a contended lock with a 2s ceiling and a 0.1s poll waited ${pi_lwait}s"
+check "#205 the lock's wait is seconds, not turns of its loop (waited ${pi_lwait}s of a 2s ceiling)" \
+  "[ '$pi_lwait' -ge 2 ]"
+check "#205 and it gives up at that ceiling rather than waiting on (${pi_lwait}s against 2s)" \
+  "[ '$pi_lwait' -le 8 ]"
+
+# An unreadable interval is SAID, never silently swapped for the default: a setting that is
+# ignored in silence reads exactly like one that is in force (L320, L11).
+out_pib="$(CLAUDE_HOME="$PIH" SYNC_REPO="$PIR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+  SYNC_POLL_INTERVAL=every-so-often SYNC_HOOK_TESTS_TIMEOUT=3 bash "$SCRIPT" status 2>&1)"
+check "#205 an interval that is not a number is named, and the default said" \
+  "line_has \"\$out_pib\" \"SYNC_POLL_INTERVAL='every-so-often'\" 'default of 0.1'"
+# The control: a well formed interval says nothing at all, or the check above is satisfied by a
+# tool that complains about every value it is given (L159). Matched with `case` on a variable
+# rather than a piped `grep -q`, which leaves on its first match and can be killed by its own
+# producer under pipefail (#132, L183).
+out_pig="$(CLAUDE_HOME="$PIH" SYNC_REPO="$PIR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+  SYNC_POLL_INTERVAL=0.5 bash "$SCRIPT" status 2>&1)"
+case "$out_pig" in *SYNC_POLL_INTERVAL*) pi_quiet=0 ;; *) pi_quiet=1 ;; esac
+check "#205 and a well formed interval is not complained about" "[ '$pi_quiet' -eq 1 ]"
+
 section "== a pull runs the hook suite it just installed (#178) =="
 # `claude-sync pull` printed its received-changes summary and ended with "Pulled shared config onto
 # this Mac" without executing anything it had just installed. The 2026-08-22 pull landed a hook
