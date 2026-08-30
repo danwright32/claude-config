@@ -242,6 +242,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   running once per run for months. The issue's own proposed remedy, scoping `TMPDIR` on source, would
   have shipped a no-op for the same reason)
 
+- **L323. A duration compared against its own history measures the SYSTEM only while the
+  workload is constant, so a job whose cost varies with its input must be divided by a measure of
+  that input before any trend is read from it.** Otherwise a quiet week is indistinguishable from a
+  real improvement and a busy one from a regression, and the reading is delivered with exactly the
+  same confidence either way, so it is believed. This is distinct from the runner measuring itself
+  (L294) and from comparing against a fixed number (L224): here the machine and the code are both
+  steady, and it is the WORK ARRIVING that moved.
+  (postroll#1041, measured 2026-08-30. A duration series comparing each CI job's recent half against
+  its older half reported the per-PR guard job as having gone from 227s to 50s, a 78% improvement,
+  and that was used to argue an open sharding issue was obsolete. That job proves only the registry
+  entries a diff touches. Reading all 21 successful runs instead gave median 181s, p90 501s against
+  the 154s and 450s recorded in the issue: it had got slightly SLOWER, and the recent window merely
+  held small pull requests. The tool had shipped less than an hour earlier and was built to judge two
+  other performance issues, either of which it would have mis-attributed the same way)
+
 - **L3. Built is not wired, and wired is not proven.** Prove every guard, integration,
   and gate actually executes in the shipping runtime, and wire the CI gate the day the
   first test lands. (45 issues, 8 repos)
