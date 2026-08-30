@@ -228,6 +228,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   @State private var presetStore = PostingPresetStore(), and that screen is itself inside the
   test bundle, so the refusal would break the build for a legitimate caller)
 
+- **L322. Isolation set through an ENVIRONMENT VARIABLE is only real if the tool being isolated
+  actually honours it, so measure where the writes LAND rather than trusting the variable.** A tool
+  that ignores it sends the work somewhere else entirely, and any guard inspecting the isolated
+  location then reports clean while seeing none of its subjects, which is worse than no guard because
+  everyone believes it. The guard's own test is no help: it is usually written with a subject shaped
+  so the rule fires (L48), which is exactly the shape that honours the variable.
+  (overture#3249, measured 2026-08-30. macOS `mktemp` ignores `TMPDIR` unless the path is spelled out:
+  `TMPDIR=$H mktemp -d` and even `TMPDIR=$H mktemp -d -t probe` land in the real shared folder, only
+  `mktemp -d "$TMPDIR/tpl.XXXXXX"` lands in $H. The fixture runner scoped `TMPDIR` per fixture and then
+  inspected that directory for leftovers, so the 56 of 81 fixtures using the bare form were invisible
+  to it, on every path. Giving the check its sight back exposed three real leaks that had each been
+  running once per run for months. The issue's own proposed remedy, scoping `TMPDIR` on source, would
+  have shipped a no-op for the same reason)
+
 - **L3. Built is not wired, and wired is not proven.** Prove every guard, integration,
   and gate actually executes in the shipping runtime, and wire the CI gate the day the
   first test lands. (45 issues, 8 repos)
