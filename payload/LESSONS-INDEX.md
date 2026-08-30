@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 352 lessons.
+LESSONS.md, which is NOT loaded into the session. 360 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -64,6 +64,7 @@ to decide something: the body is where the failure it came from is described.
 - L223. A check that finds records made BEFORE a change by reading a marker those records carry can never see anything written before the marker itself shipped, which is exactly the population it exists to find, so cover the unmarked backlog with evidence the store already holds (a file date, a created time) rather than letting a missing marker read as up to date.
 - L101. A code path that switches behaviour on the SIZE of its input will always take the small branch under test, because a fixture is minimal by construction, so the mode that actually ships is the one never exercised and the suite is green the whole time.
 - L102. A cost or latency measured while the expensive path is switched off measures the short circuit, not the work, so the number reads as reassurance for exactly the case nobody has tested.
+- L331. A measurement written into a store that later DECIDES something (a launch order, a shard balance, a retry budget) must record whether the run it came from actually did the work, because a run that refused, was locked out or died early reports a real and very small number, and nothing downstream can tell that from a genuinely fast one.
 - L289. A fast path that falls back to doing the work when it cannot read its own record (a cache, a memo, a skip if unchanged gate) fails SILENTLY, because the fallback is correct and merely slower, so every test stays green while the saving quietly stops happening.
 - L104. A filter that identifies data by its SHAPE (a redaction regex, a content classifier, a profanity or spam rule) must be tested against the content it has to PRESERVE, not only against the content it has to catch, because the shape it matches is rarely unique to its target and an over match reads exactly like the feature working.
 - L107. A number measured to justify a design decision must be produced by the code's own predicate, never by a query written beside it, because an ad-hoc reimplementation is a second definition that drifts silently and in the direction that flatters the argument being made.
@@ -99,6 +100,7 @@ to decide something: the body is where the failure it came from is described.
 - L278. A check that decides whether content was LOST by comparing whole LINES is defeated by reformatting, because re-wrapping a paragraph changes every line boundary while losing no words, so compare in the unit the meaning lives in (words, or a whitespace collapsed body) rather than the unit the file happens to be stored in.
 - L288. A test run is judged first by the count it EXECUTED against the count expected, and only then by its failures, because a run that loses a worker's share or matches half a selection still prints a verdict, and a check for zero catches none of it. Record the expected count, refuse a run below it, and do that BEFORE any change to how the suite runs (parallel workers, sharding, a new scheme or reporter), which is the moment the half run appears.
 - L320. A tool that takes a target as an argument must REFUSE one it cannot use, never fall back to its default scope, because a silently ignored target makes a run about everything look exactly like a run about the one thing that was asked for.
+- L329. A tool that scans a file for matching lines stops printing them and reports only that the file MATCHED once that file contains a byte it treats as binary
 
 ## Data safety
 
@@ -210,6 +212,9 @@ to decide something: the body is where the failure it came from is described.
 - L326. A chain of fallback matchers gives no redundancy when every arm reads a field from the SAME upstream payload
 - L261. Several behaviours a design treats as ONE condition (this run is not real, this tenant is internal, this build is disposable) must all read ONE predicate
 - L327. When a record's identifier is minted from whichever route it happens to carry (an email, else a prefixed URL, else a generated handle), any sort that breaks ties on that identifier orders by which KIND of route the record has
+- L332. A repair or cleanup pass wired to STARTUP is blind to everything the running system writes after it, so the state a person actually works in is the un repaired one.
+- L334. A deduplication that breaks a tie by AGE systematically keeps the copy holding the STALEST picture of the outside world, because being stored longest is exactly what gave it time to go stale.
+- L335. A deduplication that deletes the copy whose identity the UPSTREAM SOURCE publishes gets that duplicate back on the very next sync, so the merge repeats forever and destroys the fresher row every time.
 
 ## Security and privacy
 
@@ -267,6 +272,7 @@ to decide something: the body is where the failure it came from is described.
 - L526. A store that collects items for a PERSON to act on is only as useful as the rate they can be taken out of it, so size the drain against the rate it fills.
 - L279. A record's usefulness that depends on a COMBINATION of individually optional inputs is stated nowhere, because each field reads as independently optional at the point of entry, so name the requirement on the form itself and give the partly filled state its own label saying what is still missing.
 - L287. A notice computed over a WIDER scope than the screen it is placed on inherits that screen's scope from its position, so a sentence that is accurate about the whole collection reads as a false claim about the one record on view. State the scope inside the message rather than trusting the reader to know where its numbers came from.
+- L330. An acknowledgement a person gives must be consulted by EVERY rule that raises the question it answers, not only the one whose control recorded it, because a second rule computing that question from raw state goes on asking after it has been answered, and no action is then left that could ever satisfy it.
 
 ## External systems
 
@@ -299,6 +305,8 @@ to decide something: the body is where the failure it came from is described.
 - L28. Treat a detached AI run as an untrusted subprocess.
 - L128. A field whose only writer is an AI prompt, and whose ABSENCE is itself a legitimate value in the domain, cannot tell a model that IGNORED the instruction from one that judged the field inapplicable, so the feature stays dormant forever while every reader reports its honest default.
 - L161. When an AI writes a fact the system ALREADY HOLDS the true value for (a date, a venue, a price, a name), check what it wrote AGAINST that value rather than merely checking that something is there, because a presence check passes a contradicted fact, and a wrong fact reaching a stranger is worse than an omitted one, which at least reads as missing.
+- L328. A reader that can INDEPENDENTLY source what the payload failed to send produces a correct looking result for a reason the sender never supplied, so its success is no evidence the payload is complete, and the omission surfaces only on the inputs where that independent sourcing fails.
+- L333. Agents dispatched on ONE brief each reach the same finding, so any outward action they can take alone (filing an issue, commenting, pushing) is multiplied by the batch size and the finding arrives as N records of one defect.
 - L167. An AI writer that can READ the code consuming its output derives its contract from that code's permissiveness, so an optional field is not neutral, it is permission: any combination the schema tolerates will eventually be emitted and defended as valid.
 - L249. A decision ATTRIBUTED to somebody inside your own artifact (a PR body, a plan, an issue comment) must be quoted from the record that holds it and carry that record's own date, because a paraphrase with a date on it reads as authority and is the one claim a reviewer will not go and check, so a decision nobody made can ship with tests written to defend it.
 

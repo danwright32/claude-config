@@ -564,6 +564,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   (slate#1365: an on demand availability search timed at 2.9s against a deliberately dark
   roster, where every pass returned before touching a single calendar)
 
+- **L331. A measurement written into a store that later DECIDES something (a launch order, a
+  shard balance, a retry budget) must record whether the run it came from actually did the
+  work, because a run that refused, was locked out or died early reports a real and very small
+  number, and nothing downstream can tell that from a genuinely fast one.** The store holds
+  only the number, so one moment of overlap governs every run afterwards, and the line saying
+  how the order was decided counts the poisoned record as a measurement like any other.
+  (claude-config#229: the suite timing store held 0 for tests/test-claude-sync.sh, measured at
+  231 seconds in the same session and the slowest of 44 by a factor of four, because that suite
+  exits at once when it refuses its own lock. The launch order put it 41st of 44, so the slowest
+  suite ran last on the smallest share of the budget while the runner reported "launch order
+  from measured wall clock for 44 of 44 suite(s)")
+
 - **L289. A fast path that falls back to doing the work when it cannot read its own record
   (a cache, a memo, a skip if unchanged gate) fails SILENTLY, because the fallback is
   correct and merely slower, so every test stays green while the saving quietly stops
@@ -993,6 +1005,24 @@ window is a count rather than a boundary.
   so a run asked for one fixture ran all 81 and reported on them; earlier, Overture#2993, `mutate.sh`
   passed a misplaced `--at` through as a test scope, xcodebuild rejected it as an unknown option and
   ran the PURE suite instead, so a targeted proof became a full-suite run with the aim check off)
+
+- **L329. A tool that scans a file for matching lines stops printing them and reports only that
+  the file MATCHED once that file contains a byte it treats as binary**, and build and test logs
+  routinely carry such bytes, so any list built by parsing that output comes back EMPTY while the
+  scan itself still reports success, and the empty list then reads as a genuine negative answer.
+  (overture#3288: `mutation_scope_reached_file` reads which test suites executed by grepping a
+  `run-tests-locked.sh` log with `grep -oE 'Suite "[^"]+" (started|passed|failed)'`. xcodebuild
+  writes NUL bytes into that log, measured at 88 in a 119KB log from one scoped run, so grep
+  printed `Binary file ... matches` instead of the suite lines, the executed-suite list was
+  empty, every membership test failed, and mutate.sh refused a scope that had in fact run the
+  right suite. The verdict it owed was SURVIVED, a real finding about the code, and what it
+  printed was SCOPE MISSED THE FILE, which reads as the operator having typed the command wrong,
+  so the response it invites is to re-run rather than to read the finding. Believed and reported
+  onward as fact, caught only by opening the log by hand. Reads that consume only an EXIT STATUS
+  are unaffected, which is why the same script's `grep -q` calls were fine and only the `-o` ones
+  lied. L184 says judge a command by its exit code rather than a line of its output and is the
+  opposite case, since here the output IS the answer being sought; the remedy is to read such a
+  file as text explicitly, `grep -a`)
 
 ## Data safety
 
@@ -2066,6 +2096,43 @@ window is a count rather than a boundary.
   identifier and L170 about a criterion that never fires; this is a criterion that fires and
   ranks by an attribute nobody meant to rank by)
 
+- **L332. A repair or cleanup pass wired to STARTUP is blind to everything the running system
+  writes after it, so the state a person actually works in is the un repaired one.** Schedule it
+  on the event that CREATES the mess (an import finishing, a sync, a background run) rather than
+  on the process starting, and remember that every sibling pass in the same startup block carries
+  the identical blind spot. L175 is the read side twin, a value read once at startup going stale;
+  this is the write side, where the pass runs correctly and simply never sees the newest rows.
+  (overture#3316: `SameNightTitleVariantMerge` collapses one show billed two ways on one night and
+  has exactly one caller, `LaunchMigrations`. Measured on the live store 2026-08-30: the launch ran
+  at 13:03:58, the scout wrote a second card for the same Sep 8 show at 13:07:36, and 16 of the 19
+  duplicate clusters in the store were minted after that launch. The matching rule already called
+  every one of them one show; nothing had run it since they arrived, so Dan met 16 shows twice in
+  the queue he triages and asked why)
+
+- **L334. A deduplication that breaks a tie by AGE systematically keeps the copy holding the
+  STALEST picture of the outside world, because being stored longest is exactly what gave it time
+  to go stale.** Rank survivors by what each copy still asserts about that world (is it still
+  listed, still valid, still reachable, still scoring what it scored) and let age decide only when
+  nothing else separates them. The ladder reads as careful precisely because every rung above the
+  tie break is about something real, so nobody re-examines the rung that actually fires.
+  (overture#3328: `SameNightTitleVariantMerge` prefers an outreach record, then the richest contact
+  list, then a probed row, then `candidates[0]` of a cluster sorted by `ingestedAt` ascending.
+  Measured across a real launch 2026-08-30, 15 groups collapsed and 7 kept the worse copy; in 4 the
+  survivor was a show the feed had stopped listing 2, 14, 22 and 48 sweeps earlier while the copy
+  currently on sale was deleted, so Dan's card now reads "may be cancelled" and scores 0 for a show
+  still selling tickets)
+
+- **L335. A deduplication that deletes the copy whose identity the UPSTREAM SOURCE publishes gets
+  that duplicate back on the very next sync, so the merge repeats forever and destroys the fresher
+  row every time.** The survivor must adopt the live copy's key, link or external id before the
+  loser is deleted, or the collapse is undone by the next import and nothing anywhere reports a
+  loop. Distinct from L186, which is about a suppression record keyed too weakly: here the merge
+  succeeds completely and is simply reversed from outside.
+  (overture#3328: the surviving row kept its own `naturalKey` and `sourceListingURL`, pointing at
+  the venue's own page under a long title, while the row deleted was the ticketing feed's listing
+  under a short one. The next scout misses all three re-key arms, inserts again, and the following
+  launch merges it back into the stale row, once a day until the show passes)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -2546,6 +2613,21 @@ window is a count rather than a boundary.
   counted across the whole library and none of the three appear anywhere in the event on screen,
   so it was read as a claim about photographs that do not exist)
 
+- **L330. An acknowledgement a person gives must be consulted by EVERY rule that raises the
+  question it answers, not only the one whose control recorded it, because a second rule
+  computing that question from raw state goes on asking after it has been answered, and no
+  action is then left that could ever satisfy it.** L269 is the neighbouring failure, a finding
+  with no way to say it was dealt with; this is worse, because the way to say it EXISTS, the
+  person used it, and the answer was written durably to a field the second rule never reads. The
+  tell is a surface that shows a settled state and an open question about the same fact side by
+  side. (overture#3307, 2026-08-30: Dan pressed "This page is right" on two watched calendars
+  that are correct pages with no listings yet. The confirmation is live and still anchored to the
+  bytes on the page, and it silences the failure. A separate never-read rule asks only whether a
+  run has ever ingested shows, which a confirmed empty read deliberately never records, so both
+  rows went on being counted as work he owed. Reading it again cannot help, since every read of
+  such a page is another confirmed empty read, and the control that recorded his answer is not
+  drawn on the row any more, so there was nothing left to press)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
@@ -2810,6 +2892,32 @@ window is a count rather than a boundary.
   asked only whether a date appeared anywhere in the subject or body, which that draft passes. Found
   by measuring the live store rather than by reading the code: 6 of 19 drafts named no date at all and
   2 named a wrong one)
+
+- **L328. A reader that can INDEPENDENTLY source what the payload failed to send produces a correct
+  looking result for a reason the sender never supplied, so its success is no evidence the payload is
+  complete, and the omission surfaces only on the inputs where that independent sourcing fails.**
+  Check what the payload CARRIES against what the reader NEEDS, never by reading its output. The
+  mirror of L194, which is about a reader that FAILS to rediscover what it was not sent and misreports
+  the fact as absent: that failure is loud and costly, where this one is silent and looks like the
+  system working, so it survives far longer.
+  (overture#3285: the prep handoff sends a run's first and last date only and the runbook tells the
+  drafter to write a span, but the drafter fetched the venue's own listing page and named both exact
+  nights, so a pitch that looked perfect was correct only because the model went and got what Overture
+  never sent. Measured on the live store the same day: the long tail is 23 nights on one run and 18 on
+  another, where a span names weeks nobody chose)
+
+- **L333. Agents dispatched on ONE brief each reach the same finding, so any outward action they can
+  take alone (filing an issue, commenting, pushing) is multiplied by the batch size and the finding
+  arrives as N records of one defect.** Route what a batch discovers through something that
+  deduplicates before it acts, and say so in the brief, because each agent is individually correct and
+  cannot see the others. The subagent spool (`~/.claude/hooks/lib/issue-spool.sh`) exists for exactly
+  this and is the thing to point a batch at. Distinct from L28, which treats a detached run as an
+  untrusted subprocess: here every agent behaved well and the duplication came from the fan out itself.
+  (overture, 2026-08-30: a /plan-council run of 23 agents filed its own GitHub issues while running,
+  and four of them, #3300 #3301 #3306 #3320, independently reported that the self-booking check reads
+  only a run's opening night. A fifth was then filed by the parent session on top, and one agent was
+  still filing at the same minute the parent filed its phase issues. #3296 duplicated #3312 the same
+  way. The brief never told them not to file, and nothing deduplicated)
 
 - **L167. An AI writer that can READ the code consuming its output derives its contract from that
   code's permissiveness, so an optional field is not neutral, it is permission: any combination the
