@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 375 lessons.
+LESSONS.md, which is NOT loaded into the session. 376 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -182,6 +182,7 @@ to decide something: the body is where the failure it came from is described.
 - L337. Making a reader that silently returned a benign default THROW instead re-audits every caller, because the same refusal that is right behind an error screen leaves a caller driving a control with a pending state it never clears.
 - L344. A counter that ACCUSES once it passes a threshold (N consecutive misses means cancelled, N failures means dead) has no upper bound, so an input that merely stopped MATCHING goes on incrementing and the verdict reads as more certain the more broken the match is.
 - L530. A surface whose content is derived by JOINING two or more reads must gate its could-not-measure state on EVERY one of them.
+- L531. A validator placed on the path an input is ASSUMED to arrive by is absent on every other path that can produce the same input, and its message inherits the same assumption, so it names an origin it never measured.
 
 ## State and identity
 

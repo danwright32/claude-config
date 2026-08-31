@@ -1820,6 +1820,20 @@ window is a count rather than a boundary.
   answering empty when its own accessor throws: here the guard is present and correct and
   simply covers one of two inputs)
 
+- **L531. A validator placed on the path an input is ASSUMED to arrive by is absent on every
+  other path that can produce the same input, and its message inherits the same assumption, so
+  it names an origin it never measured.** Put the check on whatever CREATES the value, and let
+  the message say where the bad value actually is rather than where it is presumed to have come
+  from. (claude-config#248 and #249, 2026-08-31: the malformed lesson check ran only on the pull
+  path, on a stated assumption recorded in a comment beside it, that the other Mac is where
+  somebody wrote it. L530 was written on this Mac and sat unreadable for hours: missing from the
+  index that loads into every session, unreachable by the lookup command, the duplicate check and
+  the number minter, with nothing anywhere reporting it, until an unrelated pull happened to run.
+  The message then said the entry had arrived, which sends the reader to investigate the machine
+  that had nothing wrong with it. Distinct from L332, a pass wired to startup being blind to what
+  is written later, and from L280, one stage of a pipeline not enforcing a rule for the pipeline:
+  here the check is correct and simply sits on one of two ways in)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
