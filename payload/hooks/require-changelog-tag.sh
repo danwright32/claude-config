@@ -79,15 +79,6 @@ slug=$(mt_remote_slug)
 # and cannot be read is NOT an opt out: it means the gate cannot tell, and
 # treating "cannot tell" as "not in scope" is how a gate goes quiet at exactly
 # the moment it stopped working (L214, L98).
-scope=$(REGISTRY_PATH="$REGISTRY" SLUG="$slug" node -e '
-  const fs = require("fs");
-  const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
-  let registry = null;
-  try { registry = JSON.parse(fs.readFileSync(process.env.REGISTRY_PATH, "utf8")); }
-  catch (e) { registry = null; }
-  process.stdout.write(JSON.stringify(entry.repoScope(registry, process.env.SLUG)));
-' 2>/dev/null)
-HOOK_DIR="$HOOK_DIR" export HOOK_DIR
 scope=$(HOOK_DIR="$HOOK_DIR" REGISTRY_PATH="$REGISTRY" SLUG="$slug" node -e '
   const fs = require("fs");
   const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
