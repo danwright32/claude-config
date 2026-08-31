@@ -54,47 +54,38 @@ Read `repos.json` beside this file:
 { "repos": [
   { "name": "PET",
     "repo": "Try-Pennie/project-enrollment-tracker",
-    "path": "~/Documents/Project Enrollment Tracker (PET)/pet",
-    "announce": true }
+    "path": "~/Documents/Project Enrollment Tracker (PET)/pet" }
 ] }
 ```
 
+**Every repo in this file is treated identically.** There is no launch mode, no special first
+post, no per-repo behaviour of any kind. Dan writes his own introduction post when a product
+goes live; this skill only ever does the recurring update, and a product joins that rotation
+weeks later.
+
 - A repo with **no merges in the window** is omitted from the post silently.
-- A repo that **does not exist yet or is unreachable** is skipped with a line in the terminal.
-  Never fail the whole run for it, and never silently pretend it had nothing.
-- More than one **announced** repo means the post gets a top-level section per project, with
-  categories nested under each. One means no project heading at all.
-
-### `announce`: being built is not being launched
-
-A product can be under active development for months before managers can open it. Telling them
-what changed in a tool they have never seen is noise, and worse, it leaks a roadmap.
-
-- **`"announce": false`** (or absent): the repo is tracked but **kept out of the post
-  entirely**. The issue check still runs on it, so `user-facing` work is still promoted in its
-  backlog before launch. Its `lastEnd` still advances each run.
-- **`"announce": true`**: it appears in the post normally.
-
-**Flipping `announce` to true is the launch moment, and the first announced update must not
-dump the entire build history.** When a repo's first announced run would cover a window far
-larger than the usual cadence, do not list every change. Instead write a short introduction of
-the product in Dan's voice, saying what it is and what managers can now do with it, and only
-then list anything from the recent window worth calling out. Ask Dan how he wants to introduce
-it rather than guessing. After that first post it behaves like any other repo.
+- A repo that is **unreachable** is skipped with a line in the terminal. Never fail the whole
+  run for it, and never silently pretend it had nothing.
+- More than one repo means the post gets a top-level section per project, with categories
+  nested under each. One repo means no project heading at all.
 
 ### Adding a repo
 
-Edit `repos.json`. Nothing else is needed: no `lastEnd` means the skill treats it as a genuine
-first run and asks for a starting date (section 2).
+Add an entry to `repos.json`. That is the entire process.
 
-For Slate, when its repo exists:
+**Add it when you want it appearing in these updates**, which is not the same day its repo is
+created and not the same day it launches. A repo absent from this file is invisible to the
+skill, which is the correct state for a product managers cannot use yet.
+
+Having no `lastEnd` makes its next run a genuine first run, so the skill asks for a starting
+date (section 2) and then behaves exactly like PET forever after.
+
+Slate's repo is `Try-Pennie/slate`. Its entry, for when Dan wants it in the rotation:
 
 ```json
-{ "name": "Slate", "repo": "Try-Pennie/<slate-repo>",
-  "path": "~/Documents/<wherever it is checked out>", "announce": false }
+{ "name": "Slate", "repo": "Try-Pennie/slate",
+  "path": "~/<wherever it is checked out>" }
 ```
-
-Set `announce` to `true` on the day managers get access, not the day the repo is created.
 
 ---
 
