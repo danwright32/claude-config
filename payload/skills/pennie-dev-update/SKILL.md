@@ -251,6 +251,15 @@ A repo with no deploy record at all: list everything, print that the check could
 
 Every PR is **manager-visible** or **behind the scenes**.
 
+**Where a record exists (section 3), it decides.** `changelog/visible` is manager-visible,
+`changelog/technical` is behind the scenes, `changelog/none` is neither and does not appear.
+Overrule a record only when it is plainly wrong, and when you do, say so in the terminal and
+fix the label on the pull request, so the next run does not make the same correction again.
+A judgment corrected only in a draft is a judgment nobody recorded.
+
+Everything below is how to classify a pull request with **no** record: everything merged before
+the cutover date, and any gap.
+
 Manager-visible means it changes something a manager sees, changes what a number says, or
 changes what they can do. That includes changes to the Slack alerts and digests they receive,
 and to data correctness even when no pixel moved.
@@ -261,6 +270,10 @@ updates, internal error handling nobody outside sees.
 **Read the body of anything whose meaning is not obvious from the title.** Titles are written
 for the person merging, not the person reading this post. On 2026-08-31 a title-only reading
 produced a wrong item that a body read caught. If in doubt, open it.
+
+Dependabot pull requests never carry a record, by design: they merge themselves and gating them
+would stall the auto-merge workflow. They collapse into one standing line about dependency
+updates, as in the June to August post.
 
 ---
 
