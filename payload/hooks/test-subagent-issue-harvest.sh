@@ -1159,6 +1159,51 @@ contains "written after the library was sourced" "$late_out" \
        "it wrote to $FAKE_HOME/.claude-issue-spool" \
   || check "nothing is written to the default spool when one is set" ok
 
+# --- clear must file everything the review READ (claude-config) --------------------------------------
+# The review reads TWO keys when it has a transcript: the transcript's directory and the project
+# directory. The clear it then tells Claude to run carries no transcript, so it computed only the second
+# and filed only that one. Measured 2026-08-31 in the Overture repo: the clear reported success and the
+# identical 27 findings came back at the very next review, with 56KB still pending under the other key.
+#
+# A clear that leaves behind what the reader just showed is worse than one that fails, because it reports
+# the work as settled and the same list arrives again with nothing to distinguish it from new findings.
+reset_spool
+CLEAR_DIR="$TMPROOT/clear-both-keys"
+mkdir -p "$CLEAR_DIR"
+( cd "$CLEAR_DIR" && git init -q . 2>/dev/null )
+CLEAR_TRANSCRIPT_DIR="$TMPROOT/clear-transcripts"
+mkdir -p "$CLEAR_TRANSCRIPT_DIR"
+CLEAR_TRANSCRIPT="$CLEAR_TRANSCRIPT_DIR/agent.jsonl"
+: > "$CLEAR_TRANSCRIPT"
+# One finding under the TRANSCRIPT key, which is where a harvested agent's records land.
+bash "$SPOOL_LIB" note "$CLEAR_DIR" "a finding under the transcript key" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+# And one under the plain directory key, which is where a direct note lands.
+bash "$SPOOL_LIB" note "$CLEAR_DIR" "a finding under the directory key" tester >/dev/null 2>&1
+
+PENDING_BEFORE="$(grep -l . "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep -v '\.filed\.jsonl' | wc -l | tr -d ' ')"
+[ "$PENDING_BEFORE" -ge 2 ] \
+  && check "two keys really are in play before the clear" ok \
+  || check "two keys really are in play before the clear" "only $PENDING_BEFORE pending file(s), so this measures nothing"
+
+bash "$SPOOL_LIB" clear "$CLEAR_DIR" >/dev/null 2>&1
+PENDING_AFTER="$(grep -l . "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep -v '\.filed\.jsonl' | wc -l | tr -d ' ')"
+[ "${PENDING_AFTER:-0}" -eq 0 ] \
+  && check "clear with no transcript files every key holding this project's findings" ok \
+  || check "clear with no transcript files every key holding this project's findings" "$PENDING_AFTER pending file(s) left behind"
+
+# The mirror, so the fix cannot be "file everything": another project's pending findings are untouched.
+reset_spool
+OTHER_DIR="$TMPROOT/clear-other-project"
+mkdir -p "$OTHER_DIR"
+( cd "$OTHER_DIR" && git init -q . 2>/dev/null )
+bash "$SPOOL_LIB" note "$CLEAR_DIR" "this project's finding" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$OTHER_DIR" "another project's finding" tester >/dev/null 2>&1
+bash "$SPOOL_LIB" clear "$CLEAR_DIR" >/dev/null 2>&1
+OTHER_LEFT="$(grep -rl "another project's finding" "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep -vc '\.filed\.jsonl' || true)"
+[ "${OTHER_LEFT:-0}" -ge 1 ] \
+  && check "another project's findings are left alone" ok \
+  || check "another project's findings are left alone" "they were filed away too"
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
