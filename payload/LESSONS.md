@@ -331,6 +331,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   (2026-08-04, driving the Mac during overture#2088: a guard proved the frontmost app matched
   the process it had resolved, both from one bad specifier, and quit the live app it was
   written to protect)
+- **L345. A guard that can REFUSE a reading must not draw on the same source as the reading
+  itself, because the guard then falls silent exactly when that source fails and the unrefused
+  reading is at its least trustworthy.** Give it an independent second signal, or the failure it
+  exists for is the one case it cannot see. The shape is a validity check that reads the same file,
+  response or API as the data it judges: it looks like defence in depth and is a single point of
+  failure wearing two hats.
+  (overture#3385, 2026-08-31: a check added so a truncated test run would state no size and name the
+  test that killed it read the run's result bundle, and the count it would have refused fell back to
+  the same bundle. On the first real truncated run after it shipped the bundle could not be read, so
+  the check said nothing and the readout printed 5,035 tests of 8,643 as an ordinary size. The
+  separate short-run gate, which reads a different source, caught it.)
 - **L82. When a platform primitive's DOCUMENTED guarantee is the entire reason a guard is safe
   (a clock that excludes sleep, a delivery that happens once, a write that is atomic), measure
   that guarantee on the real target before shipping.** Documentation ages behind the hardware

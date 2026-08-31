@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 369 lessons.
+LESSONS.md, which is NOT loaded into the session. 370 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -42,6 +42,7 @@ to decide something: the body is where the failure it came from is described.
 - L68. A guard that reads live production data must assert the SIGNATURE of the failure it protects against, never the data's current emptiness.
 - L65. A guard shipped deliberately inactive needs the issue that activates it filed in the same change.
 - L70. A check whose expected value and its actual value come from the same lookup can only prove that lookup is self-consistent, never that it is correct.
+- L345. A guard that can REFUSE a reading must not draw on the same source as the reading itself, because the guard then falls silent exactly when that source fails and the unrefused reading is at its least trustworthy.
 - L82. When a platform primitive's DOCUMENTED guarantee is the entire reason a guard is safe (a clock that excludes sleep, a delivery that happens once, a write that is atomic), measure that guarantee on the real target before shipping.
 - L188. A limit your code SETS (a minimum size, a timeout, a cap, a default) is only in force if nothing downstream recomputes it, because a framework or platform deriving the same value from other inputs overwrites yours silently and the line goes on reading as protection while protecting nothing, so measure the value in the RUNNING system rather than trusting the assignment.
 - L84. A recorded expectation (a baseline screenshot, a golden file, an approved snapshot) captures whatever the surface happened to be showing when it was recorded, including an error or empty state caused by a dependency the harness never fed it, and then defends that broken state as correct for as long as it lives.
