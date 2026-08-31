@@ -213,7 +213,32 @@ function repoScope(registry, slug, today) {
         + 'yet required there',
     };
   }
-  return { inScope: true, from: String(found.changelogFrom), name: found.name || slug };
+
+  const from = String(found.changelogFrom).trim();
+  if (!ISO_DAY.test(from)) {
+    // Not a date. Treating it as "not yet" would disable the gate silently on a
+    // typo, and a silently disabled gate reads exactly like one that is passing.
+    return {
+      inScope: false,
+      badDate: true,
+      why: slug + ' has a changelogFrom of "' + found.changelogFrom + '", which is not a '
+        + 'YYYY-MM-DD date. Leaving the gate off on an unreadable date would be indistinguishable '
+        + 'from a repo nobody gated',
+    };
+  }
+
+  const day = typeof today === 'string' && ISO_DAY.test(today) ? today : localDay();
+  // String comparison is the whole of the arithmetic: YYYY-MM-DD sorts
+  // chronologically as text, so this needs no date parsing and no timezone.
+  if (day < from) {
+    return {
+      inScope: false,
+      from: from,
+      why: slug + ' does not require changelog records until ' + from + ' (today is ' + day + ')',
+    };
+  }
+
+  return { inScope: true, from: from, name: found.name || slug };
 }
 
 module.exports = {
