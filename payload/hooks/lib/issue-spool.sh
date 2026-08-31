@@ -172,9 +172,47 @@ issue_spool_read_keys() { # read-keys <dir> [session-transcript]
   local primary legacy
   primary="$(issue_spool_key "${1:-$PWD}" "${2:-}")"
   printf '%s\n' "$primary"
-  [ -n "${2:-}" ] || return 0
-  legacy="$(issue_spool_key "${1:-$PWD}")"
-  [ "$legacy" = "$primary" ] || printf '%s\n' "$legacy"
+  if [ -n "${2:-}" ]; then
+    legacy="$(issue_spool_key "${1:-$PWD}")"
+    [ "$legacy" = "$primary" ] || printf '%s\n' "$legacy"
+  fi
+  # Every OTHER pending key whose records were written from this project.
+  #
+  # A harvested agent's records are keyed by its TRANSCRIPT's directory, and a review that has a
+  # transcript therefore reads two keys. The `clear` it then tells Claude to run carries no transcript,
+  # so it computed only the directory key and filed only that one: measured 2026-08-31 in the Overture
+  # repo, the clear reported success and the identical 27 findings came back at the very next review,
+  # with 56KB still pending under the transcript key. A clear that leaves behind what the reader just
+  # showed is worse than one that fails, because it reports the work as settled and the same list
+  # arrives again indistinguishable from new findings (L98).
+  #
+  # Matched on the record's OWN `cwd` resolved through `issue_spool_key`, not on the raw path, so an
+  # agent that ran in a git worktree is matched to the checkout it belongs to exactly as the append path
+  # keys it. That is also what keeps this from being "file everything": another project's pending
+  # findings resolve to a different key and are left alone, which has its own test.
+  issue_spool_keys_written_from "${1:-$PWD}" "$primary" "${legacy:-}"
+}
+
+# Echo the pending keys, other than the ones already named, whose first record names a cwd belonging to
+# this project. One line read per pending file, so the cost is a handful of reads.
+issue_spool_keys_written_from() { # keys-written-from <dir> [already-named...]
+  local dir="${1:-$PWD}" root mine file key cwd named
+  shift || true
+  named=" $* "
+  mine="$(issue_spool_key "$dir")"
+  root="$(issue_spool_root)"
+  [ -d "$root" ] || return 0
+  for file in "$root"/*.jsonl; do
+    [ -f "$file" ] || continue
+    case "$file" in *.filed.jsonl) continue ;; esac
+    [ -s "$file" ] || continue
+    key="$(basename "$file" .jsonl)"
+    case "$named" in *" $key "*) continue ;; esac
+    cwd="$(head -n 1 "$file" 2>/dev/null | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    [ -n "$cwd" ] || continue
+    [ "$(issue_spool_key "$cwd")" = "$mine" ] || continue
+    printf '%s\n' "$key"
+  done
 }
 
 # A record is one line of JSON. Anything else breaks the one-record-per-line
