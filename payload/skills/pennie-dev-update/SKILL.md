@@ -159,12 +159,44 @@ which reads exactly like a repo with 500 PRs:
 
 ```bash
 gh api --paginate '/repos/<owner>/<name>/pulls?state=closed&per_page=100' \
-  --jq '.[] | select(.merged_at != null) | [.number, .merged_at, .title] | @tsv'
+  --jq '.[] | select(.merged_at != null)
+        | [.number, .merged_at, .title, ([.labels[].name] | join(" ")), (.body // "")]
+        | @tsv'
 ```
 
 Filter to `merged_at >= start`. Cross-check the count against
 `gh api '/search/issues?q=repo:<owner>/<name>+is:pr+is:merged+merged:>=<start>' --jq .total_count`
 and refuse if they disagree, because a short read reports as a quiet week.
+
+### The record each change carries (PET #1186)
+
+From a repo's `changelogFrom` date in `repos.json`, every merged pull request carries the
+judgment already, made at merge time by the person who made the change and enforced by
+`~/.claude/hooks/require-changelog-tag.sh`:
+
+| Label | Means | Body |
+|---|---|---|
+| `changelog/visible` | A manager would notice this | A `## Changelog` heading with the manager-facing sentence under it, required |
+| `changelog/technical` | Plumbing worth a roll-up line | Optional |
+| `changelog/none` | Not in the update at all | Must not carry a block |
+
+So for anything merged on or after that date: **read the label, and take the sentence from the
+block verbatim as the starting point.** Do not re-derive the judgment from the title. That
+re-derivation is what made the first post cost a read of 499 titles, and the merge-time
+judgment is the better one because the person who made the change was still holding it.
+
+Editing the sentence is still expected. Grouping, wording, and merging two related items into
+one line are this skill's job. What is no longer this skill's job is deciding, from an
+engineering-voiced title, whether anyone outside engineering would notice.
+
+**Before the cutover date, and for anything with no record, fall back to reading titles and
+bodies exactly as below.** Say in the terminal how many of the window's pull requests carried a
+record and how many were judged by hand, because a window that is entirely hand-judged looks
+identical to one that is entirely recorded, and the difference is how much to trust the sort.
+
+A pull request merged **after** the cutover with **no** record is a gap, not a plumbing change:
+it means something merged around the gate. Name those explicitly rather than defaulting them
+into behind-the-scenes.
 
 ### Never filter by changed file paths
 
