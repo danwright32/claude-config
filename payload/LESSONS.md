@@ -3584,6 +3584,19 @@ window is a count rather than a boundary.
   the trap in fixing it: WHICH ceiling fires has to be measured, because if it is CPU then
   changing a wall clock budget cannot prevent the kill and reads as a fix that changed
   nothing)
+- **L527. A retry that CHANGES the request on the assumption of one particular cause (stripping
+  an id it guesses collided, dropping a field it guesses was rejected, narrowing a scope) must
+  confirm that cause from the actual error before altering anything**, because every other
+  failure, a timeout above all, then silently produces a different and degraded write rather
+  than the one that was asked for. A plain retry is idempotent in intent; a rewriting retry is
+  a second, unreviewed code path that only ever runs when something is already wrong, which is
+  exactly when nobody is watching what it sent.
+  (project-enrollment-tracker#1176, 2026-08-31: the roster sync strips Salesforce ids off a
+  batch of new hires and re-POSTs on ANY insert failure, so a network blip writes them id-less,
+  and a timeout that landed AFTER the write committed produces a 409 plus an alert claiming the
+  reps were not written when they were. Compounding it, the lookup that would have proved a real
+  collision is an unpaginated read capped at 1,000 rows, so the strip-ids path masks that
+  truncation instead of surfacing it)
 
 ## Test speed
 

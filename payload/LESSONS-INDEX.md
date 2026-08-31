@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 370 lessons.
+LESSONS.md, which is NOT loaded into the session. 371 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -379,6 +379,7 @@ to decide something: the body is where the failure it came from is described.
 - L258. A consumer that acknowledges work by DELETING the record makes an absent record mean both "consumed successfully" and "never written"
 - L259. An escape hatch that switches a gate OFF is inherited by every process that command starts, including the gate's OWN self-test
 - L522. A time or size budget calibrated for ONE execution context is wrong when the same code is reached from another (a scheduled job versus a request, a worker versus a CLI, a foreground run versus a background one), because the platform ceiling differs
+- L527. A retry that CHANGES the request on the assumption of one particular cause (stripping an id it guesses collided, dropping a field it guesses was rejected, narrowing a scope) must confirm that cause from the actual error before altering anything
 
 ## Test speed
 
