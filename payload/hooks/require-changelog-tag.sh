@@ -95,6 +95,17 @@ if [ "$unreadable" = "true" ]; then
   deny "Cannot tell whether this repo needs a changelog record: $REGISTRY exists but does not parse as JSON naming a repos array. An unreadable registry is not the same as a repo nobody gated, and merging on it would silently lose the record for the next manager update. Fix the file, or override deliberately with ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
+# A changelogFrom that is not a date is a config error, and it must not read as a
+# repo nobody gated. Standing down on an unreadable value would disable the gate
+# on a typo and say nothing, which is the one state this design cannot afford:
+# indistinguishable from a gate that is working (L98). The remedy is fixing the
+# registry, not labelling the pull request, so it says that instead.
+bad_date=$(printf '%s' "$scope" | jq -r '.badDate // false')
+if [ "$bad_date" = "true" ]; then
+  why=$(printf '%s' "$scope" | jq -r '.why // ""')
+  deny "Cannot tell whether this repo needs a changelog record: $why. Fix changelogFrom in $REGISTRY, or override deliberately with ALLOW_UNTAGGED_MERGE=1 <the same command>."
+fi
+
 in_scope=$(printf '%s' "$scope" | jq -r '.inScope // false')
 [ "$in_scope" = "true" ] || exit 0
 
