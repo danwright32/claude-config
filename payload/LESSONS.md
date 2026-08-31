@@ -1804,6 +1804,22 @@ window is a count rather than a boundary.
   a wrong verdict look better established. Distinct from L182, which is a count driven to
   ZERO ceasing to be read as a measurement; this is a count with no top)
 
+- **L530. A surface whose content is derived by JOINING two or more reads must gate its
+  could-not-measure state on EVERY one of them.** A failure in an ungated read empties the
+  joined result, so the surface renders as a genuine all clear, and the gated read's own
+  notice sits above it explaining something else entirely, which makes the screen look like
+  it is already telling you what went wrong. (Try-Pennie/slate#1646, 2026-08-31: the admin
+  calendar sync health panel gated on the calendar read but not the roster read. With the
+  users read failing, every failing calendar mapped to a row with a null email, the dedupe
+  dropped all of them for having no email, the panel's length went to zero and the panel was
+  not drawn. The roster notice rendered directly above it, correctly, about the agent list.
+  The PR that added the gate had stated the rule in a comment two lines above it. Its own
+  control fixture carried a calendar with zero failures, so the panel never rendered in the
+  healthy case either and the test could not see it vanish, which is L159. Distinct from L98,
+  a watcher reporting success having found nothing to watch, and from L215, a reader
+  answering empty when its own accessor throws: here the guard is present and correct and
+  simply covers one of two inputs)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
