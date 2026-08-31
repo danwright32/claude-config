@@ -126,19 +126,55 @@ const REGISTRY = {
   repos: [
     { name: 'PET', repo: 'Try-Pennie/project-enrollment-tracker', changelogFrom: '2026-09-01' },
     { name: 'NoDate', repo: 'acme/nodate' },
+    { name: 'Later', repo: 'acme/later', changelogFrom: '2026-12-01' },
+    { name: 'Bad', repo: 'acme/bad', changelogFrom: 'December' },
   ],
 };
 
-let s = entry.repoScope(REGISTRY, 'Try-Pennie/project-enrollment-tracker');
-check(s.inScope === true && s.from === '2026-09-01',
-  'a listed repo carrying a start date was not in scope: ' + JSON.stringify(s));
+// The day is always passed in. A test that reads the machine's clock is a test
+// about the machine, and this one would change its own answer on 1 December.
+const TODAY = '2026-09-15';
+function scope(slug, today) { return entry.repoScope(REGISTRY, slug, today || TODAY); }
 
-s = entry.repoScope(REGISTRY, 'someone/else');
+let s = scope('Try-Pennie/project-enrollment-tracker');
+check(s.inScope === true && s.from === '2026-09-01',
+  'a listed repo carrying a past start date was not in scope: ' + JSON.stringify(s));
+
+s = scope('someone/else');
 check(s.inScope === false, 'an unlisted repo was gated: ' + JSON.stringify(s));
 
 // Case: GitHub slugs are not case sensitive and a remote can be spelled either way.
-s = entry.repoScope(REGISTRY, 'try-pennie/Project-Enrollment-Tracker');
+s = scope('try-pennie/Project-Enrollment-Tracker');
 check(s.inScope === true, 'a differently cased slug was not recognised: ' + JSON.stringify(s));
+
+// The date is a START DATE, not merely an on switch. Setting a repo's date to
+// its launch day in advance has to mean "begin then", or setting it early
+// silently begins refusing merges now, which is the opposite of what the field
+// says. This is the case Slate will actually use.
+s = scope('acme/later');
+check(s.inScope === false && /2026-12-01/.test(s.why || ''),
+  'a repo whose start date has not arrived was gated anyway, or did not say when it starts: '
+  + JSON.stringify(s));
+
+// Inclusive: on the day itself the rule is in force.
+s = scope('acme/later', '2026-12-01');
+check(s.inScope === true, 'the rule was not in force on its own start date: ' + JSON.stringify(s));
+
+// The day before is not.
+s = scope('acme/later', '2026-11-30');
+check(s.inScope === false, 'the rule was in force the day before its start date: ' + JSON.stringify(s));
+
+// A date nobody can parse must not read as "not yet". That would disable the
+// gate silently on a typo, and a silently disabled gate is indistinguishable
+// from one that is passing (L98, L214). It is a config error and says so.
+s = scope('acme/bad');
+check(s.inScope === false && s.badDate === true,
+  'an unparseable start date was treated as a date rather than as a config error: ' + JSON.stringify(s));
+check(/December/.test(s.why || ''),
+  'the bad-date refusal does not quote the value that could not be read: ' + JSON.stringify(s));
+// And it must not be confused with a repo that simply has no date.
+check(scope('acme/nodate').badDate !== true,
+  'a repo with no date at all was reported as having a bad one: ' + JSON.stringify(scope('acme/nodate')));
 
 // A repo listed with NO start date is not gated. The gate can only speak for
 // changes made after the rule reached that repo, and treating "no date" as
