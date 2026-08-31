@@ -89,9 +89,13 @@ run_hook() {  # $1 = repo dir, $2 = command ; prints the hook's stdout
 denied() { printf '%s' "$1" | grep -q '"permissionDecision": *"deny"'; }
 says()   { printf '%s' "$1" | grep -qi "$2"; }
 
-REGISTRY='{"repos":[{"name":"PET","repo":"acme/widget","changelogFrom":"2026-09-01"}]}'
+# The start dates below are deliberately in the PAST. changelogFrom is a start
+# date, so a fixture dated in the future puts its repo out of scope and every
+# refusal case here quietly turns into an allow case, which is how this suite
+# would pass while testing nothing.
+REGISTRY='{"repos":[{"name":"PET","repo":"acme/widget","changelogFrom":"2026-01-01"}]}'
 REGISTRY_NO_DATE='{"repos":[{"name":"PET","repo":"acme/widget"}]}'
-REGISTRY_OTHER='{"repos":[{"name":"Slate","repo":"acme/slate","changelogFrom":"2026-09-01"}]}'
+REGISTRY_OTHER='{"repos":[{"name":"Slate","repo":"acme/slate","changelogFrom":"2026-01-01"}]}'
 
 TAGGED='{"number":7,"url":"https://github.com/acme/widget/pull/7","author":{"login":"dwright-pennie"},"labels":[{"name":"changelog/visible"}],"body":"prose\n\n## Changelog\nThe board now says when Achieve is behind."}'
 UNTAGGED='{"number":7,"url":"https://github.com/acme/widget/pull/7","author":{"login":"dwright-pennie"},"labels":[{"name":"priority-p2"}],"body":"prose only"}'
