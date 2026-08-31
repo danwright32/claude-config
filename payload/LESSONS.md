@@ -3117,6 +3117,23 @@ window is a count rather than a boundary.
 
 - **L29. Dead code is worse than deleted code.** Wire it or delete it the moment nothing
   calls it; git remembers. (10 issues, 2 repos)
+- **L346. A recorded reason for LEAVING something as it is (a docstring saying why a check is
+  not tightened, a comment saying why a value is kept) is read by everyone afterwards as a
+  considered decision, so confirm the thing is still on a live path before writing one. A
+  justification attached to code nothing calls converts dead code into a decision nobody
+  revisits, and the next person argues with the reason instead of deleting the code.**
+  `generate_captions._is_real_handle` lost its only caller on 2026-05-24, when handles were
+  dropped from the caption prompt's performers block. Three months later #917 imported the
+  shared sentinel list into it and wrote into its docstring that it was "kept as it was
+  because tightening it changes what reaches the caption prompt, which is its own change
+  with its own tests". Nothing reached the caption prompt through it, so no version of that
+  sentence could have been true. #926 was then filed on the strength of it, describing the
+  function as a live second answer to a question it was not on any path to answer, and
+  proposing work to reconcile it. Both readers were careful; neither ran a search for
+  callers, because a function carrying a reason does not look like a function to check.
+  The check is one command (`git log -S` names the commit that took the last caller away),
+  and the state L29 already forbids is exactly the state a reason makes invisible.
+  (PostRoll#926, #1105)
 - **L46. Stored data needs a reader, not just a writer.** A field that is only ever
   written looks alive to any is-this-used check, because the write path really does run,
   so the purpose the field was added for silently never happens: name a field's consumer

@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 373 lessons.
+LESSONS.md, which is NOT loaded into the session. 374 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -326,6 +326,7 @@ to decide something: the body is where the failure it came from is described.
 
 - L217. A guard whose forbidden or expected values are DERIVED from a shipped dataset covers only what that dataset happens to contain, so a real value that never enters it is permanently exempt from the very check written to catch it.
 - L29. Dead code is worse than deleted code.
+- L346. A recorded reason for LEAVING something as it is (a docstring saying why a check is not tightened, a comment saying why a value is kept) is read by everyone afterwards as a considered decision, so confirm the thing is still on a live path before writing one. A justification attached to code nothing calls converts dead code into a decision nobody revisits, and the next person argues with the reason instead of deleting the code.
 - L46. Stored data needs a reader, not just a writer.
 - L30. Fix the class, not the instance.
 - L31. Everything the product depends on lives in git.
