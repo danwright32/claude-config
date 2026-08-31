@@ -1751,6 +1751,20 @@ window is a count rather than a boundary.
   reading the changed function's callers, not by any test failing. Distinct from L95, which
   is adding a WRITE to an error path; this is converting a silent default into a refusal)
 
+- **L344. A counter that ACCUSES once it passes a threshold (N consecutive misses means
+  cancelled, N failures means dead) has no upper bound, so an input that merely stopped
+  MATCHING goes on incrementing and the verdict reads as more certain the more broken the
+  match is.** Give it a ceiling past which it reports the matcher rather than the thing, and
+  a share based signature (most of one source's items accused at once) that says the same.
+  (danwright32/overture#3379 and #3383, 2026-08-30: a venue moved its calendar to a new feed
+  that spells titles without the marketing subtitle, so every saved show from the old feed
+  stopped matching. missedScoutCount reached 53 on a show the feed listed on every single
+  run, and 26 future cards were struck through as "may be cancelled" while on sale. Two
+  rows for one night in one hall sat at 53 and 48. Nothing anywhere read the number, and the
+  threshold that renders the flag is 2, so past that point every further increment only made
+  a wrong verdict look better established. Distinct from L182, which is a count driven to
+  ZERO ceasing to be read as a measurement; this is a count with no top)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a

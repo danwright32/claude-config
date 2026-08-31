@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 368 lessons.
+LESSONS.md, which is NOT loaded into the session. 369 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -177,6 +177,7 @@ to decide something: the body is where the failure it came from is described.
 - L282. Seeded, demo or fixture data that sets a STATUS field must also satisfy every record that status implies, because the schema does not enforce a derived invariant and the app's own checks will correctly report the fabricated rows as corrupt.
 - L325. A measurement a process reports by PRINTING reaches its reader only while that process's stdout does, so any change in how the work is EXECUTED (a worker process, a background job, a sandbox, a parallel lane) silently removes the measurement while the work itself still succeeds.
 - L337. Making a reader that silently returned a benign default THROW instead re-audits every caller, because the same refusal that is right behind an error screen leaves a caller driving a control with a pending state it never clears.
+- L344. A counter that ACCUSES once it passes a threshold (N consecutive misses means cancelled, N failures means dead) has no upper bound, so an input that merely stopped MATCHING goes on incrementing and the verdict reads as more certain the more broken the match is.
 
 ## State and identity
 
