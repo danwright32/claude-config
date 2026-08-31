@@ -1,0 +1,12 @@
+{
+  "repos": [
+    {
+      "name": "PET",
+      "repo": "Try-Pennie/project-enrollment-tracker",
+      "path": "~/Documents/Project Enrollment Tracker (PET)/pet",
+      "deployRecord": "build_history",
+      "deployRecordFrom": "2026-07-29"
+    }
+  ],
+  "_note": "Add Slate here when it is live. A repo with no merges in the window is omitted from the post silently. A repo that is unreachable is skipped with a terminal line, never silently."
+}
