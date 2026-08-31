@@ -1024,6 +1024,19 @@ window is a count rather than a boundary.
   opposite case, since here the output IS the answer being sought; the remedy is to read such a
   file as text explicitly, `grep -a`)
 
+- **L336. A check satisfied by PROOF that it already passed never runs again, so it can
+  only catch a change in its inputs and never drift in what it depends on (a date, seeded
+  data, an upstream image, a dependency resolved at run time).** Anything that can start
+  failing with no input change needs a scheduled run that ignores the proof.
+  (nursedexapp/nursedex#843, 2026-08-30: a merge to main proves the merged tree is the tree
+  the pull request already tested and skips the end to end suite, taking it from 8m50s to
+  20s, which is correct for catching bad code. The reveal spec then passed at 18:50 and
+  failed on all three attempts from 19:31 with no application code merged in between, and
+  nothing reported it: main never runs the suite, so the only two runs that surfaced it were
+  incidental pull requests opened for unrelated reasons. Distinct from L289, which is a fast
+  path silently FAILING and doing the work anyway; this is one silently SUCCEEDING and the
+  work never being done again)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -1236,6 +1249,19 @@ window is a count rather than a boundary.
   better experiment anyway since it moves one variable, but it was reached by luck rather than
   by plan. L7 already says to rehearse a destructive migration against a copy of the real store,
   and that was done; what it does not say is that the FIRST REAL LAUNCH spends the old version)
+
+- **L338. Archiving a run's INPUTS and OUTPUTS but not the record of what it DID leaves the
+  question anybody actually asks later, whether it did the work, unanswerable, and the surviving
+  pair reads as complete evidence rather than as a gap, so decide explicitly what carries the
+  process record and how long it lives instead of letting it default to the live file's
+  lifetime.**
+  (overture#3346: each paid run's queue and results are copied into a dated folder, and the run's
+  own event log is deliberately left out as "a separate retention decision", which was correct
+  when written and never revisited. Diagnosing overture#3345 needed to know whether a reachability
+  check had SEARCHED for the two people it returned or skipped them; the queue says what it was
+  given and the results say what it produced, and neither says what it did. The events had been
+  overwritten by the next run about half an hour later. The archived pair made this worse rather
+  than better, because a folder holding a run's inputs and outputs looks like the run's evidence)
 
 ## Honest failure
 
@@ -1711,8 +1737,32 @@ window is a count rather than a boundary.
   about scheduling, and the readout's own message then blamed a scope the run did not have, which
   is the same absence wearing a second wrong explanation (L11).
 
+- **L337. Making a reader that silently returned a benign default THROW instead re-audits
+  every caller, because the same refusal that is right behind an error screen leaves a
+  caller driving a control with a pending state it never clears.** Decide per caller
+  whether a failed read should throw or return a typed failure.
+  (nursedexapp/nursedex#847, 2026-08-30: hasRevealedNurse and getActiveSubscription read
+  only `data` and ignored `error`, so a failed read told a family who had spent a capped
+  daily reveal that they had not revealed the nurse, and told a paying family they had no
+  subscription. Making both throw was right for the page renders, which sit behind
+  error.tsx. revealNurse calls the same function and RevealCTA awaits it in a void async
+  IIFE with no catch, so the rejection skipped setIsPending(false) and left the button
+  spinning forever with no message, trading a wrong message for none at all. Found by
+  reading the changed function's callers, not by any test failing. Distinct from L95, which
+  is adding a WRITE to an error path; this is converting a silent default into a refusal)
+
 ## State and identity
 
+- **L339. A generator that seeds from system entropy when no seed is supplied produces a
+  different artifact on every run, so any comparison between two versions of it measures the
+  seed rather than the change, and any cache keyed on its inputs is silently wrong.** Persist
+  the seed at first use and treat an absent one as a defect rather than a default.
+  (postroll#1061, 2026-08-30: proving a render refactor was a no-op by diffing the old and new
+  mp4s showed 23% of pixels differing, which reads exactly like a broken renderer; the cause was
+  `random.Random(None)` in the collage layout, because the event stored `reelSeed: null`. The
+  same absence is a live product defect: every regenerate reshuffles the whole gallery, so
+  changing one photo re-lays-out all 234, and the pre-render cache fingerprints the inputs as
+  `seed:nil` so it can adopt a render of a different collage entirely.)
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
   every surface showing what it changed.** Enumerate the inputs, then the surfaces; a
   correct save that still shows the old value reads as a failed save. (25 issues, 3 repos)
@@ -1746,6 +1796,13 @@ window is a count rather than a boundary.
 - **L17. Long-running work belongs to an owner that outlives the screen that started
   it**, and re-reads live state at write-back instead of a copy captured at start.
   (6 issues, 2 repos)
+- **L342. Share a predicate only where both call sites ask the SAME question.** Reused for a
+  DIFFERENT question that merely agrees with it today, it silently imports every unrelated
+  condition it carries, and because consolidating a predicate is normally right (L16), the
+  reuse reads as good practice and survives review. (overture#3367: the card's reachability
+  verdict asked `isSendablePending`, which requires no uncleared calendar conflict, no missing
+  subject line and four content guards, so blocking a night made 11 prospects report no
+  address while their addresses sat in the store)
 - **L55. A reader whose correctness depends on which code path produced the state it
   reads breaks silently when a second path starts producing that state.** When you add a
   writer for an existing status or flag, recheck every rule that interprets it, because
@@ -2133,6 +2190,17 @@ window is a count rather than a boundary.
   under a short one. The next scout misses all three re-key arms, inserts again, and the following
   launch merges it back into the stale row, once a day until the show passes)
 
+- **L343. A collection read from a store carries no order unless the read declares one, so a list
+  rendered straight from a query result appears in whatever order the store happened to return.** That
+  order is not a promise: it can differ between runs and between machines, and no test notices, because
+  a test that asserts membership says nothing about sequence (L228). Declare the sort at the read, or
+  sort between the read and the screen, and declare where a record missing the sort key goes and what
+  breaks a tie, since both are otherwise decided by the same non-promise.
+  (overture#3375: the prep picker listed eleven kept shows as Sep 16, 14, 11, 19, 8, 21, 14. Its source
+  was a `@Query` carrying an eligibility filter and no sort descriptor; measured the same day, 7 of the
+  app's 70 store reads declare an order. Dan found it by looking at the screen. overture#3378 covers the
+  class)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -2254,6 +2322,17 @@ window is a count rather than a boundary.
 
 ## UX completeness
 
+- **L341. A curve assembled from piecewise segments must be checked for continuity of its RATE
+  OF CHANGE, not only of its value, because matching the values at each seam is what everyone
+  verifies while a step in the rate is what the person actually sees.** Sample it finely and
+  assert the successive differences never jump. (postroll#1061 and #1073, 2026-08-30: the scroll
+  reel's `ease_in_out` was three formulas whose speed dropped 8% instantly at t=0.12 and jumped
+  back at t=0.88, reported by Dan as part of the reel feeling jittery and measurable in the
+  delivered mp4 as 33px a frame becoming 30. Each seam joined correctly in POSITION, so nothing
+  looked wrong in the source and no check existed. Fixing it and then sampling the two sibling
+  templates found the same defect in `generate_reel_slider`, ten times larger at a 75% jump, sat
+  there unreported; `generate_reel_morph` was clean. The replacement ramps with smoothstep,
+  whose own slope is zero at both ends, so the pieces meet without a step.)
 - **L20. Accessibility is part of building each control.** Labels on icon-only controls,
   real buttons instead of tap gestures, type scaling, tap targets, AA contrast in both
   themes, reduced motion, focus management. (49 issues, 7 repos)
@@ -2947,6 +3026,19 @@ window is a count rather than a boundary.
   reading it. The body is already a gate here (`pr-completeness-guard.sh` refuses one missing its
   four enumerations); the one claim in it that only the person quoted can settle was the one
   unchecked thing)
+
+- **L340. A defensive normalization that coerces a response into the shape you asked for
+  (truncating a list to its first entry, taking the first match, clamping a count) destroys the only
+  evidence that the instruction was ignored, and the coerced value is indistinguishable from a
+  compliant one, so record the violation as a finding rather than quietly trimming it.**
+  (postroll#1067: a Thursday scroll reel gets one alt text for the whole reel, and the prompt says
+  so. `generate_captions.py` then does `alt_texts = alt_texts[:1]` for every single alt post type,
+  commented "defensively in case Claude wrote one per photo anyway". When the model did write one
+  per photo, the shipped alt was photo 1's alt: a well formed single photo description that reads
+  exactly like a compliant reel level one. Measured across the live store, 12 of 21 Thursday reels
+  had shipped an alt describing one frame, and 7 were under the word floor the reel rule sets, with
+  nothing anywhere reporting it. One event predating the trim still held all 20 per photo alts,
+  which is how the shape violation was seen at all)
 
 ## Codebase hygiene
 

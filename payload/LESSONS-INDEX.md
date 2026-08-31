@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 360 lessons.
+LESSONS.md, which is NOT loaded into the session. 368 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -101,6 +101,7 @@ to decide something: the body is where the failure it came from is described.
 - L288. A test run is judged first by the count it EXECUTED against the count expected, and only then by its failures, because a run that loses a worker's share or matches half a selection still prints a verdict, and a check for zero catches none of it. Record the expected count, refuse a run below it, and do that BEFORE any change to how the suite runs (parallel workers, sharding, a new scheme or reporter), which is the moment the half run appears.
 - L320. A tool that takes a target as an argument must REFUSE one it cannot use, never fall back to its default scope, because a silently ignored target makes a run about everything look exactly like a run about the one thing that was asked for.
 - L329. A tool that scans a file for matching lines stops printing them and reports only that the file MATCHED once that file contains a byte it treats as binary
+- L336. A check satisfied by PROOF that it already passed never runs again, so it can only catch a change in its inputs and never drift in what it depends on (a date, seeded data, an upstream image, a dependency resolved at run time).
 
 ## Data safety
 
@@ -125,6 +126,7 @@ to decide something: the body is where the failure it came from is described.
 - L256. Before dropping a stored column, measure what it holds against its DECLARED DEFAULT rather than against null, because a defaulted column is non-null on every row whether anybody set it or not, and a never-written optional is null on every row, so a null test reports a harmless column as full of data and can equally let a column holding real values read as empty.
 - L260. Two outcomes a guard gives distinct MESSAGES but the same CONSEQUENCE are one outcome in practice
 - L267. Running a new version that AUTO MIGRATES a shared store consumes your ability to run the PREVIOUS version against it
+- L338. Archiving a run's INPUTS and OUTPUTS but not the record of what it DID leaves the question anybody actually asks later, whether it did the work, unanswerable, and the surviving pair reads as complete evidence rather than as a gap, so decide explicitly what carries the process record and how long it lives instead of letting it default to the live file's lifetime.
 
 ## Honest failure
 
@@ -174,15 +176,18 @@ to decide something: the body is where the failure it came from is described.
 - L264. A durable record that exists only because a CALLER redirects the tool's output belongs to that caller, not the tool
 - L282. Seeded, demo or fixture data that sets a STATUS field must also satisfy every record that status implies, because the schema does not enforce a derived invariant and the app's own checks will correctly report the fabricated rows as corrupt.
 - L325. A measurement a process reports by PRINTING reaches its reader only while that process's stdout does, so any change in how the work is EXECUTED (a worker process, a background job, a sandbox, a parallel lane) silently removes the measurement while the work itself still succeeds.
+- L337. Making a reader that silently returned a benign default THROW instead re-audits every caller, because the same refusal that is right behind an error screen leaves a caller driving a control with a pending state it never clears.
 
 ## State and identity
 
+- L339. A generator that seeds from system entropy when no seed is supplied produces a different artifact on every run, so any comparison between two versions of it measures the seed rather than the change, and any cache keyed on its inputs is silently wrong.
 - L14. Derived state re-derives on every input that feeds it, and every action updates every surface showing what it changed.
 - L15. Key everything on stable identifiers.
 - L145. Changing a record's identity IN PLACE can land on an identity another record already holds, so check the destination is free before writing it.
 - L153. A path built from the user's home directory plus a literal folder name records where something happened to be, not what it is, so the first time anyone moves it the code points at nothing.
 - L16. A count and the rows it promises come from one shared predicate
 - L17. Long-running work belongs to an owner that outlives the screen that started it
+- L342. Share a predicate only where both call sites ask the SAME question.
 - L55. A reader whose correctness depends on which code path produced the state it reads breaks silently when a second path starts producing that state.
 - L59. Bookkeeping state that changes for reasons unrelated to the data (a scroll position, an in flight animation, a hover, a tick) must not live on the component that derives the expensive data, because every such write pays the whole derivation again.
 - L60. A one-shot trigger (navigate to, scroll to, present, run once) must carry an event with its own identity, never the destination value, because a change-detecting effect cannot see a repeat request for the same target and silently drops it.
@@ -215,6 +220,7 @@ to decide something: the body is where the failure it came from is described.
 - L332. A repair or cleanup pass wired to STARTUP is blind to everything the running system writes after it, so the state a person actually works in is the un repaired one.
 - L334. A deduplication that breaks a tie by AGE systematically keeps the copy holding the STALEST picture of the outside world, because being stored longest is exactly what gave it time to go stale.
 - L335. A deduplication that deletes the copy whose identity the UPSTREAM SOURCE publishes gets that duplicate back on the very next sync, so the merge repeats forever and destroys the fresher row every time.
+- L343. A collection read from a store carries no order unless the read declares one, so a list rendered straight from a query result appears in whatever order the store happened to return.
 
 ## Security and privacy
 
@@ -234,6 +240,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## UX completeness
 
+- L341. A curve assembled from piecewise segments must be checked for continuity of its RATE OF CHANGE, not only of its value, because matching the values at each seam is what everyone verifies while a step in the rate is what the person actually sees.
 - L20. Accessibility is part of building each control.
 - L149. A colour token that clears the level for an icon or a border does not thereby clear it for TEXT, because an interface component needs 3:1 and body text needs 4.5:1, so an accent reused for a label ships under the line while every check that measures whether it DREW reports it as fine.
 - L21. Read every new user-facing sentence cold, rendered, in the state that produces it.
@@ -309,6 +316,7 @@ to decide something: the body is where the failure it came from is described.
 - L333. Agents dispatched on ONE brief each reach the same finding, so any outward action they can take alone (filing an issue, commenting, pushing) is multiplied by the batch size and the finding arrives as N records of one defect.
 - L167. An AI writer that can READ the code consuming its output derives its contract from that code's permissiveness, so an optional field is not neutral, it is permission: any combination the schema tolerates will eventually be emitted and defended as valid.
 - L249. A decision ATTRIBUTED to somebody inside your own artifact (a PR body, a plan, an issue comment) must be quoted from the record that holds it and carry that record's own date, because a paraphrase with a date on it reads as authority and is the one claim a reviewer will not go and check, so a decision nobody made can ship with tests written to defend it.
+- L340. A defensive normalization that coerces a response into the shape you asked for (truncating a list to its first entry, taking the first match, clamping a count) destroys the only evidence that the instruction was ignored, and the coerced value is indistinguishable from a compliant one, so record the violation as a finding rather than quietly trimming it.
 
 ## Codebase hygiene
 
