@@ -32,20 +32,69 @@ do not care how anything is built.
 
 ## 1. Repos
 
-Read `repos.json` beside this file. Today:
+### It does not matter where Dan runs this
+
+**Run it from any directory, including one that is not a git repo at all.** Every repo it
+touches comes from `repos.json`, never from the working directory.
+
+So **every `gh` command must carry `--repo <owner>/<name>` explicitly**, and every `git`
+command must be run against the configured `path` (`git -C <path> ...`). This is not a style
+preference. Dan's usual working directory for PET is the folder *above* the git repo, which is
+not a repo at all, so a bare `gh issue edit` there fails or, worse, resolves to whatever repo
+happens to be nearby.
+
+If Dan asks for an update "for Slate" or "for PET" specifically, filter `repos.json` to that
+one. Otherwise do them all.
+
+### The config
+
+Read `repos.json` beside this file:
 
 ```json
-{ "repos": [ { "name": "PET", "repo": "Try-Pennie/project-enrollment-tracker",
-               "path": "~/Documents/Project Enrollment Tracker (PET)/pet" } ] }
+{ "repos": [
+  { "name": "PET",
+    "repo": "Try-Pennie/project-enrollment-tracker",
+    "path": "~/Documents/Project Enrollment Tracker (PET)/pet",
+    "announce": true }
+] }
 ```
-
-Add Slate here when it is live. Rules:
 
 - A repo with **no merges in the window** is omitted from the post silently.
 - A repo that **does not exist yet or is unreachable** is skipped with a line in the terminal.
   Never fail the whole run for it, and never silently pretend it had nothing.
-- More than one repo means the post gets a top-level section per project, with the categories
-  nested under each. One repo means no project heading at all.
+- More than one **announced** repo means the post gets a top-level section per project, with
+  categories nested under each. One means no project heading at all.
+
+### `announce`: being built is not being launched
+
+A product can be under active development for months before managers can open it. Telling them
+what changed in a tool they have never seen is noise, and worse, it leaks a roadmap.
+
+- **`"announce": false`** (or absent): the repo is tracked but **kept out of the post
+  entirely**. The issue check still runs on it, so `user-facing` work is still promoted in its
+  backlog before launch. Its `lastEnd` still advances each run.
+- **`"announce": true`**: it appears in the post normally.
+
+**Flipping `announce` to true is the launch moment, and the first announced update must not
+dump the entire build history.** When a repo's first announced run would cover a window far
+larger than the usual cadence, do not list every change. Instead write a short introduction of
+the product in Dan's voice, saying what it is and what managers can now do with it, and only
+then list anything from the recent window worth calling out. Ask Dan how he wants to introduce
+it rather than guessing. After that first post it behaves like any other repo.
+
+### Adding a repo
+
+Edit `repos.json`. Nothing else is needed: no `lastEnd` means the skill treats it as a genuine
+first run and asks for a starting date (section 2).
+
+For Slate, when its repo exists:
+
+```json
+{ "name": "Slate", "repo": "Try-Pennie/<slate-repo>",
+  "path": "~/Documents/<wherever it is checked out>", "announce": false }
+```
+
+Set `announce` to `true` on the day managers get access, not the day the repo is created.
 
 ---
 
