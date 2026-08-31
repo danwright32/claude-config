@@ -345,7 +345,7 @@ gh issue edit <n> --repo <owner>/<name> --remove-label priority-p3 --add-label p
   those alone.
 - Already p2: label only, no priority change.
 - Create the label if missing:
-  `gh label create user-facing --color 0E8A16 --description "A manager would notice this"`
+  `gh label create user-facing --repo <owner>/<name> --color 0E8A16 --description "A manager would notice this"`
 
 ### Across runs
 
