@@ -1048,6 +1048,24 @@ window is a count rather than a boundary.
   path silently FAILING and doing the work anyway; this is one silently SUCCEEDING and the
   work never being done again)
 
+- **L528. A detector that reads production counters also reads whatever your own smoke canary
+  or synthetic monitor writes into them, so check whether the canary ALONE can satisfy its
+  floor before trusting any verdict it reaches.** A threshold sitting near the canary's own per
+  run volume makes the detector conclude on the canary's schedule rather than on customer
+  behaviour, and that conclusion then reads as evidence about production.
+  (Try-Pennie/slate#1616, 2026-08-31: the booking failure rate check needs 20 attempts in a
+  rolling hour, and every attempt Slate has before cutover is the canary's. One full canary pass
+  records exactly 16 of them inside about two minutes, four short of the floor, so a pass never
+  concludes; but the canary runs four or five times a day and two drifting inside one hour clear
+  the floor between them. That happened once, and it was the ONLY verdict the detector ever
+  reached. A page then fired asking for the detector to be armed because the reason it was parked
+  had "stopped being true", which is what the arrival of real customers was supposed to look
+  like, and it repeated daily over a detector that concluded nothing for the next two and a half
+  days. The measured share was 100 percent synthetic and its only failure was a reschedule
+  conflict the canary raises on purpose. Related to L172, which says measure where a threshold
+  lands in the real distribution: here the whole distribution was the harness, so there was no
+  real one to land in and the threshold had been fitted to nothing at all)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key

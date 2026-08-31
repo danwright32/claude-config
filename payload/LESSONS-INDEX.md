@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 371 lessons.
+LESSONS.md, which is NOT loaded into the session. 372 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -103,6 +103,7 @@ to decide something: the body is where the failure it came from is described.
 - L320. A tool that takes a target as an argument must REFUSE one it cannot use, never fall back to its default scope, because a silently ignored target makes a run about everything look exactly like a run about the one thing that was asked for.
 - L329. A tool that scans a file for matching lines stops printing them and reports only that the file MATCHED once that file contains a byte it treats as binary
 - L336. A check satisfied by PROOF that it already passed never runs again, so it can only catch a change in its inputs and never drift in what it depends on (a date, seeded data, an upstream image, a dependency resolved at run time).
+- L528. A detector that reads production counters also reads whatever your own smoke canary or synthetic monitor writes into them, so check whether the canary ALONE can satisfy its floor before trusting any verdict it reaches.
 
 ## Data safety
 
