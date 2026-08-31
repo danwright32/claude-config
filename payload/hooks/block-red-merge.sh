@@ -112,44 +112,15 @@ fi
 # only confirm that lookup is self-consistent, never that it is correct (L70).
 # The hook did not verify this before; an answer about a different repo would
 # have been read as this pull request's verdict.
-remote_slug=$(git config --get remote.origin.url 2>/dev/null \
-  | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
+remote_slug=$(mt_remote_slug)
 
-pr_view() {  # $1 = token, or empty for the active account
-  if [ -n "${1:-}" ]; then
-    GH_TOKEN="$1" gh pr view ${pr:+"$pr"} --json number,statusCheckRollup,mergeable,url 2>/dev/null
-  else
-    gh pr view ${pr:+"$pr"} --json number,statusCheckRollup,mergeable,url 2>/dev/null
-  fi
-}
-
-# An answer is usable when it is non-empty AND names the repo the remote names.
-# With no parseable remote there is nothing to compare against, so the identity
-# half is skipped rather than failing every repo that has no GitHub origin.
-usable_answer() {  # $1 = rollup json
-  [ -n "$1" ] || return 1
-  [ -n "$remote_slug" ] || return 0
-  local url; url=$(printf '%s' "$1" | jq -r '.url // ""' 2>/dev/null)
-  [ -n "$url" ] || return 0
-  case "$url" in
-    "https://github.com/$remote_slug/pull/"*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-rollup=$(pr_view "")
-if ! usable_answer "$rollup"; then
-  wrong_repo=""
-  [ -n "$rollup" ] && wrong_repo=$(printf '%s' "$rollup" | jq -r '.url // ""' 2>/dev/null)
+envelope=$(mt_pr_view "$pr" "number,statusCheckRollup,mergeable,url" "$remote_slug")
+if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" = "true" ]; then
+  rollup=$(printf '%s' "$envelope" | jq -c '.view')
+else
   rollup=""
-  for account in $(gh auth status 2>/dev/null \
-      | grep -oE 'account [A-Za-z0-9_.-]+' | awk '{print $2}' | sort -u); do
-    token=$(gh auth token -u "$account" 2>/dev/null) || continue
-    [ -n "$token" ] || continue
-    candidate=$(pr_view "$token")
-    if usable_answer "$candidate"; then rollup="$candidate"; break; fi
-  done
-  if [ -z "$rollup" ] && [ -n "$wrong_repo" ]; then
+  wrong_repo=$(printf '%s' "$envelope" | jq -r '.wrongRepo // ""' 2>/dev/null)
+  if [ -n "$wrong_repo" ]; then
     deny "Refusing to merge: the only answer gh gave was about $wrong_repo, not about $remote_slug. Verifying one pull request's checks and merging another is the exact mistake this gate exists to stop. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
   fi
 fi
