@@ -100,14 +100,18 @@ in_scope=$(printf '%s' "$scope" | jq -r '.inScope // false')
 
 pr=$(mt_pr_number "$command")
 
-view=$(mt_pr_view "$pr" "number,url,author,labels,body" "$slug") || view=""
-if [ -z "$view" ]; then
-  if [ -n "${MT_WRONG_REPO:-}" ]; then
-    deny "Refusing to merge: the only answer gh gave was about $MT_WRONG_REPO, not about $slug. Reading one pull request's changelog record while merging a different one records the wrong thing about both. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+envelope=$(mt_pr_view "$pr" "number,url,author,labels,body" "$slug")
+found=$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)
+
+if [ "$found" != "true" ]; then
+  wrong=$(printf '%s' "$envelope" | jq -r '.wrongRepo // ""' 2>/dev/null)
+  if [ -n "$wrong" ]; then
+    deny "Refusing to merge: the only answer gh gave was about $wrong, not about $slug. Reading one pull request's changelog record while merging a different one records the wrong thing about both. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
   fi
   deny "Cannot read this pull request's changelog record (gh pr view returned nothing under any logged-in account), so whether a manager would notice this change would go unrecorded. Check the pull request, then re-run with ALLOW_UNTAGGED_MERGE=1 if the record is genuinely there."
 fi
 
+view=$(printf '%s' "$envelope" | jq -c '.view')
 number=$(printf '%s' "$view" | jq -r '.number // "?"')
 author=$(printf '%s' "$view" | jq -r '.author.login // ""')
 
