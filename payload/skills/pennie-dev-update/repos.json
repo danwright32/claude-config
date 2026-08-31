@@ -6,7 +6,8 @@
       "path": "~/Documents/Project Enrollment Tracker (PET)/pet",
       "announce": true,
       "deployRecord": "build_history",
-      "deployRecordFrom": "2026-07-29"
+      "deployRecordFrom": "2026-07-29",
+      "changelogFrom": "2026-08-31"
     }
   ],
   "_howToAddSlate": "Add a second entry with announce:false while it is being built. Set announce:true on the day managers get access. See section 1 of SKILL.md.",
@@ -15,5 +16,6 @@
     "repo": "Try-Pennie/CHANGE-ME",
     "path": "~/Documents/CHANGE-ME",
     "announce": false
-  }
+  },
+  "_changelogNote": "changelogFrom is the date from which every merged pull request in that repo carries a changelog record: a changelog/visible, changelog/technical or changelog/none label, plus a '## Changelog' block in the body for the visible ones. It is enforced at merge time by ~/.claude/hooks/require-changelog-tag.sh, which gates ONLY repos listed here WITH this field. A repo listed without it is not gated, which is what lets the pull request that adds the date merge. Before that date there are no records and the update falls back to reading titles and bodies by hand."
 }
