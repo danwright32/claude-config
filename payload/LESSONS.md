@@ -1294,6 +1294,16 @@ window is a count rather than a boundary.
 
 ## Honest failure
 
+- **L529. An audit entry must record the old and new values of what changed, not merely which
+  thing changed, because the question an audit exists to answer is what the state was at a given
+  moment, and an entry without values can never answer it no matter how many entries there are.**
+  Mask the value for secrets rather than omitting it for everything. A key-only trail also fails
+  in the worst direction: it looks like an audit, so nobody notices it answers nothing until the
+  incident that needs it. (bidspoke#1085: eight audit entries for ACHIEVE_MIN_VANTAGE_SCORE
+  recorded only {"key": ...}, so whether the Achieve pipe was live in August could not be
+  reconstructed from the audit at all and was inferred from when sends actually happened, after a
+  wrong first answer had already been given)
+
 - **L283. A guard asserting that a rewrite does not CONTAIN something is satisfied by a rewrite
   that DELETED it, so wherever the thing is a reference to a resource (a photo marker, a link, a
   citation, a merge field), check for its LOSS as well as its presence, because disappearance is
