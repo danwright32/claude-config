@@ -180,6 +180,27 @@ if denied "$out"; then pass; else fail "a corrupt registry was read as an opt ou
 if says "$out" "repos.json"; then pass; else fail "the refusal does not name the file that could not be read: $out"; fi
 rm -rf "$dir"
 
+# A start date that has not arrived yet. The field is a start date, not an on
+# switch, so a repo can be given its launch day in advance. Slate is the case
+# this exists for.
+dir=$(make_repo acme/widget "$UNTAGGED" '{"repos":[{"name":"PET","repo":"acme/widget","changelogFrom":"2099-01-01"}]}')
+if denied "$(run_hook "$dir" "$MERGE 7 --squash")"; then
+  fail "a repo whose changelog start date has not arrived was gated already"
+else pass; fi
+rm -rf "$dir"
+
+# A start date nobody can parse is a config error, not a quiet stand down.
+# Reading it as "not yet" would disable the gate on a typo and say nothing,
+# which is indistinguishable from the gate passing (L98).
+dir=$(make_repo acme/widget "$UNTAGGED" '{"repos":[{"name":"PET","repo":"acme/widget","changelogFrom":"September"}]}')
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out"; then pass; else fail "an unparseable changelog start date silently disabled the gate: $out"; fi
+if says "$out" "September"; then pass; else fail "the refusal does not quote the value it could not read: $out"; fi
+# It must not read like the untagged refusal: the remedy is fixing the registry,
+# not labelling the pull request (L11).
+if says "$out" "changelogFrom"; then pass; else fail "the refusal does not name the field to fix: $out"; fi
+rm -rf "$dir"
+
 # 7. Anything that is not a merge is none of this hook's business.
 dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY")
 if denied "$(run_hook "$dir" "gh pr view 7")"; then
