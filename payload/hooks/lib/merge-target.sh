@@ -112,21 +112,33 @@ mt_usable_answer() {  # $1 = json, $2 = remote slug
 # token PER CALL. Never `gh auth switch`, which changes the shared keyring's
 # active account and would break whatever other session is using it.
 #
-# Sets MT_WRONG_REPO to the url of the last answer that was about a DIFFERENT
-# repo, so a caller can tell "gh said nothing" from "gh answered about something
-# else" and give them different refusals (L11).
+# Answers with an ENVELOPE rather than the bare view, and with a global:
+#
+#   {"found":true,"view":{...}}
+#   {"found":false,"wrongRepo":"https://github.com/someone/else/pull/7"}
+#
+# because callers read this through a command substitution, which runs it in a
+# subshell, so anything it assigns to a variable is discarded on the way out. The
+# first version set a global here and the caller always saw it empty: an answer
+# about the WRONG repo was reported as gh having said nothing at all, which is a
+# different fault with a different remedy (L11). Its own test caught that.
+#
+# wrongRepo lets a caller tell "gh said nothing" from "gh answered about
+# something else" and refuse each in its own words.
 mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote slug
-  local pr="$1" fields="$2" slug="$3" answer candidate account token
-  MT_WRONG_REPO=""
+  local pr="$1" fields="$2" slug="$3" answer candidate account token wrong=""
 
   if [ -n "$pr" ]; then
     answer=$(gh pr view "$pr" --json "$fields" 2>/dev/null)
   else
     answer=$(gh pr view --json "$fields" 2>/dev/null)
   fi
-  if mt_usable_answer "$answer" "$slug"; then printf '%s' "$answer"; return 0; fi
+  if mt_usable_answer "$answer" "$slug"; then
+    printf '%s' "$answer" | jq -c '{found: true, view: .}'
+    return 0
+  fi
 
-  [ -n "$answer" ] && MT_WRONG_REPO=$(printf '%s' "$answer" | jq -r '.url // ""' 2>/dev/null)
+  [ -n "$answer" ] && wrong=$(printf '%s' "$answer" | jq -r '.url // ""' 2>/dev/null)
 
   for account in $(gh auth status 2>/dev/null \
       | grep -oE 'account [A-Za-z0-9_.-]+' | awk '{print $2}' | sort -u); do
@@ -138,13 +150,14 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
       candidate=$(GH_TOKEN="$token" gh pr view --json "$fields" 2>/dev/null)
     fi
     if mt_usable_answer "$candidate" "$slug"; then
-      MT_WRONG_REPO=""
-      printf '%s' "$candidate"
+      printf '%s' "$candidate" | jq -c '{found: true, view: .}'
       return 0
     fi
-    [ -n "$candidate" ] && [ -z "$MT_WRONG_REPO" ] \
-      && MT_WRONG_REPO=$(printf '%s' "$candidate" | jq -r '.url // ""' 2>/dev/null)
+    if [ -n "$candidate" ] && [ -z "$wrong" ]; then
+      wrong=$(printf '%s' "$candidate" | jq -r '.url // ""' 2>/dev/null)
+    fi
   done
 
+  jq -nc --arg wrong "$wrong" '{found: false, wrongRepo: $wrong}'
   return 1
 }
