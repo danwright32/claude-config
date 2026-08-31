@@ -335,8 +335,8 @@ never to decide.
 For each issue judged user-facing:
 
 ```bash
-gh issue edit <n> --add-label user-facing
-gh issue edit <n> --remove-label priority-p3 --add-label priority-p2
+gh issue edit <n> --repo <owner>/<name> --add-label user-facing
+gh issue edit <n> --repo <owner>/<name> --remove-label priority-p3 --add-label priority-p2
 ```
 
 - Add the **`user-facing`** label. This is the durable record of the judgment, so the priority
