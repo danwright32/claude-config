@@ -133,6 +133,36 @@ contains() { # contains <needle> <haystack>
   case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac
 }
 
+# What a review actually DELIVERED. The findings no longer travel inside the
+# payload: the reason names a file and Claude opens it (claude-config#243), so a
+# check that the review carried a record has to read the reason AND that file. It
+# is the same question these checks always asked, asked of the new transport.
+#
+# A reason naming a file that is NOT there answers with the reason alone, which is
+# the correct answer: a pointer at nothing delivered nothing.
+carried() { # carried <review payload>  -> the text this review put in front of a reader
+  local payload="$1" f
+  printf '%s' "$payload" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    print(json.loads(raw).get("reason") or "")
+except Exception:
+    print(raw)
+'
+  f="$(printf '%s' "$payload" | python3 -c '
+import json, re, sys
+try:
+    reason = json.loads(sys.stdin.read()).get("reason") or ""
+except Exception:
+    reason = ""
+m = re.search(r"waiting in (\S+?)\. They", reason)
+print(m.group(1) if m else "")
+')"
+  if [ -n "$f" ] && [ -f "$f" ]; then cat "$f"; fi
+  return 0
+}
+
 spool_says() { # spool_says <needle>  -> true when `spool pending` mentions it
   local out
   out="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null || true)"
@@ -401,7 +431,7 @@ PY
 export CLAUDE_PROJECT_DIR="$REPO"
 printf '%s' "$review_payload" | bash "$REVIEW" >/dev/null 2>&1
 out="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
-printf '%s' "$out" | grep -q "spool injection marker seven" \
+contains "spool injection marker seven" "$(carried "$out")" \
   && check "a pending finding beats the cooldown" ok \
   || check "a pending finding beats the cooldown" "out=${out:0:200}"
 
@@ -432,7 +462,7 @@ out_err="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
 # or a broken harvest becomes invisible instead of merely quiet.
 rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
 out_err_cold="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
-printf '%s' "$out_err_cold" | grep -q "HARVEST FAILED" \
+contains "HARVEST FAILED" "$(carried "$out_err_cold")" \
   && check "a failure is still reported at the next ordinary review" ok \
   || check "a failure is still reported at the next ordinary review" "not mentioned"
 
@@ -476,19 +506,20 @@ out_settle="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
 # The positive control. Every "gone from pending" assertion below is satisfied by
 # a review that never carried the record at all, so what was delivered is checked
 # first, in the same fixture (L159).
-printf '%s' "$out_settle" | grep -q "HARVEST FAILED" \
-  && printf '%s' "$out_settle" | grep -q "retry path has no failure test" \
+carried_settle="$(carried "$out_settle")"
+contains "HARVEST FAILED" "$carried_settle" \
+  && contains "retry path has no failure test" "$carried_settle" \
   && check "the review that settles a failure really carried it" ok \
-  || check "the review that settles a failure really carried it" "out=${out_settle:0:200}"
+  || check "the review that settles a failure really carried it" "out=${carried_settle:0:200}"
 
 # The instruction riding with it has to match what the code then does. It tells
 # Claude to run `clear` after the picker is answered, and a failure is never in a
 # picker, so without this line the reader is told to expect back a record that has
 # already been filed (L32: a doc states a testable claim, and this one is delivered
 # to the reader inside the same message).
-printf '%s' "$out_settle" | grep -q "it will not come back" \
-  && check "the delivered review says a failure will not come back" ok \
-  || check "the delivered review says a failure will not come back" "out=${out_settle:0:200}"
+contains "it will not come back" "$(cat "$(dirname "$REVIEW")/review/issue-review.md" 2>/dev/null)" \
+  && check "the instruction says a reported failure will not come back" ok \
+  || check "the instruction says a reported failure will not come back" "the instruction file does not say it"
 
 pend_settle="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 printf '%s' "$pend_settle" | grep -q "HARVEST FAILED" \
@@ -510,7 +541,7 @@ reset_spool
 stub 'exit 9'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 rm -f "$REVIEW_STAMP"
-out_nodel="$(printf '%s' "$review_payload" | CLAUDE_INJECT_SPOOL_FORCE_FAIL=1 bash "$REVIEW" 2>/dev/null)"
+out_nodel="$(printf '%s' "$review_payload" | CLAUDE_REVIEW_REASON_FORCE_FAIL=1 bash "$REVIEW" 2>/dev/null)"
 printf '%s' "$out_nodel" | grep -q "HARVEST FAILED" \
   && check "the undelivered review really left the failure out" "it carried it: ${out_nodel:0:200}" \
   || check "the undelivered review really left the failure out" ok
@@ -731,7 +762,7 @@ reset_spool
 stub 'echo "FINDING: injector failure case."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
-out_inj="$(printf '%s' "$review_payload" | CLAUDE_INJECT_SPOOL_FORCE_FAIL=1 bash "$REVIEW" 2>/dev/null)"
+out_inj="$(printf '%s' "$review_payload" | CLAUDE_REVIEW_REASON_FORCE_FAIL=1 bash "$REVIEW" 2>/dev/null)"
 printf '%s' "$out_inj" | grep -q '"decision"' \
   && check "a broken injector does not cancel the review" ok \
   || check "a broken injector does not cancel the review" "review went silent"
@@ -936,7 +967,7 @@ contains "HARVEST UNREADABLE" "$out_again" \
 reset_spool
 rm -f "$REVIEW_STAMP" "$MUTED_STAMP"
 bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":3,"error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
-printf '%s' "$review_payload" | CLAUDE_INJECT_SPOOL_FORCE_FAIL=1 bash "$REVIEW" >/dev/null 2>&1
+printf '%s' "$review_payload" | CLAUDE_REVIEW_REASON_FORCE_FAIL=1 bash "$REVIEW" >/dev/null 2>&1
 contains "the named agent transcript does not exist" "$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" \
   && check "an undelivered periodic report leaves its records pending" ok \
   || check "an undelivered periodic report leaves its records pending" "they were filed unseen"

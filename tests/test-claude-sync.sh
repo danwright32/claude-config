@@ -2024,6 +2024,13 @@ echo 'BYTECODE' > "$CH/hooks/__pycache__/gh_issue_scan.cpython-314.pyc"
 echo 'BYTECODE' > "$CH/hooks/stray.pyc"
 mkskill "$CH/skills/plan-council/SKILL.md" 'SKILL custom'
 mkskill "$CH/skills/wrangler/SKILL.md" 'SKILL plugin-owned'   # should be EXCLUDED from sync
+# A hook's instruction, in a SUBDIRECTORY of hooks/. The two Stop hooks keep their
+# instruction in hooks/review/*.md and point at it by a path resolved at run time
+# (claude-config#243), so an instruction that does not travel leaves the other Mac
+# with a hook pointing at nothing. Nothing else in this suite carries a nested file
+# under hooks/, and the mirror's excludes are a list nobody re-reads when adding one.
+mkdir -p "$CH/hooks/review"
+echo 'INSTRUCTION BODY' > "$CH/hooks/review/issue-review.md"
 echo 'AGENT' > "$CH/agents/plan-redteam.md"
 echo 'CMD' > "$CH/commands/plannotator-last.md"
 echo '# global rules v1' > "$CH/CLAUDE.md"
@@ -2058,6 +2065,7 @@ bash "$SCRIPT" push >/dev/null 2>&1
 check "payload has the custom skill"        "[ -f '$REPO/payload/skills/plan-council/SKILL.md' ]"
 check "payload EXCLUDES plugin skill"       "[ ! -e '$REPO/payload/skills/wrangler' ]"
 check "payload has the hook script"         "[ -f '$REPO/payload/hooks/tdd-nudge.sh' ]"
+check "payload has the nested hook instruction" "[ -f '$REPO/payload/hooks/review/issue-review.md' ]"
 check "payload EXCLUDES __pycache__ dir"    "[ ! -e '$REPO/payload/hooks/__pycache__' ]"
 check "payload EXCLUDES a stray .pyc"       "[ ! -e '$REPO/payload/hooks/stray.pyc' ]"
 check "payload has the agent"               "[ -f '$REPO/payload/agents/plan-redteam.md' ]"
@@ -2082,6 +2090,8 @@ export CLAUDE_HOME="$CH2"
 bash "$SCRIPT" pull >/dev/null 2>&1
 check "skill arrived on Mac 2"              "[ -f '$CH2/skills/plan-council/SKILL.md' ]"
 check "hook script arrived on Mac 2"        "[ -f '$CH2/hooks/tdd-nudge.sh' ]"
+check "nested hook instruction arrived on Mac 2" "[ -f '$CH2/hooks/review/issue-review.md' ]"
+check "and it arrived with its content intact"   "grep -q 'INSTRUCTION BODY' '$CH2/hooks/review/issue-review.md'"
 check "agent arrived on Mac 2"              "[ -f '$CH2/agents/plan-redteam.md' ]"
 check "Mac 2 plugin skill NOT deleted"      "[ -f '$CH2/skills/wrangler/SKILL.md' ]"
 check "hooks merged into settings"          "jq -e '.hooks.UserPromptSubmit' '$CH2/settings.json' >/dev/null"

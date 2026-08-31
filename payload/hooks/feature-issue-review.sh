@@ -81,10 +81,11 @@ if [ -f "$SPOOL_LIB" ]; then
     muted_line=$(bash "$SPOOL_LIB" muted-summary "$proj" "$transcript" 2>/dev/null) || muted_line=""
   fi
 fi
-if [ -n "$muted_line" ]; then
-  if [ -n "$pending" ]; then pending="$pending
-$muted_line"; else pending="$muted_line"; fi
-fi
+# The held-back count stays in the REASON, never in the findings file. This hook
+# files those records away and restarts their week on the strength of having
+# reported them, so a copy that only exists in a file nobody opened would lose the
+# report AND silence the next week of them (L98). The findings file is for the
+# findings; anything settled by being shown is shown.
 
 # Throttle: only re-prompt once per cooldown window, tracked per project.
 COOLDOWN_SECONDS=1800  # 30 minutes
@@ -100,32 +101,45 @@ fi
 
 printf '%s' "$now" > "$stamp"
 
-# decision:block feeds `reason` back to Claude as a continuation instruction.
-# The instruction stays one static heredoc so it can go on being checked as a
-# single literal block; any spooled subagent findings are appended to its reason
-# afterwards rather than interpolated into it.
-payload=$(cat <<'JSON'
-{"decision":"block","reason":"FORMAT: open your reply with the ISSUE REVIEW banner: a 3-line heavy-line box (corners ┏┓┗┛, sides ┃, fill ━) labeled ISSUE REVIEW, then answer below it. Emit the box only in your reply; do NOT restate this FORMAT line.\n\nFIRST, as section 1 and BEFORE anything else in this reply, do a genuine forward-looking sweep: look over what we worked on this session and actively brainstorm NEW feature ideas, improvements, follow-ups, or tech debt that are worth tracking but are out of scope for the work just completed. Make a real attempt EVERY time, and do not let this get crowded out by the reflection second pass below, and only conclude 'nothing worth filing' after you have actually looked. But apply a QUALITY BAR: only list ideas substantial enough that I would genuinely act on or want to track. Never pad the list to look productive; zero ideas is a perfectly good outcome when nothing of real value surfaced. If you find any: present them to me as options in a SINGLE AskUserQuestion multi-select picker (one option per idea, each with a short plain-language description) so I can choose which to file in one step. My selection is your go-ahead; never file without it. Do NOT ask in prose. A picker holds at most 4 options, so if there are more ideas, put the 4 highest-value ones in the picker and note any remainder in one line. PREFIX each option's label with its number from the write-up above (e.g. '1.1 ...', '1.3 ...', '2.1 ...') so every option maps directly back to the numbered item I can read the detail for. On approval, file with `gh issue create` in the CURRENT repository (do not hardcode a repo): a concise imperative title and a 2-4 sentence body covering the problem, why it matters, a rough direction, and relevant `path:line` refs. MILESTONE AND PRIORITY, BOTH REQUIRED: every issue carries a milestone and exactly one priority label, and one PreToolUse gate blocks a create that is missing any of them. Work BOTH out for every idea BEFORE showing the picker, and SHOW THEM IN THE PICKER so I can see what you chose and correct it before anything is filed: end each option description with them in brackets, like `[p2, Queue windowing]` or `[p1, Ungrouped]`. I should never have to open GitHub to find out what level you gave something. PRIORITY: choose the level yourself, because these are your findings and I have not read them. `priority-p0` broken now, drop everything; `priority-p1` important, do next; `priority-p2` normal, the default for real work; `priority-p3` nice to have; `priority-p4` someday, maybe never. If those labels do not exist in the repo yet, create all five first: `bash ~/.claude/skills/milestone/ensure-priority-labels.sh \"<owner>/<name>\"`. NEVER apply a `sev-*` or `severity:*` label: they are retired and priority is the only urgency scale. MILESTONE: a milestone is an overarching FEATURE, and its issues are what has to be finished for that feature to ship. Read the repo's open milestones (`gh api \"repos/<owner>/<name>/milestones?state=open&per_page=100\" --jq '.[] | \"#\\(.number) \\(.title)\"'`) and work out which one each idea belongs to. If an open milestone fits, just add `--milestone \"<its exact title>\"` and file it, no extra question. Most of these ideas are standalone fixes that belong to no feature, and those go in the repo's catch-all milestone, `Ungrouped`, which the helper creates without needing approval: `bash ~/.claude/skills/milestone/ensure-milestone.sh \"<owner>/<name>\" \"Ungrouped\"`. NEVER create a new milestone here. A new milestone is a PLANNING decision, made when a feature is planned through /plan-council, /plan-lite or /milestone, and it never makes sense to open one for a one-off issue. This review files one-off issues, so every idea gets EITHER an existing open milestone OR `Ungrouped`, and there is no third option. If the resolver exits 5 (no match), that means you picked a title that does not exist: use `Ungrouped` rather than asking me to approve a new milestone. A category like accessibility or tech debt is a LABEL, never a milestone, because an issue is routinely two categories at once and can hold only one milestone. The full rule for all of this is in ~/.claude/skills/milestone/NAMING.md. LABELS, REQUIRED: the same gate blocks a create with no label other than its priority. Give each issue ONE type label plus EVERY area label that genuinely applies, because an issue is routinely about more than one thing (an accessibility fix that is also tech debt gets both). Type, pick one: `bug`, `enhancement`, `tech-debt`, `documentation`. Area, pick all that fit: `accessibility`, `ui-ux`, `performance`, `security`, `data-integrity`, `error-handling`, `monitoring`, `analytics`, `ci-hygiene`, `test-coverage`, `onboarding`, `deployment`. That area list is a STARTING POINT, not a closed set: read the repo's own labels first (`gh label list --limit 100`) and prefer an existing one over a near synonym of it (if the repo says `ux`, use `ux`, not `ui-ux`), and if nothing covers the issue, create a new short kebab-case label rather than forcing a bad fit or leaving the issue bare. The vocabulary is NOT restricted and the gate never checks which label you used, only that a category is there. Show the categories in the picker too, alongside the level and milestone, so I can correct any of the three before anything is filed: `[p2, tech-debt + accessibility, Ungrouped]`. NEVER apply a `claude-suggested` label (or any label that attributes the issue to Claude/AI): it is forbidden; do not create or apply it under any circumstances. Prefer reusing existing repo labels, but if a needed label is missing, CREATE it first with `gh label create <name> --color <hex> --description <desc>` (then apply it) rather than omitting it. You may also create a new, more descriptive label when none of the existing ones capture the issue well. Keep new label names short, kebab-case, and reusable. If `gh` is not installed/authenticated or the current directory is not a GitHub repo, do NOT attempt to file or create labels. Just list the ideas so they can be captured manually. If nothing is worth filing AND nothing else needs my action, do NOT show a picker and do NOT add any 'nothing needed' or 'nothing else surfaced' note. Just continue silently. Never pad with filler. Do NOT reopen or redo work that is already complete. When you list or explain ideas to me in chat, use PLAIN LANGUAGE for a product manager, not an engineer: no jargon, and describe any technical thing by what it affects (the issue bodies you file may still keep their path:line refs). Number each idea you list to me as 1.1, 1.2, 1.3, and so on (this is section 1) so I can refer to them by number. NEVER use dashes or bullet points for any list anywhere in your reply. Give EVERY item (including side notes, asides, or things you are only flagging and not filing) its own number in the 1.x sequence so I can reference any of them. ORDER: When BOTH this issue review and the SESSION REFLECTION fire on the same turn, the reflection is NOT printed as its own section. Fold it in here instead. First FULLY COMPLETE the section 1 idea sweep above as a real, standalone attempt (not an afterthought) and list those items. Then, separately, do a SECOND PASS through the reflection's uncertainty point(s), applying the same three-way rule, and be SUCCINCT. Only surface what needs me: (a) RESOLVE-NOW, settle it yourself with read-only / non-destructive tools; if it clears with nothing for me to do, do NOT write it up (at most one short 'checked and cleared' line), and only surface it as a point if you found a real problem; (b) DECIDE-NOW, if it is a quick decision I can make to unblock acting now, pose it as a multiple-choice question via the AskUserQuestion tool; (c) FLAG, otherwise flag it as mine with ACTIONABLE steps for how to check or do it (not just a description of the worry). FOLD every actionable item (ideas to file, DECIDE-NOW choices, and FLAG items needing my action) into the SAME single AskUserQuestion multi-select picker as the ideas above (up to 4 options total), so all my decisions live in one place; use the picker, not prose questions. Each option's label MUST begin with its section number (1.1, 1.3, 2.1, …) matching the numbered write-up so I can find the explanation for any option. If the reflection raised nothing that needs my action, add NOTHING about it. (On turns where only the reflection fires, it prints its own section instead.)"}
-JSON
-)
-# The pending text is handed over as a FILE. As a single argument it is bounded
-# by ARG_MAX, and the spool has no natural size limit, so a busy project would
-# eventually fail the exec. And if the injector fails for any reason, the
-# ORIGINAL payload is emitted anyway: losing the spool text is bad, losing the
-# whole review because of it is worse, and an injector failure is invisible
-# otherwise (its stderr goes nowhere and an empty stdout just means no review).
-# An explicit template, not `mktemp -t <prefix>`. BSD mktemp appends random characters to a
-# prefix; GNU mktemp reads the same argument as a TEMPLATE and refuses it for having no trailing
-# X's. On Linux this line therefore failed, and under errexit it took the whole review with it:
-# every issue review on a machine that was not a Mac exited silently, which is indistinguishable
-# from a review that ran and found nothing to say (claude-config#101, measured on the runner).
-pending_file="$(mktemp "${TMPDIR:-/tmp}/claude-issue-pending.XXXXXX")"
-printf '%s' "$pending" > "$pending_file"
-injected="$(printf '%s' "$payload" | python3 "$(dirname "${BASH_SOURCE[0]}")/lib/inject-spool.py" "$pending_file" 2>/dev/null)" || injected=""
-rm -f "$pending_file"
+# decision:block feeds `reason` back to Claude as a continuation instruction, and
+# Claude Code prints that reason to Dan verbatim. So the instruction does NOT live
+# in this file any more: it lives in review/issue-review.md and what follows emits a
+# short pointer to it. Dan, 2026-08-31, looking at the 8,000 character version plus
+# the spooled findings appended to it: "I think showing this all is unnecessary and
+# ugly".
+#
+# The path is RESOLVED FROM THIS FILE'S OWN LOCATION, never written down and never
+# read from the environment. This config is synced between two Macs whose paths
+# differ, so a pointer that resolves itself is correct on both with nothing to
+# configure. test-review-instructions.sh proves that by running a relocated copy of
+# the tree and requiring the reason to name the copy.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTRUCTION="$SELF_DIR/review/issue-review.md"
 
-if [ -n "$injected" ]; then
-  printf '%s' "$injected"
+# The findings go to a file the pointer names, and that file OUTLIVES this hook:
+# Claude opens it after the hook has exited, so it is deliberately not a mktemp that
+# gets removed on the way out. One stable name per project, overwritten by every
+# review, so it reports what is pending now and cannot accumulate.
+#
+# It also replaces the old ARG_MAX dance. The spool has no natural size limit, and
+# nothing here passes it as an argument any more.
+findings_file=""
+if [ -n "$pending" ]; then
+  # ${TMPDIR%/} rather than $TMPDIR, because macOS sets it with a trailing slash
+  # and this path is now SHOWN to Dan in the reason rather than only used.
+  findings_file="${TMPDIR:-/tmp}"
+  findings_file="${findings_file%/}/claude-issue-findings-${hash}.txt"
+  printf '%s\n' "$pending" > "$findings_file" 2>/dev/null || findings_file=""
+fi
+
+reason_args=(--instruction "$INSTRUCTION" --label "END OF TURN ISSUE REVIEW")
+if [ -n "$findings_file" ]; then reason_args+=(--findings "$findings_file"); fi
+if [ -n "$muted_line" ]; then reason_args+=(--extra "$muted_line"); fi
+
+payload="$(python3 "$SELF_DIR/lib/review-reason.py" "${reason_args[@]}" 2>/dev/null)" || payload=""
+
+if [ -n "$payload" ]; then
+  printf '%s' "$payload"
   # The spool text really went out with this review, so the records nobody can act
   # on are settled here rather than riding along on every future review (#85). A
   # HARVEST FAILED line has no action attached to it: being told once is the whole
@@ -133,20 +147,29 @@ if [ -n "$injected" ]; then
   # after a picker is answered and a spool holding only failures produces no
   # picker. Findings are untouched and still wait for the picker.
   #
-  # Only in this branch: the fallback below carries no spool text at all, so
-  # filing there would settle a failure nobody was ever shown. The known cost that
-  # remains is a review interrupted before it is read, which files one unseen.
-  if [ -n "$pending" ] && [ -f "$SPOOL_LIB" ]; then
+  # The condition is the findings FILE, not the pending text. The text is only
+  # reported once it has been written somewhere Claude can open and counted in a
+  # reason Dan can read; a write that failed leaves findings_file empty, and
+  # settling then would file failures nobody was ever shown.
+  if [ -n "$findings_file" ] && [ -f "$SPOOL_LIB" ]; then
     bash "$SPOOL_LIB" file-errors "$proj" "$transcript" >/dev/null 2>&1 || true
   fi
-  # The held-back records are settled and the week restarted ONLY when their
-  # count actually went out with this review. Doing either on a review that
-  # could not be delivered would lose the report AND silence the next week of
-  # them, which is the one way holding them back could hide a fault for good.
+  # The held-back records are settled and the week restarted ONLY when their count
+  # actually went out with this review. Doing either on a review that could not be
+  # delivered would lose the report AND silence the next week of them, which is the
+  # one way holding them back could hide a fault for good. The count rides in the
+  # reason itself, so it is delivered exactly when this branch is taken.
   if [ -n "$muted_line" ] && [ -f "$SPOOL_LIB" ]; then
     bash "$SPOOL_LIB" file-muted "$proj" "$transcript" >/dev/null 2>&1 || true
     printf '%s' "$(date +%s)" > "$muted_stamp" 2>/dev/null || true
   fi
 else
-  printf '%s' "$payload"
+  # The pointer could not be built. Losing its detail is a nuisance; losing the
+  # review is not, so a static payload still sends Claude to the instruction. It
+  # names the file relatively, because the one thing this branch cannot do is work
+  # out an absolute path. Nothing is settled here: this review carried no counts,
+  # so it reported nothing that could be filed away.
+  cat <<'JSON'
+{"decision":"block","reason":"END OF TURN ISSUE REVIEW. Read review/issue-review.md next to the Stop hooks in your Claude config directory (normally ~/.claude/hooks) and follow it exactly. The pointer that normally names its exact path could not be built, so find the file yourself rather than inventing a review from this line. Any subagent findings for this project are still in the spool: `bash ~/.claude/hooks/lib/issue-spool.sh pending \"$PWD\"` reads them without consuming them."}
+JSON
 fi

@@ -71,7 +71,7 @@
 3 payload/hooks/test-session-namer.sh
 1 payload/hooks/test-stop-hooks.sh
 8 payload/hooks/test-subagent-digest.sh
-41 payload/hooks/test-subagent-issue-harvest.sh
+36 payload/hooks/test-subagent-issue-harvest.sh
 2 payload/hooks/test-suite-result-line.sh
 2 payload/hooks/test-teammate-challenge-gate.sh
 2 payload/skills/milestone/create-milestone.sh
