@@ -15,11 +15,15 @@ Two jobs, run together every time:
    manager-visible problems sitting in the p3 pile.
 
 ```
-/pennie-dev-update                 # ask for the window, then run
-/pennie-dev-update 2026-09-01      # from that date to now
+/pennie-dev-update                 # everything since the last update, up to now
 /pennie-dev-update --no-issues     # draft only, skip the issue check
 /pennie-dev-update --issues-only   # run the check, write no post
+/pennie-dev-update --since <date>  # escape hatch, see section 2
 ```
+
+**Takes no date.** The window is always "since the last update, up to right now". Dan should
+never have to remember when he last posted, and a date he types by hand is the one way this
+can silently skip a period.
 
 Audience: 7 sales team leads plus Kris Hennen. They open PET daily. They do not read code and
 do not care how anything is built.
