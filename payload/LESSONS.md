@@ -1066,6 +1066,29 @@ window is a count rather than a boundary.
   lands in the real distribution: here the whole distribution was the harness, so there was no
   real one to land in and the threshold had been fitted to nothing at all)
 
+- **L347. A test that asserts a message does not use a forbidden WORD does not assert that it
+  does not make the forbidden CLAIM**, because any synonym passes it, so check the claim the
+  sentence makes against what the code actually measured rather than listing the vocabulary you
+  do not want.
+  (PostRoll#1111: #925 was explicit that the sweep may only say a day was EXPORTED, never that it
+  was posted, because the app records a write into a folder and cannot know it reached Instagram.
+  The test asserted that the words "posted" and "published" were absent, and passed, over a
+  sentence reading "rebuilding it would not change anything that has gone out", which is the same
+  claim in different words. Dan's own filing proves the two differ: he keeps a folder called
+  "Done: Waiting to post", so a day can be exported and still not have gone anywhere, and for
+  those days the sentence was false and the conclusion it drew was backwards)
+- **L348. A build or compile check aimed at ONE target of a multi target project says nothing about the
+  others**, so a sweep asking whether the tree still compiles has to build every target that holds the
+  code it changed, or name in its own output which target it asked, because the whole purpose of a
+  narrow target is that a fault elsewhere cannot fail it.
+  (overture#3386, 2026-08-31: to answer whether the test suite's `@MainActor` annotations were needed, a
+  script stripped all 504 of them, built, restored every file the compiler named, and repeated until it
+  built clean. It built the `OvertureCore` scheme, which exists precisely so a broken app cannot fail it
+  and which does not compile the hosted test target at all. The answer it produced was "41 of 461 files
+  can drop it". Building the full scheme over that same 41 file strip rejected all 41: the real answer is
+  ZERO, and every file it cleared was in the target the scheme never touched. The wrong number was
+  already written into the issue as a measured finding before the full build was run)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
