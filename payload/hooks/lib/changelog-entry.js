@@ -46,6 +46,18 @@ const ANY_HEADING = /^[ \t]{0,3}#{1,6}[ \t]+\S/;
 // in the body instead of on the label.
 const SAYS_NOTHING = /^none[.!]?$/i;
 
+// A calendar day, which is the only shape changelogFrom may take.
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+// This machine's local day, as YYYY-MM-DD. Built from the local parts rather
+// than toISOString(), which converts to UTC first and so reports tomorrow's date
+// all evening anywhere east of Greenwich and yesterday's all night in New York.
+function localDay(now) {
+  const d = now || new Date();
+  const pad = function (n) { return String(n).padStart(2, '0'); };
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
 // The changelog labels on a pull request, lowercased and deduplicated. Accepts
 // bare strings or the {name} objects `gh --json labels` returns, because
 // normalising at every call site is how one call site ends up not doing it.
