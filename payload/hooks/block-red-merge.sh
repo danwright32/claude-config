@@ -17,14 +17,22 @@
 
 set -uo pipefail
 
+# The four things every merge gate has to work out before it can say anything
+# about a pull request (is this a merge, which directory, which pull request,
+# whose answer to trust) live in lib/merge-target.sh, shared with
+# require-changelog-tag.sh. They were learned here and each carries the incident
+# that produced it; they moved out when the second gate needed them, because two
+# copies would drift silently, each passing its own tests while disagreeing about
+# which pull request it is looking at.
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/merge-target.sh
+. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
+
 payload=$(cat)
 command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)
 
 # Not a merge: stay out of the way.
-case "$command" in
-  *"gh pr merge"*) ;;
-  *) exit 0 ;;
-esac
+mt_is_pr_merge "$command" || exit 0
 
 deny() {
   jq -nc --arg reason "$1" '{
