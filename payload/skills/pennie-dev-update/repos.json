@@ -5,7 +5,8 @@
       "repo": "Try-Pennie/project-enrollment-tracker",
       "path": "~/Documents/Project Enrollment Tracker (PET)/pet",
       "deployRecord": "build_history",
-      "deployRecordFrom": "2026-07-29"
+      "deployRecordFrom": "2026-07-29",
+      "changelogFrom": "2026-08-31"
     }
   ],
   "_addingSlate": "Uncomment the entry below when you want Slate appearing in these updates, which is weeks after launch, not at launch. Fill in its checkout path. Every repo here is treated identically.",
@@ -13,5 +14,6 @@
     "name": "Slate",
     "repo": "Try-Pennie/slate",
     "path": "FILL IN THE CHECKOUT PATH"
-  }
+  },
+  "_changelogNote": "changelogFrom is the date from which every merged pull request in that repo carries a changelog record: a changelog/visible, changelog/technical or changelog/none label, plus a '## Changelog' block in the body for the visible ones. Enforced at merge time by ~/.claude/hooks/require-changelog-tag.sh, which gates ONLY repos listed here WITH this field. A repo listed without it is not gated, which is what lets the pull request adding the date merge. Before that date there are no records and the update falls back to reading titles and bodies by hand. See pet/docs/changelog-records.md and PET #1186."
 }
