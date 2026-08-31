@@ -62,17 +62,53 @@ state, not config.
     "headings": ["COMMISSION AND FIRST PAY", "GOALS"] } }
 ```
 
-- **Start** = `lastEnd` for that repo, or the date passed as an argument.
-- **End** = now.
-- **No gaps, ever.** Because start is the previous end, nothing can fall between two updates.
-  If Dan passes a date **later** than `lastEnd`, say exactly what period would be skipped and
-  ask before proceeding. Do not silently drop it.
+- **Start** = `lastEnd` for that repo, exclusive. **End** = now. That is the whole rule.
+- **No gaps, ever**, because each window begins exactly where the last one ended. No date is
+  asked for and none is needed.
 - **`heldBack`** carries PR numbers that merged but had not reached production last run. Add
   them to this run's candidate set regardless of the window.
 - **`headings`** is the previous run's section names. See section 6.
 
-With no argument and no stored state, ask with a picker: since the last update, last week,
-last month, or a custom date.
+**The only time it asks:** a repo with no `lastEnd` at all, its genuine first run. Then ask for
+a starting date, because nothing else can know it. Every run after that is silent.
+
+### The boundary is an instant, never a day
+
+`lastEnd` is a full UTC timestamp and the comparison is strictly `merged_at > lastEnd`.
+
+This matters because Dan posts an update and then keeps working the same day. A day-granular
+boundary breaks both ways and there is no safe rounding: store `2026-08-31` and tomorrow's run
+re-reports everything already posted today; store `2026-09-01` and everything merged after the
+post is skipped forever. `merged_at` from the GitHub API is a full ISO timestamp, so comparing
+instants is exact.
+
+### What to store as the new `lastEnd`
+
+**The `merged_at` of the newest PR actually LISTED in the post.** Not wall-clock now, and not
+the newest PR considered.
+
+- Not wall-clock now: a PR that merges while the run is drafting would fall before the boundary
+  and never appear in any update.
+- Not the newest considered: a held-back PR sits above the newest listed one, and advancing past
+  it would make its future inclusion depend entirely on the `heldBack` list being written
+  correctly. Leaving the boundary below it means the next window re-covers it naturally *and*
+  `heldBack` names it. Two independent paths to the same guarantee, which is what you want for
+  the one failure this design exists to prevent.
+
+The cost is that the next run re-examines a handful of already-considered PRs. That is harmless:
+it either lists them or holds them back again.
+
+**If nothing was listed** (a quiet period, or everything held back), leave `lastEnd` untouched.
+The window simply grows until there is something to report.
+
+**Write `lastEnd` only after the draft file exists.** If the run dies partway the boundary must
+not move, or that period is skipped forever.
+
+### `--since <date>` is an escape hatch
+
+Only for redoing a period or recovering lost state. If the date given is **later** than
+`lastEnd`, print exactly what period would be skipped and ask before proceeding. A redo never
+moves `lastEnd` backwards.
 
 ---
 
