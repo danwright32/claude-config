@@ -176,7 +176,19 @@ function parseEntry(input) {
 // made after the rule reached that repo, and reading a missing date as "always"
 // would refuse every pull request in a repo that has not adopted this yet,
 // including the one that adds the date.
-function repoScope(registry, slug) {
+//
+// changelogFrom is a START DATE, not merely an on switch, so a repo's date can be
+// set to its launch day in advance and the gate begins then. Setting it early
+// otherwise means it begins refusing immediately, which is the opposite of what
+// the field says, and Slate is exactly the case where somebody would set it
+// ahead of time.
+//
+// `today` is passed in as a 'YYYY-MM-DD' string. It defaults to this machine's
+// local day, which is right for a switch that flips once and is never
+// retrospective: a day either side of the boundary changes nothing anyone can
+// observe. Every test passes it explicitly, because a test that reads the clock
+// is a test about the machine.
+function repoScope(registry, slug, today) {
   if (!registry || !Array.isArray(registry.repos)) {
     return {
       inScope: false,
