@@ -1,6 +1,6 @@
 'use strict';
 //
-// changelog-entry.js — the one definition of what a changelog record is.
+// changelog-entry.js: the one definition of what a changelog record is.
 //
 // Why this exists: the first manager facing update covering June to August meant
 // reading all 499 pull request titles merged in that period and judging each one

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# test-changelog-tag.sh — the merge gate that requires a changelog record, plus
+# test-changelog-tag.sh: the merge gate that requires a changelog record, plus
 # the record parser it reads through.
 #
 # Every case runs the REAL hook with a fake `gh` first on PATH, so what is tested

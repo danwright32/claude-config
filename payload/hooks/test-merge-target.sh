@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# test-merge-target.sh — lib/merge-target.sh, the four things a merge gate has to
+# test-merge-target.sh: lib/merge-target.sh, the four things a merge gate has to
 # work out before it can say anything about a pull request.
 #
 # These used to live inside block-red-merge.sh and were covered only through it.

@@ -1,6 +1,6 @@
 'use strict';
 //
-// changelog-entry.test.js — what counts as a changelog record, and what the
+// changelog-entry.test.js: what counts as a changelog record, and what the
 // refusal says when a pull request does not carry one.
 //
 // Run through the harness wrapper ~/.claude/hooks/test-changelog-tag.sh, which

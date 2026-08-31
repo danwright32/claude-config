@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 #
-# merge-target.sh — shared helpers for hooks that gate a pull request merge.
+# merge-target.sh: shared helpers for hooks that gate a pull request merge.
 #
 # Sourced, never executed. Holds the four things every merge gate has to work
 # out before it can say anything about a pull request, so they exist once rather
 # than once per gate:
 #
-#   mt_is_pr_merge   — is this command actually a merge
-#   mt_repo_dir      — which directory the merge will run in, which is not
+#   mt_is_pr_merge   is this command actually a merge
+#   mt_repo_dir      which directory the merge will run in, which is not
 #                      necessarily the session cwd
-#   mt_pr_number     — the pull request the command names, if it names one
-#   mt_remote_slug   — owner/name from the git remote, read from the CURRENT
+#   mt_pr_number     the pull request the command names, if it names one
+#   mt_remote_slug   owner/name from the git remote, read from the CURRENT
 #                      directory, so callers cd first
-#   mt_pr_view       — the pull request's fields, from whichever logged-in
+#   mt_pr_view       the pull request's fields, from whichever logged-in
 #                      account can actually see the repo, proved to be about
 #                      the repo the remote names
 #
