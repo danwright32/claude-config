@@ -1144,6 +1144,27 @@ window is a count rather than a boundary.
   superlinear in the count, since the gap in cost is then worse than the gap in rows. L48 requires
   the fixture to be MEASURED from real data; this is that measurement expiring afterwards.
 
+- **L355. A sampled profile shows the SHAPE of one stack, and only becomes a measurement of COST
+  once the sample count is read, so a stack seen a handful of times cannot support a claim about
+  where the time went.** Read the instrument's depth before quoting its output, because eleven
+  samples and eleven thousand render as the same picture. Measured 2026-08-31 (overture#3425): a
+  macOS `.hang` report was read as proof the main thread was "pinned" in a queue rebuild, and the
+  whole subtree it was attributed to weighed 3 samples out of 11, taken over 1.1 seconds at the end
+  of a 58 second freeze. The same session's live `sample` runs, at 1ms over 2,446 and 2,580 samples,
+  did support that kind of claim, so the fault was not the method but quoting a detection instrument
+  as if it were a measurement one. State the sample count beside any figure taken from a profile.
+
+- **L356. A performance measurement taken on the machine that also builds and tests the product
+  measures both, so record what else was running at the moment of the reading rather than filtering
+  it out afterwards.** A contaminated sample is indistinguishable from a real regression, and work
+  done to "fix" one can never be shown to have worked. Measured 2026-08-31 (overture#3442): a 58
+  second application freeze carried frames from six concurrently running xctest processes, because
+  the app under test sits in the menu bar all day on the Mac whose mandatory pre-push gate runs the
+  whole Swift suite from several worktrees. The load was invisible in every summary of the freeze
+  and was found only by reading the raw report. This is L294 pointed the other way: that one is the
+  test suite mismeasured on a loaded runner, this one is the product mismeasured beside its own
+  suite.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -1938,6 +1959,16 @@ window is a count rather than a boundary.
   earlier. Distinct from L148, where the reason dies with a transient surface, and from L194,
   where a payload reduces a fact to a flag: here the whole message was durable and present, and
   a formatter that renders one line per suite took line one)
+
+- **L357. A counter that renders its number on a screen is not a detector, because detection
+  requires something that speaks on its own when the number is wrong.** Until then the instrument
+  and its absence are the same thing and the defect is still found by the person noticing, which is
+  the state the instrument was built to end. Measured 2026-09-01 (overture#3435): Overture already
+  held `QueueRenderCounter`, which counts every whole store derivation, records which input
+  triggered each one, compares the rows produced, writes a rotating log and draws "derived N,
+  reason" on screen. It had been there for months while the app froze for up to 58 seconds at a
+  time, and a planning panel reading the same code proposed building it. Nothing read it, nothing
+  alerted on it, and so nothing about it was detection (L13, L98).
 
 ## State and identity
 
