@@ -1629,10 +1629,24 @@ window is a count rather than a boundary.
   Distinct from L110, which is a wait with no deadline, and from L236, which is a wait for a person
   on the thread that would ask them: a deadline does not help here, because the damage is done by
   occupying the thread at all.
+  A SECOND tell, on the UI thread specifically: a call that crosses a process boundary and waits
+  looks exactly like an ordinary local method call at the site that decides where to run it. Nothing
+  in `client.completedOvertureTasks()` says it sends a message to another application and blocks
+  until that application answers, so the reviewer who would have caught it has nothing to see. Name
+  the boundary where the decision is made (in the type, the call's own name, or an await that cannot
+  be skipped), never only in a comment beside the definition.
   (downbeat#406, 2026-08-22: the fix for a keychain hang ran the blocking call with `Task.detached`,
   putting it on the cooperative pool; a suite whose fixtures blocked a handful of them killed the
   test process partway through and reported 1835 failures that were one starved runtime. The same
   trap was already documented in a comment two files away, which did not prevent the repeat, L57)
+  (overture#3419, 2026-08-31, the same class in a second project nine days later, which is L195
+  unapplied: both OmniFocus sync call sites run a synchronous AppleScript round trip on the main
+  actor, so the whole app stops drawing and stops accepting clicks for the length of the call. Dan
+  reported it as a freeze and it was still frozen when sampled, which is what made it provable:
+  2,646 of 2,646 samples in `NSAppleScript.executeAndReturnError` waiting on an Apple event. Reached
+  from launch, a 30 minute timer and every data change, so it freezes unprompted, not only on the
+  menu item that surfaced it. The premise both sites were built on, that AppleScript requires the
+  main thread, had never been checked; the cost claim beside it is L353)
 
 - **L121. A retry or self heal step that decides from a RECORDED success marker (a stored
   status, an effects string, an ok field) cannot notice that the artifact it created has since
