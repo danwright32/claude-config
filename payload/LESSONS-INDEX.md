@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 379 lessons.
+LESSONS.md, which is NOT loaded into the session. 380 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -106,6 +106,7 @@ to decide something: the body is where the failure it came from is described.
 - L528. A detector that reads production counters also reads whatever your own smoke canary or synthetic monitor writes into them, so check whether the canary ALONE can satisfy its floor before trusting any verdict it reaches.
 - L347. A test that asserts a message does not use a forbidden WORD does not assert that it does not make the forbidden CLAIM
 - L348. A build or compile check aimed at ONE target of a multi target project says nothing about the others
+- L350. An optimisation that lets work be SKIPPED also removes that work's observations from every instrument whose rate is computed over them, so the sample shrinks as the optimisation succeeds and a threshold calibrated on the old sample turns into noise while still reading as a measurement.
 
 ## Data safety
 

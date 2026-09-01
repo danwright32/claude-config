@@ -1089,6 +1089,17 @@ window is a count rather than a boundary.
   ZERO, and every file it cleared was in the target the scheme never touched. The wrong number was
   already written into the issue as a measured finding before the full build was run)
 
+- **L350. An optimisation that lets work be SKIPPED also removes that work's observations from
+  every instrument whose rate is computed over them, so the sample shrinks as the optimisation
+  succeeds and a threshold calibrated on the old sample turns into noise while still reading as a
+  measurement.** When adding a skip, count what still reports and re-measure any threshold judged
+  over it, because the instrument goes on printing a percentage either way.
+  (nursedex#818 and nursedex#859, 2026-09-01: the CI health counter judges the Playwright flake
+  rate over the last 20 E2E runs. Measured that day, only 10 of the 20 reported at all and only 7
+  were push runs, because nursedex#812's merged tree proof lets a main run satisfy itself without
+  running the suite. The verdict came back 4 of 10, exactly the 40% threshold, so one flake either
+  way decided it, and the four bad runs it was counting were a single fixed defect.)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
