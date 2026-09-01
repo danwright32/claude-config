@@ -2585,6 +2585,21 @@ window is a count rather than a boundary.
   query the tool would never have made. Related to L156, where a failure message quoting its
   target defeats a substring success check; here the same property defeats a privacy control)
 
+- **L360. A value redacted where an object is CONSTRUCTED is unredacted by any later step that
+  ENRICHES that same object, because the gate lives in the construction and the enrichment runs
+  afterwards with no viewer to consult. Give the enriching function the same gate as an argument
+  rather than letting it be called ungated, since every call site reads as correct and only the
+  field added last escapes.**
+  (nursedex#873, 2026-09-01: `shapeNurseCard` blanks a nurse's surname for a viewer without
+  entitlement, carrying a comment that it is gated in the data "so no producer can ship the raw
+  value by forgetting a presentational prop". It sets `photo_url: null` too, but as an initial
+  value: `attachNurseCardPhotos` fills it in afterwards for every card with a photo and takes no
+  viewer argument at all. So a logged out visitor saw the nurse's FACE while her surname was
+  withheld, and a face identifies far better than a surname. Bio, rate and availability were all
+  correctly gated in the shaper; only the field written after the shaping escaped. The survey
+  result card even advertised "Full profiles, credentials, and photos" as the thing you unlock,
+  beside the photo it was already showing)
+
 ## UX completeness
 
 - **L341. A curve assembled from piecewise segments must be checked for continuity of its RATE

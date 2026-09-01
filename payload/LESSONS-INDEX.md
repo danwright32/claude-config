@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 389 lessons.
+LESSONS.md, which is NOT loaded into the session. 390 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -256,6 +256,7 @@ to decide something: the body is where the failure it came from is described.
 - L222. A privacy guard that scans your REPOSITORY cannot see what a tool PRINTS, so any tool that reads a live system (its screen, its database, its API) delivers real customer names and addresses straight into transcripts, terminal scrollback and logs by a route the guard never inspects, and from there into whatever somebody pastes them into.
 - L155. An issue or plan written with REAL measured evidence becomes the source whoever implements it copies into fixtures, so redact people's identities where the evidence is RECORDED rather than trusting the implementer to anonymise it later.
 - L268. A BULK query over a protected collection leaks the WHOLE collection in its ERROR message
+- L360. A value redacted where an object is CONSTRUCTED is unredacted by any later step that ENRICHES that same object, because the gate lives in the construction and the enrichment runs afterwards with no viewer to consult. Give the enriching function the same gate as an argument rather than letting it be called ungated, since every call site reads as correct and only the field added last escapes.
 
 ## UX completeness
 
