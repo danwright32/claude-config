@@ -3387,10 +3387,22 @@ window is a count rather than a boundary.
   one, sweep the OTHER projects for the same defect at once**, because the instance you just
   fixed is rarely the only one and the rest sit in code that nothing will ever re-examine: the
   rule is consulted while writing something new, never against what already exists.
+  And when the remedy was a shared HELPER rather than a rule, port the HELPER too, because a
+  sibling project that has the lesson but not the code reinvents the very mechanism the lesson
+  exists to forbid.
   (downbeat#336: L108 was recorded from PostRoll, where the Anthropic API key field checked
   only that the value began sk-ant-. Downbeat's copy of that same field checked less than that,
   only that something had been typed, and kept the gap for months until a truncated paste of a
   different credential exposed it by accident)
+  (2026-08-31, the helper half, found by sweeping all four Swift and TypeScript projects on this
+  Mac after Dan reported Overture freezing: Downbeat answered downbeat#402 and #406 by building
+  `Integration/BlockingWork.swift`, which runs blocking work on a dispatch queue under a deadline
+  and is wired at 13 call sites. Nine days later Overture was blocking the main thread outright
+  (overture#3419) and PostRoll was reaching for `Task.detached` (postroll#1143), which is the exact
+  mechanism downbeat#406 had measured as wrong. Three Swift apps, one author, one machine, and the
+  file that solved it existed the whole time in one of them. Note PostRoll had the INSTINCT right
+  and said so in a comment, off the main actor deliberately, so the lesson had travelled and only
+  the code had not: that is the case this clause is for)
 
 - **L233. In a list of exclusions or skip cases, an entry carrying no written reason while its
   neighbours each carry one is evidence it was never reasoned about rather than deliberately
