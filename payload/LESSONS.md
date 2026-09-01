@@ -2030,6 +2030,7 @@ window is a count rather than a boundary.
   setting rendering as empty: here the fallback COINCIDES with what the person intended, so
   there is no discrepancy for them to notice)
 
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
