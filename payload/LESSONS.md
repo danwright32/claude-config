@@ -1112,6 +1112,27 @@ window is a count rather than a boundary.
   printed. Adjacent to L84, which is this shape for a recorded expectation, and to L280, which is a
   rule enforced at one stage being undone at a later one.)
 
+- **L353. A comment estimating that some work is small enough to run somewhere costly (briefly on
+  the UI thread, inside a lock, in a request handler, on the hot path) is a measurement nobody took,
+  and it licenses the same choice at every later call site, so name the quantity the cost scales with
+  and what bounds it, because the costs that grow with usage are exactly the ones that read as small
+  on the day they are written.** The tell is a comment that concedes the cost and then dismisses it
+  in the same sentence, since conceding it is what makes it look considered. Distinct from L107,
+  where a number justifying a decision WAS measured but by a second definition written beside the
+  code, and from L102, where it was measured with the expensive path switched off: here nothing was
+  measured at all, and the sentence is doing the work a measurement would have done. Distinct from
+  L316, which is a premise that expires: this one can be false on the day it is written.
+  (overture#3419, 2026-08-31: `RootView.syncOmniFocus` runs a synchronous AppleScript call to
+  OmniFocus on the main actor under the comment "The work is a handful of Apple events, so the brief
+  main-actor occupancy is acceptable". It is one Apple event per completed OmniFocus task, over a set
+  nothing prunes, so it grows every time Dan ticks one off. Sampled live during a freeze Dan reported,
+  2,646 of 2,646 samples over three seconds were inside that call and the freeze lasted minutes. The
+  same sentence, alongside an unverified "NSAppleScript must run on the main thread", is why a SECOND
+  call site was written the same way in `ReconcileScheduler.syncOmniFocus`, which is the one that
+  froze: the comment read as a considered decision, so the pattern was copied rather than questioned.
+  Note the shared function underneath both, `OmniFocusSync.apply`, carries a comment saying it takes
+  value types "so it can run off the main actor", which is L3: neither caller ever did.)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
