@@ -401,6 +401,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2422: an importer skipped matching whenever a batch held two contacts of the same
   kind, which is every multi performer show, so every re-run appended duplicates instead of
   correcting rows)
+- **L362. An exemption written as ONE NAMED CASE rather than as the reason for exempting stops
+  covering the moment a second case satisfies that reason, and where the exemption exists to keep a
+  REMEDY reachable the result is a deadlock: the tool refuses while naming a condition only that
+  tool could clear. Write the condition as the reason, and hold the list of names to it with a
+  test.** The mirror of L324, and it fails in the opposite direction: too broad switches the guard
+  off silently, too narrow switches the REMEDY off loudly, and the loud version is worse to be
+  caught by because it arrives while somebody is already blocked. The tell is an exemption spelled
+  as a single constant naming one file or one check, where the comment beside it describes a class
+  ("the guards that read this record"). (PostRoll#1165, measured 2026-09-01: the test duration
+  recorder refuses to write from a red suite, exempting the guard that goes red precisely when the
+  record is stale. Two guards do that, only one was named, so adding any new test file deadlocked
+  the tool through two full suite runs, each time refusing over a failure nothing but the tool
+  could clear)
+
 - **L324. A guard's STAND DOWN condition must be no broader than the reason for standing down, because
   the broader form silently disables it in cases nobody meant to exempt, and those are the runs least
   like the ones it was tested on.** Write the condition as the exemption itself (this run was

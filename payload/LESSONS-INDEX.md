@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 391 lessons.
+LESSONS.md, which is NOT loaded into the session. 392 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -50,6 +50,7 @@ to decide something: the body is where the failure it came from is described.
 - L88. A CI job that runs only when certain paths change must have those paths derived from every input its tests actually read, not from where the code under test lives.
 - L92. When you make a removal or refusal durable by recording it against an identifier (an email, an id, a URL), every item the action can apply to must actually carry that identifier, or the ones lacking it silently keep the exact defect the recording was added to fix.
 - L93. A guard that avoids a wrong action by falling back to a different action has only chosen which defect to ship, so name what the fallback gets wrong and measure how often the guard fires on real data.
+- L362. An exemption written as ONE NAMED CASE rather than as the reason for exempting stops covering the moment a second case satisfies that reason, and where the exemption exists to keep a REMEDY reachable the result is a deadlock: the tool refuses while naming a condition only that tool could clear. Write the condition as the reason, and hold the list of names to it with a test.
 - L324. A guard's STAND DOWN condition must be no broader than the reason for standing down, because the broader form silently disables it in cases nobody meant to exempt, and those are the runs least like the ones it was tested on.
 - L98. A watcher, poller or wait-for-completion step that reports SUCCESS when it found NOTHING to watch is indistinguishable from one that saw everything pass.
 - L171. A positive control proves the query SHAPE, never that the query reached the period you are asking about, so a control satisfiable by data from outside that period cannot detect a lagging pipeline and an absence there is worthless.
