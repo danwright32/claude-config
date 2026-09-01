@@ -2448,6 +2448,24 @@ window is a count rather than a boundary.
   before the overlap was measured. The conversion RATIO survived, because the same inflation
   applies to both ends of the funnel, but the audience size did not)
 
+- **L359. A URL that carries a freshly minted credential (a signed storage URL, a presigned
+  link, a tokenised CDN path) is a NEW cache key on every render, so every cache downstream of
+  it, the CDN, the image optimiser and the visitor's own browser, MISSES forever while still
+  returning the correct bytes. Re-sign on a schedule and reuse the URL, or put a stable path in
+  front of the signing, and prove it with a cache HIT on a second load rather than by reading
+  the code.**
+  (nursedex#871, 2026-09-01: nurse photos live in a private Supabase bucket, and
+  `getSignedPhotoUrl` minted a fresh signed URL per render. The token was good for four hours
+  but a new one was issued every request, so Vercel's image optimiser saw a new source URL every
+  time: `x-vercel-cache` was MISS on 30 of 30 photo requests, and two loads seconds apart
+  produced different URLs for the same nurse. A phone downloaded only 6 KB of images and spent
+  5,247 ms waiting for 7 of them, 928 ms for a single 1 KB avatar, because the optimiser refetched
+  and re-encoded each one from scratch; on LTE the directory sat on skeletons for about thirty
+  seconds. Nothing was broken, every byte was correct, and it was invisible for months: it
+  surfaced only when Dan opened the page on his own phone. Vercel also bills per transformation,
+  so the same photos were paid for on every view. L289 says such a fast path fails silently; this
+  is the construction that guarantees it)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
