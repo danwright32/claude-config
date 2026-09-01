@@ -1100,6 +1100,18 @@ window is a count rather than a boundary.
   running the suite. The verdict came back 4 of 10, exactly the 40% threshold, so one flake either
   way decided it, and the four bad runs it was counting were a single fixed defect.)
 
+- **L352. A validator that compares a step's output against the PREVIOUS step's output can only
+  see damage that step did, so anything broken before it becomes the baseline every later guard
+  defends as correct.** Chain every guard in a rewrite pipeline back to the ORIGINAL, and guard the
+  first step too, because the step doing the most rewriting is usually the one nobody wrapped.
+  (postroll#1140, 2026-08-31: a blog revision makes three model calls. The two review passes both
+  carry markers_preserved_validator and both compare against `data`, which is already the output of
+  the first call, and that first call, the one whose whole job is rewriting the body, has no
+  validator at all. So a photograph renamed, dropped or reordered by pass one is the baseline passes
+  two and three are held to, and the post ships one picture short with nothing red and nothing
+  printed. Adjacent to L84, which is this shape for a recorded expectation, and to L280, which is a
+  rule enforced at one stage being undone at a later one.)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
