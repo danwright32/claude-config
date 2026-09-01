@@ -1868,6 +1868,19 @@ window is a count rather than a boundary.
   is written later, and from L280, one stage of a pipeline not enforcing a rule for the pipeline:
   here the check is correct and simply sits on one of two ways in)
 
+- **L351. A reporter that folds a child's failure into a single summary row keeps only the FIRST
+  line of that failure's message, so a message written summary first, with the files, counts and
+  remedy beneath, loses precisely the part that says what to do.** Carry every line of a captured
+  failure, or the reader rediscovers at cost what the reporter already held.
+  (claude-config#253, 2026-08-31: run-all-tests.sh printed `FAIL: no file has gained a short
+  circuiting pipeline (these have:` and stopped there, on an open parenthesis. The ratchet had
+  already named both offending files, both counts and the fix for each, and none of it reached
+  the CI log, so diagnosing the red build meant checking the failing commit out into a worktree
+  and running the suite by hand to read a message the runner had been handed three minutes
+  earlier. Distinct from L148, where the reason dies with a transient surface, and from L194,
+  where a payload reduces a fact to a flag: here the whole message was durable and present, and
+  a formatter that renders one line per suite took line one)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
