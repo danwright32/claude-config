@@ -3392,6 +3392,18 @@ window is a count rather than a boundary.
   nothing anywhere reporting it. One event predating the trim still held all 20 per photo alts,
   which is how the shape violation was seen at all)
 
+- **L363. A deduplication that runs before findings are filed must compare against the store they
+  are filed INTO, never only against the batch that produced them, because any audit of that store
+  restates its records and each one then arrives as a fresh finding.** L333 covers agents in one
+  batch duplicating each other, and the spool answers that; this is the batch duplicating what was
+  already recorded, which the spool cannot see. Wherever a pipeline files into a durable store (an
+  issue tracker, an alert channel, an error tracker) the last step before filing reads that store.
+  (claude-config#256: eight read only agents audited every open PostRoll issue against main on
+  2026-09-01. The harvest spooled their observations, another session's review offered them as new
+  findings, and PostRoll #1173 to #1176 were filed within minutes, each a twin of the issue its agent
+  had been reading, #959, #1023, #1156 and #1115. The eight findings the auditing session's own
+  review then received were all restatements of open issues too)
+
 ## Codebase hygiene
 
 - **L217. A guard whose forbidden or expected values are DERIVED from a shipped dataset covers
