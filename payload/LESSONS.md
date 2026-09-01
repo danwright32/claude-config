@@ -2433,6 +2433,21 @@ window is a count rather than a boundary.
   the contact on success and the button threw it away, so at the moment the family was looking at a
   button the browser was holding the email. nursedex#857 covers the class)
 
+- **L358. A unique user count from a client side analytics tool counts the identities that tool
+  has ISSUED, never people, and any environment that isolates or clears storage (an in app
+  browser, a private window, a fresh device) turns one person into several, always inflating the
+  figure. Near zero overlap between two populations that plainly SHOULD overlap is evidence of
+  that fragmentation rather than of independent audiences, so measure the overlap before
+  reporting either count as a headcount.**
+  (nursedex#870, 2026-09-01: PostHog reported 1,189 social visitors in 30 days, and exactly ONE
+  of them carried both an Instagram and a Facebook referrer. That is impossible as a fact about
+  people and is entirely an artifact: each app opens links in its own in app browser with
+  isolated storage, so one person arriving through both, or returning through one, lands as
+  separate anonymous ids, and the tool can only join them once somebody logs in, which 142 people
+  ever had. A message quoting the figure as people had already been drafted for a third party
+  before the overlap was measured. The conversion RATIO survived, because the same inflation
+  applies to both ends of the funnel, but the audience size did not)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
