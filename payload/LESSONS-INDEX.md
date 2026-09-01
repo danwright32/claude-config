@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 390 lessons.
+LESSONS.md, which is NOT loaded into the session. 391 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -67,6 +67,7 @@ to decide something: the body is where the failure it came from is described.
 - L102. A cost or latency measured while the expensive path is switched off measures the short circuit, not the work, so the number reads as reassurance for exactly the case nobody has tested.
 - L331. A measurement written into a store that later DECIDES something (a launch order, a shard balance, a retry budget) must record whether the run it came from actually did the work, because a run that refused, was locked out or died early reports a real and very small number, and nothing downstream can tell that from a genuinely fast one.
 - L289. A fast path that falls back to doing the work when it cannot read its own record (a cache, a memo, a skip if unchanged gate) fails SILENTLY, because the fallback is correct and merely slower, so every test stays green while the saving quietly stops happening.
+- L361. A filter that EXCLUDES content by testing a property of its whole container (a paragraph that starts with a marker, a block beginning with a comment character) fails in both directions as soon as one container mixes excluded and wanted content: the excluded thing leaks in wherever it is not first, and the wanted thing is discarded with it wherever it is. Strip the excluded elements from inside the container rather than judging the container by its start.
 - L104. A filter that identifies data by its SHAPE (a redaction regex, a content classifier, a profanity or spam rule) must be tested against the content it has to PRESERVE, not only against the content it has to catch, because the shape it matches is rarely unique to its target and an over match reads exactly like the feature working.
 - L107. A number measured to justify a design decision must be produced by the code's own predicate, never by a query written beside it, because an ad-hoc reimplementation is a second definition that drifts silently and in the direction that flatters the argument being made.
 - L156. A success check that looks for a SUBSTRING OF THE THING BEING TALKED TO (a hostname, a command name, a file path, a resource id) also matches the ERROR about it, because a failure message quotes its target, so match the shape of the SUCCESS output instead.

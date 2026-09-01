@@ -601,6 +601,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   passed and the suite was green. It was found only by asking why the gate said it was
   running the suite on a push where nothing had changed)
 
+- **L361. A filter that EXCLUDES content by testing a property of its whole container (a
+  paragraph that starts with a marker, a block beginning with a comment character) fails in
+  both directions as soon as one container mixes excluded and wanted content: the excluded
+  thing leaks in wherever it is not first, and the wanted thing is discarded with it wherever
+  it is. Strip the excluded elements from inside the container rather than judging the
+  container by its start.** Both directions are silent. The leak makes a rule report on text
+  nobody wrote, and the discard makes a rule report on nothing at all while still reading as
+  a rule that ran (L98). Distinct from L104, which is about a filter's PATTERN matching too
+  much, and from L278, which is about a COMPARISON judged in the wrong unit; this is about an
+  exclusion applied at the wrong granularity. (PostRoll#1163: `_prose_paragraphs` dropped a
+  paragraph only when the whole block started with `[PHOTO:`, so a marker at the end of a
+  paragraph carried its filename digits into every prose rule. The invented number check then
+  reported `-189.jpg` and `-330.jpg` as invented counts in Dan's prose, 8 of that check's 32
+  firings across the 21 stored posts, every one a false positive)
+
 - **L104. A filter that identifies data by its SHAPE (a redaction regex, a content
   classifier, a profanity or spam rule) must be tested against the content it has to
   PRESERVE, not only against the content it has to catch, because the shape it matches is
