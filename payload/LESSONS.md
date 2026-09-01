@@ -2307,6 +2307,19 @@ window is a count rather than a boundary.
   app's 70 store reads declare an order. Dan found it by looking at the screen. overture#3378 covers the
   class)
 
+- **L349. A result the mutating action ALREADY RETURNED must be rendered from that return value,
+  never left to a re-fetch or refresh to bring it back, because that read races the write it is
+  reading and, when it loses, the person sees nothing from an action that fully succeeded, which
+  is indistinguishable from the action having failed.** The action holds the answer at the moment
+  the person is still looking at the control, so keep the re-fetch for whatever ELSE the change
+  affects and never let the result itself depend on it.
+  (nursedex#831, 2026-08-30: the family reveal spec failed all three attempts on a tree with no
+  application changes. The reveal row was written, the slot spent, the action returned 200 and the
+  refresh fetched a fresh render 770ms later, and the page still rendered the un-revealed state for
+  the full fifteen seconds the spec waited, while the retry passed in 4.2s. `revealNurse` returns
+  the contact on success and the button threw it away, so at the moment the family was looking at a
+  button the browser was holding the email. nursedex#857 covers the class)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**

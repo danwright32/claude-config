@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 378 lessons.
+LESSONS.md, which is NOT loaded into the session. 379 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -229,6 +229,7 @@ to decide something: the body is where the failure it came from is described.
 - L334. A deduplication that breaks a tie by AGE systematically keeps the copy holding the STALEST picture of the outside world, because being stored longest is exactly what gave it time to go stale.
 - L335. A deduplication that deletes the copy whose identity the UPSTREAM SOURCE publishes gets that duplicate back on the very next sync, so the merge repeats forever and destroys the fresher row every time.
 - L343. A collection read from a store carries no order unless the read declares one, so a list rendered straight from a query result appears in whatever order the store happened to return.
+- L349. A result the mutating action ALREADY RETURNED must be rendered from that return value, never left to a re-fetch or refresh to bring it back, because that read races the write it is reading and, when it loses, the person sees nothing from an action that fully succeeded, which is indistinguishable from the action having failed.
 
 ## Security and privacy
 
