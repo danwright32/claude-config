@@ -2388,6 +2388,16 @@ check "status names a same-size same-mtime edit" \
 # exclude set as stage_local_to_payload. Some skills are git clones carrying
 # their own .git, and a status that reports those as pending changes is noise
 # describing work that will never happen. (#737)
+# The payload's skills directory has to EXIST for this to test what it means to test.
+# rsync reports files under a destination directory that is not there at all with the
+# flags for "nothing about this differs" rather than "newly created", so the assertion
+# below on `+` was reading an implementation detail of the missing destination and not
+# claude-sync's report. It survived only because rsync 3.4.1, on the other Mac and on
+# the CI runner, keeps the `+` in that case while the openrsync macOS ships does not,
+# so the suite was red on one Mac and green on the other for a reason neither machine
+# stated (#257 follow-up, L504: when the ambient environment is what separates a correct
+# implementation from a wrong one, the test has to set it rather than inherit it).
+mkdir -p "$STREPO/payload/skills"
 mkdir -p "$STHOME/skills/cloned/.git/hooks"
 echo 'ref: refs/heads/main' > "$STHOME/skills/cloned/.git/HEAD"
 mkskill "$STHOME/skills/cloned/SKILL.md" 'SKILL'
