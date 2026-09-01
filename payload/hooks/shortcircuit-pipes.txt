@@ -46,7 +46,7 @@
 # corrected, never as the tree getting worse, and read the number from here on as a ratchet again.
 
 7 claude-sync
-1 payload/hooks/block-red-merge.sh
+0 payload/hooks/block-red-merge.sh
 0 payload/hooks/check-home-paths.sh
 3 payload/hooks/durable-lesson-check.sh
 1 payload/hooks/lessons-advisory.sh

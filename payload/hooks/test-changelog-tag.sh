@@ -86,8 +86,24 @@ run_hook() {  # $1 = repo dir, $2 = command ; prints the hook's stdout
            bash "$HOOK" )
 }
 
-denied() { printf '%s' "$1" | grep -q '"permissionDecision": *"deny"'; }
-says()   { printf '%s' "$1" | grep -qi "$2"; }
+# Matched with the shell's own builtins, WITHOUT a pipe, deliberately. A producer piped
+# into a quiet grep is the short circuiting shape test-pipefail-shortcircuit.sh ratchets
+# down: the reader leaves on its first match, the producer dies of SIGPIPE, and under
+# `set -o pipefail` the pipeline reports a failure that never happened (L183). This suite
+# was cloned from test-block-red-merge.sh and inherited that pattern as first written
+# (L501). The builtins do the same job with no second process and nothing to break.
+denied() { local re='"permissionDecision": *"deny"'; [[ "$1" =~ $re ]]; }
+says() {  # $1 = the hook output, $2 = a LITERAL needle, matched case insensitively
+  local prior found
+  # `nocasematch` is a shell wide setting, so it is restored rather than switched off:
+  # leaving it clear would be a silent change to any caller that had set it (L509).
+  prior="$(shopt -p nocasematch)"
+  shopt -s nocasematch
+  # "$2" is quoted, so a needle is a literal here where `grep -qi` read it as a regex.
+  [[ "$1" == *"$2"* ]] && found=0 || found=1
+  eval "$prior"
+  return "$found"
+}
 
 # The start dates below are deliberately in the PAST. changelogFrom is a start
 # date, so a fixture dated in the future puts its repo out of scope and every
