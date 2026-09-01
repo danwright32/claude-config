@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 392 lessons.
+LESSONS.md, which is NOT loaded into the session. 396 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -75,6 +75,7 @@ to decide something: the body is where the failure it came from is described.
 - L183. A pipeline under `set -o pipefail` can be failed by its PRODUCER being killed when a short-circuiting consumer (`grep -q`, `head`) exits first, so a correct check reports a failure that never happened.
 - L115. A harness that measures whether content is VISIBLE must be checked against the substitutes its own renderer makes for content it cannot draw, because a placeholder is itself a mark on the page and measures as presence.
 - L141. A visibility check that measures ink over a whole surface is answered by whatever that surface paints for ITSELF, a fill, a border, a panel, so the words it exists to check can be drawn in the background colour while the measurement barely moves.
+- L535. Code behind a flag that shipped OFF has never run, so turning it on is shipping untested code, and its ERROR paths are the least exercised part of it because the observe phase existed precisely to stop them executing.
 - L147. A guard seen to fail on a fixture you chose has only been shown to work on the shape you had in mind, so measure how often it fires on the REAL values it will meet.
 - L117. A per-item ceiling judged against a POOLED total cannot notice one item running away, because the expensive item is paid for out of the cheap ones' headroom, and a single-item run is the only size where the ceiling and the total are the same number.
 - L130. A test fixture whose meaning is the RELATIONSHIP between a stored date and the clock (a show still ahead, a licence not yet expired, a record inside its retention window) must pin BOTH ends, because pinning only the fixture lets real time walk the pair into a different state and the test then passes while asserting about a case nobody chose.
@@ -195,6 +196,7 @@ to decide something: the body is where the failure it came from is described.
 - L531. A validator placed on the path an input is ASSUMED to arrive by is absent on every other path that can produce the same input, and its message inherits the same assumption, so it names an origin it never measured.
 - L351. A reporter that folds a child's failure into a single summary row keeps only the FIRST line of that failure's message, so a message written summary first, with the files, counts and remedy beneath, loses precisely the part that says what to do.
 - L357. A counter that renders its number on a screen is not a detector, because detection requires something that speaks on its own when the number is wrong.
+- L532. A form that falls back to a DEFAULT when nothing is stored cannot show that a save failed
 
 ## State and identity
 
@@ -325,6 +327,7 @@ to decide something: the body is where the failure it came from is described.
 - L271. A cross repository deliverable phrased as what YOUR side must WRITE says nothing about whether the consuming side can READ it
 - L273. A normalization written to make a comparison forgiving covers only the character class its author happened to think of, so state the reason it exists and apply it to EVERY class that reason covers, because the classes left out are total mismatches rather than near misses.
 - L280. A rule enforced at ONE stage of a pipeline is not enforced by the pipeline, because every later stage that rewrites the same content can reintroduce exactly what the rule removed, and the enforcing stage has already run, so nothing reports the regression.
+- L534. A platform setting whose DEFAULT is derived from another setting flips silently when you flip that other one
 
 ## Building with AI
 
@@ -401,6 +404,7 @@ to decide something: the body is where the failure it came from is described.
 - L259. An escape hatch that switches a gate OFF is inherited by every process that command starts, including the gate's OWN self-test
 - L522. A time or size budget calibrated for ONE execution context is wrong when the same code is reached from another (a scheduled job versus a request, a worker versus a CLI, a foreground run versus a background one), because the platform ceiling differs
 - L527. A retry that CHANGES the request on the assumption of one particular cause (stripping an id it guesses collided, dropping a field it guesses was rejected, narrowing a scope) must confirm that cause from the actual error before altering anything
+- L533. A job on a sparse schedule (weekly, monthly) whose only failure remedy is running it again needs an automatic re-attempt within the same period, because an in-process retry measured in seconds cannot outlast a real outage, and a transiently failed run otherwise silently costs the whole schedule interval.
 
 ## Test speed
 

@@ -693,6 +693,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   what the check was reading. A filled button was worse still at 0.2475, almost all of it the
   button's own background. Found by mutation, not by review: the first guard written for it
   SURVIVED)
+- **L535. Code behind a flag that shipped OFF has never run, so turning it on is shipping
+  untested code, and its ERROR paths are the least exercised part of it because the observe
+  phase existed precisely to stop them executing.** Audit the disabled half as NEW code at the
+  flip, and check in particular that it handles failure the way its already live siblings do.
+  Distinct from L142, which is about drawing the observe/enforce boundary in the wrong place:
+  here the boundary was drawn CORRECTLY, along blast radius, and the gap is a consequence of
+  doing that right, because the half you deferred is the half with no production history.
+  (project-enrollment-tracker#1196: promotion writing shipped observe only on 2026-08-14 and
+  was turned on 2026-09-01. The write loop it enabled had sat in the repo for three weeks
+  looking reviewed and had never once executed, and it was the only write in that script with
+  no try/catch, so a transient failure would abort the whole morning sync including the team
+  registry write and the Slack summary. Every sibling write recorded its failure and carried
+  on. Nothing caught it in review because the code read as existing rather than as new.)
 - **L147. A guard seen to fail on a fixture you chose has only been shown to work on the shape you had
   in mind, so measure how often it fires on the REAL values it will meet.** An exact comparison on a
   normalized name (a domain, a slug, a key) routinely misses the common case for a difference the
@@ -1999,6 +2012,24 @@ window is a count rather than a boundary.
   time, and a planning panel reading the same code proposed building it. Nothing read it, nothing
   alerted on it, and so nothing about it was detection (L13, L98).
 
+- **L532. A form that falls back to a DEFAULT when nothing is stored cannot show that a save
+  failed**, because on the action whose whole job is to write that very default, the fallback
+  and the saved value render identically. Confirm such a write by reading back the STORED
+  value, and make any monitor look for the empty CONTENT rather than the missing container.
+  (Try-Pennie/slate#1670, 2026-08-31: the admin "apply company default hours" button ran a
+  delete then an insert with neither error bound and no transaction, while every other writer
+  on that path went through an atomic RPC that refuses unless the row count matches. A failed
+  insert left the agent with a schedule row holding no rules, so `isWithinWorkingHours`
+  rejected every instant and they offered no times at all, permanently. The reloaded page
+  rendered `workingHoursDays(rules, org.default_weekdays)`, so zero rules ticked the org
+  default week and the admin saw exactly the week they had asked for. The coverage monitor
+  missed it too, because it looked for agents with no `availability_schedules` ROW and this is
+  a row with nothing in it. A pure `planUniformSchedule` already existed, was tested, said in
+  its own docstring that it was what this button meant, and was called by nothing. Distinct
+  from L67, a placeholder standing in for a missing required value, and from L138, a missing
+  setting rendering as empty: here the fallback COINCIDES with what the person intended, so
+  there is no discrepancy for them to notice)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
@@ -3221,6 +3252,17 @@ window is a count rather than a boundary.
   long image description straight back. Nobody sighted notices, which makes it the defect class
   least likely to be caught by review)
 
+- **L534. A platform setting whose DEFAULT is derived from another setting flips silently when you
+  flip that other one**, so a config change has to be checked for a second key whose default tracks
+  it, and both set explicitly. The derived key's absence from the file reads as deliberately
+  untouched while its value is actually being decided by the line you just edited, and the platform
+  reports no conflict because nothing is in conflict: one key simply had no opinion.
+  (slate#1052, slate#1692: `workers_dev: false` closes the production Worker's second origin, and
+  Wrangler defaults `preview_urls` to whatever `workers_dev` is, so the same line would have
+  disabled `wrangler versions upload` preview URLs as a side effect, and would silently re-enable
+  them for anybody who ever turned workers.dev back on. Caught by reading the platform docs for the
+  flag being changed rather than applying the one line direction the issue named)
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and
@@ -3910,6 +3952,19 @@ window is a count rather than a boundary.
   reps were not written when they were. Compounding it, the lookup that would have proved a real
   collision is an unpaginated read capped at 1,000 rows, so the strip-ids path masks that
   truncation instead of surfacing it)
+
+- **L533. A job on a sparse schedule (weekly, monthly) whose only failure remedy is running it
+  again needs an automatic re-attempt within the same period, because an in-process retry
+  measured in seconds cannot outlast a real outage, and a transiently failed run otherwise
+  silently costs the whole schedule interval.** The alert on the failure is not the remedy: it
+  hands a person a manual re-run whose omission nothing will ever report, and the checks read
+  as covered the entire week they never ran.
+  (project-enrollment-tracker#1192, 2026-08-31: the weekly data-integrity run failed both
+  feed-reading checks because the Beyond SFTP handshake timed out for the whole run; the
+  in-process retry spans about six seconds across three attempts, the outage lasted longer than
+  the four minute run, and the next scheduled attempt was seven days away. A manual dispatch an
+  hour later passed clean, so one automatic re-attempt a few hours later would have healed it
+  with nobody involved)
 
 ## Test speed
 
