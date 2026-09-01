@@ -1909,7 +1909,15 @@ drop_renumbered_duplicates(){   # $1 = merged file, rewritten in place  $2 = arr
       else {
         keep = (s in authnum) ? authnum[s] : firstnum[s]
         if (seen[s] > 1 && (n != keep || (s SUBSEP n) in taken)) {
-          printf "%s became %s\n", n, keep
+          # Two different situations reach this drop and they are not the same news.
+          # n != keep is a real renumber: the entry lives on under another number, and
+          # every mention of the old one has to follow it. n == keep is reachable only
+          # through the taken arm, which means the identical entry arrived twice under
+          # ONE number: nothing was renumbered, nothing needs chasing, and saying
+          # "Lx became Lx" is a false alarm on the one message that reports a drop
+          # (L11, L36, #257).
+          if (n == keep) printf "%s duplicate\n", n
+          else printf "%s became %s\n", n, keep
         } else {
           taken[s SUBSEP n] = 1
           for (i = 1; i <= nb; i++) print blk[i] > out
@@ -2153,6 +2161,12 @@ settle_renumber_mentions(){   # $1 = merged file (tmp)  $2 = arriving file  $3 =
     [ -n "$renline" ] || continue
     oldnum="${renline%% became *}"; newnum="${renline##* became }"
     [ "$oldnum" != "$renline" ] && [ "$newnum" != "$renline" ] || continue
+    # A number that became itself is not a renumber, so there is nothing here to rewrite
+    # and nothing for the reader to go and check. Guarded where the assumption lives, not
+    # only at the one caller: rewrite_local_mentions counts MATCHES rather than changes, so
+    # an equal-number line makes it report rewriting mentions of Lx to Lx, and the loop
+    # below would ask the reader to check every citation of Lx against Lx (#257).
+    [ "$oldnum" != "$newnum" ] || continue
     rewritten="$(rewrite_local_mentions "$1" "$2" "$oldnum" "$newnum")"
     if [ "${rewritten:-0}" -gt 0 ] 2>/dev/null; then
       echo "claude-sync: $3: rewrote $rewritten body mention(s) of $oldnum to $newnum on lines this Mac wrote, which could only have meant the renumbered lesson; mentions on published lines keep $oldnum, which now names the other Mac's entry." >&2
@@ -2207,12 +2221,25 @@ merge_rule_files(){
     # Never write a file still carrying conflict markers: these load as rules.
     if [ -n "$resolved" ] && [ -s "$tmpr" ] && ! grep -q '^<<<<<<< \|^>>>>>>> ' "$tmpr"; then
       renumbered="$(drop_renumbered_duplicates "$tmpr" "$PAYLOAD/$p")"
+      # Split by CAUSE, not just reported together. A renumber and an exact duplicate both
+      # remove a copy, but they are different news and only one of them leaves mentions to
+      # chase, so they get separate messages and only the renumbers reach the mention
+      # settling below (#257).
+      dropdup=""; droprenum=""
       if [ -n "$renumbered" ]; then
-        echo "claude-sync: the other Mac renumbered an entry you had not sent yet, so your old-numbered copy was dropped and its renumbered version kept ($p: $(printf '%s' "$renumbered" | tr '\n' ';' | sed 's/;$//')). Nothing was lost: the text is identical and your previous copy is beside it as .syncbak." >&2
+        droprenum="$(printf '%s\n' "$renumbered" | grep ' became ' 2>/dev/null || true)"
+        dropdup="$(printf '%s\n' "$renumbered" | grep ' duplicate$' 2>/dev/null | sed 's/ duplicate$//' | awk '!seen[$0]++' || true)"
+      fi
+      if [ -n "$droprenum" ]; then
+        echo "claude-sync: the other Mac renumbered an entry you had not sent yet, so your old-numbered copy was dropped and its renumbered version kept ($p: $(printf '%s' "$droprenum" | tr '\n' ';' | sed 's/;$//')). Nothing was lost: the text is identical and your previous copy is beside it as .syncbak." >&2
         notify "$p: dropped an entry the other Mac renumbered"
         settle_renumber_mentions "$tmpr" "$PAYLOAD/$p" "$p" <<RENUMBERED
-$renumbered
+$droprenum
 RENUMBERED
+      fi
+      if [ -n "$dropdup" ]; then
+        echo "claude-sync: both Macs held the same entry under the same number, so the duplicate copy was dropped and one kept ($p: $(printf '%s' "$dropdup" | tr '\n' ';' | sed 's/;$//')). No number changed here and nothing needs chasing: the two copies were byte identical, and your previous copy is beside it as .syncbak." >&2
+        notify "$p: dropped a duplicate copy of an entry"
       fi
       # Read-only here, deliberately: a pull is not where a Mac should be claiming anything, and
       # a Mac that has never asked for a number has no band yet. With one, the renumbered entry

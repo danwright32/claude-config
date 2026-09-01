@@ -3752,6 +3752,89 @@ check "renumber: no duplicate number remains afterwards" \
 check "renumber: no mention handling when nothing mentions the old number" \
   "! printf '%s' \"\$out_rn2\" | grep -qiE 'rewrote|also mentions|still mentions'"
 
+section "== #257: an exact duplicate is dropped, but must not be called a renumber =="
+# Seen for real on Dans-MacBook-Pro, 2026-09-01. A by-hand rebase resolution had put the
+# SAME entry, under the SAME number, into both this Mac's tree and the arriving payload.
+# The additive merge kept both copies, drop_renumbered_duplicates correctly removed one,
+# and then reported it as "L532 became L532": the tool's most safety critical message,
+# the one that says an entry of yours was dropped, rendered with old and new identical.
+# Two different situations reach that one line. `n != keep` is a real renumber; the
+# `(s SUBSEP n) in taken` arm is a plain duplicate under the same number, where n == keep.
+# Distinct causes get distinct messages (L11), and a false alarm on this path is what
+# teaches a person to skim past the real one (L36), which the comment above
+# preserve_local_conflicts already records happening once here.
+DUP="$WORK/dupbare.git"; git init -q --bare -b main "$DUP"
+DUPA="$WORK/duprepoA"; git clone -q "$DUP" "$DUPA" 2>/dev/null
+cp "$SCRIPT" "$DUPA/claude-sync"
+mkdir -p "$DUPA/payload/hooks"; echo '#!/bin/sh' > "$DUPA/payload/hooks/x.sh"
+echo '{"hooks":{}}' > "$DUPA/payload/settings.hooks.json"
+printf '# rules\n@LESSONS.md\n' > "$DUPA/payload/CLAUDE.md"
+printf '# Lessons\n\n- **L1. one.** body one\n' > "$DUPA/payload/LESSONS.md"
+git -C "$DUPA" checkout -q -b main 2>/dev/null || true
+git -C "$DUPA" add -A && git -C "$DUPA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$DUPA" push -q -u origin main
+
+DUPBH="$WORK/duphomeB"; mkdir -p "$DUPBH"; echo '{"hooks":{}}' > "$DUPBH/settings.json"
+DUPB="$WORK/duprepoB"; git clone -q "$DUP" "$DUPB" 2>/dev/null
+CLAUDE_HOME="$DUPBH" SYNC_REPO="$DUPB" SYNC_NO_NOTIFY=1 bash "$DUPB/claude-sync" pull >/dev/null 2>&1
+
+# Both Macs end up holding L2 with byte-identical text: no renumber happened anywhere.
+# A local body mention of L2 rides along, because the equal-number line is also fed to
+# settle_renumber_mentions, which counts MATCHES rather than changes and would report
+# rewriting mentions of L2 to L2.
+printf -- '- **L2. shared.** the very same sentence on both Macs\n- **L8. note.** a local note pointing at L2\n' >> "$DUPBH/LESSONS.md"
+printf -- '- **L2. shared.** the very same sentence on both Macs\n- **L3. theirs.** only on Mac A\n' >> "$DUPA/payload/LESSONS.md"
+git -C "$DUPA" add -A && git -C "$DUPA" -c user.name=t -c user.email=t@e commit -q -m "Mac A publishes the same L2" && git -C "$DUPA" push -q
+out_dup="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DUPBH" SYNC_REPO="$DUPB" bash "$DUPB/claude-sync" pull 2>&1)"
+
+# Precondition. Without the duplicate actually arising, every assertion below passes
+# vacuously and the test proves nothing about the message it exists to check.
+check "#257 precondition: the entry survives exactly once" \
+  "[ \"\$(grep -c 'the very same sentence on both Macs' '$DUPBH/LESSONS.md')\" = 1 ]"
+check "#257 precondition: the arriving entry keeps its number" \
+  "grep -q '^- \*\*L2\. shared' '$DUPBH/LESSONS.md'"
+check "#257 precondition: numbering passes its own check" \
+  "CLAUDE_HOME='$DUPBH' SYNC_REPO='$DUPB' bash '$DUPB/claude-sync' check-lessons >/dev/null 2>&1"
+
+# The defect itself: no line may claim a number became itself.
+check "#257 no line says a number became itself" \
+  "! printf '%s' \"\$out_dup\" | grep -qE '\\bL([0-9]+) became L\\1\\b'"
+check "#257 the drop is not called a renumber" \
+  "! line_has \"\$out_dup\" 'renumbered' 'L2'"
+# Silence is not the fix either. An entry that vanishes with nothing said reads as a
+# clean merge, which is the whole reason this report exists (#14).
+check "#257 the duplicate drop is still reported, naming the entry" \
+  "line_has \"\$out_dup\" 'duplicate' 'L2'"
+
+# The downstream noise. With old and new equal there is nothing to rewrite and nothing
+# for the reader to go and check, so neither may speak.
+check "#257 no mention rewrite is reported for an unchanged number" \
+  "! printf '%s' \"\$out_dup\" | grep -qi 'rewrote'"
+check "#257 no go-and-check warning for an unchanged number" \
+  "! printf '%s' \"\$out_dup\" | grep -qiE 'also mentions|still mentions'"
+check "#257 the local mention is left exactly as written" \
+  "grep -q 'a local note pointing at L2' '$DUPBH/LESSONS.md'"
+
+# A real renumber must still be reported as one: the fix must not silence the arm that
+# works. Mac A takes B's work, then publishes a DIFFERENT lesson under L9 while B holds
+# its own unsent L9, which is the ordinary collision that genuinely renumbers.
+# B publishes the merge first. Without this its repo sits one commit ahead, Mac A's next
+# push puts one the other way, and the second pull below refuses as a divergence instead
+# of ever reaching the renumber: the assertions would then be judging an error message.
+CLAUDE_HOME="$DUPBH" SYNC_REPO="$DUPB" SYNC_NO_NOTIFY=1 bash "$DUPB/claude-sync" push >/dev/null 2>&1
+git -C "$DUPA" pull -q --no-rebase 2>/dev/null
+printf -- '- **L9. clash.** this text is only on Mac B\n' >> "$DUPBH/LESSONS.md"
+printf -- '- **L9. clash.** and this different text is only on Mac A\n' >> "$DUPA/payload/LESSONS.md"
+git -C "$DUPA" add -A && git -C "$DUPA" -c user.name=t -c user.email=t@e commit -q -m "Mac A adds a clashing L9" && git -C "$DUPA" push -q
+out_dup2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DUPBH" SYNC_REPO="$DUPB" bash "$DUPB/claude-sync" pull 2>&1)"
+# The pull has to have RUN. A refusal (a divergence, a lock) prints a message and changes
+# nothing, and every assertion below would then be reading that instead of a renumber.
+check "#257 precondition: the second pull was not refused" \
+  "! printf '%s' \"\$out_dup2\" | grep -qi 'diverged\\|NOTHING was received'"
+check "#257 a genuine renumber is still reported as one" \
+  "line_has \"\$out_dup2\" 'renumbered' 'L9 became L10'"
+check "#257 both clashing entries survive the genuine renumber" \
+  "grep -q 'only on Mac B' '$DUPBH/LESSONS.md' && grep -q 'only on Mac A' '$DUPBH/LESSONS.md'"
+
 section "== #16: a commit that does not touch payload must still be sent =="
 # Found on 2026-08-06 while pushing a fix to this very script: push decided WHETHER to
 # push from whether STAGING THE PAYLOAD had produced a commit. So a commit touching
