@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 383 lessons.
+LESSONS.md, which is NOT loaded into the session. 384 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -109,6 +109,7 @@ to decide something: the body is where the failure it came from is described.
 - L350. An optimisation that lets work be SKIPPED also removes that work's observations from every instrument whose rate is computed over them, so the sample shrinks as the optimisation succeeds and a threshold calibrated on the old sample turns into noise while still reading as a measurement.
 - L352. A validator that compares a step's output against the PREVIOUS step's output can only see damage that step did, so anything broken before it becomes the baseline every later guard defends as correct.
 - L353. A comment estimating that some work is small enough to run somewhere costly (briefly on the UI thread, inside a lock, in a request handler, on the hot path) is a measurement nobody took, and it licenses the same choice at every later call site, so name the quantity the cost scales with and what bounds it, because the costs that grow with usage are exactly the ones that read as small on the day they are written.
+- L354. A fixture sized by a number measured once from real data silently under-represents production as that data grows, and it fails in the GREEN direction, so a cost or scale guard goes on passing while protecting a smaller world than the one that ships.
 
 ## Data safety
 

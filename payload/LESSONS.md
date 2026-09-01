@@ -1133,6 +1133,17 @@ window is a count rather than a boundary.
   Note the shared function underneath both, `OmniFocusSync.apply`, carries a comment saying it takes
   value types "so it can run off the main actor", which is L3: neither caller ever did.)
 
+- **L354. A fixture sized by a number measured once from real data silently under-represents
+  production as that data grows, and it fails in the GREEN direction, so a cost or scale guard goes
+  on passing while protecting a smaller world than the one that ships.** Derive the size from a
+  measurement something refreshes, or guard the hardcoded figure against the real count. Measured
+  2026-08-31 (overture#3426): the two tests guarding the cost of a queue rebuild were sized 724 and
+  893, each correct against the live store when written, while that store had grown to 1,140 and
+  grows every scout run. Nothing reported it, because a guard exercising a smaller corpus than
+  production cannot fail for being too small. It compounds wherever any part of the work is
+  superlinear in the count, since the gap in cost is then worse than the gap in rows. L48 requires
+  the fixture to be MEASURED from real data; this is that measurement expiring afterwards.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
