@@ -151,7 +151,10 @@ either the cluster is real and needs approval first, or the answer is `Ungrouped
 Before choosing, read what the repo already holds. `milestone-candidates.sh` prints
 the open milestones **with their descriptions**, and the open issues already in the
 holding pen that share words with the idea, ranked, with a `SIBLING-COUNT` that is
-what the "2 or more" rule counts:
+what the "2 or more" rule counts. Only the `SIBLING` lines count. A `WEAK-MATCH`
+shares just one word and is context, not evidence: measured on bidspoke, one
+genuine sibling arrived with ten false ones, because words like alert, drop and
+call are generic there.
 
     bash ~/.claude/skills/milestone/milestone-candidates.sh "<owner/name>" --like "<the idea's title>"
 

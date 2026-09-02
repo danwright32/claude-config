@@ -24,9 +24,13 @@
 #   OPEN-MILESTONE #<num> <title>            an open milestone, the catch-all excluded
 #       DESC <description on one line>       or "(none recorded)"
 #   HOLDING-PEN <title> open=<n>             how full the pen is right now
-#   SIBLING <score> #<num> <title>           an open pen issue sharing words, best first
+#   SIBLING <score> #<num> <title>           a pen issue sharing 2+ words, best first
+#   WEAK-MATCH <score> #<num> <title>        a pen issue sharing exactly one word.
+#                                            Shown as context, NOT counted as evidence.
 #   SIBLING-TRUNCATED <shown> of <found>     only when more were found than printed
-#   SIBLING-COUNT <n>                        every sibling found, not just those shown
+#   WEAK-TRUNCATED <shown> of <found>        likewise for the weak ones
+#   SIBLING-COUNT <n>                        what the "2 or more" rule reads
+#   WEAK-COUNT <n>                           reported beside it, never folded into it
 #   NO-CANDIDATES <repo>                     read fine, nothing to report (exit 1)
 #
 # Exit codes:
@@ -258,12 +262,40 @@ for it in issues:
 # declares one (L343).
 scored.sort(key=lambda r: (-r[0], -r[1]))
 
+# One shared word is a coincidence, not a cluster, so it does not count.
+#
+# Measured 2026-09-02 against bidspoke, whose pen held 82 open issues: one idea drew
+# a single genuine sibling at three shared words and TEN false ones at exactly one,
+# because "alert", "drop", "time" and "call" are generic in the vocabulary there.
+# (No apostrophes anywhere below: this python is embedded in a single quoted shell
+# string, so one would close the string and leave the file unparseable.)
+# Counting those would have reported eleven siblings, and SIBLING-COUNT is the number
+# the "2 or more issues" rule reads, so a one sibling idea would have read as an
+# obvious cluster. An over match reads exactly like the feature working (L104), and a
+# threshold calibrated on the one backlog its author had in mind has only been shown
+# to work on that shape (L147).
+#
+# The weak ones are still printed. The caller may recognise a real relation that word
+# overlap cannot see, and hiding them would lose that. They are simply not evidence.
+MIN_SIBLING_SCORE = 2
+
+siblings = [r for r in scored if r[0] >= MIN_SIBLING_SCORE]
+weak = [r for r in scored if r[0] < MIN_SIBLING_SCORE]
+
 print("HOLDING-PEN %s open=%d" % (catch_all, len(issues)))
-for score, num, title, shared in scored[:show_max]:
+for score, num, title, shared in siblings[:show_max]:
     print("SIBLING %d #%s %s [shares: %s]" % (score, num, title, ", ".join(shared)))
-if len(scored) > show_max:
-    print("SIBLING-TRUNCATED %d of %d shown" % (show_max, len(scored)))
-print("SIBLING-COUNT %d" % len(scored))
+if len(siblings) > show_max:
+    print("SIBLING-TRUNCATED %d of %d shown" % (show_max, len(siblings)))
+for score, num, title, shared in weak[:show_max]:
+    print("WEAK-MATCH %d #%s %s [shares: %s]" % (score, num, title, ", ".join(shared)))
+if len(weak) > show_max:
+    print("WEAK-TRUNCATED %d of %d shown" % (show_max, len(weak)))
+# The count the "2 or more" rule reads, and it counts only what qualifies as
+# evidence. The weak total is reported beside it rather than folded in, so the two
+# can never be mistaken for one number.
+print("SIBLING-COUNT %d" % len(siblings))
+print("WEAK-COUNT %d" % len(weak))
 ' "$like" "$CATCH_ALL" "$show_max" 2>"$gh_err")"
 irc=$?
 if [[ $irc -ne 0 ]]; then
@@ -274,8 +306,12 @@ fi
 # --- report ---------------------------------------------------------------
 milestone_count="$(printf '%s\n' "$milestones_out" | awk '/^MILESTONE-COUNT /{print $2}')"
 sibling_count="$(printf '%s\n' "$siblings_out" | awk '/^SIBLING-COUNT /{print $2}')"
+weak_count="$(printf '%s\n' "$siblings_out" | awk '/^WEAK-COUNT /{print $2}')"
 
-if [[ "${milestone_count:-0}" -eq 0 && "${sibling_count:-0}" -eq 0 ]]; then
+# A weak match counts as something to REPORT even though it never counts as
+# evidence: the caller may recognise a relation the word overlap cannot, and
+# discarding the lines here would take that away.
+if [[ "${milestone_count:-0}" -eq 0 && "${sibling_count:-0}" -eq 0 && "${weak_count:-0}" -eq 0 ]]; then
   echo "NO-CANDIDATES $repo has no open milestone other than \"$CATCH_ALL\", and nothing in the pen shares words with this idea."
   exit 1
 fi

@@ -87,10 +87,18 @@ cat >"$TMP/milestones.json" <<'JSON'
 ]
 JSON
 
+# 241 and 242 share two or more words with the idea below. 240 shares none. 243
+# shares exactly ONE, and a single shared word is the case the count must refuse:
+# measured on 2026-09-02 against bidspoke, whose pen holds 82 open issues, one idea
+# drew a single genuine sibling at three shared words and TEN false ones at one
+# ("alert", "drop", "time", "call" are generic in that repo). Counting those would
+# have reported eleven siblings and made a one sibling idea read as an obvious
+# cluster, which is the number the "2 or more" rule depends on (L104, L147).
 cat >"$TMP/issues.json" <<'JSON'
 [
   { "number": 241, "title": "Give the subagent findings spool a way to drain" },
   { "number": 242, "title": "Report whether a spooled finding is reachable by any review" },
+  { "number": 243, "title": "Warn when a stale deploy alert fires twice" },
   { "number": 240, "title": "Give claude-sync a way to clean up old backups" }
 ]
 JSON
@@ -128,6 +136,19 @@ if grep -q 'catch-all.sh' "$ENSURE" 2>/dev/null; then ok; else
   bad "ensure-milestone.sh should take the pen's name from catch-all.sh, not keep its own copy"
 fi
 
+# --- the scripts have to PARSE ---------------------------------------------
+# Both of these embed python inside a single quoted shell string, so one apostrophe
+# in a python comment closes the string and the file stops parsing. That happened
+# while this suite was being written, and the symptom was not a syntax error: bash
+# printed the parse error to stderr, ran the truncated file anyway, and every case
+# failed as a "usage error", which points at the argument handling rather than at
+# the real cause (L11). One cheap check per script names it directly.
+for s in "$SCRIPT" "$ENSURE"; do
+  if err="$(bash -n "$s" 2>&1)"; then ok; else
+    bad "$(basename "$s") does not parse: $err"
+  fi
+done
+
 # --- usage ----------------------------------------------------------------
 run
 check "no repo is a usage error" "Usage:" "$OUT"
@@ -156,11 +177,20 @@ check_not "the holding pen is not offered as a feature to match against" \
   "OPEN-MILESTONE #2 Ungrouped" "$normal"
 
 # --- siblings already in the holding pen ----------------------------------
-check "it finds a sibling that shares words with the idea" "#241" "$normal"
-check "it finds the other sibling too" "#242" "$normal"
-check_not "an unrelated issue in the pen is not reported as a sibling" "#240" "$normal"
+check "it finds a sibling that shares words with the idea" "SIBLING 3 #241" "$normal"
+check "it finds the other sibling too" "SIBLING 2 #242" "$normal"
+check_not "an unrelated issue in the pen is not reported at all" "#240" "$normal"
 check "it states the sibling count, so the caller does not have to count lines" \
   "SIBLING-COUNT 2" "$normal"
+
+# One shared word is a coincidence, not a cluster. It is still SHOWN, because the
+# caller may recognise a real relation the word overlap cannot, but it must not be
+# counted, or the number the "2 or more" rule reads is inflated by generic
+# vocabulary and every idea looks like a cluster.
+check "a single shared word is reported as a weak match, not a sibling" \
+  "WEAK-MATCH 1 #243" "$normal"
+check_not "a weak match is not also printed as a sibling" "SIBLING 1 #243" "$normal"
+check "the weak matches are counted separately" "WEAK-COUNT 1" "$normal"
 
 # The stronger match has to come first, or a caller reading only the top line
 # reads the weakest evidence it has.
@@ -216,10 +246,18 @@ if [[ "$milestone_msg" != "$issues_msg" ]]; then ok; else
 fi
 
 # --- gh missing entirely --------------------------------------------------
-# The PATH still has to carry bash and python3, so it cannot simply be emptied.
-# And a fixture where gh happens to be reachable anyway would pass this case while
-# proving nothing, so the absence is asserted before the behaviour is (L159).
-NOGH_PATH="$TMP/empty:/usr/bin:/bin"
+# The PATH still has to carry the tools the script legitimately uses, so it cannot
+# simply be emptied. It also cannot be "the usual directories minus one", which is
+# what the first version did: on this Mac gh sits in the homebrew prefix so
+# /usr/bin:/bin happened to be gh free, and in CI gh is installed in /usr/bin, so
+# the case ran with gh present and asserted nothing. Build the PATH out of named
+# symlinks instead, so what is absent is a property of the fixture rather than of
+# the machine (L322).
+mkdir -p "$TMP/nogh"
+for t in bash dirname cat tr grep awk sed python3 mktemp rm; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$TMP/nogh/$t"
+done
+NOGH_PATH="$TMP/nogh"
 if PATH="$NOGH_PATH" command -v gh >/dev/null 2>&1; then
   bad "the no-gh fixture still finds gh on PATH, so this case would prove nothing"
 else
