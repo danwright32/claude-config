@@ -1670,10 +1670,21 @@ ls_run(){ # ls_run   -> runs the fixture suites with every live-store seam point
   HOOK_TESTS_ROOT="$LS" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 \
   bash "$RUNNER" "$LS/suites" 2>&1
 }
+# It REWRITES the store rather than appending to it, which is what a suite bound to the real path
+# does: an apply installs whole files. An append is a different shape with different writers behind
+# it, and it has its own fixture below (claude-config#277).
 mk_store_writer(){ # mk_store_writer <name> <path it writes> <what it writes>
   {
     printf '#!/usr/bin/env bash\n'
-    printf 'printf %s >> "%s"\n' "'$3'" "$2"
+    printf 'printf %s > "%s"\n' "'$3'" "$2"
+    printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+  } > "$LS/suites/test-$1.sh"
+  chmod +x "$LS/suites/test-$1.sh"
+}
+mk_store_appender(){ # mk_store_appender <name> <path it adds to> <what it adds>
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf %s >> "%s"\n' "'$3\n'" "$2"
     printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
   } > "$LS/suites/test-$1.sh"
   chmod +x "$LS/suites/test-$1.sh"
@@ -1758,9 +1769,90 @@ case "$out_ls5" in
     check "#272 and the change is reported rather than passed over in silence" "out=$out_ls5" ;;
 esac
 
+# The rule files have a legitimate writer too, and it is the sync itself (claude-config#277). The
+# watch daemon pulls whatever the other Mac recorded and applies it into the live config, which is
+# the daemon doing its job, and on 2026-09-02 a run of 44 suites was failed by LESSONS.md growing by
+# 1,177 bytes while it ran. The guard's own comment stated the assumption it rested on, that nothing
+# else legitimately writes these during a run, and it was false for three stores in one day (L375).
+#
+# Attributed from evidence the sync writes itself: each clone rewrites .last-applied on every apply,
+# so its mtime says WHEN. The fixture touches that file from inside the run, which is the only way
+# to land it in a window the runner computes from its own start (L130).
+rm -f "$LS/suites"/test-hold.sh "$LS/suites"/test-daemonpid.sh "$LS/hold" "$LS/watch.pid"
+mkdir -p "$LS/clone"
+printf 'a commit\n' > "$LS/clone/.last-applied"
+printf '%s\n' "$LS/clone" > "$LS/registry"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf "a whole file the sync installed\\n" > "%s"\n' "$LS/claude-home/CLAUDE.md"
+  printf 'printf "a newer commit\\n" > "%s"\n' "$LS/clone/.last-applied"
+  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+} > "$LS/suites/test-syncapply.sh"
+chmod +x "$LS/suites/test-syncapply.sh"
+out_ls6="$(ls_run)"; code_ls6=$?
+[ "$code_ls6" -eq 0 ] \
+  && check "#277 a rule file the sync applied during the run does not fail it" ok \
+  || check "#277 a rule file the sync applied during the run does not fail it" "exit=$code_ls6 out=$out_ls6"
+case "$out_ls6" in
+  *"applied config into this Mac while these ran"*)
+    check "#277 and the run says the sync did it, naming the clone" ok ;;
+  *)
+    check "#277 and the run says the sync did it, naming the clone" "out=$out_ls6" ;;
+esac
+
+# The control, and the half that must never loosen: the same store changing with no apply behind it
+# is still the L2 violation the bracket exists to catch. Same fixture, minus the touch (L159).
+rm -f "$LS/suites"/test-syncapply.sh
+printf 'the live rules\n' > "$LS/claude-home/CLAUDE.md"
+# The apply is pinned into the PAST rather than merely left alone. Both ends of this comparison are
+# whole seconds off the same clock, and the run above touched that file a moment ago, so leaving it
+# would put the two inside one second of each other and the control would pass for the reason it is
+# meant to catch (L130, L134).
+touch -t 202001010000 "$LS/clone/.last-applied"
+mk_store_writer rulesagain "$LS/claude-home/CLAUDE.md" 'a line no suite may add'
+out_ls7="$(ls_run)"; code_ls7=$?
+[ "$code_ls7" -ne 0 ] \
+  && check "#277 the same change with no apply behind it still fails the run" ok \
+  || check "#277 the same change with no apply behind it still fails the run" "exit=$code_ls7 out=$out_ls7"
+
+# Lines ADDED to a rule file, with none removed, is what the other writers of these stores do:
+# another Claude session recording a lesson inserts it into the section it belongs in, and that
+# failed two green runs on 2026-09-02 with the message saying a suite had written it. A checksum
+# cannot tell the two apart, so the SHAPE is read from a copy taken before the run.
+rm -f "$LS/suites"/test-rulesagain.sh
+printf 'the live rules\nand a second line\n' > "$LS/claude-home/CLAUDE.md"
+touch -t 202001010000 "$LS/clone/.last-applied"
+mk_store_appender lessonlike "$LS/claude-home/CLAUDE.md" 'a lesson another session recorded'
+out_ls8="$(ls_run)"; code_ls8=$?
+[ "$code_ls8" -eq 0 ] \
+  && check "#277 a rule file that only gained lines does not fail the run" ok \
+  || check "#277 a rule file that only gained lines does not fail the run" "exit=$code_ls8 out=$out_ls8"
+case "$out_ls8" in
+  *"none were removed or changed"*)
+    check "#277 and it says what shape of change it saw" ok ;;
+  *)
+    check "#277 and it says what shape of change it saw" "out=$out_ls8" ;;
+esac
+
+# The control that keeps the teeth: a line REMOVED from the same file, with no apply behind it, is
+# the destructive shape and still fails the run. Same fixture, one line taken out instead of added.
+rm -f "$LS/suites"/test-lessonlike.sh
+printf 'the live rules\nand a second line\n' > "$LS/claude-home/CLAUDE.md"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf "the live rules\\n" > "%s"\n' "$LS/claude-home/CLAUDE.md"
+  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+} > "$LS/suites/test-linetaker.sh"
+chmod +x "$LS/suites/test-linetaker.sh"
+out_ls9="$(ls_run)"; code_ls9=$?
+[ "$code_ls9" -ne 0 ] \
+  && check "#277 a rule file that LOST a line still fails the run" ok \
+  || check "#277 a rule file that LOST a line still fails the run" "exit=$code_ls9 out=$out_ls9"
+
 # And the control: a run that touched none of them says nothing about any of them. Without this a
 # guard that failed every run would pass every check above (L159).
-rm -f "$LS/suites"/test-hold.sh "$LS/suites"/test-daemonpid.sh "$LS/hold" "$LS/watch.pid"
+rm -f "$LS/suites"/test-linetaker.sh "$LS/hold" "$LS/watch.pid"
+printf 'the live rules\n' > "$LS/claude-home/CLAUDE.md"
 mk_counting_suite "$LS/suites" storequiet 3
 out_ls4="$(ls_run)"; code_ls4=$?
 case "$out_ls4" in

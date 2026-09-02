@@ -138,6 +138,67 @@ esac
 root="${HOOK_TESTS_ROOT:-}"
 [ -n "$root" ] || root="$(git -C "$SELF_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 
+# Did a store only GAIN lines while the run went on? (claude-config#277)
+#
+# The stores on the list have writers that are not these tests and cannot be told from them by a
+# checksum: the sync applying a pull, and another Claude session recording a lesson, which is what
+# actually failed two green runs on 2026-09-02. Both of those only ever ADD to these files, in the
+# section an entry belongs in, and what a suite bound to the real path does is rewrite the file
+# wholesale or truncate it. So the SHAPE of the change is the evidence, and it is read from a copy
+# taken before the run rather than guessed at from a size (L63).
+#
+# This stands down on additions and nothing else. A line removed or changed is still counted, which
+# is the destructive shape and the one worth a full re-run. The route a suite would actually take
+# into these files is refused at its source now: claude-sync will not apply into the real config
+# while CLAUDE_SUITE_RUN_ID is set.
+live_store_only_gained(){ # <path> -> 0 when the change only added lines
+  local path="$1" copy
+  [ -n "${_live_copies:-}" ] || return 1
+  [ -f "$_live_copies/index" ] || return 1
+  copy="$(awk -F"$(printf '\t')" -v f="$path" '$1 == f { print $2; exit }' "$_live_copies/index")"
+  [ -n "$copy" ] && [ -f "$copy" ] || return 1     # absent before, so this is a creation
+  [ -f "$path" ] || return 1                        # gone now, which is not a gain
+  # Lines present in the copy and missing now are what disqualifies it. `diff` prints those with a
+  # leading `<`, so an empty result means every difference was an addition.
+  [ -z "$(diff "$copy" "$path" 2>/dev/null | grep '^<' || true)" ]
+}
+
+# Did the SYNC apply config into this Mac while the run was going? (claude-config#277)
+#
+# The stores on the list above are the config the sync installs, and the watch daemon installs it
+# the moment the other Mac pushes: a run of 44 suites was failed on 2026-09-02 by LESSONS.md growing
+# by 1,177 bytes, which was a lesson the other Mac had recorded arriving here. The guard's own
+# comment said nothing else legitimately writes these during a run, and that was false for three
+# separate stores in one day (L375).
+#
+# Read from what the sync writes about ITSELF rather than guessed at: every clone rewrites
+# .last-applied on each apply, so its mtime is when the last one happened, and the clone registry
+# names the clones. An apply inside this run's own window explains a change to any of these stores,
+# because these stores are exactly what an apply writes. Outside that window it explains nothing and
+# the change is this run's doing as before.
+_file_mtime(){ # <path> -> a unix timestamp, or nothing
+  local m
+  m="$(stat -f %m "$1" 2>/dev/null || true)"
+  case "$m" in ''|*[!0-9]*) m="$(stat -c %Y "$1" 2>/dev/null || true)" ;; esac
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$m"
+}
+sync_applied_since(){ # <unix timestamp> -> prints the clone and when, empty when none did
+  local since="$1" reg clone m
+  case "$since" in ''|*[!0-9]*) return 1 ;; esac
+  reg="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
+  [ -f "$reg" ] || return 1
+  while IFS= read -r clone; do
+    [ -n "$clone" ] || continue
+    [ -d "$clone" ] || continue
+    m="$(_file_mtime "$clone/.last-applied")" || continue
+    [ "$m" -ge "$since" ] || continue
+    printf '%s at %s' "$clone" "$(date -r "$m" '+%H:%M:%S' 2>/dev/null || printf '%s' "$m")"
+    return 0
+  done < "$reg"
+  return 1
+}
+
 # Did something OUTSIDE this run rewrite the watcher marker? (claude-config#272)
 #
 # The marker is on the live-store list like the rest, and unlike the rest it has a legitimate
@@ -627,6 +688,22 @@ $_live_stores
 LIVESTORES
   }
   _live_before="$(_live_fingerprint)"
+  _live_started="$(date +%s)"
+  # A COPY of each store as well as its fingerprint, because the verdict below needs to know what
+  # KIND of change happened and a checksum cannot say (claude-config#277). These files total well
+  # under a megabyte, so this costs nothing measurable beside a run of minutes.
+  _live_copies="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.live-copies.XXXXXXXX" 2>/dev/null || true)"
+  if [ -n "$_live_copies" ]; then
+    _lcp_n=0
+    while IFS= read -r _lcp_f; do
+      [ -n "$_lcp_f" ] || continue
+      _lcp_n=$((_lcp_n + 1))
+      printf '%s\t%s\n' "$_lcp_f" "$_live_copies/$_lcp_n" >> "$_live_copies/index"
+      [ -f "$_lcp_f" ] && cp "$_lcp_f" "$_live_copies/$_lcp_n" 2>/dev/null
+    done <<LIVECOPY
+$_live_stores
+LIVECOPY
+  fi
 
   _timed=0
   launch_order="$(
@@ -1149,12 +1226,25 @@ if [ -n "${_live_before:-}" ] && [ "$_live_before" != "$_live_after" ]; then
   # Built first and printed after, because one of these stores has a legitimate writer that is not
   # a suite and the verdict depends on which changes are left once it is accounted for.
   _lc_blamed=""; _lc_noted=""
+  # Asked ONCE, before the loop: it is a fact about the run rather than about any one store, and
+  # asking per store would read the registry six times to get the same answer.
+  _lc_applied="$(sync_applied_since "${_live_started:-}" || true)"
   while IFS= read -r _lc_line; do
     [ -n "$_lc_line" ] || continue
     _lc_path="${_lc_line%%	*}"
     _lc_was="$(printf '%s\n' "$_live_before" | awk -F"$(printf '\t')" -v f="$_lc_path" '$1 == f { print $2; exit }')"
     _lc_now="${_lc_line#*	}"
     [ "$_lc_was" = "$_lc_now" ] && continue
+    if [ -n "$_lc_applied" ]; then
+      _lc_noted="$_lc_noted  $_lc_path: was [$_lc_was], now [$_lc_now]
+"
+      continue
+    fi
+    if live_store_only_gained "$_lc_path"; then
+      _lc_noted="$_lc_noted  $_lc_path: lines were added to it and none were removed or changed, which is what the sync and another session recording a lesson both do, and not what a suite bound to the real path does.
+"
+      continue
+    fi
     if [ "$_lc_path" = "${SYNC_WATCH_PID_FILE:-$HOME/.claude-sync-watch.pid}" ] && watch_marker_is_not_ours "$_lc_path"; then
       _lc_noted="$_lc_noted  $_lc_path: rewritten by a watcher this run did not start, so it is the live daemon restarting rather than a suite.
 "
@@ -1173,12 +1263,14 @@ LIVEAFTER
     failed=$((failed + 1))
     failed_names="$failed_names live-store-pollution"
   fi
+  [ -n "${_live_copies:-}" ] && rm -rf "$_live_copies" 2>/dev/null
   if [ -n "$_lc_noted" ]; then
     # Said, not silent, and not counted. The same shape as the spool line above: a store this run
     # did not write still changed while it ran, which is worth knowing when reading anything else
     # the run reports (L98).
     echo "A live store changed while this ran, and not because of these tests:"
     printf '%s' "$_lc_noted"
+    [ -n "$_lc_applied" ] && echo "  The sync applied config into this Mac while these ran ($_lc_applied), and these stores are what an apply writes."
   fi
 fi
 if [ -n "$unmeasured_names" ]; then

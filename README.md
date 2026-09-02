@@ -307,6 +307,29 @@ those (`bash payload/hooks/run-all-tests.sh tests tools`). A directory it was to
 holds no suite is a failure, not a quiet pass, because reading nothing and reading everything green
 look identical otherwise.
 
+### Proving a check would notice
+
+A guard is only real once it has been seen to fail. That was done by hand here, by editing a
+tracked file, running the section, and putting the file back, and on 2026-09-02 it gave the wrong
+answer twice in one session: the fix was removed and the section still passed, so the test proved
+nothing and would have shipped as proof (#276). Both times the fixture never reached the state
+under test.
+
+```bash
+tools/prove-it-fails.sh --run 'bash payload/hooks/test-run-all-tests.sh' \
+                        --sed payload/hooks/run-all-tests.sh 's/the line to break/x/'
+```
+
+Everything happens on a copy, so the tree you are working in is never touched and an interrupted
+round leaves nothing behind. `--revert <file>` puts one file back to its committed state, which is
+how a fix that is not committed yet gets removed. It runs the check BEFORE the change as well, so a
+section that was already red cannot be mistaken for one that noticed.
+
+It answers with three states and an exit code for each: PROVED (0), NOT PROVED (1), and REFUSED
+(2), which is what it says when a patch matched nothing, because a patch that changed nothing
+leaves the check passing for the reason it always did and that reads exactly like a check which
+cannot discriminate.
+
 The suites run several at a time, since they are independent. Measured on this Mac on 2026-08-21 over the hook
 suites: 128 seconds one at a time, 29 seconds in parallel, with byte identical reports.
 

@@ -1296,6 +1296,35 @@ suite_clear_registered_strays(){   # $1 = the lock directory of the run that is 
   return 0
 }
 
+# Is the run that took this lock still going? (claude-config#273)
+#
+# `kill -0` on the number in the pid file answers whether SOMETHING is alive, which is a different
+# question from whether that run is. A run that is gone leaves its number behind, and numbers are
+# reused, so the refusal could name a process belonging to somebody else entirely and hand the
+# reader a `kill -9` aimed at it (L237). On 2026-09-02 that refusal fired repeatedly against runs
+# that had already been interrupted, and every one of them had to be cleared by hand.
+#
+# The run's own registry is the evidence, and it is already written: the lock names it, and the
+# takeover in #166 already reads it to clear strays. Every process a run registered having exited
+# is that run being over, whatever the recorded number is doing now. Where there is no registry to
+# read, this falls back to the number alone, which is where it started, so a lock is never broken
+# on less evidence than before.
+suite_lock_registered(){   # $1 = the lock directory -> "<alive> <total>", or "none"
+  local reg p alive=0 total=0
+  reg="$(cat "$1/registry" 2>/dev/null || true)"
+  { [ -n "$reg" ] && [ -f "$reg" ]; } || { printf 'none'; return 0; }
+  while IFS= read -r p; do
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    total=$(( total + 1 ))
+    kill -0 "$p" 2>/dev/null && alive=$(( alive + 1 ))
+  done < "$reg"
+  # An empty registry is no evidence rather than evidence of death. The file is written with the
+  # run's own pid the moment the lock is taken, so empty means something removed it, and breaking a
+  # live lock on that would be the collision the lock exists to prevent (L214).
+  [ "$total" -eq 0 ] && { printf 'none'; return 0; }
+  printf '%s %s' "$alive" "$total"
+}
+
 suite_cleanup(){
   [ -n "${SUITE_WATCHDOG_PID:-}" ] && kill "$SUITE_WATCHDOG_PID" 2>/dev/null
   # And everything else this run started, not only the watchdog (claude-config#163). On a run that
@@ -1386,18 +1415,32 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
     # one, which is the collision the lock exists to prevent (#29). Age is the fallback only for a
     # lock from ELSEWHERE, whose recorded process id refers to a machine that is not this one.
     if [ "$_lk_host" = "$(hostname)" ]; then
-      if [ -n "$_lk_pid" ] && kill -0 "$_lk_pid" 2>/dev/null; then
+      _lk_reg="$(suite_lock_registered "$SUITE_LOCK")"
+      case "$_lk_reg" in
+        none)   _lk_evidence="No registry of that run's own processes was found, so this is judged by its recorded process id alone." ;;
+        "0 "*)  _lk_evidence="" ;;
+        *)      _lk_evidence="That run still has ${_lk_reg% *} of ${_lk_reg#* } registered process(es) running." ;;
+      esac
+      # A run whose every registered process has exited is over, whatever its recorded number is
+      # doing now, so the lock is taken over rather than reported (claude-config#273). Its own
+      # message, because the two takeovers rest on different evidence and a reader who sees this
+      # one has a reused process id in front of them (L11).
+      if [ "${_lk_reg%% *}" = "0" ] && [ "$_lk_reg" != "none" ]; then
+        echo "test suite: took over a lock whose run is gone: every process it registered has exited, so the process id it recorded ($_lk_pid) is either something else now or is doing nothing on that run's behalf." >&2
+        suite_clear_registered_strays "$SUITE_LOCK"
+      elif [ -n "$_lk_pid" ] && kill -0 "$_lk_pid" 2>/dev/null; then
         # What is holding it, how old it is, and the command that ends it (claude-config#163). A
         # pid on its own is not something anybody can act on: it has no visible connection to the
         # run they killed minutes ago, and a refusal naming only a number sent two separate
         # investigations looking for a bug in the suite (L80, L148). The orphan case is named
         # explicitly, because it is the commonest reason a live run is here that nobody expects.
-        echo "test suite: another run is already going: a suite run, process $_lk_pid on $_lk_host, started ${_lk_age}s ago. Refusing rather than queueing behind it: two suites competing for this machine make each other slower and make every timing either of them reports wrong. Wait for it to finish. If you killed a run and this is the orphan it left behind, end it and everything it started with: pkill -9 -P $_lk_pid; kill -9 $_lk_pid. Or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
+        echo "test suite: another run is already going: a suite run, process $_lk_pid on $_lk_host, started ${_lk_age}s ago. $_lk_evidence Refusing rather than queueing behind it: two suites competing for this machine make each other slower and make every timing either of them reports wrong. Wait for it to finish. If you killed a run and this is the orphan it left behind, end it and everything it started with: pkill -9 -P $_lk_pid; kill -9 $_lk_pid. Or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
         exit 5
+      else
+        echo "test suite: took over a lock whose run is gone (process $_lk_pid is not running)." >&2
+        # Before the lock directory is removed below, since that is where the registry is named.
+        suite_clear_registered_strays "$SUITE_LOCK"
       fi
-      echo "test suite: took over a lock whose run is gone (process $_lk_pid is not running)." >&2
-      # Before the lock directory is removed below, since that is where the registry is named.
-      suite_clear_registered_strays "$SUITE_LOCK"
     else
       if [ "$_lk_age" -lt "${SUITE_LOCK_MAX_AGE:-1800}" ]; then
         # Deliberately NOT the message above. That one hands over a command to kill the holder,
@@ -2780,6 +2823,47 @@ chmod 644 "$QREPO/payload/hooks/tiny.sh"
 touch -t 202601010000 "$QSRC/hooks/tiny.sh" "$QREPO/payload/hooks/tiny.sh"
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$QSRC" SYNC_REPO="$QREPO" bash "$SCRIPT" pull >/dev/null 2>&1
 check "pull applies a same-size same-mtime edit"     "grep -q 'cccc' '$QSRC/hooks/tiny.sh'"
+
+section "== a test run may not apply into the real config (#277) =="
+# The bracket in run-all-tests.sh watched the live rule files and blamed the suites for any change,
+# and it could not say WHO: the sync daemon installs config into them, and another Claude session
+# recording a lesson inserts one, and both did on 2026-09-02, failing three green runs (L375).
+#
+# A refusal beats a detection. This is the ONE place the payload is installed, so a suite that
+# reaches here with CLAUDE_HOME still on the real home has bound to the live path, which is exactly
+# the mistake the bracket was filed about, and it is now stopped rather than reported afterwards.
+#
+# HOME is pointed at a fixture, so the pair the refusal compares is a fixture pair. A test that set
+# CLAUDE_HOME to Dan's real config to see the refusal fire would, the day the refusal broke, apply a
+# payload over it (L2).
+RA_H="$WORK/realish-home"; RA_R="$WORK/realish-repo"
+mkdir -p "$RA_H/.claude/hooks" "$RA_R/payload/hooks"
+echo '{"hooks":{}}' > "$RA_H/.claude/settings.json"
+printf 'aaaa\n' > "$RA_H/.claude/hooks/tiny.sh"
+HOME="$RA_H" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RA_H/.claude" SYNC_REPO="$RA_R" bash "$SCRIPT" push >/dev/null 2>&1
+printf 'bbbb\n' > "$RA_R/payload/hooks/tiny.sh"
+_ra_out="$(HOME="$RA_H" CLAUDE_SUITE_RUN_ID="a-test-run-id" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RA_H/.claude" SYNC_REPO="$RA_R" bash "$SCRIPT" pull 2>&1)"; _ra_rc=$?
+check "#277 an apply into the real config under a test run is refused" "[ '$_ra_rc' -ne 0 ]"
+check "#277 and it names the run id that made it refuse" \
+  "case \"\$_ra_out\" in *'a-test-run-id'*) true ;; *) false ;; esac"
+# Refused BEFORE anything was written, which is the whole point: a refusal that fires after the
+# rsync has run has protected nothing (L5).
+check "#277 and the config it refused to write is untouched" \
+  "[ \"\$(cat '$RA_H/.claude/hooks/tiny.sh')\" = 'aaaa' ]"
+
+# The two controls. Without them this is satisfied by a pull that refuses always, or by one that
+# refuses for some unrelated reason (L159).
+# CLAUDE_SUITE_RUN_ID is emptied OUTRIGHT rather than merely left unset: this suite is normally run
+# BY run-all-tests.sh, which exports it to everything it starts, so a control that says "outside a
+# test run" while inheriting one is testing the opposite of what it claims (L259, measured: it did).
+_rb_out="$(CLAUDE_SUITE_RUN_ID= HOME="$RA_H" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RA_H/.claude" SYNC_REPO="$RA_R" bash "$SCRIPT" pull 2>&1)"; _rb_rc=$?
+check "#277 the same pull outside a test run is not refused" "[ '$_rb_rc' -eq 0 ]"
+check "#277 and it applied what it was refusing before" \
+  "[ \"\$(cat '$RA_H/.claude/hooks/tiny.sh')\" = 'bbbb' ]"
+RA_OTHER="$WORK/realish-elsewhere"; mkdir -p "$RA_OTHER/hooks"
+echo '{"hooks":{}}' > "$RA_OTHER/settings.json"
+_rc_out="$(HOME="$RA_H" CLAUDE_SUITE_RUN_ID="a-test-run-id" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RA_OTHER" SYNC_REPO="$RA_R" bash "$SCRIPT" pull 2>&1)"; _rc_rc=$?
+check "#277 a test run applying into its OWN throwaway home is allowed" "[ '$_rc_rc' -eq 0 ]"
 
 section "== the apply cleans up its own scratch file (no temp litter per run) =="
 # The apply records what it wrote to a temp file so the summary can report real
@@ -5111,6 +5195,49 @@ check "#32 it refuses rather than queueing behind it (${_held_elapsed}s against 
 # refusal (L1).
 check "#32 and a refusal one second over that bound would be caught" \
   "! [ $(( _held_max + 1 )) -le '$_held_max' ]"
+
+# A run that is GONE while its recorded number lives on (claude-config#273). `kill -0` answers
+# whether something is alive, not whether that run is: a run that has been interrupted leaves its
+# number behind, numbers are reused, and the refusal then names a process belonging to somebody
+# else and offers a `kill -9` aimed at it (L237). Measured 2026-09-02, that refusal fired against
+# interrupted runs repeatedly and every one had to be cleared by hand, each costing a full run.
+#
+# The run's own registry is the evidence and it is already written: the lock names it, and the #166
+# takeover already reads it. Every process a run registered having exited is that run being over.
+_mkreg(){   # path, then the pids it lists
+  local f="$1"; shift
+  : > "$f"
+  local p; for p in "$@"; do printf '%s\n' "$p" >> "$f"; done
+}
+_regdead="$_lockdir/registry-of-a-dead-run"
+_mkreg "$_regdead" 99999998 99999999
+_mklock "$_lockdir/regdead" "$$" "$_thishost" "$((_now - 30))"
+printf '%s\n' "$_regdead" > "$_lockdir/regdead/registry"
+_rd="$(_try_lock "$_lockdir/regdead")"; _rd_rc=$?
+check "#273 a lock whose registered processes have all gone is taken over" "[ '$_rd_rc' -eq 0 ]"
+check "#273 and it says the run's own processes are what proved it" \
+  "case \"\$_rd\" in *'every process it registered has exited'*) true ;; *) false ;; esac"
+# The recorded number is ALIVE in that fixture (it is this very process), so without the registry
+# the old rule refuses. Asserted, or the check above is satisfied by a fixture whose pid was dead
+# and proves nothing about the rule it was written for (L159, L48).
+check "#273 and the number that lock recorded was alive the whole time" "kill -0 '$$' 2>/dev/null"
+
+# The control, and the half that must never loosen: a run whose registered processes are still
+# going holds its lock. Same fixture in every respect except which pids the registry lists.
+_reglive="$_lockdir/registry-of-a-live-run"
+_mkreg "$_reglive" "$$"
+_mklock "$_lockdir/reglive" "$$" "$_thishost" "$((_now - 30))"
+printf '%s\n' "$_reglive" > "$_lockdir/reglive/registry"
+_rl="$(_try_lock "$_lockdir/reglive")"; _rl_rc=$?
+check "#273 a lock whose registered processes are alive is still refused" "[ '$_rl_rc' -ne 0 ]"
+check "#273 and the refusal carries what the registry showed" \
+  "case \"\$_rl\" in *'still has 1 of 1 registered'*) true ;; *) false ;; esac"
+
+# And a lock with no registry at all is judged exactly as it was before, on the number alone. A
+# rule that only works where a registry exists must say so where one does not, rather than reading
+# as the same answer (L11).
+check "#273 a lock with no registry says it is judging by the process id alone" \
+  "case \"\$_held\" in *'judged by its recorded process id alone'*) true ;; *) false ;; esac"
 
 # A lock carried in from ELSEWHERE (a restored folder, a shared temp dir) records a process id that
 # means nothing here, so age is the only evidence available. Same split as claude-sync #25 and #29.

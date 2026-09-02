@@ -1555,6 +1555,18 @@ record_rsync(){
 
 # copy repo payload -> local config, merging the hooks block (no git)
 apply_payload_to_local(){
+  # A TEST RUN may not write into the real config (claude-config#277, L2). This is the one place
+  # the payload is installed, so it is the one place the refusal can live and the one place it can
+  # be forgotten from (L30). The run id is exported by run-all-tests.sh to every suite it starts, so
+  # a suite that reaches here with CLAUDE_HOME still pointing at the real home has bound to the live
+  # path, which is exactly the mistake claude-config#216 was filed about.
+  #
+  # A refusal rather than a detection: the bracket that watched these files afterwards could never
+  # say WHO wrote, because the sync daemon and other Claude sessions write them too, and it failed
+  # three green runs in one day saying a suite had (L375).
+  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ] && [ "${CLAUDE_HOME%/}" = "${HOME%/}/.claude" ]; then
+    die "refusing to apply the payload into the real config at $CLAUDE_HOME: this is running under a test suite (CLAUDE_SUITE_RUN_ID=$CLAUDE_SUITE_RUN_ID). Point CLAUDE_HOME at that suite's own throwaway directory before calling this."
+  fi
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
   merge_rule_files           # entry level merge first: what merges is no conflict
