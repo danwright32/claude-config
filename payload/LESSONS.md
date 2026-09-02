@@ -1251,6 +1251,22 @@ window is a count rather than a boundary.
   cover it: the item landed in exactly one bucket and the count was correct, and only the bucket's
   NAME asserted a legitimacy nothing had measured.)
 
+- **L364. A check deciding whether a machine is clean enough to measure on must judge by what is
+  UNUSUAL for that machine, never by what is running on it, because the always-present load (a sync
+  daemon, a backup agent, an indexer) makes an absolute-quiet rule refuse every measurement anybody
+  ever takes.** Keep the resting baseline in a file carrying its own measurement date, so it can be
+  re-derived on another machine rather than believed. Measured 2026-09-01 (overture#3434): the plan
+  defined a quiet Mac as no build or test process running, and on a machine with none of those the
+  load averages read 13.01 / 28.35 / 28.97 with a Synology daemon at 99.4% and a Backblaze agent at
+  84.0%, so the check would have stamped a badly contaminated control as clean. The obvious
+  correction is worse: Dan's own words were that those two are always running and that banning his
+  photo editor was not acceptable either, so a rule refusing on any of them refuses everything and
+  is switched off within a day (L93, L36). The working shape is three outcomes rather than two,
+  BASELINE against ELEVATED against UNMEASURED, where ELEVATED names what was busy and STILL writes
+  the record, because a reading nobody can re-examine is worse than one carrying its own caveat.
+  This is L356 one level down: that one says record what else was running, this one says how to
+  decide what counts as running.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -3735,6 +3751,18 @@ window is a count rather than a boundary.
 
 ## Cross-system reliability
 
+- **L365. A retry must read what the refusal itself says about when it could succeed, because a
+  backoff measured in seconds cannot outlast a limit measured in hours, and every attempt against
+  a spent allowance spends more of the exhausted thing to be told the same answer.** A metered API
+  reports its own state (Meta's `x-app-usage`, a `Retry-After` header, a quota field), and that
+  reading is the answer the retry would otherwise spend a call to rediscover. Read it, and when it
+  says the window cannot clear, report the refusal rather than attempting again.
+  (PostRoll#1002, 2026-09-01: a sweep of 122 handles retried 82 rate limited accounts three times
+  each, one and two seconds apart, while every response carried `call_count` 275, meaning 275% of
+  the rolling hour's allowance already spent. 246 calls that could not have succeeded, and the
+  original probe's "114 calls in 2 minutes with no rate limiting" was never evidence either,
+  because 80 of those 120 seconds were its own sleep)
+
 - **L276. A CI job is priced in allowance minutes, which is the runner's multiplier (macOS ten,
   Windows two) times its rounded-up minutes, and that price is set before the job is added**,
   because an exhausted allowance refuses every later run before its first step, and a refused
@@ -3950,6 +3978,17 @@ window is a count rather than a boundary.
   old days. The standstill alert that eventually fired advised checking Snowflake availability and
   the export credentials, both of which were fine, because the check never read the run outcomes
   that said `skipped-locked` in plain text)
+- **L366. A lock must be released as soon as the writes it protects are done**, because any
+  verification, reporting or notification step left inside the critical section makes every other
+  waiter's latency depend on work that never needed exclusion, and that coupling grows silently as
+  the trailing step grows. Distinct from L519, which is about two jobs sharing one lock; this is one
+  job holding its own lock across work that does not write what the lock guards.
+  (claude-config#267: the hook suite runs at the end of every `claude-sync pull` while the pull
+  still holds the sync lock, measured at over two minutes on 2026-09-02, so the watch daemon could
+  not pick anything up from the other Mac for that whole window. The suite writes nothing the lock
+  protects, and it had grown from 38 to 44 suites in a fortnight, so the delay to propagation was
+  set by how long the tests took rather than by anything about delivery)
+
 
 - **L255. A consumer that gates on an exact SET of accepted format versions turns the producer's
   next additive bump into a total outage of itself**, because an unrecognised version is refused

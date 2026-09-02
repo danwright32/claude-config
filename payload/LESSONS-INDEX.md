@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 402 lessons.
+LESSONS.md, which is NOT loaded into the session. 405 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -118,6 +118,7 @@ to decide something: the body is where the failure it came from is described.
 - L537. A "how far behind" reading computed as the newest item minus the last processed one measures the interval between the two most recent items, not elapsed delay, so on a sparse stream an item seconds old reads as hours behind and a genuinely stalled lane is indistinguishable from a healthy one.
 - L539. A detector comparing a PERIOD TO DATE cumulative rate against a per period baseline lets a burst heal itself as the denominator grows, so it clears with nothing fixed, never fires at all later in the period, and reports a duration set by the check's tick rather than by the event.
 - L540. A reconciliation that declares everything accounted for by summing named buckets is satisfied by the very defect it hunts, as long as that item lands in the bucket standing for legitimate cases, because the arithmetic balances whatever the labels claim. So every member of an expected absence bucket must carry a measured reason, never membership earned by failing to match the good case.
+- L364. A check deciding whether a machine is clean enough to measure on must judge by what is UNUSUAL for that machine, never by what is running on it, because the always-present load (a sync daemon, a backup agent, an indexer) makes an absolute-quiet rule refuse every measurement anybody ever takes.
 
 ## Data safety
 
@@ -379,6 +380,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Cross-system reliability
 
+- L365. A retry must read what the refusal itself says about when it could succeed, because a backoff measured in seconds cannot outlast a limit measured in hours, and every attempt against a spent allowance spends more of the exhausted thing to be told the same answer.
 - L276. A CI job is priced in allowance minutes, which is the runner's multiplier (macOS ten, Windows two) times its rounded-up minutes, and that price is set before the job is added
 - L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state (an open that is also a close, a mute that is also an unmute) is inverted by the second attempt, and the loop can report success while leaving the state nobody asked for.
 - L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a high water mark) needs a targeted redo path built in from the start whenever anything downstream requires completeness
@@ -404,6 +406,7 @@ to decide something: the body is where the failure it came from is described.
 - L226. A timer built by ADDING UP its own sleeps measures iterations, not elapsed time
 - L227. A limit cannot be raised on its own
 - L519. A repair, backfill or catch-up tool must not take the same exclusion lock as the live job it repairs
+- L366. A lock must be released as soon as the writes it protects are done
 - L255. A consumer that gates on an exact SET of accepted format versions turns the producer's next additive bump into a total outage of itself
 - L258. A consumer that acknowledges work by DELETING the record makes an absent record mean both "consumed successfully" and "never written"
 - L259. An escape hatch that switches a gate OFF is inherited by every process that command starts, including the gate's OWN self-test
