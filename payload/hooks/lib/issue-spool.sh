@@ -295,8 +295,39 @@ PY_COMPACT
 # A nested subagent leaves no transcript anywhere, so it cannot be harvested at
 # all; this is the only capture path that works for one. It is also the cheaper
 # path for any agent, since it costs no model call.
+# This session's transcript, resolved from the environment, or nothing when it cannot be resolved.
+#
+# CLAUDE.md tells every dispatched agent to record a finding with the three argument
+# `note "$PWD" "<finding>" "<who>"`, which passes no transcript, so the key fell back to the
+# agent's own directory. For an agent working in a repo NESTED inside its session's folder that is
+# a different key from the one every review reads, so the documented capture path filed where
+# nobody looks (claude-config#214). The instruction and the mechanism disagreed, and the
+# instruction is the half a person follows.
+#
+# A Bash tool call carries CLAUDE_CODE_SESSION_ID but not the transcript path, and the transcript
+# is `<projects root>/<encoded project>/<session id>.jsonl`, so the id is enough to FIND it without
+# knowing which project directory encoded it.
+#
+# Exactly one match, or nothing: two files answering to one session id is a question this cannot
+# resolve, and picking the first would key on whichever the glob happened to sort first (L521).
+# Nothing is not a failure here, it is the fallback to the directory key, which is what every
+# caller did before this existed.
+issue_spool_session_transcript() { # session-transcript
+  local id="${CLAUDE_CODE_SESSION_ID:-}" f found="" n=0
+  [ -n "$id" ] || return 0
+  for f in "${CLAUDE_TRANSCRIPT_ROOT:-$HOME/.claude/projects}"/*/"$id".jsonl; do
+    [ -f "$f" ] || continue
+    found="$f"; n=$(( n + 1 ))
+  done
+  [ "$n" -eq 1 ] && printf '%s' "$found"
+  return 0
+}
+
 issue_spool_note() { # note <dir> <finding text> [who reported it] [session-transcript]
   local dir="${1:-$PWD}" text="${2:-}" source="${3:-self-reported}" transcript="${4:-}" record
+  # Given one wins. A caller that knows its transcript is the harvest, and it knows better than a
+  # lookup through the environment does.
+  [ -n "$transcript" ] || transcript="$(issue_spool_session_transcript)"
   # `case` rather than a substitution that strips every space out of the text. The text is a
   # finding written by a model and has no bounded length, and that substitution's cost is
   # superlinear in the number of matches under the bash macOS ships (claude-config#117).

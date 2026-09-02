@@ -1047,6 +1047,52 @@ contains "legacy record" "$(bash "$SPOOL_LIB" pending "$INNER" "$SESSION_TRANSCR
   && check "filing reaches records under the old key" "it stayed pending" \
   || check "filing reaches records under the old key" ok
 
+# A DIRECT note has to reach the same place a harvested record does (claude-config#214).
+#
+# CLAUDE.md tells every dispatched agent to record a finding with
+# `issue-spool.sh note "$PWD" "<finding>" "<who>"`, and says that for a nested agent it is the
+# only capture path that works at all. That three argument form passes no transcript, so it fell
+# back to keying on the agent's OWN directory, which is exactly the split fixed above for
+# harvested records: an agent working in a repo nested inside its session's folder filed where no
+# review looks. The instruction and the mechanism disagreed, and the instruction is the half a
+# person follows.
+#
+# So `note` resolves the session itself when it can, from CLAUDE_CODE_SESSION_ID, by finding the
+# transcript that session id names. The reader is given the transcript, as a review always is, and
+# must see the finding.
+reset_spool
+( cd "$INNER" && CLAUDE_TRANSCRIPT_ROOT="$TMPROOT/projects" CLAUDE_CODE_SESSION_ID="session-one" \
+    bash "$SPOOL_LIB" note "$INNER" "the nested note must reach the session" "nested agent" >/dev/null 2>&1 )
+out_note_nested="$(bash "$SPOOL_LIB" pending "$OUTER" "$SESSION_TRANSCRIPT" 2>/dev/null)"
+case "$out_note_nested" in
+  *"nested note must reach the session"*) check "a direct note from a nested repo reaches its session's spool" ok ;;
+  *) check "a direct note from a nested repo reaches its session's spool" "pending=${out_note_nested:0:200}" ;;
+esac
+
+# The positive control: the SAME note with nothing to resolve the session from still has to be
+# recorded rather than refused, because an agent whose environment carries no session id is the
+# fallback case and losing its finding is worse than filing it under a directory key (L214, L98).
+reset_spool
+( cd "$INNER" && CLAUDE_TRANSCRIPT_ROOT="$TMPROOT/projects" \
+    env -u CLAUDE_CODE_SESSION_ID bash "$SPOOL_LIB" note "$INNER" "the unresolved note is still kept" "nested agent" >/dev/null 2>&1 )
+out_note_fallback="$(bash "$SPOOL_LIB" pending "$INNER" 2>/dev/null)"
+case "$out_note_fallback" in
+  *"unresolved note is still kept"*) check "a note with no session to resolve is still recorded" ok ;;
+  *) check "a note with no session to resolve is still recorded" "pending=${out_note_fallback:0:200}" ;;
+esac
+
+# And a session id that names no transcript must not silently key on the WRONG file: it resolves
+# nothing and takes the same fallback, rather than matching some other session's transcript by
+# accident (L521, a lookup that requires exactly one match treats absence as its own answer).
+reset_spool
+( cd "$INNER" && CLAUDE_TRANSCRIPT_ROOT="$TMPROOT/projects" CLAUDE_CODE_SESSION_ID="no-such-session" \
+    bash "$SPOOL_LIB" note "$INNER" "an unknown session falls back" "nested agent" >/dev/null 2>&1 )
+out_note_unknown="$(bash "$SPOOL_LIB" pending "$INNER" 2>/dev/null)"
+case "$out_note_unknown" in
+  *"unknown session falls back"*) check "an unresolvable session id falls back rather than guessing" ok ;;
+  *) check "an unresolvable session id falls back rather than guessing" "pending=${out_note_unknown:0:200}" ;;
+esac
+
 # Two different sessions must still key apart, or everything lands in one heap.
 OTHER_PROJECT="$TMPROOT/projects/-other-project"
 mkdir -p "$OTHER_PROJECT"
