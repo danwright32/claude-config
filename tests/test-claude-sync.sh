@@ -1966,6 +1966,35 @@ line_has(){   # $1 = captured output   $2.. = patterns that must ALL appear on O
   done
   [ -n "$_lh_cur" ]
 }
+# out_lacks <captured output> <ERE> [i] : true when the output does NOT match.
+#
+# Two hazards in one helper, because the four call sites below had both.
+#
+# First, `printf %s "$out" | grep -q PATTERN` under `set -o pipefail` can report a
+# failure that never happened: grep -q leaves on its first match, printf is killed by
+# SIGPIPE, and the pipeline takes its status. Measured on this hardware by
+# test-pipefail-shortcircuit.sh: exit 141 over a 3.7MB producer while a direct read of
+# the same content found the match, clean at 64KB and firing at 256KB. A herestring
+# has no producer process to kill, so there is nothing for SIGPIPE to reach.
+#
+# Second, and worse for a NEGATED check, empty output makes the match fail and the
+# negation therefore succeed, so the assertion passes while proving nothing about a
+# message that was never produced (L98). Empty output refuses here instead, and says
+# so, because a vacuous pass on "no line claims X" is indistinguishable from the line
+# genuinely being absent.
+out_lacks(){   # $1 = captured output   $2 = ERE   $3 = "i" for case-insensitive
+  local _ol_out="$1" _ol_pat="$2" _ol_ci="${3:-}"
+  if [ -z "$_ol_out" ]; then
+    echo "out_lacks: refusing to judge an empty capture against '$_ol_pat': nothing was produced, so 'it does not say this' is not a finding" >&2
+    return 2
+  fi
+  if [ "$_ol_ci" = "i" ]; then
+    grep -qiE -- "$_ol_pat" <<<"$_ol_out" && return 1
+  else
+    grep -qE -- "$_ol_pat" <<<"$_ol_out" && return 1
+  fi
+  return 0
+}
 # A skill the way a real one is shaped: a directory holding a SKILL.md whose frontmatter carries a
 # name and a description. Fixtures used to write a single bare line, which is a shape that cannot
 # occur in the real config and which the sync now declines to carry, so a test built on one would
@@ -3807,7 +3836,7 @@ check "#257 precondition: numbering passes its own check" \
 
 # The defect itself: no line may claim a number became itself.
 check "#257 no line says a number became itself" \
-  "! printf '%s' \"\$out_dup\" | grep -qE '\\bL([0-9]+) became L\\1\\b'"
+  "out_lacks \"\$out_dup\" '\\bL([0-9]+) became L\\1\\b'"
 check "#257 the drop is not called a renumber" \
   "! line_has \"\$out_dup\" 'renumbered' 'L2'"
 # Silence is not the fix either. An entry that vanishes with nothing said reads as a
@@ -3818,9 +3847,9 @@ check "#257 the duplicate drop is still reported, naming the entry" \
 # The downstream noise. With old and new equal there is nothing to rewrite and nothing
 # for the reader to go and check, so neither may speak.
 check "#257 no mention rewrite is reported for an unchanged number" \
-  "! printf '%s' \"\$out_dup\" | grep -qi 'rewrote'"
+  "out_lacks \"\$out_dup\" 'rewrote' i"
 check "#257 no go-and-check warning for an unchanged number" \
-  "! printf '%s' \"\$out_dup\" | grep -qiE 'also mentions|still mentions'"
+  "out_lacks \"\$out_dup\" 'also mentions|still mentions' i"
 check "#257 the local mention is left exactly as written" \
   "grep -q 'a local note pointing at L2' '$DUPBH/LESSONS.md'"
 
@@ -3839,7 +3868,7 @@ out_dup2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DUPBH" SYNC_REPO="$DUPB" bash "$DUPB/
 # The pull has to have RUN. A refusal (a divergence, a lock) prints a message and changes
 # nothing, and every assertion below would then be reading that instead of a renumber.
 check "#257 precondition: the second pull was not refused" \
-  "! printf '%s' \"\$out_dup2\" | grep -qi 'diverged\\|NOTHING was received'"
+  "out_lacks \"\$out_dup2\" 'diverged|NOTHING was received' i"
 check "#257 a genuine renumber is still reported as one" \
   "line_has \"\$out_dup2\" 'renumbered' 'L9 became L10'"
 check "#257 both clashing entries survive the genuine renumber" \
