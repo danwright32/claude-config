@@ -51,6 +51,7 @@ turnstile-spin, web-perf, workers-best-practices, wrangler, plannotator-compound
 ./claude-sync release           # lift that hold now instead of waiting for it to run out
 ./claude-sync cite-scan L2      # which synced files cite that lesson number
 ./claude-sync reap-scratch      # reclaim scratch a killed run left behind
+./claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
 ./claude-sync install-autosync  # background auto-sync (see below)
 ```
 
@@ -62,9 +63,12 @@ the `claudesync` shell alias:
 - **`com.claudesync.watch`** — an fswatch process that runs a two-way `sync` on
   every change to a synced folder, however deep, so edits push within seconds.
   Requires fswatch: `brew install fswatch` (then re-run `install-autosync`).
-- **`com.claudesync.timer`** — a periodic two-way `sync` (default weekly,
-  `SYNC_INTERVAL=<seconds>`) so the other Mac's changes arrive even when this Mac
-  makes no local edits.
+- **`com.claudesync.timer`** (a periodic two-way `sync`, `SYNC_INTERVAL=604800`
+  seconds by default, which is weekly) so the other Mac's changes arrive even when
+  this Mac makes no local edits. That number is a product choice about how often to
+  sync, not a measurement, which is why it has no row in DESIGN.md's measured
+  numbers table; what holds it honest is that it appears here on the line that names
+  the setting, and the suite requires the two to agree.
 
 It also adds this to `~/.zshrc`, so the shortcut arrives with the rest of the setup
 instead of being added by hand on each Mac (`~/.zshrc` is deliberately not synced):
@@ -79,6 +83,18 @@ your shell config. Override the target file with `SYNC_ZSHRC=<path>`.
 Sending is automatic on change; receiving is automatic on the timer. A no-op sync
 writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
 conflict the background job stops and fires a desktop notification.
+
+### Backups a pull leaves behind expire on their own
+
+A pull that overwrites a file keeps the previous copy beside it as `.syncbak`, and every later run
+lists them. Nothing removed them, so the reminder became permanent noise and the whole line stopped
+being read: two backups from 2026-08-31 were still being announced on every pull. A copy older than
+`SYNC_BACKUP_KEEP_DAYS=90` days is now swept on the next run that writes one, and each removal is
+named rather than done quietly. That number is a product choice about how long somebody might want
+to reach back for a pre-merge copy, not a measurement, which is why it has no row in DESIGN.md.
+`claude-sync clean-backups` removes them all now instead of waiting. A copy whose date cannot be
+read is KEPT, because it is the only copy of somebody's pre-merge work and a guess in the deleting
+direction cannot be taken back.
 
 ### A burst of edits is one send, and you can hold the watcher off
 
@@ -549,7 +565,7 @@ and one run, which is what a healthy machine looks like.
 
 ## Local state (per Mac, never synced)
 
-Twelve things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
+Thirteen things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
 so a fresh clone starts without them. (`lesson-bands/` also sits outside `payload/` and is the one
 exception: it is tracked and shared on purpose, because a band nobody else can see cannot stop
 anybody else claiming it. See Lesson numbers above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
@@ -565,6 +581,7 @@ defined answer for being absent or untrustworthy.
 | `.send-suite-verdicts` | a send that ran a suite covering a hook it is about to publish | the next send, to decide whether that suite has to run again | absent means every relevant suite runs, which is the pre-#269 behaviour and only costs time. An entry is keyed on a digest of the whole staged hook set, so any hook edit retires it; a verdict is never reused across a change to what it judged. A `fail` is remembered exactly like a `pass`, because what it saves is re-running a red suite on every keystroke while the sync lock is held |
 | `.resolved/` | a conflict resolved automatically because this Mac's version held nothing extra | nothing reads it; it exists so a wrong resolution is recoverable | absent means no conflict has resolved itself here. Entries are swept once older than two weeks, and one whose date cannot be read is KEPT rather than deleted on a guess, since this directory holds the only copy of something |
 | `.claude-sync-clones` (in your home, not in a clone) | every clone on this Mac, the first time it takes the lock | `claude-sync status`, to find the records other clones hold | absent means no clone has done work since this was added, so status reports only what it can reach through the launch agents. An entry naming a clone that has gone is skipped rather than reported, and nothing prunes it: the file is only ever appended to, so a run that dies part way cannot lose the entries already there |
+| `.claude-sync-watch.pid` (in your home, not in a clone) | `claude-sync watch`, on the way up | the next `claude-sync watch`, to refuse starting a second one | absent means no watcher has started here since this was added, and the next one starts normally. The pid in it is confirmed against what that process actually IS before it is believed, because a stale pid is reused by the system constantly and a guard that trusts the number refuses to start over something unrelated. It is removed on the way out, and only by the watcher whose own pid it holds, so one watcher exiting cannot clear another's record |
 | `.claude-sync-hold` (in your home, not in a clone) | `claude-sync hold` | the watcher's send, and `claude-sync status` | absent means no hold, which is the normal state. It carries an expiry and fails OPEN: once that passes it is cleared and the watcher says the hold expired, because a hold that outlives the session that took it silently stops the sync. A marker that will not parse is cleared too, and reported in its own words rather than as an expiry, since obeying it would stop the sync until somebody found the file and ignoring it silently would discard a decision somebody made |
 | `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
 | `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |

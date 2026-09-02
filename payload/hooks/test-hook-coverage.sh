@@ -21,6 +21,23 @@ check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)
 
 # The predicate, in one place, so the baseline records an answer this produced rather than a second
 # definition of the question drifting beside it (L107).
+# The whole NAME, not a substring of a line (claude-config#268). `grep -lF "$b"` reported a hook
+# whose name is a suffix of another hook's name as covered by every suite that mentions the longer
+# one: `spool.sh` was answered for by five suites that all say `issue-spool.sh` and none of which
+# mention a hook by that name. No such pair existed in the tree, which is why it would have gone
+# unnoticed until it mattered.
+#
+# The boundary excludes the characters a hook name is made of, so `/`, a quote or a space before
+# the name still matches and a `-` does not. claude-sync's send_suites_covering asks the same
+# question in the same shape, deliberately, so a send verifies the set the ratchet calls covered
+# (L263); each side has its own check that the suffix case is refused, because a shared NAME is
+# read as evidence of shared BEHAVIOUR and nothing otherwise compares them.
+hook_name_pattern(){   # $1 = a hook basename -> an ERE matching it as a whole name
+  local esc
+  esc="$(printf '%s' "$1" | sed 's/[][^$.*+?(){}|\\]/\\&/g')"
+  printf '(^|[^A-Za-z0-9_-])%s([^A-Za-z0-9_-]|$)' "$esc"
+}
+
 uncovered_now() { # uncovered_now <hooks dir>  -> one basename per line, sorted
   local d="${1%/}" f b
   # The suites are collected FIRST, and only ones that exist are passed to grep. Handed a path
@@ -35,11 +52,14 @@ uncovered_now() { # uncovered_now <hooks dir>  -> one basename per line, sorted
   # No suites at all is not "everything is uncovered", it is a derivation that read nothing, and
   # the caller has to be able to tell those apart (L98).
   [ "${#suites[@]}" -gt 0 ] || return 3
-  for f in "$d"/*.sh "$d"/*.py "$d"/lib/*.sh; do
+  # hooks/lib/*.py is in the list since claude-config#246. It was the one combination the glob
+  # missed, so a lib Python file with no suite at all was reported as fully covered, which is the
+  # exact failure the ratchet exists to prevent, and invisible because the guard passed (L96).
+  for f in "$d"/*.sh "$d"/*.py "$d"/lib/*.sh "$d"/lib/*.py; do
     [ -e "$f" ] || continue
     b="$(basename "$f")"
     case "$b" in test-*|run-all-tests.sh) continue ;; esac
-    if ! grep -lF "$b" "${suites[@]}" >/dev/null 2>&1; then
+    if ! grep -lE "$(hook_name_pattern "$b")" "${suites[@]}" >/dev/null 2>&1; then
       printf '%s\n' "$b"
     fi
   done | sort -u
@@ -60,11 +80,48 @@ trap 'rm -rf "$TMPROOT"' EXIT
 FIX="$TMPROOT/hooks"; mkdir -p "$FIX/lib"
 printf '#!/usr/bin/env bash\n' > "$FIX/covered.sh"
 printf '#!/usr/bin/env bash\n' > "$FIX/naked.sh"
-printf '#!/usr/bin/env bash\nbash "$DIR/covered.sh"\n' > "$FIX/test-covered.sh"
+# A lib Python file with no suite (claude-config#246). The glob covered shell and Python in
+# hooks/ and shell in hooks/lib/, but not Python in hooks/lib/, so review-reason.py sat outside
+# the ratchet entirely, as inject-spool.py had before it. Nothing was broken in the tree; the
+# defect was in the guard, and a guard that passes while blind is the failure it exists to
+# prevent (L96).
+printf '#!/usr/bin/env python3\n' > "$FIX/lib/naked-lib.py"
+printf '#!/usr/bin/env python3\n' > "$FIX/lib/covered-lib.py"
+# A hook whose name is a SUFFIX of another hook's name (claude-config#268). The predicate was
+# `grep -lF "$b"`, a substring test, so `spool.sh` was reported as covered by every suite that
+# merely says `issue-spool.sh`. Measured 2026-09-02: five suites in this tree match `spool.sh`
+# and not one of them mentions a hook by that name. No such pair existed, which is exactly why
+# it would have gone unnoticed.
+printf '#!/usr/bin/env bash\n' > "$FIX/spool.sh"
+printf '#!/usr/bin/env bash\n' > "$FIX/issue-spool.sh"
+printf '#!/usr/bin/env bash\nbash "$DIR/covered.sh"\npython3 "$DIR/lib/covered-lib.py"\nbash "$DIR/issue-spool.sh"\n' > "$FIX/test-covered.sh"
 got="$(uncovered_now "$FIX")"
-[ "$got" = "naked.sh" ] \
-  && check "the derivation names a hook no suite mentions, and only that one" ok \
-  || check "the derivation names a hook no suite mentions, and only that one" "it answered: [$got]"
+want="$(printf 'naked-lib.py\nnaked.sh\nspool.sh\n' | sort -u)"
+[ "$got" = "$want" ] \
+  && check "the derivation names every hook no suite mentions, and only those" ok \
+  || check "the derivation names every hook no suite mentions, and only those" "it answered: [$got], wanted: [$want]"
+# Named separately as well as counted, because a single equality check that fails says only that
+# the set is wrong and sends the reader to work out which member moved (L11).
+case "
+$got" in *"
+naked-lib.py"*) check "#246 a lib Python file with no suite is seen at all" ok ;;
+  *) check "#246 a lib Python file with no suite is seen at all" "the glob does not reach hooks/lib/*.py" ;;
+esac
+case "
+$got" in *"
+spool.sh"*) check "#268 a hook whose name is a suffix of another is not called covered" ok ;;
+  *) check "#268 a hook whose name is a suffix of another is not called covered" "a suite naming only issue-spool.sh answered for it" ;;
+esac
+case "
+$got" in *"
+issue-spool.sh"*) check "#268 and the hook the suite really does name is still covered" "it was reported uncovered" ;;
+  *) check "#268 and the hook the suite really does name is still covered" ok ;;
+esac
+case "
+$got" in *"
+covered-lib.py"*) check "#246 and a lib Python file a suite names is covered" "it was reported uncovered" ;;
+  *) check "#246 and a lib Python file a suite names is covered" ok ;;
+esac
 
 # ---------------------------------------------------------------------------
 # The comparison itself, both directions, against a fixture before the real tree.
@@ -79,16 +136,16 @@ uncovered_now "$NOSUITES" >/dev/null 2>&1
   && check "a directory with no suites at all is refused, not reported as all-uncovered" ok \
   || check "a directory with no suites at all is refused, not reported as all-uncovered" "it answered instead of refusing"
 
-printf 'naked.sh\nsomething-that-left.sh\n' > "$TMPROOT/stale-baseline.txt"
+printf 'naked-lib.py\nnaked.sh\nspool.sh\nsomething-that-left.sh\n' > "$TMPROOT/stale-baseline.txt"
 stale="$(comm -13 <(uncovered_now "$FIX") <(read_baseline "$TMPROOT/stale-baseline.txt"))"
 [ "$stale" = "something-that-left.sh" ] \
   && check "a baseline naming something no longer uncovered is spotted" ok \
   || check "a baseline naming something no longer uncovered is spotted" "it spotted: [$stale]"
 printf '# nothing\n' > "$TMPROOT/empty-baseline.txt"
 grew="$(comm -23 <(uncovered_now "$FIX") <(read_baseline "$TMPROOT/empty-baseline.txt"))"
-[ "$grew" = "naked.sh" ] \
+[ "$grew" = "$want" ] \
   && check "a hook missing from the baseline is spotted" ok \
-  || check "a hook missing from the baseline is spotted" "it spotted: [$grew]"
+  || check "a hook missing from the baseline is spotted" "it spotted: [$grew], wanted: [$want]"
 
 # ---------------------------------------------------------------------------
 # The real tree.

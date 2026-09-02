@@ -1302,6 +1302,40 @@ contains "$REP_KEY" "$REP_PENDING" \
   || check "and the source it names is the key a clear would empty" "key=$REP_KEY rendered: $REP_PENDING"
 
 echo
+# ---- a finding says how old it is, and whether the code it names has moved (#202) ----
+# A finding was offered as current however old it was, and one project's oldest pending findings
+# cited file and line references from eleven days earlier. Code moves, so a finding can send you
+# to a line number that no longer means what it did, and the time is spent before you find out.
+#
+# There is deliberately no age threshold: measured on this Mac 2026-09-02, the 618 archived
+# findings span 1.0 to 17.2 days with a median of 13.0, so every candidate number sits inside the
+# dense middle of that distribution and would move dozens across at once on a small shift (L172).
+# What is measured instead is whether the file the finding names has changed since it was written,
+# which is the thing the age was standing in for.
+reset_spool
+AGE_DIR="$TMPROOT/finding-age"; mkdir -p "$AGE_DIR"
+( cd "$AGE_DIR" && git init -q . 2>/dev/null )
+AGE_TDIR="$TMPROOT/finding-age-transcript"; mkdir -p "$AGE_TDIR"
+AGE_TRANSCRIPT="$AGE_TDIR/agent.jsonl"; : > "$AGE_TRANSCRIPT"
+printf 'first\n' > "$AGE_DIR/moved.py"
+printf 'first\n' > "$AGE_DIR/still.py"
+bash "$SPOOL_LIB" note "$AGE_DIR" "moved.py line 12 needs a guard" tester "$AGE_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$AGE_DIR" "still.py line 3 needs a guard" tester "$AGE_TRANSCRIPT" >/dev/null 2>&1
+# Only ONE of them is touched afterwards, so the marking has to tell them apart rather than mark
+# everything (L159). Touched with an explicit future stamp rather than by waiting: the timestamps
+# are what the comparison reads, so setting them is both instant and the stronger test (L290).
+touch -t "$(date -v+1d '+%Y%m%d%H%M' 2>/dev/null || date -d 'tomorrow' '+%Y%m%d%H%M')" "$AGE_DIR/moved.py"
+AGE_OUT="$(bash "$SPOOL_LIB" pending "$AGE_DIR" "$AGE_TRANSCRIPT" 2>&1)"
+contains "ago)" "$AGE_OUT" \
+  && check "#202 a rendered finding says how old it is" ok \
+  || check "#202 a rendered finding says how old it is" "rendered: $AGE_OUT"
+contains "moved.py has changed since this was written" "$AGE_OUT" \
+  && check "#202 and a finding whose file has changed since is marked" ok \
+  || check "#202 and a finding whose file has changed since is marked" "rendered: $AGE_OUT"
+contains "still.py has changed since this was written" "$AGE_OUT" \
+  && check "#202 and one whose file has not is left alone" "it marked the untouched file too" \
+  || check "#202 and one whose file has not is left alone" ok
+
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

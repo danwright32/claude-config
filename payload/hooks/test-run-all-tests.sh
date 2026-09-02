@@ -936,6 +936,61 @@ case "$out_nr_repo" in
   *) check "#155 and it names the suite that claimed it" "out=$out_nr_repo" ;;
 esac
 
+# ---- and before giving up on it, the CHECKOUT is tried (claude-config#237) ----
+# Every pull ended with "3 SUITE(S) COULD NOT RUN HERE" and told the operator to run them from the
+# checkout. The checkout is on the SAME Mac, so the pull was announcing a gap it could close
+# itself, on every single run, which is how a line stops being read (L36). It also meant a hook
+# change could ship having been checked by 46 of 49 suites with nobody noticing which three sat
+# out (measured 2026-09-02).
+#
+# The checkout is NAMED by the caller, never guessed here. claude-sync passes its own SYNC_REPO,
+# which is the one directory that certainly holds the payload these hooks came from.
+CO_ROOT="$TMPROOT/checkout"; mkdir -p "$CO_ROOT/payload/hooks"
+# The copy in the checkout is the SAME suite, and it passes there because a repository is above it.
+mk_suite "$CO_ROOT/payload/hooks" needsrepo 0
+out_co="$(HOOK_TESTS_ROOT="$NOREPO" RUN_ALL_TESTS_CHECKOUT="$CO_ROOT" bash "$RUNNER" "$NR_DIR" 2>&1)"; code_co=$?
+case "$out_co" in
+  *"passed from the checkout"*) check "#237 a suite that cannot run here is re-run from the checkout" ok ;;
+  *) check "#237 a suite that cannot run here is re-run from the checkout" "out=$out_co" ;;
+esac
+[ "$code_co" -eq 0 ] \
+  && check "#237 and a run whose skipped suites all passed there is green" ok \
+  || check "#237 and a run whose skipped suites all passed there is green" "exit=$code_co out=$out_co"
+case "$out_co" in
+  *"COULD NOT RUN"*) check "#237 and nothing is left reported as unverified" "it still said COULD NOT RUN: $out_co" ;;
+  *) check "#237 and nothing is left reported as unverified" ok ;;
+esac
+
+# A suite that FAILS from the checkout fails the run. Re-running it is not a way to excuse it: the
+# whole point is that its verdict is now real rather than absent (L98).
+CO_BAD="$TMPROOT/checkout-bad"; mkdir -p "$CO_BAD/payload/hooks"
+mk_suite "$CO_BAD/payload/hooks" needsrepo 1
+out_cob="$(HOOK_TESTS_ROOT="$NOREPO" RUN_ALL_TESTS_CHECKOUT="$CO_BAD" bash "$RUNNER" "$NR_DIR" 2>&1)"; code_cob=$?
+[ "$code_cob" -ne 0 ] \
+  && check "#237 a suite that fails from the checkout fails the run" ok \
+  || check "#237 a suite that fails from the checkout fails the run" "exit=$code_cob out=$out_cob"
+case "$out_cob" in
+  *"failed from the checkout"*) check "#237 and it says where that verdict came from" ok ;;
+  *) check "#237 and it says where that verdict came from" "out=$out_cob" ;;
+esac
+
+# A checkout that cannot answer either is its own outcome, distinct from having no checkout at
+# all: a re-run that changed nothing must not read like one that was never attempted (L11).
+CO_NR="$TMPROOT/checkout-notrun"; mkdir -p "$CO_NR/payload/hooks"
+mk_notrun_suite "$CO_NR/payload/hooks" needsrepo "no repository there either"
+out_conr="$(HOOK_TESTS_ROOT="$NOREPO" RUN_ALL_TESTS_CHECKOUT="$CO_NR" bash "$RUNNER" "$NR_DIR" 2>&1)"
+case "$out_conr" in
+  *"no repository there either"*) check "#237 a checkout that cannot answer either says so" ok ;;
+  *) check "#237 a checkout that cannot answer either says so" "out=$out_conr" ;;
+esac
+
+# The control. With no checkout named, the run behaves exactly as it did before, or this would be
+# a change nobody could turn off and the NOT RUN path would be dead code (L29).
+case "$out_nr" in
+  *"COULD NOT RUN"*) check "#237 with no checkout named, the old NOT RUN path still runs" ok ;;
+  *) check "#237 with no checkout named, the old NOT RUN path still runs" "out=$out_nr" ;;
+esac
+
 # A run where nothing could not run keeps the wording it had, so an ordinary green run reads
 # exactly as it did before (L103: a guard that asserts a rendering fails the first refinement of
 # it, and this is the rendering everybody reads).

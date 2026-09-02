@@ -14,6 +14,7 @@
 #   claude-sync status            # show what differs, no changes
 #   claude-sync hold 30 "why"     # stop the watcher committing for a while, so you can commit
 #   claude-sync release           # lift that hold now rather than waiting for it to run out
+#   claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
 #   claude-sync next-lesson       # the next free lesson number, so none is picked by eye
 #   claude-sync check-lessons     # fail if two lessons share a number
 #   claude-sync lesson L174       # one lesson in full, with its provenance
@@ -1064,37 +1065,144 @@ lesson_index_body(){   # $1 = the full lessons file
   printf 'To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or\n'
   printf 'read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about\n'
   printf 'to decide something: the body is where the failure it came from is described.\n'
+  # The whole file is read into an array first, rather than walked with getline. getline CONSUMES
+  # the line it reads, so a continuation loop had no way to put back a line that turned out to
+  # start the NEXT entry, and an entry whose bold marker never closes therefore swallowed every
+  # entry after it until one happened to contain a `**` (claude-config#194). With the lines in
+  # hand the loop can simply stop at a boundary and the next entry is still there to be rendered.
   awk '
-    /^## / { section = substr($0, 4); next }
-    /^- \*\*L[0-9]+\./ {
-      rest = substr($0, index($0, "- **") + 4)
-      # The rule sentence is bold and routinely wraps onto later lines, so read until it closes.
-      while (index(rest, "**") == 0) {
-        if ((getline nxt) <= 0) break
-        sub(/^[[:space:]]+/, " ", nxt)
-        rest = rest nxt
+    { line[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (line[i] ~ /^## /) { section = substr(line[i], 4); continue }
+        if (line[i] !~ /^- \*\*L[0-9]+\./) continue
+        rest = substr(line[i], index(line[i], "- **") + 4)
+        # The rule sentence is bold and routinely wraps onto later lines, so read on until it
+        # closes. Bounded by the three things that can only be the start of something else.
+        j = i
+        while (index(rest, "**") == 0 && j < NR) {
+          nxt = line[j + 1]
+          if (nxt ~ /^- \*\*L[0-9]+\./ || nxt ~ /^## / || nxt ~ /^[[:space:]]*$/) break
+          # Stripped and then joined with ONE space, unconditionally. Replacing the leading
+          # whitespace with a space did the right thing for an INDENTED continuation and nothing
+          # at all for an unindented one, which then joined with no separator: L517 shipped into
+          # the generated index reading "across everycombination of inputs" (claude-config#192).
+          # This does not depend on every future author indenting their wraps correctly.
+          sub(/^[[:space:]]+/, "", nxt)
+          rest = rest " " nxt
+          j++
+        }
+        end = index(rest, "**")
+        rule = (end > 0) ? substr(rest, 1, end - 1) : rest
+        gsub(/[[:space:]]+/, " ", rule)
+        sub(/[[:space:]]+$/, "", rule)
+        if (section != lastsec) { printf "\n## %s\n\n", section; lastsec = section }
+        printf "- %s\n", rule
       }
-      end = index(rest, "**")
-      rule = (end > 0) ? substr(rest, 1, end - 1) : rest
-      gsub(/[[:space:]]+/, " ", rule)
-      sub(/[[:space:]]+$/, "", rule)
-      if (section != lastsec) { printf "\n## %s\n\n", section; lastsec = section }
-      printf "- %s\n", rule
     }
   ' "$1"
   return 0
 }
 
+# The lesson numbers a file renders in each of the two canonical shapes. Two one line helpers
+# rather than the pattern written out at each call site, so the pair the check below compares
+# cannot drift into asking two different questions (L107, L41).
+canonical_lesson_numbers(){ grep -hoE '^- \*\*L[0-9]+\.' "$@" 2>/dev/null | grep -oE '[0-9]+' | sort -u -n || true; }
+index_lesson_numbers(){     grep -hoE '^- L[0-9]+\.'      "$@" 2>/dev/null | grep -oE '[0-9]+' | sort -u -n || true; }
+
+# Do the index and the lessons file beside it actually agree? Every failure path in
+# write_lesson_index returns 0 in silence, so a generation that failed, truncated, or could not
+# write left whatever stale index was already on disk and every session went on loading it. A
+# stale index and a correct one look identical to a reader (L98).
+#
+# It reads the two FILES rather than checking inside the writer, because a check that lives only
+# in the writer cannot see an index that was right when written and has gone stale since (L225).
+# Silent when they agree: a warning printed on every run is one nobody reads (L36).
+verify_lesson_index(){   # $1 = tree holding LESSONS.md and the index
+  local src="$1/LESSONS.md" idx="$1/$LESSON_INDEX_FILE" missing extra
+  [ -f "$src" ] || return 0
+  if [ ! -f "$idx" ]; then
+    echo "claude-sync: $1/LESSONS.md is here but $LESSON_INDEX_FILE is not, so every session in every project is loading no lessons index at all. Nothing here could write it; check the permissions on $1." >&2
+    return 1
+  fi
+  missing="$(comm -23 <(canonical_lesson_numbers "$src") <(index_lesson_numbers "$idx") | sed 's/^/L/' | tr '\n' ' ')"
+  extra="$(comm -13 <(canonical_lesson_numbers "$src") <(index_lesson_numbers "$idx") | sed 's/^/L/' | tr '\n' ' ')"
+  [ -z "$missing" ] && [ -z "$extra" ] && return 0
+  # Both faults are reported, never as an else-if: a truncated rewrite commits the two at once,
+  # and dying at the first sends somebody back for a second run to discover the second (L11).
+  echo "claude-sync: $LESSON_INDEX_FILE does not match the LESSONS.md beside it in $1, so the index every session loads is not what the lessons file says.${missing:+ Missing from the index: $missing.}${extra:+ In the index but not in LESSONS.md: $extra.} Nothing was reverted; the next run regenerates it, and if this repeats the index is not writable." >&2
+  notify "$LESSON_INDEX_FILE disagrees with LESSONS.md"
+  return 1
+}
+
 # Writes the index beside the lessons file, and ONLY when it differs. CLAUDE.md and everything it
 # imports are watched, so rewriting one on every sync would re-trigger the watcher for ever.
+# Where an unreadable lesson entry IS, not where it is presumed to have come from
+# (claude-config#248). The message used to say "a lesson entry that ARRIVED is not written as
+# ...", and the comment above it stated the assumption outright: "this is the path such an entry
+# actually arrives on, since the other Mac is where somebody wrote it". On 2026-08-31 a pull on
+# Dans-MacBook-Pro reported L530 that way, and git history shows L530 was never in the shared
+# payload: it was written on that Mac and had been held back unsent. Anyone acting on the message
+# goes and investigates a Mac that had nothing wrong with it.
+#
+# The payload is the copy the other Mac published, so an entry present there arrived and an entry
+# absent from it was written here. That is a fact this can READ rather than presume.
+#
+# Called from write_lesson_index, which is the one place that runs whenever the lessons file is
+# next looked at on either path, so a locally written entry is reported within seconds of the
+# watcher's next send rather than at the next pull somebody happens to run (claude-config#249).
+# Once per run, because the send falls through to a reconcile and would otherwise say it twice.
+MALFORMED_LESSONS_REPORTED=0
+report_malformed_lessons(){   # $1 = tree holding LESSONS.md
+  local bad payload_bad ptexts line txt arrived="" local_only=""
+  [ "${MALFORMED_LESSONS_REPORTED:-0}" = "1" ] && return 0
+  bad="$(malformed_lesson_entries "$1")"
+  is_blank "$bad" && return 0
+  MALFORMED_LESSONS_REPORTED=1
+  payload_bad="$(malformed_lesson_entries "$PAYLOAD" 2>/dev/null || true)"
+  # Matched on the entry's TEXT, not on "file:line:text": a line number that differs between the
+  # two copies is not evidence about where the entry came from, and the two files routinely differ
+  # in length.
+  ptexts="$(printf '%s\n' "$payload_bad" | cut -d: -f3-)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    txt="$(printf '%s' "$line" | cut -d: -f3-)"
+    case "
+$ptexts" in
+      *"
+$txt"*) arrived="${arrived:+$arrived; }$line" ;;
+      *)      local_only="${local_only:+$local_only; }$line" ;;
+    esac
+  done <<MALFORMED
+$bad
+MALFORMED
+  # BOTH are reported, never as an else-if: one file routinely commits the two at once, and dying
+  # at the first sends somebody back for a second run to discover the second (L11).
+  if [ -n "$local_only" ]; then
+    echo "claude-sync: these lesson entries were WRITTEN ON THIS MAC and are not written as '- **Lnnn. ...', so nothing here can read them: not the $LESSON_INDEX_FILE index that loads into every session in every project, not 'claude-sync lesson', not the duplicate check, and not the number minter. $local_only. Rewrite each one to start with '- **L<number>. ' and it becomes visible to all four; until then that file is held back from the next send." >&2
+    notify "unreadable lesson entry written on this Mac"
+  fi
+  if [ -n "$arrived" ]; then
+    echo "claude-sync: these lesson entries ARRIVED with the payload and are not written as '- **Lnnn. ...', so nothing here can read them: not the $LESSON_INDEX_FILE index that loads into every session in every project, not 'claude-sync lesson', not the duplicate check, and not the number minter. $arrived. They were written on the other Mac, so the fix belongs there; rewriting them here works too and publishes on the next send." >&2
+    notify "unreadable lesson entry arrived on this Mac"
+  fi
+  return 0
+}
+
 write_lesson_index(){   # $1 = tree holding LESSONS.md
   local src="$1/LESSONS.md" out
   [ -f "$src" ] || return 0
   out="$(scratch_file)"
   lesson_index_body "$src" > "$out" 2>/dev/null || { rm -f "$out"; return 0; }
   [ -s "$out" ] || { rm -f "$out"; return 0; }
-  if ! cmp -s "$out" "$1/$LESSON_INDEX_FILE"; then cat "$out" > "$1/$LESSON_INDEX_FILE"; fi
+  if ! cmp -s "$out" "$1/$LESSON_INDEX_FILE"; then cat "$out" > "$1/$LESSON_INDEX_FILE" 2>/dev/null || true; fi
   rm -f "$out"
+  # Checked against what is actually on disk afterwards, which is the point: every path above
+  # returns 0 whether it wrote anything or not, and the write itself can fail (#195).
+  verify_lesson_index "$1" || true
+  # An entry nothing can read is an entry the index above could not carry, so this is where the
+  # omission actually happens and where it is worth saying (claude-config#249).
+  report_malformed_lessons "$1"
   return 0
 }
 
@@ -1501,7 +1609,14 @@ KEEP
   # would read as two different things happening to the same file.
   if ! is_blank "$ahead"; then
     local keeplist; keeplist="$(printf '%s' "$ahead" | tr '\n' ' ')"
-    echo "claude-sync: kept local edits the shared repo has not seen yet, instead of reverting them; they go up on the next send: ${keeplist}" >&2
+    # What this measured, not more. The old wording read as the COMPLETE set of what is waiting
+    # to be sent, and it is narrower by construction: it is the paths THIS APPLY would otherwise
+    # have reverted, which excludes anything the repo also changed (those are conflicts, handled
+    # separately) and anything outside the trees it walks. On 2026-08-30 it named three files
+    # while a status dry run moments later showed five, two of them skills (claude-config#227).
+    # A sentence that is accurate about what it measured but reads as a claim about everything is
+    # the shape of L287, and the fix is to state the scope inside the message.
+    echo "claude-sync: this apply would have reverted these local edits, so it left them alone; they go up on the next send: ${keeplist}. That is what THIS APPLY touched, not everything unsent: run 'claude-sync status' for the full list of what differs from the shared copy." >&2
     notify "kept unsent local edits: ${keeplist}"
   fi
   chmod +x "$CLAUDE_HOME"/hooks/*.sh "$CLAUDE_HOME"/hooks/*.py 2>/dev/null || true
@@ -1613,15 +1728,12 @@ $f
   # on the other Mac), or it predates the sync entirely. It is in the file now, so
   # say so at once: the L43 duplicate went unnoticed for a day because nothing
   # ever looked (#15).
-  # And an entry that arrived in a shape nothing here can read (claude-config#164). Reported when it
-  # LANDS rather than only when the next send declines to publish it: until a send runs there is
-  # nothing to hold back, and this is the path such an entry actually arrives on, since the other
-  # Mac is where somebody wrote it. Same reason the duplicate below is reported here.
-  local applied_bad; applied_bad="$(malformed_lesson_entries "$CLAUDE_HOME")"
-  if ! is_blank "$applied_bad"; then
-    echo "claude-sync: a lesson entry that arrived is not written as '- **Lnnn. ...', so nothing here can read it: not the index that loads into every session, not 'claude-sync lesson', not the duplicate check, and not the number minter. $(printf '%s' "$applied_bad" | tr '\n' ';' | sed 's/;$//'). Rewrite it to start with '- **L<number>. '. Until then that file is held back from the next send." >&2
-    notify "unreadable lesson entry arrived on this Mac"
-  fi
+  # An entry in a shape nothing here can read (claude-config#164) is reported by
+  # report_malformed_lessons, which write_lesson_index just above called. It used to be reported
+  # HERE, in words that presumed the other Mac had written it, and that presumption was wrong in
+  # the case that actually turned up (claude-config#248). One reporter, which reads where the
+  # entry is rather than presuming, and which runs on every path that regenerates the index rather
+  # than on this one alone (claude-config#249).
   local applied_dups; applied_dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
   if ! is_blank "$applied_dups"; then
     echo "claude-sync: the same lesson number is now used twice on this Mac, which breaks every reference to it: $(printf '%s' "$applied_dups" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number). Until then that file is held back from the next send." >&2
@@ -1655,6 +1767,7 @@ $f
   publish_applied_marker
   # Last, so the list of kept copies sits under everything this run reported doing, and only on a
   # run that actually wrote one (claude-config#158).
+  sweep_old_syncbaks
   report_syncbaks
 }
 
@@ -1709,7 +1822,72 @@ report_syncbaks(){
   done <<SYNCBAKS
 $list
 SYNCBAKS
-  echo "  Delete any you no longer need. Nothing here removes them, so an old one stays until you do." >&2
+  echo "  Any past $(duration_in_words "$(( $(backup_keep_days) * 86400 ))") old are removed on the next run that writes one; 'claude-sync clean-backups' removes them all now." >&2
+  return 0
+}
+
+# How long a .syncbak is kept. Generous on purpose: the backup has to outlive any window in which
+# the pull that wrote it could still turn out to have been wrong, and being wrong the other way
+# costs only disk (L5, L7).
+#
+# KEEP_DAYS rather than MAX_AGE, and that is not cosmetic. DESIGN.md's measured numbers table
+# holds every SYNC_*_MAX_AGE and SYNC_*_TIMEOUT, and every row in it states what its number is
+# derived FROM. This one is derived from nothing: it is a product choice about how long somebody
+# might want to reach back for a pre-merge copy, in the same family as SYNC_INTERVAL, which that
+# table deliberately excludes for the same reason. A row for it would have to invent a
+# derivation. It is held honest the way SYNC_INTERVAL is, by appearing in the README on the line
+# that names it.
+backup_keep_days(){
+  local d="${SYNC_BACKUP_KEEP_DAYS:-90}"
+  case "$d" in ''|*[!0-9]*|0) d=90 ;; esac
+  printf '%s' "$d"
+}
+
+# Reclaim the ones nobody is coming back for. Before this the only exit was deleting files by
+# hand, so the reminder above became permanent noise and the whole line stopped being read: two
+# backups from 2026-08-31 were still being announced on every pull (claude-config#240, L523).
+#
+# Every removal is ANNOUNCED. A cleanup that quietly deletes the only copy of something is the one
+# thing this must not be, and a run that removed nothing must not read like one that removed ten
+# (L98).
+sweep_old_syncbaks(){   # -> removes backups older than the age above, naming each
+  [ -d "$CLAUDE_HOME" ] || return 0
+  local days f n=0 gone="" cutoff now when
+  days="$(backup_keep_days)"
+  now="$(date +%s)"
+  cutoff=$(( now - days * 86400 ))
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    when="$(file_mtime "$f" 2>/dev/null || true)"
+    # A date nothing can read is a reason to KEEP the file, not to delete it: this is the only
+    # copy of somebody's work and a guess in the deleting direction cannot be taken back (L5).
+    case "$when" in ''|*[!0-9]*) continue ;; esac
+    [ "$when" -lt "$cutoff" ] || continue
+    rm -f "$f" 2>/dev/null || continue
+    n=$(( n + 1 )); gone="${gone:+$gone }${f#"$CLAUDE_HOME"/}"
+  done <<OLDBAKS
+$(find "$CLAUDE_HOME" -maxdepth 2 -name '*.syncbak' -type f 2>/dev/null | sort || true)
+OLDBAKS
+  [ "$n" -gt 0 ] && echo "claude-sync: removed $n .syncbak copy(ies) older than $(duration_in_words "$(( days * 86400 ))"): $gone" >&2
+  return 0
+}
+
+do_clean_backups(){
+  local f n=0
+  [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    rm -f "$f" 2>/dev/null || continue
+    n=$(( n + 1 ))
+    echo "  removed ${f#"$CLAUDE_HOME"/}"
+  done <<ALLBAKS
+$(find "$CLAUDE_HOME" -maxdepth 2 -name '*.syncbak' -type f 2>/dev/null | sort || true)
+ALLBAKS
+  if [ "$n" -eq 0 ]; then
+    echo "No .syncbak copies in $CLAUDE_HOME or one level below it, so none were removed."
+  else
+    echo "Removed $n .syncbak copy(ies)."
+  fi
   return 0
 }
 
@@ -2979,12 +3157,25 @@ pull_from_repo_or_die(){
 # Five fields since claude-config#185, and the last two are the coverage: how many suites ran and
 # how many could not. `?` where the runner's report could not be read, never 0, because 0 is the
 # reassuring answer and would be indistinguishable from a run that genuinely covered everything.
+# NAMED fields, not positions (claude-config#233). The record grew twice by appending, and every
+# growth was read by `IFS=tab read -r a b c d e f`, which puts every REMAINING field into the LAST
+# name. So a record widened without widening the read does not fail: the last variable silently
+# absorbs the new field and is reported as itself. It happened once already, where the exit code
+# came out as "3<tab>?<tab>?", and #218 then added a check that the reader stops at its own field,
+# which catches today's shape and not the next one (L317, L505). It has worked twice; the third
+# addition is this one, which is where it would have bitten.
+#
+# With key=value an unknown field is harmlessly ignored and a missing one is detectable by name,
+# so the reader can say WHICH field it could not make sense of rather than calling the whole
+# record unreadable (L11).
 record_hook_suite_result(){   # $1 = outcome  $2 = exit status  $3 = a file of output, or nothing
                               # $4 = suites that ran  $5 = suites that could not; number or ?
                               # $6 = how many seconds it took, or ? when it was never timed
+                              # $7 = the suites that could not run, comma separated, or ?
   local tmp
   tmp="$(scratch_file)" || return 0
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$(date +%s)" "$2" "${4:-?}" "${5:-?}" "${6:-?}" > "$tmp"
+  printf 'outcome=%s\tat=%s\texit=%s\tran=%s\tnotrun=%s\tseconds=%s\tnotrun_names=%s\n' \
+    "$1" "$(date +%s)" "$2" "${4:-?}" "${5:-?}" "${6:-?}" "${7:-?}" > "$tmp"
   # Capped: the point is the reason, not a transcript, and this file is read by a person.
   [ -n "${3:-}" ] && [ -f "$3" ] && tail -50 "$3" >> "$tmp"
   mv "$tmp" "$HOOK_TESTS_FILE" 2>/dev/null || rm -f "$tmp"
@@ -3008,6 +3199,20 @@ record_hook_suite_result(){   # $1 = outcome  $2 = exit status  $3 = a file of o
 # block would be indistinguishable from a runner too old to report one, and would be read as full
 # coverage: the pleasant answer, arrived at by matching nothing (L98, L215). A report matching
 # neither shape is answered with `?`, and the closing line says so in its own words.
+# The names of the suites that could not run, from the runner's own block. Only consulted when
+# the verdict already says some did not run: an absent block is then a real disagreement with the
+# runner rather than a normal state, and it is answered with `?` rather than with an empty list,
+# because "none could not run" and "this could not be read" are different facts (L98, L215).
+hook_suite_notrun_names(){   # $1 = the file holding the runner's output -> comma separated, or ?
+  local block
+  block="$(grep -E '^[0-9]+ SUITE\(S\) COULD NOT RUN HERE:' "$1" 2>/dev/null | tail -1 || true)"
+  [ -n "$block" ] || { printf '?'; return 0; }
+  block="${block#*COULD NOT RUN HERE:}"
+  block="$(printf '%s' "$block" | tr -s ' ' ' ' | sed 's/^ //; s/ $//; s/ /,/g')"
+  case "$block" in ''|,) printf '?' ;; *) printf '%s' "$block" ;; esac
+  return 0
+}
+
 hook_suite_coverage(){   # $1 = the file holding the runner's output -> "<ran>\t<notrun>", ? if unread
   local line
   line="$(grep -E '^ALL [0-9]+ SUITES PASSED$' "$1" 2>/dev/null | tail -1 || true)"
@@ -3027,7 +3232,7 @@ hook_suite_coverage(){   # $1 = the file holding the runner's output -> "<ran>\t
 }
 
 hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
-  local runner out pid started now limit rc=0 killed=0 ran='?' notrun='?' took='?'
+  local runner out pid started now limit rc=0 killed=0 ran='?' notrun='?' took='?' nrnames='?'
   [ "${SYNC_NO_HOOK_TESTS:-0}" = "1" ] && return 0
   [ -n "${APPLIED_LOG:-}" ] || return 0
   [ -s "$APPLIED_LOG" ] || return 0
@@ -3051,7 +3256,12 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   # as an unverified one on exactly the days everything is busy.
   limit="${SYNC_HOOK_TESTS_TIMEOUT:-1800}"
   case "$limit" in ''|*[!0-9]*) limit=1800 ;; esac
-  SYNC_NO_HOOK_TESTS=1 bash "$runner" > "$out" 2>&1 &
+  # The checkout is handed to the runner, never guessed by it (claude-config#237). Three suites
+  # audit the repository and declare SUITE-NOT-RUN in a deployed copy, which is every Mac, so the
+  # pull announced the same unverified gap on every single run and never closed it. This clone IS
+  # the repository those hooks came from and it is on this same Mac, so the runner can re-run them
+  # from it and report a real pass or fail instead.
+  SYNC_NO_HOOK_TESTS=1 RUN_ALL_TESTS_CHECKOUT="$SYNC_REPO" bash "$runner" > "$out" 2>&1 &
   pid=$!
   started="$(date +%s)"
   while kill -0 "$pid" 2>/dev/null; do
@@ -3088,12 +3298,17 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
 $(hook_suite_coverage "$out")
 HSCOVEOF
     case "$ran$notrun" in *[!0-9]*) ran='?'; notrun='?' ;; esac
-    record_hook_suite_result passed 0 "" "$ran" "$notrun" "$took"
+    nrnames='?'
+    case "$notrun" in [1-9]*) nrnames="$(hook_suite_notrun_names "$out")" ;; 0) nrnames='' ;; esac
+    record_hook_suite_result passed 0 "" "$ran" "$notrun" "$took" "$nrnames"
     if [ "$ran" = '?' ]; then
       printf ', and the hook suite passed here, though its own report did not say how many of its suites ran, so how much of the suite that covers is unknown'
     elif [ "$notrun" -gt 0 ]; then
-      printf ', and the hook suite passed here, but only %s of its %s suites could run on this Mac, so %s of them are unverified here' \
-        "$ran" "$(( ran + notrun ))" "$notrun"
+      # NAMED, not counted (claude-config#250). A count cannot say whether the ones that sat out
+      # are trivial or cover the most important behaviour, and nothing can notice it growing.
+      printf ', and the hook suite passed here, but only %s of its %s suites could run on this Mac, so %s are unverified here: %s' \
+        "$ran" "$(( ran + notrun ))" "$notrun" \
+        "$(case "$nrnames" in ''|'?') printf 'and the runner did not name them' ;; *) printf '%s' "$nrnames" | tr ',' ' ' ;; esac)"
     else
       printf ', and the hook suite passed here, all %s of its suites' "$ran"
     fi
@@ -3125,6 +3340,9 @@ do_pull(){
   apply_payload_to_local
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   summarize_applied "$before" "$after"
+  # Read only, and it fetches nothing: the ref this run already has is what the other clones are
+  # measured against (claude-config#266).
+  report_other_clones_position
   report_when_lock_released "Pulled shared config onto this Mac (memory/permissions untouched)"
 }
 
@@ -3293,13 +3511,28 @@ do_sync(){
 # Which suites cover this file? Asked exactly as test-hook-coverage.sh asks it: a suite covers a hook
 # when the suite's text names it. Written twice, the two would drift, and the send would verify a
 # different set from the one the ratchet calls covered (L263, L41).
+# The whole NAME, not a substring of a line (claude-config#268). `grep -lF` matched a hook whose
+# name is a SUFFIX of another hook's name in every suite that mentions the longer one: `spool.sh`
+# was answered for by five suites that all say `issue-spool.sh` and none of which mention a hook
+# by that name. Here that means a send publishes a hook having run five irrelevant suites against
+# it and reports it as checked. The boundary excludes the characters a hook name is made of, so a
+# `/`, a quote or a space before the name still matches and a `-` does not. Written the same way
+# in test-hook-coverage.sh's hook_name_pattern, deliberately, and each side has its own check that
+# the suffix case is refused, because a shared name is read as evidence of shared behaviour and
+# nothing otherwise compares them (L263).
+send_hook_name_pattern(){   # $1 = a hook basename -> an ERE matching it as a whole name
+  local esc
+  esc="$(printf '%s' "$1" | sed 's/[][^$.*+?(){}|\\]/\\&/g')"
+  printf '(^|[^A-Za-z0-9_-])%s([^A-Za-z0-9_-]|$)' "$esc"
+}
+
 send_suites_covering(){   # $1 = a hook's basename -> the suites naming it, one per line
   local f suites=()
   for f in "$SYNC_REPO"/payload/hooks/test-*.sh "$SYNC_REPO"/tests/test-*.sh; do
     [ -f "$f" ] && suites+=("$f")
   done
   [ "${#suites[@]}" -gt 0 ] || return 0
-  grep -lF "$1" "${suites[@]}" 2>/dev/null || true
+  grep -lE "$(send_hook_name_pattern "$1")" "${suites[@]}" 2>/dev/null || true
 }
 
 # A digest of the hook set this send is about to publish, taken from the INDEX so it is the bytes
@@ -3530,12 +3763,32 @@ do_release(){
   return 0
 }
 
+# What this send DID, in one agreed shape, for the watcher to read back (claude-config#196).
+#
+# Local config changes sat unsent for 29 hours on 2026-08-23 while the watch daemon was running,
+# and nothing anywhere reported it. The reason it could not be diagnosed is the logging: the watch
+# loop wrote a timestamped line ONLY when a send exited non-zero, so a successful send wrote
+# nothing at all and the log could not tell a watcher sending normally from one that had silently
+# stopped. In 22 KB covering weeks there was exactly one line, a network blip. That is L98 exactly.
+#
+# A MARKER rather than the watcher matching prose: a classification built by grepping sentences
+# breaks silently the first time one is reworded, and it would be wrong in the reassuring
+# direction. Printed only under the watcher, because a person running `claude-sync send` by hand
+# has the sentences and does not need the token; the watcher sets SYNC_IN_WATCH itself, and a
+# reader that finds no marker says so rather than assuming success.
+send_outcome(){   # $1 = sent|nothing|behind|held|failed
+  [ "${SYNC_IN_WATCH:-0}" = "1" ] || return 0
+  printf 'SEND-OUTCOME %s\n' "$1"
+  return 0
+}
+
 do_send(){
   local hold_left
   # #262: the automatic send is what takes a deliberate commit's message and cancels its CI run,
   # so it is the one a hold stops. An explicit `claude-sync send` is unaffected.
   if [ "${SYNC_IN_WATCH:-0}" = "1" ] && hold_left="$(hold_remaining)"; then
     echo "claude-sync: the watcher is on hold for another $(duration_in_words "$hold_left"), so this edit was not sent. It goes out when the hold runs out, or immediately after: claude-sync release" >&2
+    send_outcome held
     return 0
   fi
   # Never publish while this Mac is behind: send has no apply step, so it cannot
@@ -3546,12 +3799,13 @@ do_send(){
   if unapplied_remote_changes; then
     echo "claude-sync: skipped sending, because the shared repo holds changes this Mac has not applied yet and mirroring now would overwrite them. Run 'claude-sync pull' (or wait for the receive timer); the next edit sends normally." >&2
     notify "send skipped: pull first, this Mac is behind"
+    send_outcome behind
     return 0
   fi
   stage_local_to_payload
   have_git || return 0
   send_hook_tests                        # holds back the hooks a red suite covers; the rest sends (#269)
-  commit_if_changed || return 0          # nothing changed -> nothing to send
+  commit_if_changed || { send_outcome nothing; return 0; }   # nothing changed -> nothing to send
   # A commit we just made from our OWN ~/.claude is applied here by construction:
   # stage_local_to_payload mirrored this Mac's files into it moments ago. Record it
   # as applied, or .last-applied stays at the previous commit and the guard above
@@ -3565,7 +3819,7 @@ do_send(){
     # all day but synced weekly reads as "last reached GitHub days ago" while perfectly
     # online, and the next harmless blip gets reported as a long outage. (#22)
     record_sync_success
-    echo "Sent."; return 0
+    echo "Sent."; send_outcome sent; return 0
   fi
   do_sync                                # behind remote: reconcile (pull+apply+push)
 }
@@ -3908,14 +4162,56 @@ hook_suite_headroom(){   # $1 = seconds the run took, or ? -> a clause, or nothi
   return 0
 }
 
+# What to say about the suites that could not run. Three answers, kept apart: none, some named,
+# and some whose names this record does not carry (L11).
+hook_suite_skipped(){   # $1 = the notrun count  $2 = the names, or ? / empty
+  case "${1:-}" in ''|'?'|0) return 0 ;; *[!0-9]*) return 0 ;; esac
+  case "${2:-}" in
+    ''|'?') printf ', though %s of its suites could not run here and this record does not name them' "$1" ;;
+    *)      printf ', though %s of its suites could not run here: %s' "$1" "$(printf '%s' "$2" | tr ',' ' ')" ;;
+  esac
+  return 0
+}
+
+# One field out of a key=value record, by name. Empty when the field is not there, which the
+# caller has to tell apart from a field that is present and empty: every field this writes is
+# non-empty by construction, so an empty answer means absent.
+hook_suite_field(){   # $1 = the record line  $2 = the field name
+  # Pure parameter expansion, no pipeline. `... | head -1` is a short circuiting consumer, and
+  # under this file's pipefail that kills its producer and reports a failure that never
+  # happened (L183).
+  local rest="$1" pair
+  while [ -n "$rest" ]; do
+    pair="${rest%%$'\t'*}"
+    case "$pair" in "$2="*) printf '%s' "${pair#"$2="}"; return 0 ;; esac
+    case "$rest" in *$'\t'*) rest="${rest#*$'\t'}" ;; *) rest="" ;; esac
+  done
+  return 0
+}
+
 report_hook_suite_record(){   # $1 = the record file  $2 = the clone it belongs to, or empty for this one
-  local line outcome when code ran notrun took now age prefix="hook suite: "
+  local line outcome when code ran notrun took notrun_names now age prefix="hook suite: "
   [ -n "${2:-}" ] && prefix="hook suite (recorded by another clone on this Mac, $2, which a background job runs from): "
   [ -f "$1" ] || return 0
   line="$(head -1 "$1" 2>/dev/null || true)"
-  IFS="$(printf '\t')" read -r outcome when code ran notrun took <<HSREOF
+  # Named fields since claude-config#233. A record written before that has no `=` in its first
+  # field, and is read positionally so an upgrade does not turn every existing record into an
+  # unreadable one; nothing writes that shape any more.
+  case "$line" in
+    *=*)
+      outcome="$(hook_suite_field "$line" outcome)"
+      when="$(hook_suite_field "$line" at)"
+      code="$(hook_suite_field "$line" exit)"
+      ran="$(hook_suite_field "$line" ran)"
+      notrun="$(hook_suite_field "$line" notrun)"
+      took="$(hook_suite_field "$line" seconds)"
+      notrun_names="$(hook_suite_field "$line" notrun_names)" ;;
+    *)
+      IFS="$(printf '\t')" read -r outcome when code ran notrun took <<HSREOF
 $line
 HSREOF
+      notrun_names="?" ;;
+  esac
   case "$when" in ''|*[!0-9]*) when="" ;; esac
   case "$outcome" in
     passed)
@@ -3924,7 +4220,12 @@ HSREOF
       # it stops being reported is the moment the next timeout arrives with no warning.
       [ -n "$when" ] || return 0
       now="$(date +%s)"
-      echo "${prefix}passed $(age_in_words "$(( now - when ))")$(hook_suite_headroom "$took")."
+      # A count of suites that could not run cannot be acted on and cannot be tracked: there is no
+      # way to tell whether the three that sat out are trivial or cover the most important
+      # behaviour, and no way to notice the number quietly growing (claude-config#250, L98). So the
+      # NAMES ride in the record and are said here. A record written before they did says so in
+      # those words rather than reading as none.
+      echo "${prefix}passed $(age_in_words "$(( now - when ))")$(hook_suite_headroom "$took")$(hook_suite_skipped "$notrun" "$notrun_names")."
       return 0 ;;
     failed|notrun|incomplete)
       [ -n "$when" ] || outcome="" ;;
@@ -3973,12 +4274,72 @@ report_watcher_hold(){
   return 0
 }
 
+# Where the OTHER clones on this Mac stand against the shared repo (claude-config#266).
+#
+# `pull` reports what changed in the deployed copy under ~/.claude, and rule-files-changed.sh
+# reports a rule file going stale inside a running session. Nothing reported that the DEVELOPMENT
+# CHECKOUT, which is a different directory and the one the config is actually edited in, had
+# fallen behind. On 2026-09-02 it was 40 commits behind immediately after a pull, missing three
+# helper scripts that had just landed in ~/.claude. An edit made in a stale checkout looks correct
+# locally, and pushing it builds on work that is already in the shared repo but absent there.
+#
+# The clones are read from the registry, which is derived from what has actually taken the lock
+# rather than from prose somebody maintains by hand (L41, L244). Nothing is FETCHED: this run has
+# just fetched its own remote, and both clones share it, so the other clone's HEAD is measured
+# against the ref this run already has. That also means a clone holding a commit this one has
+# never seen cannot be judged from here, and that is said rather than reported as up to date
+# (L98).
+report_other_clones_position(){
+  local up d head n line said=0
+  have_git || return 0
+  up="$(git -C "$SYNC_REPO" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  [ -n "$up" ] || return 0
+  [ -f "$CLONE_REGISTRY" ] || return 0
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ "$d" = "$SYNC_REPO" ] && continue
+    if [ ! -d "$d/.git" ]; then
+      echo "claude-sync: the clone recorded at $d is not there any more, so how far behind it is cannot be answered. Remove the line from $CLONE_REGISTRY if it has gone for good." >&2
+      said=1; continue
+    fi
+    head="$(git -C "$d" rev-parse HEAD 2>/dev/null || true)"
+    if [ -z "$head" ]; then
+      echo "claude-sync: the checkout at $d has no commit this could read, so how far behind it is cannot be answered." >&2
+      said=1; continue
+    fi
+    if ! git -C "$SYNC_REPO" cat-file -e "${head}^{commit}" 2>/dev/null; then
+      echo "claude-sync: the checkout at $d is on a commit this clone has never seen ($head), so how far behind it is cannot be answered from here. Run 'git -C $d fetch' there." >&2
+      said=1; continue
+    fi
+    n="$(git -C "$SYNC_REPO" rev-list --count "${head}..${up}" 2>/dev/null || true)"
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    [ "$n" -gt 0 ] || continue
+    echo "claude-sync: the checkout at $d is $n commit(s) behind $up. Config edited there is being written against a copy the shared repo has already moved past: run 'git -C $d pull' before working in it." >&2
+    said=1
+  done < "$CLONE_REGISTRY"
+  return 0
+}
+
 do_status(){
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
   report_sync_times
   echo "--- local config vs repo payload (dry run) ---"
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
+    # Said outright, because the two rsyncs this Mac might have disagree about it
+    # (claude-config#258). Measured on Dans-MacBook-Pro 2026-09-01: with the destination
+    # directory ABSENT, the openrsync macOS ships itemizes every file under it as `>f.......`,
+    # whose flags mean nothing about this file differs; rsync 3.4.1, which the other Mac and the
+    # CI runner have, marks the same files `>f+++++++`, newly created. A whole directory that is
+    # new in the payload is exactly the case where every file in it is new, and that is the run
+    # where the lines below can describe them as unchanged.
+    #
+    # status does NOT create the directory to make rsync happy. It is an inspection command, and
+    # creating anything in the payload from it is the defect in L206. So it says what it knows
+    # instead, which it can answer without reimplementing rsync's itemize output beside it (L107).
+    if [ ! -d "$PAYLOAD/$d" ]; then
+      echo "$d: the payload has no $d yet, so EVERY file under $CLAUDE_HOME/$d is new. The lines below may show them as unchanged: the rsync on this Mac itemizes files under a missing destination that way."
+    fi
     local ex=""; [ "$d" = skills ] && ex="$(skill_excludes)"
     # -i is load-bearing: plain `rsync -an` prints NOTHING whatever differs, so
     # this whole section used to be decorative and status always read clean.
@@ -4375,10 +4736,40 @@ PL
 # ---------- watch (long-lived): run a two-way sync on every file change ----------
 # Recursively watches the synced folders via fswatch and syncs per change batch,
 # so even an edit buried deep inside a skill folder is pushed immediately.
+# One watcher on this Mac, refused automatically rather than reported after the fact
+# (claude-config#251). status showed THREE watch processes on 2026-08-31 where one is expected,
+# one of them started independently and nested two deep, and every one of them reacts to the same
+# edit: that is a concurrency hazard rather than clutter, and the report told the reader to fix it
+# by hand.
+#
+# The pid is confirmed against what that process actually IS, never taken from the file alone. A
+# stale pid is reused by the system constantly, and a guard that trusts the number refuses to
+# start because some unrelated process inherited it (L237, L70).
+SYNC_WATCH_PID_FILE="${SYNC_WATCH_PID_FILE:-$HOME/.claude-sync-watch.pid}"
+watch_already_running(){   # -> prints the live watcher's pid, or nothing
+  local pid cmd
+  [ -f "$SYNC_WATCH_PID_FILE" ] || return 1
+  pid="$(head -1 "$SYNC_WATCH_PID_FILE" 2>/dev/null || true)"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" = "$$" ] && return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+  case "$cmd" in *claude-sync*watch*) printf '%s' "$pid"; return 0 ;; esac
+  return 1
+}
+
 do_watch(){
   local fs="${SYNC_FSWATCH:-fswatch}"
   command -v "$fs" >/dev/null 2>&1 || \
     die "fswatch not installed — run: brew install fswatch, then: claude-sync install-autosync"
+  local live
+  if live="$(watch_already_running)"; then
+    die "a claude-sync watcher is already running on this Mac (process $live), and several watchers all react to the same edit. Nothing was started. End that one first if you meant to replace it: kill $live"
+  fi
+  printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE" 2>/dev/null || true
+  # Removed on the way out however this ends, so the next watcher is not refused by a record of
+  # one that has gone. Only OUR own record: a file another live watcher wrote must survive us.
+  trap 'if [ "$(head -1 "$SYNC_WATCH_PID_FILE" 2>/dev/null || true)" = "$$" ]; then rm -f "$SYNC_WATCH_PID_FILE"; fi' EXIT
   local paths=() d
   for d in "${MIRROR_DIRS[@]}" skills; do [ -d "$CLAUDE_HOME/$d" ] && paths+=("$CLAUDE_HOME/$d"); done
   [ -f "$CLAUDE_HOME/settings.json" ] && paths+=("$CLAUDE_HOME/settings.json")
@@ -4392,6 +4783,9 @@ do_watch(){
   # to ~/.claude-sync.log, so a silently-broken sync leaves a durable trail
   # instead of just a notification nobody saw.
   local again
+  # Started at the clock, so the first sweep happens one interval in rather than on the first edit
+  # of the day: a daemon restarted often would otherwise sweep on every restart.
+  local last_reap now_reap; last_reap="$(date +%s)"
   "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" | while IFS= read -r _; do
     again=1
     while [ "$again" -eq 1 ]; do
@@ -4404,8 +4798,38 @@ do_watch(){
       else
         rc=$?
       fi
+      # EVERY outcome, not only the failures (claude-config#196). The log's job is to answer "is
+      # this thing working", and a file that only ever holds failures cannot: silence in it means
+      # both "sending normally" and "stopped sending weeks ago".
       if [ "$rc" -ne 0 ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: sync FAILED (exit $rc): ${out:-<no output>}"
+      else
+        case "$out" in
+          *"SEND-OUTCOME sent"*)    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: sent" ;;
+          *"SEND-OUTCOME nothing"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: nothing to send" ;;
+          *"SEND-OUTCOME behind"*)  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: skipped, this Mac is behind the shared repo" ;;
+          *"SEND-OUTCOME held"*)    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: skipped, a hold is in force" ;;
+          # A send that exited 0 and said nothing about what it did. Recorded as unknown rather
+          # than as success: that is the state this whole line exists to stop being invisible
+          # (L98), and it is what a version too old to print the marker looks like.
+          *) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: finished, but said nothing about what it did: ${out:-<no output>}" ;;
+        esac
+      fi
+      # Scratch is reclaimed by the WATCHER, on its own cadence (claude-config#251). status
+      # reported 207 abandoned scratch directories holding 109 MB on 2026-08-31, every one of them
+      # past the threshold, and told the reader to run something by hand. Nothing did, so the
+      # number grew while reading as routine noise.
+      #
+      # Here rather than on the pull path, and that is the whole of the choice. The sweep reads
+      # the machine's WHOLE temp directory, which holds other software's files by the hundred
+      # thousand, so putting it on a path any test drives makes every test pay for it AND lets a
+      # test reach a live store, which is the thing tests must be structurally unable to do (L2).
+      # The daemon is the process that accumulates the scratch and the one place a daily cadence
+      # can live.
+      now_reap="$(date +%s)"
+      if [ "$(( now_reap - last_reap ))" -ge "${SYNC_REAP_INTERVAL:-86400}" ]; then
+        last_reap="$now_reap"
+        do_reap_scratch >/dev/null 2>&1 || true
       fi
       # #262: everything that arrived while that send was running becomes ONE more send, not one
       # send each. A send takes seconds and can take minutes, so a burst of saves used to produce
@@ -4559,6 +4983,9 @@ case "$cmd" in
   # Not wrapped in with_lock: it touches only the tool's own scratch under the temp directory,
   # never the repo or the home, so it has nothing to serialize against.
   reap-scratch) do_reap_scratch ;;
+  # Not locked: it removes copies beside the config that nothing else reads or writes, and the one
+  # thing it must never do is queue behind a long send while somebody waits to reclaim disk.
+  clean-backups) do_clean_backups ;;
   forget-mac) with_lock do_forget_mac "${2:-}" ;;   # mutating: it deletes a published ref
   apply-only) with_lock do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
@@ -4589,5 +5016,5 @@ case "$cmd" in
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
   help|-h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, cite-scan, check-skills, lesson, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, reap-scratch, clean-backups, forget-mac, next-lesson, check-lessons, cite-scan, check-skills, lesson, install-autosync, help)" ;;
 esac

@@ -366,8 +366,8 @@ print(json.dumps({
 issue_spool_pending() { # pending <dir> [session-transcript] -> exit 1 when there is nothing to show
   local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
   if [ ! -s "$file" ]; then rm -f "$file" "$file.sources"; return 1; fi
-  CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" <<'PY'
-import json, os, sys
+  CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" "${1:-}" <<'PY'
+import datetime, json, os, re, sys
 
 MAX_FINDINGS = 200
 # How many characters of FINDINGS one review may carry. Measured 2026-08-29: a
@@ -376,6 +376,74 @@ MAX_FINDINGS = 200
 # 500 character finding costs what twenty short ones do, so the limit is on size.
 FINDING_BUDGET = int(os.environ.get("CLAUDE_ISSUE_SPOOL_FINDING_BUDGET") or 8000)
 MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
+
+# ---- how old a finding is, and whether the code it names has moved (claude-config#202) ----
+# A finding was offered as current however old it was, and one project's oldest pending findings
+# cited file and line references from eleven days earlier. Code moves, so a finding can send you
+# to a line number that no longer means what it did, and the time is spent before you find out.
+#
+# There is deliberately NO AGE THRESHOLD. The archived findings on this Mac were measured on
+# 2026-09-02: 618 of them, ages spanning 1.0 to 17.2 days, median 13.0, with p25 at 3.9 and p75 at
+# 15.6. Every one of those days is inside the dense middle of that distribution, so any threshold
+# picked from it would move dozens of findings across at once on a small shift and report the same
+# population as a sudden regression (L172). The range is also bounded by the spool's own age
+# rather than by anything about findings, so it cannot support one yet.
+#
+# What CAN be measured is the thing the issue is actually about: whether the file a finding names
+# has changed since the finding was written. That is evidence rather than a guess, it needs no
+# number, and it says exactly what has gone stale. A finding naming no file that resolves gets no
+# claim either way, because silence is better than a guess about which files matter (L93).
+PROJECT = sys.argv[2] if len(sys.argv) > 2 else ""
+PATH_RE = re.compile(
+    r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|js|ts|tsx|jsx|sh|swift|rb|go|rs|java|kt|"
+    r"md|json|yml|yaml|sql|css|html|txt)\b")
+
+
+def _parsed(ts):
+    try:
+        return datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def age_words(ts):
+    t = _parsed(ts)
+    if t is None:
+        return ""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=datetime.timezone.utc)
+    secs = (now - t).total_seconds()
+    if secs < 0:
+        # A timestamp in the FUTURE is not "brand new": it is a clock nobody can rely on, and
+        # rendering it as an age would be the most reassuring reading available (L11).
+        return "its timestamp is in the future"
+    for cut, div, word in ((3600, 60, "minute"), (86400, 3600, "hour"), (10 ** 9, 86400, "day")):
+        if secs < cut:
+            n = int(secs // div)
+            return "%d %s%s ago" % (n, word, "" if n == 1 else "s")
+    return ""
+
+
+def moved_since(text, ts):
+    t = _parsed(ts)
+    if t is None or not PROJECT:
+        return ""
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=datetime.timezone.utc)
+    for m in PATH_RE.finditer(text):
+        rel = m.group(0).lstrip("./")
+        full = os.path.join(PROJECT, rel)
+        if not os.path.isfile(full):
+            continue
+        try:
+            mt = datetime.datetime.fromtimestamp(os.path.getmtime(full), datetime.timezone.utc)
+        except OSError:
+            continue
+        if mt > t:
+            return rel
+    return ""
+
 shown = 0
 seen = set()
 errors = {}
@@ -435,7 +503,12 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
 spent = 0
 printed = 0
 for where, ts, f in findings[:MAX_FINDINGS]:
-    line = "FINDING (%s, %s): %s" % (where, ts, f)
+    age = age_words(ts)
+    line = "FINDING (%s, %s%s): %s" % (where, ts, (", " + age) if age else "", f)
+    moved = moved_since(f, ts)
+    if moved:
+        line += ("  [%s has changed since this was written, so any line number in it "
+                 "may have moved]" % moved)
     # The budget is checked BEFORE printing, so one very long finding cannot
     # overrun it, and at least one is always printed however long it is: a report
     # that carries nothing is worse than one that carries a single item.

@@ -2011,6 +2011,30 @@ mkskill(){   # $1 = path to a SKILL.md  $2 = body line
 # causes were shipped for the CI failures before anything printed the facts (L171, #52).
 dbg(){ [ -n "${SUITE_DEBUG:-}" ] && printf '  [debug] %s\n' "$1"; return 0; }
 
+# A `touch -t` stamp for N days ago, portable across the BSD and GNU date this repo runs on
+# (L38). Used to AGE a fixture rather than waiting for one, so a test about an expiry is instant
+# and pins both ends of the comparison instead of betting on the clock (L130, L290).
+date_minus_days_stamp(){   # $1 = days
+  date -v-"${1}"d '+%Y%m%d%H%M' 2>/dev/null || date -d "${1} days ago" '+%Y%m%d%H%M' 2>/dev/null
+}
+
+# By NAME since claude-config#233, not by position. The record grew twice by appending and every
+# growth was read positionally, which puts every REMAINING field into the LAST name, so a record
+# widened without widening the read reports the new field as part of the old one instead of
+# failing. It happened once already, where the exit code came out as "3<tab>?<tab>?".
+# Pure parameter expansion, no pipeline. `... | head -1` is a short circuiting consumer, and under
+# this suite's pipefail that kills its producer and reports a failure that never happened (L183).
+hd_field(){   # $1 = the record line  $2 = the field name
+  local rest="$1" pair
+  while [ -n "$rest" ]; do
+    pair="${rest%%$'\t'*}"
+    case "$pair" in "$2="*) printf '%s' "${pair#"$2="}"; return 0 ;; esac
+    case "$rest" in *$'\t'*) rest="${rest#*$'\t'}" ;; *) rest="" ;; esac
+  done
+  return 0
+}
+
+
 # Named, not a bare `mktemp -d`. A run that is force-killed never reaches suite_cleanup, so this
 # directory is abandoned, and an ANONYMOUS one cannot be attributed to this suite afterwards: the
 # 37 found on this Mac on 2026-08-17, holding 475 MB, had to be identified by looking inside them,
@@ -2044,6 +2068,28 @@ export SYNC_ZSHRC="$WORK/zshrc-guard"
 # Without it every git-backed section that happens to touch a hook would start launching real test
 # suites inside this one, which is minutes of work proving nothing about the section it is in.
 export SYNC_NO_SEND_TESTS=1
+# ---- every file seam the tool honours, pointed inside WORK, once (claude-config#220) ----
+# A test that seams SOME of a script's collaborators runs the rest for real, and the real ones are
+# the slow and the dangerous ones (L52, L196). These two are new and they are FILES the tool writes
+# outside every clone, so a section that forgets one does not fail: it quietly takes the machine's
+# real marker, and the watcher guard would then refuse the live daemon, or the live daemon would
+# refuse the test.
+#
+# The safe value is the DEFAULT here, and a section that needs its own points it at another
+# throwaway file, exactly as SYNC_ZSHRC and the clone registry above already do.
+#
+# The watcher marker is keyed per SHARD as well. Shards are re-executions of this same run and
+# share WORK, so a single path would have two of them refusing each other as duplicate watchers,
+# which is the guard working correctly against a fixture that lied about being one machine.
+export SYNC_WATCH_PID_FILE="$WORK/watch-pid-guard.${SUITE_SHARD:-0}"
+export SYNC_HOLD_FILE="$WORK/hold-guard"
+# The desktop notifier, for the whole suite rather than at 379 of 397 call sites. terminal-notifier
+# is installed on this Mac, so any failure-path call among the 65 that carried no seam would post a
+# real notification on whoever's machine runs this. Measured 2026-08-29 those particular sections
+# fired none, which is a sample that came back clean rather than a proof, and the next
+# failure-flavoured section written without the seam changes the answer. The section that tests
+# notifications sets it back and points SYNC_NOTIFIER at a stub of its own.
+export SYNC_NO_NOTIFY=1
 CH="$WORK/dot-claude"          # fake ~/.claude
 REPO="$WORK/repo"              # fake sync repo
 mkdir -p "$CH/hooks" "$CH/skills/plan-council" "$CH/skills/wrangler" \
@@ -2866,7 +2912,7 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/
 out_le="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" pull 2>&1)"
 check "local script edit: the unrelated change still arrives"  "grep -q other-v2 '$LEBH/hooks/other.sh'"
 check "the local edit is NOT reverted"      "grep -q MY-LOCAL-FIX '$LEBH/skills/reel/push.py'"
-check "local script edit: the pull says it kept it"  "line_has \"\$out_le\" 'kept local edits' 'skills/reel/push\.py'"
+check "local script edit: the pull says it kept it"  "line_has \"\$out_le\" 'would have reverted' 'skills/reel/push\.py'"
 # The kept edit still reaches the repo on the next send, and the other Mac.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEBH" SYNC_REPO="$LEB" bash "$SCRIPT" send >/dev/null 2>&1
 check "the next send publishes the edit"    "grep -q MY-LOCAL-FIX '$LEB/payload/skills/reel/push.py'"
@@ -2909,7 +2955,7 @@ out_tf="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" p
 check "unsent lesson: the unrelated change still arrives"  "grep -q other-v2 '$TFBH/hooks/tf-other.sh'"
 check "the unsent lesson is NOT reverted"       "grep -q MY-NEW-LESSON '$TFBH/LESSONS.md'"
 check "the earlier lesson is still there too"   "grep -q 'first lesson' '$TFBH/LESSONS.md'"
-check "unsent lesson: the pull says it kept it"  "line_has \"\$out_tf\" 'kept local edits' 'LESSONS\.md'"
+check "unsent lesson: the pull says it kept it"  "line_has \"\$out_tf\" 'would have reverted' 'LESSONS\.md'"
 check "and does not report overwriting it"      "! printf '%s' \"\$out_tf\" | grep -q 'updated .*LESSONS.md'"
 # It must reach the repo on the next send, and the other Mac after that.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" send >/dev/null 2>&1
@@ -2976,22 +3022,30 @@ check "#158 the pull lists the previous copies it left behind" \
 # A date for each, which is the entire point: without one an old copy and a fresh one read alike.
 check "#158 and gives a date for each, not just a count" \
   "line_has \"\$out_sb\" 'LESSONS\.md\.syncbak' '[0-9]{4}-[0-9]{2}-[0-9]{2}'"
-check "#158 and says plainly that nothing removes them" \
-  "case \"\$out_sb\" in *'removes them'*) true ;; *) false ;; esac"
+# #240 gave them an expiry, so the assertion that nothing removes them defended a promise this
+# deliberately stopped making (L252). What the line still has to do is say what WILL happen to
+# them and how to do it now, because a backup with no stated end is one nobody ever deletes.
+check "#158 and says how long they are kept and how to remove them now" \
+  "case \"\$out_sb\" in *clean-backups*) true ;; *) false ;; esac"
 # And nothing was deleted, which is the promise the sentence above makes (L5).
 check "#158 the previous copy is still on disk afterwards" "[ -f '$SBBH/LESSONS.md.syncbak' ]"
 check "#158 and it still holds this Mac's pre-merge copy" \
   "grep -q SB-FROM-MAC-B '$SBBH/LESSONS.md.syncbak'"
 # An OLDER copy beside a fresh one is named too, since telling those two apart is the whole reason
 # the dates are printed. Made older by hand rather than by waiting.
+# Older by only a few days on purpose: since #240 a copy past SYNC_BACKUP_KEEP_DAYS is swept, and
+# dating this one months back would have it removed before the line that has to name it. The sweep
+# has its own section.
 printf 'stale\n' > "$SBBH/CLAUDE.md.syncbak"
-touch -t 202601011200 "$SBBH/CLAUDE.md.syncbak"
+sb_old_stamp="$(date_minus_days_stamp 3)"
+touch -t "${sb_old_stamp:-202601011200}" "$SBBH/CLAUDE.md.syncbak"
 printf -- '- **L5. SB-FROM-MAC-A-AGAIN.** body\n' >> "$SBAH/LESSONS.md"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBAH" SYNC_REPO="$SBA" bash "$SCRIPT" sync >/dev/null 2>&1
 printf -- '- **L6. SB-FROM-MAC-B-AGAIN.** body\n' >> "$SBBH/LESSONS.md"
 out_sb2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SBBH" SYNC_REPO="$SBB" bash "$SCRIPT" pull 2>&1)"
+sb_old_date="$(printf '%s' "${sb_old_stamp:-202601011200}" | sed -E 's/^(....)(..)(..).*/\1-\2-\3/')"
 check "#158 an older copy left from before is listed too" \
-  "line_has \"\$out_sb2\" 'CLAUDE\.md\.syncbak' '2026-01-01'"
+  "line_has \"\$out_sb2\" 'CLAUDE\.md\.syncbak' \"\$sb_old_date\""
 check "#158 and the older one is not deleted either" "[ -f '$SBBH/CLAUDE.md.syncbak' ]"
 
 section "== a commit made outside send/sync must not wedge the watcher (#12) =="
@@ -5491,8 +5545,16 @@ check "#38 and it names no unbound variable"         "! printf '%s' \"\$_noTMPDI
 # guard satisfied by its own assertion line reports the codebase as broken for ever and teaches
 # everyone to ignore it, which is the same trap #34's spawn-site check had to be written around.
 _bsdisms(){
-  local a b c d e
+  local a b c d e x
   a="stat"" -f"; b="date"" -r "; c="sed"" -i ''"; d="date"" -v"; e="mktemp"" -t"
+  # A BSD spelling that carries its GNU fallback on the SAME joined line is portable, so it is
+  # excluded by that SHAPE rather than by naming the helper it happens to sit in: written as a
+  # name, the next such helper is unguarded and nobody notices (L362).
+  #
+  # ASSEMBLED from $d, never written out. Spelled literally, this line would itself hold the
+  # banned token and the guard would report itself for ever, which is the guard working correctly
+  # and is why every other pattern here is assembled too.
+  x="$d"'.*\|\| *date -d'
   # Continuation lines are joined first, or a spelling whose GNU fallback sits on the NEXT line
   # reads as unguarded and this reports two false findings for ever, which is how a guard stops
   # being read (L36).
@@ -5501,7 +5563,8 @@ _bsdisms(){
     | grep -nF -e "$a" -e "$b" -e "$c" -e "$d" -e "$e" \
     | grep -vF "$a %m \"\$1\"" | grep -vF "$b\"\$1\"" \
     | grep -vF "$a \"%m%t%N\"" \
-    | grep -vE '\|\| +touch -d' || true
+    | grep -vE '\|\| +touch -d' \
+    | grep -vE "$x" || true
 }
 check "#38 no BSD-only spelling survives outside the helpers that own them" "[ -z \"\$(_bsdisms)\" ]"
 # And the helpers really are there to be excluded, or the check above passes by matching nothing
@@ -5641,14 +5704,55 @@ check "#41 and every row carries the number the code actually uses"    "[ -z \"\
 # The number has to appear on a line that NAMES the threshold, not merely somewhere in the file, so
 # an unrelated 900 elsewhere cannot answer for the deadline (L135). Any such line will do, so a
 # sentence mentioning a setting without repeating its value is fine as long as some row states it.
+# WHICH HALF failed, not just that it did (claude-config#270). The single message
+# "[<NAME> is <value> in the code]" reads as "the documented number is stale", and that is only
+# one of the two ways this fires. On 2026-09-02 the number was correct and the setting name and
+# its value had simply WRAPPED onto different lines, so the single-line grep found no line
+# carrying both. The message sent the reader to check a number that was already right, and this
+# pin fires on a documentation edit, which is the moment an author is least likely to read past
+# the first sentence (L11, and the same family as #253).
+#
+# One definition, taking the file's text as an argument, so the probes below exercise the verdict
+# the real loop uses rather than a second copy of it (L107).
+_readme_verdict(){   # $1 = name  $2 = value  $3 = the prose -> prints a verdict word
+  # Matched in the shell rather than through `| grep -q`, which is a short circuiting consumer:
+  # under pipefail it kills its producer and the pipeline reports a failure that never happened,
+  # depending on nothing but whether the producer had finished writing (L183).
+  local rows re='(^|[^0-9])'"$2"'([^0-9]|$)'
+  rows="$(printf '%s\n' "$3" | grep -F -- "$1" || true)"
+  [ -n "$rows" ] || { printf 'unnamed'; return 0; }
+  if [[ "$rows" =~ $re ]]; then printf 'agrees'; return 0; fi
+  # The name is here and the value is here, just not together. That is a WRAP, and saying "the
+  # number is stale" about it is a wrong diagnosis rather than a vague one.
+  if [[ "$3" =~ $re ]]; then printf 'split'; return 0; fi
+  printf 'stale'
+}
+# Watched giving each of its four answers before it is believed, against prose built here, because
+# a verdict that has only ever been seen to say "agrees" is not yet a check (L1, L151: every
+# outcome the contract enumerates gets a test that PRODUCES it).
+_vp_name="SYNC""_PROBE_TIMEOUT"
+check "#270 a threshold the README never names is reported as unnamed" \
+  "[ \"\$(_readme_verdict '$_vp_name' 600 'nothing about it here')\" = unnamed ]"
+check "#270 a line carrying both is reported as agreeing" \
+  "[ \"\$(_readme_verdict '$_vp_name' 600 \"\`printf '%s=600 seconds' '$_vp_name'\`\")\" = agrees ]"
+check "#270 a name and a value on DIFFERENT lines is reported as split, not stale" \
+  "[ \"\$(_readme_verdict '$_vp_name' 600 \"\`printf '%s\\nis 600 seconds' '$_vp_name'\`\")\" = split ]"
+check "#270 and a genuinely different number is still reported as stale" \
+  "[ \"\$(_readme_verdict '$_vp_name' 600 \"\`printf '%s=900 seconds' '$_vp_name'\`\")\" = stale ]"
+
 _readme_wrong=""
 _readme_seen=0
+_readme_prose="$(cat "$_README")"
 while IFS=' ' read -r _tn _tv; do
   [ -n "$_tn" ] || continue
-  _row="$(grep -F -- "$_tn" "$_README" || true)"
-  [ -n "$_row" ] || continue
-  _readme_seen=$((_readme_seen + 1))
-  printf '%s' "$_row" | grep -qE "(^|[^0-9])$_tv([^0-9]|\$)" || _readme_wrong="$_readme_wrong[$_tn is $_tv in the code]"
+  case "$(_readme_verdict "$_tn" "$_tv" "$_readme_prose")" in
+    unnamed) continue ;;
+    agrees)  _readme_seen=$((_readme_seen + 1)) ;;
+    split)   _readme_seen=$((_readme_seen + 1))
+             _readme_wrong="$_readme_wrong[$_tn: the README carries $_tv and names $_tn, but on DIFFERENT lines. The number is right; this pin reads one line at a time, so put the value on the line that names the setting]" ;;
+    stale)   _readme_seen=$((_readme_seen + 1))
+             _readme_wrong="$_readme_wrong[$_tn: the README names it but no line carries $_tv, and $_tv appears nowhere in the file. The code uses $_tv]" ;;
+  esac
 done <<EOF
 $(_thresholds)
 EOF
@@ -6561,10 +6665,12 @@ dbg "#218 the record a real receive wrote: $hd_rec"
 #
 # Reading the fields is also the stronger check, because it says which field is wrong rather than
 # that the line as a whole did not match.
-IFS="$(printf '\t')" read -r hd_o hd_w hd_c hd_r hd_n hd_d <<HDREC
-$hd_rec
-HDREC
+hd_o="$(hd_field "$hd_rec" outcome)"; hd_w="$(hd_field "$hd_rec" at)"
+hd_c="$(hd_field "$hd_rec" exit)";    hd_r="$(hd_field "$hd_rec" ran)"
+hd_n="$(hd_field "$hd_rec" notrun)";  hd_d="$(hd_field "$hd_rec" seconds)"
 dbg "#218 fields: outcome=$hd_o when=$hd_w code=$hd_c ran=$hd_r notrun=$hd_n took=$hd_d"
+check "#233 a real receive writes its record as named fields" \
+  "case \"\$hd_rec\" in *outcome=*seconds=*) true ;; *) false ;; esac"
 check "#218 a real receive records the outcome, the counts and a duration (outcome=$hd_o ran=$hd_r notrun=$hd_n took=$hd_d)" \
   "[ \"\$hd_o\" = passed ] && [ \"\$hd_c\" = 0 ] && [ \"\$hd_r\" = 3 ] && [ \"\$hd_n\" = 0 ] && case \"\$hd_d\" in ''|*[!0-9]*) false ;; *) true ;; esac"
 check "#218 and the epoch it was written at is a whole number (when=$hd_w)" \
@@ -6584,7 +6690,7 @@ echo "ALL 3 SUITES PASSED"
 exit 0'
 hd_arrive two
 CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
-hd_slow_d="$(head -1 "$HDR/.hook-tests" 2>/dev/null | cut -f6)"
+hd_slow_d="$(hd_field "$(head -1 "$HDR/.hook-tests" 2>/dev/null || true)" seconds)"
 dbg "#218 a runner made to take two seconds was recorded at ${hd_slow_d}s"
 check "#218 and the duration is timed here, not parsed: a two second runner recorded ${hd_slow_d}s against the instant one's 0s" \
   "case \"\$hd_slow_d\" in ''|*[!0-9]*) false ;; *) [ \"\$hd_slow_d\" -ge 1 ] ;; esac"
@@ -6599,14 +6705,14 @@ check "#218 status reports the last run's duration beside its verdict" \
 # A run past HALF its deadline says so, in words that name the consequence rather than the number.
 # Driven through the record itself, which is what the reader actually reads.
 hd_over="$WORK/headroom-over"; mkdir -p "$hd_over"
-printf 'passed\t%s\t0\t44\t0\t1200\n' "$(date +%s)" > "$hd_over/.hook-tests"
+printf 'outcome=passed\tat=%s\texit=0\tran=44\tnotrun=0\tseconds=1200\n' "$(date +%s)" > "$hd_over/.hook-tests"
 hd_st_over="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_over" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_HOOK_TESTS_TIMEOUT=1800 bash "$SCRIPT" status 2>&1)"
 check "#218 a run over half its deadline is reported as running out of room" \
   "line_has \"\$hd_st_over\" 'hook suite: passed' 'over HALF'"
 # And the control: one comfortably under it is NOT, or the warning is on every run and stops being
 # read (L36, L159).
 hd_under="$WORK/headroom-under"; mkdir -p "$hd_under"
-printf 'passed\t%s\t0\t44\t0\t200\n' "$(date +%s)" > "$hd_under/.hook-tests"
+printf 'outcome=passed\tat=%s\texit=0\tran=44\tnotrun=0\tseconds=200\n' "$(date +%s)" > "$hd_under/.hook-tests"
 hd_st_under="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_under" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_HOOK_TESTS_TIMEOUT=1800 bash "$SCRIPT" status 2>&1)"
 check "#218 and one well inside it is not" \
   "! line_has \"\$hd_st_under\" 'hook suite: passed' 'over HALF'"
@@ -6616,7 +6722,7 @@ check "#218 though it still says what it took and what it is given" \
 # A record with NO duration says so, distinctly. Every record written before this existed carries
 # none, and reading that absence as comfortable is the reassuring default this refuses (L98, L11).
 hd_none="$WORK/headroom-none"; mkdir -p "$hd_none"
-printf 'passed\t%s\t0\t44\t0\n' "$(date +%s)" > "$hd_none/.hook-tests"
+printf 'outcome=passed\tat=%s\texit=0\tran=44\tnotrun=0\n' "$(date +%s)" > "$hd_none/.hook-tests"
 hd_st_none="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_none" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#218 a record from before durations existed says none was recorded" \
   "line_has \"\$hd_st_none\" 'hook suite: passed' 'no duration recorded'"
@@ -6626,14 +6732,55 @@ check "#218 and that is not phrased as being within budget" \
 # A FAILED run carries its duration too. What is recorded is what the receive path cost this Mac,
 # and a suite that failed after doing its work cost exactly what it did.
 hd_fail="$WORK/headroom-failed"; mkdir -p "$hd_fail"
-printf 'failed\t%s\t1\t?\t?\t1500\n' "$(date +%s)" > "$hd_fail/.hook-tests"
+printf 'outcome=failed\tat=%s\texit=1\tran=?\tnotrun=?\tseconds=1500\n' "$(date +%s)" > "$hd_fail/.hook-tests"
 hd_st_fail="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_fail" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_HOOK_TESTS_TIMEOUT=1800 bash "$SCRIPT" status 2>&1)"
 check "#218 a failed run reports its duration and its headroom too" \
   "line_has \"\$hd_st_fail\" 'FAILED' 'over HALF'"
-# The reader stops at its own field. `read` puts every remaining field in the LAST name, so a
-# record widened again without widening the read would report the duration as part of it (#185).
-check "#218 the reader stops at the duration field, not past it" \
-  "! line_has \"\$hd_st_fail\" 'FAILED' 'exited 1	'"
+# #185's check that the reader stops at its own field is gone, because the shape it defended is
+# gone: with named fields the question it asked cannot arise (L252). What replaces it is the
+# property that made named fields worth having, watched directly.
+#
+# A field this reader has never heard of is IGNORED and changes nothing else. Positionally, an
+# added field silently became part of the last one it did know.
+hd_new="$WORK/headroom-newfield"; mkdir -p "$hd_new"
+printf 'outcome=failed\tat=%s\texit=1\tran=?\tnotrun=?\tseconds=1500\tsomething_added_later=42\n' "$(date +%s)" > "$hd_new/.hook-tests"
+hd_st_new="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_new" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_HOOK_TESTS_TIMEOUT=1800 bash "$SCRIPT" status 2>&1)"
+check "#233 a field the reader has never heard of is ignored" \
+  "line_has \"\$hd_st_new\" 'FAILED' 'over HALF'"
+check "#233 and it does not leak into the field beside it" \
+  "! line_has \"\$hd_st_new\" 'FAILED' 'something_added_later'"
+# A record written in the OLD positional shape is still read, or shipping this would turn every
+# record already on both Macs into an unreadable one (L214).
+hd_legacy="$WORK/headroom-legacy"; mkdir -p "$hd_legacy"
+printf 'passed\t%s\t0\t44\t0\t200\n' "$(date +%s)" > "$hd_legacy/.hook-tests"
+hd_st_legacy="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_legacy" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_HOOK_TESTS_TIMEOUT=1800 bash "$SCRIPT" status 2>&1)"
+check "#233 a record in the old positional shape is still read" \
+  "line_has \"\$hd_st_legacy\" 'hook suite: passed' '200s of the 1800s'"
+
+# ---- the suites that could not run are NAMED (#250) ----
+# The line said "only 37 of its 40 suites could run on this Mac, so 3 of them are unverified
+# here", which is a quotation of the wording rather than a measurement of anything, so the figures
+# in it are not measured and cannot go stale. A count cannot say whether the ones that sat out are
+# trivial or cover the most important behaviour, and nothing could notice the number growing (L98).
+hd_runner 'echo "3 SUITE(S) COULD NOT RUN HERE: test-alpha.sh test-beta.sh test-gamma.sh"
+echo "ALL 3 SUITES THAT COULD RUN PASSED, and 3 could not run here"
+exit 0'
+hd_arrive three
+out_hd250="$(CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "#250 pull whose runner skipped three: $out_hd250"
+check "#250 the pull names the suites that could not run, not just how many" \
+  "case \"\$out_hd250\" in *test-beta.sh*) true ;; *) false ;; esac"
+check "#250 and the record keeps their names for status to read" \
+  "grep -q 'notrun_names=test-alpha.sh,test-beta.sh,test-gamma.sh' '$HDR/.hook-tests'"
+hd_st250="$(CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#250 status names them too" \
+  "line_has \"\$hd_st250\" 'hook suite: passed' 'test-gamma.sh'"
+# A record from before the names were kept must say that, not read as none having been skipped.
+hd_unnamed="$WORK/headroom-unnamed"; mkdir -p "$hd_unnamed"
+printf 'outcome=passed\tat=%s\texit=0\tran=37\tnotrun=3\tseconds=200\n' "$(date +%s)" > "$hd_unnamed/.hook-tests"
+hd_st_un="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_unnamed" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#250 a record that does not carry the names says so rather than reading as none" \
+  "line_has \"\$hd_st_un\" 'hook suite: passed' 'does not name them'"
 
 section "== every workflow job carries a timeout, above this suite's own deadline (#210) =="
 # A CI job with no `timeout-minutes` gets the platform default of six HOURS. A hang is worse than a
@@ -8806,8 +8953,10 @@ ht_cover(){   # ht_cover <exit> <verdict line> -> Mac B's whole closing output
   CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
   CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1
 }
-ht_field(){   # ht_field <n> -> the nth tab field of Mac B's recorded verdict
-  awk -F'\t' -v n="$1" 'NR==1{print $n}' "$HTRB/.hook-tests" 2>/dev/null
+ht_field(){   # ht_field <name> -> that named field of Mac B's recorded verdict
+  # By NAME since claude-config#233. Positionally, the record could be widened without widening
+  # the read and the last field would silently absorb the new one.
+  hd_field "$(head -1 "$HTRB/.hook-tests" 2>/dev/null || true)" "$1"
 }
 
 out_cv1="$(ht_cover 0 'ALL 12 SUITES PASSED')"
@@ -8815,18 +8964,18 @@ dbg "pull whose runner ran everything: $out_cv1"
 check "#185 a pass that covered the whole suite says so" \
   "line_has \"\$out_cv1\" 'Pulled shared config' 'hook suite passed here' 'all 12 of its suites'"
 check "#185 and records the counts it reported" \
-  "[ \"\$(ht_field 4)\" = '12' ] && [ \"\$(ht_field 5)\" = '0' ]"
+  "[ \"\$(ht_field ran)\" = '12' ] && [ \"\$(ht_field notrun)\" = '0' ]"
 
 out_cv2="$(ht_cover 0 'ALL 6 SUITES THAT COULD RUN PASSED, and 4 could not run here')"
 dbg "pull whose runner could not run some of itself: $out_cv2"
 check "#185 a pass with suites that could not run says how many" \
-  "line_has \"\$out_cv2\" 'Pulled shared config' 'hook suite passed here' 'only 6 of its 10 suites could run' '4 of them are unverified'"
+  "line_has \"\$out_cv2\" 'Pulled shared config' 'hook suite passed here' 'only 6 of its 10 suites could run' '4 are unverified'"
 # The negative control, in the same fixture. "all N of its suites" is the reassuring reading, and a
 # clause that printed it here would be the exact defect this section exists to end (L159).
 check "#185 and does not claim the whole suite was covered" \
   "! line_has \"\$out_cv2\" 'Pulled shared config' 'all 6 of its suites'"
 check "#185 and records what could not run" \
-  "[ \"\$(ht_field 4)\" = '6' ] && [ \"\$(ht_field 5)\" = '4' ]"
+  "[ \"\$(ht_field ran)\" = '6' ] && [ \"\$(ht_field notrun)\" = '4' ]"
 
 out_cv3="$(ht_cover 0 'the suite is happy, honestly')"
 dbg "pull whose runner said nothing this can count: $out_cv3"
@@ -8835,7 +8984,7 @@ check "#185 a report this cannot read says the coverage is unknown" \
 check "#185 and still reports the pass it was told about" \
   "line_has \"\$out_cv3\" 'Pulled shared config' 'hook suite passed here'"
 check "#185 and records the counts as unread rather than as zero" \
-  "[ \"\$(ht_field 4)\" = '?' ] && [ \"\$(ht_field 5)\" = '?' ]"
+  "[ \"\$(ht_field ran)\" = '?' ] && [ \"\$(ht_field notrun)\" = '?' ]"
 
 # The record grew two fields, and status reads it positionally. A reader that took the rest of the
 # line as the exit code would report "it exited 3\t?\t?", which is the shape a widened record
@@ -9136,7 +9285,7 @@ mk_ag_wrapper(){   # $1 = version marker
   printf '#!/usr/bin/env bash\n# v%s\nexec bash "%s/run-all-tests.sh" "%s"\n' "$1" "$AGRUN" "$AGSUITES" \
     > "$AGHA/hooks/run-all-tests.sh"
 }
-ag_field(){ awk -F'\t' -v n="$1" 'NR==1{print $n}' "$AGRB/.hook-tests" 2>/dev/null; }
+ag_field(){ hd_field "$(head -1 "$AGRB/.hook-tests" 2>/dev/null || true)" "$1"; }
 
 rm -f "$AGSUITES"/test-*.sh
 mk_ag_suite alpha; mk_ag_suite gamma
@@ -9153,7 +9302,7 @@ out_ag1="$(CLAUDE_HOME="$AGHB" SYNC_REPO="$AGRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT"
 dbg "pull whose runner ran everything: $out_ag1"
 check "#188 and the closing line reads the same two suites out of it" \
   "line_has \"\$out_ag1\" 'Pulled shared config' 'hook suite passed here' 'all 2 of its suites'"
-check "#188 and records both suites as having run" "[ \"\$(ag_field 4)\" = '2' ] && [ \"\$(ag_field 5)\" = '0' ]"
+check "#188 and records both suites as having run" "[ \"\$(ag_field ran)\" = '2' ] && [ \"\$(ag_field notrun)\" = '0' ]"
 
 rm -f "$AGSUITES"/test-*.sh
 mk_ag_suite alpha; mk_ag_notrun beta
@@ -9166,8 +9315,8 @@ check "#188 the runner still says a partial pass in the shape the reader matches
 out_ag2="$(CLAUDE_HOME="$AGHB" SYNC_REPO="$AGRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "pull whose runner could not run one of its suites: $out_ag2"
 check "#188 and the closing line reads the same counts out of it" \
-  "line_has \"\$out_ag2\" 'Pulled shared config' 'hook suite passed here' 'only 1 of its 2 suites could run' '1 of them are unverified'"
-check "#188 and records the one that ran and the one that could not" "[ \"\$(ag_field 4)\" = '1' ] && [ \"\$(ag_field 5)\" = '1' ]"
+  "line_has \"\$out_ag2\" 'Pulled shared config' 'hook suite passed here' 'only 1 of its 2 suites could run' '1 are unverified'"
+check "#188 and records the one that ran and the one that could not" "[ \"\$(ag_field ran)\" = '1' ] && [ \"\$(ag_field notrun)\" = '1' ]"
 # The failure this whole section exists to make loud: a reader that could not match either sentence
 # still reports a pass, and says the coverage is unknown. Asserted here so the two scenarios above
 # cannot both be satisfied by a reader that always answers unknown (L159).
@@ -10364,6 +10513,22 @@ check "#269 the suite runs again once its inputs change" \
 check "#269 and the held-back edit publishes on that send" \
   "grep -q 'beta changed' '$HDR/payload/hooks/beta.sh'"
 
+# A hook whose name is a SUFFIX of another hook's name must not be answered for by the suites that
+# name the longer one (claude-config#268). `grep -lF` made `spool.sh` look covered by every suite
+# mentioning `issue-spool.sh`, so a send would run five irrelevant suites and report the hook as
+# checked. The send and the coverage ratchet ask this question in the same shape on purpose, and
+# each proves the suffix case separately, because a shared name is read as evidence of shared
+# behaviour and nothing otherwise compares them (L263).
+printf '#!/usr/bin/env bash\necho long\n' > "$HDH/hooks/issue-spool.sh"
+hd_write_suite issue-spool.sh 0
+CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1
+printf '#!/usr/bin/env bash\necho short\n' > "$HDH/hooks/spool.sh"
+out_269f="$(CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+dbg "#268 send of a hook whose name is a suffix of another: $out_269f"
+line_269f="$(printf '%s\n' "$out_269f" | sed -n '/spool\.sh/p')"
+check "#268 a hook no suite names is reported uncovered, not covered by the longer name" \
+  "case \"\$line_269f\" in *'NO SUITE'*) true ;; *) false ;; esac"
+
 # A hook the repo has never seen must not be published by the hold-back either. Restoring "the
 # version already committed" has no version to restore, and the branch that gets that wrong
 # publishes exactly the file the red suite refused (L214).
@@ -10390,19 +10555,26 @@ section "== a burst of edits is one send, and a session can hold the watcher off
 # do_send, because what is under test is the SHAPE of the loop: how many times it acts on a burst.
 WT="$WORK/watch-debounce"; mkdir -p "$WT"
 WT_FS="$WT/fake-fswatch"; WT_HITS="$WT/hits"
-# A burst: one event, a pause shorter than the drain window, then four more. The pause is what
-# makes this a test of the drain rather than of end-of-input: without it every later event is
-# already sitting in the pipe and a loop with no debounce at all would still read them together.
+# A burst: one event, then four more that arrive WHILE the first send is being handled. That
+# separation is what makes this a test of the drain rather than of end-of-input, because with all
+# five already sitting in the pipe a loop with no debounce at all would read them together.
+#
+# It waits on the CONDITION (the first send has happened, so the loop is now in its drain window)
+# rather than on a fixed pause. A `sleep 0.3` here would have been a bet that the machine gets
+# round to the send inside the drain window, which is a bet about load, and it is judged hardest
+# exactly when the machine is busiest (L290).
 cat > "$WT_FS" <<'FSEOF'
 #!/usr/bin/env bash
 echo one
-sleep 0.3
+# Poll granularity, not a wait for a duration: the loop below ends the moment the send lands.
+while [ ! -s "$WT_HITS" ]; do sleep 0.02; done
 echo two
 echo three
 echo four
 echo five
 FSEOF
 chmod +x "$WT_FS"
+export WT_HITS
 WT_HOME="$WT/home"; mkdir -p "$WT_HOME/hooks"
 : > "$WT_HITS"
 SYNC_FSWATCH="$WT_FS" SYNC_WATCH_SEND="printf 'x\n' >> '$WT_HITS'" \
@@ -10493,6 +10665,344 @@ dbg "#262 watcher send with an unreadable hold: $out_262u"
 check "#262 an unreadable hold marker is cleared rather than obeyed" "[ ! -f '$HOLD' ]"
 check "#262 and it is reported in its own words, not as an expiry" \
   "case \"\$out_262u\" in *'could not be read'*) true ;; *) false ;; esac"
+
+
+section "== the index generator, against the wrap shapes it actually meets (#192, #194, #195) =="
+# LESSONS-INDEX.md is imported by CLAUDE.md into every session in every project, and the generator
+# that writes it had no test of its own. #192's word-gluing defect was found by reading the awk by
+# eye, not by anything failing, and it had already shipped into the generated index: L517 rendered
+# as "across everycombination of inputs".
+#
+# The mechanism was `sub(/^[[:space:]]+/, " ", nxt)` followed by `rest = rest nxt`. That replaces
+# LEADING whitespace with a single space, so it does the right thing for an INDENTED continuation
+# line and nothing at all for an unindented one, which then joins with no separator. That is why
+# it was intermittent: it depended on how each author happened to wrap.
+LWH="$WORK/lesswrap-home"; LWR="$WORK/lesswrap-repo"
+mkdir -p "$LWH" "$LWR/payload"
+echo '{"hooks":{}}' > "$LWH/settings.json"
+printf '# rules\n' > "$LWH/CLAUDE.md"
+# Every shape that actually occurs in the file, including the two the old code told apart by
+# accident. The unindented wrap is the one that must fail before the fix and pass after (L1).
+cat > "$LWH/LESSONS.md" <<'LWEOF'
+# Build-time lessons
+
+## Proof over green
+
+- **L1. A one line rule.** Its body.
+  (someproject#1)
+- **L2. A rule wrapping with an indented
+  continuation line.** Its body.
+  (someproject#2)
+- **L3. A rule wrapping with an unindented
+continuation line.** Its body.
+  (someproject#3)
+
+## Data safety
+
+- **L4. A rule whose bold marker never closes and runs to the end of the entry.
+  (someproject#4)
+- **L5. The rule after the unclosed one still gets its own line.** Its body.
+  (someproject#5)
+LWEOF
+CLAUDE_HOME="$LWH" SYNC_REPO="$LWR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+LWI="$LWH/LESSONS-INDEX.md"
+dbg "#194 generated index: $(cat "$LWI" 2>/dev/null)"
+check "#194 a one line rule is carried whole" \
+  "grep -qF -- '- L1. A one line rule.' '$LWI'"
+check "#194 an indented wrap joins with exactly one space" \
+  "grep -qF -- '- L2. A rule wrapping with an indented continuation line.' '$LWI'"
+# The defect. Written out in full rather than as "no double space anywhere", because the failure
+# is two WORDS fused and a check on spacing in general would pass on a line that lost a word.
+check "#192 an UNINDENTED wrap joins with a space rather than gluing the words" \
+  "grep -qF -- '- L3. A rule wrapping with an unindented continuation line.' '$LWI'"
+check "#192 and the glued form is not what it wrote" \
+  "! grep -qF -- 'unindentedcontinuation' '$LWI'"
+check "#194 every entry gets a line, including the one after an unclosed marker" \
+  "[ \"\$(grep -c '^- L[0-9]' '$LWI')\" = '5' ]"
+check "#194 the section headings are carried" \
+  "grep -q '^## Data safety' '$LWI'"
+check "#194 and the bodies are not" "! grep -q 'Its body' '$LWI'"
+
+# ---- the index and the lessons file are checked against each other (#195) ----
+# Every failure path in write_lesson_index returns 0 silently, so a generation that failed or
+# truncated left whatever stale index was already on disk and every session went on loading it.
+# An index that is stale and one that is correct look identical to a reader (L98). The check reads
+# the two FILES rather than trusting the writer, because a check living only inside the writer
+# cannot see an index that was right when written and has gone stale since (L225).
+printf -- '- **L6. A lesson the index has never been told about.** body\n  (someproject#6)\n' >> "$LWH/LESSONS.md"
+# The index is made unwritable, so the rewrite CANNOT land and the disagreement is real rather
+# than staged by editing the index into a shape the generator would never produce.
+chmod 444 "$LWI"
+out_lw195="$(CLAUDE_HOME="$LWH" SYNC_REPO="$LWR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1 || true)"
+chmod 644 "$LWI"
+dbg "#195 push with an unwritable index: $out_lw195"
+check "#195 an index that does not match its lessons file is reported" \
+  "case \"\$out_lw195\" in *LESSONS-INDEX*) true ;; *) false ;; esac"
+# It has to name the numbers, or the reader is told the two disagree and has to diff them by hand
+# to learn which lesson is missing (L11, L80).
+check "#195 and it names the lesson the index is missing" \
+  "case \"\$out_lw195\" in *L6*) true ;; *) false ;; esac"
+
+# The control, and it is what keeps the check from being a permanent complaint: a healthy pair
+# says nothing at all. A warning printed on every run is one nobody reads (L36).
+out_lw195b="$(CLAUDE_HOME="$LWH" SYNC_REPO="$LWR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1 || true)"
+dbg "#195 push once the index can be written: $out_lw195b"
+check "#195 a matching pair is silent" \
+  "case \"\$out_lw195b\" in *'does not match'*|*'disagree'*) false ;; *) true ;; esac"
+check "#195 and the missing lesson is in the index now" \
+  "grep -qF -- '- L6. A lesson the index has never been told about.' '$LWI'"
+
+
+section "== an unreadable lesson entry is reported where it IS, not where it came from (#248, #249) =="
+# The message said "a lesson entry that ARRIVED is not written as ...", and the comment above it
+# stated the assumption outright: "this is the path such an entry actually arrives on, since the
+# other Mac is where somebody wrote it". On 2026-08-31 a pull on Dans-MacBook-Pro reported L530
+# that way, and git history shows L530 was never in the shared payload: it was written on that
+# same Mac and had been held back unsent. Anyone acting on the message goes and investigates a
+# Mac that had nothing wrong with it.
+#
+# It was also reported only on the sync paths, so a locally written entry was invisible until one
+# happened to run: absent from the index that loads into every session, unreachable by
+# `claude-sync lesson`, by the duplicate check and by the number minter, with nothing saying so
+# (#249). There is ONE reporter now, called from the place that regenerates the index, so it
+# speaks whenever the lessons file is next read at all and says all three consequences at once.
+MLB="$WORK/mallesson-bare.git"; git init -q --bare -b main "$MLB"
+MLA="$WORK/mallesson-A"; git clone -q "$MLB" "$MLA" 2>/dev/null
+MLHA="$WORK/mallesson-homeA"; mkdir -p "$MLHA"
+echo '{"hooks":{}}' > "$MLHA/settings.json"
+printf '# rules\n' > "$MLHA/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. A readable one.** body\n' > "$MLHA/LESSONS.md"
+
+# Mac A publishes a clean file, Mac B receives it, and then B writes a bad entry of its OWN and
+# pulls. That is the exact shape of the 2026-08-31 report: the entry is local and unsent, and the
+# PULL is what reported it, claiming it arrived.
+CLAUDE_HOME="$MLHA" SYNC_REPO="$MLA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MLBB="$WORK/mallesson-B"; git clone -q "$MLB" "$MLBB" 2>/dev/null
+MLHB="$WORK/mallesson-homeB"; mkdir -p "$MLHB"
+echo '{"hooks":{}}' > "$MLHB/settings.json"
+CLAUDE_HOME="$MLHB" SYNC_REPO="$MLBB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+printf -- '- L2. Written on this Mac in a shape nothing can read.\n' >> "$MLHB/LESSONS.md"
+out_ml_local="$(CLAUDE_HOME="$MLHB" SYNC_REPO="$MLBB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#248 pull with a locally written bad entry: $out_ml_local"
+check "#248 an entry written here is reported" \
+  "case \"\$out_ml_local\" in *'LESSONS.md'*) true ;; *) false ;; esac"
+check "#248 and it is NOT described as having arrived" \
+  "case \"\$out_ml_local\" in *ARRIVED*) false ;; *) true ;; esac"
+check "#248 and it says the entry was written on this Mac" \
+  "case \"\$out_ml_local\" in *'ON THIS MAC'*) true ;; *) false ;; esac"
+# All three consequences in the one message, because they have one remedy and three separate
+# sentences in three places is how the same fault gets fixed once and reported twice (#249, L11).
+check "#249 and it says the entry is missing from the index every session loads" \
+  "case \"\$out_ml_local\" in *index*) true ;; *) false ;; esac"
+
+# Now the other direction, which is the case the old wording assumed was the only one. The bad
+# entry goes up from A with the check overridden, exactly as a real one would if somebody used the
+# documented escape hatch, and then lands on B.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. A readable one.** body\n' > "$MLHB/LESSONS.md"
+printf -- '- L3. Published from the other Mac in a shape nothing can read.\n' >> "$MLHA/LESSONS.md"
+CLAUDE_HOME="$MLHA" SYNC_REPO="$MLA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_SKIP_LESSON_CHECK=1 bash "$SCRIPT" send >/dev/null 2>&1
+out_ml_arrived="$(CLAUDE_HOME="$MLHB" SYNC_REPO="$MLBB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#248 pull that received a bad entry: $out_ml_arrived"
+check "#248 an entry that really did arrive is reported as having arrived" \
+  "case \"\$out_ml_arrived\" in *ARRIVED*) true ;; *) false ;; esac"
+check "#248 and it names the entry" \
+  "case \"\$out_ml_arrived\" in *L3.*) true ;; *) false ;; esac"
+# The mirror of the check above. Without it "arrived" could be a word the message always carries,
+# which is exactly what it was, and a check for its presence would pass on the broken version too
+# (L159).
+check "#248 and it does not also call that one locally written" \
+  "case \"\$out_ml_arrived\" in *'ON THIS MAC'*) false ;; *) true ;; esac"
+
+# The control. A readable file says nothing at all, or the message is printed on every run and
+# stops being read (L36).
+printf '# Lessons\n\n## Proof over green\n\n- **L1. A readable one.** body\n' > "$MLHB/LESSONS.md"
+out_ml_clean="$(CLAUDE_HOME="$MLHB" SYNC_REPO="$MLBB" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send 2>&1 || true)"
+check "#248 a readable lessons file is silent" \
+  "case \"\$out_ml_clean\" in *'nothing can read'*) false ;; *) true ;; esac"
+
+
+section "== the kept-edits line says what it measured, and old backups expire (#227, #240) =="
+# The pull printed "kept local edits the shared repo has not seen yet ... they go up on the next
+# send" with a file list, and the sentence reads as the COMPLETE set of what is waiting to be
+# sent. On 2026-08-30 it named three files while a status dry run moments later showed five
+# differing, including two skills, which change behaviour in every session. What it actually
+# measures is narrower and deliberately so: the paths this apply would otherwise have reverted.
+# So it says that, and points at the command that does answer the wider question (L287, L11).
+KEH="$WORK/keptline-home"; KER="$WORK/keptline-repo"
+KEB="$WORK/keptline-bare.git"; git init -q --bare -b main "$KEB"
+git clone -q "$KEB" "$KER" 2>/dev/null
+mkdir -p "$KEH/hooks"
+echo '{"hooks":{}}' > "$KEH/settings.json"
+printf '# rules\n' > "$KEH/CLAUDE.md"
+CLAUDE_HOME="$KEH" SYNC_REPO="$KER" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+printf '# rules edited locally\n' > "$KEH/CLAUDE.md"
+out_ke="$(CLAUDE_HOME="$KEH" SYNC_REPO="$KER" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#227 pull holding back a local edit: $out_ke"
+ke_line="$(printf '%s\n' "$out_ke" | sed -n '/would have reverted/p')"
+check "#227 the line still names the file it held back" \
+  "case \"\$ke_line\" in *CLAUDE.md*) true ;; *) false ;; esac"
+# Both facts on ONE line, because a sentence naming the files and a different sentence somewhere
+# else saying where to get the full set cannot answer between them (L178).
+check "#227 and the same line points at status for the whole pending set" \
+  "case \"\$ke_line\" in *status*) true ;; *) false ;; esac"
+
+# ---- backups expire on their own (#240) ----
+# Every pull that overwrites a file leaves a .syncbak, and every later run reminded the user about
+# all of them for ever, in the words "Nothing here removes them, so an old one stays until you do".
+# The safety net is right and the only exit was deleting files by hand, so the reminder became
+# permanent noise: two backups from 2026-08-31 were still being announced on every pull.
+KEO="$KEH/CLAUDE.md.syncbak"; printf 'an old backup\n' > "$KEO"
+KEN="$KEH/settings.json.syncbak"; printf 'a fresh backup\n' > "$KEN"
+# Aged by SETTING its mtime rather than by waiting, so the test is instant and pins both ends of
+# the comparison rather than betting on the clock (L130, L290).
+touch -t "$(date_minus_days_stamp 120)" "$KEO" 2>/dev/null || touch -t 202501010000 "$KEO"
+out_ke240="$(CLAUDE_HOME="$KEH" SYNC_REPO="$KER" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_BACKUP_KEEP_DAYS=30 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#240 pull with one aged backup: $out_ke240"
+check "#240 a backup past the age is removed" "[ ! -f '$KEO' ]"
+check "#240 and its removal is announced rather than silent" \
+  "case \"\$out_ke240\" in *CLAUDE.md.syncbak*) true ;; *) false ;; esac"
+check "#240 a backup inside the age is kept" "[ -f '$KEN' ]"
+
+# The command, for the person who wants them gone now rather than in a month.
+out_ke240b="$(CLAUDE_HOME="$KEH" SYNC_REPO="$KER" SYNC_NO_NOTIFY=1 bash "$SCRIPT" clean-backups 2>&1 || true)"
+dbg "#240 clean-backups: $out_ke240b"
+check "#240 clean-backups removes the rest" "[ ! -f '$KEN' ]"
+check "#240 and says how many it removed" \
+  "case \"\$out_ke240b\" in *1*) true ;; *) false ;; esac"
+# Run again with nothing to do. "Removed none" and "removed some" must not read the same (L98).
+out_ke240c="$(CLAUDE_HOME="$KEH" SYNC_REPO="$KER" SYNC_NO_NOTIFY=1 bash "$SCRIPT" clean-backups 2>&1 || true)"
+check "#240 and a run with nothing to remove says so in its own words" \
+  "case \"\$out_ke240c\" in *'no '*|*none*) true ;; *) false ;; esac"
+
+
+section "== status, the checkout's position, and one watcher (#258, #266, #196, #251) =="
+# ---- #258: a payload subtree that does not exist yet ----
+# The dry run reports every file under a MISSING destination as `>f.......`, whose flags mean
+# nothing about this file differs, on the openrsync macOS ships. rsync 3.4.1, which the other Mac
+# and the CI runner have, marks the same files `>f+++++++`, newly created. A whole directory that
+# is new in the payload is exactly the case where every file in it is new, and that is the run
+# where status can describe them as unchanged. status must NOT create the directory to make rsync
+# happy: it is an inspection command and creating anything in the payload from it is L206.
+# ONE status, carrying both answers. The fixture has two subtrees locally and only one of them in
+# the payload, so the line has to name the missing one and leave the present one alone, and both
+# facts come from the same measurement rather than from two runs that could differ for reasons
+# nothing here controls (L159).
+STH="$WORK/statusnew-home"; mkdir -p "$STH/hooks" "$STH/agents"
+echo '{"hooks":{}}' > "$STH/settings.json"
+printf '#!/usr/bin/env bash\n' > "$STH/hooks/brand-new.sh"
+printf 'an agent\n' > "$STH/agents/already-there.md"
+STR="$WORK/statusnew-repo"; mkdir -p "$STR/payload/agents"
+out_258="$(CLAUDE_HOME="$STH" SYNC_REPO="$STR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#258 status with no payload/hooks: $out_258"
+check "#258 status says the payload has no such subtree yet" \
+  "case \"\$out_258\" in *'the payload has no hooks yet'*) true ;; *) false ;; esac"
+check "#258 and it did not create the directory to find that out" \
+  "[ ! -d '$STR/payload/hooks' ]"
+# The control, from the same run: a subtree that IS there must not carry the line, or it is
+# printed on every status and stops being read (L36).
+check "#258 and it says nothing about a subtree that is already there" \
+  "case \"\$out_258\" in *'the payload has no agents yet'*) false ;; *) true ;; esac"
+
+# ---- #266: the development checkout's position, reported by the pull ----
+# `pull` reports what changed under ~/.claude, and nothing reported that the checkout the config
+# is actually EDITED in had fallen behind. On 2026-09-02 it was 40 commits behind immediately
+# after a pull. An edit made in a stale checkout looks correct locally, and pushing it builds on
+# work already in the shared repo but absent there.
+dbg "#266 starting"
+CKB="$WORK/checkout-bare.git"; git init -q --bare -b main "$CKB"
+CKA="$WORK/checkout-A"; git clone -q "$CKB" "$CKA" 2>/dev/null
+CKHA="$WORK/checkout-homeA"; mkdir -p "$CKHA/hooks"
+echo '{"hooks":{}}' > "$CKHA/settings.json"
+printf '# rules\n' > "$CKHA/CLAUDE.md"
+CKENV="SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1"
+CLAUDE_HOME="$CKHA" SYNC_REPO="$CKA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+# The stale checkout: a second clone taken now, then left behind while A publishes more.
+CKDEV="$WORK/checkout-dev"; git clone -q "$CKB" "$CKDEV" 2>/dev/null
+printf '# rules again\n' > "$CKHA/CLAUDE.md"
+CLAUDE_HOME="$CKHA" SYNC_REPO="$CKA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+CKB2="$WORK/checkout-B"; git clone -q "$CKB" "$CKB2" 2>/dev/null
+CKHB="$WORK/checkout-homeB"; mkdir -p "$CKHB"
+echo '{"hooks":{}}' > "$CKHB/settings.json"
+CKREG="$WORK/checkout-clones"; printf '%s\n%s\n' "$CKB2" "$CKDEV" > "$CKREG"
+dbg "#266 about to pull"
+out_266="$(CLAUDE_HOME="$CKHB" SYNC_REPO="$CKB2" SYNC_CLONE_REGISTRY="$CKREG" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#266 pull with a stale checkout registered: $out_266"
+# Both facts on ONE line: the path and how far behind it is. A count with no path, or a path with
+# no count, sends the reader to work out the other half (L178, L80).
+line_266="$(printf '%s\n' "$out_266" | sed -n "\|$CKDEV|p" | sed -n '/behind/p')"
+check "#266 the pull says the other checkout is behind, and by how much" \
+  "case \"\$line_266\" in *'1 commit'*) true ;; *) false ;; esac"
+# The control. A checkout that is level says nothing, or the line is on every pull (L36).
+git -C "$CKDEV" pull -q 2>/dev/null || true
+out_266b="$(CLAUDE_HOME="$CKHB" SYNC_REPO="$CKB2" SYNC_CLONE_REGISTRY="$CKREG" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#266 a checkout that is level is not reported" \
+  "case \"\$out_266b\" in *\"$CKDEV is\"*) false ;; *) true ;; esac"
+# A registered clone that has GONE is unresolvable, not up to date (L98).
+CKREG2="$WORK/checkout-clones2"; printf '%s\n%s\n' "$CKB2" "$WORK/checkout-that-left" > "$CKREG2"
+out_266c="$(CLAUDE_HOME="$CKHB" SYNC_REPO="$CKB2" SYNC_CLONE_REGISTRY="$CKREG2" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#266 a clone that has gone is reported as unanswerable, not as up to date" \
+  "case \"\$out_266c\" in *'is not there any more'*) true ;; *) false ;; esac"
+
+# ---- #196: every send outcome reaches the log, not only the failures ----
+# Local config changes sat unsent for 29 hours on 2026-08-23 while the watch daemon was running,
+# and nothing reported it. The watch loop wrote a line ONLY when a send failed, so the log could
+# not tell a watcher sending normally from one that had stopped: in 22 KB covering weeks there was
+# exactly one line, a network blip. That is L98 exactly.
+WOB="$WORK/watchout-bare.git"; git init -q --bare -b main "$WOB"
+WOR="$WORK/watchout-repo"; git clone -q "$WOB" "$WOR" 2>/dev/null
+WOH="$WORK/watchout-home"; mkdir -p "$WOH/hooks"
+echo '{"hooks":{}}' > "$WOH/settings.json"
+printf '# rules\n' > "$WOH/CLAUDE.md"
+out_196="$(CLAUDE_HOME="$WOH" SYNC_REPO="$WOR" SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 env bash "$SCRIPT" send 2>&1)"
+dbg "#196 a watcher send that published: $out_196"
+check "#196 a send that published says so in a shape the watcher can read" \
+  "case \"\$out_196\" in *'SEND-OUTCOME sent'*) true ;; *) false ;; esac"
+out_196b="$(CLAUDE_HOME="$WOH" SYNC_REPO="$WOR" SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 env bash "$SCRIPT" send 2>&1)"
+check "#196 and a send with nothing to publish says THAT, distinctly" \
+  "case \"\$out_196b\" in *'SEND-OUTCOME nothing'*) true ;; *) false ;; esac"
+# The control, and it is the reason the marker is conditional: a person running send by hand has
+# the sentences and does not need a token in their output.
+out_196c="$(CLAUDE_HOME="$WOH" SYNC_REPO="$WOR" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send 2>&1)"
+check "#196 and a send run by hand carries no marker" \
+  "case \"\$out_196c\" in *SEND-OUTCOME*) false ;; *) true ;; esac"
+
+# ---- #251: one watcher at a time ----
+# status showed THREE watch processes on 2026-08-31 where one is expected, one started
+# independently and nested two deep. They all react to the same edit, which is a concurrency
+# hazard rather than clutter, and the report told the reader to fix it by hand.
+WPID="$WORK/watch-pid"
+WFS="$WORK/watch-fake-fswatch"
+printf '#!/usr/bin/env bash\necho one\n' > "$WFS"; chmod +x "$WFS"
+# A LIVE process whose command line really does look like a watcher, because the guard confirms
+# what the pid IS rather than trusting the number: a stale pid is reused constantly, and a guard
+# that trusts it refuses to start because something unrelated inherited it (L237, L70).
+WFAKE="$WORK/claude-sync"
+# A single foreground sleep, deliberately: a `while :; do sleep 3600 & wait; done` body leaves an
+# hour long orphan behind the moment the parent is killed, and this suite is not allowed to leave
+# processes on the machine. Its own sleep bounds it, so even a run that never reaches the kill
+# below cannot leave anything for long.
+printf '#!/usr/bin/env bash\nsleep 120\n' > "$WFAKE"; chmod +x "$WFAKE"
+bash "$WFAKE" watch >/dev/null 2>&1 &
+w_pid=$!
+printf '%s\n' "$w_pid" > "$WPID"
+out_251="$(CLAUDE_HOME="$WOH" SYNC_REPO="$WOR" SYNC_FSWATCH="$WFS" SYNC_WATCH_PID_FILE="$WPID" SYNC_NO_NOTIFY=1 SYNC_WATCH_SEND=true bash "$SCRIPT" watch 2>&1 || true)"
+dbg "#251 a second watcher: $out_251"
+check "#251 a second watcher refuses to start while one is live" \
+  "case \"\$out_251\" in *'already running'*) true ;; *) false ;; esac"
+check "#251 and it names the process so it can be ended" \
+  "case \"\$out_251\" in *$w_pid*) true ;; *) false ;; esac"
+# SIGKILL, which nothing can block, and then `wait` only to reap it. The process-tree helper was
+# tried here and the run hung: it stops a process before walking it, and a wait on a process the
+# walk did not finish killing blocks for ever, which is a worse failure than the one under test
+# (L110). There is one process to end here and no tree to walk.
+kill -9 "$w_pid" 2>/dev/null || true
+wait "$w_pid" 2>/dev/null || true
+# The control, and it is what stops the guard being a way to never start at all: a pid file left
+# by a watcher that has GONE must not refuse the next one (L214).
+printf '%s\n' "$w_pid" > "$WPID"
+out_251b="$(CLAUDE_HOME="$WOH" SYNC_REPO="$WOR" SYNC_FSWATCH="$WFS" SYNC_WATCH_PID_FILE="$WPID" SYNC_NO_NOTIFY=1 SYNC_WATCH_SEND=true bash "$SCRIPT" watch 2>&1 || true)"
+check "#251 a pid file left by a watcher that has gone does not refuse the next one" \
+  "case \"\$out_251b\" in *'already running'*) false ;; *) true ;; esac"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"

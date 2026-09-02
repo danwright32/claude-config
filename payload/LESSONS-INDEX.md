@@ -93,8 +93,8 @@ to decide something: the body is where the failure it came from is described.
 - L225. An invariant between two stored values must be checked by something that reads the VALUES, never only inside the tool that normally writes them
 - L228. A comparison asking whether two things hold the SAME ELEMENTS says nothing about their ORDER
 - L511. A test that times out names the assertion that was running, not the cost that caused it.
-- L517. When code sorts items into output buckets (paged versus logged, retried versus deadlettered, shown versus hidden), assert that every item lands in exactly ONE bucket across everycombination of inputs.
-- L518. A check that reads source by taking a FIXED NUMBER OF LINES from an anchor stopscontaining the code it checks the moment a comment is added above it, and it then fails on thecomment rather than the code.
+- L517. When code sorts items into output buckets (paged versus logged, retried versus dead lettered, shown versus hidden), assert that every item lands in exactly ONE bucket across every combination of inputs.
+- L518. A check that reads source by taking a FIXED NUMBER OF LINES from an anchor stops containing the code it checks the moment a comment is added above it, and it then fails on the comment rather than the code.
 - L239. Sampling a TRANSIENT surface to decide whether an action happened cannot tell "it never appeared" from "it appeared and was already dismissed", so judge by the durable record the action would have written instead.
 - L250. A list written to mean one thing (a `.gitignore`, an exclude file, a skip list) is read by every OTHER tool that consults it as a DIFFERENT instruction, so a guard built on a question that tool answers inherits an exclusion nobody chose for it, and goes blind exactly where unowned writes land.
 - L252. A test asserting a decision that has since been REVERSED stops being coverage and becomes the guard DEFENDING the rejected behaviour, so a reversal must hunt those tests down across every file and DELETE them rather than adjust them, because their whole content is the thing being removed.

@@ -487,6 +487,40 @@ if [ "$ran" -gt 0 ]; then
     printf '%s\t%s\n' "$(wc -c < "$_sp_f" | tr -d ' ')" "$_sp_f"
   done)"
 
+  # ---- and the other live stores (claude-config#216) ----
+  # The bracket above covers the store the incident happened in. The same class of mistake reaches
+  # the rule files every session loads, the settings, the clone registry and the shell rc, and
+  # each would be just as silent: a suite that sources a library before setting its override binds
+  # to the real path, and nothing anywhere would say so.
+  #
+  # A LIST, so adding a store is one line rather than a new guard. Compared on content, which is
+  # what a rule file being damaged actually looks like: a suite that rewrites LESSONS.md with the
+  # same number of bytes changes no size at all, and a size-only bracket would report that as
+  # clean (L63). Attribution is deliberately NOT attempted here: unlike the spool, nothing else on
+  # this machine legitimately writes these during a test run, so any change at all is this run's
+  # doing and there is nothing to tell apart.
+  _live_stores="${CLAUDE_HOME:-$HOME/.claude}/LESSONS.md
+${CLAUDE_HOME:-$HOME/.claude}/LESSONS-INDEX.md
+${CLAUDE_HOME:-$HOME/.claude}/CLAUDE.md
+${CLAUDE_HOME:-$HOME/.claude}/settings.json
+${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}
+${SYNC_ZSHRC:-$HOME/.zshrc}"
+  # A path that is not there is recorded as absent rather than skipped, so a suite that CREATES
+  # one is caught by the same comparison. Skipping it would make creating a file the one write
+  # this cannot see (L98, L214).
+  _live_fingerprint(){
+    local f
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      if [ -f "$f" ]; then printf '%s\t%s\n' "$f" "$(cksum < "$f" 2>/dev/null || echo unreadable)"
+      else printf '%s\tabsent\n' "$f"
+      fi
+    done <<LIVESTORES
+$_live_stores
+LIVESTORES
+  }
+  _live_before="$(_live_fingerprint)"
+
   _timed=0
   launch_order="$(
     i=0
@@ -702,6 +736,42 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         printf '  FAIL  %-38s %-26s %s\n' "$name" "claimed it could not run" "$dur"
         printf '          It printed SUITE-NOT-RUN, but a repository WAS found at %s, so nothing was stopping it.\n' "$root"
         printf '          The reason it gave: %s\n' "$nr_reason"
+        continue
+      fi
+      # Before giving up on it, try the CHECKOUT (claude-config#237). These suites audit the
+      # repository and this is a deployed copy with no repository above it, but the checkout the
+      # config came FROM is on this same Mac, so the gap the pull announced on every single run
+      # was one it could close itself. Announced and never closed is what teaches a reader to skip
+      # the line, and it meant a hook change could ship having been checked by 46 of 49 suites
+      # with nobody noticing which three were missed (measured 2026-09-02).
+      #
+      # The checkout is NAMED by whoever runs this, never guessed: claude-sync passes its own
+      # SYNC_REPO, which is the one directory that certainly holds the payload these hooks came
+      # from. A guess would be the defect this repo keeps removing.
+      rerun_from=""
+      if [ -n "${RUN_ALL_TESTS_CHECKOUT:-}" ] && [ -f "${RUN_ALL_TESTS_CHECKOUT%/}/payload/hooks/$name" ]; then
+        rerun_from="${RUN_ALL_TESTS_CHECKOUT%/}/payload/hooks"
+      fi
+      if [ -n "$rerun_from" ]; then
+        rr_out="$(cd "$rerun_from" && RUN_ALL_TESTS_CHECKOUT="" bash "./$name" 2>&1)"; rr_rc=$?
+        rr_nr="$(printf '%s\n' "$rr_out" | grep -E '^SUITE-NOT-RUN ' | tail -1)"
+        if [ -n "$rr_nr" ]; then
+          # It could not run THERE either. That is a different fact from having no checkout, and
+          # it is reported as its own, because a re-run that changed nothing must not read like
+          # one that was never attempted (L98, L11).
+          notrun=$((notrun + 1))
+          notrun_names="$notrun_names $name"
+          printf '  NOT RUN %-37s %s\n' "$name" "$nr_reason (and not from $rerun_from either: ${rr_nr#SUITE-NOT-RUN })"
+          continue
+        fi
+        if [ "$rr_rc" -eq 0 ]; then
+          printf '  ok    %-38s %-26s %s\n' "$name" "passed from the checkout" "$dur"
+          continue
+        fi
+        failed=$((failed + 1))
+        failed_names="$failed_names $name"
+        printf '  FAIL  %-38s %-26s %s\n' "$name" "failed from the checkout" "$dur"
+        printf '%s\n' "$rr_out" | tail -25 | sed 's/^/          /'
         continue
       fi
       notrun=$((notrun + 1))
@@ -950,6 +1020,29 @@ SPOOLADDED
     printf '%s\n' "$_sp_theirs" | sort -u
     echo "  Another Claude session was working elsewhere on this machine. Not this run's doing, and not counted against it."
   fi
+fi
+# The other live stores, the same bracket (claude-config#216).
+_live_after="$(_live_fingerprint 2>/dev/null || true)"
+if [ -n "${_live_before:-}" ] && [ "$_live_before" != "$_live_after" ]; then
+  echo "SUITES CHANGED A LIVE STORE. A test must be structurally unable to touch live data (L2)."
+  # NAMED, not counted: which file changed is the whole of what a person needs, and a count sends
+  # them to diff six paths by hand (L11, L80).
+  _lc_i=1
+  while IFS= read -r _lc_line; do
+    [ -n "$_lc_line" ] || continue
+    _lc_path="${_lc_line%%	*}"
+    _lc_was="$(printf '%s\n' "$_live_before" | awk -F"$(printf '\t')" -v f="$_lc_path" '$1 == f { print $2; exit }')"
+    _lc_now="${_lc_line#*	}"
+    [ "$_lc_was" = "$_lc_now" ] && continue
+    printf '  %s: was [%s], now [%s]\n' "$_lc_path" "$_lc_was" "$_lc_now"
+    _lc_i=$((_lc_i + 1))
+  done <<LIVEAFTER
+$_live_after
+LIVEAFTER
+  echo "  Find the suite that sources a library, or runs a hook, without pointing CLAUDE_HOME (or"
+  echo "  the relevant override) at its own throwaway directory FIRST."
+  failed=$((failed + 1))
+  failed_names="$failed_names live-store-pollution"
 fi
 if [ -n "$unmeasured_names" ]; then
   echo "NO DURATION was measured for:$unmeasured_names"

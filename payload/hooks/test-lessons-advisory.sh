@@ -345,6 +345,57 @@ else
 fi
 assert_contains "the advisory still fires on a diff too big to fit a pipe" "L5" "$out_big"
 
+# ---- the six trigger tables are one table (claude-config#234) ----
+# The triggers live as six parallel arrays indexed together: TRIG_IDS, TRIG_WHAT, TRIG_RE1,
+# TRIG_RE2, TRIG_PATH and TRIG_FN. Adding one means adding an entry to all six in matching order.
+# Nothing checked they were the same length, and a trigger added to five of the six leaves every
+# entry after it attached to the wrong lesson id, the wrong description or the wrong file scope,
+# while the hook goes on running and its output looks entirely normal: every id it prints exists
+# and every description reads sensibly.
+#
+# Under `set -u` a SHORTER array is the loud case. The dangerous one is an array long enough to
+# index that holds the PREVIOUS trigger's value, which is exactly what an insertion in the middle
+# produces.
+#
+# Read out of the hook by sourcing the tables alone, so this measures what the hook will actually
+# index rather than a count of lines that look like entries (L107).
+trig_lengths="$(
+  # shellcheck disable=SC1090
+  eval "$(sed -n '/^TRIG_IDS=(/,/^)/p; /^TRIG_WHAT=(/,/^)/p; /^TRIG_RE1=(/,/^)/p; /^TRIG_RE2=(/,/^)/p; /^TRIG_PATH=(/,/^)/p; /^TRIG_FN=(/,/^)/p' "$HOOK")"
+  printf '%s %s %s %s %s %s\n' "${#TRIG_IDS[@]}" "${#TRIG_WHAT[@]}" "${#TRIG_RE1[@]}" "${#TRIG_RE2[@]}" "${#TRIG_PATH[@]}" "${#TRIG_FN[@]}"
+)"
+# One definition of the question, so the probes below exercise THIS comparison rather than a
+# second one written beside it that drifts (L107).
+trig_agree(){   # $@ = the lengths -> 0 when they are all equal and above zero
+  local first="${1:-0}" len
+  case "$first" in ''|*[!0-9]*|0) return 1 ;; esac
+  for len in "$@"; do [ "$len" = "$first" ] || return 1; done
+  return 0
+}
+# Watched giving both answers before it is believed, against lists built here, because a
+# comparison that has only ever been seen to pass is not yet a check (L1). The all-zero case is
+# in because six arrays that all failed to parse agree perfectly, and that must not read as
+# agreement (L98).
+trig_agree 3 3 3 3 3 3 \
+  && { PASS=$((PASS+1)); echo "PASS: the table comparison accepts six equal lengths"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL: the table comparison rejected six equal lengths"; }
+trig_agree 3 3 2 3 3 3 \
+  && { FAIL=$((FAIL+1)); echo "FAIL: the table comparison accepted a short table"; } \
+  || { PASS=$((PASS+1)); echo "PASS: the table comparison catches one short table"; }
+trig_agree 0 0 0 0 0 0 \
+  && { FAIL=$((FAIL+1)); echo "FAIL: the table comparison read six empty tables as agreement"; } \
+  || { PASS=$((PASS+1)); echo "PASS: six empty tables are not read as agreement"; }
+
+set -- $trig_lengths
+trig_n="${1:-0}"
+trig_same=0
+trig_agree "$@" && trig_same=1
+if [ "$trig_same" = 1 ]; then
+  PASS=$((PASS+1)); echo "PASS: all six trigger tables hold $trig_n entries"
+else
+  FAIL=$((FAIL+1)); echo "FAIL: the trigger tables are not one length (IDS WHAT RE1 RE2 PATH FN = $trig_lengths). An entry added to some of them silently attaches every later trigger to the wrong lesson."
+fi
+
 echo "passed: $PASS, failed: $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
