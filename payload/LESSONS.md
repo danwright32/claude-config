@@ -1267,6 +1267,22 @@ window is a count rather than a boundary.
   This is L356 one level down: that one says record what else was running, this one says how to
   decide what counts as running.
 
+- **L367. An alert or threshold on a SUM cannot see one of its components collapsing while another
+  grows to replace it, because the total never moves.** Wherever the sum is composed of sources that
+  can substitute for one another (acquisition channels, plans, queues, regions, providers), alert on
+  the COMPONENTS, because the substitution is the commonest way a healthy looking number hides a dead
+  one, and it hides it for exactly as long as the replacement lasts. Measured 2026-09-02
+  (nursedexapp/nursedex#872, #898): NurseDex lost the only traffic channel that ever produced engaged
+  visitors, organic Facebook falling from 538 visits in June to 10 in August, while tagged Instagram
+  and Facebook links grew from 292 to 1,390. Total weekly social visits held near 320 the whole time
+  and moved less than 30% week to week, so a collapse alert on the total would have stayed silent for
+  three months, which is exactly what happened with no alert at all. The headline conversion rate did
+  fall seventeen fold, but that is a weighted average of two roughly STABLE rates whose mix inverted,
+  so it read as a product regression and sent the investigation at page speed rather than at the
+  channel. Distinct from L209, which is about calibrating a threshold while a co-varying component is
+  held constant: this one is about a threshold that is correctly calibrated on a quantity that cannot
+  express the failure.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -2602,6 +2618,19 @@ window is a count rather than a boundary.
   so the same photos were paid for on every view. L289 says such a fast path fails silently; this
   is the construction that guarantees it)
 
+- **L368. A one-shot observer or trigger that records itself as FIRED before confirming its work
+  succeeded turns a transient failure into a permanent loss, because nothing will ever try again.**
+  Set the done flag from the RESULT, not from the attempt, and leave the watcher connected until the
+  work is confirmed. Measured 2026-09-02 (nursedexapp/nursedex#869, #894): an IntersectionObserver on
+  a homepage call to action captured an analytics event the moment the button appeared, set its fired
+  ref, and disconnected. PostHog initializes inside a Suspense boundary, so the capture ran before the
+  client had loaded, returned silently, and the sighting could never be recorded for the rest of that
+  visit. The instrument would have reported that nobody reaches the button no matter what was true,
+  and a homepage redesign was about to be decided on that number. Two halves to the fix and both are
+  needed: the capture helper reports whether it actually sent, and the one-shot only marks itself done
+  when it did. The sibling of L121, where a recorded success marker suppresses a later repair: there
+  the marker outlives the artifact, here it outlives nothing at all because the work never happened.
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -3704,6 +3733,22 @@ window is a count rather than a boundary.
   bridge that assembles CAPTIONS.txt, nothing asserted they agreed, and the divergence was found
   only by reading both while fixing something else)
 
+- **L370. Sharing a rule's DATA while copying the code that APPLIES it is not consolidation: the
+  shared constant reads as the single source of truth, so nobody asks whether the logic beside it
+  was duplicated, and a change to how the data is applied lands in one copy only.** Share the
+  function that applies it, not just the list it reads. The half measure is worse than two frank
+  copies, because the shared list is visible evidence of consolidation and answers the question
+  before it is asked: a reviewer sees one definition of the vocabulary and stops looking. Distinct
+  from L263, where a shared NAME is the thing suppressing the comparison, and from L41, which is
+  about a list that must MIRROR another and should be derived from it; here the list is already
+  genuinely shared and it is the matcher around it that is twinned. The remedy differs too: not a
+  fixture, not derivation, but lifting the application into one function and leaving each caller
+  only what genuinely differs.
+  (postroll#1224, 2026-09-02: `INFERRED_STATE` and `DIRECTED_INTENT` are imported by both blog and
+  caption alt text checks, and the two lines of regex matching built on them were copied byte for
+  byte into `caption_quality.py:170` beside the original at `blog_quality.py:708`, in the same
+  change that imported the lists in order to avoid duplicating them)
+
 - **L274. An exception a collection singles out for ONE item (skip this one, do not touch that
   one) must be answered by the ITEM itself, never by a predicate repeated inline at each place
   that iterates the collection, because a second loop written later omits it and the item is then
@@ -3984,11 +4029,26 @@ window is a count rather than a boundary.
   waiter's latency depend on work that never needed exclusion, and that coupling grows silently as
   the trailing step grows. Distinct from L519, which is about two jobs sharing one lock; this is one
   job holding its own lock across work that does not write what the lock guards.
-  (claude-config#267: the hook suite runs at the end of every `claude-sync pull` while the pull
-  still holds the sync lock, measured at over two minutes on 2026-09-02, so the watch daemon could
-  not pick anything up from the other Mac for that whole window. The suite writes nothing the lock
-  protects, and it had grown from 38 to 44 suites in a fortnight, so the delay to propagation was
-  set by how long the tests took rather than by anything about delivery)
+  (claude-config#269: `do_send` runs the suites covering a changed hook while holding the sync
+  lock, so editing `run-all-tests.sh` pays roughly three to five minutes per save (the suites naming
+  it include the two slowest in the tree, 85s and 125s idle, 211s under load), and the watcher fires
+  on every save. The suites write nothing the lock protects. Corrected 2026-09-02: this lesson was
+  first written from claude-config#267 against the PULL path, and that was wrong. `with_lock`
+  releases the lock and only then calls the suite, with a comment saying so and citing #181 as the
+  measurement that drove it, so the pull was already right when the lesson was recorded and #267 was
+  closed as already done. The rule is unchanged; the instance moved to the path that actually has
+  it, which is the one added afterwards)
+
+- **L371. A gate added to a shared delivery path refuses the WHOLE payload, so a failure in one
+  item stops every unrelated thing travelling with it**, and a delivery that has silently stopped is
+  indistinguishable from one with nothing to send. Scope the refusal to the item that failed, or
+  state plainly that the gate can halt everything and give the stoppage its own visible signal.
+  (claude-config#244 and #269: a send that publishes `~/.claude` to the other Mac now runs the test
+  suites covering any changed hook and refuses to commit when one fails. The refusal is total for
+  that send rather than scoped to the hook, so an unrelated red suite also stops rule files, skills
+  and lessons reaching the other machine. claude-config#196 had already recorded that a watcher
+  which stopped sending is hard to notice, because the log writes a line only on failure, so this
+  added a new way to stop that looks the same from outside as working normally)
 
 - **L255. A consumer that gates on an exact SET of accepted format versions turns the producer's
   next additive bump into a total outage of itself**, because an unrecognised version is refused
@@ -4076,6 +4136,18 @@ window is a count rather than a boundary.
   the four minute run, and the next scheduled attempt was seven days away. A manual dispatch an
   hour later passed clean, so one automatic re-attempt a few hours later would have healed it
   with nobody involved)
+
+- **L369. A lock that serialises heavy work must be scoped to the RESOURCE it protects, never to the
+  project that created it, because another project on the same machine does the same heavy work and
+  cannot take a lock it has never heard of.** A per-repo lock over a machine-wide resource reads as
+  protection while protecting only against itself. Measured 2026-09-02 (overture#3478): Overture
+  serialises its Swift suite through one machine-wide file lock, so two Overture runs can never
+  collide, and while a Phase 0 control measurement was being taken PostRoll launched
+  `pytest -n auto` from another checkout, spawned 13 workers and took the Mac from load 4.03 to
+  69.51. The lock was working perfectly and was irrelevant. This is the PREVENTION half of L364,
+  which covers only how to notice a dirty machine, and it applies wherever several projects share
+  one Mac: the lock belongs outside any checkout and every project doing that class of work has to
+  take it.
 
 ## Test speed
 

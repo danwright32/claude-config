@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 405 lessons.
+LESSONS.md, which is NOT loaded into the session. 410 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -119,6 +119,7 @@ to decide something: the body is where the failure it came from is described.
 - L539. A detector comparing a PERIOD TO DATE cumulative rate against a per period baseline lets a burst heal itself as the denominator grows, so it clears with nothing fixed, never fires at all later in the period, and reports a duration set by the check's tick rather than by the event.
 - L540. A reconciliation that declares everything accounted for by summing named buckets is satisfied by the very defect it hunts, as long as that item lands in the bucket standing for legitimate cases, because the arithmetic balances whatever the labels claim. So every member of an expected absence bucket must carry a measured reason, never membership earned by failing to match the good case.
 - L364. A check deciding whether a machine is clean enough to measure on must judge by what is UNUSUAL for that machine, never by what is running on it, because the always-present load (a sync daemon, a backup agent, an indexer) makes an absolute-quiet rule refuse every measurement anybody ever takes.
+- L367. An alert or threshold on a SUM cannot see one of its components collapsing while another grows to replace it, because the total never moves.
 
 ## Data safety
 
@@ -249,6 +250,7 @@ to decide something: the body is where the failure it came from is described.
 - L349. A result the mutating action ALREADY RETURNED must be rendered from that return value, never left to a re-fetch or refresh to bring it back, because that read races the write it is reading and, when it loses, the person sees nothing from an action that fully succeeded, which is indistinguishable from the action having failed.
 - L358. A unique user count from a client side analytics tool counts the identities that tool has ISSUED, never people, and any environment that isolates or clears storage (an in app browser, a private window, a fresh device) turns one person into several, always inflating the figure. Near zero overlap between two populations that plainly SHOULD overlap is evidence of that fragmentation rather than of independent audiences, so measure the overlap before reporting either count as a headcount.
 - L359. A URL that carries a freshly minted credential (a signed storage URL, a presigned link, a tokenised CDN path) is a NEW cache key on every render, so every cache downstream of it, the CDN, the image optimiser and the visitor's own browser, MISSES forever while still returning the correct bytes. Re-sign on a schedule and reuse the URL, or put a stable path in front of the signing, and prove it with a cache HIT on a second load rather than by reading the code.
+- L368. A one-shot observer or trigger that records itself as FIRED before confirming its work succeeded turns a transient failure into a permanent loss, because nothing will ever try again.
 
 ## Security and privacy
 
@@ -374,6 +376,7 @@ to decide something: the body is where the failure it came from is described.
 - L244. A file that is auto loaded into every session is believed without being re-checked, so any status it records (an open question, a pending issue, a not yet done) must be derived from the system that owns that truth or carry a check that fails when it drifts.
 - L262. A constraint that has only ever been satisfied as a side effect of somebody doing the work by hand is recorded nowhere and checked by nothing, so the first time that work is GENERATED rather than placed the constraint silently stops holding, and every existing check passes because each one was written against the hand made cases.
 - L263. A shared NAME is read as evidence of shared BEHAVIOUR, so two same-named functions on either side of a boundary are never compared and can implement different rules indefinitely, while every caller on each side reads as correct in isolation.
+- L370. Sharing a rule's DATA while copying the code that APPLIES it is not consolidation: the shared constant reads as the single source of truth, so nobody asks whether the logic beside it was duplicated, and a change to how the data is applied lands in one copy only.
 - L274. An exception a collection singles out for ONE item (skip this one, do not touch that one) must be answered by the ITEM itself, never by a predicate repeated inline at each place that iterates the collection, because a second loop written later omits it and the item is then protected at one site and handled normally at the other.
 - L281. Behaviour that is correct only as a SIDE EFFECT of an unrelated rule has no test, no comment and no owner, so the first change to that rule removes it silently while every check stays green.
 - L286. A derivation every test in a suite needs (a tree walk, a parse, a store clone) is recomputed once per test unless its default input is memoised, so memoise the no-argument form, keep the callers that inject their own input building, and make the memo unable to capture an empty result, because a memoised empty scan passes every guard at once.
@@ -407,12 +410,14 @@ to decide something: the body is where the failure it came from is described.
 - L227. A limit cannot be raised on its own
 - L519. A repair, backfill or catch-up tool must not take the same exclusion lock as the live job it repairs
 - L366. A lock must be released as soon as the writes it protects are done
+- L371. A gate added to a shared delivery path refuses the WHOLE payload, so a failure in one item stops every unrelated thing travelling with it
 - L255. A consumer that gates on an exact SET of accepted format versions turns the producer's next additive bump into a total outage of itself
 - L258. A consumer that acknowledges work by DELETING the record makes an absent record mean both "consumed successfully" and "never written"
 - L259. An escape hatch that switches a gate OFF is inherited by every process that command starts, including the gate's OWN self-test
 - L522. A time or size budget calibrated for ONE execution context is wrong when the same code is reached from another (a scheduled job versus a request, a worker versus a CLI, a foreground run versus a background one), because the platform ceiling differs
 - L527. A retry that CHANGES the request on the assumption of one particular cause (stripping an id it guesses collided, dropping a field it guesses was rejected, narrowing a scope) must confirm that cause from the actual error before altering anything
 - L533. A job on a sparse schedule (weekly, monthly) whose only failure remedy is running it again needs an automatic re-attempt within the same period, because an in-process retry measured in seconds cannot outlast a real outage, and a transiently failed run otherwise silently costs the whole schedule interval.
+- L369. A lock that serialises heavy work must be scoped to the RESOURCE it protects, never to the project that created it, because another project on the same machine does the same heavy work and cannot take a lock it has never heard of.
 
 ## Test speed
 
