@@ -177,7 +177,7 @@ Then resolve through the helper, which reuses a match, refuses to create a near
 duplicate, and never creates without approval (except the catch-all):
 
     bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<title>"                    # reuse only
-    bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<title>" --create-approved  # after approval
+    bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<title>" --create-approved --for-issues <n>  # after approval, n >= 2
     bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "Ungrouped"                  # catch-all, no approval
 
 Pass the exact title it reports on the `MILESTONE-TITLE` line to

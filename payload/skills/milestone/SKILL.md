@@ -57,7 +57,7 @@ It prints `MILESTONE <url>` and one `ISSUE <url>` per phase. Relay the milestone
 For one issue that just needs the right milestone (the common case, including the end-of-turn issue review), skip the plan JSON and use the resolver directly. Every issue-filing path shares it, and a PreToolUse gate blocks a `gh issue create` with no `--milestone`:
 
     bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>"                    # reuse only, never creates
-    bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>" --create-approved  # only after the user approves
+    bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<milestone title>" --create-approved --for-issues <n>  # only after the user approves, n >= 2
     bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "Ungrouped"                            # the catch-all, no approval needed
 
 It prints `MILESTONE-EXISTS` or `MILESTONE-CREATED` plus a `MILESTONE-TITLE <title>` line. Pass that exact title to `gh issue create --milestone`, because `gh` matches milestones by name and a case variant is not found. Exit codes tell you what needs a human: `3` an identically named milestone exists but is closed, `4` the title closely resembles an open milestone (attach to that one instead of creating a twin), `5` nothing matched and creating was not approved, `6` the list could not be read, `8` the title is not shaped like a feature name.
