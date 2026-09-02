@@ -4264,6 +4264,19 @@ window is a count rather than a boundary.
   one Mac: the lock belongs outside any checkout and every project doing that class of work has to
   take it.
 
+- **L372. A script that changes its own working directory must capture its own location BEFORE the cd,
+  because a path re-derived from `$0` afterwards is relative to where the script was INVOKED from
+  rather than where it now is, so it resolves for one invocation and silently misses for another.**
+  The failure is PARTIAL, which is what hides it: the script's main job succeeds and only a later
+  step is skipped. Measured 2026-09-02 (overture#3481): `mac/build-install.sh` cds into its own
+  directory on line 10, then sources `"$(dirname "$0")/scripts/lib/build-provenance.sh"` on line 131.
+  Run the way the project's own docs say, from the repo root, that resolves to `mac/mac/scripts/...`
+  and fails. The build succeeded, the bundle was replaced and correctly signed, the app ran, and the
+  only casualty was the provenance record the in-app freshness panel reads, which was simply never
+  written. Capture the directory once at the top, or make it absolute, and cover it with a test that
+  invokes the script the way the documentation says to, since that is the invocation nothing was
+  exercising (L52, L96).
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

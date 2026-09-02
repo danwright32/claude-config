@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 418 lessons.
+LESSONS.md, which is NOT loaded into the session. 419 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -426,6 +426,7 @@ to decide something: the body is where the failure it came from is described.
 - L527. A retry that CHANGES the request on the assumption of one particular cause (stripping an id it guesses collided, dropping a field it guesses was rejected, narrowing a scope) must confirm that cause from the actual error before altering anything
 - L533. A job on a sparse schedule (weekly, monthly) whose only failure remedy is running it again needs an automatic re-attempt within the same period, because an in-process retry measured in seconds cannot outlast a real outage, and a transiently failed run otherwise silently costs the whole schedule interval.
 - L369. A lock that serialises heavy work must be scoped to the RESOURCE it protects, never to the project that created it, because another project on the same machine does the same heavy work and cannot take a lock it has never heard of.
+- L372. A script that changes its own working directory must capture its own location BEFORE the cd, because a path re-derived from `$0` afterwards is relative to where the script was INVOKED from rather than where it now is, so it resolves for one invocation and silently misses for another.
 
 ## Test speed
 
