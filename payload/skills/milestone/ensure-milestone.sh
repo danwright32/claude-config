@@ -42,24 +42,21 @@ if [[ -z "$repo" || -z "$title" || "$repo" == --* ]]; then
 fi
 shift 2
 
-# The one designated holding pen per repo. Most issues are standalone bugs and
-# chores that belong to no feature, and the gate still requires a milestone on every
-# issue, so this exists to be their home. Creating it is not a decision anyone needs
-# to make, so it is exempt from the approval rule below. Without that exemption the
-# friction is what caused the original problem: a session invents a milestone on the
-# spot to satisfy the gate.
-CATCH_ALL="Ungrouped"
-
-# Matched on the normalised title, so a case variant resolves to the same one and
-# never creates a twin. Deliberately an EXACT match: "Ungrouped work and other
-# things" is an ordinary title and still needs approval, or the exemption becomes a
-# way to create anything without asking.
-is_catch_all() {
-  local norm_want norm_catch
-  norm_want="$(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
-  norm_catch="$(printf '%s' "$CATCH_ALL" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
-  [[ "$norm_want" == "$norm_catch" ]]
-}
+# The one designated holding pen per repo, plus the exact-match test for it, both
+# from catch-all.sh. They live there rather than here because milestone-candidates.sh
+# needs the same name: a second copy would let the two scripts look in differently
+# spelled pens while both read as correct, and the reader would report "no siblings"
+# with dozens of them sitting in the pen this script writes to (L41).
+#
+# Resolved from this script's own location at run time, so the same copy is right on
+# both Macs. A missing file is reported as missing rather than defaulted around.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "$HERE/catch-all.sh" ]]; then
+  echo "Cannot resolve the holding pen's name: $HERE/catch-all.sh is missing. Refusing to guess it." >&2
+  exit 6
+fi
+# shellcheck source=catch-all.sh
+source "$HERE/catch-all.sh"
 
 create_approved=""
 description=""
@@ -204,7 +201,7 @@ case "$kind" in
       # The catch-all needs no approval, and it is described here rather than by the
       # caller so every repo's holding pen reads the same.
       create_approved=1
-      [[ -z "$description" ]] && description="Standalone bugs and chores that belong to no feature. Not a feature milestone: it is the home for work that still needs a milestone but has nothing to ship alongside, so it never completes."
+      [[ -z "$description" ]] && description="$CATCH_ALL_DESCRIPTION"
       echo "CATCH-ALL-MILESTONE creating the standalone holding pen \"$CATCH_ALL\" in $repo, which needs no approval."
     elif [[ -z "$create_approved" ]]; then
       echo "NO-MATCH \"$title\" matches no open milestone in $repo."

@@ -82,8 +82,27 @@ accessibility fix that is also tech debt). Those are labels. See below.
 
 ### The catch-all: `Ungrouped`
 
-Most issues are standalone bugs and chores belonging to no feature. They still need
+Some issues are standalone bugs and chores belonging to no feature. They still need
 a milestone, so every repo has one holding pen, titled `Ungrouped`.
+
+**It is a holding pen, not a default.** On 2026-09-02 Dan pointed out that the
+forward looking sweep was reaching for it almost every time. The measurement:
+
+| Repo | Issues in `Ungrouped` | Still open |
+|---|---|---|
+| claude-config | 98 | 37 |
+| bidspoke | 157 | 82 |
+| new-agent-onboarding | 102 | 0 |
+
+And the open ones were not standalone. In claude-config, roughly ten were the
+subagent findings spool, ten were test suite reliability, four were the lessons
+index. Three causes, all of them in the instruction rather than in anyone's
+judgement: it said "most of these ideas are standalone fixes", which primed the
+answer before the backlog had been looked at; it banned opening a milestone
+outright; and it only ever compared an idea against milestone **titles**, so ten
+siblings could already be in the pen and the eleventh still read as a one off.
+`milestone-candidates.sh` closes the third one, and the rule below closes the
+other two.
 
 It is exempt from the approval rule: `ensure-milestone.sh` creates it without asking,
 because choosing it is not a decision anyone needs to make. Requiring approval there
@@ -96,26 +115,54 @@ feature.
 
 ### Who creates a milestone
 
-**Creating a milestone is a planning decision.** It happens in `/plan-council`,
-`/plan-lite` or `/milestone`, where a feature is being planned and its phases become
-the issues. Nowhere else.
+Two different things get called "creating a milestone", and they have different
+rules.
 
-Every other path that files an issue (the end of turn review, `/next-issue`,
-`/production-ready`, anything typed mid flow) has exactly two choices and no third:
+**Planning a feature** happens in `/plan-council`, `/plan-lite` or `/milestone`,
+where a feature is designed and its phases become the issues. That is still the only
+place a milestone is opened for work that does not exist yet.
 
-1. An existing open milestone, when the work ships with that feature.
-2. `Ungrouped`, the catch-all.
+**Grouping a cluster that is already in the backlog** is the other one, and every
+path that files an issue (the end of turn review, `/next-issue`,
+`/production-ready`, anything typed mid flow) may now do it. Three choices, in this
+order:
 
-It never makes sense to open a milestone for a one-off issue. A milestone with one
-issue in it is not a feature, it is a label with extra steps. If the resolver exits
-5, that means the title matches nothing: the answer is `Ungrouped`, not a request to
-approve a new milestone.
+1. **An existing open milestone**, when the work ships with that feature. Always
+   preferred. Judge it on the milestone's description as well as its title: a
+   feature's name often does not mention the subject.
+2. **A new milestone**, when **2 or more issues would go into it at once.** Count
+   the new issues being filed together plus the issues already in `Ungrouped` that
+   would be moved into it. Requires Dan's approval, which for the end of turn review
+   is his selecting it in the picker.
+3. **`Ungrouped`**, for a genuinely standalone bug or chore with no siblings and no
+   feature.
+
+**One issue with no siblings never justifies a new milestone.** A milestone holding
+a single issue is not a feature, it is a label with extra steps, and inventing one
+on the spot to satisfy the gate is what produced the six essay titled milestones
+above. That is the whole reason the threshold exists, and it is why the threshold is
+counted in issues rather than left to judgement.
+
+If the resolver exits 5, the title matches nothing and creating was not approved:
+either the cluster is real and needs approval first, or the answer is `Ungrouped`.
 
 ### Resolving a milestone
 
-Always prefer an existing open milestone. Resolve through the helper, which reuses a
-match, refuses to create a near duplicate, and never creates without approval
-(except the catch-all):
+Before choosing, read what the repo already holds. `milestone-candidates.sh` prints
+the open milestones **with their descriptions**, and the open issues already in the
+holding pen that share words with the idea, ranked, with a `SIBLING-COUNT` that is
+what the "2 or more" rule counts:
+
+    bash ~/.claude/skills/milestone/milestone-candidates.sh "<owner/name>" --like "<the idea's title>"
+
+It only ever reads. It deliberately does **not** say whether a new milestone is
+warranted: the caller usually holds several new ideas at once and the helper only
+ever sees one of them, so a verdict there would be a claim it cannot measure. Exit 6
+means it could not read the repo, which is a different answer from finding nothing,
+and it never prints a count in that case.
+
+Then resolve through the helper, which reuses a match, refuses to create a near
+duplicate, and never creates without approval (except the catch-all):
 
     bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<title>"                    # reuse only
     bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<title>" --create-approved  # after approval

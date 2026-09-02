@@ -55,10 +55,14 @@ needs=(
   "priority-p0"                     # the scale is spelled out, not assumed
   "priority-p2"
   "priority-p4"
-  "[p2, Queue windowing]"           # the level and milestone are SHOWN in the picker
-  "Ungrouped"                       # the catch-all is offered
-  "NEVER create a new milestone"    # ad hoc filing does not open milestones
-  "plan-council"                    # where creating one actually belongs
+  "[p2, tech-debt, NEW Backlog grouping, moves #241 #242]"  # a new milestone is SHOWN as new, with what it moves
+  "Ungrouped"                       # the catch-all is still offered
+  "milestone-candidates.sh"         # the backlog is READ before a milestone is chosen
+  "SIBLING-COUNT"                   # and the sibling count is what the 2 or more rule counts
+  "2 OR MORE issues would go into it at once"  # the bar for opening a new milestone
+  "--create-approved"               # which only happens after Dan selects it
+  "gh issue edit"                   # and the siblings actually get moved
+  "plan-council"                    # planning a feature still belongs there
   "ensure-priority-labels.sh"       # how to make the labels exist
   "severity:*"                      # the retired scale is named as retired
   "NAMING.md"                       # points at the shared rule
@@ -71,6 +75,30 @@ needs=(
   "ISSUE REVIEW"                             # the banner it has to open with
   "SECOND PASS"                              # the reflection folds in here
 )
+# --- and the wording it must NOT carry any more ---------------------------
+# The rule that ad hoc filing may never open a milestone was REVERSED on 2026-09-02,
+# after Dan opened his list and found Ungrouped holding 98 issues in this repo, 157
+# in bidspoke and 102 in new-agent-onboarding, with obvious clusters inside them. The
+# assertion that used to guard the old rule is deleted rather than adjusted: its whole
+# content was the decision being reversed, so keeping it in any form would leave a
+# test defending the behaviour that was removed (L252).
+#
+# These two are the wording that CAUSED the pile-up. The ban itself, and the sentence
+# that primed every idea toward the holding pen before it had even been looked at.
+forbidden=(
+  "NEVER create a new milestone"
+  "Most of these ideas are standalone fixes"
+  "there is no third option"
+)
+for gone in "${forbidden[@]}"; do
+  if [[ "$instruction" != *"$gone"* ]]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    echo "FAIL: the instruction should no longer carry '$gone'"
+  fi
+done
+
 for want in "${needs[@]}"; do
   if [[ "$instruction" == *"$want"* ]]; then
     pass=$((pass + 1))
