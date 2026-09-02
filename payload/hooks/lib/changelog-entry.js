@@ -219,10 +219,16 @@ function repoScope(registry, slug, today) {
     return { inScope: false, why: slug + ' is not listed in the /pennie-dev-update repos.json' };
   }
   if (!found.changelogFrom) {
+    // Listed with no start date is an UNFINISHED SETUP, not an opt out. Standing down here was a
+    // bare exit 0, indistinguishable from a working gate on a repo whose start date has not
+    // arrived (L98). The PET entry lost this field twice on 2026-08-31 to sessions that
+    // regenerated repos.json instead of read-modify-writing it, and nothing reported either loss.
+    // The repos nobody gated are the ones NOT listed at all, which is the branch above.
     return {
       inScope: false,
-      why: slug + ' is listed but carries no changelogFrom date, so the changelog labels are not '
-        + 'yet required there',
+      missingFrom: true,
+      why: slug + ' is listed in the registry but carries no changelogFrom date at all. A listed '
+        + 'repo with no start date is an unfinished setup, not a repo nobody gated',
     };
   }
 

@@ -175,11 +175,30 @@ if denied "$(run_hook "$dir" "$MERGE 7 --squash")"; then
 else pass; fi
 rm -rf "$dir"
 
-# A repo listed but with no start date has not adopted the rule yet, and that
-# includes the pull request that would add the date.
+# A repo LISTED with no changelogFrom is an unfinished setup, not an opt out, and it refuses with
+# its own message (claude-config#252). It used to take the bare exit 0, which is indistinguishable
+# from a working gate on a repo whose start date has not arrived yet (L98, L11).
+#
+# Not hypothetical: the PET entry lost changelogFrom twice on 2026-08-31 to sessions that
+# regenerated repos.json instead of read-modify-writing it, and nothing reported it either time.
+# While it was missing, PET merges carried no changelog record and /pennie-dev-update silently
+# degraded to reading pull request titles.
+#
+# The remedy stays reachable, which is the condition an exemption would otherwise be needed for
+# (L362): repos.json lives in this repo, whose own slug is not in the registry, so the change that
+# adds the date is not itself gated. ALLOW_UNTAGGED_MERGE=1 remains for anything else.
 dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY_NO_DATE")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out"; then pass; else fail "a repo listed without a changelogFrom date silently disabled the gate: $out"; fi
+if says "$out" "changelogFrom"; then pass; else fail "the refusal does not name the field to fix: $out"; fi
+if says "$out" "acme/widget"; then pass; else fail "the refusal does not name the repo it is about: $out"; fi
+rm -rf "$dir"
+
+# The genuinely ungated repo is the one NOT listed at all, and it must still merge freely in the
+# same run, or the fix above has simply blocked everything (L159).
+dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY_OTHER")
 if denied "$(run_hook "$dir" "$MERGE 7 --squash")"; then
-  fail "a repo listed without a changelogFrom date was gated"
+  fail "an unlisted repo was gated by the missing-changelogFrom refusal"
 else pass; fi
 rm -rf "$dir"
 

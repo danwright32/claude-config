@@ -100,6 +100,16 @@ fi
 # on a typo and say nothing, which is the one state this design cannot afford:
 # indistinguishable from a gate that is working (L98). The remedy is fixing the
 # registry, not labelling the pull request, so it says that instead.
+# A listed repo with NO changelogFrom is an unfinished setup, not an opt out, and it says so with
+# its own message rather than taking the bare exit 0 below (claude-config#252). The repos that are
+# genuinely ungated are the ones not listed at all, which is already how the registry's own note
+# describes it, and that branch is untouched.
+missing_from=$(printf '%s' "$scope" | jq -r '.missingFrom // false')
+if [ "$missing_from" = "true" ]; then
+  why=$(printf '%s' "$scope" | jq -r '.why // ""')
+  deny "Cannot tell whether this repo needs a changelog record: $why. Add changelogFrom to its entry in $REGISTRY, or remove the entry if the repo is genuinely not gated. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+fi
+
 bad_date=$(printf '%s' "$scope" | jq -r '.badDate // false')
 if [ "$bad_date" = "true" ]; then
   why=$(printf '%s' "$scope" | jq -r '.why // ""')
