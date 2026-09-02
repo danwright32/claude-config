@@ -226,6 +226,45 @@ check "#259 a floor destination is still refused when the derivation reads nothi
   "$(refused_to_rewrite 'rtk playwright test')"
 rtk_help_fixture
 
+# ---- rtk's integrity baseline still describes the hook beside it (claude-config#259 follow-up) ----
+# rtk keeps a sha256 of this hook in .rtk-hook.sha256 and REFUSES TO RUN AT ALL when the two
+# disagree: no rewriting, no token saving, and a tamper banner on every command. #259 edited the
+# hook deliberately, to stop test runs being routed through a summariser that reported
+# "PASS (0) FAIL (3)" for a run with 4356 passes, and the baseline was left describing the version
+# before that edit. Nothing here noticed; the first sign was the banner.
+#
+# So the pair is checked HERE, on every run, rather than only when rtk happens to be invoked. That
+# is what makes re-baselining safe: the baseline is not a thing somebody remembers to update, it
+# is a thing that goes red in the same suite as the hook it describes (L225: the invariant between
+# two stored values is checked by something that reads the VALUES).
+RTK_HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rtk-rewrite.sh"
+RTK_BASELINE="$(dirname "$RTK_HOOK")/.rtk-hook.sha256"
+if [ ! -f "$RTK_BASELINE" ]; then
+  # Absent is its own answer, not agreement. Without a baseline rtk warns and establishes one, so
+  # this is a state worth naming rather than passing over (L98).
+  check "the rtk integrity baseline is present" "no .rtk-hook.sha256 beside the hook, so nothing records what rtk expects"
+else
+  rtk_recorded="$(awk 'NR==1{print $1}' "$RTK_BASELINE" 2>/dev/null)"
+  rtk_actual="$(shasum -a 256 "$RTK_HOOK" 2>/dev/null | awk '{print $1}')"
+  # Both halves read, and both required to be non-empty: two empty strings agree perfectly, and a
+  # comparison that passes by reading nothing is the failure this exists to catch (L98, L178).
+  if [ -z "$rtk_recorded" ] || [ -z "$rtk_actual" ]; then
+    check "the rtk integrity baseline and the hook can both be read" \
+      "recorded=[$rtk_recorded] actual=[$rtk_actual]"
+  elif [ "$rtk_recorded" = "$rtk_actual" ]; then
+    check "the rtk integrity baseline matches the hook beside it" ok
+  else
+    check "the rtk integrity baseline matches the hook beside it" \
+      "recorded $rtk_recorded but the hook hashes to $rtk_actual, so rtk will refuse to run at all and print a tampering banner on every command. If the hook change was deliberate, re-record it: shasum -a 256 rtk-rewrite.sh | sed 's| .*| rtk-rewrite.sh|' > .rtk-hook.sha256"
+  fi
+fi
+# The comparison is watched saying NO before it is believed, against a hash built here, or a check
+# that has only ever agreed is not yet a check (L1).
+rtk_probe_bad="0000000000000000000000000000000000000000000000000000000000000000"
+[ "$rtk_probe_bad" = "${rtk_actual:-x}" ] \
+  && check "the baseline comparison would notice a hash that does not match" "it read a deliberately wrong hash as matching" \
+  || check "the baseline comparison would notice a hash that does not match" ok
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
