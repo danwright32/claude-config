@@ -104,6 +104,16 @@ cat >"$TMP/issues.json" <<'JSON'
 ]
 JSON
 
+# Open issues that are NOT in the holding pen, which is where a duplicate actually
+# hides. #900 is the same work as the idea below, sitting in a real milestone.
+cat >"$TMP/issues-all.json" <<'JSON'
+[
+  { "number": 241, "title": "Give the subagent findings spool a way to drain", "milestone": { "title": "Ungrouped" } },
+  { "number": 900, "title": "Mark and expire the stale findings in the subagent spool", "milestone": { "title": "One store, one truth" } },
+  { "number": 901, "title": "Rewrite the onboarding tour copy", "milestone": { "title": "Onboarding revamp" } }
+]
+JSON
+
 printf '[]' >"$TMP/issues-empty.json"
 printf 'not json at all' >"$TMP/garbage.json"
 
@@ -195,6 +205,25 @@ check "a single shared word is reported as a weak match, not a sibling" \
   "WEAK-MATCH 1 #243" "$normal"
 check_not "a weak match is not also printed as a sibling" "SIBLING 1 #243" "$normal"
 check "the weak matches are counted separately" "WEAK-COUNT 1" "$normal"
+
+# --- a duplicate hiding OUTSIDE the holding pen ---------------------------
+# The helper answered "what should this be grouped with" and not "does this already
+# exist", and the second question is the one that stops a duplicate being filed. It
+# read only the pen, so an issue for the same work sitting in a real milestone was
+# invisible however the overlap was scored. That is not hypothetical: on 2026-09-02
+# it was run before filing, reported no siblings and seven weak matches, and the
+# duplicate (#226, in another milestone) was in neither list. Filed as #264 and
+# closed the same hour.
+run acme/widgets --like "Mark or expire stale findings in the subagent spool"
+check "an issue for the same work in another milestone is reported" "DUPLICATE-RISK" "$OUT"
+check "the duplicate names its number" "#900" "$OUT"
+check "and names the milestone it is already in, so the reader can go and look" \
+  "One store, one truth" "$OUT"
+check "the duplicate count is stated separately from the sibling count" "DUPLICATE-COUNT 1" "$OUT"
+check_not "an unrelated issue elsewhere is not called a duplicate" "#901" "$OUT"
+# A pen issue is a SIBLING, never also a duplicate risk: one number, one meaning.
+dup_lines="$(printf '%s\n' "$OUT" | grep '^DUPLICATE-RISK' || true)"
+check_not "a holding pen issue is not double counted as a duplicate" "#241" "$dup_lines"
 
 # Tracker vocabulary is generic in EVERY repo, so two of it is still a coincidence.
 # Measured 2026-09-02 on this repo: an idea titled "Group the open issues already
