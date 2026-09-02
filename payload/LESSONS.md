@@ -3212,6 +3212,17 @@ window is a count rather than a boundary.
   place's 0.153. Dan read it off the screen as first place looking bronze and third place looking
   gold, which is exactly what the numbers say. The size ordering, 28 then 26 then 22px, still
   descended, so the row asserted one hierarchy by size and the opposite by colour)
+- **L546. A screen that no navigation links to works perfectly for whoever built it, because
+  they have the address, so it is invisible to every test, review and build and is found only by
+  somebody hunting for it under pressure.** Enumerate the routes and assert each is reachable
+  from the navigation source, exempting detail routes reached from a row by name; judging
+  reachability by any link anywhere in the tree instead satisfies the check with a stray link on
+  an unrelated page and measures nothing.
+  (slate#1751, slate#1750, slate#1742, 2026-09-02: the PII erasure worklist, the agent pool
+  drain, booking outcomes and booking reasons were reachable only through /admin/settings, whose
+  own only entry point was a card labelled "Alert settings" because #1297 moved the business
+  hours onto that page and renamed the page but not the door. Slate was offering times on Labor
+  Day and the person who needed to close the date could not find the screen that does it)
 
 ## External systems
 

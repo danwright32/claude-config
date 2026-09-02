@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 415 lessons.
+LESSONS.md, which is NOT loaded into the session. 416 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -315,6 +315,7 @@ to decide something: the body is where the failure it came from is described.
 - L287. A notice computed over a WIDER scope than the screen it is placed on inherits that screen's scope from its position, so a sentence that is accurate about the whole collection reads as a false claim about the one record on view. State the scope inside the message rather than trusting the reader to know where its numbers came from.
 - L330. An acknowledgement a person gives must be consulted by EVERY rule that raises the question it answers, not only the one whose control recorded it, because a second rule computing that question from raw state goes on asking after it has been answered, and no action is then left that could ever satisfy it.
 - L545. A set of values whose meaning is their ORDER relative to each other (medal colours, severity tints, tier sizes, ranked weights) is broken by changing ONE member for an unrelated reason such as a contrast fix, because every member stays individually valid and nothing compares them, so assert the ordering itself rather than each value.
+- L546. A screen that no navigation links to works perfectly for whoever built it, because they have the address, so it is invisible to every test, review and build and is found only by somebody hunting for it under pressure.
 
 ## External systems
 
