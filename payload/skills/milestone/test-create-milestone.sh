@@ -329,6 +329,11 @@ out="$(DRY_RUN=1 run "$TMP/existing.json" "acme/widgets" "$TMP/plan-nopriority.j
 check_eq "a dry run of a plan with no priority also exits 9" "9" "$rc"
 
 # --- zero issues is allowed (milestone only) ---
+# The reason, which was not written down and had to be rediscovered: SKILL.md
+# documents an empty "issues" array as the way to create a container before its
+# issues exist. It matters because ensure-milestone.sh now refuses a milestone for a
+# single issue, and refusing zero as well would have broken this documented flow.
+# The threshold therefore refuses exactly ONE, and an empty create announces itself.
 echo '{ "title": "Just a milestone", "issues": [] }' >"$TMP/noissues.json"
 out_noissues="$(DRY_RUN=1 run "$TMP/none.json" "acme/widgets" "$TMP/noissues.json")"; rc=$?
 check_eq "zero issues still succeeds" "0" "$rc"

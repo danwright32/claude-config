@@ -143,6 +143,15 @@ on the spot to satisfy the gate is what produced the six essay titled milestones
 above. That is the whole reason the threshold exists, and it is why the threshold is
 counted in issues rather than left to judgement.
 
+**And it is enforced, not merely written here.** `ensure-milestone.sh` refuses to
+create anything but the catch-all without `--for-issues <n>`, and refuses a stated
+count of 1. The planning paths pass their plan's own issue count, so the same rule
+holds there. The count is stated by the caller rather than verified, because the
+issues usually do not exist yet; what it removes is opening a milestone by momentum,
+since `--create-approved` is no longer enough on its own. A deliberately empty
+milestone (`--for-issues 0`, which `/milestone` uses to create a container before
+its issues exist) is allowed and announces itself.
+
 If the resolver exits 5, the title matches nothing and creating was not approved:
 either the cluster is real and needs approval first, or the answer is `Ungrouped`.
 
@@ -291,6 +300,7 @@ removing a label strips it from every issue that carries it, so that is Dan's ca
 | An issue has at least one category | the same gate | `SKIP_CATEGORY_CHECK=1 <command>` |
 | A plan's issues carry both | `create-milestone.sh`, which the gates cannot see into | none, fix the plan JSON |
 | A new milestone title names a feature | `ensure-milestone.sh`, on the create path only | `ALLOW_ANY_MILESTONE_TITLE=1 <command>` |
+| A new milestone is for 2 or more issues | the same script, which refuses to create without `--for-issues <n>` and refuses a stated count of 1 | `ALLOW_SINGLE_ISSUE_MILESTONE=1 <command>` |
 
 Every override is visible in the command itself, so it cannot happen by accident or
 go unnoticed in the transcript. Explain to Dan why you are using one, first. An

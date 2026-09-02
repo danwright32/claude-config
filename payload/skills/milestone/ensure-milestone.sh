@@ -12,6 +12,9 @@
 #   --create-approved        permit creating the milestone when nothing matches.
 #                            Without it this script NEVER creates, so the decision
 #                            to open a new milestone cannot happen by momentum.
+#   --for-issues <n>         how many issues will go into it. REQUIRED to create
+#                            anything but the catch-all, and refused below 2. The
+#                            count is stated by the caller, not verified here.
 #   --description <text>     milestone description (only used when creating)
 #   --due <iso8601>          milestone due date (only used when creating)
 #
@@ -31,6 +34,8 @@
 #   4  a near duplicate open milestone exists
 #   5  nothing matched and creating was not approved
 #   6  the milestone list could not be read (fails loud, never creates blind)
+#   8  a new title is not shaped like a feature name
+#  10  a new milestone was asked for without a count, or for fewer than 2 issues
 
 set -uo pipefail
 
@@ -59,16 +64,34 @@ fi
 source "$HERE/catch-all.sh"
 
 create_approved=""
+for_issues=""
+for_issues_given=""
 description=""
 due_on=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --create-approved) create_approved=1; shift ;;
+    # The flag being GIVEN is tracked separately from its value, because
+    # `--for-issues "$count"` with an unset variable leaves the same empty string as
+    # not passing the flag at all. Without this the caller is told they forgot to
+    # state a count, which sends them to think about the threshold when the real
+    # fault is an empty variable at the call site (L11).
+    --for-issues) for_issues="${2:-}"; for_issues_given=1; shift 2 ;;
     --description) description="${2:-}"; shift 2 ;;
     --due) due_on="${2:-}"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+# A count that is not a plain positive integer is a USAGE error, never quietly read
+# as zero or as good enough. A caller passing an empty variable would otherwise be
+# refused with a message about the threshold, which points at the wrong thing (L11).
+# Checked here, before anything branches on it, and NOT waived by the threshold
+# override below: one override must never quietly waive two rules.
+if [[ -n "$for_issues_given" && ! "$for_issues" =~ ^[0-9]+$ ]]; then
+  echo "Usage: --for-issues takes a plain count of how many issues will go into this milestone, got \"$for_issues\"." >&2
+  exit 2
+fi
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "Cannot resolve a milestone: gh is not on PATH. Refusing to file an issue without one." >&2
@@ -220,6 +243,54 @@ case "$kind" in
     exit 6
     ;;
 esac
+
+# --- a NEW milestone is for 2 OR MORE issues -------------------------------
+# A milestone holding a single issue is not a feature, it is a label with extra
+# steps. That rule used to live only in the instruction text, which is to say it was
+# a hope (L27): nothing stopped a session opening one for a lone issue, and doing so
+# is what produced the essay titled milestones this file exists to prevent.
+#
+# The count is STATED, not verified, and the comment says so plainly because a
+# checked number and an asserted one are different things. The caller usually holds
+# issues that do not exist yet, so nothing here could confirm it. What the flag
+# removes is creation by MOMENTUM: passing --create-approved is no longer enough on
+# its own, and a caller now has to say how many issues this milestone is for.
+#
+# Reached only on the approved NONE path, so it never touches a reuse. The catch-all
+# has already set create_approved itself above and is exempt on purpose: it is a
+# holding pen rather than a feature, and applying the threshold to it would make the
+# pen uncreatable and leave every standalone issue with nowhere to go, which is the
+# deadlock a too broad rule produces (L362).
+if [[ -n "$create_approved" ]] && ! is_catch_all "$title"; then
+  if [[ -z "$for_issues" ]]; then
+    echo "NO-ISSUE-COUNT creating a milestone needs --for-issues <n>, saying how many issues will go into it."
+    echo "A new milestone is for 2 or more issues. Count the issues being filed together plus any existing ones you would move into it."
+    echo "One issue with no siblings is not a feature: it goes in the catch-all \"$CATCH_ALL\" instead."
+    echo "  bash ~/.claude/skills/milestone/ensure-milestone.sh \"$repo\" \"$CATCH_ALL\""
+    echo "Read what the repo already holds first, so the count is real rather than guessed:"
+    echo "  bash ~/.claude/skills/milestone/milestone-candidates.sh \"$repo\" --like \"<the issue title>\""
+    exit 10
+  fi
+  # ZERO is a different act from ONE, and only one of them is the failure mode.
+  # `milestone/SKILL.md` documents an empty "issues" array as a way to create the
+  # container deliberately, before its issues exist, so refusing 0 would break a
+  # documented flow. It is announced rather than passed over, so an empty milestone
+  # can never appear without something having said so.
+  if [[ "$for_issues" -eq 0 ]]; then
+    echo "EMPTY-MILESTONE \"$title\" is being created with no issues yet, which is only right when its issues are coming next."
+  fi
+  if [[ "$for_issues" -eq 1 ]]; then
+    if [[ -z "${ALLOW_SINGLE_ISSUE_MILESTONE:-}" ]]; then
+      echo "SINGLE-ISSUE-MILESTONE \"$title\" would hold $for_issues issue, and a new milestone is for 2 or more."
+      echo "A milestone with one issue in it is not a feature, it is a label with extra steps."
+      echo "Put it in the catch-all \"$CATCH_ALL\" instead, or find its siblings first:"
+      echo "  bash ~/.claude/skills/milestone/milestone-candidates.sh \"$repo\" --like \"<the issue title>\""
+      echo "If a single issue milestone is genuinely right here, say why first, then re-run with the visible override: ALLOW_SINGLE_ISSUE_MILESTONE=1"
+      exit 10
+    fi
+    echo "SINGLE-ISSUE-MILESTONE-OVERRIDDEN \"$title\" holds $for_issues issue, allowed by ALLOW_SINGLE_ISSUE_MILESTONE."
+  fi
+fi
 
 # --- a NEW title names the feature, not a narrative sentence ---------------
 # A milestone is the overarching feature, and its issues are what has to be finished

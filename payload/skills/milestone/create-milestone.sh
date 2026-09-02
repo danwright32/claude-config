@@ -137,7 +137,11 @@ if [[ -n "$missing_priority" || -n "$missing_category" ]]; then
 fi
 
 # --- resolve the milestone through the shared helper ----------------------
-ensure_args=("$repo" "$title" --create-approved --description "$description")
+# The plan's own issue count is passed through, so the "2 or more issues" threshold
+# is enforced on this path too rather than only on the ad hoc filing paths. A plan
+# with a single phase is a label with extra steps just as much as a single ad hoc
+# issue is, so it gets the same refusal and the same visible override.
+ensure_args=("$repo" "$title" --create-approved --for-issues "$n_issues" --description "$description")
 [[ -n "$due_on" ]] && ensure_args+=(--due "$due_on")
 
 ms_out="$(bash "$ENSURE" "${ensure_args[@]}" 2>&1)"

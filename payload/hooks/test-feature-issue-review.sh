@@ -61,6 +61,7 @@ needs=(
   "SIBLING-COUNT"                   # and the sibling count is what the 2 or more rule counts
   "2 OR MORE issues would go into it at once"  # the bar for opening a new milestone
   "--create-approved"               # which only happens after Dan selects it
+  "--for-issues <n>"                # and the cluster size is stated, because the script now enforces it
   "gh issue edit"                   # and the siblings actually get moved
   "plan-council"                    # planning a feature still belongs there
   "ensure-priority-labels.sh"       # how to make the labels exist

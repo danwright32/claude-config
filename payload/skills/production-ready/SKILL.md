@@ -23,7 +23,7 @@ Take a quick read of the repo (CLAUDE.md, manifest) so you can confirm the proje
 Call the **Workflow** tool with:
 
     {
-      scriptPath: "__CLAUDE_HOME__/skills/production-ready/production-audit.workflow.js",
+      scriptPath: "/Users/danhankins-wright/.claude/skills/production-ready/production-audit.workflow.js",
       args: {
         projectDir: "<absolute path to the repo>",
         repo: "<owner/name>",
@@ -59,14 +59,17 @@ Offer, via **AskUserQuestion**, to file the backlog as GitHub issues in the audi
 
    The scale and the rest of the rules live in `~/.claude/skills/milestone/NAMING.md`.
 
-2. **Resolve the milestone BEFORE filing anything.** Every issue belongs to a milestone, and a gate blocks any `gh issue create` without one. **Do not create a milestone here.** A new milestone is a planning decision that belongs to `/plan-council`, `/plan-lite` or `/milestone`; audit findings are standalone fixes, not one feature shipping together. Each finding gets either an existing open milestone (when it clearly belongs to that feature) or the repo's catch-all `Ungrouped`, which needs no approval. The full rule is in `~/.claude/skills/milestone/NAMING.md`. Read the open milestones so the choice is real:
+2. **Resolve the milestone BEFORE filing anything.** Every issue belongs to a milestone, and a gate blocks any `gh issue create` without one. **The rule for which milestone lives in `~/.claude/skills/milestone/NAMING.md`, and it is not restated here.** It used to be, and the copy went stale: this skill said a milestone may never be opened from an audit while the file it cited had already been changed to allow it, so whoever read the skill got one rule and whoever read the file got the other (2026-09-02). Read NAMING.md and follow it. In short, three choices in this order: an existing open milestone when the finding ships with that feature, a NEW milestone when 2 or more findings would go into it at once (which an audit sweep produces often, since it reports clusters), or the catch-all `Ungrouped`. A new one needs the user's approval and is enforced by the helper, which refuses to create without `--for-issues <n>` and refuses a count of 1.
 
-       gh api "repos/<owner>/<name>/milestones?state=open&per_page=100" --jq '.[] | "#\(.number) \(.title)"'
+   Read what the repo already holds first, so the choice is made against the backlog rather than against milestone titles alone. This prints the open milestones with their descriptions and any findings already sitting in the catch-all that share words with this one:
+
+       bash ~/.claude/skills/milestone/milestone-candidates.sh "<owner/name>" --like "<the finding's title>"
 
    Then resolve it through the shared helper, which reuses a match and refuses to create a near duplicate:
 
        bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<existing milestone title>"   # reuse only
        bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "Ungrouped"                    # the catch-all, no approval
+       bash ~/.claude/skills/milestone/ensure-milestone.sh "<owner/name>" "<new feature name>" --create-approved --for-issues <n>   # after approval, n >= 2
 
    Use the exact title it reports on the `MILESTONE-TITLE` line: `gh` matches milestones by name, so a case variant will not be found.
 

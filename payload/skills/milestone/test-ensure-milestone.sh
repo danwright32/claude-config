@@ -108,17 +108,17 @@ check "punctuation variant reuses number 3" "MILESTONE-EXISTS 3" "$out"
 # exact title, not the variant that was asked for, or the issue create fails.
 out="$(ensure acme/widgets "onboarding revamp")"
 check "reuse reports the milestone's real title" "MILESTONE-TITLE Onboarding revamp" "$out"
-out="$(ensure acme/widgets "Search relevance" --create-approved)"
+out="$(ensure acme/widgets "Search relevance" --create-approved --for-issues 2)"
 check "create reports the milestone's real title" "MILESTONE-TITLE Search relevance" "$out"
 
 # --- 3. a near duplicate stops and asks instead of creating a twin ---
-out="$(ensure acme/widgets "Onboarding revamp v2" --create-approved)"; rc=$?
+out="$(ensure acme/widgets "Onboarding revamp v2" --create-approved --for-issues 2)"; rc=$?
 check_eq "near duplicate exits 4" "4" "$rc"
 check "near duplicate is named as such" "NEAR-DUPLICATE" "$out"
 check "near duplicate names the candidate" "Onboarding revamp" "$out"
 check_eq "near duplicate creates nothing even when approved" "0" "$(created_count)"
 
-out="$(ensure acme/widgets "Onboarding" --create-approved)"; rc=$?
+out="$(ensure acme/widgets "Onboarding" --create-approved --for-issues 2)"; rc=$?
 check_eq "substring of an existing title exits 4" "4" "$rc"
 check "substring case is a near duplicate" "NEAR-DUPLICATE" "$out"
 
@@ -132,23 +132,23 @@ check_not "no match does not list closed milestones as options" "Legacy cleanup"
 check_eq "no match creates nothing" "0" "$(created_count)"
 
 # --- 5. with approval, an unrelated title is created ---
-out="$(ensure acme/widgets "Search relevance" --create-approved)"; rc=$?
+out="$(ensure acme/widgets "Search relevance" --create-approved --for-issues 2)"; rc=$?
 check_eq "approved create exits 0" "0" "$rc"
 check "approved create reports the new milestone" "MILESTONE-CREATED 9 Search relevance" "$out"
 check_eq "approved create makes exactly one write call" "1" "$(created_count)"
 
-out="$(ensure acme/widgets "Search relevance" --create-approved --description "Better results" --due 2026-09-01T00:00:00Z)"
+out="$(ensure acme/widgets "Search relevance" --create-approved --for-issues 2 --description "Better results" --due 2026-09-01T00:00:00Z)"
 check "description is sent" "description=Better results" "$(cat "$TMP/calls.log")"
 check "due date is sent" "due_on=2026-09-01T00:00:00Z" "$(cat "$TMP/calls.log")"
 
 # --- 6. dry run writes nothing ---
-out="$(DRY_RUN=1 ensure acme/widgets "Search relevance" --create-approved)"; rc=$?
+out="$(DRY_RUN=1 ensure acme/widgets "Search relevance" --create-approved --for-issues 2)"; rc=$?
 check_eq "dry run exits 0" "0" "$rc"
 check "dry run says what it would do" "WOULD-CREATE-MILESTONE" "$out"
 check_eq "dry run creates nothing" "0" "$(created_count)"
 
 # --- 7. a closed milestone with the wanted title is a decision, not a silent reuse ---
-out="$(ensure acme/widgets "Legacy cleanup" --create-approved)"; rc=$?
+out="$(ensure acme/widgets "Legacy cleanup" --create-approved --for-issues 2)"; rc=$?
 check_eq "closed exact match exits 3" "3" "$rc"
 check "closed match is named as such" "CLOSED-MATCH" "$out"
 check_eq "closed match creates nothing" "0" "$(created_count)"
@@ -192,16 +192,16 @@ STUB
 chmod +x "$TMP/bin/gh"
 
 # --- 9. failure paths fail loud and never create ---
-out="$(GH_FAIL=1 ensure acme/widgets "Search relevance" --create-approved)"; rc=$?
+out="$(GH_FAIL=1 ensure acme/widgets "Search relevance" --create-approved --for-issues 2)"; rc=$?
 check_eq "api failure exits 6" "6" "$rc"
 check "api failure explains itself" "could not read" "$(printf '%s' "$out" | tr 'A-Z' 'a-z')"
 check_eq "api failure creates nothing" "0" "$(created_count)"
 
-out="$(echo '[' >"$TMP/bad.json"; GH_FIXTURE="$TMP/bad.json" ensure acme/widgets "Search relevance" --create-approved)"; rc=$?
+out="$(echo '[' >"$TMP/bad.json"; GH_FIXTURE="$TMP/bad.json" ensure acme/widgets "Search relevance" --create-approved --for-issues 2)"; rc=$?
 check_eq "unreadable milestone list exits 6" "6" "$rc"
 check_eq "unreadable list creates nothing" "0" "$(created_count)"
 
-out="$(PATH="/usr/bin:/bin" bash "$SCRIPT" acme/widgets "Search relevance" --create-approved 2>&1)"; rc=$?
+out="$(PATH="/usr/bin:/bin" bash "$SCRIPT" acme/widgets "Search relevance" --create-approved --for-issues 2 2>&1)"; rc=$?
 check_eq "missing gh exits 6" "6" "$rc"
 check "missing gh explains itself" "gh" "$out"
 
@@ -232,7 +232,7 @@ narrative=(
   "One paid contact answer, recorded and reused correctly"
 )
 for t in "${narrative[@]}"; do
-  out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
+  out="$(ensure acme/widgets "$t" --create-approved --for-issues 2)"; rc=$?
   check_eq "narrative title is refused: $t" "8" "$rc"
   check_eq "narrative title creates nothing: $t" "0" "$(created_count)"
 done
@@ -257,20 +257,20 @@ short_but_punctuated=(
   "Ship it."
 )
 for t in "${short_but_punctuated[@]}"; do
-  out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
+  out="$(ensure acme/widgets "$t" --create-approved --for-issues 2)"; rc=$?
   check_eq "punctuation is refused however short the title: $t" "8" "$rc"
   check "the refusal names the punctuation: $t" "reads as a sentence" "$out"
 done
 
 for t in "${isolating[@]}"; do
-  out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
+  out="$(ensure acme/widgets "$t" --create-approved --for-issues 2)"; rc=$?
   check_eq "each rule stands on its own: $t" "8" "$rc"
   check_eq "no creation on: $t" "0" "$(created_count)"
 done
 
 # The refusal has to teach the shape, not just say no, or the next attempt is
 # another guess.
-out="$(ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved)"
+out="$(ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved --for-issues 2)"
 check "the refusal is named" "TITLE-NOT-A-FEATURE" "$out"
 check "the refusal points at the shared rule" "NAMING.md" "$out"
 check "the refusal says the narrative belongs in the description" "description" "$(printf '%s' "$out" | tr 'A-Z' 'a-z')"
@@ -292,7 +292,7 @@ features=(
   "Organisation contact ledger for scouted show venues"
 )
 for t in "${features[@]}"; do
-  out="$(ensure acme/widgets "$t" --create-approved)"; rc=$?
+  out="$(ensure acme/widgets "$t" --create-approved --for-issues 2)"; rc=$?
   check_eq "feature title is accepted: $t" "0" "$rc"
 done
 
@@ -308,12 +308,12 @@ check_eq "reuse creates nothing" "0" "$(created_count)"
 
 # Same lookup with approval to create: it matches, so it never reaches the shape
 # check either.
-out="$(ensure acme/widgets "One store, one truth" --create-approved)"; rc=$?
+out="$(ensure acme/widgets "One store, one truth" --create-approved --for-issues 2)"; rc=$?
 check_eq "reuse with approval still exits 0" "0" "$rc"
 check "reuse with approval still reuses" "MILESTONE-EXISTS 7" "$out"
 
 # --- 11c. the shape rule is checked before anything is written ---
-out="$(DRY_RUN=1 ensure acme/widgets "One paid contact answer, recorded and reused correctly" --create-approved)"; rc=$?
+out="$(DRY_RUN=1 ensure acme/widgets "One paid contact answer, recorded and reused correctly" --create-approved --for-issues 2)"; rc=$?
 check_eq "a dry run of a narrative title is still refused" "8" "$rc"
 check_not "a refused dry run does not claim it would create" "WOULD-CREATE-MILESTONE" "$out"
 
@@ -363,10 +363,92 @@ check "the existing catch-all is reported" "MILESTONE-EXISTS 12" "$out"
 check_eq "reusing the catch-all creates nothing" "0" "$(created_count)"
 
 # --- 11d. the documented override lets a genuine exception through ---
-out="$(ALLOW_ANY_MILESTONE_TITLE=1 ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved)"; rc=$?
+out="$(ALLOW_ANY_MILESTONE_TITLE=1 ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved --for-issues 2)"; rc=$?
 check_eq "the override creates the milestone" "0" "$rc"
 check "the override reports a real creation" "MILESTONE-CREATED" "$out"
 check_eq "the override makes exactly one write call" "1" "$(created_count)"
+
+# --- 12. a NEW milestone has to be for 2 or more issues ---
+# The threshold used to live only in the instruction text, so nothing stopped a
+# session opening a milestone for a single issue, which is a label with extra steps
+# and is exactly what produced the six essay titled milestones. A rule that lives
+# only in a prompt is a hope (L27), so the create path now refuses without a stated
+# count. The count is STATED, not verified: the caller usually holds issues that do
+# not exist yet, so no check here could confirm it. What it removes is creation by
+# momentum, because passing --create-approved is no longer enough on its own.
+
+out="$(ensure acme/widgets "Search relevance" --create-approved)"; rc=$?
+check_eq "creating without a stated issue count is refused" "10" "$rc"
+check "the refusal names the rule" "2 or more" "$out"
+check "the refusal names the flag to use" "--for-issues" "$out"
+check_eq "a refused create writes nothing" "0" "$(created_count)"
+
+# ZERO is deliberately NOT refused. `milestone/SKILL.md` documents an empty "issues"
+# array as the way to create a container before its issues exist, so the threshold
+# refuses exactly ONE, which is the actual failure mode: a lone issue dressed up as a
+# feature. The empty case is announced so it cannot happen silently.
+out="$(ensure acme/widgets "Search relevance" --create-approved --for-issues 0)"; rc=$?
+check_eq "creating an intentionally empty milestone still succeeds" "0" "$rc"
+check "an empty milestone says so, so it cannot pass unnoticed" "EMPTY-MILESTONE" "$out"
+check_eq "creating an empty milestone makes exactly one write call" "1" "$(created_count)"
+
+out="$(ensure acme/widgets "Search relevance" --create-approved --for-issues 1)"; rc=$?
+check_eq "creating for a single issue is refused" "10" "$rc"
+check "the single issue refusal offers the catch-all instead" "Ungrouped" "$out"
+check_eq "a single issue create writes nothing" "0" "$(created_count)"
+
+out="$(ensure acme/widgets "Search relevance" --create-approved --for-issues 2)"; rc=$?
+check_eq "creating for two issues succeeds" "0" "$rc"
+check "creating for two issues reports a real creation" "MILESTONE-CREATED" "$out"
+check_eq "creating for two issues makes exactly one write call" "1" "$(created_count)"
+
+# A count that is not a number must be a usage error, never quietly read as 0 or as
+# good enough: a caller passing an empty variable would otherwise be refused with a
+# message about the threshold, which points at the wrong thing (L11).
+for bad_count in "two" "" "-1" "2.5"; do
+  out="$(ensure acme/widgets "Search relevance" --create-approved --for-issues "$bad_count")"; rc=$?
+  check_eq "--for-issues '$bad_count' is a usage error" "2" "$rc"
+  check_eq "--for-issues '$bad_count' writes nothing" "0" "$(created_count)"
+done
+
+# --- 12a. the exemptions, which have to stay exempt ---
+# The holding pen is not a feature, so the threshold does not apply to it. If it did,
+# the pen could not be created and every standalone issue would have nowhere to go,
+# which is the deadlock an exemption written too narrowly produces (L362).
+out="$(ensure acme/widgets "Ungrouped")"; rc=$?
+check_eq "the catch-all is still created with no stated count" "0" "$rc"
+check "the catch-all still reports itself as the exempt holding pen" "CATCH-ALL-MILESTONE" "$out"
+check_eq "the catch-all still makes exactly one write call" "1" "$(created_count)"
+
+# Reusing an existing milestone is not creating one, so it needs no count. This is
+# the commonest path by far and must not have acquired a new requirement.
+out="$(ensure acme/widgets "Onboarding revamp")"; rc=$?
+check_eq "reusing an open milestone needs no stated count" "0" "$rc"
+check "reusing an open milestone still reports the reuse" "MILESTONE-EXISTS" "$out"
+check_eq "reusing an open milestone writes nothing" "0" "$(created_count)"
+
+# --- 12b. the visible override, for a genuine exception ---
+out="$(ALLOW_SINGLE_ISSUE_MILESTONE=1 ensure acme/widgets "Search relevance" --create-approved --for-issues 1)"; rc=$?
+check_eq "the override allows a single issue milestone" "0" "$rc"
+check "the override says it was overridden, so it cannot pass unnoticed" "OVERRIDDEN" "$out"
+check_eq "the override makes exactly one write call" "1" "$(created_count)"
+
+# The override must not also waive the count being WELL FORMED, or one override
+# quietly waives two rules (each rule keeps its own override).
+out="$(ALLOW_SINGLE_ISSUE_MILESTONE=1 ensure acme/widgets "Search relevance" --create-approved --for-issues nonsense)"; rc=$?
+check_eq "the override does not waive a malformed count" "2" "$rc"
+
+# --- 12c. the threshold is checked BEFORE the title shape ---
+# Both can be wrong at once. Whichever is reported, nothing may be created, because a
+# refusal that still writes is worse than either message being the wrong one.
+out="$(ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved --for-issues 1)"; rc=$?
+check_eq "a create wrong in two ways still writes nothing" "0" "$(created_count)"
+if [[ "$rc" -eq 10 || "$rc" -eq 8 ]]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL: a create that is both single issue and badly titled should be refused (got rc=$rc)"
+fi
 
 echo
 echo "passed: $pass, failed: $fail"
