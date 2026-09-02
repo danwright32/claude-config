@@ -1283,6 +1283,24 @@ window is a count rather than a boundary.
   held constant: this one is about a threshold that is correctly calibrated on a quantity that cannot
   express the failure.
 
+- **L543. A feature whose data is a list of EXCEPTIONS (holidays, overrides, blocked
+  entries, allowlisted cases) ships INERT when that list is empty, and empty is a
+  legitimate domain value meaning no exceptions apply, so nothing can distinguish a
+  correctly quiet feature from one whose data was never entered.** Ship the first real
+  entries in the same change as the mechanism, or make the empty state a refusal
+  somewhere, because the harm lands on exactly the case the feature was built for.
+  Neither L96 nor L65 covers it: there the incomplete list drives a GUARD, and here the
+  mechanism works perfectly and is simply never consulted, so every test of it passes.
+  (slate#1742, found 2026-09-02 five days before the holiday it would have closed: the
+  org closure feature shipped in slate#1363 explicitly naming a holiday shutdown as the
+  case it was for, `business_hours_exceptions` still held zero rows months later, and
+  production was offering 53 bookable times on Labor Day while the incumbent cal.com
+  was closed. The admin surface read "No dates are set. Every day follows the weekly
+  pattern above.", which is the truth and is also indistinguishable from a gap, and the
+  availability canary scored the day healthy because the times really were computable.)
+
+
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -2631,6 +2649,18 @@ window is a count rather than a boundary.
   when it did. The sibling of L121, where a recorded success marker suppresses a later repair: there
   the marker outlives the artifact, here it outlives nothing at all because the work never happened.
 
+- **L544. A value and the flag describing how it was obtained (the load failed, it is stale, it is
+  a built in default) are ONE fact and must be one discriminated value, never two pieces of state
+  beside each other.** Two can disagree about the same reading, and the screen then contradicts
+  itself while each half is correct in isolation. Deriving one from the other's contents is the
+  same trap wearing a disguise: an empty list is a real answer, not evidence that nothing arrived,
+  so a "has anything loaded" test written as "is the list non empty" reports a genuinely empty
+  list as a failed load. (new-agent-onboarding#711 held a trainer list and a trainersFailed flag
+  as separate props, which is what makes the wrong one of two opposite warnings expressible; the
+  same session shipped the emptiness version of it in a checklist re-read and a test caught the
+  screen blaming the network for a trainer who had genuinely been removed)
+
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -2674,6 +2704,22 @@ window is a count rather than a boundary.
   is a REVOKE that is absent, and nobody reviews for a missing line.
   (bidspoke#762: Postgres grants EXECUTE to PUBLIC on every new function, so six security-definer
   functions were callable by anon over the REST API, two of which write and bypass RLS)
+
+- **L541. A REVOKE that is PRESENT can still be ineffective, because revoking from PUBLIC does
+  not remove a grant made DIRECTLY to a role, so a platform's default grants to its own roles
+  survive it untouched.** Name every role in the revoke, and confirm by querying the live
+  privilege ROLE BY ROLE rather than by reading the migration, because the line that looks like
+  the protection is the same line that gives the false assurance. Distinct from L124, which
+  frames the missing evidence as a revoke that is ABSENT: that framing is exactly what makes a
+  present but narrowly scoped revoke read as done.
+  (bidspoke#1101, #1107, 2026-09-02: a new function shipped carrying
+  `REVOKE ALL ON FUNCTION ... FROM PUBLIC` and was still executable by `anon` and
+  `authenticated`, because Supabase's default privileges grant EXECUTE on every new public
+  function to both roles directly. Measured minutes after applying, with
+  `has_function_privilege` per role; the sibling function called two lines away in the same code
+  path was correctly closed, because #762 had already had to revoke all three by name. The
+  function enumerated every watched field path on every workflow with its run counts, and the
+  anon key ships in the client bundle.)
 
 - **L503. An over-broad permission is invisible, because the code never attempts what it is not
   meant to do, while a missing one fails loudly on the first run**, so a least-privilege split
@@ -3151,6 +3197,21 @@ window is a count rather than a boundary.
   rows went on being counted as work he owed. Reading it again cannot help, since every read of
   such a page is another confirmed empty read, and the control that recorded his answer is not
   drawn on the row any more, so there was nothing left to press)
+
+- **L545. A set of values whose meaning is their ORDER relative to each other (medal colours,
+  severity tints, tier sizes, ranked weights) is broken by changing ONE member for an unrelated
+  reason such as a contrast fix, because every member stays individually valid and nothing
+  compares them, so assert the ordering itself rather than each value.** L213 is the neighbouring
+  failure for a PAIR, where the two halves have to be overridden together; this is the N member
+  version, and it is quieter, because what breaks it is a correct accessibility fix applied to
+  exactly one member for a good reason. The tell is a palette or scale whose members are each
+  named for their rank while no test mentions more than one of them at a time. (PET#1232,
+  2026-09-02: Power Rankings first place was gold #D69938 until #879 darkened it to #8D6525 for
+  AA, since the gold measured 2.30:1 on the page background. Nothing touched second or third, so
+  third place at #B08050 was left at luminance 0.252 against first place's 0.151 and second
+  place's 0.153. Dan read it off the screen as first place looking bronze and third place looking
+  gold, which is exactly what the numbers say. The size ordering, 28 then 26 then 22px, still
+  descended, so the row asserted one hierarchy by size and the opposite by colour)
 
 ## External systems
 
@@ -3793,6 +3854,23 @@ window is a count rather than a boundary.
   repository walk that 24 guard suites each recompute per test, 206 tests taking 10.9 of the
   suite's 27 seconds, a `static func` where a `static let` would do. Found by the 2026-08-29 test
   speed audit, combined lesson 30)
+
+- **L542. Two similar rules that DIFFER may each be a recorded decision rather than an
+  inconsistency, and the comment beside one documents only that one, so a change that
+  aligns them can silently delete a product rule while reading as a cleanup. Before making
+  two such rules agree, find the decision record for EACH side, and treat an observed
+  divergence as evidence of a defect only once both records are in hand.**
+  (project-enrollment-tracker#1217, 2026-09-02: two predicates decided a week apart with
+  deliberately different answers at the 1st of the month, board visibility with a strict
+  comparison and commission eligibility with on-or-before. #612 found the difference, read
+  the eligibility comment as documenting THE intended boundary, wrote "generate.js looks
+  like the side that is wrong", and routed the board through the commission one. The
+  evidence it cited as proof of a defect, two reps sitting on the June board while
+  commission ineligible for June, is exactly what the two decisions together prescribe. It
+  cost nothing visible for three months because neither rep had production that month, then
+  a rep termed on the 1st sold that day and $22,107 vanished from a team board. L342 does
+  not cover it: nothing here was being consolidated for convenience, the change believed it
+  was repairing an inconsistency.)
 
 ## Cross-system reliability
 

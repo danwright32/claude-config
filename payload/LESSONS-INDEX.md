@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 410 lessons.
+LESSONS.md, which is NOT loaded into the session. 415 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -120,6 +120,7 @@ to decide something: the body is where the failure it came from is described.
 - L540. A reconciliation that declares everything accounted for by summing named buckets is satisfied by the very defect it hunts, as long as that item lands in the bucket standing for legitimate cases, because the arithmetic balances whatever the labels claim. So every member of an expected absence bucket must carry a measured reason, never membership earned by failing to match the good case.
 - L364. A check deciding whether a machine is clean enough to measure on must judge by what is UNUSUAL for that machine, never by what is running on it, because the always-present load (a sync daemon, a backup agent, an indexer) makes an absolute-quiet rule refuse every measurement anybody ever takes.
 - L367. An alert or threshold on a SUM cannot see one of its components collapsing while another grows to replace it, because the total never moves.
+- L543. A feature whose data is a list of EXCEPTIONS (holidays, overrides, blocked entries, allowlisted cases) ships INERT when that list is empty, and empty is a legitimate domain value meaning no exceptions apply, so nothing can distinguish a correctly quiet feature from one whose data was never entered.
 
 ## Data safety
 
@@ -251,6 +252,7 @@ to decide something: the body is where the failure it came from is described.
 - L358. A unique user count from a client side analytics tool counts the identities that tool has ISSUED, never people, and any environment that isolates or clears storage (an in app browser, a private window, a fresh device) turns one person into several, always inflating the figure. Near zero overlap between two populations that plainly SHOULD overlap is evidence of that fragmentation rather than of independent audiences, so measure the overlap before reporting either count as a headcount.
 - L359. A URL that carries a freshly minted credential (a signed storage URL, a presigned link, a tokenised CDN path) is a NEW cache key on every render, so every cache downstream of it, the CDN, the image optimiser and the visitor's own browser, MISSES forever while still returning the correct bytes. Re-sign on a schedule and reuse the URL, or put a stable path in front of the signing, and prove it with a cache HIT on a second load rather than by reading the code.
 - L368. A one-shot observer or trigger that records itself as FIRED before confirming its work succeeded turns a transient failure into a permanent loss, because nothing will ever try again.
+- L544. A value and the flag describing how it was obtained (the load failed, it is stale, it is a built in default) are ONE fact and must be one discriminated value, never two pieces of state beside each other.
 
 ## Security and privacy
 
@@ -261,6 +263,7 @@ to decide something: the body is where the failure it came from is described.
 - L72. A gate's stored DEFAULT must be its OFF value, so that FORGETTING to set it produces the safe state rather than the live one.
 - L75. When identifying WHO or WHAT an outward action targets fails, refuse the action; never fall back to a nearby candidate.
 - L124. A platform's DEFAULT grant may already give away what you are about to grant
+- L541. A REVOKE that is PRESENT can still be ineffective, because revoking from PUBLIC does not remove a grant made DIRECTLY to a role, so a platform's default grants to its own roles survive it untouched.
 - L503. An over-broad permission is invisible, because the code never attempts what it is not meant to do, while a missing one fails loudly on the first run
 - L123. Declining to PROVISION someone is not declining to AUTHENTICATE them
 - L137. A grant checked only where it is GRANTED (a login, a signup, an invite) is never re-checked for anyone already holding a session, so removing someone from an access list takes nothing away from the people most likely to be removed, and the gap stays invisible until the first real removal.
@@ -311,6 +314,7 @@ to decide something: the body is where the failure it came from is described.
 - L279. A record's usefulness that depends on a COMBINATION of individually optional inputs is stated nowhere, because each field reads as independently optional at the point of entry, so name the requirement on the form itself and give the partly filled state its own label saying what is still missing.
 - L287. A notice computed over a WIDER scope than the screen it is placed on inherits that screen's scope from its position, so a sentence that is accurate about the whole collection reads as a false claim about the one record on view. State the scope inside the message rather than trusting the reader to know where its numbers came from.
 - L330. An acknowledgement a person gives must be consulted by EVERY rule that raises the question it answers, not only the one whose control recorded it, because a second rule computing that question from raw state goes on asking after it has been answered, and no action is then left that could ever satisfy it.
+- L545. A set of values whose meaning is their ORDER relative to each other (medal colours, severity tints, tier sizes, ranked weights) is broken by changing ONE member for an unrelated reason such as a contrast fix, because every member stays individually valid and nothing compares them, so assert the ordering itself rather than each value.
 
 ## External systems
 
@@ -380,6 +384,7 @@ to decide something: the body is where the failure it came from is described.
 - L274. An exception a collection singles out for ONE item (skip this one, do not touch that one) must be answered by the ITEM itself, never by a predicate repeated inline at each place that iterates the collection, because a second loop written later omits it and the item is then protected at one site and handled normally at the other.
 - L281. Behaviour that is correct only as a SIDE EFFECT of an unrelated rule has no test, no comment and no owner, so the first change to that rule removes it silently while every check stays green.
 - L286. A derivation every test in a suite needs (a tree walk, a parse, a store clone) is recomputed once per test unless its default input is memoised, so memoise the no-argument form, keep the callers that inject their own input building, and make the memo unable to capture an empty result, because a memoised empty scan passes every guard at once.
+- L542. Two similar rules that DIFFER may each be a recorded decision rather than an inconsistency, and the comment beside one documents only that one, so a change that aligns them can silently delete a product rule while reading as a cleanup. Before making two such rules agree, find the decision record for EACH side, and treat an observed divergence as evidence of a defect only once both records are in hand.
 
 ## Cross-system reliability
 
