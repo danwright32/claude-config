@@ -7060,6 +7060,49 @@ out_p45gone="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=
 check "#45 a pull with no copies left says nothing about conflicts" \
   "! printf '%s' \"\$out_p45gone\" | grep -qi 'conflict'"
 
+section "== a set-aside copy is judged by its words, not its line breaks (#212) =="
+# The report decided whether a `.conflict-*` copy still held content by comparing whole LINES
+# against the live file. Re-flowing a paragraph keeps every word and changes every line boundary,
+# so the copy was reported as holding content that is in fact already live.
+#
+# Observed 2026-08-29: `hooks/test-pipefail-shortcircuit.sh.conflict-Daniels-MacBook-Pro-2` was
+# reported as 4 lines "still only there", and all four sentences were present verbatim in the live
+# header, merely wrapped differently. This is the only report of content that exists in no loaded
+# file, so a warning that fires on files needing no action is the one that trains the reader to
+# skim it (L36), and L278 is the rule: compare in the unit the meaning lives in, not the unit the
+# file happens to be stored in.
+#
+# Both directions are asserted in ONE fixture, because a check that only goes quiet proves nothing
+# about whether it can still speak (L159): the re-wrapped copy must go quiet in the same run where
+# the copy holding a genuinely deleted sentence is still named.
+WWH="$WORK/wrap-home"; WWR="$WORK/wrap-repo"
+mkdir -p "$WWH/hooks" "$WWR/payload/hooks"
+echo '{"hooks":{}}' > "$WWH/settings.json"
+printf '# rules\n@LESSONS.md\n' > "$WWH/CLAUDE.md"
+printf -- '- **L1. one.** body\n' > "$WWH/LESSONS.md"
+# The live file, wrapped one way.
+printf '# the producer is killed by its consumer and the pipeline\n# reports a failure that never happened\nrun_it\n' \
+  > "$WWH/hooks/wrapped.sh"
+# A second file, to hold the case that must still be reported.
+printf '# the producer is killed by its consumer\nrun_it\n' > "$WWH/hooks/lost.sh"
+CLAUDE_HOME="$WWH" SYNC_REPO="$WWR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+# The set-aside copy: identical words, every line boundary different. Nothing is at stake in it.
+printf '# the producer is killed by its consumer and\n# the pipeline reports a failure that\n# never happened\nrun_it\n' \
+  > "$WWH/hooks/wrapped.sh.conflict-OtherMac"
+# The set-aside copy that DOES hold a sentence the live file lost. Same re-wrap, plus one clause
+# that exists nowhere else, so a fix that simply stops looking would take this one down with it.
+printf '# the producer is killed by\n# its consumer and the hazard is live here\nrun_it\n' \
+  > "$WWH/hooks/lost.sh.conflict-OtherMac"
+out_212="$(CLAUDE_HOME="$WWH" SYNC_REPO="$WWR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "status with a re-wrapped conflict copy: $out_212"
+check "#212 a re-wrapped copy is named as safe rather than as work outstanding" \
+  "printf '%s' \"\$out_212\" | grep -qE 'wrapped\.sh\.conflict-OtherMac.*(nothing|safe)'"
+check "#212 and it is not reported as holding lines" \
+  "! printf '%s' \"\$out_212\" | grep -qE 'wrapped\.sh\.conflict-OtherMac.*[0-9]+ lines'"
+check "#212 a copy holding a sentence the live file lost is still named in the same run" \
+  "printf '%s' \"\$out_212\" | grep -qE 'lost\.sh\.conflict-OtherMac.*[0-9]+ lines'"
+rm -f "$WWH/hooks/wrapped.sh.conflict-OtherMac" "$WWH/hooks/lost.sh.conflict-OtherMac"
+
 section "== a renumber's citation scan opens only the files that match (#53) =="
 # The scan walked every synced file and ran a text test plus a matcher on each of them, once per
 # renumbered lesson, measured on 2026-08-17: 800 files (747 under skills/) at 8.4 seconds per
