@@ -31,6 +31,8 @@
 #   HOOK_TESTS_LIST_ONLY=1    print the directories it would read, run nothing
 #   HOOK_TESTS_FAIL_DETAIL_MAX  lines of a failing suite's output to print
 #   HOOK_TESTS_FLAKE_RECHECK  0 turns off the second run of a suite that failed (default 1)
+#   HOOK_TESTS_FLAKE_RECHECK_MAX   seconds a recheck may take before it is called hung (default 60)
+#   HOOK_TESTS_FLAKE_RECHECK_POLL  how long each wait for it lasts (default 1)
 #   HOOK_TESTS_JOBS           how many suites run at once
 #   HOOK_TESTS_BUDGET         processes this whole run may have in flight (default: cores, max 8)
 #   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
@@ -69,6 +71,11 @@ FLAKE_RECHECK="${HOOK_TESTS_FLAKE_RECHECK:-1}"
 # first run, so a slow suite is not called hung for being slow, and a suite with no measurement at
 # all still has this bound.
 FLAKE_RECHECK_MAX="${HOOK_TESTS_FLAKE_RECHECK_MAX:-60}"
+# The interval the recheck's deadline is counted in. Injectable from the day it is written, so the
+# test that drives the timeout branch is instant instead of waiting the deadline out for real
+# (L524). Both numbers are read in the same unit, so setting this alone shortens the wait without
+# changing what the deadline MEANS.
+FLAKE_RECHECK_POLL="${HOOK_TESTS_FLAKE_RECHECK_POLL:-1}"
 
 # How many suites run at once (claude-config#125). Since #120 this reads every directory in the
 # repo, which was 37 suites and about five minutes run one after another when #125 was written,
@@ -773,7 +780,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         _fl_pid=$!
         _fl_waited=0
         while kill -0 "$_fl_pid" 2>/dev/null && [ "$_fl_waited" -lt "$_fl_max" ]; do
-          sleep 1
+          sleep "$FLAKE_RECHECK_POLL"
           _fl_waited=$(( _fl_waited + 1 ))
         done
         if kill -0 "$_fl_pid" 2>/dev/null; then

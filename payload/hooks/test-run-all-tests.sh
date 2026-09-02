@@ -1467,6 +1467,40 @@ case "$out_fl" in
   *) check "#245 and the flake is named, not just counted" "out=$out_fl" ;;
 esac
 
+# A recheck that HANGS is a third outcome, and it has its own words (L11). A suite that fails and
+# then hangs on the second run is not a flake and is not a clean failure, and without a deadline it
+# would hold the whole run open on a suite that had already misbehaved once (L110).
+#
+# Driven through the injected poll rather than by waiting the real deadline out, so this costs a
+# fraction of a second instead of a minute (L524).
+HG="$TMPROOT/hangs"
+mkdir -p "$HG"
+HG_MARKER="$TMPROOT/hang-marker"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'if [ -e "%s" ]; then while :; do sleep 3600 & wait "$!" || true; done; fi\n' "$HG_MARKER"
+  printf 'touch "%s"\n' "$HG_MARKER"
+  printf 'echo "FAIL: it failed, and it will hang if run again"\n'
+  printf 'echo "SUITE-RESULT passed=0 failed=1"\n'
+  printf 'exit 1\n'
+} > "$HG/test-hangs.sh"
+chmod +x "$HG/test-hangs.sh"
+rm -f "$HG_MARKER"
+out_hg="$(HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 HOOK_TESTS_FLAKE_RECHECK_MAX=2 \
+  HOOK_TESTS_FLAKE_RECHECK_POLL=0.05 bash "$RUNNER" "$HG" 2>&1)"; code_hg=$?
+case "$out_hg" in
+  *"recheck timed out"*) check "#245 a recheck that hangs is named as timed out" ok ;;
+  *) check "#245 a recheck that hangs is named as timed out" "out=$out_hg" ;;
+esac
+case "$out_hg" in
+  *FLAKY*) check "#245 and a hung recheck is not counted as a flake" "out=$out_hg" ;;
+  *) check "#245 and a hung recheck is not counted as a flake" ok ;;
+esac
+[ "$code_hg" -ne 0 ] \
+  && check "#245 and the run is still red after a hung recheck" ok \
+  || check "#245 and the run is still red after a hung recheck" "exit=$code_hg"
+rm -f "$HG_MARKER"
+
 # The control: a suite that fails BOTH times is a failure, not a flake. Without this the word
 # FLAKY would attach to every red suite and stop meaning anything (L159).
 mk_suite "$FL" solid 1
