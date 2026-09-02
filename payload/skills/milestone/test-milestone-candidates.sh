@@ -66,6 +66,9 @@ case "$*" in
     cat "$GH_ISSUES"
     exit 0
     ;;
+  *)
+    :
+    ;;
 esac
 echo "gh: fake received an unexpected call: $*" >&2
 exit 1
@@ -94,21 +97,16 @@ JSON
 # ("alert", "drop", "time", "call" are generic in that repo). Counting those would
 # have reported eleven siblings and made a one sibling idea read as an obvious
 # cluster, which is the number the "2 or more" rule depends on (L104, L147).
+# One repo-wide read, so each issue carries the milestone the script partitions on.
+# 241, 242, 243, 244 and 240 are loose (the pen). 900 and 901 sit in real milestones,
+# which is where a duplicate hides and where the old pen-only read could not look.
 cat >"$TMP/issues.json" <<'JSON'
 [
-  { "number": 241, "title": "Give the subagent findings spool a way to drain" },
-  { "number": 242, "title": "Report whether a spooled finding is reachable by any review" },
-  { "number": 243, "title": "Warn when a stale deploy alert fires twice" },
-  { "number": 244, "title": "Match a spooled finding against open issues before offering it" },
-  { "number": 240, "title": "Give claude-sync a way to clean up old backups" }
-]
-JSON
-
-# Open issues that are NOT in the holding pen, which is where a duplicate actually
-# hides. #900 is the same work as the idea below, sitting in a real milestone.
-cat >"$TMP/issues-all.json" <<'JSON'
-[
   { "number": 241, "title": "Give the subagent findings spool a way to drain", "milestone": { "title": "Ungrouped" } },
+  { "number": 242, "title": "Report whether a spooled finding is reachable by any review", "milestone": { "title": "Ungrouped" } },
+  { "number": 243, "title": "Warn when a stale deploy alert fires twice", "milestone": { "title": "Ungrouped" } },
+  { "number": 244, "title": "Match a spooled finding against open issues before offering it", "milestone": { "title": "Ungrouped" } },
+  { "number": 240, "title": "Give claude-sync a way to clean up old backups", "milestone": { "title": "Ungrouped" } },
   { "number": 900, "title": "Mark and expire the stale findings in the subagent spool", "milestone": { "title": "One store, one truth" } },
   { "number": 901, "title": "Rewrite the onboarding tour copy", "milestone": { "title": "Onboarding revamp" } }
 ]
@@ -214,15 +212,20 @@ check "the weak matches are counted separately" "WEAK-COUNT 1" "$normal"
 # it was run before filing, reported no siblings and seven weak matches, and the
 # duplicate (#226, in another milestone) was in neither list. Filed as #264 and
 # closed the same hour.
-run acme/widgets --like "Mark or expire stale findings in the subagent spool"
-check "an issue for the same work in another milestone is reported" "DUPLICATE-RISK" "$OUT"
-check "the duplicate names its number" "#900" "$OUT"
+dup_lines=""
+while IFS= read -r line; do
+  case "$line" in "DUPLICATE-RISK "*) dup_lines="$dup_lines$line"$'\n' ;; esac
+done <<<"$normal"
+check "an issue for the same work in another milestone is reported" "DUPLICATE-RISK" "$normal"
+check "the duplicate names its number" "#900" "$dup_lines"
+# Asserted against the DUPLICATE-RISK line only. Against the whole output it passed
+# before the feature existed, because that milestone is already named on an
+# OPEN-MILESTONE line, so the check could not fail (L159).
 check "and names the milestone it is already in, so the reader can go and look" \
-  "One store, one truth" "$OUT"
-check "the duplicate count is stated separately from the sibling count" "DUPLICATE-COUNT 1" "$OUT"
-check_not "an unrelated issue elsewhere is not called a duplicate" "#901" "$OUT"
-# A pen issue is a SIBLING, never also a duplicate risk: one number, one meaning.
-dup_lines="$(printf '%s\n' "$OUT" | grep '^DUPLICATE-RISK' || true)"
+  "[in: One store, one truth]" "$dup_lines"
+check "the duplicate count is stated separately from the sibling count" "DUPLICATE-COUNT 1" "$normal"
+check_not "an unrelated issue elsewhere is not called a duplicate" "#901" "$normal"
+# A loose issue is a SIBLING, never also a duplicate risk: one number, one meaning.
 check_not "a holding pen issue is not double counted as a duplicate" "#241" "$dup_lines"
 
 # Tracker vocabulary is generic in EVERY repo, so two of it is still a coincidence.
@@ -257,7 +260,10 @@ check "the strongest match is ranked first" "#241" "$top"
 # gh issue list defaults to 30. The pen held 82 open issues in one real repo, so a
 # default page would silently hide most of them and the count would be a fiction.
 calls="$(cat "$GH_CALLS")"
-check "it asks for the holding pen by the shared name" "--milestone $catch_all" "$calls"
+check_not "the read is NOT narrowed to the holding pen, which is what hid a duplicate" \
+  "--milestone" "$calls"
+check "it asks for each issue's milestone, so it can tell loose work from filed work" \
+  "number,title,milestone" "$calls"
 limit=""
 [[ "$calls" =~ --limit[[:space:]]+([0-9]+) ]] && limit="${BASH_REMATCH[1]}"
 if [[ -n "$limit" && "$limit" -ge 100 ]]; then ok; else
