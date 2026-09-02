@@ -235,7 +235,31 @@ issue_spool_append() { # append <dir> <json-record>
   local file record count; file="$(issue_spool_path "$1" "${3:-}")"; record="${2:-}"
   [ -n "$record" ] || return 2
   case "$record" in *$'\n'*) return 2 ;; esac
-  printf '%s' "$record" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null || return 2
+  # STAMPED while a test run is in progress (claude-config#275). run-all-tests.sh brackets a run
+  # with a listing of the real spool and fails the run if anything was added, and it used to decide
+  # WHO added it from the directory the record names. That cannot tell a suite from a second Claude
+  # session working in the same repo, which is the normal case on this machine, so a green run was
+  # failed by another session's harvest.
+  #
+  # The stamp answers it positively instead: a record carrying one was written under a test run and
+  # is the L2 violation the bracket exists to catch, and a record carrying none was not, wherever it
+  # came from. Every writer goes through this function, so this is the one place it can be applied
+  # and the one place it can be forgotten from (L30).
+  #
+  # Nothing is added when the variable is unset, so a record written in ordinary use is byte for
+  # byte what it was before this existed.
+  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ]; then
+    record="$(printf '%s' "$record" | CLAUDE_SUITE_RUN_ID="$CLAUDE_SUITE_RUN_ID" python3 -c '
+import json, os, sys
+rec = json.loads(sys.stdin.read())
+if isinstance(rec, dict):
+    rec["suite_run"] = os.environ["CLAUDE_SUITE_RUN_ID"]
+print(json.dumps(rec))' 2>/dev/null)" || return 2
+    [ -n "$record" ] || return 2
+    case "$record" in *$'\n'*) return 2 ;; esac
+  else
+    printf '%s' "$record" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null || return 2
+  fi
   mkdir -p "$(issue_spool_root)" 2>/dev/null || return 1
   printf '%s\n' "$record" >> "$file" 2>/dev/null || return 1
 

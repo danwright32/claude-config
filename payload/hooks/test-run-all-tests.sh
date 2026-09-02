@@ -991,6 +991,104 @@ case "$out_nr" in
   *) check "#237 with no checkout named, the old NOT RUN path still runs" "out=$out_nr" ;;
 esac
 
+# ---- and the re-run says WHICH copy it verified (claude-config#274) ----
+# The re-run above closes the gap, and in doing so it makes one report mean two different things.
+# Every other suite in a pull's run is checking what the pull just installed. A re-run suite is
+# checking the CHECKOUT's copy of the same file, and the line read as an ordinary pass either way.
+# The gap is normally nil, since the pull installed from that checkout moments earlier, and it is
+# exactly non nil in the case that matters: a local edit nobody has sent, or a checkout behind what
+# is deployed (L11).
+#
+# The checkout also holds .last-applied, which the pull writes with the commit whose payload is on
+# this Mac, so the runner can say whether the two agree rather than assume they do.
+co_git_fixture(){ # co_git_fixture <dir> <exit code for the suite>   -> a checkout that is a repo
+  mkdir -p "$1/payload/hooks"
+  mk_suite "$1/payload/hooks" needsrepo "$2"
+  git -C "$1" init -q
+  git -C "$1" -c user.email=t@example.invalid -c user.name=t -c commit.gpgsign=false \
+      add -A >/dev/null 2>&1
+  git -C "$1" -c user.email=t@example.invalid -c user.name=t -c commit.gpgsign=false \
+      commit -qm "the payload this Mac is running" >/dev/null 2>&1
+  git -C "$1" rev-parse HEAD 2>/dev/null
+}
+CO_SAME="$TMPROOT/checkout-same"
+co_head="$(co_git_fixture "$CO_SAME" 0)"
+printf '%s\n' "$co_head" > "$CO_SAME/.last-applied"
+out_pv="$(HOOK_TESTS_ROOT="$NOREPO" RUN_ALL_TESTS_CHECKOUT="$CO_SAME" bash "$RUNNER" "$NR_DIR" 2>&1)"; code_pv=$?
+[ "$code_pv" -eq 0 ] \
+  && check "#274 a re-run from a checkout that matches what was applied still passes" ok \
+  || check "#274 a re-run from a checkout that matches what was applied still passes" "exit=$code_pv out=$out_pv"
+case "$out_pv" in
+  *"$CO_SAME"*)
+    check "#274 and the line names the checkout it verified" ok ;;
+  *)
+    check "#274 and the line names the checkout it verified" "out=$out_pv" ;;
+esac
+case "$out_pv" in
+  *"not the copy installed here"*)
+    check "#274 and says that copy is not the installed one" ok ;;
+  *)
+    check "#274 and says that copy is not the installed one" "out=$out_pv" ;;
+esac
+case "$out_pv" in
+  *"which is what the pull applied"*)
+    check "#274 and says the two agree when they do" ok ;;
+  *)
+    check "#274 and says the two agree when they do" "out=$out_pv" ;;
+esac
+
+# The case the line exists for: a checkout that is not what was applied. The verdict is still real,
+# and it is a verdict about a different revision, so it is reported as one rather than as coverage
+# of what is installed.
+CO_DRIFT="$TMPROOT/checkout-drift"
+co_git_fixture "$CO_DRIFT" 0 > /dev/null
+printf '%s\n' "0000000000000000000000000000000000000000" > "$CO_DRIFT/.last-applied"
+out_dv="$(HOOK_TESTS_ROOT="$NOREPO" RUN_ALL_TESTS_CHECKOUT="$CO_DRIFT" bash "$RUNNER" "$NR_DIR" 2>&1)"
+case "$out_dv" in
+  *"is NOT what the pull applied"*)
+    check "#274 a checkout ahead of or behind what was applied says so" ok ;;
+  *)
+    check "#274 a checkout ahead of or behind what was applied says so" "out=$out_dv" ;;
+esac
+case "$out_dv" in
+  *0000000*)
+    check "#274 and names the commit that was applied, so the two can be compared" ok ;;
+  *)
+    check "#274 and names the commit that was applied, so the two can be compared" "out=$out_dv" ;;
+esac
+
+# An uncommitted edit is the same defect arriving by the other route, and the one a person is most
+# likely to hit: the suite that passed is the one on the screen, not the one anybody else can get.
+CO_DIRTY="$TMPROOT/checkout-dirty"
+co_head_d="$(co_git_fixture "$CO_DIRTY" 0)"
+printf '%s\n' "$co_head_d" > "$CO_DIRTY/.last-applied"
+printf '\n# an edit that has not been committed\n' >> "$CO_DIRTY/payload/hooks/test-needsrepo.sh"
+out_uv="$(HOOK_TESTS_ROOT="$NOREPO" RUN_ALL_TESTS_CHECKOUT="$CO_DIRTY" bash "$RUNNER" "$NR_DIR" 2>&1)"
+case "$out_uv" in
+  *"uncommitted"*)
+    check "#274 a checkout with an uncommitted edit says the verdict is about that edit" ok ;;
+  *)
+    check "#274 a checkout with an uncommitted edit says the verdict is about that edit" "out=$out_uv" ;;
+esac
+
+# A checkout that is not a repository at all cannot be compared, and saying nothing would leave the
+# reader with the same unmarked pass this issue is about. It says it could not read the revision.
+case "$out_co" in
+  *"could not be read"*)
+    check "#274 a checkout whose revision cannot be read says so rather than staying quiet" ok ;;
+  *)
+    check "#274 a checkout whose revision cannot be read says so rather than staying quiet" "out=$out_co" ;;
+esac
+
+# And a FAILING re-run carries the same provenance. The verdict a person acts on hardest is the red
+# one, and "it failed" over an unnamed copy sends them to the wrong file.
+case "$out_cob" in
+  *"$CO_BAD"*)
+    check "#274 a failing re-run names the checkout its verdict came from" ok ;;
+  *)
+    check "#274 a failing re-run names the checkout its verdict came from" "out=$out_cob" ;;
+esac
+
 # A run where nothing could not run keeps the wording it had, so an ordinary green run reads
 # exactly as it did before (L103: a guard that asserts a rendering fails the first refinement of
 # it, and this is the rendering everybody reads).
@@ -1428,6 +1526,250 @@ case "$out_sp4" in
     [ "$code_sp4" -eq 0 ] \
       && check "#230 a run that wrote nothing to the spool says nothing about it" ok \
       || check "#230 a run that wrote nothing to the spool says nothing about it" "exit=$code_sp4" ;;
+esac
+
+# ---------------------------------------------------------------------------
+# WHO wrote is answered by a marker the suites carry, not by where the record came from
+# (claude-config#275).
+# ---------------------------------------------------------------------------
+# The attribution above splits on the record's own working directory: inside this repo means a
+# suite, elsewhere means another session. That split cannot see the normal case on this machine,
+# which is a second Claude session working in THIS repo. Measured 2026-09-02, a run was failed by
+# two HARVEST FAILED records the real SubagentStop hook wrote for another session, cwd this repo,
+# and no suite in the tree can write there because they all set CLAUDE_ISSUE_SPOOL_DIR first.
+#
+# So the runner stamps every write a suite makes: it exports a run id, and the spool library puts
+# it in the record. A record carrying one was written under a test run and is the L2 violation this
+# exists to catch. A record carrying none was not, whatever directory it names. That is positive
+# identification rather than a second heuristic on top of the first (L70).
+#
+# TMPDIR is pointed away from the fixture on purpose, so a record naming a fixture path is judged
+# by the rule under test rather than by the throwaway-directory branch above it.
+SP2="$TMPROOT/spool275"
+SPOOL2="$TMPROOT/live-spool-275"
+mkdir -p "$SPOOL2" "$SP2/suites" "$SP2/nottmp"
+sp2_run(){ # sp2_run [extra env assignments...]   -> one runner run over the #275 fixtures
+  env TMPDIR="$SP2/nottmp" CLAUDE_ISSUE_SPOOL_DIR="$SPOOL2" HOOK_TESTS_ROOT="$SP2" \
+      HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 "$@" bash "$RUNNER" "$SP2/suites" 2>&1
+}
+# Another session, working in this repo: a record naming a path inside the root, with no marker.
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf %s >> "%s/other.jsonl"\n' \
+    "'{\"ts\":\"2026-09-02T12:00:00Z\",\"status\":\"error\",\"agent\":\"subagent\",\"cwd\":\"$SP2/a/b\",\"error\":\"no transcript\"}'" "$SPOOL2"
+  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+} > "$SP2/suites/test-othersession.sh"
+chmod +x "$SP2/suites/test-othersession.sh"
+out_m1="$(sp2_run)"; code_m1=$?
+[ "$code_m1" -eq 0 ] \
+  && check "#275 an unmarked record from inside this repo does not fail the run" ok \
+  || check "#275 an unmarked record from inside this repo does not fail the run" "exit=$code_m1 out=$out_m1"
+case "$out_m1" in
+  *"from work in other directories"*)
+    check "#275 and the run says the spool grew without blaming itself" ok ;;
+  *)
+    check "#275 and the run says the spool grew without blaming itself" "out=$out_m1" ;;
+esac
+
+# The half that must still fire, and the reason the loosening above is safe: a suite that writes
+# through the spool library, which is what the defect actually looks like, carries the marker and
+# still fails the run. This one goes through the REAL library rather than a hand written record, so
+# it is the stamping itself that is under test and not a fixture's imitation of it (L52).
+rm -f "$SPOOL2"/*.jsonl "$SP2/suites"/test-othersession.sh
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '. "%s/lib/issue-spool.sh"\n' "$DIR"
+  printf 'issue_spool_note "$PWD" "a finding no suite may leave in the live spool" suite-fixture >/dev/null 2>&1\n'
+  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+} > "$SP2/suites/test-libwriter.sh"
+chmod +x "$SP2/suites/test-libwriter.sh"
+out_m2="$(sp2_run)"; code_m2=$?
+[ "$code_m2" -ne 0 ] \
+  && check "#275 a suite writing through the library still fails the run" ok \
+  || check "#275 a suite writing through the library still fails the run" "exit=$code_m2 out=$out_m2"
+case "$out_m2" in
+  *"SUITES WROTE INTO THE LIVE SPOOL"*)
+    check "#275 and it is named as the L2 violation it is" ok ;;
+  *)
+    check "#275 and it is named as the L2 violation it is" "out=$out_m2" ;;
+esac
+case "$out_m2" in
+  *"written under this test run"*)
+    check "#275 and the record is attributed to the run that stamped it" ok ;;
+  *)
+    check "#275 and the record is attributed to the run that stamped it" "out=$out_m2" ;;
+esac
+
+# The marker is only evidence while the stamping works, and a stamping that has quietly stopped
+# makes every write read as somebody else's, which is the guard going blind while passing (L345).
+# So the runner proves the mechanism on a throwaway spool before it trusts an absence, and says so
+# and falls back to judging by directory when it cannot. The seam points the proof at a library
+# that does not stamp.
+rm -f "$SPOOL2"/*.jsonl "$SP2/suites"/test-libwriter.sh
+STUBLIB="$SP2/stub-issue-spool.sh"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'issue_spool_note(){ printf %s >> "$CLAUDE_ISSUE_SPOOL_DIR/stub.jsonl"; }\n' \
+    "'{\"ts\":\"2026-09-02T12:00:00Z\",\"status\":\"found\",\"cwd\":\"/nowhere\",\"findings\":[\"x\"]}\\n'"
+} > "$STUBLIB"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf %s >> "%s/other.jsonl"\n' \
+    "'{\"ts\":\"2026-09-02T12:00:00Z\",\"status\":\"error\",\"agent\":\"subagent\",\"cwd\":\"$SP2/a/b\",\"error\":\"no transcript\"}'" "$SPOOL2"
+  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+} > "$SP2/suites/test-othersession.sh"
+chmod +x "$SP2/suites/test-othersession.sh"
+out_m3="$(sp2_run HOOK_SPOOL_LIB="$STUBLIB")"; code_m3=$?
+case "$out_m3" in
+  *"could not be proved"*)
+    check "#275 a marker that cannot be proved is announced rather than trusted" ok ;;
+  *)
+    check "#275 a marker that cannot be proved is announced rather than trusted" "out=$out_m3" ;;
+esac
+[ "$code_m3" -ne 0 ] \
+  && check "#275 and attribution falls back to the directory, which fails closed" ok \
+  || check "#275 and attribution falls back to the directory, which fails closed" "exit=$code_m3 out=$out_m3"
+
+# The control: with the real library the proof passes, so the fallback line is NOT printed. Without
+# this, a runner that could never prove the marker would satisfy every check above (L159).
+out_m4="$(sp2_run)"
+case "$out_m4" in
+  *"could not be proved"*)
+    check "#275 and a run whose marker works says nothing about proving it" "out=$out_m4" ;;
+  *)
+    check "#275 and a run whose marker works says nothing about proving it" ok ;;
+esac
+
+# ---------------------------------------------------------------------------
+# The other LIVE STORES are bracketed too, and the list has to cover every seam a suite can
+# write through (claude-config#216, claude-config#272).
+# ---------------------------------------------------------------------------
+# The spool bracket above covers the store the first incident happened in. The same mistake reaches
+# the rule files, the settings, the clone registry, the shell rc, and the two markers the watcher
+# keeps in the real home. Nothing here had a test at all, so the list was a claim: the guard's own
+# contract says a store on it is compared and an absent one is recorded as absent, and neither half
+# had ever been seen to fire (L1, L151).
+#
+# The watcher marker is the one with teeth. A stale ~/.claude-sync-watch.pid makes the live daemon
+# refuse to start, so a suite that runs `claude-sync watch` without pointing the seam at its own
+# throwaway path stops config reaching the other Mac, silently, from a green run.
+LS="$TMPROOT/livestores"
+mkdir -p "$LS/claude-home" "$LS/suites" "$LS/spool"
+printf 'the live rules\n' > "$LS/claude-home/CLAUDE.md"
+printf 'a clone registry\n' > "$LS/registry"
+printf 'a shell rc\n' > "$LS/zshrc"
+# Every seam the runner reads, pointed at the fixture, so the "live" stores under test are these
+# and the real ones are untouched. The runner is asked about the fixture's home, not Dan's.
+ls_run(){ # ls_run   -> runs the fixture suites with every live-store seam pointed at $LS
+  CLAUDE_HOME="$LS/claude-home" \
+  SYNC_CLONE_REGISTRY="$LS/registry" \
+  SYNC_ZSHRC="$LS/zshrc" \
+  SYNC_WATCH_PID_FILE="$LS/watch.pid" \
+  SYNC_HOLD_FILE="$LS/hold" \
+  CLAUDE_ISSUE_SPOOL_DIR="$LS/spool" \
+  HOOK_TESTS_ROOT="$LS" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 \
+  bash "$RUNNER" "$LS/suites" 2>&1
+}
+mk_store_writer(){ # mk_store_writer <name> <path it writes> <what it writes>
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf %s >> "%s"\n' "'$3'" "$2"
+    printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+  } > "$LS/suites/test-$1.sh"
+  chmod +x "$LS/suites/test-$1.sh"
+}
+
+# The positive control FIRST, because everything below is a claim that this bracket notices a
+# write, and a green on a new store would otherwise be satisfied by a fixture that never reached
+# the guard (L246, L159).
+mk_store_writer rules "$LS/claude-home/CLAUDE.md" 'a line no suite may add'
+out_ls1="$(ls_run)"; code_ls1=$?
+[ "$code_ls1" -ne 0 ] \
+  && check "#216 a suite that changes a live rule file fails the run" ok \
+  || check "#216 a suite that changes a live rule file fails the run" "exit=$code_ls1 out=$out_ls1"
+case "$out_ls1" in
+  *"SUITES CHANGED A LIVE STORE"*"$LS/claude-home/CLAUDE.md"*)
+    check "#216 and the store that changed is named" ok ;;
+  *)
+    check "#216 and the store that changed is named" "out=$out_ls1" ;;
+esac
+
+# The watcher marker. A suite CREATES it rather than editing it, which is what running
+# `claude-sync watch` against the real home actually does, and is the case a list that skipped
+# absent paths could not see at all (L214).
+rm -f "$LS/suites"/test-rules.sh
+printf 'the live rules\n' > "$LS/claude-home/CLAUDE.md"
+# It writes its OWN pid, which is what a suite that started a watcher and stopped it leaves behind,
+# and which is certainly dead by the time the run is judged. A number picked out of the air would
+# be a fixture whose meaning depends on what else the machine happens to be running (L224).
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf "%%s\\n" "$$" > "%s"\n' "$LS/watch.pid"
+  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+} > "$LS/suites/test-watchpid.sh"
+chmod +x "$LS/suites/test-watchpid.sh"
+out_ls2="$(ls_run)"; code_ls2=$?
+[ "$code_ls2" -ne 0 ] \
+  && check "#272 a suite that writes the watcher pid marker fails the run" ok \
+  || check "#272 a suite that writes the watcher pid marker fails the run" "exit=$code_ls2 out=$out_ls2"
+case "$out_ls2" in
+  *"$LS/watch.pid"*)
+    check "#272 and the marker it created is named, not just counted" ok ;;
+  *)
+    check "#272 and the marker it created is named, not just counted" "out=$out_ls2" ;;
+esac
+
+# The hold marker, the other store added in the same commit and left off the same list. A stale
+# hold silences the automatic send rather than stopping it, so it fails quieter than the pid file.
+rm -f "$LS/suites"/test-watchpid.sh "$LS/watch.pid"
+mk_store_writer hold "$LS/hold" '99999999 1 a-mac a suite took a hold'
+out_ls3="$(ls_run)"; code_ls3=$?
+[ "$code_ls3" -ne 0 ] \
+  && check "#272 a suite that writes the watcher hold marker fails the run" ok \
+  || check "#272 a suite that writes the watcher hold marker fails the run" "exit=$code_ls3 out=$out_ls3"
+case "$out_ls3" in
+  *"$LS/hold"*)
+    check "#272 and the hold marker is named too" ok ;;
+  *)
+    check "#272 and the hold marker is named too" "out=$out_ls3" ;;
+esac
+
+# The watcher marker has a legitimate writer that is NOT a suite, and the comparison has to know
+# it. launchd keeps the live daemon alive and it restarts on its own: 562 restarts were recorded in
+# the sync log by 2026-09-02, and one of them landed inside the very run that added this store to
+# the list, which failed a green run of 49 suites. A guard that cries wolf is one nobody reads
+# (L36), and the price of each cry is a full re-run (L293).
+#
+# So the marker is judged rather than compared. It names a pid: a watcher a SUITE started is a
+# descendant of the run, and one the run started and stopped leaves a pid that is dead. Anything
+# else alive on this machine is somebody else's. This fixture writes the pid of the process running
+# THIS file, which is alive and is an ancestor of the run rather than a descendant, so it stands in
+# for the daemon without needing one.
+rm -f "$LS/suites"/test-hold.sh "$LS/hold"
+mk_store_writer daemonpid "$LS/watch.pid" "$$"
+out_ls5="$(ls_run)"; code_ls5=$?
+[ "$code_ls5" -eq 0 ] \
+  && check "#272 a watcher marker owned by something outside the run does not fail it" ok \
+  || check "#272 a watcher marker owned by something outside the run does not fail it" "exit=$code_ls5 out=$out_ls5"
+case "$out_ls5" in
+  *"not because of these tests"*)
+    check "#272 and the change is reported rather than passed over in silence" ok ;;
+  *)
+    check "#272 and the change is reported rather than passed over in silence" "out=$out_ls5" ;;
+esac
+
+# And the control: a run that touched none of them says nothing about any of them. Without this a
+# guard that failed every run would pass every check above (L159).
+rm -f "$LS/suites"/test-hold.sh "$LS/suites"/test-daemonpid.sh "$LS/hold" "$LS/watch.pid"
+mk_counting_suite "$LS/suites" storequiet 3
+out_ls4="$(ls_run)"; code_ls4=$?
+case "$out_ls4" in
+  *"CHANGED A LIVE STORE"*)
+    check "#216 a run that touched no live store says nothing about them" "out=$out_ls4" ;;
+  *)
+    [ "$code_ls4" -eq 0 ] \
+      && check "#216 a run that touched no live store says nothing about them" ok \
+      || check "#216 a run that touched no live store says nothing about them" "exit=$code_ls4 out=$out_ls4" ;;
 esac
 
 # ---------------------------------------------------------------------------
