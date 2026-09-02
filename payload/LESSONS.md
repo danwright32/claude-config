@@ -1207,6 +1207,21 @@ window is a count rather than a boundary.
   test suite mismeasured on a loaded runner, this one is the product mismeasured beside its own
   suite.
 
+- **L537. A "how far behind" reading computed as the newest item minus the last processed one
+  measures the interval between the two most recent items, not elapsed delay, so on a sparse
+  stream an item seconds old reads as hours behind and a genuinely stalled lane is
+  indistinguishable from a healthy one.** Measure a backlog's age against the CLOCK, as now minus
+  the oldest unprocessed item's stamp, and read a large lag standing beside a tiny backlog as
+  evidence the metric is wrong rather than the lane. Measured 2026-09-02 (slate#1713): Slate's PII
+  retention lanes refuse to delete unless the Snowflake export lane is current, and the gate
+  computed lag as `newestTs - cursorTs`. A time off request written at 02:53:14 UTC, with the
+  previous audit row at 00:11:36, scored "3 hours behind" at 03:00:04 while being under seven
+  minutes old, and all three retention lanes stopped for a day. The bound it was compared against
+  was reasoned about in its own comment as "six consecutive missed ticks", which is not the
+  quantity being computed: on a sparse table the reading is unbounded above however healthy the
+  lane is. The message carried its own refutation, "3 hours behind, with 1 rows waiting", since a
+  lane three hours behind a ten minute tick would have eighteen ticks of rows queued.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -2030,6 +2045,21 @@ window is a count rather than a boundary.
   setting rendering as empty: here the fallback COINCIDES with what the person intended, so
   there is no discrepancy for them to notice)
 
+
+- **L536. A language or API that silently yields NOTHING for a construct it does not support
+  makes the FIX indistinguishable from the BUG**, because the natural remedy for a missing
+  value (a default, a fallback, a coalesce) produces that same missing value. Support the
+  obvious spelling or refuse it loudly, but never accept it and return nothing.
+  (bidspoke#1097, 2026-09-01: 23,786 Salesforce patches in three days dropped a field whose
+  template resolved to undefined, and the obvious fix, `{{steps.x.output.bid ?? 0}}`, resolves
+  to undefined as well: a bare number is not a valid reference root, and the number literal
+  rule is consulted only inside the arithmetic branch, so `?? 0 + 0` yields 0 while `?? 0`
+  yields nothing. Someone applying that fix would see the same dropped-field warning
+  afterwards and have no way to tell a fix that did nothing from one that worked. The
+  limitation was already known: the code node beside it carries the comment "Templates can't
+  do math / ?? / || / dynamic keys, so we compute here". The platform simply never said so.
+  Distinct from L111, which is about a recovery MESSAGE naming a step that does not change the
+  state: here the remedy itself is accepted and quietly does nothing)
 
 ## State and identity
 

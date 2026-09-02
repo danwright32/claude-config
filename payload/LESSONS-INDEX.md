@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 397 lessons.
+LESSONS.md, which is NOT loaded into the session. 399 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -115,6 +115,7 @@ to decide something: the body is where the failure it came from is described.
 - L354. A fixture sized by a number measured once from real data silently under-represents production as that data grows, and it fails in the GREEN direction, so a cost or scale guard goes on passing while protecting a smaller world than the one that ships.
 - L355. A sampled profile shows the SHAPE of one stack, and only becomes a measurement of COST once the sample count is read, so a stack seen a handful of times cannot support a claim about where the time went.
 - L356. A performance measurement taken on the machine that also builds and tests the product measures both, so record what else was running at the moment of the reading rather than filtering it out afterwards.
+- L537. A "how far behind" reading computed as the newest item minus the last processed one measures the interval between the two most recent items, not elapsed delay, so on a sparse stream an item seconds old reads as hours behind and a genuinely stalled lane is indistinguishable from a healthy one.
 
 ## Data safety
 
@@ -197,6 +198,7 @@ to decide something: the body is where the failure it came from is described.
 - L351. A reporter that folds a child's failure into a single summary row keeps only the FIRST line of that failure's message, so a message written summary first, with the files, counts and remedy beneath, loses precisely the part that says what to do.
 - L357. A counter that renders its number on a screen is not a detector, because detection requires something that speaks on its own when the number is wrong.
 - L532. A form that falls back to a DEFAULT when nothing is stored cannot show that a save failed
+- L536. A language or API that silently yields NOTHING for a construct it does not support makes the FIX indistinguishable from the BUG
 
 ## State and identity
 
