@@ -99,6 +99,7 @@ cat >"$TMP/issues.json" <<'JSON'
   { "number": 241, "title": "Give the subagent findings spool a way to drain" },
   { "number": 242, "title": "Report whether a spooled finding is reachable by any review" },
   { "number": 243, "title": "Warn when a stale deploy alert fires twice" },
+  { "number": 244, "title": "Match an open issue against the issues already filed" },
   { "number": 240, "title": "Give claude-sync a way to clean up old backups" }
 ]
 JSON
@@ -191,6 +192,14 @@ check "a single shared word is reported as a weak match, not a sibling" \
   "WEAK-MATCH 1 #243" "$normal"
 check_not "a weak match is not also printed as a sibling" "SIBLING 1 #243" "$normal"
 check "the weak matches are counted separately" "WEAK-COUNT 1" "$normal"
+
+# Tracker vocabulary is generic in EVERY repo, so two of it is still a coincidence.
+# Measured 2026-09-02 on this repo: an idea titled "Group the open issues already
+# sitting in the Ungrouped holding pen" drew two siblings at two shared words, and
+# neither was about grouping. They shared "issue", "open" and "already", which say
+# nothing in a backlog of issues. Raising the threshold would have lost real matches,
+# so the words themselves are excluded instead.
+check_not "two shared tracker words is not a sibling" "#244" "$normal"
 
 # The stronger match has to come first, or a caller reading only the top line
 # reads the weakest evidence it has.
