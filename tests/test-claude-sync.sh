@@ -2039,6 +2039,11 @@ export SYNC_CLONE_REGISTRY="$WORK/no-such-directory/clone-registry"
 # must be structurally unable to touch live config, so the safe value is the default
 # here and individual tests override it only to point at another throwaway file.
 export SYNC_ZSHRC="$WORK/zshrc-guard"
+# The send-side hook suite gate is ON in production and OFF for this suite, except in the one
+# section that tests it, which unsets this and sets it again afterwards (claude-config#244, #220).
+# Without it every git-backed section that happens to touch a hook would start launching real test
+# suites inside this one, which is minutes of work proving nothing about the section it is in.
+export SYNC_NO_SEND_TESTS=1
 CH="$WORK/dot-claude"          # fake ~/.claude
 REPO="$WORK/repo"              # fake sync repo
 mkdir -p "$CH/hooks" "$CH/skills/plan-council" "$CH/skills/wrangler" \
@@ -10174,6 +10179,84 @@ check "#167 and does not fail the run"            "[ '$_hd_off_rc' -eq 0 ]"
 # run and this section is reached inside a shard.
 check "#167 the fan-out asks this function rather than repeating the rule" \
   "[ \"\$(grep -c 'suite_headroom_report ' '$SCRIPT_SELF')\" -ge 2 ]"
+
+section "== a send runs the suites covering the hooks it is about to publish (#244) =="
+# The pre push test gate is a Claude Code PreToolUse hook on `git push`, so it only fires for a
+# push a session makes by hand. The watcher mirrors ~/.claude into the payload and commits and
+# pushes on its own, and nothing in that path asked whether the change carried a test.
+#
+# Not hypothetical: on 2026-08-31 commit f094409 pushed a 41 line change to hooks/lib/issue-spool.sh
+# with no test at all. The test for it had been written in ~/.claude at the same time, failed to
+# merge on the next pull, and was set aside as a .conflict copy, so it reached nobody. Code written
+# directly in the live config is exactly the code that governs every session in every project, and
+# it was the one path with no coverage requirement on it.
+#
+# Which suites are RELEVANT is derived the same way test-hook-coverage.sh derives coverage: a suite
+# covers a hook when the suite's text names it. Written twice, the two would drift, and the send
+# would verify a different set from the one the ratchet calls covered (L263, L41).
+unset SYNC_NO_SEND_TESTS
+SDB="$WORK/sendtest-bare.git"; git init -q --bare "$SDB"
+SDR="$WORK/sendtest-repo"; git clone -q "$SDB" "$SDR"
+SDH="$WORK/sendtest-home"; mkdir -p "$SDH/hooks"
+echo '{"hooks":{}}' > "$SDH/settings.json"
+printf '# rules\n' > "$SDH/CLAUDE.md"
+printf '#!/usr/bin/env bash\necho demo\n' > "$SDH/hooks/demo.sh"
+# The suite for it, named so the derivation finds it and passing so the first send goes through.
+printf '#!/usr/bin/env bash\n# covers demo.sh\necho "SUITE-RESULT passed=1 failed=0"\nexit 0\n' \
+  > "$SDH/hooks/test-demo.sh"
+out_244a="$(CLAUDE_HOME="$SDH" SYNC_REPO="$SDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+dbg "#244 first send: $out_244a"
+check "#244 a hook whose suite passes is published" \
+  "[ -f '$SDR/payload/hooks/demo.sh' ] && [ -n \"\$(git -C '$SDR' log --oneline 2>/dev/null)\" ]"
+
+# Now the hook changes and its suite fails. The send must NOT commit it.
+printf '#!/usr/bin/env bash\necho demo changed\n' > "$SDH/hooks/demo.sh"
+printf '#!/usr/bin/env bash\n# covers demo.sh\necho "FAIL: demo.sh is broken"\necho "SUITE-RESULT passed=0 failed=1"\nexit 1\n' \
+  > "$SDH/hooks/test-demo.sh"
+sd_head_before="$(git -C "$SDR" rev-parse HEAD 2>/dev/null)"
+out_244b="$(CLAUDE_HOME="$SDH" SYNC_REPO="$SDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"; rc_244b=$?
+dbg "#244 send with a failing suite: $out_244b"
+check "#244 a hook whose suite fails is not committed" \
+  "[ \"\$(git -C '$SDR' rev-parse HEAD 2>/dev/null)\" = '$sd_head_before' ]"
+check "#244 and the send reports a failure rather than success" "[ $rc_244b -ne 0 ]"
+# Naming the SUITE is the whole point: "a test failed" sends the reader to run all of them, which
+# is the cost this exists to save (L11, L80).
+check "#244 and it names the suite that failed" \
+  "case \"\$out_244b\" in *test-demo.sh*) true ;; *) false ;; esac"
+
+# The edit is still on disk and still unsent, so the next send retries it. A refusal that also
+# discarded the work would be worse than the defect (L5).
+check "#244 the local edit is untouched by the refusal" \
+  "grep -q 'demo changed' '$SDH/hooks/demo.sh'"
+
+# And once the suite passes again, the same edit goes out. A gate that cannot be satisfied is a
+# gate that gets turned off (L109).
+printf '#!/usr/bin/env bash\n# covers demo.sh\necho "SUITE-RESULT passed=1 failed=0"\nexit 0\n' \
+  > "$SDH/hooks/test-demo.sh"
+out_244c="$(CLAUDE_HOME="$SDH" SYNC_REPO="$SDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+check "#244 the same edit is published once its suite passes" \
+  "grep -q 'demo changed' '$SDR/payload/hooks/demo.sh'"
+
+# A hook NO suite mentions is not silently published as verified. The ratchet is what gates an
+# uncovered hook; this has to say plainly that it verified nothing, or a send that ran no suite
+# reads exactly like one whose suites all passed (L98).
+printf '#!/usr/bin/env bash\necho naked\n' > "$SDH/hooks/naked.sh"
+out_244d="$(CLAUDE_HOME="$SDH" SYNC_REPO="$SDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+dbg "#244 send of an uncovered hook: $out_244d"
+check "#244 an uncovered hook is still published" "[ -f '$SDR/payload/hooks/naked.sh' ]"
+# Both facts on ONE line, so a sentence elsewhere naming the file and a different sentence saying
+# "no suite" cannot answer between them (L178).
+line_244d="$(printf '%s\n' "$out_244d" | sed -n '/naked\.sh/p')"
+check "#244 and the send says outright that no suite covers it" \
+  "case \"\$line_244d\" in *'NO SUITE'*|*'no suite'*) true ;; *) false ;; esac"
+
+# The control, and it is what keeps the cost honest: a send that touches no hook runs nothing.
+printf 'a skill\n' > "$SDH/CLAUDE.md"
+out_244e="$(CLAUDE_HOME="$SDH" SYNC_REPO="$SDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+dbg "#244 send with no hook change: $out_244e"
+check "#244 a send that changes no hook runs no suite" \
+  "case \"\$out_244e\" in *suite*|*SUITE*) false ;; *) true ;; esac"
+SYNC_NO_SEND_TESTS=1
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"

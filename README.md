@@ -158,6 +158,25 @@ bounds how long the pull will wait before stopping it and saying nothing was ver
 told `SYNC_NO_HOOK_TESTS=1` in its own environment, because the test suite runs pulls of its own and
 a pull that runs the suite would otherwise recurse without end.
 
+### Sending checks the hooks it is about to publish
+
+A `send` runs the suites covering the hooks in that send, and refuses to commit when one fails. The
+pre push test gate is a Claude Code hook on `git push`, so it only fires for a push a session makes
+by hand; the watcher commits and pushes on its own, and that was the one path with no coverage
+requirement on it. Measured 2026-08-31: commit `f094409` pushed a 41 line change to
+`hooks/lib/issue-spool.sh` with no test at all, and nothing reported it.
+
+Which suites are relevant is asked exactly as `test-hook-coverage.sh` asks it: a suite covers a hook
+when the suite's text names it. So a send that touches no hook runs nothing, and a hook edit runs one
+or two suites rather than the whole set, which is what makes holding the lock across it acceptable.
+A changed `test-*.sh` is its own relevant suite. A changed hook that NO suite names is still sent,
+with a line saying plainly that nothing verified it, since the coverage ratchet is what gates an
+uncovered hook and a send that ran nothing must not read like one whose suites all passed.
+
+A refusal leaves your edit untouched in `~/.claude` and it goes out on the next send once the suite
+passes. `SYNC_NO_SEND_TESTS=1` skips the gate for one run. `SYNC_SEND_TESTS_TIMEOUT` (default `600` seconds)
+bounds how long it waits for a suite before refusing and naming that suite as still running.
+
 ## Lesson numbers
 
 Each Mac mints lesson numbers from a band it owns, so two lessons written between syncs can never

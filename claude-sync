@@ -3255,6 +3255,120 @@ do_sync(){
 # onto ~/.claude is what (a) let a sync resurrect a file deleted mid-run and
 # (b) self-triggered the watcher. Receiving stays the timer's job (do_sync). If
 # the remote moved on, fall back to a full reconcile so our commit still rides up.
+# ---- the send-side hook suite gate (claude-config#244) ----
+#
+# The pre push test gate is a Claude Code PreToolUse hook on `git push`, so it only fires for a push
+# a session makes by hand. The watcher mirrors ~/.claude into the payload and commits and pushes on
+# its own, and nothing in that path asked whether the change carried a test.
+#
+# Not hypothetical: on 2026-08-31 commit f094409 pushed a 41 line change to hooks/lib/issue-spool.sh
+# with no test at all. The test for it had been written in ~/.claude at the same time, failed to
+# merge on the next pull, and was set aside as a .conflict copy, so it reached nobody. It was only
+# carried into the repo because a later pull happened to collide with it and the conflict notice was
+# read. Code written directly in the live config governs every session in every project, and it was
+# the one path with no coverage requirement on it.
+#
+# ONLY the suites covering what actually changed, so a send that touches no hook costs nothing and a
+# hook edit costs one or two suites rather than the whole set. That is the difference between this
+# and the pull's full run, and it is what makes holding the lock across it acceptable.
+
+# Which suites cover this file? Asked exactly as test-hook-coverage.sh asks it: a suite covers a hook
+# when the suite's text names it. Written twice, the two would drift, and the send would verify a
+# different set from the one the ratchet calls covered (L263, L41).
+send_suites_covering(){   # $1 = a hook's basename -> the suites naming it, one per line
+  local f suites=()
+  for f in "$SYNC_REPO"/payload/hooks/test-*.sh "$SYNC_REPO"/tests/test-*.sh; do
+    [ -f "$f" ] && suites+=("$f")
+  done
+  [ "${#suites[@]}" -gt 0 ] || return 0
+  grep -lF "$1" "${suites[@]}" 2>/dev/null || true
+}
+
+send_hook_tests(){
+  local f base suite out list rc=0 ran=0 failed_names="" uncovered="" limit pid started now killed
+  case "${SYNC_NO_SEND_TESTS:-0}${SYNC_NO_HOOK_TESTS:-0}" in *1*) return 0 ;; esac
+
+  # What this send is about to publish. `add -A` first, so the comparison is against the index the
+  # commit will be made from rather than against a working tree nobody is committing.
+  git -C "$SYNC_REPO" add -A -- payload 2>/dev/null || true
+
+  limit="${SYNC_SEND_TESTS_TIMEOUT:-600}"
+  case "$limit" in ''|*[!0-9]*) limit=600 ;; esac
+
+  # The shortlist goes to scratch, never into $SYNC_REPO: a tool that leaves a file inside the repo
+  # it is about to commit from is one `add -A` away from publishing its own working notes.
+  list="$(scratch_file)" || return 0
+
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in *.sh|*.py) ;; *) continue ;; esac
+    base="$(basename "$f")"
+    # A changed SUITE is its own relevant suite: a test edited in the live config is exactly as
+    # unverified as the hook it covers, and that is how f094409's missing test went out.
+    case "$base" in
+      test-*) suite="$SYNC_REPO/payload/hooks/$base"
+              [ -f "$suite" ] && printf '%s\n' "$suite" ;;
+      run-all-tests.sh) ;;
+      *) out="$(send_suites_covering "$base")"
+         if [ -n "$out" ]; then
+           printf '%s\n' "$out"
+         else
+           # Said out loud rather than passed over. The coverage ratchet is what GATES an uncovered
+           # hook; what this must not do is publish one having run nothing and read the same as a
+           # send whose suites all passed (L98).
+           printf 'UNCOVERED %s\n' "$base"
+         fi ;;
+    esac
+  done < <(git -C "$SYNC_REPO" diff --cached --name-only -- payload/hooks 2>/dev/null) > "$list" 2>/dev/null
+
+  while IFS= read -r suite; do
+    case "$suite" in
+      "UNCOVERED "*) uncovered="$uncovered ${suite#UNCOVERED }"; continue ;;
+      '') continue ;;
+    esac
+    ran=$(( ran + 1 ))
+    out="$(scratch_file)" || out="/dev/null"
+    # Same shape as the pull's runner: a background child against the clock, because a wait with no
+    # deadline cannot fail, it can only hang, and this one holds the sync lock while it does (L110).
+    SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$suite" > "$out" 2>&1 &
+    pid=$!
+    started="$(date +%s)"; killed=0
+    while kill -0 "$pid" 2>/dev/null; do
+      now="$(date +%s)"
+      if [ "$(( now - started ))" -ge "$limit" ]; then
+        killed=1
+        kill -TERM "$pid" 2>/dev/null || true
+        break
+      fi
+      sleep "$SYNC_POLL_INTERVAL"
+    done
+    if [ "$killed" -eq 1 ]; then
+      wait "$pid" 2>/dev/null || true
+      failed_names="$failed_names $(basename "$suite") (still running after ${limit}s)"
+      rc=1
+    elif ! wait "$pid" 2>/dev/null; then
+      failed_names="$failed_names $(basename "$suite")"
+      rc=1
+    fi
+    [ "$out" = "/dev/null" ] || rm -f "$out" 2>/dev/null || true
+  done < "$list"
+  rm -f "$list" 2>/dev/null || true
+
+  if [ -n "$uncovered" ]; then
+    echo "claude-sync: sent, but NO SUITE covers these changed hook(s), so nothing verified them here:$uncovered" >&2
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "claude-sync: did NOT send. The suite(s) covering the hook(s) you changed failed here:$failed_names" >&2
+    echo "  Your edit is untouched in $CLAUDE_HOME and goes out on the next send once the suite passes." >&2
+    echo "  Run it to see why: bash $CLAUDE_HOME/hooks/$(printf '%s' "$failed_names" | awk '{print $1}')" >&2
+    echo "  Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
+    notify "send blocked: a hook suite failed here"
+    return 1
+  fi
+  [ "$ran" -gt 0 ] && echo "claude-sync: ran $ran suite(s) covering the hook(s) in this send, all passed."
+  return 0
+}
+
 do_send(){
   # Never publish while this Mac is behind: send has no apply step, so it cannot
   # reconcile, and mirroring upward from here would revert the other Mac. Skipping
@@ -3268,6 +3382,7 @@ do_send(){
   fi
   stage_local_to_payload
   have_git || return 0
+  send_hook_tests || return 1            # a hook whose suite fails does not get published
   commit_if_changed || return 0          # nothing changed -> nothing to send
   # A commit we just made from our OWN ~/.claude is applied here by construction:
   # stage_local_to_payload mirrored this Mac's files into it moments ago. Record it
