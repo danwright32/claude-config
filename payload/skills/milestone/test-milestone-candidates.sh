@@ -181,8 +181,11 @@ check_not "the holding pen is not offered as a feature to match against" \
 check "it finds a sibling that shares words with the idea" "SIBLING 3 #241" "$normal"
 check "it finds the other sibling too" "SIBLING 2 #242" "$normal"
 check_not "an unrelated issue in the pen is not reported at all" "#240" "$normal"
+# Three: 241, 242 and 244, which all share at least two words with the idea. 244 was
+# added for the tracker vocabulary case below and genuinely shares "spool" and
+# "find" with this one, so it counts here too.
 check "it states the sibling count, so the caller does not have to count lines" \
-  "SIBLING-COUNT 2" "$normal"
+  "SIBLING-COUNT 3" "$normal"
 
 # One shared word is a coincidence, not a cluster. It is still SHOWN, because the
 # caller may recognise a real relation the word overlap cannot, but it must not be
