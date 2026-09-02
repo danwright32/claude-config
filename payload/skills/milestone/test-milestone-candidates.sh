@@ -270,6 +270,30 @@ if [[ -n "$limit" && "$limit" -ge 100 ]]; then ok; else
   bad "it should ask for at least 100 issues (gh defaults to 30, the real pen held 82 open), got '${limit:-none}'"
 fi
 
+# --- a capped read is announced, never passed off as the whole backlog ----
+# `gh issue list --limit N` returns N and says nothing when more exist, so the
+# duplicate check would silently scan a subset and report "no duplicate found" about
+# a backlog it never saw. Measured 2026-09-02: bidspoke had 270 open issues against a
+# limit of 300, so this was 30 issues from firing in silence (L24, L227). A false
+# warning when the count lands exactly on the limit is the safe direction and is
+# deliberate.
+cat >"$TMP/issues-three.json" <<'JSON'
+[
+  { "number": 1, "title": "First loose item about spool draining", "milestone": { "title": "Ungrouped" } },
+  { "number": 2, "title": "Second loose item about spool draining", "milestone": { "title": "Ungrouped" } },
+  { "number": 3, "title": "Third loose item about spool draining", "milestone": { "title": "Ungrouped" } }
+]
+JSON
+GH_ISSUES="$TMP/issues-three.json" run acme/widgets --like "spool draining" --limit 3
+GH_ISSUES="$TMP/issues.json"
+check "a read that came back at the limit says so" "READ-TRUNCATED" "$OUT"
+check "and says how many it saw, so the gap is measurable" "3" "$OUT"
+check_eq "a truncated read is still a successful read, not an error" 0 "$RC"
+
+GH_ISSUES="$TMP/issues-three.json" run acme/widgets --like "spool draining" --limit 50
+GH_ISSUES="$TMP/issues.json"
+check_not "a read comfortably under the limit says nothing about truncation" "READ-TRUNCATED" "$OUT"
+
 # --- nothing matched, read fine -------------------------------------------
 GH_ISSUES="$TMP/issues-empty.json" run acme/widgets --like "Onboarding revamp copy tweaks"
 GH_ISSUES="$TMP/issues.json"
