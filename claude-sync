@@ -115,7 +115,12 @@ PLUGIN_SKILLS=(agents-sdk cloudflare cloudflare-email-service durable-objects \
   sandbox-sdk turnstile-spin web-perf workers-best-practices wrangler \
   plannotator-compound)
 
-MIRROR_DIRS=(hooks agents commands)   # full mirror (no overlap with plugins)
+# `audits` is here since claude-config#224. LESSONS.md cites audits/2026-07-27-issue-audit/ and
+# audits/2026-08-29-test-speed-audit/ as the full provenance for two batches of lessons, and the
+# directory was not synced, so on the other Mac those pointers named files that do not exist and a
+# lesson's evidence could not be read there at all. It is nine markdown files and half a megabyte,
+# which is cheaper than a rule whose reasoning is unreachable on the machine reading it.
+MIRROR_DIRS=(hooks agents commands audits)   # full mirror (no overlap with plugins)
 # Floor for the top-level rule files, not the whole list. The real list is derived
 # from CLAUDE.md's own @imports by top_files_in(); this seed only guarantees that
 # an existing setup keeps syncing these three even if CLAUDE.md temporarily stops
@@ -1968,6 +1973,15 @@ $d/$path
   for tf in $(top_files_in "$CLAUDE_HOME"); do
     [ -f "$CLAUDE_HOME/$tf" ] || continue
     [ -f "$PAYLOAD/$tf" ] || continue
+    # A DERIVED file is never locally ahead (claude-config#238). LESSONS-INDEX.md is regenerated
+    # from LESSONS.md at the end of every apply and every send, on each Mac independently, so the
+    # two copies differ whenever the lessons differ, by construction and with no work at risk.
+    # Reported as an unsent local edit it named itself on every pull where lessons had moved: a
+    # false positive on the one message that protects an edit from being silently reverted, which
+    # is what teaches a reader to skip it, so the one time it names a genuinely unsent edit it
+    # reads like all the noise (L36). Three other readers already skip derived files for the same
+    # reason; this was the one left out.
+    is_derived_rule_file "$tf" && continue
     if cmp -s "$PAYLOAD/$tf" "$CLAUDE_HOME/$tf"; then continue; fi
     case "$unapplied" in *"
 $tf

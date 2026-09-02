@@ -1916,7 +1916,57 @@ _suite_mtime(){   # path -> unix timestamp, or nothing
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
-check(){ if eval "$2"; then ok "$1"; else bad "$1 (expr: $2)"; fi; }
+# This file's `check` EVALS its second argument. payload/hooks/test-run-all-tests.sh defines a
+# `check` of its own that COMPARES its second argument against the literal string `ok`. Same name,
+# opposite meaning, one repo, and a shared name is read as evidence of shared behaviour so the two
+# are never compared (L263).
+#
+# Walked into on 2026-08-30: a case block written in the runner suite's convention was pasted here,
+# so `check "..." "out=$st_empty"` handed a page of captured suite output to `eval`. It RAN,
+# produced a confusing failure inside an unrelated helper, and killed the run with
+# `line 1906: $1: unbound variable`, which names the `bad()` helper rather than anything to do with
+# the mistake. The failure mode of the paste is arbitrary execution of captured output, not a wrong
+# answer, which is why this refuses rather than merely reporting.
+#
+# Refused by SHAPE, at the moment the mistake is written, rather than by renaming 1,300 call sites:
+# the other convention's second argument is either the bare word `ok` or a failure message, and a
+# message is overwhelmingly `something=value` or prose. Neither is ever how an expression starts.
+check(){
+  if ! check_expr_shape "$2"; then
+    bad "$1 ($CHECK_SHAPE_WHY)"
+    return 0
+  fi
+  if eval "$2"; then ok "$1"; else bad "$1 (expr: $2)"; fi
+}
+
+# Is this second argument shaped like an EXPRESSION this file can eval, rather than like the other
+# suite's result argument? Sets CHECK_SHAPE_WHY and returns 1 when it is not.
+#
+# A predicate rather than inline, so the probes below can watch it give BOTH answers without
+# failing the suite to do it (L1, L151).
+#
+# Refusing a leading `word=` was the first rule here and it was WRONG: an environment prefix is
+# exactly that shape, and this file writes `check "..." "CLAUDE_HOME=... bash ... pull"`
+# constantly. It rejected seven legitimate checks on the first full run. A rule that describes the
+# mistake must not also describe the commonest correct form (L104: a filter is tested against what
+# it has to PRESERVE, not only against what it has to catch).
+#
+# What is left is unambiguous, and it is the dangerous half: `eval` on captured output is arbitrary
+# execution rather than a wrong answer.
+CHECK_SHAPE_WHY=""
+check_expr_shape(){   # $1 = the expression
+  CHECK_SHAPE_WHY=""
+  case "$1" in
+    ok)
+      CHECK_SHAPE_WHY="this file's check EVALS its second argument; 'ok' is test-run-all-tests.sh's convention. Write the expression itself, or use that suite's form there."
+      return 1 ;;
+  esac
+  if ! bash -n -c "$1" 2>/dev/null; then
+    CHECK_SHAPE_WHY="that is not a shell expression bash can parse, so it was NOT run. This file's check EVALS its second argument; test-run-all-tests.sh's compares it against 'ok'. If you pasted a captured message here, write the expression instead."
+    return 1
+  fi
+  return 0
+}
 
 # ---- how old a scratch fixture has to be (#160) ----
 # Two sections plant scratch and expect the sweep to reclaim it, and both aged it by a flat two
@@ -11003,6 +11053,131 @@ printf '%s\n' "$w_pid" > "$WPID"
 out_251b="$(CLAUDE_HOME="$WOH" SYNC_REPO="$WOR" SYNC_FSWATCH="$WFS" SYNC_WATCH_PID_FILE="$WPID" SYNC_NO_NOTIFY=1 SYNC_WATCH_SEND=true bash "$SCRIPT" watch 2>&1 || true)"
 check "#251 a pid file left by a watcher that has gone does not refuse the next one" \
   "case \"\$out_251b\" in *'already running'*) false ;; *) true ;; esac"
+
+
+section "== a pull with nothing pending names nothing, and the audits travel (#238, #224, #220) =="
+# The kept-edits line is the one that protects an edit made on one Mac from being silently reverted
+# by the other, so a false positive is expensive: it fires on every pull, teaches the reader to
+# skip it, and the one time it names a genuinely unsent edit it reads the same as all the noise
+# (L36). On 2026-08-30 it named LESSONS.md and LESSONS-INDEX.md with nothing pending.
+UPB="$WORK/untouched-bare.git"; git init -q --bare -b main "$UPB"
+UPA="$WORK/untouched-A"; git clone -q "$UPB" "$UPA" 2>/dev/null
+UPHA="$WORK/untouched-homeA"; mkdir -p "$UPHA/hooks" "$UPHA/audits/2026-01-01-an-audit"
+echo '{"hooks":{}}' > "$UPHA/settings.json"
+# CLAUDE.md IMPORTS them, because that is what puts a file in the synced top level set at all: the
+# list is derived from the imports rather than from a fixed list, so a fixture whose CLAUDE.md
+# imports nothing never exercises the top level comparison and the check passes by reading nothing
+# (L98). Found exactly that way: the first version of this section passed with the fix removed.
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$UPHA/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. A readable one.** body\n' > "$UPHA/LESSONS.md"
+printf 'the evidence a lesson cites\n' > "$UPHA/audits/2026-01-01-an-audit/findings.md"
+CLAUDE_HOME="$UPHA" SYNC_REPO="$UPA" SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+UPB2="$WORK/untouched-B"; git clone -q "$UPB" "$UPB2" 2>/dev/null
+UPHB="$WORK/untouched-homeB"; mkdir -p "$UPHB"
+echo '{"hooks":{}}' > "$UPHB/settings.json"
+CLAUDE_HOME="$UPHB" SYNC_REPO="$UPB2" SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+# The SECOND pull is the one under test: everything has landed, nothing has been edited here, so
+# there is nothing this apply could have reverted and nothing to name.
+out_238="$(CLAUDE_HOME="$UPHB" SYNC_REPO="$UPB2" SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#238 a pull with an untouched tree: $out_238"
+check "#238 a pull with nothing pending names nothing as held back" \
+  "case \"\$out_238\" in *'would have reverted'*) false ;; *) true ;; esac"
+# Specifically the derived index, and this is the case that actually occurred: it is regenerated
+# from LESSONS.md independently on each Mac, so the two copies differ whenever the lessons differ
+# or the generators do, with no work at risk. The comparison runs BEFORE the apply regenerates it,
+# so a differing index was named on every such pull. Staged by making the local index differ,
+# which is what a merge, or the other Mac running an older generator, produces.
+printf 'a line only this Mac has\n' >> "$UPHB/LESSONS-INDEX.md"
+out_238i="$(CLAUDE_HOME="$UPHB" SYNC_REPO="$UPB2" SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#238 a pull whose local index differs: $out_238i"
+# Matched on the LINE that holds both, not on the file name anywhere in the output: the index is
+# legitimately named by the received-changes summary in the same run, and a check that cannot tell
+# those two apart is answered by the wrong one (L135, L178).
+check "#238 a derived index that differs is not named as an unsent edit" \
+  "! line_has \"\$out_238i\" 'would have reverted' 'LESSONS-INDEX'"
+# And it was REBUILT rather than left, which is the other half of why naming it would be wrong.
+check "#238 and it was regenerated from the lessons file instead" \
+  "! grep -q 'a line only this Mac has' '$UPHB/LESSONS-INDEX.md'"
+# The control, in the same fixture: a real local edit IS still named, or this would have been
+# fixed by making the message unable to say anything (L159).
+printf '# rules edited here\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$UPHB/CLAUDE.md"
+out_238b="$(CLAUDE_HOME="$UPHB" SYNC_REPO="$UPB2" SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#238 a real unsent edit is still named" \
+  "case \"\$out_238b\" in *'would have reverted'*CLAUDE.md*) true ;; *) false ;; esac"
+
+# ---- the audits travel with the lessons that cite them (#224) ----
+# LESSONS.md cites audits/ as the full provenance for two batches of lessons, and the directory was
+# not synced, so on the other Mac those pointers named files that do not exist and a lesson's
+# evidence could not be read there at all.
+check "#224 an audit reaches the other Mac" \
+  "[ -f '$UPHB/audits/2026-01-01-an-audit/findings.md' ]"
+check "#224 and it is the whole file, not a placeholder" \
+  "grep -q 'the evidence a lesson cites' '$UPHB/audits/2026-01-01-an-audit/findings.md'"
+
+# ---- every seam the tool honours is either set here or tested somewhere (#220) ----
+# A test that seams SOME of a script's collaborators runs the rest for real, and the real ones are
+# the slow and the dangerous ones (L52, L196). The list is DERIVED from the tool rather than kept
+# by hand beside it, or the next seam added is exempt from the very rule this checks (L96, L41).
+_seams(){ grep -ohE 'SYNC_NO_[A-Z_]+' "$SCRIPT" | sort -u; }
+_seam_unset=""
+while IFS= read -r _sm; do
+  [ -n "$_sm" ] || continue
+  # Set for the whole suite by the prelude, or named by a section that deliberately exercises its
+  # OFF state. Either is fine; neither is not.
+  case "$(eval "printf '%s' \"\${$_sm:-}\"")" in
+    [1-9]*) continue ;;
+  esac
+  grep -q "$_sm" "$SCRIPT_SELF" || _seam_unset="$_seam_unset[$_sm never mentioned]"
+done <<SEAMS
+$(_seams)
+SEAMS
+check "#220 the seam list was actually derived" "[ \"\$(_seams | grep -c .)\" -ge 4 ]"
+check "#220 every seam the tool reads is set here or exercised by a section" \
+  "[ -z \"\$_seam_unset\" ] || { echo \"    \$_seam_unset\" >&2; false; }"
+# And the two the prelude sets are really set, or the check above passes by reading nothing (L98).
+check "#220 the notifier seam is on for the whole suite" "[ \"\$SYNC_NO_NOTIFY\" = 1 ]"
+check "#220 and the watcher marker points inside this run's own directory" \
+  "case \"\$SYNC_WATCH_PID_FILE\" in \"$WORK\"/*) true ;; *) false ;; esac"
+
+section "== this file's check cannot be handed the other suite's argument (#231) =="
+# tests/test-claude-sync.sh defines `check <description> <expression>` and EVALS the second
+# argument. payload/hooks/test-run-all-tests.sh defines `check <description> <result>` and compares
+# it against the literal `ok`. Same name, opposite meaning, one repo, and a shared name is read as
+# evidence of shared behaviour so the two are never compared (L263).
+#
+# Walked into on 2026-08-30: a case block written in the runner suite's convention was pasted here,
+# so a page of captured suite output went to `eval`. It RAN, produced a confusing failure inside an
+# unrelated helper, and killed the run with an unbound variable error naming the `bad` helper
+# rather than anything to do with the mistake. The failure mode is arbitrary execution of captured
+# output, not a wrong answer, which is why this refuses rather than merely reporting.
+#
+# Watched giving BOTH answers, through the predicate `check` itself uses, so the probes exercise
+# the shipped rule rather than a second copy of it (L107, L151).
+check_expr_shape "[ 1 = 1 ]" \
+  && check "#231 an ordinary expression is accepted" "true" \
+  || check "#231 an ordinary expression is accepted" "false"
+# The commonest correct form in this file, and the one the first version of this rule REJECTED:
+# an environment prefix is a leading assignment, and a rule that refuses those refuses seven real
+# checks (L104).
+check_expr_shape "CLAUDE_HOME=/tmp/x SYNC_REPO=/tmp/y bash /bin/echo hi" \
+  && check "#231 an environment prefixed command is still accepted" "true" \
+  || check "#231 an environment prefixed command is still accepted" "false"
+check_expr_shape "ok" \
+  && check "#231 the other suite's 'ok' is refused" "false" \
+  || check "#231 the other suite's 'ok' is refused" "true"
+# A captured failure message, which is what was actually pasted. It is refused because bash cannot
+# parse it, and being refused is what stops it reaching eval.
+check_expr_shape "out=SUITE-RESULT passed=3 failed=1 (unbalanced" \
+  && check "#231 an unparseable captured message is refused" "false" \
+  || check "#231 an unparseable captured message is refused" "true"
+# And the refusal SAYS which convention it thinks you used, or the reader is told their expression
+# is bad without being told what to write instead (L11, L111).
+# Copied out FIRST: `check` calls the predicate itself, which resets the reason before the
+# expression is evaluated, so reading the live variable inside a check always finds it empty.
+check_expr_shape "ok" || true
+_231_why="$CHECK_SHAPE_WHY"
+check "#231 and the refusal names the other suite" \
+  "case \"\$_231_why\" in *test-run-all-tests.sh*) true ;; *) false ;; esac"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"

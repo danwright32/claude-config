@@ -67,7 +67,32 @@ NONE_CLEAN='{"number":7,"statusCheckRollup":[],"mergeable":"MERGEABLE"}'
 NONE_CONFLICTING='{"number":7,"statusCheckRollup":[],"mergeable":"CONFLICTING"}'
 NONE_UNKNOWN='{"number":7,"statusCheckRollup":[],"mergeable":"UNKNOWN"}'
 
-denied() { printf '%s' "$1" | grep -q '"permissionDecision": *"deny"'; }
+# Matched with the shell's own builtins, WITHOUT a pipe, deliberately. A producer piped into a
+# quiet grep is the short circuiting shape test-pipefail-shortcircuit.sh ratchets down: the reader
+# leaves on its first match, the producer dies of SIGPIPE, and under `set -o pipefail` the pipeline
+# reports a failure that never happened (L183).
+#
+# Converted HERE because this is the file new hook suites are started from, and a clone copies the
+# pattern as first written: on 2026-08-31 test-changelog-tag.sh arrived carrying two of these,
+# byte identical to this file, and turned main red. Converting the template is what stops it
+# happening again, which is the class rather than the instance (L501, L30).
+denied() { local re='"permissionDecision": *"deny"'; [[ "$1" =~ $re ]]; }
+
+says() {  # $1 = the hook output, $2 = a LITERAL needle, matched case insensitively
+  local prior found
+  # `nocasematch` is a shell wide setting, so it is restored rather than switched off: leaving it
+  # clear would be a silent change to any caller that had set it (L509).
+  prior="$(shopt -p nocasematch)"
+  shopt -s nocasematch
+  # "$2" is quoted, so a needle is a literal here where `grep -qi` read it as a regex.
+  [[ "$1" == *"$2"* ]] && found=0 || found=1
+  eval "$prior"
+  return "$found"
+}
+
+holds() {  # $1 = the hook output, $2 = a LITERAL needle, matched case sensitively
+  case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac
+}
 
 echo "block-red-merge: the commit pinned rule (#711)"
 
@@ -78,7 +103,7 @@ if denied "$out"; then pass; else
   fail "a plain gh pr merge was allowed in a repo that carries the pinned merge tool"
 fi
 # And the refusal has to say what to run instead, or it is a dead end.
-if printf '%s' "$out" | grep -q "wait_for_checks.py 7 --merge"; then pass; else
+if holds "$out" "wait_for_checks.py 7 --merge"; then pass; else
   fail "the refusal does not name the command to use instead: $out"
 fi
 rm -rf "$dir"
@@ -130,12 +155,12 @@ out=$(run_hook "$dir" "gh pr merge 7 --squash --delete-branch")
 if denied "$out"; then pass; else
   fail "a plain gh pr merge was allowed in a repo that carries a shell merge wrapper"
 fi
-if printf '%s' "$out" | grep -q "npm run merge -- 7"; then pass; else
+if holds "$out" "npm run merge -- 7"; then pass; else
   fail "the refusal does not name the wrapper's own command: $out"
 fi
 # It must name the tool it found, not the other repo's, or the message sends
 # somebody to a file that is not there.
-if printf '%s' "$out" | grep -q "wait_for_checks"; then
+if holds "$out" "wait_for_checks"; then
   fail "the refusal names the other repo's tool: $out"
 else pass; fi
 rm -rf "$dir"
@@ -166,10 +191,10 @@ out=$(run_hook "$dir" "gh pr merge 7 --squash")
 if denied "$out"; then pass; else
   fail "a conflicting PR with no checks was allowed through: $out"
 fi
-if printf '%s' "$out" | grep -qi 'conflict'; then pass; else
+if says "$out" "conflict"; then pass; else
   fail "the refusal does not say the branch conflicts, which is the one thing that explains it: $out"
 fi
-if printf '%s' "$out" | grep -qi 'rebase\|merge the base'; then pass; else
+if { says "$out" "rebase" || says "$out" "merge the base"; }; then pass; else
   fail "the refusal does not say what to do about it: $out"
 fi
 rm -rf "$dir"
@@ -182,7 +207,7 @@ out=$(run_hook "$dir" "gh pr merge 7 --squash")
 if denied "$out"; then pass; else
   fail "a PR with no checks was allowed in a repo whose workflows run on pull requests: $out"
 fi
-if printf '%s' "$out" | grep -qi 'conflict'; then
+if says "$out" "conflict"; then
   fail "it blamed a conflict when the branch merges cleanly: $out"
 else pass; fi
 rm -rf "$dir"
@@ -212,7 +237,7 @@ out=$(run_hook "$dir" "gh pr merge 7 --squash")
 if denied "$out"; then pass; else
   fail "an unknown mergeable state with no checks was allowed through: $out"
 fi
-if printf '%s' "$out" | grep -qi 'conflict'; then
+if says "$out" "conflict"; then
   fail "it asserted a conflict GitHub had not confirmed: $out"
 else pass; fi
 rm -rf "$dir"
