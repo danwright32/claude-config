@@ -1222,6 +1222,20 @@ window is a count rather than a boundary.
   lane is. The message carried its own refutation, "3 hours behind, with 1 rows waiting", since a
   lane three hours behind a ten minute tick would have eighteen ticks of rows queued.
 
+- **L539. A detector comparing a PERIOD TO DATE cumulative rate against a per period baseline lets
+  a burst heal itself as the denominator grows, so it clears with nothing fixed, never fires at all
+  later in the period, and reports a duration set by the check's tick rather than by the event.**
+  Judge a trailing window instead, and report the window that was actually measured rather than the
+  interval between ticks. Measured 2026-09-02 (bidspoke#1101): Main Flow's
+  `trades_request.body.pennieLeadCalculations` missed 168 of 261 runs inside the single hour 12:00
+  to 13:00 UTC, from a Salesforce Apex deploy that broke the trades path between 12:20 and 12:50.
+  The hourly field presence check compares midnight to now against a seven day daily baseline, so
+  it alerted at 13:00, then posted "back within normal range" at 14:00 because the day's average
+  had climbed back over the 0.90 floor as later good runs arrived, which is dilution rather than
+  repair. The recovery notice reported the incident as lasting one hour, an artifact of the tick,
+  against a real outage of thirty minutes, and the identical 168 misses inside a busier hour would
+  never have crossed the floor at all.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
