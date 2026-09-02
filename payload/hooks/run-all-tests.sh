@@ -30,6 +30,7 @@
 #   HOOK_TESTS_ROOT           read this repo instead of the one above this script
 #   HOOK_TESTS_LIST_ONLY=1    print the directories it would read, run nothing
 #   HOOK_TESTS_FAIL_DETAIL_MAX  lines of a failing suite's output to print
+#   HOOK_TESTS_FLAKE_RECHECK  0 turns off the second run of a suite that failed (default 1)
 #   HOOK_TESTS_JOBS           how many suites run at once
 #   HOOK_TESTS_BUDGET         processes this whole run may have in flight (default: cores, max 8)
 #   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
@@ -60,6 +61,14 @@ export HOOK_TESTS_RUNNING=1
 # How many lines of a failing suite's own output to print. Enough to act on, bounded so one
 # broken suite cannot bury the other verdicts.
 FAIL_DETAIL_MAX="${HOOK_TESTS_FAIL_DETAIL_MAX:-40}"
+# Run a suite that FAILED once more, purely to find out whether it is a flake (claude-config#245).
+# On by default because the cost is paid only by a run that is already red, and off inside the
+# recheck itself so a suite that fails every time cannot recurse.
+FLAKE_RECHECK="${HOOK_TESTS_FLAKE_RECHECK:-1}"
+# The floor on how long a recheck may take. Raised to three times what the suite measured on its
+# first run, so a slow suite is not called hung for being slow, and a suite with no measurement at
+# all still has this bound.
+FLAKE_RECHECK_MAX="${HOOK_TESTS_FLAKE_RECHECK_MAX:-60}"
 
 # How many suites run at once (claude-config#125). Since #120 this reads every directory in the
 # repo, which was 37 suites and about five minutes run one after another when #125 was written,
@@ -277,6 +286,8 @@ echo "run-all-tests: $(printf '%s' "$dirs" | grep -c .) directory(ies), $source_
 ran=0
 failed=0
 failed_names=""
+flaky=0
+flaky_names=""
 empty_dirs=""
 guessed_names=""
 
@@ -728,13 +739,83 @@ run-all-tests: this suite left no exit status, so it was killed or never started
     if [ "$code" -ne 0 ] || { [ -n "$tally" ] && [ "$tally" -gt 0 ]; }; then
       failed=$((failed + 1))
       failed_names="$failed_names $name"
-      printf '  FAIL  %-38s %-26s %s\n' "$name" "$summary" "$dur"
+      # Was it a FLAKE? Run it once more and say so (claude-config#245).
+      #
+      # Three suites failed three separate full runs on 2026-08-31 on three different assertions and
+      # passed cleanly every time they were run on their own. A suite that fails at random teaches
+      # everyone to re-run rather than read, so a real regression there arrives looking exactly like
+      # the noise, and nothing anywhere counted how often it happened.
+      #
+      # The re-run does NOT rescue the suite. It stays failed and the run stays red, because a retry
+      # that turns a red suite green hides the price the flake is actually costing (L293). What the
+      # second run buys is the word FLAKY beside it, which is the thing a reviewer needs and cannot
+      # otherwise get without reproducing it by hand.
+      #
+      # Paid only on a suite that already failed, so a green run costs nothing extra.
+      #
+      # Run inside a subshell and behind a deadline, because the suite being re-run is by definition
+      # one that just misbehaved. `test-vanish.sh` in this runner's own suite kills its PARENT: run
+      # directly, that parent is this script, and the first version of this recheck killed the
+      # runner mid report. The subshell puts a throwaway process in the way, and the deadline means
+      # a suite that hangs on the second run costs a bounded wait rather than the whole run (L110).
+      _flake=""
+      if [ "$FLAKE_RECHECK" = "1" ]; then
+        _fl_max="$FLAKE_RECHECK_MAX"
+        case "$secs" in
+          ''|*[!0-9]*) ;;
+          *) [ "$(( secs * 3 ))" -gt "$_fl_max" ] && _fl_max="$(( secs * 3 ))" ;;
+        esac
+        # The trailing assignment and explicit exit are load bearing. Bash replaces the subshell
+        # with the command when that command is the LAST thing in it, so the plain form left the
+        # suite's PPID pointing at this script again and `kill -9 "$PPID"` went on killing the
+        # runner. Something after it keeps a real process in between.
+        ( HOOK_TESTS_FLAKE_RECHECK=0 bash "$suite" >/dev/null 2>&1; _fl_rc=$?; exit "$_fl_rc" ) &
+        _fl_pid=$!
+        _fl_waited=0
+        while kill -0 "$_fl_pid" 2>/dev/null && [ "$_fl_waited" -lt "$_fl_max" ]; do
+          sleep 1
+          _fl_waited=$(( _fl_waited + 1 ))
+        done
+        if kill -0 "$_fl_pid" 2>/dev/null; then
+          # It outlasted its deadline, so it is not a flake and it is not a clean failure either.
+          # Said out loud rather than folded into the FAIL line, because a suite that hangs on the
+          # second run is a different problem from one that fails on it (L11).
+          runner_kill_tree "$_fl_pid" 2>/dev/null || true
+          kill -9 "$_fl_pid" 2>/dev/null || true
+          _flake=" (recheck timed out after ${_fl_max}s)"
+        elif wait "$_fl_pid"; then
+          _flake=" FLAKY"
+          flaky=$((flaky + 1))
+          flaky_names="$flaky_names $name"
+        fi
+      fi
+      printf '  FAIL  %-38s %-26s %s%s\n' "$name" "$summary" "$dur" "$_flake"
       # And WHY. A one line verdict is enough on a machine where you can just run the suite
       # again; it is useless where you cannot, which is the whole point of running these
       # somewhere else (claude-config#101). The failing lines are printed, and the count is
       # said out loud when there are more than fit, so a truncated report cannot read as a
       # complete one.
-      detail="$(printf '%s\n' "$out" | grep -E '^ *(FAIL|not ok)' || true)"
+      # EVERY line of the message, not only the line the word FAIL is on (claude-config#253).
+      #
+      # This used to be a grep for lines STARTING with FAIL, so a multi line message lost everything
+      # after its first line. The suites that give the most useful detail are the ones that lost the
+      # most of it: on the red run of b94b29a both messages ended mid sentence, on an open
+      # parenthesis, and what was cut off was the files, the counts and the remedy. Diagnosing it
+      # meant checking out the failing commit and running the suite by hand to read a message the
+      # runner had already been handed (L148).
+      #
+      # A continuation is a line INDENTED further than the FAIL it follows. That is what the suites
+      # here actually write, and it is what stops the rule swallowing the whole of a chatty suite's
+      # output: a line back at the margin ends the message.
+      detail="$(printf '%s\n' "$out" | awk '
+        /^ *(FAIL|not ok)/ { match($0, /^ */); ind = RLENGTH; print; carry = 1; next }
+        carry {
+          if ($0 ~ /^[[:space:]]*$/) { carry = 0; next }
+          match($0, /^ */)
+          if (RLENGTH > ind) { print; next }
+          carry = 0
+        }
+      ' || true)"
       [ -n "$detail" ] || detail="$(printf '%s\n' "$out" | tail -n "$FAIL_DETAIL_MAX")"
       shown="$(printf '%s\n' "$detail" | grep -c . || true)"
       printf '%s\n' "$detail" | head -n "$FAIL_DETAIL_MAX" | sed 's/^/          /'
@@ -866,6 +947,14 @@ fi
 if [ -n "$unmeasured_names" ]; then
   echo "NO DURATION was measured for:$unmeasured_names"
   echo "  They are missing from the timings above rather than counted as instant."
+fi
+if [ -n "$flaky_names" ]; then
+  # Named and counted, where the verdict is read (claude-config#245, L293). A flake is a speed cost
+  # priced at a full re-run, and the only way it stops being rediscovered every few weeks is for the
+  # count to sit in front of whoever reads the run.
+  echo "$flaky PASSED ON A SECOND RUN, so they are FLAKY rather than broken:$flaky_names"
+  echo "  They are still counted as failures above. A suite that fails at random teaches everyone"
+  echo "  to re-run rather than read, so a real regression there arrives looking like the noise."
 fi
 if [ -n "$guessed_names" ]; then
   # Named, not counted. A suite whose score had to be guessed is one whose verdict this run is less

@@ -1375,6 +1375,108 @@ case "$out_sp4" in
       || check "#230 a run that wrote nothing to the spool says nothing about it" "exit=$code_sp4" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A failing suite's WHOLE diagnosis reaches the reader (claude-config#253).
+#
+# The runner printed the failing suite name and then the FAIL lines, but only the FIRST line of
+# each. Every FAIL message in test-pipefail-shortcircuit.sh is multi line: the first line states the
+# rule that was broken, and the lines under it name the files, the counts and the remedy. On the red
+# run of b94b29a both messages ended mid sentence, on an open parenthesis, and diagnosing it meant
+# checking out the failing commit in a worktree and running the suite by hand to read a message the
+# runner had already been handed. That is L148: the reason exists, and the only surface carrying it
+# dies with the run.
+FD="$TMPROOT/faildetail"
+mkdir -p "$FD"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'echo "FAIL: the baseline has been lowered as sites were converted (these are stale:"\n'
+  printf 'echo "  payload/hooks/block-red-merge.sh: 1 recorded, 0 now"\n'
+  printf 'echo "  Lower the recorded number, so what is left keeps meaning something."\n'
+  printf 'echo "SUITE-RESULT passed=0 failed=1"\n'
+  printf 'exit 1\n'
+} > "$FD/test-detail.sh"
+chmod +x "$FD/test-detail.sh"
+out_fd="$(HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$FD" 2>&1)"
+case "$out_fd" in
+  *"1 recorded, 0 now"*)
+    check "#253 a multi line FAIL carries the line naming the file and the count" ok ;;
+  *)
+    check "#253 a multi line FAIL carries the line naming the file and the count" "out=$out_fd" ;;
+esac
+case "$out_fd" in
+  *"Lower the recorded number"*)
+    check "#253 and it carries the remedy under it" ok ;;
+  *)
+    check "#253 and it carries the remedy under it" "out=$out_fd" ;;
+esac
+# The control: an UNINDENTED line after the FAIL belongs to the suite's ordinary chatter, not to
+# the message, and carrying it would turn every failing suite's whole output into the detail block.
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'echo "FAIL: the rule that was broken"\n'
+  printf 'echo "  the indented reason"\n'
+  printf 'echo "an unrelated line at the margin"\n'
+  printf 'echo "SUITE-RESULT passed=0 failed=1"\n'
+  printf 'exit 1\n'
+} > "$FD/test-detail.sh"
+out_fd2="$(HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$FD" 2>&1)"
+case "$out_fd2" in
+  *"the indented reason"*) check "#253 the indented continuation is carried" ok ;;
+  *) check "#253 the indented continuation is carried" "out=$out_fd2" ;;
+esac
+case "$out_fd2" in
+  *"an unrelated line at the margin"*)
+    check "#253 and a line back at the margin is not swept in" "out=$out_fd2" ;;
+  *)
+    check "#253 and a line back at the margin is not swept in" ok ;;
+esac
+
+# ---------------------------------------------------------------------------
+# A suite that passes only on a second run is COUNTED as a flake (claude-config#245).
+#
+# Three suites failed three separate full runs on 2026-08-31 on three different assertions, and
+# passed cleanly every time they were run on their own. A suite that fails at random teaches
+# everyone to re-run rather than read, so a real regression there arrives looking exactly like the
+# noise. L293 is the rule: a flake is a speed cost priced at a full re-run, and a RETRY HIDES THE
+# PRICE, so count flakes on every run and put the count where a reviewer looks.
+#
+# So the re-run does not rescue the suite. It stays failed, and the run stays red; what the re-run
+# buys is the word FLAKY next to it, which is the thing a reviewer needs and could not otherwise
+# get without reproducing it by hand.
+FL="$TMPROOT/flaky"
+mkdir -p "$FL"
+MARKER="$TMPROOT/flaky-marker"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'if [ -e "%s" ]; then echo "SUITE-RESULT passed=1 failed=0"; exit 0; fi\n' "$MARKER"
+  printf 'touch "%s"\n' "$MARKER"
+  printf 'echo "FAIL: it failed the first time only"\n'
+  printf 'echo "SUITE-RESULT passed=0 failed=1"\n'
+  printf 'exit 1\n'
+} > "$FL/test-flaky.sh"
+chmod +x "$FL/test-flaky.sh"
+rm -f "$MARKER"
+out_fl="$(HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 bash "$RUNNER" "$FL" 2>&1)"; code_fl=$?
+case "$out_fl" in
+  *FLAKY*) check "#245 a suite that passes on a second run is named FLAKY" ok ;;
+  *) check "#245 a suite that passes on a second run is named FLAKY" "out=$out_fl" ;;
+esac
+[ "$code_fl" -ne 0 ]   && check "#245 and the run is still red, because a retry must not hide the price" ok   || check "#245 and the run is still red, because a retry must not hide the price" "exit=$code_fl"
+case "$out_fl" in
+  *"test-flaky.sh"*) check "#245 and the flake is named, not just counted" ok ;;
+  *) check "#245 and the flake is named, not just counted" "out=$out_fl" ;;
+esac
+
+# The control: a suite that fails BOTH times is a failure, not a flake. Without this the word
+# FLAKY would attach to every red suite and stop meaning anything (L159).
+mk_suite "$FL" solid 1
+rm -f "$MARKER" "$FL/test-flaky.sh"
+out_fl2="$(HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 bash "$RUNNER" "$FL" 2>&1)"; code_fl2=$?
+case "$out_fl2" in
+  *FLAKY*) check "#245 a suite that fails twice is not called a flake" "out=$out_fl2" ;;
+  *) [ "$code_fl2" -ne 0 ]        && check "#245 a suite that fails twice is not called a flake" ok        || check "#245 a suite that fails twice is not called a flake" "exit=$code_fl2" ;;
+esac
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
