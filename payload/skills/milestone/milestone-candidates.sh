@@ -31,6 +31,12 @@
 #   WEAK-TRUNCATED <shown> of <found>        likewise for the weak ones
 #   SIBLING-COUNT <n>                        what the "2 or more" rule reads
 #   WEAK-COUNT <n>                           reported beside it, never folded into it
+#   DUPLICATE-RISK <score> #<num> <title>    an open issue ANYWHERE that overlaps.
+#                                            A warning that this may already be filed,
+#                                            never a sibling, never in the count below.
+#   READ-TRUNCATED <n> at the limit          the read hit its cap, so every count that
+#                                            follows is about a subset of the backlog
+#   DUPLICATE-COUNT <n>                      reported apart from the sibling count
 #   NO-CANDIDATES <repo>                     read fine, nothing to report (exit 1)
 #
 # Exit codes:
@@ -63,7 +69,12 @@ fi
 shift
 
 like=""
-limit=300          # gh issue list defaults to 30, and one real pen held 82 open.
+# gh issue list defaults to 30 and returns exactly --limit with no indication that
+# more exist. Measured 2026-09-02: bidspoke had 270 open issues, so a limit of 300 was
+# 30 away from silently scanning a subset while still reporting "no duplicate found".
+# Raised, and a read that comes back AT the limit is announced below rather than
+# trusted (L24, L227).
+limit=1000
 show_max=12
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -191,6 +202,7 @@ siblings_out="$(printf '%s' "$issues_raw" | python3 -c '
 import json, re, sys
 
 like, catch_all, show_max = sys.argv[1], sys.argv[2], int(sys.argv[3])
+limit = int(sys.argv[4])
 
 # Words shorter than this carry no subject on their own.
 MIN_WORD = 4
@@ -329,6 +341,14 @@ MIN_SIBLING_SCORE = 2
 siblings = [r for r in scored if r[0] >= MIN_SIBLING_SCORE]
 weak = [r for r in scored if r[0] < MIN_SIBLING_SCORE]
 
+# Announced BEFORE anything derived from the read, so a reader who stops at the first
+# line still learns the answer rests on a subset. A count landing exactly on the limit
+# warns when nothing was actually lost, which is the safe direction: a needless warning
+# costs a glance, a silent subset costs the answer.
+if len(valid) >= limit:
+    print("READ-TRUNCATED %d issues came back at the limit of %d, so this saw a SUBSET "
+          "of the backlog and every count below is about that subset only. Re-run with "
+          "--limit above %d." % (len(valid), limit, limit))
 print("HOLDING-PEN %s open=%d" % (catch_all, len(pen)))
 for score, num, title, shared in siblings[:show_max]:
     print("SIBLING %d #%s %s [shares: %s]" % (score, num, title, ", ".join(shared)))
@@ -349,7 +369,7 @@ if len(dups) > show_max:
 print("SIBLING-COUNT %d" % len(siblings))
 print("WEAK-COUNT %d" % len(weak))
 print("DUPLICATE-COUNT %d" % len(dups))
-' "$like" "$CATCH_ALL" "$show_max" 2>"$gh_err")"
+' "$like" "$CATCH_ALL" "$show_max" "$limit" 2>"$gh_err")"
 irc=$?
 if [[ $irc -ne 0 ]]; then
   echo "Could not read the HOLDING PEN \"$CATCH_ALL\" in $repo: $(tr '\n' ' ' <"$gh_err")" >&2
