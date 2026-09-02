@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 401 lessons.
+LESSONS.md, which is NOT loaded into the session. 402 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -117,6 +117,7 @@ to decide something: the body is where the failure it came from is described.
 - L356. A performance measurement taken on the machine that also builds and tests the product measures both, so record what else was running at the moment of the reading rather than filtering it out afterwards.
 - L537. A "how far behind" reading computed as the newest item minus the last processed one measures the interval between the two most recent items, not elapsed delay, so on a sparse stream an item seconds old reads as hours behind and a genuinely stalled lane is indistinguishable from a healthy one.
 - L539. A detector comparing a PERIOD TO DATE cumulative rate against a per period baseline lets a burst heal itself as the denominator grows, so it clears with nothing fixed, never fires at all later in the period, and reports a duration set by the check's tick rather than by the event.
+- L540. A reconciliation that declares everything accounted for by summing named buckets is satisfied by the very defect it hunts, as long as that item lands in the bucket standing for legitimate cases, because the arithmetic balances whatever the labels claim. So every member of an expected absence bucket must carry a measured reason, never membership earned by failing to match the good case.
 
 ## Data safety
 

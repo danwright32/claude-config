@@ -1236,6 +1236,21 @@ window is a count rather than a boundary.
   against a real outage of thirty minutes, and the identical 168 misses inside a busier hour would
   never have crossed the floor at all.
 
+- **L540. A reconciliation that declares everything accounted for by summing named buckets is
+  satisfied by the very defect it hunts, as long as that item lands in the bucket standing for
+  legitimate cases, because the arithmetic balances whatever the labels claim. So every member of
+  an expected absence bucket must carry a measured reason, never membership earned by failing to
+  match the good case.** (project-enrollment-tracker#1219, 2026-09-02: the #1084 attribution
+  cross-check read 85 September feed rows, put 84 on a board and 1 in `offBoard`, documented as
+  rows "legitimately not on any board", and printed "every feed row is accounted for" on a run
+  where a rep's unit was genuinely missing from Team Whitaker. `offBoard` membership is earned by
+  the resolved name not being in `boardNames`, which is precisely the #1081 and Sean Murakami
+  defect shape, so the bucket named for legitimate absences is the one that absorbs the silent
+  drop. The roster coverage guard alerted on the same row in the same run, one log line above the
+  balanced verdict, so the two guards shipped opposite answers to one question. L517 does not
+  cover it: the item landed in exactly one bucket and the count was correct, and only the bucket's
+  NAME asserted a legitimacy nothing had measured.)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
