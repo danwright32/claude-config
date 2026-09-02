@@ -1251,6 +1251,22 @@ window is a count rather than a boundary.
   cover it: the item landed in exactly one bucket and the count was correct, and only the bucket's
   NAME asserted a legitimacy nothing had measured.)
 
+- **L548. A record still holding a seeded default does not merely escape detection, it COUNTS
+  TOWARD any coverage or health measure computed over its population, so the placeholder makes
+  the system read healthier than it is and can mask the very gap the measure exists to find.
+  Exclude never-set records from such measures, or record whether a value was ever set by
+  anyone.** (slate#1753, 2026-09-02: every one of 117 agents carried the seeded working week,
+  Monday to Friday 08:00 to 17:00 in America/New_York, because nobody had edited it; measured
+  against cal.com, 81 of 100 had different hours and 74 of 103 were in another timezone, one of
+  them Phoenix, three hours out. Two agents whose hours nobody has ever set are still on that
+  default, and `roster-coverage` (#1454) pages when the org's advertised hours are not covered
+  by somebody on shift, so those two CONTRIBUTE 08:00 to 17:00 of coverage each and make the
+  roster read better than it is, hiding whatever gap their real hours would have left. L113 says
+  a default is indistinguishable from a deliberate choice, which is the passive half; this is the
+  active half, where the placeholder feeds the health metric. The root fix is a stamp recording
+  who set a value and when, since `availability_schedules` carried `created_at` and nothing about
+  whether a human had ever touched the row, so "never set" was not a state anything could query.)
+
 - **L364. A check deciding whether a machine is clean enough to measure on must judge by what is
   UNUSUAL for that machine, never by what is running on it, because the always-present load (a sync
   daemon, a backup agent, an indexer) makes an absolute-quiet rule refuse every measurement anybody
