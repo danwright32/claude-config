@@ -63,6 +63,55 @@ case "$REWRITTEN" in
   "rtk read "*) exit 0 ;;
 esac
 
+# NEVER rewrite a TEST RUN into an rtk summariser (claude-config#259).
+#
+# Twice on 2026-09-01 a full Playwright run came back as exactly 18 bytes, `PASS (0) FAIL (3)`, and
+# nothing else. Both commands EXITED 0 and the true results were 4356 and 4359 passed with nothing
+# failed, confirmed by re-running with a different reporter. Two properties compound: it invented
+# three failures that did not exist, and it discarded the entire underlying output, so there was
+# nothing left to cross-check against. The same parser failing the other way round reports PASS on
+# a red suite by the same mechanism, and there would be no output left to contradict it either.
+#
+# It is size dependent, so the condensing engages exactly on the runs too long to eyeball, and
+# intermittent, so a correct summary yesterday says nothing about today.
+#
+# A summary that can disagree with the exit code, while being the only thing printed, is not a
+# summary a reader can rely on. A test verdict is the one output where being wrong is
+# indistinguishable from being right, so these pass through unfiltered. Everything else still goes
+# through rtk, which is the point: git, gh and the rest keep saving tokens.
+#
+# Refused by DESTINATION, like `rtk read` above, and for the same reason: whatever produced it,
+# the summariser is the thing that corrupts the output.
+rtk_dest_sub="${REWRITTEN#rtk }"; rtk_dest_verb="${rtk_dest_sub#* }"
+rtk_dest_sub="${rtk_dest_sub%% *}"; rtk_dest_verb="${rtk_dest_verb%% *}"
+
+# The `test` VERB, wherever it appears as the first argument. rtk's help describes `cargo`, `go`,
+# `dotnet` and `npm` as compact output for those tools generally, so the subcommand alone cannot
+# tell `cargo test` from `cargo build`, and only the verb makes it a verdict.
+if [ "$rtk_dest_verb" = "test" ]; then exit 0; fi
+
+# The floor: summarisers whose whole job is a test verdict. Held in code AND checked by the
+# derivation below, so neither is the only guard (L96).
+case " test playwright pytest vitest " in
+  *" $rtk_dest_sub "*) exit 0 ;;
+esac
+
+# And derived from rtk's OWN subcommand list, so a summariser this hook has never heard of is
+# refused because rtk says it runs tests, rather than because somebody remembered to add it (L41).
+# A help output that cannot be read finds nothing and refuses nothing extra, which is why the floor
+# above is not folded into it: the derivation going quiet must not take the known cases with it.
+#
+# It errs toward refusing, and the cost of that is measured rather than assumed. Against rtk 0.31.0
+# it also catches `dotnet` (its description lists build/test/restore/format) and `verify` (it runs
+# TOML filter inline tests), neither of which is purely a test verdict. Both simply run unfiltered,
+# which loses some token saving and cannot lose a result, and neither is used by any project here.
+if rtk --help 2>/dev/null | awk -v want="$rtk_dest_sub" '
+     $1 == want && tolower($0) ~ /test/ { found = 1 }
+     END { exit found ? 0 : 1 }
+   '; then
+  exit 0
+fi
+
 # No change — nothing to do.
 if [ "$CMD" = "$REWRITTEN" ]; then
   exit 0

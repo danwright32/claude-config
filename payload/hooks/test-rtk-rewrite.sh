@@ -39,6 +39,7 @@ cat > "$BIN/rtk" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
   --version) cat "$RTK_STUB_DIR/version" 2>/dev/null || echo "rtk 0.31.0" ;;
+  --help|help) cat "$RTK_STUB_DIR/help" 2>/dev/null || true ;;
   rewrite)
     if [ -s "$RTK_STUB_DIR/rewrite" ]; then cat "$RTK_STUB_DIR/rewrite"; exit 0; fi
     exit 1 ;;
@@ -48,6 +49,21 @@ STUB
 chmod +x "$BIN/rtk"
 export RTK_STUB_DIR="$TMPROOT"
 : > "$TMPROOT/rewrite"
+# rtk's own subcommand list, which is where the set of test summarisers is derived from.
+rtk_help_fixture() {
+  cat > "$TMPROOT/help" <<'HELP'
+Commands:
+  git            Git commands with compact output
+  test           Run tests and show only failures
+  playwright     Playwright E2E tests with compact output
+  pytest         Pytest test runner with compact output
+  vitest         Vitest commands with compact output
+  cargo          Cargo commands with compact output
+  newrunner      Brand new test harness with compact output
+  read           Read file with intelligent filtering
+HELP
+}
+rtk_help_fixture
 
 # The payload is written to a FILE and fed in with a redirect, never through a pipe. The hook
 # exits before reading stdin in several of the cases below (no jq, no rtk, too old), and a python
@@ -157,6 +173,58 @@ out_none="$(PATH="$SYSPATH" bash "$H" < "$TMPROOT/payload.json" 2>"$TMPROOT/none
 grep -qi 'not installed' "$TMPROOT/noneerr" \
   && check "and says which tool is missing" ok \
   || check "and says which tool is missing" "stderr=$(cat "$TMPROOT/noneerr")"
+
+# ---------------------------------------------------------------------------
+# A TEST RUN is never rewritten into an rtk summariser (claude-config#259).
+#
+# Twice on 2026-09-01 a full Playwright run came back as exactly 18 bytes, `PASS (0) FAIL (3)`,
+# and nothing else. Both commands EXITED 0 and the true results were 4356 and 4359 passed with
+# nothing failed. Two properties compound: it invented three failures that did not exist, and it
+# discarded the entire underlying output, so there was nothing left to cross-check against. The
+# same parser failing the other way round reports PASS on a red suite, by the same mechanism, with
+# no output left to contradict it.
+#
+# A summary that can disagree with the exit code, while being the only thing printed, is not a
+# summary a reader can rely on, and a test verdict is the one output where being wrong is
+# indistinguishable from being right. So test runs pass through unfiltered and everything else
+# keeps saving tokens, which is the same shape as the `rtk read` refusal above: by DESTINATION,
+# because whatever produced it is what corrupts the output.
+refused_to_rewrite() { # refused_to_rewrite <destination>  -> "ok" when the hook passed through
+  printf '%s\n' "$1" > "$TMPROOT/rewrite"
+  local o; o="$(hook 'some command')"
+  if [ -z "$o" ]; then echo ok; else echo "it rewrote to: $(printf '%s' "$o" | rewritten_to)"; fi
+}
+check "#259 a playwright run is not condensed into a verdict" \
+  "$(refused_to_rewrite 'rtk playwright test --config playwright.node.config.js --reporter=dot')"
+check "#259 nor a pytest run" "$(refused_to_rewrite 'rtk pytest -q')"
+check "#259 nor a vitest run" "$(refused_to_rewrite 'rtk vitest run')"
+check "#259 nor the generic test summariser" "$(refused_to_rewrite 'rtk test')"
+# The test-ness of these lives in the ARGUMENT, not the subcommand: rtk's help calls `cargo` and
+# `go` compact output for those tools generally, and only the `test` verb makes it a verdict.
+check "#259 nor cargo test, where the verb is the argument" "$(refused_to_rewrite 'rtk cargo test')"
+check "#259 nor go test" "$(refused_to_rewrite 'rtk go test ./...')"
+# Derived, not listed: a summariser this hook has never heard of is refused because rtk's own help
+# says it runs tests. A hand-written list checks only what it lists (L96).
+check "#259 and a test summariser nobody hardcoded is refused too" "$(refused_to_rewrite 'rtk newrunner --all')"
+
+# The controls, and they are the point: everything that is not a test verdict still saves tokens.
+printf 'rtk git status\n' > "$TMPROOT/rewrite"
+out_259a="$(hook 'git status')"
+[ "$(printf '%s' "$out_259a" | rewritten_to)" = "rtk git status" ] \
+  && check "#259 an ordinary command is still rewritten" ok \
+  || check "#259 an ordinary command is still rewritten" "out=$out_259a"
+printf 'rtk cargo build\n' > "$TMPROOT/rewrite"
+out_259b="$(hook 'cargo build')"
+[ "$(printf '%s' "$out_259b" | rewritten_to)" = "rtk cargo build" ] \
+  && check "#259 and a cargo BUILD is not caught by the cargo test rule" ok \
+  || check "#259 and a cargo BUILD is not caught by the cargo test rule" "out=$out_259b"
+
+# Fail closed. If rtk stops answering with a subcommand list the derivation finds nothing, and a
+# refusal that quietly stopped refusing would be the defect back with a green test beside it (L98).
+: > "$TMPROOT/help"
+check "#259 a floor destination is still refused when the derivation reads nothing" \
+  "$(refused_to_rewrite 'rtk playwright test')"
+rtk_help_fixture
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
