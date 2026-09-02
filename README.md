@@ -47,6 +47,8 @@ turnstile-spin, web-perf, workers-best-practices, wrangler, plannotator-compound
 ./claude-sync pull              # bring shared config down
 ./claude-sync sync              # two-way: send local, then receive remote
 ./claude-sync status            # show differences, no changes
+./claude-sync hold 30 "why"     # stop the watcher committing while you commit by hand
+./claude-sync release           # lift that hold now instead of waiting for it to run out
 ./claude-sync cite-scan L2      # which synced files cite that lesson number
 ./claude-sync reap-scratch      # reclaim scratch a killed run left behind
 ./claude-sync install-autosync  # background auto-sync (see below)
@@ -77,6 +79,26 @@ your shell config. Override the target file with `SYNC_ZSHRC=<path>`.
 Sending is automatic on change; receiving is automatic on the timer. A no-op sync
 writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
 conflict the background job stops and fires a desktop notification.
+
+### A burst of edits is one send, and you can hold the watcher off
+
+Everything that arrives while a send is running becomes ONE more send rather than one send each
+(`SYNC_WATCH_DRAIN`, default `1` second of quiet before the loop decides the burst is over). Those
+events are never simply dropped: anything the drain sees sends the loop round again, so the last
+edit always goes out. Without this a run of saves produced a commit each, and since CI cancels a
+superseded run there was effectively no build signal during active work (measured 2026-09-02: six
+consecutive commits, five runs cancelled, one survivor).
+
+`claude-sync hold [minutes] [why]` stops the AUTOMATIC send for a while, so a session can get its
+own commit in with its own message rather than finding the watcher has already committed the same
+files as `sync from <host>`. It holds the watcher only: `claude-sync send` typed by a person still
+works, because the person asking is not the thing being held off. The hold fails open, which is the
+point of the expiry: a hold that outlived the session that took it would silently stop the sync,
+which is the hardest failure here to notice. It defaults to 30 minutes (`SYNC_HOLD_MINUTES`, a chosen number and not a measurement: what it
+costs to be wrong is one more `hold` or one earlier `release`), lifts
+itself when that runs out and says so, is listed by `claude-sync status` for as long as it is live,
+and `claude-sync release` ends it early. A marker nothing can read is cleared and reported in those
+words, never treated as a hold and never treated as absent.
 
 ## Lessons: an index in context, the full text on demand
 
@@ -160,7 +182,8 @@ a pull that runs the suite would otherwise recurse without end.
 
 ### Sending checks the hooks it is about to publish
 
-A `send` runs the suites covering the hooks in that send, and refuses to commit when one fails. The
+A `send` runs the suites covering the hooks in that send, and holds back the hooks a failing suite
+covers. The
 pre push test gate is a Claude Code hook on `git push`, so it only fires for a push a session makes
 by hand; the watcher commits and pushes on its own, and that was the one path with no coverage
 requirement on it. Measured 2026-08-31: commit `f094409` pushed a 41 line change to
@@ -173,9 +196,23 @@ A changed `test-*.sh` is its own relevant suite. A changed hook that NO suite na
 with a line saying plainly that nothing verified it, since the coverage ratchet is what gates an
 uncovered hook and a send that ran nothing must not read like one whose suites all passed.
 
-A refusal leaves your edit untouched in `~/.claude` and it goes out on the next send once the suite
-passes. `SYNC_NO_SEND_TESTS=1` skips the gate for one run. `SYNC_SEND_TESTS_TIMEOUT` (default `600` seconds)
-bounds how long it waits for a suite before refusing and naming that suite as still running.
+A red suite costs a trip to the hooks it covers, and to nothing else. The first version of this gate
+refused the WHOLE send, which is the more expensive of the two failures: an unrelated red suite then
+stopped rule files, skills and lessons reaching the other Mac as well, and a watcher that has quietly
+stopped sending is already hard to notice from outside. So a send holds those hooks back, names them
+and the suite on one line, and delivers everything else, which is the same "only that file waits"
+rule a rule file with a duplicate lesson number already gets.
+
+The held-back edit is untouched in `~/.claude` and goes out on the next send once the suite passes.
+`SYNC_NO_SEND_TESTS=1` skips the gate for one run. `SYNC_SEND_TESTS_TIMEOUT` (default `600` seconds)
+bounds how long it waits for a suite before calling it failed and naming it as still running.
+
+A verdict is remembered in `.send-suite-verdicts` against a digest of the whole staged hook set, and
+reused while that digest is unchanged. That is a bound on cost, not a shortcut: the watcher fires a
+send on every file event, so without it a suite that stays red is paid for again on every save, with
+the sync lock held throughout. Any hook edit changes the digest and retires every entry, so a
+remembered verdict can never outlive a change to what it judged, and the send says how many verdicts
+it reused rather than saving the time silently.
 
 ## Lesson numbers
 
@@ -512,7 +549,7 @@ and one run, which is what a healthy machine looks like.
 
 ## Local state (per Mac, never synced)
 
-Ten things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
+Twelve things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
 so a fresh clone starts without them. (`lesson-bands/` also sits outside `payload/` and is the one
 exception: it is tracked and shared on purpose, because a band nobody else can see cannot stop
 anybody else claiming it. See Lesson numbers above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
@@ -525,8 +562,10 @@ defined answer for being absent or untrustworthy.
 | `.last-sent` | a push that went through | `claude-sync status` | absent means nothing has ever gone up from this clone, which is said in those words rather than shown as a date; a value that will not parse is reported as unreadable, never as never |
 | `.last-received` | an apply that wrote at least one file | `claude-sync status` | same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block, since that is regenerated from whatever payload is present, including one this Mac just staged itself |
 | `.hook-tests` | any run that reached a verdict on the hook suite it installed: `pull`, `sync`, the reconcile `send` falls through to, or `apply-only` | `claude-sync status`, in this clone and in any other clone on this Mac | absent means nothing has verified anything here yet and status says nothing, since it reports what needs attention. A record that will not parse is reported as unreadable, never as a pass. A pass is silent; every other outcome keeps its own wording, so a suite that FAILED and one that could NOT be run stay apart. It also carries how many suites ran and how many could not, with `?` where the runner's report could not be read, which is never written as zero. Since #218 it carries the measured wall clock too, and a PASS is no longer silent: it reports how long that run took against the deadline it is given, and says so plainly when it has used over half of it, so a suite outgrowing `SYNC_HOOK_TESTS_TIMEOUT` shows up as headroom shrinking rather than as a timeout on the day it runs out. A record written before that field existed says no duration was recorded, which is never folded into being within budget |
+| `.send-suite-verdicts` | a send that ran a suite covering a hook it is about to publish | the next send, to decide whether that suite has to run again | absent means every relevant suite runs, which is the pre-#269 behaviour and only costs time. An entry is keyed on a digest of the whole staged hook set, so any hook edit retires it; a verdict is never reused across a change to what it judged. A `fail` is remembered exactly like a `pass`, because what it saves is re-running a red suite on every keystroke while the sync lock is held |
 | `.resolved/` | a conflict resolved automatically because this Mac's version held nothing extra | nothing reads it; it exists so a wrong resolution is recoverable | absent means no conflict has resolved itself here. Entries are swept once older than two weeks, and one whose date cannot be read is KEPT rather than deleted on a guess, since this directory holds the only copy of something |
 | `.claude-sync-clones` (in your home, not in a clone) | every clone on this Mac, the first time it takes the lock | `claude-sync status`, to find the records other clones hold | absent means no clone has done work since this was added, so status reports only what it can reach through the launch agents. An entry naming a clone that has gone is skipped rather than reported, and nothing prunes it: the file is only ever appended to, so a run that dies part way cannot lose the entries already there |
+| `.claude-sync-hold` (in your home, not in a clone) | `claude-sync hold` | the watcher's send, and `claude-sync status` | absent means no hold, which is the normal state. It carries an expiry and fails OPEN: once that passes it is cleared and the watcher says the hold expired, because a hold that outlives the session that took it silently stops the sync. A marker that will not parse is cleared too, and reported in its own words rather than as an expiry, since obeying it would stop the sync until somebody found the file and ignoring it silently would discard a decision somebody made |
 | `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
 | `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |
 | `state/` | every apply | nothing reads the local copy; it exists so a marker is only republished when it changes | absent just means the next apply republishes |

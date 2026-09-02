@@ -4548,9 +4548,18 @@ cp "$SCRIPT" "$SUB/claude-sync"
 # first attempt appended it after the dispatch, where the script did its entire job
 # successfully and only failed on the last line, so the pull completed normally and the test
 # would have demonstrated nothing. Verified separately: this version parses and exits 127.
-awk 'NR==30{print "a_helper_that_does_not_exist_on_this_mac"} {print}' "$SCRIPT" > "$SUA/claude-sync"
+# Placed by what the line SAYS, not by its number. Pinned to NR==30 this broke the moment two
+# lines were added to the usage header: the injected call landed ABOVE `set -e`, so its exit 127
+# no longer stopped anything, the pull completed normally, and the two checks below failed
+# describing the gate rather than the fixture (L237).
+awk '{print} /^set -euo pipefail$/ && !done {print "a_helper_that_does_not_exist_on_this_mac"; done=1}' \
+  "$SCRIPT" > "$SUA/claude-sync"
 git -C "$SUA" add claude-sync && git -C "$SUA" -c user.name=t -c user.email=t@e commit -q -m "push a runnable-looking but broken script" && git -C "$SUA" push -q
 check "#28 the broken version really does still parse" "bash -n '$SUA/claude-sync' 2>/dev/null"
+# And that it actually DIES when run, which is the whole fixture. Parsing alone was true of the
+# version that landed above `set -e` too, and that one proved nothing (L48, L1).
+check "#28 and it really does fail on its first step" \
+  "! bash '$SUA/claude-sync' help >/dev/null 2>&1"
 out_su="$(CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1 || true)"
 check "#28 a pulled script that cannot run is refused" \
   "printf '%s' \"\$out_su\" | grep -qi 'cannot complete a run'"
@@ -10216,9 +10225,13 @@ printf '#!/usr/bin/env bash\n# covers demo.sh\necho "FAIL: demo.sh is broken"\ne
 sd_head_before="$(git -C "$SDR" rev-parse HEAD 2>/dev/null)"
 out_244b="$(CLAUDE_HOME="$SDH" SYNC_REPO="$SDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"; rc_244b=$?
 dbg "#244 send with a failing suite: $out_244b"
-check "#244 a hook whose suite fails is not committed" \
-  "[ \"\$(git -C '$SDR' rev-parse HEAD 2>/dev/null)\" = '$sd_head_before' ]"
-check "#244 and the send reports a failure rather than success" "[ $rc_244b -ne 0 ]"
+# #269 reversed the OTHER half of this deliberately, so the assertion that defended it is gone
+# rather than adjusted (L252). A total refusal stopped rule files, skills and lessons crossing
+# too, which is the more expensive failure; what #244 asked for, and what still holds, is that
+# the unverified hook itself is not published.
+check "#244 a hook whose suite fails is not published" \
+  "! grep -q 'demo changed' '$SDR/payload/hooks/demo.sh'"
+check "#244 and the send delivers the rest rather than failing whole (#269)" "[ $rc_244b -eq 0 ]"
 # Naming the SUITE is the whole point: "a test failed" sends the reader to run all of them, which
 # is the cost this exists to save (L11, L80).
 check "#244 and it names the suite that failed" \
@@ -10257,6 +10270,229 @@ dbg "#244 send with no hook change: $out_244e"
 check "#244 a send that changes no hook runs no suite" \
   "case \"\$out_244e\" in *suite*|*SUITE*) false ;; *) true ;; esac"
 SYNC_NO_SEND_TESTS=1
+
+
+section "== a red suite holds back the hooks it covers, not the whole send (#269) =="
+# #244 made a send run the suites covering the hooks it is about to publish, and refuse to COMMIT
+# when one fails. The refusal was total for that send, so an unrelated red suite stopped rule
+# files, skills and lessons reaching the other Mac too, and #196 already records that a watcher
+# which has stopped sending is hard to notice from the outside. Holding back everything is the
+# more expensive failure of the two, and the send path already held back a single malformed rule
+# file rather than failing whole, which is the shape copied here.
+#
+# The second half is cost. The watcher fires do_send on every event, so while a suite is red the
+# same suite is re-run on every save for as long as it stays red, with the sync lock held
+# throughout. A verdict is therefore remembered against a digest of the staged hooks, and reused
+# while nothing they depend on has changed.
+unset SYNC_NO_SEND_TESTS
+HDB="$WORK/holdback-bare.git"; git init -q --bare "$HDB"
+HDR="$WORK/holdback-repo"; git clone -q "$HDB" "$HDR"
+HDH="$WORK/holdback-home"; mkdir -p "$HDH/hooks"
+echo '{"hooks":{}}' > "$HDH/settings.json"
+printf '# rules\n' > "$HDH/CLAUDE.md"
+# How many times each suite has actually been launched. A count, not a flag, because the thing
+# being measured is repetition and a flag cannot tell one run from twenty (#269's second half).
+HD_RUNS="$WORK/holdback-runs"; : > "$HD_RUNS"
+hd_write_suite(){   # $1 = covered hook basename  $2 = exit code
+  local pass=1 fail=0
+  [ "$2" -eq 0 ] || { pass=0; fail=1; }
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf '# covers %s\n' "$1"
+    printf 'printf "%s\\n" >> "%s"\n' "$1" "$HD_RUNS"
+    printf 'echo "SUITE-RESULT passed=%s failed=%s"\n' "$pass" "$fail"
+    printf 'exit %s\n' "$2"
+  } > "$HDH/hooks/test-${1%.sh}.sh"
+}
+hd_runs_for(){ grep -cxF "$1" "$HD_RUNS" 2>/dev/null || true; }
+
+printf '#!/usr/bin/env bash\necho alpha\n' > "$HDH/hooks/alpha.sh"
+printf '#!/usr/bin/env bash\necho beta\n'  > "$HDH/hooks/beta.sh"
+hd_write_suite alpha.sh 0
+hd_write_suite beta.sh  0
+out_269a="$(CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+dbg "#269 first send: $out_269a"
+check "#269 both hooks publish while both suites pass" \
+  "[ -f '$HDR/payload/hooks/alpha.sh' ] && [ -f '$HDR/payload/hooks/beta.sh' ]"
+
+# Now both hooks change, one suite goes red, and an unrelated rule file changes with them. The
+# red suite must cost beta.sh its trip and nothing else theirs.
+printf '#!/usr/bin/env bash\necho alpha changed\n' > "$HDH/hooks/alpha.sh"
+printf '#!/usr/bin/env bash\necho beta changed\n'  > "$HDH/hooks/beta.sh"
+printf '# rules changed\n' > "$HDH/CLAUDE.md"
+hd_write_suite beta.sh 1
+: > "$HD_RUNS"
+out_269b="$(CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"; rc_269b=$?
+dbg "#269 send with one red suite: $out_269b"
+check "#269 the unrelated rule file still reaches the repo" \
+  "grep -q 'rules changed' '$HDR/payload/CLAUDE.md'"
+check "#269 the hook whose suite passed still reaches the repo" \
+  "grep -q 'alpha changed' '$HDR/payload/hooks/alpha.sh'"
+check "#269 the hook whose suite failed is held back" \
+  "! grep -q 'beta changed' '$HDR/payload/hooks/beta.sh'"
+check "#269 and the send delivers rather than failing whole" "[ $rc_269b -eq 0 ]"
+# Both facts on ONE line: a sentence naming the suite and a different sentence naming the file
+# cannot answer between them about which hook is waiting (L178).
+line_269b="$(printf '%s\n' "$out_269b" | sed -n '/test-beta\.sh/p')"
+check "#269 one line names both the red suite and the hook it held back" \
+  "case \"\$line_269b\" in *beta.sh*) case \"\$line_269b\" in *test-beta.sh*) true ;; *) false ;; esac ;; *) false ;; esac"
+check "#269 the held-back edit is untouched in the live config" \
+  "grep -q 'beta changed' '$HDH/hooks/beta.sh'"
+
+# The cost half. Nothing beta's verdict rests on has changed, so a second send must reuse it
+# rather than pay for the suite again, and it must still hold beta back.
+hd_before_269="$(hd_runs_for beta.sh)"
+printf '# rules changed twice\n' > "$HDH/CLAUDE.md"
+out_269c="$(CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+dbg "#269 second send while still red: $out_269c"
+check "#269 a red suite is not re-run while its inputs are unchanged" \
+  "[ \"\$(hd_runs_for beta.sh)\" = '$hd_before_269' ]"
+check "#269 and the hook it covers is still held back" \
+  "! grep -q 'beta changed' '$HDR/payload/hooks/beta.sh'"
+check "#269 and the send says the verdict was reused rather than measured" \
+  "case \"\$out_269c\" in *reus*|*remember*|*unchanged*) true ;; *) false ;; esac"
+check "#269 the rest of that send still went out" \
+  "grep -q 'rules changed twice' '$HDR/payload/CLAUDE.md'"
+
+# The control for the line above, and it is the one that matters: a remembered verdict that
+# survives a change to its inputs is not a cache, it is a permanent refusal (L336, L159).
+hd_write_suite beta.sh 0
+out_269d="$(CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+dbg "#269 send once the suite is green again: $out_269d"
+check "#269 the suite runs again once its inputs change" \
+  "[ \"\$(hd_runs_for beta.sh)\" != '$hd_before_269' ]"
+check "#269 and the held-back edit publishes on that send" \
+  "grep -q 'beta changed' '$HDR/payload/hooks/beta.sh'"
+
+# A hook the repo has never seen must not be published by the hold-back either. Restoring "the
+# version already committed" has no version to restore, and the branch that gets that wrong
+# publishes exactly the file the red suite refused (L214).
+printf '#!/usr/bin/env bash\necho gamma\n' > "$HDH/hooks/gamma.sh"
+hd_write_suite gamma.sh 1
+out_269e="$(CLAUDE_HOME="$HDH" SYNC_REPO="$HDR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+dbg "#269 send of a brand new hook whose suite is red: $out_269e"
+check "#269 a new hook whose suite is red is not published at all" \
+  "[ ! -e '$HDR/payload/hooks/gamma.sh' ]"
+check "#269 and the repo is not left holding a staged copy of it" \
+  "! git -C '$HDR' ls-files --error-unmatch payload/hooks/gamma.sh >/dev/null 2>&1"
+SYNC_NO_SEND_TESTS=1
+
+
+section "== a burst of edits is one send, and a session can hold the watcher off (#262) =="
+# Two costs with one cause: the watcher commits and pushes on every fswatch event. It takes the
+# commit message out of a session's hands (twice on 2026-09-02 a change was written up with its
+# reasoning and the watcher had already committed the same files as "sync from <host>", so
+# `git commit` found a clean tree and the explanation survives only in code comments), and it
+# cancels CI (six consecutive commits on 2026-09-02, five runs cancelled by cancel-in-progress,
+# one survivor, so during active work there is no build signal at all).
+#
+# The debounce is measured through the watch loop's own send step rather than through a real
+# do_send, because what is under test is the SHAPE of the loop: how many times it acts on a burst.
+WT="$WORK/watch-debounce"; mkdir -p "$WT"
+WT_FS="$WT/fake-fswatch"; WT_HITS="$WT/hits"
+# A burst: one event, a pause shorter than the drain window, then four more. The pause is what
+# makes this a test of the drain rather than of end-of-input: without it every later event is
+# already sitting in the pipe and a loop with no debounce at all would still read them together.
+cat > "$WT_FS" <<'FSEOF'
+#!/usr/bin/env bash
+echo one
+sleep 0.3
+echo two
+echo three
+echo four
+echo five
+FSEOF
+chmod +x "$WT_FS"
+WT_HOME="$WT/home"; mkdir -p "$WT_HOME/hooks"
+: > "$WT_HITS"
+SYNC_FSWATCH="$WT_FS" SYNC_WATCH_SEND="printf 'x\n' >> '$WT_HITS'" \
+  CLAUDE_HOME="$WT_HOME" SYNC_REPO="$WORK/watch-repo-unused" SYNC_NO_NOTIFY=1 \
+  bash "$SCRIPT" watch >/dev/null 2>&1 || true
+wt_burst="$(grep -c . "$WT_HITS" 2>/dev/null || true)"
+dbg "#262 sends for a five event burst: $wt_burst"
+# One send for the event that woke the loop, and ONE more covering everything that arrived while
+# it was running. Never five, and never one: dropping the drained events would lose the last edit,
+# which is a worse defect than the one being fixed (L368).
+check "#262 a five event burst becomes two sends, not five" "[ \"\$wt_burst\" = '2' ]"
+
+# The control. A debounce that costs an extra send on every single event has moved the cost rather
+# than removed it, and the count above cannot tell that apart from a working drain.
+cat > "$WT_FS" <<'FSEOF'
+#!/usr/bin/env bash
+echo only
+FSEOF
+chmod +x "$WT_FS"
+: > "$WT_HITS"
+SYNC_FSWATCH="$WT_FS" SYNC_WATCH_SEND="printf 'x\n' >> '$WT_HITS'" \
+  CLAUDE_HOME="$WT_HOME" SYNC_REPO="$WORK/watch-repo-unused" SYNC_NO_NOTIFY=1 \
+  bash "$SCRIPT" watch >/dev/null 2>&1 || true
+check "#262 a single event is still exactly one send" \
+  "[ \"\$(grep -c . '$WT_HITS' 2>/dev/null || true)\" = '1' ]"
+
+# ---- the hold ----
+# The marker lives outside every clone on purpose: the watcher runs from a different clone than the
+# one a session works in, so a file inside either of them reaches only itself.
+HOLD="$WT/hold-marker"
+HRB="$WORK/hold-bare.git"; git init -q --bare "$HRB"
+HRR="$WORK/hold-repo"; git clone -q "$HRB" "$HRR"
+HRH="$WORK/hold-home"; mkdir -p "$HRH/hooks"
+echo '{"hooks":{}}' > "$HRH/settings.json"
+printf '# held rules\n' > "$HRH/CLAUDE.md"
+# Through `env`, so a caller can add its OWN assignment in front of the command. A bare "$@" runs
+# a leading VAR=1 as a command name rather than as an assignment, which fails silently enough to
+# look like the behaviour under test: the send never runs, nothing is committed, and the check
+# that nothing was committed passes for the wrong reason (L159).
+hold_env(){ CLAUDE_HOME="$HRH" SYNC_REPO="$HRR" SYNC_HOLD_FILE="$HOLD" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 env "$@"; }
+out_262h="$(hold_env bash "$SCRIPT" hold 5 "committing by hand" 2>&1)"
+dbg "#262 hold: $out_262h"
+check "#262 hold writes a marker" "[ -f '$HOLD' ]"
+check "#262 and says how long it lasts" \
+  "case \"\$out_262h\" in *minute*) true ;; *) false ;; esac"
+
+out_262w="$(hold_env SYNC_IN_WATCH=1 bash "$SCRIPT" send 2>&1)"
+dbg "#262 watcher send while held: $out_262w"
+check "#262 the watcher does not commit while a hold is in force" \
+  "[ -z \"\$(git -C '$HRR' log --oneline 2>/dev/null)\" ]"
+check "#262 and it says why, naming how to lift it" \
+  "case \"\$out_262w\" in *release*) true ;; *) false ;; esac"
+
+# A hold silences the AUTOMATIC send only. A person who asks for one explicitly is not the thing
+# being held off, and a command that refuses the person who set the hold is a dead control (L109).
+out_262e="$(hold_env bash "$SCRIPT" send 2>&1)"
+dbg "#262 explicit send while held: $out_262e"
+check "#262 an explicit send is not blocked by the hold" \
+  "[ -n \"\$(git -C '$HRR' log --oneline 2>/dev/null)\" ]"
+
+# Captured, then matched. `status | grep -q` is a short-circuiting consumer under pipefail, so the
+# producer is killed and the pipeline reports a failure that never happened (L183).
+out_262s="$(hold_env bash "$SCRIPT" status 2>&1)"
+check "#262 status reports the hold while it is live" \
+  "case \"\$out_262s\" in *'watcher hold'*) true ;; *) false ;; esac"
+out_262r="$(hold_env bash "$SCRIPT" release 2>&1)"
+check "#262 release clears the marker" "[ ! -f '$HOLD' ]"
+
+# An expiry, and it has to fail OPEN: a hold that outlives the session that took it silently stops
+# the sync, which is the failure #196 exists to make visible, and a suppression set by hand needs
+# an expiry and somewhere visible to be listed (L523).
+printf '%s %s %s hand written and long expired\n' "$(( $(date +%s) - 60 ))" "$(( $(date +%s) - 3600 ))" "somehost" > "$HOLD"
+printf '# held rules again\n' > "$HRH/CLAUDE.md"
+out_262x="$(hold_env SYNC_IN_WATCH=1 bash "$SCRIPT" send 2>&1)"
+dbg "#262 watcher send with an expired hold: $out_262x"
+check "#262 an expired hold is cleared" "[ ! -f '$HOLD' ]"
+check "#262 and the watcher sends again" \
+  "grep -q 'held rules again' '$HRR/payload/CLAUDE.md'"
+check "#262 and it says the hold expired rather than staying silent" \
+  "case \"\$out_262x\" in *expired*) true ;; *) false ;; esac"
+
+# A marker nothing can read is neither "no hold" nor "held for ever". Reading it as a hold stops
+# the sync until somebody finds the file; reading it as absent hides that somebody meant to stop it.
+printf 'this is not a marker\n' > "$HOLD"
+printf '# held rules a third time\n' > "$HRH/CLAUDE.md"
+out_262u="$(hold_env SYNC_IN_WATCH=1 bash "$SCRIPT" send 2>&1)"
+dbg "#262 watcher send with an unreadable hold: $out_262u"
+check "#262 an unreadable hold marker is cleared rather than obeyed" "[ ! -f '$HOLD' ]"
+check "#262 and it is reported in its own words, not as an expiry" \
+  "case \"\$out_262u\" in *'could not be read'*) true ;; *) false ;; esac"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"

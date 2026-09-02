@@ -12,6 +12,8 @@
 #   claude-sync sync              # two-way: send local changes, then receive remote
 #   claude-sync watch             # foreground: sync on every change (needs fswatch)
 #   claude-sync status            # show what differs, no changes
+#   claude-sync hold 30 "why"     # stop the watcher committing for a while, so you can commit
+#   claude-sync release           # lift that hold now rather than waiting for it to run out
 #   claude-sync next-lesson       # the next free lesson number, so none is picked by eye
 #   claude-sync check-lessons     # fail if two lessons share a number
 #   claude-sync lesson L174       # one lesson in full, with its provenance
@@ -71,6 +73,11 @@ LAST_RECEIVED_FILE="$SYNC_REPO/.last-received"
 # (claude-config#182). One file, not two: evidence kept somewhere with a retention schedule of its
 # own is gone before the investigation that needs it arrives (L202), and scratch is swept hourly.
 HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
+# The last verdict each send-side suite reached, against a digest of the hooks it judged (#269).
+# Untracked and per clone, because it records what has been RUN here rather than what the config
+# is. It exists to bound cost: the watcher fires a send on every file event, so without it a suite
+# that stays red is paid for again on every save, with the sync lock held throughout.
+SEND_VERDICTS_FILE="$SYNC_REPO/.send-suite-verdicts"
 # Where a version dropped by an automatic conflict resolution is kept (claude-config#183). Outside
 # the mirrored config on purpose: under $CLAUDE_HOME it would become exactly the stale file nobody
 # deletes that #177 exists to stop leaving behind, and it would then travel to the other Mac.
@@ -82,6 +89,17 @@ RESOLVED_DIR="$SYNC_REPO/.resolved"
 # time it can hold a verdict at all, so the list is derived from what has actually run rather than
 # from what somebody remembered to write down (L41, L96).
 CLONE_REGISTRY="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
+# A session about to commit deliberately can hold the WATCHER off (#262). Outside every clone, for
+# the same reason as the registry above: the watcher runs from a different clone than the one a
+# session works in, so a marker inside either of them reaches only itself.
+#
+# It holds only the automatic send. `claude-sync send` typed by a person is not the thing being
+# held off, and a command that refuses the person who set the hold is a dead control (L109).
+SYNC_HOLD_FILE="${SYNC_HOLD_FILE:-$HOME/.claude-sync-hold}"
+# How long a hold lasts when none is named. It fails OPEN on purpose: a hold that outlives the
+# session that took it silently stops the sync, and #196 already records how hard a watcher that
+# has stopped sending is to notice from outside (L523).
+SYNC_HOLD_MINUTES="${SYNC_HOLD_MINUTES:-30}"
 STATE_DIR="$SYNC_REPO/state"   # what each Mac has applied, published so verify can compare (#23)
 # One file per Mac, holding the first number of the band that Mac mints lesson numbers from. Unlike
 # everything else outside payload/, this is TRACKED and shared: a band nobody else can see cannot
@@ -3284,8 +3302,57 @@ send_suites_covering(){   # $1 = a hook's basename -> the suites naming it, one 
   grep -lF "$1" "${suites[@]}" 2>/dev/null || true
 }
 
+# A digest of the hook set this send is about to publish, taken from the INDEX so it is the bytes
+# the commit would carry rather than whatever the working tree holds a moment later. Deliberately
+# the WHOLE staged hook set rather than only the files one suite happens to name: a suite reads
+# its helpers, its fixtures and the library beside it, so a key narrowed to the covered file alone
+# would go on reporting a pass across a change to any of them (L336, L40). Empty when it cannot be
+# computed, and the caller then runs everything rather than sharing one blank key between suites.
+send_hooks_digest(){
+  local d
+  d="$(git -C "$SYNC_REPO" ls-files -s -- payload/hooks 2>/dev/null | shasum -a 256 2>/dev/null | cut -d' ' -f1)"
+  case "$d" in ''|*[!0-9a-f]*) printf '' ;; *) printf '%s' "$d" ;; esac
+}
+
+send_verdict_recall(){   # $1 = suite basename  $2 = digest -> prints pass|fail, or nothing
+  [ -n "$2" ] || return 0
+  [ -f "$SEND_VERDICTS_FILE" ] || return 0
+  awk -v s="$1" -v d="$2" '$1 == d && $2 == s { print $3 }' "$SEND_VERDICTS_FILE" 2>/dev/null | tail -1
+  return 0
+}
+
+send_verdict_record(){   # $1 = suite basename  $2 = digest  $3 = pass|fail
+  local tmp
+  [ -n "$2" ] || return 0
+  tmp="$(scratch_file)" || return 0
+  # One line per suite, REPLACED rather than appended. A verdict is only ever asked for against the
+  # current digest, so keeping the superseded ones grows a file nothing will read again, and a
+  # capped store would start evicting the entries that are still live (L191).
+  if [ -f "$SEND_VERDICTS_FILE" ]; then
+    awk -v s="$1" '$2 != s' "$SEND_VERDICTS_FILE" > "$tmp" 2>/dev/null || : > "$tmp"
+  else
+    : > "$tmp"
+  fi
+  printf '%s %s %s %s\n' "$2" "$1" "$3" "$(date +%s)" >> "$tmp"
+  mv -f "$tmp" "$SEND_VERDICTS_FILE" 2>/dev/null || true
+  return 0
+}
+
+# Put back the copy the repo already holds, so this send publishes everything EXCEPT this path.
+# A path the repo has never seen has no published copy to restore, and that is the branch that
+# matters: getting it wrong publishes exactly the file the red suite refused (L214). So the
+# restore is attempted and its failure is the signal to remove instead, rather than the two cases
+# being told apart by guessing which one this is.
+send_hold_back_path(){   # $1 = path relative to the repo
+  git -C "$SYNC_REPO" checkout HEAD -- "$1" 2>/dev/null && return 0
+  git -C "$SYNC_REPO" rm -q --cached -- "$1" 2>/dev/null || true
+  rm -f "$SYNC_REPO/$1" 2>/dev/null || true
+  return 0
+}
+
 send_hook_tests(){
-  local f base suite out list rc=0 ran=0 failed_names="" uncovered="" limit pid started now killed
+  local f base suite out pairs rc=0 ran=0 reused=0 uncovered="" limit pid started now killed
+  local digest verdict failed_suites="" files p
   case "${SYNC_NO_SEND_TESTS:-0}${SYNC_NO_HOOK_TESTS:-0}" in *1*) return 0 ;; esac
 
   # What this send is about to publish. `add -A` first, so the comparison is against the index the
@@ -3297,8 +3364,10 @@ send_hook_tests(){
 
   # The shortlist goes to scratch, never into $SYNC_REPO: a tool that leaves a file inside the repo
   # it is about to commit from is one `add -A` away from publishing its own working notes.
-  list="$(scratch_file)" || return 0
+  pairs="$(scratch_file)" || return 0
 
+  # Every (suite, file) pair this send has to judge, rather than a list of suites. Which files a
+  # red suite costs a trip is the whole of #269, and a list of suites alone cannot answer it.
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in *.sh|*.py) ;; *) continue ;; esac
@@ -3307,69 +3376,168 @@ send_hook_tests(){
     # unverified as the hook it covers, and that is how f094409's missing test went out.
     case "$base" in
       test-*) suite="$SYNC_REPO/payload/hooks/$base"
-              [ -f "$suite" ] && printf '%s\n' "$suite" ;;
+              [ -f "$suite" ] && printf 'C\t%s\t%s\n' "$suite" "$f" ;;
       run-all-tests.sh) ;;
       *) out="$(send_suites_covering "$base")"
          if [ -n "$out" ]; then
-           printf '%s\n' "$out"
+           while IFS= read -r suite; do
+             [ -n "$suite" ] && printf 'C\t%s\t%s\n' "$suite" "$f"
+           done <<COVERS
+$out
+COVERS
          else
            # Said out loud rather than passed over. The coverage ratchet is what GATES an uncovered
            # hook; what this must not do is publish one having run nothing and read the same as a
            # send whose suites all passed (L98).
-           printf 'UNCOVERED %s\n' "$base"
+           printf 'U\t-\t%s\n' "$base"
          fi ;;
     esac
-  done < <(git -C "$SYNC_REPO" diff --cached --name-only -- payload/hooks 2>/dev/null) > "$list" 2>/dev/null
+  done < <(git -C "$SYNC_REPO" diff --cached --name-only -- payload/hooks 2>/dev/null) > "$pairs" 2>/dev/null
 
+  uncovered="$(awk -F'\t' '$1=="U"{print $3}' "$pairs" 2>/dev/null | sort -u | tr '\n' ' ')"
+
+  # Taken BEFORE anything is held back, because holding back rewrites the index, and the verdict
+  # has to be remembered against what was actually judged.
+  digest="$(send_hooks_digest)"
+
+  # Deduplicated. A suite that both changed itself and covers a changed hook appears twice, and
+  # running it twice is the cost this issue exists to bound.
   while IFS= read -r suite; do
-    case "$suite" in
-      "UNCOVERED "*) uncovered="$uncovered ${suite#UNCOVERED }"; continue ;;
-      '') continue ;;
-    esac
-    ran=$(( ran + 1 ))
-    out="$(scratch_file)" || out="/dev/null"
-    # Same shape as the pull's runner: a background child against the clock, because a wait with no
-    # deadline cannot fail, it can only hang, and this one holds the sync lock while it does (L110).
-    SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$suite" > "$out" 2>&1 &
-    pid=$!
-    started="$(date +%s)"; killed=0
-    while kill -0 "$pid" 2>/dev/null; do
-      now="$(date +%s)"
-      if [ "$(( now - started ))" -ge "$limit" ]; then
-        killed=1
-        kill -TERM "$pid" 2>/dev/null || true
-        break
+    [ -n "$suite" ] || continue
+    verdict="$(send_verdict_recall "$(basename "$suite")" "$digest")"
+    if [ -n "$verdict" ]; then
+      reused=$(( reused + 1 ))
+    else
+      ran=$(( ran + 1 ))
+      out="$(scratch_file)" || out="/dev/null"
+      # Same shape as the pull's runner: a background child against the clock, because a wait with
+      # no deadline cannot fail, it can only hang, and this one holds the sync lock while it does
+      # (L110).
+      SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$suite" > "$out" 2>&1 &
+      pid=$!
+      started="$(date +%s)"; killed=0
+      while kill -0 "$pid" 2>/dev/null; do
+        now="$(date +%s)"
+        if [ "$(( now - started ))" -ge "$limit" ]; then
+          killed=1
+          kill -TERM "$pid" 2>/dev/null || true
+          break
+        fi
+        sleep "$SYNC_POLL_INTERVAL"
+      done
+      if [ "$killed" -eq 1 ]; then
+        wait "$pid" 2>/dev/null || true
+        verdict=fail
+      elif wait "$pid" 2>/dev/null; then
+        verdict=pass
+      else
+        verdict=fail
       fi
-      sleep "$SYNC_POLL_INTERVAL"
-    done
-    if [ "$killed" -eq 1 ]; then
-      wait "$pid" 2>/dev/null || true
-      failed_names="$failed_names $(basename "$suite") (still running after ${limit}s)"
-      rc=1
-    elif ! wait "$pid" 2>/dev/null; then
-      failed_names="$failed_names $(basename "$suite")"
-      rc=1
+      [ "$out" = "/dev/null" ] || rm -f "$out" 2>/dev/null || true
+      # A killed run is recorded as a failure like any other, and deliberately so: what the
+      # remembered verdict has to survive is a change to the inputs, and a deadline that fired
+      # once will fire again on the same bytes on the same machine.
+      send_verdict_record "$(basename "$suite")" "$digest" "$verdict"
     fi
-    [ "$out" = "/dev/null" ] || rm -f "$out" 2>/dev/null || true
-  done < "$list"
-  rm -f "$list" 2>/dev/null || true
+    [ "$verdict" = fail ] && failed_suites="$failed_suites$suite
+"
+  done < <(awk -F'\t' '$1=="C"{print $2}' "$pairs" 2>/dev/null | sort -u)
 
   if [ -n "$uncovered" ]; then
-    echo "claude-sync: sent, but NO SUITE covers these changed hook(s), so nothing verified them here:$uncovered" >&2
+    echo "claude-sync: sent, but NO SUITE covers these changed hook(s), so nothing verified them here: $uncovered" >&2
   fi
-  if [ "$rc" -ne 0 ]; then
-    echo "claude-sync: did NOT send. The suite(s) covering the hook(s) you changed failed here:$failed_names" >&2
-    echo "  Your edit is untouched in $CLAUDE_HOME and goes out on the next send once the suite passes." >&2
-    echo "  Run it to see why: bash $CLAUDE_HOME/hooks/$(printf '%s' "$failed_names" | awk '{print $1}')" >&2
-    echo "  Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
-    notify "send blocked: a hook suite failed here"
+
+  # #269: hold back the hooks the red suite covers, and send everything else. Refusing the WHOLE
+  # send was the first shape and it is the more expensive failure of the two: an unrelated red
+  # suite stopped rule files, skills and lessons reaching the other Mac as well, and #196 records
+  # that a watcher which has stopped sending is already hard to notice from outside. This is the
+  # same "only that file waits" rule the malformed rule file check above already uses.
+  if [ -n "$failed_suites" ]; then
+    while IFS= read -r suite; do
+      [ -n "$suite" ] || continue
+      files="$(awk -F'\t' -v s="$suite" '$1=="C" && $2==s {print $3}' "$pairs" 2>/dev/null | sort -u)"
+      while IFS= read -r p; do
+        [ -n "$p" ] && send_hold_back_path "$p"
+      done <<HELD
+$files
+HELD
+      # The suite AND the files it cost a trip, on ONE line. A sentence naming the suite and a
+      # different sentence naming the file cannot answer between them about which hook is waiting
+      # (L178, L80).
+      echo "claude-sync: NOT publishing $(printf '%s' "$files" | sed 's|^payload/hooks/||' | tr '\n' ' ')because $(basename "$suite") fails here, so nothing verified them. Everything else in this send went out normally. Run it to see why: bash $CLAUDE_HOME/hooks/$(basename "$suite"). The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
+      notify "held back $(printf '%s' "$files" | sed 's|^payload/hooks/||' | tr '\n' ' '): $(basename "$suite") fails here"
+    done <<FAILED
+$failed_suites
+FAILED
+  fi
+
+  [ "$ran" -gt 0 ] && echo "claude-sync: ran $ran suite(s) covering the hook(s) in this send."
+  # Said out loud rather than silently saved. A saving that has quietly stopped happening looks
+  # exactly like one still working (L289), and this is the number that says the gate's cost is
+  # bounded rather than paid again on every keystroke.
+  [ "$reused" -gt 0 ] && echo "claude-sync: reused the remembered verdict for $reused suite(s), whose inputs are unchanged since it was measured."
+  return "$rc"
+}
+
+# Seconds left on a LIVE hold, printed on stdout; nothing, and a non-zero return, for every other
+# state. The three states are told apart in their own words rather than folded together, because a
+# marker nothing can read is neither "no hold" nor "held for ever": obeying it stops the sync until
+# somebody finds the file, and ignoring it silently discards a decision somebody made (L11, L50).
+hold_remaining(){
+  local until taken now
+  [ -f "$SYNC_HOLD_FILE" ] || return 1
+  until="$(awk 'NR==1{print $1}' "$SYNC_HOLD_FILE" 2>/dev/null)"
+  taken="$(awk 'NR==1{print $2}' "$SYNC_HOLD_FILE" 2>/dev/null)"
+  case "$until" in
+    ''|*[!0-9]*)
+      echo "claude-sync: the watcher hold marker at $SYNC_HOLD_FILE could not be read, so it has been cleared and the watcher is sending again. Take another with 'claude-sync hold' if you still need one." >&2
+      rm -f "$SYNC_HOLD_FILE" 2>/dev/null || true
+      return 1 ;;
+  esac
+  now="$(date +%s)"
+  if [ "$now" -ge "$until" ]; then
+    case "$taken" in ''|*[!0-9]*) taken="$until" ;; esac
+    echo "claude-sync: the watcher hold taken $(age_in_words "$(( now - taken ))") has expired, so it has been cleared and the watcher is sending again." >&2
+    rm -f "$SYNC_HOLD_FILE" 2>/dev/null || true
     return 1
   fi
-  [ "$ran" -gt 0 ] && echo "claude-sync: ran $ran suite(s) covering the hook(s) in this send, all passed."
+  printf '%s' "$(( until - now ))"
+  return 0
+}
+
+do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
+  local mins="${1:-$SYNC_HOLD_MINUTES}" why now
+  case "$mins" in ''|*[!0-9]*|0) mins="$SYNC_HOLD_MINUTES" ;; esac
+  shift 2>/dev/null || true
+  why="$*"
+  [ -n "$why" ] || why="a session is committing by hand"
+  now="$(date +%s)"
+  printf '%s %s %s %s\n' "$(( now + mins * 60 ))" "$now" "$(sync_hostname)" "$why" > "$SYNC_HOLD_FILE"
+  echo "Watcher held off for $(duration_in_words "$(( mins * 60 ))") ($why). It resumes on its own when that runs out, or now with: claude-sync release"
+  return 0
+}
+
+do_release(){
+  if [ -f "$SYNC_HOLD_FILE" ]; then
+    rm -f "$SYNC_HOLD_FILE" 2>/dev/null || true
+    echo "Watcher hold released; the next edit sends normally."
+  else
+    # Said rather than passed over in silence: "nothing to release" and "released" are different
+    # answers, and a release that reports success over a hold somebody else still holds is the
+    # one that costs something (L98).
+    echo "No watcher hold was in force, so nothing was released."
+  fi
   return 0
 }
 
 do_send(){
+  local hold_left
+  # #262: the automatic send is what takes a deliberate commit's message and cancels its CI run,
+  # so it is the one a hold stops. An explicit `claude-sync send` is unaffected.
+  if [ "${SYNC_IN_WATCH:-0}" = "1" ] && hold_left="$(hold_remaining)"; then
+    echo "claude-sync: the watcher is on hold for another $(duration_in_words "$hold_left"), so this edit was not sent. It goes out when the hold runs out, or immediately after: claude-sync release" >&2
+    return 0
+  fi
   # Never publish while this Mac is behind: send has no apply step, so it cannot
   # reconcile, and mirroring upward from here would revert the other Mac. Skipping
   # is safe because the receive timer (and any manual pull) will apply, after which
@@ -3382,7 +3550,7 @@ do_send(){
   fi
   stage_local_to_payload
   have_git || return 0
-  send_hook_tests || return 1            # a hook whose suite fails does not get published
+  send_hook_tests                        # holds back the hooks a red suite covers; the rest sends (#269)
   commit_if_changed || return 0          # nothing changed -> nothing to send
   # A commit we just made from our OWN ~/.claude is applied here by construction:
   # stage_local_to_payload mirrored this Mac's files into it moments ago. Record it
@@ -3793,6 +3961,18 @@ OTHERCLONEEOF
   return 0
 }
 
+# A hold stops the watcher sending, and nothing else says so. A suppression set by hand has to be
+# listed somewhere a person actually looks, or it becomes the reason the sync stopped that nobody
+# can find (L523). Silent when there is none, like everything else here: status reports what needs
+# attention.
+report_watcher_hold(){
+  local left
+  if left="$(hold_remaining)"; then
+    echo "watcher hold: the automatic send is held for another $(duration_in_words "$left") ($(awk 'NR==1{$1="";$2="";$3="";sub(/^ +/,"");print}' "$SYNC_HOLD_FILE" 2>/dev/null)). Lift it now with: claude-sync release"
+  fi
+  return 0
+}
+
 do_status(){
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
   report_sync_times
@@ -3817,6 +3997,7 @@ do_status(){
   report_user_scope_plugins
   report_duplicate_plugin_skills || true
   report_conflict_copies
+  report_watcher_hold
   report_hook_suite_result
   report_outage_tally
   report_stray_processes
@@ -4210,19 +4391,44 @@ do_watch(){
   # line to this command's own output, which the launchd plist already sends
   # to ~/.claude-sync.log, so a silently-broken sync leaves a durable trail
   # instead of just a notification nobody saw.
+  local again
   "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" | while IFS= read -r _; do
-    # `if var=$(cmd)` (not a bare assignment) is the one form `set -e` does not
-    # abort on when cmd fails -- a bare `out="$(do_send)"; rc=$?` would exit
-    # the whole watch loop on failure before the check below ever ran.
-    if out="$( with_lock do_send 2>&1 )"; then
-      rc=0
-    else
-      rc=$?
-    fi
-    if [ "$rc" -ne 0 ]; then
-      echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: sync FAILED (exit $rc): ${out:-<no output>}"
-    fi
+    again=1
+    while [ "$again" -eq 1 ]; do
+      again=0
+      # `if var=$(cmd)` (not a bare assignment) is the one form `set -e` does not
+      # abort on when cmd fails -- a bare `out="$(do_send)"; rc=$?` would exit
+      # the whole watch loop on failure before the check below ever ran.
+      if out="$( watch_tick 2>&1 )"; then
+        rc=0
+      else
+        rc=$?
+      fi
+      if [ "$rc" -ne 0 ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: sync FAILED (exit $rc): ${out:-<no output>}"
+      fi
+      # #262: everything that arrived while that send was running becomes ONE more send, not one
+      # send each. A send takes seconds and can take minutes, so a burst of saves used to produce
+      # a commit per event: six on 2026-09-02, of which CI cancelled five.
+      #
+      # The drained events are NOT simply discarded. A drain that ends the round would lose the
+      # last edit, which is a worse defect than the one this fixes (L368), so anything seen here
+      # sends the loop round once more and that send carries all of them.
+      while IFS= read -r -t "${SYNC_WATCH_DRAIN:-1}" _; do again=1; done
+    done
   done
+}
+
+# What one turn of the watch loop DOES. Named so the loop's shape (how many times it acts on a
+# burst) can be measured without a real send behind it, the same way SYNC_FSWATCH stands in for
+# fswatch. SYNC_IN_WATCH is what tells do_send this is the automatic send rather than a person
+# asking for one, which is the only send a hold stops.
+watch_tick(){
+  if [ -n "${SYNC_WATCH_SEND:-}" ]; then
+    bash -c "$SYNC_WATCH_SEND"
+    return $?
+  fi
+  SYNC_IN_WATCH=1 with_lock do_send
 }
 
 writeplist(){ # label  arg  extra-keys-xml
@@ -4343,6 +4549,11 @@ case "$cmd" in
   # NOT locked as a whole: watch is a long-lived loop that would then hold the lock for
   # the entire life of the daemon. It takes the lock per event instead, around its send.
   watch) do_watch ;;
+  # Neither takes the sync lock: they write one small marker outside every clone and touch nothing
+  # a mutating run touches, and a hold that had to queue behind the very send it exists to hold off
+  # would be useless exactly when it is reached for (#262).
+  hold) do_hold "${2:-}" "${@:3}" ;;
+  release) do_release ;;
   status) do_status ;;           # read-only, deliberately never blocked
   verify) do_verify ;;           # read-only too: it answers a question, it changes nothing
   # Not wrapped in with_lock: it touches only the tool's own scratch under the temp directory,
@@ -4378,5 +4589,5 @@ case "$cmd" in
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
   help|-h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, cite-scan, check-skills, lesson, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, reap-scratch, forget-mac, next-lesson, check-lessons, cite-scan, check-skills, lesson, install-autosync, help)" ;;
 esac
