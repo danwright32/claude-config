@@ -668,7 +668,12 @@ issue_spool_clear() { # clear <dir> [session-transcript] -> file the pending rec
   done <<CLEAR_KEYS
 $(issue_spool_read_keys "${1:-$PWD}" "${2:-}")
 CLEAR_KEYS
-  if [ "$total" -eq 0 ]; then
+  # "nothing was pending" is only true when nothing FAILED. A key whose records could not be
+  # appended to its archive also totals zero, and saying nothing was pending over that would be an
+  # empty answer printed over a failure, with the loud message just above it contradicted by the
+  # reassuring one below (L10, L11). The failure has already named itself and where the records
+  # are; what this must not do is add a sentence saying there were none.
+  if [ "$total" -eq 0 ] && [ "$rc" -eq 0 ]; then
     echo "issue-spool: nothing was pending under the key(s) this project reads (${keys:-none}), so nothing was filed."
   fi
   return $rc

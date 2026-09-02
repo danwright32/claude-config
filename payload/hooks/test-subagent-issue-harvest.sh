@@ -1289,6 +1289,30 @@ REP_ARCHIVE_LINES="$(cat "$CLAUDE_ISSUE_SPOOL_DIR"/*.filed.jsonl 2>/dev/null | g
   && check "and the records really are in the archive it named" ok \
   || check "and the records really are in the archive it named" "archive holds ${REP_ARCHIVE_LINES:-0} line(s)"
 
+# A clear where a key could NOT be filed must not also say nothing was pending. Both would be
+# printed, one of them false, and the reassuring one is the one a reader keeps (L10, L11).
+# Driven by making the archive unwritable, so the append genuinely fails rather than being staged.
+bash "$SPOOL_LIB" note "$REP_DIR" "a finding that cannot be archived" tester "$REP_TRANSCRIPT" >/dev/null 2>&1
+REP_KEY_NOW="$(bash "$SPOOL_LIB" key "$REP_DIR" "$REP_TRANSCRIPT" 2>/dev/null)"
+REP_ARCH="$CLAUDE_ISSUE_SPOOL_DIR/$REP_KEY_NOW.filed.jsonl"
+: > "$REP_ARCH"; chmod 444 "$REP_ARCH"
+REP_FAIL="$(bash "$SPOOL_LIB" clear "$REP_DIR" "$REP_TRANSCRIPT" 2>&1)"; REP_FAIL_RC=$?
+chmod 644 "$REP_ARCH" 2>/dev/null || true
+contains "could NOT append" "$REP_FAIL" \
+  && check "a clear that could not file says so" ok \
+  || check "a clear that could not file says so" "said: $REP_FAIL"
+contains "nothing was pending" "$REP_FAIL" \
+  && check "and it does not ALSO say nothing was pending" "it printed both, and one of them is false" \
+  || check "and it does not ALSO say nothing was pending" ok
+[ "$REP_FAIL_RC" -ne 0 ] \
+  && check "and it exits non-zero so a caller can tell" ok \
+  || check "and it exits non-zero so a caller can tell" "it exited 0"
+# The records are still there, since the only copy must survive a failed archive (L5).
+[ -n "$(ls "$CLAUDE_ISSUE_SPOOL_DIR"/*.filing.* 2>/dev/null)" ] \
+  && check "and the records it could not archive are left, named" ok \
+  || check "and the records it could not archive are left, named" "the staged copy is gone"
+rm -f "$CLAUDE_ISSUE_SPOOL_DIR"/*.filing.* 2>/dev/null || true
+
 # The review's side. A findings list that names its source can be compared with what the clear
 # said it emptied; one that does not leaves the reader with two counts and no way to relate them.
 bash "$SPOOL_LIB" note "$REP_DIR" "a finding to render" tester "$REP_TRANSCRIPT" >/dev/null 2>&1
@@ -1321,10 +1345,13 @@ printf 'first\n' > "$AGE_DIR/moved.py"
 printf 'first\n' > "$AGE_DIR/still.py"
 bash "$SPOOL_LIB" note "$AGE_DIR" "moved.py line 12 needs a guard" tester "$AGE_TRANSCRIPT" >/dev/null 2>&1
 bash "$SPOOL_LIB" note "$AGE_DIR" "still.py line 3 needs a guard" tester "$AGE_TRANSCRIPT" >/dev/null 2>&1
-# Only ONE of them is touched afterwards, so the marking has to tell them apart rather than mark
-# everything (L159). Touched with an explicit future stamp rather than by waiting: the timestamps
-# are what the comparison reads, so setting them is both instant and the stronger test (L290).
+# BOTH ends are pinned, not just one. The meaning here is the RELATIONSHIP between a file's
+# timestamp and the finding's, and the finding's is recorded to the second while a file's carries
+# a fraction, so leaving the untouched file at "now" made it land a fraction AFTER the finding
+# often enough to matter and the control failed for a reason that had nothing to do with the code
+# (L130, L134). Set rather than waited for, so it is instant and cannot drift (L290).
 touch -t "$(date -v+1d '+%Y%m%d%H%M' 2>/dev/null || date -d 'tomorrow' '+%Y%m%d%H%M')" "$AGE_DIR/moved.py"
+touch -t "$(date -v-1d '+%Y%m%d%H%M' 2>/dev/null || date -d 'yesterday' '+%Y%m%d%H%M')" "$AGE_DIR/still.py"
 AGE_OUT="$(bash "$SPOOL_LIB" pending "$AGE_DIR" "$AGE_TRANSCRIPT" 2>&1)"
 contains "ago)" "$AGE_OUT" \
   && check "#202 a rendered finding says how old it is" ok \
