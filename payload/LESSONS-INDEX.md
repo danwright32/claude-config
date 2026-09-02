@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 419 lessons.
+LESSONS.md, which is NOT loaded into the session. 420 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -122,6 +122,7 @@ to decide something: the body is where the failure it came from is described.
 - L364. A check deciding whether a machine is clean enough to measure on must judge by what is UNUSUAL for that machine, never by what is running on it, because the always-present load (a sync daemon, a backup agent, an indexer) makes an absolute-quiet rule refuse every measurement anybody ever takes.
 - L367. An alert or threshold on a SUM cannot see one of its components collapsing while another grows to replace it, because the total never moves.
 - L543. A feature whose data is a list of EXCEPTIONS (holidays, overrides, blocked entries, allowlisted cases) ships INERT when that list is empty, and empty is a legitimate domain value meaning no exceptions apply, so nothing can distinguish a correctly quiet feature from one whose data was never entered.
+- L373. A test whose premise is that a change has NOT yet been made (a migration rehearsal, a dry run, an assertion that the thing about to be dropped is still there) is CONSUMED by that change shipping, so retire or invert it in the same commit that ships the change. Left behind it goes permanently red for a reason that looks exactly like a real defect, and a standing red makes every other failure in the same list unreadable.
 
 ## Data safety
 

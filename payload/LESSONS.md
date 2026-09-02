@@ -1317,6 +1317,23 @@ window is a count rather than a boundary.
 
 
 
+- **L373. A test whose premise is that a change has NOT yet been made (a migration rehearsal, a dry
+  run, an assertion that the thing about to be dropped is still there) is CONSUMED by that change
+  shipping, so retire or invert it in the same commit that ships the change. Left behind it goes
+  permanently red for a reason that looks exactly like a real defect, and a standing red makes every
+  other failure in the same list unreadable.**
+  (overture#3482: `RetiredColumnsDryRunTests` rehearsed the app's first subtractive migration against a
+  clone of the live store, and step one asserted the column being dropped was still on the clone,
+  deliberately, so the rehearsal could not pass on a store that never carried it. The drop then shipped.
+  Measured 2026-09-02 on a WAL inclusive copy, `ZWEBSITEURL` is gone from `ZPROSPECT` and `websiteURL`
+  is gone from the Swift model, leaving three past-tense comments behind it. So the suite failed on
+  every run with its own wording, "rehearsed dropping a column that was already gone", on the one gate
+  that verifies the Mac app at all, since CI does not run the Swift suite. The half of the same suite
+  that is still live, asserting the two columns Dan chose to KEEP are still there holding their values,
+  was unreadable behind it. Note this is not L252: that is a decision REVERSED, where the test defends
+  the rejected behaviour, and this is a decision CARRIED OUT, where the test defends a precondition
+  that was true only until the work was done)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
