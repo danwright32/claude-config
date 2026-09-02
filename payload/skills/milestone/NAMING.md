@@ -167,6 +167,15 @@ call are generic there.
 
     bash ~/.claude/skills/milestone/milestone-candidates.sh "<owner/name>" --like "<the idea's title>"
 
+It also prints `DUPLICATE-RISK` lines for open issues **anywhere in the repo** that
+overlap with the idea, each naming the milestone it already sits in, with a
+`DUPLICATE-COUNT`. Read those before filing. A `DUPLICATE-RISK` is not a sibling and
+never counts toward the "2 or more" rule: it is a warning that the work may already
+be filed. This exists because it was not there on 2026-09-02 and a duplicate was
+filed within the hour (#264, closed as a duplicate of #226): the helper read only the
+holding pen, so an issue for the same work sitting in a real milestone was invisible
+however the overlap was scored.
+
 It only ever reads. It deliberately does **not** say whether a new milestone is
 warranted: the caller usually holds several new ideas at once and the helper only
 ever sees one of them, so a verdict there would be a claim it cannot measure. Exit 6
