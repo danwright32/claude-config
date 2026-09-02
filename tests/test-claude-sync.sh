@@ -6329,17 +6329,59 @@ section "== a section is never run twice to satisfy a needs declaration (#151) =
 # counts below were 20 launches and 22 seconds of it.
 #
 # It is the REAL selector either way. The equivalence is not assumed, it is checked below.
-_bw_lines(){   # _bw_lines <shards> -> the real coverage lines for that many shards
+# The store every launch below reads, pinned once (claude-config#245).
+#
+# These helpers used to inherit the LIVE section timings store, which the OTHER shards of this same
+# run are writing to while these launches happen. The partition is dealt from those measured times,
+# so the one fast launch and the four slow ones read the store at five different moments and can be
+# handed five different partitions. That is what made #204 fail three separate full runs on
+# 2026-08-31 while passing every time it was run on its own: the variable it was actually measuring
+# was what else the machine was doing (L134, L224, L205).
+#
+# ST_BW_LIVE stands in for the real cache so nothing here writes to it (L2), and ST_BW_PIN is the
+# snapshot taken at ONE moment. Every launch reads the pin, so the comparison below is between two
+# code paths rather than between two moments of a store that moves under it.
+ST_BW_LIVE="$WORK/bw-live"; ST_BW_PIN="$WORK/bw-pin"
+mkdir -p "$ST_BW_LIVE" "$ST_BW_PIN"
+if [ -n "$SUITE_SECTION_TIMINGS" ] && [ -d "$SUITE_SECTION_TIMINGS" ]; then
+  cp -R "$SUITE_SECTION_TIMINGS/." "$ST_BW_LIVE/" 2>/dev/null || true
+fi
+cp -R "$ST_BW_LIVE/." "$ST_BW_PIN/" 2>/dev/null || true
+# The store moving under the run, standing for a sibling shard closing a section mid comparison.
+#
+# Every record is INVERTED rather than one being made large, and that is deliberate twice over.
+# Naming a section to disturb would report success while matching nothing the moment that title is
+# reworded (L100), and the first attempt did exactly that: it named a PRELUDE section, which is
+# never dealt to a shard, so the disturbance changed no partition and the control passed by
+# accident. Inverting turns the heaviest group into the lightest, and the deal is heaviest first,
+# so the order it produces has to change.
+#
+# It answers with how many records it rewrote, so a store that turned out empty is a failure rather
+# than a silent pass (L98).
+_bw_disturb(){   # _bw_disturb <store dir> -> how many records it changed
+  local _bd_f _bd_v _bd_n=0
+  for _bd_f in "$1"/*; do
+    [ -f "$_bd_f" ] || continue
+    _bd_v="$(awk 'NR == 1 { print $1 }' "$_bd_f" 2>/dev/null)"
+    case "$_bd_v" in ''|*[!0-9]*) continue ;; esac
+    printf '%s\n' "$(( 9999 - _bd_v ))" > "$_bd_f" 2>/dev/null || continue
+    _bd_n=$(( _bd_n + 1 ))
+  done
+  printf '%s' "$_bd_n"
+}
+_bw_lines(){   # _bw_lines <shards> [store] -> the real coverage lines for that many shards
   SUITE_SHARD="1/$1" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 \
+    SUITE_SECTION_TIMINGS="${2:-$ST_BW_PIN}" \
     SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1
 }
 # The one launch per shard form, kept for exactly one purpose: proving the form above answers the
 # same. A fast path that is a COPY of the selector's logic would agree with itself and with
 # nothing else, and the only way to tell the two apart is to run the slow path and compare (L52).
-_bw_lines_one_at_a_time(){   # _bw_lines_one_at_a_time <shards> -> the same, the expensive way
-  local _bw_n="$1" _bw_k=1 _bw_all=""
+_bw_lines_one_at_a_time(){   # _bw_lines_one_at_a_time <shards> [store] -> the same, the expensive way
+  local _bw_n="$1" _bw_store="${2:-$ST_BW_PIN}" _bw_k=1 _bw_all=""
   while [ "$_bw_k" -le "$_bw_n" ]; do
     _bw_all="$_bw_all$(SUITE_SHARD="$_bw_k/$_bw_n" SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
+      SUITE_SECTION_TIMINGS="$_bw_store" \
       SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
 "
     _bw_k=$((_bw_k + 1))
@@ -6361,7 +6403,25 @@ _bw_borrowed(){   # _bw_borrowed <coverage lines> -> every borrowed section, spa
 # what is in doubt is whether the two paths are the same CODE, which a single disagreement would
 # settle and four would not settle any better, and the slow path is the thing being paid for here.
 # Four shards, because that is the default a Mac actually runs.
+# The control first, and it is the half that proves the rest is not vacuous (L159): two reads of a
+# store that MOVES between them really do come back with different partitions. Two fast launches,
+# not the five-launch pair, because all this has to establish is that the disturbance can change
+# the answer at all.
+_bw_before="$(_bw_cov_only "$(_bw_lines 4 "$ST_BW_LIVE")")"
+_bw_moved="$(_bw_disturb "$ST_BW_LIVE")"
+_bw_after="$(_bw_cov_only "$(_bw_lines 4 "$ST_BW_LIVE")")"
+# Two halves, because they fail differently: that the disturbance reached real records at all, and
+# that reaching them changed the answer. A control that quietly rewrote nothing would report the
+# same agreement as a store nobody touched (L98).
+check "#245 the control disturbed the records it meant to ($_bw_moved of them)" \
+  "[ \"\$_bw_moved\" -gt 50 ]"
+check "#245 the control: a timings store that moves between two reads really does repartition" \
+  "[ -n \"\$_bw_before\" ] && [ \"\$_bw_before\" != \"\$_bw_after\" ]"
+
+# And now the equivalence, with the live store disturbed in the middle exactly as a sibling shard
+# would. Both paths read the pin, so it reaches neither, and any disagreement left is a real one.
 _bw_fast4="$(_bw_cov_only "$(_bw_lines 4)")"
+_bw_disturb "$ST_BW_LIVE" >/dev/null
 _bw_slow4="$(_bw_cov_only "$(_bw_lines_one_at_a_time 4)")"
 # Counted into plain variables first, so the expressions handed to `check` stay simple enough to
 # read. Both halves matter: that the two paths agree, and that they agreed about four real lines
@@ -7095,12 +7155,18 @@ printf '# the producer is killed by\n# its consumer and the hazard is live here\
   > "$WWH/hooks/lost.sh.conflict-OtherMac"
 out_212="$(CLAUDE_HOME="$WWH" SYNC_REPO="$WWR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 dbg "status with a re-wrapped conflict copy: $out_212"
+# The one line each copy is named on, pulled out first and matched with `case`. A piped `grep -q`
+# would be three more sites on the ratchet in the file that already carries the most of them, and
+# the hazard it tracks is real on this Mac (L183). `sed -n` reads all of its input, so it cannot
+# kill the producer.
+line_212wrap="$(printf '%s\n' "$out_212" | sed -n '/wrapped\.sh\.conflict-OtherMac/p')"
+line_212lost="$(printf '%s\n' "$out_212" | sed -n '/lost\.sh\.conflict-OtherMac/p')"
 check "#212 a re-wrapped copy is named as safe rather than as work outstanding" \
-  "printf '%s' \"\$out_212\" | grep -qE 'wrapped\.sh\.conflict-OtherMac.*(nothing|safe)'"
+  "case \"\$line_212wrap\" in *nothing*|*safe*) true ;; *) false ;; esac"
 check "#212 and it is not reported as holding lines" \
-  "! printf '%s' \"\$out_212\" | grep -qE 'wrapped\.sh\.conflict-OtherMac.*[0-9]+ lines'"
+  "[ -n \"\$line_212wrap\" ] && case \"\$line_212wrap\" in *' lines'*) false ;; *) true ;; esac"
 check "#212 a copy holding a sentence the live file lost is still named in the same run" \
-  "printf '%s' \"\$out_212\" | grep -qE 'lost\.sh\.conflict-OtherMac.*[0-9]+ lines'"
+  "case \"\$line_212lost\" in *' lines'*) true ;; *) false ;; esac"
 rm -f "$WWH/hooks/wrapped.sh.conflict-OtherMac" "$WWH/hooks/lost.sh.conflict-OtherMac"
 
 section "== a renumber's citation scan opens only the files that match (#53) =="
@@ -8432,8 +8498,32 @@ pi_slow="$(pi_run 4 one)"
 pi_reached="$(cat "$WORK/poll-out.txt" 2>/dev/null)"
 check "#205 the timed pulls really do run the hook suite" \
   "line_has \"\$pi_reached\" 'Pulled shared config' 'hook suite passed here'"
-pi_fast="$(pi_run 0.1 two)"
-dbg "#205 pull with a 4s poll took ${pi_slow}ms, with the default 0.1s poll took ${pi_fast}ms"
+# THREE fast samples, and the smallest of them is the one used (claude-config#245).
+#
+# A single sample of an elapsed time is a sample of what else the machine was doing at that instant,
+# and this section was one of the three that failed three separate full runs on 2026-08-31 while
+# passing every time it was run alone. The same run took 149s idle and 402s under load, which is the
+# variable a single reading actually measures (L224).
+#
+# The smallest of several readings is the one least contaminated by a load spike, and the SPREAD
+# between them is this machine's noise for this operation, right now, in this run. It is reported
+# alongside the verdict so a failure says whether the machine was busy rather than leaving the
+# reader to guess (L11).
+pi_fast_a="$(pi_run 0.1 two)"
+pi_fast_b="$(pi_run 0.1 two_b)"
+pi_fast_c="$(pi_run 0.1 two_c)"
+pi_fast="$pi_fast_a"
+[ "$pi_fast_b" -lt "$pi_fast" ] && pi_fast="$pi_fast_b"
+[ "$pi_fast_c" -lt "$pi_fast" ] && pi_fast="$pi_fast_c"
+pi_spread_hi="$pi_fast_a"
+[ "$pi_fast_b" -gt "$pi_spread_hi" ] && pi_spread_hi="$pi_fast_b"
+[ "$pi_fast_c" -gt "$pi_spread_hi" ] && pi_spread_hi="$pi_fast_c"
+pi_spread=$(( pi_spread_hi - pi_fast ))
+dbg "#205 pull with a 4s poll took ${pi_slow}ms, with the default 0.1s poll took ${pi_fast_a}ms ${pi_fast_b}ms ${pi_fast_c}ms"
+# The samples have to be real work, or the minimum of three zeroes would satisfy everything below
+# it (L98). A pull that reached the wait cannot cost nothing.
+check "#205 the fast samples measured real pulls (fastest ${pi_fast}ms, spread ${pi_spread}ms)" \
+  "[ \"\$pi_fast\" -gt 0 ]"
 # The setting is HONOURED, which is the only thing that makes the default meaningful. A four
 # second poll against a runner that ends after the 50ms the stub above SETS (not measured: the
 # fixture sleeps exactly that long) must cost at least two seconds more than a tenth of a second
@@ -8447,7 +8537,7 @@ check "#205 the poll interval is honoured (4s poll took ${pi_slow}ms, 0.1s poll 
 # way and only the wait is under test here (L146, L224).
 pi_overhead=$(( pi_slow - 4000 ))
 [ "$pi_overhead" -ge 0 ] || pi_overhead=0
-check "#205 and a runner finishing in 50ms is noticed within 200ms of it (${pi_fast}ms, of which ${pi_overhead}ms is the pull itself)" \
+check "#205 and a runner finishing in 50ms is noticed within 200ms of it (fastest ${pi_fast}ms, spread ${pi_spread}ms, of which ${pi_overhead}ms is the pull itself)" \
   "[ \"\$(( pi_fast - pi_overhead ))\" -le 200 ]"
 
 # The deadline is against the CLOCK. A runner that never ends, and a ceiling of three seconds: if
