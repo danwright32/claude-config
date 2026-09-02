@@ -99,7 +99,7 @@ cat >"$TMP/issues.json" <<'JSON'
   { "number": 241, "title": "Give the subagent findings spool a way to drain" },
   { "number": 242, "title": "Report whether a spooled finding is reachable by any review" },
   { "number": 243, "title": "Warn when a stale deploy alert fires twice" },
-  { "number": 244, "title": "Match an open issue against the issues already filed" },
+  { "number": 244, "title": "Match a spooled finding against open issues before offering it" },
   { "number": 240, "title": "Give claude-sync a way to clean up old backups" }
 ]
 JSON
@@ -203,7 +203,7 @@ check "the weak matches are counted separately" "WEAK-COUNT 1" "$normal"
 # This needs its OWN run with a tracker heavy title. Asserted against the run above
 # it was satisfied by a fixture where the case could not arise, since that idea
 # shares no word at all with #244, so it passed while proving nothing (L159).
-run acme/widgets --like "Match an open issue against the issues already filed elsewhere"
+run acme/widgets --like "Group the open issues already sitting in the Ungrouped holding pen"
 check_not "two shared tracker words is not a sibling" "#244" "$OUT"
 check "and the tracker only overlap does not reach the count" "SIBLING-COUNT 0" "$OUT"
 

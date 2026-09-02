@@ -228,6 +228,7 @@ STOP = {
         # have discarded real matches, so the words go here instead.
         "issue", "issues", "open", "opened", "close", "closed", "already",
         "filed", "file", "backlog", "repo", "ticket", "item", "items",
+        "against", "elsewhere", "twice", "anything",
     )
 }
 
