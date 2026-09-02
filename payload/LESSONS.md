@@ -4328,3 +4328,14 @@ difference was plumbing.
   (2026-08-29 audit: PostRoll#571 priced a duplicate render at "about 200s and nothing else";
   Overture#2487 and its AGENTS.md; claude-config had seven dated numbers all a week stale;
   Downbeat's gate still says two to three minutes in six places against 46 seconds measured)
+
+- **L538. A build left red for a known unrelated reason stops being a signal for everything
+  else, because a genuinely new failure then arrives indistinguishable from the standing one in
+  every list. Fix or quarantine the standing failure rather than working alongside it, since the
+  longer it stands the more changes get merged with nothing actually judging them.**
+  (danwright32/claude-config#263, 2026-09-02: test-pipefail-shortcircuit.sh had recorded 318
+  short circuiting pipelines against 322 present since 7c16c15, so every run failed. A change
+  that day genuinely added two such pipelines to a new file, the suite correctly caught them, and
+  in the run list that real failure and the stale one were one line apart and indistinguishable.
+  Nearest neighbours are L314, which is CI that has stopped rather than CI that always fails, and
+  L179 on a superseded run answering for the wrong revision.)

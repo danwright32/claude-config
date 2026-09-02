@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 399 lessons.
+LESSONS.md, which is NOT loaded into the session. 400 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -441,3 +441,4 @@ to decide something: the body is where the failure it came from is described.
 - L314. CI that has stopped is the slowest test suite there is and it stops quietly: a refused run looks like a failed run in every list, nothing alerts on an exhausted allowance, and a repo that goes quiet for a month looks like a repo nobody is working on, so a speed pass begins by confirming the tests are running at all, and a repo on a capped or metered runner needs a visible surface showing how much of the month is left before the day it is zero (L13, L523).
 - L315. Anything divided into fixed-size pieces under a fixed deadline needs a test holding the measured size of the largest piece to a fraction of the deadline (L172, L224) and pieces dealt by measured cost rather than by count (L296), because a sweep sized by count grows into its own deadline and the red it then produces names the sweep's size as a broken guard (L11).
 - L316. A recorded decision carries the premise it was made on, and the premise can expire while the decision stands, so record the premise in a form that can be re-measured (a pin, a command, a number with its source) rather than as a dated sentence, because a date on a number makes it MORE trusted, not less (L61, L244, L210).
+- L538. A build left red for a known unrelated reason stops being a signal for everything else, because a genuinely new failure then arrives indistinguishable from the standing one in every list. Fix or quarantine the standing failure rather than working alongside it, since the longer it stands the more changes get merged with nothing actually judging them.
