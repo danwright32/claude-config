@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 416 lessons.
+LESSONS.md, which is NOT loaded into the session. 417 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -316,6 +316,7 @@ to decide something: the body is where the failure it came from is described.
 - L330. An acknowledgement a person gives must be consulted by EVERY rule that raises the question it answers, not only the one whose control recorded it, because a second rule computing that question from raw state goes on asking after it has been answered, and no action is then left that could ever satisfy it.
 - L545. A set of values whose meaning is their ORDER relative to each other (medal colours, severity tints, tier sizes, ranked weights) is broken by changing ONE member for an unrelated reason such as a contrast fix, because every member stays individually valid and nothing compares them, so assert the ordering itself rather than each value.
 - L546. A screen that no navigation links to works perfectly for whoever built it, because they have the address, so it is invisible to every test, review and build and is found only by somebody hunting for it under pressure.
+- L547. A control whose work is pure computation over data the page already holds must not be routed through a server round trip, because on a dynamic page that round trip re-runs every UNRELATED read on the page, so the control's cost becomes the whole page's cost and nothing at the point it is written says so.
 
 ## External systems
 

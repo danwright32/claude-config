@@ -3223,6 +3223,16 @@ window is a count rather than a boundary.
   own only entry point was a card labelled "Alert settings" because #1297 moved the business
   hours onto that page and renamed the page but not the door. Slate was offering times on Labor
   Day and the person who needed to close the date could not find the screen that does it)
+- **L547. A control whose work is pure computation over data the page already holds must not be
+  routed through a server round trip, because on a dynamic page that round trip re-runs every
+  UNRELATED read on the page, so the control's cost becomes the whole page's cost and nothing at
+  the point it is written says so.** The code at the filter reads as correct and cheap, and the
+  expense lives in a list of reads several hundred lines away that nobody consults when adding a
+  filter, so the tell is a control that narrows no query and still costs a page load.
+  (slate#1752, 2026-09-02: the admin agent search is an in memory `includes` over a roster of 136
+  already in the payload, but submitting it re-rendered the force-dynamic admin page, re-running
+  about twelve reads including the audit log and its exact count, webhook deliveries and cron lane
+  health, before one row could change. Dan reported it as search taking too long to do anything)
 
 ## External systems
 
