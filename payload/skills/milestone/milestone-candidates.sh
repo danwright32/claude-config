@@ -220,6 +220,14 @@ STOP = {
         "just", "then", "over", "past", "does", "done", "need", "needs",
         "take", "takes", "uses", "used", "once", "actually", "really", "thing",
         "things", "ways", "lets", "each", "both", "while", "being", "does",
+        # Tracker vocabulary. Generic in EVERY repo, because everything here is an
+        # issue that is open or closed and was filed at some point. Measured
+        # 2026-09-02 on this repo: an idea about grouping the backlog drew two
+        # siblings at two shared words and neither was about grouping, because they
+        # shared "issue", "open" and "already". Raising the score threshold would
+        # have discarded real matches, so the words go here instead.
+        "issue", "issues", "open", "opened", "close", "closed", "already",
+        "filed", "file", "backlog", "repo", "ticket", "item", "items",
     )
 }
 
