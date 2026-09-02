@@ -11179,6 +11179,40 @@ _231_why="$CHECK_SHAPE_WHY"
 check "#231 and the refusal names the other suite" \
   "case \"\$_231_why\" in *test-run-all-tests.sh*) true ;; *) false ;; esac"
 
+section "== the pull hands the runner the checkout it can re-run from (#237) =="
+# #237 gave run-all-tests.sh a branch that re-runs a repository-audit suite from the checkout when
+# it cannot run in the deployed copy, and that branch has its own tests in
+# test-run-all-tests.sh. NOTHING asserted the other half: that claude-sync actually TELLS the
+# runner where the checkout is. Built is not wired, and wired is not proven (L3).
+#
+# Without this, removing or renaming that variable on the sync side leaves the runner's branch
+# green in its own suite while the feature silently stops, and the pull goes quietly back to
+# announcing an unverified gap on every run. The two halves are in different files, so nothing
+# else compares them.
+CKR_HOME="$WORK/checkoutvar-home"; mkdir -p "$CKR_HOME/hooks"
+echo '{"hooks":{}}' > "$CKR_HOME/settings.json"
+CKR_REPO="$WORK/checkoutvar-repo"; mkdir -p "$CKR_REPO/payload/hooks"
+# A stub runner that reports what it was HANDED, which is the one fact under test. It prints a
+# passing verdict too, so the pull takes its ordinary path and this measures the normal case.
+CKR_SEEN="$WORK/checkoutvar-seen"
+{ printf '#!/usr/bin/env bash\n'
+  printf 'printf "%%s" "${RUN_ALL_TESTS_CHECKOUT:-<unset>}" > "%s"\n' "$CKR_SEEN"
+  printf 'echo "ALL 1 SUITES PASSED"\n'
+  printf 'exit 0\n'; } > "$CKR_REPO/payload/hooks/run-all-tests.sh"
+chmod +x "$CKR_REPO/payload/hooks/run-all-tests.sh"
+printf '# marker\n' > "$CKR_REPO/payload/hooks/ckr-marker.sh"
+CLAUDE_HOME="$CKR_HOME" SYNC_REPO="$CKR_REPO" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
+ckr_seen="$(cat "$CKR_SEEN" 2>/dev/null || true)"
+dbg "#237 the runner was handed: ${ckr_seen:-<nothing>}"
+# The exact repo, not merely "something": a value that is set but wrong sends the re-run at a
+# directory with no payload in it, where it finds no suite and changes nothing, which reads
+# exactly like the variable never having been passed (L98).
+check "#237 the pull tells the runner which checkout to re-run from" \
+  "[ \"\$ckr_seen\" = '$CKR_REPO' ]"
+# And the runner really did get a chance to report, or the check above is satisfied by a pull that
+# never launched it at all (L100).
+check "#237 and the runner was actually launched" "[ -f '$CKR_SEEN' ]"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
