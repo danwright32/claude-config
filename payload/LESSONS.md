@@ -3978,6 +3978,7 @@ window is a count rather than a boundary.
   old days. The standstill alert that eventually fired advised checking Snowflake availability and
   the export credentials, both of which were fine, because the check never read the run outcomes
   that said `skipped-locked` in plain text)
+
 - **L366. A lock must be released as soon as the writes it protects are done**, because any
   verification, reporting or notification step left inside the critical section makes every other
   waiter's latency depend on work that never needed exclusion, and that coupling grows silently as
@@ -3988,7 +3989,6 @@ window is a count rather than a boundary.
   not pick anything up from the other Mac for that whole window. The suite writes nothing the lock
   protects, and it had grown from 38 to 44 suites in a fortnight, so the delay to propagation was
   set by how long the tests took rather than by anything about delivery)
-
 
 - **L255. A consumer that gates on an exact SET of accepted format versions turns the producer's
   next additive bump into a total outage of itself**, because an unrecognised version is refused
