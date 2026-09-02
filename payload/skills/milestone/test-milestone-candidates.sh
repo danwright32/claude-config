@@ -199,7 +199,13 @@ check "the weak matches are counted separately" "WEAK-COUNT 1" "$normal"
 # neither was about grouping. They shared "issue", "open" and "already", which say
 # nothing in a backlog of issues. Raising the threshold would have lost real matches,
 # so the words themselves are excluded instead.
-check_not "two shared tracker words is not a sibling" "#244" "$normal"
+#
+# This needs its OWN run with a tracker heavy title. Asserted against the run above
+# it was satisfied by a fixture where the case could not arise, since that idea
+# shares no word at all with #244, so it passed while proving nothing (L159).
+run acme/widgets --like "Match an open issue against the issues already filed elsewhere"
+check_not "two shared tracker words is not a sibling" "#244" "$OUT"
+check "and the tracker only overlap does not reach the count" "SIBLING-COUNT 0" "$OUT"
 
 # The stronger match has to come first, or a caller reading only the top line
 # reads the weakest evidence it has.
