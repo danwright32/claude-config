@@ -1250,6 +1250,57 @@ OTHER_LEFT="$(grep -rl "another project's finding" "$CLAUDE_ISSUE_SPOOL_DIR"/*.j
   && check "another project's findings are left alone" ok \
   || check "another project's findings are left alone" "they were filed away too"
 
+# ---- a clear says what it filed, and a review says what it read (claude-config#260) ----
+# Measured on project-enrollment-tracker, 2026-09-01: a clear was run exactly as CLAUDE.md
+# instructs, it exited 0, the pending file was gone afterwards, and the review fired again later
+# in the same session naming the same 49 findings from a file rebuilt at that moment. The archive
+# for that key had not been written to since 21 August. Three explanations fit those facts and
+# nothing anywhere distinguished them, because `clear` printed nothing at all and the review never
+# said which files it read.
+#
+# So neither of them is silent any more. This does not itself decide which explanation was right;
+# it makes the next occurrence answerable instead of arguable (L11, L98).
+reset_spool
+REP_DIR="$TMPROOT/report-clear"; mkdir -p "$REP_DIR"
+( cd "$REP_DIR" && git init -q . 2>/dev/null )
+REP_TDIR="$TMPROOT/report-clear-transcript"; mkdir -p "$REP_TDIR"
+REP_TRANSCRIPT="$REP_TDIR/agent.jsonl"; : > "$REP_TRANSCRIPT"
+
+# Nothing pending. "It worked" and "it matched nothing" are the two answers that used to look
+# identical at the call site, and telling them apart is the whole of this.
+REP_EMPTY="$(bash "$SPOOL_LIB" clear "$REP_DIR" "$REP_TRANSCRIPT" 2>&1)"
+contains "nothing was pending" "$REP_EMPTY" \
+  && check "a clear that matched nothing says so" ok \
+  || check "a clear that matched nothing says so" "said: $REP_EMPTY"
+
+bash "$SPOOL_LIB" note "$REP_DIR" "the first finding" tester "$REP_TRANSCRIPT" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REP_DIR" "the second finding" tester "$REP_TRANSCRIPT" >/dev/null 2>&1
+REP_FULL="$(bash "$SPOOL_LIB" clear "$REP_DIR" "$REP_TRANSCRIPT" 2>&1)"
+contains "filed 2 record" "$REP_FULL" \
+  && check "a clear that filed records says how many" ok \
+  || check "a clear that filed records says how many" "said: $REP_FULL"
+# And WHERE they went, so the archive question that started this can be answered by looking at the
+# file the clear names rather than at the one somebody assumed it used.
+contains ".filed.jsonl" "$REP_FULL" \
+  && check "and names the archive it put them in" ok \
+  || check "and names the archive it put them in" "said: $REP_FULL"
+REP_ARCHIVE_LINES="$(cat "$CLAUDE_ISSUE_SPOOL_DIR"/*.filed.jsonl 2>/dev/null | grep -c . || true)"
+[ "${REP_ARCHIVE_LINES:-0}" -eq 2 ] \
+  && check "and the records really are in the archive it named" ok \
+  || check "and the records really are in the archive it named" "archive holds ${REP_ARCHIVE_LINES:-0} line(s)"
+
+# The review's side. A findings list that names its source can be compared with what the clear
+# said it emptied; one that does not leaves the reader with two counts and no way to relate them.
+bash "$SPOOL_LIB" note "$REP_DIR" "a finding to render" tester "$REP_TRANSCRIPT" >/dev/null 2>&1
+REP_PENDING="$(bash "$SPOOL_LIB" pending "$REP_DIR" "$REP_TRANSCRIPT" 2>&1)"
+contains "SPOOL SOURCE" "$REP_PENDING" \
+  && check "a rendered findings list names the spool files it was built from" ok \
+  || check "a rendered findings list names the spool files it was built from" "rendered: $REP_PENDING"
+REP_KEY="$(bash "$SPOOL_LIB" key "$REP_DIR" "$REP_TRANSCRIPT" 2>/dev/null)"
+contains "$REP_KEY" "$REP_PENDING" \
+  && check "and the source it names is the key a clear would empty" ok \
+  || check "and the source it names is the key a clear would empty" "key=$REP_KEY rendered: $REP_PENDING"
+
 echo
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

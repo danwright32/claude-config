@@ -155,13 +155,25 @@ issue_spool_archive_for_key() { printf '%s/%s.filed.jsonl' "$(issue_spool_root)"
 # separately is how the split this fixes came about.
 #
 # Prints the temp file's path. The caller removes it.
+# Beside the collected records it writes a "<tmp>.sources" file naming each spool file it actually
+# read and how many records it held. A reader that shows a person a list of findings has to be
+# able to name where they came from, because the one question a re-served list raises is whether
+# it is the same file a clear already emptied, and nothing could answer it (claude-config#260).
+#
+# A FILE rather than a variable, and that is not a style choice: every caller here takes the tmp
+# path through `$(...)`, which is a subshell, so a global set in this function is discarded on the
+# way out. The first version did exactly that and the source line silently never appeared.
 issue_spool_collect() { # collect <dir> [session-transcript]
-  local tmp key file
+  local tmp key file n
   tmp="$(mktemp "${TMPDIR:-/tmp}/claude-spool-read.XXXXXX")" || return 1
+  : > "$tmp.sources"
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     file="$(issue_spool_path_for_key "$key")"
-    [ -s "$file" ] && cat "$file" >> "$tmp" 2>/dev/null
+    if [ -s "$file" ] && cat "$file" >> "$tmp" 2>/dev/null; then
+      n="$(grep -c . "$file" 2>/dev/null || true)"
+      printf '%s (%s records)\n' "$(basename "$file")" "${n:-0}" >> "$tmp.sources"
+    fi
   done <<COLLECT_KEYS
 $(issue_spool_read_keys "${1:-$PWD}" "${2:-}")
 COLLECT_KEYS
@@ -353,7 +365,7 @@ print(json.dumps({
 # reply nobody could parse.
 issue_spool_pending() { # pending <dir> [session-transcript] -> exit 1 when there is nothing to show
   local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
-  if [ ! -s "$file" ]; then rm -f "$file"; return 1; fi
+  if [ ! -s "$file" ]; then rm -f "$file" "$file.sources"; return 1; fi
   CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" <<'PY'
 import json, os, sys
 
@@ -457,7 +469,14 @@ if corrupt:
 sys.exit(0 if shown else 1)
 PY
   rc=$?
-  rm -f "$file"
+  # Named only when something was actually shown, because a source line over an empty report is a
+  # line about nothing. It goes LAST, so it cannot be mistaken for a finding, and it names the
+  # same files `clear` names when it files them: the two are meant to be compared.
+  if [ "$rc" -eq 0 ] && [ -s "$file.sources" ]; then
+    printf 'SPOOL SOURCE: %s, under %s. A clear files exactly these, and says how many it filed; if this list comes back after one, that is the fact to report.\n' \
+      "$(tr '\n' ';' < "$file.sources" | sed 's/;$//; s/;/, /g')" "$(issue_spool_root)"
+  fi
+  rm -f "$file" "$file.sources"
   return $rc
 }
 
@@ -467,7 +486,7 @@ PY
 # and interrupting every turn over it would train the review to be ignored.
 issue_spool_has_findings() { # has-findings <dir> [session-transcript] -> exit 0 when a finding is pending
   local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
-  if [ ! -s "$file" ]; then rm -f "$file"; return 1; fi
+  if [ ! -s "$file" ]; then rm -f "$file" "$file.sources"; return 1; fi
   python3 - "$file" <<'PY_HF'
 import json, sys
 for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
@@ -483,7 +502,7 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
 sys.exit(1)
 PY_HF
   rc=$?
-  rm -f "$file"
+  rm -f "$file" "$file.sources"
   return $rc
 }
 
@@ -497,7 +516,7 @@ PY_HF
 # "stopped" rather than printing a reassuring zero (L98).
 issue_spool_muted_summary() { # muted-summary <dir> [session-transcript] -> exit 1 when nothing is held back
   local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
-  if [ ! -s "$file" ]; then rm -f "$file"; return 1; fi
+  if [ ! -s "$file" ]; then rm -f "$file" "$file.sources"; return 1; fi
   CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" <<'PY_MUTED'
 import json, os, sys
 
@@ -547,7 +566,7 @@ print("HARVEST UNREADABLE, since %s: %s. This is a periodic count, not a new pro
 sys.exit(0)
 PY_MUTED
   rc=$?
-  rm -f "$file"
+  rm -f "$file" "$file.sources"
   return $rc
 }
 
@@ -558,23 +577,40 @@ PY_MUTED
 # likely to be finishing (right after the picker is answered), so that window is
 # the normal case rather than a corner. After the rename an appender writes to a
 # fresh file and cannot be caught by the drain at all.
+# It SAYS what it did (claude-config#260). Exiting 0 in silence made "it filed 49 records" and "it
+# matched nothing" the same event at the call site, and CLAUDE.md tells Claude to run this by hand
+# after a picker, so the call site is a person reading a terminal. When the same findings then
+# came back at the next review there was no way to tell a clear that had missed them from a
+# harvest that had written them again.
 issue_spool_clear() { # clear <dir> [session-transcript] -> file the pending records
-  local key rc=0
+  local key rc=0 total=0 n keys=""
   while IFS= read -r key; do
     [ -n "$key" ] || continue
-    issue_spool_clear_key "$key" || rc=1
+    keys="${keys:+$keys, }$key"
+    if n="$(issue_spool_clear_key "$key")"; then
+      [ -n "$n" ] && [ "$n" -gt 0 ] 2>/dev/null && total=$(( total + n ))
+    else
+      rc=1
+    fi
   done <<CLEAR_KEYS
 $(issue_spool_read_keys "${1:-$PWD}" "${2:-}")
 CLEAR_KEYS
+  if [ "$total" -eq 0 ]; then
+    echo "issue-spool: nothing was pending under the key(s) this project reads (${keys:-none}), so nothing was filed."
+  fi
   return $rc
 }
 
+# Prints the number of records it filed, so the caller can total them. Says nothing on stdout when
+# there was nothing to file; the caller reports that once for the whole run rather than once per key.
 issue_spool_clear_key() { # clear-key <key>
   local file archive staged count
   file="$(issue_spool_path_for_key "$1")"
   archive="$(issue_spool_archive_for_key "$1")"
-  [ -s "$file" ] || return 0
+  [ -s "$file" ] || { printf '0'; return 0; }
   mkdir -p "$(issue_spool_root)" 2>/dev/null || return 1
+  count="$(grep -c . "$file" 2>/dev/null || true)"
+  case "$count" in ''|*[!0-9]*) count=0 ;; esac
   staged="${file}.filing.$$"
   mv "$file" "$staged" 2>/dev/null || return 1
 
@@ -583,9 +619,21 @@ issue_spool_clear_key() { # clear-key <key>
   # window happened not to open (measured 2026-08-16, the broken version passed).
   [ -n "${CLAUDE_ISSUE_SPOOL_MIDCLEAR:-}" ] && eval "${CLAUDE_ISSUE_SPOOL_MIDCLEAR}"
 
-  cat "$staged" >> "$archive" 2>/dev/null && rm -f "$staged"
+  if cat "$staged" >> "$archive" 2>/dev/null; then
+    rm -f "$staged"
+    echo "issue-spool: filed $count record(s) from $(basename "$file") into $(basename "$archive"), under $(issue_spool_root)." >&2
+  else
+    # The staged copy is deliberately LEFT, and named. It is the only copy of those records, and a
+    # drain that failed in silence is how an archive stops being written to without anybody
+    # noticing, which is half of what claude-config#260 reported (L98, L11).
+    echo "issue-spool: could NOT append $count record(s) to $(basename "$archive"). They are not lost: they are in $staged, and nothing has been added to the archive. Move that file by hand once you know why." >&2
+    printf '0'
+    return 1
+  fi
 
   issue_spool_cap_archive "$archive"
+  printf '%s' "$count"
+  return 0
 }
 
 # Cap the archive. It is history that nothing reads automatically, so the only
@@ -735,7 +783,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     archive-path) issue_spool_archive_path "${1:-$PWD}" "${2:-}" ;;
     append)       issue_spool_append "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     note)         issue_spool_note "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
-    raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; rm -f "$f"; exit 0 ;;
+    raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; rm -f "$f" "$f.sources"; exit 0 ;;
     pending)      issue_spool_pending "${1:-$PWD}" "${2:-}" ;;
     has-findings) issue_spool_has_findings "${1:-$PWD}" "${2:-}" ;;
     archive)      f="$(issue_spool_archive_path "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
