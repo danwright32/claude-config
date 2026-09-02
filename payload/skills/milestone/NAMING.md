@@ -310,6 +310,7 @@ removing a label strips it from every issue that carries it, so that is Dan's ca
 | A plan's issues carry both | `create-milestone.sh`, which the gates cannot see into | none, fix the plan JSON |
 | A new milestone title names a feature | `ensure-milestone.sh`, on the create path only | `ALLOW_ANY_MILESTONE_TITLE=1 <command>` |
 | A new milestone is for 2 or more issues | the same script, which refuses to create without `--for-issues <n>` and refuses a stated count of 1 | `ALLOW_SINGLE_ISSUE_MILESTONE=1 <command>` |
+| A new milestone is not a twin of an open one | the same script, comparing titles with any generic noun the two SHARE (integration, sync, page, dashboard, cleanup, migration) removed first | `--distinct-approved`, once Dan has confirmed the two are separate features |
 
 Every override is visible in the command itself, so it cannot happen by accident or
 go unnoticed in the transcript. Explain to Dan why you are using one, first. An

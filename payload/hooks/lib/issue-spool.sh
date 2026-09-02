@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# issue-spool.sh — the durable holding place for issue candidates found by
+# issue-spool.sh: the durable holding place for issue candidates found by
 # subagents, and the ONE definition of the spool's shape.
 #
 # Why a spool at all. The end of turn issue review is a Stop hook: it fires when

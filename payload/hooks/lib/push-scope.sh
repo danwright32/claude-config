@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# push-scope.sh — shared helpers for hooks that act on a `git push`.
+# push-scope.sh: shared helpers for hooks that act on a `git push`.
 #
 # Sourced, never executed. Holds the three things every push hook has to work
 # out for itself, so they exist once rather than once per hook:
-#   ps_is_git_push   — is this command actually a push (leading tokens, not a
+#   ps_is_git_push: is this command actually a push (leading tokens, not a
 #                      substring, so an `echo "git push"` cannot trigger a hook)
-#   ps_commit_in_chain / ps_add_in_chain — does the same command commit/stage
+#   ps_commit_in_chain / ps_add_in_chain: does the same command commit/stage
 #                      before pushing? PreToolUse runs BEFORE the command, so a
 #                      `git add … && git commit … && git push` has nothing in
 #                      history yet and the pending work must be folded in.
-#   ps_base_ref / ps_merge_base — what the pushed commits are measured against.
+#   ps_base_ref / ps_merge_base: what the pushed commits are measured against.
 #
 # Every function is pure: it reads its arguments and echoes or returns, touching
 # no globals, so a caller can use one without inheriting the others.

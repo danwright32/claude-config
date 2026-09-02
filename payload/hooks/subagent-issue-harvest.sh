@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# subagent-issue-harvest.sh — SubagentStop hook. Reads the transcript of a
+# subagent-issue-harvest.sh: SubagentStop hook. Reads the transcript of a
 # subagent that just finished and spools anything it noticed that is worth
 # filing but was not the job it was sent to do.
 #

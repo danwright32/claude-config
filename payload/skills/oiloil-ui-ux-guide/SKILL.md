@@ -40,7 +40,7 @@ Use `references/review-template.md` when you need a stable output format.
 Apply these as first-order constraints before choosing components or page patterns.
 Full definitions and review questions: `references/system-principles.md`.
 
-Key principles: concept constancy · primary task focus · UI copy source discipline · state perceptibility · help text layering (L0–L3) · feedback loop closure · prevention + recoverability · progressive complexity · action perceptibility · cognitive load budget · evolution with semantic continuity.
+Key principles: concept constancy · primary task focus · UI copy source discipline · state perceptibility · help text layering (L0: L3) · feedback loop closure · prevention + recoverability · progressive complexity · action perceptibility · cognitive load budget · evolution with semantic continuity.
 
 ## Core Principles (minimal set)
 
@@ -125,44 +125,44 @@ Use this when implementing or reviewing layouts. Keep it short, but enforce it s
 AI 生成 UI 时有固定倾向。以下是反模式清单，违反必须修复。
 
 ### 字体
-- ❌ **禁止**: Inter, Roboto, Arial, Open Sans, system-ui
-- ✅ **推荐**: Plus Jakarta Sans, Outfit, Manrope, DM Sans, Geist
+- **禁止**: Inter, Roboto, Arial, Open Sans, system-ui
+- **推荐**: Plus Jakarta Sans, Outfit, Manrope, DM Sans, Geist
 
 ### 颜色
-- ❌ **禁止**:
+- **禁止**:
   - 纯黑 `#000`, 纯白 `#fff`, 纯灰 `#888`
   - 在有色背景上使用灰色文字
   - purple-to-blue 渐变, cyan-on-dark
   - `#6366f1` (generic indigo)
-- ✅ **推荐**:
+- **推荐**:
   - **Tinted neutrals**: 给所有灰色添加品牌色调 (例: 品牌色 `#0066cc` → 灰色用 `#1a2a3a` 而非 `#333`)
   - **OKLCH 色彩空间**: 替代 HSL，感知均匀，调整明度/彩度时更自然
   - 深色模式需要更高的对比度和彩度，不是简单反转
 
 ### 布局
-- ❌ **禁止**:
+- **禁止**:
   - 所有内容包在卡片里
   - 卡片嵌套卡片
   - 相同的 3 列卡片网格
   - 圆角过大 (>12px) 的 "pill" 风格
-- ✅ **推荐**:
+- **推荐**:
   - 用留白和排版建立层次，而非边框/卡片
   - 卡片只用于真正需要分组的内容
   - 网格布局使用 `grid-template-columns: repeat(auto-fit, minmax(240px, 1fr))`
 
 ### 动效
-- ❌ **禁止**: bounce/easing, 入场动画过多, 装饰性持续动画
-- ✅ **推荐**: fade → translate+fade → scale+fade (仅 overlay)
+- **禁止**: bounce/easing, 入场动画过多, 装饰性持续动画
+- **推荐**: fade → translate+fade → scale+fade (仅 overlay)
 
 ### 图标
-- ❌ **禁止**: emoji 作为图标, 混合多种图标风格
-- ✅ **推荐**: Lucide, Phosphor, Heroicons 等现代图标库
+- **禁止**: emoji 作为图标, 混合多种图标风格
+- **推荐**: Lucide, Phosphor, Heroicons 等现代图标库
 
 ---
 
 ## Bold Typography (大胆排版)
 
-AI 生成的 UI 倾向于"安全"的布局——居中对齐、均匀网格、可预测的层次。鼓励探索更有个性的排版方向。
+AI 生成的 UI 倾向于"安全"的布局:, 居中对齐、均匀网格、可预测的层次。鼓励探索更有个性的排版方向。
 
 ### 原则
 - **排版即装饰**: 用字体大小/粗细/位置的对比代替边框/阴影/卡片
@@ -172,21 +172,21 @@ AI 生成的 UI 倾向于"安全"的布局——居中对齐、均匀网格、�
 - **网格是工具不是规则**: 必要时打破，但要有意图
 
 ### 何时大胆
-Marketing 页面、产品介绍、Landing page、Hero 区域、作品展示——需要吸引注意力、传递品牌个性的场景。
+Marketing 页面、产品介绍、Landing page、Hero 区域、作品展示:, 需要吸引注意力、传递品牌个性的场景。
 
 ### 何时克制
-表单填写、数据录入、复杂操作流程、需要快速扫描的列表——效率和清晰度优先的场景。
+表单填写、数据录入、复杂操作流程、需要快速扫描的列表:, 效率和清晰度优先的场景。
 
 ---
 
 ## Anti-AI Self-Check (生成后必查)
 
-- **Gradient restraint** — 装饰性渐变每页最多 1 个。背景、按钮、边框同时用渐变 = 过度。
-- **No emoji as UI** — 检查 section icons、状态指示、按钮标签是否混入 emoji。
-- **Copy necessity** — 删除这段文字后，用户能通过布局/图标/位置理解吗？能 → 删除。
-- **Decoration justification** — 每个视觉特效 (blur/glow/动画) 必须回答："帮助用户理解什么？" 无答案 → 删除。
-- **Font check** — 是否使用了 Inter/Roboto？替换为 Plus Jakarta Sans/Outfit/Manrope。
-- **Color check** — 是否有纯黑纯白纯灰？是否在彩色背景上用灰色文字？添加色调。
+- **Gradient restraint**: 装饰性渐变每页最多 1 个。背景、按钮、边框同时用渐变 = 过度。
+- **No emoji as UI**: 检查 section icons、状态指示、按钮标签是否混入 emoji。
+- **Copy necessity**: 删除这段文字后，用户能通过布局/图标/位置理解吗？能 → 删除。
+- **Decoration justification**: 每个视觉特效 (blur/glow/动画) 必须回答："帮助用户理解什么？" 无答案 → 删除。
+- **Font check**: 是否使用了 Inter/Roboto？替换为 Plus Jakarta Sans/Outfit/Manrope。
+- **Color check**: 是否有纯黑纯白纯灰？是否在彩色背景上用灰色文字？添加色调。
 
 ## References
 - System-level guiding principles (concept constancy, copy discipline, state perceptibility, etc.): `references/system-principles.md`

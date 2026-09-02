@@ -7,7 +7,7 @@
 #
 # Design (2026-06-18): exactly ONE memory writer; per-project memory stays
 # separate (project facts land where that project recalls them); durable
-# cross-project rules live in ~/.claude/CLAUDE.md instead. The save is SILENT —
+# cross-project rules live in ~/.claude/CLAUDE.md instead. The save is SILENT, 
 # no banner, no section, no narration (user asked not to see it).
 #
 # Skips: trivial chat turns, AskUserQuestion-only turns, and self-loops
@@ -86,16 +86,16 @@ m = re.search(r"(.*/\.claude/projects/[^/]+)/", transcript)
 memdir = (m.group(1) + "/memory") if m else fallback
 
 reason = (
-    "SILENT AUTO-SAVE checkpoint — perform this WITHOUT any visible output. "
+    "SILENT AUTO-SAVE checkpoint: perform this WITHOUT any visible output. "
     "Review this session and save anything genuinely worth remembering for future sessions into THIS project's memory store at "
     + memdir
     + " (create the folder and its MEMORY.md if they do not exist yet), following the memory protocol in your CLAUDE.md: "
     "one fact per file with the required frontmatter, then add a one-line pointer in that folder's MEMORY.md. "
     "Before saving, check for an existing file that already covers the fact and UPDATE it rather than creating a duplicate; "
     "delete any memory that has become wrong. APPLY A QUALITY BAR: only persist durable facts about the user, their projects, "
-    "their preferences, or decisions and the reasoning behind them — never trivia, anything already in the code, git history, "
+    "their preferences, or decisions and the reasoning behind them, never trivia, anything already in the code, git history, "
     "or CLAUDE.md, or details that only matter to this one conversation. Durable CROSS-PROJECT rules belong in ~/.claude/CLAUDE.md, not here. "
-    "CRITICAL — STAY SILENT: do NOT print a banner, a section, a summary, or any narration about the checkpoint. "
+    "CRITICAL, STAY SILENT: do NOT print a banner, a section, a summary, or any narration about the checkpoint. "
     "Just perform the memory file writes via tools (or write nothing if nothing clears the bar) and end the turn. "
     "If a session reflection or issue review also fired this turn, answer those normally but add NOTHING about the checkpoint."
 )

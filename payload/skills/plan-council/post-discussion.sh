@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# post-discussion.sh — robustly publish a plan-council result, with fallbacks.
+# post-discussion.sh: robustly publish a plan-council result, with fallbacks.
 # Usage: post-discussion.sh <owner/repo> <title> <body-file> [milestone-title]
 #
 # Tries, in order:
