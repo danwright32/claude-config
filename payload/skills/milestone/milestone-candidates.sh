@@ -163,8 +163,19 @@ if [[ $mrc -ne 0 ]]; then
 fi
 
 # --- what is already in the holding pen -----------------------------------
-issues_raw="$(gh issue list --repo "$repo" --milestone "$CATCH_ALL" --state open \
-  --limit "$limit" --json number,title 2>"$gh_err")"
+# ONE read of every open issue, then partitioned locally, rather than one read of
+# the pen. Two questions have to be answered and only one of them is about the pen:
+#
+#   "what should this be grouped with"  -> the pen, which is where loose work sits
+#   "does this already exist"           -> ANYWHERE, which is the one that matters
+#
+# Reading only the pen answered the first and silently could not answer the second.
+# On 2026-09-02 this helper was run before filing an idea, reported no siblings and
+# seven weak matches, and the issue for the same work was in neither list because it
+# sat in a real milestone. It was filed as a duplicate (#264) and closed the same
+# hour. A duplicate is exactly what a pre-filing check exists to catch.
+issues_raw="$(gh issue list --repo "$repo" --state open \
+  --limit "$limit" --json number,title,milestone 2>"$gh_err")"
 if [[ $? -ne 0 ]]; then
   # A repo with no pen yet is not a failure, it is a pen holding nothing. Anything
   # else is, and it says which half failed so the right one gets investigated.
@@ -257,14 +268,41 @@ except Exception as exc:
     sys.stderr.write("the response did not parse (%s)\n" % exc)
     sys.exit(3)
 
+
+def norm(s):
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def milestone_of(it):
+    ms = it.get("milestone")
+    return (ms or {}).get("title") or ""
+
+
+valid = [it for it in issues if isinstance(it, dict) and it.get("title")]
+# An issue with NO milestone is treated as loose rather than as elsewhere. The gate
+# requires one, so these are older issues predating it, and they belong with the pen
+# for the grouping question.
+pen = [it for it in valid if norm(milestone_of(it)) in ("", norm(catch_all))]
+elsewhere = [it for it in valid if it not in pen]
+
 target = words(like)
 scored = []
-for it in issues:
-    if not isinstance(it, dict) or not it.get("title"):
-        continue
+for it in pen:
     shared = target & words(it["title"])
     if shared:
         scored.append((len(shared), it.get("number", 0), it["title"], sorted(shared)))
+
+# The same overlap bar, asked of a different question. An issue already attached to a
+# feature is not a sibling to group with, it is a warning that this work may already
+# be filed, so it is reported and counted on its own line and never folded into the
+# sibling count that the "2 or more" rule consumes.
+dups = []
+for it in elsewhere:
+    shared = target & words(it["title"])
+    if len(shared) >= 2:
+        dups.append((len(shared), it.get("number", 0), it["title"],
+                     milestone_of(it), sorted(shared)))
+dups.sort(key=lambda r: (-r[0], -r[1]))
 
 # Ranked by shared words, then by issue number descending so the newest of an equal
 # pair comes first. A collection read from anywhere carries no order unless the read
@@ -291,7 +329,7 @@ MIN_SIBLING_SCORE = 2
 siblings = [r for r in scored if r[0] >= MIN_SIBLING_SCORE]
 weak = [r for r in scored if r[0] < MIN_SIBLING_SCORE]
 
-print("HOLDING-PEN %s open=%d" % (catch_all, len(issues)))
+print("HOLDING-PEN %s open=%d" % (catch_all, len(pen)))
 for score, num, title, shared in siblings[:show_max]:
     print("SIBLING %d #%s %s [shares: %s]" % (score, num, title, ", ".join(shared)))
 if len(siblings) > show_max:
@@ -303,8 +341,14 @@ if len(weak) > show_max:
 # The count the "2 or more" rule reads, and it counts only what qualifies as
 # evidence. The weak total is reported beside it rather than folded in, so the two
 # can never be mistaken for one number.
+for score, num, title, ms, shared in dups[:show_max]:
+    print("DUPLICATE-RISK %d #%s %s [in: %s] [shares: %s]"
+          % (score, num, title, ms, ", ".join(shared)))
+if len(dups) > show_max:
+    print("DUPLICATE-TRUNCATED %d of %d shown" % (show_max, len(dups)))
 print("SIBLING-COUNT %d" % len(siblings))
 print("WEAK-COUNT %d" % len(weak))
+print("DUPLICATE-COUNT %d" % len(dups))
 ' "$like" "$CATCH_ALL" "$show_max" 2>"$gh_err")"
 irc=$?
 if [[ $irc -ne 0 ]]; then
