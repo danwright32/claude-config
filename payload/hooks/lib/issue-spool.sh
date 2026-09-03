@@ -868,7 +868,28 @@ CLEAR_KEYS
   # reassuring one below (L10, L11). The failure has already named itself and where the records
   # are; what this must not do is add a sentence saying there were none.
   if [ "$total" -eq 0 ] && [ "$rc" -eq 0 ]; then
-    echo "issue-spool: nothing was pending under the key(s) this project reads (${keys:-none}), so nothing was filed."
+    # AND WHETHER THE SPOOL IS STILL HOLDING SOMETHING THIS DID NOT MATCH (claude-config#287).
+    # "nothing was pending" and "nothing was pending under the key I happened to compute" read
+    # identically, and only the second was ever true in the failure this comes from: 138 records
+    # sat under nine keys while a clear reported an empty answer and everybody believed it (L11,
+    # L98). A count of what is left turns that silence into something a reader can act on.
+    #
+    # An empty spool gains no such sentence: on the normal case it would be noise, and a line
+    # printed every time distinguishes nothing (L36).
+    local elsewhere=0 f n
+    for f in "$(issue_spool_root)"/*.jsonl; do
+      [ -e "$f" ] || continue
+      case "$f" in *.filed.jsonl) continue ;; esac
+      [ -s "$f" ] || continue
+      n="$(grep -c . "$f" 2>/dev/null || true)"
+      case "$n" in ''|*[!0-9]*) n=0 ;; esac
+      elsewhere=$(( elsewhere + n ))
+    done
+    if [ "$elsewhere" -gt 0 ]; then
+      echo "issue-spool: nothing was pending under the key(s) this project reads (${keys:-none}), so nothing was filed. The spool at $(issue_spool_root) is still holding $elsewhere pending record(s) under other key(s), so if a review has just shown you findings, this command was not given the same key it read them from: run the line the findings file names instead."
+    else
+      echo "issue-spool: nothing was pending under the key(s) this project reads (${keys:-none}), so nothing was filed."
+    fi
   fi
   return $rc
 }

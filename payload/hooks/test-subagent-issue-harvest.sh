@@ -1743,6 +1743,118 @@ contains "still.py has changed since this was written" "$AGE_OUT" \
   && check "#202 and one whose file has not is left alone" "it marked the untouched file too" \
   || check "#202 and one whose file has not is left alone" ok
 
+# ---------------------------------------------------------------------------
+# The clear must drain the key the review READ (claude-config#287, claude-config#284).
+# ---------------------------------------------------------------------------
+# Observed live in Slate on 2026-09-03. The review's findings file named its source,
+# `bfea61f932c1.jsonl (107 records)`, and the clear documented in the instruction was then run
+# exactly as written, `issue-spool.sh clear "$PWD"`, and answered `nothing was pending under the
+# key(s) this project reads (ac694bb5abad)`. Both statements were true and they were about
+# different files. 138 records sat unfiled across 9 keys and the identical five findings came back
+# at the next review.
+#
+# The cause is two independent derivations of one key. The review renders with the session
+# TRANSCRIPT, which keys on the transcript's directory; the documented clear passes only a
+# directory, which keys on the git common dir. They agree only when those two roots coincide, and
+# nothing anywhere compared them (L70, L285).
+#
+# So the RENDERER writes the clear command, out of the same two values it rendered from, into the
+# findings file it produces. There is one derivation and the two cannot disagree by construction.
+CLEARK="$TMPROOT/cleartest"
+# The record's own cwd is a DIFFERENT directory from the project being reviewed, which is what a
+# harvested record looks like: the agent worked somewhere else under the same parent session. It is
+# also what defeats the multi key fallback, which matches a record by ITS cwd, and it is the shape
+# the live failure had (the records named ~/claude-config-sync and ~/trypennie while the review was
+# in a third project).
+mkdir -p "$CLEARK/proj" "$CLEARK/agentdir"
+CLEAR_TRANSCRIPT="$TMPROOT/clear-session.jsonl"
+cat > "$CLEAR_TRANSCRIPT" <<'JSONL'
+{"type":"user","message":{"content":"do the work"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{}}]}}
+JSONL
+
+# The fixture's whole point: the transcript's directory and the project directory are different
+# places, so the two derivations give different keys. Asserted, not assumed, because if they
+# happened to coincide every check below would pass while measuring nothing (L70).
+ck_read_key="$(bash "$SPOOL_LIB" key "$CLEARK/proj" "$CLEAR_TRANSCRIPT" 2>/dev/null)"
+ck_dir_key="$(bash "$SPOOL_LIB" key "$CLEARK/proj" 2>/dev/null)"
+[ -n "$ck_read_key" ] && [ "$ck_read_key" != "$ck_dir_key" ] \
+  && check "#287 the fixture really does key the two ways apart" ok \
+  || check "#287 the fixture really does key the two ways apart" "read=$ck_read_key dir=$ck_dir_key"
+
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "a finding the review will render and must then be able to file" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+
+ck_payload="$(python3 - "$CLEARK/proj" "$CLEAR_TRANSCRIPT" <<'PY'
+import json, sys
+print(json.dumps({"transcript_path": sys.argv[2], "cwd": sys.argv[1], "stop_hook_active": False}))
+PY
+)"
+CLAUDE_PROJECT_DIR="$CLEARK/proj" bash -c 'printf "%s" "$1" | bash "$2" >/dev/null 2>&1' _ "$ck_payload" "$REVIEW"
+ck_out="$(CLAUDE_PROJECT_DIR="$CLEARK/proj" bash -c 'printf "%s" "$1" | bash "$2" 2>/dev/null' _ "$ck_payload" "$REVIEW")"
+ck_file="$(printf '%s' "$ck_out" | python3 -c '
+import json, re, sys
+try:
+    reason = json.loads(sys.stdin.read()).get("reason") or ""
+except Exception:
+    reason = ""
+m = re.search(r"waiting in (\S+?)\. They", reason)
+print(m.group(1) if m else "")
+')"
+[ -n "$ck_file" ] && [ -f "$ck_file" ] \
+  && check "#287 the review rendered a findings file" ok \
+  || check "#287 the review rendered a findings file" "pointer=${ck_file:-<none>}"
+
+# The findings file carries the command that files exactly what it rendered.
+ck_cmd="$(grep -n 'issue-spool.sh' "$ck_file" 2>/dev/null | tail -1 | cut -d: -f2- | sed 's/^ *//')"
+case "$ck_cmd" in
+  *"clear"*) check "#287 the findings file names the command that files what it rendered" ok ;;
+  *)         check "#287 the findings file names the command that files what it rendered" "last spool line: ${ck_cmd:-<none>}" ;;
+esac
+
+# And running EXACTLY that line files them. This is the whole issue: the command a reader is told
+# to run has to drain the file the reader read.
+ck_filed="$(eval "$ck_cmd" 2>&1)"
+case "$ck_filed" in
+  *"filed 1 record"*) check "#287 running that line files the record the review rendered" ok ;;
+  *)                  check "#287 running that line files the record the review rendered" "said: $ck_filed" ;;
+esac
+ck_left="$(bash "$SPOOL_LIB" raw "$CLEARK/proj" "$CLEAR_TRANSCRIPT" 2>/dev/null | grep -c . || true)"
+[ "${ck_left:-1}" = "0" ] \
+  && check "#287 and nothing is left pending under the key it read" ok \
+  || check "#287 and nothing is left pending under the key it read" "$ck_left record(s) remain"
+
+# THE CONTROL, and without it none of the above measures anything: the form that was documented,
+# a directory and no transcript, really does miss this spool. If it did not, the checks above would
+# pass whatever the fix did (L159).
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "a finding the review will render and must then be able to file" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+ck_dironly="$(bash "$SPOOL_LIB" clear "$CLEARK/proj" 2>&1)"
+case "$ck_dironly" in
+  *"nothing was pending"*) check "#287 the control: a clear given only a directory misses it" ok ;;
+  *)                       check "#287 the control: a clear given only a directory misses it" "said: $ck_dironly" ;;
+esac
+
+# A clear that matched nothing must say whether the spool is holding records it did not match,
+# because "nothing was pending" and "nothing was pending under the key I happened to compute" read
+# identically and only the second one was ever true here (L11, L98).
+case "$ck_dironly" in
+  *"1 record"*|*"other key"*) check "#287 and it says the spool is still holding records it did not match" ok ;;
+  *)                          check "#287 and it says the spool is still holding records it did not match" "said: $ck_dironly" ;;
+esac
+
+# A genuinely empty spool must NOT gain that sentence, or it becomes noise on the normal case and
+# stops distinguishing anything (L36).
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+ck_empty="$(bash "$SPOOL_LIB" clear "$CLEARK/proj" 2>&1)"
+case "$ck_empty" in
+  *"other key"*) check "#287 and an empty spool is not accused of holding anything" "said: $ck_empty" ;;
+  *)             check "#287 and an empty spool is not accused of holding anything" ok ;;
+esac
+
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
