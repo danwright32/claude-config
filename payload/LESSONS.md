@@ -867,6 +867,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   so the branch has never fired in 150,110 runs, while the signal sits in the same payload as
   financialInformation.employmentStatus === 'military', arriving 34 times in 3 hours)
 
+- **L551. A precise branch added beside an HONEST fallback is invisible when it never fires,
+  because the fallback's label is truthful and reads as the system working rather than as a
+  signal that never matched**, so measure the ratio between the two branches on real data
+  before treating the precise one as live. Distinct from L506, where the branch is dead
+  because an external field is absent; here every input is internal and the branch is simply
+  never satisfied, and the conservative label beside it is what removes any reason to look.
+  (bidspoke#1112: the stranded-execution drain claims 'completed' only when the last completed
+  step lands on a graph dead end (#571), and otherwise labels the row honestly as "outcome
+  could not be confirmed". Over 14 days all 117 recovered rows took the honest fallback, none
+  took the dead-end branch and none took the failed-step branch, so a signal shipped as the
+  precise one has never once fired in production, while the authoritative outcome sat unread
+  in lead_sightings the whole time)
+
 - **L209. A threshold measured while a co-varying component is held constant attaches itself to the wrong variable, because the part the fixture moves stands in for the sum.** Vary every component the real input varies, or state the measured limit as a limit on the total.
   (downbeat#344: two confident predicates for which calendar sentences Fantastical mangles shipped and were both disproven by real bookings, one the same day it shipped. Every ladder fixture held the title short and constant while varying the venue phrase, so the phrase's length aliased the sentence's total length and took the blame: "62 to 66 characters ending in a number" was really "a total near 170 under that fixture's title". Cloning the real failing sentence and bisecting title against phrase showed total length was the only variable that flipped the outcome, at a cliff between 166 and 172.)
 
@@ -2251,6 +2264,22 @@ window is a count rather than a boundary.
   Distinct from L111, which is about a recovery MESSAGE naming a step that does not change the
   state: here the remedy itself is accepted and quietly does nothing)
 
+- **L550. A component that omits a state because of an assumption about ALL its callers (every
+  action redirects with an outcome, every parent supplies the context, every input was validated
+  upstream) is correct only while that assumption holds, and nothing enforces it, so it breaks at
+  the first caller that does not honour it.** Enforce the assumption in the type or a guard,
+  because the comment explaining the omission makes the gap read as a considered decision and
+  nobody re-examines it.
+  (Try-Pennie/slate#1769, 2026-09-02: SubmitButton reports started, still alive, and stalled, and
+  deliberately has NO success state. Its docstring gives the reason: "A real failure comes back on
+  the page as its own message (every admin action redirects with an outcome), so this covers the
+  case where nothing comes back at all." True of the actions it was written for. setBookable
+  returns void and calls revalidatePath on a different route than the form is on, so pressing Make
+  bookable made an agent bookable and said nothing at all, which Dan reported as "it worked but it
+  didn't immediately look like it did anything". The docstring is why nobody added a success
+  state: the omission looked answered. Nineteen files adopted the component and eight still have
+  bare buttons, so the assumption was never enforced anywhere)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
@@ -3344,6 +3373,33 @@ window is a count rather than a boundary.
   already in the payload, but submitting it re-rendered the force-dynamic admin page, re-running
   about twelve reads including the audit log and its exact count, webhook deliveries and cron lane
   health, before one row could change. Dan reported it as search taking too long to do anything)
+- **L549. A row aligned on its children's top or bottom EDGES aligns the CONTAINERS, not the
+  controls inside them, so a column carrying a hint, an error or a second label line has its
+  control silently pushed out of line while every column still reads as correctly aligned when
+  read on its own.** The alignment property sits on the row and each column's own markup is
+  unremarkable, so the defect is invisible at both places a reader looks, and it appears the
+  moment somebody adds helper text under one field. Align the control boxes rather than the
+  column bottoms, either by lifting the hint out of the aligned child or by giving every column
+  the same reserved space above and below its control.
+  (slate#1761, 2026-09-02: the Team access row was `flex items-end`, and the email column's
+  bottom edge was the bottom of its "The address they sign in to Google with" hint rather than
+  the bottom of the input, so the Access select and the Give access button beside it were pushed
+  down by the hint's height. Dan reported it as the right side not being centered)
+
+- **L553. A column's header alignment and its cells' alignment are ONE fact set at two
+  independent declaration sites, so they diverge silently while each site reads as correct on
+  its own.** The header rule usually lives in a stylesheet keyed on the table, and the cells
+  take theirs from a per column class, so nobody comparing the two is ever looking at one
+  screen. Carry the alignment on the column's own class so a header cannot be set apart from
+  its data, and assert that the two MATCH rather than asserting any particular value, so the
+  check survives a later change of convention. The near sibling of L213, where a pair token is
+  overridden by halves, and of L549, where the aligned thing is the container rather than the
+  control.
+  (project-enrollment-tracker#1242, 2026-09-03: ten tables across PET each decided header
+  alignment independently, three conventions shipping side by side, and the All Teams
+  leaderboard rendered a centred Units header over a right aligned column of numbers because
+  its `sortableTh()` omitted the `th-metric` class the team board's renderer applies. Dan
+  reported it from a screenshot of the column edges)
 
 ## External systems
 
@@ -3560,6 +3616,21 @@ window is a count rather than a boundary.
   disabled `wrangler versions upload` preview URLs as a side effect, and would silently re-enable
   them for anybody who ever turned workers.dev back on. Caught by reading the platform docs for the
   flag being changed rather than applying the one line direction the issue named)
+
+- **L552. Pinning a tool's VERSION pins its output only when that tool does the work locally,
+  so a command that delegates to a hosted service (a generator invoked with a project id and an
+  access token rather than a database or a file) emits whatever the server currently produces,
+  and the pin, the comment explaining it, and every check built on comparing the result character
+  for character go on reading as reproducibility. Pin the thing that PRODUCES the artifact, or
+  normalise what you cannot pin.** The pin being HONOURED is what makes this invisible: the
+  version really is the one named, so measuring that it is in force passes, and the output changes
+  anyway. This is the case L188 and L322 do not reach, because there the control was overridden.
+  (bidspoke#1105 and #1115, 2026-09-03: `supabase gen types --project-id` generates on Supabase's
+  servers, so the CLI pinned to 2.107.0 in two workflow files produced one format at 09:00 UTC and
+  another at 12:22 the same day, on the identical commit. The nightly drift check went red for
+  three runs over two days on five added parentheses in boilerplate, alerting Slack each time with
+  a sentence blaming a migration that never happened, while a real schema change would have been
+  invisible behind it. The comments in both files stated that the pin guarded against exactly this)
 
 ## Building with AI
 

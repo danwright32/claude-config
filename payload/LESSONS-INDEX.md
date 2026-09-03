@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 428 lessons.
+LESSONS.md, which is NOT loaded into the session. 433 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -89,6 +89,7 @@ to decide something: the body is where the failure it came from is described.
 - L502. A setting whose OFF state stops something being RECORDED must be monitored by asserting its current VALUE on a schedule, never only by auditing changes to it, because an application level audit cannot see a change made directly to the database, and the setting's whole effect is to remove the evidence that would reveal it.
 - L504. A test can only tell two implementations apart when the environment it runs in makes them behave differently, so when the ambient configuration (the host timezone, the locale, the filesystem's case sensitivity) is what separates a correct implementation from a wrong one, the test must SET that configuration itself rather than inherit it.
 - L506. A guard that branches on a field arriving from OUTSIDE the system is only real once that field's presence has been measured on live traffic, because an absent field makes a strict comparison silently false and the guard then reads as an active safeguard while refusing nobody.
+- L551. A precise branch added beside an HONEST fallback is invisible when it never fires, because the fallback's label is truthful and reads as the system working rather than as a signal that never matched
 - L209. A threshold measured while a co-varying component is held constant attaches itself to the wrong variable, because the part the fixture moves stands in for the sum.
 - L225. An invariant between two stored values must be checked by something that reads the VALUES, never only inside the tool that normally writes them
 - L228. A comparison asking whether two things hold the SAME ELEMENTS says nothing about their ORDER
@@ -211,6 +212,7 @@ to decide something: the body is where the failure it came from is described.
 - L357. A counter that renders its number on a screen is not a detector, because detection requires something that speaks on its own when the number is wrong.
 - L532. A form that falls back to a DEFAULT when nothing is stored cannot show that a save failed
 - L536. A language or API that silently yields NOTHING for a construct it does not support makes the FIX indistinguishable from the BUG
+- L550. A component that omits a state because of an assumption about ALL its callers (every action redirects with an outcome, every parent supplies the context, every input was validated upstream) is correct only while that assumption holds, and nothing enforces it, so it breaks at the first caller that does not honour it.
 
 ## State and identity
 
@@ -324,6 +326,8 @@ to decide something: the body is where the failure it came from is described.
 - L545. A set of values whose meaning is their ORDER relative to each other (medal colours, severity tints, tier sizes, ranked weights) is broken by changing ONE member for an unrelated reason such as a contrast fix, because every member stays individually valid and nothing compares them, so assert the ordering itself rather than each value.
 - L546. A screen that no navigation links to works perfectly for whoever built it, because they have the address, so it is invisible to every test, review and build and is found only by somebody hunting for it under pressure.
 - L547. A control whose work is pure computation over data the page already holds must not be routed through a server round trip, because on a dynamic page that round trip re-runs every UNRELATED read on the page, so the control's cost becomes the whole page's cost and nothing at the point it is written says so.
+- L549. A row aligned on its children's top or bottom EDGES aligns the CONTAINERS, not the controls inside them, so a column carrying a hint, an error or a second label line has its control silently pushed out of line while every column still reads as correctly aligned when read on its own.
+- L553. A column's header alignment and its cells' alignment are ONE fact set at two independent declaration sites, so they diverge silently while each site reads as correct on its own.
 
 ## External systems
 
@@ -348,6 +352,7 @@ to decide something: the body is where the failure it came from is described.
 - L273. A normalization written to make a comparison forgiving covers only the character class its author happened to think of, so state the reason it exists and apply it to EVERY class that reason covers, because the classes left out are total mismatches rather than near misses.
 - L280. A rule enforced at ONE stage of a pipeline is not enforced by the pipeline, because every later stage that rewrites the same content can reintroduce exactly what the rule removed, and the enforcing stage has already run, so nothing reports the regression.
 - L534. A platform setting whose DEFAULT is derived from another setting flips silently when you flip that other one
+- L552. Pinning a tool's VERSION pins its output only when that tool does the work locally, so a command that delegates to a hosted service (a generator invoked with a project id and an access token rather than a database or a file) emits whatever the server currently produces, and the pin, the comment explaining it, and every check built on comparing the result character for character go on reading as reproducibility. Pin the thing that PRODUCES the artifact, or normalise what you cannot pin.
 
 ## Building with AI
 
