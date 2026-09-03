@@ -1893,9 +1893,13 @@ record_rsync(){
 # rewriting until somebody thinks to compare two hashes.
 #
 # So the installed baseline is DERIVED from the installed hook, the same way the lessons index is
-# derived from the lessons. The two cannot then disagree here. A payload that arrives out of step
-# is still a real defect in the source, so it is REPORTED rather than quietly corrected: silently
-# fixing it on every Mac is how a wrong baseline would live in the repo for ever (L11).
+# derived from the lessons. The two cannot then disagree here.
+#
+# It is REPORTED as well as corrected, because a wrong pair means a real defect in the source and
+# fixing it in silence is how one would live in the repo unexamined (L11). Note what the correction
+# actually does: hooks/ is fully mirrored, so the rebuilt copy is staged back on the next send and
+# the repo converges on its own. The message says that rather than telling the reader the payload
+# is still wrong, which it briefly did and which was simply untrue.
 ensure_rtk_baseline(){
   local hook base want have
   hook="$CLAUDE_HOME/hooks/rtk-rewrite.sh"
@@ -1913,7 +1917,7 @@ ensure_rtk_baseline(){
   # Said only when one was THERE and disagreed. An absent baseline is the recoverable case, which
   # rtk handles by establishing one, so reporting it would be a line about nothing.
   if [ -n "$have" ]; then
-    echo "claude-sync: the rtk fingerprint that arrived describes a different hooks/rtk-rewrite.sh than the hook that arrived with it ($have against $want), so the copy on this Mac has been rebuilt from the hook. Left as it arrived, rtk refuses to run at all and prints a tampering banner on every Bash command. The payload still carries the wrong one: run the hook suite in the checkout, where test-rtk-rewrite.sh names it and says how to re-record it." >&2
+    echo "claude-sync: the rtk fingerprint that arrived describes a different hooks/rtk-rewrite.sh than the hook that arrived with it ($have against $want), so the copy on this Mac has been rebuilt from the hook, and the next send publishes that corrected copy. Left as it arrived, rtk refuses to run at all and prints a tampering banner on every Bash command. Nothing to do here; if it keeps happening, the pair in the checkout is what to look at, and test-rtk-rewrite.sh names it and says how to re-record it." >&2
   fi
   return 0
 }
