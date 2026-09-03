@@ -4793,6 +4793,18 @@ window is a count rather than a boundary.
   `version` text holding the numeric prefix, `name` text holding the rest of the filename,
   and a `statements` array that is null on every real row.)
 
+- **L390. In a two way sync, a file REGENERATED from one side rather than mirrored gets none of the
+  protection the mirrored files beside it get, so a merge rule written for the receiving direction
+  has to be written again for the sending one.** The loss is silent in the sending direction,
+  because the regeneration always succeeds and simply produces the older content.
+  (claude-config#300, 2026-09-03: `payload/settings.hooks.json` is rebuilt wholesale from
+  `~/.claude/settings.json` on every send, while the APPLY side merges it three ways and its own
+  comment says why. `do_sync` stages before it pulls, so a clone twelve commits behind committed
+  the older hooks block and the rebase replayed it over the newer remote. A hook that had just
+  shipped, with its file and its test both present on the shared repo, was left registered nowhere
+  and therefore inert. The sync reported success; the only thing that noticed was the wiring check
+  inside that hook's own suite, going red on the deployed Mac)
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

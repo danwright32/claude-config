@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 457 lessons.
+LESSONS.md, which is NOT loaded into the session. 458 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -464,6 +464,7 @@ to decide something: the body is where the failure it came from is described.
 - L372. A script that changes its own working directory must capture its own location BEFORE the cd, because a path re-derived from `$0` afterwards is relative to where the script was INVOKED from rather than where it now is, so it resolves for one invocation and silently misses for another.
 - L386. A scheduled job's DECLARED time is not when it runs, because platforms delay scheduled work by hours under load, so two scheduled jobs must never be ordered by clock arithmetic between their crons.
 - L379. Doing by hand what a tool normally does performs the visible change and silently omits the tool's OTHER writes, and the one most often omitted is the record some monitor reads, so the system ends up correct while the monitor is permanently wrong.
+- L390. In a two way sync, a file REGENERATED from one side rather than mirrored gets none of the protection the mirrored files beside it get, so a merge rule written for the receiving direction has to be written again for the sending one.
 
 ## Test speed
 
