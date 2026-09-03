@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 453 lessons.
+LESSONS.md, which is NOT loaded into the session. 454 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -325,6 +325,7 @@ to decide something: the body is where the failure it came from is described.
 - L508. A control that renders a value the BROWSER itself validates (a date input, a number input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that value stands beside an empty control and the two halves of the screen contradict each other about what was asked for.
 - L207. A constraint imposed by the surface your output is DISPLAYED on (a phone's notch or safe area, a host app's own overlay chrome, a fold, a print bleed) leaves no trace in the artifact you render or in any check you run over it, so it is only ever discovered on a real device.
 - L221. A limit calibrated against the DEVICE somebody owns is looser than the same device turned down, because display scaling, text size and browser zoom are settings a person changes with no code change and nothing re-runs the check, so calibrate against the most constrained SETTING the hardware can be put into rather than against the hardware itself.
+- L569. A surface token (a hover tint, a zebra stripe, a card, a header row) is one half of a pair with the surface BEHIND it, so a contrast check that only measures what sits ON it proves the text is readable while saying nothing about whether the surface is visible at all.
 - L213. A colour token that only has meaning as one half of a PAIR (a foreground against its background, a border against its fill) must be overridden as a pair, because a call site that swaps only the background silently keeps the base variant's foreground, the two can land on the same value, and the result is content that is present in the DOM, correctly named to a screen reader, and invisible on screen.
 - L231. A container's background is only the background until something that paints its OWN is placed inside it (a platform list or table, a text view, an embedded frame, a third party widget), so every call site can name the correct token and still render differently, and any check that reads the declaration passes while the screen disagrees.
 - L232. A minimum reserved for one part of a shared space (a pane's floor, a sidebar's minimum width, a gutter, a buffer) is SUBTRACTED from whatever shares that space, so it must be checked for being too LARGE as much as too small, because over reserving breaks nothing and fails no test: the neighbour simply cannot grow, and the number goes on reading as prudence.

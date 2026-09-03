@@ -3347,6 +3347,13 @@ window is a count rather than a boundary.
   878, so the floor guessed from imagined hardware was 78 points looser than the setting he can
   pick at any moment. Headroom fell from 696 to 618 against the same 460 cap once corrected)
 
+- **L569. A surface token (a hover tint, a zebra stripe, a card, a header row) is one half of a pair
+  with the surface BEHIND it, so a contrast check that only measures what sits ON it proves the
+  text is readable while saying nothing about whether the surface is visible at all.** A one point
+  colour difference then ships under a green suite, and every place relying on that surface to
+  separate content separates nothing, so measure each surface against its parent as well as
+  against its contents.
+  (slate#1851)
 - **L213. A colour token that only has meaning as one half of a PAIR (a foreground against its
   background, a border against its fill) must be overridden as a pair, because a call site that
   swaps only the background silently keeps the base variant's foreground, the two can land on the
