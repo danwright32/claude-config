@@ -159,11 +159,17 @@ either the cluster is real and needs approval first, or the answer is `Ungrouped
 
 Before choosing, read what the repo already holds. `milestone-candidates.sh` prints
 the open milestones **with their descriptions**, and the open issues already in the
-holding pen that share words with the idea, ranked, with a `SIBLING-COUNT` that is
-what the "2 or more" rule counts. Only the `SIBLING` lines count. A `WEAK-MATCH`
-shares just one word and is context, not evidence: measured on bidspoke, one
-genuine sibling arrived with ten false ones, because words like alert, drop and
-call are generic there.
+holding pen that share words with the idea, as `CANDIDATE` lines ranked best first.
+
+The score RANKS the shortlist. It does not rule on what is related, and the
+`CANDIDATE-COUNT` says how many were listed, never how many are related. The count
+the "2 or more" rule reads is one **you** state, after reading the titles, and pass
+to `ensure-milestone.sh --for-issues <n>`. Word counting was wrong three times on
+the day it was written, always claiming a cluster that was not there (ten false
+siblings on bidspoke, because alert, drop and call are generic there; two more here
+on issue, open and already), and each fix excluded the words that exposed it, which
+is the tell: the next repo has its own generic words and nothing in the script can
+know them. You can read the titles, so you decide (#265).
 
     bash ~/.claude/skills/milestone/milestone-candidates.sh "<owner/name>" --like "<the idea's title>"
 

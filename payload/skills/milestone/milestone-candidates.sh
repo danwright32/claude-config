@@ -24,12 +24,14 @@
 #   OPEN-MILESTONE #<num> <title>            an open milestone, the catch-all excluded
 #       DESC <description on one line>       or "(none recorded)"
 #   HOLDING-PEN <title> open=<n>             how full the pen is right now
-#   SIBLING <score> #<num> <title>           a pen issue sharing 2+ words, best first
-#   WEAK-MATCH <score> #<num> <title>        a pen issue sharing exactly one word.
+#   CANDIDATE <score> #<num> <title>         a pen issue sharing a word, best first.
+#                                            The score RANKS. It does not rule: read
+#                                            the titles and decide what is related.
 #                                            Shown as context, NOT counted as evidence.
-#   SIBLING-TRUNCATED <shown> of <found>     only when more were found than printed
+#   CANDIDATE-TRUNCATED <shown> of <found>   only when more were found than printed
 #   WEAK-TRUNCATED <shown> of <found>        likewise for the weak ones
-#   SIBLING-COUNT <n>                        what the "2 or more" rule reads
+#   CANDIDATE-COUNT <n> shown                how many are LISTED, never how many are
+#                                            related: that count is the reader's
 #   WEAK-COUNT <n>                           reported beside it, never folded into it
 #   DUPLICATE-RISK <score> #<num> <title>    an open issue ANYWHERE that overlaps.
 #                                            A warning that this may already be filed,
@@ -321,25 +323,24 @@ dups.sort(key=lambda r: (-r[0], -r[1]))
 # declares one (L343).
 scored.sort(key=lambda r: (-r[0], -r[1]))
 
-# One shared word is a coincidence, not a cluster, so it does not count.
+# The overlap RANKS and LIMITS. It does not rule (claude-config#265).
 #
-# Measured 2026-09-02 against bidspoke, whose pen held 82 open issues: one idea drew
-# a single genuine sibling at three shared words and TEN false ones at exactly one,
-# because "alert", "drop", "time" and "call" are generic in the vocabulary there.
+# It used to split the list into SIBLING and WEAK-MATCH at two shared words, and derive
+# a SIBLING-COUNT that the "2 or more issues" rule then consumed. That number was wrong
+# three times on the day it was written, always the same way, claiming a cluster that
+# was not there: ten false siblings against bidspoke because "alert", "drop", "time"
+# and "call" are generic in that vocabulary, then two more here on "issue", "open" and
+# "already". Each fix excluded the words that exposed it, which is the tell: the next
+# repo has its own generic words and nothing here can know them.
+#
+# Whatever reads this can judge relatedness far better than word counting can, because
+# it can read the titles. So the score orders the shortlist and nothing else, and the
+# count the threshold consumes has to be one a reader affirmed. This extends the
+# refusal at the top of this file, which already declines to rule on eligibility, to
+# relatedness itself.
 # (No apostrophes anywhere below: this python is embedded in a single quoted shell
 # string, so one would close the string and leave the file unparseable.)
-# Counting those would have reported eleven siblings, and SIBLING-COUNT is the number
-# the "2 or more issues" rule reads, so a one sibling idea would have read as an
-# obvious cluster. An over match reads exactly like the feature working (L104), and a
-# threshold calibrated on the one backlog its author had in mind has only been shown
-# to work on that shape (L147).
-#
-# The weak ones are still printed. The caller may recognise a real relation that word
-# overlap cannot see, and hiding them would lose that. They are simply not evidence.
-MIN_SIBLING_SCORE = 2
-
-siblings = [r for r in scored if r[0] >= MIN_SIBLING_SCORE]
-weak = [r for r in scored if r[0] < MIN_SIBLING_SCORE]
+candidates = scored
 
 # Announced BEFORE anything derived from the read, so a reader who stops at the first
 # line still learns the answer rests on a subset. A count landing exactly on the limit
@@ -350,24 +351,20 @@ if len(valid) >= limit:
           "of the backlog and every count below is about that subset only. Re-run with "
           "--limit above %d." % (len(valid), limit, limit))
 print("HOLDING-PEN %s open=%d" % (catch_all, len(pen)))
-for score, num, title, shared in siblings[:show_max]:
-    print("SIBLING %d #%s %s [shares: %s]" % (score, num, title, ", ".join(shared)))
-if len(siblings) > show_max:
-    print("SIBLING-TRUNCATED %d of %d shown" % (show_max, len(siblings)))
-for score, num, title, shared in weak[:show_max]:
-    print("WEAK-MATCH %d #%s %s [shares: %s]" % (score, num, title, ", ".join(shared)))
-if len(weak) > show_max:
-    print("WEAK-TRUNCATED %d of %d shown" % (show_max, len(weak)))
-# The count the "2 or more" rule reads, and it counts only what qualifies as
-# evidence. The weak total is reported beside it rather than folded in, so the two
-# can never be mistaken for one number.
+for score, num, title, shared in candidates[:show_max]:
+    print("CANDIDATE %d #%s %s [shares: %s]" % (score, num, title, ", ".join(shared)))
+if len(candidates) > show_max:
+    print("CANDIDATE-TRUNCATED %d of %d shown" % (show_max, len(candidates)))
 for score, num, title, ms, shared in dups[:show_max]:
     print("DUPLICATE-RISK %d #%s %s [in: %s] [shares: %s]"
           % (score, num, title, ms, ", ".join(shared)))
 if len(dups) > show_max:
     print("DUPLICATE-TRUNCATED %d of %d shown" % (show_max, len(dups)))
-print("SIBLING-COUNT %d" % len(siblings))
-print("WEAK-COUNT %d" % len(weak))
+# How many were SHOWN, which is not how many are related. Named so that nothing can
+# read it as the second: the count the "2 or more issues" rule consumes is one the
+# reader states after reading the titles, and passes to ensure-milestone.sh itself.
+print("CANDIDATE-COUNT %d shown, which is NOT a count of related issues: read the "
+      "titles and decide" % len(candidates))
 print("DUPLICATE-COUNT %d" % len(dups))
 ' "$like" "$CATCH_ALL" "$show_max" "$limit" 2>"$gh_err")"
 irc=$?
@@ -378,13 +375,12 @@ fi
 
 # --- report ---------------------------------------------------------------
 milestone_count="$(printf '%s\n' "$milestones_out" | awk '/^MILESTONE-COUNT /{print $2}')"
-sibling_count="$(printf '%s\n' "$siblings_out" | awk '/^SIBLING-COUNT /{print $2}')"
-weak_count="$(printf '%s\n' "$siblings_out" | awk '/^WEAK-COUNT /{print $2}')"
+candidate_count="$(printf '%s\n' "$siblings_out" | awk '/^CANDIDATE-COUNT /{print $2}')"
 
-# A weak match counts as something to REPORT even though it never counts as
-# evidence: the caller may recognise a relation the word overlap cannot, and
-# discarding the lines here would take that away.
-if [[ "${milestone_count:-0}" -eq 0 && "${sibling_count:-0}" -eq 0 && "${weak_count:-0}" -eq 0 ]]; then
+# Every candidate is REPORTED, whatever it scored. The caller may recognise a relation
+# the word overlap cannot see, and it may reject one the overlap liked; both are its
+# job rather than this script's (claude-config#265).
+if [[ "${milestone_count:-0}" -eq 0 && "${candidate_count:-0}" -eq 0 ]]; then
   echo "NO-CANDIDATES $repo has no open milestone other than \"$CATCH_ALL\", and nothing in the pen shares words with this idea."
   exit 1
 fi

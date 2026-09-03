@@ -186,23 +186,25 @@ check_not "the holding pen is not offered as a feature to match against" \
   "OPEN-MILESTONE #2 Ungrouped" "$normal"
 
 # --- siblings already in the holding pen ----------------------------------
-check "it finds a sibling that shares words with the idea" "SIBLING 3 #241" "$normal"
-check "it finds the other sibling too" "SIBLING 2 #242" "$normal"
+check "it finds a candidate that shares words with the idea" "CANDIDATE 3 #241" "$normal"
+check "it finds the other candidate too" "CANDIDATE 2 #242" "$normal"
 check_not "an unrelated issue in the pen is not reported at all" "#240" "$normal"
-# Three: 241, 242 and 244, which all share at least two words with the idea. 244 was
-# added for the tracker vocabulary case below and genuinely shares "spool" and
-# "find" with this one, so it counts here too.
-check "it states the sibling count, so the caller does not have to count lines" \
-  "SIBLING-COUNT 3" "$normal"
+# Four: 241, 242 and 244 share two or more words, and 243 shares one. All four are
+# CANDIDATES now, because the score ranks the shortlist and does not rule on which of
+# them are related: it was wrong three times on the day it was written, always in the
+# same direction, and each fix excluded the words that exposed it (claude-config#265).
+check "it states how many it listed" \
+  "CANDIDATE-COUNT 4 shown" "$normal"
+# And it says outright that the number is not a count of related issues, because that
+# is exactly what the old SIBLING-COUNT was read as, and it fed the 2 or more rule.
+check "and says that number is not a count of related issues" \
+  "NOT a count of related issues" "$normal"
 
-# One shared word is a coincidence, not a cluster. It is still SHOWN, because the
-# caller may recognise a real relation the word overlap cannot, but it must not be
-# counted, or the number the "2 or more" rule reads is inflated by generic
-# vocabulary and every idea looks like a cluster.
-check "a single shared word is reported as a weak match, not a sibling" \
-  "WEAK-MATCH 1 #243" "$normal"
-check_not "a weak match is not also printed as a sibling" "SIBLING 1 #243" "$normal"
-check "the weak matches are counted separately" "WEAK-COUNT 1" "$normal"
+# A single shared word is still LISTED, ranked below the rest. The caller may
+# recognise a real relation the word overlap cannot see, and may reject one it liked.
+check "a single shared word is listed as a candidate like any other" \
+  "CANDIDATE 1 #243" "$normal"
+check_not "and nothing is labelled a weak match any more" "WEAK-MATCH" "$normal"
 
 # --- a duplicate hiding OUTSIDE the holding pen ---------------------------
 # The helper answered "what should this be grouped with" and not "does this already
@@ -239,8 +241,11 @@ check_not "a holding pen issue is not double counted as a duplicate" "#241" "$du
 # it was satisfied by a fixture where the case could not arise, since that idea
 # shares no word at all with #244, so it passed while proving nothing (L159).
 run acme/widgets --like "Group the open issues already sitting in the Ungrouped holding pen"
-check_not "two shared tracker words is not a sibling" "#244" "$OUT"
-check "and the tracker only overlap does not reach the count" "SIBLING-COUNT 0" "$OUT"
+# Tracker vocabulary ("issue", "open", "already") is excluded before scoring, so an
+# overlap made only of it produces no candidate at all. That exclusion stays: it keeps
+# noise out of the SHORTLIST, which is what the score is for now.
+check_not "an overlap made only of tracker words produces no candidate" "#244" "$OUT"
+check "and the shortlist is empty rather than merely unranked" "CANDIDATE-COUNT 0 shown" "$OUT"
 
 # The stronger match has to come first, or a caller reading only the top line
 # reads the weakest evidence it has.
@@ -251,7 +256,7 @@ check "and the tracker only overlap does not reach the count" "SIBLING-COUNT 0" 
 top=""
 while IFS= read -r line; do
   case "$line" in
-    "SIBLING "*) top="$line"; break ;;
+    "CANDIDATE "*) top="$line"; break ;;
   esac
 done <<<"$normal"
 check "the strongest match is ranked first" "#241" "$top"
@@ -297,7 +302,7 @@ check_not "a read comfortably under the limit says nothing about truncation" "RE
 # --- nothing matched, read fine -------------------------------------------
 GH_ISSUES="$TMP/issues-empty.json" run acme/widgets --like "Onboarding revamp copy tweaks"
 GH_ISSUES="$TMP/issues.json"
-check "an empty pen still reports its count explicitly" "SIBLING-COUNT 0" "$OUT"
+check "an empty pen still reports its count explicitly" "CANDIDATE-COUNT 0 shown" "$OUT"
 check_eq "milestones present but no siblings is still a successful read" 0 "$RC"
 
 # --- the read FAILING is not the same as finding nothing ------------------

@@ -58,7 +58,7 @@ needs=(
   "[p2, tech-debt, NEW Backlog grouping, moves #241 #242]"  # a new milestone is SHOWN as new, with what it moves
   "Ungrouped"                       # the catch-all is still offered
   "milestone-candidates.sh"         # the backlog is READ before a milestone is chosen
-  "SIBLING-COUNT"                   # and the sibling count is what the 2 or more rule counts
+  "READ THE TITLES"                 # the score ranks the shortlist, the reader decides (#265)
   "DUPLICATE-RISK"                  # an idea that already exists is not filed again
   "CHECK THOSE BEFORE FILING"       # which only works if the lines are actually read
   "2 OR MORE issues would go into it at once"  # the bar for opening a new milestone
