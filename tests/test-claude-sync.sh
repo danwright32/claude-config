@@ -1190,6 +1190,23 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
         echo "test suite: TIMED OUT: ${ceiling}s of wall clock, still inside section: ${where:-<no section reached>}" >&2
         echo "It was still making progress and simply ran past the absolute ceiling. Raise SUITE_TIMEOUT if this machine is genuinely that slow, or find what got slower." >&2
       fi
+      # WHAT WAS RUNNING at that moment, before anything is killed (claude-config#271). The lines
+      # above name the SECTION, and a section is minutes of work and dozens of commands: on
+      # 2026-09-02 a hang inside one cost most of an hour, because narrowing it needed a fresh
+      # several minute run for every guess, and the run that could have answered it had already
+      # been killed. This evidence exists only in the instant before the kill and it is free
+      # (L148, L177). The walk is over the run own descendants, so it names the command that was
+      # actually sitting there rather than everything on the machine.
+      echo "test suite: what was still running under it, deepest last:" >&2
+      _wd_tree() {
+        for _wd_c in $(pgrep -P "$1" 2>/dev/null); do
+          ps -o pid=,etime=,command= -p "$_wd_c" 2>/dev/null | sed "s/^/  /" >&2
+          _wd_tree "$_wd_c"
+        done
+      }
+      _wd_tree "$1"
+      echo "test suite: (nothing above this line means it was stuck in the shell itself rather than in a command it had started)" >&2
+
       # Kill the run AND everything it started. Killing only the run itself leaves its children
       # alive, and anything reading the run output then waits for THEM: a 6 second deadline
       # measured 60 on 2026-08-17, the length of the sleep the run happened to be sitting in. Its children are
@@ -4981,6 +4998,16 @@ check "#31 it names the section it died in"     "grep -q 'still inside section: 
 # The whole point is that a hang stops reading as an ordinary run, so it must never leave behind
 # the summary line that means everything passed.
 check "#31 a hung run is never reported as green" "! grep -q 'FAIL=0' <<< \"\$_hang\""
+# WHAT it was stuck in, not only WHERE (claude-config#271). A section is minutes of work and
+# dozens of commands, and a hang inside one cost most of an hour on 2026-09-02 because every guess
+# needed a fresh several minute run and the run that could have answered had already been killed.
+# The hang seam sits in a `sleep`, so that is the command the report has to name.
+check "#271 and it lists what was still running under it" \
+  "grep -q 'what was still running under it' <<< \"\$_hang\""
+check "#271 and the command it was actually stuck in is in that list" \
+  "grep -qE '^ +[0-9]+ +[0-9:]+ .*sleep' <<< \"\$_hang\""
+# The control: a healthy run prints none of it, or the listing is on every run and stops being read
+# (L36, L159). Asserted against the healthy run below, which is built a few lines down.
 
 # The other half, and the one that would do real damage if it were wrong: a deadline that fires
 # on a HEALTHY run turns every ordinary run into a false failure. A guard has to be seen not
@@ -4991,6 +5018,8 @@ _okrun="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push SUITE_TIMEOUT=300 SU
 _ok_elapsed=$(( $(date +%s) - _ok_t0 ))
 check "#31 a healthy run is not killed by its own deadline" "! grep -q 'TIMED OUT' <<< \"\$_okrun\""
 check "#31 and still reports its result"        "[ '$_okrun_rc' -eq 0 ]"
+check "#271 and a healthy run lists nothing about what was running" \
+  "! grep -q 'what was still running under it' <<< \"\$_okrun\""
 
 # How long the hung run took, judged against the HEALTHY one just measured rather than against a
 # number written here (claude-config#149). It used to be "under 30 seconds", chosen not measured,
