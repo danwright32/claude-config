@@ -1396,6 +1396,23 @@ window is a count rather than a boundary.
   which points at an import and both of which read like a corrupt cache. The check itself takes 2.28s
   over 943 files and was the only file in the tree that tripped it)
 
+- **L382. A poll that repeats an IDENTICAL request can be served the same cached answer every
+  time, so it re-reads its own first attempt and can never observe the change it is waiting for.
+  Make each attempt demand a fresh read, and prove the value can change inside one run rather than
+  trusting that the loop is looking again.**
+  (nursedex#913: the PostHog ingestion health check sent a probe event and then polled every 3
+  seconds for it, with a byte identical HogQL query each time. PostHog caches a query answer against
+  the text of the query. The first attempt ran 179ms after the capture, when zero was the honest
+  answer, and all 51 later attempts were handed that cached zero. The check waited 182 seconds, made
+  52 requests, and reported that ingestion was not recording, while the event sat in PostHog the
+  whole time, timestamped the same second the check started. It could never have passed. The cached
+  answer was still being served twenty minutes later, with `is_cached: true` and `last_refresh`
+  stamped at the first attempt, which is how it was finally seen. Adding `refresh: "force_blocking"`
+  made the same query return 1 immediately. The same run also invalidated the measurement the
+  design rested on: a recorded ingestion lag of about 90 seconds had itself been measured through
+  that cache, so it was timing the cached answer expiring rather than the event arriving; the real
+  lag, measured with the cache bypassed, was between 31 and 35 seconds)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -2812,6 +2829,22 @@ window is a count rather than a boundary.
   invented join space reachable too, so "kite jkite" would have matched John Kite across the gap
   between his name and his address. The two other search boxes in the same app already matched
   name and email separately, so the joined one was the outlier and nothing compared them)
+- **L384. A field stamped on the UPDATE path and not on the INSERT path leaves every freshly
+  created record without it, and the gap is invisible because every record that has ever been
+  updated looks correct, so the population missing it is exactly the newest one. Stamp it where
+  the record is CONSTRUCTED, and measure the field's presence against record age rather than
+  reading the writer.** (overture#3495, 2026-09-03: `ScoutService.apply` set `scoutGroupName`
+  and `scoutVenue` on every re-ingest while `ScoutService.make`, the insert, set neither. Those
+  two fields are the anchor the natural key is computed from, added by #1886 precisely so a
+  display rename could not move a row's key, so a freshly minted row had no anchor at all.
+  Measured on the live store: 9 of 9 rows first seen that day carried neither field, against 372
+  of 381 rows re-ingested the same day carrying both, which is the shape this defect always has.
+  The same function already carried the correct version of the rule one field over, in a comment
+  from #1663: "stamp the decider on the way in, so the FIRST time a second source touches this
+  row the precedence rule already knows whose genre is sitting there. Without it every new row
+  would spend its first collision unprotected." A repair elsewhere, `ProspectMutations.renameGroup`
+  backfilling the name half when it happens to be nil, hid the name half of it and left the venue
+  half uncovered.)
 
 ## Security and privacy
 
@@ -4115,6 +4148,21 @@ window is a count rather than a boundary.
   other readers skipped derived files for exactly this reason; the rebase was the fourth
   site and was left out. L41 is the opposite concern, deriving rather than hand
   maintaining, and says nothing about the derived artifact's own merges.)
+- **L383. A derived value exposed as a computed property or a getter is re-run in full by
+  EVERY reader, and a reader's call site reads as a free field access, so nothing at the point
+  of use says what it costs. Where the derivation walks a whole collection, compute it once at
+  the top of the pass and hand the value down, and assert the NUMBER of call sites, because
+  the shape alone cannot be read.** (overture#3492, 2026-09-03: `ArchiveView.filtered` was a
+  computed property running a 1,139 row derivation, read twice in one body pass, once for the
+  count beside the title and once for the empty check, so every render of that screen paid for
+  the corpus twice. One rebuild is 533ms. It was invisible because both readers look like
+  ordinary property reads, and it survived #3479, which removed a THIRD read on the empty path
+  without anyone counting the other two. The fix names it as a call, `filteredItems()`, bound
+  once in `body`, precisely so the guard can count call sites; a property access cannot be
+  counted. The sibling sweep found the same shape in `RootView.searchableItems`, which reads
+  `nonDismissedProspects` directly and again through `reachedOutKeys`, walking the store twice
+  for one search scope (overture#3493). L286 is the same mechanism inside a test suite; this is
+  the production half.)
 
 ## Cross-system reliability
 
