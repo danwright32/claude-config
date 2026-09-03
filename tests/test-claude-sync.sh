@@ -2191,6 +2191,14 @@ export SYNC_ZSHRC="$WORK/zshrc-guard"
 # Without it every git-backed section that happens to touch a hook would start launching real test
 # suites inside this one, which is minutes of work proving nothing about the section it is in.
 export SYNC_NO_SEND_TESTS=1
+# A clone under a disposable directory is not registered or reported on (claude-config#295), and
+# EVERY fixture clone in this file lives under the real temp directory, so with the rule in force
+# the sections about clone discovery would have nothing to discover and would pass by finding
+# nothing (L98). Pointed at somewhere no path can sit under, once, here.
+#
+# The one section that is ABOUT the rule unsets this and puts its fixture under the real temp
+# directory, so the shipped list is exercised rather than described (L322).
+export SYNC_TEMP_ROOTS="/no-such-temp-root-exists-here"
 # ---- every file seam the tool honours, pointed inside WORK, once (claude-config#220) ----
 # A test that seams SOME of a script's collaborators runs the rest for real, and the real ones are
 # the slow and the dangerous ones (L52, L196). These two are new and they are FILES the tool writes
@@ -11995,6 +12003,68 @@ check "#283 a sync that received nothing says so instead" \
   "line_has \"\$out_sr2\" 'Already up to date' 'nothing on this Mac'"
 check "#283 and does not carry a new session notice over an empty apply" \
   "out_lacks \"\$out_sr2\" 'Start a new Claude Code session'"
+
+section "== a disposable clone is neither registered nor reported on (claude-config#295) =="
+# The register is appended to and never pruned, by design: pruning is a read modify write over the
+# one record saying where the other clones are. So one hand made debug scenario under /private/tmp
+# put a throwaway checkout into it permanently, and every pull afterwards ended with "the checkout
+# at /private/tmp/dbg/B is on a commit this clone has never seen ... Run 'git -C ... fetch' there".
+# That line carries no action anybody would take, and a notice with no remedy printed on every run
+# is what teaches a reader to skip the whole report.
+#
+# SYNC_TEMP_ROOTS is UNSET for this section, so what is measured is the list that actually ships
+# rather than the suite-wide stand-in (L322). The fixture therefore has to live under the real temp
+# directory, which is where WORK already is.
+TMPCL_REG="$WORK/tempclone-registry"
+TMPCL_H="$WORK/tempclone-home"; mkdir -p "$TMPCL_H"; echo '{"hooks":{}}' > "$TMPCL_H/settings.json"
+TMPCL_A="$WORK/tempclone-A"; mkdir -p "$TMPCL_A/payload"; cp "$SCRIPT" "$TMPCL_A/claude-sync"
+TMPCL_LA="$WORK/tempclone-agents"; mkdir -p "$TMPCL_LA"
+TMPCL_REAL="$(cd "$TMPCL_A" && pwd -P)"
+: > "$TMPCL_REG"
+
+tmpcl_pull(){ # tmpcl_pull [extra env assignments...] -> a run that takes the lock
+  env SYNC_CLONE_REGISTRY="$TMPCL_REG" SYNC_LAUNCHAGENTS="$TMPCL_LA" CLAUDE_HOME="$TMPCL_H" \
+      SYNC_REPO="$TMPCL_A" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 "$@" bash "$SCRIPT" pull >/dev/null 2>&1
+}
+
+# The fixture really is under a disposable root, or the refusal below is about nothing (L159).
+check "#295 the fixture clone really does sit under the temp directory" \
+  "case '$TMPCL_REAL' in /private/var/folders/*|/var/folders/*|/private/tmp/*|/tmp/*|/var/tmp/*) true ;; *) false ;; esac"
+
+# UNSET, never `env SYNC_TEMP_ROOTS=`: an empty value is an empty LIST, which exempts every path,
+# and the check below would then pass for the opposite of the reason it claims.
+: > "$TMPCL_REG"
+( unset SYNC_TEMP_ROOTS; tmpcl_pull )
+check "#295 a clone under a disposable directory is not written down" \
+  "[ ! -s '$TMPCL_REG' ]"
+
+# THE CONTROL. The same clone, the same run, with only the rule changed: it registers. Without it
+# a refusal is satisfied by a run that never registers anything, whatever the reason (L159, L98).
+: > "$TMPCL_REG"
+tmpcl_pull
+check "#295 the control: with the rule pointed elsewhere the same clone does register" \
+  "grep -qxF '$TMPCL_REAL' '$TMPCL_REG'"
+
+# And the entries already recorded, which nothing prunes, go quiet. Written by hand into the
+# register because that is exactly the state a Mac is in today: the line is there and the refusal
+# above cannot remove it.
+printf '%s\n' "$TMPCL_REAL" > "$TMPCL_REG"
+printf 'failed\t%s\t7\t?\t?\n' "$(date +%s)" > "$TMPCL_A/.hook-tests"
+TMPCL_B="$WORK/tempclone-B"; mkdir -p "$TMPCL_B/payload"; cp "$SCRIPT" "$TMPCL_B/claude-sync"
+tmpcl_status(){ # tmpcl_status [extra env assignments...]
+  env SYNC_CLONE_REGISTRY="$TMPCL_REG" SYNC_LAUNCHAGENTS="$TMPCL_LA" CLAUDE_HOME="$TMPCL_H" \
+      SYNC_REPO="$TMPCL_B" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 "$@" bash "$SCRIPT" status 2>&1
+}
+out_tmpcl="$( unset SYNC_TEMP_ROOTS; tmpcl_status )"
+dbg "#295 status with a disposable clone already in the register: $out_tmpcl"
+check "#295 a disposable clone already recorded is not reported on" \
+  "! line_has \"\$out_tmpcl\" 'another clone' '$TMPCL_REAL'"
+
+# THE CONTROL for that half too: the same register, the same status, only the rule changed.
+out_tmpcl2="$(tmpcl_status)"
+dbg "#295 the same status with the rule pointed elsewhere: $out_tmpcl2"
+check "#295 the control: with the rule pointed elsewhere that clone IS reported on" \
+  "line_has \"\$out_tmpcl2\" 'another clone' '$TMPCL_REAL'"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
