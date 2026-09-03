@@ -3731,6 +3731,10 @@ do_apply_only(){
   have_git && after="$(repo_head)"
   apply_payload_to_local
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
+  # The resume point after a self update finishes the same sync, so it owes the same report
+  # (claude-config#283). Leaving it out here would make what a run says depend on whether the tool
+  # happened to update itself in the middle of it.
+  summarize_applied "$before" "$after"
   report_when_lock_released "Synced (sent local changes, pulled remote; memory/permissions untouched)"
 }
 
@@ -3974,6 +3978,15 @@ do_sync(){
   fi
   apply_payload_to_local
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
+  # WHAT ARRIVED, on this path too (claude-config#283). do_pull has always listed what it wrote and
+  # added the start a new session notice when an arriving file cannot be seen by a running session;
+  # this path called neither, so the route that RECEIVES the most reported the least. On 2026-09-03
+  # a reconcile delivered 20 commits and 82 payload files, including CLAUDE.md, RTK.md, LESSONS.md
+  # and LESSONS-INDEX.md, and said nothing about any of it. The sync-config skill deliberately tells
+  # Claude not to invent its own version of that notice, because this script owns the decision, so
+  # on this path the notice did not exist at all and had to be reconstructed from git by hand. A
+  # silent path passes every check there is (L98).
+  summarize_applied "$before" "$after"
   report_when_lock_released "Synced (sent local changes, pulled remote; memory/permissions untouched)"
 }
 
