@@ -577,10 +577,24 @@ FIRST and was caught only by the suite that runs after installation. Three pushe
 2026-09-03 were green on a Mac and red on the Linux runner, and every one of them would have landed
 there.
 
-**The rule.** An AUTOMATIC receive, the fswatch watcher or the timer whose plist carries
-`SYNC_AUTOMATIC`, integrates a commit only when its checks are green. A `pull` or `sync` typed by a
-person is not gated, which is the escape hatch, so there is no flag to remember and no way to be
-stuck. Red, still running, cancelled and unreadable each get their own sentence and their own
+**The rule.** The fswatch WATCHER integrates a commit only when its checks are green. A `pull` or
+`sync` typed by a person is not gated, which is the escape hatch, so there is no flag to remember
+and no way to be stuck. Neither is the weekly receive timer, deliberately: a CI wait of a few
+minutes is noise against a week.
+
+**How the gate is turned on, since this paragraph said otherwise for a week.** It said the timer
+was gated too, by a plist carrying `SYNC_AUTOMATIC`. Nothing writes that variable and nothing reads
+it: `writeplist` puts only `PATH` in a plist's environment, and the gate turns on because
+`watch_tick` sets `SYNC_IN_WATCH` itself, inside whichever `claude-sync` the job runs. The sentence
+sat beside numbers that were checked and re-measured, which made it more trusted rather than less
+(L210, L244), and claude-config#280 was filed on it: a whole issue about a per Mac divergence that
+could not happen, because an old PLIST is not the thing that carries the gate.
+
+What CAN diverge is which `claude-sync` a job runs. A plist records an absolute path and this Mac
+has more than one clone, so a job pointed at a clone that has not been updated runs a copy with no
+gate. `claude-sync status` now says which of the two launch agents are installed, which copy each
+one runs, and whether that copy has the gate, so the question is answered by running one read-only
+command on each Mac rather than by opening a plist. Red, still running, cancelled and unreadable each get their own sentence and their own
 `SEND-OUTCOME` marker in the watcher's log, because they need different remedies: a run still going
 resolves itself, a cancelled one never will, and unreadable is about `gh` on the receiving Mac
 rather than about the commit.

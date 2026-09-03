@@ -4708,6 +4708,91 @@ report_other_clones_position(){
   return 0
 }
 
+# Which automatic jobs this Mac runs, and which of their receives waits for CI (claude-config#280).
+#
+# claude-config#221 gated the automatic receive, and the answer to "is THIS Mac gated" was a plist
+# somebody had to open and read. Two Macs could sit in different states with nothing able to tell
+# them apart.
+#
+# The issue was filed believing the gate travelled in the plist, as a SYNC_AUTOMATIC variable.
+# It does not, and nothing here ever read one: writeplist puts only PATH in a plist's environment,
+# and the gate turns on because watch_tick sets SYNC_IN_WATCH itself, inside whichever claude-sync
+# the job runs (L61). So an old PLIST is not the divergence. What is, is a plist naming a
+# claude-sync in a clone that has not been updated, because a plist records an absolute path and
+# this Mac has more than one clone.
+#
+# THE MARKER is the gate function's own name, which the function and its caller both spell, so it
+# cannot appear in a copy written before the gate. A rename would make every copy read as ungated,
+# which is the report going wrong in the direction that raises a false alarm on a correctly gated
+# Mac, so the suite asserts THIS script satisfies it: a rename turns that check red rather than
+# turning this report into a lie (L96, L103).
+CI_GATE_MARKER="ci_gate_blocks_pull"
+
+#
+# Both read sed's whole output into a variable and take the first line with a parameter expansion,
+# rather than piping it to `head -1`. A reader that leaves on the first line kills the producer with
+# SIGPIPE, and under `set -o pipefail` the pipeline then reports a failure that never happened
+# (L183); test-pipefail-shortcircuit.sh caught both of these on the way in.
+plist_program(){   # $1 = plist -> the claude-sync it runs, or nothing
+  local out
+  out="$(sed -n 's|.*<string>\(/[^<]*/claude-sync\)</string>.*|\1|p' "$1" 2>/dev/null)"
+  printf '%s' "${out%%$'\n'*}"
+}
+plist_interval(){  # $1 = plist -> StartInterval in seconds, or nothing
+  local out
+  out="$(sed -n 's|.*<key>StartInterval</key><integer>\([0-9][0-9]*\)</integer>.*|\1|p' "$1" 2>/dev/null)"
+  printf '%s' "${out%%$'\n'*}"
+}
+
+# One line per job. Every state gets its own sentence, because "not installed", "installed but
+# pointing at nothing", "installed and ungated" and "installed and gated" need four different
+# remedies and only one of them is a fault worth acting on (L11).
+report_automatic_jobs(){
+  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  local tp="$agentdir/com.claudesync.timer.plist" wp="$agentdir/com.claudesync.watch.plist"
+  local prog interval
+
+  if [ ! -f "$tp" ] && [ ! -f "$wp" ]; then
+    echo "automatic sync: neither launch agent is installed on this Mac, so nothing here sends or receives on its own and every sync is one somebody typed. Install both with: claude-sync install-autosync"
+    return 0
+  fi
+
+  if [ -f "$tp" ]; then
+    prog="$(plist_program "$tp")"
+    interval="$(plist_interval "$tp")"
+    case "$interval" in ''|*[!0-9]*) interval="" ;; esac
+    if [ -z "$prog" ]; then
+      echo "receive timer: installed, but $tp names no claude-sync to run, so what it does cannot be read. Rewrite it with: claude-sync install-autosync"
+    elif [ ! -f "$prog" ]; then
+      echo "receive timer: installed, but there is no claude-sync at $prog, so this job cannot run at all. Rewrite it with: claude-sync install-autosync"
+    else
+      echo "receive timer: ${interval:+every $(duration_in_words "$interval"), }running $prog. Its receive is deliberately not gated on CI: a CI wait of a few minutes is noise against that interval, and a pull somebody types is never gated either."
+    fi
+  else
+    echo "receive timer: not installed, so this Mac receives the other Mac's config only when somebody runs 'claude-sync pull'. Install it with: claude-sync install-autosync"
+  fi
+
+  if [ -f "$wp" ]; then
+    prog="$(plist_program "$wp")"
+    if [ -z "$prog" ]; then
+      echo "change watcher: installed, but $wp names no claude-sync to run, so what it does cannot be read. Rewrite it with: claude-sync install-autosync"
+    elif [ ! -f "$prog" ]; then
+      echo "change watcher: installed, but there is no claude-sync at $prog, so this job cannot run at all. Rewrite it with: claude-sync install-autosync"
+    elif [ ! -r "$prog" ]; then
+      # Not the same as having no gate. A copy nobody can read is a question nobody can answer, and
+      # answering it as "ungated" would raise an alarm about the wrong thing (L98).
+      echo "change watcher: running $prog, and whether that copy has the CI gate could not be read, so it is not known whether this Mac's automatic receive waits for CI."
+    elif grep -qF "$CI_GATE_MARKER" "$prog" 2>/dev/null; then
+      echo "change watcher: running $prog, and that copy has the CI gate, so what this Mac receives automatically waits for CI to pass first."
+    else
+      echo "change watcher: running $prog, and that copy has NO CI gate, so this Mac integrates whatever is on the shared repo the moment the watcher pulls, before anything has judged it. Update that clone, or point the job at one that has the gate: claude-sync install-autosync"
+    fi
+  else
+    echo "change watcher: not installed, so this Mac sends nothing instantly and has no gated automatic receive. Install it with: claude-sync install-autosync (it needs fswatch)"
+  fi
+  return 0
+}
+
 do_status(){
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
   report_sync_times
@@ -4747,6 +4832,7 @@ do_status(){
   report_duplicate_plugin_skills || true
   report_conflict_copies
   report_watcher_hold
+  report_automatic_jobs
   report_hook_suite_result
   report_outage_tally
   report_stray_processes
