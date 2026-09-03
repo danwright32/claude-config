@@ -35,6 +35,7 @@
 #                                              their periodic count has gone out
 #   issue-spool.sh muted-summary <dir>         the periodic count of held-back
 #                                              failures; exit 1 if none
+#   issue-spool.sh reach-report                which pending keys no session can open
 #
 # `raw` and `archive` exit 0 on an empty spool. They used to exit non-zero,
 # which kills any caller running under errexit on the ordinary empty case, and
@@ -432,11 +433,18 @@ issue_spool_pending() { # pending <dir> [session-transcript] -> exit 1 when ther
 import datetime, json, os, re, sys
 
 MAX_FINDINGS = 200
-# How many characters of FINDINGS one review may carry. Measured 2026-08-29: a
-# real project's pending list rendered to 50,030 characters, all of which would
-# have gone into a single message. A count cap does not bound that, because one
-# 500 character finding costs what twenty short ones do, so the limit is on size.
-FINDING_BUDGET = int(os.environ.get("CLAUDE_ISSUE_SPOOL_FINDING_BUDGET") or 8000)
+# How many characters of FINDINGS one review may carry. Measured 2026-08-29: a real project's
+# pending list rendered to 50,030 characters, all of which would have gone into a single MESSAGE. A
+# count cap does not bound that, because one 500 character finding costs what twenty short ones do,
+# so the limit is on size.
+#
+# Raised from 8,000 to 40,000 by claude-config#241, because the reason for the small number went
+# away and the number stayed. Since claude-config#243 the findings go to a FILE the reader opens,
+# not into the reason, so the cost of showing one is a line in a file rather than a line on Dan's
+# screen. At 8,000 a spool holding 219 findings showed 4 and said "and 215 more not shown here",
+# and the clear that follows the picker files ALL of them, so everything past the first few was
+# archived unread. Showing them is what makes it possible to act on more than four (L526).
+FINDING_BUDGET = int(os.environ.get("CLAUDE_ISSUE_SPOOL_FINDING_BUDGET") or 40000)
 MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
 # Whose review this is. Empty when it cannot be known, and then nothing is marked: marking every
 # finding as somebody else's would be worse than marking none (L11).
@@ -592,7 +600,8 @@ for where, ts, f, sess in findings[:MAX_FINDINGS]:
     shown += 1
 if printed < len(findings):
     shown += 1
-    print("...and %d more findings not shown here. They stay in the spool until filed."
+    print("...and %d more findings not shown here. THEY ARE STILL FILED AWAY by the clear that "
+          "follows the picker, so say in your reply that this many went unread."
           % (len(findings) - printed))
 
 for reason, info in errors.items():
@@ -623,6 +632,58 @@ PY
   fi
   rm -f "$file" "$file.sources"
   return $rc
+}
+
+# CAN ANYBODY READ THIS? (claude-config#242)
+#
+# A review opens exactly one key, the one derived from its own session's transcript directory, so a
+# finding written under a key no session ever resolves to is never offered to anybody. The harvest
+# reports success, the review reports nothing to show, and both are telling the truth about
+# different files (L98). Measured on 2026-08-31: 142 distinct keys, and the records inside named
+# about 42 distinct working directories, which says nothing about WHERE the split is (L203) but does
+# establish that nothing anywhere reports whether a written finding is reachable.
+#
+# This answers it by construction rather than by inference: every directory under the transcript
+# root is a key a session can resolve to, so a pending key that is not one of them is a key no
+# review will ever open.
+issue_spool_reach_report() { # reach-report -> 0 when every pending key is reachable
+  local root reachable file key n unreachable="" total=0 held=0 empty=0 dirs=0 d
+  root="$(issue_spool_root)"
+  [ -d "$root" ] || { echo "issue-spool: there is no spool at $root, so there is nothing to report on."; return 0; }
+  reachable="$(mktemp "${TMPDIR:-/tmp}/claude-spool-reach.XXXXXX")" || return 1
+  for d in "${CLAUDE_TRANSCRIPT_ROOT:-$HOME/.claude/projects}"/*; do
+    [ -d "$d" ] || continue
+    dirs=$(( dirs + 1 ))
+    printf '%s\n' "$(issue_spool_key "" "$d/x.jsonl")" >> "$reachable"
+  done
+  # Reading NO transcript directory is not a clean answer: every key would read as unreachable and
+  # the report would be a wall of false alarms (L98, L36).
+  if [ "$dirs" -eq 0 ]; then
+    rm -f "$reachable"
+    echo "issue-spool: no session transcript directory was found under ${CLAUDE_TRANSCRIPT_ROOT:-$HOME/.claude/projects}, so which keys are reachable could not be worked out. Nothing is being reported as unreachable." >&2
+    return 1
+  fi
+  for file in "$root"/*.jsonl; do
+    [ -e "$file" ] || continue
+    case "$file" in *.filed.jsonl) continue ;; esac
+    total=$(( total + 1 ))
+    if [ ! -s "$file" ]; then empty=$(( empty + 1 )); continue; fi
+    held=$(( held + 1 ))
+    key="$(basename "$file")"; key="${key%.jsonl}"
+    grep -qx -- "$key" "$reachable" 2>/dev/null && continue
+    n="$(grep -c . "$file" 2>/dev/null || true)"
+    unreachable="$unreachable
+  $key.jsonl (${n:-0} record(s))"
+  done
+  rm -f "$reachable"
+  echo "issue-spool: $total pending file(s) under $root, $held holding records and $empty empty, against $dirs session transcript director(ies)."
+  if [ -n "$unreachable" ]; then
+    echo "issue-spool: these hold findings under a key NO session resolves to, so no review will ever open them:$unreachable" >&2
+    echo "  They were written by an agent whose session's transcript directory no longer exists, or under the older directory key. 'issue-spool.sh raw <dir>' reads one by hand." >&2
+    return 1
+  fi
+  echo "issue-spool: every key holding a finding is one a session can resolve to."
+  return 0
 }
 
 # Does the spool hold an actual FINDING, as opposed to only records of harvests
@@ -952,7 +1013,16 @@ PY_SPLIT
   cat "$errs" >> "$archive" 2>/dev/null && rm -f "$errs"
   # Appended, never moved into place: a record written by an agent that finished
   # after the rename above is already sitting in this file.
-  cat "$keep" >> "$file" 2>/dev/null && rm -f "$keep"
+  # Only when there is something to keep. `cat empty >> file` CREATES the pending file empty, and
+  # that is where the spool's zero byte files come from: 131 of 157 on this Mac on 2026-08-31, one
+  # per project whose failures were filed with no finding left behind (claude-config#242). They
+  # make the spool look like it holds 157 keys when 26 hold anything, which is what made the
+  # reachability question hard to answer in the first place.
+  if [ -s "$keep" ]; then
+    cat "$keep" >> "$file" 2>/dev/null && rm -f "$keep"
+  else
+    rm -f "$keep" "$file" 2>/dev/null || true
+  fi
   rm -f "$staged"
 
   issue_spool_cap_archive "$archive"
@@ -979,6 +1049,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     file-errors)  issue_spool_file_errors "${1:-$PWD}" "${2:-}" ;;
     file-muted)   issue_spool_file_muted "${1:-$PWD}" "${2:-}" ;;
     muted-summary) issue_spool_muted_summary "${1:-$PWD}" "${2:-}" ;;
+    reach-report) issue_spool_reach_report ;;
     *)            echo "issue-spool.sh: unknown command '${cmd}'" >&2; exit 2 ;;
   esac
 fi

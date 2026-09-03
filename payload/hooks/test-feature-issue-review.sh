@@ -227,6 +227,126 @@ bash "$DIR/lib/issue-spool.sh" has-findings "$FIND_PROJ" "$TRANSCRIPT" >/dev/nul
   && check "the finding is still pending after the review carried it" ok \
   || check "the finding is still pending after the review carried it" "the spool no longer holds it"
 
+# ---------------------------------------------------------------------------
+# A finding an open issue already covers arrives WITH the issue number (claude-config#256).
+# ---------------------------------------------------------------------------
+# On 2026-09-01 eight read only agents audited every open issue in one repo. The harvest spooled
+# their observations, another session's review offered them as fresh findings, and four were filed:
+# each a twin of the issue the agent had been READING, closed as a duplicate within the hour. The
+# harvest cannot know a problem is already tracked; the review can look.
+MATCH_PROJ="$(mktemp -d "$WORK/matching.XXXXXX")"
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+# Answers the one question the matcher asks, and records that it was asked.
+printf '%s\n' "$*" >> "$GH_CALLS"
+cat "$GH_ISSUES"
+STUB
+chmod +x "$WORK/bin/gh"
+export GH_CALLS="$WORK/gh-calls.log"; : > "$GH_CALLS"
+export GH_ISSUES="$WORK/issues.json"
+cat > "$GH_ISSUES" <<'JSON'
+[{"number": 412, "title": "The widget cache is never invalidated in widget/cache.py",
+  "body": "widget/cache.py keeps a stale entry after a rename."},
+ {"number": 998, "title": "Something else entirely",
+  "body": "About other/thing.py and nothing to do with the above."}]
+JSON
+bash "$DIR/lib/issue-spool.sh" note "$MATCH_PROJ" \
+  "widget/cache.py keeps a stale cache entry when a widget is renamed" "test-suite" "$TRANSCRIPT" >/dev/null 2>&1
+reason="$(PATH="$WORK/bin:$PATH" reason_of "$(PATH="$WORK/bin:$PATH" run_review "$MATCH_PROJ")")"
+named="$(printf '%s' "$reason" | python3 -c '
+import re, sys
+m = re.search(r"waiting in (\S+?)\. They", sys.stdin.read())
+print(m.group(1) if m else "")
+')"
+# The stub really was asked, or everything below is satisfied by a matcher that never ran (L100).
+grep -q "issue list" "$GH_CALLS" 2>/dev/null \
+  && check "#256 the review asks for the open issues" ok \
+  || check "#256 the review asks for the open issues" "gh was never called: $(cat "$GH_CALLS" 2>/dev/null)"
+grep -q "already #412" "$named" 2>/dev/null \
+  && check "#256 a finding an open issue already covers carries that issue's number" ok \
+  || check "#256 a finding an open issue already covers carries that issue's number" "file=$(awk 'NR <= 3' "$named" 2>/dev/null)"
+grep -q "already #998" "$named" 2>/dev/null \
+  && check "#256 and an unrelated open issue is not attached to it" "it named #998 as well" \
+  || check "#256 and an unrelated open issue is not attached to it" ok
+
+# A finding naming a file NO open issue mentions gets nothing, or the annotation says nothing and
+# would talk somebody out of filing a real finding (L159).
+NOMATCH_PROJ="$(mktemp -d "$WORK/nomatch.XXXXXX")"
+bash "$DIR/lib/issue-spool.sh" note "$NOMATCH_PROJ" \
+  "unrelated/module.py drops its error on the floor" "test-suite" "$TRANSCRIPT" >/dev/null 2>&1
+reason_nm="$(PATH="$WORK/bin:$PATH" reason_of "$(PATH="$WORK/bin:$PATH" run_review "$NOMATCH_PROJ")")"
+named_nm="$(printf '%s' "$reason_nm" | python3 -c '
+import re, sys
+m = re.search(r"waiting in (\S+?)\. They", sys.stdin.read())
+print(m.group(1) if m else "")
+')"
+# Asked of the LINE, not of the file. Every note here shares one transcript, so they share one
+# spool key and one pending list: a file-wide grep is answered by the annotated finding above and
+# says nothing about this one (L135, and it did exactly that).
+_nm_line="$(grep 'unrelated/module.py' "$named_nm" 2>/dev/null || true)"
+case "$_nm_line" in
+  "") check "#256 a finding no open issue covers is left alone" "the finding is not in the file at all" ;;
+  *"already #"*) check "#256 a finding no open issue covers is left alone" "it was annotated: $_nm_line" ;;
+  *) check "#256 a finding no open issue covers is left alone" ok ;;
+esac
+
+# And it FAILS OPEN. This is a convenience on a review, and losing it must never cost the review.
+FAILOPEN_PROJ="$(mktemp -d "$WORK/failopen.XXXXXX")"
+cat > "$WORK/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+echo "gh: not logged in" >&2
+exit 1
+STUB
+chmod +x "$WORK/bin/gh"
+FAILMARK="widget/cache.py still drops the rename"
+bash "$DIR/lib/issue-spool.sh" note "$FAILOPEN_PROJ" "$FAILMARK" "test-suite" "$TRANSCRIPT" >/dev/null 2>&1
+reason_fo="$(PATH="$WORK/bin:$PATH" reason_of "$(PATH="$WORK/bin:$PATH" run_review "$FAILOPEN_PROJ")")"
+named_fo="$(printf '%s' "$reason_fo" | python3 -c '
+import re, sys
+m = re.search(r"waiting in (\S+?)\. They", sys.stdin.read())
+print(m.group(1) if m else "")
+')"
+grep -qF "$FAILMARK" "$named_fo" 2>/dev/null \
+  && check "#256 a gh that refuses leaves the findings going out unannotated" ok \
+  || check "#256 a gh that refuses leaves the findings going out unannotated" "file=[$named_fo] $(awk 'NR <= 2' "$named_fo" 2>/dev/null)"
+
+# The matcher on its own, by name. Driving it only through the review would leave its own refusals
+# untested, and the coverage ratchet is right that a file no suite names is a file nobody checks.
+MATCHER="$DIR/lib/match-open-issues.py"
+matcher_out() { # matcher_out <findings text>   -> the annotated text
+  printf '%s\n' "$1" | PATH="$WORK/bin:$PATH" python3 "$MATCHER" "$WORK" 2>/dev/null
+}
+cat > "$WORK/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+cat "$GH_ISSUES"
+STUB
+chmod +x "$WORK/bin/gh"
+mo="$(matcher_out 'FINDING (a, b): widget/cache.py keeps a stale entry after a rename')"
+case "$mo" in
+  *"already #412"*) check "#256 the matcher on its own attaches the issue that names the same file" ok ;;
+  *) check "#256 the matcher on its own attaches the issue that names the same file" "out=$mo" ;;
+esac
+# A finding naming NO file is left alone whatever words it shares. Title words alone produced false
+# siblings twice in the milestone helper, always claiming a cluster that was not there (#265).
+mo_nofile="$(matcher_out 'FINDING (a, b): the widget cache is never invalidated on rename')"
+case "$mo_nofile" in
+  *"already #"*) check "#256 a finding naming no file is never matched on words alone" "out=$mo_nofile" ;;
+  *) check "#256 a finding naming no file is never matched on words alone" ok ;;
+esac
+# A shared file and no shared word is two findings that mention one file, not one subject.
+mo_pathonly="$(matcher_out 'FINDING (a, b): widget/cache.py should log its eviction reason')"
+case "$mo_pathonly" in
+  *"already #412"*) check "#256 a shared path with no shared subject word is not a match" "out=$mo_pathonly" ;;
+  *) check "#256 a shared path with no shared subject word is not a match" ok ;;
+esac
+# Text with no findings in it comes back untouched, so the matcher can never eat a report.
+mo_plain="$(matcher_out 'HARVEST FAILED: one agent could not be read')"
+case "$mo_plain" in
+  *"HARVEST FAILED: one agent could not be read"*) check "#256 text holding no finding is passed through" ok ;;
+  *) check "#256 text holding no finding is passed through" "out=$mo_plain" ;;
+esac
+
 # --- the hook stays quiet when nothing happened ---
 # It fires on Stop, so a chat-only turn must not trigger a review. An absent
 # transcript is the cheapest stand-in for "nothing to review".

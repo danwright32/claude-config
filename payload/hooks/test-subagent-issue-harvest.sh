@@ -1248,6 +1248,109 @@ PENDING_AFTER="$(grep -l . "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep 
   || check "clear with no transcript files every key holding this project's findings" "$PENDING_AFTER pending file(s) left behind"
 
 # ---------------------------------------------------------------------------
+# A spool a review cannot drain (claude-config#241).
+# ---------------------------------------------------------------------------
+# One spool was measured holding 219 pending findings, of which the review carried four and a line
+# saying "and 215 more findings not shown here". The clear that follows the picker files ALL of
+# them, so everything past the first few was archived unread, silently. The 8,000 character cap
+# came from when the list went into the MESSAGE; since claude-config#243 it goes to a file the
+# reader opens, so the reason for the small number went away and the number stayed.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+MANY_TRANSCRIPT="$TMPROOT/many-sess.jsonl"; : > "$MANY_TRANSCRIPT"
+_many=1
+while [ "$_many" -le 40 ]; do
+  bash "$SPOOL_LIB" note "$REPO" \
+    "finding number $_many, about a subject long enough to cost a few hundred characters of budget, so that forty of them comfortably exceed the eight thousand the old cap allowed and the difference is visible" \
+    tester "$MANY_TRANSCRIPT" >/dev/null 2>&1
+  _many=$(( _many + 1 ))
+done
+out_many="$(bash "$SPOOL_LIB" pending "$REPO" "$MANY_TRANSCRIPT" 2>/dev/null)"
+_shown="$(grep -c '^FINDING' <<< "$out_many" || true)"
+[ "${_shown:-0}" -ge 40 ] \
+  && check "#241 a review is shown every pending finding, not the first few" ok \
+  || check "#241 a review is shown every pending finding, not the first few" "only $_shown of 40 were shown"
+# The old cap really would have cut it, or this measures nothing (L159).
+out_capped="$(CLAUDE_ISSUE_SPOOL_FINDING_BUDGET=8000 bash "$SPOOL_LIB" pending "$REPO" "$MANY_TRANSCRIPT" 2>/dev/null)"
+_capped="$(grep -c '^FINDING' <<< "$out_capped" || true)"
+[ "${_capped:-0}" -lt 40 ] \
+  && check "#241 and the old cap would have cut the same list short" ok \
+  || check "#241 and the old cap would have cut the same list short" "it showed $_capped of 40 even at 8000"
+# When something IS cut, the notice says what happens to the remainder, because the clear files
+# them and a line saying they "stay in the spool until filed" reads as the opposite (L11).
+case "$out_capped" in
+  *"went unread"*) check "#241 and a truncated list says the rest are filed away unread" ok ;;
+  *) check "#241 and a truncated list says the rest are filed away unread" "out=${out_capped: -300}" ;;
+esac
+
+# ---------------------------------------------------------------------------
+# WHETHER A WRITTEN FINDING CAN BE READ BY ANYBODY (claude-config#242).
+# ---------------------------------------------------------------------------
+# A review opens exactly one key, the one derived from its own session's transcript directory, so a
+# finding under a key no session resolves to is never offered to anyone: the harvest reports
+# success, the review reports nothing to show, and both are telling the truth about different files
+# (L98). Measured on 2026-08-31, the spool held 142 distinct keys and the records inside named
+# about 42 working directories, and nothing anywhere reported whether any of it was reachable.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+REACH_ROOT="$TMPROOT/reach-projects"
+mkdir -p "$REACH_ROOT/a-real-project"
+REACH_TRANSCRIPT="$REACH_ROOT/a-real-project/sess.jsonl"; : > "$REACH_TRANSCRIPT"
+bash "$SPOOL_LIB" note "$REPO" "a finding a session can reach" tester "$REACH_TRANSCRIPT" >/dev/null 2>&1
+out_reach="$(CLAUDE_TRANSCRIPT_ROOT="$REACH_ROOT" bash "$SPOOL_LIB" reach-report 2>&1)"; reach_rc=$?
+[ "$reach_rc" -eq 0 ] \
+  && check "#242 a key a session resolves to is reported as reachable" ok \
+  || check "#242 a key a session resolves to is reported as reachable" "exit=$reach_rc out=$out_reach"
+case "$out_reach" in
+  *"1 holding records"*) check "#242 and the count of keys holding records is stated" ok ;;
+  *) check "#242 and the count of keys holding records is stated" "out=$out_reach" ;;
+esac
+
+# A finding written under a key nothing resolves to. Written by hand under a key of its own,
+# because that is exactly the state the measurement found and there is no way to reach it through
+# the library, which always keys on something real.
+printf '{"ts":"2026-08-31T00:00:00Z","status":"found","agent":"a","cwd":"/gone","findings":["a finding nobody will ever be offered"]}\n' \
+  > "$CLAUDE_ISSUE_SPOOL_DIR/deadbeefdead.jsonl"
+out_un="$(CLAUDE_TRANSCRIPT_ROOT="$REACH_ROOT" bash "$SPOOL_LIB" reach-report 2>&1)"; un_rc=$?
+[ "$un_rc" -ne 0 ] \
+  && check "#242 a key no session resolves to fails the report" ok \
+  || check "#242 a key no session resolves to fails the report" "exit=$un_rc out=$out_un"
+case "$out_un" in
+  *"deadbeefdead.jsonl (1 record(s))"*)
+    check "#242 and the unreachable key is named with what it holds" ok ;;
+  *)
+    check "#242 and the unreachable key is named with what it holds" "out=$out_un" ;;
+esac
+
+# Reading NO transcript directory must not report every key as unreachable: that is a wall of false
+# alarms built out of having measured nothing (L98, L36).
+EMPTY_ROOT="$TMPROOT/reach-empty"; mkdir -p "$EMPTY_ROOT"
+out_nodirs="$(CLAUDE_TRANSCRIPT_ROOT="$EMPTY_ROOT" bash "$SPOOL_LIB" reach-report 2>&1)"; nodirs_rc=$?
+[ "$nodirs_rc" -ne 0 ] \
+  && check "#242 no transcript directory at all is a refusal, not a verdict" ok \
+  || check "#242 no transcript directory at all is a refusal, not a verdict" "exit=$nodirs_rc out=$out_nodirs"
+case "$out_nodirs" in
+  *"could not be worked out"*"Nothing is being reported as unreachable"*)
+    check "#242 and it says it could not work out which keys are reachable" ok ;;
+  *)
+    check "#242 and it says it could not work out which keys are reachable" "out=$out_nodirs" ;;
+esac
+
+# The second question the measurement raised: 131 of 157 files were ZERO BYTES. They are made by
+# the filing path writing an empty keep set back with `cat >>`, which creates the file, so a spool
+# holding 8 findings looks like it holds 139 keys.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+ZERO_TRANSCRIPT="$TMPROOT/zero-sess.jsonl"; : > "$ZERO_TRANSCRIPT"
+printf '{"ts":"2026-09-02T00:00:00Z","status":"error","agent":"a","session":"zero-sess","cwd":"%s","error":"a failure with a remedy"}\n' "$REPO" \
+  > "$(bash "$SPOOL_LIB" path "$REPO" "$ZERO_TRANSCRIPT")"
+bash "$SPOOL_LIB" file-errors "$REPO" "$ZERO_TRANSCRIPT" >/dev/null 2>&1
+ZERO_LEFT="$(ls -1 "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep -v '\.filed\.jsonl' | grep -c . || true)"
+[ "${ZERO_LEFT:-0}" -eq 0 ] \
+  && check "#242 filing everything leaves no empty pending file behind" ok \
+  || check "#242 filing everything leaves no empty pending file behind" "$ZERO_LEFT pending file(s) left, sized: $(wc -c < "$(ls -1 "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep -v '\.filed\.jsonl' | awk 'NR<=1')" 2>/dev/null)"
+
+# ---------------------------------------------------------------------------
 # A clear files ITS OWN session's findings and leaves everybody else's (claude-config#222).
 # ---------------------------------------------------------------------------
 # The spool is keyed on the PROJECT, deliberately, so an agent in a worktree reaches the same spool
