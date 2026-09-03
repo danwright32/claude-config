@@ -11939,6 +11939,62 @@ out_drc="$(drsync "$DRHC" "$DRRC")"; drc_rc=$?
 dbg "#282 a real content conflict said: $out_drc"
 check "#282 a conflict in a file nobody generates still stops" \
   "[ '$drc_rc' -ne 0 ] || case \"\$out_drc\" in *'reconcile by hand'*) true ;; *) false ;; esac"
+section "== the sync path reports what arrived, the same way pull does (claude-config#283) =="
+# do_pull calls summarize_applied, which lists what landed and adds the start-a-new-session notice
+# when an arriving file cannot be seen by a running session. do_sync called neither: its only
+# report was the fixed "Synced (sent local changes, pulled remote...)" line.
+#
+# So the path that RECEIVES the most reported the least. On 2026-09-03 a reconcile delivered 20
+# commits and 82 payload files, including CLAUDE.md, RTK.md, LESSONS.md and LESSONS-INDEX.md, and
+# printed no list of what landed and no notice. The sync-config skill deliberately tells Claude not
+# to invent its own version of that notice, because the script owns the decision, so on this path
+# the notice did not exist at all and had to be reconstructed from git by hand. A silent path
+# passes every check there is (L98).
+unset SYNC_NO_GIT
+SRB="$WORK/syncreport-bare.git"; git init -q --bare "$SRB"
+SRA="$WORK/syncreport-repoA"; git clone -q "$SRB" "$SRA" 2>/dev/null
+SRHA="$WORK/syncreport-homeA"; mkdir -p "$SRHA/hooks"
+echo '{"hooks":{}}' > "$SRHA/settings.json"
+printf '# rules\n@RTK.md\n' > "$SRHA/CLAUDE.md"
+printf '# rtk\nfirst\n' > "$SRHA/RTK.md"
+CLAUDE_HOME="$SRHA" SYNC_REPO="$SRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+
+SRRB="$WORK/syncreport-repoB"; git clone -q "$SRB" "$SRRB" 2>/dev/null
+SRHB="$WORK/syncreport-homeB"; mkdir -p "$SRHB/hooks"
+echo '{"hooks":{}}' > "$SRHB/settings.json"
+CLAUDE_HOME="$SRHB" SYNC_REPO="$SRRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+
+# Mac A changes a RULE file, which is the class the notice exists for: a session already running
+# keeps the copy it loaded at startup and cannot see the new one.
+printf '# rtk\nsecond, changed on Mac A\n' > "$SRHA/RTK.md"
+CLAUDE_HOME="$SRHA" SYNC_REPO="$SRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+
+out_sr="$(CLAUDE_HOME="$SRHB" SYNC_REPO="$SRRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"
+dbg "#283 the receiving sync said: $out_sr"
+# The file really did arrive, or every check below is about a sync that received nothing (L100).
+check "#283 the rule file really did arrive on the receiving Mac" \
+  "grep -q 'second, changed on Mac A' '$SRHB/RTK.md'"
+check "#283 a sync that receives says what arrived" \
+  "line_has \"\$out_sr\" 'Received changes' 'shared repo'"
+# The summary ROW, not any line that happens to mention the file: the notice below names it too,
+# so a loose pattern is answered by the wrong half of the output and this check passed before the
+# fix that made it true (L135, L63).
+check "#283 and names the file it wrote, as a row in the list" \
+  "line_has \"\$out_sr\" '^ +[a-z]+ +RTK\\.md$'  'RTK'"
+check "#283 and carries the start a new session notice" \
+  "line_has \"\$out_sr\" 'Start a new Claude Code session' 'RTK.md'"
+# It still says the thing it always said, so nothing that reads the closing line breaks.
+check "#283 and still prints its own closing line" \
+  "line_has \"\$out_sr\" 'Synced' 'pulled remote'"
+
+# A sync that received NOTHING must not claim it did. "Received changes" over an empty apply is the
+# same defect one step along (L98, L11).
+out_sr2="$(CLAUDE_HOME="$SRHB" SYNC_REPO="$SRRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"
+dbg "#283 the second, empty sync said: $out_sr2"
+check "#283 a sync that received nothing says so instead" \
+  "line_has \"\$out_sr2\" 'Already up to date' 'nothing on this Mac'"
+check "#283 and does not carry a new session notice over an empty apply" \
+  "out_lacks \"\$out_sr2\" 'Start a new Claude Code session'"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
