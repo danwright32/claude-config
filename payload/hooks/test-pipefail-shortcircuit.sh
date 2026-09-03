@@ -53,17 +53,24 @@ fi
 # definition of the question drifting beside it (L107). Comment lines are skipped, or the prose
 # explaining the rule counts as breaking it.
 #
+# A `|` PRECEDED BY ANOTHER `|` is not a pipe (claude-config#282). `[ ... ] || grep -q PAT <<< "$var"`
+# is a logical OR: grep is a separate command with its own stdin, nothing is producing into it, and
+# no producer can be killed. It was counted anyway, so a correct line was reported as a defect and
+# whoever wrote it had to work around a rule it never broke. A guard that fires on lines it was not
+# written about is one people learn to route around (L104, L36). The `^` alternative keeps a pipe
+# that starts a line, which would otherwise be the case this newly missed.
+#
 # The quiet flag is matched in ANY cluster spelling (claude-config#153). It read `-[a-zA-Z]*q`,
 # which requires the cluster to end in q, so `-q` and `-Eq` counted while `-qi`, `-qE` and `-qF`
 # did not: the same hazard with the letters the other way round, permanently exempt from the check
 # written to catch it (L217). The cluster must still CONTAIN a q, so a piped `grep -i`, `-c` or
 # `-o` reads its producer to the end and is not counted, which the probes below assert both ways.
 count_in() { # count_in <file>  -> how many short circuiting pipelines it has
-  grep -cE '\| *(grep +(--quiet|-[a-zA-Z]*q[a-zA-Z]*)|head)( |$)' "$1" 2>/dev/null | tr -d ' ' || echo 0
+  grep -cE '(^|[^|])\| *(grep +(--quiet|-[a-zA-Z]*q[a-zA-Z]*)|head)( |$)' "$1" 2>/dev/null | tr -d ' ' || echo 0
 }
 count_uncommented() { # count_uncommented <file>
   local n
-  n="$(grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | grep -cE '\| *(grep +(--quiet|-[a-zA-Z]*q[a-zA-Z]*)|head)( |$)' || true)"
+  n="$(grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | grep -cE '(^|[^|])\| *(grep +(--quiet|-[a-zA-Z]*q[a-zA-Z]*)|head)( |$)' || true)"
   printf '%s' "${n:-0}"
 }
 
@@ -123,6 +130,21 @@ _PIPE='|'
 [ "$(count_uncommented "$TMPROOT/probe-loud.sh")" = "0" ] \
   && check "and does not count a piped grep that reads its producer to the end" ok \
   || check "and does not count a piped grep that reads its producer to the end" "it counted $(count_uncommented "$TMPROOT/probe-loud.sh")"
+
+# And does not count a logical OR, which is not a pipe at all (claude-config#282). Both spacings,
+# because the counter reads text and a defect that only shows without a space would be exempt from
+# the probe written to catch it. The last two lines are REAL pipes sitting beside them, so a
+# pattern that fixed the false positive by refusing to count anything would fail here (L159).
+{
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf '[ -n "$x" ] %s%s grep -q needle <<< "$var"\n' "$_PIPE" "$_PIPE"
+  printf 'test -f f %s%sgrep -q needle <<< "$var"\n' "$_PIPE" "$_PIPE"
+  printf 'cat file %s grep -q needle\n' "$_PIPE"
+  printf 'ls dir %s head -1\n' "$_PIPE"
+} > "$TMPROOT/probe-or.sh"
+[ "$(count_uncommented "$TMPROOT/probe-or.sh")" = "2" ] \
+  && check "and does not count a logical OR, only the real pipes beside it" ok \
+  || check "and does not count a logical OR, only the real pipes beside it" "it counted $(count_uncommented "$TMPROOT/probe-or.sh") of the 2 real pipes"
 
 # ---------------------------------------------------------------------------
 # The hazard itself, on THIS machine, rather than taken from a note (claude-config#162).
