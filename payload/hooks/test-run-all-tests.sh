@@ -1525,7 +1525,8 @@ case "$out_sp3" in
 esac
 
 # The sizes are read for EVERY file in one `wc` rather than one per file, because the real spool
-# holds 157 of them and forking per file was 414ms of a 600ms launch (claude-config#239). What has
+# holds 157 of them and forking per file was 414ms of a 600ms launch, measured 2026-09-03
+# (claude-config#239). What has
 # to survive that is reading the size of EACH file: only the bytes a run ADDED are judged, and a
 # reader that lost the per file sizes would treat every existing record as new.
 #
@@ -1633,15 +1634,21 @@ esac
 SP2="$TMPROOT/spool275"
 SPOOL2="$TMPROOT/live-spool-275"
 mkdir -p "$SPOOL2" "$SP2/suites" "$SP2/nottmp"
+# The repo the records claim to come from is a path that is under NEITHER temp root. The guard
+# treats anything under TMPDIR or under /tmp as a throwaway directory, and on the Linux runner
+# TMPDIR is unset so the fixture itself lived under /tmp and every record read as a suite's doing.
+# Pointing TMPDIR away is not enough, because /tmp is checked outright. Not under /Users either:
+# check-home-paths refuses a line naming one machine's home directory, and it is right to.
+SP2_REPO="/opt/a-repo-of-its-own"
 sp2_run(){ # sp2_run [extra env assignments...]   -> one runner run over the #275 fixtures
-  env TMPDIR="$SP2/nottmp" CLAUDE_ISSUE_SPOOL_DIR="$SPOOL2" HOOK_TESTS_ROOT="$SP2" \
+  env TMPDIR="$SP2/nottmp" CLAUDE_ISSUE_SPOOL_DIR="$SPOOL2" HOOK_TESTS_ROOT="$SP2_REPO" \
       HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 "$@" bash "$RUNNER" "$SP2/suites" 2>&1
 }
 # Another session, working in this repo: a record naming a path inside the root, with no marker.
 {
   printf '#!/usr/bin/env bash\n'
   printf 'printf %s >> "%s/other.jsonl"\n' \
-    "'{\"ts\":\"2026-09-02T12:00:00Z\",\"status\":\"error\",\"agent\":\"subagent\",\"cwd\":\"$SP2/a/b\",\"error\":\"no transcript\"}'" "$SPOOL2"
+    "'{\"ts\":\"2026-09-02T12:00:00Z\",\"status\":\"error\",\"agent\":\"subagent\",\"cwd\":\"$SP2_REPO/a/b\",\"error\":\"no transcript\"}'" "$SPOOL2"
   printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
 } > "$SP2/suites/test-othersession.sh"
 chmod +x "$SP2/suites/test-othersession.sh"
@@ -1700,7 +1707,7 @@ STUBLIB="$SP2/stub-issue-spool.sh"
 {
   printf '#!/usr/bin/env bash\n'
   printf 'printf %s >> "%s/other.jsonl"\n' \
-    "'{\"ts\":\"2026-09-02T12:00:00Z\",\"status\":\"error\",\"agent\":\"subagent\",\"cwd\":\"$SP2/a/b\",\"error\":\"no transcript\"}'" "$SPOOL2"
+    "'{\"ts\":\"2026-09-02T12:00:00Z\",\"status\":\"error\",\"agent\":\"subagent\",\"cwd\":\"$SP2_REPO/a/b\",\"error\":\"no transcript\"}'" "$SPOOL2"
   printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
 } > "$SP2/suites/test-othersession.sh"
 chmod +x "$SP2/suites/test-othersession.sh"

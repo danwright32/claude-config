@@ -1198,9 +1198,16 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
       # (L148, L177). The walk is over the run own descendants, so it names the command that was
       # actually sitting there rather than everything on the machine.
       echo "test suite: what was still running under it, deepest last:" >&2
+      # The WATCHDOG is excluded, and each line is trimmed. It is a child of the run like anything
+      # else, and its whole script is its command line, so listing it printed the text of the very
+      # messages above, including "no progress", which a check three thousand lines away reads to
+      # tell the two timeout wordings apart. It failed on the Linux runner and not on a Mac, where
+      # ps truncates differently, which is the platform difference in L177 wearing a new coat.
       _wd_tree() {
         for _wd_c in $(pgrep -P "$1" 2>/dev/null); do
-          ps -o pid=,etime=,command= -p "$_wd_c" 2>/dev/null | sed "s/^/  /" >&2
+          ps -o pid=,etime=,command= -p "$_wd_c" 2>/dev/null \
+            | grep -v suite-deadline-watchdog \
+            | cut -c1-160 | sed "s/^/  /" >&2
           _wd_tree "$_wd_c"
         done
       }
