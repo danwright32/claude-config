@@ -638,6 +638,22 @@ reverts it again. What makes this worth writing down rather than remembering is 
 silent in both directions: nothing warns before the revert, and afterwards the tests pass, because
 the tests were reverted along with the code they covered.
 
+**And now something says it.** The paragraph above was, for a week, a rule in prose, which is a
+hope (L27). `payload/hooks/payload-revert-warning.sh` runs on UserPromptSubmit and speaks when all
+of it is true at once: the prompt came from a directory inside a clone of this tool, a watch daemon
+is live, that daemon is not running from this clone, and no hold is in force. It names the
+checkout, the clone the daemon runs from, the hold command, and the part a hold does not solve,
+which is that `~/.claude` still has to be made to match afterwards. The state it speaks about
+includes the hold, so a hold that EXPIRES while a session is still editing brings the notice back:
+that is the same loss with a delay on it, and nothing else would report it.
+
+It WARNS rather than refusing, which is a decision and not the easier option. Every PreToolUse hook
+in this config matches Bash, and the edits here are made through Bash, where a refusal would have
+to parse shell text or refuse a whole category of command, and the second deadlocks the moment the
+remedy is itself a command (L362). A notice on the prompt arrives before any edit route, costs a
+`ps` and two small file reads, and addresses what was actually lost, which was a day of work rather
+than one edit.
+
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
 `LESSONS.md` and its index, which carry the other Mac's real additions.
