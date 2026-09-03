@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 435 lessons.
+LESSONS.md, which is NOT loaded into the session. 440 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -127,6 +127,8 @@ to decide something: the body is where the failure it came from is described.
 - L375. A before and after comparison of shared state attributes every change it sees to whatever it was bracketing, so on any store with a second legitimate writer it accuses rather than finds, and it accuses loudest exactly when that writer is busiest.
 - L376. A guard that compares the current environment against the ONE it was calibrated in fails on every machine that legitimately differs, because a developer machine and a CI runner never upgrade together.
 - L378. A guard that exists to save an EXPENSIVE step must run on every entry point that reaches that step, because wiring it only into the thorough path leaves it absent from the quick one people use while iterating, which is exactly when the mistake it catches is made. Its own cost is the wrong thing to weigh: two seconds on every fast run is nothing against one doomed build it prevents.
+- L382. A poll that repeats an IDENTICAL request can be served the same cached answer every time, so it re-reads its own first attempt and can never observe the change it is waiting for. Make each attempt demand a fresh read, and prove the value can change inside one run rather than trusting that the loop is looking again.
+- L385. A test asserting an invariant that a SCHEDULED repair restores (a launch migration, a nightly cleanup, a periodic reconcile) must RUN that repair first and assert what is LEFT, because between two runs of the repair the violated state is the system's normal one, so the test reports the interval rather than a defect and goes red on ordinary days.
 
 ## Data safety
 
@@ -263,6 +265,7 @@ to decide something: the body is where the failure it came from is described.
 - L368. A one-shot observer or trigger that records itself as FIRED before confirming its work succeeded turns a transient failure into a permanent loss, because nothing will ever try again.
 - L544. A value and the flag describing how it was obtained (the load failed, it is stale, it is a built in default) are ONE fact and must be one discriminated value, never two pieces of state beside each other.
 - L555. Matching a query against several fields CONCATENATED into one string makes the joining separator matchable, so a query spanning the boundary matches text that exists in no record.
+- L384. A field stamped on the UPDATE path and not on the INSERT path leaves every freshly created record without it, and the gap is invisible because every record that has ever been updated looks correct, so the population missing it is exactly the newest one. Stamp it where the record is CONSTRUCTED, and measure the field's presence against record age rather than reading the writer.
 
 ## Security and privacy
 
@@ -402,6 +405,7 @@ to decide something: the body is where the failure it came from is described.
 - L542. Two similar rules that DIFFER may each be a recorded decision rather than an inconsistency, and the comment beside one documents only that one, so a change that aligns them can silently delete a product rule while reading as a cleanup. Before making two such rules agree, find the decision record for EACH side, and treat an observed divergence as evidence of a defect only once both records are in hand.
 - L374. A gitignore or exclude entry without a leading slash matches at EVERY depth, so a rule written for one top level folder silently swallows any same named directory anywhere in the tree, and the loss is invisible to status, diff and commit alike.
 - L554. A generated file committed beside its source conflicts on every aggregate it carries (a total, a count, a checksum, a timestamp), so two independent edits to the source that merge cleanly still collide there and block the merge over content nobody wrote.
+- L383. A derived value exposed as a computed property or a getter is re-run in full by EVERY reader, and a reader's call site reads as a free field access, so nothing at the point of use says what it costs. Where the derivation walks a whole collection, compute it once at the top of the pass and hand the value down, and assert the NUMBER of call sites, because the shape alone cannot be read.
 
 ## Cross-system reliability
 
@@ -441,6 +445,7 @@ to decide something: the body is where the failure it came from is described.
 - L533. A job on a sparse schedule (weekly, monthly) whose only failure remedy is running it again needs an automatic re-attempt within the same period, because an in-process retry measured in seconds cannot outlast a real outage, and a transiently failed run otherwise silently costs the whole schedule interval.
 - L369. A lock that serialises heavy work must be scoped to the RESOURCE it protects, never to the project that created it, because another project on the same machine does the same heavy work and cannot take a lock it has never heard of.
 - L372. A script that changes its own working directory must capture its own location BEFORE the cd, because a path re-derived from `$0` afterwards is relative to where the script was INVOKED from rather than where it now is, so it resolves for one invocation and silently misses for another.
+- L386. A scheduled job's DECLARED time is not when it runs, because platforms delay scheduled work by hours under load, so two scheduled jobs must never be ordered by clock arithmetic between their crons.
 - L379. Doing by hand what a tool normally does performs the visible change and silently omits the tool's OTHER writes, and the one most often omitted is the record some monitor reads, so the system ends up correct while the monitor is permanently wrong.
 
 ## Test speed

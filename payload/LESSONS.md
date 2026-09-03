@@ -1413,6 +1413,21 @@ window is a count rather than a boundary.
   that cache, so it was timing the cached answer expiring rather than the event arriving; the real
   lag, measured with the cache bypassed, was between 31 and 35 seconds)
 
+
+- **L385. A test asserting an invariant that a SCHEDULED repair restores (a launch migration, a
+  nightly cleanup, a periodic reconcile) must RUN that repair first and assert what is LEFT,
+  because between two runs of the repair the violated state is the system's normal one, so the
+  test reports the interval rather than a defect and goes red on ordinary days.** (overture#3496,
+  2026-09-03: two live-store suites asserted that Dan's store held no show stored twice. The
+  scout mints duplicates all day and the merge passes run only at launch, so both went red the
+  morning a venue renamed two of its own listings, blocking every push in the repository and
+  costing a full diagnostic detour to establish the change under test was innocent. A sibling
+  suite in the same directory had it right and said so in its header: it runs the pass on the
+  clone first, then asserts the invariant that holds before AND after, and it passed on the same
+  run over the same two pairs. L332 is the app side of this, a repair wired to startup being
+  blind to what the running system writes afterwards; L538 is the consequence, a standing red
+  making every other failure unreadable.)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -2846,6 +2861,7 @@ window is a count rather than a boundary.
   backfilling the name half when it happens to be nil, hid the name half of it and left the venue
   half uncovered.)
 
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -4164,6 +4180,7 @@ window is a count rather than a boundary.
   for one search scope (overture#3493). L286 is the same mechanism inside a test suite; this is
   the production half.)
 
+
 ## Cross-system reliability
 
 - **L365. A retry must read what the refusal itself says about when it could succeed, because a
@@ -4532,6 +4549,16 @@ window is a count rather than a boundary.
   invokes the script the way the documentation says to, since that is the invocation nothing was
   exercising (L52, L96).
 
+- **L386. A scheduled job's DECLARED time is not when it runs, because platforms delay
+  scheduled work by hours under load, so two scheduled jobs must never be ordered by clock
+  arithmetic between their crons.** Key the later one off the earlier one's COMPLETION, and
+  where that is impossible, measure the real start times before writing a cadence down.
+  (PostRoll#1262, 2026-09-03: a recorder was scheduled at 09:00 "two hours after the sweep's
+  own 07:00", and the last six scheduled runs of that sweep actually started at 11:55, 11:57,
+  12:21 and 14:50, so the recorder ran hours BEFORE the thing it was written to follow, every
+  day. The behaviour degraded quietly, the record simply stayed a day behind, and what was
+  actually wrong was a confident sentence beside a cron that the next person would reason
+  from, which is L316 and L244 in a different costume.)
 - **L379. Doing by hand what a tool normally does performs the visible change and silently
   omits the tool's OTHER writes, and the one most often omitted is the record some monitor
   reads, so the system ends up correct while the monitor is permanently wrong.** Before
