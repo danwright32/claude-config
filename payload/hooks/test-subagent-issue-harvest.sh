@@ -114,6 +114,126 @@ else
   check "worktree fixture was created" "git worktree add failed"
 fi
 
+# ---------------------------------------------------------------------------
+# The 12 hex characters a key is MADE of (claude-config#281).
+#
+# Measured on this Mac 2026-09-03: shasum costs 11.5ms a call against openssl's 5.2ms, because
+# shasum is a perl script, and this library computes a key on nearly every operation. One run of
+# this suite made 690 of them, about a quarter of its whole cost. The digest is taken with openssl
+# where that works, and `cut` is gone with it.
+#
+# THE VALUE MUST NOT CHANGE BY A CHARACTER. A key is a FILENAME, so a different digest strands
+# every record already pending under the old name with nothing left that could find it (L92). It is
+# pinned three ways below: against a recorded constant, against shasum itself, which is the
+# reference implementation and the fallback, and by proving the fast path is the one being taken,
+# because an agreement test where both sides ran shasum agrees about nothing (L159, L3).
+sha12(){ bash "$SPOOL_LIB" sha12 "$1" 2>/dev/null; }
+
+[ "$(sha12 /some/path)" = "39359e3abc60" ] \
+  && check "#281 the key digest is the value it has always been" ok \
+  || check "#281 the key digest is the value it has always been" "got $(sha12 /some/path)"
+
+sha_disagreed=""
+for _sha_in in "/some/path" "/a path with spaces/x" "/tmp" "" "/opt/deep/nested/checkout"; do
+  _sha_want="$(printf '%s' "$_sha_in" | shasum | cut -c1-12)"
+  _sha_got="$(sha12 "$_sha_in")"
+  [ "$_sha_got" = "$_sha_want" ] || sha_disagreed="$sha_disagreed [$_sha_in: $_sha_got vs $_sha_want]"
+done
+[ -z "$sha_disagreed" ] \
+  && check "#281 and it agrees with shasum on every shape of input" ok \
+  || check "#281 and it agrees with shasum on every shape of input" "$sha_disagreed"
+
+# The fast path is LIVE, proved by a stub that answers differently from shasum: if the digest were
+# quietly always falling back, this would return the shasum value and the agreement above would be
+# proving nothing. Both output shapes are covered, because the two openssl builds a Mac can have
+# print differently (Homebrew's prints "SHA1(stdin)= <hex>", the system LibreSSL prints bare hex).
+FAKESSL="$TMPROOT/fakessl"
+cat > "$FAKESSL" <<'FAKESSL_EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+echo "SHA1(stdin)= aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"
+FAKESSL_EOF
+chmod +x "$FAKESSL"
+[ "$(CLAUDE_ISSUE_SPOOL_SHA="$FAKESSL" sha12 /some/path)" = "aaaaaaaaaaaa" ] \
+  && check "#281 the openssl path is the one actually taken" ok \
+  || check "#281 the openssl path is the one actually taken" "got $(CLAUDE_ISSUE_SPOOL_SHA="$FAKESSL" sha12 /some/path)"
+
+FAKESSL_BARE="$TMPROOT/fakessl-bare"
+cat > "$FAKESSL_BARE" <<'FAKESSL_EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+echo "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"
+FAKESSL_EOF
+chmod +x "$FAKESSL_BARE"
+[ "$(CLAUDE_ISSUE_SPOOL_SHA="$FAKESSL_BARE" sha12 /some/path)" = "aaaaaaaaaaaa" ] \
+  && check "#281 and a build that prints the bare hex is read too" ok \
+  || check "#281 and a build that prints the bare hex is read too" "got $(CLAUDE_ISSUE_SPOOL_SHA="$FAKESSL_BARE" sha12 /some/path)"
+
+# Every way the fast path can fail falls back to shasum and still produces the right key: a tool
+# that is not installed, one that errors, and one that answers with something that is not a SHA-1.
+# Falling back is correct and merely slower, which is exactly why it is silent and has to be tested
+# (L289).
+GOOD12="$(printf '%s' /some/path | shasum | cut -c1-12)"
+JUNKSSL="$TMPROOT/junkssl"
+printf '#!/usr/bin/env bash\ncat >/dev/null\necho "not a digest at all"\n' > "$JUNKSSL"; chmod +x "$JUNKSSL"
+DEADSSL="$TMPROOT/deadssl"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 3\n' > "$DEADSSL"; chmod +x "$DEADSSL"
+sha_fallback_bad=""
+for _sha_tool in "$TMPROOT/not-installed-at-all" "$JUNKSSL" "$DEADSSL" ""; do
+  _sha_got="$(CLAUDE_ISSUE_SPOOL_SHA="$_sha_tool" sha12 /some/path)"
+  [ "$_sha_got" = "$GOOD12" ] || sha_fallback_bad="$sha_fallback_bad [${_sha_tool:-<none>}: $_sha_got]"
+done
+[ -z "$sha_fallback_bad" ] \
+  && check "#281 and every way that path can fail falls back to the same key" ok \
+  || check "#281 and every way that path can fail falls back to the same key" "$sha_fallback_bad"
+
+# THE RATCHET, on the thing that was actually measured (claude-config#281). A saving that quietly
+# stops happening looks exactly like one still working, because the fallback is correct and merely
+# slower (L289). Counted in PROCESS LAUNCHES rather than in seconds, because elapsed time on this
+# machine is set by whatever else is running on it and a threshold on it measures the machine
+# (L224, L364).
+#
+# One `note` is the representative operation: it builds a record and appends it, which is every
+# expensive step the library has. Measured 2026-09-03 it launches 1 openssl and 2 python3 and
+# nothing else. The ceiling is deliberately close to that: it is here to catch a shasum coming
+# back, or a third python3, not to leave room for one.
+FORKSHIM="$TMPROOT/forkshim"
+FORKLOG="$TMPROOT/forkshim.log"
+mkdir -p "$FORKSHIM"
+for _fs_bin in shasum cut openssl python3 git; do
+  _fs_real="$(command -v "$_fs_bin" 2>/dev/null || true)"
+  [ -n "$_fs_real" ] || continue
+  {
+    printf '#!/bin/sh\n'
+    printf 'echo %s >> "$FORKSHIM_LOG"\n' "$_fs_bin"
+    printf 'exec %s "$@"\n' "$_fs_real"
+  } > "$FORKSHIM/$_fs_bin"
+  chmod +x "$FORKSHIM/$_fs_bin"
+done
+: > "$FORKLOG"
+PATH="$FORKSHIM:$PATH" FORKSHIM_LOG="$FORKLOG" \
+  bash "$SPOOL_LIB" note "$REPO" "a finding whose cost is being counted" tester "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+fork_total="$(grep -c . "$FORKLOG" 2>/dev/null || true)"
+fork_seen="$(sort "$FORKLOG" 2>/dev/null | uniq -c | tr -s ' ' | tr '\n' ' ')"
+# A count of ZERO would satisfy any ceiling, and it means the shim was never on the path rather
+# than that the work got cheap (L98).
+[ "${fork_total:-0}" -ge 1 ] \
+  && check "#281 the fork counter really saw the work happen" ok \
+  || check "#281 the fork counter really saw the work happen" "it counted nothing, so the shim was not used"
+[ "${fork_total:-99}" -le 4 ] \
+  && check "#281 one spooled note still costs at most four process launches" ok \
+  || check "#281 one spooled note still costs at most four process launches" "$fork_total launches: $fork_seen"
+# And specifically not the slow digest, which is the saving this protects.
+case "$fork_seen" in
+  *shasum*) check "#281 and it does not reach for shasum" "$fork_seen" ;;
+  *)        check "#281 and it does not reach for shasum" ok ;;
+esac
+
+# And the key itself, which is what all of that exists to keep stable.
+[ "$(bash "$SPOOL_LIB" key "$TMPROOT" 2>/dev/null)" = "$(printf '%s' "$(cd "$TMPROOT" && pwd -P)" | shasum | cut -c1-12)" ] \
+  && check "#281 a directory key is still the digest of its resolved path" ok \
+  || check "#281 a directory key is still the digest of its resolved path" "key=$(bash "$SPOOL_LIB" key "$TMPROOT" 2>/dev/null)"
+
 key_other="$(bash "$SPOOL_LIB" key "$TMPROOT" 2>&1)"
 [ -n "${key_main:-}" ] && [ "$key_main" != "$key_other" ] \
   && check "two different projects key apart" ok \
@@ -132,6 +252,73 @@ stub() { # stub <script-body>  -> writes an executable stub and points the seam 
 }
 
 records() { bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null; }
+
+# BULK FIXTURE RECORDS, written in one launch (claude-config#281).
+#
+# Three cases below needed 60, 60 and 40 records to exist before they could ask their question, and
+# each made one launch of the spool library per record: 160 launches, each paying a bash, a python3
+# and a digest to add one line to a file. That was about a fifth of this suite's whole cost, and
+# none of the three cases is ABOUT the append path. They are about compaction, about the finding
+# budget, and about how many findings a review is shown.
+#
+# So the bulk is written straight into the pending file, and the TEMPLATE is a line the LIBRARY
+# itself just wrote: each case still makes at least one record through the real library first, and
+# the copies are that record with one field varied. A fixture shaped by hand would be this file's
+# idea of a record rather than the library's, and would go on passing after the real shape changed
+# (L48, L52). The record that TRIGGERS the behaviour under test goes through the library too, so
+# what is short circuited is only the filling.
+pending_file() { bash "$SPOOL_LIB" path "${1:-$REPO}" "${2:-$PARENT_TRANSCRIPT}" 2>/dev/null; }
+#
+# THE LEVERS DELIBERATELY NOT PULLED, written down so the next speed pass does not rediscover them
+# (L308). Measured 2026-09-03 with a counting shim on the whole suite, before and after:
+# shasum 690 and cut 690 became openssl 509, python3 591 became 338, and the tracked launches went
+# from 2495 to 1458. Alternating runs of the old and new file in the same session, so the machine's
+# load hit both equally (L224): 39, 40, 40, 43 seconds against 26, 26, 28, 29.
+#
+# What is LEFT, and why:
+#
+#   python3, 338 launches at about 20ms each, is now the largest single cost by far. Most of them
+#   are one per record written: issue_spool_note builds the record and issue_spool_append then
+#   parses, stamps and re-dumps it, and both have to, because append validates whatever any caller
+#   hands it and that contract is what keeps a bad line out of the spool. Merging them would put
+#   the stamping rule in two places, which is the shape of L370, and it is not worth that.
+#
+#   The harvest reads its payload with SIX separate jq calls, one per field, about 1.8ms each. The
+#   exact fix reads them in one launch, but a value carrying a newline would then be truncated,
+#   and the forms that avoid that cost more complexity than the 10ms they save per subagent stop.
+#
+#   git, 305 launches, is issue_spool_key asking for the repository root. Memoising the key inside
+#   one process would remove some, but a memo has to be keyed on a directory and a transcript path,
+#   and any delimiter used to hold that in a shell string can appear in a path. A wrong key is a
+#   record filed where nobody looks (L131, L215), and this is not a saving worth that risk.
+
+bulk_dup() { # bulk_dup <pending-file> <n>   -> n more copies of the last record in it
+  local f="$1" n="$2" last i=0
+  last="$(tail -1 "$f" 2>/dev/null)"
+  [ -n "$last" ] || return 1
+  while [ "$i" -lt "$n" ]; do printf '%s\n' "$last" >> "$f"; i=$((i + 1)); done
+  return 0
+}
+
+bulk_vary() { # bulk_vary <pending-file> <n> <finding text, with %d for the number>
+  python3 - "$1" "$2" "$3" <<'PY_BULK'
+import json, sys
+path, n, tmpl = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+with open(path) as fh:
+    lines = [ln for ln in fh if ln.strip()]
+template = json.loads(lines[-1])
+with open(path, "a") as fh:
+    # Numbered from 1, because the record the LIBRARY wrote is number 0 and a copy repeating its
+    # text would be folded together with it by the reader's own deduplication, leaving one finding
+    # fewer than the case asked for.
+    for i in range(1, n + 1):
+        rec = dict(template)
+        rec["findings"] = [tmpl % i]
+        rec["agent"] = "agent-%d" % i
+        fh.write(json.dumps(rec) + "\n")
+PY_BULK
+}
+
 reset_spool() { rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; }
 
 # `producer | grep -q needle` is a trap under `pipefail`, which this suite sets: grep -q exits on
@@ -824,9 +1011,11 @@ bash "$SPOOL_LIB" note "$REPO" "   " >/dev/null 2>&1 \
 reset_spool
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 bash "$SPOOL_LIB" note "$REPO" "a finding that must survive compaction" "early agent" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
-for i in $(seq 1 60); do
-  bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the harvest model exited 1"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
-done
+# One through the library, so the 59 copies below are copies of a record the library wrote, then
+# the 61st through the library again, which is the one that trips compaction.
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the harvest model exited 1"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bulk_dup "$(pending_file)" 59 \
+  || check "the compaction fixture was written" "the library wrote no record to copy"
 CLAUDE_ISSUE_SPOOL_PENDING_MAX=20 bash "$SPOOL_LIB" append "$REPO" '{"ts":"t","status":"error","agent":"subagent","error":"the harvest model exited 1"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 remaining="$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null | grep -c . || true)"
 [ "$remaining" -lt 40 ] \
@@ -1153,11 +1342,9 @@ raw_dup_count="$(printf '%s\n' "$raw_dup" | grep -c "retry path" || true)"
 # The size cap. Each finding is distinct, so nothing here is foldable and only
 # the budget can bound it.
 reset_spool
-i=0
-while [ "$i" -lt 60 ]; do
-  bash "$SPOOL_LIB" note "$REPO" "Distinct finding number $i: $(printf 'x%.0s' $(seq 1 200))" "agent-$i" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
-  i=$((i + 1))
-done
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$REPO" "Distinct finding number 0: $(printf 'x%.0s' $(seq 1 200))" "agent-0" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+bulk_vary "$(pending_file)" 59 "Distinct finding number %d: $(printf 'x%.0s' $(seq 1 200))"
 big_out="$(CLAUDE_ISSUE_SPOOL_FINDING_BUDGET=2000 bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 big_len="${#big_out}"
 [ "$big_len" -lt 4000 ] \
@@ -1258,13 +1445,9 @@ PENDING_AFTER="$(grep -l . "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep 
 reset_spool
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 MANY_TRANSCRIPT="$TMPROOT/many-sess.jsonl"; : > "$MANY_TRANSCRIPT"
-_many=1
-while [ "$_many" -le 40 ]; do
-  bash "$SPOOL_LIB" note "$REPO" \
-    "finding number $_many, about a subject long enough to cost a few hundred characters of budget, so that forty of them comfortably exceed the eight thousand the old cap allowed and the difference is visible" \
-    tester "$MANY_TRANSCRIPT" >/dev/null 2>&1
-  _many=$(( _many + 1 ))
-done
+MANY_TEXT="about a subject long enough to cost a few hundred characters of budget, so that forty of them comfortably exceed the eight thousand the old cap allowed and the difference is visible"
+bash "$SPOOL_LIB" note "$REPO" "finding number 0, $MANY_TEXT" tester "$MANY_TRANSCRIPT" >/dev/null 2>&1
+bulk_vary "$(pending_file "$REPO" "$MANY_TRANSCRIPT")" 39 "finding number %d, $MANY_TEXT"
 out_many="$(bash "$SPOOL_LIB" pending "$REPO" "$MANY_TRANSCRIPT" 2>/dev/null)"
 _shown="$(grep -c '^FINDING' <<< "$out_many" || true)"
 [ "${_shown:-0}" -ge 40 ] \

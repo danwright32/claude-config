@@ -115,13 +115,48 @@ MUTED_ERROR_REASONS="${CLAUDE_ISSUE_SPOOL_MUTED_REASONS:-the named agent transcr
 # It also subsumes the worktree case this used to solve: an agent in a worktree
 # still reports its parent session's transcript, so it lands in the session's
 # spool rather than under a path nobody opens.
+# THE 12 HEX CHARACTERS A KEY IS MADE OF (claude-config#281).
+#
+# `shasum` on macOS is a perl script and costs 11.5ms a call, against openssl's 5.2ms, measured on
+# this Mac 2026-09-03. A key is computed on nearly every operation here, so one run of
+# test-subagent-issue-harvest.sh made 690 of them, about a quarter of that suite's whole cost, and
+# every one of them was followed by a `cut` as well.
+#
+# THE VALUE MUST NOT CHANGE BY A CHARACTER. A key is a FILENAME, so a different digest strands
+# every record already pending under the old name with nothing left that could find it (L92). Both
+# tools compute the same SHA-1; only the printing differs, and the two openssl builds a Mac can
+# have differ from each other (Homebrew's OpenSSL prints "SHA1(stdin)= <hex>", the system LibreSSL
+# prints the bare hex). So the LAST whitespace separated field is taken, and it is accepted only
+# when it is exactly 40 hex characters. Anything else, including openssl not being installed at
+# all, falls back to shasum, which is the reference implementation the suite pins this against.
+#
+# The fallback is correct and merely slower, which is why it is silent, and why the suite proves
+# the fast path is the one actually being taken rather than trusting an agreement that both halves
+# could satisfy by running shasum (L289, L159).
+issue_spool_sha12() { # sha12 <text> -> the first 12 hex characters of its SHA-1
+  local tool out hex
+  tool="${CLAUDE_ISSUE_SPOOL_SHA-openssl}"
+  hex=""
+  if [ -n "$tool" ] && command -v "$tool" >/dev/null 2>&1; then
+    out="$(printf '%s' "$1" | "$tool" dgst -sha1 2>/dev/null)" || out=""
+    hex="${out##* }"
+    case "$hex" in *[!0-9a-f]*) hex="" ;; esac
+    [ "${#hex}" -eq 40 ] || hex=""
+  fi
+  if [ -z "$hex" ]; then
+    out="$(printf '%s' "$1" | shasum 2>/dev/null)"
+    hex="${out%% *}"
+  fi
+  printf '%s' "${hex:0:12}"
+}
+
 issue_spool_key() { # key <dir> [session-transcript]
   local dir="${1:-$PWD}" transcript="${2:-}" common root
   if [ -n "$transcript" ]; then
     root="$(dirname "$transcript")"
     if [ -d "$root" ]; then
       root="$(cd "$root" 2>/dev/null && pwd -P || printf '%s' "$root")"
-      printf '%s' "$root" | shasum | cut -c1-12
+      issue_spool_sha12 "$root"
       return 0
     fi
   fi
@@ -134,7 +169,7 @@ issue_spool_key() { # key <dir> [session-transcript]
     root="$dir"
   fi
   root="$(cd "$root" 2>/dev/null && pwd -P || printf '%s' "$root")"
-  printf '%s' "$root" | shasum | cut -c1-12
+  issue_spool_sha12 "$root"
 }
 
 issue_spool_path()         { printf '%s/%s.jsonl' "$(issue_spool_root)" "$(issue_spool_key "${1:-$PWD}" "${2:-}")"; }
@@ -1062,6 +1097,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   shift || true
   case "$cmd" in
     key)          issue_spool_key "${1:-$PWD}" "${2:-}" ;;
+    sha12)        issue_spool_sha12 "${1:-}" ;;
     read-keys)    issue_spool_read_keys "${1:-$PWD}" "${2:-}" ;;
     path)         issue_spool_path "${1:-$PWD}" "${2:-}" ;;
     archive-path) issue_spool_archive_path "${1:-$PWD}" "${2:-}" ;;
