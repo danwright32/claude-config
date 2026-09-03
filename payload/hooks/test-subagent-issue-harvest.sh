@@ -194,9 +194,15 @@ done
 # (L224, L364).
 #
 # One `note` is the representative operation: it builds a record and appends it, which is every
-# expensive step the library has. Measured 2026-09-03 it launches 1 openssl and 2 python3 and
-# nothing else. The ceiling is deliberately close to that: it is here to catch a shasum coming
+# expensive step the library has. Measured 2026-09-03 it launches 2 python3, 2 openssl and 1 git,
+# and nothing else. The ceiling is deliberately close to that: it is here to catch a shasum coming
 # back, or a third python3, not to leave room for one.
+#
+# It was 3 when this was written, and went to 5 in claude-config#294, which stamps the project key
+# on every record: that is one more digest and one git, resolved while the directory still exists.
+# The ratchet is what made that cost visible on the way in rather than a month later, so the number
+# is RAISED with its reason rather than quietly loosened, and the composition is asserted beside it
+# so a swap back to the slow digest fails even though the count would not move.
 FORKSHIM="$TMPROOT/forkshim"
 FORKLOG="$TMPROOT/forkshim.log"
 mkdir -p "$FORKSHIM"
@@ -220,9 +226,9 @@ fork_seen="$(sort "$FORKLOG" 2>/dev/null | uniq -c | tr -s ' ' | tr '\n' ' ')"
 [ "${fork_total:-0}" -ge 1 ] \
   && check "#281 the fork counter really saw the work happen" ok \
   || check "#281 the fork counter really saw the work happen" "it counted nothing, so the shim was not used"
-[ "${fork_total:-99}" -le 4 ] \
-  && check "#281 one spooled note still costs at most four process launches" ok \
-  || check "#281 one spooled note still costs at most four process launches" "$fork_total launches: $fork_seen"
+[ "${fork_total:-99}" -le 5 ] \
+  && check "#281 one spooled note still costs at most five process launches" ok \
+  || check "#281 one spooled note still costs at most five process launches" "$fork_total launches: $fork_seen"
 # And specifically not the slow digest, which is the saving this protects.
 case "$fork_seen" in
   *shasum*) check "#281 and it does not reach for shasum" "$fork_seen" ;;
@@ -1853,6 +1859,97 @@ ck_empty="$(bash "$SPOOL_LIB" clear "$CLEARK/proj" 2>&1)"
 case "$ck_empty" in
   *"other key"*) check "#287 and an empty spool is not accused of holding anything" "said: $ck_empty" ;;
   *)             check "#287 and an empty spool is not accused of holding anything" ok ;;
+esac
+
+# ---------------------------------------------------------------------------
+# A finding is still attributable after the worktree it was written in has gone (claude-config#294).
+# ---------------------------------------------------------------------------
+# issue_spool_keys_written_from attributed a pending file by resolving its FIRST record's own `cwd`
+# through issue_spool_key. That resolution needs the directory to still exist: the key falls back
+# to git's common dir, and every AGENTS.md in the consuming repos tells people to remove a worktree
+# once its PR merges. Once it is gone the git call fails, the path is hashed as itself, and the
+# record belongs to no project.
+#
+# Measured on this Mac 2026-09-03 in Slate: 106 unfiled findings sat in one file whose first record
+# named a deleted worktree, and 111 of the 170 pending records across the whole spool were written
+# from a worktree cwd, so this is the majority case rather than an edge. Reading only the first
+# record made it worse: one unattributable record at the top stranded every record behind it.
+#
+# Two answers, because one of them cannot see the backlog. Every record now carries the project key
+# resolved at APPEND time, when the directory is guaranteed to exist. That does nothing for records
+# already written (L223), so the cwd is still resolved as before, and a worktree path also resolves
+# through the checkout it belongs to.
+WT="$TMPROOT/worktree294"
+mkdir -p "$WT/project/.claude/worktrees" "$WT/other"
+git -C "$WT/project" init -q 2>/dev/null
+git -C "$WT/project" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init 2>/dev/null
+WT_AGENT="$WT/project/.claude/worktrees/agent-deadbeef"
+mkdir -p "$WT_AGENT"
+
+wt_keys(){ bash "$SPOOL_LIB" read-keys "$WT/project" 2>/dev/null; }
+wt_reset(){ rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"; }
+
+# A record written from the worktree, keyed under a transcript so it lands in a file the project's
+# own directory key does not name. That is the shape a harvested finding has.
+WT_TRANSCRIPT="$TMPROOT/wt-session.jsonl"; : > "$WT_TRANSCRIPT"
+wt_reset
+bash "$SPOOL_LIB" note "$WT_AGENT" "a finding an agent made inside a worktree" tester "$WT_TRANSCRIPT" >/dev/null 2>&1
+wt_file="$(bash "$SPOOL_LIB" path "$WT_AGENT" "$WT_TRANSCRIPT" 2>/dev/null)"
+[ -s "$wt_file" ] \
+  && check "#294 the worktree finding was written" ok \
+  || check "#294 the worktree finding was written" "nothing at ${wt_file:-<none>}"
+
+# THE WORKTREE IS THEN DELETED, which is what every AGENTS.md tells people to do.
+rm -rf "$WT_AGENT"
+[ ! -d "$WT_AGENT" ] \
+  && check "#294 the worktree really is gone" ok \
+  || check "#294 the worktree really is gone" "$WT_AGENT is still there"
+
+wt_found="$(bash "$SPOOL_LIB" read-keys "$WT/project" 2>/dev/null | tr '\n' ' ')"
+wt_key="$(basename "$wt_file" .jsonl)"
+case " $wt_found " in
+  *" $wt_key "*) check "#294 the project still reaches a finding from a deleted worktree" ok ;;
+  *)             check "#294 the project still reaches a finding from a deleted worktree" "keys=$wt_found wanted=$wt_key" ;;
+esac
+
+# ONE unattributable record at the top must not strand the ones behind it. Only the first record
+# was ever read, so a single stranger at the head hid the whole file.
+wt_reset
+STRANGE="$TMPROOT/wt-strange.jsonl"; : > "$STRANGE"
+bash "$SPOOL_LIB" note "$WT/other" "a finding from somewhere else entirely" tester "$STRANGE" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$WT/project" "a finding that belongs to this project" tester "$STRANGE" >/dev/null 2>&1
+wt_file2="$(bash "$SPOOL_LIB" path "$WT/other" "$STRANGE" 2>/dev/null)"
+wt_key2="$(basename "$wt_file2" .jsonl)"
+wt_found2="$(bash "$SPOOL_LIB" read-keys "$WT/project" 2>/dev/null | tr '\n' ' ')"
+case " $wt_found2 " in
+  *" $wt_key2 "*) check "#294 a record behind an unattributable one is still reached" ok ;;
+  *)              check "#294 a record behind an unattributable one is still reached" "keys=$wt_found2 wanted=$wt_key2" ;;
+esac
+
+# THE CONTROL, and without it the widening above could simply be "attribute everything" (L104).
+# A file holding only another project's records must not be reached from here.
+wt_reset
+ONLY_OTHER="$TMPROOT/wt-other-only.jsonl"; : > "$ONLY_OTHER"
+bash "$SPOOL_LIB" note "$WT/other" "a finding that belongs to another project" tester "$ONLY_OTHER" >/dev/null 2>&1
+wt_file3="$(bash "$SPOOL_LIB" path "$WT/other" "$ONLY_OTHER" 2>/dev/null)"
+wt_key3="$(basename "$wt_file3" .jsonl)"
+wt_found3="$(bash "$SPOOL_LIB" read-keys "$WT/project" 2>/dev/null | tr '\n' ' ')"
+case " $wt_found3 " in
+  *" $wt_key3 "*) check "#294 another project's file is still not reached from here" "keys=$wt_found3 wrongly include $wt_key3" ;;
+  *)              check "#294 another project's file is still not reached from here" ok ;;
+esac
+
+# The stamp itself, which is what makes this work for a directory that has gone entirely rather
+# than only for a worktree whose parent survives.
+wt_reset
+GONE="$WT/vanishes"; mkdir -p "$GONE"
+GONE_TRANSCRIPT="$TMPROOT/wt-gone.jsonl"; : > "$GONE_TRANSCRIPT"
+gone_key_before="$(bash "$SPOOL_LIB" key "$GONE" 2>/dev/null)"
+bash "$SPOOL_LIB" note "$GONE" "a finding from a directory that will not exist" tester "$GONE_TRANSCRIPT" >/dev/null 2>&1
+gone_rec="$(bash "$SPOOL_LIB" raw "$GONE" "$GONE_TRANSCRIPT" 2>/dev/null)"
+case "$gone_rec" in
+  *"\"project\": \"$gone_key_before\""*) check "#294 a record carries the project key resolved when it was written" ok ;;
+  *)                                     check "#294 a record carries the project key resolved when it was written" "record=$gone_rec" ;;
 esac
 
 echo "passed: $pass  failed: $fail"
