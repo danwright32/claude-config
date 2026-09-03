@@ -3298,6 +3298,13 @@ window is a count rather than a boundary.
   navigation locked, and on 2026-08-18 the only remaining exit was closing the window, which is
   the one action that loses the commit)
 
+- **L568. Replacing a native form control with a custom one silently drops everything the platform
+  was supplying for free: submission by `name` inside the form, keyboard operation, type ahead,
+  screen reader semantics, and freedom from being clipped by an ancestor.** Every one of those
+  losses is invisible on screen, because the replacement still looks correct and only stops
+  WORKING, so enumerate what the native control was doing and test each item rather than testing
+  that the new one renders.
+  (slate#1849)
 - **L508. A control that renders a value the BROWSER itself validates (a date input, a number
   input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that
   value stands beside an empty control and the two halves of the screen contradict each other
