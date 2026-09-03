@@ -1208,8 +1208,13 @@ MALFORMED
 # the FIRST run on a clone rather than only once the file has arrived, which is the run where the
 # conflict would otherwise happen. It is per clone and never travels, so both Macs get it from
 # here.
+#
+# SYNC_DERIVED_MERGE_RULE=0 turns this off. Not a convenience: it is the only way to reach the
+# RECOVERY below it, because when this works there is no conflict for the recovery to handle, and a
+# recovery nobody can exercise is a branch that ships untested (L142, L535).
 ensure_derived_file_merge_rule(){
   local info rule
+  [ "${SYNC_DERIVED_MERGE_RULE:-1}" = "0" ] && return 0
   [ -d "$SYNC_REPO" ] || return 0
   git -C "$SYNC_REPO" rev-parse --git-dir >/dev/null 2>&1 || return 0
   # `true` as the driver keeps whichever side is checked out and exits 0, so git never stops. What
@@ -1220,6 +1225,93 @@ ensure_derived_file_merge_rule(){
   rule="payload/$LESSON_INDEX_FILE merge=ours"
   [ -f "$info/attributes" ] && grep -qF -- "$rule" "$info/attributes" 2>/dev/null && return 0
   printf '%s\n' "$rule" >> "$info/attributes" 2>/dev/null || true
+  return 0
+}
+
+# THE RECOVERY, for when the rule above did not prevent the conflict (claude-config#282).
+#
+# `ensure_derived_file_merge_rule` writes to `.git/info/attributes`, which is PER CLONE and never
+# travels, so it is absent on a clone that has not yet run a version of this tool that writes it,
+# and it is not consulted by every rebase backend git has. On 2026-09-03 the conflict happened
+# anyway: five new lessons on one Mac against twenty commits on the other, `payload/LESSONS.md`
+# merged cleanly, and `payload/LESSONS-INDEX.md` was the only conflicted path, purely on the count
+# line in its header. The sync died telling Dan to reconcile by hand, which is not something he can
+# act on, and the sync stayed blocked until somebody drove git by hand.
+#
+# There is nothing to reconcile about two correct renderings of two different inputs. The input
+# merged; the rendering is regenerated from it. So when EVERY conflicted path is a derived file,
+# each is rebuilt from its source, staged, and the rebase continued.
+#
+# THE STAND DOWN IS NO BROADER THAN THE REASON (L324): one conflicted path that nobody generates
+# and this does nothing, because continuing then would commit whichever side git happened to leave
+# in the tree. It also refuses when git reports NO conflicted path at all, because a rebase stopped
+# for some other reason is not this, and treating it as this would continue through something
+# nobody has looked at (L98).
+#
+# It LOOPS, because a rebase replays one commit at a time and can stop on the next one for the same
+# reason. Bounded, because an unbounded loop around a command that can keep failing is a hang, and
+# a hang is worse than a failure (L110).
+resolve_derived_conflicts(){   # -> 0 when the rebase was carried through, 1 when it was not
+  local i=0 paths p rel handled any=0
+  while [ "$i" -lt 100 ]; do
+    i=$(( i + 1 ))
+    paths="$(git -C "$SYNC_REPO" diff --name-only --diff-filter=U 2>/dev/null)"
+    # No conflicted path means either the rebase is finished or it stopped for a reason this
+    # cannot see. `rebase --continue` decides which, and a rebase that is already done is not
+    # still in progress, so the loop ends either way.
+    if [ -z "$paths" ]; then
+      [ "$any" -eq 1 ] || return 1
+      git -C "$SYNC_REPO" rev-parse --absolute-git-dir >/dev/null 2>&1 || return 1
+      break
+    fi
+    handled=0
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      rel="${p#payload/}"
+      # A path outside payload/ is not a synced rule file at all, and is_derived_rule_file would
+      # be answering about a name it never meant. Refuse rather than guess.
+      [ "$rel" = "$p" ] && return 1
+      is_derived_rule_file "$rel" || return 1
+      handled=$(( handled + 1 ))
+    done <<DERIVED_PATHS
+$paths
+DERIVED_PATHS
+    [ "$handled" -gt 0 ] || return 1
+    # Rebuilt from the source sitting beside it in the working tree, which is the MERGED one:
+    # LESSONS.md combined cleanly, which is why the index was the only thing left.
+    regenerate_payload_index_from_worktree || return 1
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      git -C "$SYNC_REPO" add -- "$p" >/dev/null 2>&1 || return 1
+    done <<DERIVED_ADD
+$paths
+DERIVED_ADD
+    any=1
+    # GIT_EDITOR=true, or a continue that wants a commit message opens an editor nobody is sitting
+    # at and the daemon hangs on it.
+    if GIT_EDITOR=true git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" rebase --continue >/dev/null 2>&1; then
+      # Finished, unless it stopped again, which the next turn of the loop finds out.
+      git -C "$SYNC_REPO" rev-parse --verify -q REBASE_HEAD >/dev/null 2>&1 || break
+    fi
+  done
+  [ "$any" -eq 1 ] || return 1
+  # Said out loud. A run that recovered and one that never conflicted would otherwise read the
+  # same, and the second is the one somebody would want to know had stopped happening (L11, L98).
+  echo "claude-sync: both Macs changed $LESSON_INDEX_FILE, which is generated from LESSONS.md rather than written by hand, so it was regenerated from the merged lessons and the sync carried on. Nothing needs reconciling."
+  return 0
+}
+
+# The same rebuild as regenerate_payload_index, without its publish time assertions, because this
+# runs MID REBASE where the working tree is a half applied state and the counts are checked once at
+# the end by regenerate_payload_index itself.
+regenerate_payload_index_from_worktree(){
+  local src="$PAYLOAD/LESSONS.md" out
+  [ -f "$src" ] || return 1
+  out="$(scratch_file)"
+  lesson_index_body "$src" > "$out" 2>/dev/null || { rm -f "$out"; return 1; }
+  [ -s "$out" ] || { rm -f "$out"; return 1; }
+  cat "$out" > "$PAYLOAD/$LESSON_INDEX_FILE" 2>/dev/null || { rm -f "$out"; return 1; }
+  rm -f "$out"
   return 0
 }
 
@@ -3826,19 +3918,30 @@ do_sync(){
         # own working directory, so the test never fired and every real conflict fell
         # through to the catch-all below. Caught by the guard kept for exactly this.
         gitdir="$(git -C "$SYNC_REPO" rev-parse --absolute-git-dir 2>/dev/null || echo "$SYNC_REPO/.git")"
+        derived_recovered=0
         if [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; then
-          git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
-          # git's own words are carried, and that is not decoration. This branch ASSERTS a cause
-          # from a state rather than reading it, so when it is wrong it is confidently wrong and
-          # there is nothing left to diagnose from: the catch-all beneath it quotes git and this one
-          # did not, which made a misclassification here the only failure in the tool that says
-          # nothing about what actually happened (L11, and #52 was exactly this).
-          die "both Macs changed the same config and it couldn't auto-merge. Run 'claude-sync status' and reconcile by hand. git said: ${pull_err:-<no output>}"
+          # A conflict only in files this tool GENERATES is not two people's work in conflict
+          # (claude-config#282). Tried BEFORE the abort, because after an abort there is nothing
+          # left to continue, and it refuses on anything else, so the die below is still reached
+          # for every conflict that really is two people's work.
+          if resolve_derived_conflicts; then
+            derived_recovered=1
+          else
+            git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
+            # git's own words are carried, and that is not decoration. This branch ASSERTS a cause
+            # from a state rather than reading it, so when it is wrong it is confidently wrong and
+            # there is nothing left to diagnose from: the catch-all beneath it quotes git and this
+            # one did not, which made a misclassification here the only failure in the tool that
+            # says nothing about what actually happened (L11, and #52 was exactly this).
+            die "both Macs changed the same config and it couldn't auto-merge. Run 'claude-sync status' and reconcile by hand. git said: ${pull_err:-<no output>}"
+          fi
         fi
-        git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
-        # Deliberately NOT folded into either message above. An unknown failure defaulted
-        # to a known cause is how the original defect read as a confident diagnosis.
-        die "the shared repo was reachable and this is NOT a two-Mac content conflict, but git refused to combine the two sides. git said: ${pull_err:-<no output>}"
+        if [ "$derived_recovered" -ne 1 ]; then
+          git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
+          # Deliberately NOT folded into either message above. An unknown failure defaulted
+          # to a known cause is how the original defect read as a confident diagnosis.
+          die "the shared repo was reachable and this is NOT a two-Mac content conflict, but git refused to combine the two sides. git said: ${pull_err:-<no output>}"
+        fi
       fi
       stash_after="$(git -C "$SYNC_REPO" stash list 2>/dev/null | wc -l | tr -d ' ')"
       stash_top="$(git -C "$SYNC_REPO" stash list 2>/dev/null | awk 'NR <= 1' || true)"

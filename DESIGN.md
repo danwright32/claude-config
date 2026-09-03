@@ -631,6 +631,33 @@ four minute CI wait is noise against a week, so an old plist is not worth chasin
 asks about the head of the branch, not about each commit between: a red commit followed by a green
 one is applied with the green one, which is what a person pulling by hand would get.
 
+## A conflict in a file this tool GENERATES is not a conflict
+
+`LESSONS-INDEX.md` is derived: it is rebuilt from `LESSONS.md` on every send and every apply, and
+its header carries a lesson count. Both Macs rewrite that one line, so any two sided lesson
+addition makes the generated files differ and git stops, even when the lessons themselves merged
+perfectly well.
+
+There are two defences, and the second exists because the first cannot always be in place.
+
+The clone is told never to combine the file, with a `merge=ours` rule written to
+`.git/info/attributes`. That is per clone and never travels, which is deliberate (it is in force on
+the first run on a clone rather than only once a committed file has arrived), and it is also the
+limitation: a clone that has not yet run a version of this tool that writes it does not have it,
+and not every rebase backend consults it.
+
+So when the conflict happens anyway, the rebase is not abandoned. If EVERY conflicted path is a
+derived file, each is regenerated from the source sitting beside it in the working tree, staged,
+and the rebase continued, and the run says it did that. One conflicted path that nobody generates
+and none of this happens: continuing then would commit whichever side git happened to leave, so the
+stand down is no broader than its reason (L324). A rebase stopped with no conflicted path at all is
+refused too, because that is not this.
+
+Measured 2026-09-03: five new lessons here against twenty commits there, `payload/LESSONS.md`
+merged cleanly, `payload/LESSONS-INDEX.md` was the only conflicted path, and the sync died telling
+Dan to reconcile by hand, which is not something he can act on. `SYNC_DERIVED_MERGE_RULE=0` turns
+the first defence off, which is the only way to reach the second one in a test.
+
 ## Editing the payload in the development checkout is reverted by the daemon
 
 Measured 2026-09-03, the hard way. Most of a day's work on the payload was made in the development

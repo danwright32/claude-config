@@ -11852,6 +11852,94 @@ check "#280 and the absent watcher is said to be absent" \
 check "#280 and that is not reported as neither agent being installed" \
   "out_lacks \"\$out_aj4\" 'neither launch agent'"
 
+section "== a derived file that DOES conflict is regenerated rather than handed to the operator (claude-config#282) =="
+# claude-config#200 stopped the derived index from conflicting at all, by telling the clone never
+# to combine it. That rule lives in .git/info/attributes, which is per clone and never travels, so
+# it is absent on a clone that has not yet run a version of this tool that writes it, and it is not
+# consulted by every rebase backend git has. On 2026-09-03 the conflict happened anyway: five new
+# lessons here against twenty commits there, payload/LESSONS.md merged cleanly, and
+# payload/LESSONS-INDEX.md was the only conflicted path, purely on its count line. The sync then
+# died telling Dan to reconcile by hand, which is not something he can act on.
+#
+# So the failure branch recovers instead of dying, when EVERY conflicted path is a file whose
+# content is a function of another file. There is nothing to reconcile about two correct renderings
+# of two different inputs: the input merged, and the rendering is regenerated from it.
+#
+# The merge rule is turned OFF for this section, because while it works there is no conflict for
+# the recovery to meet and the branch would ship having never run (L142, L535).
+unset SYNC_NO_GIT
+DRB="$WORK/derived-bare.git"; git init -q --bare "$DRB"
+DRA="$WORK/derived-repoA"; git clone -q "$DRB" "$DRA" 2>/dev/null
+DRHA="$WORK/derived-homeA"; mkdir -p "$DRHA"
+echo '{"hooks":{}}' > "$DRHA/settings.json"
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$DRHA/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body one\n\n## Data safety\n\n- **L2. two.** body two\n' > "$DRHA/LESSONS.md"
+drsync(){ # drsync <home> <repo> [extra env assignments...]
+  local h="$1" r="$2"; shift 2
+  env SYNC_DERIVED_MERGE_RULE=0 CLAUDE_HOME="$h" SYNC_REPO="$r" SYNC_NO_NOTIFY=1 "$@" \
+    bash "$SCRIPT" sync 2>&1
+}
+drsync "$DRHA" "$DRA" >/dev/null 2>&1
+DRRB="$WORK/derived-repoB"; git clone -q "$DRB" "$DRRB" 2>/dev/null
+DRHB="$WORK/derived-homeB"; mkdir -p "$DRHB"
+echo '{"hooks":{}}' > "$DRHB/settings.json"
+env SYNC_DERIVED_MERGE_RULE=0 CLAUDE_HOME="$DRHB" SYNC_REPO="$DRRB" SYNC_NO_NOTIFY=1 \
+  bash "$SCRIPT" pull >/dev/null 2>&1
+check "#282 both Macs start from the same published lessons" \
+  "grep -q 'L2. two' '$DRHB/LESSONS.md'"
+# The rule really is off on this clone, or the conflict below never happens and every check here
+# passes while measuring the case #200 already covers (L159).
+check "#282 the seam really did leave the merge rule off" \
+  "! grep -q 'LESSONS-INDEX.md merge=ours' '$DRRB/.git/info/attributes' 2>/dev/null"
+
+# Different sections, so LESSONS.md merges cleanly and the INDEX is the only conflicted path, which
+# is the shape the real failure had. Different COUNTS on the two sides, so the generated header
+# line differs: with one each the counts match and no conflict fires at all.
+python3 - "$DRHA/LESSONS.md" <<'DRA_PY'
+import sys
+p = sys.argv[1]
+t = open(p).read().replace("- **L1. one.** body one\n",
+                           "- **L1. one.** body one\n- **L4. four.** written only on Mac A\n")
+open(p, "w").write(t)
+DRA_PY
+drsync "$DRHA" "$DRA" >/dev/null 2>&1
+printf -- '- **L3. three.** written only on Mac B\n' >> "$DRHB/LESSONS.md"
+printf -- '- **L5. five.** also written only on Mac B\n' >> "$DRHB/LESSONS.md"
+out_dr="$(drsync "$DRHB" "$DRRB")"; dr_rc=$?
+dbg "#282 two sided sync with the merge rule off said: $out_dr"
+check "#282 the sync completes rather than dying on the derived index" "[ '$dr_rc' -eq 0 ]"
+check "#282 and it does not tell Dan to reconcile by hand" \
+  "! grep -q \"reconcile by hand\" <<< \"\$out_dr\""
+# The positive control: the lessons really did come together, so the checks above are about the
+# recovery rather than about a sync that quietly did nothing (L159, L100).
+check "#282 the merged lessons carry both Macs' entries" \
+  "grep -q 'L4. four' '$DRHB/LESSONS.md' && grep -q 'L3. three' '$DRHB/LESSONS.md'"
+# And the index is REGENERATED from what the merge produced, never one side's copy kept whole.
+check "#282 and the index is rebuilt from the merged lessons" \
+  "grep -q 'L4. four' '$DRHB/LESSONS-INDEX.md' && grep -q 'L3. three' '$DRHB/LESSONS-INDEX.md'"
+check "#282 and no conflict marker survives in the index" \
+  "! grep -q '<<<<<<<' '$DRHB/LESSONS-INDEX.md'"
+# It SAYS it recovered. A rebase that stopped and was continued is worth one line: silence would
+# make a run that recovered indistinguishable from one that never conflicted (L11, L98).
+check "#282 and it says which derived file it rebuilt" \
+  "line_has \"\$out_dr\" 'regenerated' 'LESSONS-INDEX.md'"
+
+# THE STAND DOWN IS NO BROADER THAN THE REASON (L324). A conflict in a file nobody generates is
+# still a conflict, and continuing through it would commit whichever side git happened to leave.
+DRHC="$WORK/derived-homeC"; DRRC="$WORK/derived-repoC"
+git clone -q "$DRB" "$DRRC" 2>/dev/null
+mkdir -p "$DRHC"; echo '{"hooks":{}}' > "$DRHC/settings.json"
+env SYNC_DERIVED_MERGE_RULE=0 CLAUDE_HOME="$DRHC" SYNC_REPO="$DRRC" SYNC_NO_NOTIFY=1 \
+  bash "$SCRIPT" pull >/dev/null 2>&1
+printf 'A rules from Mac A\n' > "$DRHA/CLAUDE.md.notes"
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\nA side says this\n' > "$DRHA/CLAUDE.md"
+drsync "$DRHA" "$DRA" >/dev/null 2>&1
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\nC side says something else entirely\n' > "$DRHC/CLAUDE.md"
+out_drc="$(drsync "$DRHC" "$DRRC")"; drc_rc=$?
+dbg "#282 a real content conflict said: $out_drc"
+check "#282 a conflict in a file nobody generates still stops" \
+  "[ '$drc_rc' -ne 0 ] || case \"\$out_drc\" in *'reconcile by hand'*) true ;; *) false ;; esac"
+
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
