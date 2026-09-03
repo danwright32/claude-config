@@ -5601,12 +5601,16 @@ check "#33 a run nested inside a run is reported" "grep -qi 'test run' <<< \"\$_
 check "#33 and it says how deeply they are nested" "printf '%s' \"\$_ps_chain\" | grep -qE 'nested [0-9]+ deep inside another'"
 
 # The control (L143): an EMPTY listing must report nothing even though this machine really does
-# have a watcher running right now. If the seam were ignored, this check would fail against the
+# have a watcher running right now. Matched on the stray report's OWN wording, which is
+# `--- <label> the tool left running ---` plus each of its two labels, rather than on the bare word
+# `watcher`: status now says which launch agents this Mac runs (claude-config#280), and one of
+# those lines legitimately begins `change watcher:`, so the loose word answered for a report that
+# was never made (L135, L63). If the seam were ignored, this check would fail against the
 # live process table, which is the only thing that can tell a working stub from one that missed.
 : > "$WORK/ps-none"
 _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
-  "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher\|test run'"
+  "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher processes\|test runs'"
 
 section "== a sync works where git has no identity of its own (#52) =="
 # The tool passes its own name and address to the two commits it makes, so it does not depend on
@@ -8859,7 +8863,7 @@ ci_case(){   # ci_case <label> <ci state, empty for a gh that refuses> -> the au
     SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
   # B ticks AUTOMATICALLY, with a local edit of its own so there is something to send as well.
   printf 'edit from B\n' > "$CI_HOME/hooks/from-B.sh"
-  CI_STATE="$2" SYNC_GH="$CIBIN/gh" SYNC_AUTOMATIC=1 SYNC_IN_WATCH=1 \
+  CI_STATE="$2" SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 \
     CLAUDE_HOME="$CI_HOME" SYNC_REPO="$CI_REPO" \
     SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1
 }
@@ -8956,7 +8960,7 @@ check "#221 and a sync run by hand applies that same red head" "ci_applied hatch
 ci_case ownwork success >/dev/null 2>&1
 check "#221 the level case really did take the head first" "ci_applied ownwork"
 printf 'B alone\n' > "$(ci_home ownwork)/hooks/from-B2.sh"
-out_own="$(CI_STATE=failure SYNC_GH="$CIBIN/gh" SYNC_AUTOMATIC=1 SYNC_IN_WATCH=1 \
+out_own="$(CI_STATE=failure SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 \
   SYNC_CLONE_REGISTRY="$CI_REG" CLAUDE_HOME="$(ci_home ownwork)" SYNC_REPO="$(ci_repo ownwork)" \
   SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1)"
 dbg "#221 own work: $out_own"
@@ -11746,6 +11750,107 @@ check "#237 the pull tells the runner which checkout to re-run from" \
 # And the runner really did get a chance to report, or the check above is satisfied by a pull that
 # never launched it at all (L100).
 check "#237 and the runner was actually launched" "[ -f '$CKR_SEEN' ]"
+
+section "== status says which automatic jobs this Mac runs, and which of them is gated (#280) =="
+# claude-config#221 gates the automatic receive on CI, and the answer to "is THIS Mac gated" was a
+# plist somebody had to read by hand. Two Macs could sit in different states with nothing able to
+# tell them apart.
+#
+# The issue was filed believing the gate travelled in the plist as a SYNC_AUTOMATIC variable. It
+# does not: writeplist puts only PATH in the plist's environment, and the gate turns on because
+# watch_tick sets SYNC_IN_WATCH itself, inside whichever claude-sync the job runs (L61: a decision
+# recorded on an issue is only true as of its date). So the divergence that can actually happen is
+# a plist naming a claude-sync in a clone that has not been updated, and that is what is reported.
+AJ="$WORK/autojobs"; mkdir -p "$AJ/agents-none" "$AJ/gated" "$AJ/ungated" "$AJ/gone"
+AJH="$AJ/home"; mkdir -p "$AJH/hooks"; echo '{"hooks":{}}' > "$AJH/settings.json"
+# writeplist records `cd <dir> && pwd`, which collapses the doubled slash the suite's temp root
+# can carry, so every assertion below uses the spelling of the side it reads: the plist holds the
+# normalised one (the same care the #187 section takes over a symlinked root).
+AJ_GATED_PROG="$(cd "$AJ/gated" && pwd)/claude-sync"
+AJ_UNGATED_PROG="$(cd "$AJ/ungated" && pwd)/claude-sync"
+AJ_GONE_PROG="$(cd "$AJ/gone" && pwd)/claude-sync"
+AJFS="$AJ/fake-fswatch"; printf '#!/usr/bin/env bash\nexit 0\n' > "$AJFS"; chmod +x "$AJFS"
+
+ajstatus(){   # status with a given launch agent directory
+  SYNC_LAUNCHAGENTS="$1" SYNC_CLONE_REGISTRY="$AJ/registry" CLAUDE_HOME="$AJH" SYNC_REPO="$AJ/gated" \
+    SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1
+}
+
+# THE CONTROL FOR THE WHOLE SECTION, and it is not optional. The report decides whether a copy has
+# the gate by looking for the gate function's own name. Rename that function and every copy reads
+# as ungated, which is the report going quietly wrong in the direction that raises a false alarm
+# on a Mac that is correctly gated (L96, L103). Asserted against the script under test, so the
+# rename breaks this instead.
+check "#280 the script under test really does carry the marker the report looks for" \
+  "grep -q 'ci_gate_blocks_pull' '$SCRIPT'"
+
+# Neither agent installed is its own answer, not silence (L11, L98).
+out_aj0="$(ajstatus "$AJ/agents-none")"
+dbg "#280 no agents: $out_aj0"
+check "#280 with no launch agents at all status says nothing here syncs on its own" \
+  "line_has \"\$out_aj0\" 'automatic sync' 'neither launch agent'"
+check "#280 and it names the command that installs them" \
+  "line_has \"\$out_aj0\" 'automatic sync' 'claude-sync install-autosync'"
+
+# A gated clone: a real copy of the script under test, with the plists written by that copy through
+# the real install-autosync, so what is read is the shape that actually ships (L52).
+cp "$SCRIPT" "$AJ/gated/claude-sync"; chmod +x "$AJ/gated/claude-sync"
+SYNC_LAUNCHAGENTS="$AJ/agents-gated" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$AJFS" \
+  SYNC_INTERVAL=604800 CLAUDE_HOME="$AJH" bash "$AJ/gated/claude-sync" install-autosync >/dev/null 2>&1
+check "#280 the fixture really wrote both plists" \
+  "[ -f '$AJ/agents-gated/com.claudesync.timer.plist' ] && [ -f '$AJ/agents-gated/com.claudesync.watch.plist' ]"
+out_aj1="$(ajstatus "$AJ/agents-gated")"
+dbg "#280 gated: $out_aj1"
+check "#280 the receive timer is named, with the copy it runs and how often" \
+  "line_has \"\$out_aj1\" 'receive timer' '$AJ_GATED_PROG' '7 days'"
+# The timer being ungated is a DELIBERATE scope decision, not a fault, so it is stated as one.
+check "#280 and the timer's receive is said to be ungated" \
+  "line_has \"\$out_aj1\" 'receive timer' 'not gated on CI'"
+check "#280 the change watcher is named, and its receive waits for CI" \
+  "line_has \"\$out_aj1\" 'change watcher' '$AJ_GATED_PROG' 'waits for CI'"
+
+# The divergence the issue is actually about: the job points at a clone whose claude-sync predates
+# the gate. The copy is real, with the gate function renamed out of it, standing in for that clone.
+cp "$SCRIPT" "$AJ/ungated/claude-sync.tmp"
+sed 's/ci_gate_blocks_pull/ci_gate_from_before_that_change/g' "$AJ/ungated/claude-sync.tmp" > "$AJ/ungated/claude-sync"
+rm -f "$AJ/ungated/claude-sync.tmp"; chmod +x "$AJ/ungated/claude-sync"
+SYNC_LAUNCHAGENTS="$AJ/agents-ungated" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$AJFS" \
+  CLAUDE_HOME="$AJH" bash "$AJ/ungated/claude-sync" install-autosync >/dev/null 2>&1
+out_aj2="$(ajstatus "$AJ/agents-ungated")"
+dbg "#280 ungated: $out_aj2"
+check "#280 a watcher running a copy with no CI gate is reported as ungated" \
+  "line_has \"\$out_aj2\" 'change watcher' '$AJ_UNGATED_PROG' 'NO CI gate'"
+check "#280 and that line names the command that repoints it" \
+  "line_has \"\$out_aj2\" 'change watcher' 'claude-sync install-autosync'"
+# The two states must not read alike, or the report cannot answer the question it exists for (L11).
+check "#280 and the gated wording is not also present for the ungated copy" \
+  "out_lacks \"\$out_aj2\" 'waits for CI'"
+
+# A plist naming a script that is not there is a job that cannot run at all, which is a third
+# answer and not a quieter spelling of ungated (L11).
+mkdir -p "$AJ/agents-gone"
+cp "$AJ/agents-gated"/com.claudesync.*.plist "$AJ/agents-gone/" 2>/dev/null
+sed -i.bak "s|$AJ_GATED_PROG|$AJ_GONE_PROG|g" "$AJ/agents-gone"/com.claudesync.*.plist
+rm -f "$AJ/agents-gone"/*.bak
+out_aj3="$(ajstatus "$AJ/agents-gone")"
+dbg "#280 missing script: $out_aj3"
+check "#280 a job naming a claude-sync that is not there says the job cannot run" \
+  "line_has \"\$out_aj3\" 'change watcher' '$AJ_GONE_PROG' 'cannot run'"
+check "#280 and a missing script is not reported as a missing gate" \
+  "out_lacks \"\$out_aj3\" 'no CI gate'"
+
+# One installed and one not: each job is answered for separately, so a Mac with only the timer is
+# not reported as having no automatic sync at all.
+mkdir -p "$AJ/agents-timeronly"
+cp "$AJ/agents-gated/com.claudesync.timer.plist" "$AJ/agents-timeronly/"
+out_aj4="$(ajstatus "$AJ/agents-timeronly")"
+dbg "#280 timer only: $out_aj4"
+check "#280 with only the timer installed the timer is still reported" \
+  "line_has \"\$out_aj4\" 'receive timer' '7 days'"
+check "#280 and the absent watcher is said to be absent" \
+  "line_has \"\$out_aj4\" 'change watcher' 'not installed'"
+check "#280 and that is not reported as neither agent being installed" \
+  "out_lacks \"\$out_aj4\" 'neither launch agent'"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
