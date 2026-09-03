@@ -3643,6 +3643,115 @@ do_apply_only(){
 }
 
 # ---------- sync (two-way, used by the background job) ----------
+# ---------- only a commit CI has passed reaches this Mac automatically (claude-config#221) ----
+#
+# THE DECISION. The watcher used to integrate whatever was on the shared repo the moment it had a
+# reason to pull, which is before anything had judged it. 32 of 233 CI runs in 30 days were red,
+# almost all on direct pushes to main, so config that fails CI was installed on the other Mac
+# FIRST and caught only by the suite that runs after installation: ship first, verify after, with
+# the CI run as a second opinion nothing read. Three of this session's own pushes were green on a
+# Mac and red on the Linux runner, and every one of them would have landed there.
+#
+# THE PREMISE, in a form that can be re-measured rather than believed (L316): the wait this buys is
+# one CI run, which `gh run list --limit 20 --json startedAt,updatedAt` prices at about four
+# minutes today, against a red commit being live on the other Mac for the three to four minutes
+# until its own suite says so, and longer if nobody reads the notification. If CI ever becomes slow
+# enough that the wait costs more than the exposure, this is the trade to look at again.
+#
+# THE SCOPE. The WATCHER is gated and the weekly receive timer is not, deliberately: a four minute
+# CI wait is noise against a week, and an explicit `claude-sync pull` or `sync` typed by a person is
+# the escape hatch, so there is no flag to remember and no way to be stuck.
+#
+# It FAILS CLOSED. Unreadable, no check at all, or a run the concurrency group cancelled all skip
+# the pull and say which, because a control that exists to protect someone fails closed rather than
+# open (L42), and because "green" and "nobody could tell" must never be the same answer (L98).
+sync_gh(){ printf '%s' "${SYNC_GH:-gh}"; }
+
+repo_slug(){   # -> owner/name from the origin url, or nothing
+  local url
+  url="$(git -C "$SYNC_REPO" remote get-url origin 2>/dev/null || true)"
+  [ -n "$url" ] || return 1
+  url="${url%.git}"
+  case "$url" in
+    *github.com[:/]*) printf '%s' "${url##*github.com}" | sed -e 's|^[:/]||' ;;
+    *) return 1 ;;
+  esac
+}
+
+# One of: green red pending cancelled none unreadable. The distinctions matter because each needs a
+# different sentence and a different remedy (L11): pending resolves itself, cancelled never will,
+# and unreadable is about this Mac rather than about the commit.
+remote_ci_state(){   # $1 = commit sha
+  local gh slug out
+  gh="$(sync_gh)"
+  command -v "$gh" >/dev/null 2>&1 || { printf 'unreadable'; return 0; }
+  slug="$(repo_slug)" || { printf 'unreadable'; return 0; }
+  [ -n "${1:-}" ] || { printf 'unreadable'; return 0; }
+  out="$("$gh" api "repos/$slug/commits/$1/check-runs" \
+        --jq '.check_runs[] | (.conclusion // .status)' 2>/dev/null)" || { printf 'unreadable'; return 0; }
+  # Read in order of what stops a pull. A failure anywhere is a red commit whatever else passed; a
+  # run still going means the answer is coming; only then can success mean success.
+  case "
+$out" in *"
+failure"*|*"
+timed_out"*|*"
+action_required"*|*"
+startup_failure"*) printf 'red'; return 0 ;; esac
+  case "
+$out" in *"
+queued"*|*"
+in_progress"*|*"
+pending"*|*"
+waiting"*|*"
+requested"*) printf 'pending'; return 0 ;; esac
+  case "
+$out" in *"
+success"*) printf 'green'; return 0 ;; esac
+  # Cancelled with nothing else is the state that would otherwise read as pending for ever: the
+  # concurrency group cancels a superseded run, and no verdict is coming for this commit.
+  case "
+$out" in *"
+cancelled"*|*"
+skipped"*|*"
+neutral"*) printf 'cancelled'; return 0 ;; esac
+  printf 'none'
+  return 0
+}
+
+# The gate itself. Prints nothing and returns 0 when the pull may go ahead.
+ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
+  local branch sha state
+  [ "${SYNC_IN_WATCH:-0}" = "1" ] || return 1
+  have_git || return 1
+  git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1 || return 1
+  branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+  sha="$(git -C "$SYNC_REPO" rev-parse "origin/$branch" 2>/dev/null || true)"
+  [ -n "$sha" ] || return 1
+  # Nothing to integrate means nothing to gate: this Mac's own work must never be held up by a
+  # question about a commit it already has (L324).
+  [ "$sha" != "$(repo_head)" ] || return 1
+  state="$(remote_ci_state "$sha")"
+  case "$state" in
+    green) return 1 ;;
+    red)
+      echo "claude-sync: the shared repo's newest commit (${sha:0:8}) FAILED its tests, so it was not applied here. Nothing is lost: it applies as soon as a green commit lands, or now if you run 'claude-sync pull' yourself." >&2
+      notify "not applied: the shared repo's head failed CI"
+      send_outcome ci-red ;;
+    pending)
+      echo "claude-sync: the shared repo's newest commit (${sha:0:8}) is still being tested, so it was not applied here yet. It applies once the tests finish." >&2
+      send_outcome ci-pending ;;
+    cancelled)
+      echo "claude-sync: the tests for the shared repo's newest commit (${sha:0:8}) were cancelled, so no verdict is coming for it and it was not applied here. Push again, or run 'claude-sync pull' yourself if you know it is good." >&2
+      notify "not applied: the tests for the shared repo's head were cancelled"
+      send_outcome ci-cancelled ;;
+    *)
+      echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests ($state), so it was not applied here. Run 'claude-sync pull' yourself, or check that gh is installed and logged in." >&2
+      notify "not applied: could not read CI for the shared repo's head"
+      send_outcome ci-unreadable ;;
+  esac
+  return 0
+}
+
 do_sync(){
   # Staging is protected against the paths this Mac has not applied yet (see
   # unapplied_paths), so the original order is safe: send local changes, integrate

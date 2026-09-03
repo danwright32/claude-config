@@ -145,6 +145,12 @@ issue_spool_archive_path() { printf '%s/%s.filed.jsonl' "$(issue_spool_root)" "$
 # directory key is a TRANSITION path, not a second home: writes only ever go to
 # the first key, so these files drain and stop being written to.
 #
+# It is still read, and after claude-config#217 it is the ONLY thing that reads what the one time
+# migration could not place. Both Macs ran that migration on 2026-09-03 and it was deleted in the
+# same change; the other Mac reported five records moved, 158 before and 158 after, and one
+# directory it could not place, whose records stay under this key. Removing this read would strand
+# them (L92, L211).
+#
 # Deduplicated, because when no transcript is supplied the two are the same key
 # and reading it twice would double every count a person is shown.
 issue_spool_path_for_key()    { printf '%s/%s.jsonl' "$(issue_spool_root)" "$1"; }
