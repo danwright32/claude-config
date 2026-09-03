@@ -631,6 +631,35 @@ four minute CI wait is noise against a week, so an old plist is not worth chasin
 asks about the head of the branch, not about each commit between: a red commit followed by a green
 one is applied with the green one, which is what a person pulling by hand would get.
 
+## The hooks block is merged in BOTH directions, against the same base
+
+`settings.json` is not mirrored like the rest of the config. Its `hooks` block is extracted into
+`payload/settings.hooks.json` on the way out and merged back into `settings.json` on the way in, so
+it is REGENERATED at both ends rather than copied. That puts it outside every protection the
+mirrored files get, including the locally-ahead hold-back, and the protection has to be written
+again for each direction.
+
+The rule, in one function both callers use: the result is the PRIMARY side, plus every entry in the
+SECONDARY side that is in neither primary nor the BASE. The base is the hooks block of the commit
+this Mac last applied. An entry missing from primary but present in base was deliberately removed
+and stays removed; one missing from both is something the other side has not seen yet and is kept.
+With no base at all, keep, in both directions.
+
+On the way IN, primary is what is arriving. That half was written in #13, after replacing the block
+wholesale silently unregistered a hook added here since the last send: the hook script itself was
+held back as locally ahead, but the line that activates it was not, so the hook shipped inert.
+
+On the way OUT, primary is what is registered here. That half was missing until #300, and it failed
+in exactly the mirror image. `stage_local_to_payload` rebuilt the payload's copy wholesale from
+`~/.claude/settings.json`, and it runs BEFORE the apply, so anything the payload already held that
+this Mac had not applied was destroyed. Traced on 2026-09-03: `eb6ce56` registered
+`payload-revert-warning.sh`, and `f0cd3c7`, a sync commit, deleted exactly those five lines and
+touched nothing else. The hook and its test both travelled; only the registration was lost.
+
+`send` alone was already safe, because it refuses outright when the repo holds changes this Mac has
+not applied. `sync` cannot refuse, because reconciling is what it is for, and its send half runs
+first. That is why the merge belongs in the staging rather than in a guard above it.
+
 ## A conflict in a file this tool GENERATES is not a conflict
 
 `LESSONS-INDEX.md` is derived: it is rebuilt from `LESSONS.md` on every send and every apply, and

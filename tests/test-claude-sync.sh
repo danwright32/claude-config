@@ -12143,6 +12143,95 @@ CLAUDE_HOME="$RTKN_HOME" SYNC_REPO="$RTKN_REPO" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
 check "#296 no rewriter means no baseline is invented" \
   "[ ! -e '$RTKN_HOME/hooks/.rtk-hook.sha256' ]"
 
+section "== the send keeps a registration the payload holds and this Mac has not applied (claude-config#300) =="
+# stage_local_to_payload rebuilds payload/settings.hooks.json WHOLESALE from ~/.claude/settings.json,
+# with no three-way merge, and it runs BEFORE apply_payload_to_local. So anything the payload
+# already holds that this Mac has not yet applied is destroyed by the staging, and the mirror's own
+# locally-ahead protection does not cover this file because it is regenerated rather than mirrored.
+#
+# Traced in the history, not read off the code: eb6ce56 registered payload-revert-warning.sh, and
+# f0cd3c7, a sync commit at 2026-09-03 15:21, deleted exactly those five lines and touched nothing
+# else. The hook and its test both travelled; only the line that activates it was lost, so it
+# shipped inert. The one thing that noticed was the wiring check inside that hook's own suite.
+#
+# The apply side has merged three ways since claude-config#13 for the mirror image of this reason,
+# and its comment says so. This is that rule written on the other side, sharing the code that
+# APPLIES it rather than only the shape of it (L370, L263).
+unset SYNC_NO_GIT
+SHB="$WORK/sendhooks-bare.git"; git init -q --bare "$SHB"
+SHA_R="$WORK/sendhooks-repoA"; git clone -q "$SHB" "$SHA_R" 2>/dev/null
+SHA_H="$WORK/sendhooks-homeA"; mkdir -p "$SHA_H/hooks"
+SHB_R="$WORK/sendhooks-repoB"
+SHB_H="$WORK/sendhooks-homeB"; mkdir -p "$SHB_H/hooks"
+
+sh_settings(){ # sh_settings <home> <command...>   -> a settings.json registering those commands
+  local home="$1"; shift
+  python3 - "$home/settings.json" "$@" <<'PY_SET'
+import json, sys
+out, cmds = sys.argv[1], sys.argv[2:]
+json.dump({"hooks": {"PreToolUse": [{"matcher": "Bash",
+          "hooks": [{"type": "command", "command": c} for c in cmds]}]}},
+          open(out, "w"), indent=2)
+PY_SET
+}
+sh_registers(){ # sh_registers <settings-or-fragment file> <command> -> 0 when it names it
+  grep -qF "$2" "$1" 2>/dev/null
+}
+sh_sync(){ CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1; }
+sh_send(){ CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1; }
+
+# A publishes the base: one hook, X.
+sh_settings "$SHA_H" "__CLAUDE_HOME__/hooks/xray.sh"
+printf '#!/usr/bin/env bash\n' > "$SHA_H/hooks/xray.sh"
+sh_sync "$SHA_H" "$SHA_R"
+git clone -q "$SHB" "$SHB_R" 2>/dev/null
+CLAUDE_HOME="$SHB_H" SYNC_REPO="$SHB_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#300 B starts from the published base" \
+  "sh_registers '$SHB_H/settings.json' 'hooks/xray.sh'"
+
+# A then registers Y and publishes it. B has NOT applied that yet.
+sh_settings "$SHA_H" "__CLAUDE_HOME__/hooks/xray.sh" "__CLAUDE_HOME__/hooks/yankee.sh"
+printf '#!/usr/bin/env bash\n' > "$SHA_H/hooks/yankee.sh"
+sh_sync "$SHA_H" "$SHA_R"
+
+# B's PAYLOAD is brought forward by git alone, with no apply, which is exactly the state a rebase
+# inside a sync leaves it in: the payload holds Y and ~/.claude does not.
+# The branch is DERIVED, never written down: `git init` names it from whatever the machine's git
+# is configured to use, and a hardcoded name makes the pull a no-op that leaves the fixture in the
+# state the check is asserting against, so it would fail for a reason unrelated to its subject.
+SHB_BRANCH="$(git -C "$SHB_R" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+git -C "$SHB_R" pull -q --ff-only origin "$SHB_BRANCH" 2>/dev/null
+check "#300 B's payload holds the registration its config has not seen" \
+  "sh_registers '$SHB_R/payload/settings.hooks.json' 'hooks/yankee.sh'"
+check "#300 and B's own config really does not have it yet" \
+  "! sh_registers '$SHB_H/settings.json' 'hooks/yankee.sh'"
+
+# B reconciles. This is the moment the registration was lost.
+#
+# `sync`, not `send`: do_send already refuses outright when the repo holds changes this Mac has not
+# applied, and its comment says why. do_sync has no such guard, because it is the command that
+# RECONCILES, and its send half runs first. That is the hole, and pointing this at `send` measured
+# the guard that already works instead (measured: the first version of this fixture did exactly
+# that and passed before anything was fixed).
+sh_sync "$SHB_H" "$SHB_R"
+check "#300 a reconcile does not drop a registration this Mac has not applied yet" \
+  "sh_registers '$SHB_R/payload/settings.hooks.json' 'hooks/yankee.sh'"
+check "#300 and the entry this Mac does have is still there" \
+  "sh_registers '$SHB_R/payload/settings.hooks.json' 'hooks/xray.sh'"
+
+# THE CONTROL, and it is what stops the fix becoming "never remove anything" (L324). An entry this
+# Mac genuinely REMOVED is in the base and absent locally, which is a different thing from one it
+# has never seen, and it must still go.
+CLAUDE_HOME="$SHB_H" SYNC_REPO="$SHB_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#300 B has now applied both, so both are in its base" \
+  "sh_registers '$SHB_H/settings.json' 'hooks/yankee.sh'"
+sh_settings "$SHB_H" "__CLAUDE_HOME__/hooks/yankee.sh"
+sh_sync "$SHB_H" "$SHB_R"
+check "#300 an entry this Mac deliberately removed is still removed" \
+  "! sh_registers '$SHB_R/payload/settings.hooks.json' 'hooks/xray.sh'"
+check "#300 and the one it kept is untouched" \
+  "sh_registers '$SHB_R/payload/settings.hooks.json' 'hooks/yankee.sh'"
+
 section "== the suite never reads or writes anything of the operator's (claude-config#301) =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
