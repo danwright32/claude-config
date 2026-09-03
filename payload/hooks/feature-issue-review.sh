@@ -140,6 +140,24 @@ if [ -n "$pending" ]; then
     [ -n "$_annotated" ] && pending="$_annotated"
   fi
   printf '%s\n' "$pending" > "$findings_file" 2>/dev/null || findings_file=""
+  # THE CLEAR COMMAND IS WRITTEN HERE, out of the same two values this render used
+  # (claude-config#287, claude-config#284). The instruction used to name it as a fixed line,
+  # `issue-spool.sh clear "$PWD"`, which passes no transcript and therefore keys on the git common
+  # dir, while this render keyed on the transcript's directory. The two agreed only when those
+  # roots coincided. Observed live on 2026-09-03: the findings file named
+  # `bfea61f932c1.jsonl (107 records)` and the clear answered `nothing was pending under the key(s)
+  # this project reads (ac694bb5abad)`. Both were true, about different files, and 138 records sat
+  # unfiled across 9 keys while the same five findings came back at every review.
+  #
+  # There is now ONE derivation of the key, here, and the reader is handed the command rather than
+  # a rule for reconstructing it. Two independent derivations that must stay in step is what failed
+  # (L70, L285), and it is the same drift this design already recorded once, on the writing side.
+  #
+  # Quoted with %q, so a path holding a space is still one argument when the line is run verbatim.
+  if [ -n "$findings_file" ]; then
+    printf '\nTO FILE THESE, run this line exactly as it stands:\n  bash %q clear %q %q\n' \
+      "$SELF_DIR/lib/issue-spool.sh" "$proj" "$transcript" >> "$findings_file" 2>/dev/null || true
+  fi
 fi
 
 reason_args=(--instruction "$INSTRUCTION" --label "END OF TURN ISSUE REVIEW")

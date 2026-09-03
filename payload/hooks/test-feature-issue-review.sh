@@ -77,6 +77,8 @@ needs=(
   "data-integrity"                           # the area vocabulary is actually listed
   "ISSUE REVIEW"                             # the banner it has to open with
   "SECOND PASS"                              # the reflection folds in here
+  "TO FILE THESE"                            # the clear command the render wrote (#287)
+  "Run that line, verbatim"                  # and it is run as it stands, not reconstructed
 )
 # --- and the wording it must NOT carry any more ---------------------------
 # The rule that ad hoc filing may never open a milestone was REVERSED on 2026-09-02,
@@ -88,10 +90,18 @@ needs=(
 #
 # These two are the wording that CAUSED the pile-up. The ban itself, and the sentence
 # that primed every idea toward the holding pen before it had even been looked at.
+#
+# The third is the clear command as a FIXED line (claude-config#287). It passed no session
+# transcript, so it keyed on the git common dir while the render that produced the findings keyed
+# on the transcript's directory, and the two agreed only when those roots coincided. The render now
+# writes the command it means, so any fixed form here is a second derivation of the same key and
+# the exact failure over again (L70, L285). Matched on the whole invocation rather than on the
+# words, so the prose explaining why it is gone does not answer for it (L135).
 forbidden=(
   "NEVER create a new milestone"
   "Most of these ideas are standalone fixes"
   "there is no third option"
+  "issue-spool.sh clear \"\$PWD\""
 )
 for gone in "${forbidden[@]}"; do
   if [[ "$instruction" != *"$gone"* ]]; then
