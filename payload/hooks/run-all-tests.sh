@@ -603,10 +603,15 @@ if [ "$ran" -gt 0 ]; then
   # a harvest firing in another project during a run reads here as a suite violating L2. Measured
   # 2026-08-30, a green run of all 44 suites was failed by 1,180 bytes written by a session working
   # in a different repository entirely.
-  _spool_sizes_before="$(for _sp_f in "$_live_spool"/*.jsonl; do
-    [ -e "$_sp_f" ] || continue
-    printf '%s\t%s\n' "$(wc -c < "$_sp_f" | tr -d ' ')" "$_sp_f"
-  done)"
+  # ONE `wc`, not one per file (claude-config#239). The loop forked once per spool file, and the
+  # real spool on this Mac holds 157 of them: measured 2026-09-03, that was 414ms of a 600ms
+  # launch, paid by every run of this runner and by 65 of the 69 launches its own suite makes.
+  # `wc -c` over the whole glob prints the same size and path per line, and the ordering does not
+  # matter because every reader looks a path up by name. It also prints a "total" line, which is
+  # dropped for clarity rather than for safety: a row keyed "total" cannot match a path, so leaving
+  # it in changes nothing, and a test was written expecting it to matter and did not discriminate.
+  _spool_sizes_before="$(wc -c "$_live_spool"/*.jsonl 2>/dev/null \
+    | awk '$2 != "total" && NF >= 2 { printf "%s\t%s\n", $1, $2 }')"
 
   # WHO wrote, answered positively (claude-config#275). Reading the directory off the record tells
   # a suite from another project's session, which is what #230 needed, and it cannot tell a suite

@@ -36,6 +36,15 @@ case "${TMPROOT%/}" in
 esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
+# EVERY launch below reads a throwaway spool, not Dan's real one. 65 of the 69 launches in this
+# file named no spool, so they bracketed the live one, and the cost of a launch was then set by how
+# many files that happened to hold: 157 on this Mac on 2026-09-03, and the bracket forked once per
+# file. That is a suite whose duration is a measurement of somebody else's machine (L224, L364),
+# and it is a suite reading live data on every case (L2). The four cases that are ABOUT the spool
+# bracket still name their own, which overrides this.
+export CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool-default"
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+
 # NOTHING below runs the runner without either naming a directory or pointing HOOK_TESTS_ROOT at a
 # fixture. This file is itself a `test-*.sh` in a directory the runner reads, so a bare invocation
 # would discover this suite and run it, from inside itself, for as long as the machine held out.
@@ -1514,6 +1523,38 @@ case "$out_sp3" in
   *)
     check "#230 and it says so, rather than asserting a suite wrote it" "out=$out_sp3" ;;
 esac
+
+# The sizes are read for EVERY file in one `wc` rather than one per file, because the real spool
+# holds 157 of them and forking per file was 414ms of a 600ms launch (claude-config#239). What has
+# to survive that is reading the size of EACH file: only the bytes a run ADDED are judged, and a
+# reader that lost the per file sizes would treat every existing record as new.
+#
+# So the fixture puts a record that would be blamed on a suite into a file NOTHING touches, and has
+# the run append to a DIFFERENT file from elsewhere. Read correctly the run passes, because the only
+# added bytes came from elsewhere. Read without the sizes the untouched file is re-read from the
+# start and its record fails the run. Two files, because one cannot tell the two readings apart.
+rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-quiet.sh "$SP/suites"/test-anon.sh
+printf '%s\n' "$(sp_record "$SP/a/b")" > "$SPOOL/untouched.jsonl"
+mk_spool_writer beside "/opt/another-project/checkout"
+out_sp5="$(CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" HOOK_TESTS_ROOT="$SP" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$SP/suites" 2>&1)"; code_sp5=$?
+[ "$code_sp5" -eq 0 ] \
+  && check "#239 only the bytes this run added are judged, across several spool files" ok \
+  || check "#239 only the bytes this run added are judged, across several spool files" "exit=$code_sp5 out=$out_sp5"
+case "$out_sp5" in
+  *"SUITES WROTE INTO THE LIVE SPOOL"*)
+    check "#239 and a record nothing touched is not blamed on this run" "out=$out_sp5" ;;
+  *)
+    check "#239 and a record nothing touched is not blamed on this run" ok ;;
+esac
+# The positive control, from the same fixture: the run DID grow a file, so this is not a case where
+# the bracket had nothing to look at (L159, L100).
+case "$out_sp5" in
+  *"from work in other directories"*)
+    check "#239 and the file that did grow was seen" ok ;;
+  *)
+    check "#239 and the file that did grow was seen" "out=$out_sp5" ;;
+esac
+rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-beside.sh
 
 # And the control for all of it: a run that touched the spool not at all says nothing about it.
 rm -f "$SPOOL"/*.jsonl "$SP/suites"/test-anon.sh

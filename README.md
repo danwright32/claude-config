@@ -359,7 +359,15 @@ along with the suites that account for most of it:
 
     time bash payload/hooks/run-all-tests.sh
 
-Last taken on 2026-08-30: 3 minutes 11 seconds for the whole repo, of which `test-claude-sync.sh`
+Last taken on 2026-09-03: 76 seconds for the hook suites and the tools, of which
+`test-run-all-tests.sh` was 73 seconds and `test-subagent-issue-harvest.sh` 41. Before 2026-09-03
+that pair alone was 110 and 41: the runner bracketed the live findings spool by forking `wc` once
+per file, and the real spool held 157 of them, so 414ms of every 600ms launch was that loop, paid
+again by each of the 69 launches its own suite makes (#239). One `wc` over the glob, and a suite
+that no longer reads the live spool at all, took the pair from 110 seconds to 70 under matched
+conditions.
+
+Taken on 2026-08-30: 3 minutes 11 seconds for the whole repo, of which `test-claude-sync.sh`
 was 188 seconds. The wall clock cannot go below the single longest suite, so that one is the floor
 and the only thing that moves this number.
 
