@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 426 lessons.
+LESSONS.md, which is NOT loaded into the session. 428 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -152,6 +152,7 @@ to decide something: the body is where the failure it came from is described.
 - L267. Running a new version that AUTO MIGRATES a shared store consumes your ability to run the PREVIOUS version against it
 - L338. Archiving a run's INPUTS and OUTPUTS but not the record of what it DID leaves the question anybody actually asks later, whether it did the work, unanswerable, and the surviving pair reads as complete evidence rather than as a gap, so decide explicitly what carries the process record and how long it lives instead of letting it default to the live file's lifetime.
 - L377. Retiring a feature must delete the STORED POINTERS to what it produced, not only its writer and its screen, because a consumer written to be generic over those pointers has no list anybody could have updated and goes on acting on every one left behind.
+- L381. A directory kept in step by an automatic mirror has ONE authoritative side, and an edit made to the other side is not merged but silently reverted, with a new file there deleted outright because the mirror has never heard of it.
 
 ## Honest failure
 
@@ -468,3 +469,4 @@ to decide something: the body is where the failure it came from is described.
 - L315. Anything divided into fixed-size pieces under a fixed deadline needs a test holding the measured size of the largest piece to a fraction of the deadline (L172, L224) and pieces dealt by measured cost rather than by count (L296), because a sweep sized by count grows into its own deadline and the red it then produces names the sweep's size as a broken guard (L11).
 - L316. A recorded decision carries the premise it was made on, and the premise can expire while the decision stands, so record the premise in a form that can be re-measured (a pin, a command, a number with its source) rather than as a dated sentence, because a date on a number makes it MORE trusted, not less (L61, L244, L210).
 - L538. A build left red for a known unrelated reason stops being a signal for everything else, because a genuinely new failure then arrives indistinguishable from the standing one in every list. Fix or quarantine the standing failure rather than working alongside it, since the longer it stands the more changes get merged with nothing actually judging them.
+- L380. Two build or test invocations that share an output or cache directory share no work unless every setting that keys that output also matches, so a differing configuration, flag or compilation condition makes the shared path share nothing while still reading as evidence of reuse. Measure what actually recompiles rather than concluding reuse from the shared path.

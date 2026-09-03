@@ -1622,6 +1622,22 @@ window is a count rather than a boundary.
   asserted the opposite, because a fresh generation DID clear the entry and the case that
   mattered was the day nobody regenerates)
 
+- **L381. A directory kept in step by an automatic mirror has ONE authoritative side, and an edit
+  made to the other side is not merged but silently reverted, with a new file there deleted
+  outright because the mirror has never heard of it.** Nothing warns before it, and the tests pass
+  afterwards, because they were reverted alongside the code they covered. Hold the mirror or edit
+  the source.
+  (claude-config#221, 2026-09-03: most of a day's work was made in the development checkout and
+  pushed to GitHub, and at 11:03 the watch daemon on the SAME Mac mirrored its ~/.claude up over
+  the payload and reverted 84 files in one commit: a whole style sweep, two finished issues, part
+  of a third, part of a fourth, and lib/match-open-issues.py deleted outright. The mechanism is not
+  a bug, it is the mirror doing its job with --delete, and none of the machinery that protects
+  against the TWO MAC merge applies, because both copies are on one machine and only one is the
+  source. It was found by a ratchet reporting 204 short circuiting pipelines where 79 had been
+  recorded, not by anything watching the sync. Recovery is to find the mirror's own commit, take
+  the file list it touched, and check those paths out of the commit BEFORE it, keeping whatever
+  genuinely arrived from elsewhere)
+
 ## Honest failure
 
 - **L529. An audit entry must record the old and new values of what changed, not merely which
@@ -4716,3 +4732,21 @@ difference was plumbing.
   in the run list that real failure and the stale one were one line apart and indistinguishable.
   Nearest neighbours are L314, which is CI that has stopped rather than CI that always fails, and
   L179 on a superseded run answering for the wrong revision.)
+
+- **L380. Two build or test invocations that share an output or cache directory share no work
+  unless every setting that keys that output also matches, so a differing configuration, flag or
+  compilation condition makes the shared path share nothing while still reading as evidence of
+  reuse. Measure what actually recompiles rather than concluding reuse from the shared path.**
+  The shared path is the part everybody checks, because it is visible in the command line, and
+  the keying is the part nobody checks, because it lives in the build settings. Docker build
+  args, NODE_ENV on a webpack or Next cache, Gradle and ccache all behave this way. Nearest
+  neighbour is L303, which is a declared cache that restores and saves nothing; this one is two
+  invocations nobody ever cached, believed to be sharing.
+  (PostRoll#1242, 2026-09-03: swift.yml's three xcodebuild calls share -derivedDataPath, and a
+  comment plus the docstring of test_every_xcodebuild_in_the_job_shares_one_derived_data_path
+  both recorded that the test step therefore reuses the app build. The app build is forced to
+  Release with whole module optimisation and the test build resolves to Debug with
+  POSTROLL_TESTS set, so they share nothing. Measured on run 33760431737: 0 individual file
+  compile tasks in the Release build against 541 in the test step and 235 more for the same 229
+  app files in the GUI step, so the app source is compiled three times in one job while the
+  shared path read as reuse.)
