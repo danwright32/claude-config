@@ -4089,6 +4089,21 @@ window is a count rather than a boundary.
   L250 is a different failure on the same file: it is about OTHER tools reading `.gitignore`
   as an instruction it was not written to give, not about the pattern's own reach.)
 
+- **L554. A generated file committed beside its source conflicts on every aggregate it
+  carries (a total, a count, a checksum, a timestamp), so two independent edits to the
+  source that merge cleanly still collide there and block the merge over content nobody
+  wrote.** Either keep the derived file out of version control, or give it a merge rule that
+  regenerates it from the merged source rather than reconciling it line by line.
+  (claude-config#282, 2026-09-03: `LESSONS-INDEX.md` is regenerated from `LESSONS.md` on
+  every apply, and its header carries a lesson total. Both Macs added lessons, `LESSONS.md`
+  auto-merged with no conflict, and the index was the only conflicted path, purely on the
+  count line. The sync died with "both Macs changed the same config and it couldn't
+  auto-merge... reconcile by hand", which Dan cannot act on, so the whole two way sync was
+  blocked by a line no person had written. `is_derived_rule_file` already existed and three
+  other readers skipped derived files for exactly this reason; the rebase was the fourth
+  site and was left out. L41 is the opposite concern, deriving rather than hand
+  maintaining, and says nothing about the derived artifact's own merges.)
+
 ## Cross-system reliability
 
 - **L365. A retry must read what the refusal itself says about when it could succeed, because a

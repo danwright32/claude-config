@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 433 lessons.
+LESSONS.md, which is NOT loaded into the session. 434 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -400,6 +400,7 @@ to decide something: the body is where the failure it came from is described.
 - L286. A derivation every test in a suite needs (a tree walk, a parse, a store clone) is recomputed once per test unless its default input is memoised, so memoise the no-argument form, keep the callers that inject their own input building, and make the memo unable to capture an empty result, because a memoised empty scan passes every guard at once.
 - L542. Two similar rules that DIFFER may each be a recorded decision rather than an inconsistency, and the comment beside one documents only that one, so a change that aligns them can silently delete a product rule while reading as a cleanup. Before making two such rules agree, find the decision record for EACH side, and treat an observed divergence as evidence of a defect only once both records are in hand.
 - L374. A gitignore or exclude entry without a leading slash matches at EVERY depth, so a rule written for one top level folder silently swallows any same named directory anywhere in the tree, and the loss is invisible to status, diff and commit alike.
+- L554. A generated file committed beside its source conflicts on every aggregate it carries (a total, a count, a checksum, a timestamp), so two independent edits to the source that merge cleanly still collide there and block the merge over content nobody wrote.
 
 ## Cross-system reliability
 
