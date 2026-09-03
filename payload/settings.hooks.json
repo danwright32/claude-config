@@ -127,11 +127,6 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/project-list-nudge.sh",
             "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/payload-revert-warning.sh",
-            "timeout": 5
           }
         ]
       }
