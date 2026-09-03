@@ -250,7 +250,7 @@ issue_spool_read_keys() { # read-keys <dir> [session-transcript]
 # Echo the pending keys, other than the ones already named, whose first record names a cwd belonging to
 # this project. One line read per pending file, so the cost is a handful of reads.
 issue_spool_keys_written_from() { # keys-written-from <dir> [already-named...]
-  local dir="${1:-$PWD}" root mine file key cwd named
+  local dir="${1:-$PWD}" root mine file key cwd named matched
   shift || true
   named=" $* "
   mine="$(issue_spool_key "$dir")"
@@ -262,9 +262,35 @@ issue_spool_keys_written_from() { # keys-written-from <dir> [already-named...]
     [ -s "$file" ] || continue
     key="$(basename "$file" .jsonl)"
     case "$named" in *" $key "*) continue ;; esac
-    cwd="$(head -n 1 "$file" 2>/dev/null | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-    [ -n "$cwd" ] || continue
-    [ "$(issue_spool_key "$cwd")" = "$mine" ] || continue
+    # EVERY record, not just the first (claude-config#294). Reading only the head meant a single
+    # unattributable record at the top of a file stranded every record behind it, whatever their
+    # own cwd said, and that is how 106 findings sat in one file nothing could reach.
+    #
+    # The stamped project key first, because it needs no resolution at all and is right even when
+    # the directory has been deleted outright.
+    if grep -q "\"project\"[[:space:]]*:[[:space:]]*\"$mine\"" "$file" 2>/dev/null; then
+      printf '%s\n' "$key"
+      continue
+    fi
+    # Then the cwds, for every record written before the stamp existed. Deduplicated, because a
+    # file holds one cwd repeated far more often than it holds many, and each distinct one costs a
+    # digest.
+    matched=0
+    while IFS= read -r cwd; do
+      [ -n "$cwd" ] || continue
+      [ "$matched" -eq 1 ] && continue
+      [ "$(issue_spool_key "$cwd")" = "$mine" ] && { matched=1; continue; }
+      # A worktree resolves through the checkout it belongs to, which is what its own key would
+      # have been while it still existed. Pure string work, so it costs nothing and it is the only
+      # thing that can reach the backlog written from a worktree that has since been removed.
+      case "$cwd" in
+        */.claude/worktrees/*)
+          [ "$(issue_spool_key "${cwd%/.claude/worktrees/*}")" = "$mine" ] && matched=1 ;;
+      esac
+    done <<KEYS_FROM_CWDS
+$(sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" 2>/dev/null | sort -u)
+KEYS_FROM_CWDS
+    [ "$matched" -eq 1 ] || continue
     printf '%s\n' "$key"
   done
 }
@@ -315,10 +341,25 @@ issue_spool_append() { # append <dir> <json-record>
   # is written when it is not known, so a record made where there is no session is byte for byte
   # what it was before this existed, and a record that already names a session keeps it: the
   # harvest reads the AGENT's session out of the hook payload and knows better than a lookup does.
-  local _sp_sid; _sp_sid="$(issue_spool_session_id "${3:-}")"
-  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ] || [ -n "$_sp_sid" ]; then
-    record="$(printf '%s' "$record" | CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-}" \
-        CLAUDE_SPOOL_SESSION="$_sp_sid" python3 -c '
+  #
+  # AND THE PROJECT KEY, resolved HERE, while the directory the record names is guaranteed to still
+  # exist (claude-config#294). Attribution used to re-resolve a record's `cwd` when a clear went
+  # looking, and an agent's cwd is routinely a git worktree that every AGENTS.md tells people to
+  # remove once the PR merges. Once it is gone the resolution falls back to hashing a path that is
+  # not there and the record belongs to no project. Measured on this Mac 2026-09-03: 111 of 170
+  # pending records were written from a worktree cwd, so this was the majority case.
+  #
+  # Stamping it cannot help a record already written, which is the whole backlog (L223), so the
+  # reader still resolves `cwd` as well. This is the half that will be right from now on.
+  #
+  # ONE python3 for all of it. The two branches this replaces did the same parse and dump, and the
+  # second existed only to validate, so folding them costs nothing and the validation still happens:
+  # a record that does not parse fails here exactly as before.
+  local _sp_sid _sp_proj
+  _sp_sid="$(issue_spool_session_id "${3:-}")"
+  _sp_proj="$(issue_spool_key "${1:-$PWD}")"
+  record="$(printf '%s' "$record" | CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-}" \
+      CLAUDE_SPOOL_SESSION="$_sp_sid" CLAUDE_SPOOL_PROJECT="$_sp_proj" python3 -c '
 import json, os, sys
 rec = json.loads(sys.stdin.read())
 if isinstance(rec, dict):
@@ -326,12 +367,11 @@ if isinstance(rec, dict):
         rec["suite_run"] = os.environ["CLAUDE_SUITE_RUN_ID"]
     if os.environ.get("CLAUDE_SPOOL_SESSION") and not rec.get("session"):
         rec["session"] = os.environ["CLAUDE_SPOOL_SESSION"]
+    if os.environ.get("CLAUDE_SPOOL_PROJECT") and not rec.get("project"):
+        rec["project"] = os.environ["CLAUDE_SPOOL_PROJECT"]
 print(json.dumps(rec))' 2>/dev/null)" || return 2
-    [ -n "$record" ] || return 2
-    case "$record" in *$'\n'*) return 2 ;; esac
-  else
-    printf '%s' "$record" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null || return 2
-  fi
+  [ -n "$record" ] || return 2
+  case "$record" in *$'\n'*) return 2 ;; esac
   mkdir -p "$(issue_spool_root)" 2>/dev/null || return 1
   printf '%s\n' "$record" >> "$file" 2>/dev/null || return 1
 
