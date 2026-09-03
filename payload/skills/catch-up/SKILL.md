@@ -1,6 +1,6 @@
 ---
 name: catch-up
-description: Full Claude Code capability audit — enumerates every feature available, maps each against your actual usage and config, surfaces what you're missing, highlights recent launches, and produces an exhaustive personalized report. User-invoked only — the agent will never auto-fire this.
+description: Full Claude Code capability audit, enumerates every feature available, maps each against your actual usage and config, surfaces what you're missing, highlights recent launches, and produces an exhaustive personalized report. User-invoked only: the agent will never auto-fire this.
 allowed-tools: Read, Glob, Grep, Bash, WebFetch, Agent
 disable-model-invocation: true
 effort: high
@@ -10,21 +10,21 @@ effort: high
 
 ultrathink
 
-You are running a comprehensive Claude Code audit. The goal is to help the user discover and use every Claude Code feature relevant to how they actually work — not just recent additions, but the full capability surface. A user who types /catch-up wants a thorough report, not a quick summary. Be exhaustive. Be specific. Be verbose. This report should take several minutes to produce and should be long.
+You are running a comprehensive Claude Code audit. The goal is to help the user discover and use every Claude Code feature relevant to how they actually work, not just recent additions, but the full capability surface. A user who types /catch-up wants a thorough report, not a quick summary. Be exhaustive. Be specific. Be verbose. This report should take several minutes to produce and should be long.
 
 The output has two parts:
-1. **The full picture** — here is everything Claude Code can do, organized by category, with your current adoption status next to each
-2. **Personalized action items** — here is what you specifically should do, backed by evidence from your actual sessions, config, and codebase
+1. **The full picture**: here is everything Claude Code can do, organized by category, with your current adoption status next to each
+2. **Personalized action items**: here is what you specifically should do, backed by evidence from your actual sessions, config, and codebase
 
 ---
 
 ## ANTI-HALLUCINATION RULE
 
-Every feature citation must quote exact text from a source you fetched. Never invent version numbers, dates, or feature descriptions. If you cannot find a real source for a claim, write: `[no source found — inferred from analysis]`. This rule applies to every single item in your output.
+Every feature citation must quote exact text from a source you fetched. Never invent version numbers, dates, or feature descriptions. If you cannot find a real source for a claim, write: `[no source found, inferred from analysis]`. This rule applies to every single item in your output.
 
 ---
 
-## Step 1 — Locate session directory
+## Step 1: Locate session directory
 
 Run this first. You need the actual path before spawning agents.
 
@@ -56,7 +56,7 @@ Record the actual SESSIONS_DIR path and project name. You will embed these in th
 
 ---
 
-## Step 2 — Launch three research agents in parallel
+## Step 2: Launch three research agents in parallel
 
 **Critical**: spawn all three agents in a single message so they run simultaneously. Do not wait for one before starting the next.
 
@@ -64,7 +64,7 @@ Embed the actual SESSIONS_DIR path and project cwd into each agent prompt before
 
 ---
 
-### Agent A — Full Feature Researcher
+### Agent A: Full Feature Researcher
 
 Prompt (fill in PROJECT_CWD with the actual path before sending):
 
@@ -129,7 +129,7 @@ Return the COMPLETE inventory. Do not summarize or truncate. Include everything 
 
 ---
 
-### Agent B — Deep Usage Analyst
+### Agent B: Deep Usage Analyst
 
 Prompt (fill in SESSIONS_DIR with the actual path before sending):
 
@@ -153,7 +153,7 @@ print(f"Showing most recent 25:\n")
 for e in entries:
     date = e.get("modified", "?")[:10]
     msgs = e.get("messageCount", "?")
-    branch = e.get("gitBranch", "") or "—"
+    branch = e.get("gitBranch", "") or "(none)"
     summary = e.get("summary", "")[:100]
     first = e.get("firstPrompt", "")[:80]
     print(f"{date} | {str(msgs):>4}msg | {branch}")
@@ -267,7 +267,7 @@ Return ALL raw data. Do not truncate output. The caller needs the full picture t
 
 ---
 
-### Agent C — Config and Project Auditor
+### Agent C: Config and Project Auditor
 
 Prompt (fill in PROJECT_CWD with the actual working directory before sending):
 
@@ -279,20 +279,20 @@ Working directory: PROJECT_CWD_PLACEHOLDER
 Read ALL of the following. Return the full content of each (not summaries).
 
 **C1. Global Claude configuration**
-- Read ~/.claude/CLAUDE.md — show line count and full content
-- Read ~/.claude/settings.json — show full content
+- Read ~/.claude/CLAUDE.md: show line count and full content
+- Read ~/.claude/settings.json: show full content
 - Read ~/.claude/settings.local.json if it exists
-- List ~/.claude/skills/ — show all skill names and their SKILL.md frontmatter
-- List ~/.claude/commands/ — show all command names
-- List ~/.claude/agents/ — show all agent names and their frontmatter
+- List ~/.claude/skills/: show all skill names and their SKILL.md frontmatter
+- List ~/.claude/commands/: show all command names
+- List ~/.claude/agents/: show all agent names and their frontmatter
 
 **C2. Project-level Claude configuration**
-- Read PROJECT_CWD_PLACEHOLDER/CLAUDE.md — show full content and line count
+- Read PROJECT_CWD_PLACEHOLDER/CLAUDE.md: show full content and line count
 - Read PROJECT_CWD_PLACEHOLDER/.claude/settings.json if it exists
 - Read PROJECT_CWD_PLACEHOLDER/.claude/settings.local.json if it exists
-- List PROJECT_CWD_PLACEHOLDER/.claude/skills/ — show all skill names
-- List PROJECT_CWD_PLACEHOLDER/.claude/commands/ — show all command names
-- List PROJECT_CWD_PLACEHOLDER/.claude/agents/ — show all agent names
+- List PROJECT_CWD_PLACEHOLDER/.claude/skills/: show all skill names
+- List PROJECT_CWD_PLACEHOLDER/.claude/commands/: show all command names
+- List PROJECT_CWD_PLACEHOLDER/.claude/agents/: show all agent names
 - Read PROJECT_CWD_PLACEHOLDER/.mcp.json if it exists
 
 **C3. Auto-memory files**
@@ -337,7 +337,7 @@ Return EVERYTHING. Full file contents, not summaries. The caller needs the raw d
 
 ---
 
-## Step 3 — Synthesize all three agent results
+## Step 3: Synthesize all three agent results
 
 After all three agents complete, you have:
 - **A**: Complete feature inventory from official docs + changelog
@@ -348,7 +348,7 @@ Now cross-reference everything and produce the report below.
 
 ---
 
-## Step 4 — Produce the full report
+## Step 4: Produce the full report
 
 The report must be comprehensive and verbose. Do not summarize. Do not cap at N items. Show everything relevant. Use clear markdown headers and tables where appropriate.
 
@@ -377,17 +377,17 @@ For EVERY major Claude Code capability, show adoption status. Organize by catego
 ```
 | Feature | Status | Notes |
 |---------|--------|-------|
-| /compact | ✓ Used | Called 3× |
-| /resume  | — Never used | Would save context on long sessions |
-| /loop    | — Never used | Could automate your deploy checks |
+| /compact | Used | Called 3 times |
+| /resume  | Never used | Would save context on long sessions |
+| /loop    | Never used | Could automate your deploy checks |
 ```
 
 Status options:
-- **✓ Using** — confirmed in session history
-- **⚙ Configured** — set up but zero usage
-- **— Not set up** — not configured, not used
-- **✗ Dead weight** — configured but never used, likely should remove
-- **N/A** — doesn't apply to this project/stack
+- **Using**: confirmed in session history
+- **Configured**: set up but zero usage
+- **Not set up**: not configured, not used
+- **Dead weight**: configured but never used, likely should remove
+- **N/A**: doesn't apply to this project/stack
 
 Cover ALL of these categories (from the feature inventory Agent A built):
 - Built-in slash commands (every single one)
@@ -401,21 +401,21 @@ Cover ALL of these categories (from the feature inventory Agent A built):
 - Memory system features
 - Keyboard shortcuts (notable ones)
 
-For every "— Not set up" item where usage data or project structure suggests it would help: add a note explaining WHY it fits this project specifically.
+For every "Not set up" item where usage data or project structure suggests it would help: add a note explaining WHY it fits this project specifically.
 
 ---
 
-### SECTION 2: Recent Launches — What Just Shipped
+### SECTION 2: Recent Launches, What Just Shipped
 
 For every significant feature released in the last 60 days (from Agent A's changelog research):
 
 Show each as:
 
 ```
-#### {Feature Name} — {version} ({date})
+#### {Feature Name}: {version} ({date})
 {Exact quote from changelog}
 
-**Applies to you**: Yes/No/Maybe — {1 sentence why, citing specific evidence from B or C}
+**Applies to you**: Yes/No/Maybe, {1 sentence why, citing specific evidence from B or C}
 **How to enable**: {exact command or config}
 ```
 
@@ -423,7 +423,7 @@ Do not skip any release. Do not filter. Show everything that shipped. Let the us
 
 ---
 
-### SECTION 3: Dead Weight — Remove This
+### SECTION 3: Dead Weight, Remove This
 
 List everything that is configured but produces zero value:
 - MCP servers with 0 calls in history
@@ -474,11 +474,11 @@ Specific changes to settings.json, hooks, or MCP setup that would reduce frictio
 Number every actionable recommendation from the entire report. Rank by expected impact. Format:
 
 ```
-1. [10 min] **Remove swift-lsp plugin** — loads on every session, zero Swift files
+1. [10 min] **Remove swift-lsp plugin**: loads on every session, zero Swift files
    → claude plugin disable swift-lsp@claude-plugins-official
    → Evidence: 0 Swift files in project, 0 swift-lsp tool calls in 25 sessions
 
-2. [5 min] **Add status line showing git branch** — you asked "which branch?" in 3 sessions  
+2. [5 min] **Add status line showing git branch**: you asked "which branch?" in 3 sessions  
    → Add to ~/.claude/settings.json: "statusLine": {"command": "...", "refreshInterval": 10}
    → Evidence: B5 repeated prompt analysis, session data
 
@@ -491,7 +491,7 @@ No cap on the number of items. Include everything worth doing.
 
 ### SECTION 8: Things to Know About
 
-Features that exist and are relevant but don't require immediate action — just awareness. Organized as a bulleted list of short "did you know" facts specific to this project/workflow. Include exact docs links or changelog quotes.
+Features that exist and are relevant but don't require immediate action, just awareness. Organized as a bulleted list of short "did you know" facts specific to this project/workflow. Include exact docs links or changelog quotes.
 
 ---
 

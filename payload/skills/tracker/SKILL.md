@@ -38,7 +38,7 @@ If `config.local.json` is missing, the skill is not configured. Walk the user th
 6. Create `config.local.json` in this skill dir by copying `config.example.json` and pasting
    the URL. The token is already filled in.
 
-Then verify with `bash tracker.sh headers` — it should print the sheet's column names.
+Then verify with `bash tracker.sh headers`: it should print the sheet's column names.
 
 > If the user later changes the script, they must **Deploy → Manage deployments → Edit →
 > New version** for changes to take effect. The `/exec` URL stays the same.
@@ -47,26 +47,26 @@ Then verify with `bash tracker.sh headers` — it should print the sheet's colum
 
 1. **Read config**: confirm `config.local.json` exists. If not, run setup above.
 2. **Discover columns**: run `bash tracker.sh headers`. This returns the sheet's actual
-   header row — always use these as the source of truth; don't assume column names.
+   header row, always use these as the source of truth; don't assume column names.
 3. **Build the row** from the user's message + the current project context (repo name, what
    was just worked on). Map values onto the real headers.
-   - **Date Started — do NOT default to today.** Determine when the project actually began by
+   - **Date Started: do NOT default to today.** Determine when the project actually began by
      looking back, in this order: (a) the earliest conversation/session about this project,
      (b) the repo's first commit (`git log --reverse --format=%ad --date=short | head -1`),
      (c) ask the user. Only use today if the project genuinely started today.
-   - **Date Completed — leave blank (`""`) unless the project is actually finished.** Pass it
+   - **Date Completed: leave blank (`""`) unless the project is actually finished.** Pass it
      explicitly as an empty string so it isn't auto-dated.
-   - ⚠️ The script auto-fills *any* empty `date`/`timestamp`/`added`/`updated`/`created`
+   - Warning: the script auto-fills *any* empty `date`/`timestamp`/`added`/`updated`/`created`
      column with today. Because this sheet has both *Date Started* and *Date Completed*,
      always set both explicitly (computed start date; `""` for completed-if-unfinished) so
      neither gets a wrong "today".
    - If a column that clearly needs a value (e.g. Project Name, Problem/Goal) can't be
      inferred, ask the user one short question rather than guessing.
-   - **Skills Used — never "Claude Code".** This column is for resume-grade skills: the actual
+   - **Skills Used, never "Claude Code".** This column is for resume-grade skills: the actual
      technologies, languages, frameworks, and competencies demonstrated (e.g. TypeScript,
      Next.js, Cloudflare Workers, Supabase/Postgres, system architecture, REST API design).
      Claude Code is the tool used to do the work, not a skill to list.
-   - **Link — default to the project's repo URL.** Use the current repo's remote
+   - **Link: default to the project's repo URL.** Use the current repo's remote
      (`git remote get-url origin`, stripped of a trailing `.git`) as the Link value. Only leave
      it blank or use something else if the project has no git remote or the user specifies a
      different URL (e.g. a deploy/dashboard link).
@@ -76,7 +76,7 @@ Then verify with `bash tracker.sh headers` — it should print the sheet's colum
    substantial. Only call `append` once they've signed off.
 5. **Append**: pass a JSON object keyed by header name (case-insensitive). Current columns are
    *Project Name, Date Started, Date Completed, Problem/Goal, My Actions, Outcome/Results,
-   When to Check Results, Skills Used, Link* — but always re-read via `headers` in case they change.
+   When to Check Results, Skills Used, Link*, but always re-read via `headers` in case they change.
    ```
    bash tracker.sh append '{"Project Name":"Bidspoke","Date Started":"2026-05-20","Date Completed":"","Problem/Goal":"Ship auth flow","My Actions":"Built login + session handling","Outcome/Results":"Flow works, tests pending","Skills Used":"Claude Code"}'
    ```
@@ -85,7 +85,7 @@ Then verify with `bash tracker.sh headers` — it should print the sheet's colum
 
 ## Notes
 
-- `config.local.json` holds the deployment URL + token and is gitignored — never commit it or
+- `config.local.json` holds the deployment URL + token and is gitignored, never commit it or
   print the token in chat.
 - The column mapping is by header name, so the skill keeps working if the user reorders or
-  renames columns — just re-read headers.
+  renames columns, just re-read headers.

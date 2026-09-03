@@ -35,10 +35,10 @@ printf '{"agent_id":"plan-redteam-1"}' | run; code1=$?
   && check "the first idle is held back rather than allowed" ok \
   || check "the first idle is held back rather than allowed" "exit=$code1"
 msg="$(errtext)"
-printf '%s' "$msg" | grep -qi 'disagree' \
+grep -qi 'disagree' <<< "$msg" \
   && check "and the message asks for the disagreement it exists to surface" ok \
   || check "and the message asks for the disagreement it exists to surface" "msg=$msg"
-printf '%s' "$msg" | grep -qi 'you may stop' \
+grep -qi 'you may stop' <<< "$msg" \
   && check "and says how to finish, so it is not a wall" ok \
   || check "and says how to finish, so it is not a wall" "msg=$msg"
 

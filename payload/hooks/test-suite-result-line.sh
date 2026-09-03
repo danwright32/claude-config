@@ -46,7 +46,7 @@ printf '%s passed=3 failed=0\n' "$MARK" | grep -q "$PATTERN" \
   && check "the pattern accepts a well formed result line" ok \
   || check "the pattern accepts a well formed result line" "it rejected one"
 for bad in "$MARK passed=3" "$MARK passed=three failed=0" "  $MARK passed=3 failed=0" "passed: 3, failed: 0"; do
-  printf '%s\n' "$bad" | grep -q "$PATTERN" \
+  grep -q "$PATTERN" <<< "$bad" \
     && check "and rejects: $bad" "it accepted it" \
     || check "and rejects: $bad" ok
 done

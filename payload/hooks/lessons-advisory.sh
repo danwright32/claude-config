@@ -241,7 +241,7 @@ for i in "${!TRIG_IDS[@]}"; do
   done <<< "$files"
   [ -z "$hit_files" ] && continue
   # Three examples is enough to find it; a full list turns advice into a wall.
-  shown="$(printf '%s' "$hit_files" | tr ' ' '\n' | sed '/^$/d' | head -3 | tr '\n' ' ')"
+  shown="$(printf '%s' "$hit_files" | tr ' ' '\n' | sed '/^$/d' | awk 'NR <= 3' | tr '\n' ' ')"
   more="$(printf '%s' "$hit_files" | tr ' ' '\n' | sed '/^$/d' | wc -l | tr -d ' ')"
   extra=""
   [ "$more" -gt 3 ] && extra=" (and $((more - 3)) more)"
@@ -275,7 +275,7 @@ ids="$(printf '%s' "$hit_ids" | tr ',' '\n' | sed '/^$/d' | sort -u -V)"
 
 lesson_text=""
 if [ ! -r "$LESSONS_FILE" ]; then
-  lesson_text="COULD NOT READ $LESSONS_FILE — the lessons below could not be quoted, so read them there yourself. This is not a clean result."
+  lesson_text="COULD NOT READ $LESSONS_FILE: the lessons below could not be quoted, so read them there yourself. This is not a clean result."
 else
   while IFS= read -r id; do
     [ -z "$id" ] && continue
@@ -287,7 +287,7 @@ else
     ' "$LESSONS_FILE")"
     if [ -z "$body" ]; then
       lesson_text="$lesson_text
-$id NOT FOUND in $LESSONS_FILE — the trigger map names a lesson this file no longer has. Do not treat it as inapplicable; the id was renumbered or removed."
+$id NOT FOUND in $LESSONS_FILE: the trigger map names a lesson this file no longer has. Do not treat it as inapplicable; the id was renumbered or removed."
     else
       lesson_text="$lesson_text
 $body"

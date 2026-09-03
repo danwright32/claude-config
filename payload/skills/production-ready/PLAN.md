@@ -4,9 +4,9 @@
 
 **Goal:** Build a global, user-invoked `/production-ready` skill that audits a project against a broad production-readiness checklist using many parallel specialist agents, adversarially verifies the serious findings, and produces a severity-ranked advisory report that can be filed as GitHub issues.
 
-**Architecture:** Mirrors `plan-council` — a `SKILL.md` runs the framing conversation, launches a Workflow, presents results, and files issues; `production-audit.workflow.js` runs the real multi-agent work (profile → 19 parallel domain auditors → adversarial verify → synthesize). A `healthcheck.sh` is the test harness, validating frontmatter + that the workflow parses.
+**Architecture:** Mirrors `plan-council`, a `SKILL.md` runs the framing conversation, launches a Workflow, presents results, and files issues; `production-audit.workflow.js` runs the real multi-agent work (profile → 19 parallel domain auditors → adversarial verify → synthesize). A `healthcheck.sh` is the test harness, validating frontmatter + that the workflow parses.
 
-**Tech Stack:** Markdown (SKILL.md), JavaScript (Workflow engine script — plain JS, no TypeScript, no `Date.now()`/`Math.random()`), Bash (healthcheck), `gh` CLI for issue filing, shared `~/.claude/skills/milestone/create-milestone.sh`.
+**Tech Stack:** Markdown (SKILL.md), JavaScript (Workflow engine script: plain JS, no TypeScript, no `Date.now()`/`Math.random()`), Bash (healthcheck), `gh` CLI for issue filing, shared `~/.claude/skills/milestone/create-milestone.sh`.
 
 ## Global Constraints
 
@@ -26,7 +26,7 @@
 - Create: `~/.claude/skills/production-ready/SKILL.md` (frontmatter + title only this task)
 
 **Interfaces:**
-- Produces: `healthcheck.sh` — exits 0 when all files are valid, non-zero with a message otherwise. Re-run after every later task.
+- Produces: `healthcheck.sh`, exits 0 when all files are valid, non-zero with a message otherwise. Re-run after every later task.
 
 - [ ] **Step 1: Write the failing test (`healthcheck.sh`)**
 
@@ -68,7 +68,7 @@ Expected: FAIL with `HEALTHCHECK FAIL: SKILL.md missing` (no files yet).
 ```markdown
 ---
 name: production-ready
-description: Audit a project against a broad production-readiness checklist before sharing it — many parallel specialist auditor agents grade security, data/privacy, testing, reliability, observability, deployment, DR, cost, accessibility, and docs; serious findings are adversarially verified; produces a severity-ranked advisory report and, on approval, files prioritized GitHub issues in the audited repo. User-invoked only (spawns many agents).
+description: Audit a project against a broad production-readiness checklist before sharing it: many parallel specialist auditor agents grade security, data/privacy, testing, reliability, observability, deployment, DR, cost, accessibility, and docs; serious findings are adversarially verified; produces a severity-ranked advisory report and, on approval, files prioritized GitHub issues in the audited repo. User-invoked only (spawns many agents).
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash, WebFetch, AskUserQuestion, Workflow, Agent
 ---
@@ -81,7 +81,7 @@ allowed-tools: Read, Glob, Grep, Bash, WebFetch, AskUserQuestion, Workflow, Agen
 Run: `~/.claude/skills/production-ready/healthcheck.sh`
 Expected: FAIL with `HEALTHCHECK FAIL: workflow script missing` (frontmatter checks now pass; we've advanced past them).
 
-- [ ] **Step 5: "Commit"** — `~/.claude` is not a git repo, so no commit. Files are saved; proceed.
+- [ ] **Step 5: "Commit"**, `~/.claude` is not a git repo, so no commit. Files are saved; proceed.
 
 ---
 
@@ -333,13 +333,13 @@ const verifyFindings = async (res, d) => {
   if (!serious.length) return { domain: d.key, findings: res.findings }
   const verdicts = await parallel(serious.map(f => () =>
     agent(`Adversarially REFUTE this production-readiness finding for "${d.title}" in ${projectDir}.
-Finding: "${f.check}" — claimed ${f.status} (${f.severity}). Stated evidence: ${f.evidence}.
+Finding: "${f.check}", claimed ${f.status} (${f.severity}). Stated evidence: ${f.evidence}.
 Search the codebase to prove the claim WRONG (e.g. the protection actually exists). Default refuted=false if you cannot disprove it. Cite path:line.`,
       { schema: REFUTE_SCHEMA, label: `verify:${d.key}`, phase: 'Verify' })
       .then(v => ({ f, v }))))
   const refutedSet = new Set(verdicts.filter(Boolean).filter(x => x.v && x.v.refuted).map(x => x.f.check))
   const findings = res.findings.map(f => refutedSet.has(f.check)
-    ? { ...f, status: 'pass', severity: 'none', evidence: `${f.evidence} — overturned on verification` }
+    ? { ...f, status: 'pass', severity: 'none', evidence: `${f.evidence}, overturned on verification` }
     : f)
   return { domain: d.key, findings }
 }
@@ -356,7 +356,7 @@ phase('Synthesize')
 const allFindings = audited.filter(Boolean).flatMap(a =>
   a.findings.map(f => ({ domain: a.domain, ...f })))
 const synth = await agent(
-  `You are synthesizing a production-readiness report (ADVISORY — no go/no-go verdict). Project: ${repo || projectDir}.
+  `You are synthesizing a production-readiness report (ADVISORY, no go/no-go verdict). Project: ${repo || projectDir}.
 Here are all verified findings across domains as JSON:
 ${JSON.stringify(allFindings)}
 Dedup findings that describe the same gap across domains. Rank by severity. Produce:
@@ -374,9 +374,9 @@ return { profile, applicable: applicable.map(d => d.key), naDomains, report: syn
 - [ ] **Step 2: Run the test to verify it now passes the parse + phases checks**
 
 Run: `~/.claude/skills/production-ready/healthcheck.sh`
-Expected: FAIL with `HEALTHCHECK FAIL: SKILL.md missing section/marker: ## 1.` (parse + `phases:` checks now pass; only the SKILL.md body markers remain — that's Task 3).
+Expected: FAIL with `HEALTHCHECK FAIL: SKILL.md missing section/marker: ## 1.` (parse + `phases:` checks now pass; only the SKILL.md body markers remain: that's Task 3).
 
-- [ ] **Step 3: "Commit"** — save only (no git). Proceed.
+- [ ] **Step 3: "Commit"**, save only (no git). Proceed.
 
 ---
 
@@ -395,15 +395,15 @@ Expected: FAIL with `HEALTHCHECK FAIL: SKILL.md missing section/marker: ## 1.` (
 
 A heavyweight, user-invoked production-readiness auditor. A panel of independent specialist agents each grade one domain against the real codebase; serious gaps are adversarially verified; the result is a severity-ranked **advisory** report (no ship/no-ship gate) that, on your approval, becomes GitHub issues in the audited repo.
 
-Gates marked 👤 require the user before continuing.
+Gates marked (user) require the user before continuing.
 
-## 1. Frame the audit  👤
+## 1. Frame the audit  (user)
 In conversation with the user, establish:
 - The **target project directory** (absolute path, so agents read the right repo).
 - The **GitHub repo** (`owner/name`) where issues will be filed (the audited repo).
 - Any **known focus or exclusions** (e.g. "skip accessibility, it's an internal API").
 
-Take a quick read of the repo (CLAUDE.md, manifest) so you can confirm the project type you expect. Then present the plan — "I'll run 19 domain auditors in parallel, verify the serious findings, and produce an advisory report" — and get a go-ahead with **AskUserQuestion**. This is heavy and spawns many agents, so confirm before launching.
+Take a quick read of the repo (CLAUDE.md, manifest) so you can confirm the project type you expect. Then present the plan: "I'll run 19 domain auditors in parallel, verify the serious findings, and produce an advisory report", and get a go-ahead with **AskUserQuestion**. This is heavy and spawns many agents, so confirm before launching.
 
 ## 2. Run the audit (Workflow engine)
 Call the **Workflow** tool with:
@@ -417,15 +417,15 @@ Call the **Workflow** tool with:
       }
     }
 
-Pass `date` from your own context — the workflow engine cannot read the clock. It returns `{ profile, applicable, naDomains, report }`, where `report = { executiveSummary, whatsSolid, topRisks, severityCounts, backlog }`.
+Pass `date` from your own context: the workflow engine cannot read the clock. It returns `{ profile, applicable, naDomains, report }`, where `report = { executiveSummary, whatsSolid, topRisks, severityCounts, backlog }`.
 
 ## 3. Save the report
-Render a markdown report from the return value (executive summary, what's solid, top risks, severity counts, the N/A domains with reasons, then the full backlog grouped by domain with status/severity/evidence/remediation/effort). Save it to `docs/production-readiness/<date>-report.md` in the **target** repo. Do NOT commit it — tell the user it's there for review.
+Render a markdown report from the return value (executive summary, what's solid, top risks, severity counts, the N/A domains with reasons, then the full backlog grouped by domain with status/severity/evidence/remediation/effort). Save it to `docs/production-readiness/<date>-report.md` in the **target** repo. Do NOT commit it: tell the user it's there for review.
 
-## 4. Present  👤
-Give a plain-language summary for a product manager: how many critical/high/medium/low gaps, what's already solid, the top risks, and any domains skipped as N/A (with why). If the profile suggests grounding was partial (repo unreadable), say so. Advisory only — do not declare anything ship-blocking.
+## 4. Present  (user)
+Give a plain-language summary for a product manager: how many critical/high/medium/low gaps, what's already solid, the top risks, and any domains skipped as N/A (with why). If the profile suggests grounding was partial (repo unreadable), say so. Advisory only: do not declare anything ship-blocking.
 
-## 5. File issues  👤
+## 5. File issues  (user)
 Offer, via **AskUserQuestion**, to file the backlog as GitHub issues in the audited repo. On approval:
 1. Ensure labels exist (create missing ones), one per domain key plus severity labels:
 
@@ -435,14 +435,14 @@ Offer, via **AskUserQuestion**, to file the backlog as GitHub issues in the audi
        gh label create "severity:low"       --color 0E8A16 --description "Production-readiness: low"       2>/dev/null || true
        gh label create "production-readiness" --color 5319E7 --description "Found by /production-ready"    2>/dev/null || true
 
-2. File one issue per backlog item (group tightly-related items into one issue to avoid spam — especially `low` severity, which you may group by domain). Title = imperative summary; body = the gap, why it matters, the remediation direction, and the `path:line` evidence. Label with `production-readiness`, the matching `severity:*`, and the domain. **Never** apply any Claude/AI-attribution label.
+2. File one issue per backlog item (group tightly-related items into one issue to avoid spam, especially `low` severity, which you may group by domain). Title = imperative summary; body = the gap, why it matters, the remediation direction, and the `path:line` evidence. Label with `production-readiness`, the matching `severity:*`, and the domain. **Never** apply any Claude/AI-attribution label.
 
        gh issue create --repo "<owner/name>" --title "<title>" --body "<body>" \
          --label "production-readiness" --label "severity:high"
 
-3. If `gh` is not installed/authenticated or the repo isn't resolvable, skip filing and tell the user — the saved report still captures everything.
+3. If `gh` is not installed/authenticated or the repo isn't resolvable, skip filing and tell the user: the saved report still captures everything.
 
-## 6. Offer a tracking milestone  👤
+## 6. Offer a tracking milestone  (user)
 Optionally offer (AskUserQuestion) to group the issues under a GitHub milestone via the shared helper:
 
     DRY_RUN=1 bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>   # preview
@@ -459,7 +459,7 @@ Optionally offer (AskUserQuestion) to group the issues under a GitHub milestone 
 Run: `~/.claude/skills/production-ready/healthcheck.sh`
 Expected: `HEALTHCHECK OK`
 
-- [ ] **Step 3: "Commit"** — save only (no git). Skill is complete.
+- [ ] **Step 3: "Commit"**, save only (no git). Skill is complete.
 
 ---
 
@@ -469,15 +469,15 @@ Expected: `HEALTHCHECK OK`
 
 - [ ] **Step 1: Pick a target.** Ask the user which repo to audit first (e.g. Bidspoke). Confirm `gh auth status` succeeds for that repo's owner.
 - [ ] **Step 2: Invoke `/production-ready`** against that repo and walk the gates.
-- [ ] **Step 3: Sanity-check the output** — do auditors cite real `path:line`s? Did the verify pass overturn any false alarms? Is the severity split sensible?
+- [ ] **Step 3: Sanity-check the output**, do auditors cite real `path:line`s? Did the verify pass overturn any false alarms? Is the severity split sensible?
 - [ ] **Step 4: Tune** the `DOMAINS` checklists / severity guidance in `production-audit.workflow.js` based on what the first run got wrong, and update DESIGN.md's "open items" accordingly.
 
 ---
 
 ## Self-Review
 
-**1. Spec coverage:** profile/tailor (Task 2 Phase 0 + naDomains) ✓; 19 split-finer domains (Task 2 DOMAINS) ✓; deep-every-run (no quick mode) ✓; adversarial verify (Task 2 `verifyFindings`) ✓; advisory only — no go/no-go (synth prompt + present step) ✓; read-only against code (auditors only read/grep; no edits) ✓; report saved to `docs/production-readiness/<date>-report.md`, not committed (Task 3 step 3) ✓; file issues in audited repo, domain + severity labels, no AI label (Task 3 step 5) ✓; optional milestone via shared helper (Task 3 step 6) ✓; healthcheck as the test (Task 1) ✓.
+**1. Spec coverage:** profile/tailor (Task 2 Phase 0 + naDomains), covered; 19 split-finer domains (Task 2 DOMAINS), covered; deep-every-run (no quick mode), covered; adversarial verify (Task 2 `verifyFindings`), covered; advisory only, no go/no-go (synth prompt + present step), covered; read-only against code (auditors only read/grep; no edits), covered; report saved to `docs/production-readiness/<date>-report.md`, not committed (Task 3 step 3), covered; file issues in audited repo, domain + severity labels, no AI label (Task 3 step 5), covered; optional milestone via shared helper (Task 3 step 6), covered; healthcheck as the test (Task 1), covered.
 
-**2. Placeholder scan:** `<owner/name>`, `<title>`, `<body>`, `<date>` are runtime values the skill fills, not plan placeholders — acceptable. No "TODO"/"implement later" in code steps.
+**2. Placeholder scan:** `<owner/name>`, `<title>`, `<body>`, `<date>` are runtime values the skill fills, not plan placeholders: acceptable. No "TODO"/"implement later" in code steps.
 
 **3. Type consistency:** `status` enum `pass|partial|missing|na`, `severity` `critical|high|medium|low|none`, `effort` `S|M|L` consistent across FINDING_PROPS, FINDINGS_SCHEMA, SYNTH_SCHEMA, and the return shape documented in Task 2 interfaces and consumed in Task 3. `verifyFindings` downgrades to `status:'pass', severity:'none'` (both valid enum values). Workflow return `{ profile, applicable, naDomains, report }` matches Task 3's consume block.

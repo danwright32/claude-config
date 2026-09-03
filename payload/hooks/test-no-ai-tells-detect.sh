@@ -84,7 +84,7 @@ done
 # ---------------------------------------------------------------------------
 out="$(python3 -c 'import json; print(json.dumps({"prompt":"write a blog post"}))' | HOME="$FAKEHOME" python3 "$H" 2>/dev/null)"
 ctx="$(printf '%s' "$out" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("hookSpecificOutput") or {}).get("additionalContext",""))' 2>/dev/null)"
-printf '%s' "$ctx" | grep -qi 'no-ai-tells' \
+grep -qi 'no-ai-tells' <<< "$ctx" \
   && check "what it injects is the writing skill" ok \
   || check "what it injects is the writing skill" "ctx=${ctx:0:120}"
 [ "${#ctx}" -gt 400 ] \
@@ -115,7 +115,7 @@ out_missing="$(python3 -c 'import json; print(json.dumps({"prompt":"write a blog
 [ -z "$out_missing" ] \
   && check "with the skill file absent it injects nothing" ok \
   || check "with the skill file absent it injects nothing" "out=$out_missing"
-printf '%s' "$err_missing" | grep -qi 'no-ai-tells' \
+grep -qi 'no-ai-tells' <<< "$err_missing" \
   && check "and says so, rather than looking like a prompt it decided was not writing" ok \
   || check "and says so, rather than looking like a prompt it decided was not writing" "it said nothing at all"
 # The control: the same absent-HOME run on a NON writing prompt must stay silent, or the check

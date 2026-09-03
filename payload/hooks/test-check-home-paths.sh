@@ -55,7 +55,7 @@ code_bad=$?
 [ "$code_bad" -eq 1 ] \
   && check "a planted machine path fails the check" ok \
   || check "a planted machine path fails the check" "exit=$code_bad out=$out_bad"
-printf '%s' "$out_bad" | grep -q "skills/demo/SKILL.md" \
+grep -q "skills/demo/SKILL.md" <<< "$out_bad" \
   && check "the failure names the file it found it in" ok \
   || check "the failure names the file it found it in" "out=$out_bad"
 
@@ -160,7 +160,7 @@ code_mixed=$?
 [ "$code_mixed" -eq 1 ] \
   && check "another Mac's home is still refused beside a portable one" ok \
   || check "another Mac's home is still refused beside a portable one" "exit=$code_mixed out=$out_mixed"
-printf '%s' "$out_mixed" | grep -q "other.sh" \
+grep -q "other.sh" <<< "$out_mixed" \
   && check "and the refusal names the offending line, not the portable one" ok \
   || check "and the refusal names the offending line, not the portable one" "out=$out_mixed"
 
@@ -222,13 +222,13 @@ code_ang=$?
 [ "$code_ang" -eq 1 ] \
   && check "the hand substituted placeholder is refused" ok \
   || check "the hand substituted placeholder is refused" "exit=$code_ang out=$out_ang"
-printf '%s' "$out_ang" | grep -q "skills/demo/SKILL.md" \
+grep -q "skills/demo/SKILL.md" <<< "$out_ang" \
   && check "and the refusal names the file it found it in" ok \
   || check "and the refusal names the file it found it in" "out=$out_ang"
 
 # Its own exit is 1, not 2: it is a finding, and it must be reported as the same
 # kind of finding as a machine path rather than as a scan that read nothing.
-printf '%s' "$out_ang" | grep -qi "substitut" \
+grep -qi "substitut" <<< "$out_ang" \
   && check "the refusal says what to do about it" ok \
   || check "the refusal says what to do about it" "out=$out_ang"
 
@@ -275,13 +275,13 @@ code_all=$?
   && check "a tree holding all three defects fails" ok \
   || check "a tree holding all three defects fails" "exit=$code_all out=$out_all"
 
-printf '%s' "$out_all" | grep -q "skills/demo/SKILL.md" \
+grep -q "skills/demo/SKILL.md" <<< "$out_all" \
   && check "one run reports the machine path" ok \
   || check "one run reports the machine path" "out=$out_all"
-printf '%s' "$out_all" | grep -q "agents/a.md" \
+grep -q "agents/a.md" <<< "$out_all" \
   && check "the same run also reports the placeholder" ok \
   || check "the same run also reports the placeholder" "out=$out_all"
-printf '%s' "$out_all" | grep -q "commands/c.md" \
+grep -q "commands/c.md" <<< "$out_all" \
   && check "and the same run also reports the hand substituted one" ok \
   || check "and the same run also reports the hand substituted one" "out=$out_all"
 

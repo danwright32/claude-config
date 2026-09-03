@@ -8792,6 +8792,170 @@ check "#199 an empty pin file is refused rather than passed" "[ '$ce_rc' -ne 0 ]
 check "#199 and it says nothing was checked" \
   "case \"\$out_ce\" in *'holds no rows'*) true ;; *) false ;; esac"
 
+section "== only a commit CI has passed is applied automatically (claude-config#221) =="
+# 32 of 233 CI runs in 30 days were red, almost all on direct pushes to main, and the automatic
+# receive integrated whatever was on the shared repo without waiting for anything to judge it. So
+# config that fails CI was installed on the other Mac FIRST and caught only by the suite that runs
+# after installation. Three of this session's own pushes were green on a Mac and red on the Linux
+# runner, and every one of them would have landed there.
+#
+# Dan chose to gate the automatic pull on the check (2026-09-03). A pull or sync typed by a person
+# is not gated, which is the escape hatch.
+unset SYNC_NO_GIT
+CIB="$WORK/ci-bare.git"; git init -q --bare -b main "$CIB"
+CIA="$WORK/ci-repoA"; git clone -q "$CIB" "$CIA" 2>/dev/null
+CIHA="$WORK/ci-homeA"; mkdir -p "$CIHA/hooks"
+echo '{"hooks":{}}' > "$CIHA/settings.json"
+printf 'first\n' > "$CIHA/hooks/from-A.sh"
+CLAUDE_HOME="$CIHA" SYNC_REPO="$CIA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+
+# A stub gh answering the ONE endpoint the gate asks about, in the shape the real one answers in,
+# because a stub written to match my own idea of the reply proves only that (L52).
+CIBIN="$WORK/ci-bin"; mkdir -p "$CIBIN"
+cat > "$CIBIN/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CI_CALLS"
+[ -n "${CI_STATE:-}" ] || exit 1
+printf '%s\n' "$CI_STATE"
+STUB
+chmod +x "$CIBIN/gh"
+export CI_CALLS="$WORK/ci-calls.log"; : > "$CI_CALLS"
+# The repo the gate asks about. The fixtures push to a bare repo on disk, and no derivation can
+# turn a local path into an owner and a name, so the slug is named here and the DERIVATION is
+# tested on its own below against the URL forms GitHub actually hands out.
+export SYNC_REPO_SLUG="acme/widgets"
+# A registry these runs can actually write. The prelude points it at a directory that does not
+# exist, deliberately, and a sync that gets far enough to record its clone dies on it. The gated
+# runs return before they reach it and the ungated ones do not, so without this the escape hatch
+# case fails for a reason that has nothing to do with the gate (L140).
+CI_REG="$WORK/ci-clone-registry"; : > "$CI_REG"
+
+# A FRESH receiving Mac per case, level with the repo before A publishes anything new. The first
+# version of this reused one clone across every state, so each case inherited the commits the case
+# before it had pushed, both Macs ended up behind each other, and two checks passed on a conflict
+# rather than on the rule (L205: a fixture that shares mutable state with its neighbours).
+# The paths are derived from the LABEL wherever they are needed, never carried in a variable set
+# inside ci_case: it is called inside a command substitution, which is a subshell, so anything it
+# assigns is discarded on the way out. The first version did exactly that and every later reference
+# read an empty string, so a check failed with "no such file" rather than on the rule (L235).
+ci_home(){ printf '%s' "$WORK/ci-Bhome-$1"; }
+ci_repo(){ printf '%s' "$WORK/ci-B-$1"; }
+ci_case(){   # ci_case <label> <ci state, empty for a gh that refuses> -> the automatic tick output
+  local CI_REPO CI_HOME
+  CI_REPO="$(ci_repo "$1")"; CI_HOME="$(ci_home "$1")"
+  rm -rf "$CI_REPO" "$CI_HOME"
+  git clone -q "$CIB" "$CI_REPO" 2>/dev/null
+  mkdir -p "$CI_HOME/hooks"; echo '{"hooks":{}}' > "$CI_HOME/settings.json"
+  CLAUDE_HOME="$CI_HOME" SYNC_REPO="$CI_REPO" SYNC_CLONE_REGISTRY="$CI_REG" \
+    SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+  # A publishes something only it has. It syncs rather than sends, so a push from an earlier case
+  # cannot leave it behind and silently skip.
+  printf 'newer for %s\n' "$1" > "$CIHA/hooks/from-A.sh"
+  CLAUDE_HOME="$CIHA" SYNC_REPO="$CIA" SYNC_CLONE_REGISTRY="$CI_REG" \
+    SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
+  # B ticks AUTOMATICALLY, with a local edit of its own so there is something to send as well.
+  printf 'edit from B\n' > "$CI_HOME/hooks/from-B.sh"
+  CI_STATE="$2" SYNC_GH="$CIBIN/gh" SYNC_AUTOMATIC=1 SYNC_IN_WATCH=1 \
+    CLAUDE_HOME="$CI_HOME" SYNC_REPO="$CI_REPO" \
+    SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1
+}
+ci_applied(){   # did the case's Mac take what A published?
+  grep -q "newer for $1" "$WORK/ci-Bhome-$1/hooks/from-A.sh" 2>/dev/null
+}
+
+# GREEN goes through, and that is the control for everything below: without it a gate that refused
+# every state would satisfy each of the refusal checks (L159, L1).
+out_green="$(ci_case green success)"
+dbg "#221 green: $out_green"
+check "#221 a green head is applied" "ci_applied green"
+check "#221 and nothing is said about CI on a green head" \
+  "case \"\$out_green\" in *'its tests'*|*'being tested'*) false ;; *) true ;; esac"
+check "#221 and it really did ask gh about that commit" \
+  "grep -q 'commits/.*/check-runs' '$CI_CALLS'"
+
+# RED is not applied.
+out_red="$(ci_case red failure)"
+dbg "#221 red: $out_red"
+check "#221 a red head is NOT applied" "! ci_applied red"
+check "#221 and it says the tests failed" \
+  "case \"\$out_red\" in *'FAILED its tests'*) true ;; *) false ;; esac"
+check "#221 and it names the command that applies it anyway" \
+  "case \"\$out_red\" in *'claude-sync pull'*) true ;; *) false ;; esac"
+check "#221 and the marker the watcher logs says which outcome it was" \
+  "case \"\$out_red\" in *'SEND-OUTCOME ci-red'*) true ;; *) false ;; esac"
+
+# PENDING is a different fact with a different remedy: it resolves itself.
+out_pending="$(ci_case pending in_progress)"
+check "#221 a head still being tested is not applied yet" "! ci_applied pending"
+check "#221 and that is worded as waiting, not as a failure" \
+  "case \"\$out_pending\" in *'still being tested'*) true ;; *) false ;; esac"
+check "#221 and pending carries its own marker" \
+  "case \"\$out_pending\" in *'SEND-OUTCOME ci-pending'*) true ;; *) false ;; esac"
+
+# CANCELLED must never read as pending, or the receive waits for a verdict that is not coming: the
+# concurrency group cancels a superseded run and nothing will ever judge that commit.
+out_cancelled="$(ci_case cancelled cancelled)"
+check "#221 a cancelled run is not applied either" "! ci_applied cancelled"
+check "#221 and it says no verdict is coming rather than that one is on its way" \
+  "case \"\$out_cancelled\" in *'no verdict is coming'*) true ;; *) false ;; esac"
+check "#221 and cancelled carries its own marker" \
+  "case \"\$out_cancelled\" in *'SEND-OUTCOME ci-cancelled'*) true ;; *) false ;; esac"
+
+# UNREADABLE fails closed and says so, because a control that protects somebody fails closed rather
+# than open (L42), and because green and "nobody could tell" must never read alike (L98).
+out_unread="$(ci_case unreadable "")"
+check "#221 a check that cannot be read is not applied" "! ci_applied unreadable"
+check "#221 and it says it could not read the answer, not that it failed" \
+  "case \"\$out_unread\" in *'could not read whether'*) true ;; *) false ;; esac"
+check "#221 and unreadable carries its own marker" \
+  "case \"\$out_unread\" in *'SEND-OUTCOME ci-unreadable'*) true ;; *) false ;; esac"
+
+# THE ESCAPE HATCH, and the reason there is no flag to remember: the same head the gate just
+# refused, the same Mac, a sync nobody automated. Its OWN case, run immediately, because every case
+# above publishes something newer and asking a Mac from three cases ago what it holds is asking
+# about a different commit (L130).
+out_block="$(ci_case hatch failure)"
+check "#221 the escape hatch case really was blocked first" "! ci_applied hatch"
+out_hand="$(CI_STATE=failure SYNC_GH="$CIBIN/gh" SYNC_CLONE_REGISTRY="$CI_REG" \
+  CLAUDE_HOME="$(ci_home hatch)" SYNC_REPO="$(ci_repo hatch)" \
+  SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1)"
+dbg "#221 sync by hand: $out_hand"
+_ci_hh="$(ci_home hatch)"
+dbg "#221 after the hand sync: home=[$_ci_hh] holds [$(ls "$_ci_hh/hooks" 2>&1 | tr '\n' ' ')] from-A=[$(cat "$_ci_hh/hooks/from-A.sh" 2>&1)]"
+check "#221 and a sync run by hand applies that same red head" "ci_applied hatch"
+
+# And this Mac's OWN work is never held up by a question about a commit it already has: with
+# nothing to integrate there is nothing to gate (L324). Its own case too, level by construction,
+# because the gate is asked about the remote head and every earlier case moved it.
+ci_case ownwork success >/dev/null 2>&1
+check "#221 the level case really did take the head first" "ci_applied ownwork"
+printf 'B alone\n' > "$(ci_home ownwork)/hooks/from-B2.sh"
+out_own="$(CI_STATE=failure SYNC_GH="$CIBIN/gh" SYNC_AUTOMATIC=1 SYNC_IN_WATCH=1 \
+  SYNC_CLONE_REGISTRY="$CI_REG" CLAUDE_HOME="$(ci_home ownwork)" SYNC_REPO="$(ci_repo ownwork)" \
+  SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1)"
+dbg "#221 own work: $out_own"
+check "#221 with nothing to integrate, this Mac's own automatic send is not gated" \
+  "case \"\$out_own\" in *'its tests'*|*'being tested'*|*'could not read whether'*) false ;; *) true ;; esac"
+
+# The slug DERIVATION, on its own, against the two URL forms GitHub hands out and one it does not.
+# A derivation tested only through its own override is a derivation nothing tests (L322).
+SLUGR="$WORK/slug-repo"; mkdir -p "$SLUGR"; git -C "$SLUGR" init -q
+slug_of(){   # slug_of <url> -> what the tool derives, or the word none
+  git -C "$SLUGR" remote remove origin 2>/dev/null || true
+  git -C "$SLUGR" remote add origin "$1"
+  SYNC_REPO_SLUG= SYNC_REPO="$SLUGR" CLAUDE_HOME="$CIHA" bash "$SCRIPT" repo-slug 2>/dev/null || printf none
+}
+check "#221 an https remote gives owner and name" \
+  "[ \"\$(slug_of https://github.com/acme/widgets.git)\" = 'acme/widgets' ]"
+check "#221 an ssh remote gives the same" \
+  "[ \"\$(slug_of git@github.com:acme/widgets.git)\" = 'acme/widgets' ]"
+check "#221 a remote with no .git suffix gives the same" \
+  "[ \"\$(slug_of https://github.com/acme/widgets)\" = 'acme/widgets' ]"
+# A remote that is not GitHub cannot be asked about checks at all, and deriving nothing is what
+# makes the gate report "could not read" rather than inventing a repository (L11).
+check "#221 a remote that is not GitHub derives nothing" \
+  "[ \"\$(slug_of /some/bare/repo.git)\" = 'none' ]"
+
 section "== a two sided lesson does not stop on the derived index (claude-config#200) =="
 # LESSONS-INDEX.md is generated from LESSONS.md, and it is COMMITTED, so git combines it as though
 # somebody maintained it by hand. Whenever both Macs record a lesson between syncs the two

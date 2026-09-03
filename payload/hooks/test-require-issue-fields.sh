@@ -183,7 +183,7 @@ denies "create on a later line"       "echo hello
 gh issue create --title \"T\" $P $C"
 allows "complete create on a later line" "echo hello
 gh issue create --title \"T\" $ALL"
-denies "create on line 3 after a pipe" "gh issue list | head -3
+denies "create on line 3 after a pipe" "gh issue list | awk 'NR <= 3'
 echo checking
 gh issue create --title \"T\" $P $C"
 allows "backslash continuation, complete" 'gh issue create --title "T" \
@@ -252,8 +252,8 @@ m = importlib.util.module_from_spec(s); os.environ['GATE_DIR'] = '$DIR'; s.loade
 print(len(m.RULES))
 print(all(set(r) >= {'name','check','fix','override'} for r in m.RULES))
 ")"
-if [[ "$(printf '%s' "$rules_n" | head -1)" = "3" ]]; then pass=$((pass + 1)); else
-  fail=$((fail + 1)); echo "FAIL: expected 3 rules in the table, got $(printf '%s' "$rules_n" | head -1)"; fi
+if [[ "$(printf '%s' "$rules_n" | awk 'NR <= 1')" = "3" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: expected 3 rules in the table, got $(printf '%s' "$rules_n" | awk 'NR <= 1')"; fi
 if [[ "$(printf '%s' "$rules_n" | tail -1)" = "True" ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: every rule needs a name, check, fix and override"; fi
 
@@ -271,8 +271,8 @@ d = json.load(open('$HOME/.claude/settings.json'))
 n = [h['command'] for e in d['hooks']['PreToolUse'] for h in e['hooks'] if 'issue' in h['command']]
 print(len(n)); print(n[0] if n else '')
 " 2>/dev/null)"
-if [[ "$(printf '%s' "$hooks_registered" | head -1)" = "1" ]]; then pass=$((pass + 1)); else
-  fail=$((fail + 1)); echo "FAIL: exactly one issue gate should be registered, got $(printf '%s' "$hooks_registered" | head -1)"; fi
+if [[ "$(printf '%s' "$hooks_registered" | awk 'NR <= 1')" = "1" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: exactly one issue gate should be registered, got $(printf '%s' "$hooks_registered" | awk 'NR <= 1')"; fi
 if [[ "$(printf '%s' "$hooks_registered" | tail -1)" == *"require-issue-fields.sh" ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: the registered gate should be require-issue-fields.sh, got $(printf '%s' "$hooks_registered" | tail -1)"; fi
 else

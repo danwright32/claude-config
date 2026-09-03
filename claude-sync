@@ -3669,6 +3669,10 @@ sync_gh(){ printf '%s' "${SYNC_GH:-gh}"; }
 
 repo_slug(){   # -> owner/name from the origin url, or nothing
   local url
+  # A seam, because the fixtures push to a bare repo on disk and no derivation can turn a local
+  # path into an owner and a name. The derivation itself is tested directly against the URL forms
+  # below rather than through this, so the seam cannot hide it (L322).
+  [ -n "${SYNC_REPO_SLUG:-}" ] && { printf '%s' "$SYNC_REPO_SLUG"; return 0; }
   url="$(git -C "$SYNC_REPO" remote get-url origin 2>/dev/null || true)"
   [ -n "$url" ] || return 1
   url="${url%.git}"
@@ -3728,8 +3732,11 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
   sha="$(git -C "$SYNC_REPO" rev-parse "origin/$branch" 2>/dev/null || true)"
   [ -n "$sha" ] || return 1
   # Nothing to integrate means nothing to gate: this Mac's own work must never be held up by a
-  # question about a commit it already has (L324).
-  [ "$sha" != "$(repo_head)" ] || return 1
+  # question about a commit it already has (L324). The question is whether the remote holds
+  # anything we do NOT, which is an ancestry test, not an inequality: do_sync commits local changes
+  # BEFORE this runs, so our head always differs from theirs and comparing the two would gate every
+  # run for ever. Mind the direction, the same way unapplied_remote_changes does.
+  git -C "$SYNC_REPO" merge-base --is-ancestor "$sha" HEAD 2>/dev/null && return 1
   state="$(remote_ci_state "$sha")"
   case "$state" in
     green) return 1 ;;
@@ -3779,6 +3786,11 @@ do_sync(){
       # about whether the repo was reachable, and would restart the outage clock wrongly.
       record_sync_success
     fi
+    # THE CI GATE, before anything of theirs is integrated (claude-config#221). Only the automatic
+    # watcher is gated; a person running this by hand is the escape hatch. Returning here leaves
+    # this Mac's own commit local and unpushed, which the next tick retries, and the message above
+    # names the one command that settles it now.
+    if ci_gate_blocks_pull; then return 0; fi
     # integrate the other Mac's changes (only if the remote branch exists yet)
     ensure_derived_file_merge_rule
     if git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1; then
@@ -5165,6 +5177,14 @@ do_watch(){
           *"SEND-OUTCOME nothing"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: nothing to send" ;;
           *"SEND-OUTCOME behind"*)  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: skipped, this Mac is behind the shared repo" ;;
           *"SEND-OUTCOME held"*)    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: skipped, a hold is in force" ;;
+          # The four CI gate outcomes, each said separately (claude-config#221). Folded into one
+          # line they would read as one condition, and they need different remedies: pending
+          # resolves itself, red needs a fix on the other Mac, cancelled needs another push, and
+          # unreadable is about gh on THIS Mac (L11).
+          *"SEND-OUTCOME ci-pending"*)    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: not applied yet, the shared repo's head is still being tested" ;;
+          *"SEND-OUTCOME ci-red"*)        echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, the shared repo's head failed its tests" ;;
+          *"SEND-OUTCOME ci-cancelled"*)  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, the tests for the shared repo's head were cancelled, so no verdict is coming" ;;
+          *"SEND-OUTCOME ci-unreadable"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, could not read whether the shared repo's head passed its tests" ;;
           # A send that exited 0 and said nothing about what it did. Recorded as unknown rather
           # than as success: that is the state this whole line exists to stop being invisible
           # (L98), and it is what a version too old to print the marker looks like.
@@ -5347,6 +5367,7 @@ case "$cmd" in
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
   next-lesson) lesson_band_locked; next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND" ;;
+  repo-slug) repo_slug || { echo "claude-sync: origin is not a GitHub remote, so there is no owner and name to derive." >&2; exit 1; } ;;
   cite-scan) do_cite_scan "${2:-}" ;;   # read-only: which synced files cite a lesson number
   cite-pin) do_cite_pin ;;              # record what each cited lesson number names now
   cite-check) do_cite_check ;;          # read-only: has any cited number come to mean something else
@@ -5374,5 +5395,5 @@ case "$cmd" in
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
   help|-h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, reap-scratch, clean-backups, forget-mac, next-lesson, check-lessons, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, reap-scratch, clean-backups, forget-mac, next-lesson, check-lessons, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
 esac

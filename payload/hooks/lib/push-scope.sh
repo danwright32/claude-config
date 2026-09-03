@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# push-scope.sh — shared helpers for hooks that act on a `git push`.
+# push-scope.sh: shared helpers for hooks that act on a `git push`.
 #
 # Sourced, never executed. Holds the three things every push hook has to work
 # out for itself, so they exist once rather than once per hook:
-#   ps_is_git_push   — is this command actually a push (leading tokens, not a
+#   ps_is_git_push: is this command actually a push (leading tokens, not a
 #                      substring, so an `echo "git push"` cannot trigger a hook)
-#   ps_commit_in_chain / ps_add_in_chain — does the same command commit/stage
+#   ps_commit_in_chain / ps_add_in_chain: does the same command commit/stage
 #                      before pushing? PreToolUse runs BEFORE the command, so a
 #                      `git add … && git commit … && git push` has nothing in
 #                      history yet and the pending work must be folded in.
-#   ps_base_ref / ps_merge_base — what the pushed commits are measured against.
+#   ps_base_ref / ps_merge_base: what the pushed commits are measured against.
 #
 # Every function is pure: it reads its arguments and echoes or returns, touching
 # no globals, so a caller can use one without inheriting the others.
@@ -130,11 +130,11 @@ ps_repo_dir() {
   local cmd="$1" cwd="${2:-}" cand=""
 
   # `git -C <path> … push`
-  cand="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[[:space:];&|])(rtk[[:space:]]+)?git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*@\3@p' | head -1)"
+  cand="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[[:space:];&|])(rtk[[:space:]]+)?git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*@\3@p' | awk 'NR <= 1')"
   if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi
 
   # `cd <path> && … git push`
-  cand="$(printf '%s' "$cmd" | sed -nE 's@(^|[[:space:];&|])cd[[:space:]]+([^[:space:]&|;]+).*@\2@p' | head -1)"
+  cand="$(printf '%s' "$cmd" | sed -nE 's@(^|[[:space:];&|])cd[[:space:]]+([^[:space:]&|;]+).*@\2@p' | awk 'NR <= 1')"
   cand="${cand%\"}"; cand="${cand#\"}"
   cand="${cand%\'}"; cand="${cand#\'}"
   if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi

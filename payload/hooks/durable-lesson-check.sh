@@ -45,14 +45,14 @@ while IFS= read -r seg; do
   # Documented override: an inline SKIP_LESSON_CHECK=1 prefix. It is judged PER
   # SEGMENT, because it belongs to the one command it prefixes. Reading it across
   # the whole call let a genuine create sitting in a later segment go unexamined.
-  if printf '%s' "$seg" | grep -Eq '(^|[[:space:]])SKIP_LESSON_CHECK=1([[:space:]]|$)'; then
+  if grep -Eq '(^|[[:space:]])SKIP_LESSON_CHECK=1([[:space:]]|$)' <<< "$seg"; then
     continue
   fi
   stripped="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//')"
   head_tokens="$(printf '%s' "$stripped" | awk '{print $1, $2, $3}')"
-  if printf '%s' "$head_tokens" | grep -Eq '(^|/)gh[[:space:]]+issue[[:space:]]+create([[:space:]]|$)'; then
+  if grep -Eq '(^|/)gh[[:space:]]+issue[[:space:]]+create([[:space:]]|$)' <<< "$head_tokens"; then
     # A help invocation files nothing, so there is no issue to draw a lesson from.
-    if printf '%s' "$stripped" | grep -Eq '(^|[[:space:]])(--help|-h)([[:space:]]|$)'; then
+    if grep -Eq '(^|[[:space:]])(--help|-h)([[:space:]]|$)' <<< "$stripped"; then
       continue
     fi
     is_create=1

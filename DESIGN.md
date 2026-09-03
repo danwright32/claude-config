@@ -566,6 +566,75 @@ exists specifically because a real watcher is running while the suite executes. 
 listing that failed to reach the code under test would pass quietly against the live machine, and a
 stub that matched nothing is worse than no stub, because you believe the case is covered.
 
+## Config waits for CI before it installs itself on the other Mac
+
+Decided 2026-09-03 (#221), by Dan, from three options.
+
+The automatic receive used to integrate whatever was on the shared repo as soon as it had a reason
+to, which is before anything had judged it. 32 of 233 CI runs in the 30 days to 2026-08-29 were
+red, almost all on direct pushes to main, so config that fails CI installed itself on the other Mac
+FIRST and was caught only by the suite that runs after installation. Three pushes in one session on
+2026-09-03 were green on a Mac and red on the Linux runner, and every one of them would have landed
+there.
+
+**The rule.** An AUTOMATIC receive, the fswatch watcher or the timer whose plist carries
+`SYNC_AUTOMATIC`, integrates a commit only when its checks are green. A `pull` or `sync` typed by a
+person is not gated, which is the escape hatch, so there is no flag to remember and no way to be
+stuck. Red, still running, cancelled and unreadable each get their own sentence and their own
+`SEND-OUTCOME` marker in the watcher's log, because they need different remedies: a run still going
+resolves itself, a cancelled one never will, and unreadable is about `gh` on the receiving Mac
+rather than about the commit.
+
+It fails closed. Unreadable and "no check at all" skip the pull and say so, because a control that
+protects somebody fails closed rather than open (L42), and because green and "nobody could tell"
+must never be the same answer (L98).
+
+**The premise, in a form that can be re-measured** rather than believed (L316). The wait this buys
+is one CI run:
+
+    gh run list --limit 20 --json startedAt,updatedAt
+
+which priced at about four minutes on 2026-09-03, against a red commit being live on the other Mac
+for the three to four minutes until its own suite says so, and longer if nobody reads the
+notification. The red rate is:
+
+    gh run list --limit 200 --json conclusion --jq '[.[].conclusion] | group_by(.) | map({(.[0]//"running"): length}) | add'
+
+If CI becomes slow enough that the wait costs more than the exposure, or the red rate falls far
+enough that there is nothing to protect against, this is the trade to look at again. Re-measure
+those two numbers rather than re-reading this paragraph.
+
+**What is deliberately NOT gated.** The weekly receive timer only gets the gate once
+`install-autosync` has been re-run on a Mac, because the marker lives in the plist it writes. A
+four minute CI wait is noise against a week, so an old plist is not worth chasing. And the gate
+asks about the head of the branch, not about each commit between: a red commit followed by a green
+one is applied with the green one, which is what a person pulling by hand would get.
+
+## Editing the payload in the development checkout is reverted by the daemon
+
+Measured 2026-09-03, the hard way. Most of a day's work on the payload was made in the development
+checkout and pushed to GitHub. At 11:03 the watch daemon on the SAME Mac mirrored its `~/.claude`
+up into the payload and reverted 84 files in one commit: a whole style sweep, two finished issues,
+part of a third, and `lib/match-open-issues.py` was DELETED, because a file that exists only in the
+repo is a file the mirror has never heard of and the mirror runs with `--delete`.
+
+The mechanism is not a bug. `~/.claude` is the source and `payload/` is its mirror, and the daemon's
+job is to make the second match the first. A change made in the mirror is not merged with the
+source, it is overwritten by it, silently, with no conflict to notice: this is not the two Mac
+merge, and none of the machinery that protects against THAT applies, because both copies are on one
+machine and only one of them is the source.
+
+**So: edit `~/.claude`, or hold the daemon.** `claude-sync hold 120 "why"` stops the automatic send
+for two hours and `claude-sync release` ends it early. A session that is going to edit the payload
+in the checkout should take a hold first, and afterwards make `~/.claude` match, or the next send
+reverts it again. What makes this worth writing down rather than remembering is that the failure is
+silent in both directions: nothing warns before the revert, and afterwards the tests pass, because
+the tests were reverted along with the code they covered.
+
+The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
+take the file list it touched, and check those paths out of the commit BEFORE it, keeping
+`LESSONS.md` and its index, which carry the other Mac's real additions.
+
 ## Things known to be wrong and left that way
 
 Markers are keyed on hostname, which is a mutable string. Renaming or reinstalling a Mac abandons

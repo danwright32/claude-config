@@ -22,7 +22,7 @@ out="$(printf '{"prompt":"add a saved views feature"}' | bash "$H" 2>/dev/null)"
 [ -n "$out" ] \
   && check "it prints something, which is the only thing it does" ok \
   || check "it prints something, which is the only thing it does" "it printed nothing"
-printf '%s' "$out" | grep -qi 'feature-discovery' \
+grep -qi 'feature-discovery' <<< "$out" \
   && check "and what it prints names the skill it is pointing at" ok \
   || check "and what it prints names the skill it is pointing at" "out=$out"
 printf '%s' "$out" | grep -qi 'no-op\|no op' \

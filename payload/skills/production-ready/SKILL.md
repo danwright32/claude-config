@@ -1,6 +1,6 @@
 ---
 name: production-ready
-description: Audit a project against a broad production-readiness checklist before sharing it — many parallel specialist auditor agents grade security, data/privacy, testing, reliability, observability, deployment, DR, cost, accessibility, and docs; serious findings are adversarially verified; produces a severity-ranked advisory report and, on approval, files prioritized GitHub issues in the audited repo. User-invoked only (spawns many agents).
+description: Audit a project against a broad production-readiness checklist before sharing it: many parallel specialist auditor agents grade security, data/privacy, testing, reliability, observability, deployment, DR, cost, accessibility, and docs; serious findings are adversarially verified; produces a severity-ranked advisory report and, on approval, files prioritized GitHub issues in the audited repo. User-invoked only (spawns many agents).
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash, WebFetch, AskUserQuestion, Workflow, Agent
 ---
@@ -9,15 +9,15 @@ allowed-tools: Read, Glob, Grep, Bash, WebFetch, AskUserQuestion, Workflow, Agen
 
 A heavyweight, user-invoked production-readiness auditor. A panel of independent specialist agents each grade one domain against the real codebase; serious gaps are adversarially verified; the result is a severity-ranked **advisory** report (no ship/no-ship gate) that, on your approval, becomes GitHub issues in the audited repo.
 
-Gates marked 👤 require the user before continuing.
+Gates marked (user) require the user before continuing.
 
-## 1. Frame the audit  👤
+## 1. Frame the audit  (user)
 In conversation with the user, establish:
 - The **target project directory** (absolute path, so agents read the right repo).
 - The **GitHub repo** (`owner/name`) where issues will be filed (the audited repo).
 - Any **known focus or exclusions** (e.g. "skip accessibility, it's an internal API").
 
-Take a quick read of the repo (CLAUDE.md, manifest) so you can confirm the project type you expect. Then present the plan — "I'll run 19 domain auditors in parallel, verify the serious findings, and produce an advisory report" — and get a go-ahead with **AskUserQuestion**. This is heavy and spawns many agents, so confirm before launching.
+Take a quick read of the repo (CLAUDE.md, manifest) so you can confirm the project type you expect. Then present the plan: "I'll run 19 domain auditors in parallel, verify the serious findings, and produce an advisory report", and get a go-ahead with **AskUserQuestion**. This is heavy and spawns many agents, so confirm before launching.
 
 ## 2. Run the audit (Workflow engine)
 Call the **Workflow** tool with:
@@ -33,15 +33,15 @@ Call the **Workflow** tool with:
 
 That path is absolute and correct on this machine: the config sync rewrites the home directory in every synced file, so each Mac holds its own. Use it exactly as written. It is spelled out rather than shortened because the Workflow tool takes `scriptPath` as a literal string and expands neither `~` nor `$HOME`. If what you see there is a placeholder rather than a real path, this copy of the file has not been through the sync yet: use this machine's own config directory (`echo $HOME/.claude`) followed by the rest of the path as written.
 
-Pass `date` from your own context — the workflow engine cannot read the clock. It returns `{ profile, applicable, naDomains, report }`, where `report = { executiveSummary, whatsSolid, topRisks, severityCounts, backlog }`.
+Pass `date` from your own context: the workflow engine cannot read the clock. It returns `{ profile, applicable, naDomains, report }`, where `report = { executiveSummary, whatsSolid, topRisks, severityCounts, backlog }`.
 
 ## 3. Save the report
-Render a markdown report from the return value (executive summary, what's solid, top risks, severity counts, the N/A domains with reasons, then the full backlog grouped by domain with status/severity/evidence/remediation/effort). Save it to `docs/production-readiness/<date>-report.md` in the **target** repo. Do NOT commit it — tell the user it's there for review.
+Render a markdown report from the return value (executive summary, what's solid, top risks, severity counts, the N/A domains with reasons, then the full backlog grouped by domain with status/severity/evidence/remediation/effort). Save it to `docs/production-readiness/<date>-report.md` in the **target** repo. Do NOT commit it: tell the user it's there for review.
 
-## 4. Present  👤
-Give a plain-language summary for a product manager: how many critical/high/medium/low gaps, what's already solid, the top risks, and any domains skipped as N/A (with why). If the profile suggests grounding was partial (repo unreadable), say so. Advisory only — do not declare anything ship-blocking.
+## 4. Present  (user)
+Give a plain-language summary for a product manager: how many critical/high/medium/low gaps, what's already solid, the top risks, and any domains skipped as N/A (with why). If the profile suggests grounding was partial (repo unreadable), say so. Advisory only: do not declare anything ship-blocking.
 
-## 5. File issues  👤
+## 5. File issues  (user)
 Offer, via **AskUserQuestion**, to file the backlog as GitHub issues in the audited repo. On approval:
 1. Ensure labels exist (create missing ones), one per domain key, plus the shared priority labels:
 
@@ -81,7 +81,7 @@ Offer, via **AskUserQuestion**, to file the backlog as GitHub issues in the audi
          --milestone "<milestone title>" \
          --label "production-readiness" --label "priority-p1"
 
-4. If `gh` is not installed/authenticated or the repo isn't resolvable, skip filing and tell the user — the saved report still captures everything.
+4. If `gh` is not installed/authenticated or the repo isn't resolvable, skip filing and tell the user: the saved report still captures everything.
 
 ## 6. Note on grouping
 Milestone grouping now happens up front in step 5, not as an afterthought, so no issue is ever left unattached. If the audit backlog is large enough to deserve phases of its own, `~/.claude/skills/milestone/create-milestone.sh` still files a whole set in one call:

@@ -67,10 +67,10 @@ out_ok="$(run "$GOOD" MacOne)"; code_ok=$?
 [ "$code_ok" -eq 0 ] \
   && check "a list whose paths are all present passes" ok \
   || check "a list whose paths are all present passes" "exit=$code_ok out=$out_ok"
-printf '%s' "$out_ok" | grep -q '2' \
+grep -q '2' <<< "$out_ok" \
   && check "and says how many it checked" ok \
   || check "and says how many it checked" "out=$out_ok"
-printf '%s' "$out_ok" | grep -q 'AppThree' \
+grep -q 'AppThree' <<< "$out_ok" \
   && check "the other Mac's entries are not checked here" "it complained about AppThree" \
   || check "the other Mac's entries are not checked here" ok
 
@@ -89,10 +89,10 @@ out_bad="$(run "$BAD" MacOne)"; code_bad=$?
 [ "$code_bad" -eq 1 ] \
   && check "a path that is not there fails the check" ok \
   || check "a path that is not there fails the check" "exit=$code_bad out=$out_bad"
-printf '%s' "$out_bad" | grep -q 'Vanished' \
+grep -q 'Vanished' <<< "$out_bad" \
   && check "and names the one it could not find" ok \
   || check "and names the one it could not find" "out=$out_bad"
-printf '%s' "$out_bad" | grep -q 'AppOne' \
+grep -q 'AppOne' <<< "$out_bad" \
   && check "and does not accuse the ones it did find" "it named AppOne too" \
   || check "and does not accuse the ones it did find" ok
 
@@ -104,7 +104,7 @@ out_other="$(run "$GOOD" SomeRunner)"; code_other=$?
 [ "$code_other" -eq 0 ] \
   && check "a machine the list does not mention is not a failure" ok \
   || check "a machine the list does not mention is not a failure" "exit=$code_other out=$out_other"
-printf '%s' "$out_other" | grep -qi 'no entries for' \
+grep -qi 'no entries for' <<< "$out_other" \
   && check "but it says it checked nothing rather than reporting a clean list" ok \
   || check "but it says it checked nothing rather than reporting a clean list" "out=$out_other"
 

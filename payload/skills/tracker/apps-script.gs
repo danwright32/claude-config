@@ -1,5 +1,5 @@
 /**
- * Personal Project Tracker — Apps Script Web App
+ * Personal Project Tracker: Apps Script Web App
  *
  * Deploy: Deploy > New deployment > Web app
  *   Execute as: Me
