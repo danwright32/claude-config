@@ -47,22 +47,24 @@ GENERIC = {
 
 
 def open_issues(project):
-    """Every open issue as (number, title, body). Empty on any failure, which annotates nothing."""
+    """(issues, why it could not be read). Both empty means the repo genuinely has no open issue."""
     try:
         out = subprocess.run(
             ["gh", "issue", "list", "--state", "open", "--limit", "300",
              "--json", "number,title,body"],
             cwd=project, capture_output=True, text=True, timeout=TIMEOUT)
-    except Exception:
-        return []
-    if out.returncode != 0 or not out.stdout.strip():
-        return []
+    except Exception as exc:
+        return [], "gh could not be run (%s)" % type(exc).__name__
+    if out.returncode != 0:
+        return [], "gh refused: %s" % (out.stderr or "").strip().splitlines()[:1]
+    if not out.stdout.strip():
+        return [], "gh answered with nothing at all"
     try:
         rows = json.loads(out.stdout)
     except Exception:
-        return []
-    return [(r.get("number"), r.get("title") or "", r.get("body") or "")
-            for r in rows if isinstance(r, dict) and r.get("number")]
+        return [], "gh answered with something that is not the issue list"
+    return ([(r.get("number"), r.get("title") or "", r.get("body") or "")
+             for r in rows if isinstance(r, dict) and r.get("number")], "")
 
 
 def words(text):
@@ -105,7 +107,15 @@ def main():
     if "FINDING" not in text:
         sys.stdout.write(text)
         return 0
-    issues = open_issues(project)
+    issues, why = open_issues(project)
+    if why:
+        # SAID. Failing open is right, and a review that could not look is not the same as one
+        # that looked and matched nothing: without this line the reader has no way to tell an
+        # unannotated list from a list with no duplicates in it (L10, L11).
+        sys.stdout.write(text.rstrip("\n") +
+                         "\nOPEN ISSUES NOT READ, so none of these carry the issue that may "
+                         "already cover them: %s\n" % why)
+        return 0
     if not issues:
         sys.stdout.write(text)
         return 0

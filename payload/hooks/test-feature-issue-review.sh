@@ -310,6 +310,15 @@ print(m.group(1) if m else "")
 grep -qF "$FAILMARK" "$named_fo" 2>/dev/null \
   && check "#256 a gh that refuses leaves the findings going out unannotated" ok \
   || check "#256 a gh that refuses leaves the findings going out unannotated" "file=[$named_fo] $(awk 'NR <= 2' "$named_fo" 2>/dev/null)"
+# And SAYS it could not look. Failing open is right; failing open in silence makes an unannotated
+# list indistinguishable from a list with no duplicates in it (L10, L11).
+grep -q "OPEN ISSUES NOT READ" "$named_fo" 2>/dev/null \
+  && check "#256 and says the open issues could not be read" ok \
+  || check "#256 and says the open issues could not be read" "file=[$named_fo]"
+# The control: a run that COULD read them says nothing of the kind.
+grep -q "OPEN ISSUES NOT READ" "$named" 2>/dev/null \
+  && check "#256 and a run that read them says nothing about it" "it claimed it could not read them" \
+  || check "#256 and a run that read them says nothing about it" ok
 
 # The matcher on its own, by name. Driving it only through the review would leave its own refusals
 # untested, and the coverage ratchet is right that a file no suite names is a file nobody checks.
