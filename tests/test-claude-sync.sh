@@ -12065,6 +12065,75 @@ out_tmpcl2="$(tmpcl_status)"
 dbg "#295 the same status with the rule pointed elsewhere: $out_tmpcl2"
 check "#295 the control: with the rule pointed elsewhere that clone IS reported on" \
   "line_has \"\$out_tmpcl2\" 'another clone' '$TMPCL_REAL'"
+section "== the rtk fingerprint is derived from the hook that landed, not carried beside it (claude-config#296) =="
+# rtk keeps a sha256 of hooks/rtk-rewrite.sh in hooks/.rtk-hook.sha256 and REFUSES TO RUN AT ALL
+# when the two disagree: no rewriting, and a tampering banner on every Bash command. Observed
+# 2026-09-02 in a trypennie session, which lost its command path entirely and worked around it by
+# calling binaries by absolute path, with a failure that reads as the tool being broken rather than
+# as a fingerprint mismatch.
+#
+# Both files are carried in the payload, so they normally arrive together, and test-rtk-rewrite.sh
+# keeps the SOURCE pair honest on every run. What nothing did was hold them in step on a DEPLOYED
+# Mac: whatever reason the two arrive out of step for, the result is a Mac with no working Bash
+# rewriting until somebody diagnoses a hash.
+#
+# So the installed baseline is DERIVED from the installed hook, the way the lessons index is
+# derived from the lessons. The two cannot then disagree on a Mac, and a payload that arrives out
+# of step is reported rather than silently corrected, because that is a real defect in the source
+# and the suite that guards it has to be told (L11).
+RTKB_HOME="$WORK/rtkbase-home"; mkdir -p "$RTKB_HOME/hooks"
+RTKB_REPO="$WORK/rtkbase-repo"; mkdir -p "$RTKB_REPO/payload/hooks"
+printf '#!/usr/bin/env bash\n# the customised rewriter\nexit 0\n' > "$RTKB_REPO/payload/hooks/rtk-rewrite.sh"
+RTKB_WANT="$(shasum -a 256 "$RTKB_REPO/payload/hooks/rtk-rewrite.sh" | awk '{print $1}')"
+
+rtkb_pull(){ CLAUDE_HOME="$RTKB_HOME" SYNC_REPO="$RTKB_REPO" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+               SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1; }
+rtkb_installed(){ awk 'NR==1{print $1}' "$RTKB_HOME/hooks/.rtk-hook.sha256" 2>/dev/null; }
+
+# A payload whose baseline describes a DIFFERENT hook, which is the state that takes a Mac's
+# command path out.
+printf '%s  rtk-rewrite.sh\n' "0000000000000000000000000000000000000000000000000000000000000000" \
+  > "$RTKB_REPO/payload/hooks/.rtk-hook.sha256"
+out_rtkb="$(rtkb_pull)"
+dbg "#296 pull with a stale baseline said: $out_rtkb"
+check "#296 the installed baseline describes the hook that actually landed" \
+  "[ \"\$(rtkb_installed)\" = '$RTKB_WANT' ]"
+# Matched on wording only this notice has. `rtk` and `rtk-rewrite.sh` both appear in the list of
+# files the pull applied, on one line, so the loose form was answered by the wrong half of the
+# output and passed before the notice existed (L135, L63).
+check "#296 and the run names the mismatch rather than refusing generically" \
+  "line_has \"\$out_rtkb\" 'rtk fingerprint' 'rebuilt from the hook' '$RTKB_WANT'"
+check "#296 and says what it would have cost" \
+  "line_has \"\$out_rtkb\" 'rtk' '(refuse|refusing)'"
+
+# A payload that is IN STEP must not gain a notice, or the line becomes noise on every pull and
+# stops meaning anything (L36).
+printf '%s  rtk-rewrite.sh\n' "$RTKB_WANT" > "$RTKB_REPO/payload/hooks/.rtk-hook.sha256"
+rm -rf "$RTKB_HOME/hooks/.rtk-hook.sha256"
+out_rtkb2="$(rtkb_pull)"
+dbg "#296 pull with a correct baseline said: $out_rtkb2"
+check "#296 a payload already in step installs the same baseline" \
+  "[ \"\$(rtkb_installed)\" = '$RTKB_WANT' ]"
+check "#296 and says nothing about it" \
+  "out_lacks \"\$out_rtkb2\" 'rtk-rewrite.sh'"
+
+# A payload carrying NO baseline at all still leaves the deployed Mac in step, because rtk refuses
+# on a mismatch and establishes one on an absence: the absent case is the recoverable one, and the
+# mismatch is what has to be prevented.
+rm -f "$RTKB_REPO/payload/hooks/.rtk-hook.sha256" "$RTKB_HOME/hooks/.rtk-hook.sha256"
+rtkb_pull >/dev/null 2>&1
+check "#296 a payload with no baseline still leaves one describing the installed hook" \
+  "[ \"\$(rtkb_installed)\" = '$RTKB_WANT' ]"
+
+# And with NO hook there is nothing to describe, so nothing is invented: a baseline naming a hook
+# that is not there is a claim about a file nobody has (L98).
+RTKN_HOME="$WORK/rtkbase-nohook-home"; mkdir -p "$RTKN_HOME/hooks"
+RTKN_REPO="$WORK/rtkbase-nohook-repo"; mkdir -p "$RTKN_REPO/payload/hooks"
+printf '# something else\n' > "$RTKN_REPO/payload/hooks/other.sh"
+CLAUDE_HOME="$RTKN_HOME" SYNC_REPO="$RTKN_REPO" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+  SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#296 no rewriter means no baseline is invented" \
+  "[ ! -e '$RTKN_HOME/hooks/.rtk-hook.sha256' ]"
 
 section "== the suite never touches a real shell rc =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
