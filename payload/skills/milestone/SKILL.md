@@ -6,17 +6,17 @@ allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion
 
 # milestone
 
-Turn a big feature into a GitHub milestone with one issue per phase. This is the **ad-hoc** path: for work already in flight, or anything you didn't plan via `/plan-council` or `/plan-lite` (those two offer this automatically at the end of a run, using the same helper).
+Turn a big feature into a GitHub milestone with one issue per phase. This is the **ad-hoc** path — for work already in flight, or anything you didn't plan via `/plan-council` or `/plan-lite` (those two offer this automatically at the end of a run, using the same helper).
 
-Use for: a feature worth tracking as a milestone. Not for single tasks, just open an issue for those.
+Use for: a feature worth tracking as a milestone. Not for single tasks — just open an issue for those.
 
 ## Steps
 
-### 1. Frame  (user)
+### 1. Frame  👤
 In a short exchange, confirm:
 - The **feature** (becomes the milestone title) and a one-paragraph **description**. The title NAMES the feature, with NO punctuation at all (a comma or colon is refused at any length) and at most 8 words (`Saved views`, `Bulk contact enrichment for scouted shows`); the narrative goes in the description. Never a narrative sentence, and never a category like `Accessibility` (categories are labels, since an issue can be two at once). The create path enforces that shape, and the full rule is in [NAMING.md](NAMING.md).
 - The **GitHub repo** (`owner/name`). If you're in a project dir, infer it from `gh repo view --json nameWithOwner -q .nameWithOwner` and confirm.
-- The **phases**: the chunks of work, each becoming one issue. If the user has a plan, derive phases from it; otherwise ask for the breakdown. Keep phases at feature-chunk altitude, not micro-tasks.
+- The **phases** — the chunks of work, each becoming one issue. If the user has a plan, derive phases from it; otherwise ask for the breakdown. Keep phases at feature-chunk altitude, not micro-tasks.
 - Optional: a **due date** (ISO8601).
 
 If the work is a standalone bug or chore that no feature ships with, it does not need a milestone of its own: use the repo's catch-all `Ungrouped` and just file the issue. See "Single issue" below.
@@ -41,8 +41,8 @@ Every issue needs a priority and at least one category label, either its own or 
 
 `due_on` is optional; omit the key if there's no date. `issues` may be empty to create a milestone with no issues yet.
 
-### 3. Preview  (user)
-Show the user the milestone title and the list of issue titles, and confirm before writing to GitHub: this creates real, outward-facing records. You can dry-run to show exactly what will be created:
+### 3. Preview  👤
+Show the user the milestone title and the list of issue titles, and confirm before writing to GitHub — this creates real, outward-facing records. You can dry-run to show exactly what will be created:
 
     DRY_RUN=1 bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>
 

@@ -19,7 +19,7 @@ rtk gain              # Should work (not "command not found")
 which rtk             # Verify correct binary
 ```
 
-**Warning, name collision**: If `rtk gain` fails, you may have reachingforthejack/rtk (Rust Type Kit) installed instead.
+⚠️ **Name collision**: If `rtk gain` fails, you may have reachingforthejack/rtk (Rust Type Kit) installed instead.
 
 ## Hook-Based Usage
 

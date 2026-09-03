@@ -64,7 +64,6 @@ fi
 source "$HERE/catch-all.sh"
 
 create_approved=""
-distinct_approved=""
 for_issues=""
 for_issues_given=""
 description=""
@@ -72,12 +71,6 @@ due_on=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --create-approved) create_approved=1; shift ;;
-    # The near duplicate refusal tells the caller to confirm with the user that a genuinely
-    # separate milestone is wanted, and there was no way to say they had, so the only route left
-    # was `gh api` directly, which skips the title check this script exists to run (claude-config#255).
-    # It waives the DUPLICATE question and nothing else: the shape check and the two issue
-    # threshold both still run below, because one override must never quietly waive three rules.
-    --distinct-approved) distinct_approved=1; shift ;;
     # The flag being GIVEN is tracked separately from its value, because
     # `--for-issues "$count"` with an unset variable leaves the same empty string as
     # not passing the flag at all. Without this the caller is told they forgot to
@@ -127,35 +120,8 @@ RATIO = 0.72          # tuned so "Q3 hardening" vs "Q4 hardening" stops to ask
                       # but "Milestone: Auth" vs "Milestone: Billing" does not.
 SUBSTR_MIN = 4        # ignore substring hits on very short titles
 
-# Words that name a KIND of feature rather than which feature it is. A title pair sharing only one
-# of these is not a duplicate, it is two features of the same kind, and any repo with more than one
-# integration, sync, page or dashboard trips the comparison below on every second one: "Regal
-# integration" was refused as a twin of "PET integration" on 2026-09-01 (claude-config#255).
-#
-# Dropped only when BOTH titles carry the word, so a single title using one is compared whole, and
-# only when something distinctive is left on both sides afterwards: comparing an empty string
-# against a real title matches everything (L214).
-GENERIC = {
-    "integration", "integrations", "sync", "syncs", "page", "pages",
-    "dashboard", "dashboards", "cleanup", "cleanups", "migration", "migrations",
-}
-
 def norm(s):
     return re.sub(r"[^a-z0-9]", "", (s or "").lower())
-
-def words(s):
-    return [w for w in re.split(r"[^a-z0-9]+", (s or "").lower()) if w]
-
-def distinctive(a, b):
-    """The two titles with any GENERIC word they SHARE removed, or None when that leaves nothing."""
-    aw, bw = words(a), words(b)
-    shared = (set(aw) & set(bw)) & GENERIC
-    if not shared:
-        return None
-    da, db = [w for w in aw if w not in shared], [w for w in bw if w not in shared]
-    if not da or not db:
-        return None
-    return "".join(da), "".join(db)
 
 def load(text):
     # gh --paginate concatenates one JSON array per page, and --slurp would nest
@@ -215,13 +181,11 @@ for m in opens:
     mn = norm(m["title"])
     if not mn:
         continue
-    pair = distinctive(want, m["title"])
-    a, b = pair if pair else (wn, mn)
-    shorter, longer = sorted((a, b), key=len)
+    shorter, longer = sorted((wn, mn), key=len)
     if len(shorter) >= SUBSTR_MIN and shorter in longer:
         near.append(m)
         continue
-    if SequenceMatcher(None, a, b).ratio() >= RATIO:
+    if SequenceMatcher(None, wn, mn).ratio() >= RATIO:
         near.append(m)
 
 if near:
@@ -251,14 +215,9 @@ case "$kind" in
     exit 3
     ;;
   NEAR)
-    if [[ -z "$distinct_approved" ]]; then
-      echo "NEAR-DUPLICATE \"$title\" closely resembles an open milestone in $repo: $f2"
-      echo "Do not create a second one. Either attach the issue to that milestone, or confirm with the user that a genuinely separate milestone is wanted and re-run with --distinct-approved."
-      exit 4
-    fi
-    # SAID, not silent. The resemblance is real and somebody decided it was two features rather
-    # than one, so the line records that decision where the creation is reported (L11).
-    echo "DISTINCT-APPROVED \"$title\" resembles an open milestone in $repo ($f2), and was confirmed as a separate feature."
+    echo "NEAR-DUPLICATE \"$title\" closely resembles an open milestone in $repo: $f2"
+    echo "Do not create a second one. Either attach the issue to that milestone, or confirm with the user that a genuinely separate milestone is wanted."
+    exit 4
     ;;
   NONE)
     if is_catch_all "$title"; then

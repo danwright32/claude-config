@@ -1334,6 +1334,55 @@ window is a count rather than a boundary.
   the rejected behaviour, and this is a decision CARRIED OUT, where the test defends a precondition
   that was true only until the work was done)
 
+- **L375. A before and after comparison of shared state attributes every change it sees to whatever
+  it was bracketing, so on any store with a second legitimate writer it accuses rather than finds,
+  and it accuses loudest exactly when that writer is busiest.** Identify your own writes positively,
+  by a marker you stamp or by evidence the other writer leaves, rather than inferring authorship
+  from the change itself.
+  (claude-config#275, #272, #277: run-all-tests.sh brackets a run with a fingerprint of the live
+  findings spool, the rule files, the settings and the watcher's own markers, and fails the run if
+  any changed. Three separate false reds on green runs in one day, each costing a full re-run of
+  roughly three minutes: two HARVEST FAILED records another Claude session's SubagentStop hook wrote
+  while working in the same repo, the watch daemon restarting under launchd and rewriting its pid
+  marker, which it had done 562 times by then, and the same daemon pulling a lesson from the other
+  Mac and applying it into LESSONS.md mid run. The guard's own comment stated the assumption it
+  rested on, that nothing else on the machine legitimately writes these during a run, and all three
+  writers were doing exactly their job. The fix in each case was positive identification rather than
+  a wider exemption: the run exports an id and the spool library stamps it into every record, the
+  watcher marker is judged by whether the pid it names descends from this run, and an apply is read
+  from the timestamp the sync itself writes. The stamping is proved on a throwaway store before an
+  absence is read as evidence, because a stamp that had quietly stopped would make every write read
+  as somebody else's and the guard would be the last thing to say so)
+
+- **L376. A guard that compares the current environment against the ONE it was calibrated in
+  fails on every machine that legitimately differs, because a developer machine and a CI runner
+  never upgrade together.** Record the SET of environments there is a reading for, each with its
+  evidence, and keep a test that an unmeasured one is still refused, since widening such a list is
+  how it stops guarding.
+  (postroll#1226: the reference frame checks deliberately do not pin ffmpeg, and instead assert the
+  running major matches the single build MAX_CHANGED_FRACTION was measured against. Homebrew moved
+  the pinned runner image from 8.1.2 to 9.0.1 between two runs an hour apart, with nothing
+  committed in between, and every reference frame job on every branch refused to run. The new major
+  turned out to render all eleven frames identically, 0.0000% each, so the limit did not move; but
+  recording 9.0.1 as the single value would have turned the same check red on Dan's Mac, which was
+  on 8.1 that same afternoon. The record became the majors there is evidence for, each naming the
+  run behind it)
+
+- **L378. A guard that exists to save an EXPENSIVE step must run on every entry point that reaches
+  that step, because wiring it only into the thorough path leaves it absent from the quick one
+  people use while iterating, which is exactly when the mistake it catches is made. Its own cost is
+  the wrong thing to weigh: two seconds on every fast run is nothing against one doomed build it
+  prevents.**
+  (overture#3490: `check-pure-suite-imports.sh` catches a test file importing the app as a module,
+  which the unhosted target cannot resolve, and its own header says it runs ahead of the build
+  because "its whole value is saving a doomed build". It was called only from the full pre-push
+  gate. The scoped runner, which is what anyone reaches for while iterating on a NEW test file, never
+  called it. On 2026-09-03 one stray `@testable import Overture` cost two failed scoped builds and a
+  needless 1.3 GB DerivedData wipe before the full gate finally named it in a single line; the two
+  build errors read `malformed compiled module` and `unable to resolve module dependency`, neither of
+  which points at an import and both of which read like a corrupt cache. The check itself takes 2.28s
+  over 943 files and was the only file in the tree that tripped it)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -1559,6 +1608,19 @@ window is a count rather than a boundary.
   given and the results say what it produced, and neither says what it did. The events had been
   overwritten by the next run about half an hour later. The archived pair made this worse rather
   than better, because a folder holding a run's inputs and outputs looks like the run's evidence)
+
+- **L377. Retiring a feature must delete the STORED POINTERS to what it produced, not only
+  its writer and its screen, because a consumer written to be generic over those pointers
+  has no list anybody could have updated and goes on acting on every one left behind.**
+  Genericity raises the cost of an incomplete retirement rather than lowering it.
+  (postroll#1240: Thursday's grid cover was removed, the renderer, the panel and the
+  regenerate path all went, and every Thursday generated before that still named a `cover`
+  in its stored preview paths. The export does not always re-render: it copies approved
+  previews, and its merge policy was deliberately generic over asset key, documented as
+  "copies exactly like reel or story, no exclusions needed". So the retired asset would
+  have gone on reaching the folder Dan uploads from, and the pull request removing it
+  asserted the opposite, because a fresh generation DID clear the entry and the case that
+  mattered was the day nobody regenerates)
 
 ## Honest failure
 
@@ -3926,6 +3988,20 @@ window is a count rather than a boundary.
   not cover it: nothing here was being consolidated for convenience, the change believed it
   was repairing an inconsistency.)
 
+- **L374. A gitignore or exclude entry without a leading slash matches at EVERY depth, so a
+  rule written for one top level folder silently swallows any same named directory anywhere
+  in the tree, and the loss is invisible to status, diff and commit alike.** Anchor such
+  entries, and assert that nothing under the directories holding committed work is ignored.
+  (nursedex#906, 2026-09-02: `.gitignore` carried `Legal/` for the repo root folder of legal
+  documents. A new `src/lib/legal/` was created for a module two pages import, and the rule
+  matched it. `git add -A` reported nothing, `git status` was clean, the commit contained
+  only the two files that IMPORT the module, and it was caught by hand before pushing; the
+  first automatic sign would have been CI failing on an import of a file that was never
+  pushed. The same accident under `supabase/migrations/` means production silently never
+  receives a migration, and the symptom surfaces far away as a column that does not exist.
+  L250 is a different failure on the same file: it is about OTHER tools reading `.gitignore`
+  as an instruction it was not written to give, not about the pattern's own reach.)
+
 ## Cross-system reliability
 
 - **L365. A retry must read what the refusal itself says about when it could succeed, because a
@@ -4293,6 +4369,22 @@ window is a count rather than a boundary.
   written. Capture the directory once at the top, or make it absolute, and cover it with a test that
   invokes the script the way the documentation says to, since that is the invocation nothing was
   exercising (L52, L96).
+
+- **L379. Doing by hand what a tool normally does performs the visible change and silently
+  omits the tool's OTHER writes, and the one most often omitted is the record some monitor
+  reads, so the system ends up correct while the monitor is permanently wrong.** Before
+  substituting a manual step for a tool, enumerate every write the tool makes, not only the
+  one you wanted. (nursedex#909, 2026-09-02: `supabase db push` is unavailable both to Dan
+  and from the dev machine, so migration 068 was applied by pasting its SQL into the Supabase
+  dashboard. That added the column correctly and skipped the row the CLI writes into
+  `supabase_migrations.schema_migrations`. Nothing about the schema was wrong; Migration
+  Drift would simply have reported 068 as committed to git but never applied, indefinitely,
+  and that channel's whole value came from catching migration 043 merged but unapplied
+  (#518), so a permanent false entry is how the next real one gets overlooked. Caught before
+  it shipped only by asking what else `db push` does. Note the recording query must not be
+  written from a guess at the table's columns: it was read first, and it turned out to be
+  `version` text holding the numeric prefix, `name` text holding the rest of the filename,
+  and a `statements` array that is null on every real row.)
 
 ## Test speed
 

@@ -12,9 +12,9 @@ SKILL="$DIR/SKILL.md"
 # SIGPIPE, and under `pipefail` the pipeline's status becomes that death, so the check can report
 # missing frontmatter that is plainly there (L183).
 _fm="$(head -20 "$SKILL" 2>/dev/null || true)"
-grep -q '^name: production-ready$' <<< "$_fm" || fail "frontmatter missing 'name: production-ready'"
-grep -q '^disable-model-invocation: true$' <<< "$_fm" || fail "frontmatter missing disable-model-invocation"
-grep -q '^allowed-tools:.*Workflow' <<< "$_fm" || fail "frontmatter missing allowed-tools with Workflow"
+printf '%s\n' "$_fm" | grep -q '^name: production-ready$' || fail "frontmatter missing 'name: production-ready'"
+printf '%s\n' "$_fm" | grep -q '^disable-model-invocation: true$' || fail "frontmatter missing disable-model-invocation"
+printf '%s\n' "$_fm" | grep -q '^allowed-tools:.*Workflow' || fail "frontmatter missing allowed-tools with Workflow"
 
 # 2. Workflow script parses and declares meta.phases
 WF="$DIR/production-audit.workflow.js"
@@ -37,7 +37,7 @@ if grep -q '@@' "$SKILL"; then fail "SKILL.md still contains an unsubstituted pl
 # 5. The scriptPath the skill hands to the Workflow tool must actually resolve.
 #    A stale absolute path here is silent: the skill reads fine and only fails
 #    at run time, which is exactly how the original shipped broken.
-WFPATH="$(grep -o 'scriptPath: "[^"]*"' "$SKILL" | awk 'NR <= 1' | sed 's/scriptPath: "//; s/"$//')"
+WFPATH="$(grep -o 'scriptPath: "[^"]*"' "$SKILL" | head -1 | sed 's/scriptPath: "//; s/"$//')"
 # The installed SKILL.md carries a real absolute path, because the config sync rewrites the home
 # directory in every synced file on the way in. A copy that has not been through an apply (the
 # repo's own, or one edited by hand) still holds the token, so expand it here rather than

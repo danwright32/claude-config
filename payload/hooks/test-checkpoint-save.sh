@@ -60,14 +60,14 @@ transcript "$T_WORKED" "$(user_line 'fix the retry')" "$(tool_line Edit)" "$(tex
 # A turn that did work asks for a save, and names the right store.
 # ---------------------------------------------------------------------------
 out_worked="$(run "$T_WORKED")"
-grep -q '"decision": *"block"' <<< "$out_worked" \
+printf '%s' "$out_worked" | grep -q '"decision": *"block"' \
   && check "a turn that did work asks the session to save" ok \
   || check "a turn that did work asks the session to save" "out=${out_worked:0:200}"
 reason="$(printf '%s' "$out_worked" | reason_of)"
-grep -qF "$PROJDIR/memory" <<< "$reason" \
+printf '%s' "$reason" | grep -qF "$PROJDIR/memory" \
   && check "and names THIS project's memory store, derived from the transcript path" ok \
   || check "and names THIS project's memory store, derived from the transcript path" "reason=${reason:0:300}"
-grep -qi 'silent' <<< "$reason" \
+printf '%s' "$reason" | grep -qi 'silent' \
   && check "and says to do it without narrating, which is the whole point of it" ok \
   || check "and says to do it without narrating, which is the whole point of it" "reason=${reason:0:300}"
 
@@ -77,7 +77,7 @@ OTHERDIR="$TMPROOT/home/.claude/projects/-Users-someone-Apps-Gadget"
 T_OTHER="$OTHERDIR/sessions/worked.jsonl"
 transcript "$T_OTHER" "$(user_line 'fix it')" "$(tool_line Write)"
 reason_other="$(run "$T_OTHER" | reason_of)"
-grep -qF "$OTHERDIR/memory" <<< "$reason_other" \
+printf '%s' "$reason_other" | grep -qF "$OTHERDIR/memory" \
   && check "a transcript from another project names that project's store instead" ok \
   || check "a transcript from another project names that project's store instead" "reason=${reason_other:0:300}"
 [ "$reason" != "$reason_other" ] \

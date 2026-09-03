@@ -122,7 +122,7 @@ $(git diff --name-only --diff-filter=ACMR 2>/dev/null)"
     # stage them. Counting every untracked file (the old behavior) let a stray
     # untracked test that isn't being added satisfy the gate yet never reach the
     # commit -- so a change could ship with its test left only on disk.
-    add_args="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[&|;[:space:]])git[[:space:]]+add[[:space:]]+([^&|;]*).*@\2@p' | awk 'NR <= 1')"
+    add_args="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[&|;[:space:]])git[[:space:]]+add[[:space:]]+([^&|;]*).*@\2@p' | head -1)"
     add_all=0
     for a in $add_args; do
       case "$a" in -A|--all|.) add_all=1; break ;; esac

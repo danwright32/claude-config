@@ -1,6 +1,6 @@
 ---
 name: read-shortcut
-description: Extract and analyze Siri Shortcut (.shortcut) files: reads the AEA1 signed binary format, converts to inspectable JSON, and summarizes actions, flow logic, variables, and bugs.
+description: Extract and analyze Siri Shortcut (.shortcut) files — reads the AEA1 signed binary format, converts to inspectable JSON, and summarizes actions, flow logic, variables, and bugs.
 user-invokable: true
 args:
   - name: path
@@ -8,7 +8,7 @@ args:
     required: true
 ---
 
-Extract, parse, and analyze one or more Siri Shortcut files, then answer whatever the user needs: flow summary, bug diagnosis, action-by-action trace, or cross-shortcut dependency analysis.
+Extract, parse, and analyze one or more Siri Shortcut files, then answer whatever the user needs — flow summary, bug diagnosis, action-by-action trace, or cross-shortcut dependency analysis.
 
 ## How .shortcut files are structured
 
@@ -23,13 +23,13 @@ Modern `.shortcut` files use Apple's **AEA1 signed archive** format:
 [rest]     LZFSE-compressed Apple Archive (.aa) containing Shortcut.wflow
 ```
 
-`Shortcut.wflow` is a **binary plist** with key `WFWorkflowActions`: an array of action dicts.
+`Shortcut.wflow` is a **binary plist** with key `WFWorkflowActions` — an array of action dicts.
 
 ## Extraction pipeline
 
 Run these steps for each `.shortcut` file provided:
 
-**Step 1: Decompress the payload**
+**Step 1 — Decompress the payload**
 
 ```python
 import subprocess, re
@@ -46,20 +46,20 @@ result = subprocess.run(
 aa_data = result.stdout
 ```
 
-**Step 2: Extract the Apple Archive**
+**Step 2 — Extract the Apple Archive**
 
 ```bash
 aa extract -i payload.aa -d /tmp/shortcut_out/
 # Produces: Shortcut.wflow
 ```
 
-**Step 3: Convert to JSON**
+**Step 3 — Convert to JSON**
 
 ```bash
 plutil -convert json -o output.json Shortcut.wflow
 ```
 
-**Step 4: Parse in Python**
+**Step 4 — Parse in Python**
 
 ```python
 import json
@@ -98,8 +98,8 @@ def extract_shortcut(path, out_json):
 ## Key WFWorkflowActions fields to understand
 
 Each action dict has:
-- `WFWorkflowActionIdentifier`: the action type (e.g. `is.workflow.actions.getvalueforkey`)
-- `WFWorkflowActionParameters`: all settings for that action
+- `WFWorkflowActionIdentifier` — the action type (e.g. `is.workflow.actions.getvalueforkey`)
+- `WFWorkflowActionParameters` — all settings for that action
 
 ### Common action identifiers
 
@@ -148,7 +148,7 @@ Token strings use `\ufffc` as a placeholder for variable attachments:
   }
 }
 ```
-**Magic variables** (OutputUUID) reference the output of a specific action by UUID, even from inside a loop. They retain the last value from the most recent execution of that action. This is important: using a magic variable from inside a loop after the loop ends gives you the last iteration's value, which may or may not be the full accumulated result.
+**Magic variables** (OutputUUID) reference the output of a specific action by UUID — even from inside a loop. They retain the last value from the most recent execution of that action. This is important: using a magic variable from inside a loop after the loop ends gives you the last iteration's value, which may or may not be the full accumulated result.
 
 ## Analysis checklist
 
@@ -167,7 +167,7 @@ After extracting, work through these:
 - [ ] Does any `runworkflow` call overwrite a dictionary that was passed in?
 
 **Condition logic**
-- [ ] Check every `conditional`: is the logic ALL vs ANY correct for its intent?
+- [ ] Check every `conditional` — is the logic ALL vs ANY correct for its intent?
 - [ ] Any typos in key names used in `getvalueforkey`?
 
 **Loop variable bugs**
@@ -179,14 +179,14 @@ After extracting, work through these:
 
 ## Common bugs to flag
 
-1. **OR vs AND in if-condition**: `WFActionParameterFilterPrefix: 1` (ANY) causes lines that match either condition to enter the block, often including lines that should be excluded.
+1. **OR vs AND in if-condition** — `WFActionParameterFilterPrefix: 1` (ANY) causes lines that match either condition to enter the block, often including lines that should be excluded.
 
-2. **runworkflow passing magic variable instead of accumulated dict variable**, after a loop, the final `runworkflow` should use the named `dict` variable, not a magic variable from inside the loop.
+2. **runworkflow passing magic variable instead of accumulated dict variable** — after a loop, the final `runworkflow` should use the named `dict` variable, not a magic variable from inside the loop.
 
-3. **Hardcoded values that should come from the input dictionary**: `gettext` actions that set variables before the dictionary is ever consulted mean those values can never be overridden by callers.
+3. **Hardcoded values that should come from the input dictionary** — `gettext` actions that set variables before the dictionary is ever consulted mean those values can never be overridden by callers.
 
-4. **Caller doesn't send required keys**, if Shortcut A calls Shortcut B, and B checks for a key to change its behavior, A must include that key. Typos in key names (e.g. `rerunningShortut` vs `rerunningShortcut`) silently break the handshake.
+4. **Caller doesn't send required keys** — if Shortcut A calls Shortcut B, and B checks for a key to change its behavior, A must include that key. Typos in key names (e.g. `rerunningShortut` vs `rerunningShortcut`) silently break the handshake.
 
-5. **Caller dict gets overwritten**, if Shortcut B calls Shortcut C and overwrites `variableDict` with C's output, all data passed by A is lost. A must signal B to skip C, or B must merge rather than replace.
+5. **Caller dict gets overwritten** — if Shortcut B calls Shortcut C and overwrites `variableDict` with C's output, all data passed by A is lost. A must signal B to skip C, or B must merge rather than replace.
 
-6. **Split separator mismatch**, if `%0A` is replaced with `|||` but splitting is set to "New Lines", URL-encoded input won't split. Must pick one strategy and be consistent.
+6. **Split separator mismatch** — if `%0A` is replaced with `|||` but splitting is set to "New Lines", URL-encoded input won't split. Must pick one strategy and be consistent.

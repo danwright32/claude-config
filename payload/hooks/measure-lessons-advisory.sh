@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# measure-lessons-advisory.sh: how noisy is the lessons advisory, really?
+# measure-lessons-advisory.sh — how noisy is the lessons advisory, really?
 #
 # Replays the REAL lessons-advisory.sh hook over the recent history of a repo and
 # reports how often it would have spoken up, and which triggers did it. The point
@@ -81,7 +81,7 @@ for line in d["hookSpecificOutput"]["additionalContext"].splitlines():
   grand_total=$((grand_total + total))
 
   if [ "$total" -eq 0 ]; then
-    echo "### $name: NO COMMITS READ, nothing was measured, which is not the same as quiet."
+    echo "### $name: NO COMMITS READ — nothing was measured, which is not the same as quiet."
   else
     pct=$(( fired * 100 / total ))
     echo "### $name: advised on $fired of $total commits (${pct}%)"

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# teammate-challenge-gate.sh: TeammateIdle hook.
+# teammate-challenge-gate.sh — TeammateIdle hook.
 #
 # Before a teammate goes idle, nudge it ONCE to surface disagreement/risk rather
 # than silently agreeing (anti-rubber-stamp / anti-false-consensus). Fires at
 # most once per teammate; if no stable teammate id is found in the payload it
 # does nothing, so it can never loop. Only meaningful when agent teams are
-# enabled (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1): otherwise no teammate ever
+# enabled (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) — otherwise no teammate ever
 # goes idle and this never runs.
 #
 # Exit 2 = send the message back and keep the teammate working (per the

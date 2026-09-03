@@ -24,22 +24,22 @@ Treat it as a floor:
 
 ### Starting agenda
 
-1. **Problem**: What problem are we solving? Who experiences it? How do we know it is real?
-2. **User**, Who is this for? How many are affected? Who does not need this?
-3. **Outcome**: What business or user outcome are we trying to achieve? How does it improve the product?
-4. **Priority**: Why now? Why is this more important than other work?
-5. **MVP**: What is the smallest version we could build to validate the idea?
-6. **Success**: How will we measure success? What metrics or KPIs tell us it worked?
-7. **Discovery**: How will users find or learn about this feature?
-8. **Opportunity cost**: What happens if we do not build it?
-9. **Alternatives**: Is there a simpler solution? Can we solve it without a new feature?
-10. **Edge cases**: Empty states, large datasets, permissions, errors, concurrent edits, offline, other unusual conditions.
-11. **Risks**: Technical, product, security, privacy, performance, scalability.
-12. **Dependencies**: Existing systems affected: APIs, database, auth, billing, notifications, analytics.
-13. **Non-functional requirements**: Performance, reliability, accessibility, security, compliance, localization, observability.
-14. **Instrumentation**: What events to track? What dashboards or alerts do we need?
-15. **Assumptions**: What are we assuming? How can we validate it?
-16. **Unknowns**: What questions are still unanswered?
+1. **Problem** — What problem are we solving? Who experiences it? How do we know it is real?
+2. **User** — Who is this for? How many are affected? Who does not need this?
+3. **Outcome** — What business or user outcome are we trying to achieve? How does it improve the product?
+4. **Priority** — Why now? Why is this more important than other work?
+5. **MVP** — What is the smallest version we could build to validate the idea?
+6. **Success** — How will we measure success? What metrics or KPIs tell us it worked?
+7. **Discovery** — How will users find or learn about this feature?
+8. **Opportunity cost** — What happens if we do not build it?
+9. **Alternatives** — Is there a simpler solution? Can we solve it without a new feature?
+10. **Edge cases** — Empty states, large datasets, permissions, errors, concurrent edits, offline, other unusual conditions.
+11. **Risks** — Technical, product, security, privacy, performance, scalability.
+12. **Dependencies** — Existing systems affected: APIs, database, auth, billing, notifications, analytics.
+13. **Non-functional requirements** — Performance, reliability, accessibility, security, compliance, localization, observability.
+14. **Instrumentation** — What events to track? What dashboards or alerts do we need?
+15. **Assumptions** — What are we assuming? How can we validate it?
+16. **Unknowns** — What questions are still unanswered?
 
 ## After shared understanding
 
@@ -55,8 +55,8 @@ pipeline rather than building ad hoc:
 
 Apply these before writing new code:
 
-1. **Standard library first**: Can this be solved using the language's standard library? If yes, use it.
-2. **Existing dependency second**: Is there an existing, reliable dependency already in the project that does this? If yes, use it. Do not add a new one.
+1. **Standard library first** — Can this be solved using the language's standard library? If yes, use it.
+2. **Existing dependency second** — Is there an existing, reliable dependency already in the project that does this? If yes, use it. Do not add a new one.
 
 Also follow the project's standing rules (CLAUDE.md): consolidate instead of
 duplicating logic, prefer the correct and robust approach over the fast one, default

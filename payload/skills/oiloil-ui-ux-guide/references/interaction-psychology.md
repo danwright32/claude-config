@@ -14,7 +14,7 @@ Practical rules:
 - Primary CTA: make it the largest interactive element in its section and place it near the user's visual focus.
 - Destructive actions: keep them small and spatially separated from the primary CTA to prevent slips.
 - Touch targets: minimum 44×44 CSS px (web) / 48×48 dp (mobile); don't shrink hit area to the glyph.
-- Edges and corners of the viewport are effectively infinite-size targets (screen edge stops the cursor): use them for key navigation (e.g., fixed top nav, bottom tab bar).
+- Edges and corners of the viewport are effectively infinite-size targets (screen edge stops the cursor) — use them for key navigation (e.g., fixed top nav, bottom tab bar).
 
 Review question: Is the primary action button large enough and close to the user's focus? Are destructive actions physically separated from routine actions?
 
@@ -38,9 +38,9 @@ Review question: Is the user facing too many options at once? Can grouping, sear
 
 Practical rules:
 - Navigation / tab bars: keep to ≤ 7 top-level items; use grouping or "more" for the rest.
-- Long forms: chunk fields into labeled groups (≤ 5-7 fields per group).
+- Long forms: chunk fields into labeled groups (≤ 5–7 fields per group).
 - Information display: break long lists into scannable sections with headings.
-- Don't force users to remember information across screens: carry context forward.
+- Don't force users to remember information across screens — carry context forward.
 
 Review question: Does a single screen require the user to hold more than 7 independent pieces of information in mind?
 
@@ -55,7 +55,7 @@ Review question: Does a single screen require the user to hold more than 7 indep
 
 Practical rules:
 - Pricing pages: show the recommended plan first (or in the center); it becomes the anchor.
-- Form defaults: the pre-filled value becomes the user's baseline: choose it carefully.
+- Form defaults: the pre-filled value becomes the user's baseline — choose it carefully.
 - Progress indicators: showing "step 2 of 3" anchors the user's effort expectation.
 
 ### Default Effect (默认效应)
@@ -74,7 +74,7 @@ Practical rules:
 - A painful middle is forgiven if the peak and end are positive.
 
 Practical rules:
-- Invest in the completion/success screen: it's the last impression.
+- Invest in the completion/success screen — it's the last impression.
 - Error recovery experience matters more than error prevention messaging for overall satisfaction.
 - Celebrate meaningful milestones (first project created, first successful deploy).
 
@@ -131,7 +131,7 @@ Practical rules:
 
 Practical rules:
 - Provide undo for common actions (delete, move, edit).
-- Non-destructive actions should not require confirmation dialogs: let users act and undo.
+- Non-destructive actions should not require confirmation dialogs — let users act and undo.
 - For truly irreversible actions, make the consequences explicit and require deliberate confirmation (e.g., type the name to confirm).
 
 ---
@@ -148,7 +148,7 @@ Practical rules:
 - Secondary information: reduce contrast, size, or weight to create clear hierarchy.
 - If everything looks important, re-evaluate: what is the ONE thing the user should do or notice here?
 
-Review question: Close your eyes, then open them, is the first thing you see the most important thing on the page?
+Review question: Close your eyes, then open them — is the first thing you see the most important thing on the page?
 
 ### Scanning Patterns (扫描模式)
 
@@ -159,6 +159,6 @@ Practical rules:
 - Place critical information at the top-left and in headings (F-pattern entry points).
 - In data tables, put the most important column on the far left.
 - Use visual anchors (bold text, icons, color) to create "scan stops" at key information.
-- Front-load sentences and labels: put the differentiating word first ("Save draft" vs "Draft: save").
+- Front-load sentences and labels: put the differentiating word first ("Save draft" vs "Draft — save").
 
 Review question: If the user spends only 3 seconds scanning, can they extract the most critical information?

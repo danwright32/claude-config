@@ -32,12 +32,6 @@ check() { # check <description> <result>   ("ok" passes, anything else is the fa
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
 export CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool"
-# The AMBIENT session is unset for the whole file. A record now carries the session that produced
-# it, and a clear files only its own (claude-config#222), so a suite that inherited whichever
-# session happened to be running it would attribute its fixtures to that session and every
-# assertion about filing would depend on who typed the command (L504). Every case that means
-# something by a session names it.
-unset CLAUDE_CODE_SESSION_ID
 # The hook under test writes the records it could not spool to a fixed name in the shared temp
 # directory, and this suite used to read and remove that exact path. Two runs at once therefore
 # destroyed each other's file, which is the same fault claude-config#180 was written for, in a
@@ -65,11 +59,7 @@ cat > "$FAKE_TRANSCRIPT" <<'JSONL'
 {"type":"assistant","message":{"content":[{"type":"text","text":"Fixed it. I also noticed EventPlace has no test for the empty case."}]}}
 JSONL
 
-# NAMED AFTER THE SESSION, because a real one is: SubagentStop fires in the parent session, so its
-# payload's session_id and the basename of its transcript_path are the same string. A fixture where
-# they differ made every clear file nothing once records started carrying their session
-# (claude-config#222), which is the fixture being unrealistic rather than the rule being wrong.
-PARENT_TRANSCRIPT="$TMPROOT/test-session.jsonl"
+PARENT_TRANSCRIPT="$TMPROOT/parent.jsonl"
 cat > "$PARENT_TRANSCRIPT" <<'JSONL'
 {"type":"user","message":{"content":"run the batch"}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"PARENT_SESSION_MARKER: this is the conversation that spawned the agent, not the agent."}]}}
@@ -184,8 +174,8 @@ reset_spool
 stub 'echo "FINDING: EventPlace has no test for the empty case (EventPlace.swift)."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q '"status": *"found"' <<< "$got" \
-  && grep -q 'EventPlace' <<< "$got" \
+printf '%s' "$got" | grep -q '"status": *"found"' \
+  && printf '%s' "$got" | grep -q 'EventPlace' \
   && check "a finding is spooled as found" ok \
   || check "a finding is spooled as found" "spool=$got"
 
@@ -195,7 +185,7 @@ reset_spool
 stub 'echo NONE'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q '"status": *"none"' <<< "$got" \
+printf '%s' "$got" | grep -q '"status": *"none"' \
   && check "an empty harvest records that it looked" ok \
   || check "an empty harvest records that it looked" "spool=$got"
 
@@ -204,7 +194,7 @@ reset_spool
 stub 'echo "model unavailable" >&2; exit 7'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q '"status": *"error"' <<< "$got" \
+printf '%s' "$got" | grep -q '"status": *"error"' \
   && check "a failed harvest records an error, not none" ok \
   || check "a failed harvest records an error, not none" "spool=$got"
 
@@ -213,7 +203,7 @@ reset_spool
 stub 'exit 0'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q '"status": *"error"' <<< "$got" \
+printf '%s' "$got" | grep -q '"status": *"error"' \
   && check "a silent model is an error, not none" ok \
   || check "a silent model is an error, not none" "spool=$got"
 
@@ -236,8 +226,8 @@ reset_spool
 stub 'echo NONE'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 sent="$(cat "$MODEL_INPUT" 2>/dev/null)"
-grep -q "EventPlace has no test" <<< "$sent" \
-  && ! grep -q "PARENT_SESSION_MARKER" <<< "$sent" \
+printf '%s' "$sent" | grep -q "EventPlace has no test" \
+  && ! printf '%s' "$sent" | grep -q "PARENT_SESSION_MARKER" \
   && check "the agent's transcript is what reaches the model" ok \
   || check "the agent's transcript is what reaches the model" "the parent's content reached it"
 
@@ -251,9 +241,9 @@ reset_spool
 stub 'echo "FINDING: should never be reached."'
 payload "$REPO" OMIT | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q '"status": *"error"' <<< "$got" \
-  && grep -q "named no agent_transcript_path" <<< "$got" \
-  && ! grep -q "should never be reached" <<< "$got" \
+printf '%s' "$got" | grep -q '"status": *"error"' \
+  && printf '%s' "$got" | grep -q "named no agent_transcript_path" \
+  && ! printf '%s' "$got" | grep -q "should never be reached" \
   && check "no agent transcript is an error, never a fallback to the parent" ok \
   || check "no agent transcript is an error, never a fallback to the parent" "spool=$got"
 
@@ -262,7 +252,7 @@ reset_spool
 stub 'echo "FINDING: should never be reached."'
 payload "$REPO" "$PARENT_TRANSCRIPT" "$PARENT_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q '"status": *"error"' <<< "$got" \
+printf '%s' "$got" | grep -q '"status": *"error"' \
   && check "an agent path equal to the parent's is refused" ok \
   || check "an agent path equal to the parent's is refused" "spool=$got"
 
@@ -272,7 +262,7 @@ reset_spool
 stub 'echo NONE'
 payload "$REPO" "$TMPROOT/does-not-exist.jsonl" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q '"status": *"error"' <<< "$got" \
+printf '%s' "$got" | grep -q '"status": *"error"' \
   && check "a named but missing transcript is an error" ok \
   || check "a named but missing transcript is an error" "spool=$got"
 
@@ -282,10 +272,10 @@ reset_spool
 stub 'echo "FINDING: something."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q "$FAKE_TRANSCRIPT" <<< "$got" \
+printf '%s' "$got" | grep -q "$FAKE_TRANSCRIPT" \
   && check "the record names the transcript it read" ok \
   || check "the record names the transcript it read" "spool=$got"
-grep -q '"agent": *"Explore"' <<< "$got" \
+printf '%s' "$got" | grep -q '"agent": *"Explore"' \
   && check "the record names the agent type" ok \
   || check "the record names the agent type" "spool=$got"
 
@@ -302,7 +292,7 @@ reset_spool
 stub 'echo NONE'
 payload "$REPO" "$UNREADABLE" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q '"status": *"error"' <<< "$got" \
+printf '%s' "$got" | grep -q '"status": *"error"' \
   && check "an unreadable transcript is an error, not an agent that said nothing" ok \
   || check "an unreadable transcript is an error, not an agent that said nothing" "spool=$got"
 
@@ -316,7 +306,7 @@ reset_spool
 stub 'echo NONE'
 payload "$REPO" "$SILENT_AGENT" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q '"status": *"none"' <<< "$got" \
+printf '%s' "$got" | grep -q '"status": *"none"' \
   && check "an agent that said nothing is a none, not an error" ok \
   || check "an agent that said nothing is a none, not an error" "spool=$got"
 
@@ -366,10 +356,10 @@ unset CLAUDE_ISSUE_SPOOL_MIDCLEAR
 
 still_pending="$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 archived="$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-grep -q "arrived-mid-clear" <<< "$still_pending" \
+printf '%s' "$still_pending" | grep -q "arrived-mid-clear" \
   && check "a finding arriving during filing is not eaten by it" ok \
   || check "a finding arriving during filing is not eaten by it" "pending=$still_pending"
-grep -q "filed before the clear" <<< "$archived" \
+printf '%s' "$archived" | grep -q "filed before the clear" \
   && check "filing still archives what was there when it started" ok \
   || check "filing still archives what was there when it started" "archive=$archived"
 
@@ -384,7 +374,7 @@ payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 
 pending="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>&1)"
 pending_code=$?
-grep -q "queue rebuild is not measured" <<< "$pending" \
+printf '%s' "$pending" | grep -q "queue rebuild is not measured" \
   && [ "$pending_code" -eq 0 ] \
   && check "pending prints the findings" ok \
   || check "pending prints the findings" "code=$pending_code out=$pending"
@@ -397,7 +387,7 @@ lines="$(printf '%s\n' "$pending" | grep -c "FINDING" || true)"
 # Reading must NOT clear. A review that is read and then interrupted has to leave
 # the finding behind for the next one.
 pending_again="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>&1)"
-grep -q "queue rebuild is not measured" <<< "$pending_again" \
+printf '%s' "$pending_again" | grep -q "queue rebuild is not measured" \
   && check "reading pending does not consume it" ok \
   || check "reading pending does not consume it" "out=$pending_again"
 
@@ -408,7 +398,7 @@ bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
   || check "clear empties pending" "pending survived clear"
 
 archive="$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-grep -q "queue rebuild is not measured" <<< "$archive" \
+printf '%s' "$archive" | grep -q "queue rebuild is not measured" \
   && check "clear keeps the record in the archive" ok \
   || check "clear keeps the record in the archive" "archive=$archive"
 
@@ -489,7 +479,7 @@ out_quiet="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
 # path the spool lookup sits in front of still works at all.
 rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
 out_cold="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
-grep -q '"decision"' <<< "$out_cold" \
+printf '%s' "$out_cold" | grep -q '"decision"' \
   && check "an empty spool does not stop the ordinary review" ok \
   || check "an empty spool does not stop the ordinary review" "silent: ${out_cold:0:120}"
 
@@ -532,14 +522,14 @@ contains "it will not come back" "$(cat "$(dirname "$REVIEW")/review/issue-revie
   || check "the instruction says a reported failure will not come back" "the instruction file does not say it"
 
 pend_settle="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-grep -q "HARVEST FAILED" <<< "$pend_settle" \
+printf '%s' "$pend_settle" | grep -q "HARVEST FAILED" \
   && check "a reported failure is not offered a second time" "still pending: ${pend_settle:0:200}" \
   || check "a reported failure is not offered a second time" ok
-grep -q "retry path has no failure test" <<< "$pend_settle" \
+printf '%s' "$pend_settle" | grep -q "retry path has no failure test" \
   && check "a finding in the same spool is left pending" ok \
   || check "a finding in the same spool is left pending" "pending=${pend_settle:0:200}"
 arch_settle="$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-grep -q '"status": *"error"' <<< "$arch_settle" \
+printf '%s' "$arch_settle" | grep -q '"status": *"error"' \
   && check "the settled failure is filed, not dropped" ok \
   || check "the settled failure is filed, not dropped" "archive=${arch_settle:0:200}"
 
@@ -552,11 +542,11 @@ stub 'exit 9'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 rm -f "$REVIEW_STAMP"
 out_nodel="$(printf '%s' "$review_payload" | CLAUDE_REVIEW_REASON_FORCE_FAIL=1 bash "$REVIEW" 2>/dev/null)"
-grep -q "HARVEST FAILED" <<< "$out_nodel" \
+printf '%s' "$out_nodel" | grep -q "HARVEST FAILED" \
   && check "the undelivered review really left the failure out" "it carried it: ${out_nodel:0:200}" \
   || check "the undelivered review really left the failure out" ok
 pend_nodel="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-grep -q "HARVEST FAILED" <<< "$pend_nodel" \
+printf '%s' "$pend_nodel" | grep -q "HARVEST FAILED" \
   && check "a failure nobody was shown stays pending" ok \
   || check "a failure nobody was shown stays pending" "pending=${pend_nodel:0:200}"
 
@@ -567,7 +557,7 @@ mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 printf 'this is not a record at all\n' >> "$(bash "$SPOOL_LIB" path "$REPO" "$PARENT_TRANSCRIPT")"
 bash "$SPOOL_LIB" file-errors "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 pend_corrupt="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-grep -q "UNREADABLE SPOOL RECORDS" <<< "$pend_corrupt" \
+printf '%s' "$pend_corrupt" | grep -q "UNREADABLE SPOOL RECORDS" \
   && check "filing failures leaves an unreadable record pending" ok \
   || check "filing failures leaves an unreadable record pending" "pending=${pend_corrupt:0:200}"
 
@@ -583,7 +573,7 @@ reset_spool
 stub 'echo "FINDING: something worth keeping."'
 payload "$REPO" | CLAUDE_ISSUE_SPOOL_LIB="$TMPROOT/not-here.sh" bash "$HARVEST" >/dev/null 2>&1
 lost="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/harvest-unrecorded.log" 2>/dev/null)"
-grep -q "spool library is missing" <<< "$lost" \
+printf '%s' "$lost" | grep -q "spool library is missing" \
   && check "a missing spool library is recorded, not silently swallowed" ok \
   || check "a missing spool library is recorded, not silently swallowed" "log=$lost"
 
@@ -595,7 +585,7 @@ stub 'echo "FINDING: written to a read-only spool."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 chmod 700 "$CLAUDE_ISSUE_SPOOL_DIR"
 lost="$(cat "$LOST_RECORDS" 2>/dev/null)"
-grep -q "read-only spool" <<< "$lost" \
+printf '%s' "$lost" | grep -q "read-only spool" \
   && check "a record that cannot be written lands in the lost file" ok \
   || check "a record that cannot be written lands in the lost file" "lost=$lost"
 rm -f "$LOST_RECORDS"
@@ -625,7 +615,7 @@ payload "$REPO" | CLAUDE_ISSUE_HARVEST_TIMEOUT=$hang_timeout bash "$HARVEST" >/d
 elapsed=$((SECONDS - start))
 hang_max=$(( quick_elapsed + 3 * hang_timeout ))
 got="$(records)"
-[ "$elapsed" -le "$hang_max" ] && grep -q '"status": *"error"' <<< "$got" \
+[ "$elapsed" -le "$hang_max" ] && printf '%s' "$got" | grep -q '"status": *"error"' \
   && check "a hung model is cut off and recorded" ok \
   || check "a hung model is cut off and recorded" "took ${elapsed}s against a bound of ${hang_max}s, spool=$got"
 # The same comparison, asked of one second over that bound, so it has been watched REFUSING rather
@@ -641,8 +631,8 @@ reset_spool
 stub 'echo "Here are the issues I spotted: the parser is wrong."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-grep -q '"status": *"unparsed"' <<< "$got" \
-  && grep -q "the parser is wrong" <<< "$got" \
+printf '%s' "$got" | grep -q '"status": *"unparsed"' \
+  && printf '%s' "$got" | grep -q "the parser is wrong" \
   && check "unparseable model output is its own status with the raw text kept" ok \
   || check "unparseable model output is its own status with the raw text kept" "spool=$got"
 spool_says "COULD NOT BE READ" \
@@ -773,7 +763,7 @@ stub 'echo "FINDING: injector failure case."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
 out_inj="$(printf '%s' "$review_payload" | CLAUDE_REVIEW_REASON_FORCE_FAIL=1 bash "$REVIEW" 2>/dev/null)"
-grep -q '"decision"' <<< "$out_inj" \
+printf '%s' "$out_inj" | grep -q '"decision"' \
   && check "a broken injector does not cancel the review" ok \
   || check "a broken injector does not cancel the review" "review went silent"
 
@@ -790,7 +780,7 @@ with open(p, 'w') as fh:
 " "$(bash "$SPOOL_LIB" path "$REPO" "$PARENT_TRANSCRIPT")"
 rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
 out_big="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
-grep -q '"decision"' <<< "$out_big" \
+printf '%s' "$out_big" | grep -q '"decision"' \
   && check "a very large pending list does not break the review" ok \
   || check "a very large pending list does not break the review" "review went silent"
 
@@ -1246,193 +1236,6 @@ PENDING_AFTER="$(grep -l . "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep 
 [ "${PENDING_AFTER:-0}" -eq 0 ] \
   && check "clear with no transcript files every key holding this project's findings" ok \
   || check "clear with no transcript files every key holding this project's findings" "$PENDING_AFTER pending file(s) left behind"
-
-# ---------------------------------------------------------------------------
-# A spool a review cannot drain (claude-config#241).
-# ---------------------------------------------------------------------------
-# One spool was measured holding 219 pending findings, of which the review carried four and a line
-# saying "and 215 more findings not shown here". The clear that follows the picker files ALL of
-# them, so everything past the first few was archived unread, silently. The 8,000 character cap
-# came from when the list went into the MESSAGE; since claude-config#243 it goes to a file the
-# reader opens, so the reason for the small number went away and the number stayed.
-reset_spool
-mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-MANY_TRANSCRIPT="$TMPROOT/many-sess.jsonl"; : > "$MANY_TRANSCRIPT"
-_many=1
-while [ "$_many" -le 40 ]; do
-  bash "$SPOOL_LIB" note "$REPO" \
-    "finding number $_many, about a subject long enough to cost a few hundred characters of budget, so that forty of them comfortably exceed the eight thousand the old cap allowed and the difference is visible" \
-    tester "$MANY_TRANSCRIPT" >/dev/null 2>&1
-  _many=$(( _many + 1 ))
-done
-out_many="$(bash "$SPOOL_LIB" pending "$REPO" "$MANY_TRANSCRIPT" 2>/dev/null)"
-_shown="$(grep -c '^FINDING' <<< "$out_many" || true)"
-[ "${_shown:-0}" -ge 40 ] \
-  && check "#241 a review is shown every pending finding, not the first few" ok \
-  || check "#241 a review is shown every pending finding, not the first few" "only $_shown of 40 were shown"
-# The old cap really would have cut it, or this measures nothing (L159).
-out_capped="$(CLAUDE_ISSUE_SPOOL_FINDING_BUDGET=8000 bash "$SPOOL_LIB" pending "$REPO" "$MANY_TRANSCRIPT" 2>/dev/null)"
-_capped="$(grep -c '^FINDING' <<< "$out_capped" || true)"
-[ "${_capped:-0}" -lt 40 ] \
-  && check "#241 and the old cap would have cut the same list short" ok \
-  || check "#241 and the old cap would have cut the same list short" "it showed $_capped of 40 even at 8000"
-# When something IS cut, the notice says what happens to the remainder, because the clear files
-# them and a line saying they "stay in the spool until filed" reads as the opposite (L11).
-case "$out_capped" in
-  *"went unread"*) check "#241 and a truncated list says the rest are filed away unread" ok ;;
-  *) check "#241 and a truncated list says the rest are filed away unread" "out=${out_capped: -300}" ;;
-esac
-
-# ---------------------------------------------------------------------------
-# WHETHER A WRITTEN FINDING CAN BE READ BY ANYBODY (claude-config#242).
-# ---------------------------------------------------------------------------
-# A review opens exactly one key, the one derived from its own session's transcript directory, so a
-# finding under a key no session resolves to is never offered to anyone: the harvest reports
-# success, the review reports nothing to show, and both are telling the truth about different files
-# (L98). Measured on 2026-08-31, the spool held 142 distinct keys and the records inside named
-# about 42 working directories, and nothing anywhere reported whether any of it was reachable.
-reset_spool
-mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-REACH_ROOT="$TMPROOT/reach-projects"
-mkdir -p "$REACH_ROOT/a-real-project"
-REACH_TRANSCRIPT="$REACH_ROOT/a-real-project/sess.jsonl"; : > "$REACH_TRANSCRIPT"
-bash "$SPOOL_LIB" note "$REPO" "a finding a session can reach" tester "$REACH_TRANSCRIPT" >/dev/null 2>&1
-out_reach="$(CLAUDE_TRANSCRIPT_ROOT="$REACH_ROOT" bash "$SPOOL_LIB" reach-report 2>&1)"; reach_rc=$?
-[ "$reach_rc" -eq 0 ] \
-  && check "#242 a key a session resolves to is reported as reachable" ok \
-  || check "#242 a key a session resolves to is reported as reachable" "exit=$reach_rc out=$out_reach"
-case "$out_reach" in
-  *"1 holding records"*) check "#242 and the count of keys holding records is stated" ok ;;
-  *) check "#242 and the count of keys holding records is stated" "out=$out_reach" ;;
-esac
-
-# A finding written under a key nothing resolves to. Written by hand under a key of its own,
-# because that is exactly the state the measurement found and there is no way to reach it through
-# the library, which always keys on something real.
-printf '{"ts":"2026-08-31T00:00:00Z","status":"found","agent":"a","cwd":"/gone","findings":["a finding nobody will ever be offered"]}\n' \
-  > "$CLAUDE_ISSUE_SPOOL_DIR/deadbeefdead.jsonl"
-out_un="$(CLAUDE_TRANSCRIPT_ROOT="$REACH_ROOT" bash "$SPOOL_LIB" reach-report 2>&1)"; un_rc=$?
-[ "$un_rc" -ne 0 ] \
-  && check "#242 a key no session resolves to fails the report" ok \
-  || check "#242 a key no session resolves to fails the report" "exit=$un_rc out=$out_un"
-case "$out_un" in
-  *"deadbeefdead.jsonl (1 record(s))"*)
-    check "#242 and the unreachable key is named with what it holds" ok ;;
-  *)
-    check "#242 and the unreachable key is named with what it holds" "out=$out_un" ;;
-esac
-
-# Reading NO transcript directory must not report every key as unreachable: that is a wall of false
-# alarms built out of having measured nothing (L98, L36).
-EMPTY_ROOT="$TMPROOT/reach-empty"; mkdir -p "$EMPTY_ROOT"
-out_nodirs="$(CLAUDE_TRANSCRIPT_ROOT="$EMPTY_ROOT" bash "$SPOOL_LIB" reach-report 2>&1)"; nodirs_rc=$?
-[ "$nodirs_rc" -ne 0 ] \
-  && check "#242 no transcript directory at all is a refusal, not a verdict" ok \
-  || check "#242 no transcript directory at all is a refusal, not a verdict" "exit=$nodirs_rc out=$out_nodirs"
-case "$out_nodirs" in
-  *"could not be worked out"*"Nothing is being reported as unreachable"*)
-    check "#242 and it says it could not work out which keys are reachable" ok ;;
-  *)
-    check "#242 and it says it could not work out which keys are reachable" "out=$out_nodirs" ;;
-esac
-
-# The second question the measurement raised: on 2026-08-31, 131 of 157 files were ZERO BYTES. They are made by
-# the filing path writing an empty keep set back with `cat >>`, which creates the file, so a spool
-# holding 8 findings looks like it holds 139 keys.
-reset_spool
-mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-ZERO_TRANSCRIPT="$TMPROOT/zero-sess.jsonl"; : > "$ZERO_TRANSCRIPT"
-printf '{"ts":"2026-09-02T00:00:00Z","status":"error","agent":"a","session":"zero-sess","cwd":"%s","error":"a failure with a remedy"}\n' "$REPO" \
-  > "$(bash "$SPOOL_LIB" path "$REPO" "$ZERO_TRANSCRIPT")"
-bash "$SPOOL_LIB" file-errors "$REPO" "$ZERO_TRANSCRIPT" >/dev/null 2>&1
-ZERO_LEFT="$(ls -1 "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep -v '\.filed\.jsonl' | grep -c . || true)"
-[ "${ZERO_LEFT:-0}" -eq 0 ] \
-  && check "#242 filing everything leaves no empty pending file behind" ok \
-  || check "#242 filing everything leaves no empty pending file behind" "$ZERO_LEFT pending file(s) left, sized: $(wc -c < "$(ls -1 "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep -v '\.filed\.jsonl' | awk 'NR<=1')" 2>/dev/null)"
-
-# ---------------------------------------------------------------------------
-# A clear files ITS OWN session's findings and leaves everybody else's (claude-config#222).
-# ---------------------------------------------------------------------------
-# The spool is keyed on the PROJECT, deliberately, so an agent in a worktree reaches the same spool
-# as the session that reads it. Dan runs several sessions against one project at once, and that
-# keying cannot tell them apart: whichever session's Stop hook fires first is handed EVERY session's
-# findings and is then told to clear. Measured in one PostRoll session on 2026-08-29, four
-# consecutive reviews were each handed the same 25 findings about work that session had never
-# touched, and they had to be copied aside by hand every time or they would have been filed unseen.
-reset_spool
-mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-SESS_A="$TMPROOT/session-a.jsonl"; : > "$SESS_A"
-SESS_B="$TMPROOT/session-b.jsonl"; : > "$SESS_B"
-bash "$SPOOL_LIB" note "$REPO" "a finding session A must settle" tester "$SESS_A" >/dev/null 2>&1
-bash "$SPOOL_LIB" note "$REPO" "a finding session B has not seen yet" tester "$SESS_B" >/dev/null 2>&1
-# Both are in play before anything is cleared, or the check below is satisfied by a spool that
-# never held B's record at all (L159, L100).
-pend_two="$(bash "$SPOOL_LIB" pending "$REPO" "$SESS_A" 2>/dev/null)"
-case "$pend_two" in
-  *"session A must settle"*) check "#222 both sessions' findings are pending to begin with" ok ;;
-  *) check "#222 both sessions' findings are pending to begin with" "pending=${pend_two:0:200}" ;;
-esac
-
-# Read from B's point of view BEFORE anything is filed, while both findings are still pending.
-pend_marked="$(bash "$SPOOL_LIB" pending "$REPO" "$SESS_B" 2>/dev/null)"
-bash "$SPOOL_LIB" clear "$REPO" "$SESS_A" >/dev/null 2>&1
-arch_a="$(bash "$SPOOL_LIB" archive "$REPO" "$SESS_A" 2>/dev/null)"
-case "$arch_a" in
-  *"session A must settle"*) check "#222 a clear files the calling session's own finding" ok ;;
-  *) check "#222 a clear files the calling session's own finding" "archive=${arch_a:0:200}" ;;
-esac
-case "$arch_a" in
-  *"session B has not seen yet"*)
-    check "#222 and it does NOT file the other session's" "B's finding was filed by A's clear" ;;
-  *)
-    check "#222 and it does NOT file the other session's" ok ;;
-esac
-pend_b="$(bash "$SPOOL_LIB" pending "$REPO" "$SESS_B" 2>/dev/null)"
-case "$pend_b" in
-  *"session B has not seen yet"*)
-    check "#222 and the other session's finding is still there for its own review" ok ;;
-  *)
-    check "#222 and the other session's finding is still there for its own review" "pending=${pend_b:0:200}" ;;
-esac
-# And B can then settle it, or the rule has moved the loss rather than removed it.
-bash "$SPOOL_LIB" clear "$REPO" "$SESS_B" >/dev/null 2>&1
-arch_b="$(bash "$SPOOL_LIB" archive "$REPO" "$SESS_B" 2>/dev/null)"
-case "$arch_b" in
-  *"session B has not seen yet"*) check "#222 and B's own clear settles it afterwards" ok ;;
-  *) check "#222 and B's own clear settles it afterwards" "archive=${arch_b:0:200}" ;;
-esac
-
-# A review that is handed another session's finding SAYS so. It has no context for judging one it
-# did not cause, and would either file it badly or drop it.
-case "$pend_marked" in
-  *"session A must settle"*"from another session working in this project"*)
-    check "#222 a finding from another session is marked as one" ok ;;
-  *)
-    check "#222 a finding from another session is marked as one" "pending=${pend_marked:0:300}" ;;
-esac
-# And the reader's OWN finding is not, or the mark says nothing (L159).
-case "$pend_marked" in
-  *"session B has not seen yet"*"from another session"*)
-    check "#222 and its own finding is not marked" "B's own finding was marked as somebody else's" ;;
-  *)
-    check "#222 and its own finding is not marked" ok ;;
-esac
-
-# A record with NO session cannot be claimed by anybody, so it is filed by whoever clears first,
-# which is what every record did before this existed. Leaving it pending for ever would be a worse
-# failure than the one being fixed (L526).
-reset_spool
-mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-bash "$SPOOL_LIB" note "$REPO" "a finding no session claims" tester >/dev/null 2>&1
-bash "$SPOOL_LIB" clear "$REPO" "$SESS_A" >/dev/null 2>&1
-# Read WITHOUT the transcript, because a note that named none landed under the plain directory key
-# and that is the archive it goes to. Reading the transcript key here would report an empty archive
-# and be indistinguishable from a record that was never filed (L11).
-arch_u="$(bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null)"
-case "$arch_u" in
-  *"no session claims"*) check "#222 a finding belonging to no session is still filed" ok ;;
-  *) check "#222 a finding belonging to no session is still filed" "archive=${arch_u:0:200}" ;;
-esac
 
 # The mirror, so the fix cannot be "file everything": another project's pending findings are untouched.
 reset_spool

@@ -68,7 +68,7 @@ cmd="${parsed%%$'\x1f'*}"
 [ -n "$cmd" ] || exit 0
 
 # Documented override: an inline SKIP_PR_QUIZ=1 prefix.
-if grep -Eq '(^|[[:space:];&|])SKIP_PR_QUIZ=1([[:space:]]|$)' <<< "$cmd"; then
+if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_PR_QUIZ=1([[:space:]]|$)'; then
   exit 0
 fi
 
@@ -92,7 +92,7 @@ is_merge=0
 while IFS= read -r seg; do
   stripped="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//')"
   head_tokens="$(printf '%s' "$stripped" | awk '{print $1, $2, $3}')"
-  if grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' <<< "$head_tokens"; then
+  if printf '%s' "$head_tokens" | grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
     is_merge=1
     break
   fi
@@ -104,7 +104,7 @@ while IFS= read -r seg; do
       is_merge=1
       break 2
     fi
-    if grep -Eq '^(bash|sh|zsh)$' <<< "$first" && [ "${second##*/}" = "$wrapper" ]; then
+    if printf '%s' "$first" | grep -Eq '^(bash|sh|zsh)$' && [ "${second##*/}" = "$wrapper" ]; then
       is_merge=1
       break 2
     fi

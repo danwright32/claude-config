@@ -18,7 +18,7 @@ export const meta = {
 // args (set by the plan-panel skill after the framing conversation):
 //   { feature, constraints, weightedCriteria, roles:[{key,brief}], projectDir, repo }
 // args may arrive already-parsed (object) or as a JSON string depending on the
-// launch path: normalize so the framing inputs are never silently dropped.
+// launch path — normalize so the framing inputs are never silently dropped.
 let a
 try {
   a = (typeof args === 'string' && args.trim())
@@ -26,26 +26,26 @@ try {
     : (args && typeof args === 'object' ? args : {})
 } catch (e) {
   throw new Error(
-    `plan-council ABORT (before any agent ran): args was a string but not valid JSON, ${e.message}. ` +
+    `plan-council ABORT (before any agent ran): args was a string but not valid JSON — ${e.message}. ` +
     `Nothing was spawned, no tokens burned. Re-launch passing args as a JSON object/string ` +
     `{feature, constraints, weightedCriteria, roles, projectDir, repo}.`
   )
 }
 
 // FAILSAFE: refuse to run blind. If the framing never reached the script (feature
-// missing/empty), abort NOW, before the preflight or any role agent, so a missing
+// missing/empty), abort NOW — before the preflight or any role agent — so a missing
 // spec costs ~0 tokens instead of a full multi-agent run against a vacuum.
 if (!a.feature || !String(a.feature).trim()) {
   throw new Error(
-    'plan-council ABORT (before any agent ran): no `feature` supplied, the framing step was ' +
+    'plan-council ABORT (before any agent ran): no `feature` supplied — the framing step was ' +
     'skipped or args failed to reach the script. Refusing to spawn the panel and burn tokens. ' +
     'Expected args: {feature, constraints, weightedCriteria, roles:[{key,brief,agentType}], projectDir, repo}.'
   )
 }
-const feature = a.feature || 'UNSPECIFIED FEATURE: framing step was skipped'
+const feature = a.feature || 'UNSPECIFIED FEATURE — framing step was skipped'
 const constraints = a.constraints || 'none captured'
 const criteria = a.weightedCriteria ||
-  'correctness & robustness (HIGHEST: right beats fast) · user impact (high) · cost / recurring spend (high: prefer free; a paid option must clearly earn its bill) · maintainability (high) · risk & reversibility (medium) · NOTE: build time / effort is explicitly NOT a criterion, never weight how long an option takes to build'
+  'correctness & robustness (HIGHEST — right beats fast) · user impact (high) · cost / recurring spend (high — prefer free; a paid option must clearly earn its bill) · maintainability (high) · risk & reversibility (medium) · NOTE: build time / effort is explicitly NOT a criterion — never weight how long an option takes to build'
 const roles = (a.roles && a.roles.length) ? a.roles : [
   { key: 'architect', brief: 'overall architecture, system fit, long-term maintainability', agentType: 'plan-architect' },
   { key: 'product', brief: 'is this the right thing for the customer; real value vs scope', agentType: 'plan-product' },
@@ -62,7 +62,7 @@ const grounding =
   `Feature to plan: ${feature}\n` +
   `Hard constraints: ${constraints}\n` +
   `Project directory: ${a.projectDir || '(current working directory)'}\n` +
-  `GROUND YOURSELF IN THE REAL CODE: read the relevant files, the project's CLAUDE.md, and the live database schema (Supabase MCP) if available. Do NOT invent files, APIs, or tables: only reference things you have verified exist.`
+  `GROUND YOURSELF IN THE REAL CODE: read the relevant files, the project's CLAUDE.md, and the live database schema (Supabase MCP) if available. Do NOT invent files, APIs, or tables — only reference things you have verified exist.`
 
 // --- Recorded lessons: the plan must not propose something already known to be a mistake ---
 // LESSONS.md is the distilled record of defects found across every project (L1, L2, … ).
@@ -96,11 +96,11 @@ const LESSONS_SCHEMA = {
   },
 }
 const auditLessons = (planText, label) => agent(
-  `Audit this plan for "${feature}" against the RECORDED LESSONS: the distilled record of defects already paid for on past projects.\n\n` +
+  `Audit this plan for "${feature}" against the RECORDED LESSONS — the distilled record of defects already paid for on past projects.\n\n` +
   `FIRST, read ${LESSONS_PATH} in full, and the build-time reliability rules in ${RULES_PATH}. Do not work from memory: report lessonsFileRead=false and verdict="could-not-audit" if you cannot read the lessons file, and NEVER report "clean" on a file you did not read.\n\n` +
   `${grounding}\n\nPLAN:\n${planText}\n\n` +
   `Go lesson by lesson. For each one that the plan VIOLATES, or that the plan silently ignores where it plainly applies (a background job with no failure alerting, a guard that fails open, a multi-step write that is not idempotent, a route with no tenant scoping, a destructive step with no backup or undo, an empty state rendered over an error, a count and its rows from two different predicates, a hand-maintained list mirroring a source of truth, a test that cannot fail), report it with the lesson id, the exact part of the plan at fault, why it is the same mistake, and the concrete fix.\n\n` +
-  `Report ONLY real violations grounded in the plan's own text: do not pad the list with generic advice, and do not restate the reality-check's job (whether files and tables exist). Absence of a lesson from the plan is a violation only where that lesson plainly applies to what the plan is building.`,
+  `Report ONLY real violations grounded in the plan's own text — do not pad the list with generic advice, and do not restate the reality-check's job (whether files and tables exist). Absence of a lesson from the plan is a violation only where that lesson plainly applies to what the plan is building.`,
   { label, phase: 'Lessons audit', schema: LESSONS_SCHEMA, effort: 'high' }
 )
 // An auditor that dies must never resolve to silence: parallel() yields null on failure,
@@ -131,7 +131,7 @@ if (a.mode === 'revise') {
   }
   phase('Revise')
   const revised = await agent(
-    `The human reviewed this plan for "${feature}" and left comments. Revise the plan to ADDRESS each comment specifically: change it where they are right, push back with reasons where they are not.\n${grounding}\n\nPRIOR PLAN:\n${prior}\n\nHUMAN COMMENTS:\n${comments}`,
+    `The human reviewed this plan for "${feature}" and left comments. Revise the plan to ADDRESS each comment specifically — change it where they are right, push back with reasons where they are not.\n${grounding}\n\nPRIOR PLAN:\n${prior}\n\nHUMAN COMMENTS:\n${comments}`,
     { label: 'revise', phase: 'Revise', schema: REVISE_SCHEMA, effort: 'high' }
   )
   phase('Reality-check')
@@ -145,16 +145,16 @@ if (a.mode === 'revise') {
   ])
   let reviseRC = normalizeRC(reviseRC0)
   let reviseAudit = normalizeAudit(reviseAudit0)
-  if (auditFailed(reviseAudit)) log(`LESSONS AUDIT DID NOT RUN CLEANLY (${reviseAudit.verdict}, read=${reviseAudit.lessonsFileRead}, lessons seen=${reviseAudit.lessonsSeen}): the revised plan is UNAUDITED against LESSONS.md, not clean.`)
+  if (auditFailed(reviseAudit)) log(`LESSONS AUDIT DID NOT RUN CLEANLY (${reviseAudit.verdict}, read=${reviseAudit.lessonsFileRead}, lessons seen=${reviseAudit.lessonsSeen}) — the revised plan is UNAUDITED against LESSONS.md, not clean.`)
 
   // One bounded correction round: revise mode stays light, but a known-bad proposal
   // must be FIXED in the plan text, never merely reported beside it.
   const reviseProblems = reviseRC.broken.length + reviseAudit.violations.length
   if (reviseProblems > 0) {
     phase('Fix & reverify')
-    log(`Revised plan has ${reviseRC.broken.length} broken claim(s) and ${reviseAudit.violations.length} lesson violation(s): correcting inline.`)
+    log(`Revised plan has ${reviseRC.broken.length} broken claim(s) and ${reviseAudit.violations.length} lesson violation(s) — correcting inline.`)
     reviseFinal = await agent(
-      `Correct this revised plan IN PLACE. Fix each broken claim and each recorded-lesson violation directly in the plan text; do NOT append correction notes. Keep everything already correct, and keep the point-by-point responses to the human's comments.\n${grounding}\n\nBROKEN CLAIMS:\n${JSON.stringify(reviseRC.broken, null, 2)}\nLESSON VIOLATIONS (from ${LESSONS_PATH}: each names the lesson, the offending part, and the fix; apply the fix):\n${JSON.stringify(reviseAudit.violations, null, 2)}\n\nCURRENT PLAN:\n${reviseFinal.plan}\n\nReturn the fully corrected plan with the same structure.`,
+      `Correct this revised plan IN PLACE. Fix each broken claim and each recorded-lesson violation directly in the plan text; do NOT append correction notes. Keep everything already correct, and keep the point-by-point responses to the human's comments.\n${grounding}\n\nBROKEN CLAIMS:\n${JSON.stringify(reviseRC.broken, null, 2)}\nLESSON VIOLATIONS (from ${LESSONS_PATH} — each names the lesson, the offending part, and the fix; apply the fix):\n${JSON.stringify(reviseAudit.violations, null, 2)}\n\nCURRENT PLAN:\n${reviseFinal.plan}\n\nReturn the fully corrected plan with the same structure.`,
       { label: 'fix:1', phase: 'Fix & reverify', schema: REVISE_SCHEMA, effort: 'high' }
     )
     const [reviseRC1, reviseAudit1] = await parallel([
@@ -179,7 +179,7 @@ const PREFLIGHT_SCHEMA = {
 }
 phase('Preflight')
 const preflight = await agent(
-  `Quick grounding probe for planning "${feature}". Project directory: ${a.projectDir || '(current working directory)'}.\n(1) Can you actually read this project's source files and its CLAUDE.md? Try listing/reading one or two.\n(2) Can you reach the live database schema via the Supabase MCP tools? Try one cheap call.\nReport a boolean for each plus a short note on anything you could NOT access. Be honest: a "false" here is valuable, not a failure.`,
+  `Quick grounding probe for planning "${feature}". Project directory: ${a.projectDir || '(current working directory)'}.\n(1) Can you actually read this project's source files and its CLAUDE.md? Try listing/reading one or two.\n(2) Can you reach the live database schema via the Supabase MCP tools? Try one cheap call.\nReport a boolean for each plus a short note on anything you could NOT access. Be honest — a "false" here is valuable, not a failure.`,
   { label: 'preflight', phase: 'Preflight', schema: PREFLIGHT_SCHEMA }
 )
 // THREE states, not two. `agent()` returns null when the subagent dies on a terminal
@@ -237,7 +237,7 @@ const OPTIONS_SCHEMA = {
 
 phase('Distill options')
 const distilled = await agent(
-  `Independent panel recommendations:\n${JSON.stringify(passes, null, 2)}\n\nSynthesize them into 2-3 DISTINCT, WHOLE, internally-coherent candidate approaches to "${feature}". Each option must be a genuinely different bet (e.g. thin-slice-now vs durable-foundation vs buy-don't-build): do NOT blend them into one compromise.\n\nCOST SPREAD IS REQUIRED: at least ONE option must be the free / cheapest-possible approach (reuse what already exists, no new paid services). Include a NON-FREE option ONLY when its extra spend buys a genuinely meaningful win, and then state plainly what the money buys over the free option. Never pad the slate with a paid option that is not clearly better. Give each a short id, name, summary, key choices, and a cost note.`,
+  `Independent panel recommendations:\n${JSON.stringify(passes, null, 2)}\n\nSynthesize them into 2-3 DISTINCT, WHOLE, internally-coherent candidate approaches to "${feature}". Each option must be a genuinely different bet (e.g. thin-slice-now vs durable-foundation vs buy-don't-build) — do NOT blend them into one compromise.\n\nCOST SPREAD IS REQUIRED: at least ONE option must be the free / cheapest-possible approach (reuse what already exists, no new paid services). Include a NON-FREE option ONLY when its extra spend buys a genuinely meaningful win, and then state plainly what the money buys over the free option. Never pad the slate with a paid option that is not clearly better. Give each a short id, name, summary, key choices, and a cost note.`,
   { label: 'distill', phase: 'Distill options', schema: OPTIONS_SCHEMA }
 )
 const options = distilled.options
@@ -271,7 +271,7 @@ const SELECT_SCHEMA = {
 
 phase('Score & select')
 const selection = await agent(
-  `Feature: ${feature}\nWeighted criteria that define "best": ${criteria}\nCandidate options:\n${JSON.stringify(options, null, 2)}\nChampion & red-team cases:\n${JSON.stringify(advocacy, null, 2)}\n\nBLIND JUDGING: you are NOT told which specialist or role favored which option, and you must NOT infer or weight by any author's seniority: judge each option purely on its merits against the criteria. WEIGHT BY CONFIDENCE: each case carries a stated confidence; a low-confidence claim must not outweigh a well-supported one.\n\nA red-team objection that CITES a recorded lesson id (from ${LESSONS_PATH}) is evidence of a defect this project has already shipped once, not a hypothetical: weight it accordingly, and score an option down on correctness & robustness where it repeats a recorded mistake and does nothing to prevent it.\n\nScore EACH option 0-10 against the weighted criteria, with reasons. Then pick the highest-scoring option that SURVIVES its red-team. Choose the BEST plan, not the most comfortable or easiest-to-ship, if the more ambitious option scores higher and survives, pick it. COST IS FIRST-CLASS: do not pick a paid option over a free/cheapest one that scores nearly as well: prefer free unless the paid option is clearly, materially better on the weighted criteria. IGNORE BUILD TIME / EFFORT: the user's standing rule is "right is always better than fast", NEVER prefer an option because it is quicker or easier to build; when options differ on correctness vs. build speed, the more correct/robust one wins. (Recurring cost still counts; build effort does not.) List the runner-up's best ideas worth grafting into the winner.`,
+  `Feature: ${feature}\nWeighted criteria that define "best": ${criteria}\nCandidate options:\n${JSON.stringify(options, null, 2)}\nChampion & red-team cases:\n${JSON.stringify(advocacy, null, 2)}\n\nBLIND JUDGING: you are NOT told which specialist or role favored which option, and you must NOT infer or weight by any author's seniority — judge each option purely on its merits against the criteria. WEIGHT BY CONFIDENCE: each case carries a stated confidence; a low-confidence claim must not outweigh a well-supported one.\n\nA red-team objection that CITES a recorded lesson id (from ${LESSONS_PATH}) is evidence of a defect this project has already shipped once, not a hypothetical — weight it accordingly, and score an option down on correctness & robustness where it repeats a recorded mistake and does nothing to prevent it.\n\nScore EACH option 0-10 against the weighted criteria, with reasons. Then pick the highest-scoring option that SURVIVES its red-team. Choose the BEST plan, not the most comfortable or easiest-to-ship — if the more ambitious option scores higher and survives, pick it. COST IS FIRST-CLASS: do not pick a paid option over a free/cheapest one that scores nearly as well — prefer free unless the paid option is clearly, materially better on the weighted criteria. IGNORE BUILD TIME / EFFORT: the user's standing rule is "right is always better than fast" — NEVER prefer an option because it is quicker or easier to build; when options differ on correctness vs. build speed, the more correct/robust one wins. (Recurring cost still counts; build effort does not.) List the runner-up's best ideas worth grafting into the winner.`,
   { label: 'judge', phase: 'Score & select', schema: SELECT_SCHEMA, effort: 'high' }
 )
 const winner = options.find(o => o.id === selection.winnerId) || options[0]
@@ -294,7 +294,7 @@ const PLAN_SCHEMA = {
 
 phase('Synthesize')
 const draft = await agent(
-  `Write the implementation plan for "${feature}" from the winning approach "${winner.name}" (${winner.summary}).\nGraft in these runner-up ideas where they strengthen it: ${(selection.runnerUpBestIdeas || []).join('; ') || '(none)'}\nJudge rationale: ${selection.rationale}\nFull champion/red-team context:\n${JSON.stringify(advocacy)}\n\nBEFORE writing, read ${LESSONS_PATH} and the build-time rules in ${RULES_PATH}, and design against them: every failure path surfaces loudly, every multi-step write survives running twice, every route states who may call it and whose data it touches, every destructive step keeps the good state until its replacement is verified, and every guard is one that can be seen to fail. The plan is audited against that file after you write it, so build it in now rather than having it corrected out of you.\n\nProduce: (1) a phased, concrete plan grounded in this codebase; (2) dissent you overruled and WHY; (3) the IDEAL-vs-DOABLE gap: what the best version would add and why it is deferred; (4) escalatedDecisions: EVERY product / scope / cost trade-off where reasonable people could choose differently MUST go here for the human to decide; do NOT 'lock' such a call yourself. This includes scope (build one thing vs two), thin-vs-full, and especially FREE-vs-PAID: if a non-free option is meaningfully better than the free one, put 'ship the free way' vs 'pay for the better way' here as an explicit decision with the cost named. Lock ONLY purely technical decisions that have one clearly-correct answer; (5) open risks and unknowns.`,
+  `Write the implementation plan for "${feature}" from the winning approach "${winner.name}" (${winner.summary}).\nGraft in these runner-up ideas where they strengthen it: ${(selection.runnerUpBestIdeas || []).join('; ') || '(none)'}\nJudge rationale: ${selection.rationale}\nFull champion/red-team context:\n${JSON.stringify(advocacy)}\n\nBEFORE writing, read ${LESSONS_PATH} and the build-time rules in ${RULES_PATH}, and design against them: every failure path surfaces loudly, every multi-step write survives running twice, every route states who may call it and whose data it touches, every destructive step keeps the good state until its replacement is verified, and every guard is one that can be seen to fail. The plan is audited against that file after you write it, so build it in now rather than having it corrected out of you.\n\nProduce: (1) a phased, concrete plan grounded in this codebase; (2) dissent you overruled and WHY; (3) the IDEAL-vs-DOABLE gap — what the best version would add and why it is deferred; (4) escalatedDecisions — EVERY product / scope / cost trade-off where reasonable people could choose differently MUST go here for the human to decide; do NOT 'lock' such a call yourself. This includes scope (build one thing vs two), thin-vs-full, and especially FREE-vs-PAID: if a non-free option is meaningfully better than the free one, put 'ship the free way' vs 'pay for the better way' here as an explicit decision with the cost named. Lock ONLY purely technical decisions that have one clearly-correct answer; (5) open risks and unknowns.`,
   { label: 'synthesize', phase: 'Synthesize', schema: PLAN_SCHEMA, effort: 'high' }
 )
 
@@ -316,7 +316,7 @@ phase('Reality-check')
 let finalPlan = draft
 const rcPrompt = (planText, corrected) => corrected
   ? `Reality-check this CORRECTED plan against the ACTUAL codebase and data.\n${grounding}\n\nPlan:\n${planText}\n\nVerify every concrete claim (files, paths, line numbers, APIs, tables, constraints) by reading the real code/schema. Report what holds and anything still broken.`
-  : `Reality-check this plan against the ACTUAL codebase and data.\n${grounding}\n\nPlan:\n${planText}\n\nVerify every concrete assumption: do the referenced files, components, APIs, and tables actually exist? Are the file paths and line numbers correct? Does the data model support it? Does anything violate the stated constraints (${constraints})? Read the real code and schema to confirm: do not take the plan's word for it. Report what holds, what is broken, and concrete adjustments.`
+  : `Reality-check this plan against the ACTUAL codebase and data.\n${grounding}\n\nPlan:\n${planText}\n\nVerify every concrete assumption: do the referenced files, components, APIs, and tables actually exist? Are the file paths and line numbers correct? Does the data model support it? Does anything violate the stated constraints (${constraints})? Read the real code and schema to confirm — do not take the plan's word for it. Report what holds, what is broken, and concrete adjustments.`
 
 let [rc0, audit0] = await parallel([
   () => agent(rcPrompt(finalPlan.plan, false), { label: 'reality-check', phase: 'Reality-check', schema: RC_SCHEMA, effort: 'high' }),
@@ -325,7 +325,7 @@ let [rc0, audit0] = await parallel([
 let realityCheck = normalizeRC(rc0)
 let lessonsAudit = normalizeAudit(audit0)
 if (auditFailed(lessonsAudit)) {
-  log(`LESSONS AUDIT DID NOT RUN CLEANLY (${lessonsAudit.verdict}, read=${lessonsAudit.lessonsFileRead}, lessons seen=${lessonsAudit.lessonsSeen}): this plan is UNAUDITED against LESSONS.md, not clean. ${lessonsAudit.notes || ''}`)
+  log(`LESSONS AUDIT DID NOT RUN CLEANLY (${lessonsAudit.verdict}, read=${lessonsAudit.lessonsFileRead}, lessons seen=${lessonsAudit.lessonsSeen}) — this plan is UNAUDITED against LESSONS.md, not clean. ${lessonsAudit.notes || ''}`)
 }
 
 // Fix-and-reverify: if either check found a problem, correct the plan IN PLACE (not as an
@@ -335,13 +335,13 @@ const stillBroken = () => (realityCheck.verdict === 'needs-fixes' || (realityChe
 const stillViolating = () => lessonsAudit.violations.length > 0
 while ((stillBroken() || stillViolating()) && rcRounds < 2) {
   rcRounds++
-  log(`Round ${rcRounds}: ${(realityCheck.broken || []).length} broken item(s), ${lessonsAudit.violations.length} recorded-lesson violation(s): correcting the plan inline.`)
+  log(`Round ${rcRounds}: ${(realityCheck.broken || []).length} broken item(s), ${lessonsAudit.violations.length} recorded-lesson violation(s) — correcting the plan inline.`)
   phase('Fix & reverify')
   finalPlan = await agent(
-    `This plan failed its checks. Correct EACH item directly in the plan text: fix the wrong file paths, line numbers, and claims in place, and change the DESIGN where it repeats a recorded mistake; do NOT just append correction notes. Keep everything that was already correct.\n${grounding}\n\n` +
+    `This plan failed its checks. Correct EACH item directly in the plan text — fix the wrong file paths, line numbers, and claims in place, and change the DESIGN where it repeats a recorded mistake; do NOT just append correction notes. Keep everything that was already correct.\n${grounding}\n\n` +
     `BROKEN CLAIMS (reality-check):\n${JSON.stringify(realityCheck.broken || [], null, 2)}\n` +
     `ADJUSTMENTS:\n${JSON.stringify(realityCheck.adjustments || [], null, 2)}\n` +
-    `RECORDED-LESSON VIOLATIONS (from ${LESSONS_PATH}: each names the lesson, the offending part of the plan, and the fix; APPLY the fix, and if you genuinely disagree with one, put it in overruledDissent with your reason rather than silently ignoring it):\n${JSON.stringify(lessonsAudit.violations, null, 2)}\n\n` +
+    `RECORDED-LESSON VIOLATIONS (from ${LESSONS_PATH} — each names the lesson, the offending part of the plan, and the fix; APPLY the fix, and if you genuinely disagree with one, put it in overruledDissent with your reason rather than silently ignoring it):\n${JSON.stringify(lessonsAudit.violations, null, 2)}\n\n` +
     `CURRENT PLAN:\n${finalPlan.plan}\n\nReturn the fully corrected plan with the same structure.`,
     { label: `fix:${rcRounds}`, phase: 'Fix & reverify', schema: PLAN_SCHEMA, effort: 'high' }
   )

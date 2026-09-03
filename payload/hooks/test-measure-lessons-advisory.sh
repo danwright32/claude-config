@@ -43,19 +43,19 @@ out_none="$(bash "$M" 2>&1)"; code_none=$?
 [ "$code_none" -ne 0 ] \
   && check "pointed at no repo at all it refuses" ok \
   || check "pointed at no repo at all it refuses" "exit=$code_none out=$out_none"
-grep -qi 'usage' <<< "$out_none" \
+printf '%s' "$out_none" | grep -qi 'usage' \
   && check "and says how to call it" ok \
   || check "and says how to call it" "out=$out_none"
 
 NOTAREPO="$TMPROOT/plain"; mkdir -p "$NOTAREPO"
 out_notrepo="$(bash "$M" "$NOTAREPO" 2>&1)"; code_notrepo=$?
-grep -qi 'not a git repo' <<< "$out_notrepo" \
+printf '%s' "$out_notrepo" | grep -qi 'not a git repo' \
   && check "a path that is not a repo is named as skipped, not counted" ok \
   || check "a path that is not a repo is named as skipped, not counted" "out=$out_notrepo"
 [ "$code_notrepo" -ne 0 ] \
   && check "and a run that measured nothing exits non-zero rather than reporting quiet" ok \
   || check "and a run that measured nothing exits non-zero rather than reporting quiet" "exit=$code_notrepo"
-grep -qi 'NOTHING MEASURED' <<< "$out_notrepo" \
+printf '%s' "$out_notrepo" | grep -qi 'NOTHING MEASURED' \
   && check "and says plainly that nothing was measured" ok \
   || check "and says plainly that nothing was measured" "out=$out_notrepo"
 
@@ -71,10 +71,10 @@ out_clean="$(bash "$M" "$CLEAN" -n 1 2>&1)"; code_clean=$?
 printf '%s' "$out_clean" | grep -qE 'advised on [0-9]+ of [0-9]+ commits' \
   && check "and reports how many commits it read, not just how many fired" ok \
   || check "and reports how many commits it read, not just how many fired" "out=$out_clean"
-grep -q 'OVERALL' <<< "$out_clean" \
+printf '%s' "$out_clean" | grep -q 'OVERALL' \
   && check "and closes with an overall rate" ok \
   || check "and closes with an overall rate" "out=$out_clean"
-grep -qi 'tuned out' <<< "$out_clean" \
+printf '%s' "$out_clean" | grep -qi 'tuned out' \
   && check "and says what the number would have to reach to matter" ok \
   || check "and says what the number would have to reach to matter" "out=$out_clean"
 

@@ -660,7 +660,7 @@ print(f'{new_total} new/changed file(s) to re-extract.')
 "
 ```
 
-If new files exist, run **Steps 3A: 3C** on `result['new_files']` only (not the full corpus). Then:
+If new files exist, run **Steps 3A–3C** on `result['new_files']` only (not the full corpus). Then:
 
 ```bash
 python3 -c "
@@ -685,7 +685,7 @@ print(f'Merged: {G_existing.number_of_nodes()} nodes, {G_existing.number_of_edge
 " 
 ```
 
-Then run Steps 4-8 on the merged graph as normal.
+Then run Steps 4–8 on the merged graph as normal.
 
 After Step 4, show the graph diff:
 
@@ -721,7 +721,7 @@ Clean up after: `rm -f .graphify_old.json`
 
 ## For --cluster-only
 
-Skip Steps 1-3. Load the existing graph from `graphify-out/graph.json` and re-run clustering:
+Skip Steps 1–3. Load the existing graph from `graphify-out/graph.json` and re-run clustering:
 
 ```bash
 python3 -c "
@@ -762,7 +762,7 @@ print(f'Re-clustered: {len(communities)} communities')
 "
 ```
 
-Then run Steps 5-9 as normal (label communities, generate viz, benchmark, clean up, report).
+Then run Steps 5–9 as normal (label communities, generate viz, benchmark, clean up, report).
 
 ---
 

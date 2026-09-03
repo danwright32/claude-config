@@ -35,7 +35,7 @@ payload() { python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv
 # ---------------------------------------------------------------------------
 id1="$(newid one)"
 out1="$(payload "$id1" "$TMPROOT/My Project" | bash "$H" 2>/dev/null)"
-grep -q '"sessionTitle"' <<< "$out1" \
+printf '%s' "$out1" | grep -q '"sessionTitle"' \
   && check "the first prompt of a session gets a title" ok \
   || check "the first prompt of a session gets a title" "out=$out1"
 printf '%s' "$out1" | grep -q "my-project-$(date +%m%d)" \
@@ -54,7 +54,7 @@ out2="$(payload "$id1" "$TMPROOT/My Project" | bash "$H" 2>/dev/null)"
 # nothing after the first session on the machine (L159).
 id2="$(newid two)"
 out3="$(payload "$id2" "$TMPROOT/Other" | bash "$H" 2>/dev/null)"
-grep -q 'other-' <<< "$out3" \
+printf '%s' "$out3" | grep -q 'other-' \
   && check "a different session still gets its own name" ok \
   || check "a different session still gets its own name" "out=$out3"
 

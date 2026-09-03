@@ -46,13 +46,13 @@ out_full="$(python3 "$D" "$FULL" 2>&1)"; code_full=$?
 [ "$code_full" -eq 0 ] \
   && check "a transcript with something in it exits 0" ok \
   || check "a transcript with something in it exits 0" "exit=$code_full out=$out_full"
-grep -q 'swallowed error' <<< "$out_full" \
+printf '%s' "$out_full" | grep -q 'swallowed error' \
   && check "and prints what the agent said" ok \
   || check "and prints what the agent said" "out=$out_full"
-grep -q '/repo/retry.ts' <<< "$out_full" \
+printf '%s' "$out_full" | grep -q '/repo/retry.ts' \
   && check "and the files it touched" ok \
   || check "and the files it touched" "out=$out_full"
-grep -q 'Audit the retry path' <<< "$out_full" \
+printf '%s' "$out_full" | grep -q 'Audit the retry path' \
   && check "and the task it was given" ok \
   || check "and the task it was given" "out=$out_full"
 
@@ -109,10 +109,10 @@ WITHRESULT="$TMPROOT/withresult.jsonl"
   python3 -c 'import json; print(json.dumps({"type":"user","message":{"content":[{"type":"tool_result","content":"ENORMOUS-TOOL-OUTPUT-MARKER"}]}}))'
 } > "$WITHRESULT"
 out_wr="$(python3 "$D" "$WITHRESULT" 2>/dev/null)"
-grep -q 'ENORMOUS-TOOL-OUTPUT-MARKER' <<< "$out_wr" \
+printf '%s' "$out_wr" | grep -q 'ENORMOUS-TOOL-OUTPUT-MARKER' \
   && check "tool results are left out of the digest" "the marker came through" \
   || check "tool results are left out of the digest" ok
-grep -q 'The registry is empty' <<< "$out_wr" \
+printf '%s' "$out_wr" | grep -q 'The registry is empty' \
   && check "while what the agent said still comes through" ok \
   || check "while what the agent said still comes through" "out=$out_wr"
 
@@ -123,13 +123,13 @@ grep -q 'The registry is empty' <<< "$out_wr" \
 LONG="$TMPROOT/long.jsonl"
 { asked "Look at everything"; say "OPENING-MARKER"; say "$(python3 -c 'print("filler. " * 400)')"; say "CLOSING-MARKER"; } > "$LONG"
 out_long="$(python3 "$D" "$LONG" 500 2>/dev/null)"
-grep -q 'CLOSING-MARKER' <<< "$out_long" \
+printf '%s' "$out_long" | grep -q 'CLOSING-MARKER' \
   && check "trimming keeps the end of what the agent said" ok \
   || check "trimming keeps the end of what the agent said" "out=${out_long:0:200}"
-grep -q 'OPENING-MARKER' <<< "$out_long" \
+printf '%s' "$out_long" | grep -q 'OPENING-MARKER' \
   && check "and drops the beginning" "the opening survived, so nothing was trimmed" \
   || check "and drops the beginning" ok
-grep -qi 'trimmed' <<< "$out_long" \
+printf '%s' "$out_long" | grep -qi 'trimmed' \
   && check "and says it trimmed rather than silently shortening" ok \
   || check "and says it trimmed rather than silently shortening" "out=${out_long:0:200}"
 

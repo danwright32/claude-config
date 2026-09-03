@@ -129,16 +129,6 @@ if [ -n "$pending" ]; then
   # and this path is now SHOWN to Dan in the reason rather than only used.
   findings_file="${TMPDIR:-/tmp}"
   findings_file="${findings_file%/}/claude-issue-findings-${hash}.txt"
-  # Annotated with the open issue that already covers a finding, where one clearly does
-  # (claude-config#256). An agent auditing the backlog restates the issues it read, and those
-  # restatements were filed as fresh issues and closed as duplicates within the hour. It FAILS
-  # OPEN: no gh, no network, no repo and the findings go out exactly as they were, because this is
-  # a convenience on a review and losing it must never cost the review.
-  _matcher="$SELF_DIR/lib/match-open-issues.py"
-  if [ -f "$_matcher" ]; then
-    _annotated="$(printf '%s\n' "$pending" | python3 "$_matcher" "$proj" 2>/dev/null)" || _annotated=""
-    [ -n "$_annotated" ] && pending="$_annotated"
-  fi
   printf '%s\n' "$pending" > "$findings_file" 2>/dev/null || findings_file=""
 fi
 

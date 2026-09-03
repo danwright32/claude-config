@@ -40,7 +40,7 @@ else
   f=$(printf '%s' "$parser_line" | sed -E 's/.*failed=([0-9]+).*/\1/')
   passed=$((passed + p))
   failed=$((failed + f))
-  [ "$f" != "0" ] && grep '  FAIL:' <<< "$parser_out"
+  [ "$f" != "0" ] && printf '%s\n' "$parser_out" | grep '  FAIL:'
 fi
 
 # --------------------------------------------------------------- the gate

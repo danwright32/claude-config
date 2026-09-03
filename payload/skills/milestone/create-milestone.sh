@@ -158,8 +158,8 @@ fi
 # matches a milestone by name, not by number (gh 2.88: "Add the issue to a
 # milestone by name"). The helper reports the resolved title, which can differ in
 # case or punctuation from the title this plan asked for.
-verdict="$(printf '%s\n' "$ms_out" | grep -E '^(MILESTONE-EXISTS|MILESTONE-CREATED|WOULD-CREATE-MILESTONE)' | awk 'NR <= 1')"
-resolved="$(printf '%s\n' "$ms_out" | sed -n 's/^MILESTONE-TITLE //p' | awk 'NR <= 1')"
+verdict="$(printf '%s\n' "$ms_out" | grep -E '^(MILESTONE-EXISTS|MILESTONE-CREATED|WOULD-CREATE-MILESTONE)' | head -1)"
+resolved="$(printf '%s\n' "$ms_out" | sed -n 's/^MILESTONE-TITLE //p' | head -1)"
 case "$verdict" in
   MILESTONE-EXISTS*|MILESTONE-CREATED*)
     ms_ref="$resolved"

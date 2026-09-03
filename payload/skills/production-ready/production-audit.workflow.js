@@ -10,14 +10,14 @@ export const meta = {
 }
 
 // args may arrive already-parsed (object) or as a JSON string depending on how
-// the skill launched the workflow: handle both, like plan-council does.
+// the skill launched the workflow — handle both, like plan-council does.
 let _a
 try {
   _a = (typeof args === 'string' && args.trim())
     ? JSON.parse(args)
     : (args && typeof args === 'object' ? args : {})
 } catch (e) {
-  throw new Error(`production-audit ABORT: args was a string but not valid JSON, ${e.message}. Nothing spawned.`)
+  throw new Error(`production-audit ABORT: args was a string but not valid JSON — ${e.message}. Nothing spawned.`)
 }
 const { projectDir, repo, date, mode } = _a
 if (!projectDir) throw new Error('args.projectDir is required (got: ' + JSON.stringify(args) + ')')
@@ -244,13 +244,13 @@ const verifyFindings = async (res, d) => {
   if (!serious.length) return { domain: d.key, findings: res.findings }
   const verdicts = await parallel(serious.map(f => () =>
     agent(`Adversarially REFUTE this production-readiness finding for "${d.title}" in ${projectDir}.
-Finding: "${f.check}", claimed ${f.status} (${f.severity}). Stated evidence: ${f.evidence}.
+Finding: "${f.check}" — claimed ${f.status} (${f.severity}). Stated evidence: ${f.evidence}.
 Search the codebase to prove the claim WRONG (e.g. the protection actually exists). Default refuted=false if you cannot disprove it. Cite path:line.`,
       { schema: REFUTE_SCHEMA, label: `verify:${d.key}`, phase: 'Verify' })
       .then(v => ({ f, v }))))
   const refutedSet = new Set(verdicts.filter(Boolean).filter(x => x.v && x.v.refuted).map(x => x.f.check))
   const findings = res.findings.map(f => refutedSet.has(f.check)
-    ? { ...f, status: 'pass', severity: 'none', evidence: `${f.evidence}, overturned on verification` }
+    ? { ...f, status: 'pass', severity: 'none', evidence: `${f.evidence} — overturned on verification` }
     : f)
   return { domain: d.key, findings }
 }
@@ -267,7 +267,7 @@ phase('Synthesize')
 const allFindings = audited.filter(Boolean).flatMap(a =>
   a.findings.map(f => ({ domain: a.domain, ...f })))
 const synth = await agent(
-  `You are synthesizing a production-readiness report (ADVISORY, no go/no-go verdict). Project: ${repo || projectDir}.
+  `You are synthesizing a production-readiness report (ADVISORY — no go/no-go verdict). Project: ${repo || projectDir}.
 Here are all verified findings across domains as JSON:
 ${JSON.stringify(allFindings)}
 Dedup findings that describe the same gap across domains. Rank by severity. Produce:

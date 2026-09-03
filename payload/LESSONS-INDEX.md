@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 420 lessons.
+LESSONS.md, which is NOT loaded into the session. 426 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -123,6 +123,9 @@ to decide something: the body is where the failure it came from is described.
 - L367. An alert or threshold on a SUM cannot see one of its components collapsing while another grows to replace it, because the total never moves.
 - L543. A feature whose data is a list of EXCEPTIONS (holidays, overrides, blocked entries, allowlisted cases) ships INERT when that list is empty, and empty is a legitimate domain value meaning no exceptions apply, so nothing can distinguish a correctly quiet feature from one whose data was never entered.
 - L373. A test whose premise is that a change has NOT yet been made (a migration rehearsal, a dry run, an assertion that the thing about to be dropped is still there) is CONSUMED by that change shipping, so retire or invert it in the same commit that ships the change. Left behind it goes permanently red for a reason that looks exactly like a real defect, and a standing red makes every other failure in the same list unreadable.
+- L375. A before and after comparison of shared state attributes every change it sees to whatever it was bracketing, so on any store with a second legitimate writer it accuses rather than finds, and it accuses loudest exactly when that writer is busiest.
+- L376. A guard that compares the current environment against the ONE it was calibrated in fails on every machine that legitimately differs, because a developer machine and a CI runner never upgrade together.
+- L378. A guard that exists to save an EXPENSIVE step must run on every entry point that reaches that step, because wiring it only into the thorough path leaves it absent from the quick one people use while iterating, which is exactly when the mistake it catches is made. Its own cost is the wrong thing to weigh: two seconds on every fast run is nothing against one doomed build it prevents.
 
 ## Data safety
 
@@ -148,6 +151,7 @@ to decide something: the body is where the failure it came from is described.
 - L260. Two outcomes a guard gives distinct MESSAGES but the same CONSEQUENCE are one outcome in practice
 - L267. Running a new version that AUTO MIGRATES a shared store consumes your ability to run the PREVIOUS version against it
 - L338. Archiving a run's INPUTS and OUTPUTS but not the record of what it DID leaves the question anybody actually asks later, whether it did the work, unanswerable, and the surviving pair reads as complete evidence rather than as a gap, so decide explicitly what carries the process record and how long it lives instead of letting it default to the live file's lifetime.
+- L377. Retiring a feature must delete the STORED POINTERS to what it produced, not only its writer and its screen, because a consumer written to be generic over those pointers has no list anybody could have updated and goes on acting on every one left behind.
 
 ## Honest failure
 
@@ -389,6 +393,7 @@ to decide something: the body is where the failure it came from is described.
 - L281. Behaviour that is correct only as a SIDE EFFECT of an unrelated rule has no test, no comment and no owner, so the first change to that rule removes it silently while every check stays green.
 - L286. A derivation every test in a suite needs (a tree walk, a parse, a store clone) is recomputed once per test unless its default input is memoised, so memoise the no-argument form, keep the callers that inject their own input building, and make the memo unable to capture an empty result, because a memoised empty scan passes every guard at once.
 - L542. Two similar rules that DIFFER may each be a recorded decision rather than an inconsistency, and the comment beside one documents only that one, so a change that aligns them can silently delete a product rule while reading as a cleanup. Before making two such rules agree, find the decision record for EACH side, and treat an observed divergence as evidence of a defect only once both records are in hand.
+- L374. A gitignore or exclude entry without a leading slash matches at EVERY depth, so a rule written for one top level folder silently swallows any same named directory anywhere in the tree, and the loss is invisible to status, diff and commit alike.
 
 ## Cross-system reliability
 
@@ -428,6 +433,7 @@ to decide something: the body is where the failure it came from is described.
 - L533. A job on a sparse schedule (weekly, monthly) whose only failure remedy is running it again needs an automatic re-attempt within the same period, because an in-process retry measured in seconds cannot outlast a real outage, and a transiently failed run otherwise silently costs the whole schedule interval.
 - L369. A lock that serialises heavy work must be scoped to the RESOURCE it protects, never to the project that created it, because another project on the same machine does the same heavy work and cannot take a lock it has never heard of.
 - L372. A script that changes its own working directory must capture its own location BEFORE the cd, because a path re-derived from `$0` afterwards is relative to where the script was INVOKED from rather than where it now is, so it resolves for one invocation and silently misses for another.
+- L379. Doing by hand what a tool normally does performs the visible change and silently omits the tool's OTHER writes, and the one most often omitted is the record some monitor reads, so the system ends up correct while the monitor is permanently wrong.
 
 ## Test speed
 

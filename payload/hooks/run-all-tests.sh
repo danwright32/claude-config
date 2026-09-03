@@ -102,7 +102,7 @@ FLAKE_RECHECK_POLL="${HOOK_TESTS_FLAKE_RECHECK_POLL:-1}"
 # Mac. So the budget below is granted to the suites running at once, each is TOLD its share in
 # HOOK_TESTS_SLOTS, and the total is printed rather than left to be worked out. The shares are not
 # equal: see the lanes further down (#139).
-_ncpu="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) | awk 'NR <= 1' )"
+_ncpu="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) | head -1 )"
 case "$_ncpu" in ''|*[!0-9]*) _ncpu=4 ;; esac
 [ "$_ncpu" -gt 0 ] || _ncpu=4
 _default_budget=$(( _ncpu > 8 ? 8 : _ncpu ))
@@ -137,127 +137,6 @@ esac
 # path INSIDE this repo.
 root="${HOOK_TESTS_ROOT:-}"
 [ -n "$root" ] || root="$(git -C "$SELF_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
-
-# Did a store only GAIN lines while the run went on? (claude-config#277)
-#
-# The stores on the list have writers that are not these tests and cannot be told from them by a
-# checksum: the sync applying a pull, and another Claude session recording a lesson, which is what
-# actually failed two green runs on 2026-09-02. Both of those only ever ADD to these files, in the
-# section an entry belongs in, and what a suite bound to the real path does is rewrite the file
-# wholesale or truncate it. So the SHAPE of the change is the evidence, and it is read from a copy
-# taken before the run rather than guessed at from a size (L63).
-#
-# This stands down on additions and nothing else. A line removed or changed is still counted, which
-# is the destructive shape and the one worth a full re-run. The route a suite would actually take
-# into these files is refused at its source now: claude-sync will not apply into the real config
-# while CLAUDE_SUITE_RUN_ID is set.
-live_store_only_gained(){ # <path> -> 0 when the change only added lines
-  local path="$1" copy
-  [ -n "${_live_copies:-}" ] || return 1
-  [ -f "$_live_copies/index" ] || return 1
-  copy="$(awk -F"$(printf '\t')" -v f="$path" '$1 == f { print $2; exit }' "$_live_copies/index")"
-  [ -n "$copy" ] && [ -f "$copy" ] || return 1     # absent before, so this is a creation
-  [ -f "$path" ] || return 1                        # gone now, which is not a gain
-  # Lines present in the copy and missing now are what disqualifies it. `diff` prints those with a
-  # leading `<`, so an empty result means every difference was an addition.
-  [ -z "$(diff "$copy" "$path" 2>/dev/null | grep '^<' || true)" ]
-}
-
-# Did the SYNC apply config into this Mac while the run was going? (claude-config#277)
-#
-# The stores on the list above are the config the sync installs, and the watch daemon installs it
-# the moment the other Mac pushes: a run of 44 suites was failed on 2026-09-02 by LESSONS.md growing
-# by 1,177 bytes, which was a lesson the other Mac had recorded arriving here. The guard's own
-# comment said nothing else legitimately writes these during a run, and that was false for three
-# separate stores in one day (L375).
-#
-# Read from what the sync writes about ITSELF rather than guessed at: every clone rewrites
-# .last-applied on each apply, so its mtime is when the last one happened, and the clone registry
-# names the clones. An apply inside this run's own window explains a change to any of these stores,
-# because these stores are exactly what an apply writes. Outside that window it explains nothing and
-# the change is this run's doing as before.
-_file_mtime(){ # <path> -> a unix timestamp, or nothing
-  local m
-  m="$(stat -f %m "$1" 2>/dev/null || true)"
-  case "$m" in ''|*[!0-9]*) m="$(stat -c %Y "$1" 2>/dev/null || true)" ;; esac
-  case "$m" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s' "$m"
-}
-sync_applied_since(){ # <unix timestamp> -> prints the clone and when, empty when none did
-  local since="$1" reg clone m
-  case "$since" in ''|*[!0-9]*) return 1 ;; esac
-  reg="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
-  [ -f "$reg" ] || return 1
-  while IFS= read -r clone; do
-    [ -n "$clone" ] || continue
-    [ -d "$clone" ] || continue
-    m="$(_file_mtime "$clone/.last-applied")" || continue
-    [ "$m" -ge "$since" ] || continue
-    printf '%s at %s' "$clone" "$(date -r "$m" '+%H:%M:%S' 2>/dev/null || printf '%s' "$m")"
-    return 0
-  done < "$reg"
-  return 1
-}
-
-# Did something OUTSIDE this run rewrite the watcher marker? (claude-config#272)
-#
-# The marker is on the live-store list like the rest, and unlike the rest it has a legitimate
-# writer that is not a suite: launchd keeps the watch daemon alive and it restarts on its own, 562
-# times by 2026-09-02 on this Mac, and one of those restarts landed inside the very run that added
-# the store to the list. A plain comparison there is a false red on a green run, priced at a full
-# re-run and arriving when the machine is busiest (L36, L293).
-#
-# Judged rather than compared, and judged positively: the marker names a pid. A watcher a SUITE
-# started is a descendant of this run. One a suite started and stopped leaves a pid that is dead,
-# and the live daemon's marker never does, because it removes the file on the way out and launchd
-# starts a new one. So anything alive that this run is not an ancestor of belongs to somebody else.
-watch_marker_is_not_ours(){ # <marker path> -> 0 when something outside this run owns it
-  local pid p hops=0
-  [ -f "$1" ] || return 1
-  # `read` reports failure at end of file even when it filled the variable, and a marker written
-  # without a trailing newline is exactly that, so the value is judged rather than the exit code.
-  read -r pid < "$1" 2>/dev/null || true
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$pid" 2>/dev/null || return 1
-  p="$pid"
-  while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$hops" -lt 40 ]; do
-    [ "$p" = "$$" ] && return 1
-    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
-    case "$p" in ''|*[!0-9]*) break ;; esac
-    hops=$(( hops + 1 ))
-  done
-  return 0
-}
-
-# WHICH copy a re-run verified (claude-config#274). Every other suite in a pull's run is checking
-# what the pull just installed; a suite re-run from the checkout is checking the checkout's copy of
-# the same file, and the line read as an ordinary pass either way. The gap is normally nil, because
-# the pull installed from that checkout moments earlier, and it is exactly non nil in the two cases
-# that matter: an edit nobody has sent, and a checkout behind what is deployed (L11).
-#
-# The checkout holds .last-applied, which the pull writes with the commit whose payload is on this
-# Mac, so this SAYS whether the two agree rather than assuming it. No pipes: a pipeline whose
-# consumer leaves early can report a failure that never happened (L183), and there is nothing here
-# expensive enough to want one.
-checkout_provenance(){ # checkout_provenance <checkout dir> -> the sentence for the line under it
-  local co="${1%/}" head applied dirty=""
-  head="$(git -C "$co" rev-parse --short=7 HEAD 2>/dev/null || true)"
-  [ -n "$(git -C "$co" status --porcelain -- payload 2>/dev/null || true)" ] \
-    && dirty=" It has uncommitted changes under payload, so this verdict is about an edit that has not been sent."
-  if [ -z "$head" ]; then
-    printf 'Verified the copy in %s, whose revision could not be read, not the copy installed here.%s' "$co" "$dirty"
-    return 0
-  fi
-  applied=""
-  [ -f "$co/.last-applied" ] && read -r applied < "$co/.last-applied" 2>/dev/null
-  if [ -z "$applied" ]; then
-    printf 'Verified the copy in %s at %s, and nothing there records what the pull applied, not the copy installed here.%s' "$co" "$head" "$dirty"
-  elif [ "${applied#"$head"}" != "$applied" ]; then
-    printf 'Verified the copy in %s at %s, which is what the pull applied, not the copy installed here.%s' "$co" "$head" "$dirty"
-  else
-    printf 'Verified the copy in %s at %s, which is NOT what the pull applied (%s), not the copy installed here.%s' "$co" "$head" "$applied" "$dirty"
-  fi
-}
 
 # Whether there is a REPOSITORY here at all (claude-config#155). Three suites in this repo audit
 # the repository itself: the tracked files, and every suite in it. A deployed copy under the config
@@ -603,53 +482,10 @@ if [ "$ran" -gt 0 ]; then
   # a harvest firing in another project during a run reads here as a suite violating L2. Measured
   # 2026-08-30, a green run of all 44 suites was failed by 1,180 bytes written by a session working
   # in a different repository entirely.
-  # ONE `wc`, not one per file (claude-config#239). The loop forked once per spool file, and the
-  # real spool on this Mac holds 157 of them: measured 2026-09-03, that was 414ms of a 600ms
-  # launch, paid by every run of this runner and by 65 of the 69 launches its own suite makes.
-  # `wc -c` over the whole glob prints the same size and path per line, and the ordering does not
-  # matter because every reader looks a path up by name. It also prints a "total" line, which is
-  # dropped for clarity rather than for safety: a row keyed "total" cannot match a path, so leaving
-  # it in changes nothing, and a test was written expecting it to matter and did not discriminate.
-  _spool_sizes_before="$(wc -c "$_live_spool"/*.jsonl 2>/dev/null \
-    | awk '$2 != "total" && NF >= 2 { printf "%s\t%s\n", $1, $2 }')"
-
-  # WHO wrote, answered positively (claude-config#275). Reading the directory off the record tells
-  # a suite from another project's session, which is what #230 needed, and it cannot tell a suite
-  # from a second Claude session working in THIS repo, which is the normal case here: measured
-  # 2026-09-02, a run was failed by two HARVEST FAILED records the real SubagentStop hook wrote for
-  # another session, cwd this repo, at a moment when no suite in the tree could have written there.
-  #
-  # So the run stamps its own writes. Every suite inherits this id, the spool library puts it in
-  # every record it appends, and a record carrying one was written under a test run whatever
-  # directory it names. A record carrying none was not. That is one fact rather than a heuristic on
-  # top of a heuristic (L70).
-  CLAUDE_SUITE_RUN_ID="run-all-tests.$$.$(date +%s)"
-  export CLAUDE_SUITE_RUN_ID
-
-  # And the stamp is PROVED before an absence is read as evidence. A stamping that quietly stopped
-  # would make every write read as somebody else's, which is this guard going blind while passing,
-  # and the guard would be the last thing to say so (L345, L98). One record through the real
-  # library into a throwaway spool answers it. When it cannot be proved the run says so and falls
-  # back to judging by directory, which is what it did before and fails closed.
-  _sp_marker_works=0
-  _sp_lib="${HOOK_SPOOL_LIB:-$SELF_DIR/lib/issue-spool.sh}"
-  if [ -r "$_sp_lib" ]; then
-    _sp_canary="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.spool-proof.XXXXXXXX" 2>/dev/null || true)"
-    if [ -n "$_sp_canary" ]; then
-      (
-        # shellcheck disable=SC1090
-        . "$_sp_lib" >/dev/null 2>&1 || exit 1
-        CLAUDE_ISSUE_SPOOL_DIR="$_sp_canary" issue_spool_note "$_sp_canary" \
-          "proving that a write made under a test run is stamped with the run id" run-all-tests \
-          >/dev/null 2>&1
-      )
-      grep -q -- "$CLAUDE_SUITE_RUN_ID" "$_sp_canary"/*.jsonl 2>/dev/null && _sp_marker_works=1
-      rm -rf "$_sp_canary" 2>/dev/null || true
-    fi
-  fi
-  if [ "$_sp_marker_works" -eq 0 ]; then
-    echo "run-all-tests: a suite's own write to the live spool could not be proved to carry this run's id ($_sp_lib), so a write is attributed by the directory it names instead. That cannot tell a suite from another session working in this repo."
-  fi
+  _spool_sizes_before="$(for _sp_f in "$_live_spool"/*.jsonl; do
+    [ -e "$_sp_f" ] || continue
+    printf '%s\t%s\n' "$(wc -c < "$_sp_f" | tr -d ' ')" "$_sp_f"
+  done)"
 
   # ---- and the other live stores (claude-config#216) ----
   # The bracket above covers the store the incident happened in. The same class of mistake reaches
@@ -668,19 +504,10 @@ ${CLAUDE_HOME:-$HOME/.claude}/LESSONS-INDEX.md
 ${CLAUDE_HOME:-$HOME/.claude}/CLAUDE.md
 ${CLAUDE_HOME:-$HOME/.claude}/settings.json
 ${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}
-${SYNC_ZSHRC:-$HOME/.zshrc}
-${SYNC_WATCH_PID_FILE:-$HOME/.claude-sync-watch.pid}
-${SYNC_HOLD_FILE:-$HOME/.claude-sync-hold}"
-  # The last two are the watcher's own markers, added to the list by claude-config#272: they were
-  # created in the same commit as this guard and left off it, so a suite that ran `claude-sync
-  # watch` or `claude-sync hold` without pointing the seam at its own throwaway path wrote into the
-  # real home and nothing said so. The pid marker is the one with teeth, since a stale one makes
-  # the live daemon refuse to start, which stops config reaching the other Mac from a green run.
-  #
+${SYNC_ZSHRC:-$HOME/.zshrc}"
   # A path that is not there is recorded as absent rather than skipped, so a suite that CREATES
   # one is caught by the same comparison. Skipping it would make creating a file the one write
-  # this cannot see (L98, L214). That half was a claim until #272: neither it nor the comparison
-  # had ever been seen to fire, and both now are (L1).
+  # this cannot see (L98, L214).
   _live_fingerprint(){
     local f
     while IFS= read -r f; do
@@ -693,22 +520,6 @@ $_live_stores
 LIVESTORES
   }
   _live_before="$(_live_fingerprint)"
-  _live_started="$(date +%s)"
-  # A COPY of each store as well as its fingerprint, because the verdict below needs to know what
-  # KIND of change happened and a checksum cannot say (claude-config#277). These files total well
-  # under a megabyte, so this costs nothing measurable beside a run of minutes.
-  _live_copies="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.live-copies.XXXXXXXX" 2>/dev/null || true)"
-  if [ -n "$_live_copies" ]; then
-    _lcp_n=0
-    while IFS= read -r _lcp_f; do
-      [ -n "$_lcp_f" ] || continue
-      _lcp_n=$((_lcp_n + 1))
-      printf '%s\t%s\n' "$_lcp_f" "$_live_copies/$_lcp_n" >> "$_live_copies/index"
-      [ -f "$_lcp_f" ] && cp "$_lcp_f" "$_live_copies/$_lcp_n" 2>/dev/null
-    done <<LIVECOPY
-$_live_stores
-LIVECOPY
-  fi
 
   _timed=0
   launch_order="$(
@@ -887,23 +698,11 @@ slow_profile=""
 unmeasured_names=""
 notrun=0
 notrun_names=""
-divisions=""
 idx=0
 for suite in ${suites[@]+"${suites[@]}"}; do
     name="$(basename "$suite")"
     out="$(cat "$WORK/$idx.out" 2>/dev/null)"
     code="$(cat "$WORK/$idx.rc" 2>/dev/null)"
-    # What this suite said about dividing its OWN work (claude-config#232). A passing suite's
-    # output is printed nowhere, so a suite that went back to counting its sections instead of
-    # using what it measured would simply be slower, on every run, with nothing anywhere saying so:
-    # the silent regression this whole milestone existed to remove, one level up (L3, L98).
-    while IFS= read -r _div_line; do
-      [ -n "$_div_line" ] || continue
-      divisions="$divisions
-  $name: $_div_line"
-    done <<DIVISIONS
-$(printf '%s\n' "$out" | grep -E '^SUITE-DIVISION ' | sort -u || true)
-DIVISIONS
     # A suite that left no duration is SAID to have left none. Printing 0s instead would be the
     # most reassuring figure available: it reads as a suite that cost nothing rather than as one
     # nobody measured, and a run where everything was killed would read as an instant run (L11,
@@ -967,13 +766,11 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         fi
         if [ "$rr_rc" -eq 0 ]; then
           printf '  ok    %-38s %-26s %s\n' "$name" "passed from the checkout" "$dur"
-          printf '          %s\n' "$(checkout_provenance "${RUN_ALL_TESTS_CHECKOUT%/}")"
           continue
         fi
         failed=$((failed + 1))
         failed_names="$failed_names $name"
         printf '  FAIL  %-38s %-26s %s\n' "$name" "failed from the checkout" "$dur"
-        printf '          %s\n' "$(checkout_provenance "${RUN_ALL_TESTS_CHECKOUT%/}")"
         printf '%s\n' "$rr_out" | tail -25 | sed 's/^/          /'
         continue
       fi
@@ -1098,7 +895,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       ' || true)"
       [ -n "$detail" ] || detail="$(printf '%s\n' "$out" | tail -n "$FAIL_DETAIL_MAX")"
       shown="$(printf '%s\n' "$detail" | grep -c . || true)"
-      printf '%s\n' "$detail" | awk -v n="$FAIL_DETAIL_MAX" 'NR <= n' | sed 's/^/          /'
+      printf '%s\n' "$detail" | head -n "$FAIL_DETAIL_MAX" | sed 's/^/          /'
       if [ "${shown:-0}" -gt "$FAIL_DETAIL_MAX" ]; then
         printf '          ...and %s more line(s) not shown\n' "$(( shown - FAIL_DETAIL_MAX ))"
       fi
@@ -1149,12 +946,6 @@ if [ -n "$slow_profile" ] && [ -n "${launch_order:-}" ]; then
   fi
 fi
 
-# Echoed where the run's own verdict is read, and only when a suite said something. A line printed
-# on every run whether or not anything divides its work is a line nobody reads (L36).
-if [ -n "$divisions" ]; then
-  echo "how each suite divided its own work:$divisions"
-fi
-
 if [ -n "$slow_profile" ]; then
   echo "slowest suites:"
   # `awk NR<=5` rather than `head -5`, which leaves on its fifth line and can kill its own producer
@@ -1192,24 +983,14 @@ if [ "${_spool_before:-}" != "$_spool_after" ] || [ "${_spool_before_bytes:-}" !
     while IFS= read -r _sp_line; do
       [ -n "$_sp_line" ] || continue
       _sp_cwd="$(printf '%s' "$_sp_line" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-      _sp_run="$(printf '%s' "$_sp_line" | sed -n 's/.*"suite_run"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-      if [ -n "$_sp_run" ]; then
-        # Stamped, so a suite wrote it (claude-config#275). ANY run's id counts, not only this
-        # one's: a suite that launches a nested run replaces the id its own children carry, and a
-        # record from the inner run is still a test writing into Dan's real spool.
-        _sp_mine="$_sp_mine
-    ${_sp_cwd:-(no directory recorded)} (written under this test run, id $_sp_run)"
-      elif [ -z "$_sp_cwd" ]; then
+      if [ -z "$_sp_cwd" ]; then
         # No working directory to judge it by. Reported as unattributable and counted against the
         # run, because that is also the shape a writer nobody expected would take, and a change
         # this cannot explain must not read as a clean one (L98, L11).
         _sp_unknown=$(( _sp_unknown + 1 ))
-      elif [ "$_sp_marker_works" -eq 0 ] && [ -n "$root" ] && [ "${_sp_cwd#"$root"}" != "$_sp_cwd" ]; then
-        # Only reached when the stamp could not be proved, and announced above when that happens.
-        # With the stamp working this branch is what produced the false red: a record naming this
-        # repo is far more often another session's than a suite's.
+      elif [ -n "$root" ] && [ "${_sp_cwd#"$root"}" != "$_sp_cwd" ]; then
         _sp_mine="$_sp_mine
-    $_sp_cwd (attributed by directory, because the run id could not be proved)"
+    $_sp_cwd"
       elif [ "${_sp_cwd#"${TMPDIR:-/tmp}"}" != "$_sp_cwd" ] || [ "${_sp_cwd#/tmp}" != "$_sp_cwd" ]; then
         _sp_mine="$_sp_mine
     $_sp_cwd (a throwaway directory, so a suite wrote it)"
@@ -1243,58 +1024,25 @@ fi
 # The other live stores, the same bracket (claude-config#216).
 _live_after="$(_live_fingerprint 2>/dev/null || true)"
 if [ -n "${_live_before:-}" ] && [ "$_live_before" != "$_live_after" ]; then
+  echo "SUITES CHANGED A LIVE STORE. A test must be structurally unable to touch live data (L2)."
   # NAMED, not counted: which file changed is the whole of what a person needs, and a count sends
   # them to diff six paths by hand (L11, L80).
-  #
-  # Built first and printed after, because one of these stores has a legitimate writer that is not
-  # a suite and the verdict depends on which changes are left once it is accounted for.
-  _lc_blamed=""; _lc_noted=""
-  # Asked ONCE, before the loop: it is a fact about the run rather than about any one store, and
-  # asking per store would read the registry six times to get the same answer.
-  _lc_applied="$(sync_applied_since "${_live_started:-}" || true)"
+  _lc_i=1
   while IFS= read -r _lc_line; do
     [ -n "$_lc_line" ] || continue
     _lc_path="${_lc_line%%	*}"
     _lc_was="$(printf '%s\n' "$_live_before" | awk -F"$(printf '\t')" -v f="$_lc_path" '$1 == f { print $2; exit }')"
     _lc_now="${_lc_line#*	}"
     [ "$_lc_was" = "$_lc_now" ] && continue
-    if [ -n "$_lc_applied" ]; then
-      _lc_noted="$_lc_noted  $_lc_path: was [$_lc_was], now [$_lc_now]
-"
-      continue
-    fi
-    if live_store_only_gained "$_lc_path"; then
-      _lc_noted="$_lc_noted  $_lc_path: lines were added to it and none were removed or changed, which is what the sync and another session recording a lesson both do, and not what a suite bound to the real path does.
-"
-      continue
-    fi
-    if [ "$_lc_path" = "${SYNC_WATCH_PID_FILE:-$HOME/.claude-sync-watch.pid}" ] && watch_marker_is_not_ours "$_lc_path"; then
-      _lc_noted="$_lc_noted  $_lc_path: rewritten by a watcher this run did not start, so it is the live daemon restarting rather than a suite.
-"
-      continue
-    fi
-    _lc_blamed="$_lc_blamed  $_lc_path: was [$_lc_was], now [$_lc_now]
-"
+    printf '  %s: was [%s], now [%s]\n' "$_lc_path" "$_lc_was" "$_lc_now"
+    _lc_i=$((_lc_i + 1))
   done <<LIVEAFTER
 $_live_after
 LIVEAFTER
-  if [ -n "$_lc_blamed" ]; then
-    echo "SUITES CHANGED A LIVE STORE. A test must be structurally unable to touch live data (L2)."
-    printf '%s' "$_lc_blamed"
-    echo "  Find the suite that sources a library, or runs a hook, without pointing CLAUDE_HOME (or"
-    echo "  the relevant override) at its own throwaway directory FIRST."
-    failed=$((failed + 1))
-    failed_names="$failed_names live-store-pollution"
-  fi
-  [ -n "${_live_copies:-}" ] && rm -rf "$_live_copies" 2>/dev/null
-  if [ -n "$_lc_noted" ]; then
-    # Said, not silent, and not counted. The same shape as the spool line above: a store this run
-    # did not write still changed while it ran, which is worth knowing when reading anything else
-    # the run reports (L98).
-    echo "A live store changed while this ran, and not because of these tests:"
-    printf '%s' "$_lc_noted"
-    [ -n "$_lc_applied" ] && echo "  The sync applied config into this Mac while these ran ($_lc_applied), and these stores are what an apply writes."
-  fi
+  echo "  Find the suite that sources a library, or runs a hook, without pointing CLAUDE_HOME (or"
+  echo "  the relevant override) at its own throwaway directory FIRST."
+  failed=$((failed + 1))
+  failed_names="$failed_names live-store-pollution"
 fi
 if [ -n "$unmeasured_names" ]; then
   echo "NO DURATION was measured for:$unmeasured_names"

@@ -58,10 +58,10 @@ If a transition doesn't hold up literally, cut it and let the concrete next sent
 
 See the reference files for worked examples and patterns:
 
-- **references/blog-posts.md**: structure, spine, openings, CTAs
-- **references/social-media.md**: captions, hashtags, five-post campaign
-- **references/website-copy.md**: homepage, services, galleries
-- **references/email-and-alt-text.md**: client emails and image alt text
+- **references/blog-posts.md** — structure, spine, openings, CTAs
+- **references/social-media.md** — captions, hashtags, five-post campaign
+- **references/website-copy.md** — homepage, services, galleries
+- **references/email-and-alt-text.md** — client emails and image alt text
 
 ### Blog posts (quick reference)
 Continuous prose, no subheadings, no italics, no markdown styling, no specific dates (Dan doesn't always publish immediately, so write timelessly). State the true spine once: what Dan actually did and observed, not a tidier version. Don't restate it before the CTA or echo it across paragraphs. Avoid photo-by-photo or roster-by-roster structure; merge performers who illustrate the same point. Short paragraphs. The CTA carries a specific idea forward rather than restating the post's central observation, and addresses an organizational decision-maker.

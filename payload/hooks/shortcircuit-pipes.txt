@@ -38,20 +38,6 @@
 # which is the direction that matters. All three are converted and their counts here are lowered in
 # the same change, which is what keeps this a ratchet rather than an allowance.
 
-# Converted from 492 sites to 79 on 2026-09-02 (claude-config#197), by two mechanical passes and a
-# handful by hand. `printf '%s' "$v" | grep -q PAT` became `grep -q PAT <<< "$v"`, which has no
-# producer process to kill, and `| head -n` became `| awk 'NR <= n'`, which reads to the end. Every
-# rewrite was ROUND TRIPPED, rebuilt back into the original text and compared, so a line that did
-# not come back exactly was left alone: a conversion that changed an assertion's meaning would be a
-# test rewritten rather than a hazard removed. 41 lines still came out wrong, all one shape (the
-# here-string landing inside the pattern's own quotes), and they were found by a quote-balance
-# check over every converted line rather than by the suite, which passed.
-#
-# What is left is ENTIRELY inside test fixtures, and test-pipefail-shortcircuit.sh now fails
-# outright if a site appears anywhere else, rather than tracking it. The fixture argument does not
-# cover shipped code: it reads real files that grow on their own, which is what both of the sites
-# that actually fired were doing.
-
 # The counts jumped from 335 to 515 on 2026-08-22, and NOT because 180 sites were added that day.
 # The pattern read `-[a-zA-Z]*q`, which requires the flag cluster to END in q, so `-q` and `-Eq` were
 # counted while `-qi`, `-qE` and `-qF` were not: the identical hazard with the letters the other way
@@ -59,41 +45,41 @@
 # made sites that were always here visible for the first time. Read the jump as the measurement being
 # corrected, never as the tree getting worse, and read the number from here on as a ratchet again.
 
-0 claude-sync
+7 claude-sync
 0 payload/hooks/block-red-merge.sh
 0 payload/hooks/check-home-paths.sh
-0 payload/hooks/durable-lesson-check.sh
-0 payload/hooks/lessons-advisory.sh
-0 payload/hooks/pr-merge-quiz.sh
-0 payload/hooks/run-all-tests.sh
+3 payload/hooks/durable-lesson-check.sh
+1 payload/hooks/lessons-advisory.sh
+3 payload/hooks/pr-merge-quiz.sh
+2 payload/hooks/run-all-tests.sh
 0 payload/hooks/test-block-red-merge.sh
-1 payload/hooks/test-check-home-paths.sh
-0 payload/hooks/test-check-project-list.sh
-0 payload/hooks/test-checkpoint-save.sh
+8 payload/hooks/test-check-home-paths.sh
+5 payload/hooks/test-check-project-list.sh
+4 payload/hooks/test-checkpoint-save.sh
 2 payload/hooks/test-durable-lesson-check.sh
-1 payload/hooks/test-feature-discovery-nudge.sh
+2 payload/hooks/test-feature-discovery-nudge.sh
 2 payload/hooks/test-lessons-advisory.sh
-3 payload/hooks/test-measure-lessons-advisory.sh
-0 payload/hooks/test-no-ai-tells-detect.sh
-1 payload/hooks/test-post-compact.sh
+8 payload/hooks/test-measure-lessons-advisory.sh
+2 payload/hooks/test-no-ai-tells-detect.sh
+5 payload/hooks/test-post-compact.sh
 5 payload/hooks/test-pr-merge-quiz.sh
-0 payload/hooks/test-require-issue-fields.sh
+5 payload/hooks/test-require-issue-fields.sh
 1 payload/hooks/test-require-tests-before-push.sh
-0 payload/hooks/test-rtk-rewrite.sh
-0 payload/hooks/test-rule-files-changed.sh
-4 payload/hooks/test-run-all-tests.sh
-1 payload/hooks/test-session-namer.sh
+2 payload/hooks/test-rtk-rewrite.sh
+9 payload/hooks/test-rule-files-changed.sh
+19 payload/hooks/test-run-all-tests.sh
+3 payload/hooks/test-session-namer.sh
 1 payload/hooks/test-stop-hooks.sh
-0 payload/hooks/test-subagent-digest.sh
-1 payload/hooks/test-subagent-issue-harvest.sh
-1 payload/hooks/test-suite-result-line.sh
-0 payload/hooks/test-teammate-challenge-gate.sh
-0 payload/skills/milestone/create-milestone.sh
+8 payload/hooks/test-subagent-digest.sh
+36 payload/hooks/test-subagent-issue-harvest.sh
+2 payload/hooks/test-suite-result-line.sh
+2 payload/hooks/test-teammate-challenge-gate.sh
+2 payload/skills/milestone/create-milestone.sh
 0 payload/skills/milestone/ensure-priority-labels.sh
-0 payload/skills/plan-council/healthcheck.sh
-0 payload/skills/plan-council/post-discussion.sh
-0 payload/skills/production-ready/healthcheck.sh
-0 tests/audit-changed-sections.sh
-0 tests/test-audit-changed-sections.sh
-53 tests/test-claude-sync.sh
-2 tools/test-measure-sync-gaps.sh
+2 payload/skills/plan-council/healthcheck.sh
+1 payload/skills/plan-council/post-discussion.sh
+4 payload/skills/production-ready/healthcheck.sh
+1 tests/audit-changed-sections.sh
+9 tests/test-audit-changed-sections.sh
+317 tests/test-claude-sync.sh
+9 tools/test-measure-sync-gaps.sh

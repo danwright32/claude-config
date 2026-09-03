@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# test-block-red-merge.sh: the merge gate, including the rule that a repo
+# test-block-red-merge.sh — the merge gate, including the rule that a repo
 # carrying the commit pinned merge tool must use it (PostRoll #711).
 #
 # Every case runs the real hook with a fake `gh` first on PATH, so what is

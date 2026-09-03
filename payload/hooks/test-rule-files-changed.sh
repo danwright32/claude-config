@@ -65,13 +65,13 @@ out1="$(prompt session-one)"
 # ---------------------------------------------------------------------------
 printf 'index two, with a new lesson\n' > "$RULES/LESSONS-INDEX.md"
 out2="$(prompt session-one)"
-grep -q "LESSONS-INDEX.md" <<< "$out2" \
+printf '%s' "$out2" | grep -q "LESSONS-INDEX.md" \
   && check "an edited rule file is reported" ok \
   || check "an edited rule file is reported" "said: $out2"
-grep -q "RTK.md" <<< "$out2" \
+printf '%s' "$out2" | grep -q "RTK.md" \
   && check "a file that did not change is not named" "named RTK.md too: $out2" \
   || check "a file that did not change is not named" ok
-grep -q "new session" <<< "$out2" \
+printf '%s' "$out2" | grep -q "new session" \
   && check "the notice says what to do about it" ok \
   || check "the notice says what to do about it" "said: $out2"
 
@@ -89,7 +89,7 @@ out3="$(prompt session-one)"
 # having switched itself off for the session.
 printf 'rtk two\n' > "$RULES/RTK.md"
 out4="$(prompt session-one)"
-grep -q "RTK.md" <<< "$out4" \
+printf '%s' "$out4" | grep -q "RTK.md" \
   && check "a later change is reported in its turn" ok \
   || check "a later change is reported in its turn" "said: $out4"
 
@@ -101,14 +101,14 @@ printf 'extra one\n' > "$RULES/EXTRA.md"
 printf '@EXTRA.md\n%s\n' "$(cat "$RULES/CLAUDE.md")" > "$RULES/CLAUDE.md.new"
 mv "$RULES/CLAUDE.md.new" "$RULES/CLAUDE.md"
 out5="$(prompt session-one)"
-grep -q "EXTRA.md" <<< "$out5" \
-  && grep -q "CLAUDE.md" <<< "$out5" \
+printf '%s' "$out5" | grep -q "EXTRA.md" \
+  && printf '%s' "$out5" | grep -q "CLAUDE.md" \
   && check "a newly imported file is reported with the file that imported it" ok \
   || check "a newly imported file is reported with the file that imported it" "said: $out5"
 
 rm -f "$RULES/EXTRA.md"
 out6="$(prompt session-one)"
-grep -q "EXTRA.md" <<< "$out6" \
+printf '%s' "$out6" | grep -q "EXTRA.md" \
   && check "a rule file that disappears is reported" ok \
   || check "a rule file that disappears is reported" "said: $out6"
 
@@ -122,7 +122,7 @@ out7="$(prompt session-two)"
   || check "another session starts with its own baseline" "said: $out7"
 printf 'index three\n' > "$RULES/LESSONS-INDEX.md"
 out8="$(prompt session-two)"
-grep -q "LESSONS-INDEX.md" <<< "$out8" \
+printf '%s' "$out8" | grep -q "LESSONS-INDEX.md" \
   && check "and is told about a change after its own start" ok \
   || check "and is told about a change after its own start" "said: $out8"
 
@@ -136,7 +136,7 @@ noid_err="$(printf '{"cwd":"."}' | CLAUDE_RULES_DIR="$RULES" bash "$HOOK" 2>&1 >
 [ -z "$noid_out" ] \
   && check "an unidentifiable session gets no notice" ok \
   || check "an unidentifiable session gets no notice" "said: $noid_out"
-grep -q "neither a session id nor a transcript path" <<< "$noid_err" \
+printf '%s' "$noid_err" | grep -q "neither a session id nor a transcript path" \
   && check "and it says why, rather than passing as a clean check" ok \
   || check "and it says why, rather than passing as a clean check" "stderr: $noid_err"
 

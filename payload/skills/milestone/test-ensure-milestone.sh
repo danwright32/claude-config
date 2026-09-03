@@ -122,56 +122,6 @@ out="$(ensure acme/widgets "Onboarding" --create-approved --for-issues 2)"; rc=$
 check_eq "substring of an existing title exits 4" "4" "$rc"
 check "substring case is a near duplicate" "NEAR-DUPLICATE" "$out"
 
-# --- 3b. two features that share only a common noun are NOT twins (#255) ---
-# "Regal integration" was refused in Try-Pennie/slate on 2026-09-01 as a near duplicate of the open
-# "PET integration". They are different features for different external systems and share only the
-# word "integration", which says nothing about which feature either one is. The refusal landed
-# inside a batch of nine milestones Dan had already confirmed by name, so the remedy the message
-# offers had already been carried out, and the milestone was created through `gh api` instead,
-# which skipped the title check this script exists to run.
-#
-# Any repo with two integrations, syncs, pages or dashboards trips this on every second one, so the
-# comparison now drops a generic noun the two titles SHARE and judges what is left.
-cat >"$TMP/two-integrations.json" <<'JSON'
-[
-  { "number": 3, "title": "PET integration", "state": "open", "html_url": "https://github.com/acme/widgets/milestone/3" },
-  { "number": 5, "title": "Saved views",     "state": "open", "html_url": "https://github.com/acme/widgets/milestone/5" }
-]
-JSON
-# Set and RESTORED around the block. An assignment written in front of a shell FUNCTION persists
-# after it, so the first version of this leaked the fixture into every later check and failed 29 of
-# them (L259, measured).
-_saved_fixture="$GH_FIXTURE"
-export GH_FIXTURE="$TMP/two-integrations.json"
-out="$(ensure acme/widgets "Regal integration" --create-approved --for-issues 2)"; rc=$?
-check_eq "#255 a second integration for a different system is created" "0" "$rc"
-check_not "#255 and it is not called a near duplicate" "NEAR-DUPLICATE" "$out"
-
-# The half that must not loosen, and the case the issue names as the one that must still be
-# refused: a genuine near duplicate differing by a single letter (L159).
-out="$(ensure acme/widgets "Saved view" --create-approved --for-issues 2)"; rc=$?
-check_eq "#255 a genuine near duplicate is still refused" "4" "$rc"
-check "#255 and it is still named as one" "NEAR-DUPLICATE" "$out"
-
-# A title that IS the generic noun on its own has nothing distinctive left once the shared word is
-# dropped, so it is judged whole rather than compared as an empty string against a real title. An
-# empty comparison matches everything (L214).
-out="$(ensure acme/widgets "Integration" --create-approved --for-issues 2)"; rc=$?
-check_eq "#255 a title that is only the shared noun is judged whole and refused" "4" "$rc"
-
-# --- 3c. a separate milestone the user has already confirmed can proceed (#255) ---
-# The refusal tells the caller to confirm with the user, and there was no way to say they had. The
-# flag records it. It waives the DUPLICATE question only: the title shape check and the two issue
-# threshold both still run, because one override must never quietly waive three rules.
-out="$(ensure acme/widgets "Saved view" --create-approved --for-issues 2 --distinct-approved)"; rc=$?
-check_eq "#255 a confirmed distinct milestone is created" "0" "$rc"
-check "#255 and it says the resemblance was confirmed rather than missed" "DISTINCT-APPROVED" "$out"
-out="$(ensure acme/widgets "Saved view, but with commas" --create-approved --for-issues 2 --distinct-approved)"; rc=$?
-check_eq "#255 and a badly shaped title is still refused with the flag" "8" "$rc"
-out="$(ensure acme/widgets "Saved view" --create-approved --for-issues 1 --distinct-approved)"; rc=$?
-check_eq "#255 and one issue is still too few with the flag" "10" "$rc"
-export GH_FIXTURE="$_saved_fixture"
-
 # --- 4. an unrelated title needs approval before it can be created ---
 out="$(ensure acme/widgets "Search relevance")"; rc=$?
 check_eq "no match without approval exits 5" "5" "$rc"

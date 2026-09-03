@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Global Stop hook: after a turn that involved REAL work (any tool use other
-# than AskUserQuestion), re-prompt Claude to reflect before it actually stops, 
+# than AskUserQuestion), re-prompt Claude to reflect before it actually stops —
 # (1) what it is least sure about, and (2) the biggest thing the user probably
 # does not realize about what was just done.
 #

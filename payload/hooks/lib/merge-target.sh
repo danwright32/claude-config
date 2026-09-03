@@ -37,7 +37,7 @@ mt_is_pr_merge() {  # $1 = command
 mt_pr_number() {  # $1 = command
   printf '%s' "$1" \
     | grep -oE 'gh pr me''rge[[:space:]]+(--[^[:space:]]+[[:space:]]+)*([0-9]+)' \
-    | grep -oE '[0-9]+$' | awk 'NR <= 1'
+    | grep -oE '[0-9]+$' | head -1
 }
 
 # Resolve the directory the merge will actually run in.
