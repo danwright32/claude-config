@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 458 lessons.
+LESSONS.md, which is NOT loaded into the session. 459 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -132,6 +132,7 @@ to decide something: the body is where the failure it came from is described.
 - L382. A poll that repeats an IDENTICAL request can be served the same cached answer every time, so it re-reads its own first attempt and can never observe the change it is waiting for. Make each attempt demand a fresh read, and prove the value can change inside one run rather than trusting that the loop is looking again.
 - L385. A test asserting an invariant that a SCHEDULED repair restores (a launch migration, a nightly cleanup, a periodic reconcile) must RUN that repair first and assert what is LEFT, because between two runs of the repair the violated state is the system's normal one, so the test reports the interval rather than a defect and goes red on ordinary days.
 - L564. An empty search result proves the SPELLING is absent, never the concept, so a conclusion drawn from it may claim only what was actually searched for.
+- L391. A cost guard's fixture must record the dimension the COST scales with, which is routinely a PAIRING or a MAXIMUM rather than a total, because a fixture matching every recorded total can still exercise an entirely different load while every drift check passes. Name what the cost is quadratic or conditional in, and record THAT.
 
 ## Data safety
 

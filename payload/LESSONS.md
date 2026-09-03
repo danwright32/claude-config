@@ -1467,6 +1467,20 @@ window is a count rather than a boundary.
   better, naming the person being impersonated, which the preserved sentence could not. Dan: "Warning
   isn't needed when I'm not impersonating someone and when I am I'll see the banner")
 
+- **L391. A cost guard's fixture must record the dimension the COST scales with, which is routinely a
+  PAIRING or a MAXIMUM rather than a total, because a fixture matching every recorded total can still
+  exercise an entirely different load while every drift check passes. Name what the cost is quadratic
+  or conditional in, and record THAT.** (overture#3506 and overture#3516, 2026-09-03, twice in one
+  day. A render cost fixture matched the live store exactly on recipients, contacts, pending count and
+  draft bodies, all five verified against the real store on every push, and ran the draft lint 402
+  times against the store's 73: the lint is reached only through a PENDING recipient carrying a body,
+  and nothing recorded that pairing, so the seed gave every body-carrying row two pending contacts
+  where the store has sixteen in total. The same fixture spreads its dates evenly, so its busiest date
+  holds 11 shows against the store's 19, and the self-booking check is quadratic in exactly that
+  maximum. L48 is about a fixture shaped to make the rule fire and L354 about one going stale as the
+  data grows; both assume the recorded dimensions are the right ones, and this is the case where they
+  are not.)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
