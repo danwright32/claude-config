@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 434 lessons.
+LESSONS.md, which is NOT loaded into the session. 435 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -262,6 +262,7 @@ to decide something: the body is where the failure it came from is described.
 - L359. A URL that carries a freshly minted credential (a signed storage URL, a presigned link, a tokenised CDN path) is a NEW cache key on every render, so every cache downstream of it, the CDN, the image optimiser and the visitor's own browser, MISSES forever while still returning the correct bytes. Re-sign on a schedule and reuse the URL, or put a stable path in front of the signing, and prove it with a cache HIT on a second load rather than by reading the code.
 - L368. A one-shot observer or trigger that records itself as FIRED before confirming its work succeeded turns a transient failure into a permanent loss, because nothing will ever try again.
 - L544. A value and the flag describing how it was obtained (the load failed, it is stale, it is a built in default) are ONE fact and must be one discriminated value, never two pieces of state beside each other.
+- L555. Matching a query against several fields CONCATENATED into one string makes the joining separator matchable, so a query spanning the boundary matches text that exists in no record.
 
 ## Security and privacy
 

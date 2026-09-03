@@ -2801,6 +2801,18 @@ window is a count rather than a boundary.
   screen blaming the network for a trainer who had genuinely been removed)
 
 
+- **L555. Matching a query against several fields CONCATENATED into one string makes the joining
+  separator matchable, so a query spanning the boundary matches text that exists in no record.**
+  Match each field separately. Note which way this one hides: stripping the separator from the
+  query means no query can ever reach it, so the defect is unreachable until somebody removes the
+  stripping, and the change that IMPROVES the search is what exposes it.
+  (Try-Pennie/slate#1791, 2026-09-03: the roster search built `${name} ${email}` and substring
+  matched a trimmed, lowercased query against it. Dan asked for a trailing space to mean end of
+  word, so "John " would find John Kite and not Andrew Johnson. Honouring the space makes the
+  invented join space reachable too, so "kite jkite" would have matched John Kite across the gap
+  between his name and his address. The two other search boxes in the same app already matched
+  name and email separately, so the joined one was the outlier and nothing compared them)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
