@@ -882,11 +882,23 @@ slow_profile=""
 unmeasured_names=""
 notrun=0
 notrun_names=""
+divisions=""
 idx=0
 for suite in ${suites[@]+"${suites[@]}"}; do
     name="$(basename "$suite")"
     out="$(cat "$WORK/$idx.out" 2>/dev/null)"
     code="$(cat "$WORK/$idx.rc" 2>/dev/null)"
+    # What this suite said about dividing its OWN work (claude-config#232). A passing suite's
+    # output is printed nowhere, so a suite that went back to counting its sections instead of
+    # using what it measured would simply be slower, on every run, with nothing anywhere saying so:
+    # the silent regression this whole milestone existed to remove, one level up (L3, L98).
+    while IFS= read -r _div_line; do
+      [ -n "$_div_line" ] || continue
+      divisions="$divisions
+  $name: $_div_line"
+    done <<DIVISIONS
+$(printf '%s\n' "$out" | grep -E '^SUITE-DIVISION ' | sort -u || true)
+DIVISIONS
     # A suite that left no duration is SAID to have left none. Printing 0s instead would be the
     # most reassuring figure available: it reads as a suite that cost nothing rather than as one
     # nobody measured, and a run where everything was killed would read as an instant run (L11,
@@ -1130,6 +1142,12 @@ if [ -n "$slow_profile" ] && [ -n "${launch_order:-}" ]; then
     echo "  Lane 1 carries the largest share of the budget and is whatever launches first, so this run spent the machine on the wrong suite."
     echo "  The order comes from $TIMINGS. A record there that measured a refusal rather than a run is how this happens (#229)."
   fi
+fi
+
+# Echoed where the run's own verdict is read, and only when a suite said something. A line printed
+# on every run whether or not anything divides its work is a line nobody reads (L36).
+if [ -n "$divisions" ]; then
+  echo "how each suite divided its own work:$divisions"
 fi
 
 if [ -n "$slow_profile" ]; then

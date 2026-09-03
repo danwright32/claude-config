@@ -725,6 +725,12 @@ SHNEEDS
   else
     _sh_by_time=1
     echo "test suite: shards dealt by measured section time for $_sh_measured of $_sh_total section(s), the rest at the median of those (${_sh_median}s)"
+    # The same fact in a shape a MACHINE can read (claude-config#232). The line above reaches a
+    # person only when this suite fails, because the runner prints a passing suite's output
+    # nowhere, so on CI the division could silently go back to counting sections and every run
+    # would simply be slower, which is the regression this whole milestone existed to remove. The
+    # runner collects these and echoes them, and the workflow asserts on the number.
+    echo "SUITE-DIVISION measured=$_sh_measured total=$_sh_total by=section-time"
   fi
   # The weight a group is dealt on. With nothing measured this is exactly the section count the
   # deal used before #203, so the fallback is not a second scheme to keep working, it is this one
@@ -7223,6 +7229,26 @@ check "#203 and every shard's line carries the seconds it was dealt ($st_secs)" 
   "[ \"\$(printf '%s' \"\$st_secs\" | wc -w | tr -d ' ')\" = 4 ]"
 check "#203 and it is still a partition of every section" \
   "printf '%s\n' \"\$st_timed\" | shard_coverage_verdict 4 >/dev/null"
+
+# PARTIALLY warm, which is the normal state and the one nothing covered (claude-config#232). The
+# store above was written by a run that stopped part way, so it holds records for some sections and
+# not others, and the deal has to use what it has and stand in for the rest. The existing checks
+# cover all-measured and none-measured, and a fault that measured exactly ONE section would satisfy
+# both of them (L11).
+st_m="$(printf '%s\n' "$st_timed" | sed -n 's/.*section time for \([0-9][0-9]*\) of \([0-9][0-9]*\) section.*/\1/p' | awk 'NR<=1')"
+st_t="$(printf '%s\n' "$st_timed" | sed -n 's/.*section time for \([0-9][0-9]*\) of \([0-9][0-9]*\) section.*/\2/p' | awk 'NR<=1')"
+check "#203 a partly warm store measures SOME sections (${st_m:-none} of ${st_t:-none})" \
+  "[ \"\${st_m:-0}\" -ge 1 ]"
+check "#203 and leaves the rest to the stand-in rather than inventing a number for them" \
+  "[ \"\${st_m:-0}\" -lt \"\${st_t:-0}\" ]"
+
+# And the same fact in a shape a MACHINE can read, because on CI the human line reaches the log
+# only when this suite FAILS, so the division could go back to counting and every run would simply
+# be slower with nothing saying so (claude-config#232).
+check "#232 the deal is also reported in a line a machine can read" \
+  "case \"\$st_timed\" in *'SUITE-DIVISION measured='*'total='*'by=section-time'*) true ;; *) false ;; esac"
+check "#232 and the two numbers in it are the two the sentence gives" \
+  "case \"\$st_timed\" in *\"SUITE-DIVISION measured=\$st_m total=\$st_t\"*) true ;; *) false ;; esac"
 
 # The balance itself, in SECONDS, which is the quantity the deal is for. This replaces the check
 # that compared how many SECTIONS each shard held: that number is now expected to differ between

@@ -80,6 +80,7 @@ jobs:
       # run saves what it measured and the next restores the most recent. A cold cache is not a
       # failure and is not silent either, because both readers SAY which rule they used.
       - name: Restore what earlier runs measured
+        id: timings-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/claude-config
@@ -163,7 +164,74 @@ jobs:
           # oversubscription here costs seconds, and a path that only ever runs on the machine of
           # whoever wrote it is a path CI does not check at all (L88, L98).
           HOOK_TESTS_BUDGET: 4
-        run: bash payload/hooks/run-all-tests.sh
+        # Captured as well as printed, so the step below can assert on what it said. `tee` keeps
+        # the log identical to what it was, and the pipeline's exit status is taken from the
+        # runner rather than from tee, or a failing suite would be reported as a pass.
+        run: |
+          set -o pipefail
+          bash payload/hooks/run-all-tests.sh 2>&1 | tee "$RUNNER_TEMP/run-all-tests.log"
+
+      - name: The measured timings were actually used
+        # #203 and #144 both decide how work is divided from stored measurements, and the cache
+        # step above carries those between runs. Nothing noticed it STOPPING. The runner prints a
+        # passing suite's own output nowhere, so if the cache key scheme broke or the store stopped
+        # being written, CI would fall back to dividing by counting and every run would simply be
+        # slower: the silent regression this milestone existed to remove, reintroduced one level up
+        # (claude-config#232, L3, L98).
+        #
+        # A COLD cache is not a failure. The key is per run with a prefix to restore from, so the
+        # first run on a new branch legitimately has nothing to restore, and this branches on
+        # whether the cache step matched a key rather than on what the numbers happen to be.
+        # Judging by the numbers alone would make "cold by design" and "the store stopped being
+        # written" the same reading (L11).
+        run: |
+          log="$RUNNER_TEMP/run-all-tests.log"
+          [ -s "$log" ] || { echo "The suite log is empty, so nothing was measured about it." >&2; exit 1; }
+          order="$(grep -m1 'launch order from measured wall clock' "$log" || true)"
+          [ -n "$order" ] || { echo "The runner printed no launch order line at all, so how it ordered the suites is unknown." >&2; exit 1; }
+          echo "$order"
+          measured="$(printf '%s\n' "$order" | sed -n 's/.*wall clock for \([0-9][0-9]*\) of \([0-9][0-9]*\) suite.*/\1/p')"
+          total="$(printf '%s\n' "$order" | sed -n 's/.*wall clock for \([0-9][0-9]*\) of \([0-9][0-9]*\) suite.*/\2/p')"
+          [ -n "$measured" ] && [ -n "$total" ] || { echo "The launch order line did not carry the two numbers this reads." >&2; exit 1; }
+          div="$(grep -m1 'SUITE-DIVISION ' "$log" || true)"
+          if [ -n "$div" ]; then echo "$div"; fi
+          if [ -z "${{ steps.timings-cache.outputs.cache-matched-key }}" ]; then
+            echo "No timings cache was restored, so this run is COLD by design: $measured of $total suites measured."
+            exit 0
+          fi
+          echo "Cache restored from ${{ steps.timings-cache.outputs.cache-matched-key }}."
+          if [ "$measured" -lt 1 ]; then
+            echo "A timings cache was restored and the runner still measured NONE of the $total suites, so the store is not being read. Ordering fell back to file size." >&2
+            exit 1
+          fi
+          # PARTIALLY warm is the normal state: a section or suite added since the last run has no
+          # record yet and takes the stand-in. It is reported rather than refused, and the numbers
+          # are in the log so a drop from 44 of 44 to 3 of 44 is visible without a threshold nobody
+          # calibrated (L172).
+          echo "Measured wall clock used for $measured of $total suite(s)."
+          # A suite only divides its work when it is given more than one slot, and how many it
+          # gets is decided by the budget, so the absence of a division line is a legitimate state
+          # rather than a fault. Judged by what the run SAID about its slots, not assumed: refusing
+          # a run that never sharded would be a false red on a correct run, which is the one thing
+          # a guard like this must not do (L36, L324).
+          slots="$(sed -n 's/.* \([0-9][0-9]*\) slot(s) each.*/\1/p' "$log" | awk 'NR<=1')"
+          case "${slots:-}" in ''|*[!0-9]*) slots=0 ;; esac
+          if [ -z "$div" ]; then
+            if [ "$slots" -le 1 ]; then
+              echo "No suite divided its own work, and the runner gave each suite $slots slot(s), so there was nothing to divide. Nothing is asserted about section timings on this run."
+              exit 0
+            fi
+            echo "The runner gave each suite $slots slot(s), so the sync suite sharded, and no suite reported how it divided its work. That reporting has stopped." >&2
+            exit 1
+          fi
+          dm="$(printf '%s\n' "$div" | sed -n 's/.*measured=\([0-9][0-9]*\).*/\1/p')"
+          dt="$(printf '%s\n' "$div" | sed -n 's/.*total=\([0-9][0-9]*\).*/\1/p')"
+          [ -n "$dm" ] && [ -n "$dt" ] || { echo "The SUITE-DIVISION line did not carry its two numbers." >&2; exit 1; }
+          if [ "$dm" -lt 1 ]; then
+            echo "A timings cache was restored and the shards were dealt from measured time for NONE of the $dt sections, so the section store is not being read either." >&2
+            exit 1
+          fi
+          echo "Shards dealt from measured section time for $dm of $dt section(s)."
 
       - name: Each changed suite section, run on its own
         # The suite's sections are independent: every one after the prelude runs alone, and the

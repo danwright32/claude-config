@@ -1336,7 +1336,7 @@ case "$out_nodirs" in
     check "#242 and it says it could not work out which keys are reachable" "out=$out_nodirs" ;;
 esac
 
-# The second question the measurement raised: 131 of 157 files were ZERO BYTES. They are made by
+# The second question the measurement raised: on 2026-08-31, 131 of 157 files were ZERO BYTES. They are made by
 # the filing path writing an empty keep set back with `cat >>`, which creates the file, so a spool
 # holding 8 findings looks like it holds 139 keys.
 reset_spool

@@ -1529,6 +1529,50 @@ case "$out_sp4" in
 esac
 
 # ---------------------------------------------------------------------------
+# What each suite said about dividing its OWN work reaches the log (claude-config#232).
+# ---------------------------------------------------------------------------
+# A passing suite's output is printed NOWHERE, so a suite that went back to counting its sections
+# instead of using what it measured would simply be slower, on every run, with nothing anywhere
+# saying so. That is the silent regression the whole timings milestone existed to remove, one level
+# up (L3, L98). The suites report it in a line a machine can read and the runner echoes it.
+DV="$TMPROOT/divisions"; mkdir -p "$DV/suites"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'echo "SUITE-DIVISION measured=7 total=9 by=section-time"\n'
+  printf 'echo "SUITE-DIVISION measured=7 total=9 by=section-time"\n'
+  printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+} > "$DV/suites/test-divider.sh"
+chmod +x "$DV/suites/test-divider.sh"
+mk_counting_suite "$DV/suites" quietone 2
+out_dv="$(HOOK_TESTS_ROOT="$DV" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$DV/suites" 2>&1)"; code_dv=$?
+[ "$code_dv" -eq 0 ] \
+  && check "#232 a suite reporting its own division still passes" ok \
+  || check "#232 a suite reporting its own division still passes" "exit=$code_dv out=$out_dv"
+case "$out_dv" in
+  *"how each suite divided its own work"*"test-divider.sh: SUITE-DIVISION measured=7 total=9"*)
+    check "#232 and the runner echoes what it said, naming the suite" ok ;;
+  *)
+    check "#232 and the runner echoes what it said, naming the suite" "out=$out_dv" ;;
+esac
+# Each shard of a sharded suite prints its own copy, so the same line arrives several times and the
+# echo would say it several times. Deduplicated, or the log grows with the shard count and says
+# nothing more.
+_dv_n="$(printf '%s\n' "$out_dv" | grep -c 'test-divider.sh: SUITE-DIVISION' || true)"
+[ "${_dv_n:-0}" -eq 1 ] \
+  && check "#232 and it says it once however many times the suite said it" ok \
+  || check "#232 and it says it once however many times the suite said it" "it appeared ${_dv_n:-0} times"
+# The control: a run where nothing divides anything says nothing about division, or the line is
+# printed on every run and stops being read (L36, L159).
+rm -f "$DV/suites/test-divider.sh"
+out_dv2="$(HOOK_TESTS_ROOT="$DV" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$DV/suites" 2>&1)"
+case "$out_dv2" in
+  *"how each suite divided its own work"*)
+    check "#232 a run where nothing reported a division says nothing about it" "out=$out_dv2" ;;
+  *)
+    check "#232 a run where nothing reported a division says nothing about it" ok ;;
+esac
+
+# ---------------------------------------------------------------------------
 # WHO wrote is answered by a marker the suites carry, not by where the record came from
 # (claude-config#275).
 # ---------------------------------------------------------------------------
