@@ -2214,6 +2214,14 @@ export SYNC_TEMP_ROOTS="/no-such-temp-root-exists-here"
 # which is the guard working correctly against a fixture that lied about being one machine.
 export SYNC_WATCH_PID_FILE="$WORK/watch-pid-guard.${SUITE_SHARD:-0}"
 export SYNC_HOLD_FILE="$WORK/hold-guard"
+# The launch agents, which is where other_sync_clones finds sibling clones (claude-config#301).
+# Left at its default this suite read the operator's REAL agents, found the real scheduled clone,
+# and read that clone's real .hook-tests and its real position against the remote. On 2026-09-03
+# one stale failure record there turned a green tree into four failures describing a machine nobody
+# had touched, and deleting a file OUTSIDE the repository is what made them pass. It is a READ
+# rather than a write, and the effect is the same: a verdict decided by what happens to be on the
+# machine (L2). The two sections that are ABOUT clone discovery override it with their own.
+export SYNC_LAUNCHAGENTS="$WORK/launchagents-guard"
 # The desktop notifier, for the whole suite rather than at 379 of 397 call sites. terminal-notifier
 # is installed on this Mac, so any failure-path call among the 65 that carried no seam would post a
 # real notification on whoever's machine runs this. Measured 2026-08-29 those particular sections
@@ -12135,9 +12143,43 @@ CLAUDE_HOME="$RTKN_HOME" SYNC_REPO="$RTKN_REPO" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
 check "#296 no rewriter means no baseline is invented" \
   "[ ! -e '$RTKN_HOME/hooks/.rtk-hook.sha256' ]"
 
-section "== the suite never touches a real shell rc =="
+section "== the suite never reads or writes anything of the operator's (claude-config#301) =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
+check "SYNC_LAUNCHAGENTS is redirected suite-wide" "[ \"\$SYNC_LAUNCHAGENTS\" = '$WORK/launchagents-guard' ]"
+
+# THE RATCHET, derived from the tool rather than from a list kept beside it (L41, L96).
+#
+# other_sync_clones finds sibling clones from $SYNC_LAUNCHAGENTS, which defaults to the operator's
+# real one. That seam was not exported here, so every section calling `status` outside the two that
+# are ABOUT clone discovery read the real launch agents, found the real scheduled clone, and read
+# its real .hook-tests and its real position against the remote. On 2026-09-03 one stale
+# `outcome=failed` record there turned a green tree into four failures describing a machine nobody
+# had touched, and deleting a file OUTSIDE the repository is what made them pass.
+#
+# The prelude already states the rule (a suite that seams SOME of a script's collaborators runs the
+# rest for real, and the real ones are the dangerous ones, L284) and this one slipped through
+# anyway, so the list is now derived: every seam whose DEFAULT points into the operator's home is
+# one this file has to redirect. A new one added to the tool and forgotten here goes red instead of
+# quietly reading live data.
+# This file, found from where it is RUNNING rather than written down, so a relocated copy reads
+# itself rather than the one in the checkout it came from.
+SUITE_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+HOMESEAMS="$(grep -oE '\$\{(SYNC|CLAUDE)_[A-Z_]+:-\$HOME/' "$SCRIPT" 2>/dev/null \
+             | sed 's/^\${//; s/:-\$HOME\/$//' | sort -u)"
+# The derivation has to find some, or this passes by reading nothing (L98, L1).
+homeseam_n="$(printf '%s\n' "$HOMESEAMS" | grep -c . || true)"
+dbg "#301 seams defaulting into the home directory: $(printf '%s' "$HOMESEAMS" | tr '\n' ' ')"
+check "#301 the seam derivation really found the seams" "[ \"\${homeseam_n:-0}\" -ge 5 ]"
+unseamed=""
+while IFS= read -r _hs; do
+  [ -n "$_hs" ] || continue
+  grep -qE "^export $_hs=" "$SUITE_SELF" 2>/dev/null || unseamed="$unseamed $_hs"
+done <<HOME_SEAMS
+$HOMESEAMS
+HOME_SEAMS
+dbg "#301 seams not exported by this suite:${unseamed:- none}"
+check "#301 every seam defaulting into the operator's home is redirected by this suite" "[ -z \"\$unseamed\" ]"
 
 suite_profile
 echo ""
