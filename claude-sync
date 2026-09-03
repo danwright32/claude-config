@@ -1194,6 +1194,57 @@ MALFORMED
   return 0
 }
 
+# The derived index must never be COMBINED by git (claude-config#200).
+#
+# LESSONS-INDEX.md is generated from LESSONS.md and regenerated on every send and every apply, and
+# the apply already knows it is derived and skips it. The git layer did not: the file is committed,
+# so git combined it as though somebody maintained it by hand, and any two sided lesson addition
+# stopped the rebase on a content conflict. The header line carries a count that both Macs rewrite,
+# so this is guaranteed rather than occasional, and it landed the operator in a by-hand recovery
+# that means nothing to somebody who does not live in a terminal (2026-08-29, L265 to L269 here
+# against L522 and L523 there).
+#
+# Written to .git/info/attributes rather than to a committed .gitattributes, so it is in force on
+# the FIRST run on a clone rather than only once the file has arrived, which is the run where the
+# conflict would otherwise happen. It is per clone and never travels, so both Macs get it from
+# here.
+ensure_derived_file_merge_rule(){
+  local info rule
+  [ -d "$SYNC_REPO" ] || return 0
+  git -C "$SYNC_REPO" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  # `true` as the driver keeps whichever side is checked out and exits 0, so git never stops. What
+  # it keeps does not matter: the file is regenerated from the merged lessons a few steps later.
+  git -C "$SYNC_REPO" config merge.ours.driver true >/dev/null 2>&1 || true
+  info="$(git -C "$SYNC_REPO" rev-parse --absolute-git-dir 2>/dev/null || printf '%s' "$SYNC_REPO/.git")/info"
+  mkdir -p "$info" 2>/dev/null || return 0
+  rule="payload/$LESSON_INDEX_FILE merge=ours"
+  [ -f "$info/attributes" ] && grep -qF -- "$rule" "$info/attributes" 2>/dev/null && return 0
+  printf '%s\n' "$rule" >> "$info/attributes" 2>/dev/null || true
+  return 0
+}
+
+# The index in the REPO, rebuilt from whatever the merge produced (claude-config#200). Both Macs
+# publish this file, and after a rebase the copy sitting in the payload is one side's rendering of
+# a lessons file that no longer exists. Regenerating is the whole point of a derived file.
+regenerate_payload_index(){
+  local src="$PAYLOAD/LESSONS.md" out nl ni
+  [ -f "$src" ] || return 0
+  out="$(scratch_file)"
+  lesson_index_body "$src" > "$out" 2>/dev/null || { rm -f "$out"; return 0; }
+  [ -s "$out" ] || { rm -f "$out"; return 0; }
+  cmp -s "$out" "$PAYLOAD/$LESSON_INDEX_FILE" || cat "$out" > "$PAYLOAD/$LESSON_INDEX_FILE" 2>/dev/null || true
+  rm -f "$out"
+  # ASSERTED before it is published, not hoped for. A generator that half ran would otherwise send
+  # the other Mac an index describing a different lessons file, and the index is what every session
+  # in every project actually loads (L98).
+  nl="$(lesson_numbers_in "$src" | sort -u | grep -c . || true)"
+  ni="$(lesson_numbers_in "$PAYLOAD/$LESSON_INDEX_FILE" | sort -u | grep -c . || true)"
+  if [ "${nl:-0}" != "${ni:-0}" ]; then
+    die "the lessons index regenerated after the merge lists ${ni:-0} entries while the LESSONS.md beside it holds ${nl:-0}. Nothing has been published. Run 'claude-sync status' and look at $PAYLOAD/$LESSON_INDEX_FILE."
+  fi
+  return 0
+}
+
 write_lesson_index(){   # $1 = tree holding LESSONS.md
   local src="$1/LESSONS.md" out
   [ -f "$src" ] || return 0
@@ -1211,15 +1262,78 @@ write_lesson_index(){   # $1 = tree holding LESSONS.md
   return 0
 }
 
+# THE IDENTITY OF A LESSON, which the number is only a display of (claude-config#199).
+#
+# Both Macs mint numbers from their own band and a collision still happened: each had used L521 for
+# a different entry, and the pull renumbered this Mac's unsent one to L523. The tool's own message
+# names the risk it cannot fix, that something already refers to the number that moved, and numbers
+# ARE referred to: ~/.claude/CLAUDE.md points at L174 as its worked example, the generated index is
+# built on them, and `claude-sync lesson L<n>` resolves by one.
+#
+# The identity is DERIVED from the lesson's own rule sentence rather than stored anywhere, so there
+# is no registry for two Macs to disagree about and no state a merge can lose. A renumber does not
+# touch the rule text, so the id survives it; editing the rule text changes the id, which is
+# correct, because that is the lesson itself changing rather than its presentation.
+lesson_rule_text(){   # $1 = lessons file  $2 = number, e.g. L174 -> the rule sentence, one line
+  # The rule runs to the closing `**`, which is usually SEVERAL lines down: almost every entry in
+  # the real file wraps. Reading only the first line would give two entries whose openings happen
+  # to match the same id, and would move an id whenever a line was re-wrapped.
+  awk -v want="$2" '
+    $0 ~ ("^- \\*\\*" want "\\.") {
+      buf = $0
+      sub("^- \\*\\*" want "\\. *", "", buf)
+      while (buf !~ /\*\*/) {
+        if ((getline nxt) <= 0) break
+        sub(/^[[:space:]]+/, " ", nxt)
+        buf = buf nxt
+      }
+      sub(/\*\*.*$/, "", buf)
+      print buf
+      exit
+    }
+  ' "$1" 2>/dev/null
+}
+
+# Whitespace is collapsed first, so a lesson re-wrapped to a different line width keeps its id: the
+# words are the lesson and the wrapping is not (L278).
+lesson_id_of_text(){   # rule text on stdin -> a short stable id
+  tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//' \
+    | { shasum -a 256 2>/dev/null || sha256sum 2>/dev/null; } \
+    | awk '{ print substr($1, 1, 10) }'
+}
+
+lesson_id(){   # $1 = lessons file  $2 = number -> the id, or nothing when there is no such entry
+  local text; text="$(lesson_rule_text "$1" "$2")"
+  [ -n "$text" ] || return 1
+  printf '%s' "$text" | lesson_id_of_text
+}
+
+# The number a given id currently sits at. Every entry is hashed rather than a registry consulted,
+# because a registry is state two Macs can disagree about and this is a pure function of the file.
+lesson_number_for_id(){   # $1 = lessons file  $2 = id -> the number, or nothing
+  local n
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    if [ "$(lesson_id "$1" "L$n")" = "$2" ]; then printf 'L%s' "$n"; return 0; fi
+  done < <(lesson_numbers_in "$1" | sort -un)
+  return 1
+}
+
 # One entry, in full, with its provenance: what the index sends you to.
-do_lesson(){   # $1 = number, e.g. L174
+do_lesson(){   # $1 = a number (L174) or an id, which survives a renumber
   local num="${1:-}" src out
-  case "$num" in
-    L[0-9]*) : ;;
-    *) die "lesson needs a number, e.g. lesson L174 (got '${num:-<nothing>}')" ;;
-  esac
   src="$CLAUDE_HOME/LESSONS.md"
   [ -f "$src" ] || die "no LESSONS.md at $src, so nothing can be looked up."
+  case "$num" in
+    L[0-9]*) : ;;
+    # An ID is what somebody quoting a lesson somewhere this tool cannot reach should write down,
+    # because it is the one reference a renumber cannot invalidate (claude-config#199).
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+      local found; found="$(lesson_number_for_id "$src" "$num")"
+      [ -n "$found" ] || die "no lesson in $src has the id '$num'. Ids are printed beside the number by 'claude-sync lesson'."
+      num="$found" ;;
+    *) die "lesson needs a number, e.g. lesson L174, or an id (got '${num:-<nothing>}')" ;;
+  esac
   out="$(awk -v want="$num" '
     $0 ~ ("^- \\*\\*" want "\\.") { printing = 1; print; next }
     printing && /^- \*\*L[0-9]+\./ { exit }
@@ -1239,6 +1353,9 @@ do_lesson(){   # $1 = number, e.g. L174
     fi
     die "$num is not in $src. 'claude-sync next-lesson' prints the next free number if you are adding one."
   fi
+  # The id is printed WITH the entry, so the stable reference is in front of whoever is reading it
+  # rather than in a document they would have to know about (claude-config#199).
+  printf 'id: %s (this survives a renumber; %s may not)\n' "$(lesson_id "$src" "$num")" "$num"
   printf '%s\n' "$out"
   return 0
 }
@@ -2357,6 +2474,97 @@ citing_synced_files(){   # $1 = number, e.g. L2
   citation_candidates "$1" | count_citations_in "$1"
 }
 
+# WHICH lesson numbers the config quotes, and what each one MEANT when it was pinned
+# (claude-config#199).
+#
+# A renumber changes what a number names. Inside the file being merged the tool rewrites the
+# mentions itself, and in other synced files it counts them and sends a person to look, but nothing
+# recorded what a citation was written ABOUT, so a number that moved and a number that did not read
+# the same afterwards. The pin file records the id of the entry each cited number named at the time,
+# and the check re-derives them: an id that has changed is a citation now pointing somewhere else.
+#
+# It lives in the repo, beside lesson-bands, rather than in the payload: it is about the config
+# rather than part of it, and nothing loads it into a session.
+LESSON_PIN_FILE="$SYNC_REPO/lesson-citations.tsv"
+
+# Every lesson number quoted anywhere in the payload except the lessons files themselves, which are
+# where the entries live rather than places that cite them.
+cited_lesson_numbers(){   # -> one Lnnn per line, distinct, sorted
+  [ -d "$PAYLOAD" ] || return 0
+  grep -rhoE '(^|[^A-Za-z0-9])L[0-9]{1,4}([^0-9]|$)' "$PAYLOAD" \
+      --exclude=LESSONS.md --exclude="$LESSON_INDEX_FILE" 2>/dev/null \
+    | grep -oE 'L[0-9]{1,4}' | sort -u
+}
+
+do_cite_pin(){
+  local src="$CLAUDE_HOME/LESSONS.md" num id tmp n=0
+  [ -f "$src" ] || die "no LESSONS.md at $src, so there is nothing to pin citations against."
+  tmp="$(scratch_file)"
+  while IFS= read -r num; do
+    [ -n "$num" ] || continue
+    id="$(lesson_id "$src" "$num" 2>/dev/null || true)"
+    # A number nothing defines is not a citation of a lesson, it is a version string, a label or a
+    # coincidence. Pinning it would put a row in this file that can never be satisfied.
+    [ -n "$id" ] || continue
+    printf '%s\t%s\n' "$num" "$id" >> "$tmp"
+    n=$(( n + 1 ))
+  done < <(cited_lesson_numbers)
+  if [ "$n" -eq 0 ]; then
+    rm -f "$tmp"
+    die "found no lesson citation anywhere in $PAYLOAD, which cannot be right. Nothing was written; the old pin file is untouched."
+  fi
+  cat "$tmp" > "$LESSON_PIN_FILE" && rm -f "$tmp"
+  echo "claude-sync: pinned $n cited lesson number(s) in $LESSON_PIN_FILE to the entry each one names now."
+  return 0
+}
+
+do_cite_check(){
+  local src="$CLAUDE_HOME/LESSONS.md" num id want moved="" gone="" unpinned="" n=0
+  [ -f "$src" ] || die "no LESSONS.md at $src, so nothing can be checked."
+  if [ ! -f "$LESSON_PIN_FILE" ]; then
+    die "there is no pin file at $LESSON_PIN_FILE, so nothing records what any cited number was written about. Run 'claude-sync cite-pin' once to record it."
+  fi
+  while IFS="$(printf '\t')" read -r num want; do
+    [ -n "$num" ] && [ -n "$want" ] || continue
+    n=$(( n + 1 ))
+    id="$(lesson_id "$src" "$num" 2>/dev/null || true)"
+    if [ -z "$id" ]; then
+      gone="$gone $num"
+    elif [ "$id" != "$want" ]; then
+      moved="$moved $num"
+    fi
+  done < "$LESSON_PIN_FILE"
+  # Reading an empty pin file is not a clean answer (L98).
+  [ "$n" -gt 0 ] || die "the pin file at $LESSON_PIN_FILE holds no rows, so nothing was checked."
+  while IFS= read -r num; do
+    [ -n "$num" ] || continue
+    lesson_id "$src" "$num" >/dev/null 2>&1 || continue
+    grep -q "^$num	" "$LESSON_PIN_FILE" 2>/dev/null || unpinned="$unpinned $num"
+  done < <(cited_lesson_numbers)
+  local bad=0
+  if [ -n "$moved" ]; then
+    bad=1
+    echo "claude-sync: these cited lesson numbers name a DIFFERENT entry than when they were pinned:$moved" >&2
+    echo "  Something renumbered them, so every citation of them now points at the wrong lesson. 'claude-sync cite-scan <number>' lists who cites one. Fix the citations, then re-run 'claude-sync cite-pin'." >&2
+  fi
+  if [ -n "$gone" ]; then
+    bad=1
+    echo "claude-sync: these cited lesson numbers no longer exist in $src at all:$gone" >&2
+    echo "  A citation of one resolves to nothing. Fix or remove them, then re-run 'claude-sync cite-pin'." >&2
+  fi
+  if [ -n "$unpinned" ]; then
+    # SAID, and deliberately NOT counted. A citation written since the last pin is not a fault, it
+    # is just unprotected, and failing on it would mean re-pinning on every commit that quotes a
+    # lesson, which is most of them. What the check exists to catch is a number that came to mean
+    # something ELSE (L324: the refusal is no broader than the reason for it).
+    echo "claude-sync: cited but not pinned, so nothing would notice if these moved:$unpinned" >&2
+    echo "  Run 'claude-sync cite-pin' to record what each of them names now." >&2
+  fi
+  [ "$bad" -eq 0 ] || return 1
+  echo "claude-sync: all $n pinned citation(s) still name the entry they were written about."
+  return 0
+}
+
 # `claude-sync cite-scan L2` answers, on demand, the question the renumber report answers as a side
 # effect: which synced files cite this lesson number. It also says how many files it had to open to
 # find out, because that is the quantity #53 is about and a scan that quietly went back to opening
@@ -3454,6 +3662,7 @@ do_sync(){
       record_sync_success
     fi
     # integrate the other Mac's changes (only if the remote branch exists yet)
+    ensure_derived_file_merge_rule
     if git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1; then
       # Counted around the pull because git DROPS the autostash on a clean restore and
       # KEEPS it on a conflicted one. See the check after the pull for why that matters.
@@ -3496,6 +3705,9 @@ do_sync(){
          grep -q 'autostash' <<< "$stash_top"; then
         die "your uncommitted edits inside $SYNC_REPO clashed with the other Mac's version, so git parked them in a stash and left conflict markers in the working tree. The sync tool's own files are the ones affected. Fix the marked files, then run 'git -C $SYNC_REPO stash drop'"
       fi
+      # The merge kept one side's rendering of a lessons file that no longer exists. Rebuilt here,
+      # before anything is committed or published (claude-config#200).
+      regenerate_payload_index
     fi
     after="$(repo_head)"
     # Re-checked AFTER the rebase, not from $pushed alone: the daemon runs this, so a
@@ -5018,6 +5230,8 @@ case "$cmd" in
   install-autosync) do_install_autosync ;;
   next-lesson) lesson_band_locked; next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND" ;;
   cite-scan) do_cite_scan "${2:-}" ;;   # read-only: which synced files cite a lesson number
+  cite-pin) do_cite_pin ;;              # record what each cited lesson number names now
+  cite-check) do_cite_check ;;          # read-only: has any cited number come to mean something else
   lesson) do_lesson "${2:-}" ;;         # read-only: one lesson in full, with its provenance
   check-skills) do_check_skills ;;      # read-only: is any skill provided by a plugin AND locally
   check-lessons)
@@ -5042,5 +5256,5 @@ case "$cmd" in
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
   help|-h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, reap-scratch, clean-backups, forget-mac, next-lesson, check-lessons, cite-scan, check-skills, lesson, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, reap-scratch, clean-backups, forget-mac, next-lesson, check-lessons, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
 esac

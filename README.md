@@ -253,6 +253,27 @@ Macs that claim while unable to see each other are settled by name order, the sa
 Mac, and the one that moves says so. A band that fills up refuses rather than spilling into the next
 Mac's numbers (`SYNC_LESSON_BAND_SIZE` widens it).
 
+### A number is a display, an id is the reference
+
+A lesson's number can move. Both Macs mint from their own band and a collision still happened on
+2026-08-29: each had used L521 for a different entry, and the pull renumbered this Mac's unsent one
+to L523 (#199). Anything already quoting the number then points at a different lesson.
+
+So a lesson also has an id, derived from its own rule sentence rather than stored anywhere, which
+means there is no registry for two Macs to disagree about and nothing a merge can lose. A renumber
+does not touch the rule text, so the id survives it. `claude-sync lesson` prints it beside the
+number and accepts it in place of one:
+
+```bash
+claude-sync lesson f9c1041ccf
+```
+
+Citations inside the config are held to it. `claude-sync cite-pin` records what each cited number
+names now, in `lesson-citations.tsv`, and `claude-sync cite-check` re-derives them: a number whose
+id has changed is a citation that now points somewhere else, and it says which. A citation written
+since the last pin is reported as unpinned rather than as a fault, because failing on that would
+mean re-pinning on every commit that quotes a lesson.
+
 ## Skills that cannot load
 
 A skill is a directory holding a `SKILL.md` whose frontmatter carries a name and a description.
@@ -589,9 +610,10 @@ and one run, which is what a healthy machine looks like.
 ## Local state (per Mac, never synced)
 
 Thirteen things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
-so a fresh clone starts without them. (`lesson-bands/` also sits outside `payload/` and is the one
-exception: it is tracked and shared on purpose, because a band nobody else can see cannot stop
-anybody else claiming it. See Lesson numbers above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
+so a fresh clone starts without them. (`lesson-bands/` and `lesson-citations.tsv` also sit outside
+`payload/` and are the two exceptions: both are tracked and shared on purpose. A band nobody else
+can see cannot stop anybody else claiming a number, and a record of what a citation was written
+about is a fact about the shared payload rather than about one Mac. See Lesson numbers above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
 defined answer for being absent or untrustworthy.
 
 | File | Written by | Read by | Missing or stale |

@@ -6457,10 +6457,21 @@ check "#137 and the out of range section is named" \
 # said what it selected, so four real shards cost four file reads instead of a full run. Every
 # check above would pass over a suite whose shards never emit a line at all, and this is the half
 # that cannot (L98, L159).
+# The four sub-runs deal from a PINNED copy of the timings store, taken once, because the deal is
+# computed from it on every invocation and the parent run's own shards are writing to the live
+# store while this loop goes. Four deals made from four different readings of the same moving store
+# do not have to agree, and when they disagree the union has a gap: this failed exactly once in a
+# full run on 2026-09-02 and passed on its own, which is the shape of two readings of a shared
+# resource taken at different moments (L134, L205).
+ST_COV_PIN="$WORK/cov-timings-pin"; mkdir -p "$ST_COV_PIN"
+if [ -n "$SUITE_SECTION_TIMINGS" ] && [ -d "$SUITE_SECTION_TIMINGS" ]; then
+  cp -R "$SUITE_SECTION_TIMINGS/." "$ST_COV_PIN/" 2>/dev/null || true
+fi
 _cov_real=""
 _cov_k=1
 while [ "$_cov_k" -le 4 ]; do
   _cov_real="$_cov_real$(SUITE_SHARD="$_cov_k/4" SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
+    SUITE_SECTION_TIMINGS="$ST_COV_PIN" \
     SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
 "
   _cov_k=$((_cov_k + 1))
@@ -8657,6 +8668,133 @@ check "#83 a file that really clashes is still kept and reported" \
   "line_has \"\$out_ix2\" 'could NOT be merged' 'RTK\.md'"
 check "#83 and its copy is still set aside" "ls '$IXHB'/RTK.md.conflict-* >/dev/null 2>&1"
 
+
+section "== a lesson keeps an identity a renumber cannot move (claude-config#199) =="
+# Both Macs mint numbers from their own band and a collision still happened on 2026-08-29: each had
+# used L521 for a different entry, and the pull renumbered this Mac's unsent one to L523. The tool's
+# own message names the risk it cannot fix, that something already refers to the number that moved,
+# and numbers ARE referred to: CLAUDE.md points at L174 as its worked example, and 137 citations sit
+# across the payload.
+#
+# The identity is DERIVED from the lesson's own rule sentence, so there is no registry two Macs can
+# disagree about and nothing a merge can lose. A renumber does not touch the rule text.
+IDH="$WORK/ident-home"; mkdir -p "$IDH"
+printf '# Lessons\n\n## Proof over green\n\n- **L7. a rule about proving things.** the body\n\n- **L9. a different rule.** another body\n' > "$IDH/LESSONS.md"
+id7="$(CLAUDE_HOME="$IDH" bash "$SCRIPT" lesson L7 2>/dev/null | sed -n 's/^id: \([0-9a-f]*\).*/\1/p')"
+check "#199 a lesson has an id" "[ -n \"\$id7\" ]"
+check "#199 and 'lesson' resolves that id back to the same entry" \
+  "grep -q 'a rule about proving things' <<< \"\$(CLAUDE_HOME='$IDH' bash '$SCRIPT' lesson \"\$id7\" 2>/dev/null)\""
+
+# The whole point: renumber the entry and the id does not move with the number.
+sed -i.bak 's/- \*\*L7\./- **L523./' "$IDH/LESSONS.md" && rm -f "$IDH/LESSONS.md.bak"
+id523="$(CLAUDE_HOME="$IDH" bash "$SCRIPT" lesson L523 2>/dev/null | sed -n 's/^id: \([0-9a-f]*\).*/\1/p')"
+check "#199 a renumbered lesson keeps its id" "[ -n \"\$id7\" ] && [ \"\$id523\" = \"\$id7\" ]"
+# The control, or the check above is satisfied by an id that is the same for every entry (L159).
+id9="$(CLAUDE_HOME="$IDH" bash "$SCRIPT" lesson L9 2>/dev/null | sed -n 's/^id: \([0-9a-f]*\).*/\1/p')"
+check "#199 and two different lessons do not share one id" "[ -n \"\$id9\" ] && [ \"\$id9\" != \"\$id7\" ]"
+# Re-wrapping is not a change of lesson: the words are the rule and the line width is not (L278).
+printf '# Lessons\n\n## Proof over green\n\n- **L7. a rule about\n  proving things.** the body\n' > "$IDH/LESSONS.md"
+id7w="$(CLAUDE_HOME="$IDH" bash "$SCRIPT" lesson L7 2>/dev/null | sed -n 's/^id: \([0-9a-f]*\).*/\1/p')"
+check "#199 and re-wrapping the same rule keeps the id" "[ \"\$id7w\" = \"\$id7\" ]"
+
+# ---- and a citation is checked against what it was written about ----
+IDR="$WORK/ident-repo"; mkdir -p "$IDR/payload/hooks"
+printf '# Lessons\n\n## Proof over green\n\n- **L7. a rule about proving things.** the body\n\n- **L9. a different rule.** another body\n' > "$IDH/LESSONS.md"
+cp "$IDH/LESSONS.md" "$IDR/payload/LESSONS.md"
+printf '# a hook that quotes one\n# see L7 for why this refuses\n' > "$IDR/payload/hooks/quoter.sh"
+out_pin="$(CLAUDE_HOME="$IDH" SYNC_REPO="$IDR" bash "$SCRIPT" cite-pin 2>&1)"; pin_rc=$?
+check "#199 pinning records what each cited number names" "[ '$pin_rc' -eq 0 ]"
+check "#199 and the pin file holds the cited number" "grep -q '^L7	' '$IDR/lesson-citations.tsv'"
+CLAUDE_HOME="$IDH" SYNC_REPO="$IDR" bash "$SCRIPT" cite-check >/dev/null 2>&1
+check "#199 a config nobody has renumbered passes the check" "[ \$? -eq 0 ]"
+
+# Now move L7's number, exactly as a merge collision does, and leave a DIFFERENT lesson at L7.
+printf '# Lessons\n\n## Proof over green\n\n- **L7. a rule that arrived from the other Mac.** its body\n\n- **L523. a rule about proving things.** the body\n' > "$IDH/LESSONS.md"
+out_cc="$(CLAUDE_HOME="$IDH" SYNC_REPO="$IDR" bash "$SCRIPT" cite-check 2>&1)"; cc_rc=$?
+check "#199 a cited number that now names a different entry fails the check" "[ '$cc_rc' -ne 0 ]"
+check "#199 and the number that moved is named" \
+  "case \"\$out_cc\" in *'DIFFERENT entry'*L7*) true ;; *) false ;; esac"
+
+# A number that vanished is its own outcome, not the same one: the citation resolves to nothing at
+# all rather than to the wrong thing, and the remedy differs (L11).
+printf '# Lessons\n\n## Proof over green\n\n- **L9. a different rule.** another body\n' > "$IDH/LESSONS.md"
+out_cg="$(CLAUDE_HOME="$IDH" SYNC_REPO="$IDR" bash "$SCRIPT" cite-check 2>&1)"; cg_rc=$?
+check "#199 a cited number that no longer exists fails the check too" "[ '$cg_rc' -ne 0 ]"
+check "#199 and it says the entry is gone rather than that it moved" \
+  "case \"\$out_cg\" in *'no longer exist'*) true ;; *) false ;; esac"
+
+# Reading an empty pin file must not read as a clean check (L98).
+: > "$IDR/lesson-citations.tsv"
+out_ce="$(CLAUDE_HOME="$IDH" SYNC_REPO="$IDR" bash "$SCRIPT" cite-check 2>&1)"; ce_rc=$?
+check "#199 an empty pin file is refused rather than passed" "[ '$ce_rc' -ne 0 ]"
+check "#199 and it says nothing was checked" \
+  "case \"\$out_ce\" in *'holds no rows'*) true ;; *) false ;; esac"
+
+section "== a two sided lesson does not stop on the derived index (claude-config#200) =="
+# LESSONS-INDEX.md is generated from LESSONS.md, and it is COMMITTED, so git combines it as though
+# somebody maintained it by hand. Whenever both Macs record a lesson between syncs the two
+# generated indexes differ, git stops the rebase on a content conflict, and the operator lands in
+# the by-hand recovery message, which is not actionable for somebody who does not live in a
+# terminal. It happened on 2026-08-29 when this Mac added L265 to L269 while the other added L522
+# and L523, and it is guaranteed rather than occasional: any two sided addition triggers it.
+#
+# The apply already knows the file is derived and skips it. Only the git layer still treated it as
+# content, so the fix belongs there: the clone is told never to combine it, and it is regenerated
+# from the MERGED lessons afterwards.
+unset SYNC_NO_GIT
+TSB="$WORK/twoside-bare.git"; git init -q --bare "$TSB"
+TSRA="$WORK/twoside-repoA"; git clone -q "$TSB" "$TSRA" 2>/dev/null
+TSHA="$WORK/twoside-homeA"; mkdir -p "$TSHA"
+echo '{"hooks":{}}' > "$TSHA/settings.json"
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$TSHA/CLAUDE.md"
+# TWO sections, and each Mac writes into a different one, which is what the real case looked like:
+# L265 to L269 arrived here while L522 and L523 arrived there, in different parts of the file. That
+# makes the lessons themselves merge cleanly and leaves the INDEX as the only thing that stops the
+# rebase, which is what this section is about. Written into the same section, git conflicts on
+# LESSONS.md itself and the run never reaches the index at all (measured: the first version of this
+# fixture did exactly that and was testing something else).
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body one\n\n## Data safety\n\n- **L2. two.** body two\n' > "$TSHA/LESSONS.md"
+CLAUDE_HOME="$TSHA" SYNC_REPO="$TSRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+TSRB="$WORK/twoside-repoB"; git clone -q "$TSB" "$TSRB" 2>/dev/null
+TSHB="$WORK/twoside-homeB"; mkdir -p "$TSHB"
+echo '{"hooks":{}}' > "$TSHB/settings.json"
+CLAUDE_HOME="$TSHB" SYNC_REPO="$TSRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#200 both Macs start from the same published lessons" \
+  "grep -q 'L2. two' '$TSHB/LESSONS.md'"
+
+# One lesson on one side, TWO on the other, so the generated header counts differ. That header is a
+# single line both sides rewrite, which is what makes the index unmergeable while the lessons
+# underneath it merge perfectly well: with one each the counts match and the conflict never fires,
+# which is the fixture mistake #83 recorded making (L1).
+python3 - "$TSHA/LESSONS.md" <<'TSA'
+import sys
+p = sys.argv[1]
+t = open(p).read().replace("- **L1. one.** body one\n",
+                           "- **L1. one.** body one\n- **L4. four.** written only on Mac A\n")
+open(p, "w").write(t)
+TSA
+CLAUDE_HOME="$TSHA" SYNC_REPO="$TSRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+printf -- '- **L3. three.** written only on Mac B\n' >> "$TSHB/LESSONS.md"
+printf -- '- **L5. five.** also written only on Mac B\n' >> "$TSHB/LESSONS.md"
+# Mac B appends to the LAST section, Mac A inserted into the first, so the two changes are nowhere
+# near each other in the file.
+out_ts="$(CLAUDE_HOME="$TSHB" SYNC_REPO="$TSRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; ts_rc=$?
+dbg "two sided sync said: $out_ts"
+check "#200 the second Mac's sync completes rather than stopping on the index" "[ '$ts_rc' -eq 0 ]"
+check "#200 and it does not report a content conflict the operator must settle by hand" \
+  "! grep -q \"couldn't auto-merge\" <<< \"\$out_ts\""
+
+# The positive control: the lessons themselves really did come together on that run, so the checks
+# above are about the index rather than about a sync that did nothing (L159, L100).
+check "#200 the merged lessons carry both Macs' entries" \
+  "grep -q 'L4. four' '$TSHB/LESSONS.md' && grep -q 'L3. three' '$TSHB/LESSONS.md'"
+# And the index is REGENERATED from what the merge produced, not carried over from either side.
+check "#200 and the index carries both Macs' entries too" \
+  "grep -q 'L4. four' '$TSHB/LESSONS-INDEX.md' && grep -q 'L3. three' '$TSHB/LESSONS-INDEX.md'"
+check "#200 and the index that was published matches" \
+  "grep -q 'L4. four' '$TSRB/payload/LESSONS-INDEX.md' && grep -q 'L3. three' '$TSRB/payload/LESSONS-INDEX.md'"
+check "#200 and nothing was left holding conflict markers" \
+  "! grep -rq '<<<<<<<' '$TSRB/payload' 2>/dev/null"
 
 section "== a conflict whose local side holds nothing new resolves itself (claude-config#177) =="
 # The 2026-08-22 pull declared three files unmergeable and wrote a .conflict copy of each. One of
