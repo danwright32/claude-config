@@ -19,7 +19,7 @@ fi
 
 # Version guard: rtk rewrite was added in 0.23.0.
 # Older binaries: warn once and exit cleanly (no silent failure).
-RTK_VERSION=$(rtk --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+RTK_VERSION=$(rtk --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | awk 'NR <= 1')
 if [ -n "$RTK_VERSION" ]; then
   MAJOR=$(echo "$RTK_VERSION" | cut -d. -f1)
   MINOR=$(echo "$RTK_VERSION" | cut -d. -f2)

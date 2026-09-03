@@ -60,7 +60,7 @@ changed="$(git diff --unified=0 "$BASE" -- "$REL" | awk '
 # They also have to come from the file's own headings rather than from line numbers recorded
 # anywhere, because a diff moves every line below an insertion.
 headings="$(SECTION_LIST=1 bash "$SUITE" 2>/dev/null || true)"
-if [ -z "${headings%%[[:space:]]}" ] || ! printf '%s' "$headings" | grep -q '[0-9]'; then
+if [ -z "${headings%%[[:space:]]}" ] || ! grep -q '[0-9]' <<< "$headings"; then
   echo "audit-changed-sections: $REL listed no sections, so no changed line can be attributed to one. Refusing rather than treating the whole diff as preamble, which would report a clean audit of nothing." >&2
   exit 2
 fi

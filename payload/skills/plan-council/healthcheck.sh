@@ -64,7 +64,7 @@ for h in require-tests-before-push check-style-guide lessons-advisory require-is
 done
 
 echo "== skill -> workflow path resolves =="
-ref=$(grep -o '/Users/[^"]*panel\.workflow\.js' "$D/skills/plan-council/SKILL.md" 2>/dev/null | head -1)
+ref=$(grep -o '/Users/[^"]*panel\.workflow\.js' "$D/skills/plan-council/SKILL.md" 2>/dev/null | awk 'NR <= 1')
 if [ -n "$ref" ] && [ -f "$ref" ]; then ok "scriptPath -> $ref"; else bad "SKILL.md scriptPath missing or broken: '${ref:-none}'"; fi
 
 echo "== grilling gate (both planners open with a grill) =="
@@ -77,7 +77,7 @@ for s in plan-council plan-lite; do
   # Captured first: awk feeding grep -q is a pipeline whose consumer leaves on the first match and
   # kills the producer, which under `pipefail` reads as the check failing (L183).
   _pc_fm="$(awk '/^---$/{n++; next} n==1' "$smd" 2>/dev/null || true)"
-  if printf '%s\n' "$_pc_fm" | grep -q '^allowed-tools:.*Skill'; then
+  if grep -q '^allowed-tools:.*Skill' <<< "$_pc_fm"; then
     ok "$s allowed-tools includes Skill"
   else
     bad "$s: allowed-tools lacks Skill, so it cannot invoke grilling"

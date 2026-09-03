@@ -265,6 +265,41 @@ $shrank$gone  Lower the recorded number, so what is left keeps meaning something
   *) check "the baseline has been lowered as sites were converted" ok ;;
 esac
 
+# ---------------------------------------------------------------------------
+# And NOTHING outside a test fixture may carry one at all (claude-config#197).
+# ---------------------------------------------------------------------------
+# The ratchet above only forbids a count from GROWING, so a site in shipped code could sit at one
+# for ever and read as a tracked allowance rather than as the defect it is. The distinction that
+# makes the remaining sites tolerable is that every one of them feeds a fixture the test itself
+# built, which is small by construction. That argument does not cover shipped code, which reads
+# real files that grow on their own: the two sites that actually fired both did, and one of them
+# was a guard that failed OPEN when the pipeline reported its producer's death instead of a match.
+#
+# So this is a one way door rather than a number. 492 sites were converted down to 79 on 2026-09-02
+# and every one that is left is in a `test-*.sh`. A new one anywhere else fails this suite on the
+# day it lands, rather than being added to the list.
+_ship_bad=""; _ship_seen=0
+while read -r _sc_n _sc_path; do
+  case "$_sc_n" in ''|*[!0-9]*) continue ;; esac
+  [ -n "$_sc_path" ] || continue
+  _ship_seen=$(( _ship_seen + 1 ))
+  [ "$_sc_n" -gt 0 ] || continue
+  case "${_sc_path##*/}" in test-*) continue ;; esac
+  _ship_bad="$_ship_bad
+  $_sc_path: $_sc_n"
+done < <(grep -vE '^[[:space:]]*#' "$BASELINE" | grep -vE '^[[:space:]]*$')
+# Reading NOTHING is not a clean answer. The first version of this named the wrong variable, read
+# an empty file, and passed while measuring nothing, which is the exact failure this whole suite is
+# organised against (L98, and it was caught by reading the code rather than by the check).
+if [ "$_ship_seen" -eq 0 ]; then
+  check "no site outside a test fixture is left" "the tracked list at $BASELINE gave no rows to read, so nothing was measured."
+elif [ -n "$_ship_bad" ]; then
+  check "no site outside a test fixture is left" "shipped code still short circuits a pipeline, which reads a real file that grows on its own:$_ship_bad
+  Convert it to a here-string (grep -q PAT <<< \"\$var\") or to awk (NR <= n), then lower the count."
+else
+  check "no site outside a test fixture is left" ok
+fi
+
 echo "test-pipefail-shortcircuit: $seen file(s) tracked."
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

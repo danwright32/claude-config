@@ -241,7 +241,7 @@ for i in "${!TRIG_IDS[@]}"; do
   done <<< "$files"
   [ -z "$hit_files" ] && continue
   # Three examples is enough to find it; a full list turns advice into a wall.
-  shown="$(printf '%s' "$hit_files" | tr ' ' '\n' | sed '/^$/d' | head -3 | tr '\n' ' ')"
+  shown="$(printf '%s' "$hit_files" | tr ' ' '\n' | sed '/^$/d' | awk 'NR <= 3' | tr '\n' ' ')"
   more="$(printf '%s' "$hit_files" | tr ' ' '\n' | sed '/^$/d' | wc -l | tr -d ' ')"
   extra=""
   [ "$more" -gt 3 ] && extra=" (and $((more - 3)) more)"

@@ -58,7 +58,7 @@ except Exception: print("")' 2>/dev/null)"
   ms_title=""
   if [ -n "$milestone" ] && [ -f "$ensure" ]; then
     ms_out="$(bash "$ensure" "$repo" "$milestone" 2>/dev/null)"
-    ms_title="$(printf '%s\n' "$ms_out" | sed -n 's/^MILESTONE-TITLE //p' | head -1)"
+    ms_title="$(printf '%s\n' "$ms_out" | sed -n 's/^MILESTONE-TITLE //p' | awk 'NR <= 1')"
   fi
 
   if [ -n "$ms_title" ]; then

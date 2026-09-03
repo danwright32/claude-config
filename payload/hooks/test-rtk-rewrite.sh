@@ -87,12 +87,12 @@ printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/n
 [ "$(printf '%s' "$out" | rewritten_to)" = "rtk git status" ] \
   && check "and carries the rewritten command" ok \
   || check "and carries the rewritten command" "out=$out"
-printf '%s' "$out" | grep -q '"permissionDecision": *"allow"' \
+grep -q '"permissionDecision": *"allow"' <<< "$out" \
   && check "and allows it, or the rewrite would just prompt" ok \
   || check "and allows it, or the rewrite would just prompt" "out=$out"
 # The rest of the tool input has to survive: the hook replaces ONE field of it, and a rewrite that
 # dropped the others would silently discard whatever else the caller set.
-printf '%s' "$out" | grep -q '"description"' \
+grep -q '"description"' <<< "$out" \
   && check "and keeps the rest of the tool input rather than replacing it" ok \
   || check "and keeps the rest of the tool input rather than replacing it" "out=$out"
 

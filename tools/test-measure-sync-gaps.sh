@@ -46,9 +46,9 @@ R1="$(mkrepo one 0:macA 1:macA 8:macA 9:macA)"
 o1="$(bash "$M" "$R1" 2>&1)"; c1=$?
 [ "$c1" -eq 0 ] && check "a repo with sync history measures cleanly" ok \
                 || check "a repo with sync history measures cleanly" "exit=$c1 out=$o1"
-printf '%s' "$o1" | grep -q 'macA' \
+grep -q 'macA' <<< "$o1" \
   && check "it names the Mac it measured" ok || check "it names the Mac it measured" "out=$o1"
-printf '%s' "$o1" | grep -qE 'longest gap 7\.0+ days' \
+grep -qE 'longest gap 7\.0+ days' <<< "$o1" \
   && check "it reports the real longest gap, not the average" ok \
   || check "it reports the real longest gap, not the average" "out=$o1"
 
@@ -63,7 +63,7 @@ R2="$(mkrepo two 0:macA 1:macA 0:macB 20:macB)"
 o3="$(bash "$M" "$R2" 2>&1)"
 printf '%s' "$o3" | grep -q 'macB' && printf '%s' "$o3" | grep -q 'macA' \
   && check "each Mac is measured on its own" ok || check "each Mac is measured on its own" "out=$o3"
-printf '%s' "$o3" | grep -qE 'longest gap 20\.0+ days' \
+grep -qE 'longest gap 20\.0+ days' <<< "$o3" \
   && check "and the worst of them is the one the ratio uses" ok \
   || check "and the worst of them is the one the ratio uses" "out=$o3"
 
@@ -74,23 +74,23 @@ git -C "$R3" commit -q --allow-empty -m "an ordinary commit, not a sync"
 o4="$(bash "$M" "$R3" 2>&1)"; c4=$?
 [ "$c4" -ne 0 ] && check "a repo with no sync history is refused, not reported as zero" ok \
                 || check "a repo with no sync history is refused, not reported as zero" "exit=$c4 out=$o4"
-printf '%s' "$o4" | grep -qi 'no sync' \
+grep -qi 'no sync' <<< "$o4" \
   && check "and it says what it could not find" ok || check "and it says what it could not find" "out=$o4"
 
 # --- a single sync from a Mac has no GAP to measure, and that is not a gap of zero either.
 R4="$(mkrepo single 0:macA)"
 o5="$(bash "$M" "$R4" 2>&1)"
-printf '%s' "$o5" | grep -qi 'only one' \
+grep -qi 'only one' <<< "$o5" \
   && check "one sync alone is reported as no gap to measure" ok \
   || check "one sync alone is reported as no gap to measure" "out=$o5"
 
 # --- the window is anchored to the newest commit, not to today, or this fixture would measure
 #     differently every day it is run (L130).
 o6="$(MEASURE_WINDOW_DAYS=5 bash "$M" "$R1" 2>&1)"
-printf '%s' "$o6" | grep -qE 'longest gap 1\.0+ days' \
+grep -qE 'longest gap 1\.0+ days' <<< "$o6" \
   && check "a narrower window measures only what falls inside it" ok \
   || check "a narrower window measures only what falls inside it" "out=$o6"
-printf '%s' "$o6" | grep -q 'anchored' \
+grep -q 'anchored' <<< "$o6" \
   && check "and it says the window is anchored to the newest sync" ok \
   || check "and it says the window is anchored to the newest sync" "out=$o6"
 

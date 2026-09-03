@@ -102,7 +102,7 @@ FLAKE_RECHECK_POLL="${HOOK_TESTS_FLAKE_RECHECK_POLL:-1}"
 # Mac. So the budget below is granted to the suites running at once, each is TOLD its share in
 # HOOK_TESTS_SLOTS, and the total is printed rather than left to be worked out. The shares are not
 # equal: see the lanes further down (#139).
-_ncpu="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) | head -1 )"
+_ncpu="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) | awk 'NR <= 1' )"
 case "$_ncpu" in ''|*[!0-9]*) _ncpu=4 ;; esac
 [ "$_ncpu" -gt 0 ] || _ncpu=4
 _default_budget=$(( _ncpu > 8 ? 8 : _ncpu ))
@@ -1081,7 +1081,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       ' || true)"
       [ -n "$detail" ] || detail="$(printf '%s\n' "$out" | tail -n "$FAIL_DETAIL_MAX")"
       shown="$(printf '%s\n' "$detail" | grep -c . || true)"
-      printf '%s\n' "$detail" | head -n "$FAIL_DETAIL_MAX" | sed 's/^/          /'
+      printf '%s\n' "$detail" | awk -v n="$FAIL_DETAIL_MAX" 'NR <= n' | sed 's/^/          /'
       if [ "${shown:-0}" -gt "$FAIL_DETAIL_MAX" ]; then
         printf '          ...and %s more line(s) not shown\n' "$(( shown - FAIL_DETAIL_MAX ))"
       fi

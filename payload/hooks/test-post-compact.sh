@@ -33,13 +33,13 @@ printf '%s' "$out1" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/
   && check "it answers with valid JSON" ok \
   || check "it answers with valid JSON" "out=$out1"
 ctx1="$(printf '%s' "$out1" | context_of)"
-printf '%s' "$ctx1" | grep -q 'NEVER-PUSH-ON-FRIDAY-MARKER' \
+grep -q 'NEVER-PUSH-ON-FRIDAY-MARKER' <<< "$ctx1" \
   && check "the project's actual rules come through, not just their name" ok \
   || check "the project's actual rules come through, not just their name" "ctx=$ctx1"
-printf '%s' "$ctx1" | grep -q 'HasRules' \
+grep -q 'HasRules' <<< "$ctx1" \
   && check "and it says which project they belong to" ok \
   || check "and it says which project they belong to" "ctx=$ctx1"
-printf '%s' "$ctx1" | grep -qi 'compact' \
+grep -qi 'compact' <<< "$ctx1" \
   && check "and that a compaction is why it is saying so" ok \
   || check "and that a compaction is why it is saying so" "ctx=$ctx1"
 
@@ -53,7 +53,7 @@ ctx2="$(printf '%s' "$out2" | context_of)"
 [ -n "$ctx2" ] \
   && check "a project with no CLAUDE.md still gets an answer" ok \
   || check "a project with no CLAUDE.md still gets an answer" "it said nothing"
-printf '%s' "$ctx2" | grep -qi 'no CLAUDE.md' \
+grep -qi 'no CLAUDE.md' <<< "$ctx2" \
   && check "and the answer says there were none to re-inject" ok \
   || check "and the answer says there were none to re-inject" "ctx=$ctx2"
 [ "$ctx1" != "$ctx2" ] \

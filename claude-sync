@@ -802,7 +802,7 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
     # THIS MAC, and the first version of the prune did exactly that to a folder holding the
     # person's own work. The suite caught it (L5).
     REFUSED_SKILL_EXCLUDES+=(--exclude="/$entry")
-    if [ "${3:-}" = prune ] && [ -d "$1/$entry" ] && [ -z "$(find "$1/$entry" -type f 2>/dev/null | head -1)" ]; then
+    if [ "${3:-}" = prune ] && [ -d "$1/$entry" ] && [ -z "$(find "$1/$entry" -type f 2>/dev/null | awk 'NR <= 1')" ]; then
       rm -rf "$1/$entry"
       named+="  skills/$entry: $reason, and it held no files at all, so it was removed from the payload and will stop being reported"$'\n'
       continue
@@ -1343,7 +1343,7 @@ lesson_band(){
     echo "claude-sync: this Mac ($host) had no lesson number band, so it claimed $mine to $((mine + LESSON_BAND_SIZE - 1)) and every lesson written here now takes a number from it. Two Macs can then never mint the same number, however long they go without seeing each other." >&2
     LESSON_BAND="$mine"; return 0
   fi
-  loser="$(colliding_band_holders "$mine" | head -1)"
+  loser="$(colliding_band_holders "$mine" | awk 'NR <= 1')"
   if [ -n "$loser" ]; then
     local moved; moved="$(next_free_band)"
     record_lesson_band "$moved"
@@ -3048,7 +3048,7 @@ print_new_session_notice(){   # $1 = applied list (kind<TAB>path per line)
   names="$(printf '%s\n' "$1" | needs_new_session)"
   is_blank "$names" && return 0
   n="$(printf '%s' "$names" | grep -c . || true)"
-  shown="$(printf '%s' "$names" | head -"$NOTICE_MAX" | tr '\n' ' ')"
+  shown="$(printf '%s' "$names" | awk -v n="$NOTICE_MAX" 'NR <= n' | tr '\n' ' ')"
   shown="${shown% }"
   [ "$n" -gt "$NOTICE_MAX" ] && shown="${shown} and $((n - NOTICE_MAX)) more"
   # Names last: the reader needs the instruction first, and putting the list at
@@ -3078,7 +3078,7 @@ summarize_applied(){   # $1 pre-pull commit  $2 post-pull commit (for the first-
     return 0
   fi
   echo "Received changes from the shared repo:"
-  printf '%s\n' "$list" | head -"$SUMMARY_MAX" | while IFS=$'\t' read -r kind name; do
+  printf '%s\n' "$list" | awk -v n="$SUMMARY_MAX" 'NR <= n' | while IFS=$'\t' read -r kind name; do
     printf '  %-8s %s\n' "$kind" "$name"
   done
   if [ "$n" -gt "$SUMMARY_MAX" ]; then echo "  and $((n - SUMMARY_MAX)) more"; fi
@@ -3482,7 +3482,7 @@ do_sync(){
         die "the shared repo was reachable and this is NOT a two-Mac content conflict, but git refused to combine the two sides. git said: ${pull_err:-<no output>}"
       fi
       stash_after="$(git -C "$SYNC_REPO" stash list 2>/dev/null | wc -l | tr -d ' ')"
-      stash_top="$(git -C "$SYNC_REPO" stash list 2>/dev/null | head -1 || true)"
+      stash_top="$(git -C "$SYNC_REPO" stash list 2>/dev/null | awk 'NR <= 1' || true)"
       # A pull that EXITED ZERO can still have gone wrong, measured against real git, not
       # assumed: when re-applying the edits it set aside conflicts, git prints
       # "Successfully rebased", returns 0, writes conflict markers into the working tree
@@ -3493,7 +3493,7 @@ do_sync(){
       # created by hand in this folder while the background sync was mid-run, and the
       # marker alone would re-fire forever on a conflicted autostash left from last time.
       if [ "${stash_after:-0}" -gt "${stash_before:-0}" ] && \
-         printf '%s' "$stash_top" | grep -q 'autostash'; then
+         grep -q 'autostash' <<< "$stash_top"; then
         die "your uncommitted edits inside $SYNC_REPO clashed with the other Mac's version, so git parked them in a stash and left conflict markers in the working tree. The sync tool's own files are the ones affected. Fix the marked files, then run 'git -C $SYNC_REPO stash drop'"
       fi
     fi
@@ -4442,7 +4442,7 @@ report_process_family(){
   # exactly how the seventeen went unnoticed (L36, L147).
   [ "$roots" -le "$ok_roots" ] && [ "$maxd" -le "$ok_depth" ] && return 0
   echo "--- $label the tool left running ---"
-  printf '%s\n' "$out" | grep -v '^SUMMARY '
+  grep -v '^SUMMARY ' <<< "$out"
   echo "  $n in total, $roots started independently, nested up to $maxd deep."
   echo "  $advice"
 }
@@ -4928,7 +4928,7 @@ ensure_zsh_alias(){
   # `|| true`: with `set -e` and `pipefail`, a grep that simply finds nothing would
   # abort the whole install silently, which is exactly what it did the first time.
   local existing
-  existing="$(grep -n '^[[:space:]]*alias[[:space:]]\+claudesync=' "$rc" 2>/dev/null | head -1 || true)"
+  existing="$(grep -n '^[[:space:]]*alias[[:space:]]\+claudesync=' "$rc" 2>/dev/null | awk 'NR <= 1' || true)"
 
   if [ -n "$existing" ]; then
     # `~/x` and `$HOME/x` are the same path, and the alias on this Mac was added by

@@ -80,7 +80,7 @@ run(){ ( cd "$1" && AUDIT_SUITE="$1/tests/test-claude-sync.sh" bash "$AUDIT" HEA
 R1="$(mkrepo untouched)"
 o1="$(run "$R1")"; c1=$?
 [ "$c1" -eq 0 ] && check "an untouched suite exits clean" ok || check "an untouched suite exits clean" "exit=$c1 out=$o1"
-printf '%s' "$o1" | grep -qi 'unchanged' \
+grep -qi 'unchanged' <<< "$o1" \
   && check "and says it had nothing to run, not that everything passed" ok \
   || check "and says it had nothing to run, not that everything passed" "out=$o1"
 
@@ -89,19 +89,19 @@ R2="$(mkrepo oneedit)"
 perl -pi -e 's/^echo b$/echo b-edited/' "$R2/tests/test-claude-sync.sh"
 o2="$(run "$R2")"; c2=$?
 [ "$c2" -eq 0 ] && check "a green changed section passes" ok || check "a green changed section passes" "exit=$c2 out=$o2"
-printf '%s' "$o2" | grep -q 'LISTED beta' \
+grep -q 'LISTED beta' <<< "$o2" \
   && check "the changed section is the one that ran" ok \
   || check "the changed section is the one that ran" "out=$o2"
 # The decisive one: the name can only have come from asking the suite, because the suite's own
 # heading lines say something different. Two implementations of "where do the sections start" would
 # have produced the file's text instead (claude-config#114).
-printf '%s' "$o2" | grep -q 'LISTED' \
+grep -q 'LISTED' <<< "$o2" \
   && check "the audit asked the suite rather than grepping the file itself" ok \
   || check "the audit asked the suite rather than grepping the file itself" "out=$o2"
-printf '%s' "$o2" | grep -q 'alpha' \
+grep -q 'alpha' <<< "$o2" \
   && check "an untouched section is not run" "out=$o2" \
   || check "an untouched section is not run" ok
-printf '%s' "$o2" | grep -qE 'audited 1 ' \
+grep -qE 'audited 1 ' <<< "$o2" \
   && check "it reports how many sections it audited" ok \
   || check "it reports how many sections it audited" "out=$o2"
 
@@ -111,7 +111,7 @@ perl -pi -e 's/^echo c$/echo c-edited/' "$R3/tests/test-claude-sync.sh"
 o3="$(run "$R3")"; c3=$?
 [ "$c3" -ne 0 ] && check "a changed section that fails alone fails the audit" ok \
                 || check "a changed section that fails alone fails the audit" "exit=$c3 out=$o3"
-printf '%s' "$o3" | grep -q 'LISTED BROKEN gamma' \
+grep -q 'LISTED BROKEN gamma' <<< "$o3" \
   && check "and names which section could not run alone" ok \
   || check "and names which section could not run alone" "out=$o3"
 
@@ -122,7 +122,7 @@ R4="$(mkrepo preambleedit)"
 perl -pi -e 's/^PREAMBLE=1$/PREAMBLE=2/' "$R4/tests/test-claude-sync.sh"
 o4="$(run "$R4")"; c4=$?
 [ "$c4" -eq 0 ] && check "a preamble edit exits clean" ok || check "a preamble edit exits clean" "exit=$c4 out=$o4"
-printf '%s' "$o4" | grep -qi 'preamble' \
+grep -qi 'preamble' <<< "$o4" \
   && check "and says the change was in the preamble" ok \
   || check "and says the change was in the preamble" "out=$o4"
 
@@ -130,7 +130,7 @@ printf '%s' "$o4" | grep -qi 'preamble' \
 R5="$(mkrepo twoedits)"
 perl -pi -e 's/^echo a$/echo a-edited/; s/^echo b$/echo b-edited/' "$R5/tests/test-claude-sync.sh"
 o5="$(run "$R5")"; c5=$?
-printf '%s' "$o5" | grep -qE 'audited 2 ' \
+grep -qE 'audited 2 ' <<< "$o5" \
   && check "two changed sections are both audited" ok \
   || check "two changed sections are both audited" "exit=$c5 out=$o5"
 
@@ -140,7 +140,7 @@ printf '%s' "$o5" | grep -qE 'audited 2 ' \
 R6="$(mkrepo deletion)"
 perl -ni -e 'print unless /^echo b$/' "$R6/tests/test-claude-sync.sh"
 o6="$(run "$R6")"; c6=$?
-printf '%s' "$o6" | grep -q 'LISTED beta' \
+grep -q 'LISTED beta' <<< "$o6" \
   && check "a pure deletion still attributes to its section" ok \
   || check "a pure deletion still attributes to its section" "exit=$c6 out=$o6"
 

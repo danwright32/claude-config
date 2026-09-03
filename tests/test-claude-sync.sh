@@ -296,7 +296,7 @@ suite_profile(){
   [ -n "$_SEC_PROFILE" ] || return 0
   echo ""
   echo "slowest sections:"
-  printf '%s' "$_SEC_PROFILE" | sort -r | head -5 | while IFS="$(printf '\t')" read -r _pd _pt; do
+  printf '%s' "$_SEC_PROFILE" | sort -r | awk 'NR <= 5' | while IFS="$(printf '\t')" read -r _pd _pt; do
     [ -n "$_pt" ] || continue
     printf '  %ds %s\n' "$((10#$_pd))" "$_pt"
   done
@@ -474,7 +474,7 @@ if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTIO
     _m="$(printf '%s' "$_so_all" | grep -niF -- "$1" || true)"
     _so_hits="$(printf '%s' "$_m" | grep -c . || true)"
     case "$_so_hits" in ''|*[!0-9]*) _so_hits=0 ;; esac
-    _so_idx="$(printf '%s' "$_m" | head -1 | cut -d: -f1)"
+    _so_idx="$(printf '%s' "$_m" | awk 'NR <= 1' | cut -d: -f1)"
     _so_list="$(printf '%s' "$_m" | sed 's/^[0-9]*:/  /')"
     return 0
   }
@@ -2315,7 +2315,7 @@ check "timer has StartInterval"        "grep -q 'StartInterval' '$TPL'"
 check "timer sets Homebrew PATH"        "grep -q '/opt/homebrew/bin' '$TPL'"
 check "timer runs sync"                 "grep -q '<string>sync</string>' '$TPL'"
 check "no watcher without fswatch"      "[ ! -f '$WPL' ]"
-check "hints to install fswatch"        "printf '%s' \"\$outA\" | grep -qi fswatch"
+check "hints to install fswatch"        "grep -qi fswatch <<< \"\$outA\""
 # with fswatch present -> also a watcher agent that runs 'watch' and stays alive
 printf '#!/usr/bin/env bash\ntrue\n' > "$FAKEFS"; chmod +x "$FAKEFS"
 SYNC_LAUNCHAGENTS="$PLDIR2" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$FAKEFS" CLAUDE_HOME="$CA" bash "$SCRIPT" install-autosync >/dev/null 2>&1
@@ -2327,7 +2327,7 @@ check "watcher sets Homebrew PATH"      "grep -q '/opt/homebrew/bin' '$WPL'"
 section "== watch: errors without fswatch; runs a sync per event when present =="
 out_nofs="$(SYNC_FSWATCH="$WORK/nope" CLAUDE_HOME="$CA" SYNC_REPO="$RA" bash "$SCRIPT" watch 2>&1)"; rcw=$?
 check "watch fails without fswatch"     "[ $rcw -ne 0 ]"
-check "watch error mentions fswatch"    "printf '%s' \"\$out_nofs\" | grep -qi fswatch"
+check "watch error mentions fswatch"    "grep -qi fswatch <<< \"\$out_nofs\""
 # fake fswatch that emits one batch then exits; the watch loop should fire one sync
 WBARE="$WORK/wbare.git"; git init -q --bare "$WBARE"
 WR="$WORK/wrepo"; git clone -q "$WBARE" "$WR"
@@ -2384,7 +2384,7 @@ echo 'export AWS_KEY=AKIAIOSFODNN7EXAMPLE' > "$SS/hooks/leak.sh"
 SR="$WORK/ssrepo"; mkdir -p "$SR"
 out="$(CLAUDE_HOME="$SS" SYNC_REPO="$SR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"; rc=$?
 check "push aborts on detected secret"   "[ $rc -ne 0 ]"
-check "message names offending file"     "printf '%s' \"\$out\" | grep -q 'possible secret found in: hooks/leak\.sh'"
+check "message names offending file"     "grep -q 'possible secret found in: hooks/leak\.sh' <<< \"\$out\""
 # override lets it through if the user insists
 SYNC_SKIP_SECRET_SCAN=1 CLAUDE_HOME="$SS" SYNC_REPO="$SR" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
 check "override bypasses the scan"       "[ -f '$SR/payload/hooks/leak.sh' ]"
@@ -2405,7 +2405,7 @@ check "allowlisted secret passes"        "[ -f '$SAR/payload/hooks/known.sh' ]"
 echo '-----BEGIN RSA PRIVATE KEY-----' > "$SA/hooks/new.sh"
 out3="$(CLAUDE_HOME="$SA" SYNC_REPO="$SAR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"; rc3=$?
 check "non-allowlisted secret blocks"     "[ $rc3 -ne 0 ]"
-check "block names the new file"          "printf '%s' \"\$out3\" | grep -q 'possible secret found in: hooks/new\.sh'"
+check "block names the new file"          "grep -q 'possible secret found in: hooks/new\.sh' <<< \"\$out3\""
 
 section "== send (watcher path) propagates a delete and never re-applies to home (issue #2) =="
 SDBARE="$WORK/sdbare.git"; git init -q --bare "$SDBARE"
@@ -2467,7 +2467,7 @@ echo '# a harmless comment appended' >> "$RSA/claude-sync"
 git -C "$RSA" add claude-sync && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "edit script" && git -C "$RSA" push -q
 
 out_restart="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$RSBHOME" SYNC_REPO="$RSB" bash "$SCRIPT" pull 2>&1)"
-check "pull restarts the watch daemon on a script change" "printf '%s' \"\$out_restart\" | grep -qi 'watch daemon'"
+check "pull restarts the watch daemon on a script change" "grep -qi 'watch daemon' <<< \"\$out_restart\""
 
 # First pull on a brand new Mac: the clone predates every commit (no local
 # HEAD). repo_head used to capture the literal string "HEAD" here, which faked
@@ -2482,15 +2482,15 @@ git -C "$FPA" checkout -q -b main 2>/dev/null || true
 git -C "$FPA" add -A && git -C "$FPA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$FPA" push -q -u origin main
 FPHOME="$WORK/fphome"; mkdir -p "$FPHOME"; echo '{"hooks":{}}' > "$FPHOME/settings.json"
 out_first="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$FPHOME" SYNC_REPO="$FPD" bash "$SCRIPT" pull 2>&1)"
-check "first pull announces itself as a first pull"      "printf '%s' \"\$out_first\" | grep -qi 'first pull'"
-check "first pull does not print an empty changes header" "! printf '%s' \"\$out_first\" | grep -q 'Received changes from the shared repo'"
-check "first pull restarts the watch daemon"              "printf '%s' \"\$out_first\" | grep -qi 'watch daemon'"
+check "first pull announces itself as a first pull"      "grep -qi 'first pull' <<< \"\$out_first\""
+check "first pull does not print an empty changes header" "! grep -q 'Received changes from the shared repo' <<< \"\$out_first\""
+check "first pull restarts the watch daemon"              "grep -qi 'watch daemon' <<< \"\$out_first\""
 
 # Control: a payload-only change must NOT claim a restart happened.
 mkdir -p "$RSA/payload/skills/ctrl"; mkskill "$RSA/payload/skills/ctrl/SKILL.md" 'x'
 git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "payload only" && git -C "$RSA" push -q
 out_nowatch="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 CLAUDE_HOME="$RSBHOME" SYNC_REPO="$RSB" bash "$SCRIPT" pull 2>&1)"
-check "payload-only pull does not restart the daemon" "! printf '%s' \"\$out_nowatch\" | grep -qi 'watch daemon'"
+check "payload-only pull does not restart the daemon" "! grep -qi 'watch daemon' <<< \"\$out_nowatch\""
 
 # sync (two-way) must do the same self-change detection as pull, AND must still
 # apply the payload afterwards. A self-update makes `sync` resume at an
@@ -2504,10 +2504,10 @@ echo '#!/bin/sh ordinary' > "$RSA/payload/hooks/ordinary.sh"
 git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m "edit script again" && git -C "$RSA" push -q
 out_sync_restart="$(SYNC_LAUNCHAGENTS="$RSPLDIR" SYNC_NO_LAUNCHCTL=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RSCHOME" SYNC_REPO="$RSC" bash "$SCRIPT" sync 2>&1)"
 dbg "the resumed sync said: $out_sync_restart"
-check "sync also restarts the watch daemon on a script change" "printf '%s' \"\$out_sync_restart\" | grep -qi 'watch daemon'"
+check "sync also restarts the watch daemon on a script change" "grep -qi 'watch daemon' <<< \"\$out_sync_restart\""
 check "the resumed sync still applies ordinary payload files" "[ -f '$RSCHOME/hooks/ordinary.sh' ]"
 check "the resumed sync applies what only the NEW version syncs" "[ -f '$RSCHOME/RESUMED.md' ]"
-check "the resumed sync still reports completion"             "printf '%s' \"\$out_sync_restart\" | grep -q 'Synced (sent local changes, pulled remote'"
+check "the resumed sync still reports completion"             "grep -q 'Synced (sent local changes, pulled remote' <<< \"\$out_sync_restart\""
 
 # ---- status must actually REPORT a difference (#737) ----
 # do_status ran `rsync -an`, which has no -v and no -i, so rsync printed nothing
@@ -2518,12 +2518,17 @@ STHOME="$WORK/st-home"; STREPO="$WORK/st-repo"
 mkdir -p "$STHOME/hooks" "$STREPO/payload/hooks"
 echo '{"hooks":{}}' > "$STHOME/settings.json"
 
+# ANCHORED, all four. A status difference is printed as `hooks: ` at the START of a line, and
+# status also carries machine wide sections (stray processes, scratch left behind by other runs)
+# whose paths can contain that text anywhere in a line. Unanchored, the quiet check failed once in
+# a full parallel run on 2026-09-02 and passed on the re-run, which is a flake priced at a full
+# re-run of the slowest suite in the repo (L293, L156).
 # Identical on both sides -> status must stay quiet.
 echo 'same' > "$STHOME/hooks/same.sh"
 cp "$STHOME/hooks/same.sh" "$STREPO/payload/hooks/same.sh"
 out_st_clean="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status is quiet when local matches payload" \
-  "! printf '%s' \"\$out_st_clean\" | grep -q 'hooks: '"
+  "! grep -q '^hooks: ' <<< \"\$out_st_clean\""
 
 # A hook that exists locally but NOT in the payload: status must name it.
 echo 'brand new' > "$STHOME/hooks/added.sh"
@@ -2536,7 +2541,7 @@ out_st_add="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCR
 # pattern that aged (#72, L103). Codes read from rsync 3.4.1 on macOS and 3.4.1 on the CI runner;
 # the CI job prints its rsync version, see .github/workflows/tests.yml.
 check "status names a hook missing from the payload" \
-  "printf '%s' \"\$out_st_add\" | grep -q 'hooks: >f+[^ ]* added\.sh'"
+  "printf '%s' \"\$out_st_add\" | grep -q '^hooks: >f+[^ ]* added\.sh'"
 
 # A file in the payload that is gone locally: --delete is in the command, so a
 # working status must show the pending deletion. This is the exact case that
@@ -2544,7 +2549,7 @@ check "status names a hook missing from the payload" \
 echo 'stale' > "$STREPO/payload/hooks/removed.sh"
 out_st_del="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status names a payload file deleted locally" \
-  "printf '%s' \"\$out_st_del\" | grep -q 'hooks: \*deleting  *removed\.sh'"
+  "grep -q '^hooks: \*deleting  *removed\.sh' <<< \"\$out_st_del\""
 
 # An edit to an existing hook with the SAME byte count. -a quick-checks on size
 # plus mtime, so without -c this edit is invisible even to an itemized rsync.
@@ -2555,7 +2560,7 @@ printf 'bbbb\n' > "$STHOME/hooks/edit.sh"
 touch -t 202601010000 "$STHOME/hooks/edit.sh"
 out_st_edit="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status names a same-size same-mtime edit" \
-  "printf '%s' \"\$out_st_edit\" | grep -q 'hooks: >fc[^ ]* edit\.sh'"
+  "printf '%s' \"\$out_st_edit\" | grep -q '^hooks: >fc[^ ]* edit\.sh'"
 
 # status must report what a push would ACTUALLY do, so it has to honor the same
 # exclude set as stage_local_to_payload. Some skills are git clones carrying
@@ -2577,9 +2582,9 @@ mkskill "$STHOME/skills/cloned/SKILL.md" 'SKILL'
 echo 'junk' > "$STHOME/skills/cloned/.DS_Store"
 out_st_ex="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status ignores nested .git the way a push does" \
-  "! printf '%s' \"\$out_st_ex\" | grep -q '\.git/'"
+  "! grep -q '\.git/' <<< \"\$out_st_ex\""
 check "status ignores .DS_Store the way a push does" \
-  "! printf '%s' \"\$out_st_ex\" | grep -q '\.DS_Store'"
+  "! grep -q '\.DS_Store' <<< \"\$out_st_ex\""
 check "status still reports the real skill file next to them" \
   "printf '%s' \"\$out_st_ex\" | grep -q 'skills: >f+[^ ]* cloned/SKILL\.md'"
 
@@ -2588,7 +2593,7 @@ mkdir -p "$STHOME/skills/wrangler"
 mkskill "$STHOME/skills/wrangler/SKILL.md" 'PLUGIN'
 out_st_plugin="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status ignores plugin-managed skills the way a push does" \
-  "! printf '%s' \"\$out_st_plugin\" | grep -q 'wrangler'"
+  "! grep -q 'wrangler' <<< \"\$out_st_plugin\""
 
 section "== pull reports WHAT was received, so it's clear the sync worked =="
 # A pull used to print only a generic success line; the /sync-config skill even
@@ -2613,14 +2618,14 @@ rm -f "$SUAH/hooks/del-me.sh"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SUAH" SYNC_REPO="$SUA" bash "$SCRIPT" sync >/dev/null 2>&1
 # Mac B's next pull must say exactly what it received
 out_sum="$(CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" bash "$SCRIPT" pull 2>&1)"
-check "pull names the modified file"      "printf '%s' \"\$out_sum\" | grep -q 'updated .*hooks/mod-me.sh'"
-check "pull names the added file"         "printf '%s' \"\$out_sum\" | grep -q 'added .*hooks/add-me.sh'"
-check "pull names the removed file"       "printf '%s' \"\$out_sum\" | grep -q 'removed .*hooks/del-me.sh'"
-check "summary strips the payload/ prefix" "! printf '%s' \"\$out_sum\" | grep -q 'payload/hooks'"
+check "pull names the modified file"      "grep -q 'updated .*hooks/mod-me.sh' <<< \"\$out_sum\""
+check "pull names the added file"         "grep -q 'added .*hooks/add-me.sh' <<< \"\$out_sum\""
+check "pull names the removed file"       "grep -q 'removed .*hooks/del-me.sh' <<< \"\$out_sum\""
+check "summary strips the payload/ prefix" "! grep -q 'payload/hooks' <<< \"\$out_sum\""
 # A pull with nothing new must say so, and must not print a change summary
 out_noop="$(CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" bash "$SCRIPT" pull 2>&1)"
-check "no-change pull says up to date"     "printf '%s' \"\$out_noop\" | grep -qi 'up to date'"
-check "no-change pull has no change list"  "! printf '%s' \"\$out_noop\" | grep -q 'Received'"
+check "no-change pull says up to date"     "grep -qi 'up to date' <<< \"\$out_noop\""
+check "no-change pull has no change list"  "! grep -q 'Received' <<< \"\$out_noop\""
 
 section "== a pull that updates claude-sync itself applies the NEW logic, same pull (#6) =="
 # The running process loaded the OLD script at start, so a pull that updates
@@ -2663,7 +2668,7 @@ else
   _up_why=" (the pull actually said: $(printf '%s' "$out_up" | tr '\n' '~'))"
 fi
 check "the self-updating pull still reports the change$_up_why" "[ -z \"\$_up_why\" ]"
-check "the self-updating pull still succeeds"  "printf '%s' \"\$out_up\" | grep -q 'Pulled shared config'"
+check "the self-updating pull still succeeds"  "grep -q 'Pulled shared config' <<< \"\$out_up\""
 # and it must not loop: exactly one hand-off, so one daemon-restart notice
 restarts="$(printf '%s\n' "$out_up" | grep -ci 'watch daemon' || true)"
 check "hand-off happens once, no re-exec loop"  "[ \"\$restarts\" -le 1 ]"
@@ -2697,13 +2702,13 @@ check "the pull still succeeds on a broken pulled script" "[ \"\$rc_bk\" -eq 0 ]
 check "it still applies the payload with the old logic"   "[ -f '$BKBH/hooks/later.sh' ]"
 # grep for OUR wording, not 'syntax': bash prints its own syntax-error line, so a
 # looser pattern would pass with no guard implemented at all.
-check "it warns that the pulled script was rejected"      "printf '%s' \"\$out_bk\" | grep -q 'kept the copy already running'"
-check "it does NOT restart the daemon into a broken script" "! printf '%s' \"\$out_bk\" | grep -qi 'restart'"
+check "it warns that the pulled script was rejected"      "grep -q 'kept the copy already running' <<< \"\$out_bk\""
+check "it does NOT restart the daemon into a broken script" "! grep -qi 'restart' <<< \"\$out_bk\""
 # The broken script is now the copy sitting in this clone, so the NEXT run
 # executes it and cannot help itself. The guard protects the pull that delivers
 # the break and keeps the daemon off it; recovering afterwards needs a plain git
 # pull, which is why the warning has to name that command.
-check "the warning names the plain git recovery command" "printf '%s' \"\$out_bk\" | grep -q 'git -C'"
+check "the warning names the plain git recovery command" "grep -q 'git -C' <<< \"\$out_bk\""
 if bash "$BKB/claude-sync" pull >/dev/null 2>&1; then rc_stuck=0; else rc_stuck=$?; fi
 check "running the landed broken script fails (documented limit)" "[ \"\$rc_stuck\" -ne 0 ]"
 # Control: after the other Mac fixes it, a plain git pull restores a working tool.
@@ -2713,7 +2718,7 @@ git -C "$BKA" add -A && git -C "$BKA" -c user.name=t -c user.email=t@e commit -q
 git -C "$BKB" pull -q --ff-only
 out_bk2="$(SYNC_LAUNCHAGENTS="$BKPL" SYNC_NO_LAUNCHCTL=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BKBH" SYNC_REPO="$BKB" bash "$BKB/claude-sync" pull 2>&1)"
 check "a recovered script runs and applies again"       "[ -f '$BKBH/hooks/fixed.sh' ]"
-check "and no longer warns about the pulled copy"       "! printf '%s' \"\$out_bk2\" | grep -q 'kept the copy already running'"
+check "and no longer warns about the pulled copy"       "! grep -q 'kept the copy already running' <<< \"\$out_bk2\""
 
 section "== pull fails loudly when CLAUDE.md references a rules file that isn't here (#7) =="
 # CLAUDE.md pulls in extra rule files with an @import. When the imported file is
@@ -2726,8 +2731,8 @@ echo 'x' > "$IMR/payload/hooks/h.sh"
 printf '@GONE.md\n\n# rules\n' > "$IMR/payload/CLAUDE.md"
 if out_imp="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$IMH" SYNC_REPO="$IMR" bash "$SCRIPT" pull 2>&1)"; then rc_imp=0; else rc_imp=$?; fi
 check "pull exits nonzero on a dangling rules import" "[ \"\$rc_imp\" -ne 0 ]"
-check "the error names the missing file"             "printf '%s' \"\$out_imp\" | grep -q 'referenced but are not on this Mac: GONE\.md'"
-check "it does not claim the pull succeeded"         "! printf '%s' \"\$out_imp\" | grep -q 'Pulled shared config'"
+check "the error names the missing file"             "grep -q 'referenced but are not on this Mac: GONE\.md' <<< \"\$out_imp\""
+check "it does not claim the pull succeeded"         "! grep -q 'Pulled shared config' <<< \"\$out_imp\""
 # Control: an import naming a file the sync actually carries must pull clean.
 printf '@RTK.md\n\n# rules\n' > "$IMR/payload/CLAUDE.md"
 printf '# rtk\n' > "$IMR/payload/RTK.md"
@@ -2760,13 +2765,13 @@ check "baseline pull delivered the hook"     "[ -f '$WRBH/hooks/keep.sh' ]"
 # locally, so this pull really does write one. It must say so, not "up to date".
 rm -f "$WRBH/hooks/keep.sh"
 out_wr="$(CLAUDE_HOME="$WRBH" SYNC_REPO="$WRBR" bash "$SCRIPT" pull 2>&1)"
-check "a pull that writes a file names it"        "printf '%s' \"\$out_wr\" | grep -q 'added  *hooks/keep\.sh'"
-check "it does NOT claim to be up to date"        "! printf '%s' \"\$out_wr\" | grep -qi 'up to date'"
+check "a pull that writes a file names it"        "grep -q 'added  *hooks/keep\.sh' <<< \"\$out_wr\""
+check "it does NOT claim to be up to date"        "! grep -qi 'up to date' <<< \"\$out_wr\""
 check "and the file is back"                      "[ -f '$WRBH/hooks/keep.sh' ]"
 # A pull that genuinely writes nothing still has to say exactly that.
 out_wr2="$(CLAUDE_HOME="$WRBH" SYNC_REPO="$WRBR" bash "$SCRIPT" pull 2>&1)"
-check "a pull that writes nothing says up to date" "printf '%s' \"\$out_wr2\" | grep -qi 'up to date'"
-check "and lists no files"                         "! printf '%s' \"\$out_wr2\" | grep -q 'keep.sh'"
+check "a pull that writes nothing says up to date" "grep -qi 'up to date' <<< \"\$out_wr2\""
+check "and lists no files"                         "! grep -q 'keep.sh' <<< \"\$out_wr2\""
 
 section "== a newly referenced rules file syncs with no script edit (#9) =="
 # TOP_FILES was a hand-maintained list that had to mirror the @imports at the top
@@ -2794,13 +2799,13 @@ check "the still-listed defaults are unaffected"    "[ -f '$DVH2/CLAUDE.md' ]"
 printf '# root rules CHANGED\n@EXTRA.md\n' > "$DVH/CLAUDE.md"
 printf '# extra rules CHANGED\n' > "$DVH/EXTRA.md"
 out_dvst="$(SYNC_NO_GIT=1 CLAUDE_HOME="$DVH" SYNC_REPO="$DVR" bash "$SCRIPT" status 2>&1)"
-check "status reports a referenced rules file differing" "printf '%s' \"\$out_dvst\" | grep -q 'EXTRA\.md: differs'"
+check "status reports a referenced rules file differing" "grep -q 'EXTRA\.md: differs' <<< \"\$out_dvst\""
 # a nested reference that resolves nowhere must still fail loudly, not pass quietly
 printf '@NOWHERE.md\n' > "$DVH/EXTRA.md"
 if SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DVH" SYNC_REPO="$DVR" bash "$SCRIPT" push >/dev/null 2>&1; then rc_dv2=0; else rc_dv2=$?; fi
 if out_dv3="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DVH2" SYNC_REPO="$DVR" bash "$SCRIPT" pull 2>&1)"; then rc_dv3=0; else rc_dv3=$?; fi
 check "a dangling NESTED reference fails the pull"  "[ \"\$rc_dv3\" -ne 0 ]"
-check "and the error names the missing file"        "printf '%s' \"\$out_dv3\" | grep -q 'referenced but are not on this Mac: NOWHERE\.md'"
+check "and the error names the missing file"        "grep -q 'referenced but are not on this Mac: NOWHERE\.md' <<< \"\$out_dv3\""
 
 section "== a same-size edit still reaches the other Mac (rsync quick-check data loss) =="
 # rsync's default quick check compares size plus mtime at one-second granularity.
@@ -2925,14 +2930,14 @@ commits_before="$(git -C "$UAB" rev-list --count HEAD)"
 out_ua="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" send 2>&1)"
 check "send does NOT revert A's change"    "grep -q two '$UAB/payload/hooks/shared.sh'"
 check "send makes no commit in that state" "[ \"\$(git -C '$UAB' rev-list --count HEAD)\" = \"\$commits_before\" ]"
-check "send says why it skipped"           "printf '%s' \"\$out_ua\" | grep -qi 'not applied'"
+check "send says why it skipped"           "grep -qi 'not applied' <<< \"\$out_ua\""
 # Control: with both sides agreed, a genuine local edit still sends normally.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" pull >/dev/null 2>&1
 check "B received A's change on pull"      "grep -q two '$UABH/hooks/shared.sh'"
 echo 'B-only' > "$UABH/hooks/b-only.sh"
 out_ua2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" send 2>&1)"
 check "a normal send still works"          "[ -f '$UAB/payload/hooks/b-only.sh' ]"
-check "and does not warn"                  "! printf '%s' \"\$out_ua2\" | grep -qi 'not applied'"
+check "and does not warn"                  "! grep -qi 'not applied' <<< \"\$out_ua2\""
 # sync in that same state must RECEIVE first, then still send the local edit.
 echo three > "$UAAH/hooks/shared.sh"
 dbg "A's log before its sync: $(git -C "$UAA" log --oneline -4 2>&1 | tr '\n' ' | ')"
@@ -2975,7 +2980,7 @@ out_cf="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFBH" SYNC_REPO="$CFB" bash "$SCRIPT" s
 check "the other Mac's version is applied"        "grep -q MAC-A-VERSION '$CFBH/hooks/x.sh'"
 check "the local edit is kept beside it"          "grep -rq MAC-B-MY-OWN-EDIT '$CFBH/hooks/'"
 check "the kept copy is named as a conflict"      "ls '$CFBH/hooks/' | grep -q 'x.sh.conflict'"
-check "and the conflict is reported, not silent"  "printf '%s' \"\$out_cf\" | grep -qi 'both Macs changed'"
+check "and the conflict is reported, not silent"  "grep -qi 'both Macs changed' <<< \"\$out_cf\""
 check "the report names the file"                 "line_has \"\$out_cf\" 'could NOT be merged' 'hooks/x\.sh'"
 # No conflict on a file this Mac never touched: no stray copy, no noise.
 check "an untouched file gets the new version"    "grep -q A-CHANGED-THIS-TOO '$CFBH/hooks/y.sh'"
@@ -3003,7 +3008,7 @@ check "a sent commit counts as applied here"   "[ \"\$(cat '$SWA/.last-applied')
 echo 'second' > "$SWAH/hooks/sw-two.sh"
 out_sw="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SWAH" SYNC_REPO="$SWA" bash "$SCRIPT" send 2>&1)"
 check "a second send still lands"              "[ -f '$SWA/payload/hooks/sw-two.sh' ]"
-check "and is never called behind itself"      "! printf '%s' \"\$out_sw\" | grep -qi 'not applied'"
+check "and is never called behind itself"      "! grep -qi 'not applied' <<< \"\$out_sw\""
 # The guard this replaces is load-bearing, so prove it still fires: genuinely
 # behind the OTHER Mac must still skip, keep the other Mac's content, and say why.
 SWB="$WORK/swrepoB"; git clone -q "$SWBARE" "$SWB" 2>/dev/null
@@ -3016,7 +3021,7 @@ echo 'B-local' > "$SWBH/hooks/sw-b.sh"
 out_swb="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SWBH" SYNC_REPO="$SWB" bash "$SCRIPT" send 2>&1)"
 check "still skips when truly behind"          "[ ! -f '$SWB/payload/hooks/sw-b.sh' ]"
 check "still keeps the other Mac's change"     "grep -q A-MOVED-ON '$SWB/payload/hooks/shared.sh'"
-check "still says why it skipped"              "printf '%s' \"\$out_swb\" | grep -qi 'not applied'"
+check "still says why it skipped"              "grep -qi 'not applied' <<< \"\$out_swb\""
 
 section "== a pull must not revert a local edit the repo never changed (2026-07-28) =="
 # The incident: the watcher was down, a skill script was edited locally, and a
@@ -3090,7 +3095,7 @@ check "unsent lesson: the unrelated change still arrives"  "grep -q other-v2 '$T
 check "the unsent lesson is NOT reverted"       "grep -q MY-NEW-LESSON '$TFBH/LESSONS.md'"
 check "the earlier lesson is still there too"   "grep -q 'first lesson' '$TFBH/LESSONS.md'"
 check "unsent lesson: the pull says it kept it"  "line_has \"\$out_tf\" 'would have reverted' 'LESSONS\.md'"
-check "and does not report overwriting it"      "! printf '%s' \"\$out_tf\" | grep -q 'updated .*LESSONS.md'"
+check "and does not report overwriting it"      "! grep -q 'updated .*LESSONS.md' <<< \"\$out_tf\""
 # It must reach the repo on the next send, and the other Mac after that.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TFBH" SYNC_REPO="$TFB" bash "$SCRIPT" send >/dev/null 2>&1
 check "the next send publishes the lesson"      "grep -q MY-NEW-LESSON '$TFB/payload/LESSONS.md'"
@@ -3211,7 +3216,7 @@ chmod +x "$HCN"
 echo 'edited after the hand commit' > "$HCH/hooks/hc-after.sh"
 out_hc="$(SYNC_NOTIFIER="$HCN" SYNC_NO_NOTIFY=0 CLAUDE_HOME="$HCH" SYNC_REPO="$HCR" bash "$SCRIPT" send 2>&1)"
 check "the edit still reaches the repo"           "[ -f '$HCR/payload/hooks/hc-after.sh' ]"
-check "send is not called behind its own commit"  "! printf '%s' \"\$out_hc\" | grep -qi 'not applied'"
+check "send is not called behind its own commit"  "! grep -qi 'not applied' <<< \"\$out_hc\""
 check "and no behind-notification is fired"       "! grep -qi 'behind' '$HCREC' 2>/dev/null"
 
 # `claude-sync push` commits the payload straight from THIS Mac's home and pushes,
@@ -3223,7 +3228,7 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH" SYNC_REPO="$HCR" bash "$SCRIPT" push >/dev/n
 echo 'edited after the push' > "$HCH/hooks/hc-after-push.sh"
 out_hcp="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH" SYNC_REPO="$HCR" bash "$SCRIPT" send 2>&1)"
 check "an edit after a plain push still sends"    "[ -f '$HCR/payload/hooks/hc-after-push.sh' ]"
-check "and is not called behind either"           "! printf '%s' \"\$out_hcp\" | grep -qi 'not applied'"
+check "and is not called behind either"           "! grep -qi 'not applied' <<< \"\$out_hcp\""
 
 # Deciding by content only works over paths the apply actually writes to disk.
 # settings.hooks.json is merged INTO settings.json and never lands as a file of
@@ -3244,7 +3249,7 @@ check "the hooks fragment really did change" \
 echo 'edit after a hooks change' > "$HCJ/hooks/hcj-after.sh"
 out_hcj="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCJ" SYNC_REPO="$HCJR" bash "$SCRIPT" send 2>&1)"
 check "a merged-only payload entry does not block sending" "[ -f '$HCJR/payload/hooks/hcj-after.sh' ]"
-check "and it is not reported as unapplied"                "! printf '%s' \"\$out_hcj\" | grep -qi 'not applied'"
+check "and it is not reported as unapplied"                "! grep -qi 'not applied' <<< \"\$out_hcj\""
 
 # A local commit not yet pushed leaves HEAD ahead of the server. Reading "differs
 # from origin" as "behind" wedges sends in the one state where sending is exactly
@@ -3255,7 +3260,7 @@ git -C "$HCR" -c user.name=t -c user.email=t@e commit -q -m "local only, unpushe
 echo 'edited while ahead' > "$HCH/hooks/hc-ahead.sh"
 out_hca="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH" SYNC_REPO="$HCR" bash "$SCRIPT" send 2>&1)"
 check "being ahead of the server is not being behind" "[ -f '$HCR/payload/hooks/hc-ahead.sh' ]"
-check "and reports no unapplied changes"              "! printf '%s' \"\$out_hca\" | grep -qi 'not applied'"
+check "and reports no unapplied changes"              "! grep -qi 'not applied' <<< \"\$out_hca\""
 
 # Control: the guard is load-bearing. The other Mac pushing something this Mac has
 # not even fetched must still stop the send, or a watcher firing here mirrors an
@@ -3277,7 +3282,7 @@ echo 'mine while truly behind' > "$HCH2/hooks/hc-mine.sh"
 out_hcb="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH2" SYNC_REPO="$HCR2" bash "$SCRIPT" send 2>&1)"
 check "a real remote change still blocks the send" "[ ! -f '$HCR2/payload/hooks/hc-mine.sh' ]"
 check "it makes no commit in that state"           "[ \"\$(git -C '$HCR2' rev-list --count HEAD)\" = \"\$hc2_commits\" ]"
-check "and still says why it skipped"              "printf '%s' \"\$out_hcb\" | grep -qi 'not applied'"
+check "and still says why it skipped"              "grep -qi 'not applied' <<< \"\$out_hcb\""
 
 section "== a pull says which received files only take effect in a NEW session =="
 # Claude Code reads the rule files (CLAUDE.md and its @imports) once, at session
@@ -3308,19 +3313,19 @@ out_ns="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
 notice_ns="$(printf '%s\n' "$out_ns" | grep -i 'new Claude Code session' || true)"
 check "pull tells you a new session is needed"   "[ -n \"\$notice_ns\" ]"
 check "the notice names the changed rule file"   "line_has \"\$notice_ns\" 'new Claude Code session' 'CLAUDE\.md'"
-check "the notice names the newly added skill"   "printf '%s' \"\$notice_ns\" | grep -q 'rs-added'"
-check "it does NOT name the edited hook script"  "! printf '%s' \"\$notice_ns\" | grep -q 'rs-hook'"
+check "the notice names the newly added skill"   "grep -q 'rs-added' <<< \"\$notice_ns\""
+check "it does NOT name the edited hook script"  "! grep -q 'rs-hook' <<< \"\$notice_ns\""
 # It is one sentence a person reads at a glance, so it has to render as one: the
 # first draft joined the last filename straight onto the next word.
 check "the notice reads as a sentence"           "! printf '%s' \"\$notice_ns\" | grep -q '[A-Za-z0-9]('"
-check "nor an edit to an existing skill"         "! printf '%s' \"\$notice_ns\" | grep -q 'rs-existing'"
+check "nor an edit to an existing skill"         "! grep -q 'rs-existing' <<< \"\$notice_ns\""
 # The whole point is that it stays quiet otherwise: a pull carrying only hook
 # edits must not tell you to restart, or the notice becomes noise to scroll past.
 echo three > "$NSAH/hooks/rs-hook.sh"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
 out_ns2="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
-check "hook-only pull still reports the change"  "printf '%s' \"\$out_ns2\" | grep -q 'updated .*hooks/rs-hook.sh'"
-check "hook-only pull says nothing about restarting" "! printf '%s' \"\$out_ns2\" | grep -qi 'new Claude Code session'"
+check "hook-only pull still reports the change"  "grep -q 'updated .*hooks/rs-hook.sh' <<< \"\$out_ns2\""
+check "hook-only pull says nothing about restarting" "! grep -qi 'new Claude Code session' <<< \"\$out_ns2\""
 # A removed skill is gone from the running session's list just as wrongly as an
 # added one is missing from it, so it earns the notice too.
 rm -rf "$NSAH/skills/rs-added"
@@ -3420,7 +3425,7 @@ out_hk2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HKBH" SYNC_REPO="$HKB" bash "$HKB/clau
 check "#13 both Macs' hooks coexist after the merge" \
   "jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | (any(test(\"local-gate.sh\")) and any(test(\"from-mac-a.sh\")))' '$HKBH/settings.json' >/dev/null"
 check "#13 the summary names the hook that arrived" \
-  "printf '%s' \"\$out_hk2\" | grep -q 'added  *hooks/from-mac-a\.sh'"
+  "grep -q 'added  *hooks/from-mac-a\.sh' <<< \"\$out_hk2\""
 
 # A deliberate removal on Mac A must still be honored, not resurrected from here.
 cat > "$HKA/payload/settings.hooks.json" <<'J'
@@ -3433,7 +3438,7 @@ check "#13 a removal on the other Mac is honored" \
 check "#13 the local hook still survives that removal" \
   "jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test(\"local-gate.sh\"))' '$HKBH/settings.json' >/dev/null"
 check "#13 the summary names the hook that was removed" \
-  "printf '%s' \"\$out_hk3\" | grep -q 'unregistered: shared\.sh'"
+  "grep -q 'unregistered: shared\.sh' <<< \"\$out_hk3\""
 check "#13 machine-local settings are still untouched" \
   "jq -e '.model==\"opus\"' '$HKBH/settings.json' >/dev/null"
 check "#13 no home-path token is left behind" \
@@ -3449,7 +3454,7 @@ out_hkbad="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HKCH" SYNC_REPO="$HKC" bash "$HKC/cl
 after_bad="$(shasum "$HKCH/settings.json" | awk '{print $1}')"
 check "#13 an unmergeable settings.json is left untouched" "[ '$before_bad' = '$after_bad' ]"
 check "#13 and it says so instead of failing silently" \
-  "printf '%s' \"\$out_hkbad\" | grep -q 'could not merge the hooks block'"
+  "grep -q 'could not merge the hooks block' <<< \"\$out_hkbad\""
 check "#13 the rest of the pull still lands" "[ -f '$HKCH/hooks/from-mac-a.sh' ]"
 
 section "== #14: rule files merge entry by entry instead of one Mac's copy winning =="
@@ -3483,8 +3488,8 @@ check "#14 the other Mac's lesson arrives"        "grep -q 'L4. four' '$RMBH/LES
 check "#14 this Mac's unsent lesson survives"     "grep -q 'L3. three' '$RMBH/LESSONS.md'"
 check "#14 the original lessons are still there"  "grep -q 'L1. one' '$RMBH/LESSONS.md' && grep -q 'L2. two' '$RMBH/LESSONS.md'"
 check "#14 no conflict copy is left behind"       "[ ! -e '$RMBH/LESSONS.md.conflict-'* ] 2>/dev/null || ! ls '$RMBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
-check "#14 the merge is reported, not silent"     "printf '%s' \"\$out_rm1\" | grep -qi 'entries were MERGED and nothing was dropped'"
-check "#14 the report names the file merged"      "printf '%s' \"\$out_rm1\" | grep -q 'merged  *LESSONS\.md'"
+check "#14 the merge is reported, not silent"     "grep -qi 'entries were MERGED and nothing was dropped' <<< \"\$out_rm1\""
+check "#14 the report names the file merged"      "grep -q 'merged  *LESSONS\.md' <<< \"\$out_rm1\""
 check "#14 no conflict markers reach the file"    "! grep -q '<<<<<<<' '$RMBH/LESSONS.md'"
 
 # Seen for real on 2026-08-06: this same pull merged three lessons into LESSONS.md and
@@ -3496,9 +3501,9 @@ check "#14 no conflict markers reach the file"    "! grep -q '<<<<<<<' '$RMBH/LE
 # loaded at session start (LESSONS.md via CLAUDE.md), so a session that stays open
 # keeps the pre-merge copy while the summary says there is nothing to pick up.
 check "#14 a merge is never reported as nothing-changed" \
-  "! printf '%s' \"\$out_rm1\" | grep -qi 'nothing on this Mac needed changing'"
+  "! grep -qi 'nothing on this Mac needed changing' <<< \"\$out_rm1\""
 check "#14 the merged file is listed as a received change" \
-  "printf '%s' \"\$out_rm1\" | grep -qE '^ +merged +LESSONS\\.md'"
+  "grep -qE '^ +merged +LESSONS\\.md' <<< \"\$out_rm1\""
 check "#14 a merged rule file earns the restart notice" \
   "line_has \"\$out_rm1\" 'new Claude Code session' 'LESSONS\.md'"
 
@@ -3523,7 +3528,7 @@ out_rm2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RMBH" SYNC_REPO="$RMB" bash "$RMB/clau
 check "#14 an unmergeable file still keeps a copy of yours" \
   "ls '$RMBH'/LESSONS.md.conflict-* >/dev/null 2>&1"
 check "#14 and it names the entry only you had" \
-  "printf '%s' \"\$out_rm2\" | grep -q 'only in yours: L6'"
+  "grep -q 'only in yours: L6' <<< \"\$out_rm2\""
 check "#14 an unmergeable file never gets conflict markers" \
   "! grep -q '<<<<<<<' '$RMBH/LESSONS.md'"
 
@@ -3544,8 +3549,8 @@ check "#15 a clean lessons file publishes normally" "[ \"\$rc_ln_ok\" -eq 0 ] &&
 # Now a duplicate number.
 printf -- '- **L2. two again.** a different lesson with the same number\n' >> "$LNH/LESSONS.md"
 out_ln_dup="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" push 2>&1)"
-check "#15 the duplicate is named, not silent"        "printf '%s' \"\$out_ln_dup\" | grep -q 'L2 used 2 times'"
-check "#15 the file it is in is named"                "printf '%s' \"\$out_ln_dup\" | grep -q 'LESSONS\.md: L2 used 2 times'"
+check "#15 the duplicate is named, not silent"        "grep -q 'L2 used 2 times' <<< \"\$out_ln_dup\""
+check "#15 the file it is in is named"                "grep -q 'LESSONS\.md: L2 used 2 times' <<< \"\$out_ln_dup\""
 check "#15 the corrupt numbering is NOT published"    "! grep -q 'two again' '$LN/payload/LESSONS.md'"
 check "#15 the previously published copy is intact"   "grep -q 'L1. one' '$LN/payload/LESSONS.md'"
 # Blocking the whole sync over a numbering slip would stop hooks and skills moving
@@ -3561,23 +3566,23 @@ check "#15 the override publishes it anyway"          "grep -q 'two again' '$LN/
 # highest, never a gap: a skipped number was skipped deliberately.
 printf '# Lessons\n\n- **L1. one.** body\n- **L2. two.** body\n- **L5. five.** body\n' > "$LNH/LESSONS.md"
 out_next="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" next-lesson 2>&1)"
-check "#15 next-lesson reports one past the highest"  "printf '%s' \"\$out_next\" | grep -q '^L6$'"
-check "#15 next-lesson does not offer a gap"          "! printf '%s' \"\$out_next\" | grep -q 'L3'"
+check "#15 next-lesson reports one past the highest"  "grep -q '^L6$' <<< \"\$out_next\""
+check "#15 next-lesson does not offer a gap"          "! grep -q 'L3' <<< \"\$out_next\""
 
 # next-lesson must survive a rule file that contains no lessons at all: under
 # pipefail a grep matching nothing killed the whole command and printed nothing.
 printf '# just rules, no lessons here\n' > "$LNH/RTK.md"
 out_next2="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" next-lesson 2>&1)"; rc_next2=$?
-check "#15 next-lesson survives a file with no lessons" "[ \"\$rc_next2\" -eq 0 ] && printf '%s' \"\$out_next2\" | grep -q '^L6$'"
+check "#15 next-lesson survives a file with no lessons" "[ \"\$rc_next2\" -eq 0 ] && grep -q '^L6$' <<< \"\$out_next2\""
 
 # The standalone check, usable as a gate before writing a lesson.
 out_chk_ok="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" check-lessons 2>&1)"; rc_chk_ok=$?
 check "#15 check-lessons passes on sound numbering" "[ \"\$rc_chk_ok\" -eq 0 ]"
-check "#15 check-lessons reports the next free number" "printf '%s' \"\$out_chk_ok\" | grep -q 'next free: L6'"
+check "#15 check-lessons reports the next free number" "grep -q 'next free: L6' <<< \"\$out_chk_ok\""
 printf -- '- **L5. five again.** duplicate\n' >> "$LNH/LESSONS.md"
 out_chk_bad="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" check-lessons 2>&1)"; rc_chk_bad=$?
 check "#15 check-lessons fails on a duplicate" "[ \"\$rc_chk_bad\" -ne 0 ]"
-check "#15 and names the number involved"      "printf '%s' \"\$out_chk_bad\" | grep -q 'L5 used 2 times'"
+check "#15 and names the number involved"      "grep -q 'L5 used 2 times' <<< \"\$out_chk_bad\""
 
 # A duplicate created by the #14 merge (both Macs choosing the same number) has to
 # surface at apply time too, since by then it is already in the file.
@@ -3766,7 +3771,7 @@ check "#17 the numbering is sound afterwards"            "SYNC_NO_GIT=1 CLAUDE_H
 # so the three halves were answered by two unrelated lines and proved nothing (L135, L178).
 check "#17 the renumber is reported, naming old and new" \
   "line_has \"\$out_lnm\" 'renumbered' 'L2 became L5'"
-check "#17 the file is not reported as held back"        "! printf '%s' \"\$out_lnm\" | grep -qi 'held back'"
+check "#17 the file is not reported as held back"        "! grep -qi 'held back' <<< \"\$out_lnm\""
 # A renumber must carry its body mentions with it. At merge time the tool DOES know
 # which lesson a local mention meant: a line this Mac wrote (absent from the arriving
 # published file) could only ever have meant this Mac's own entry, because the other
@@ -3782,9 +3787,9 @@ check "#17 a published body mention keeps its number" \
 check "#17 the rewrite is reported, naming old and new" \
   "line_has \"\$out_lnm\" 'LESSONS\.md: rewrote' 'mention' 'of L2 to L5'"
 check "#17 no go-and-check warning for the file it rewrote" \
-  "! printf '%s' \"\$out_lnm\" | grep -qi 'still mentions'"
+  "! grep -qi 'still mentions' <<< \"\$out_lnm\""
 check "#17 a mention in another synced rule file is warned about" \
-  "printf '%s' \"\$out_lnm\" | grep -q 'CLAUDE\.md also mentions L2'"
+  "grep -q 'CLAUDE\.md also mentions L2' <<< \"\$out_lnm\""
 check "#17 that other file is never rewritten" \
   "grep -q 'see L2 for the rule' '$LNMBH/CLAUDE.md'"
 # Or every assertion below is about files that were never delivered, and passes by
@@ -3797,9 +3802,9 @@ check "#43 the fixture's subdirectory files really did sync" \
 # skills/demo/SKILL.md, and the CLAUDE.md warning already supplies "also mentions L2", so a
 # pair of independent greps was satisfied by two unrelated lines and proved nothing (L135).
 check "#43 a mention in a synced hooks file is warned about" \
-  "printf '%s' \"\$out_lnm\" | grep -q 'hooks/x\.sh also mentions L2'"
+  "grep -q 'hooks/x\.sh also mentions L2' <<< \"\$out_lnm\""
 check "#43 a mention in a synced skills file is warned about" \
-  "printf '%s' \"\$out_lnm\" | grep -q 'skills/demo/SKILL\.md also mentions L2'"
+  "grep -q 'skills/demo/SKILL\.md also mentions L2' <<< \"\$out_lnm\""
 # Named by the path it lives at, never by its basename: SKILL.md is the commonest
 # filename in the whole config, so "SKILL.md also mentions L2" names nothing findable.
 check "#43 a nested file is named by its path, not its basename" \
@@ -3818,7 +3823,7 @@ printf -- '- **L6. six.** on Mac A\n- **L6. six again.** also on Mac A under the
 git -C "$LNMA" add -A && git -C "$LNMA" -c user.name=t -c user.email=t@e commit -q -m "Mac A publishes a collision" && git -C "$LNMA" push -q
 out_lnm2="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNMBH" SYNC_REPO="$LNMB" bash "$LNMB/claude-sync" pull 2>&1)"
 check "#17 an arriving collision is applied untouched"   "[ \"\$(grep -c '^- \*\*L6\.' '$LNMBH/LESSONS.md')\" = 2 ]"
-check "#17 and is warned about, not auto-renumbered"     "printf '%s' \"\$out_lnm2\" | grep -q 'used 2 times'"
+check "#17 and is warned about, not auto-renumbered"     "grep -q 'used 2 times' <<< \"\$out_lnm2\""
 
 # ---- repo hygiene: nothing already-committed slips past the rsync excludes ----
 # The excludes above stop NEW bytecode being staged, but they cannot clean a file
@@ -3855,7 +3860,7 @@ check "alias added when missing"        "grep -q 'alias claudesync=' '$ZRC'"
 check "alias runs a pull"               "grep -q \"claude-sync' *pull\|claude-sync pull\" '$ZRC'"
 check "alias line is commented"         "grep -q 'claude-config-sync: pull shared' '$ZRC'"
 check "existing zshrc content kept"     "grep -q 'EDITOR=bbedit' '$ZRC'"
-check "it says the alias was added"     "printf '%s' \"\$outZ\" | grep -qi 'Installed shell alias: claudesync'"
+check "it says the alias was added"     "grep -qi 'Installed shell alias: claudesync' <<< \"\$outZ\""
 
 # 2. assume it runs twice: a second install must not append a duplicate
 SYNC_LAUNCHAGENTS="$ALDIR" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$ALFS" \
@@ -3889,9 +3894,9 @@ printf "alias claudesync='~/claude-config-sync/claude-sync pull'\n" > "$ZRC4"
 outZ4="$(SYNC_LAUNCHAGENTS="$ALDIR" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$ALFS" \
   SYNC_ZSHRC="$ZRC4" SYNC_SELF_DIR="$HOME/claude-config-sync" CLAUDE_HOME="$CA" \
   bash "$SCRIPT" install-autosync 2>&1)"
-check "a tilde alias counts as installed"  "printf '%s' \"\$outZ4\" | grep -qi 'already installed'"
+check "a tilde alias counts as installed"  "grep -qi 'already installed' <<< \"\$outZ4\""
 check "no duplicate for the tilde form"    "[ \"\$(grep -c 'alias claudesync=' '$ZRC4')\" = 1 ]"
-check "the tilde form is not called a conflict" "! printf '%s' \"\$outZ4\" | grep -qi 'points somewhere else'"
+check "the tilde form is not called a conflict" "! grep -qi 'points somewhere else' <<< \"\$outZ4\""
 
 section "== a lesson renumbered on the other Mac must not come back under its old number =="
 # Seen for real on 2026-08-05, the third numbering collision. Both Macs had used L66
@@ -4089,19 +4094,19 @@ UPH="$WORK/uphome"; mkdir -p "$UPH"; echo '{"hooks":{}}' > "$UPH/settings.json";
 CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
 out_up0="$(CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
 check "#16 precondition: a settled push has nothing to stage" \
-  "printf '%s' \"\$out_up0\" | grep -qi 'already up to date'"
+  "grep -qi 'already up to date' <<< \"\$out_up0\""
 
 echo '# notes' > "$UPR/NOTES.md"
 git -C "$UPR" add -A && git -C "$UPR" -c user.name=t -c user.email=t@e commit -q -m "edit outside payload"
 out_up="$(CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
 check "#16 push does not claim nothing changed while ahead" \
-  "! printf '%s' \"\$out_up\" | grep -qi 'already up to date'"
+  "! grep -qi 'already up to date' <<< \"\$out_up\""
 # Captured, not piped straight into grep: under `set -o pipefail` grep -q exits on the
 # first matching line, git takes SIGPIPE, and the pipeline reports failure over a log
 # that DOES contain the commit. That false negative cost a debugging detour here.
 bare_log_up="$(git -C "$UPB" log --oneline main 2>/dev/null || true)"
 check "#16 the non-payload commit reaches the remote" \
-  "printf '%s' \"\$bare_log_up\" | grep -q 'edit outside payload'"
+  "grep -q 'edit outside payload' <<< \"\$bare_log_up\""
 
 # sync is what the background daemon runs, so the same hole there strands the commit
 # with nobody watching at all.
@@ -4123,7 +4128,7 @@ check "#16 sync also sends a non-payload commit" \
 # becomes noise and the real "already up to date" case stops meaning anything.
 out_up2="$(CLAUDE_HOME="$UPH" SYNC_REPO="$UPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
 check "#16 a truly settled push still says so" \
-  "printf '%s' \"\$out_up2\" | grep -qi 'already up to date'"
+  "grep -qi 'already up to date' <<< \"\$out_up2\""
 
 section "== a failed sync names the RIGHT cause (#22) =="
 # do_sync had ONE message for every way `git pull --rebase` can fail, and it named a
@@ -4156,9 +4161,9 @@ mkskill "$UNH/skills/s/SKILL.md" 'two'
 out_unreach="$(CLAUDE_HOME="$UNH" SYNC_REPO="$UNR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_unreach=$?
 check "#22 an unreachable remote fails loudly" "[ $rc_unreach -ne 0 ]"
 check "#22 an unreachable remote is NOT blamed on the other Mac" \
-  "! printf '%s' \"\$out_unreach\" | grep -q 'both Macs changed the same config'"
+  "! grep -q 'both Macs changed the same config' <<< \"\$out_unreach\""
 check "#22 an unreachable remote says the repo could not be reached" \
-  "printf '%s' \"\$out_unreach\" | grep -qi 'could not reach'"
+  "grep -qi 'could not reach' <<< \"\$out_unreach\""
 check "#22 an unreachable remote still keeps this Mac's commit" \
   "[ -n \"\$(git -C '$UNR' log --oneline -1 2>/dev/null)\" ]"
 
@@ -4174,7 +4179,7 @@ mkskill "$CFHB/skills/s/SKILL.md" 'B rewrote this line'
 out_conf="$(CLAUDE_HOME="$CFHB" SYNC_REPO="$CFR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_conf=$?
 check "#22 a real two-Mac conflict fails" "[ $rc_conf -ne 0 ]"
 check "#22 a real two-Mac conflict still names both Macs" \
-  "printf '%s' \"\$out_conf\" | grep -q 'both Macs changed the same config'"
+  "grep -q 'both Macs changed the same config' <<< \"\$out_conf\""
 # --absolute-git-dir, not --git-path: the latter answers with a path relative to the
 # repo, which `[ -d ]` then resolves against the SUITE's working directory, so this
 # assertion was passing on a path that could never exist no matter what the code did.
@@ -4195,12 +4200,12 @@ mkskill "$OTHB/skills/s/SKILL.md" 'B edit'
 out_other="$(CLAUDE_HOME="$OTHB" SYNC_REPO="$OTR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_other=$?
 check "#22 an unrecognised pull failure fails loudly" "[ $rc_other -ne 0 ]"
 check "#22 an unrecognised pull failure is NOT blamed on the other Mac" \
-  "! printf '%s' \"\$out_other\" | grep -q 'both Macs changed the same config'"
+  "! grep -q 'both Macs changed the same config' <<< \"\$out_other\""
 # Deliberately asserts on claude-sync's OWN sentence, not just on the word `untracked`:
 # git's stderr reaches this output whatever the tool does, so grepping only for git's
 # wording passed against the old single-message code and proved nothing.
 check "#22 an unrecognised pull failure is reported by the tool, not just by git" \
-  "printf '%s' \"\$out_other\" | grep -q 'claude-sync:.*git said'"
+  "grep -q 'claude-sync:.*git said' <<< \"\$out_other\""
 check "#22 an unrecognised pull failure repeats git's own reason" \
   "line_has \"\$out_other\" 'git said:' 'untracked working tree files'"
 
@@ -4225,11 +4230,11 @@ mkskill "$STHB/skills/s/SKILL.md" 'B edit'
 out_stash="$(CLAUDE_HOME="$STHB" SYNC_REPO="$STR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_stash=$?
 check "#22 a conflicted autostash restore is not reported as a clean sync" "[ $rc_stash -ne 0 ]"
 check "#22 a conflicted autostash restore does not announce success" \
-  "! printf '%s' \"\$out_stash\" | grep -q 'Synced (sent local changes'"
+  "! grep -q 'Synced (sent local changes' <<< \"\$out_stash\""
 check "#22 a conflicted autostash restore says the edits were parked" \
-  "printf '%s' \"\$out_stash\" | grep -qi 'parked them in a stash and left conflict markers'"
+  "grep -qi 'parked them in a stash and left conflict markers' <<< \"\$out_stash\""
 check "#22 a conflicted autostash restore is not blamed on a payload conflict" \
-  "! printf '%s' \"\$out_stash\" | grep -q 'both Macs changed the same config'"
+  "! grep -q 'both Macs changed the same config' <<< \"\$out_stash\""
 check "#22 a conflicted autostash restore leaves the edits recoverable" \
   "[ -n \"\$(git -C '$STR' stash list 2>/dev/null)\" ]"
 
@@ -4249,7 +4254,7 @@ CLAUDE_HOME="$CQH" SYNC_REPO="$CQR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT
 # the line becomes noise and stops meaning anything when a real one appears.
 out_noconf="$(CLAUDE_HOME="$CQH" SYNC_REPO="$CQR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#20 a clean status says nothing about conflicts" \
-  "! printf '%s' \"\$out_noconf\" | grep -qi 'conflict'"
+  "! grep -qi 'conflict' <<< \"\$out_noconf\""
 # Ages are pinned RELATIVE to now, never to a literal date: a fixture whose meaning is the
 # gap between a stored time and the clock drifts into a different case as real time passes.
 touch -t "$(date -v-9d +%Y%m%d%H%M)" "$CQH/LESSONS.md.conflict-OtherMac" 2>/dev/null || \
@@ -4258,13 +4263,13 @@ touch -t "$(date -v-2d +%Y%m%d%H%M)" "$CQH/skills/beta/SKILL.md.conflict-OtherMa
   touch -d '2 days ago' "$CQH/skills/beta/SKILL.md.conflict-OtherMac"
 out_conf20="$(CLAUDE_HOME="$CQH" SYNC_REPO="$CQR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#20 status names a top-level conflict copy" \
-  "printf '%s' \"\$out_conf20\" | grep -q 'LESSONS.md.conflict-OtherMac'"
+  "grep -q 'LESSONS.md.conflict-OtherMac' <<< \"\$out_conf20\""
 check "#20 status names a nested conflict copy" \
   "printf '%s' \"\$out_conf20\" | grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac \([0-9]+ days old'"
 check "#20 status says how old each copy is" \
-  "printf '%s' \"\$out_conf20\" | grep -q '9 days'"
+  "grep -q '9 days' <<< \"\$out_conf20\""
 check "#20 status says what to do about them" \
-  "printf '%s' \"\$out_conf20\" | grep -qi 'Compare each with the live file next to it, then delete the copy'"
+  "grep -qi 'Compare each with the live file next to it, then delete the copy' <<< \"\$out_conf20\""
 # The copy must not be mistaken for ordinary config: it is excluded from staging, so a
 # status that listed it as a pending change would be reporting a push that cannot happen.
 check "#20 a conflict copy is still never staged for the other Mac" \
@@ -4285,7 +4290,7 @@ sleep 60 & LIVE_PID=$!
 mkdir -p "$LOCK"; printf '%s\n' "$LIVE_PID" > "$LOCK/pid"
 out_lk="$(env $(lockenv) bash "$SCRIPT" push 2>&1)"; rc_lk=$?
 check "#21 a run declines while another holds the lock" "[ $rc_lk -ne 0 ]"
-check "#21 the refusal says another run has it"  "printf '%s' \"\$out_lk\" | grep -qi 'already running'"
+check "#21 the refusal says another run has it"  "grep -qi 'already running' <<< \"\$out_lk\""
 check "#21 a blocked run does not stage anything" "[ ! -e '$LKR/payload/skills/l/SKILL.md' ]"
 
 # status must NEVER be blocked: it is what the refusal tells you to run, and a diagnosis
@@ -4357,7 +4362,7 @@ out_blip="$(env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync 2>
 check "#22 a brief outage still fails rather than reporting success" "[ $rc_blip -ne 0 ]"
 check "#22 a brief outage raises no desktop alert" "[ ! -s '$NOTED' ]"
 check "#22 a brief outage is still written to the log" \
-  "printf '%s' \"\$out_blip\" | grep -qi 'could not reach'"
+  "grep -qi 'could not reach' <<< \"\$out_blip\""
 
 # The SAME failure, once it has been going on past the threshold, must alert. Only the age
 # of the last success differs between this case and the one above.
@@ -4379,7 +4384,7 @@ rm -f "$OUR/.last-success"; : > "$NOTED"
 out_none="$(env $(ounotify) SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync 2>&1)"
 check "#22 an outage with no recorded success alerts" "[ -s '$NOTED' ]"
 check "#22 and says the duration is unknown rather than guessing" \
-  "printf '%s' \"\$out_none\" | grep -qi 'no record'"
+  "grep -qi 'no record' <<< \"\$out_none\""
 
 # A corrupt marker must not read as a recent success and silence a real outage (L50).
 printf 'not-a-timestamp\n' > "$OUR/.last-success"; : > "$NOTED"
@@ -4443,7 +4448,7 @@ VFR="$WORK/verify-repoB"; git clone -q "$VFB" "$VFR" 2>/dev/null
 VFHB="$WORK/verify-homeB"; mkdir -p "$VFHB"; echo '{"hooks":{}}' > "$VFHB/settings.json"
 out_v1="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1)"
 check "#23 verify reports this Mac as up to date" \
-  "printf '%s' \"\$out_v1\" | grep -qi 'up to date'"
+  "grep -qi 'up to date' <<< \"\$out_v1\""
 # One Mac agreeing with itself is agreement with nobody, which is the same vacuous success
 # the no-markers case exists to prevent. Caught on the REAL repo after shipping, where it
 # printed "all 1 Mac(s) agree" while the second Mac had simply never published.
@@ -4451,16 +4456,16 @@ check "#23 verify reports this Mac as up to date" \
 # explaining that agreement cannot be answered yet. The first version of this assertion
 # banned the word and so failed on the correct message.
 check "#23 a single published Mac gets no agreement verdict" \
-  "! printf '%s' \"\$out_v1\" | grep -q 'Verified:'"
+  "! grep -q 'Verified:' <<< \"\$out_v1\""
 check "#23 a single published Mac says only itself has reported" \
-  "printf '%s' \"\$out_v1\" | grep -qi 'only this Mac'"
+  "grep -qi 'only this Mac' <<< \"\$out_v1\""
 
 # Now B applies too, and both must read as agreeing.
 CLAUDE_HOME="$VFHB" SYNC_REPO="$VFR" SYNC_HOSTNAME=macB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 out_v2="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1)"
-check "#23 verify names the other Mac"        "printf '%s' \"\$out_v2\" | grep -q 'macB: up to date with the shared config'"
-check "#23 verify says the two Macs agree"    "printf '%s' \"\$out_v2\" | grep -qi 'both Macs agree on the same config'"
+check "#23 verify names the other Mac"        "grep -q 'macB: up to date with the shared config' <<< \"\$out_v2\""
+check "#23 verify says the two Macs agree"    "grep -qi 'both Macs agree on the same config' <<< \"\$out_v2\""
 
 # A changes the config and publishes. B has not applied it, so B is BEHIND, and verify must
 # say so by name rather than reporting a clean bill of health.
@@ -4472,9 +4477,9 @@ check "#23 verify reports the other Mac as behind"  "printf '%s' \"\$out_v3\" | 
 # marker's timestamp", which is a stand-in for the real quantity and goes wrong whenever the
 # two Macs' clocks disagree. A test that only looked for the word "behind" passed on it.
 check "#23 verify counts exactly one config change behind" \
-  "printf '%s' \"\$out_v3\" | grep -q 'BEHIND by 1 config change'"
+  "grep -q 'BEHIND by 1 config change' <<< \"\$out_v3\""
 check "#23 a Mac that is behind is not called agreeing" \
-  "! printf '%s' \"\$out_v3\" | grep -qi 'both Macs agree'"
+  "! grep -qi 'both Macs agree' <<< \"\$out_v3\""
 check "#23 verify exits non-zero when they do not agree" \
   "! CLAUDE_HOME='$VFHA' SYNC_REPO='$VFA' SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash '$SCRIPT' verify >/dev/null 2>&1"
 
@@ -4492,9 +4497,9 @@ git -C "$VFC" -c user.name=t -c user.email=t@e commit -q -m "config with no mark
 git -C "$VFC" push -q -u origin main
 out_v4="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFC" SYNC_HOSTNAME=macZ SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1 || true)"
 check "#23 no markers at all does not claim agreement" \
-  "! printf '%s' \"\$out_v4\" | grep -qi 'agree'"
+  "! grep -qi 'agree' <<< \"\$out_v4\""
 check "#23 no markers at all says so plainly" \
-  "printf '%s' \"\$out_v4\" | grep -qi 'no Mac has published'"
+  "grep -qi 'no Mac has published' <<< \"\$out_v4\""
 
 section "== outage decisions are recorded so the threshold can be judged (#24) =="
 # The 3 hour cutoff deciding when a sync failure stops being logged quietly and starts
@@ -4518,7 +4523,7 @@ check "#24 an alerting outage is recorded too" "grep -q 'alert' '$OCR/.outage-lo
 check "#24 the two decisions are kept apart" \
   "[ \"\$(grep -c 'quiet' '$OCR/.outage-log')\" = 1 ] && [ \"\$(grep -c 'alert' '$OCR/.outage-log')\" = 1 ]"
 out_oc="$(CLAUDE_HOME="$OCH" SYNC_REPO="$OCR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
-check "#24 status reports the tally"     "printf '%s' \"\$out_oc\" | grep -qi 'outage decisions so far:'"
+check "#24 status reports the tally"     "grep -qi 'outage decisions so far:' <<< \"\$out_oc\""
 # The tally exists to judge the threshold, so it must not imply every record was judged under
 # the CURRENT one. The two outages above were deliberately made under different thresholds
 # (10800 then 0), so a summary quoting one number for all of them would be telling you
@@ -4526,9 +4531,9 @@ check "#24 status reports the tally"     "printf '%s' \"\$out_oc\" | grep -qi 'o
 check "#24 each record carries the threshold it was judged under" \
   "grep -q ' 10800$' '$OCR/.outage-log' && grep -q ' 0$' '$OCR/.outage-log'"
 check "#24 a mixed tally says the threshold changed" \
-  "printf '%s' \"\$out_oc\" | grep -qi 'different threshold'"
+  "grep -qi 'different threshold' <<< \"\$out_oc\""
 check "#24 the tally names both counts" \
-  "printf '%s' \"\$out_oc\" | grep -q '1 quiet, 1 alerted'"
+  "grep -q '1 quiet, 1 alerted' <<< \"\$out_oc\""
 # A run that reached the repo must not be recorded as an outage, or the tally that exists to
 # judge the threshold is padded with every healthy sync and answers nothing.
 git -C "$OCR" remote set-url origin "$OCB"
@@ -4564,7 +4569,7 @@ mkskill "$STH2/skills/s/SKILL.md" 'edited'
 out_st="$(CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NO_NOTIFY=1 SYNC_LOCK_WAIT=1 bash "$SCRIPT" sync 2>&1)"; rc_st=$?
 check "#25 an ancient lock does not block a run" "[ $rc_st -eq 0 ]"
 check "#25 and the run says it broke a stale lock" \
-  "printf '%s' \"\$out_st\" | grep -qi 'stale lock'"
+  "grep -qi 'stale lock' <<< \"\$out_st\""
 
 # The FUTURE is the hole, not the past. A clock that is merely old already alerts, because
 # the gap exceeds the threshold by definition. A clock ahead of now produces a NEGATIVE gap,
@@ -4587,7 +4592,7 @@ out_fut="$(CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NOTIFIER="$FAKEN2" SYNC_NO
   SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync 2>&1 || true)"
 check "#25 a clock in the future does not silence an outage" "[ -s '$NOTED2' ]"
 check "#25 and it says the record was not usable" \
-  "printf '%s' \"\$out_fut\" | grep -qi 'no record'"
+  "grep -qi 'no record' <<< \"\$out_fut\""
 # Control, so the rule above cannot be satisfied by simply alerting on everything: an
 # ordinary recent success must still keep a blip quiet.
 : > "$NOTED2"
@@ -4619,9 +4624,9 @@ GHREF="refs/claude-sync-state/macGone"
 out_gh="$(CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 \
   SYNC_MAC_RETIRE_AFTER=0 bash "$SCRIPT" verify 2>&1 || true)"
 check "#26 a long-silent Mac is called retired, not behind" \
-  "printf '%s' \"\$out_gh\" | grep -qi 'RETIRED, no sign of it since'"
+  "grep -qi 'RETIRED, no sign of it since' <<< \"\$out_gh\""
 check "#26 a retired Mac is not counted as behind" \
-  "! printf '%s' \"\$out_gh\" | grep -q 'macGone: BEHIND'"
+  "! grep -q 'macGone: BEHIND' <<< \"\$out_gh\""
 check "#26 and it no longer blocks the verdict" \
   "CLAUDE_HOME='$GHH' SYNC_REPO='$GHR' SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 SYNC_MAC_RETIRE_AFTER=0 bash '$SCRIPT' verify >/dev/null 2>&1"
 # The boundary is NOT pinned here, and that is a gap stated rather than a guard held. A check that
@@ -4633,12 +4638,12 @@ check "#26 and it no longer blocks the verdict" \
 # does not have.
 # Retired must NOT mean forgotten: it still has to be named, or a Mac that genuinely fell
 # behind quietly disappears from the report that exists to notice exactly that.
-check "#26 a retired Mac is still named"  "printf '%s' \"\$out_gh\" | grep -q 'macGone: RETIRED'"
+check "#26 a retired Mac is still named"  "grep -q 'macGone: RETIRED' <<< \"\$out_gh\""
 # The control: with a normal retirement window that same Mac is simply behind, so the rule
 # cannot be satisfied by calling every absent Mac retired.
 out_gh2="$(CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1 || true)"
 check "#26 a recently seen Mac is still reported as behind" \
-  "printf '%s' \"\$out_gh2\" | grep -q 'macGone: BEHIND'"
+  "grep -q 'macGone: BEHIND' <<< \"\$out_gh2\""
 # And a way to drop one deliberately, since a Mac you know is gone should not need a wait.
 CLAUDE_HOME="$GHH" SYNC_REPO="$GHR" SYNC_HOSTNAME=macNow SYNC_NO_NOTIFY=1 bash "$SCRIPT" forget-mac macGone >/dev/null 2>&1
 check "#26 forget-mac removes the marker" \
@@ -4666,7 +4671,7 @@ check "#27 a stopped-early run still reports a total" "grep -q '^PASS=' '$SUBOUT
 check "#27 it reaches the named section"       "grep -q 'sync (two-way) over a local fake remote' '$SUBOUT'"
 check "#27 it stops after it"                  "! grep -q 'install-autosync writes a receive-timer' '$SUBOUT'"
 # The whole point is speed, so assert it did less rather than trusting that it did.
-sub_total="$(grep -o 'PASS=[0-9]*' "$SUBOUT" | head -1 | cut -d= -f2)"
+sub_total="$(grep -o 'PASS=[0-9]*' "$SUBOUT" | awk 'NR <= 1' | cut -d= -f2)"
 check "#27 a stopped-early run does less work" "[ \"\${sub_total:-99999}\" -lt 200 ]"
 # And it must be HONEST: the sections build on each other, so a partial run that produced
 # failures the code did not cause would be worse than the slow full run it replaces.
@@ -4750,13 +4755,13 @@ check "#28 and it really does fail on its first step" \
   "! bash '$SUA/claude-sync' help >/dev/null 2>&1"
 out_su="$(CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1 || true)"
 check "#28 a pulled script that cannot run is refused" \
-  "printf '%s' \"\$out_su\" | grep -qi 'cannot complete a run'"
+  "grep -qi 'cannot complete a run' <<< \"\$out_su\""
 # Distinct from the parse failure, which already had its own message. Two different faults
 # reported identically would send the diagnosis to the wrong place.
 check "#28 it is not reported as a parse failure" \
-  "! printf '%s' \"\$out_su\" | grep -qi 'does not parse'"
+  "! grep -qi 'does not parse' <<< \"\$out_su\""
 check "#28 and it says the older copy is still in use" \
-  "printf '%s' \"\$out_su\" | grep -qi 'kept the copy already running'"
+  "grep -qi 'kept the copy already running' <<< \"\$out_su\""
 # The control: a pulled script that is FINE must still be accepted, or the gate would be
 # satisfied by refusing every update, which protects nothing and breaks syncing entirely.
 SUC="$WORK/su-repoC"; git clone -q "$SUBARE" "$SUC" 2>/dev/null
@@ -4767,7 +4772,7 @@ cp "$SCRIPT" "$SUA/claude-sync"; printf '\n# a harmless comment\n' >> "$SUA/clau
 git -C "$SUA" add claude-sync && git -C "$SUA" -c user.name=t -c user.email=t@e commit -q -m "a good script" && git -C "$SUA" push -q
 out_suok="$(CLAUDE_HOME="$SUCH" SYNC_REPO="$SUC" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1 || true)"
 check "#28 a healthy pulled script is still accepted" \
-  "! printf '%s' \"\$out_suok\" | grep -qi 'cannot complete a run'"
+  "! grep -qi 'cannot complete a run' <<< \"\$out_suok\""
 
 section "== a clock jump must not break a live lock (#29) =="
 # Of the eleven places the tool reads the clock, ten only affect what it SAYS. One changes
@@ -4789,7 +4794,7 @@ touch -t "$(date -v-2d +%Y%m%d%H%M)" "$CJLOCK/pid" 2>/dev/null || touch -d '2 da
 out_cj="$(env $(cjenv) bash "$SCRIPT" push 2>&1)"; rc_cj=$?
 check "#29 an ancient lock whose owner is ALIVE here is not broken" "[ $rc_cj -ne 0 ]"
 check "#29 and the run declines rather than proceeding" \
-  "printf '%s' \"\$out_cj\" | grep -qi 'already running'"
+  "grep -qi 'already running' <<< \"\$out_cj\""
 kill "$CJ_LIVE" 2>/dev/null; wait "$CJ_LIVE" 2>/dev/null
 # Control: the same ancient lock from ANOTHER machine must still be broken, or #25 regresses
 # and a restored folder wedges syncing for good.
@@ -4891,20 +4896,20 @@ check "#34 a run past the depth limit refuses to run at all" "[ '$_d2_rc' -ne 0 
 # theory: this check passed in a measured run where the child ran happily and its two neighbours
 # correctly flipped to FAIL, which is the worst version, a section reporting a partial pass
 # exactly where the guard is not working (L156, claude-config#109).
-check "#34 the refusal says how deep it was asked to go" "printf '%s' \"\$_d2\" | grep -q 'refusing to run at depth 2'"
+check "#34 the refusal says how deep it was asked to go" "grep -q 'refusing to run at depth 2' <<< \"\$_d2\""
 
 # And the two states are shown to be tellable apart, in the same fixture, or the wording above is
 # just a different string nobody has watched failing to match (L159). A run inside the limit must
 # announce and must NOT carry the refusal.
 _d2ok="$(SUITE_DEPTH=2 SUITE_MAX_DEPTH=3 SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1)"
-check "#34 a run inside the limit announces rather than refuses" "printf '%s' \"\$_d2ok\" | grep -q 'running at depth 2'"
-check "#34 and an announcement does not read as a refusal" "! printf '%s' \"\$_d2ok\" | grep -q 'refusing to run at depth'"
+check "#34 a run inside the limit announces rather than refuses" "grep -q 'running at depth 2' <<< \"\$_d2ok\""
+check "#34 and an announcement does not read as a refusal" "! grep -q 'refusing to run at depth' <<< \"\$_d2ok\""
 # The old token, asked of the run that was NOT refused. It matches, which is the defect, and saying
 # so here keeps the reason this check is worded the way it is attached to the evidence for it.
-check "#34 the bare depth token would have passed on that run" "printf '%s' \"\$_d2ok\" | grep -q 'depth 2'"
+check "#34 the bare depth token would have passed on that run" "grep -q 'depth 2' <<< \"\$_d2ok\""
 # It must refuse EARLY, not run the suite and complain afterwards: a refusal that still pays for
 # a full run is not a limit on anything. A real run prints per-section headings and a PASS= line.
-check "#34 it refuses before running any checks" "! printf '%s' \"\$_d2\" | grep -q '^PASS='"
+check "#34 it refuses before running any checks" "! grep -q '^PASS=' <<< \"\$_d2\""
 
 # A value that cannot be compared must never land on the permissive side of a threshold (L50).
 # `[ abc -gt 1 ]` is a shell ERROR, not a false, and this suite runs without `set -e`, so an
@@ -4912,7 +4917,7 @@ check "#34 it refuses before running any checks" "! printf '%s' \"\$_d2\" | grep
 # off precisely when the environment is wrong.
 _dj="$(_deep abc)"; _dj_rc=$?
 check "#34 a depth that is not a number is refused, not waved through" "[ '$_dj_rc' -ne 0 ]"
-check "#34 the refusal names the value it could not read" "printf '%s' \"\$_dj\" | grep -q 'SUITE_DEPTH=.abc. is not a whole number'"
+check "#34 the refusal names the value it could not read" "grep -q 'SUITE_DEPTH=.abc. is not a whole number' <<< \"\$_dj\""
 _dn="$(_deep -1)"; _dn_rc=$?
 check "#34 a negative depth is refused too" "[ '$_dn_rc' -ne 0 ]"
 
@@ -4965,11 +4970,11 @@ _t0="$(date +%s)"
 _hang="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_TIMEOUT=$_hang_deadline SUITE_HANG_IN=push SUITE_POLL_INTERVAL=$_hang_poll SUITE_WATCHDOG_TAG="$_wd_tag" bash "$SCRIPT_SELF" 2>&1)"; _hang_rc=$?
 _elapsed=$(( $(date +%s) - _t0 ))
 check "#31 a hung run ends instead of waiting for ever" "[ '$_hang_rc' -ne 0 ]"
-check "#31 it says plainly that it timed out"   "printf '%s' \"\$_hang\" | grep -q 'TIMED OUT'"
-check "#31 it names the section it died in"     "printf '%s' \"\$_hang\" | grep -q 'still inside section: == push =='"
+check "#31 it says plainly that it timed out"   "grep -q 'TIMED OUT' <<< \"\$_hang\""
+check "#31 it names the section it died in"     "grep -q 'still inside section: == push ==' <<< \"\$_hang\""
 # The whole point is that a hang stops reading as an ordinary run, so it must never leave behind
 # the summary line that means everything passed.
-check "#31 a hung run is never reported as green" "! printf '%s' \"\$_hang\" | grep -q 'FAIL=0'"
+check "#31 a hung run is never reported as green" "! grep -q 'FAIL=0' <<< \"\$_hang\""
 
 # The other half, and the one that would do real damage if it were wrong: a deadline that fires
 # on a HEALTHY run turns every ordinary run into a false failure. A guard has to be seen not
@@ -4978,7 +4983,7 @@ check "#31 a hung run is never reported as green" "! printf '%s' \"\$_hang\" | g
 _ok_t0="$(date +%s)"
 _okrun="$(SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push SUITE_TIMEOUT=300 SUITE_POLL_INTERVAL=$_hang_poll SUITE_WATCHDOG_TAG="$_wd_tag" bash "$SCRIPT_SELF" 2>&1)"; _okrun_rc=$?
 _ok_elapsed=$(( $(date +%s) - _ok_t0 ))
-check "#31 a healthy run is not killed by its own deadline" "! printf '%s' \"\$_okrun\" | grep -q 'TIMED OUT'"
+check "#31 a healthy run is not killed by its own deadline" "! grep -q 'TIMED OUT' <<< \"\$_okrun\""
 check "#31 and still reports its result"        "[ '$_okrun_rc' -eq 0 ]"
 
 # How long the hung run took, judged against the HEALTHY one just measured rather than against a
@@ -5161,9 +5166,9 @@ _t0="$(date +%s)"
 _held="$(_try_lock "$_lockdir/live")"; _held_rc=$?
 _held_elapsed=$(( $(date +%s) - _t0 ))
 check "#32 a second run does not start while one is going" "[ '$_held_rc' -ne 0 ]"
-check "#32 it names the run that holds the lock"  "printf '%s' \"\$_held\" | grep -q '$$'"
+check "#32 it names the run that holds the lock"  "grep -q '$$' <<< \"\$_held\""
 check "#32 it says how long that run has been going" "printf '%s' \"\$_held\" | grep -qE '[0-9]+s'"
-check "#32 and runs none of the checks"           "! printf '%s' \"\$_held\" | grep -q '^PASS='"
+check "#32 and runs none of the checks"           "! grep -q '^PASS=' <<< \"\$_held\""
 
 # A crashed run must not wedge the suite for good. The owner being gone is the evidence, not the
 # clock, because this lock only ever holds a process id from THIS machine.
@@ -5173,7 +5178,7 @@ _dead_t0="$(date +%s)"
 _dead="$(_try_lock "$_lockdir/dead")"; _dead_rc=$?
 _dead_elapsed=$(( $(date +%s) - _dead_t0 ))
 check "#32 a lock whose owner is gone is taken over" "[ '$_dead_rc' -eq 0 ]"
-check "#32 and says it took it over"                 "printf '%s' \"\$_dead\" | grep -qi 'took over'"
+check "#32 and says it took it over"                 "grep -qi 'took over' <<< \"\$_dead\""
 
 # Refuse, never queue: a run that waits silently is the stall this issue was filed about. Judged
 # against the run just above, which took the lock and went on to do the work, rather than against
@@ -5536,9 +5541,9 @@ cat > "$WORK/ps-many" <<'PSEOF'
   701     1 00:09:00 /bin/bash /Users/x/claude-config-sync/claude-sync watch
 PSEOF
 _ps_many="$(_status_with "$WORK/ps-many")"
-check "#33 several watchers are reported"        "printf '%s' \"\$_ps_many\" | grep -qi 'watcher processes the tool left running'"
-check "#33 and each one's age is given"          "printf '%s' \"\$_ps_many\" | grep -q '03:11:02'"
-check "#33 and the process ids are named"        "printf '%s' \"\$_ps_many\" | grep -q '601'"
+check "#33 several watchers are reported"        "grep -qi 'watcher processes the tool left running' <<< \"\$_ps_many\""
+check "#33 and each one's age is given"          "grep -q '03:11:02' <<< \"\$_ps_many\""
+check "#33 and the process ids are named"        "grep -q '601' <<< \"\$_ps_many\""
 
 # The case a count CANNOT catch, and the reason this counts roots and depth instead. A run that
 # spawned a run that spawned a run is one root nested deep, and the pile grows one process at a
@@ -5550,7 +5555,7 @@ cat > "$WORK/ps-chain" <<'PSEOF'
   803   802 00:05:00 /bin/bash /Users/x/claude-config-sync/tests/test-claude-sync.sh
 PSEOF
 _ps_chain="$(_status_with "$WORK/ps-chain")"
-check "#33 a run nested inside a run is reported" "printf '%s' \"\$_ps_chain\" | grep -qi 'test run'"
+check "#33 a run nested inside a run is reported" "grep -qi 'test run' <<< \"\$_ps_chain\""
 check "#33 and it says how deeply they are nested" "printf '%s' \"\$_ps_chain\" | grep -qE 'nested [0-9]+ deep inside another'"
 
 # The control (L143): an EMPTY listing must report nothing even though this machine really does
@@ -5610,7 +5615,7 @@ _noid_env=(env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null)
 # really does refuse an identity here.
 _noid_probe="$("${_noid_env[@]}" git -C "$_NOID/repo" commit --allow-empty -m probe 2>&1 || true)"
 check "#52 the fixture really does deny git an identity" \
-  "printf '%s' \"\$_noid_probe\" | grep -qi 'Author identity unknown'"
+  "grep -qi 'Author identity unknown' <<< \"\$_noid_probe\""
 # The second: there really is something for the pull to replay. With nothing to rebase, no commit
 # is written, no identity is needed, and every check below passes against the defect untouched.
 # BOTH directions. Ahead alone is not enough: with the remote unmoved the pull fast-forwards
@@ -5629,7 +5634,7 @@ check "#52 a sync completes where git has no identity"  "[ '$_noid_rc' -eq 0 ]"
 # The half that names the damage. A wrong cause here sends the person to reconcile a conflict that
 # does not exist, and there is no edit they can make that will clear it.
 check "#52 and it is not blamed on a two-Mac conflict" \
-  "! printf '%s' \"\$_noid_out\" | grep -q 'both Macs changed the same config'"
+  "! grep -q 'both Macs changed the same config' <<< \"\$_noid_out\""
 check "#52 and the local edit really was published" "[ -f '$_NOID/repo/payload/hooks/mine.sh' ]"
 
 section "== nothing depends on a tool only BSD has (#38) =="
@@ -5707,12 +5712,12 @@ check "#38 the date helper still answers with GNU-shaped tools" \
 _noTMPDIR="$(env -u TMPDIR SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1 || true)"
 # The positive control first: without it, a child that died for some entirely different reason
 # would satisfy the assertion below by never getting far enough to say "unbound variable" (L159).
-check "#38 the suite runs with no TMPDIR set at all" "printf '%s' \"\$_noTMPDIR\" | grep -q '^PASS='"
-check "#38 and names no unbound variable"            "! printf '%s' \"\$_noTMPDIR\" | grep -q 'unbound variable'"
+check "#38 the suite runs with no TMPDIR set at all" "grep -q '^PASS=' <<< \"\$_noTMPDIR\""
+check "#38 and names no unbound variable"            "! grep -q 'unbound variable' <<< \"\$_noTMPDIR\""
 # The tool itself too, and separately, because it is the half that runs unattended on both Macs.
 _noTMPDIRtool="$(env -u TMPDIR SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" bash "$SCRIPT" status 2>&1 || true)"; _noTMPDIRrc=$?
 check "#38 the tool runs with no TMPDIR set either"  "[ '$_noTMPDIRrc' -eq 0 ]"
-check "#38 and it names no unbound variable"         "! printf '%s' \"\$_noTMPDIRtool\" | grep -q 'unbound variable'"
+check "#38 and it names no unbound variable"         "! grep -q 'unbound variable' <<< \"\$_noTMPDIRtool\""
 
 # Derived, so the port cannot quietly rot: one new `stat -f` anywhere outside the helper breaks
 # every run on the runner, and the helper is the only place allowed to spell it that way. Comments
@@ -5798,7 +5803,7 @@ _cite_found(){   # $1 = a citation like "#160"   $2 = the section headings to lo
 }
 while IFS= read -r _row; do
   [ -n "$_row" ] || continue
-  _cite="$(printf '%s' "$_row" | grep -oE 'proved by #[0-9]+' | head -1 | sed 's/.*#/#/')"
+  _cite="$(printf '%s' "$_row" | grep -oE 'proved by #[0-9]+' | awk 'NR <= 1' | sed 's/.*#/#/')"
   if [ -z "$_cite" ]; then
     _uncited="$_uncited[$(printf '%s' "$_row" | cut -d'|' -f2 | sed 's/^ *//; s/ *$//')]"
     continue
@@ -5968,10 +5973,10 @@ _scr_status(){ SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$_SCR" CLAUDE_HOME
 # rather than the one it was pointed at, which is a stub that matched nothing (L143).
 _scr_empty="$(_scr_status)"
 check "#36 an empty root reports no leftover scratch" \
-  "! printf '%s' \"\$_scr_empty\" | grep -qi 'scratch the tool left behind'"
+  "! grep -qi 'scratch the tool left behind' <<< \"\$_scr_empty\""
 _scr_empty_reap="$(_reap)"
 check "#36 and reaping it says plainly that it found nothing" \
-  "printf '%s' \"\$_scr_empty_reap\" | grep -qi 'no abandoned scratch'"
+  "grep -qi 'no abandoned scratch' <<< \"\$_scr_empty_reap\""
 
 _scr_dir "claude-sync-suite-work.OLDAAAA" 3     # a killed suite run
 _scr_age "$_SCR/claude-sync-suite-work.OLDAAAA"
@@ -5984,15 +5989,15 @@ _scr_dir "tmp.SOMEONEELSE" 2                    # another tool's scratch, the me
 _scr_age "$_SCR/tmp.SOMEONEELSE"
 
 _scr_rep="$(_scr_status)"
-check "#36 status reports abandoned scratch"     "printf '%s' \"\$_scr_rep\" | grep -qi 'scratch the tool left behind'"
-check "#36 and says how many there are"          "printf '%s' \"\$_scr_rep\" | grep -q '2 abandoned'"
+check "#36 status reports abandoned scratch"     "grep -qi 'scratch the tool left behind' <<< \"\$_scr_rep\""
+check "#36 and says how many there are"          "grep -q '2 abandoned' <<< \"\$_scr_rep\""
 # The size, not just the count: the count is what grows and the size is what actually hurts, and
 # 2 items could be 2 KB or 2 GB.
 check "#36 and how much space they hold"         "printf '%s' \"\$_scr_rep\" | grep -qE '[0-9]+ MB'"
-check "#36 and names the command that reclaims them" "printf '%s' \"\$_scr_rep\" | grep -q 'reap-scratch'"
+check "#36 and names the command that reclaims them" "grep -q 'reap-scratch' <<< \"\$_scr_rep\""
 
 _scr_out="$(_reap)"
-check "#36 the reaper says how many it reclaimed" "printf '%s' \"\$_scr_out\" | grep -q 'reclaimed 2'"
+check "#36 the reaper says how many it reclaimed" "grep -q 'reclaimed 2' <<< \"\$_scr_out\""
 check "#36 and how much space it got back"        "printf '%s' \"\$_scr_out\" | grep -qE '[0-9]+ MB'"
 # The scan reads the temp directory once per NAME, and on a real Mac that directory holds six
 # figures of entries: measured 113,000 here on 2026-08-21, six passes, 1.28 seconds of every
@@ -6007,7 +6012,7 @@ _SCRP="$WORK/scratch-prefix"; mkdir -p "$_SCRP"
 touch -t 202001010000 "$_SCRP/claude-sync-work.SHAREDAA" "$_SCRP/totally-different-name.ODDONEA"
 _scr_odd="$(SYNC_SCRATCH_NAMES='claude-sync-work. totally-different-name.' SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$_SCRP" SYNC_SCRATCH_MAX_AGE=60 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#115 a scratch name sharing the common prefix is reported" \
-  "printf '%s' \"\$_scr_odd\" | grep -q '2 abandoned'"
+  "grep -q '2 abandoned' <<< \"\$_scr_odd\""
 check "#115 the control: both fixtures were old enough to count" \
   "[ -e '$_SCRP/totally-different-name.ODDONEA' ] && [ -e '$_SCRP/claude-sync-work.SHAREDAA' ]"
 
@@ -6024,7 +6029,7 @@ check "#36 and its contents are untouched"             "[ -f '$_SCR/tmp.SOMEONEE
 # Run twice: there is nothing left to reclaim, and saying so is not the same as saying nothing.
 _scr_again="$(_reap)"
 check "#36 reaping again finds nothing and says so" \
-  "printf '%s' \"\$_scr_again\" | grep -qi 'no abandoned scratch'"
+  "grep -qi 'no abandoned scratch' <<< \"\$_scr_again\""
 check "#36 and status goes quiet once they are gone" \
   "! _scr_status | grep -qi 'scratch the tool left behind'"
 
@@ -6036,15 +6041,15 @@ _scr_age "$_SCR/claude-sync-suite-work.OFFTEST"
 _scr_off="$(SYNC_SCRATCH_MAX_AGE=0 SYNC_SCRATCH_ROOT="$_SCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"; _scr_off_rc=$?
 check "#36 the sweep can be turned off"          "[ '$_scr_off_rc' -eq 0 ]"
 check "#36 and says it is off rather than that it found nothing" \
-  "printf '%s' \"\$_scr_off\" | grep -qi 'sweep is off'"
+  "grep -qi 'sweep is off' <<< \"\$_scr_off\""
 check "#36 and removes nothing while it is off"  "[ -d '$_SCR/claude-sync-suite-work.OFFTEST' ]"
 _scr_off_st="$(SYNC_SCRATCH_MAX_AGE=0 SYNC_SCRATCH_ROOT="$_SCR" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#36 and status reports no leftovers while it is off" \
-  "! printf '%s' \"\$_scr_off_st\" | grep -qi 'scratch the tool left behind'"
+  "! grep -qi 'scratch the tool left behind' <<< \"\$_scr_off_st\""
 # An age that cannot be read must never land on the permissive side of an `rm -rf` (L50).
 _scr_junk="$(SYNC_SCRATCH_MAX_AGE=soon SYNC_SCRATCH_ROOT="$_SCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"; _scr_junk_rc=$?
 check "#36 an unreadable age is refused, not guessed" "[ '$_scr_junk_rc' -ne 0 ]"
-check "#36 and the refusal names the value"          "printf '%s' \"\$_scr_junk\" | grep -q 'SYNC_SCRATCH_MAX_AGE=.soon. is not a whole number'"
+check "#36 and the refusal names the value"          "grep -q 'SYNC_SCRATCH_MAX_AGE=.soon. is not a whole number' <<< \"\$_scr_junk\""
 check "#36 and it removed nothing on the way out"    "[ -d '$_SCR/claude-sync-suite-work.OFFTEST' ]"
 
 # A young path matching the LAST name the reaper looks for. This is not a corner: the last name is
@@ -6056,7 +6061,7 @@ check "#36 and it removed nothing on the way out"    "[ -d '$_SCR/claude-sync-su
 rm -rf "$_SCR"/*; touch "$_SCR/claude-sync-suite-section.LIVE"
 _scr_young="$(_reap)"; _scr_young_rc=$?
 check "#36 a live section mark does not break the reaper" "[ '$_scr_young_rc' -eq 0 ]"
-check "#36 and it still says what it found"       "printf '%s' \"\$_scr_young\" | grep -qi 'no abandoned scratch'"
+check "#36 and it still says what it found"       "grep -qi 'no abandoned scratch' <<< \"\$_scr_young\""
 _scr_status >/dev/null 2>&1; _scr_st_rc=$?
 check "#36 and status still exits cleanly beside one" "[ '$_scr_st_rc' -eq 0 ]"
 check "#36 and the live mark is still there"      "[ -f '$_SCR/claude-sync-suite-section.LIVE' ]"
@@ -6096,7 +6101,7 @@ _scr_names="$(_scr_code | grep -E '\bmktemp\b' | grep -oE '/claude-sync-[a-z-]+\
 _scr_unswept=""
 while IFS= read -r _nm; do
   [ -n "$_nm" ] || continue
-  case " $(grep -oE '^SYNC_SCRATCH_NAMES=.*' "$SCRIPT" | head -1) " in *"$_nm"*) ;; *) _scr_unswept="$_scr_unswept[$_nm]" ;; esac
+  case " $(grep -oE '^SYNC_SCRATCH_NAMES=.*' "$SCRIPT" | awk 'NR <= 1') " in *"$_nm"*) ;; *) _scr_unswept="$_scr_unswept[$_nm]" ;; esac
 done <<EOF
 $_scr_names
 EOF
@@ -6182,7 +6187,7 @@ else
   check "#116 the read-only fixture holds" "true"
   _ro_out="$(SYNC_SCRATCH_ROOT="$_SUBRO" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" cite-scan L1 2>&1 || true)"
   check "#116 a new scratch file is created inside the subdirectory" \
-    "printf '%s' \"\$_ro_out\" | grep -q 'claude-sync/claude-sync-work'"
+    "grep -q 'claude-sync/claude-sync-work' <<< \"\$_ro_out\""
 fi
 chmod 700 "$_SUBRO/claude-sync"
 
@@ -6199,10 +6204,10 @@ _sub_age "$_SUB/claude-sync/claude-sync-suite-work.OLDSUBA"
 mkdir -p "$_SUB/claude-sync/claude-sync-suite-work.NEWSUBB"
 _sub_st="$(_sub_run status)"
 check "#116 status reports scratch abandoned in the new home" \
-  "printf '%s' \"\$_sub_st\" | grep -q '1 abandoned'"
+  "grep -q '1 abandoned' <<< \"\$_sub_st\""
 _sub_reap="$(_sub_run reap-scratch)"
 check "#116 and the reaper reclaims it"          "[ ! -e '$_SUB/claude-sync/claude-sync-suite-work.OLDSUBA' ]"
-check "#116 and says so"                          "printf '%s' \"\$_sub_reap\" | grep -q 'reclaimed 1'"
+check "#116 and says so"                          "grep -q 'reclaimed 1' <<< \"\$_sub_reap\""
 check "#116 scratch too young to be abandoned is kept" \
   "[ -d '$_SUB/claude-sync/claude-sync-suite-work.NEWSUBB' ]"
 # The container is not scratch. Sweeping it would take every live run's scratch with it, and it is
@@ -6220,7 +6225,7 @@ echo 'not ours' > "$_SUBL/tmp.SOMEONEELSE"
 _sub_age "$_SUBL/tmp.SOMEONEELSE"
 _leg_st="$(_legacy_run status)"
 check "#116 a leftover in the old flat location is still reported" \
-  "printf '%s' \"\$_leg_st\" | grep -q '1 abandoned'"
+  "grep -q '1 abandoned' <<< \"\$_leg_st\""
 _leg_reap="$(_legacy_run reap-scratch)"
 check "#116 and is still reclaimed"     "[ ! -e '$_SUBL/claude-sync-applied.OLDFLAT' ]"
 check "#116 and another tool's file beside it is left alone" "[ -f '$_SUBL/tmp.SOMEONEELSE' ]"
@@ -6238,12 +6243,12 @@ echo 'planted after the stamp' > "$_SUBI/claude-sync-applied.AFTERSTAMP"
 _sub_age "$_SUBI/claude-sync-applied.AFTERSTAMP"
 _int_quiet="$(_int_run status)"
 check "#116 a later call inside the interval does not read the old location" \
-  "! printf '%s' \"\$_int_quiet\" | grep -qi 'scratch the tool left behind'"
+  "! grep -qi 'scratch the tool left behind' <<< \"\$_int_quiet\""
 # But it is never abandoned. Two ways back to it, and both are checked, because one of them is
 # what somebody is told to run and the other is what happens on its own.
 _int_forced="$(_int_run reap-scratch)"
 check "#116 reap-scratch reads the old location whatever the interval says" \
-  "printf '%s' \"\$_int_forced\" | grep -q 'reclaimed 1'"
+  "grep -q 'reclaimed 1' <<< \"\$_int_forced\""
 echo 'planted again' > "$_SUBI/claude-sync-applied.SECONDONE"
 _sub_age "$_SUBI/claude-sync-applied.SECONDONE"
 # Aged well past any interval, with a fixed date rather than an offset from now: the point is
@@ -6252,16 +6257,16 @@ _sub_age "$_SUBI/claude-sync-applied.SECONDONE"
 touch -t 202001010000 "$_SUBI/claude-sync/.legacy-swept"
 _int_due="$(_int_run status)"
 check "#116 and once the interval is up the old location is read again" \
-  "printf '%s' \"\$_int_due\" | grep -q '1 abandoned'"
+  "grep -q '1 abandoned' <<< \"\$_int_due\""
 
 # ---- the interval knob ------------------------------------------------------------------------
 _int_zero="$(SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$_SUBI" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#116 an interval of zero reads the old location on every call" \
-  "printf '%s' \"\$_int_zero\" | grep -q '1 abandoned'"
+  "grep -q '1 abandoned' <<< \"\$_int_zero\""
 _int_junk="$(SYNC_SCRATCH_LEGACY_EVERY=daily SYNC_SCRATCH_ROOT="$_SUBI" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1 || true)"
 _int_junk_rc=$?
 check "#116 an unreadable interval is refused, not guessed" \
-  "printf '%s' \"\$_int_junk\" | grep -q \"SYNC_SCRATCH_LEGACY_EVERY='daily' is not a whole number\""
+  "grep -q \"SYNC_SCRATCH_LEGACY_EVERY='daily' is not a whole number\" <<< \"\$_int_junk\""
 check "#116 and it reclaimed nothing on the way out" "[ -f '$_SUBI/claude-sync-applied.SECONDONE' ]"
 
 # ---- the directory name is half of an `rm -rf` pattern ------------------------------------------
@@ -6274,7 +6279,7 @@ _sub_age "$_SUBN/claude-sync-applied.NAMETEST"
 for _dn in 'a/b' '..' '.'; do
   _dn_out="$(SYNC_SCRATCH_DIRNAME="$_dn" SYNC_SCRATCH_ROOT="$_SUBN" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1 || true)"
   check "#116 a scratch directory name of '$_dn' is refused" \
-    "printf '%s' \"\$_dn_out\" | grep -q 'is not a single directory name'"
+    "grep -q 'is not a single directory name' <<< \"\$_dn_out\""
 done
 # Planted old, so this cannot pass by there being nothing to remove (L159).
 check "#116 and none of those refusals removed anything" "[ -f '$_SUBN/claude-sync-applied.NAMETEST' ]"
@@ -6282,7 +6287,7 @@ check "#116 and none of those refusals removed anything" "[ -f '$_SUBN/claude-sy
 # default rather than being refused. Proved by the run working, not by it staying silent.
 _dn_empty="$(SYNC_SCRATCH_DIRNAME= SYNC_SCRATCH_ROOT="$_SUBN" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1 || true)"
 check "#116 an empty directory name falls back to the default" \
-  "printf '%s' \"\$_dn_empty\" | grep -q 'reclaimed 1'"
+  "grep -q 'reclaimed 1' <<< \"\$_dn_empty\""
 
 
 section "== every run executes from a copy, so editing the suite mid-run cannot corrupt it (#121) =="
@@ -6331,25 +6336,25 @@ section "== a full run fans out across shards, and refuses a set nobody chose (#
 _sh_run(){ SUITE_SHARD="$1" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -3; }
 for _sh_bad in "0/4" "5/4" "abc" "2" "2/0" "-1/4"; do
   _sh_out="$(_sh_run "$_sh_bad")"
-  check "#133 a shard spec of '$_sh_bad' is refused"     "printf '%s' \"\$_sh_out\" | grep -q \"SUITE_SHARD='$_sh_bad'\""
+  check "#133 a shard spec of '$_sh_bad' is refused"     "grep -q \"SUITE_SHARD='$_sh_bad'\" <<< \"\$_sh_out\""
 done
 # The control: a WELL formed spec is not refused, or every check above is satisfied by a suite that
 # refuses everything (L159). Asked for a shard count larger than the section count, which is the
 # one well formed spec that still has to refuse, and for a real one, which must not.
-_sh_ok="$(SUITE_SHARD=1/2 SUITE_NO_LOCK=1 SECTION_LIST=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -2)"
-check "#133 the control: a well formed spec gets past the refusals"   "! printf '%s' \"\$_sh_ok\" | grep -q 'is not of the form'"
+_sh_ok="$(SUITE_SHARD=1/2 SUITE_NO_LOCK=1 SECTION_LIST=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | awk 'NR <= 2')"
+check "#133 the control: a well formed spec gets past the refusals"   "! grep -q 'is not of the form' <<< \"\$_sh_ok\""
 
 # A job count nobody can read decides how many processes start, so it is refused too.
 for _sh_j in "two" "1.5" "-2"; do
-  _sh_jo="$(SUITE_JOBS="$_sh_j" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -3)"
-  check "#133 a job count of '$_sh_j' is refused"     "printf '%s' \"\$_sh_jo\" | grep -q \"SUITE_JOBS='$_sh_j'\""
+  _sh_jo="$(SUITE_JOBS="$_sh_j" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | awk 'NR <= 3')"
+  check "#133 a job count of '$_sh_j' is refused"     "grep -q \"SUITE_JOBS='$_sh_j'\" <<< \"\$_sh_jo\""
 done
 # An EMPTY job count means UNSET, which is what `:-` does everywhere else in this file, so it takes
 # the default rather than being refused. Checked because the refusal above is a `case` and it would
 # be natural to list the empty string in it, which would then refuse a value nobody ever sets.
-_sh_je="$(SUITE_JOBS= SUITE_SHARD=1/2 SUITE_NO_LOCK=1 SECTION_LIST=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | head -2)"
+_sh_je="$(SUITE_JOBS= SUITE_SHARD=1/2 SUITE_NO_LOCK=1 SECTION_LIST=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>&1 | awk 'NR <= 2')"
 check "#133 an empty job count falls back to the default rather than being refused" \
-  "! printf '%s' \"\$_sh_je\" | grep -q 'SUITE_JOBS='"
+  "! grep -q 'SUITE_JOBS=' <<< \"\$_sh_je\""
 
 # The two flags that make a shard work must not reach anything it starts. SUITE_SHARD leaking made
 # every run a section spawns become a whole shard, which turned a 48 second shard, written down 2026-08-21,
@@ -6359,7 +6364,7 @@ check "#133 an empty job count falls back to the default rather than being refus
 # to the same list is covered without anybody remembering this check.
 _sh_exp="$(grep -m1 "^export"" -n SUITE_FILTERED" "$SCRIPT_SELF")"
 for _sh_v in SUITE_SHARD SUITE_NO_LOCK; do
-  check "#133 $_sh_v is un-exported, so nothing this run starts inherits it"     "printf '%s' \"\$_sh_exp\" | grep -q '$_sh_v'"
+  check "#133 $_sh_v is un-exported, so nothing this run starts inherits it"     "grep -q '$_sh_v' <<< \"\$_sh_exp\""
 done
 
 section "== the shards, between them, covered every section (#137) =="
@@ -6789,7 +6794,7 @@ if [ -n "$_bw_dep" ]; then
   _bw_only="$(SECTION_ONLY="$_bw_dep_title" SUITE_NO_LOCK=1 SCRIPT="$SCRIPT" \
     SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
   check "#151 running only the dependent section still pulls its prerequisite in" \
-    "printf '%s' \"\$_bw_only\" | grep -qF -- \"\$_bw_pre_title\""
+    "grep -qF -- \"\$_bw_pre_title\" <<< \"\$_bw_only\""
 else
   # Said out loud rather than skipped. A file with no declaration left in it makes every check
   # above pass by having nothing to find, which reads exactly like the defect being fixed (L98).
@@ -7366,18 +7371,18 @@ _gc="$(SUITE_FILTERED=1 SUITE_DEPTH="$SUITE_DEPTH" SUITE_SPAWN_UNTIL=push SUITE_
 # Said first, because every assertion below reads that child's output, and a probe that never
 # started one would leave them all comparing against nothing at all (L98).
 check "#37 the spawn probe actually started a child" \
-  "printf '%s' \"\$_gc\" | grep -q 'the child exited'"
+  "grep -q 'the child exited' <<< \"\$_gc\""
 check "#37 a filtered run hands the flag to nothing it starts" \
   "printf '%s' \"\$_gc\" | grep -q 'inherits SUITE_FILTERED as: <unset>'"
 check "#37 its child honours the section limit it was given" \
-  "printf '%s' \"\$_gc\" | grep -q 'stopped after SECTION_UNTIL=push'"
+  "grep -q 'stopped after SECTION_UNTIL=push' <<< \"\$_gc\""
 # The other half, and the one that names the actual damage: not merely that the child stopped, but
 # that it never ran on past its limit. The marker is taken from the file rather than typed, so a
 # renamed section leaves this failing rather than quietly asserting nothing (L103).
 _late="$(section_title "$(grep '^section "' "$SCRIPT_SELF" | sed -n '6p')")"
 check "#37 the late-section marker was found" "[ -n \"\$_late\" ]"
 check "#37 the child did not run on into the rest of the suite" \
-  "! printf '%s' \"\$_gc\" | grep -qF -- \"\$_late\""
+  "! grep -qF -- \"\$_late\" <<< \"\$_gc\""
 check "#37 and the child is green" "[ '$_gc_rc' -eq 0 ]"
 
 # The class fix has to sit ahead of every spawn site, or a site above it is still handing the flag
@@ -7385,8 +7390,8 @@ check "#37 and the child is green" "[ '$_gc_rc' -eq 0 ]"
 # pieces so this assertion cannot be satisfied by itself.
 _expn_pat="export"" -n SUITE_FILTERED"
 _spawn_pat="bash \"\$SCRIPT""_SELF\""
-_expn_line="$(grep -nF "$_expn_pat" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
-_spawn_first="$(grep -nF "$_spawn_pat" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
+_expn_line="$(grep -nF "$_expn_pat" "$SCRIPT_SELF" | awk 'NR <= 1' | cut -d: -f1)"
+_spawn_first="$(grep -nF "$_spawn_pat" "$SCRIPT_SELF" | awk 'NR <= 1' | cut -d: -f1)"
 check "#37 the flag is un-exported before anything spawns a run" \
   "[ -n \"\$_expn_line\" ] && [ -n \"\$_spawn_first\" ] && [ \"\$_expn_line\" -lt \"\$_spawn_first\" ]"
 
@@ -7417,17 +7422,17 @@ dbg "status with pending conflicts: $out_p45"
 # ONE line carrying the path AND what is still only in it. Two greps over the whole output would be
 # answered by the file listing and by any other sentence mentioning the entry (L172, #55).
 check "#45 status says what a set-aside rule file still holds" \
-  "printf '%s' \"\$out_p45\" | grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174'"
+  "grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174' <<< \"\$out_p45\""
 check "#45 status says how much a set-aside plain file still holds" \
-  "printf '%s' \"\$out_p45\" | grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac.*2 lines'"
+  "grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac.*2 lines' <<< \"\$out_p45\""
 # The pull is where the condition was reported once and then never again, so it is the surface that
 # has to keep reporting it.
 out_p45pull="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "pull with pending conflicts: $out_p45pull"
 check "#45 a later pull says the copy is still unresolved" \
-  "printf '%s' \"\$out_p45pull\" | grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174'"
+  "grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174' <<< \"\$out_p45pull\""
 check "#45 and the pull says plainly that this is not news" \
-  "printf '%s' \"\$out_p45pull\" | grep -qi 'set a copy of your version aside and it is STILL not resolved'"
+  "grep -qi 'set a copy of your version aside and it is STILL not resolved' <<< \"\$out_p45pull\""
 # Resolved by putting the entry back into the live file, which is what a person does. The copy is
 # still on disk, so a report keyed on the file EXISTING would cry wolf for ever, and a guard that
 # fires when nothing is wrong is one nobody reads (L36).
@@ -7441,7 +7446,7 @@ out_p45pull2="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY
 dbg "status after resolving: $out_p45done"
 dbg "second pull: $out_p45pull2"
 check "#45 a resolved copy is no longer reported as outstanding by the pull" \
-  "! printf '%s' \"\$out_p45pull2\" | grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174'"
+  "! grep -qE 'LESSONS\.md\.conflict-OtherMac.*L174' <<< \"\$out_p45pull2\""
 # Still listed by status, because the file is still on disk and only a person can decide to delete
 # it, but named as safe rather than as work outstanding. A copy that says nothing about its own
 # state is indistinguishable from one holding the last surviving version of a lesson (L11).
@@ -7450,13 +7455,13 @@ check "#45 status still lists the resolved copy, named as safe to delete" \
 # The other copy has NOT been resolved and must still be reported in the same run: a report that
 # went quiet the moment one of them was dealt with would hide the rest.
 check "#45 the copy that is still outstanding is still named" \
-  "printf '%s' \"\$out_p45done\" | grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac.*2 lines'"
+  "grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac.*2 lines' <<< \"\$out_p45done\""
 check "#45 and the pull still names it" \
-  "printf '%s' \"\$out_p45pull2\" | grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac.*2 lines'"
+  "grep -qE 'skills/beta/SKILL\.md\.conflict-OtherMac.*2 lines' <<< \"\$out_p45pull2\""
 rm -f "$CPH/LESSONS.md.conflict-OtherMac" "$CPH/skills/beta/SKILL.md.conflict-OtherMac"
 out_p45gone="$(CLAUDE_HOME="$CPH" SYNC_REPO="$CPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 check "#45 a pull with no copies left says nothing about conflicts" \
-  "! printf '%s' \"\$out_p45gone\" | grep -qi 'conflict'"
+  "! grep -qi 'conflict' <<< \"\$out_p45gone\""
 
 section "== a set-aside copy is judged by its words, not its line breaks (#212) =="
 # The report decided whether a `.conflict-*` copy still held content by comparing whole LINES
@@ -7561,10 +7566,10 @@ check "#53 only the files that could match are opened" \
   "printf '%s' \"\$cs_fast_err\" | grep -qE 'examined 5 (candidate )?file'"
 check "#53 the slow path opens the whole tree, so the comparison is real" \
   "[ \"\$(printf '%s' \"\$cs_slow_err\" | sed -nE 's/.*examined ([0-9]+).*/\1/p')\" -gt 400 ]"
-check "#53 a binary file is never scanned"       "! printf '%s' \"\$cs_fast\" | grep -q 'logo.png'"
-check "#53 a file that is not synced is out of scope" "! printf '%s' \"\$cs_fast\" | grep -q 'unsynced.sh'"
-check "#53 a heading is not a citation of itself" "! printf '%s' \"\$cs_fast\" | grep -q 'LESSONS.md'"
-check "#53 a synced file with no mention is not named" "! printf '%s' \"\$cs_fast\" | grep -q 'quiet/SKILL.md'"
+check "#53 a binary file is never scanned"       "! grep -q 'logo.png' <<< \"\$cs_fast\""
+check "#53 a file that is not synced is out of scope" "! grep -q 'unsynced.sh' <<< \"\$cs_fast\""
+check "#53 a heading is not a citation of itself" "! grep -q 'LESSONS.md' <<< \"\$cs_fast\""
+check "#53 a synced file with no mention is not named" "! grep -q 'quiet/SKILL.md' <<< \"\$cs_fast\""
 # Report only, in both directions: the scan is a diagnostic and must never edit what it reads.
 check "#53 the scan rewrites nothing"            "grep -q 'see L2 for the rule' '$CSH/hooks/x.sh' && grep -q 'see L2 for the rule' '$CSH/CLAUDE.md'"
 # A number it cannot parse is refused, not scanned for: `cite-scan hooks` would otherwise grep the
@@ -7590,34 +7595,34 @@ cp "$BDA/CLAUDE.md" "$BDB/CLAUDE.md"; cp "$BDA/LESSONS.md" "$BDB/LESSONS.md"
 out_bd1="$(SYNC_HOSTNAME=MacOne SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
 dbg "first Mac's claim: $out_bd1"
 check "#44 the first Mac keeps counting from the numbers already in use" \
-  "printf '%s' \"\$out_bd1\" | grep -q '^L4$'"
+  "grep -q '^L4$' <<< \"\$out_bd1\""
 check "#44 its band is recorded where the other Mac can read it" \
   "[ \"\$(cat '$BDR/lesson-bands/MacOne' 2>/dev/null)\" = '1' ]"
 check "#44 and the claim says which band it took" \
-  "printf '%s' \"\$out_bd1\" | grep -qi 'had no lesson number band, so it claimed 1 to 500'"
+  "grep -qi 'had no lesson number band, so it claimed 1 to 500' <<< \"\$out_bd1\""
 # The whole point, and the case that used to collide: a second Mac holding the SAME rules file, at
 # the same moment, must not offer the same number.
 out_bd2="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
 dbg "second Mac's claim: $out_bd2"
 check "#44 the second Mac mints from its own band instead" \
-  "printf '%s' \"\$out_bd2\" | grep -q '^L501$'"
+  "grep -q '^L501$' <<< \"\$out_bd2\""
 check "#44 and the two Macs are not offered the same number" \
   "[ \"\$(printf '%s' \"\$out_bd1\" | grep -oE 'L[0-9]+' | tail -1)\" != \"\$(printf '%s' \"\$out_bd2\" | grep -oE 'L[0-9]+' | tail -1)\" ]"
 # A band is claimed once. Re-claiming on every call would walk up the bands for ever and make the
 # number nobody can predict.
 out_bd2b="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
-check "#44 asking twice gives the same answer"       "printf '%s' \"\$out_bd2b\" | grep -q '^L501$'"
+check "#44 asking twice gives the same answer"       "grep -q '^L501$' <<< \"\$out_bd2b\""
 check "#44 and does not claim a second band"          "[ \"\$(cat '$BDR/lesson-bands/MacTwo' 2>/dev/null)\" = '501' ]"
 check "#44 an established Mac says nothing about claiming" \
-  "! printf '%s' \"\$out_bd2b\" | grep -qi 'claimed'"
+  "! grep -qi 'claimed' <<< \"\$out_bd2b\""
 # The second Mac writes its lesson, and both Macs then hold each other's entries after a sync.
 # Neither Mac's next number may move because of what the OTHER one wrote.
 printf -- '- **L501. five hundred and one.** body\n' >> "$BDB/LESSONS.md"
 printf -- '- **L501. five hundred and one.** body\n' >> "$BDA/LESSONS.md"
 out_bd3="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
 out_bd4="$(SYNC_HOSTNAME=MacOne SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
-check "#44 the Mac that wrote it moves on to the next in its band" "printf '%s' \"\$out_bd3\" | grep -q '^L502$'"
-check "#44 the other Mac is unaffected by it"                      "printf '%s' \"\$out_bd4\" | grep -q '^L4$'"
+check "#44 the Mac that wrote it moves on to the next in its band" "grep -q '^L502$' <<< \"\$out_bd3\""
+check "#44 the other Mac is unaffected by it"                      "grep -q '^L4$' <<< \"\$out_bd4\""
 # Numbering is still one namespace, so the duplicate check has to keep judging the whole file
 # rather than one band: an arriving duplicate is exactly what it exists to catch.
 printf -- '- **L501. a second entry under the same number.** body\n' >> "$BDA/LESSONS.md"
@@ -7633,7 +7638,7 @@ printf '501\n' > "$BDR/lesson-bands/MacThree"
 bd_full_rc=0
 out_bdfull="$(SYNC_HOSTNAME=MacThree SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDC" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)" || bd_full_rc=$?
 check "#44 a full band refuses instead of spilling into another Mac's" "[ \"\$bd_full_rc\" -ne 0 ]"
-check "#44 and says which band ran out"                               "printf '%s' \"\$out_bdfull\" | grep -q '501'"
+check "#44 and says which band ran out"                               "grep -q '501' <<< \"\$out_bdfull\""
 # Two Macs that claimed the same band while unable to see each other. There is nobody to arbitrate,
 # so the rule has to give the same answer wherever it runs: the lower name keeps the band. Which
 # Mac that is does not matter; that both agree without talking does.
@@ -7647,7 +7652,7 @@ out_bdkeep="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$
 check "#44 the Mac whose name sorts first keeps the band" \
   "[ \"\$(cat '$BDR/lesson-bands/MacTwo' 2>/dev/null)\" = '501' ]"
 check "#44 and is told nothing, because nothing changed for it" \
-  "! printf '%s' \"\$out_bdkeep\" | grep -qi 'moved'"
+  "! grep -qi 'moved' <<< \"\$out_bdkeep\""
 out_bdcol="$(SYNC_HOSTNAME=MacZulu SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDC" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
 dbg "collided band: $out_bdcol"
 check "#44 the other one moves to a free band" \
@@ -7655,13 +7660,13 @@ check "#44 the other one moves to a free band" \
 check "#44 and it does not take a band anyone else holds" \
   "[ \"\$(cat '$BDR/lesson-bands/MacZulu' 2>/dev/null)\" != \"\$(cat '$BDR/lesson-bands/MacTwo' 2>/dev/null)\" ] && [ \"\$(cat '$BDR/lesson-bands/MacZulu' 2>/dev/null)\" != \"\$(cat '$BDR/lesson-bands/MacOne' 2>/dev/null)\" ]"
 check "#44 the move is reported, not silent" \
-  "printf '%s' \"\$out_bdcol\" | grep -qi 'moved to 1001 to 1500'"
+  "grep -qi 'moved to 1001 to 1500' <<< \"\$out_bdcol\""
 check "#44 and it mints from the band it moved to" \
   "printf '%s' \"\$out_bdcol\" | grep -q \"L\$(cat '$BDR/lesson-bands/MacZulu')\""
 # Settled for good: asking again neither moves it nor reports anything.
 out_bdcol2="$(SYNC_HOSTNAME=MacZulu SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDC" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
 check "#44 a settled collision stays settled" \
-  "! printf '%s' \"\$out_bdcol2\" | grep -qi 'moved'"
+  "! grep -qi 'moved' <<< \"\$out_bdcol2\""
 # A band file that holds no number is not the same as having none: read as absent it would hand
 # this Mac the whole range again, which is the collision the mechanism exists to prevent, and the
 # only sign would be a number that happened to be taken (L50).
@@ -7669,7 +7674,7 @@ printf 'not a number\n' > "$BDR/lesson-bands/MacFive"
 bd_junk_rc=0
 out_bdjunk="$(SYNC_HOSTNAME=MacFive SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)" || bd_junk_rc=$?
 check "#44 a band file with no number in it refuses"  "[ \"\$bd_junk_rc\" -ne 0 ]"
-check "#44 and names the file to fix"                 "printf '%s' \"\$out_bdjunk\" | grep -q 'lesson-bands/MacFive holds no number'"
+check "#44 and names the file to fix"                 "grep -q 'lesson-bands/MacFive holds no number' <<< \"\$out_bdjunk\""
 check "#44 and does not mint a number anyway"         "! printf '%s' \"\$out_bdjunk\" | grep -qE '^L[0-9]+$'"
 rm -f "$BDR/lesson-bands/MacFive"
 
@@ -7707,9 +7712,9 @@ check "#50 a SKILL.md with no description is not sent" "[ ! -e '$BSR/payload/ski
 check "#50 frontmatter written in the body does not count" "[ ! -e '$BSR/payload/skills/bodyonly' ]"
 # Named WITH the reason on one line: "four skills were skipped" sends nobody anywhere, and two
 # separate greps over a push report that lists paths anyway prove nothing (L172, #55).
-check "#50 the push names the empty directory and why"  "printf '%s' \"\$out_bs\" | grep -qE 'empty.*SKILL\.md'"
+check "#50 the push names the empty directory and why"  "grep -qE 'empty.*SKILL\.md' <<< \"\$out_bs\""
 check "#50 the push names the loose file and why"       "printf '%s' \"\$out_bs\" | grep -qE 'design-notes\.md.*(not a skill|bare file)'"
-check "#50 the push names the one missing a description" "printf '%s' \"\$out_bs\" | grep -qE 'nofm.*description'"
+check "#50 the push names the one missing a description" "grep -qE 'nofm.*description' <<< \"\$out_bs\""
 # Silence when everything can load, or the warning becomes furniture and stops being read.
 BS2="$WORK/badskill-home2"; BSR2="$WORK/badskill-repo2"
 mkdir -p "$BS2/skills/good" "$BSR2/payload"
@@ -7717,7 +7722,7 @@ echo '{"hooks":{}}' > "$BS2/settings.json"; printf '# rules\n' > "$BS2/CLAUDE.md
 printf -- '---\nname: good\ndescription: a skill that can actually load\n---\nbody\n' > "$BS2/skills/good/SKILL.md"
 out_bsok="$(CLAUDE_HOME="$BS2" SYNC_REPO="$BSR2" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
 check "#50 a clean push says nothing about skills that cannot load" \
-  "! printf '%s' \"\$out_bsok\" | grep -qi 'cannot load'"
+  "! grep -qi 'cannot load' <<< \"\$out_bsok\""
 # The other direction: junk already in the payload (all four of these have been syncing for
 # months) must not be written onto this Mac either, and the pull has to say so.
 BSD="$WORK/badskill-dest"; mkdir -p "$BSD"
@@ -7731,7 +7736,7 @@ dbg "pull with unloadable skills: $out_bspull"
 check "#50 a skill that can load still arrives"      "[ -f '$BSD/skills/loose/SKILL.md' ]"
 check "#50 a directory with no SKILL.md is not applied" "[ ! -e '$BSD/skills/humanizer' ]"
 check "#50 a bare file in the payload is not applied"   "[ ! -e '$BSD/skills/stop-slop.md' ]"
-check "#50 the pull names what it refused, and why"     "printf '%s' \"\$out_bspull\" | grep -qE 'humanizer.*SKILL\.md'"
+check "#50 the pull names what it refused, and why"     "grep -qE 'humanizer.*SKILL\.md' <<< \"\$out_bspull\""
 
 section "== an empty skills folder in the payload is cleared, not reported for ever (#62) =="
 # stop-slop/ and humanizer/ arrived in the payload as directories holding no files at all: both are
@@ -7751,18 +7756,18 @@ mkskill "$EMR/payload/skills/fine/SKILL.md" 'a skill that loads'
 out_em="$(CLAUDE_HOME="$EMH" SYNC_REPO="$EMR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "pull with an empty payload skill: $out_em"
 check "#62 the empty folder is named once, with the reason" \
-  "printf '%s' \"\$out_em\" | grep -qE 'hollow.*SKILL\.md'"
+  "grep -qE 'hollow.*SKILL\.md' <<< \"\$out_em\""
 check "#62 and it is gone from the payload"        "[ ! -d '$EMR/payload/skills/hollow' ]"
 check "#62 a folder holding files is refused, never deleted" \
   "[ -f '$EMR/payload/skills/haswork/notes.md' ]"
-check "#62 and that one is still named"            "printf '%s' \"\$out_em\" | grep -qE 'haswork.*SKILL\.md'"
+check "#62 and that one is still named"            "grep -qE 'haswork.*SKILL\.md' <<< \"\$out_em\""
 check "#62 a skill that loads is untouched"        "[ -f '$EMH/skills/fine/SKILL.md' ]"
 # The point of clearing it: the next pull is quiet about it, so the warning that remains means
 # something.
 out_em2="$(CLAUDE_HOME="$EMH" SYNC_REPO="$EMR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 check "#62 the next pull says nothing about the empty one" \
-  "! printf '%s' \"\$out_em2\" | grep -q 'hollow'"
-check "#62 and still reports the one holding files"  "printf '%s' \"\$out_em2\" | grep -q 'skills/haswork: the directory holds no SKILL\.md'"
+  "! grep -q 'hollow' <<< \"\$out_em2\""
+check "#62 and still reports the one holding files"  "grep -q 'skills/haswork: the directory holds no SKILL\.md' <<< \"\$out_em2\""
 # The mirror runs with --delete, so an entry the payload does not carry is deleted from this Mac
 # unless something protects it. Refusing to carry a half-built or broken skill folder therefore
 # became "delete it from the other Mac" the moment that Mac pulled, which is the shape L5 is about,
@@ -7810,16 +7815,16 @@ check "#49 a name held by both a plugin and the skills folder fails the check" "
 # One line carrying the skill AND the plugin providing it, or the report names a duplicate without
 # saying which of the seven plugins to look in (L172).
 check "#49 and names the skill and the plugin together" \
-  "printf '%s' \"\$out_ds\" | grep -qE 'wrangler.*cloudflare'"
-check "#49 a skill only this Mac has is not reported"     "! printf '%s' \"\$out_ds\" | grep -q 'mine'"
-check "#49 a plugin skill with no local twin is not reported" "! printf '%s' \"\$out_ds\" | grep -q 'durable-objects'"
+  "grep -qE 'wrangler.*cloudflare' <<< \"\$out_ds\""
+check "#49 a skill only this Mac has is not reported"     "! grep -q 'mine' <<< \"\$out_ds\""
+check "#49 a plugin skill with no local twin is not reported" "! grep -q 'durable-objects' <<< \"\$out_ds\""
 # The payload half: a plugin installed later can shadow a skill that syncs between the Macs, and
 # that copy is on the other Mac too.
 mkdir -p "$DSR/payload/skills/durable-objects"
 mkskill "$DSR/payload/skills/durable-objects/SKILL.md" 'a synced skill a plugin now also provides'
 out_ds2="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" check-skills 2>&1 || true)"
 check "#49 a synced skill shadowed by a plugin is caught too" \
-  "printf '%s' \"\$out_ds2\" | grep -qE 'durable-objects.*cloudflare'"
+  "grep -qE 'durable-objects.*cloudflare' <<< \"\$out_ds2\""
 # Nothing to report must be a PASS that says so, not a silent zero: a check that prints nothing
 # when it found nothing reads exactly like one that could not look (L98).
 rm -rf "$DSH/skills/wrangler" "$DSR/payload/skills/durable-objects"
@@ -7838,7 +7843,7 @@ check "#49 no plugins at all is reported as nothing to compare against" \
 mkdir -p "$DSH/skills/wrangler"; mkskill "$DSH/skills/wrangler/SKILL.md" 'back again'
 out_dsstatus="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#49 status reports a duplicate without being asked" \
-  "printf '%s' \"\$out_dsstatus\" | grep -qE 'wrangler.*cloudflare'"
+  "grep -qE 'wrangler.*cloudflare' <<< \"\$out_dsstatus\""
 
 section "== assertions that could pass on output the command prints anyway (#55) =="
 # Many checks capture a command's whole output and grep that blob for a phrase. claude-sync's own
@@ -7922,8 +7927,10 @@ function tally(c, restr,   rest, m, v, rs, rl) {
   n = split(line, seg, /&&/)
   for (i = 1; i <= n; i++) {
     s = seg[i]
-    if (s !~ /printf/ || s !~ /grep/) continue
-    if (s ~ /![[:space:]]*printf/) continue
+    if (s !~ /grep/) continue
+    # Either spelling of feeding captured output to grep: the pipe, or the here-string it became.
+    if (s !~ /printf/ && s !~ /<<</) continue
+    if (s ~ /![[:space:]]*printf/ || s ~ /![[:space:]]*grep/) continue
     if (match(s, /grep -[a-zA-Z]*q[a-zA-Z]*[[:space:]]+'[^']+'/) == 0) continue
     p = substr(s, RSTART, RLENGTH); sub(/^grep[^\047]*\047/, "", p); sub(/\047$/, "", p)
     if (p ~ /^[A-Za-z0-9_.\/\\-]+$/ && (p ~ /\// || p ~ /\.(sh|md|py|json|txt|js)$/)) {
@@ -7951,8 +7958,9 @@ function tally(c, restr,   rest, m, v, rs, rl) {
   nc = split(expr, segc, /&&/)
   for (ic = 1; ic <= nc; ic++) {
     sc = segc[ic]
-    if (sc !~ /printf/ || sc !~ /grep/) continue
-    if (sc ~ /![[:space:]]*printf/) continue
+    if (sc !~ /grep/) continue
+    if (sc !~ /printf/ && sc !~ /<<</) continue
+    if (sc ~ /![[:space:]]*printf/ || sc ~ /![[:space:]]*grep/) continue
     if (match(sc, /grep -[a-zA-Z]*q[a-zA-Z]*[[:space:]]+'[^']+'/) == 0) continue
     pc = substr(sc, RSTART, RLENGTH); sub(/^grep[^\047]*\047/, "", pc); sub(/\047$/, "", pc)
     if (pc ~ /^[A-Za-z][A-Za-z0-9]*$/) {
@@ -7974,58 +7982,67 @@ WEAKFIX="$WORK/weak-fixture.sh"
 # nobody would add a case to it, and #68 needed four more.)
 sed 's/^@@//' > "$WEAKFIX" <<'WEAKFIXTURE'
 @@check "two greps over one blob"  "printf '%s' \"$out_x\" | grep -q 'alpha-1' && printf '%s' \"$out_x\" | grep -q 'beta-1'"
-@@check "a bare path in the output"  "printf '%s' \"$out_y\" | grep -q 'hooks/thing.sh'"
-@@check "a negated bare path is fine"  "! printf '%s' \"$out_z\" | grep -q 'hooks/thing.sh'"
-@@check "one line carrying both"  "printf '%s' \"$out_w\" | grep -q 'hooks/thing.sh also mentions L2'"
+@@check "a bare path in the output"  "grep -q 'hooks/thing.sh' <<< \"$out_y\""
+@@check "a negated bare path is fine"  "! grep -q 'hooks/thing.sh' <<< \"$out_z\""
+@@check "one line carrying both"  "grep -q 'hooks/thing.sh also mentions L2' <<< \"$out_w\""
 @@check "two herestrings over one blob"  "grep -q 'alpha-1' <<<\"$out_h\" && grep -q 'beta-1' <<<\"$out_h\""
 @@check "a case and a grep over one blob"  "case \"$out_c\" in *alpha-1*) true ;; *) false ;; esac && printf '%s' \"$out_c\" | grep -q 'beta-1'"
 @@check "two double brackets over one blob"  "[[ \"$out_b\" == *alpha-1* ]] && [[ \"$out_b\" == *beta-1* ]]"
 @@check "a positive and a negated match is fine"  "printf '%s' \"$out_n\" | grep -q 'alpha-1' && ! printf '%s' \"$out_n\" | grep -q 'beta-1'"
-@@check "a bare word in the output"  "printf '%s' \"$out_v\" | grep -q 'kept'"
-@@check "a negated bare word is fine"  "! printf '%s' \"$out_v2\" | grep -q 'kept'"
-@@check "a word with what it is about"  "printf '%s' \"$out_v3\" | grep -q 'kept your edit to push.py'"
-@@check "an anchored pattern is fine"  "printf '%s' \"$out_v4\" | grep -q '^PASS='"
-@@check "a long bare word in the output"  "printf '%s' \"$out_v5\" | grep -q 'unregistering'"
+@@check "a bare word in the output"  "grep -q 'kept' <<< \"$out_v\""
+@@check "a negated bare word is fine"  "! grep -q 'kept' <<< \"$out_v2\""
+@@check "a word with what it is about"  "grep -q 'kept your edit to push.py' <<< \"$out_v3\""
+@@check "an anchored pattern is fine"  "grep -q '^PASS=' <<< \"$out_v4\""
+@@check "a long bare word in the output"  "grep -q 'unregistering' <<< \"$out_v5\""
+@@check "a bare path through a pipe"  "grep -q 'hooks/thing.sh' <<< \"$out_yp\""
+@@check "a bare word through a pipe"  "grep -q 'kept' <<< \"$out_vp\""
 WEAKFIXTURE
 weak_fix="$(awk -f "$WEAK_AWK" "$WEAKFIX")"
 dbg "weak scanner on the fixture: $weak_fix"
 check "#55 the scanner reads every check in a file" \
-  "[ \"\$(printf '%s' \"\$weak_fix\" | awk -F'\t' '\$1==\"totals\"{print \$2}')\" = '13' ]"
+  "[ \"\$(printf '%s' \"\$weak_fix\" | awk -F'\t' '\$1==\"totals\"{print \$2}')\" = '15' ]"
 check "#55 it flags two greps over one captured output" \
-  "printf '%s' \"\$weak_fix\" | grep -q 'twice.*two greps over one blob'"
+  "grep -q 'twice.*two greps over one blob' <<< \"\$weak_fix\""
 check "#55 it flags a bare path matched in captured output" \
-  "printf '%s' \"\$weak_fix\" | grep -q 'bare.*a bare path in the output'"
+  "grep -q 'bare.*a bare path in the output' <<< \"\$weak_fix\""
 check "#55 a negated bare path is not flagged" \
-  "! printf '%s' \"\$weak_fix\" | grep -q 'a negated bare path is fine'"
+  "! grep -q 'a negated bare path is fine' <<< \"\$weak_fix\""
 check "#55 an assertion carrying the path and the wording together is not flagged" \
-  "! printf '%s' \"\$weak_fix\" | grep -q 'one line carrying both'"
+  "! grep -q 'one line carrying both' <<< \"\$weak_fix\""
 # #68: the same defect written the other ways this suite can write it. A detector that knows one
 # spelling reports zero about the rest, and a zero is read as proof the shape cannot occur (L182).
 check "#68 it flags two herestrings over one captured output" \
-  "printf '%s' \"\$weak_fix\" | grep -q 'twice.*two herestrings over one blob'"
+  "grep -q 'twice.*two herestrings over one blob' <<< \"\$weak_fix\""
 check "#68 it flags a case and a grep over one captured output" \
-  "printf '%s' \"\$weak_fix\" | grep -q 'twice.*a case and a grep over one blob'"
+  "grep -q 'twice.*a case and a grep over one blob' <<< \"\$weak_fix\""
 check "#68 it flags two double brackets over one captured output" \
-  "printf '%s' \"\$weak_fix\" | grep -q 'twice.*two double brackets over one blob'"
+  "grep -q 'twice.*two double brackets over one blob' <<< \"\$weak_fix\""
 # A negated half cannot be supplied by an unrelated line, so "present AND not present" over one
 # blob is sound. Banning it at a ceiling of zero would refuse a legitimate check.
 check "#68 a positive paired with a negated match is not flagged" \
-  "! printf '%s' \"\$weak_fix\" | grep -q 'a positive and a negated match is fine'"
+  "! grep -q 'a positive and a negated match is fine' <<< \"\$weak_fix\""
 # #71: the third family. One bare word, matched against a whole captured output.
 check "#71 it flags an assertion matching one bare word" \
-  "printf '%s' \"\$weak_fix\" | grep -q 'word.*a bare word in the output'"
+  "grep -q 'word.*a bare word in the output' <<< \"\$weak_fix\""
 check "#71 a negated bare word is not flagged" \
-  "! printf '%s' \"\$weak_fix\" | grep -q 'a negated bare word is fine'"
+  "! grep -q 'a negated bare word is fine' <<< \"\$weak_fix\""
 check "#71 a word carrying what it is about is not flagged" \
-  "! printf '%s' \"\$weak_fix\" | grep -q 'a word with what it is about'"
+  "! grep -q 'a word with what it is about' <<< \"\$weak_fix\""
+# Both families, in the PIPE spelling as well. #197 converted the suite to here-strings and the two
+# rules below required a printf, so they would have reported zero about every converted line while
+# still reporting a number (L98, L182).
+check "#197 it flags a bare path fed through a pipe" \
+  "grep -q 'bare.*a bare path through a pipe' <<< \"\$weak_fix\""
+check "#197 it flags a bare word fed through a pipe" \
+  "grep -q 'word.*a bare word through a pipe' <<< \"\$weak_fix\""
 check "#71 an anchored pattern is not flagged" \
-  "! printf '%s' \"\$weak_fix\" | grep -q 'an anchored pattern is fine'"
+  "! grep -q 'an anchored pattern is fine' <<< \"\$weak_fix\""
 # Length is not what makes a word generic. The cap this pass shipped with (12 characters) was a
 # guess nobody measured, and it was inert the moment the 40 were rewritten, so the only thing it
 # could ever do was let a future one through (#71, L172: do not ship a threshold you have not
 # measured against the real spread).
 check "#71 a long bare word is flagged too" \
-  "printf '%s' \"\$weak_fix\" | grep -q 'word.*a long bare word in the output'"
+  "grep -q 'word.*a long bare word in the output' <<< \"\$weak_fix\""
 # Now the real suite. The ceilings were first measured on 2026-08-17 (581 checks, 6 and 22); #67
 # rewrote all six of the double-grep checks and #69 all twenty-one of the bare path ones, so both
 # are 0. From here either shape fails the suite. Raising either is a decision somebody has to write
@@ -8060,8 +8077,8 @@ WEAKPOS="$WORK/weak-positive-control.sh"
 cp "$SCRIPT_SELF" "$WEAKPOS"
 sed 's/^@@//' >> "$WEAKPOS" <<'WEAKPLANT'
 @@check "planted: two greps over one blob"  "printf '%s' \"$out_p\" | grep -q 'alpha-1' && printf '%s' \"$out_p\" | grep -q 'beta-1'"
-@@check "planted: a bare path in the output"  "printf '%s' \"$out_q\" | grep -q 'hooks/planted.sh'"
-@@check "planted: one bare word in the output"  "printf '%s' \"$out_r\" | grep -q 'planted'"
+@@check "planted: a bare path in the output"  "grep -q 'hooks/planted.sh' <<< \"$out_q\""
+@@check "planted: one bare word in the output"  "grep -q 'planted' <<< \"$out_r\""
 WEAKPLANT
 weak_pos="$(awk -f "$WEAK_AWK" "$WEAKPOS" | awk -F'\t' '$1=="totals"{print $3 " " $4 " " $5}')"
 dbg "positive control on the real suite: planted 1 of each, scanner reports ${weak_pos:-<nothing>}"
@@ -8093,9 +8110,9 @@ dup_names(){ grep -o '^check "[^"]*"' "$1" | sort | uniq -d; }
 dup_fix="$(dup_names "$DUPFIX")"
 dbg "duplicate-name scan on the fixture: $dup_fix"
 check "#70 the scan finds a name used twice" \
-  "printf '%s' \"\$dup_fix\" | grep -q 'check \"alpha\"'"
+  "grep -q 'check \"alpha\"' <<< \"\$dup_fix\""
 check "#70 and leaves a name used once alone" \
-  "! printf '%s' \"\$dup_fix\" | grep -q 'beta'"
+  "! grep -q 'beta' <<< \"\$dup_fix\""
 dup_real="$(dup_names "$SCRIPT_SELF")"
 if [ -n "$dup_real" ]; then
   echo "  (#70 check names used more than once in this suite:)"
@@ -8143,9 +8160,9 @@ printf '%s=1\n' "SECTION_UNTIL" > "$SETK"
 set_fix="$(comm -23 <(mentioned_settings "$SETC") <(used_settings "$SETK"))"
 dbg "setting-name scan on the fixture: $set_fix"
 check "#73 the scan reports a name that only prose mentions" \
-  "printf '%s' \"\$set_fix\" | grep -q \"\$_fake_setting\""
+  "grep -q \"\$_fake_setting\" <<< \"\$set_fix\""
 check "#73 and leaves a name the code really uses alone" \
-  "! printf '%s' \"\$set_fix\" | grep -q 'SECTION_UNTIL'"
+  "! grep -q 'SECTION_UNTIL' <<< \"\$set_fix\""
 # Now the real files. The workflow counts as code: it is where several SUITE_* knobs are actually
 # set, and treating it as prose would report every one of them as invented.
 _repo_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
@@ -8386,13 +8403,13 @@ check "#63 a second send leaves the index alone" "[ \"\$(cksum < '$LXH/LESSONS-I
 # Reading one in full, which is what the index sends you to.
 out_lxl="$(CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson L3 2>&1)"
 dbg "lesson L3: $out_lxl"
-check "#63 a lesson can be read in full on demand"   "printf '%s' \"\$out_lxl\" | grep -q 'Write to temp and rename'"
-check "#63 with its provenance"                      "printf '%s' \"\$out_lxl\" | grep -q 'someproject#13'"
-check "#63 and without the neighbouring entries"     "! printf '%s' \"\$out_lxl\" | grep -q 'Mocked guards'"
+check "#63 a lesson can be read in full on demand"   "grep -q 'Write to temp and rename' <<< \"\$out_lxl\""
+check "#63 with its provenance"                      "grep -q 'someproject#13' <<< \"\$out_lxl\""
+check "#63 and without the neighbouring entries"     "! grep -q 'Mocked guards' <<< \"\$out_lxl\""
 lx_miss_rc=0
 out_lxmiss="$(CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson L99 2>&1)" || lx_miss_rc=$?
 check "#63 a number that is not there is refused"     "[ \"\$lx_miss_rc\" -ne 0 ]"
-check "#63 rather than printing nothing and exiting 0" "printf '%s' \"\$out_lxmiss\" | grep -q 'L99 is not in'"
+check "#63 rather than printing nothing and exiting 0" "grep -q 'L99 is not in' <<< \"\$out_lxmiss\""
 
 section "== a pull git refused must fail loudly, not report success (#78 #80 #81) =="
 # `git pull --ff-only` ran with its exit status discarded, so a pull git ABORTED fell straight
@@ -8437,8 +8454,8 @@ dv_rc=0
 out_dv="$(CLAUDE_HOME="$DVHB" SYNC_REPO="$DVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)" || dv_rc=$?
 dbg "diverged pull: rc=$dv_rc $out_dv"
 check "#78 a refused pull exits non zero"            "[ \"\$dv_rc\" -ne 0 ]"
-check "#78 it does not claim to have pulled"         "! printf '%s' \"\$out_dv\" | grep -q 'Pulled shared config'"
-check "#78 nor that there was nothing to receive"    "! printf '%s' \"\$out_dv\" | grep -q 'Already up to date'"
+check "#78 it does not claim to have pulled"         "! grep -q 'Pulled shared config' <<< \"\$out_dv\""
+check "#78 nor that there was nothing to receive"    "! grep -q 'Already up to date' <<< \"\$out_dv\""
 check "#81 nothing from the repo was applied"        "[ ! -e '$DVHB/skills/dvlater/SKILL.md' ]"
 check "#80 the message names the divergence, both counts, and the command that resolves it" \
   "line_has \"\$out_dv\" 'diverged' '1 commit here' '[0-9]+ commits? there' 'claude-sync sync'"
@@ -8460,7 +8477,7 @@ dvoff_rc=0
 out_dvoff="$(CLAUDE_HOME="$DVHC" SYNC_REPO="$DVRC" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)" || dvoff_rc=$?
 dbg "unreachable pull: rc=$dvoff_rc $out_dvoff"
 check "#78 a pull that cannot reach the repo exits non zero" "[ \"\$dvoff_rc\" -ne 0 ]"
-check "#78 and does not claim to have pulled"                "! printf '%s' \"\$out_dvoff\" | grep -q 'Pulled shared config'"
+check "#78 and does not claim to have pulled"                "! grep -q 'Pulled shared config' <<< \"\$out_dvoff\""
 check "#78 it records no reachability it did not observe"    "[ ! -s '$DVRC/.last-success' ]"
 check "#78 and says the repo could not be reached, in git's words" \
   "line_has \"\$out_dvoff\" 'could not reach the shared repo' 'no-such-bare'"
@@ -8477,8 +8494,8 @@ dvd_rc=0
 out_dvd="$(CLAUDE_HOME="$DVHD" SYNC_REPO="$DVRD" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)" || dvd_rc=$?
 dbg "refused pull (dirty repo): rc=$dvd_rc $out_dvd"
 check "#78 a pull git refuses for its own reason exits non zero" "[ \"\$dvd_rc\" -ne 0 ]"
-check "#78 that refusal does not claim to have pulled"           "! printf '%s' \"\$out_dvd\" | grep -q 'Pulled shared config'"
-check "#78 it is not reported as a divergence"                   "! printf '%s' \"\$out_dvd\" | grep -q 'have diverged'"
+check "#78 that refusal does not claim to have pulled"           "! grep -q 'Pulled shared config' <<< \"\$out_dvd\""
+check "#78 it is not reported as a divergence"                   "! grep -q 'have diverged' <<< \"\$out_dvd\""
 check "#78 and it carries git's own words"                       "line_has \"\$out_dvd\" 'refused to fast-forward' 'local changes'"
 
 
@@ -8616,7 +8633,7 @@ check "#83 the regenerated index carries both sides" \
 # two lines (claude-config#172).
 ix_count="$(grep -c '^- L[0-9]' "$IXHB/LESSONS-INDEX.md" 2>/dev/null || true)"
 case "$ix_count" in ''|*[!0-9]*) ix_count=0 ;; esac
-ix_header="$(grep -oE '[0-9]+ lessons' "$IXHB/LESSONS-INDEX.md" 2>/dev/null | grep -oE '[0-9]+' | head -1)"
+ix_header="$(grep -oE '[0-9]+ lessons' "$IXHB/LESSONS-INDEX.md" 2>/dev/null | grep -oE '[0-9]+' | awk 'NR <= 1')"
 ix_real="$(grep -c '^- \*\*L[0-9]' "$IXHB/LESSONS.md" 2>/dev/null || true)"
 case "$ix_real" in ''|*[!0-9]*) ix_real=0 ;; esac
 dbg "index entries=$ix_count header=$ix_header lessons=$ix_real"
@@ -9720,8 +9737,8 @@ check "#87 and the pull reports it as a received change" "line_has \"\$out_tk\" 
 # nothing changed is a change report nobody reads (L36).
 out_tk2="$(CLAUDE_HOME="$TKHB" SYNC_REPO="$TKRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "second pull, nothing changed: $out_tk2"
-check "#87 a pull with nothing new says so"        "printf '%s' \"\$out_tk2\" | grep -q 'Already up to date'"
-check "#87 and names no file as received"          "! printf '%s' \"\$out_tk2\" | grep -q 'tokhook\.sh'"
+check "#87 a pull with nothing new says so"        "grep -q 'Already up to date' <<< \"\$out_tk2\""
+check "#87 and names no file as received"          "! grep -q 'tokhook\.sh' <<< \"\$out_tk2\""
 
 # Nor may a send invent a commit out of the substitution. If the payload were rewritten to
 # something different every time, the watcher would push a commit per run for ever.
@@ -9851,7 +9868,7 @@ check "#105 even though every check inside it passed" "grep -q 'FAIL=0' '$_SO8'"
 # on 2026-08-17 (#37): a child read the flag as being about ITSELF. Proven the same way #37 proves
 # its own, from the outside, with a real run that RECEIVED the value starting a real child.
 _SOG="$(SUITE_FILTERED=1 SUITE_DEPTH="$SUITE_DEPTH" SECTION_ONLY=push SUITE_SPAWN_UNTIL=push SUITE_TIMEOUT=90 bash "$SCRIPT_SELF" 2>&1)"
-check "#105 the spawn probe for that started a child" "printf '%s' \"\$_SOG\" | grep -q 'the child exited'"
+check "#105 the spawn probe for that started a child" "grep -q 'the child exited' <<< \"\$_SOG\""
 check "#105 a child does not inherit the one-section filter" \
   "printf '%s' \"\$_SOG\" | grep -q 'inherits SECTION_ONLY as: <unset>'"
 
@@ -9892,8 +9909,8 @@ check "#110 even though the run as a whole reported no failures" "grep -q 'FAIL=
 # And the un-export has to sit ahead of every spawn site, or a site above it still hands it on.
 # Derived, and the pattern assembled from pieces so the check cannot be satisfied by its own line.
 _soexp_pat="export"" -n SUITE_FILTERED SECTION_ONLY SECTION_LIST"
-_soexp_line="$(grep -nF "$_soexp_pat" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
-_sospawn_first="$(grep -nF "bash \"\$SCRIPT""_SELF\"" "$SCRIPT_SELF" | head -1 | cut -d: -f1)"
+_soexp_line="$(grep -nF "$_soexp_pat" "$SCRIPT_SELF" | awk 'NR <= 1' | cut -d: -f1)"
+_sospawn_first="$(grep -nF "bash \"\$SCRIPT""_SELF\"" "$SCRIPT_SELF" | awk 'NR <= 1' | cut -d: -f1)"
 check "#105 the filter is un-exported before anything spawns a run" \
   "[ -n \"\$_soexp_line\" ] && [ -n \"\$_sospawn_first\" ] && [ \"\$_soexp_line\" -lt \"\$_sospawn_first\" ]"
 
@@ -10063,7 +10080,7 @@ check "#145 the scan has the repo's shell and workflow files to read" \
 # stopped matching workflows could not leave the scan looking healthy (L100).
 for _sc_want in tests/test-claude-sync.sh .github/workflows/tests.yml tests/audit-changed-sections.sh payload/hooks/run-all-tests.sh; do
   check "#145 and $_sc_want is one of them" \
-    "printf '%s\n' \"\$_sc_files\" | grep -qx '$_sc_want'"
+    "grep -qx '$_sc_want' <<< \"\$_sc_files\""
 done
 _sc_bad="$(printf '%s\n' "$_sc_files" | while IFS= read -r _sc_one; do
   [ -n "$_sc_one" ] || continue
@@ -10183,7 +10200,7 @@ check "#148 the markdown scan has this repo's own documents to read" \
   "[ \"\${_sc_md_n:-0}\" -ge 3 ]"
 for _sc_md_want in README.md DESIGN.md SETUP.md; do
   check "#148 and $_sc_md_want is one of them" \
-    "printf '%s\n' \"\$_sc_md_files\" | grep -qx '$_sc_md_want'"
+    "grep -qx '$_sc_md_want' <<< \"\$_sc_md_files\""
 done
 _sc_md_bad="$(printf '%s\n' "$_sc_md_files" | while IFS= read -r _sc_md_one; do
   [ -n "$_sc_md_one" ] || continue
@@ -10277,8 +10294,8 @@ while IFS= read -r _pfn; do
 done <<PFEOF
 $(grep -oE '^  \(section: [0-9]+' "$_PFO" | grep -oE '[0-9]+')
 PFEOF
-_pf_pass="$(grep -oE '^PASS=[0-9]+' "$_PFO" | head -1 | cut -d= -f2)"
-_pf_fail="$(grep -oE 'FAIL=[0-9]+' "$_PFO" | head -1 | cut -d= -f2)"
+_pf_pass="$(grep -oE '^PASS=[0-9]+' "$_PFO" | awk 'NR <= 1' | cut -d= -f2)"
+_pf_fail="$(grep -oE 'FAIL=[0-9]+' "$_PFO" | awk 'NR <= 1' | cut -d= -f2)"
 case "$_pf_pass" in ''|*[!0-9]*) _pf_pass=-1 ;; esac
 case "$_pf_fail" in ''|*[!0-9]*) _pf_fail=-1 ;; esac
 check "#107 the per section counts add up to the run's own total" \

@@ -130,11 +130,11 @@ ps_repo_dir() {
   local cmd="$1" cwd="${2:-}" cand=""
 
   # `git -C <path> … push`
-  cand="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[[:space:];&|])(rtk[[:space:]]+)?git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*@\3@p' | head -1)"
+  cand="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[[:space:];&|])(rtk[[:space:]]+)?git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*@\3@p' | awk 'NR <= 1')"
   if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi
 
   # `cd <path> && … git push`
-  cand="$(printf '%s' "$cmd" | sed -nE 's@(^|[[:space:];&|])cd[[:space:]]+([^[:space:]&|;]+).*@\2@p' | head -1)"
+  cand="$(printf '%s' "$cmd" | sed -nE 's@(^|[[:space:];&|])cd[[:space:]]+([^[:space:]&|;]+).*@\2@p' | awk 'NR <= 1')"
   cand="${cand%\"}"; cand="${cand#\"}"
   cand="${cand%\'}"; cand="${cand#\'}"
   if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi

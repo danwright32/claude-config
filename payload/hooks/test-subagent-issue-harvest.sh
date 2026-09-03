@@ -174,8 +174,8 @@ reset_spool
 stub 'echo "FINDING: EventPlace has no test for the empty case (EventPlace.swift)."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q '"status": *"found"' \
-  && printf '%s' "$got" | grep -q 'EventPlace' \
+grep -q '"status": *"found"' <<< "$got" \
+  && grep -q 'EventPlace' <<< "$got" \
   && check "a finding is spooled as found" ok \
   || check "a finding is spooled as found" "spool=$got"
 
@@ -185,7 +185,7 @@ reset_spool
 stub 'echo NONE'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q '"status": *"none"' \
+grep -q '"status": *"none"' <<< "$got" \
   && check "an empty harvest records that it looked" ok \
   || check "an empty harvest records that it looked" "spool=$got"
 
@@ -194,7 +194,7 @@ reset_spool
 stub 'echo "model unavailable" >&2; exit 7'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q '"status": *"error"' \
+grep -q '"status": *"error"' <<< "$got" \
   && check "a failed harvest records an error, not none" ok \
   || check "a failed harvest records an error, not none" "spool=$got"
 
@@ -203,7 +203,7 @@ reset_spool
 stub 'exit 0'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q '"status": *"error"' \
+grep -q '"status": *"error"' <<< "$got" \
   && check "a silent model is an error, not none" ok \
   || check "a silent model is an error, not none" "spool=$got"
 
@@ -226,8 +226,8 @@ reset_spool
 stub 'echo NONE'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 sent="$(cat "$MODEL_INPUT" 2>/dev/null)"
-printf '%s' "$sent" | grep -q "EventPlace has no test" \
-  && ! printf '%s' "$sent" | grep -q "PARENT_SESSION_MARKER" \
+grep -q "EventPlace has no test" <<< "$sent" \
+  && ! grep -q "PARENT_SESSION_MARKER" <<< "$sent" \
   && check "the agent's transcript is what reaches the model" ok \
   || check "the agent's transcript is what reaches the model" "the parent's content reached it"
 
@@ -241,9 +241,9 @@ reset_spool
 stub 'echo "FINDING: should never be reached."'
 payload "$REPO" OMIT | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q '"status": *"error"' \
-  && printf '%s' "$got" | grep -q "named no agent_transcript_path" \
-  && ! printf '%s' "$got" | grep -q "should never be reached" \
+grep -q '"status": *"error"' <<< "$got" \
+  && grep -q "named no agent_transcript_path" <<< "$got" \
+  && ! grep -q "should never be reached" <<< "$got" \
   && check "no agent transcript is an error, never a fallback to the parent" ok \
   || check "no agent transcript is an error, never a fallback to the parent" "spool=$got"
 
@@ -252,7 +252,7 @@ reset_spool
 stub 'echo "FINDING: should never be reached."'
 payload "$REPO" "$PARENT_TRANSCRIPT" "$PARENT_TRANSCRIPT" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q '"status": *"error"' \
+grep -q '"status": *"error"' <<< "$got" \
   && check "an agent path equal to the parent's is refused" ok \
   || check "an agent path equal to the parent's is refused" "spool=$got"
 
@@ -262,7 +262,7 @@ reset_spool
 stub 'echo NONE'
 payload "$REPO" "$TMPROOT/does-not-exist.jsonl" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q '"status": *"error"' \
+grep -q '"status": *"error"' <<< "$got" \
   && check "a named but missing transcript is an error" ok \
   || check "a named but missing transcript is an error" "spool=$got"
 
@@ -272,10 +272,10 @@ reset_spool
 stub 'echo "FINDING: something."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q "$FAKE_TRANSCRIPT" \
+grep -q "$FAKE_TRANSCRIPT" <<< "$got" \
   && check "the record names the transcript it read" ok \
   || check "the record names the transcript it read" "spool=$got"
-printf '%s' "$got" | grep -q '"agent": *"Explore"' \
+grep -q '"agent": *"Explore"' <<< "$got" \
   && check "the record names the agent type" ok \
   || check "the record names the agent type" "spool=$got"
 
@@ -292,7 +292,7 @@ reset_spool
 stub 'echo NONE'
 payload "$REPO" "$UNREADABLE" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q '"status": *"error"' \
+grep -q '"status": *"error"' <<< "$got" \
   && check "an unreadable transcript is an error, not an agent that said nothing" ok \
   || check "an unreadable transcript is an error, not an agent that said nothing" "spool=$got"
 
@@ -306,7 +306,7 @@ reset_spool
 stub 'echo NONE'
 payload "$REPO" "$SILENT_AGENT" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q '"status": *"none"' \
+grep -q '"status": *"none"' <<< "$got" \
   && check "an agent that said nothing is a none, not an error" ok \
   || check "an agent that said nothing is a none, not an error" "spool=$got"
 
@@ -356,10 +356,10 @@ unset CLAUDE_ISSUE_SPOOL_MIDCLEAR
 
 still_pending="$(bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
 archived="$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-printf '%s' "$still_pending" | grep -q "arrived-mid-clear" \
+grep -q "arrived-mid-clear" <<< "$still_pending" \
   && check "a finding arriving during filing is not eaten by it" ok \
   || check "a finding arriving during filing is not eaten by it" "pending=$still_pending"
-printf '%s' "$archived" | grep -q "filed before the clear" \
+grep -q "filed before the clear" <<< "$archived" \
   && check "filing still archives what was there when it started" ok \
   || check "filing still archives what was there when it started" "archive=$archived"
 
@@ -374,7 +374,7 @@ payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 
 pending="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>&1)"
 pending_code=$?
-printf '%s' "$pending" | grep -q "queue rebuild is not measured" \
+grep -q "queue rebuild is not measured" <<< "$pending" \
   && [ "$pending_code" -eq 0 ] \
   && check "pending prints the findings" ok \
   || check "pending prints the findings" "code=$pending_code out=$pending"
@@ -387,7 +387,7 @@ lines="$(printf '%s\n' "$pending" | grep -c "FINDING" || true)"
 # Reading must NOT clear. A review that is read and then interrupted has to leave
 # the finding behind for the next one.
 pending_again="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>&1)"
-printf '%s' "$pending_again" | grep -q "queue rebuild is not measured" \
+grep -q "queue rebuild is not measured" <<< "$pending_again" \
   && check "reading pending does not consume it" ok \
   || check "reading pending does not consume it" "out=$pending_again"
 
@@ -398,7 +398,7 @@ bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
   || check "clear empties pending" "pending survived clear"
 
 archive="$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-printf '%s' "$archive" | grep -q "queue rebuild is not measured" \
+grep -q "queue rebuild is not measured" <<< "$archive" \
   && check "clear keeps the record in the archive" ok \
   || check "clear keeps the record in the archive" "archive=$archive"
 
@@ -479,7 +479,7 @@ out_quiet="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
 # path the spool lookup sits in front of still works at all.
 rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
 out_cold="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
-printf '%s' "$out_cold" | grep -q '"decision"' \
+grep -q '"decision"' <<< "$out_cold" \
   && check "an empty spool does not stop the ordinary review" ok \
   || check "an empty spool does not stop the ordinary review" "silent: ${out_cold:0:120}"
 
@@ -522,14 +522,14 @@ contains "it will not come back" "$(cat "$(dirname "$REVIEW")/review/issue-revie
   || check "the instruction says a reported failure will not come back" "the instruction file does not say it"
 
 pend_settle="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-printf '%s' "$pend_settle" | grep -q "HARVEST FAILED" \
+grep -q "HARVEST FAILED" <<< "$pend_settle" \
   && check "a reported failure is not offered a second time" "still pending: ${pend_settle:0:200}" \
   || check "a reported failure is not offered a second time" ok
-printf '%s' "$pend_settle" | grep -q "retry path has no failure test" \
+grep -q "retry path has no failure test" <<< "$pend_settle" \
   && check "a finding in the same spool is left pending" ok \
   || check "a finding in the same spool is left pending" "pending=${pend_settle:0:200}"
 arch_settle="$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-printf '%s' "$arch_settle" | grep -q '"status": *"error"' \
+grep -q '"status": *"error"' <<< "$arch_settle" \
   && check "the settled failure is filed, not dropped" ok \
   || check "the settled failure is filed, not dropped" "archive=${arch_settle:0:200}"
 
@@ -542,11 +542,11 @@ stub 'exit 9'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 rm -f "$REVIEW_STAMP"
 out_nodel="$(printf '%s' "$review_payload" | CLAUDE_REVIEW_REASON_FORCE_FAIL=1 bash "$REVIEW" 2>/dev/null)"
-printf '%s' "$out_nodel" | grep -q "HARVEST FAILED" \
+grep -q "HARVEST FAILED" <<< "$out_nodel" \
   && check "the undelivered review really left the failure out" "it carried it: ${out_nodel:0:200}" \
   || check "the undelivered review really left the failure out" ok
 pend_nodel="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-printf '%s' "$pend_nodel" | grep -q "HARVEST FAILED" \
+grep -q "HARVEST FAILED" <<< "$pend_nodel" \
   && check "a failure nobody was shown stays pending" ok \
   || check "a failure nobody was shown stays pending" "pending=${pend_nodel:0:200}"
 
@@ -557,7 +557,7 @@ mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 printf 'this is not a record at all\n' >> "$(bash "$SPOOL_LIB" path "$REPO" "$PARENT_TRANSCRIPT")"
 bash "$SPOOL_LIB" file-errors "$REPO" "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 pend_corrupt="$(bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)"
-printf '%s' "$pend_corrupt" | grep -q "UNREADABLE SPOOL RECORDS" \
+grep -q "UNREADABLE SPOOL RECORDS" <<< "$pend_corrupt" \
   && check "filing failures leaves an unreadable record pending" ok \
   || check "filing failures leaves an unreadable record pending" "pending=${pend_corrupt:0:200}"
 
@@ -573,7 +573,7 @@ reset_spool
 stub 'echo "FINDING: something worth keeping."'
 payload "$REPO" | CLAUDE_ISSUE_SPOOL_LIB="$TMPROOT/not-here.sh" bash "$HARVEST" >/dev/null 2>&1
 lost="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/harvest-unrecorded.log" 2>/dev/null)"
-printf '%s' "$lost" | grep -q "spool library is missing" \
+grep -q "spool library is missing" <<< "$lost" \
   && check "a missing spool library is recorded, not silently swallowed" ok \
   || check "a missing spool library is recorded, not silently swallowed" "log=$lost"
 
@@ -585,7 +585,7 @@ stub 'echo "FINDING: written to a read-only spool."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 chmod 700 "$CLAUDE_ISSUE_SPOOL_DIR"
 lost="$(cat "$LOST_RECORDS" 2>/dev/null)"
-printf '%s' "$lost" | grep -q "read-only spool" \
+grep -q "read-only spool" <<< "$lost" \
   && check "a record that cannot be written lands in the lost file" ok \
   || check "a record that cannot be written lands in the lost file" "lost=$lost"
 rm -f "$LOST_RECORDS"
@@ -615,7 +615,7 @@ payload "$REPO" | CLAUDE_ISSUE_HARVEST_TIMEOUT=$hang_timeout bash "$HARVEST" >/d
 elapsed=$((SECONDS - start))
 hang_max=$(( quick_elapsed + 3 * hang_timeout ))
 got="$(records)"
-[ "$elapsed" -le "$hang_max" ] && printf '%s' "$got" | grep -q '"status": *"error"' \
+[ "$elapsed" -le "$hang_max" ] && grep -q '"status": *"error"' <<< "$got" \
   && check "a hung model is cut off and recorded" ok \
   || check "a hung model is cut off and recorded" "took ${elapsed}s against a bound of ${hang_max}s, spool=$got"
 # The same comparison, asked of one second over that bound, so it has been watched REFUSING rather
@@ -631,8 +631,8 @@ reset_spool
 stub 'echo "Here are the issues I spotted: the parser is wrong."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 got="$(records)"
-printf '%s' "$got" | grep -q '"status": *"unparsed"' \
-  && printf '%s' "$got" | grep -q "the parser is wrong" \
+grep -q '"status": *"unparsed"' <<< "$got" \
+  && grep -q "the parser is wrong" <<< "$got" \
   && check "unparseable model output is its own status with the raw text kept" ok \
   || check "unparseable model output is its own status with the raw text kept" "spool=$got"
 spool_says "COULD NOT BE READ" \
@@ -763,7 +763,7 @@ stub 'echo "FINDING: injector failure case."'
 payload "$REPO" | bash "$HARVEST" >/dev/null 2>&1
 rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
 out_inj="$(printf '%s' "$review_payload" | CLAUDE_REVIEW_REASON_FORCE_FAIL=1 bash "$REVIEW" 2>/dev/null)"
-printf '%s' "$out_inj" | grep -q '"decision"' \
+grep -q '"decision"' <<< "$out_inj" \
   && check "a broken injector does not cancel the review" ok \
   || check "a broken injector does not cancel the review" "review went silent"
 
@@ -780,7 +780,7 @@ with open(p, 'w') as fh:
 " "$(bash "$SPOOL_LIB" path "$REPO" "$PARENT_TRANSCRIPT")"
 rm -f "${TMPDIR:-/tmp}/claude-feature-issue-review-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
 out_big="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
-printf '%s' "$out_big" | grep -q '"decision"' \
+grep -q '"decision"' <<< "$out_big" \
   && check "a very large pending list does not break the review" ok \
   || check "a very large pending list does not break the review" "review went silent"
 

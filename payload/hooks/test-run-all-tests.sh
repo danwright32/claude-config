@@ -90,7 +90,7 @@ out_bad="$(bash "$RUNNER" "$A" "$B" 2>&1)"; code_bad=$?
 [ "$code_bad" -ne 0 ] \
   && check "a failing suite outside the first directory fails the run" ok \
   || check "a failing suite outside the first directory fails the run" "exit=$code_bad out=$out_bad"
-printf '%s' "$out_bad" | grep -q 'test-gamma.sh' \
+grep -q 'test-gamma.sh' <<< "$out_bad" \
   && check "and the failure names which suite it was" ok \
   || check "and the failure names which suite it was" "out=$out_bad"
 rm -f "$B/test-gamma.sh"
@@ -109,11 +109,11 @@ mk_chatty_suite "$T" reversed '12 passed, 0 failed'
 mk_chatty_suite "$T" spaced   'passed 15, failed 0'
 out_tally="$(bash "$RUNNER" "$T" 2>&1)"
 for want in 'PASS=805 FAIL=0' 'passed: 8, failed: 0' '12 passed, 0 failed' 'passed 15, failed 0'; do
-  printf '%s' "$out_tally" | grep -qF "$want" \
+  grep -qF "$want" <<< "$out_tally" \
     && check "the score column shows the tally '$want'" ok \
     || check "the score column shows the tally '$want'" "out=$out_tally"
 done
-printf '%s' "$out_tally" | grep -q 'wording mentions' \
+grep -q 'wording mentions' <<< "$out_tally" \
   && check "and not a chattier line from further down" "it printed a per-check line instead" \
   || check "and not a chattier line from further down" ok
 
@@ -161,15 +161,15 @@ out_r="$(bash "$RUNNER" "$R" 2>&1)"; code_r=$?
 [ "$code_r" -eq 0 ] \
   && check "a suite whose result line says no failures passes" ok \
   || check "a suite whose result line says no failures passes" "exit=$code_r out=$out_r"
-printf '%s' "$out_r" | grep -q '12 passed, 0 failed' \
+grep -q '12 passed, 0 failed' <<< "$out_r" \
   && check "and its score is shown in one uniform shape" ok \
   || check "and its score is shown in one uniform shape" "out=$out_r"
 # The fixture deliberately also prints `PASS=999 FAIL=42` and two chatty lines. The result line
 # has to win, or the runner is still recognising a score rather than reading one.
-printf '%s' "$out_r" | grep -q '999' \
+grep -q '999' <<< "$out_r" \
   && check "and a misleading prose tally on the same run is ignored" "it read 999" \
   || check "and a misleading prose tally on the same run is ignored" ok
-printf '%s' "$out_r" | grep -qi 'NO RESULT LINE' \
+grep -qi 'NO RESULT LINE' <<< "$out_r" \
   && check "and nothing is reported as having been guessed" "it said it guessed" \
   || check "and nothing is reported as having been guessed" ok
 
@@ -192,10 +192,10 @@ out_r3="$(bash "$RUNNER" "$R3" 2>&1)"; code_r3=$?
 [ "$code_r3" -eq 0 ] \
   && check "a suite with no result line still runs and still passes" ok \
   || check "a suite with no result line still runs and still passes" "exit=$code_r3 out=$out_r3"
-printf '%s' "$out_r3" | grep -qi 'NO RESULT LINE' \
+grep -qi 'NO RESULT LINE' <<< "$out_r3" \
   && check "and the runner says out loud that it guessed" ok \
   || check "and the runner says out loud that it guessed" "out=$out_r3"
-printf '%s' "$out_r3" | grep -q 'test-oldstyle.sh' \
+grep -q 'test-oldstyle.sh' <<< "$out_r3" \
   && check "and names which suite it guessed for" ok \
   || check "and names which suite it guessed for" "out=$out_r3"
 
@@ -247,7 +247,7 @@ par_elapsed=$(( $(date +%s) - par_start ))
   && check "three suites run at once all pass" ok \
   || check "three suites run at once all pass" "exit=$code_par out=$out_par"
 for n in aaa bbb ccc; do
-  printf '%s' "$out_par" | grep -q "test-$n.sh" \
+  grep -q "test-$n.sh" <<< "$out_par" \
     && check "and test-$n.sh was run and reported" ok \
     || check "and test-$n.sh was run and reported" "out=$out_par"
 done
@@ -288,7 +288,7 @@ out_pf="$(HOOK_TESTS_JOBS=4 bash "$RUNNER" "$PF" 2>&1)"; code_pf=$?
 [ "$code_pf" -ne 0 ] \
   && check "a suite that fails while another is still running fails the run" ok \
   || check "a suite that fails while another is still running fails the run" "exit=$code_pf out=$out_pf"
-printf '%s' "$out_pf" | grep -q 'test-quick.sh' \
+grep -q 'test-quick.sh' <<< "$out_pf" \
   && check "and is named" ok || check "and is named" "out=$out_pf"
 
 # One at a time is the escape hatch, and it has to keep working: it is what somebody reaches for
@@ -320,7 +320,7 @@ out_empty="$(bash "$RUNNER" "$A" "$EMPTY" 2>&1)"; code_empty=$?
 [ "$code_empty" -ne 0 ] \
   && check "a directory holding no suite is a failure, not a quiet pass" ok \
   || check "a directory holding no suite is a failure, not a quiet pass" "exit=$code_empty out=$out_empty"
-printf '%s' "$out_empty" | grep -q "$EMPTY" \
+grep -q "$EMPTY" <<< "$out_empty" \
   && check "and it says which directory was empty" ok \
   || check "and it says which directory was empty" "out=$out_empty"
 
@@ -346,13 +346,13 @@ out_disc="$(HOOK_TESTS_ROOT="$REPO" bash "$RUNNER" 2>&1)"; code_disc=$?
 [ "$code_disc" -eq 0 ] \
   && check "discovery over a repo passes when every suite passes" ok \
   || check "discovery over a repo passes when every suite passes" "exit=$code_disc out=$out_disc"
-printf '%s' "$out_disc" | grep -q 'test-faraway.sh' \
+grep -q 'test-faraway.sh' <<< "$out_disc" \
   && check "a suite three directories away from the runner is run" ok \
   || check "a suite three directories away from the runner is run" "out=$out_disc"
 printf '%s' "$out_disc" | grep -q 'test-middle.sh' && printf '%s' "$out_disc" | grep -q 'test-near.sh' \
   && check "and so is every other one in the repo" ok \
   || check "and so is every other one in the repo" "out=$out_disc"
-printf '%s' "$out_disc" | grep -q 'helper.sh' \
+grep -q 'helper.sh' <<< "$out_disc" \
   && check "a script that is not a suite is not run" "it ran helper.sh" \
   || check "a script that is not a suite is not run" ok
 
@@ -395,7 +395,7 @@ if [ -n "$REAL" ]; then
     # appears inside the runner's own name, so a substring check is answered by the refusal
     # message ABOUT the runner just as readily as by a directory it listed, and it passed that
     # way while its three neighbours failed (L156).
-    printf '%s\n' "$out_list" | grep -qx "$REAL/$d" \
+    grep -qx "$REAL/$d" <<< "$out_list" \
       && check "the real repo's $d is one of the directories it would read" ok \
       || check "the real repo's $d is one of the directories it would read" "out=$out_list"
   done
@@ -860,7 +860,7 @@ vanish_line="$(printf '%s\n' "$out_dk" | grep -E '^ +(ok|FAIL) +test-vanish\.sh 
 printf '%s' "$vanish_line" | grep -qE '\(0s\)' \
   && check "#150 and it is not reported as having taken no time" "its line reads: $vanish_line" \
   || check "#150 and it is not reported as having taken no time" ok
-printf '%s' "$vanish_line" | grep -qi 'not measured' \
+grep -qi 'not measured' <<< "$vanish_line" \
   && check "#150 and its line says outright that nothing measured it" ok \
   || check "#150 and its line says outright that nothing measured it" "its line reads: $vanish_line"
 # The control for that pair: the suite beside it in the same run WAS measured, so "not measured" is
