@@ -529,6 +529,44 @@ release_lock(){
   return 0
 }
 
+# A DISPOSABLE directory is not a clone worth remembering (claude-config#295).
+#
+# The register is appended to and, by design, never pruned: pruning would be a read modify write
+# over the one record saying where the other clones are. So one hand made debug scenario under
+# /private/tmp put a throwaway checkout into it permanently, and every pull afterwards ended with
+# "the checkout at /private/tmp/dbg/B is on a commit this clone has never seen ... Run
+# 'git -C /private/tmp/dbg/B fetch' there". That line carries no action anybody would take: the
+# directory is disposable and the OS will clear it, at which point the entry points at nothing. A
+# notice with no remedy, printed on every run, is what teaches a reader to skip the whole report.
+#
+# Refused on the way IN, and skipped on the way OUT, because the entries already recorded cannot be
+# pruned and would otherwise keep talking for ever.
+#
+# SYNC_TEMP_ROOTS is the list, newline separated, so a path holding a space is still one entry. The
+# suite sets it to somewhere unusable, because its own clones live under the real temp directory
+# and every section about clone discovery would otherwise have nothing to discover; the one section
+# that is ABOUT this rule unsets it and puts its fixture under the real one.
+sync_temp_roots(){
+  if [ -n "${SYNC_TEMP_ROOTS+set}" ]; then printf '%s\n' "$SYNC_TEMP_ROOTS"; return 0; fi
+  [ -n "${TMPDIR:-}" ] && printf '%s\n' "${TMPDIR%/}"
+  printf '%s\n' /tmp /private/tmp /var/tmp /var/folders /private/var/folders
+  return 0
+}
+
+is_under_temp_dir(){   # $1 = an absolute path -> 0 when it sits under a disposable root
+  local p="${1%/}" r
+  [ -n "$p" ] || return 1
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    r="${r%/}"
+    [ "$p" = "$r" ] && return 0
+    case "$p" in "$r"/*) return 0 ;; esac
+  done <<TEMP_ROOTS
+$(sync_temp_roots)
+TEMP_ROOTS
+  return 1
+}
+
 # This clone, written down where a sibling can read it (claude-config#189).
 #
 # Appended once, never rewritten, so a run that dies part way through cannot lose the entries
@@ -544,6 +582,9 @@ register_this_clone(){
   [ -n "$me" ] || return 0
   # A directory holding no claude-sync is not a clone of this tool, whatever else it is.
   [ -f "$SYNC_REPO/claude-sync" ] || return 0
+  # Nor is a disposable one (claude-config#295): recording it is permanent and what it says stops
+  # being true the moment the OS clears the directory.
+  is_under_temp_dir "$me" && return 0
   if [ -f "$CLONE_REGISTRY" ] && grep -qxF "$me" "$CLONE_REGISTRY" 2>/dev/null; then return 0; fi
   printf '%s\n' "$me" >> "$CLONE_REGISTRY" 2>/dev/null || true
   return 0
@@ -4593,7 +4634,7 @@ report_sync_times(){
 # Compared with pwd -P on both sides, because the two clones can be reached through symlinked paths
 # and a textual comparison would report a clone as a stranger to itself.
 other_sync_clones(){   # prints one absolute directory per line, this clone excluded
-  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}" plist path dir mine
+  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}" plist path dir mine _reg_d
   mine="$(cd "$SYNC_REPO" 2>/dev/null && pwd -P)" || mine=""
   {
     if [ -d "$agentdir" ]; then
@@ -4606,7 +4647,13 @@ other_sync_clones(){   # prints one absolute directory per line, this clone excl
     # the clone a background job runs from, so on its own this found the scheduled clone from the
     # development checkout and never the other way round.
     if [ -f "$CLONE_REGISTRY" ]; then
-      sed -n 's|.*|&/claude-sync|p' "$CLONE_REGISTRY" 2>/dev/null || true
+      # Disposable entries are dropped here too (claude-config#295), or a throwaway clone recorded
+      # before the refusal existed goes on answering for a verdict nobody can act on.
+      while IFS= read -r _reg_d; do
+        [ -n "$_reg_d" ] || continue
+        is_under_temp_dir "$_reg_d" && continue
+        printf '%s/claude-sync\n' "$_reg_d"
+      done < "$CLONE_REGISTRY"
     fi
   } | while IFS= read -r path; do
       [ -n "$path" ] || continue
@@ -4802,6 +4849,10 @@ report_other_clones_position(){
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     [ "$d" = "$SYNC_REPO" ] && continue
+    # An entry recorded before the refusal above existed, and nothing prunes the register
+    # (claude-config#295). Skipped silently: there is nothing a reader could do about it and saying
+    # so on every run is the noise this removes.
+    is_under_temp_dir "$d" && continue
     if [ ! -d "$d/.git" ]; then
       echo "claude-sync: the clone recorded at $d is not there any more, so how far behind it is cannot be answered. Remove the line from $CLONE_REGISTRY if it has gone for good." >&2
       said=1; continue
