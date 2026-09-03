@@ -3751,6 +3751,26 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       echo "claude-sync: the tests for the shared repo's newest commit (${sha:0:8}) were cancelled, so no verdict is coming for it and it was not applied here. Push again, or run 'claude-sync pull' yourself if you know it is good." >&2
       notify "not applied: the tests for the shared repo's head were cancelled"
       send_outcome ci-cancelled ;;
+    none)
+      # NOTHING JUDGED IT, and Dan's call (2026-09-03) is that nothing to fail is not a failure: a
+      # commit that will never have a check must not hold up config for ever.
+      #
+      # But "no checks yet" and "no checks at all" are the same empty answer for the first minute
+      # of a commit's life, and taking the young one as green would defeat this gate in exactly the
+      # common case, a push whose run has not been created yet (L11, L214). So a commit is only
+      # read as unjudged once it is old enough that a check would have appeared by now.
+      local age now
+      now="$(date +%s)"
+      age="$(git -C "$SYNC_REPO" log -1 --format=%ct "$sha" 2>/dev/null || true)"
+      case "$age" in ''|*[!0-9]*) age="$now" ;; esac
+      if [ "$(( now - age ))" -lt "${SYNC_CI_GRACE:-600}" ]; then
+        echo "claude-sync: the shared repo's newest commit (${sha:0:8}) has no test run yet and is less than $(duration_in_words "${SYNC_CI_GRACE:-600}") old, so it was not applied here yet. It applies once a run appears, or once it is old enough that none is coming." >&2
+        send_outcome ci-pending
+        return 0
+      fi
+      echo "claude-sync: the shared repo's newest commit (${sha:0:8}) has no test run at all and is older than $(duration_in_words "${SYNC_CI_GRACE:-600}"), so nothing is going to judge it and it was applied." >&2
+      send_outcome ci-none
+      return 1 ;;
     *)
       echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests ($state), so it was not applied here. Run 'claude-sync pull' yourself, or check that gh is installed and logged in." >&2
       notify "not applied: could not read CI for the shared repo's head"
@@ -5184,6 +5204,7 @@ do_watch(){
           *"SEND-OUTCOME ci-pending"*)    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: not applied yet, the shared repo's head is still being tested" ;;
           *"SEND-OUTCOME ci-red"*)        echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, the shared repo's head failed its tests" ;;
           *"SEND-OUTCOME ci-cancelled"*)  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, the tests for the shared repo's head were cancelled, so no verdict is coming" ;;
+          *"SEND-OUTCOME ci-none"*)       echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: applied a commit that has no test run at all, and is old enough that none is coming" ;;
           *"SEND-OUTCOME ci-unreadable"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, could not read whether the shared repo's head passed its tests" ;;
           # A send that exited 0 and said nothing about what it did. Recorded as unknown rather
           # than as success: that is the state this whole line exists to stop being invisible

@@ -604,6 +604,13 @@ If CI becomes slow enough that the wait costs more than the exposure, or the red
 enough that there is nothing to protect against, this is the trade to look at again. Re-measure
 those two numbers rather than re-reading this paragraph.
 
+**A commit with no check at all** is not a failure, it is nothing to fail, and it is applied
+(Dan, 2026-09-03). The catch is that "no run yet" and "no run ever" are the same empty answer for
+the first minute of a commit's life, and reading the young one as green would defeat this gate in
+exactly the common case: a push whose run has not been created yet. So a commit is read as unjudged
+only once it is older than `SYNC_CI_GRACE`, ten minutes by default, and until then it waits. Being
+applied unjudged is said out loud in the watcher's log rather than passing silently.
+
 **What is deliberately NOT gated.** The weekly receive timer only gets the gate once
 `install-autosync` has been re-run on a Mac, because the marker lives in the plist it writes. A
 four minute CI wait is noise against a week, so an old plist is not worth chasing. And the gate

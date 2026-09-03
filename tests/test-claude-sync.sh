@@ -8815,6 +8815,10 @@ CIBIN="$WORK/ci-bin"; mkdir -p "$CIBIN"
 cat > "$CIBIN/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CI_CALLS"
+# Three answers, and they are different facts: a state, an EMPTY list from a gh that worked, and a
+# gh that refused. The middle one is what a commit with no run at all looks like, and reading it as
+# the third would report a working lookup as a broken one (L10, L11).
+[ "${CI_STATE:-}" = "none" ] && exit 0
 [ -n "${CI_STATE:-}" ] || exit 1
 printf '%s\n' "$CI_STATE"
 STUB
@@ -8909,6 +8913,28 @@ check "#221 and it says it could not read the answer, not that it failed" \
   "case \"\$out_unread\" in *'could not read whether'*) true ;; *) false ;; esac"
 check "#221 and unreadable carries its own marker" \
   "case \"\$out_unread\" in *'SEND-OUTCOME ci-unreadable'*) true ;; *) false ;; esac"
+
+# NO CHECK AT ALL is not a failure, it is nothing to fail, and Dan chose to let it through
+# (2026-09-03). The catch is that "no run yet" and "no run ever" are the same empty answer for the
+# first minute of a commit's life, so taking the young one as green would defeat this gate in
+# exactly the common case, a push whose run has not been created yet (L214). A commit is only read
+# as unjudged once it is old enough that a run would have appeared.
+out_fresh="$(ci_case fresh none)"
+dbg "#221 no run yet: $out_fresh"
+check "#221 a commit with no run YET is not applied" "! ci_applied fresh"
+check "#221 and that is worded as waiting rather than as unjudged" \
+  "case \"\$out_fresh\" in *'no test run yet'*) true ;; *) false ;; esac"
+
+# The same answer from a commit old enough that nothing is coming. SYNC_CI_GRACE is the seam: the
+# fixture's commits are seconds old by construction, and waiting ten minutes to assert would be a
+# test about the clock (L290).
+out_none="$(SYNC_CI_GRACE=0 ci_case nochecks none)"
+dbg "#221 no run at all: $out_none"
+check "#221 a commit old enough that no run is coming IS applied" "ci_applied nochecks"
+check "#221 and it says so rather than applying it silently" \
+  "case \"\$out_none\" in *'no test run at all'*) true ;; *) false ;; esac"
+check "#221 and it carries its own marker, not the pending one" \
+  "case \"\$out_none\" in *'SEND-OUTCOME ci-none'*) true ;; *) false ;; esac"
 
 # THE ESCAPE HATCH, and the reason there is no flag to remember: the same head the gate just
 # refused, the same Mac, a sync nobody automated. Its OWN case, run immediately, because every case
