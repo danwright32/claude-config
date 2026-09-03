@@ -32,6 +32,12 @@ check() { # check <description> <result>   ("ok" passes, anything else is the fa
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
 export CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool"
+# The AMBIENT session is unset for the whole file. A record now carries the session that produced
+# it, and a clear files only its own (claude-config#222), so a suite that inherited whichever
+# session happened to be running it would attribute its fixtures to that session and every
+# assertion about filing would depend on who typed the command (L504). Every case that means
+# something by a session names it.
+unset CLAUDE_CODE_SESSION_ID
 # The hook under test writes the records it could not spool to a fixed name in the shared temp
 # directory, and this suite used to read and remove that exact path. Two runs at once therefore
 # destroyed each other's file, which is the same fault claude-config#180 was written for, in a
@@ -59,7 +65,11 @@ cat > "$FAKE_TRANSCRIPT" <<'JSONL'
 {"type":"assistant","message":{"content":[{"type":"text","text":"Fixed it. I also noticed EventPlace has no test for the empty case."}]}}
 JSONL
 
-PARENT_TRANSCRIPT="$TMPROOT/parent.jsonl"
+# NAMED AFTER THE SESSION, because a real one is: SubagentStop fires in the parent session, so its
+# payload's session_id and the basename of its transcript_path are the same string. A fixture where
+# they differ made every clear file nothing once records started carrying their session
+# (claude-config#222), which is the fixture being unrealistic rather than the rule being wrong.
+PARENT_TRANSCRIPT="$TMPROOT/test-session.jsonl"
 cat > "$PARENT_TRANSCRIPT" <<'JSONL'
 {"type":"user","message":{"content":"run the batch"}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"PARENT_SESSION_MARKER: this is the conversation that spawned the agent, not the agent."}]}}
@@ -1236,6 +1246,90 @@ PENDING_AFTER="$(grep -l . "$CLAUDE_ISSUE_SPOOL_DIR"/*.jsonl 2>/dev/null | grep 
 [ "${PENDING_AFTER:-0}" -eq 0 ] \
   && check "clear with no transcript files every key holding this project's findings" ok \
   || check "clear with no transcript files every key holding this project's findings" "$PENDING_AFTER pending file(s) left behind"
+
+# ---------------------------------------------------------------------------
+# A clear files ITS OWN session's findings and leaves everybody else's (claude-config#222).
+# ---------------------------------------------------------------------------
+# The spool is keyed on the PROJECT, deliberately, so an agent in a worktree reaches the same spool
+# as the session that reads it. Dan runs several sessions against one project at once, and that
+# keying cannot tell them apart: whichever session's Stop hook fires first is handed EVERY session's
+# findings and is then told to clear. Measured in one PostRoll session on 2026-08-29, four
+# consecutive reviews were each handed the same 25 findings about work that session had never
+# touched, and they had to be copied aside by hand every time or they would have been filed unseen.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+SESS_A="$TMPROOT/session-a.jsonl"; : > "$SESS_A"
+SESS_B="$TMPROOT/session-b.jsonl"; : > "$SESS_B"
+bash "$SPOOL_LIB" note "$REPO" "a finding session A must settle" tester "$SESS_A" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "a finding session B has not seen yet" tester "$SESS_B" >/dev/null 2>&1
+# Both are in play before anything is cleared, or the check below is satisfied by a spool that
+# never held B's record at all (L159, L100).
+pend_two="$(bash "$SPOOL_LIB" pending "$REPO" "$SESS_A" 2>/dev/null)"
+case "$pend_two" in
+  *"session A must settle"*) check "#222 both sessions' findings are pending to begin with" ok ;;
+  *) check "#222 both sessions' findings are pending to begin with" "pending=${pend_two:0:200}" ;;
+esac
+
+# Read from B's point of view BEFORE anything is filed, while both findings are still pending.
+pend_marked="$(bash "$SPOOL_LIB" pending "$REPO" "$SESS_B" 2>/dev/null)"
+bash "$SPOOL_LIB" clear "$REPO" "$SESS_A" >/dev/null 2>&1
+arch_a="$(bash "$SPOOL_LIB" archive "$REPO" "$SESS_A" 2>/dev/null)"
+case "$arch_a" in
+  *"session A must settle"*) check "#222 a clear files the calling session's own finding" ok ;;
+  *) check "#222 a clear files the calling session's own finding" "archive=${arch_a:0:200}" ;;
+esac
+case "$arch_a" in
+  *"session B has not seen yet"*)
+    check "#222 and it does NOT file the other session's" "B's finding was filed by A's clear" ;;
+  *)
+    check "#222 and it does NOT file the other session's" ok ;;
+esac
+pend_b="$(bash "$SPOOL_LIB" pending "$REPO" "$SESS_B" 2>/dev/null)"
+case "$pend_b" in
+  *"session B has not seen yet"*)
+    check "#222 and the other session's finding is still there for its own review" ok ;;
+  *)
+    check "#222 and the other session's finding is still there for its own review" "pending=${pend_b:0:200}" ;;
+esac
+# And B can then settle it, or the rule has moved the loss rather than removed it.
+bash "$SPOOL_LIB" clear "$REPO" "$SESS_B" >/dev/null 2>&1
+arch_b="$(bash "$SPOOL_LIB" archive "$REPO" "$SESS_B" 2>/dev/null)"
+case "$arch_b" in
+  *"session B has not seen yet"*) check "#222 and B's own clear settles it afterwards" ok ;;
+  *) check "#222 and B's own clear settles it afterwards" "archive=${arch_b:0:200}" ;;
+esac
+
+# A review that is handed another session's finding SAYS so. It has no context for judging one it
+# did not cause, and would either file it badly or drop it.
+case "$pend_marked" in
+  *"session A must settle"*"from another session working in this project"*)
+    check "#222 a finding from another session is marked as one" ok ;;
+  *)
+    check "#222 a finding from another session is marked as one" "pending=${pend_marked:0:300}" ;;
+esac
+# And the reader's OWN finding is not, or the mark says nothing (L159).
+case "$pend_marked" in
+  *"session B has not seen yet"*"from another session"*)
+    check "#222 and its own finding is not marked" "B's own finding was marked as somebody else's" ;;
+  *)
+    check "#222 and its own finding is not marked" ok ;;
+esac
+
+# A record with NO session cannot be claimed by anybody, so it is filed by whoever clears first,
+# which is what every record did before this existed. Leaving it pending for ever would be a worse
+# failure than the one being fixed (L526).
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$REPO" "a finding no session claims" tester >/dev/null 2>&1
+bash "$SPOOL_LIB" clear "$REPO" "$SESS_A" >/dev/null 2>&1
+# Read WITHOUT the transcript, because a note that named none landed under the plain directory key
+# and that is the archive it goes to. Reading the transcript key here would report an empty archive
+# and be indistinguishable from a record that was never filed (L11).
+arch_u="$(bash "$SPOOL_LIB" archive "$REPO" 2>/dev/null)"
+case "$arch_u" in
+  *"no session claims"*) check "#222 a finding belonging to no session is still filed" ok ;;
+  *) check "#222 a finding belonging to no session is still filed" "archive=${arch_u:0:200}" ;;
+esac
 
 # The mirror, so the fix cannot be "file everything": another project's pending findings are untouched.
 reset_spool

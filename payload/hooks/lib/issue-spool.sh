@@ -248,12 +248,22 @@ issue_spool_append() { # append <dir> <json-record>
   #
   # Nothing is added when the variable is unset, so a record written in ordinary use is byte for
   # byte what it was before this existed.
-  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ]; then
-    record="$(printf '%s' "$record" | CLAUDE_SUITE_RUN_ID="$CLAUDE_SUITE_RUN_ID" python3 -c '
+  # Stamped with the run id while a test run is going, and with the SESSION that produced it, so a
+  # clear can file its own records and leave everybody else's pending (claude-config#222). Neither
+  # is written when it is not known, so a record made where there is no session is byte for byte
+  # what it was before this existed, and a record that already names a session keeps it: the
+  # harvest reads the AGENT's session out of the hook payload and knows better than a lookup does.
+  local _sp_sid; _sp_sid="$(issue_spool_session_id "${3:-}")"
+  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ] || [ -n "$_sp_sid" ]; then
+    record="$(printf '%s' "$record" | CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-}" \
+        CLAUDE_SPOOL_SESSION="$_sp_sid" python3 -c '
 import json, os, sys
 rec = json.loads(sys.stdin.read())
 if isinstance(rec, dict):
-    rec["suite_run"] = os.environ["CLAUDE_SUITE_RUN_ID"]
+    if os.environ.get("CLAUDE_SUITE_RUN_ID"):
+        rec["suite_run"] = os.environ["CLAUDE_SUITE_RUN_ID"]
+    if os.environ.get("CLAUDE_SPOOL_SESSION") and not rec.get("session"):
+        rec["session"] = os.environ["CLAUDE_SPOOL_SESSION"]
 print(json.dumps(rec))' 2>/dev/null)" || return 2
     [ -n "$record" ] || return 2
     case "$record" in *$'\n'*) return 2 ;; esac
@@ -348,6 +358,33 @@ PY_COMPACT
 # resolve, and picking the first would key on whichever the glob happened to sort first (L521).
 # Nothing is not a failure here, it is the fallback to the directory key, which is what every
 # caller did before this existed.
+# WHICH SESSION a record belongs to (claude-config#222).
+#
+# The spool is keyed on the PROJECT, deliberately, so an agent working in a worktree reaches the
+# same spool as the session that reads it. Dan routinely runs several sessions against one project,
+# and that keying cannot tell them apart: whichever session's Stop hook fires first is handed EVERY
+# session's findings and is then told to clear, which files the others' before they have ever been
+# seen. Measured in one PostRoll session on 2026-08-29: four consecutive reviews were each handed
+# the same 25 findings about work that session had never touched, and the findings had to be copied
+# aside by hand each time.
+#
+# A record therefore carries the session that produced it, and a clear files only its own. The
+# project keying is untouched, so the worktree case it was written for still works.
+issue_spool_session_id() { # [transcript] -> the session's id, or nothing when it cannot be known
+  # GIVEN ONE WINS, the same rule issue_spool_note follows for the transcript itself: a caller that
+  # names a transcript is telling this which session it means, and a lookup through the environment
+  # answers about whichever session happens to be running the command. A hook clearing on behalf of
+  # a session is not always that session's own process.
+  local t="${1:-}"
+  if [ -n "$t" ]; then
+    t="${t##*/}"
+    printf '%s' "${t%.jsonl}"
+    return 0
+  fi
+  [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && printf '%s' "$CLAUDE_CODE_SESSION_ID"
+  return 0
+}
+
 issue_spool_session_transcript() { # session-transcript
   local id="${CLAUDE_CODE_SESSION_ID:-}" f found="" n=0
   [ -n "$id" ] || return 0
@@ -390,7 +427,8 @@ print(json.dumps({
 issue_spool_pending() { # pending <dir> [session-transcript] -> exit 1 when there is nothing to show
   local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
   if [ ! -s "$file" ]; then rm -f "$file" "$file.sources"; return 1; fi
-  CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" "${1:-}" <<'PY'
+  CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" \
+    CLAUDE_SPOOL_READER_SESSION="$(issue_spool_session_id "${2:-}")" python3 - "$file" "${1:-}" <<'PY'
 import datetime, json, os, re, sys
 
 MAX_FINDINGS = 200
@@ -400,6 +438,9 @@ MAX_FINDINGS = 200
 # 500 character finding costs what twenty short ones do, so the limit is on size.
 FINDING_BUDGET = int(os.environ.get("CLAUDE_ISSUE_SPOOL_FINDING_BUDGET") or 8000)
 MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
+# Whose review this is. Empty when it cannot be known, and then nothing is marked: marking every
+# finding as somebody else's would be worse than marking none (L11).
+READER_SESSION = os.environ.get("CLAUDE_SPOOL_READER_SESSION") or ""
 
 # ---- how old a finding is, and whether the code it names has moved (claude-config#202) ----
 # A finding was offered as current however old it was, and one project's oldest pending findings
@@ -500,7 +541,7 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
             if f in seen:
                 continue
             seen.add(f)
-            findings.append((where, rec.get("ts", "?"), f))
+            findings.append((where, rec.get("ts", "?"), f, rec.get("session") or ""))
     elif status == "error":
         # Deduped by REASON, and counted. A recurring fault (a subagent kind that
         # leaves no transcript fires every few minutes, measured 2026-08-16)
@@ -526,9 +567,16 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
 
 spent = 0
 printed = 0
-for where, ts, f in findings[:MAX_FINDINGS]:
+for where, ts, f, sess in findings[:MAX_FINDINGS]:
     age = age_words(ts)
     line = "FINDING (%s, %s%s): %s" % (where, ts, (", " + age) if age else "", f)
+    # A finding another session's agents produced is SAID to be one (claude-config#222). The spool
+    # is keyed on the project, so a review sees every session's findings, and the reviewing session
+    # has no context for judging one it did not cause: it will either file it badly or drop it. Its
+    # own review will still be offered it, because a clear now files only its own session's.
+    if READER_SESSION and sess and sess != READER_SESSION:
+        line += ("  [from another session working in this project, which has not seen it yet, "
+                 "so leave it to that session's own review unless you can judge it]")
     moved = moved_since(f, ts)
     if moved:
         line += ("  [%s has changed since this was written, so any line number in it "
@@ -684,7 +732,7 @@ issue_spool_clear() { # clear <dir> [session-transcript] -> file the pending rec
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     keys="${keys:+$keys, }$key"
-    if n="$(issue_spool_clear_key "$key")"; then
+    if n="$(issue_spool_clear_key "$key" "$(issue_spool_session_id "${2:-}")")"; then
       [ -n "$n" ] && [ "$n" -gt 0 ] 2>/dev/null && total=$(( total + n ))
     else
       rc=1
@@ -705,14 +753,12 @@ CLEAR_KEYS
 
 # Prints the number of records it filed, so the caller can total them. Says nothing on stdout when
 # there was nothing to file; the caller reports that once for the whole run rather than once per key.
-issue_spool_clear_key() { # clear-key <key>
-  local file archive staged count
+issue_spool_clear_key() { # clear-key <key> [session id]
+  local file archive staged count mine others sid="${2:-}"
   file="$(issue_spool_path_for_key "$1")"
   archive="$(issue_spool_archive_for_key "$1")"
   [ -s "$file" ] || { printf '0'; return 0; }
   mkdir -p "$(issue_spool_root)" 2>/dev/null || return 1
-  count="$(grep -c . "$file" 2>/dev/null || true)"
-  case "$count" in ''|*[!0-9]*) count=0 ;; esac
   staged="${file}.filing.$$"
   mv "$file" "$staged" 2>/dev/null || return 1
 
@@ -720,6 +766,46 @@ issue_spool_clear_key() { # clear-key <key>
   # record survives. Racing real processes proved nothing here, because the
   # window happened not to open (measured 2026-08-16, the broken version passed).
   [ -n "${CLAUDE_ISSUE_SPOOL_MIDCLEAR:-}" ] && eval "${CLAUDE_ISSUE_SPOOL_MIDCLEAR}"
+
+  # SPLIT by session (claude-config#222). A record naming a different session belongs to a review
+  # that has not happened yet, and filing it destroys work nobody has seen. A record naming NO
+  # session cannot be attributed, so it is filed by whoever clears first, which is what every
+  # record did before this existed.
+  if [ -n "$sid" ]; then
+    mine="${file}.mine.$$"; others="${file}.others.$$"
+    CLAUDE_SPOOL_SESSION="$sid" python3 -c '
+import json, os, sys
+sid = os.environ["CLAUDE_SPOOL_SESSION"]
+src, mine, others = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", encoding="utf-8") as m, open(others, "w", encoding="utf-8") as o:
+    for line in fh:
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+            s = rec.get("session") if isinstance(rec, dict) else None
+        except Exception:
+            # An unreadable line has no session to read. It is filed rather than left pending for
+            # ever, because nothing can ever claim it and the reader already reports it (L11).
+            s = None
+        (o if (s and s != sid) else m).write(line)
+' "$staged" "$mine" "$others" 2>/dev/null || { mine=""; others=""; }
+    if [ -n "$mine" ] && [ -f "$mine" ]; then
+      # Appended, never written over: a record that arrived while this was going created a NEW
+      # pending file, and replacing it would destroy exactly what the rename was protecting.
+      if [ -s "$others" ]; then cat "$others" >> "$file" 2>/dev/null || true; fi
+      rm -f "$others" 2>/dev/null || true
+      mv "$mine" "$staged" 2>/dev/null || true
+    fi
+  fi
+
+  count="$(grep -c . "$staged" 2>/dev/null || true)"
+  case "$count" in ''|*[!0-9]*) count=0 ;; esac
+  if [ "$count" -eq 0 ]; then
+    rm -f "$staged" 2>/dev/null || true
+    printf '0'
+    return 0
+  fi
 
   if cat "$staged" >> "$archive" 2>/dev/null; then
     rm -f "$staged"
