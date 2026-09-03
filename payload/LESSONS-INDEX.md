@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 454 lessons.
+LESSONS.md, which is NOT loaded into the session. 457 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -273,6 +273,7 @@ to decide something: the body is where the failure it came from is described.
 - L384. A field stamped on the UPDATE path and not on the INSERT path leaves every freshly created record without it, and the gap is invisible because every record that has ever been updated looks correct, so the population missing it is exactly the newest one. Stamp it where the record is CONSTRUCTED, and measure the field's presence against record age rather than reading the writer.
 - L563. A sync that refreshes only the records its upstream QUERY returned leaves every record that query stopped matching frozen at its last synced values, and a frozen copy is indistinguishable from a freshly confirmed one.
 - L565. A key recomputed from a record's own data is only as durable as whatever the recomputation CONSULTS, so an attribution resolved by asking the filesystem or a tool about a path stops resolving once that path is removed, and a temporary working directory is removed by design.
+- L389. A writer that only fills records going FORWARD leaves every record that existed when it shipped permanently unfilled, and each consumer of that data then runs correctly over an empty set, so the whole feature reads as working while producing nothing. Measure how much of the store the writer can never reach before building anything that depends on it.
 
 ## Security and privacy
 
@@ -291,6 +292,7 @@ to decide something: the body is where the failure it came from is described.
 - L155. An issue or plan written with REAL measured evidence becomes the source whoever implements it copies into fixtures, so redact people's identities where the evidence is RECORDED rather than trusting the implementer to anonymise it later.
 - L268. A BULK query over a protected collection leaks the WHOLE collection in its ERROR message
 - L360. A value redacted where an object is CONSTRUCTED is unredacted by any later step that ENRICHES that same object, because the gate lives in the construction and the enrichment runs afterwards with no viewer to consult. Give the enriching function the same gate as an argument rather than letting it be called ungated, since every call site reads as correct and only the field added last escapes.
+- L388. A search or filter that matches a field the viewer is not permitted to READ hands that field's content back one guess at a time through the result count, without ever displaying it, so every searchable field must be gated by the same predicate that decides whether it is shown.
 
 ## UX completeness
 
@@ -420,6 +422,7 @@ to decide something: the body is where the failure it came from is described.
 - L383. A derived value exposed as a computed property or a getter is re-run in full by EVERY reader, and a reader's call site reads as a free field access, so nothing at the point of use says what it costs. Where the derivation walks a whole collection, compute it once at the top of the pass and hand the value down, and assert the NUMBER of call sites, because the shape alone cannot be read.
 - L556. When asking a stakeholder to rule on whether two surfaces should agree, enumerate every place they ALREADY disagree before asking, because the answer comes back as a rule about agreement rather than about the single case you showed, and it gets applied to the cases you never mentioned. Showing one instance also makes the decision look smaller than it is, so the reply is given on a smaller picture than the change it authorises.
 - L562. A named rule is copied through its WORKED EXAMPLE, so an example that contradicts the rule teaches the inverse and is then defended with the rule's own authority.
+- L387. A change that fixes a defect CLASS must be searched for a fresh instance of that same class before it ships. The fix is written by somebody holding the class in mind, which makes it the likeliest place to repeat it, and the new instance arrives carrying the authority of the remedy so nobody re-examines it. Sweep the DIFF, not only the existing code.
 
 ## Cross-system reliability
 

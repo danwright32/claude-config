@@ -2962,6 +2962,29 @@ window is a count rather than a boundary.
   outside the record. Distinct from L153, a path recording where something happened to be
   rather than what it is: this path was correct when written)
 
+- **L389. A writer that only fills records going FORWARD leaves every record that existed
+  when it shipped permanently unfilled, and each consumer of that data then runs correctly
+  over an empty set, so the whole feature reads as working while producing nothing. Measure
+  how much of the store the writer can never reach before building anything that depends on
+  it.** Forward only is usually the right default for the writer itself: it fills each record
+  as it is worked on, with no launch sweep and no wasted calls (L332 is the neighbouring
+  mistake, a pass wired to startup that never sees the newest rows; this is the mirror, a pass
+  wired to new rows that never sees the oldest). What is easy to miss is that the population
+  which predates it is not a small remainder, it is EVERYTHING, because the store was complete
+  before the feature and empty of the new field afterwards. L223 is the read side twin, a check
+  keyed on a marker that cannot see the backlog; here nothing is even looking, and the consumer
+  cannot tell an empty answer from a considered one. (PostRoll#1268, 2026-09-03: the Instagram
+  account figures fetch fires only when an event's handle list settles, and #1004 shipped that
+  as "No backfill of the archive; forward only", which was a deliberate and defensible choice.
+  Measured on the live store five days later: `accounts.json` held 9 records, every one carrying
+  a follower count and nothing else, 0 of 9 rankable against the app's own `hasEngagementData`
+  predicate, and no record carrying a fetch outcome or attempt at all, so the fetch had never
+  run against that book. The collaborator ranking it feeds was therefore scoring nobody on any
+  real day, and three further issues in the same milestone, a photo promotion suggestion, a
+  reel membership check and an accepted or declined mark, were all built to rank accounts that
+  could not be ranked. Nothing anywhere reported it: every surface honestly said "not counted
+  yet", which is a legitimate value for an account nobody has counted.)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -3111,6 +3134,15 @@ window is a count rather than a boundary.
   correctly gated in the shaper; only the field written after the shaping escaped. The survey
   result card even advertised "Full profiles, credentials, and photos" as the thing you unlock,
   beside the photo it was already showing)
+
+- **L388. A search or filter that matches a field the viewer is not permitted to READ hands that
+  field's content back one guess at a time through the result count, without ever displaying it, so
+  every searchable field must be gated by the same predicate that decides whether it is shown.**
+  (nursedex#935, 2026-09-03: a keyword search shipped matching `bio` and `care_philosophy` for every
+  viewer. Bio was safe by accident, being the profile page's public meta description, but the care
+  philosophy is hidden from anyone who has not signed up, and 30 listed nurses had written one. The
+  same change had correctly gated LAST NAMES on exactly this reasoning, so the rule was understood
+  and applied to one field and not to its neighbour in the same clause)
 
 ## UX completeness
 
@@ -4353,6 +4385,19 @@ window is a count rather than a boundary.
   these letters as its canonical example of a mark that must stay legible, which is the clearest
   case of one that need not. Five recording sites for one wrong sentence, and the guard then blocked
   the correction)
+
+- **L387. A change that fixes a defect CLASS must be searched for a fresh instance of that same
+  class before it ships. The fix is written by somebody holding the class in mind, which makes it
+  the likeliest place to repeat it, and the new instance arrives carrying the authority of the
+  remedy so nobody re-examines it. Sweep the DIFF, not only the existing code.** (overture#3508
+  and overture#3500, 2026-09-03, twice in one session. #2597 gave an opt in cost measurement a
+  freshness record so its figure could not go stale unnoticed, and the same change added a SECOND
+  opt in measurement, the richer one, with no record at all. Separately, a milestone whose whole
+  subject is main thread cost gained a counter firing about 2,700 times per render whose own cost
+  was never measured, described in its source comment as "one task local read, which is nil, and
+  then nothing", which is an estimate nobody took. Both were caught by the end of turn review
+  rather than by any check. L30 is the neighbouring rule and does not cover this: it says sweep
+  for a found defect's SIBLINGS in the same change, which is about the code that already exists.)
 
 ## Cross-system reliability
 
