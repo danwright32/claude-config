@@ -12,6 +12,7 @@
 #   claude-sync sync              # two-way: send local changes, then receive remote
 #   claude-sync watch             # foreground: sync on every change (needs fswatch)
 #   claude-sync status            # show what differs, no changes
+#   claude-sync recheck           # run the hook suite and record what it said, so a fixed failure stops being reported
 #   claude-sync hold 30 "why"     # stop the watcher committing for a while, so you can commit
 #   claude-sync release           # lift that hold now rather than waiting for it to run out
 #   claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
@@ -3703,11 +3704,18 @@ hook_suite_coverage(){   # $1 = the file holding the runner's output -> "<ran>\t
 hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
   local runner out pid started now limit rc=0 killed=0 ran='?' notrun='?' took='?' nrnames='?'
   [ "${SYNC_NO_HOOK_TESTS:-0}" = "1" ] && return 0
-  [ -n "${APPLIED_LOG:-}" ] || return 0
-  [ -s "$APPLIED_LOG" ] || return 0
-  # The log is kind<TAB>path, so the tab is part of the match: without it a file merely NAMED
-  # hooks/something in a label would answer for one.
-  grep -q "$(printf '\t')hooks/" "$APPLIED_LOG" 2>/dev/null || return 0
+  # Normally this runs only when an apply actually wrote a hook, which is the right trigger for a
+  # receive. It is also the ONLY writer of the record, so a Mac that FIXED a failure without a hook
+  # arriving had no way to say so and went on reporting the old one (claude-config#305). HOOK_SUITE_FORCE
+  # is `claude-sync recheck` asking for that same run deliberately, which is what makes the remedy
+  # the failure message names one that can actually clear it (L144, L111).
+  if [ "${HOOK_SUITE_FORCE:-0}" != "1" ]; then
+    [ -n "${APPLIED_LOG:-}" ] || return 0
+    [ -s "$APPLIED_LOG" ] || return 0
+    # The log is kind<TAB>path, so the tab is part of the match: without it a file merely NAMED
+    # hooks/something in a label would answer for one.
+    grep -q "$(printf '\t')hooks/" "$APPLIED_LOG" 2>/dev/null || return 0
+  fi
   runner="$CLAUDE_HOME/hooks/run-all-tests.sh"
   if [ ! -f "$runner" ]; then
     notify "hooks arrived with no run-all-tests.sh to check them"
@@ -4876,18 +4884,18 @@ HSREOF
     *) outcome="" ;;
   esac
   if [ -z "$outcome" ]; then
-    echo "${prefix}the record in $1 is unreadable, so what that run's checks decided cannot be answered from here. Re-run them with: bash $CLAUDE_HOME/hooks/run-all-tests.sh"
+    echo "${prefix}the record in $1 is unreadable, so what that run's checks decided cannot be answered from here. Run them again and record what they say with: claude-sync recheck"
     return 0
   fi
   now="$(date +%s)"
   age="$(age_in_words "$(( now - when ))")"
   case "$outcome" in
     failed)
-      echo "${prefix}FAILED $age (it exited ${code:-?})$(hook_suite_headroom "$took"). The config that run installed is on disk, and at least one check on it does not pass. What it said is in $1; re-run with: bash $CLAUDE_HOME/hooks/run-all-tests.sh" ;;
+      echo "${prefix}FAILED $age (it exited ${code:-?})$(hook_suite_headroom "$took"). The config that run installed is on disk, and at least one check on it does not pass. What it said is in $1. Once it is fixed, run  claude-sync recheck  to run them again and replace this record: running the suite on its own does not, because this is the only thing that writes it" ;;
     notrun)
       echo "${prefix}could NOT be run $age, because hooks arrived and there was no $CLAUDE_HOME/hooks/run-all-tests.sh to check them with. Nothing that landed has been verified." ;;
     incomplete)
-      echo "${prefix}could NOT be completed $age, because it was still running when the run that started it stopped waiting. Nothing that landed has been verified. What it managed to say is in $1" ;;
+      echo "${prefix}could NOT be completed $age, because it was still running when the run that started it stopped waiting. Nothing that landed has been verified. What it managed to say is in $1, and  claude-sync recheck  runs them again and records what they say" ;;
   esac
   return 0
 }
@@ -5437,6 +5445,35 @@ report_stray_processes(){
     "A run nested deeper than one is a run that spawned a run that spawned a run. It multiplies one process at a time, so it presents as slowness rather than as a failure."
 }
 
+# RUN THE HOOK SUITE AND RECORD WHAT IT SAID (claude-config#305).
+#
+# `.hook-tests` had exactly one writer, hook_suite_verdict, and that runs only when an apply wrote a
+# file under hooks/. So the record was refreshed by an incoming change and by nothing a person could
+# do: a Mac that FIXED a failure without a hook arriving reported the old one indefinitely, and the
+# message telling the reader to "re-run with bash .../run-all-tests.sh" named a remedy that changes
+# nothing, because the runner does not write the record. On 2026-09-03 the remedy actually reached
+# for was deleting the file by hand, outside the repository.
+#
+# So this is the same run, asked for deliberately, through the one writer. Keeping a single writer
+# is the point: two producers of one record format drift, and the reader cannot tell which of them
+# it is looking at (L263).
+#
+# NOT under the sync lock. It writes one small file in this clone and touches nothing a mutating run
+# touches, and a recheck that had to queue behind a long send would be useless exactly when somebody
+# reaches for it, which is the reasoning `hold` and `release` already follow.
+do_recheck(){
+  local runner="$CLAUDE_HOME/hooks/run-all-tests.sh"
+  if [ ! -f "$runner" ]; then
+    die "there is no $runner on this Mac, so the hook suite could not be run and nothing was recorded. A pull that carries the hooks puts it there."
+  fi
+  echo "Running the hook suite from $runner; this takes a few minutes."
+  HOOK_SUITE_FORCE=1 hook_suite_verdict >/dev/null
+  # Reported by READING the record just written, through the same reporter `status` uses, so the
+  # two can never describe the same run differently (L70).
+  report_hook_suite_record "$HOOK_TESTS_FILE" ""
+  return 0
+}
+
 # ---------- install-schedule ----------
 do_install_schedule(){
   local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
@@ -5733,6 +5770,8 @@ case "$cmd" in
   apply-only) with_lock do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
+  # Read-only about the config: it runs the checks and records what they said, nothing else.
+  recheck) do_recheck ;;
   next-lesson) lesson_band_locked; next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND" ;;
   repo-slug) repo_slug || { echo "claude-sync: origin is not a GitHub remote, so there is no owner and name to derive." >&2; exit 1; } ;;
   cite-scan) do_cite_scan "${2:-}" ;;   # read-only: which synced files cite a lesson number
@@ -5762,5 +5801,5 @@ case "$cmd" in
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
   help|-h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, reap-scratch, clean-backups, forget-mac, next-lesson, check-lessons, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, next-lesson, check-lessons, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
 esac
