@@ -116,6 +116,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   asserting their own mock, wrappers treating exit 0 as a pass, vacuous assertions, and
   tests of hand-copied reimplementations all sit green while protecting nothing. Break
   the code once and watch it go red before trusting it. (58 issues, 6 repos)
+- **L557. A monitor or validator that has never once PASSED is not measuring anything,
+  because every failure it reports reads as a finding about the data rather than about
+  itself. Record its outcomes so a lifetime success count of zero is detectable, and treat
+  that as the check being broken.** L1 is the mirror image and does not cover this
+  direction: a guard seen to fail is calibrated against the defect, and one never seen to
+  pass is calibrated against nothing. The archive deletion gate's payload probe failed on
+  all 16 days it ever measured, from the day it shipped, always with the same message
+  naming a real execution id, and each alert was read as a claim that production data was
+  missing. The cause was in the Snowflake client, which returned only the first partition
+  of a large result, so the probe asked for 60 bundles, received a prefix, and reported the
+  rest as absent. Nothing said the check had never succeeded, and the evidence was sitting
+  in the check's own stored rows the whole time (`probe_ok` false on every one), so it was
+  queryable from day two and was instead found on day 16 by a person reading Slack.
+  (bidspoke#986, bidspoke#1126)
 - **L140. A test asserting that something THREW is satisfied by ANY throw, including one
   raised by its own fixture, so assert on the specific failure (the message, the type, the
   state left behind) rather than on the mere fact of an error.** A typo in the fake then
@@ -342,6 +356,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   the same bundle. On the first real truncated run after it shipped the bundle could not be read, so
   the check said nothing and the readout printed 5,035 tests of 8,643 as an ordinary size. The
   separate short-run gate, which reads a different source, caught it.)
+- **L561. A record written so that a failure can be RECOVERED from must be written by a
+  DIFFERENT operation than the one that fails**, because a projection, checkpoint or breadcrumb
+  riding inside the failing write is absent from precisely the cases it exists for, while its
+  presence on every healthy run makes it look like it works. The write-side twin of L345: there a
+  guard reads the same source as the reading it judges, here a safeguard shares a transaction with
+  the thing it is meant to outlive.
+  (bidspoke#1132, 2026-09-03: buildSightingFinalizeProjection's own docstring called it "the write
+  that survives isolate eviction" and said the strand drain reconstructs a stranded outcome from it
+  "with full fidelity", but it was set as one field of the finalize UPDATE, which is the write
+  eviction destroys. Measured across 119 stranded rows over 14 days, it was null on every single
+  one, and the drain had to fall back to lead_sightings, written independently at the trigger
+  boundary.)
 - **L82. When a platform primitive's DOCUMENTED guarantee is the entire reason a guard is safe
   (a clock that excludes sleep, a delivery that happens once, a write that is atomic), measure
   that guarantee on the real target before shipping.** Documentation ages behind the hardware
@@ -1428,6 +1454,19 @@ window is a count rather than a boundary.
   blind to what the running system writes afterwards; L538 is the consequence, a standing red
   making every other failure unreadable.)
 
+- **L564. An empty search result proves the SPELLING is absent, never the concept, so a conclusion
+  drawn from it may claim only what was actually searched for.** Before treating something as the
+  last copy of a fact, look for where the fact is SERVED rather than where its wording appears: the
+  search that found nothing is the same search whether the thing is missing or merely worded
+  differently.
+  (Try-Pennie/slate#1795 then #1836, 2026-09-03: removing an admin panel meant deciding whether its
+  warning sentence about impersonation was the only explanation of what impersonation does. A grep
+  for the sentence found it nowhere else, so I concluded the explanation was unique, lifted it into
+  its own module with a docstring arguing for its own necessity, and left it rendering as two lines
+  of prose on a page where nobody was impersonating. The header banner had said it all along, and
+  better, naming the person being impersonated, which the preserved sentence could not. Dan: "Warning
+  isn't needed when I'm not impersonating someone and when I am I'll see the banner")
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -1472,6 +1511,18 @@ window is a count rather than a boundary.
   temp and rename, keep the prior version until the new one is confirmed, defer physical
   deletes until undo expires, and never let a blank value beat real data in a merge.
   (16 issues, 2 repos)
+- **L567. A stored verification result that AUTHORISES an irreversible action (a backup proved
+  complete, a lock confirmed free, a health check passed) must be refused on its AGE at the point
+  of use, because a truthful measurement of a past state is indistinguishable from a current one
+  and the record says nothing about when it stopped being true.** Give the staleness refusal its
+  own reason, distinct from a failed verification, so an unmeasured subject and a disagreeing one
+  do not read alike. L331 is the completeness twin, whether the run that produced the number did
+  the work; this is the age of a number whose run did everything right.
+  (bidspoke#1137: the execution archive's deletion gate writes a per day measurement that
+  `verified_purgeable_days` will read to authorise truncating a partition, and the gate's own pass
+  dies partway when its caller disconnects, leaving some days measured today and others carrying
+  readings up to six days old with nothing recording that the pass was cut short. The spec requires
+  a "fresh" row and defines fresh nowhere)
 - **L95. Adding a WRITE to an error path re-audits every error that can reach it**, because a
   misclassification that was harmless while the path only reported becomes data loss the
   moment it persists. The classification was never checked against the new consequence, and
@@ -1682,6 +1733,19 @@ window is a count rather than a boundary.
   recorded, not by anything watching the sync. Recovery is to find the mirror's own commit, take
   the file list it touched, and check those paths out of the commit BEFORE it, keeping whatever
   genuinely arrived from elsewhere)
+
+- **L559. A rule that decides whether a record COUNTS (an eligibility test, a visibility
+  window, an exclusion) must be applied where the record is READ, never also where it is
+  WRITTEN, because the read-time application is the visible one and reads as the whole
+  enforcement while the write-time copy silently withholds the record itself, so correcting
+  or reversing the rule later recovers nothing.**
+  (project-enrollment-tracker#1247: a rep terminated on the 1st was excluded at write time as
+  well as at read time, so no enrollment_history row was ever created for their termination
+  month. The board rule says that month's production COUNTS toward team MTD, and the read-time
+  eligibility check was correct, but the units had never reached the store. Measured across all
+  20 stored months on 2026-09-03: four rep-months missing, holding 24 top-out and 16 cleared
+  units, invisible because every surface agreed with every other surface about a number that was
+  never captured)
 
 ## Honest failure
 
@@ -2862,6 +2926,42 @@ window is a count rather than a boundary.
   half uncovered.)
 
 
+- **L563. A sync that refreshes only the records its upstream QUERY returned leaves every
+  record that query stopped matching frozen at its last synced values, and a frozen copy is
+  indistinguishable from a freshly confirmed one.** Reconcile the rows you already hold
+  against the rows the query returned, and either clear what you can no longer confirm or
+  report the divergence. (Try-Pennie/slate#1833, 2026-09-03: the roster sync selects
+  Salesforce users with IsActive true AND at least one debt tier flag set. A Sales Manager
+  whose tier flags were all cleared dropped out of the result set, so his Slate row kept its
+  2026-08-04 attributes, including a backend servicer of Beyond that Salesforce now says is
+  false. Slate went on presenting the month old copy as current fact on the admin surfaces,
+  and it was one of only two rows making the Beyond tiers look staffed at all. The sharper
+  cost is that the row's own routing flag is frozen too: clearing those tiers is how somebody
+  is taken off rotation for leave, and the reap step deliberately acts only on a positive
+  inactive from upstream, so the person stays flagged bookable and keeps being routed leads
+  while away. The sync lane
+  reported success every hour throughout, because from its side nothing had failed. Found by
+  comparing three systems by hand, not by any check. Distinct from L344, a counter that keeps
+  incrementing once an input stops matching, and from L211, a cleanup that deletes whatever
+  its read did not mention: here the omitted record is neither accused nor deleted, it is
+  silently preserved)
+
+- **L565. A key recomputed from a record's own data is only as durable as whatever the
+  recomputation CONSULTS, so an attribution resolved by asking the filesystem or a tool about a
+  path stops resolving once that path is removed, and a temporary working directory is removed
+  by design.** Resolve it at write time, when the location is guaranteed present, and store the
+  result on the record. (danwright32/claude-config#294, 2026-09-03: the issue spool attributes a
+  pending file to a project by resolving the first record's cwd through a git common dir lookup.
+  Agent findings carry the worktree they ran in, AGENTS.md tells contributors to remove a
+  worktree once its PR merges, so the lookup fails and the key falls back to hashing a path that
+  no longer exists and belongs to no project. clear reported nothing pending, twice, with 106
+  unfiled findings sitting in the very file the review names as its source, and 111 of 170
+  pending records across the spool were written from a worktree cwd. Complements L186, which
+  says to key on something recomputable from the data itself: here that was satisfied in letter,
+  the cwd was on the record, and the recomputation still failed because it needed the world
+  outside the record. Distinct from L153, a path recording where something happened to be
+  rather than what it is: this path was correct when written)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -3028,6 +3128,13 @@ window is a count rather than a boundary.
 - **L20. Accessibility is part of building each control.** Labels on icon-only controls,
   real buttons instead of tap gestures, type scaling, tap targets, AA contrast in both
   themes, reduced motion, focus management. (49 issues, 7 repos)
+- **L560. An ARIA role that names a STRUCTURE (menu, tablist, list, radiogroup, table) is a
+  promise about the element's CHILDREN**, so putting it on a container of mixed content tells
+  assistive tech to expect a set of items and hands back a panel. Nothing catches it: the
+  screen renders identically and an accessible-name test still passes. Give the container the
+  role its content actually has, or make the children the items the role requires.
+  (slate#1816: the header account menu was marked role="menu" while holding an email, a
+  calendar status line and a theme fieldset, with only sign out as a menuitem.)
 - **L149. A colour token that clears the level for an icon or a border does not thereby clear
   it for TEXT, because an interface component needs 3:1 and body text needs 4.5:1, so an accent
   reused for a label ships under the line while every check that measures whether it DREW
@@ -3092,6 +3199,14 @@ window is a count rather than a boundary.
   it being overwritten, a dedupe, a retention window, is worth nothing while the surface holding it is
   off screen, and the code stays entirely correct the whole time.
   (overture#2204)
+- **L566. An element positioned absolutely inside a scrolling container is CLIPPED by that
+  container, and setting overflow on ONE axis makes the other axis clip too, because a `visible`
+  axis computes to `auto` beside a non-visible one.** So a menu, popup or tooltip anywhere inside a
+  scroll region must escape to the top layer (the popover API, a portal) rather than be positioned
+  within it: an `overflow-x-auto` wrapper added only to let a wide table scroll sideways silently
+  cuts a row's dropdown off at the bottom edge as well, and the clipping hides the focus ring, so a
+  keyboard user is focused on something they cannot see.
+  (slate#1843)
 - **L189. A persistent surface pinned over the edge of a scrolling region must RESERVE space
   inside that region rather than float above it, or the last item in the scroll is permanently
   unreachable.** The surface only overlaps once the content is long enough to scroll, so every
@@ -3461,6 +3576,19 @@ window is a count rather than a boundary.
   leaderboard rendered a centred Units header over a right aligned column of numbers because
   its `sortableTh()` omitted the `th-metric` class the team board's renderer applies. Dan
   reported it from a screenshot of the column edges)
+
+- **L558. A mark drawn BESIDE a caption of the same fact is decoration, so a spec that asks for
+  BOTH ships the duplication as a requirement and no implementation can avoid it.** Decide which
+  one carries the fact. A per-row mark also needs an axis shared with the rows above and below, or
+  it cannot be compared vertically, which is the only thing it can do that the words cannot.
+  (Try-Pennie/slate#1796 then #1812, 2026-09-03: an agent's debt tier coverage was a wrapping comma
+  list of raw keys, and the replacement specced a five rung ladder glyph AND the sentence "Covers
+  Low to High" in the same cell. Every row then said it twice, so the eye read the words and the
+  bars were noise. The rungs ascended in height, so the commonest case, Low only, drew the smallest
+  possible mark, and with no axis shared between rows nothing could be compared down the column.
+  Dan's verdict on seeing it was "I hate the change made to the teams". The spec, not the build, is
+  where it was decided: asking for both was the defect, and the note in the same issue saying to
+  screenshot it early was the only safeguard, which is L27)
 
 ## External systems
 
@@ -4180,6 +4308,37 @@ window is a count rather than a boundary.
   for one search scope (overture#3493). L286 is the same mechanism inside a test suite; this is
   the production half.)
 
+
+- **L556. When asking a stakeholder to rule on whether two surfaces should agree, enumerate
+  every place they ALREADY disagree before asking, because the answer comes back as a rule
+  about agreement rather than about the single case you showed, and it gets applied to the
+  cases you never mentioned. Showing one instance also makes the decision look smaller than
+  it is, so the reply is given on a smaller picture than the change it authorises.**
+  (project-enrollment-tracker#1244 and #1245, 2026-09-03: the question put to the director
+  showed ONE divergence between the team board and the commission report, a rep terminated
+  on the 1st of the month, and he replied "I would like them both to match actually. Make
+  them both match the commission report." The board and the commission report also disagree
+  about NEW HIRES, because the board's roster is filtered only by departures and never by
+  the floor date, and that population is larger: 2 reps in September and 11 in August out
+  of 103 active. So a one line answer now either authorises removing every new hire from
+  their team's board for their first partial month, which would make the #484 goal
+  proration built for exactly that month pointless, or it does not, and nobody can tell
+  which from the reply. Enumerating both cases in the original message would have cost one
+  sentence and returned a decision that covered them.)
+
+- **L562. A named rule is copied through its WORKED EXAMPLE, so an example that contradicts the
+  rule teaches the inverse and is then defended with the rule's own authority.** Check the example
+  against the rule when writing it. And when a premise turns out wrong, hunt it down in every place
+  it was recorded rather than only where it was implemented.
+  (Try-Pennie/slate#1824, 2026-09-03: a tier coverage column drew five letters, covered ones dark
+  and uncovered ones faint. I claimed the faint letters had to clear 3:1 because they established
+  which position was which, and wrote a contrast guard, a component docstring, two design system
+  colour entries and a named rule around it. The premise was wrong: the covered letters are their
+  own labels, so "M H V" says Medium, High, Very High and nothing is ever counted. The rule itself
+  read correctly ("a mark is decoration only if removing it loses nothing a reader needs") and cited
+  these letters as its canonical example of a mark that must stay legible, which is the clearest
+  case of one that need not. Five recording sites for one wrong sentence, and the guard then blocked
+  the correction)
 
 ## Cross-system reliability
 

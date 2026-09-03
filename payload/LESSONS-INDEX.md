@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 440 lessons.
+LESSONS.md, which is NOT loaded into the session. 452 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -18,6 +18,7 @@ to decide something: the body is where the failure it came from is described.
 - L203. A cause inferred from two things co-occurring in a log or a trace is not established until you find a case where the suspected cause is present and the effect is ABSENT, because a busy system produces near simultaneous events constantly and a coincidence reads exactly like a mechanism.
 - L205. A test that touches a shared mutable object other tests also touch can pass purely because its own fixture is SLOW enough to outlive a neighbour's reset, so making that fixture faster is what exposes it: remove the dependency on the shared object rather than serializing around it, and re-check any such test after speeding its fixture.
 - L1. A test or guard is only real once it has been seen to fail.
+- L557. A monitor or validator that has never once PASSED is not measuring anything, because every failure it reports reads as a finding about the data rather than about itself. Record its outcomes so a lifetime success count of zero is detectable, and treat that as the check being broken.
 - L140. A test asserting that something THREW is satisfied by ANY throw, including one raised by its own fixture, so assert on the specific failure (the message, the type, the state left behind) rather than on the mere fact of an error.
 - L154. A tool that reports whether a check CAUGHT a deliberate defect must name WHICH check fired, because a defect large enough to break everything makes every check fail and is indistinguishable from the one that should have.
 - L177. When a failure reproduces only in an environment you cannot run (a CI runner, another machine, a device), make that environment PRINT the fact in question before changing any code, because a theory built from the symptom is cheap to believe and expensive to ship.
@@ -43,6 +44,7 @@ to decide something: the body is where the failure it came from is described.
 - L65. A guard shipped deliberately inactive needs the issue that activates it filed in the same change.
 - L70. A check whose expected value and its actual value come from the same lookup can only prove that lookup is self-consistent, never that it is correct.
 - L345. A guard that can REFUSE a reading must not draw on the same source as the reading itself, because the guard then falls silent exactly when that source fails and the unrefused reading is at its least trustworthy.
+- L561. A record written so that a failure can be RECOVERED from must be written by a DIFFERENT operation than the one that fails
 - L82. When a platform primitive's DOCUMENTED guarantee is the entire reason a guard is safe (a clock that excludes sleep, a delivery that happens once, a write that is atomic), measure that guarantee on the real target before shipping.
 - L188. A limit your code SETS (a minimum size, a timeout, a cap, a default) is only in force if nothing downstream recomputes it, because a framework or platform deriving the same value from other inputs overwrites yours silently and the line goes on reading as protection while protecting nothing, so measure the value in the RUNNING system rather than trusting the assignment.
 - L84. A recorded expectation (a baseline screenshot, a golden file, an approved snapshot) captures whatever the surface happened to be showing when it was recorded, including an error or empty state caused by a dependency the harness never fed it, and then defends that broken state as correct for as long as it lives.
@@ -129,6 +131,7 @@ to decide something: the body is where the failure it came from is described.
 - L378. A guard that exists to save an EXPENSIVE step must run on every entry point that reaches that step, because wiring it only into the thorough path leaves it absent from the quick one people use while iterating, which is exactly when the mistake it catches is made. Its own cost is the wrong thing to weigh: two seconds on every fast run is nothing against one doomed build it prevents.
 - L382. A poll that repeats an IDENTICAL request can be served the same cached answer every time, so it re-reads its own first attempt and can never observe the change it is waiting for. Make each attempt demand a fresh read, and prove the value can change inside one run rather than trusting that the loop is looking again.
 - L385. A test asserting an invariant that a SCHEDULED repair restores (a launch migration, a nightly cleanup, a periodic reconcile) must RUN that repair first and assert what is LEFT, because between two runs of the repair the violated state is the system's normal one, so the test reports the interval rather than a defect and goes red on ordinary days.
+- L564. An empty search result proves the SPELLING is absent, never the concept, so a conclusion drawn from it may claim only what was actually searched for.
 
 ## Data safety
 
@@ -136,6 +139,7 @@ to decide something: the body is where the failure it came from is described.
 - L206. A tool mode whose NAME reads like an inspection (reach, check, status, list, show, verify) must not create or modify live data, because it will be run to look around by somebody who has not re-read the docs, and being reached for in a hurry is the whole point of such a tool.
 - L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an injected path the loader alone uses) does not cover the way OUT
 - L5. Never destroy good state before its replacement is verified to exist.
+- L567. A stored verification result that AUTHORISES an irreversible action (a backup proved complete, a lock confirmed free, a health check passed) must be refused on its AGE at the point of use, because a truthful measurement of a past state is indistinguishable from a current one and the record says nothing about when it stopped being true.
 - L95. Adding a WRITE to an error path re-audits every error that can reach it
 - L7. User data gets a rotating backup and a restore path from day one.
 - L8. Own your paths.
@@ -156,6 +160,7 @@ to decide something: the body is where the failure it came from is described.
 - L338. Archiving a run's INPUTS and OUTPUTS but not the record of what it DID leaves the question anybody actually asks later, whether it did the work, unanswerable, and the surviving pair reads as complete evidence rather than as a gap, so decide explicitly what carries the process record and how long it lives instead of letting it default to the live file's lifetime.
 - L377. Retiring a feature must delete the STORED POINTERS to what it produced, not only its writer and its screen, because a consumer written to be generic over those pointers has no list anybody could have updated and goes on acting on every one left behind.
 - L381. A directory kept in step by an automatic mirror has ONE authoritative side, and an edit made to the other side is not merged but silently reverted, with a new file there deleted outright because the mirror has never heard of it.
+- L559. A rule that decides whether a record COUNTS (an eligibility test, a visibility window, an exclusion) must be applied where the record is READ, never also where it is WRITTEN, because the read-time application is the visible one and reads as the whole enforcement while the write-time copy silently withholds the record itself, so correcting or reversing the rule later recovers nothing.
 
 ## Honest failure
 
@@ -266,6 +271,8 @@ to decide something: the body is where the failure it came from is described.
 - L544. A value and the flag describing how it was obtained (the load failed, it is stale, it is a built in default) are ONE fact and must be one discriminated value, never two pieces of state beside each other.
 - L555. Matching a query against several fields CONCATENATED into one string makes the joining separator matchable, so a query spanning the boundary matches text that exists in no record.
 - L384. A field stamped on the UPDATE path and not on the INSERT path leaves every freshly created record without it, and the gap is invisible because every record that has ever been updated looks correct, so the population missing it is exactly the newest one. Stamp it where the record is CONSTRUCTED, and measure the field's presence against record age rather than reading the writer.
+- L563. A sync that refreshes only the records its upstream QUERY returned leaves every record that query stopped matching frozen at its last synced values, and a frozen copy is indistinguishable from a freshly confirmed one.
+- L565. A key recomputed from a record's own data is only as durable as whatever the recomputation CONSULTS, so an attribution resolved by asking the filesystem or a tool about a path stops resolving once that path is removed, and a temporary working directory is removed by design.
 
 ## Security and privacy
 
@@ -289,6 +296,7 @@ to decide something: the body is where the failure it came from is described.
 
 - L341. A curve assembled from piecewise segments must be checked for continuity of its RATE OF CHANGE, not only of its value, because matching the values at each seam is what everyone verifies while a step in the rate is what the person actually sees.
 - L20. Accessibility is part of building each control.
+- L560. An ARIA role that names a STRUCTURE (menu, tablist, list, radiogroup, table) is a promise about the element's CHILDREN
 - L149. A colour token that clears the level for an icon or a border does not thereby clear it for TEXT, because an interface component needs 3:1 and body text needs 4.5:1, so an accent reused for a label ships under the line while every check that measures whether it DREW reports it as fine.
 - L21. Read every new user-facing sentence cold, rendered, in the state that produces it.
 - L118. One word must name one unit across the whole product, and an added qualifier is not enough to separate two, because each sentence is correct read alone and the contradiction exists only in the reading.
@@ -301,6 +309,7 @@ to decide something: the body is where the failure it came from is described.
 - L69. A preview or approval surface must render the content on both light and dark backgrounds.
 - L76. A region that clips its content must show, at rest and with no interaction, that content continues past the edge, and must stop showing it once the end is reached.
 - L79. A notice placed in a container the platform may collapse, overflow or truncate (a toolbar slot, a header that condenses, a single row) is not shipped until it has been seen at the window size the person actually uses.
+- L566. An element positioned absolutely inside a scrolling container is CLIPPED by that container, and setting overflow on ONE axis makes the other axis clip too, because a `visible` axis computes to `auto` beside a non-visible one.
 - L189. A persistent surface pinned over the edge of a scrolling region must RESERVE space inside that region rather than float above it, or the last item in the scroll is permanently unreachable.
 - L80. When a message names a specific record, source or item so the person can act on it, the surface showing it must carry that action.
 - L97. An undo whose input is the very thing the action removed from the screen is not an undo, because the action destroys the only key to its own reversal.
@@ -332,6 +341,7 @@ to decide something: the body is where the failure it came from is described.
 - L547. A control whose work is pure computation over data the page already holds must not be routed through a server round trip, because on a dynamic page that round trip re-runs every UNRELATED read on the page, so the control's cost becomes the whole page's cost and nothing at the point it is written says so.
 - L549. A row aligned on its children's top or bottom EDGES aligns the CONTAINERS, not the controls inside them, so a column carrying a hint, an error or a second label line has its control silently pushed out of line while every column still reads as correctly aligned when read on its own.
 - L553. A column's header alignment and its cells' alignment are ONE fact set at two independent declaration sites, so they diverge silently while each site reads as correct on its own.
+- L558. A mark drawn BESIDE a caption of the same fact is decoration, so a spec that asks for BOTH ships the duplication as a requirement and no implementation can avoid it.
 
 ## External systems
 
@@ -406,6 +416,8 @@ to decide something: the body is where the failure it came from is described.
 - L374. A gitignore or exclude entry without a leading slash matches at EVERY depth, so a rule written for one top level folder silently swallows any same named directory anywhere in the tree, and the loss is invisible to status, diff and commit alike.
 - L554. A generated file committed beside its source conflicts on every aggregate it carries (a total, a count, a checksum, a timestamp), so two independent edits to the source that merge cleanly still collide there and block the merge over content nobody wrote.
 - L383. A derived value exposed as a computed property or a getter is re-run in full by EVERY reader, and a reader's call site reads as a free field access, so nothing at the point of use says what it costs. Where the derivation walks a whole collection, compute it once at the top of the pass and hand the value down, and assert the NUMBER of call sites, because the shape alone cannot be read.
+- L556. When asking a stakeholder to rule on whether two surfaces should agree, enumerate every place they ALREADY disagree before asking, because the answer comes back as a rule about agreement rather than about the single case you showed, and it gets applied to the cases you never mentioned. Showing one instance also makes the decision look smaller than it is, so the reply is given on a smaller picture than the change it authorises.
+- L562. A named rule is copied through its WORKED EXAMPLE, so an example that contradicts the rule teaches the inverse and is then defended with the rule's own authority.
 
 ## Cross-system reliability
 
