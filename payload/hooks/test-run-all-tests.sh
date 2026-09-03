@@ -1732,6 +1732,72 @@ case "$out_m4" in
     check "#275 and a run whose marker works says nothing about proving it" ok ;;
 esac
 
+
+# ---------------------------------------------------------------------------
+# One layer under the bracket: the library REFUSES the write (claude-config#278).
+# ---------------------------------------------------------------------------
+# Everything above is a DETECTION. The record has already landed in Dan's real store by the time
+# the run reports it, and two of them were sitting there when this was written, agent
+# `suite-fixture`, from a scratch copy of this suite assembled by hand while profiling
+# claude-config#239. The copy carried no CLAUDE_ISSUE_SPOOL_DIR, so it wrote where the library
+# defaults to, which is the live one.
+#
+# A detection that fires afterwards asks every suite to remember a seam, and the ones that forget
+# are exactly the ones nobody is looking at (L2). claude-sync already made this decision one layer
+# along in claude-config#277: it refuses to apply the payload into the real config while a run id
+# is set rather than reporting it later. This is the same refusal in issue_spool_append, which is
+# the one function every writer goes through and therefore the one place it can be forgotten from
+# (L30).
+#
+# HOME is pointed at a throwaway directory here, so the case that PROVES a write into the default
+# store is structurally unable to reach the real one (L2). The library resolves its root every time
+# it is needed, so the fake takes effect.
+SP278="$TMPROOT/spool278"
+REAL278="$SP278/home/.claude-issue-spool"
+mkdir -p "$SP278/home" "$SP278/work" "$SP278/own"
+
+# Empty rather than unset for both seams: the library treats an empty value as absent on each, and
+# this suite inherits a real run id and a real spool directory from the runner that started it.
+sp278_note(){ # sp278_note [env assignments...] -> one note through the REAL library
+  env HOME="$SP278/home" CLAUDE_SUITE_RUN_ID= CLAUDE_ISSUE_SPOOL_DIR= "$@" \
+      bash "$DIR/lib/issue-spool.sh" note "$SP278/work" \
+      "a finding no suite may leave in the live spool" suite-fixture 2>&1
+}
+
+# The control first, and it is not optional: without it a refusal below is satisfied by a fixture
+# that could never write at all, whatever the reason (L159).
+rm -rf "$REAL278"
+out_r1="$(sp278_note)"; code_r1=$?
+if [ "$code_r1" -eq 0 ] && [ -n "$(ls -1 "$REAL278" 2>/dev/null)" ]; then
+  check "#278 outside a test run a write into the default store still lands" ok
+else
+  check "#278 outside a test run a write into the default store still lands" "exit=$code_r1 out=$out_r1"
+fi
+
+rm -rf "$REAL278"
+out_r2="$(sp278_note CLAUDE_SUITE_RUN_ID=run-278)"; code_r2=$?
+[ "$code_r2" -ne 0 ] \
+  && check "#278 the same write under a test run is refused" ok \
+  || check "#278 the same write under a test run is refused" "exit=$code_r2 out=$out_r2"
+[ -z "$(ls -1 "$REAL278" 2>/dev/null)" ] \
+  && check "#278 and nothing reaches the store it was refused for" ok \
+  || check "#278 and nothing reaches the store it was refused for" "left=$(ls -1 "$REAL278" 2>/dev/null | tr '\n' ' ')"
+case "$out_r2" in
+  *CLAUDE_ISSUE_SPOOL_DIR*)
+    check "#278 and the refusal names the seam that fixes it" ok ;;
+  *)
+    check "#278 and the refusal names the seam that fixes it" "out=$out_r2" ;;
+esac
+
+# The case every suite in this tree is actually in, and the reason the refusal is safe to ship: a
+# run id set AND a throwaway root of its own still writes. Without this the refusal could be a
+# blanket one and satisfy everything above (L142).
+out_r3="$(sp278_note CLAUDE_SUITE_RUN_ID=run-278 CLAUDE_ISSUE_SPOOL_DIR="$SP278/own")"; code_r3=$?
+if [ "$code_r3" -eq 0 ] && [ -n "$(ls -1 "$SP278/own" 2>/dev/null)" ]; then
+  check "#278 a run that points the spool at its own root still writes" ok
+else
+  check "#278 a run that points the spool at its own root still writes" "exit=$code_r3 out=$out_r3"
+fi
 # ---------------------------------------------------------------------------
 # The other LIVE STORES are bracketed too, and the list has to cover every seam a suite can
 # write through (claude-config#216, claude-config#272).

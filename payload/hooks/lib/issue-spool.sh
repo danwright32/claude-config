@@ -239,7 +239,27 @@ issue_spool_keys_written_from() { # keys-written-from <dir> [already-named...]
 # reader, so a bad caller would corrupt the spool and see no complaint. Refusing
 # here means the caller can fall back to somewhere the record still survives.
 issue_spool_append() { # append <dir> <json-record>
-  local file record count; file="$(issue_spool_path "$1" "${3:-}")"; record="${2:-}"
+  local file record count
+  # A TEST RUN may not write into the real store (claude-config#278, L2). The bracket in
+  # run-all-tests.sh is a DETECTION: it says afterwards that a record landed in Dan's live spool,
+  # by which time it has. Two were sitting there when this was written, agent `suite-fixture`, from
+  # a scratch copy of the suite assembled by hand, which carried no CLAUDE_ISSUE_SPOOL_DIR and so
+  # wrote where the library defaults to. Asking every suite to remember the seam leaves the ones
+  # that forget writing into live data, and those are the ones nobody is looking at.
+  #
+  # So it is refused here, in the one function every writer goes through, which is the one place it
+  # can be applied and the one place it can be forgotten from (L30). claude-sync's
+  # apply_payload_to_local made the same decision one layer along in claude-config#277 and this is
+  # deliberately the same shape.
+  #
+  # Judged on the ROOT that was actually resolved rather than on whether the override was set, so a
+  # suite that sets it and points it at the live store is refused too: the override is not the
+  # question, the destination is.
+  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ] && [ "$(issue_spool_root)" = "${HOME%/}/.claude-issue-spool" ]; then
+    echo "issue-spool: refusing to write into the real spool at $(issue_spool_root): this is running under a test suite (CLAUDE_SUITE_RUN_ID=$CLAUDE_SUITE_RUN_ID). Set CLAUDE_ISSUE_SPOOL_DIR to that suite's own throwaway directory before writing." >&2
+    return 3
+  fi
+  file="$(issue_spool_path "$1" "${3:-}")"; record="${2:-}"
   [ -n "$record" ] || return 2
   case "$record" in *$'\n'*) return 2 ;; esac
   # STAMPED while a test run is in progress (claude-config#275). run-all-tests.sh brackets a run
