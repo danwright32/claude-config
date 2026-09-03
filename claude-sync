@@ -1239,8 +1239,17 @@ regenerate_payload_index(){
   # in every project actually loads (L98).
   nl="$(lesson_numbers_in "$src" | sort -u | grep -c . || true)"
   ni="$(lesson_numbers_in "$PAYLOAD/$LESSON_INDEX_FILE" | sort -u | grep -c . || true)"
-  if [ "${nl:-0}" != "${ni:-0}" ]; then
-    die "the lessons index regenerated after the merge lists ${ni:-0} entries while the LESSONS.md beside it holds ${nl:-0}. Nothing has been published. Run 'claude-sync status' and look at $PAYLOAD/$LESSON_INDEX_FILE."
+  # ZERO is refused before the two are compared. Both counts come from the same reader, so a reader
+  # that failed returns zero on both sides, they agree, and the check passes on the permissive side
+  # having measured nothing (L50, L98). A lessons file with no readable entry is not a state to
+  # publish an index for.
+  case "${nl:-}" in ''|*[!0-9]*) nl=0 ;; esac
+  case "${ni:-}" in ''|*[!0-9]*) ni=0 ;; esac
+  if [ "$nl" -eq 0 ]; then
+    die "no readable lesson entry was found in $src after the merge, so the index cannot be rebuilt from it and nothing has been published. Look at that file."
+  fi
+  if [ "$nl" != "$ni" ]; then
+    die "the lessons index regenerated after the merge lists $ni entries while the LESSONS.md beside it holds $nl. Nothing has been published. Run 'claude-sync status' and look at $PAYLOAD/$LESSON_INDEX_FILE."
   fi
   return 0
 }
