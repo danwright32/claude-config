@@ -9300,10 +9300,37 @@ check "#205 the poll interval is honoured (4s poll took ${pi_slow}ms, 0.1s poll 
 # finishes in 50 milliseconds is noticed within a fifth of a second of doing so. Bounded against
 # the SLOW run's own overhead rather than against a bare 200, because a pull does real work either
 # way and only the wait is under test here (L146, L224).
+#
+# AND AGAINST THIS RUN'S OWN NOISE (claude-config#308). The overhead subtracted above is measured
+# once, on the slow run, and stands in for the fast runs' overhead; under load the fast samples
+# inflate by more than it accounts for. On 2026-09-03 this went red at 594ms fastest against a
+# 364ms overhead, so 230 against a ceiling of 200, while the SPREAD between the three samples was
+# 142ms. A margin of 30ms cannot be asserted with a measurement whose own noise is 142ms: that is
+# not a finding about the code, it is a reading of what else the machine was doing.
+#
+# So when the spread is larger than the claim, the tight claim is not made, and the check SAYS
+# which of the two it made rather than passing quietly on the loose one (L11, L98). The gross
+# regression is still caught either way by the "poll interval is honoured" check above, which
+# compares four seconds against a tenth of one and is nowhere near this noise.
 pi_overhead=$(( pi_slow - 4000 ))
 [ "$pi_overhead" -ge 0 ] || pi_overhead=0
-check "#205 and a runner finishing in 50ms is noticed within 200ms of it (fastest ${pi_fast}ms, spread ${pi_spread}ms, of which ${pi_overhead}ms is the pull itself)" \
-  "[ \"\$(( pi_fast - pi_overhead ))\" -le 200 ]"
+# The decision, in a function, so BOTH branches can be driven with numbers rather than only the
+# one this machine happens to produce today (L1, L101: the branch a fixture never reaches is the
+# one that ships untested).
+pi_within(){   # pi_within <fast> <overhead> <spread> <ceiling> -> 0 when the wait is within bounds
+  local _w=$(( $1 - $2 )) _ceiling="$4"
+  [ "$_w" -ge 0 ] || _w=0
+  [ "$3" -gt "$_ceiling" ] && _ceiling="$3"
+  [ "$_w" -le "$_ceiling" ]
+}
+check "#308 the noise aware bound holds a quiet run to the tight claim" \
+  "pi_within 300 100 20 200 && ! pi_within 500 100 20 200"
+check "#308 and lets a noisy run through only up to its own measured noise" \
+  "pi_within 550 100 500 200 && ! pi_within 700 100 500 200"
+pi_claim="within 200ms"
+[ "$pi_spread" -gt 200 ] && pi_claim="within this run's own ${pi_spread}ms of measurement noise, which was wider than 200ms, so the tighter claim was NOT made"
+check "#205 and a runner finishing in 50ms is noticed $pi_claim (fastest ${pi_fast}ms, spread ${pi_spread}ms, of which ${pi_overhead}ms is the pull itself)" \
+  "pi_within \"\$pi_fast\" \"\$pi_overhead\" \"\$pi_spread\" 200"
 
 # The deadline is against the CLOCK. A runner that never ends, and a ceiling of three seconds: if
 # the deadline counted polls it would fire after three TENTHS of a second at the default interval,
