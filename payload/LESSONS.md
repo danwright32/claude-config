@@ -401,6 +401,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   the window's limits from the content instead and replaced it with 353 by 2834 against a usable
   screen height of 984, leaving a window macOS would not allow to fit on the screen and no drag
   able to recover it)
+- **L572. A limit that governs an operation already under way cannot be set from INSIDE that
+  operation, because the mechanism enforcing it was armed when the operation began and read the
+  value at that moment, so the assignment silently applies only to the next one.** Set such a
+  bound before the work starts, and prove it fires by exceeding it deliberately. This is not
+  L188, where something downstream overwrites the value: here nothing overwrites anything, the
+  assignment simply lands too late, and the inert line leaves the safe number sitting in the
+  source where every reader takes it for protection.
+  (bidspoke#1147, probed both ways 2026-09-04. A pg_cron rollup was being killed at the cluster
+  default statement_timeout of 120s, and the obvious fix was a SET LOCAL statement_timeout inside
+  the refresh function. A probe function setting it to 1s and then sleeping 3s slept the full 3s;
+  the same pair written as two separate statements cancelled at 1s. The budget went into the cron
+  command instead, and the guard asserts the PLACEMENT rather than that the setting appears
+  somewhere, because a grep for the setting cannot tell the working form from the inert one)
 - **L84. A recorded expectation (a baseline screenshot, a golden file, an approved snapshot)
   captures whatever the surface happened to be showing when it was recorded, including an error
   or empty state caused by a dependency the harness never fed it, and then defends that broken
@@ -1566,6 +1579,12 @@ window is a count rather than a boundary.
   name, never share a default resource (clipboard, default store, one appended log)
   between concurrent writers, and put app data in the platform-correct home before the
   first byte. (14 issues, 3 repos)
+- **L574. An undo, revert or reactivate that restores FEWER fields than the action changed is not
+  the inverse of that action, so any copy calling it reversible is a claim about two separate
+  writes and has to be checked against both.** The fields it does restore make the reversal look
+  complete, so the one it leaves behind is found later by its absence rather than by anything
+  reporting it, and the person who trusted the word reversible is the one who finds it.
+  (slate#1875)
 - **L9. Destructive actions get confirmation or undo from the first build, and any
   automatic deletion or retention policy is the user's product decision, never a silent
   default.** (9 issues, 4 repos)
@@ -4259,6 +4278,27 @@ window is a count rather than a boundary.
   three of seven photographs behind the caption. The picture file was correct, every test was
   green, and it was found only by drawing the phone chrome over a render by hand)
 
+- **L570. A sequence applied only incrementally forward (database migrations, an append-only
+  provisioning or setup script) is never run from empty, so a step that quietly depends on
+  state one particular machine already had keeps passing there while failing on every fresh
+  environment, and the rot surfaces only when somebody first needs one.** Rehearse the whole
+  sequence from empty on a schedule, and have each step address what it changes by a property
+  it can look up rather than by a name the platform generated. The second half is where these
+  break: a constraint or index nobody named explicitly is named BY the platform from the
+  columns and from how many siblings already exist, so a hardcoded one is an assertion about a
+  database the step did not build. Distinct from L262, which is a constraint satisfied by hand
+  placement being violated once the work is generated: here the hand made state is what the
+  step DEPENDS on, so it is correct exactly once, on the machine that has it.
+  (bidspoke#1139: applying supabase/migrations to an empty database stopped at 22 of 119 from
+  2026-04-24 to 2026-09-03. 20260424000001 opened by dropping a foreign key by a name that
+  appears nowhere earlier in the history, because core_tables declares that key inline and
+  unnamed and Postgres auto-names it; the dropped name existed only in production, made by
+  hand, so the statement could only ever succeed there. Nothing noticed for four months because
+  nothing ever replays the directory. The compounding cost is the tell: with no way to build an
+  empty database, nothing in the repo had ever been tested against real Postgres, so every SQL
+  guard read migration TEXT instead of executing it, and the procedures that TRUNCATE
+  production partitions had to be tested on a throwaway database created by hand)
+
 - **L263. A shared NAME is read as evidence of shared BEHAVIOUR, so two same-named functions on
   either side of a boundary are never compared and can implement different rules indefinitely,
   while every caller on each side reads as correct in isolation.** The name is what suppresses
@@ -5226,3 +5266,33 @@ difference was plumbing.
   compile tasks in the Release build against 541 in the test step and 235 more for the same 229
   app files in the GUI step, so the app source is compiled three times in one job while the
   shared path read as reuse.)
+
+- **L571. A gate that performs an external network call BEFORE the check it is named for can
+  fail without ever running that check, so its red is indistinguishable from the failure it
+  exists to report and merging becomes dependent on a third party being up.** Put the network
+  step in its own job, or run it after the check. A gate that goes red for a reason unrelated
+  to what it measures teaches people to re-run rather than look, which is how a real failure
+  arriving during an outage gets re-run past.
+  (slate#1868, 2026-09-04: the CI `typecheck` job runs `pnpm audit --prod` against
+  registry.npmjs.org before `tsc --noEmit` in the same job. Three consecutive runs failed with
+  ERR_SOCKET_TIMEOUT at the audit step, so tsc never executed once, and a merge was blocked
+  about twenty minutes for a reason that had nothing to do with the code. Reproduced
+  independently from a laptop: curl to the audit endpoint timed out at 25s while everything
+  else was fine, then recovered.)
+
+- **L573. Before running a pure check once per item, count the DISTINCT inputs it will
+  actually see, because a loop that reads as once per thing is usually mostly repeats. Cache
+  on the WHOLE input, never a coarser key, since a coarser one is fast and silently wrong in
+  exactly the cases a uniform fixture never contains.** The repeats hide because the loop is
+  correct: every call is a real question, and nothing says the answer was already known. The
+  coarser key hides for the opposite reason, that it is right on every case anybody thought to
+  write down.
+  (slate#1846, #1864, #1871, all found in one day in one codebase. The availability grid asked
+  the business hours judge once per cached appointment time, 13,538 questions for 396 distinct
+  windows, and separately rebuilt each agent's shift window once per hour per day, 17,136 for
+  five distinct timezones. The every minute health check still does the first of those on the
+  budget four cron lanes share. Both fixes were nearly keyed too loosely: on the HOUR rather
+  than the exact start and duration, which admits a slot running past the close, and on the
+  ORG's date rather than the agent's own zone and instant, which collapses the boundary where
+  one company day falls on two different local weekdays for the same person. Neither is
+  reachable from a single zone fixture on an ordinary week.)
