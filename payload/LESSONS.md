@@ -3076,6 +3076,19 @@ window is a count rather than a boundary.
   reel membership check and an accepted or declined mark, were all built to rank accounts that
   could not be ranked. Nothing anywhere reported it: every surface honestly said "not counted
   yet", which is a legitimate value for an account nobody has counted.)
+- **L580. Editing something by DELETING and RECREATING it discards everything accumulated
+  ALONGSIDE it, its run history, its metrics, its audit trail, so where the platform offers an in
+  place alter, use that for an edit and reserve delete plus create for real creation and
+  removal.** The loss is silent, and what it takes is usually exactly what the health check reads.
+  (bidspoke#1156, where every migration that retuned a scheduled database job unscheduled it and
+  scheduled it again even to change one setting. pg_cron mints a new job id each time and the run
+  history table is keyed on that id, so each retune silently emptied the job's whole record. The
+  health check reads that record, so a freshly retuned job reported as never having succeeded and
+  paged, and the before and after runtime comparison that justified the retune became impossible
+  for any job retuned since. An in place alter existed the whole time. Distinct from L15, whose
+  remedy is to record the old to new mapping: no mapping recovers history keyed on the id that
+  was thrown away)
+
 
 ## Security and privacy
 

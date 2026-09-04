@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 473 lessons.
+LESSONS.md, which is NOT loaded into the session. 474 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -281,6 +281,7 @@ to decide something: the body is where the failure it came from is described.
 - L565. A key recomputed from a record's own data is only as durable as whatever the recomputation CONSULTS, so an attribution resolved by asking the filesystem or a tool about a path stops resolving once that path is removed, and a temporary working directory is removed by design.
 - L576. A stamp recording WHEN something was first seen must be keyed on the identity that DISAPPEARS when that thing is replaced, never on its descriptive attributes.
 - L389. A writer that only fills records going FORWARD leaves every record that existed when it shipped permanently unfilled, and each consumer of that data then runs correctly over an empty set, so the whole feature reads as working while producing nothing. Measure how much of the store the writer can never reach before building anything that depends on it.
+- L580. Editing something by DELETING and RECREATING it discards everything accumulated ALONGSIDE it, its run history, its metrics, its audit trail, so where the platform offers an in place alter, use that for an edit and reserve delete plus create for real creation and removal.
 
 ## Security and privacy
 
