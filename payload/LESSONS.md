@@ -2514,6 +2514,20 @@ window is a count rather than a boundary.
   state: the omission looked answered. Nineteen files adopted the component and eight still have
   bare buttons, so the assumption was never enforced anywhere)
 
+- **L589. A relative time or magnitude ("4 hours before", "2 days late") must name what it is
+  relative TO, and where that anchor can MOVE between records it must name WHICH anchor it used,
+  because otherwise a perfectly truthful history reads as corrupt.** The numbers change while the
+  wall clock does not, so the reader concludes the data is wrong rather than that the reference
+  moved, and the record loses its authority at the moment somebody is relying on it.
+  (Try-Pennie/slate#1943, 2026-09-04: a booking's history showed three entries all stamped
+  `Fri, Sep 4, 11:18am` and then `4 hours before`, `3 hours before`, `2 hours before` down the
+  page. Every value was right: `formatLeadTime` measures notice given relative to THE APPOINTMENT,
+  and each reschedule had moved the appointment later, so the notice period grew while the
+  recording clock stayed inside one minute. Dan read it as a defect. The phrase also named no
+  object at all, and the reader's only available guess, that it was relative to the neighbouring
+  entry, is wrong. Two fixes, and the second is the one nobody thinks of: state the anchor, and
+  state which value of it)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a

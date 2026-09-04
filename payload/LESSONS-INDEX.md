@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 482 lessons.
+LESSONS.md, which is NOT loaded into the session. 483 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -231,6 +231,7 @@ to decide something: the body is where the failure it came from is described.
 - L532. A form that falls back to a DEFAULT when nothing is stored cannot show that a save failed
 - L536. A language or API that silently yields NOTHING for a construct it does not support makes the FIX indistinguishable from the BUG
 - L550. A component that omits a state because of an assumption about ALL its callers (every action redirects with an outcome, every parent supplies the context, every input was validated upstream) is correct only while that assumption holds, and nothing enforces it, so it breaks at the first caller that does not honour it.
+- L589. A relative time or magnitude ("4 hours before", "2 days late") must name what it is relative TO, and where that anchor can MOVE between records it must name WHICH anchor it used, because otherwise a perfectly truthful history reads as corrupt.
 
 ## State and identity
 
