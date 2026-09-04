@@ -3570,6 +3570,15 @@ window is a count rather than a boundary.
   WORKING, so enumerate what the native control was doing and test each item rather than testing
   that the new one renders.
   (slate#1849)
+- **L596. A custom control placed inside a form also INHERITS the platform's form behaviours, so
+  every key the control handles for its own purposes must decide explicitly whether that key still
+  reaches the form.** Handling it on only some branches makes one keystroke mean "commit this
+  field" sometimes and "save everything" the rest of the time, with nothing on screen saying
+  which, and the branch that writes is the one nobody tested. The mirror of L568, which is about
+  what such a control LOSES; this is what it silently gains.
+  (slate#1968: Enter in a typeable time field called preventDefault only when a dropdown row
+  happened to be highlighted, so pressing it after typing a time submitted the whole business
+  hours form and wrote the org's opening hours to live data, twice, before anybody noticed)
 - **L508. A control that renders a value the BROWSER itself validates (a date input, a number
   input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that
   value stands beside an empty control and the two halves of the screen contradict each other

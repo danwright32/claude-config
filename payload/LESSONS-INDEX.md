@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 489 lessons.
+LESSONS.md, which is NOT loaded into the session. 490 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -342,6 +342,7 @@ to decide something: the body is where the failure it came from is described.
 - L180. A confirmation dialog's consequence sentence must be derived from the state it is about to change, never asserted, because a warning shown on every delete carries no information and reads identically whether it is taking one row or a subtree of ten.
 - L187. A control gated on a collection holding MORE THAN ONE member is absent in the commonest case, which is one member.
 - L568. Replacing a native form control with a custom one silently drops everything the platform was supplying for free: submission by `name` inside the form, keyboard operation, type ahead, screen reader semantics, and freedom from being clipped by an ancestor.
+- L596. A custom control placed inside a form also INHERITS the platform's form behaviours, so every key the control handles for its own purposes must decide explicitly whether that key still reaches the form.
 - L508. A control that renders a value the BROWSER itself validates (a date input, a number input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that value stands beside an empty control and the two halves of the screen contradict each other about what was asked for.
 - L207. A constraint imposed by the surface your output is DISPLAYED on (a phone's notch or safe area, a host app's own overlay chrome, a fold, a print bleed) leaves no trace in the artifact you render or in any check you run over it, so it is only ever discovered on a real device.
 - L221. A limit calibrated against the DEVICE somebody owns is looser than the same device turned down, because display scaling, text size and browser zoom are settings a person changes with no code change and nothing re-runs the check, so calibrate against the most constrained SETTING the hardware can be put into rather than against the hardware itself.
