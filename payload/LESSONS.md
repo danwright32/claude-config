@@ -1836,6 +1836,16 @@ window is a count rather than a boundary.
 
 ## Honest failure
 
+- **L583. A fallback that relaxes only ONE dimension of a multi dimensional match does nothing
+  wherever the shortage lives in another dimension, so name which dimension is actually thin
+  before choosing what the fallback relaxes.** It fails green: the fallback runs, walks every
+  rung, and reports a legitimate miss, so the safety net reads as present while covering nothing.
+  The tell is a ladder built by stepping one field of a compound predicate while the rest stay
+  pinned. (slate#1909: `tierLadder` walks 522, 422, 322, 222, 122 stepping only the debt tier and
+  never the backend service, and with one bookable Beyond agent all five rungs resolve to the
+  same person; measured against prod, all twelve non Low Beyond buckets returned the identical 39
+  slots, and the three Low Beyond buckets returned zero with nowhere left to fall)
+
 - **L529. An audit entry must record the old and new values of what changed, not merely which
   thing changed, because the question an audit exists to answer is what the state was at a given
   moment, and an entry without values can never answer it no matter how many entries there are.**
