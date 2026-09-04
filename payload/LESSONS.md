@@ -1876,6 +1876,21 @@ window is a count rather than a boundary.
   built to find. It cost a 6 hour window plus a peer check, proving some OTHER workflow recorded
   in the same window, before any accusation could be made at all)
 
+- **L595. A configuration value that can live in more than one store** (a platform secret, a
+  settings table, a file) must be resolved by ONE reader that consults them all, because the path
+  somebody exercises interactively reads the merged view and works, while a background path
+  reading a single store silently sees a subset and refuses only where nobody is watching.
+  (Bidspoke, 2026-09-04, bidspoke#1174: SALESFORCE_INSTANCE_URL and SALESFORCE_CLIENT_ID exist
+  ONLY in the environment_variables table, while SALESFORCE_CLIENT_SECRET is in that table AND as
+  a Cloudflare Worker secret. The engine's Salesforce steps read the merged env the executor
+  injects and patch Salesforce thousands of times a day; two scheduled jobs read the Cloudflare
+  env alone, see one value of three, and throw before any query runs. One of them, the hourly bid
+  matrix sync, had failed every hour since 2026-08-22 with nothing surfacing it, and a brand new
+  job written on 2026-09-04 inherited the identical defect within the hour because it copied the
+  scheduled reader rather than the working one. The tell is that the failure appears only in the
+  context nobody watches: the interactive path is the merged one, so testing by hand proves
+  nothing about the cron)
+
 ## Honest failure
 
 - **L586. A redirect whose target is ITSELF a redirect drops the query string, so any outcome
