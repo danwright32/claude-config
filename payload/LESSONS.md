@@ -1862,6 +1862,20 @@ window is a count rather than a boundary.
   brand new agent is unaffected and heals correctly, because they have no token to retain, which
   is why the neighbouring issue read as if this repaired itself)
 
+- **L592. Two datasets meant to be read TOGETHER must be retained on the same boundary**,
+  because the shorter one empties first and every query pairing them is then silently wrong in
+  its oldest window, in the direction that looks exactly like the data being broken rather than
+  the retention. State the pair's shared boundary where the retention is set, and window any
+  such query to the shorter of the two. (Bidspoke, 2026-09-04, bidspoke#1167: lead_sighting_bids
+  is drained about 25 hours back while lead_sightings keeps roughly two days, both export gated
+  but on separate crons. Measured across all workflows, the 16:00 and 17:00 hours of the previous
+  day held 2,315 and 6,382 sightings against ZERO bid rows, 18:00 was partial at 1,134, and the
+  ratio was normal from 19:00 on. A detector comparing a workflow's sightings against its
+  recorded bids over 24 hours therefore reads a healthy workflow whose traffic sits in that
+  stretch as having recorded nothing, which is indistinguishable from the real defect it was
+  built to find. It cost a 6 hour window plus a peer check, proving some OTHER workflow recorded
+  in the same window, before any accusation could be made at all)
+
 ## Honest failure
 
 - **L586. A redirect whose target is ITSELF a redirect drops the query string, so any outcome
