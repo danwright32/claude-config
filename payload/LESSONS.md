@@ -292,6 +292,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   migration applied in production, the live site serving the new commit, behavior
   confirmed in a production build. CI must exercise the artifact production actually
   runs. (20 issues, 5 repos)
+- **L581. A merge or conflict resolution that writes its result to the LOCAL copy must read
+  back the SHARED copy and confirm the merged entries are there before reporting success,
+  because a merge that resolved correctly and a merge that also propagated produce the
+  identical message.** A reconcile on one Mac merged LESSONS.md, printed "nothing was dropped"
+  and "sent local changes", and both were true about the live copy at 472 lessons while the
+  committed copy held 468: L575 to L578 existed on that machine alone, so the other Mac would
+  never have received them and an overwrite of the live file would have destroyed them. The
+  derived index made it plainer by sitting in three states at once, 463 committed, 468
+  uncommitted, 472 live. Entries that exist on one side only are by definition the ones nobody
+  is looking at, so compare in the unit the meaning lives in (the identifiers, not whole lines)
+  and refuse the success line until the shared side answers. (claude-config#312)
 - **L212. A count of source sites that CREATE a resource against source sites that RELEASE it
   cannot measure whether anything leaks, because one shared helper runs once per caller and a
   single missing teardown inside it multiplies invisibly, so measure what actually survives at

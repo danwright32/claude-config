@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 474 lessons.
+LESSONS.md, which is NOT loaded into the session. 475 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -34,6 +34,7 @@ to decide something: the body is where the failure it came from is described.
 - L323. A duration compared against its own history measures the SYSTEM only while the workload is constant, so a job whose cost varies with its input must be divided by a measure of that input before any trend is read from it.
 - L3. Built is not wired, and wired is not proven.
 - L4. A merged fix is not a deployed fix.
+- L581. A merge or conflict resolution that writes its result to the LOCAL copy must read back the SHARED copy and confirm the merged entries are there before reporting success, because a merge that resolved correctly and a merge that also propagated produce the identical message.
 - L212. A count of source sites that CREATE a resource against source sites that RELEASE it cannot measure whether anything leaks, because one shared helper runs once per caller and a single missing teardown inside it multiplies invisibly, so measure what actually survives at runtime.
 - L63. A regression guard must assert the quantity it exists to protect, never a proxy for it.
 - L103. A guard that asserts the exact rendering of a value rather than the rule behind it fails the first legitimate refinement of that value, and when the value is a file's text it can also be satisfied by a comment ABOUT the thing, including one explaining that the thing was removed.
