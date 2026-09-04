@@ -3961,6 +3961,19 @@ window is a count rather than a boundary.
   uppercase label sat 0.7px high, in all seven statuses including the two with no dot. Dan
   reported it as the dot being centred and the words not being)
 
+- **L597. When markup carries BOTH outcomes of a choice a client script will make, the state
+  rendered by default must be the one that is correct if that script never runs, because a script
+  that fails is silent and leaves a page that still looks finished while showing the wrong
+  half.** The server cannot decide anything that depends on rendered geometry, so pre-rendering
+  both branches and letting the browser pick is often the only design available; what is optional
+  is which branch the markup ships in. Pick the one that is safe to be stuck on, and have the
+  script promote rather than demote, so the degraded page is correct instead of corrupt.
+  (pet#1293, 2026-09-04: the Power Rankings bar renders each number inside its colour band and
+  again in the bar's grey tail, and a browser pass hides whichever does not fit. With scripts
+  off, 9 of 15 bands showed their number clipped mid-figure and no tail copy appeared at all,
+  while the rest of the board, which is baked, rendered perfectly. The fix is to default to the
+  tail, which always has room)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
