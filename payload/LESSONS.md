@@ -4264,6 +4264,20 @@ window is a count rather than a boundary.
   step, which left the sentences going to strangers under his name as the only copy in the product
   with no reader. A closing note told people who had never replied "it was good to be in touch",
   and it survived a rewrite of the first sentence of that same paragraph three days earlier)
+- **L582. When one fact is recorded by two mechanisms that deliberately exclude each other's
+  territory, assert their union against the real population, because each exclusion can be
+  correct while a third group belongs to neither and is recorded zero times.** Both mechanisms
+  go on reporting success on the cases they do cover, so the gap has no failure to surface it,
+  and an absence of records is indistinguishable from a population that genuinely never does the
+  thing. Distinct from L129, which says to name what WILL cover the exempted category: here both
+  halves were named and each is right, and nobody checked that the two named halves add up to
+  the whole. Applies to every fast path beside a fallback, native beside derived, primary handler
+  beside catch-all.
+  (bidspoke#1157: bid recording is split between a native path firing only on partner_bid and
+  bid_group nodes and a derivation that deliberately excludes those to avoid double counting and
+  only inspects code nodes. The Lead Economy workflow bids from a branch node, so neither fired,
+  and 41,747 runs a week produced zero bid rows and zero recorded winners while the workflow
+  succeeded every time)
 - **L57. A correction recorded only in memory or a transcript will recur, because the
   artifact that actually governs the behavior never changed.** Write every accepted
   correction into the prompt, config, or rule file that decides the outcome, in the same

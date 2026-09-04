@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 475 lessons.
+LESSONS.md, which is NOT loaded into the session. 476 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -413,6 +413,7 @@ to decide something: the body is where the failure it came from is described.
 - L96. A guard driven by a hand-written registry checks only what the registry lists, so anything missing from it is exempt from the very check meant to catch it, and the guard reports green while blind.
 - L247. A sweep that requires every place doing X to also do Y must enumerate its subjects by the STATE they reach, never by one spelling of X, because a place reaching that state by another route is never enumerated and is exempt from the rule the sweep exists to enforce, while the sweep goes on passing the subjects it did find.
 - L129. A category deliberately EXEMPTED from a review or check, for a CORRECT reason, has no reviewer at all unless one is named in the same change, and the gap is invisible precisely because the exemption was right.
+- L582. When one fact is recorded by two mechanisms that deliberately exclude each other's territory, assert their union against the real population, because each exclusion can be correct while a third group belongs to neither and is recorded zero times.
 - L57. A correction recorded only in memory or a transcript will recur, because the artifact that actually governs the behavior never changed.
 - L61. A decision recorded on an issue is only true as of its date, so re-check it against what has shipped since before building to it.
 - L62. A guard on a function's first line cannot protect against the cost of building its arguments, because every language evaluates those before the call runs.
