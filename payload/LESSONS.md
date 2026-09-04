@@ -1530,6 +1530,23 @@ window is a count rather than a boundary.
   data grows; both assume the recorded dimensions are the right ones, and this is the case where they
   are not.)
 
+- **L588. A displayed share or percentage must be ASSERTED to lie within its own range, because
+  a value outside it is the only self-evident proof that the numerator and denominator measure
+  different things, and nothing else will ever report it.** Beware in particular a denominator
+  that models ONE ideal member against a numerator counting a UNION across many: the two agree
+  while the members are identical and diverge as the real population becomes varied, so it ships
+  correct and rots without any code changing.
+  (Try-Pennie/slate#1937, 2026-09-04: the bucket availability page rendered 117%, 168% and 189%
+  under a header promising "every number is a share of what was possible". The numerator counted
+  distinct slot instants offered across a pool of 84 agents; the denominator, named
+  `userId: "theoretical-maximum"`, was a single synthetic agent on the org's hours and the event
+  type's slot interval. Agents' windows begin at different minutes in seven timezones (#1739,
+  #1454), so the union holds more instants than any one grid. It read as roughly 100% for months
+  while every schedule said America/New_York with identical hours. Worse, `open >= max` counted a
+  189% bucket as "offering the whole of today" in the page's own summary line, so the headline
+  numbers were wrong too. Dan read it as "did we book more than we offered". A clamp to 100% would
+  have hidden it; the range assertion is what surfaces it)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
