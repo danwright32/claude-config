@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 463 lessons.
+LESSONS.md, which is NOT loaded into the session. 473 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -48,6 +48,7 @@ to decide something: the body is where the failure it came from is described.
 - L561. A record written so that a failure can be RECOVERED from must be written by a DIFFERENT operation than the one that fails
 - L82. When a platform primitive's DOCUMENTED guarantee is the entire reason a guard is safe (a clock that excludes sleep, a delivery that happens once, a write that is atomic), measure that guarantee on the real target before shipping.
 - L188. A limit your code SETS (a minimum size, a timeout, a cap, a default) is only in force if nothing downstream recomputes it, because a framework or platform deriving the same value from other inputs overwrites yours silently and the line goes on reading as protection while protecting nothing, so measure the value in the RUNNING system rather than trusting the assignment.
+- L572. A limit that governs an operation already under way cannot be set from INSIDE that operation, because the mechanism enforcing it was armed when the operation began and read the value at that moment, so the assignment silently applies only to the next one.
 - L84. A recorded expectation (a baseline screenshot, a golden file, an approved snapshot) captures whatever the surface happened to be showing when it was recorded, including an error or empty state caused by a dependency the harness never fed it, and then defends that broken state as correct for as long as it lives.
 - L85. Two changes that are each green can merge into a broken main, because each one was verified against a base that did not contain the other.
 - L88. A CI job that runs only when certain paths change must have those paths derived from every input its tests actually read, not from where the code under test lives.
@@ -145,6 +146,7 @@ to decide something: the body is where the failure it came from is described.
 - L95. Adding a WRITE to an error path re-audits every error that can reach it
 - L7. User data gets a rotating backup and a restore path from day one.
 - L8. Own your paths.
+- L574. An undo, revert or reactivate that restores FEWER fields than the action changed is not the inverse of that action, so any copy calling it reversible is a claim about two separate writes and has to be checked against both.
 - L9. Destructive actions get confirmation or undo from the first build, and any automatic deletion or retention policy is the user's product decision, never a silent default.
 - L40. A check that decides to SKIP work must compare something that changes whenever the content changes.
 - L105. A read, modify, write cycle whose read answers EMPTY when it fails will erase the whole record the first time the read fails, and it does so at the exact moment the record is worth having.
@@ -164,6 +166,7 @@ to decide something: the body is where the failure it came from is described.
 - L381. A directory kept in step by an automatic mirror has ONE authoritative side, and an edit made to the other side is not merged but silently reverted, with a new file there deleted outright because the mirror has never heard of it.
 - L559. A rule that decides whether a record COUNTS (an eligibility test, a visibility window, an exclusion) must be applied where the record is READ, never also where it is WRITTEN, because the read-time application is the visible one and reads as the whole enforcement while the write-time copy silently withholds the record itself, so correcting or reversing the rule later recovers nothing.
 - L392. A one time correction that skips rows because of a state that can END (hidden, suspended, deleted, archived, paused) does not exempt them, it postpones them, and nothing re runs when that state ends, so either correct them anyway or make leaving that state re apply the rule.
+- L575. Deleting cached content must clear the marker that RECORDS that content's coverage (a sync token, a cursor, a window bound, a last refreshed stamp) in the same write
 
 ## Honest failure
 
@@ -276,6 +279,7 @@ to decide something: the body is where the failure it came from is described.
 - L384. A field stamped on the UPDATE path and not on the INSERT path leaves every freshly created record without it, and the gap is invisible because every record that has ever been updated looks correct, so the population missing it is exactly the newest one. Stamp it where the record is CONSTRUCTED, and measure the field's presence against record age rather than reading the writer.
 - L563. A sync that refreshes only the records its upstream QUERY returned leaves every record that query stopped matching frozen at its last synced values, and a frozen copy is indistinguishable from a freshly confirmed one.
 - L565. A key recomputed from a record's own data is only as durable as whatever the recomputation CONSULTS, so an attribution resolved by asking the filesystem or a tool about a path stops resolving once that path is removed, and a temporary working directory is removed by design.
+- L576. A stamp recording WHEN something was first seen must be keyed on the identity that DISAPPEARS when that thing is replaced, never on its descriptive attributes.
 - L389. A writer that only fills records going FORWARD leaves every record that existed when it shipped permanently unfilled, and each consumer of that data then runs correctly over an empty set, so the whole feature reads as working while producing nothing. Measure how much of the store the writer can never reach before building anything that depends on it.
 
 ## Security and privacy
@@ -349,6 +353,9 @@ to decide something: the body is where the failure it came from is described.
 - L549. A row aligned on its children's top or bottom EDGES aligns the CONTAINERS, not the controls inside them, so a column carrying a hint, an error or a second label line has its control silently pushed out of line while every column still reads as correctly aligned when read on its own.
 - L553. A column's header alignment and its cells' alignment are ONE fact set at two independent declaration sites, so they diverge silently while each site reads as correct on its own.
 - L558. A mark drawn BESIDE a caption of the same fact is decoration, so a spec that asks for BOTH ships the duplication as a requirement and no implementation can avoid it.
+- L577. A request to remove ON SCREEN text can be removing a control's only accessible name, or the target of an `aria-describedby`, and both failures are silent.
+- L578. A list of RECORDS laid out as flow rows, one flex row per record, has no columns at all: each field's position is set by the width of everything before it, so it reads as aligned only while that leading field is a uniform width, which a fixture always is and real data never is.
+- L579. An explanation added because ONE record's value was confusing gets attached to the record TEMPLATE, so it is correct at one row and becomes a wall of identical text at the real record count, which no fixture reaches.
 
 ## External systems
 
@@ -414,6 +421,7 @@ to decide something: the body is where the failure it came from is described.
 - L233. In a list of exclusions or skip cases, an entry carrying no written reason while its neighbours each carry one is evidence it was never reasoned about rather than deliberately chosen
 - L244. A file that is auto loaded into every session is believed without being re-checked, so any status it records (an open question, a pending issue, a not yet done) must be derived from the system that owns that truth or carry a check that fails when it drifts.
 - L262. A constraint that has only ever been satisfied as a side effect of somebody doing the work by hand is recorded nowhere and checked by nothing, so the first time that work is GENERATED rather than placed the constraint silently stops holding, and every existing check passes because each one was written against the hand made cases.
+- L570. A sequence applied only incrementally forward (database migrations, an append-only provisioning or setup script) is never run from empty, so a step that quietly depends on state one particular machine already had keeps passing there while failing on every fresh environment, and the rot surfaces only when somebody first needs one.
 - L263. A shared NAME is read as evidence of shared BEHAVIOUR, so two same-named functions on either side of a boundary are never compared and can implement different rules indefinitely, while every caller on each side reads as correct in isolation.
 - L370. Sharing a rule's DATA while copying the code that APPLIES it is not consolidation: the shared constant reads as the single source of truth, so nobody asks whether the logic beside it was duplicated, and a change to how the data is applied lands in one copy only.
 - L274. An exception a collection singles out for ONE item (skip this one, do not touch that one) must be answered by the ITEM itself, never by a predicate repeated inline at each place that iterates the collection, because a second loop written later omits it and the item is then protected at one site and handled normally at the other.
@@ -505,3 +513,5 @@ to decide something: the body is where the failure it came from is described.
 - L316. A recorded decision carries the premise it was made on, and the premise can expire while the decision stands, so record the premise in a form that can be re-measured (a pin, a command, a number with its source) rather than as a dated sentence, because a date on a number makes it MORE trusted, not less (L61, L244, L210).
 - L538. A build left red for a known unrelated reason stops being a signal for everything else, because a genuinely new failure then arrives indistinguishable from the standing one in every list. Fix or quarantine the standing failure rather than working alongside it, since the longer it stands the more changes get merged with nothing actually judging them.
 - L380. Two build or test invocations that share an output or cache directory share no work unless every setting that keys that output also matches, so a differing configuration, flag or compilation condition makes the shared path share nothing while still reading as evidence of reuse. Measure what actually recompiles rather than concluding reuse from the shared path.
+- L571. A gate that performs an external network call BEFORE the check it is named for can fail without ever running that check, so its red is indistinguishable from the failure it exists to report and merging becomes dependent on a third party being up.
+- L573. Before running a pure check once per item, count the DISTINCT inputs it will actually see, because a loop that reads as once per thing is usually mostly repeats. Cache on the WHOLE input, never a coarser key, since a coarser one is fast and silently wrong in exactly the cases a uniform fixture never contains.

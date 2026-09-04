@@ -1807,6 +1807,22 @@ window is a count rather than a boundary.
   it. The gate that now refuses such an approval runs on the approve path only, and coming out
   of hidden or suspended is not that path)
 
+- **L575. Deleting cached content must clear the marker that RECORDS that content's coverage
+  (a sync token, a cursor, a window bound, a last refreshed stamp) in the same write**, because
+  the surviving marker is a positive claim about data that no longer exists: it tells the refill
+  path there is nothing to fetch and tells the monitor the coverage is healthy, so the gap is
+  both unrepaired and unreported.
+  (slate#1879: leaving the bookable pool deletes an agent's cached busy_blocks but leaves
+  agent_calendars.sync_token and sync_window_to untouched. The retained token makes every later
+  pass incremental, and a calendar delta delivers an unchanged event exactly once, so nothing
+  ever re-sends the deleted rows; the retained window makes the coverage monitor score the agent
+  as fully hydrated. Measured 2026-09-04 two minutes after an admin deactivated and reactivated
+  one agent: 0 cached blocks against 101 of 101 peers holding a mean of 536, a sync_window_to
+  reading three weeks ahead, no alert, and the daily hydration rotation 67 calendars away, so
+  roughly 8 hours during which the booker offered that agent's whole working day as free. A
+  brand new agent is unaffected and heals correctly, because they have no token to retain, which
+  is why the neighbouring issue read as if this repaired itself)
+
 ## Honest failure
 
 - **L529. An audit entry must record the old and new values of what changed, not merely which
@@ -3021,6 +3037,22 @@ window is a count rather than a boundary.
   the cwd was on the record, and the recomputation still failed because it needed the world
   outside the record. Distinct from L153, a path recording where something happened to be
   rather than what it is: this path was correct when written)
+- **L576. A stamp recording WHEN something was first seen must be keyed on the identity that
+  DISAPPEARS when that thing is replaced, never on its descriptive attributes.** A replacement
+  carrying the same description inherits the old stamp and reads as having existed all along,
+  which is the one case the stamp exists to distinguish. The inverse of L186 (a key too
+  ephemeral to be found again) and not what L15 asks for: the trap here is a key MORE stable
+  than its subject. (bidspoke#1152, where a pg_cron watcher grants a rescheduled job a grace
+  period before paging that it has never succeeded, and keys the grace stamp on the job's name
+  plus its schedule. A migration changed the job's COMMAND and kept its timetable, which
+  recreates the job under a new jobid and orphans its whole run history, so the job correctly
+  read as never having succeeded while the stamp beside it, written 17 days earlier for the
+  job's previous incarnation under the identical name and schedule, said it had been around all
+  along. Both nightly rollups paged as broken 30 minutes after a healthy deploy. The code
+  comment named jobid as the true identity and judged the case too rare to widen the function's
+  contract for, but rescheduling to change a command while keeping the timetable is the ordinary
+  way that repo tunes a job)
+
 
 - **L389. A writer that only fills records going FORWARD leaves every record that existed
   when it shipped permanently unfilled, and each consumer of that data then runs correctly
@@ -3695,6 +3727,49 @@ window is a count rather than a boundary.
   Dan's verdict on seeing it was "I hate the change made to the teams". The spec, not the build, is
   where it was decided: asking for both was the defect, and the note in the same issue saying to
   screenshot it early was the only safeguard, which is L27)
+
+- **L577. A request to remove ON SCREEN text can be removing a control's only accessible name,
+  or the target of an `aria-describedby`, and both failures are silent.** The control still draws
+  and still works, so nothing on screen and no error anywhere reports that a screen reader now
+  announces an unnamed box, or no description at all. Before deleting any label, hint or
+  placeholder, read what NAMES the control and what POINTS AT the element being deleted.
+  (Try-Pennie/slate#1889, 2026-09-04: Dan asked for three pieces of copy off the Team access email
+  field, the `Work email address` label, a `firstname.lastname@trypennie.com` placeholder that was
+  not even our address format, and a hint reading "The address they sign in to Google with". Every
+  one of the three was a fair call on its own. The label was also the field's whole accessible name
+  under WCAG 4.1.2, and the hint was the element the input's `aria-describedby` pointed at, so the
+  literal reading of the request shipped an unnamed input with a dangling reference. Removing all
+  three from the SCREEN while keeping a visually hidden label, and dropping the describedby in the
+  same change, is identical to what was asked for and costs nothing)
+
+- **L578. A list of RECORDS laid out as flow rows, one flex row per record, has no columns at
+  all: each field's position is set by the width of everything before it, so it reads as aligned
+  only while that leading field is a uniform width, which a fixture always is and real data never
+  is.** Where fields are meant to be compared down the page, reach for a table or a grid from the
+  start, because no spacing value can align a flow row: there is nothing there to align. This is
+  the cross-row twin of L549, which is about alignment INSIDE one row.
+  (Try-Pennie/slate#1891, 2026-09-04: the Team access waiting list rendered each person as one
+  `flex flex-wrap items-center` row, so the access pill, the wait text and the "Check this address"
+  flag started at a different position on every row, set by the length of the address before them.
+  `geoff@trypennie.com` against `mrasmussen@trypennie.com` is nine characters, so the three later
+  fields sat nine characters apart. `flex-wrap` made it worse than a misalignment: on a narrow
+  window the flag dropped to a second line on some rows and not others, so the rows stopped
+  sharing a shape as well as a grid. Dan reported it from a screenshot of five real rows; two
+  seeded rows of similar length would have looked correct)
+
+- **L579. An explanation added because ONE record's value was confusing gets attached to the
+  record TEMPLATE, so it is correct at one row and becomes a wall of identical text at the real
+  record count, which no fixture reaches.** Put a caveat at the level the caveat is ABOUT, usually
+  the section or the column header, not the level you happened to notice it on. The placement is
+  invisible at the moment of writing, because the row that prompted it is the only one in front of
+  you, and it is invisible in review for the same reason.
+  (Try-Pennie/slate#1760 then #1896, 2026-09-04: two numbers on the bucket editor did not say what
+  they measured, one being the bucket's depth and the other the whole org roster, so #1760 added two
+  clarifying paragraphs. They went inside the per bucket form. Against the live 3 digit XBC matrix
+  that is about sixty forms in one scroll, so the page carries roughly 120 lines of the same grey
+  text, and Dan's report was that the section is "unreadable and ugly and just unpleasant". The
+  content of the fix was right and only its level was wrong. Related to L558, which is duplication
+  WITHIN one row; this is duplication ACROSS rows)
 
 ## External systems
 
