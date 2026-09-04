@@ -3829,6 +3829,21 @@ window is a count rather than a boundary.
   content of the fix was right and only its level was wrong. Related to L558, which is duplication
   WITHIN one row; this is duplication ACROSS rows)
 
+- **L587. A key, legend or swatch and the THING it describes are two consumers of one style
+  record, so any field only ONE of them reads makes the key describe a treatment the thing does
+  not have, and both call sites read as correct in isolation.** Give the shared record no field
+  that a single consumer applies, or assert that the two render the same treatment. The failure is
+  silent in both directions: the legend draws, the content draws, and only somebody holding the
+  two side by side can see they disagree.
+  (Try-Pennie/slate#1927, 2026-09-04: the availability grid's `CELL_TREATMENTS` carries `cell` and
+  `swatchExtra`, and only the LEGEND applies `swatchExtra`. The Closed state is `cell:
+  "bg-transparent"` with `mark: ""`, so its key showed a bordered empty box while the grid cell
+  drew no fill, no border and no glyph, indistinguishable from a cell that failed to render. Dan
+  reported it as "make closed a grey, more inert than just white", which is a colour request about
+  a cell that had no treatment at all. The `?` state had the same split, and its dashed border in
+  the key reached no cell either. Related to L370, which is about duplicating the code that applies
+  shared data; this is one field of the shared data being applied by one consumer only)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
