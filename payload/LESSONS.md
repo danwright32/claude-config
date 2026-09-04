@@ -3078,6 +3078,14 @@ window is a count rather than a boundary.
   screen blaming the network for a trainer who had genuinely been removed)
 
 
+- **L594. A control holding several values in ONE text box (a time with its am or pm, an amount
+  with its currency, a number with its unit) is edited a fragment at a time, and deleting one
+  fragment leaves a value that is still WELL FORMED under a different interpretation, so every
+  refuse the invalid guard passes it silently.** Validate what a PARTIAL EDIT can leave behind,
+  not only what somebody types from scratch, because the value that survives is readable, in
+  range, and means something the person never asked for.
+  (slate#1964: double clicking the minutes in "5:00pm" selects "00pm" by the browser's word
+  rules, so typing 15 leaves "5:15", which parses as a 24 hour reading and saves 5:15 AM.)
 - **L555. Matching a query against several fields CONCATENATED into one string makes the joining
   separator matchable, so a query spanning the boundary matches text that exists in no record.**
   Match each field separately. Note which way this one hides: stripping the separator from the
