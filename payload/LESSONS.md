@@ -3875,6 +3875,20 @@ window is a count rather than a boundary.
   the key reached no cell either. Related to L370, which is about duplicating the code that applies
   shared data; this is one field of the shared data being applied by one consumer only)
 
+- **L590. A display gated on a derived identifier being PRESENT hides it on precisely the record
+  where the user's input is still choosing it, and shows it on every record where it can no longer
+  change.** Gate on whether the value is still being DECIDED, not on whether it exists yet. The
+  condition reads as obviously correct at the call site ("show the code when we have one") while
+  producing the exact inverse of what is useful, so nothing about the code looks wrong.
+  (Try-Pennie/slate#1947, 2026-09-04: the booking reasons editor gated both its `Code: ...` line
+  and its usage line on `r.code` being non-empty. A new row is created with a blank code, and
+  `reason-options.ts:142` mints the permanent code from the label server side, only for a new row.
+  So the code was printed on every existing row, where renaming the label can never change it, and
+  hidden on the add row, where what the manager types was choosing it forever. The codes are what
+  reach the booking history and the Regal webhook payload, so the one row where the mapping was
+  being fixed was the one row that showed nothing. Dan's report was that the list was too tall and
+  the codes were not needed, which is true of the rows that had them)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
