@@ -12232,6 +12232,74 @@ check "#300 an entry this Mac deliberately removed is still removed" \
 check "#300 and the one it kept is untouched" \
   "sh_registers '$SHB_R/payload/settings.hooks.json' 'hooks/yankee.sh'"
 
+section "== a fixed failure can be cleared, by the command the message names (claude-config#305) =="
+# record_hook_suite_result is written by hook_suite_verdict and by nothing else, and that runs only
+# when an apply actually wrote a file under hooks/. So the record is refreshed by an INCOMING
+# change and by nothing a person can do. A Mac that FIXES a failure without a hook arriving keeps
+# reporting the old one for ever.
+#
+# The failure message already said "re-run with: bash ~/.claude/hooks/run-all-tests.sh", and doing
+# that changed nothing, because the runner does not write the record. That is a message naming a
+# remedy that cannot clear the state it describes, which is the shape of L144 and L111, and the
+# remedy people actually reached for on 2026-09-03 was deleting the file by hand.
+RCK_H="$WORK/recheck-home"; mkdir -p "$RCK_H/hooks"
+echo '{"hooks":{}}' > "$RCK_H/settings.json"
+RCK_R="$WORK/recheck-repo"; mkdir -p "$RCK_R/payload/hooks"
+RCK_VERDICT="$WORK/recheck-verdict"
+# A stub runner whose answer this section controls, so what is under test is the recording rather
+# than any real suite.
+{ printf '#!/usr/bin/env bash\n'
+  printf 'cat "%s" 2>/dev/null || echo "ALL 3 SUITES PASSED"\n' "$RCK_VERDICT"
+  printf 'exit "${RECHECK_RC:-0}"\n'; } > "$RCK_H/hooks/run-all-tests.sh"
+chmod +x "$RCK_H/hooks/run-all-tests.sh"
+printf 'ALL 3 SUITES PASSED\n' > "$RCK_VERDICT"
+
+rck(){ # rck <command> [extra env...]
+  local cmd="$1"; shift
+  env CLAUDE_HOME="$RCK_H" SYNC_REPO="$RCK_R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 "$@" \
+      bash "$SCRIPT" "$cmd" 2>&1
+}
+
+# A failure recorded, and nothing arriving to refresh it. This is the stuck state.
+printf 'outcome=failed\tat=%s\texit=1\tran=?\tnotrun=?\tseconds=9\tnotrun_names=?\n' "$(date +%s)" > "$RCK_R/.hook-tests"
+out_rck0="$(rck status)"
+check "#305 the stuck state really is reported" \
+  "line_has \"\$out_rck0\" 'hook suite' 'FAILED'"
+# And the message names the command that settles it, or the reader is left with the one that does
+# not (L148: a control whose failure reason names no working remedy).
+check "#305 and the message names the command that clears it" \
+  "line_has \"\$out_rck0\" 'hook suite' 'claude-sync recheck'"
+
+# Running the suite through that command records what it found.
+out_rck1="$(rck recheck)"
+dbg "#305 recheck said: $out_rck1"
+check "#305 recheck reports the result it just recorded" \
+  "line_has \"\$out_rck1\" 'hook suite' 'passed'"
+out_rck2="$(rck status)"
+check "#305 and the failure is no longer reported" \
+  "out_lacks \"\$out_rck2\" 'FAILED'"
+check "#305 and status now reports the passing run" \
+  "line_has \"\$out_rck2\" 'hook suite' 'passed'"
+
+# It must record a FAILURE just as faithfully, or it becomes a way to make a red record go away
+# without fixing anything, which is worse than the stuck state it replaces (L12).
+printf 'FAIL: something is genuinely wrong\n1 of 3 SUITES FAILED: test-thing.sh\n' > "$RCK_VERDICT"
+out_rck3="$(rck recheck RECHECK_RC=1)"
+dbg "#305 recheck over a failing suite said: $out_rck3"
+check "#305 a recheck over a failing suite records the failure" \
+  "line_has \"\$out_rck3\" 'hook suite' 'FAILED'"
+out_rck4="$(rck status)"
+check "#305 and status reports it too" \
+  "line_has \"\$out_rck4\" 'hook suite' 'FAILED'"
+
+# With no runner there is nothing to run, and that is its own answer rather than a silent success
+# or a fabricated record (L98).
+rm -f "$RCK_H/hooks/run-all-tests.sh"
+out_rck5="$(rck recheck)"
+dbg "#305 recheck with no runner said: $out_rck5"
+check "#305 with no runner it says so rather than recording anything" \
+  "line_has \"\$out_rck5\" 'run-all-tests.sh' '(no|not)'"
+
 section "== the suite never reads or writes anything of the operator's (claude-config#301) =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
