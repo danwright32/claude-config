@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 492 lessons.
+LESSONS.md, which is NOT loaded into the session. 493 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -173,6 +173,7 @@ to decide something: the body is where the failure it came from is described.
 - L575. Deleting cached content must clear the marker that RECORDS that content's coverage (a sync token, a cursor, a window bound, a last refreshed stamp) in the same write
 - L592. Two datasets meant to be read TOGETHER must be retained on the same boundary
 - L595. A configuration value that can live in more than one store
+- L599. Repairing a monitor that compares against a STORED BASELINE makes its first run a report about the OUTAGE rather than about the present
 
 ## Honest failure
 

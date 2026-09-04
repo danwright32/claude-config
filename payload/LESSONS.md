@@ -1900,6 +1900,19 @@ window is a count rather than a boundary.
   context nobody watches: the interactive path is the merged one, so testing by hand proves
   nothing about the cron)
 
+- **L599. Repairing a monitor that compares against a STORED BASELINE makes its first run a
+  report about the OUTAGE rather than about the present**, because the baseline is as old as the
+  failure, so a restored comparison must refresh its baseline and stay silent on that run rather
+  than announce the whole gap as a single change. (Bidspoke, 2026-09-04, bidspoke#1176: the
+  hourly Salesforce bid matrix audit had been failing since at least 2026-08-22 on a credential
+  bug, and its snapshot table held 1,230 rows last updated 2026-05-07, nearly four months
+  earlier. Fixing the credentials re-enabled the comparison, so its next run would diff the live
+  matrix against a four month old picture and report every accumulated edit as an edit that just
+  happened, through an alert built specifically because one mid-day matrix edit had broken three
+  hours of bidding. The alert path has no cooldown and no mute, so there was no lever to hold it
+  back either. Noticed only because the snapshot's date was checked while writing up something
+  else; the repair itself looked complete and correct)
+
 ## Honest failure
 
 - **L586. A redirect whose target is ITSELF a redirect drops the query string, so any outcome
