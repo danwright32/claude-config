@@ -4980,6 +4980,23 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
 
 ## Pipeline speed
 
+- **L395. A speed improvement claimed from ONE reading per arm cannot be told from noise**, because
+  the same code run twice on the same machine routinely differs by more than the effect being
+  claimed. Measure the run to run spread of the UNCHANGED code first and record it as a FLOOR
+  (two runs prove the noise is at least that wide, never that it is only that wide), then
+  require several runs per arm compared at the median to clear it. Distinct from L224, which is
+  about comparing against a fixed number, and L316, which is about recording where a figure came
+  from: those say where a reading came from, this says how many readings it takes before a
+  DIFFERENCE means anything.
+  (PostRoll#1257, 2026-09-04: a test suite change was reported as a 10.8% improvement to the CI
+  job, 188.99s against 168.67s, from one dispatched run per arm, and the claim shipped in a
+  merged commit and a pull request body. Two runs of identical code on the same runner then
+  measured 183.4s and 157.5s, a 25.9 second spread, so the gap claimed was inside the noise and
+  had to be withdrawn. What survived was the STRUCTURAL half, that the heaviest test class went
+  from 55.2s to under 30s, which is arithmetic over per class sums rather than a timing
+  comparison and is therefore immune to the noise. PostRoll#1328 and #1329 are the sweep for
+  every other figure in that repo taken once)
+
 The rules that apply while shaping CI, a deploy workflow or a pre-push hook. Same audit as
 "Test speed" above. The recurring shape: the tests took seconds, the wait took minutes, and the
 difference was plumbing.

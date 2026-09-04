@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 462 lessons.
+LESSONS.md, which is NOT loaded into the session. 463 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -484,6 +484,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Pipeline speed
 
+- L395. A speed improvement claimed from ONE reading per arm cannot be told from noise
 - L299. The tests are innocent until measured guilty and the pipeline rarely is, so the first move in any speed pass is per-step timing of every stage a push or merge waits on, read off the CI API, before a single test is opened.
 - L300. A gate's own guards are a pipeline and they are never timed because nobody thinks of them as tests, so time every stage a push waits on including the ones that guard the guards, and put the measurement where the claim about it lives, so the next drift is a diff rather than a discovery.
 - L301. Look for the same work done twice per event: a suite run by two jobs, an artifact built twice per pull request, a merge verified by two workflows, migrations applied by two adjacent steps, a target compiled for a runner that never launches it.
