@@ -144,6 +144,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   in the check's own stored rows the whole time (`probe_ok` false on every one), so it was
   queryable from day two and was instead found on day 16 by a person reading Slack.
   (bidspoke#986, bidspoke#1126)
+- **L584. Data archived as a serialized bundle (a gzipped payload in one column, an object in
+  a blob store) is recoverable one record at a time and cannot be aggregated, so reaching the
+  warehouse is not the same as being analysable.** Before concluding a value is available for
+  analysis, confirm it is stored as its own column rather than inside a bundle, because the
+  archive's existence is what everyone cites and its shape is what nobody checks. The two
+  purposes pull opposite ways: a bundle is the cheap, faithful, schema-free way to make a
+  record RECOVERABLE, and it is the one form no query can group by.
+  (bidspoke#1158: the execution archive ships every step's output to Snowflake, so the rate
+  quoted to each lead's source was described as already in the warehouse. It is in
+  bundle_gz_b64, one gzipped blob per execution, so no query could total it over any period,
+  and a column had to be added anyway)
 - **L140. A test asserting that something THREW is satisfied by ANY throw, including one
   raised by its own fixture, so assert on the specific failure (the message, the type, the
   state left behind) rather than on the mere fact of an error.** A typo in the fake then

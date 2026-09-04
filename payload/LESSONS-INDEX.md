@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 477 lessons.
+LESSONS.md, which is NOT loaded into the session. 478 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -20,6 +20,7 @@ to decide something: the body is where the failure it came from is described.
 - L205. A test that touches a shared mutable object other tests also touch can pass purely because its own fixture is SLOW enough to outlive a neighbour's reset, so making that fixture faster is what exposes it: remove the dependency on the shared object rather than serializing around it, and re-check any such test after speeding its fixture.
 - L1. A test or guard is only real once it has been seen to fail.
 - L557. A monitor or validator that has never once PASSED is not measuring anything, because every failure it reports reads as a finding about the data rather than about itself. Record its outcomes so a lifetime success count of zero is detectable, and treat that as the check being broken.
+- L584. Data archived as a serialized bundle (a gzipped payload in one column, an object in a blob store) is recoverable one record at a time and cannot be aggregated, so reaching the warehouse is not the same as being analysable.
 - L140. A test asserting that something THREW is satisfied by ANY throw, including one raised by its own fixture, so assert on the specific failure (the message, the type, the state left behind) rather than on the mere fact of an error.
 - L154. A tool that reports whether a check CAUGHT a deliberate defect must name WHICH check fired, because a defect large enough to break everything makes every check fail and is indistinguishable from the one that should have.
 - L177. When a failure reproduces only in an environment you cannot run (a CI runner, another machine, a device), make that environment PRINT the fact in question before changing any code, because a theory built from the symptom is cheap to believe and expensive to ship.
