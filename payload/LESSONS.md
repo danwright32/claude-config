@@ -1847,6 +1847,19 @@ window is a count rather than a boundary.
 
 ## Honest failure
 
+- **L586. A redirect whose target is ITSELF a redirect drops the query string, so any outcome
+  carried in it (a saved flag, a refusal message) is destroyed while both redirects read as
+  correct in isolation, and the receiving page's notice becomes dead code that looks like
+  working feedback.** Point an action at the route its own form is on, and assert the TARGET
+  rather than the fact of a redirect, because a test that only checks a redirect happened
+  passes on every wrong target.
+  (slate#1922, 2026-09-04: six admin actions redirected to /admin/settings, which #1748 had
+  reduced to a bare redirect to /admin when it split that hub into its own routes. Measured in
+  a browser, `/admin/settings?ok=1` and `/admin/settings?error=...` both landed on the Health
+  page with no notice anywhere, so a successful save said nothing and a REFUSED save destroyed
+  the sentence explaining why. Both pages already rendered SettingsSaveNotice, mounted and
+  unreachable, which is why nobody noticed.)
+
 - **L583. A fallback that relaxes only ONE dimension of a multi dimensional match does nothing
   wherever the shortage lives in another dimension, so name which dimension is actually thin
   before choosing what the fallback relaxes.** It fails green: the fallback runs, walks every
