@@ -3889,6 +3889,17 @@ window is a count rather than a boundary.
   being fixed was the one row that showed nothing. Dan's report was that the list was too tall and
   the codes were not needed, which is true of the rows that had them)
 
+- **L591. Vertically centring text centres its LINE BOX, which reserves descender space that an
+  all-caps label never uses, so the capitals sit visibly high and any dot or icon centred beside
+  them appears to sit low.** Symmetric padding and `align-items: center` both read as correct at
+  every place a reader looks, and the error is under a pixel, so it survives review and is only
+  ever reported as the thing next to the text looking wrong. Rebalance the padding until the
+  MEASURED centre of the letters matches the container's, keeping the total unchanged so the
+  element's height does not move, and re-derive those numbers if the typeface or size changes.
+  (pet#1288, 2026-09-04: the Power Rankings status badges centred a 7px dot exactly while the
+  uppercase label sat 0.7px high, in all seven statuses including the two with no dot. Dan
+  reported it as the dot being centred and the words not being)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
