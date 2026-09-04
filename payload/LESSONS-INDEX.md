@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 461 lessons.
+LESSONS.md, which is NOT loaded into the session. 462 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -9,6 +9,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Proof over green
 
+- L394. In Python a default argument binds ONCE, when the function is defined, so writing a collaborator or a path as a default (`def f(run=measure)`, `def f(path=RECORD)`) gives you the parameter without the replaceability
 - L277. A defect's output can be the only record of a fact the system never stored deliberately, so shipping the fix silently removes the evidence the diagnosis was made from. Before shipping one, name what the failure was incidentally reporting and record that fact directly.
 - L284. A test that sets some of a script's seams runs every unset collaborator for real, and the real ones are the slow and the dangerous ones, so enumerate every seam the script honours beside the test and assert each is either set once for the whole suite or deliberately left real by a section that tests it.
 - L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is written, because a hard-coded setTimeout forces every end-to-end test that crosses it to wait for real.

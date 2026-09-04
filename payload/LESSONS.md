@@ -7,6 +7,20 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L394. In Python a default argument binds ONCE, when the function is defined, so writing a
+  collaborator or a path as a default (`def f(run=measure)`, `def f(path=RECORD)`) gives you the
+  parameter without the replaceability**: a test that swaps that name on the module is silently
+  ignored and the real collaborator runs, which is the whole suite, the real file or the paid
+  API. Default it to `None` and resolve inside the body. Distinct from L284, where the seam
+  exists and the test forgot to set it, and from L196, where there is no seam at all: here the
+  seam exists, the test DID set it, and the setting cannot take effect, so it fails in the
+  direction that looks fine.
+  (PostRoll#1325, 2026-09-04, twice in one session: `record_test_durations.measure_repeatedly`
+  would have run the entire Python suite three times instead of counting the passes a fake was
+  asked for, and `check_no_such_account_calibration.observations` read the real fixture while
+  the test pointed it at a temporary one. Both were caught by a test that DROVE them, never by
+  reading the code)
+
 - **L277. A defect's output can be the only record of a fact the system never stored
   deliberately, so shipping the fix silently removes the evidence the diagnosis was made from.
   Before shipping one, name what the failure was incidentally reporting and record that fact
