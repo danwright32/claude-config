@@ -2542,6 +2542,21 @@ window is a count rather than a boundary.
   entry, is wrong. Two fixes, and the second is the one nobody thinks of: state the anchor, and
   state which value of it)
 
+- **L593. Write an audit or provenance record at the LOWEST layer every invocation path shares,
+  usually the database function or the store itself, never in the API route or the UI handler.**
+  The record then survives the same action being done by hand, by script, or by a future second
+  entry point. A record written in the route is lost precisely when somebody bypasses the route,
+  which is the occasion it was most needed. This is the prescriptive half of L379, which describes
+  the failure; this says where to put the write so it cannot be omitted.
+  (Try-Pennie/slate#1961, 2026-09-04: a data subject erasure is audited in two halves.
+  `src/lib/audit.ts:59` records that the Supabase half, `pii.erasure`, is written INSIDE the
+  `erase_booking_pii` database function, so it lands however the function is called, including from
+  a hand-run statement. The Snowflake half, `pii.warehouse_purge`, is written by
+  `/api/admin/erasure-purge`, so it exists only when somebody clicks the button. Dan asked to remove
+  the UI control and run erasures through Claude instead, and the same compliance action would then
+  keep one audit entry and silently lose the other. One codebase, one action, both designs, and the
+  difference decided whether his plan was safe)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
