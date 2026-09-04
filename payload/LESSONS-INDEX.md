@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 459 lessons.
+LESSONS.md, which is NOT loaded into the session. 461 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -162,6 +162,7 @@ to decide something: the body is where the failure it came from is described.
 - L377. Retiring a feature must delete the STORED POINTERS to what it produced, not only its writer and its screen, because a consumer written to be generic over those pointers has no list anybody could have updated and goes on acting on every one left behind.
 - L381. A directory kept in step by an automatic mirror has ONE authoritative side, and an edit made to the other side is not merged but silently reverted, with a new file there deleted outright because the mirror has never heard of it.
 - L559. A rule that decides whether a record COUNTS (an eligibility test, a visibility window, an exclusion) must be applied where the record is READ, never also where it is WRITTEN, because the read-time application is the visible one and reads as the whole enforcement while the write-time copy silently withholds the record itself, so correcting or reversing the rule later recovers nothing.
+- L392. A one time correction that skips rows because of a state that can END (hidden, suspended, deleted, archived, paused) does not exempt them, it postpones them, and nothing re runs when that state ends, so either correct them anyway or make leaving that state re apply the rule.
 
 ## Honest failure
 
@@ -427,6 +428,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Cross-system reliability
 
+- L393. An automated job that creates a NAMED outside thing somebody has to act on (a pull request, an issue, a draft, a branch keyed on a date) collides with its OWN previous output for as long as that output sits unconsumed
 - L365. A retry must read what the refusal itself says about when it could succeed, because a backoff measured in seconds cannot outlast a limit measured in hours, and every attempt against a spent allowance spends more of the exhausted thing to be told the same answer.
 - L276. A CI job is priced in allowance minutes, which is the runner's multiplier (macOS ten, Windows two) times its rounded-up minutes, and that price is set before the job is added
 - L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state (an open that is also a close, a mute that is also an unmute) is inverted by the second attempt, and the loop can report success while leaving the state nobody asked for.

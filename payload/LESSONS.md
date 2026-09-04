@@ -1760,6 +1760,19 @@ window is a count rather than a boundary.
   20 stored months on 2026-09-03: four rep-months missing, holding 24 top-out and 16 cleared
   units, invisible because every surface agreed with every other surface about a number that was
   never captured)
+- **L392. A one time correction that skips rows because of a state that can END (hidden,
+  suspended, deleted, archived, paused) does not exempt them, it postpones them, and nothing
+  re runs when that state ends, so either correct them anyway or make leaving that state
+  re apply the rule.**
+  (nursedex#912, #948, 2026-09-03: verification could be granted before a nurse had finished
+  signing up, and 29 of 32 verified home health aides held the badge with no licence number.
+  A backfill sent 25 of them back and asked for the number, deliberately skipping four whose
+  accounts were hidden, deleted or suspended, on the correct grounds that nothing of theirs is
+  shown to families and no email should go to a deleted account. The exclusion is right on the
+  day and wrong the moment somebody unhides or unsuspends one, which puts a publicly verified
+  profile in front of families on a credential nobody ever checked, with nothing watching for
+  it. The gate that now refuses such an approval runs on the approve path only, and coming out
+  of hidden or suspended is not that path)
 
 ## Honest failure
 
@@ -4414,6 +4427,21 @@ window is a count rather than a boundary.
   for a found defect's SIBLINGS in the same change, which is about the code that already exists.)
 
 ## Cross-system reliability
+
+- **L393. An automated job that creates a NAMED outside thing somebody has to act on (a pull
+  request, an issue, a draft, a branch keyed on a date) collides with its OWN previous output
+  for as long as that output sits unconsumed**, and the collision surfaces as a hard failure
+  rather than as waiting, so the job goes red for a reason unrelated to the work it does and
+  every genuinely new failure afterwards arrives indistinguishable from it (L538). This is not
+  the concurrency case: the earlier run SUCCEEDED, and what blocks the next one is a person not
+  having got to it yet. Update the existing artefact in place, or make the second run a success
+  that says it is waiting.
+  (PostRoll#1321, 2026-09-04: `record-suite-count.yml` pushes a branch named for the day. Its
+  own proposal from 09:49 was still open, so every run after it was refused at the push and
+  died, 37 failed runs and 37 emails in one day, none of them about the count it measured.
+  PostRoll#1011's failure reporter, written the same day, had already reached the other answer
+  independently: one issue per workflow, comment on it rather than file again, and converge if
+  two shards race to create it)
 
 - **L365. A retry must read what the refusal itself says about when it could succeed, because a
   backoff measured in seconds cannot outlast a limit measured in hours, and every attempt against
