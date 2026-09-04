@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 478 lessons.
+LESSONS.md, which is NOT loaded into the session. 479 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -439,6 +439,7 @@ to decide something: the body is where the failure it came from is described.
 - L556. When asking a stakeholder to rule on whether two surfaces should agree, enumerate every place they ALREADY disagree before asking, because the answer comes back as a rule about agreement rather than about the single case you showed, and it gets applied to the cases you never mentioned. Showing one instance also makes the decision look smaller than it is, so the reply is given on a smaller picture than the change it authorises.
 - L562. A named rule is copied through its WORKED EXAMPLE, so an example that contradicts the rule teaches the inverse and is then defended with the rule's own authority.
 - L387. A change that fixes a defect CLASS must be searched for a fresh instance of that same class before it ships. The fix is written by somebody holding the class in mind, which makes it the likeliest place to repeat it, and the new instance arrives carrying the authority of the remedy so nobody re-examines it. Sweep the DIFF, not only the existing code.
+- L585. A guard that bans raw values in favour of named tokens is structurally blind to a token that is REFERENCED but never DEFINED, because there is no literal for it to find, so the declaration reads as correct while the runtime silently substitutes its own fallback.
 
 ## Cross-system reliability
 

@@ -4613,6 +4613,21 @@ window is a count rather than a boundary.
   then nothing", which is an estimate nobody took. Both were caught by the end of turn review
   rather than by any check. L30 is the neighbouring rule and does not cover this: it says sweep
   for a found defect's SIBLINGS in the same change, which is about the code that already exists.)
+- **L585. A guard that bans raw values in favour of named tokens is structurally blind to a token
+  that is REFERENCED but never DEFINED, because there is no literal for it to find, so the
+  declaration reads as correct while the runtime silently substitutes its own fallback.** Check
+  that every name used is also declared, in the same pass that bans the literals: the two halves
+  of a token system are the declaration and the use, and a scan that only polices the use can
+  only ever confirm nobody wrote a raw value. L113 is the neighbouring rule and does not cover
+  this: it is about a lookup table taking its DEFAULT branch on a missing key, where a default at
+  least exists. Here nothing exists at all.
+  (project-enrollment-tracker#1276, 2026-09-04: dist/styles.css uses var(--border) in five rules
+  and never declares --border in any :root block, so the "Achieve data is behind" banner under
+  the dashboard header draws its border in whatever the text colour happens to be rather than the
+  intended hairline. The project has tests/palette-tokens.spec.js specifically to police colours
+  written outside the palette, and it passed the whole time, because an undefined token leaves no
+  colour in the file to catch. Found only because a new notice was being styled beside it and the
+  token was reached for by name.)
 
 ## Cross-system reliability
 
