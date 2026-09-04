@@ -1764,6 +1764,15 @@ window is a count rather than a boundary.
   messages and L98 for an absent answer not to read as a pass; both were already satisfied here,
   and neither noticed that the two states were the same event to everything except a reader)
 
+- **L598. A page already open in somebody's browser is a client from whichever version was live
+  when it loaded, so every deploy turns every open page into a stale client, and anything that
+  page holds which was minted at BUILD time (a server action id, a chunk name, an asset hash)
+  stops resolving against the running server.** The more often you deploy the more routine this
+  is, so a long lived form needs a recoverable version mismatch path (reload and re-present the
+  work) rather than an error, and the failure only shows up for somebody who left a tab sitting,
+  which is nobody testing it.
+  (slate#1970: thirty deploys in a day, a form left open 20 minutes, the save fell through to the
+  framework's own unstyled error screen and the typed hours were lost.)
 - **L267. Running a new version that AUTO MIGRATES a shared store consumes your ability to run
   the PREVIOUS version against it**, so take any baseline measurement, comparison or rollback you
   may want BEFORE the new version opens that store for the first time. The migration is one way,

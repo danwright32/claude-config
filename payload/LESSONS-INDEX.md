@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 491 lessons.
+LESSONS.md, which is NOT loaded into the session. 492 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -163,6 +163,7 @@ to decide something: the body is where the failure it came from is described.
 - L219. A test that drives a real browser and does not assert on its CONSOLE discards a diagnosis the browser already made
 - L256. Before dropping a stored column, measure what it holds against its DECLARED DEFAULT rather than against null, because a defaulted column is non-null on every row whether anybody set it or not, and a never-written optional is null on every row, so a null test reports a harmless column as full of data and can equally let a column holding real values read as empty.
 - L260. Two outcomes a guard gives distinct MESSAGES but the same CONSEQUENCE are one outcome in practice
+- L598. A page already open in somebody's browser is a client from whichever version was live when it loaded, so every deploy turns every open page into a stale client, and anything that page holds which was minted at BUILD time (a server action id, a chunk name, an asset hash) stops resolving against the running server.
 - L267. Running a new version that AUTO MIGRATES a shared store consumes your ability to run the PREVIOUS version against it
 - L338. Archiving a run's INPUTS and OUTPUTS but not the record of what it DID leaves the question anybody actually asks later, whether it did the work, unanswerable, and the surviving pair reads as complete evidence rather than as a gap, so decide explicitly what carries the process record and how long it lives instead of letting it default to the live file's lifetime.
 - L377. Retiring a feature must delete the STORED POINTERS to what it produced, not only its writer and its screen, because a consumer written to be generic over those pointers has no list anybody could have updated and goes on acting on every one left behind.
