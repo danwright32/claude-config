@@ -12299,6 +12299,92 @@ out_rck5="$(rck recheck)"
 dbg "#305 recheck with no runner said: $out_rck5"
 check "#305 with no runner it says so rather than recording anything" \
   "line_has \"\$out_rck5\" 'run-all-tests.sh' '(no|not)'"
+section "== a checkout that has gone can be forgotten (claude-config#306) =="
+# register_this_clone appends to the register and deliberately never prunes: pruning would be a
+# read modify write over the one record saying where the other clones are. So a real checkout that
+# is deleted or renamed leaves an entry that reports, on every pull and every status, "the clone
+# recorded at X is not there any more. Remove the line from ... if it has gone for good."
+#
+# That names a remedy the tool will not perform, in a file, with no command to do it, and it
+# repeats for ever. A notice carrying no action anybody takes, on every run, is what teaches a
+# reader to skip the whole report. claude-config#295 silenced DISPOSABLE paths; a real one that
+# goes away was still not covered.
+# A REAL clone with an upstream: report_other_clones_position asks git for one and returns in
+# silence without it, so a fixture with SYNC_NO_GIT set would measure nothing at all (L98).
+unset SYNC_NO_GIT
+FGC_REG="$WORK/forget-registry"
+FGC_H="$WORK/forget-home"; mkdir -p "$FGC_H"; echo '{"hooks":{}}' > "$FGC_H/settings.json"
+FGC_BARE="$WORK/forget-bare.git"; git init -q --bare "$FGC_BARE"
+FGC_MINE="$WORK/forget-mine"; git clone -q "$FGC_BARE" "$FGC_MINE" 2>/dev/null
+mkdir -p "$FGC_MINE/payload"; cp "$SCRIPT" "$FGC_MINE/claude-sync"
+CLAUDE_HOME="$FGC_H" SYNC_REPO="$FGC_MINE" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+FGC_LA="$WORK/forget-agents"; mkdir -p "$FGC_LA"
+FGC_GONE="$WORK/forget-gone-checkout"
+FGC_KEEP="$WORK/forget-keep-checkout"; mkdir -p "$FGC_KEEP/.git"
+
+fgc(){ # fgc <args...>
+  env SYNC_CLONE_REGISTRY="$FGC_REG" SYNC_LAUNCHAGENTS="$FGC_LA" CLAUDE_HOME="$FGC_H" \
+      SYNC_REPO="$FGC_MINE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_TEMP_ROOTS="/no-such-root" \
+      bash "$SCRIPT" "$@" 2>&1
+}
+# The notice lives on the RECEIVE path, not in status: report_other_clones_position is called by
+# do_pull. Pointing this at status measured a command that never asks the question (L100).
+fgc_report(){ fgc pull; }
+fgc_seed(){ printf '%s\n%s\n' "$FGC_GONE" "$FGC_KEEP" > "$FGC_REG"; }
+
+# The stuck state: an entry naming a directory that is not there, reported with a remedy the tool
+# will not carry out.
+fgc_seed
+out_fgc0="$(fgc_report)"
+dbg "#306 a receive with a vanished clone recorded: $out_fgc0"
+check "#306 the vanished checkout really is reported" \
+  "line_has \"\$out_fgc0\" 'not there any more' '$FGC_GONE'"
+check "#306 and the message names the command that removes it" \
+  "line_has \"\$out_fgc0\" 'not there any more' 'claude-sync forget-clone'"
+
+out_fgc1="$(fgc forget-clone "$FGC_GONE")"
+dbg "#306 forget-clone said: $out_fgc1"
+check "#306 forget-clone says what it removed" \
+  "line_has \"\$out_fgc1\" 'clone register' 'not be reported again' '$FGC_GONE'"
+check "#306 the entry is gone from the register" \
+  "! grep -qxF '$FGC_GONE' '$FGC_REG'"
+# The one that must SURVIVE, or this is a way to empty the register rather than to answer one
+# notice (L5, L211: a cleanup that removes what its read did not mention).
+check "#306 and every other entry is untouched" \
+  "grep -qxF '$FGC_KEEP' '$FGC_REG'"
+out_fgc2="$(fgc_report)"
+check "#306 and it stops being reported" \
+  "out_lacks \"\$out_fgc2\" 'not there any more'"
+
+# Removing something that is not recorded is a DIFFERENT answer from removing something, or a
+# mistyped path reads as a successful removal (L98, L11).
+out_fgc3="$(fgc forget-clone "$WORK/never-recorded")"
+dbg "#306 forgetting an unrecorded path said: $out_fgc3"
+check "#306 a path that was never recorded says so rather than reporting a removal" \
+  "line_has \"\$out_fgc3\" 'never-recorded' '(was not|no entry|nothing)'"
+
+# And with no argument there is nothing to act on, which must refuse rather than guess: a
+# forget-clone that defaulted to something would remove a line nobody named.
+# The USAGE BLOCK is not truncated (claude-config#306). `help` printed a fixed line range, and
+# adding two commands to the list pushed the last two off the end of it, so it silently stopped
+# naming install-autosync and help itself. A fixed line count from an anchor stops containing what
+# it was written about the moment anything above it grows (L518).
+#
+# Asserted as a COUNT rather than as a list of commands: the block has never named every dispatched
+# command, and several are deliberately internal, so requiring completeness would invent a policy
+# nobody chose. What is under test is that every line the block HAS reaches the reader.
+fgc_help_src="$(grep -c '^#   claude-sync ' "$SCRIPT" || true)"
+fgc_help_out="$(fgc help | grep -c '^  claude-sync ' || true)"
+dbg "#306 usage lines in the source: $fgc_help_src, printed by help: $fgc_help_out"
+# Non-zero first, or two zeroes agree perfectly and the check passes having read nothing (L98).
+check "#306 the usage block really was found in the source" "[ \"\${fgc_help_src:-0}\" -ge 10 ]"
+check "#306 and help prints every line of it" "[ \"\${fgc_help_out:-0}\" = \"\${fgc_help_src:-0}\" ]"
+
+out_fgc4="$(fgc forget-clone 2>&1)"; fgc4_rc=$?
+dbg "#306 forget-clone with no argument said: $out_fgc4"
+check "#306 with no directory named it refuses" "[ '$fgc4_rc' -ne 0 ]"
+check "#306 and says what it needed" \
+  "line_has \"\$out_fgc4\" 'forget-clone' 'director'"
 
 section "== the suite never reads or writes anything of the operator's (claude-config#301) =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"

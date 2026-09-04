@@ -13,6 +13,7 @@
 #   claude-sync watch             # foreground: sync on every change (needs fswatch)
 #   claude-sync status            # show what differs, no changes
 #   claude-sync recheck           # run the hook suite and record what it said, so a fixed failure stops being reported
+#   claude-sync forget-clone DIR  # drop one checkout from the register, when it has gone for good
 #   claude-sync hold 30 "why"     # stop the watcher committing for a while, so you can commit
 #   claude-sync release           # lift that hold now rather than waiting for it to run out
 #   claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
@@ -588,6 +589,44 @@ register_this_clone(){
   is_under_temp_dir "$me" && return 0
   if [ -f "$CLONE_REGISTRY" ] && grep -qxF "$me" "$CLONE_REGISTRY" 2>/dev/null; then return 0; fi
   printf '%s\n' "$me" >> "$CLONE_REGISTRY" 2>/dev/null || true
+  return 0
+}
+
+# ONE named entry out of the register, on request (claude-config#306).
+#
+# The register is appended to and never pruned, deliberately: an automatic sweep would be a read
+# modify write over the one record saying where the other clones are. But a real checkout that is
+# deleted or renamed then reports "not there any more. Remove the line from ... if it has gone for
+# good" on every receive, for ever, and that named a remedy the tool would not perform, in a file,
+# with no command to do it. A notice carrying no action anybody takes, repeated on every run, is
+# what teaches a reader to skip the whole report.
+#
+# This is not the sweep the design rejected. It removes exactly the ONE line the person names, and
+# nothing else, which is why it is safe to do at all.
+#
+# It runs UNDER THE LOCK, which is the whole reason the read modify write is safe here:
+# register_this_clone appends from inside with_lock, so holding it is what stops an append landing
+# between the read and the rename and being lost (L5). Written to a temp file and renamed, never
+# edited in place.
+do_forget_clone(){   # $1 = the directory to forget
+  local want="${1:-}" tmp n
+  [ -n "$want" ] || die "forget-clone needs the directory to forget, exactly as it appears in $CLONE_REGISTRY. Run 'claude-sync pull' to see the ones being reported."
+  if [ ! -f "$CLONE_REGISTRY" ]; then
+    echo "There is no clone register at $CLONE_REGISTRY, so there was no entry for $want to remove."
+    return 0
+  fi
+  n="$(grep -cxF -- "$want" "$CLONE_REGISTRY" 2>/dev/null || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  if [ "$n" -eq 0 ]; then
+    # A DIFFERENT answer from having removed something, or a mistyped path reads as a successful
+    # removal and the notice it was meant to settle comes straight back (L98, L11).
+    echo "No entry for $want was in the clone register, so nothing was removed. The paths it holds are listed in $CLONE_REGISTRY."
+    return 0
+  fi
+  tmp="$(scratch_file)" || die "no scratch file could be made, so the clone register was left exactly as it is."
+  grep -vxF -- "$want" "$CLONE_REGISTRY" > "$tmp" 2>/dev/null || true
+  mv "$tmp" "$CLONE_REGISTRY" 2>/dev/null || { rm -f "$tmp"; die "the clone register at $CLONE_REGISTRY could not be rewritten, so it was left exactly as it is."; }
+  echo "Removed $want from the clone register; it will not be reported again."
   return 0
 }
 
@@ -4955,7 +4994,7 @@ report_other_clones_position(){
     # so on every run is the noise this removes.
     is_under_temp_dir "$d" && continue
     if [ ! -d "$d/.git" ]; then
-      echo "claude-sync: the clone recorded at $d is not there any more, so how far behind it is cannot be answered. Remove the line from $CLONE_REGISTRY if it has gone for good." >&2
+      echo "claude-sync: the clone recorded at $d is not there any more, so how far behind it is cannot be answered. If it has gone for good: claude-sync forget-clone $d" >&2
       said=1; continue
     fi
     head="$(git -C "$d" rev-parse HEAD 2>/dev/null || true)"
@@ -5767,6 +5806,8 @@ case "$cmd" in
   # thing it must never do is queue behind a long send while somebody waits to reclaim disk.
   clean-backups) do_clean_backups ;;
   forget-mac) with_lock do_forget_mac "${2:-}" ;;   # mutating: it deletes a published ref
+  # Locked, because register_this_clone appends from inside the lock and this rewrites that file.
+  forget-clone) with_lock do_forget_clone "${2:-}" ;;
   apply-only) with_lock do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
@@ -5800,6 +5841,13 @@ case "$cmd" in
     lesson_band_locked
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
-  help|-h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, next-lesson, check-lessons, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
+  # The usage block is DERIVED from where it ends rather than from a line number (claude-config#306).
+  # It read '2,24p', and adding two commands to the list pushed the last two off the end of it, so
+  # `help` silently stopped naming install-autosync and help itself. A fixed line count from an
+  # anchor stops containing what it was written about the moment anything above it grows (L518).
+  # The usage block ends at the first bare `#`, which is what separates it from the env notes.
+  help|-h|--help) awk 'NR > 1 { if ($0 ~ /^# *Env overrides/) exit; buf[n++] = $0 }
+                        END { while (n > 0 && buf[n-1] == "#") n--; for (i = 0; i < n; i++) print buf[i] }' \
+                    "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
 esac
