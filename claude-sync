@@ -3129,6 +3129,82 @@ $p"
   return 0
 }
 
+# WHAT A MERGE PRODUCED HAS TO REACH THE REPO (claude-config#312).
+#
+# On 2026-09-04 a reconcile merged LESSONS.md and printed both "nothing was dropped" and
+# "Synced (sent local changes, pulled remote)". Both sentences were true ABOUT THE LIVE COPY under
+# ~/.claude, which held 472 lessons, while the copy committed in the repo held 468. Four entries
+# existed on one machine only, so the other Mac would never have received them and anything that
+# overwrote that file would have destroyed them. The regenerated index made it worse by sitting in
+# three states at once: 463 committed, 468 uncommitted in the payload, and 472 live.
+#
+# The mechanism is the ORDER, not the merge. Staging holds back a path this Mac has not applied
+# yet, so the local entry is not published; the pull brings the other Mac's version; and the apply
+# merges the two into the LIVE file, which by then nothing sends. So the run that merges cannot say
+# whether its merge reached the repo, and it reported success either way (L3, L98).
+#
+# Two halves, and the second is the one that matters. The merge is staged and pushed through the
+# ONE path that publishes anything, so every guard deciding what may travel still decides it, and
+# the regenerated index rides in the same commit as the file it describes. Then the repo is READ
+# BACK and the run refuses its success line until the entries are actually there. Compared in the
+# unit the meaning lives in, the entry labels, not whole lines, because a re-wrap changes every
+# line boundary and loses no words (L278).
+publish_merged_rule_files(){
+  local p detail missing="" published="" branch tmp
+  is_blank "${MERGED_RULE_FILES:-}" && return 0
+  if ! have_git; then
+    # Said rather than skipped. Without git there is no repo to reach, so the merge is genuinely
+    # local, and that is a different answer from "it got there" (L11, L98).
+    echo "claude-sync: rule files were merged on this Mac, and there is no git here, so nothing could be published and they exist only in $CLAUDE_HOME." >&2
+    return 0
+  fi
+  stage_local_to_payload
+  commit_if_changed || true
+  branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+  if git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1; then
+    git -C "$SYNC_REPO" push -u origin "$branch" -q 2>/dev/null || true
+  fi
+  # Read back from the COMMIT, never from the payload directory. A file sitting in the working tree
+  # is exactly the state this issue is about: it looks published and is not (L3).
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    tmp="$(scratch_file)"
+    if ! git -C "$SYNC_REPO" show "HEAD:payload/$p" > "$tmp" 2>/dev/null; then
+      missing="${missing:+$missing; }$p (the repo has no copy of it at all)"
+      rm -f "$tmp"; continue
+    fi
+    detail="$(only_in_first "$CLAUDE_HOME/$p" "$tmp")"
+    rm -f "$tmp"
+    if is_blank "$detail"; then published="$published$p "
+    else missing="${missing:+$missing; }$p ($detail)"; fi
+  done <<MERGED_PUBLISH
+${MERGED_RULE_FILES:-}
+MERGED_PUBLISH
+  if [ -n "$missing" ]; then
+    notify "a merged rule file did NOT reach the shared repo"
+    die "the entries merged on this Mac did NOT reach the repo: $missing. They exist only in $CLAUDE_HOME, so the other Mac cannot receive them and anything that overwrites that file destroys them. Nothing is lost yet, and this is NOT a failure of the merge. A message above says why the file was held back; settle that and run 'claude-sync sync' again."
+  fi
+  is_blank "$published" && return 0
+  # Level with the shared repo, or not, said either way. Committed and unpushed is a real state
+  # with a real remedy (the next send carries it), and reporting it as published would be the same
+  # false success one level along (L11).
+  if unpushed_commits; then
+    echo "claude-sync: the entries merged on this Mac were committed here (${published% }) and the push did NOT go through, so they are safe but the other Mac has not got them yet. The next send carries them." >&2
+  else
+    echo "claude-sync: the entries merged on this Mac were published to the shared repo (${published% }), so the other Mac receives them and the two copies hold the same entries." >&2
+  fi
+  return 0
+}
+
+# The same fact on a path that does not send (claude-config#312). A pull RECEIVES, so the merge it
+# produces is genuinely local until something sends it, and saying nothing left "nothing was
+# dropped" and "Pulled shared config onto this Mac" reading as though the two copies now agreed.
+report_unpublished_merge(){
+  is_blank "${MERGED_RULE_FILES:-}" && return 0
+  echo "claude-sync: the entries merged on this Mac are in $CLAUDE_HOME only. A pull does not send, so they reach the other Mac on the next send: the watcher picks the change up on its own, or run 'claude-sync sync' now." >&2
+  return 0
+}
+
 # Entry labels present in the first file but not the second, where an entry is a
 # self naming list item ("- **L47. ...**"). Naming only the FILE, as this used to,
 # reads as resolved when a lesson that existed nowhere else has just left it.
@@ -4005,6 +4081,7 @@ do_pull(){
     reexec_after_self_update "$before" "$after" pull || true
   fi
   apply_payload_to_local
+  report_unpublished_merge
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   summarize_applied "$before" "$after"
   # Read only, and it fetches nothing: the ref this run already has is what the other clones are
@@ -4323,6 +4400,10 @@ do_sync(){
     reexec_after_self_update "$before" "$after" apply-only || true
   fi
   apply_payload_to_local
+  # The apply may have MERGED a rule file, which lives only here until something sends it, and this
+  # is the path that sends (claude-config#312). Before the summary, so the closing line is only
+  # reached once the merge is provably in the repo.
+  publish_merged_rule_files
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   # WHAT ARRIVED, on this path too (claude-config#283). do_pull has always listed what it wrote and
   # added the start a new session notice when an arriving file cannot be seen by a running session;

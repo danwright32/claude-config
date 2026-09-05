@@ -12604,6 +12604,117 @@ check "#315 and the refusal names the number that clashed" \
 check "#315 and nothing was published holding the number twice" \
   "[ \"\$(grep -c 'L11\\.' '$UNRD/payload/LESSONS.md' 2>/dev/null || echo 0)\" -le 1 ]"
 
+section "== a merge that never reached the repo is not a successful sync (claude-config#312) =="
+# On 2026-09-04 a reconcile merged LESSONS.md and printed both "nothing was dropped" and
+# "Synced (sent local changes, pulled remote)". Both sentences were true ABOUT THE LIVE COPY under
+# ~/.claude, which held 472 lessons, while the copy committed in the repo held 468: four entries
+# existed on that one machine only, so the other Mac would never have received them and an
+# overwrite of the live file would have destroyed them.
+#
+# The mechanism is not a bug in the merge, it is the ORDER. Staging holds back a path this Mac has
+# not applied yet, so the local entry is not published; the pull then brings the other Mac's
+# version; and the apply merges the two into the LIVE file, which nothing sends. The run that
+# merges cannot say whether its merge reached the repo, and it reported success either way (L3,
+# L98).
+unset SYNC_NO_GIT
+MPB="$WORK/mpub-bare.git"; git init -q --bare "$MPB"
+MPA="$WORK/mpub-repoA"; git clone -q "$MPB" "$MPA" 2>/dev/null
+MPHA="$WORK/mpub-homeA"; mkdir -p "$MPHA"
+echo '{"hooks":{}}' > "$MPHA/settings.json"
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$MPHA/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body one\n\n## Data safety\n\n- **L2. two.** body two\n' > "$MPHA/LESSONS.md"
+mpsync(){ local h="$1" r="$2"; shift 2; env CLAUDE_HOME="$h" SYNC_REPO="$r" SYNC_NO_NOTIFY=1 "$@" bash "$SCRIPT" sync 2>&1; }
+mpsync "$MPHA" "$MPA" >/dev/null 2>&1
+MPRB="$WORK/mpub-repoB"; MPHB="$WORK/mpub-homeB"
+git clone -q "$MPB" "$MPRB" 2>/dev/null; mkdir -p "$MPHB"; echo '{"hooks":{}}' > "$MPHB/settings.json"
+env CLAUDE_HOME="$MPHB" SYNC_REPO="$MPRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#312 both Macs start from the same published lessons" "grep -q 'L2. two' '$MPHB/LESSONS.md'"
+
+# The other Mac publishes, and this clone RECEIVES that commit without applying it, which is the
+# state unapplied_paths exists to describe: the payload has moved and this Mac's config has not.
+# It is what makes staging hold this Mac's own edit back, and holding it back is the whole
+# mechanism. Reached the same way the tool reaches it, by moving the clone's head, rather than
+# through a seam: any run whose apply does not follow its pull leaves exactly this.
+printf -- '- **L4. four.** written only on Mac A\n' >> "$MPHA/LESSONS.md"
+mpsync "$MPHA" "$MPA" >/dev/null 2>&1
+mp_applied_before="$(cat "$MPRB/.last-applied" 2>/dev/null || true)"
+git -C "$MPRB" pull -q --rebase origin "$(git -C "$MPRB" symbolic-ref --short HEAD)" 2>/dev/null || true
+check "#312 the clone really did receive a commit it has not applied" \
+  "[ -n \"\$mp_applied_before\" ] && [ \"\$mp_applied_before\" != \"\$(git -C '$MPRB' rev-parse HEAD)\" ]"
+python3 - "$MPHB/LESSONS.md" <<'MP_PY'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+old = "- **L1. one.** body one\n"
+assert t.count(old) == 1
+open(p, "w").write(t.replace(old, old + "- **L5. five.** written only on Mac B\n"))
+MP_PY
+out_mp="$(mpsync "$MPHB" "$MPRB")"; mp_rc=$?
+dbg "#312 the reconcile said: $out_mp"
+check "#312 the reconcile completes" "[ '$mp_rc' -eq 0 ]"
+# The state the incident left, asserted from both sides. The live copy holding everything is
+# exactly what made the old message truthful and useless.
+check "#312 the live copy holds both Macs' entries" \
+  "grep -q 'L4. four' '$MPHB/LESSONS.md' && grep -q 'L5. five' '$MPHB/LESSONS.md'"
+check "#312 and so does the copy committed in the repo" \
+  "grep -q 'L5. five' '$MPRB/payload/LESSONS.md'"
+# The index travels in the SAME commit. It used to sit in three states at once, so the index the
+# other Mac loads named a shorter list than the file beside it.
+check "#312 the published index lists the merged entry too" \
+  "grep -q 'L5. five' '$MPRB/payload/LESSONS-INDEX.md'"
+check "#312 the index and the lessons file were committed together" \
+  "[ -z \"\$(git -C '$MPRB' status --porcelain -- payload)\" ]"
+# And it reached the SHARED repo, not just this clone: the other Mac reads that one.
+check "#312 the merged entry reached the shared repo" \
+  "git -C '$MPRB' show \"origin/\$(git -C '$MPRB' symbolic-ref --short HEAD):payload/LESSONS.md\" 2>/dev/null | grep -q 'L5. five'"
+check "#312 and the run says the merge was published" \
+  "line_has \"\$out_mp\" 'published' 'LESSONS\.md'"
+check "#312 and still reports the sync as done" "grep -q '^Synced' <<< \"\$out_mp\""
+
+# ---- THE REFUSAL ----
+# A merge that could NOT be published must not be reported as a sync that worked, which is the
+# whole of this issue. Reached through a real path rather than a seam: a file already holding one
+# number twice is held back by the publish gate, so the merged entries genuinely cannot travel.
+MPRC="$WORK/mpub-repoC"; MPHC="$WORK/mpub-homeC"
+git clone -q "$MPB" "$MPRC" 2>/dev/null; mkdir -p "$MPHC"; echo '{"hooks":{}}' > "$MPHC/settings.json"
+env CLAUDE_HOME="$MPHC" SYNC_REPO="$MPRC" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+printf -- '- **L6. six.** a second entry from Mac A\n' >> "$MPHA/LESSONS.md"
+mpsync "$MPHA" "$MPA" >/dev/null 2>&1
+python3 - "$MPHC/LESSONS.md" <<'MP_PY2'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+old = "- **L1. one.** body one\n"
+assert t.count(old) == 1
+open(p, "w").write(t.replace(old, old + "- **L7. seven.** written on Mac C\n- **L7. seven again.** and the same number twice\n"))
+MP_PY2
+out_mpc="$(mpsync "$MPHC" "$MPRC")"; mpc_rc=$?
+dbg "#312 a merge that cannot be published said: $out_mpc"
+check "#312 a merge that could not be published is not reported as a done sync" \
+  "! grep -q '^Synced' <<< \"\$out_mpc\""
+check "#312 and it says which file did not reach the repo" \
+  "line_has \"\$out_mpc\" 'did NOT reach' 'LESSONS\.md'"
+check "#312 and the run exits non-zero so the watcher can see it" "[ '$mpc_rc' -ne 0 ]"
+# Nothing of the operator's was destroyed to produce that refusal. Asserted on the entry TEXT
+# rather than its number: the collision settling legitimately renumbers this Mac's unsent entry, so
+# a check on the number would go red on the merge working correctly (L103).
+check "#312 the merged entries are still on this Mac" \
+  "grep -q 'six\.\*\* a second entry from Mac A' '$MPHC/LESSONS.md' && grep -q 'written on Mac C' '$MPHC/LESSONS.md'"
+# And the refusal is about the file, not about a number that happens to be free: the number it
+# names is the one actually used twice in the file it names.
+check "#312 the refusal names the file that was held back" \
+  "line_has \"\$out_mpc\" 'did NOT reach' 'LESSONS\.md \\(L[0-9]'"
+
+# ---- NO REGRESSION ON THE ORDINARY RUN ----
+# A reconcile that merged nothing must be unaffected: it says what it always said, and says nothing
+# about publishing a merge that never happened (L11).
+out_mpq="$(mpsync "$MPHB" "$MPRB")"
+dbg "#312 a reconcile with nothing merged said: $out_mpq"
+check "#312 a reconcile with nothing to merge still reports the sync as done" \
+  "grep -q '^Synced' <<< \"\$out_mpq\""
+check "#312 and says nothing about publishing a merge" \
+  "! grep -q 'did NOT reach' <<< \"\$out_mpq\""
+
 section "== the suite never reads or writes anything of the operator's (claude-config#301) =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
