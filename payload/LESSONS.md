@@ -4948,6 +4948,20 @@ window is a count rather than a boundary.
   colour in the file to catch. Found only because a new notice was being styled beside it and the
   token was reached for by name.)
 
+- **L407. A constraint recorded only as a COMMENT beside the code it governs is enforced by
+  nothing, and sitting there makes it read as binding, so the first person to break it does so
+  with every check green.** Write the check that fails when it is broken in the same change as
+  the comment, or say in the comment that nothing enforces it. Distinct from L27, which is about a
+  rule living in a PROMPT, and from L262, which is about a constraint recorded nowhere at all: this
+  one is written down clearly, repeatedly, and in exactly the right place, which is what makes it
+  feel handled.
+  (overture#3558, 2026-09-05: three files said a stored property must never be dropped, because the
+  app has no MigrationPlan and every schema change so far had been additive, against a live store
+  whose only net is the launch backup. A change then dropped one and opened a pull request with
+  8,960 tests passing and every guard green. It was caught only because somebody happened to read
+  one of those comments while sweeping an unrelated issue, and it would otherwise have run its first
+  subtractive migration against real data.)
+
 ## Cross-system reliability
 
 - **L405. A check deciding whether anything is NEW must compare what the artifact MEANS, never its
