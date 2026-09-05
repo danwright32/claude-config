@@ -538,6 +538,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   with 55 rows sitting between 0.75 and 1.0. Running the identical query against four retained
   Salesforce dataset builds gave 49, 48, 48, 48, so the population had barely moved)
 
+- **L398. A gate that decides whether a subject passes must read its criteria from the SAME
+  revision it is judging, never from the checkout the gate happens to run in, because the two drift
+  with no symptom and a criteria list short by one entry is a requirement nobody is waiting on.**
+  Distinct from L179, which is about the ANSWER being scoped to the right revision: this tool was
+  already compliant with that, asking only about runs at the head commit, and the defect was that
+  the QUESTION came from somewhere else. Anywhere a gate's rules live in the repository it inspects
+  (a required checks list, a lint config, a schema, an allowlist), the rules and the subject are two
+  reads that can name different revisions, and the failure is silent in the direction that matters:
+  a short list is a check nobody waits for.
+  (2026-09-04, PostRoll#1342: `tools/wait_for_checks.py` derives the checks a pull request must
+  clear by reading `.github/workflows/*.yml` out of its own working directory. Run from a checkout
+  sitting on another branch, it derived 7 checks for a pull request that reported 8, because that
+  pull request had added a job. The missing one was a real check it would not have waited for)
+
 - **L179. A status query about work in flight must be scoped to the exact revision it asks about,
   because a superseded run reports under the same check names and answers for the new one in both
   directions: a stale failure blocks a commit nothing has judged, and a stale pass merges one.** Ask
@@ -1546,6 +1560,19 @@ window is a count rather than a boundary.
   189% bucket as "offering the whole of today" in the page's own summary line, so the headline
   numbers were wrong too. Dan read it as "did we book more than we offered". A clamp to 100% would
   have hidden it; the range assertion is what surfaces it)
+
+- **L396. A count of people who reached a LATE stage of a funnel (signups, checkouts, completions)
+  is not a measure of how many ARRIVED, so never conclude that traffic has collapsed from a
+  downstream number. Read arrivals at the entry point first, because a stage count falls both when
+  fewer people come and when the same crowd stops converting, and those two demand opposite work.**
+  (nursedexapp/nursedex#980, 2026-09-04. Asked which milestone was most valuable, the answer given
+  was that nobody was arriving and the whole backlog therefore served an audience that did not
+  exist, drawn from sessions reaching the signup path falling from 236 in June to 2 in September.
+  Measuring arrivals directly showed about 325 visits a WEEK still landing, so the recommendation
+  was wrong in the way that mattered: the work is not to restart a channel but to fix what the
+  arrivals meet, since 96% of them left from the first page after a median of 20 seconds. Distinct
+  from L367, which is about a SUM hiding one component collapsing: here no component was hidden and
+  the number read was simply several steps downstream of the question being asked.)
 
 ## Data safety
 
@@ -3255,6 +3282,16 @@ window is a count rather than a boundary.
   keep hiding or refusing rather than defaulting to an empty set, because an empty
   protective list is indistinguishable from no protection and the person it protects is
   never told. (playedit#307)
+- **L397. A control made of two halves, a write that ARMS it (adding to a block list, recording a
+  suppression, stamping that a message was sent) and a read that ENFORCES it, must have BOTH halves
+  checked, because the enforcing half is the one every audit looks at and a silently failed arming
+  write leaves a correctly hardened enforcement point with nothing to enforce.** The failure is
+  self concealing: the evidence that the control was never armed would have been the row that was
+  not written. (nursedexapp/nursedex#982, 2026-09-04. Removing a user cancels their subscription,
+  upserts their address into blocked_emails and inserts the audit row, and neither write checked
+  its result, so a failed ban read as a successful removal and the person could sign up again
+  immediately. The enforcing read had the L42 defect as well, which is what drew the eye: hardening
+  only that side would have left a refusal that is never reached because the list is empty.)
 - **L43. A platform's built in request authentication is not caller authentication when
   it accepts your public client key.** Supabase's verify_jwt passes the anon key that
   ships inside every app binary, so an endpoint can look protected while accepting
@@ -3537,6 +3574,16 @@ window is a count rather than a boundary.
   (new-agent-onboarding#565: a refused Salesforce profile told the operator to reload the page,
   but the stale profile id lives on the saved onboarding, so the reload restored the same value
   and the only control that could fix it went unmentioned)
+
+- **L399. An instruction to a person must be written in the vocabulary of the place they will
+  act, never in the terms of the constraint that motivated it.** A phrase that names where
+  something must NOT go has no referent at the destination, so it reads as accurate inside the
+  app that wrote it while being unusable at the surface where the person is standing, and the
+  test that would catch it is reading the sentence there rather than in the code.
+  (PostRoll#1367: the details block's help text said "Paste below the post, outside the post
+  body", which describes the app's own rule that the block must stay out of the AI round trip;
+  Squarespace has one content area and no "post body", so Dan pasting into it was left asking
+  what to do with the block)
 
 - **L112. An alert's urgency is set by what the reader must DO and how soon, never by
   whether something is broken.** A condition correctly judged "not a fault" gets filed
