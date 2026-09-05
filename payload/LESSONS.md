@@ -4971,11 +4971,18 @@ window is a count rather than a boundary.
   fine, because opening the pull request is the half that carries the real token; it is every
   later update to that same branch that arrives attributed to the bot and stalls. So the failure
   appears only on a re-push, which is exactly when the newest measurement is the one waiting.
+  CHECK THAT THE ONE CREDENTIAL CAN ACTUALLY DO BOTH before shipping the change, because the
+  obvious fix moves the push onto the pull request's token and a token scoped to OPEN pull
+  requests cannot PUSH. That trades a silent stall for a hard failure, and it fails on precisely
+  the runs that had work to do, so it reads as green on every quiet run in between.
   (PostRoll#1390, 2026-09-05: `propose_recorded_change.sh` opens with `RECORD_UPDATE_TOKEN` and
   then pushes with whatever `actions/checkout` persisted, the default `GITHUB_TOKEN`. PR #1387,
   freshly opened, ran 8 checks as `danwright32`. PR #1383, re-pushed the same day, sat at
   `action_required` as `github-actions[bot]` with 0 checks reported, and `wait_for_checks.py`
-  correctly refused to call that green, so it could never merge)
+  correctly refused to call that green, so it could never merge. The fix that gave
+  `actions/checkout` that token was reverted the same hour: the first recorder run after it
+  merged died with `Permission to danwright32/PostRoll.git denied to danwright32`, a 403 at the
+  push, because the token could open a pull request and not push)
 
 - **L393. An automated job that creates a NAMED outside thing somebody has to act on (a pull
   request, an issue, a draft, a branch keyed on a date) collides with its OWN previous output
