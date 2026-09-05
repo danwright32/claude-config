@@ -253,6 +253,18 @@ check "#318 a file comparison is not condensed into rtk diff" "$(refused_to_rewr
 check "#318 nor one carrying flags through" "$(refused_to_rewrite 'rtk diff -u old/x.md new/x.md')"
 check "#318 nor the bare subcommand" "$(refused_to_rewrite 'rtk diff')"
 
+# And `rtk find`, measured the same way and found by the check rather than by a person
+# (claude-config#319). `find ./no-such-dir` exits 1 and `rtk find ./no-such-dir` exits 0, so a
+# search over a path that does not exist, a typo or something since moved, reads as a search that
+# ran and found nothing (L100, L320). That is the same defect class as `rtk diff` above and it is
+# refused for the same reason, but it is worth saying how it was found: check-rtk-exit-fidelity.sh
+# compares both against the real tool, so the list below is no longer the only thing standing
+# between a lying substitute and a session that believes it (L96).
+check "#319 a find is not condensed into rtk find, whose exit code disagrees" \
+  "$(refused_to_rewrite 'rtk find ./no-such-dir')"
+check "#319 nor one with native find flags" \
+  "$(refused_to_rewrite 'rtk find . -name Thing.swift -type f')"
+
 # The control, and it is what keeps the refusal from over-reaching: `rtk git diff` is a DIFFERENT
 # destination and was measured to preserve its exit code (a dirty tree gave 1 through both the real
 # git and rtk), so it must still be rewritten. A refusal that swallowed it would take
