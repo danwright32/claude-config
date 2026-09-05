@@ -2048,6 +2048,22 @@ window is a count rather than a boundary.
   and the branch was pushed red. The repo already held a note about exactly this, written about the
   test runner, which is why the tool-specific form of the rule is not enough)
 
+- **L404. A tool put on the path IN PLACE of another (a proxy, a compact output filter, a shim, an
+  alias, a rewriting hook) must be proved to reproduce the original's EXIT CODE on a case that
+  genuinely FAILS**, because every script and agent downstream judges by that code, and a
+  substitute that only reproduces the output turns the one signal L184 says to trust into a lie
+  that reads as a pass.
+  (claude-config#318, 2026-09-05: a PreToolUse hook rewrote `diff a b` into `rtk diff a b`, which
+  printed the difference correctly and exited 0 where the real diff exits 1, measured on rtk
+  0.31.0. Anything judging the comparison by its exit code read "different" as "same", and the
+  output being right is exactly what stopped anyone looking. The same substitute also printed
+  "[ok] Files are identical" for two files that genuinely differ, intermittently, caught only
+  because the line was read by hand afterwards. The hook already refused two other destinations
+  for corrupting output, both found the same way, so the missing thing was never a third refusal
+  but a check that MEASURES fidelity: claude-config#319 tracks running a known failing case
+  through both the real tool and its substitute. L184 is the reader side of this and is defeated
+  by it, since it tells you to trust the exit code and this is the exit code lying)
+
 - **L10. An error state and an empty state are different screens.** Never render a
   cheerful empty state over a failure, and return real not-found semantics rather than a
   200 shell. (16 issues, 3 repos)

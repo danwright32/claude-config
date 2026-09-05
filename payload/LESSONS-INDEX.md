@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 500 lessons.
+LESSONS.md, which is NOT loaded into the session. 502 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -188,6 +188,7 @@ to decide something: the body is where the failure it came from is described.
 - L515. Cleanup placed in a `finally` is only reached by the paths that THROW
 - L514. A signal that records THAT something ran must be written on every exit path, in a `finally`, never only on the success path
 - L184. Judge a command by its EXIT CODE, never by a line of its output, because a tool's final line is routinely a different measurement than its verdict and is usually the more reassuring of the two.
+- L404. A tool put on the path IN PLACE of another (a proxy, a compact output filter, a shim, an alias, a rewriting hook) must be proved to reproduce the original's EXIT CODE on a case that genuinely FAILS
 - L10. An error state and an empty state are different screens.
 - L199. A marker meant to be READ BY CODE (a prefix, an error code, a sentinel) must reach its reader unwrapped
 - L11. Distinct causes get distinct messages, and a message may claim only what its check actually measured.
@@ -464,6 +465,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Cross-system reliability
 
+- L403. An automated flow that both PUSHES a branch and OPENS a pull request must use the ONE credential for both halves, because a platform gates or suppresses the workflow runs triggered by its own default identity, so the update silently carries no checks and an empty check list is indistinguishable from one whose checks have not started yet (L98).
 - L393. An automated job that creates a NAMED outside thing somebody has to act on (a pull request, an issue, a draft, a branch keyed on a date) collides with its OWN previous output for as long as that output sits unconsumed
 - L365. A retry must read what the refusal itself says about when it could succeed, because a backoff measured in seconds cannot outlast a limit measured in hours, and every attempt against a spent allowance spends more of the exhausted thing to be told the same answer.
 - L276. A CI job is priced in allowance minutes, which is the runner's multiplier (macOS ten, Windows two) times its rounded-up minutes, and that price is set before the job is added
