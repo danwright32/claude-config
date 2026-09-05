@@ -4932,6 +4932,20 @@ window is a count rather than a boundary.
 
 ## Cross-system reliability
 
+- **L405. A check deciding whether anything is NEW must compare what the artifact MEANS, never its
+  whole serialized form, because a record routinely carries provenance that changes on every run
+  (a timestamp, a run id, a commit), so the check fires every time, the work repeats, and any
+  verification already earned against the previous version is silently invalidated.** L40 is this
+  same comparison failing the other way, and reading it as "compare the whole file" is what
+  produces this one, so the thing being compared has to be the measurement rather than the bytes
+  around it.
+  (postroll#1392, 2026-09-05: `propose_recorded_change.sh` asks `git diff --cached --quiet` over
+  the whole record. PR #1383's head moved three times in half an hour, every commit recording the
+  identical count of 3175 and differing only in `measured_at_commit` and `measured_from_run`. One
+  of those greens was refused at the merge because the branch had moved under it, and the script's
+  own "already carries this record" branch, written to prevent exactly this, could never be
+  reached)
+
 - **L403. An automated flow that both PUSHES a branch and OPENS a pull request must use the ONE
   credential for both halves, because a platform gates or suppresses the workflow runs triggered
   by its own default identity, so the update silently carries no checks and an empty check list is
