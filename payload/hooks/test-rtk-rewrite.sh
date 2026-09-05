@@ -276,6 +276,10 @@ out_318="$(hook 'git diff --quiet')"
 # two stored values is checked by something that reads the VALUES).
 RTK_HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rtk-rewrite.sh"
 RTK_BASELINE="$(dirname "$RTK_HOOK")/.rtk-hook.sha256"
+# The command that re-records the baseline, held ONCE because both the failure message above and
+# the check below that RUNS it read this one string. Two independent spellings of the same command
+# is exactly what shipped the defect covered below.
+RTK_REBASELINE_CMD="shasum -a 256 rtk-rewrite.sh | awk '{print \$1 \"  rtk-rewrite.sh\"}' > .rtk-hook.sha256"
 if [ ! -f "$RTK_BASELINE" ]; then
   # Absent is its own answer, not agreement. Without a baseline rtk warns and establishes one, so
   # this is a state worth naming rather than passing over (L98).
@@ -292,7 +296,7 @@ else
     check "the rtk integrity baseline matches the hook beside it" ok
   else
     check "the rtk integrity baseline matches the hook beside it" \
-      "recorded $rtk_recorded but the hook hashes to $rtk_actual, so rtk will refuse to run at all and print a tampering banner on every command. If the hook change was deliberate, re-record it: shasum -a 256 rtk-rewrite.sh | sed 's| .*| rtk-rewrite.sh|' > .rtk-hook.sha256"
+      "recorded $rtk_recorded but the hook hashes to $rtk_actual, so rtk will refuse to run at all and print a tampering banner on every command. If the hook change was deliberate, re-record it: $RTK_REBASELINE_CMD"
   fi
 fi
 # The comparison is watched saying NO before it is believed, against a hash built here, or a check
@@ -301,6 +305,52 @@ rtk_probe_bad="0000000000000000000000000000000000000000000000000000000000000000"
 [ "$rtk_probe_bad" = "${rtk_actual:-x}" ] \
   && check "the baseline comparison would notice a hash that does not match" "it read a deliberately wrong hash as matching" \
   || check "the baseline comparison would notice a hash that does not match" ok
+
+# ---- and the baseline is in the FORMAT rtk will actually accept (claude-config#319) ----
+# rtk parses this file and refuses the whole run with "Invalid hash format in ... (expected
+# 'hash  filename')" unless the hash and the name are separated by TWO spaces, which is what
+# shasum itself emits. The check above reads only the FIRST FIELD with awk, so it agreed with a
+# file rtk would not read at all: on 2026-09-05 the baseline was re-recorded from the remedy this
+# very message names, that remedy wrote ONE space, the suite went green, and every real rtk
+# command on the machine started answering "Invalid hash format" and exiting 1 (L63: a guard must
+# assert the quantity it exists to protect, never a proxy for it).
+#
+# Two things are checked, and the second is the one that would have caught it. The committed file
+# has to match the format, and the REMEDY this suite tells you to run has to PRODUCE that format,
+# proved by running it. A worked example is how a rule actually travels, so an example that
+# contradicts the rule teaches the inverse and is then defended with the rule's authority (L562).
+rtk_baseline_ok() { # rtk_baseline_ok <line>  -> 0 when rtk would accept it
+  printf '%s\n' "$1" | grep -Eq '^[0-9a-f]{64}  rtk-rewrite\.sh$'
+}
+# The predicate is watched REFUSING the exact malformation that shipped, or it is not yet a check
+# (L1). One space is a valid shasum-looking line and the awk reader above accepts it happily.
+rtk_bad_line="$(printf '%s rtk-rewrite.sh' "${rtk_actual:-0000000000000000000000000000000000000000000000000000000000000000}")"
+rtk_baseline_ok "$rtk_bad_line" \
+  && check "the format check refuses the single space form rtk rejects" "it accepted it" \
+  || check "the format check refuses the single space form rtk rejects" ok
+rtk_baseline_line="$(awk 'NR==1{print}' "$RTK_BASELINE" 2>/dev/null)"
+rtk_baseline_ok "$rtk_baseline_line" \
+  && check "the committed baseline is in the format rtk accepts" ok \
+  || check "the committed baseline is in the format rtk accepts" \
+     "rtk needs '<hash>  rtk-rewrite.sh' with two spaces and the file holds [$rtk_baseline_line], so rtk refuses to run at all. Re-record it: $RTK_REBASELINE_CMD"
+
+# The loop closer: run the remedy, in a throwaway directory, against a copy of this same hook, and
+# require what it writes to be BYTE FOR BYTE the committed baseline. That proves the remedy is
+# correct and that the committed file is what the remedy would produce, from ONE derivation rather
+# than two that have to stay in step (L70).
+RTK_SANDBOX="$TMPROOT/rebaseline"
+mkdir -p "$RTK_SANDBOX"
+cp "$RTK_HOOK" "$RTK_SANDBOX/rtk-rewrite.sh"
+( cd "$RTK_SANDBOX" && eval "$RTK_REBASELINE_CMD" ) >/dev/null 2>&1
+rtk_remedy_line="$(awk 'NR==1{print}' "$RTK_SANDBOX/.rtk-hook.sha256" 2>/dev/null)"
+rtk_baseline_ok "$rtk_remedy_line" \
+  && check "the remedy this suite names writes a file rtk would accept" ok \
+  || check "the remedy this suite names writes a file rtk would accept" \
+     "running it produced [$rtk_remedy_line]"
+[ -n "$rtk_remedy_line" ] && [ "$rtk_remedy_line" = "$rtk_baseline_line" ] \
+  && check "and reproduces the committed baseline exactly" ok \
+  || check "and reproduces the committed baseline exactly" \
+     "remedy wrote [$rtk_remedy_line] but the file holds [$rtk_baseline_line]"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
