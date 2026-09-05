@@ -4916,6 +4916,19 @@ window is a count rather than a boundary.
 
 ## Cross-system reliability
 
+- **L403. An automated flow that both PUSHES a branch and OPENS a pull request must use the ONE
+  credential for both halves, because a platform gates or suppresses the workflow runs triggered
+  by its own default identity, so the update silently carries no checks and an empty check list is
+  indistinguishable from one whose checks have not started yet (L98).** The first proposal looks
+  fine, because opening the pull request is the half that carries the real token; it is every
+  later update to that same branch that arrives attributed to the bot and stalls. So the failure
+  appears only on a re-push, which is exactly when the newest measurement is the one waiting.
+  (PostRoll#1390, 2026-09-05: `propose_recorded_change.sh` opens with `RECORD_UPDATE_TOKEN` and
+  then pushes with whatever `actions/checkout` persisted, the default `GITHUB_TOKEN`. PR #1387,
+  freshly opened, ran 8 checks as `danwright32`. PR #1383, re-pushed the same day, sat at
+  `action_required` as `github-actions[bot]` with 0 checks reported, and `wait_for_checks.py`
+  correctly refused to call that green, so it could never merge)
+
 - **L393. An automated job that creates a NAMED outside thing somebody has to act on (a pull
   request, an issue, a draft, a branch keyed on a date) collides with its OWN previous output
   for as long as that output sits unconsumed**, and the collision surfaces as a hard failure
