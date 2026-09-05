@@ -991,6 +991,43 @@ payload_local_view(){   # $1 = path relative to the payload
   fi
 }
 
+# Is the payload's copy of this path ALREADY what belongs on this Mac (claude-config#313)?
+#
+# A tokenized file never equals its payload copy byte for byte: the payload holds __CLAUDE_HOME__
+# and the live copy holds this Mac's own home path. Every comparison in the apply already goes
+# through payload_local_view for that reason; the status dry run did not, so it reported three
+# files as differing on every single run (skills/plan-council/SKILL.md and both of
+# skills/production-ready/) when nothing had moved at all. The one report that would reveal genuine
+# drift permanently carried three false alarms, and a report that cries wolf is one people stop
+# reading (L36, L182).
+#
+# Derived from the substitution rule itself rather than from a list of those three names (L41,
+# L96), and asked PER FILE: a tokenized file whose text has also really changed still differs here,
+# so carrying the token is not a way to disappear from the report.
+#
+# It answers about THIS CAUSE ONLY, and every one of the four conditions is load-bearing, because
+# whatever this excuses is excused under a sentence naming the placeholder and a message may claim
+# only what it measured (L11). A file rsync flags for a timestamp or a group, whose bytes are
+# identical on both sides, is a different fact with a different remedy and is left to be reported
+# as it always was: the first cut here asked only whether the CONTENT matched, which swallowed
+# every one of those and reported them under this cause.
+payload_differs_only_by_home_path(){   # $1 = path relative to the payload
+  local tmp rc
+  [ -f "$PAYLOAD/$1" ] && [ -f "$CLAUDE_HOME/$1" ] || return 1
+  # Only the mirrored trees are substituted at all, so nothing outside them can differ this way.
+  tokenized_path "$1" || return 1
+  # The payload must really carry the placeholder. Without this the question is unanswerable and
+  # the answer would be about some other difference.
+  grep -Iq -F -- "$TOKEN" "$PAYLOAD/$1" 2>/dev/null || return 1
+  # Identical raw bytes means the difference rsync reported is not in the content at all.
+  cmp -s "$PAYLOAD/$1" "$CLAUDE_HOME/$1" && return 1
+  tmp="$(scratch_file)"
+  payload_local_view "$1" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  cmp -s "$tmp" "$CLAUDE_HOME/$1"; rc=$?
+  rm -f "$tmp"
+  return "$rc"
+}
+
 # The same view of a payload file as it was at some past commit, for the conflict path, which asks
 # what this Mac last applied. grep -I decides whether the blob is text, so a binary is never
 # handed to sed.
@@ -5101,6 +5138,8 @@ report_automatic_jobs(){
 }
 
 do_status(){
+  local line rel
+  local DRIFT_EXPANSIONS=0
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
   report_sync_times
   echo "--- local config vs repo payload (dry run) ---"
@@ -5129,8 +5168,31 @@ do_status(){
     # COMMON_EXCLUDES must match stage_local_to_payload: status is only useful
     # if it describes what a push would ACTUALLY do, and some skills are git
     # clones whose .git would otherwise dominate the output. (#737)
-    rsync -ainc --delete "${COMMON_EXCLUDES[@]}" $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' | sed "s|^|$d: |" || true
+    #
+    # Each line is then asked whether the two sides differ only by the home path placeholder
+    # (claude-config#313). rsync compares bytes and cannot know about the substitution, so the
+    # answer comes from payload_local_view, which is the same view the apply uses. Only the files
+    # rsync already flagged are re-read, so the ordinary case, where nothing differs, costs nothing
+    # extra, and every other kind of difference is still printed exactly as before.
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      # rsync -i prints the itemize flags, one space, then the path. A `*deleting` line has more
+      # than one space, so its "path" keeps a leading space, fails the file test below and is
+      # printed unchanged, which is what a deletion should do.
+      rel="${line#* }"
+      if payload_differs_only_by_home_path "$d/$rel"; then
+        DRIFT_EXPANSIONS=$(( DRIFT_EXPANSIONS + 1 ))
+        continue
+      fi
+      echo "$d: $line"
+    done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' || true)
   done
+  # COUNTED and said, never silently dropped. A section that quietly stops naming files cannot be
+  # told from one that has stopped looking (L98, L11), and the number is what makes a change in it
+  # visible without anybody having to remember the old one.
+  if [ "$DRIFT_EXPANSIONS" -gt 0 ]; then
+    echo "$DRIFT_EXPANSIONS file(s) differ from the payload only where it holds $TOKEN and this Mac holds its own home path, which is that substitution working. They are not drift and are not listed above."
+  fi
   for f in $(top_files_in "$CLAUDE_HOME"); do
     [ -f "$CLAUDE_HOME/$f" ] || continue
     cmp -s "$CLAUDE_HOME/$f" "$PAYLOAD/$f" 2>/dev/null || echo "$f: differs"

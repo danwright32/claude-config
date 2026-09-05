@@ -12413,6 +12413,76 @@ check "#306 with no directory named it refuses" "[ '$fgc4_rc' -ne 0 ]"
 check "#306 and says what it needed" \
   "line_has \"\$out_fgc4\" 'forget-clone' 'director'"
 
+section "== the drift report stays silent about a placeholder expansion (claude-config#313) =="
+# The "local config vs repo payload" section compared the live tree against the payload's RAW
+# bytes, and a tokenized file never equals its payload copy byte for byte: the payload holds
+# __CLAUDE_HOME__ and the live copy holds this Mac's own home path, which is that mechanism working
+# exactly as designed. Three files reported as differing on every single status because of it
+# (skills/plan-council/SKILL.md and both of skills/production-ready/), so the one report that would
+# reveal genuine drift permanently carried three false alarms and taught the reader to skip it
+# (L36, L182).
+#
+# The expected set is DERIVED from the substitution rule itself rather than kept as a list of those
+# three names beside it (L41, L96), so a fourth tokenized file needs no edit here and a file that
+# stops being tokenized stops being excused.
+D13H="$WORK/drift313-home"; D13R="$WORK/drift313-repo"
+mkdir -p "$D13H/hooks" "$D13R/payload/hooks" "$D13R/payload/skills/tokdrift"
+echo '{"hooks":{}}' > "$D13H/settings.json"
+# The placeholder mechanism working. Written as the pair it actually is: the payload holds the
+# token and the live copy holds this Mac's expansion of it.
+mkskill "$D13H/skills/tokdrift/SKILL.md" "scriptPath: $D13H/skills/tokdrift/panel.workflow.js"
+mkskill "$D13R/payload/skills/tokdrift/SKILL.md" 'scriptPath: __CLAUDE_HOME__/skills/tokdrift/panel.workflow.js'
+# THE POSITIVE CONTROL. Suppressing the false alarms is worthless if it also silences a file that
+# has really moved, and a section that says nothing reads the same either way (L98, L159).
+echo 'the live version' > "$D13H/hooks/realdrift.sh"
+echo 'the payload version' > "$D13R/payload/hooks/realdrift.sh"
+# A tokenized file whose text ALSO differs for a real reason. The excuse is granted per file, so a
+# file that carries the token and has genuinely moved must still be named: excusing it would make
+# the token a way to hide from this report altogether.
+mkdir -p "$D13R/payload/skills/tokboth"
+mkskill "$D13H/skills/tokboth/SKILL.md" "scriptPath: $D13H/skills/tokboth/panel.workflow.js
+and a line only this Mac has"
+mkskill "$D13R/payload/skills/tokboth/SKILL.md" 'scriptPath: __CLAUDE_HOME__/skills/tokboth/panel.workflow.js'
+out13="$(CLAUDE_HOME="$D13H" SYNC_REPO="$D13R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#313 status said: $(printf '%s' "$out13" | tr '\n' '|')"
+check "#313 a difference that is only the placeholder is not called drift" \
+  "! grep -q 'tokdrift/SKILL\.md' <<< \"\$out13\""
+check "#313 a file that really moved is still named" \
+  "line_has \"\$out13\" 'hooks' 'realdrift\.sh'"
+check "#313 a tokenized file that ALSO really moved is still named" \
+  "line_has \"\$out13\" 'skills' 'tokboth/SKILL\.md'"
+# Not silently dropped. A report that quietly stops mentioning files cannot be told from one that
+# has stopped looking, so what was excused is counted and said (L98, L11).
+check "#313 the excused files are counted out loud" \
+  "line_has \"\$out13\" 'differ from the payload only' '__CLAUDE_HOME__'"
+check "#313 and the count is the one file that qualified" \
+  "line_has \"\$out13\" '\\b1 file' 'differ from the payload only'"
+# A file rsync flags for a TIMESTAMP, whose bytes are identical on both sides, is a different fact
+# with a different remedy. Excusing it here would file it under a sentence naming the placeholder,
+# which is a claim nothing measured (L11). The first cut of this asked only whether the content
+# matched and swallowed every one of them.
+echo 'byte for byte the same' > "$D13H/hooks/samebytes.sh"
+echo 'byte for byte the same' > "$D13R/payload/hooks/samebytes.sh"
+touch -t 202001010101 "$D13R/payload/hooks/samebytes.sh"
+out13c="$(CLAUDE_HOME="$D13H" SYNC_REPO="$D13R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#313 status with a timestamp-only difference: $(printf '%s' "$out13c" | tr '\n' '|')"
+check "#313 a timestamp-only difference is still reported as it always was" \
+  "line_has \"\$out13c\" 'hooks' 'samebytes\.sh'"
+check "#313 and it is not counted under the placeholder" \
+  "line_has \"\$out13c\" '\\b1 file' 'differ from the payload only'"
+
+# A status on a tree with nothing tokenized must not speak at all, or the line becomes the noise it
+# was written to remove.
+D13H2="$WORK/drift313-home2"; D13R2="$WORK/drift313-repo2"
+mkdir -p "$D13H2/hooks" "$D13R2/payload/hooks"
+echo '{"hooks":{}}' > "$D13H2/settings.json"
+echo 'same on both sides' > "$D13H2/hooks/quiet.sh"
+echo 'same on both sides' > "$D13R2/payload/hooks/quiet.sh"
+out13b="$(CLAUDE_HOME="$D13H2" SYNC_REPO="$D13R2" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#313 status with nothing tokenized: $(printf '%s' "$out13b" | tr '\n' '|')"
+check "#313 nothing tokenized, nothing said about it" \
+  "! grep -q 'differ from the payload only' <<< \"\$out13b\""
+
 section "== the suite never reads or writes anything of the operator's (claude-config#301) =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
