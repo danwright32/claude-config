@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 505 lessons.
+LESSONS.md, which is NOT loaded into the session. 506 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -383,6 +383,7 @@ to decide something: the body is where the failure it came from is described.
 - L590. A display gated on a derived identifier being PRESENT hides it on precisely the record where the user's input is still choosing it, and shows it on every record where it can no longer change.
 - L591. Vertically centring text centres its LINE BOX, which reserves descender space that an all-caps label never uses, so the capitals sit visibly high and any dot or icon centred beside them appears to sit low.
 - L597. When markup carries BOTH outcomes of a choice a client script will make, the state rendered by default must be the one that is correct if that script never runs, because a script that fails is silent and leaves a page that still looks finished while showing the wrong half.
+- L408. A control that acts on the TOP of a shared stack (undo, back, revert last) is silently redirected to an unrelated earlier entry by any action that records nothing onto that stack, so either every action on the surface records one, or a non recording action must block the control rather than let it reach past.
 
 ## External systems
 

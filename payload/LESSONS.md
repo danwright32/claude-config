@@ -4135,6 +4135,19 @@ window is a count rather than a boundary.
   while the rest of the board, which is baked, rendered perfectly. The fix is to default to the
   tail, which always has room)
 
+- **L408. A control that acts on the TOP of a shared stack (undo, back, revert last) is silently
+  redirected to an unrelated earlier entry by any action that records nothing onto that stack, so
+  either every action on the surface records one, or a non recording action must block the control
+  rather than let it reach past.** The person names the action by having just done it, never by
+  naming the entry, so the control cannot tell "there is nothing of yours to act on" from "the top
+  of the stack is somebody else's". Enabling the control unconditionally, which is usually forced by
+  something else riding the same shortcut, removes the last signal that anything is wrong.
+  (overture#3566, 2026-09-05: closing a pitch out from the Reached Out row records no undo entry,
+  because undo was deliberately narrowed to keep and dismiss and the wall that used to stop Cmd+Z
+  reaching past a non recording action was deleted with that narrowing. Pressing Cmd+Z after a close
+  out does nothing with an empty stack, and with an earlier keep or dismiss in the session it
+  reverses that instead, on a different show)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
