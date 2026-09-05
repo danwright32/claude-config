@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 497 lessons.
+LESSONS.md, which is NOT loaded into the session. 498 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -140,6 +140,7 @@ to decide something: the body is where the failure it came from is described.
 - L391. A cost guard's fixture must record the dimension the COST scales with, which is routinely a PAIRING or a MAXIMUM rather than a total, because a fixture matching every recorded total can still exercise an entirely different load while every drift check passes. Name what the cost is quadratic or conditional in, and record THAT.
 - L588. A displayed share or percentage must be ASSERTED to lie within its own range, because a value outside it is the only self-evident proof that the numerator and denominator measure different things, and nothing else will ever report it.
 - L396. A count of people who reached a LATE stage of a funnel (signups, checkouts, completions) is not a measure of how many ARRIVED, so never conclude that traffic has collapsed from a downstream number. Read arrivals at the entry point first, because a stage count falls both when fewer people come and when the same crowd stops converting, and those two demand opposite work.
+- L400. A check's NAME is not a statement of its coverage, so read what a monitor, smoke test or guard actually does before counting it as protection. A job named for the thing it does not check makes the gap permanently invisible, because nobody writes the missing check while a green tick with the right name is already on the board.
 
 ## Data safety
 

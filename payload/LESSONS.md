@@ -1574,6 +1574,20 @@ window is a count rather than a boundary.
   from L367, which is about a SUM hiding one component collapsing: here no component was hidden and
   the number read was simply several steps downstream of the question being asked.)
 
+- **L400. A check's NAME is not a statement of its coverage, so read what a monitor, smoke test or
+  guard actually does before counting it as protection. A job named for the thing it does not check
+  makes the gap permanently invisible, because nobody writes the missing check while a green tick
+  with the right name is already on the board.** (nursedexapp/nursedex#1017, 2026-09-04. After
+  promoting 35 dependency bumps including a Next minor to production, the deploy was read as
+  verified partly because a workflow named "Production Smoke" had gone green. It checks the
+  database permission surface, that the legacy Supabase host is serving, and how much of the plan's
+  usage is left. It never fetches a page, and a search of every workflow in the repo found nothing
+  that requests the live site at all, so a build serving errors on every route would have left the
+  whole pipeline green. The name had been doing the reassuring for an unknown length of time.
+  Distinct from L4, which is about verifying that YOUR change went live, and from L263, where a
+  shared name suppresses comparison between two implementations: here one name suppressed the
+  question of whether the thing existed.)
+
 
 ## Data safety
 
