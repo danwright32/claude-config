@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 498 lessons.
+LESSONS.md, which is NOT loaded into the session. 499 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -86,6 +86,7 @@ to decide something: the body is where the failure it came from is described.
 - L147. A guard seen to fail on a fixture you chose has only been shown to work on the shape you had in mind, so measure how often it fires on the REAL values it will meet.
 - L117. A per-item ceiling judged against a POOLED total cannot notice one item running away, because the expensive item is paid for out of the cheap ones' headroom, and a single-item run is the only size where the ceiling and the total are the same number.
 - L130. A test fixture whose meaning is the RELATIONSHIP between a stored date and the clock (a show still ahead, a licence not yet expired, a record inside its retention window) must pin BOTH ends, because pinning only the fixture lets real time walk the pair into a different state and the test then passes while asserting about a case nobody chose.
+- L401. A fixture whose meaning is its relationship to a CONFIGURABLE threshold (a lead time window, a cap, a retention period, a rate limit) must be DERIVED from that threshold rather than written as a literal chosen to sit at its edge, because pinning both ends of the fixture does not help when the third party to the relationship is a constant somebody can change: the day it moves, the fixture silently stands for a different case.
 - L134. A test that derives two inputs from the same LIVE shared resource read at different moments must ASSERT the separation it depends on, never assume it, because the healthy margin is usually one unit of that resource's own granularity and a single stale read closes it exactly.
 - L220. A change that SPLITS work into parts silently re-aims every guard calibrated against the whole: the guard goes on running, and passing, while now measuring a fragment, so it can no longer reach the threshold it was set to catch.
 - L135. A guard that matches source text over a WHOLE FILE is satisfied by any occurrence in it, so a second legitimate use of the same construct elsewhere in that file answers the check while the region it was written about is broken.

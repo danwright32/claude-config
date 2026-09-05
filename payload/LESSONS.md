@@ -830,6 +830,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   (overture#2669, overture#2670: four fixtures in one session, every one of them red the moment a rule
   about shows that have already performed arrived, and not one of them red for a reason it asserted)
 
+- **L401. A fixture whose meaning is its relationship to a CONFIGURABLE threshold (a lead time window,
+  a cap, a retention period, a rate limit) must be DERIVED from that threshold rather than written as a
+  literal chosen to sit at its edge, because pinning both ends of the fixture does not help when the
+  third party to the relationship is a constant somebody can change: the day it moves, the fixture
+  silently stands for a different case.** This is L130's blind spot rather than a restatement of it.
+  L130's remedy, pin both ends, was correctly applied in every one of the cases below and did not help,
+  because both ends were pinned to each other and neither was pinned to the number that actually
+  decided the verdict. The failure is worst where a test SKIPS a subject it cannot place: eight suites
+  went red when a queue's lead time window went from 90 days to nine weeks, which is the safe
+  direction, while a ninth had a `guard let stage else { continue }` and would have gone green having
+  quietly covered fewer states. Where the fixture cannot be derived, assert the relationship instead,
+  so the next move of the constant fails loudly rather than hollowing the test out.
+  (overture#3546, overture#3423: the ninth was the guard that exists to prove every stage is reachable
+  from a pill, after a real incident where an approved draft vanished from every view its owner used)
+
 - **L134. A test that derives two inputs from the same LIVE shared resource read at different moments
   must ASSERT the separation it depends on, never assume it, because the healthy margin is usually one
   unit of that resource's own granularity and a single stale read closes it exactly.** The resulting
