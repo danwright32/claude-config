@@ -320,7 +320,11 @@ rtk_probe_bad="0000000000000000000000000000000000000000000000000000000000000000"
 # proved by running it. A worked example is how a rule actually travels, so an example that
 # contradicts the rule teaches the inverse and is then defended with the rule's authority (L562).
 rtk_baseline_ok() { # rtk_baseline_ok <line>  -> 0 when rtk would accept it
-  printf '%s\n' "$1" | grep -Eq '^[0-9a-f]{64}  rtk-rewrite\.sh$'
+  # Matched in the shell rather than through `printf ... | grep -q`, because a short circuiting
+  # consumer can SIGPIPE its producer under `pipefail` and report a failure that never happened
+  # (L183). test-pipefail-shortcircuit.sh caught exactly that here, in this function, on the run
+  # that added it.
+  [[ "$1" =~ ^[0-9a-f]{64}\ \ rtk-rewrite\.sh$ ]]
 }
 # The predicate is watched REFUSING the exact malformation that shipped, or it is not yet a check
 # (L1). One space is a valid shasum-looking line and the awk reader above accepts it happily.
