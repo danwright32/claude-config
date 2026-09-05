@@ -12483,6 +12483,127 @@ dbg "#313 status with nothing tokenized: $(printf '%s' "$out13b" | tr '\n' '|')"
 check "#313 nothing tokenized, nothing said about it" \
   "! grep -q 'differ from the payload only' <<< \"\$out13b\""
 
+section "== two Macs appending to one lessons section are combined, not handed over (claude-config#315) =="
+# Two appended entries with distinct numbers never contradict each other, so the right merge is to
+# keep both. Git does not know that: on 2026-09-04 L396 was appended at the end of "Proof over
+# green" on one Mac and L588 at the end of the same section on the other, git reported a content
+# conflict on payload/LESSONS.md, and the sync died telling Dan to reconcile by hand, which is not
+# something he can do. claude-config#200 and #282 had already settled this for the DERIVED index;
+# both deliberately stood down here because LESSONS.md is a source.
+#
+# Resolved in the RECOVERY, after git has stopped, and deliberately not by a union merge rule in
+# .git/info/attributes beside the `ours` rule for the derived index. A rule resolves the file
+# inside the rebase, which is before anything can look at the result, so the one case that must
+# stop the sync, both Macs using one number for different entries, would be committed and pushed as
+# two entries under that number. The checks below hold that design: no clone may carry a merge rule
+# for the lessons file, in either half.
+unset SYNC_NO_GIT
+UNB="$WORK/union-bare.git"; git init -q --bare "$UNB"
+UNA="$WORK/union-repoA"; git clone -q "$UNB" "$UNA" 2>/dev/null
+UNHA="$WORK/union-homeA"; mkdir -p "$UNHA"
+echo '{"hooks":{}}' > "$UNHA/settings.json"
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$UNHA/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body one\n\n## Data safety\n\n- **L2. two.** body two\n' > "$UNHA/LESSONS.md"
+# $3.. are extra environment assignments, which is how the recovery half below turns the merge rule
+# off without a second copy of this helper.
+unsync(){ local h="$1" r="$2"; shift 2; env CLAUDE_HOME="$h" SYNC_REPO="$r" SYNC_NO_NOTIFY=1 "$@" bash "$SCRIPT" sync 2>&1; }
+# Appends at the SAME position, which is what makes git call it a conflict. Appending in different
+# sections merges cleanly and would test nothing (#282's fixture is deliberately the other shape).
+un_append(){   # $1 = lessons file  $2 = the entry line to add after L1
+  python3 - "$1" "$2" <<'UN_PY'
+import sys
+p, entry = sys.argv[1], sys.argv[2]
+t = open(p).read()
+old = "- **L1. one.** body one\n"
+assert t.count(old) == 1, "the fixture's anchor line is not where this expects it"
+open(p, "w").write(t.replace(old, old + entry + "\n"))
+UN_PY
+}
+unsync "$UNHA" "$UNA" >/dev/null 2>&1
+UNRB="$WORK/union-repoB"; UNHB="$WORK/union-homeB"
+git clone -q "$UNB" "$UNRB" 2>/dev/null; mkdir -p "$UNHB"; echo '{"hooks":{}}' > "$UNHB/settings.json"
+env CLAUDE_HOME="$UNHB" SYNC_REPO="$UNRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#315 both Macs start from the same published lessons" "grep -q 'L1. one' '$UNHB/LESSONS.md'"
+
+# ---- the ordinary case ----
+un_append "$UNHA/LESSONS.md" '- **L4. four.** written only on Mac A'
+unsync "$UNHA" "$UNA" >/dev/null 2>&1
+un_append "$UNHB/LESSONS.md" '- **L5. five.** written only on Mac B'
+out_un="$(unsync "$UNHB" "$UNRB")"; un_rc=$?
+dbg "#315 two sided append with the merge rule on said: $out_un"
+check "#315 the sync completes rather than dying on the lessons file" "[ '$un_rc' -eq 0 ]"
+check "#315 and it does not tell Dan to reconcile by hand" \
+  "! grep -q 'reconcile by hand' <<< \"\$out_un\""
+check "#315 the other Mac's entry arrived" "grep -q 'L4. four' '$UNHB/LESSONS.md'"
+check "#315 and this Mac's own entry survived" "grep -q 'L5. five' '$UNHB/LESSONS.md'"
+# ONCE each. A union that keeps both sides of a hunk is exactly the mechanism that can keep one of
+# them twice, and a doubled entry is a duplicate number, which is the state the band mechanism
+# exists to prevent.
+check "#315 each entry is present exactly once" \
+  "[ \"\$(grep -c 'L4. four' '$UNHB/LESSONS.md')\" = 1 ] && [ \"\$(grep -c 'L5. five' '$UNHB/LESSONS.md')\" = 1 ]"
+check "#315 no conflict marker survives in the lessons file" \
+  "! grep -q '^<<<<<<< ' '$UNHB/LESSONS.md'"
+check "#315 the index is regenerated from the combined lessons" \
+  "grep -q 'L4. four' '$UNHB/LESSONS-INDEX.md' && grep -q 'L5. five' '$UNHB/LESSONS-INDEX.md'"
+# PUBLISHED, not merely local. The whole failure this section is about is a merge that was true of
+# the live copy and never reached the repo (claude-config#312).
+check "#315 and the combined file reached the repo" \
+  "grep -q 'L5. five' '$UNRB/payload/LESSONS.md' && grep -q 'L4. four' '$UNRB/payload/LESSONS.md'"
+# It SAYS so. A run that combined two sides and one that never conflicted would otherwise read the
+# same, and the first is the one worth knowing about (L11, L98).
+check "#315 and it says it combined the two sides" \
+  "line_has \"\$out_un\" 'kept both' 'LESSONS\.md'"
+# The gate can only see a clash while git is still stopped, so a merge rule for the lessons file
+# would silently resolve it first and defeat the refusal below. Asserted on the clone that DOES
+# take the index's rule, which is where such a line would be added by mistake.
+check "#315 no merge rule is written for the lessons file" \
+  "! grep -q 'payload/LESSONS.md merge=' '$UNRB/.git/info/attributes' 2>/dev/null"
+check "#315 while the index's own rule really is there" \
+  "grep -q 'payload/LESSONS-INDEX.md merge=ours' '$UNRB/.git/info/attributes'"
+
+# ---- and again with the DERIVED index's own merge rule off ----
+# That rule is what normally stops the index conflicting, so turning it off makes both files
+# conflict at once, which is the shape that has to resolve in one pass and in the right order: the
+# index is regenerated from the lessons file, so combining them the other way round renders the
+# unmerged copy (claude-config#282's seam, used here for a second purpose).
+UNRC="$WORK/union-repoC"; UNHC="$WORK/union-homeC"
+git clone -q "$UNB" "$UNRC" 2>/dev/null; mkdir -p "$UNHC"; echo '{"hooks":{}}' > "$UNHC/settings.json"
+env SYNC_DERIVED_MERGE_RULE=0 CLAUDE_HOME="$UNHC" SYNC_REPO="$UNRC" SYNC_NO_NOTIFY=1 \
+  bash "$SCRIPT" pull >/dev/null 2>&1
+check "#315 no merge rule is written for the lessons file, with the index rule off" \
+  "! grep -q 'payload/LESSONS.md merge=' '$UNRC/.git/info/attributes' 2>/dev/null"
+un_append "$UNHA/LESSONS.md" '- **L8. eight.** a second entry from Mac A'
+unsync "$UNHA" "$UNA" >/dev/null 2>&1
+un_append "$UNHC/LESSONS.md" '- **L9. nine.** written only on Mac C'
+out_unc="$(unsync "$UNHC" "$UNRC" SYNC_DERIVED_MERGE_RULE=0)"; unc_rc=$?
+dbg "#315 two sided append with the merge rule off said: $out_unc"
+check "#315 the recovery carries the sync through too" "[ '$unc_rc' -eq 0 ]"
+check "#315 and the recovery does not hand it to Dan either" \
+  "! grep -q 'reconcile by hand' <<< \"\$out_unc\""
+check "#315 the recovery keeps both sides" \
+  "grep -q 'L8. eight' '$UNHC/LESSONS.md' && grep -q 'L9. nine' '$UNHC/LESSONS.md'"
+check "#315 and leaves no conflict marker behind" \
+  "! grep -q '^<<<<<<< ' '$UNHC/LESSONS.md'"
+
+# ---- A GENUINE COLLISION STILL STOPS ----
+# The stand down is no broader than the reason (L324). Two entries under ONE number are not two
+# appended entries, they are a clash nothing downstream can read apart, and unioning them would
+# publish both under that number.
+UNRD="$WORK/union-repoD"; UNHD="$WORK/union-homeD"
+git clone -q "$UNB" "$UNRD" 2>/dev/null; mkdir -p "$UNHD"; echo '{"hooks":{}}' > "$UNHD/settings.json"
+env CLAUDE_HOME="$UNHD" SYNC_REPO="$UNRD" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+un_append "$UNHA/LESSONS.md" '- **L11. eleven.** Mac A meant this one'
+unsync "$UNHA" "$UNA" >/dev/null 2>&1
+un_append "$UNHD/LESSONS.md" '- **L11. eleven.** Mac D meant something else entirely'
+out_und="$(unsync "$UNHD" "$UNRD")"; und_rc=$?
+dbg "#315 a genuine number collision said: $out_und"
+check "#315 a collision on one number is refused rather than combined" \
+  "[ '$und_rc' -ne 0 ]"
+check "#315 and the refusal names the number that clashed" \
+  "line_has \"\$out_und\" 'L11' 'LESSONS\.md'"
+check "#315 and nothing was published holding the number twice" \
+  "[ \"\$(grep -c 'L11\\.' '$UNRD/payload/LESSONS.md' 2>/dev/null || echo 0)\" -le 1 ]"
+
 section "== the suite never reads or writes anything of the operator's (claude-config#301) =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
