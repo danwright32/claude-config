@@ -687,6 +687,47 @@ merged cleanly, `payload/LESSONS-INDEX.md` was the only conflicted path, and the
 Dan to reconcile by hand, which is not something he can act on. `SYNC_DERIVED_MERGE_RULE=0` turns
 the first defence off, which is the only way to reach the second one in a test.
 
+### And when the lessons file itself conflicts
+
+The day after, the other shape turned up: L396 appended at the end of "Proof over green" on one Mac
+against L588 appended at the end of the same section on the other. `payload/LESSONS.md` is a
+source, not a derived file, so both defences above stood down and the sync died the same way.
+
+Two appended entries carrying different numbers never contradict each other, so the recovery now
+combines them: it takes the three sides git holds mid rebase, unions them, drops an entry both Macs
+wrote identically, and refuses if the result uses one number for two different entries. That last
+case is not a merge failure and is not something to reconcile: it says which number clashed and
+tells Dan to renumber, which is a remedy he can act on.
+
+There is deliberately NO union merge rule in `.git/info/attributes` for the lessons file, and that
+is the whole reason the work happens in the recovery. A rule resolves the file inside the rebase,
+which is before anything can look at the result, so the one case that must stop the sync would be
+committed and pushed as two entries under one number, past the stage time duplicate check, which by
+then has nothing left to refuse. Doing it in the recovery keeps the union and the refusal in the
+same place, at the moment the rebase can still be abandoned, and it needs no per clone config, so
+it is in force on a clone that has never run it and under every rebase backend.
+
+## A merge has to reach the repo before the sync says it worked
+
+Measured 2026-09-04. A reconcile merged `LESSONS.md` and printed both "nothing was dropped" and
+"Synced (sent local changes, pulled remote)". Both sentences were true about the live copy under
+`~/.claude`, which held 472 lessons, while the copy committed in the repo held 468. Four entries
+existed on one machine only, so the other Mac would never have received them and anything
+overwriting that file would have destroyed them. The regenerated index made it worse by sitting in
+three states at once: 463 committed, 468 uncommitted in the payload, and 472 live.
+
+The mechanism is the order rather than the merge. Staging holds back a path this Mac has not
+applied yet, so the local entry is not published; the pull brings the other Mac's version; and the
+apply merges the two into the live file, which by then nothing sends.
+
+So the sync path stages and pushes what the merge produced, through the one path that publishes
+anything, and then reads the repo back and refuses its closing line until the entries are there.
+The comparison is on entry labels rather than whole lines, because re-wrapping a paragraph changes
+every line boundary and loses no words (L278). Committed but not pushed is reported as its own
+state, because the next send carries it and calling that published would be the same false success
+one level along. The pull path does not send, so it says the merge is local until the next send
+rather than leaving that to be inferred.
+
 ## Editing the payload in the development checkout is reverted by the daemon
 
 Measured 2026-09-03, the hard way. Most of a day's work on the payload was made in the development

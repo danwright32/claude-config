@@ -33,6 +33,11 @@
 #   can be compared)
 set -euo pipefail
 
+# WHAT THIS RUN IS DOING, captured before anything can shift the positional parameters. It is
+# written into the run's scratch note (see scratch_note_this_run), which is the only evidence a
+# killed run leaves of itself (claude-config#314).
+SYNC_RUN_ARGV="${*:-<no arguments>}"
+
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 SYNC_REPO="${SYNC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 PAYLOAD="$SYNC_REPO/payload"
@@ -653,7 +658,10 @@ with_lock(){   # $@ = the command to run while holding the lock
   if have_git && unpushed_commits; then note_unsent_work; fi
   # In the trap, not on a line after the call: every failure in here leaves through die(), and a
   # run that pushed and then died on something later still sent what it sent.
-  trap 'record_sent_if_shipped; release_lock; cleanup_applied_log' EXIT
+  # The sweep rides HERE (claude-config#314), on the one trap every mutating command reaches and
+  # no read-only one does, and last, so a run's own scratch is removed by the handlers before it
+  # and cannot be counted as somebody else's leftover.
+  trap 'record_sent_if_shipped; release_lock; cleanup_applied_log; reap_scratch_if_due' EXIT
   "$@" || rc=$?
   release_lock
   # After release_lock, never before: this is where the minutes of hook suite behind the closing
@@ -991,6 +999,43 @@ payload_local_view(){   # $1 = path relative to the payload
   fi
 }
 
+# Is the payload's copy of this path ALREADY what belongs on this Mac (claude-config#313)?
+#
+# A tokenized file never equals its payload copy byte for byte: the payload holds __CLAUDE_HOME__
+# and the live copy holds this Mac's own home path. Every comparison in the apply already goes
+# through payload_local_view for that reason; the status dry run did not, so it reported three
+# files as differing on every single run (skills/plan-council/SKILL.md and both of
+# skills/production-ready/) when nothing had moved at all. The one report that would reveal genuine
+# drift permanently carried three false alarms, and a report that cries wolf is one people stop
+# reading (L36, L182).
+#
+# Derived from the substitution rule itself rather than from a list of those three names (L41,
+# L96), and asked PER FILE: a tokenized file whose text has also really changed still differs here,
+# so carrying the token is not a way to disappear from the report.
+#
+# It answers about THIS CAUSE ONLY, and every one of the four conditions is load-bearing, because
+# whatever this excuses is excused under a sentence naming the placeholder and a message may claim
+# only what it measured (L11). A file rsync flags for a timestamp or a group, whose bytes are
+# identical on both sides, is a different fact with a different remedy and is left to be reported
+# as it always was: the first cut here asked only whether the CONTENT matched, which swallowed
+# every one of those and reported them under this cause.
+payload_differs_only_by_home_path(){   # $1 = path relative to the payload
+  local tmp rc
+  [ -f "$PAYLOAD/$1" ] && [ -f "$CLAUDE_HOME/$1" ] || return 1
+  # Only the mirrored trees are substituted at all, so nothing outside them can differ this way.
+  tokenized_path "$1" || return 1
+  # The payload must really carry the placeholder. Without this the question is unanswerable and
+  # the answer would be about some other difference.
+  grep -Iq -F -- "$TOKEN" "$PAYLOAD/$1" 2>/dev/null || return 1
+  # Identical raw bytes means the difference rsync reported is not in the content at all.
+  cmp -s "$PAYLOAD/$1" "$CLAUDE_HOME/$1" && return 1
+  tmp="$(scratch_file)"
+  payload_local_view "$1" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  rc=0; cmp -s "$tmp" "$CLAUDE_HOME/$1" || rc=$?
+  rm -f "$tmp"
+  return "$rc"
+}
+
 # The same view of a payload file as it was at some past commit, for the conflict path, which asks
 # what this Mac last applied. grep -I decides whether the blob is text, so a binary is never
 # handed to sed.
@@ -1132,6 +1177,10 @@ duplicate_lesson_numbers(){   # $1 = tree to inspect
 # hand next to the thing it mirrors drifts the moment one of them is edited, and the drift is
 # silent (L41). A hand edit here is therefore overwritten, which is the point.
 LESSON_INDEX_FILE="LESSONS-INDEX.md"
+
+# The file the index above is generated FROM. Named here so the merge recovery and the index
+# generator cannot drift into two spellings of one path (L41).
+LESSONS_FILE="LESSONS.md"
 
 # Is this synced path a file whose CONTENT is a function of another file? Asked in one place, so
 # the sites that have to know cannot drift into three different lists (L41). Two copies of a
@@ -1309,6 +1358,93 @@ ensure_derived_file_merge_rule(){
   return 0
 }
 
+# TWO MACS APPENDING TO ONE SECTION OF THE LESSONS FILE (claude-config#315).
+#
+# On 2026-09-04 L396 was appended at the end of "Proof over green" on one Mac and L588 at the end of
+# the same section on the other. Git reported a content conflict on payload/LESSONS.md and the sync
+# died telling Dan to reconcile by hand, which is not something he can act on. Two appended entries
+# carrying DIFFERENT numbers never contradict each other, so the right merge is to keep both.
+#
+# ---- why this is not a git merge driver ----
+#
+# The obvious shape is a union merge rule in .git/info/attributes beside the `ours` rule for the
+# derived index. It was rejected, and the reason is the gate rather than the plumbing: a rule that
+# resolves the file INSIDE the rebase resolves it before anything can look at the result, so the
+# one case that must stop the sync, both Macs using one number for different entries, would be
+# committed and pushed as two entries under that number. Nothing downstream can read those apart,
+# and the stage time duplicate check cannot help because by then the commit exists. Resolving in
+# the recovery keeps the union and the refusal in the same place, at the moment the rebase can
+# still be abandoned. It also needs no per clone config and no path to this script, so it is in
+# force on a clone that has never run it and under every rebase backend (L173).
+#
+# Returns 0 when the union was written, 1 when it could not be produced at all, and 2 when the two
+# sides genuinely clash on a number. Those are three different outcomes needing three different
+# messages, so they are three different answers rather than one failure (L11).
+LESSON_UNION_CLASH=""
+lesson_union_merge(){   # $1 = base  $2 = ours  $3 = theirs  $4 = where the result is written
+  local base="$1" ours="$2" theirs="$3" dest="$4" raw out rc=1 mine dups pre fresh lost
+  LESSON_UNION_CLASH=""
+  [ -f "$ours" ] && [ -f "$theirs" ] || return 1
+  [ -f "$base" ] || return 1
+  raw="$(scratch_file)"
+  # --union keeps both sides of every conflicted hunk and never writes a marker, so this cannot
+  # leave the file in a state that loads as rules.
+  git merge-file --union -q -p "$ours" "$base" "$theirs" > "$raw" 2>/dev/null || { rm -f "$raw"; return 1; }
+  [ -s "$raw" ] || { rm -f "$raw"; return 1; }
+  out="$(scratch_file)"
+  # An entry BOTH Macs wrote IDENTICALLY is one entry written twice, not two. The union keeps the
+  # line from each side, and keeping both would publish a duplicate number over text nobody
+  # disagrees about. Matched on the whole line, so two entries that merely share a number are left
+  # alone and reach the refusal below, which is where they belong.
+  if ! awk '!/^- \*\*L[0-9]+\./ || !seen[$0]++' "$raw" > "$out" 2>/dev/null; then
+    rm -f "$raw" "$out"; return 1
+  fi
+  rm -f "$raw"
+  # A number used twice in the result, that was not ALREADY used twice on one of the sides. A
+  # pre-existing duplicate is a fault in a file this run never touched, and refusing it here would
+  # block every sync until somebody fixed it, which is a different remedy for a different problem
+  # (L324).
+  dups="$(lesson_numbers_in "$out" | sort | uniq -d || true)"
+  pre="$( { lesson_numbers_in "$ours" | sort | uniq -d; lesson_numbers_in "$theirs" | sort | uniq -d; } | sort -u || true)"
+  fresh="$(comm -23 <(printf '%s\n' "$dups" | grep -E '^[0-9]+$' | sort -u || true) \
+                    <(printf '%s\n' "$pre"  | grep -E '^[0-9]+$' | sort -u || true) || true)"
+  if [ -n "$fresh" ]; then
+    LESSON_UNION_CLASH="$(printf '%s\n' "$fresh" | sed 's/^/L/' | tr '\n' ' ' | sed 's/ $//')"
+    rm -f "$out"; return 2
+  fi
+  # NOTHING MAY BE LOST. Every check above asks whether the result holds too much; this is the one
+  # that asks whether it holds too little, and a dropped entry is the worse failure and the only
+  # one the others cannot see (L283).
+  mine="$(scratch_file)"
+  { lesson_numbers_in "$ours"; lesson_numbers_in "$theirs"; } | sort -u > "$mine"
+  lost="$(comm -23 "$mine" <(lesson_numbers_in "$out" | sort -u) || true)"
+  rm -f "$mine"
+  if [ -n "$lost" ]; then rm -f "$out"; return 1; fi
+  cat "$out" > "$dest" 2>/dev/null && rc=0
+  rm -f "$out"
+  return "$rc"
+}
+
+# One conflicted path's three sides, as git holds them mid rebase. Stage 1 is the common ancestor,
+# 2 is what the branch being rebased onto has, 3 is the commit being replayed. Which of 2 and 3 is
+# "this Mac" changes with the direction of the rebase and does not matter to a union.
+lesson_stage_file(){   # $1 = the conflicted path  $2 = the stage number -> prints a scratch file
+  local out; out="$(scratch_file)"
+  git -C "$SYNC_REPO" show ":$2:$1" > "$out" 2>/dev/null || : > "$out"
+  printf '%s' "$out"
+}
+
+# The lessons file, resolved from those three sides. Same three answers as lesson_union_merge.
+resolve_lessons_conflict(){
+  local b o t rc
+  b="$(lesson_stage_file "payload/$LESSONS_FILE" 1)"
+  o="$(lesson_stage_file "payload/$LESSONS_FILE" 2)"
+  t="$(lesson_stage_file "payload/$LESSONS_FILE" 3)"
+  rc=0; lesson_union_merge "$b" "$o" "$t" "$PAYLOAD/$LESSONS_FILE" || rc=$?
+  rm -f "$b" "$o" "$t"
+  return "$rc"
+}
+
 # THE RECOVERY, for when the rule above did not prevent the conflict (claude-config#282).
 #
 # `ensure_derived_file_merge_rule` writes to `.git/info/attributes`, which is PER CLONE and never
@@ -1332,8 +1468,8 @@ ensure_derived_file_merge_rule(){
 # It LOOPS, because a rebase replays one commit at a time and can stop on the next one for the same
 # reason. Bounded, because an unbounded loop around a command that can keep failing is a hang, and
 # a hang is worse than a failure (L110).
-resolve_derived_conflicts(){   # -> 0 when the rebase was carried through, 1 when it was not
-  local i=0 paths p rel handled any=0
+resolve_derived_conflicts(){   # -> 0 carried through, 1 not this, 2 a real lesson number clash
+  local i=0 paths p rel handled any=0 lessons rc unioned=0 derived=0
   while [ "$i" -lt 100 ]; do
     i=$(( i + 1 ))
     paths="$(git -C "$SYNC_REPO" diff --name-only --diff-filter=U 2>/dev/null)"
@@ -1345,21 +1481,35 @@ resolve_derived_conflicts(){   # -> 0 when the rebase was carried through, 1 whe
       git -C "$SYNC_REPO" rev-parse --absolute-git-dir >/dev/null 2>&1 || return 1
       break
     fi
-    handled=0
+    handled=0; lessons=0
     while IFS= read -r p; do
       [ -n "$p" ] || continue
       rel="${p#payload/}"
       # A path outside payload/ is not a synced rule file at all, and is_derived_rule_file would
       # be answering about a name it never meant. Refuse rather than guess.
       [ "$rel" = "$p" ] && return 1
-      is_derived_rule_file "$rel" || return 1
-      handled=$(( handled + 1 ))
+      if is_derived_rule_file "$rel"; then handled=$(( handled + 1 )); derived=1; continue; fi
+      # The lessons file itself, which is a SOURCE and used to be refused here (claude-config#315).
+      # Two appended entries never contradict each other, so the sides are combined; a genuine
+      # clash on a number is answered separately below and stops the sync.
+      if [ "$rel" = "$LESSONS_FILE" ]; then handled=$(( handled + 1 )); lessons=1; continue; fi
+      return 1
     done <<DERIVED_PATHS
 $paths
 DERIVED_PATHS
     [ "$handled" -gt 0 ] || return 1
+    # The lessons file FIRST, because the index below is regenerated from whatever it ends up
+    # holding, so resolving them the other way round would render the unmerged copy.
+    if [ "$lessons" -eq 1 ]; then
+      rc=0; resolve_lessons_conflict || rc=$?
+      # 2 travels all the way out unchanged. It is the one outcome the caller must NOT report as a
+      # failure to auto-merge, because the remedy is a renumber rather than a reconcile (L11).
+      [ "$rc" -eq 2 ] && return 2
+      [ "$rc" -eq 0 ] || return 1
+      unioned=1
+    fi
     # Rebuilt from the source sitting beside it in the working tree, which is the MERGED one:
-    # LESSONS.md combined cleanly, which is why the index was the only thing left.
+    # either LESSONS.md combined cleanly by git, or it was just combined above.
     regenerate_payload_index_from_worktree || return 1
     while IFS= read -r p; do
       [ -n "$p" ] || continue
@@ -1376,9 +1526,18 @@ DERIVED_ADD
     fi
   done
   [ "$any" -eq 1 ] || return 1
-  # Said out loud. A run that recovered and one that never conflicted would otherwise read the
-  # same, and the second is the one somebody would want to know had stopped happening (L11, L98).
-  echo "claude-sync: both Macs changed $LESSON_INDEX_FILE, which is generated from LESSONS.md rather than written by hand, so it was regenerated from the merged lessons and the sync carried on. Nothing needs reconciling."
+  # Said out loud, and the two causes said SEPARATELY. A run that recovered and one that never
+  # conflicted would otherwise read the same, and a run that combined two Macs' lesson entries is
+  # different news from one that merely re-rendered an index (L11, L98).
+  if [ "$unioned" -eq 1 ]; then
+    echo "claude-sync: both Macs added lesson entries to the same part of $LESSONS_FILE. Entries with different numbers never contradict each other, so the merge kept both and the sync carried on. Nothing needs reconciling."
+  fi
+  # Only when the index was ACTUALLY one of the conflicted paths. Saying it whenever this function
+  # ran would be a claim about a file git never stopped on, on the very run where the news is that
+  # something else did (L11).
+  if [ "$derived" -eq 1 ]; then
+    echo "claude-sync: both Macs changed $LESSON_INDEX_FILE, which is generated from LESSONS.md rather than written by hand, so it was regenerated from the merged lessons and the sync carried on. Nothing needs reconciling."
+  fi
   return 0
 }
 
@@ -1889,7 +2048,7 @@ APPLIED_LOG=""
 # Removed however the run ends, including the early exit die() takes, so a pull
 # never leaves a scratch file behind. Safe across the self-update hand-off: at
 # that point the apply has not run yet, so there is nothing to clean.
-cleanup_applied_log(){ if [ -n "$APPLIED_LOG" ]; then rm -f "$APPLIED_LOG"; fi; cleanup_expanded; return 0; }
+cleanup_applied_log(){ if [ -n "$APPLIED_LOG" ]; then rm -f "$APPLIED_LOG"; fi; cleanup_expanded; cleanup_scratch_note; return 0; }
 trap cleanup_applied_log EXIT
 record_applied(){   # $1 = added|updated|removed   $2 = path relative to ~/.claude
   if [ -n "$APPLIED_LOG" ]; then printf '%s\t%s\n' "$1" "$2" >> "$APPLIED_LOG"; fi
@@ -2978,6 +3137,82 @@ $p"
   return 0
 }
 
+# WHAT A MERGE PRODUCED HAS TO REACH THE REPO (claude-config#312).
+#
+# On 2026-09-04 a reconcile merged LESSONS.md and printed both "nothing was dropped" and
+# "Synced (sent local changes, pulled remote)". Both sentences were true ABOUT THE LIVE COPY under
+# ~/.claude, which held 472 lessons, while the copy committed in the repo held 468. Four entries
+# existed on one machine only, so the other Mac would never have received them and anything that
+# overwrote that file would have destroyed them. The regenerated index made it worse by sitting in
+# three states at once: 463 committed, 468 uncommitted in the payload, and 472 live.
+#
+# The mechanism is the ORDER, not the merge. Staging holds back a path this Mac has not applied
+# yet, so the local entry is not published; the pull brings the other Mac's version; and the apply
+# merges the two into the LIVE file, which by then nothing sends. So the run that merges cannot say
+# whether its merge reached the repo, and it reported success either way (L3, L98).
+#
+# Two halves, and the second is the one that matters. The merge is staged and pushed through the
+# ONE path that publishes anything, so every guard deciding what may travel still decides it, and
+# the regenerated index rides in the same commit as the file it describes. Then the repo is READ
+# BACK and the run refuses its success line until the entries are actually there. Compared in the
+# unit the meaning lives in, the entry labels, not whole lines, because a re-wrap changes every
+# line boundary and loses no words (L278).
+publish_merged_rule_files(){
+  local p detail missing="" published="" branch tmp
+  is_blank "${MERGED_RULE_FILES:-}" && return 0
+  if ! have_git; then
+    # Said rather than skipped. Without git there is no repo to reach, so the merge is genuinely
+    # local, and that is a different answer from "it got there" (L11, L98).
+    echo "claude-sync: rule files were merged on this Mac, and there is no git here, so nothing could be published and they exist only in $CLAUDE_HOME." >&2
+    return 0
+  fi
+  stage_local_to_payload
+  commit_if_changed || true
+  branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+  if git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1; then
+    git -C "$SYNC_REPO" push -u origin "$branch" -q 2>/dev/null || true
+  fi
+  # Read back from the COMMIT, never from the payload directory. A file sitting in the working tree
+  # is exactly the state this issue is about: it looks published and is not (L3).
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    tmp="$(scratch_file)"
+    if ! git -C "$SYNC_REPO" show "HEAD:payload/$p" > "$tmp" 2>/dev/null; then
+      missing="${missing:+$missing; }$p (the repo has no copy of it at all)"
+      rm -f "$tmp"; continue
+    fi
+    detail="$(only_in_first "$CLAUDE_HOME/$p" "$tmp")"
+    rm -f "$tmp"
+    if is_blank "$detail"; then published="$published$p "
+    else missing="${missing:+$missing; }$p ($detail)"; fi
+  done <<MERGED_PUBLISH
+${MERGED_RULE_FILES:-}
+MERGED_PUBLISH
+  if [ -n "$missing" ]; then
+    notify "a merged rule file did NOT reach the shared repo"
+    die "the entries merged on this Mac did NOT reach the repo: $missing. They exist only in $CLAUDE_HOME, so the other Mac cannot receive them and anything that overwrites that file destroys them. Nothing is lost yet, and this is NOT a failure of the merge. A message above says why the file was held back; settle that and run 'claude-sync sync' again."
+  fi
+  is_blank "$published" && return 0
+  # Level with the shared repo, or not, said either way. Committed and unpushed is a real state
+  # with a real remedy (the next send carries it), and reporting it as published would be the same
+  # false success one level along (L11).
+  if unpushed_commits; then
+    echo "claude-sync: the entries merged on this Mac were committed here (${published% }) and the push did NOT go through, so they are safe but the other Mac has not got them yet. The next send carries them." >&2
+  else
+    echo "claude-sync: the entries merged on this Mac were published to the shared repo (${published% }), so the other Mac receives them and the two copies hold the same entries." >&2
+  fi
+  return 0
+}
+
+# The same fact on a path that does not send (claude-config#312). A pull RECEIVES, so the merge it
+# produces is genuinely local until something sends it, and saying nothing left "nothing was
+# dropped" and "Pulled shared config onto this Mac" reading as though the two copies now agreed.
+report_unpublished_merge(){
+  is_blank "${MERGED_RULE_FILES:-}" && return 0
+  echo "claude-sync: the entries merged on this Mac are in $CLAUDE_HOME only. A pull does not send, so they reach the other Mac on the next send: the watcher picks the change up on its own, or run 'claude-sync sync' now." >&2
+  return 0
+}
+
 # Entry labels present in the first file but not the second, where an entry is a
 # self naming list item ("- **L47. ...**"). Naming only the FILE, as this used to,
 # reads as resolved when a lesson that existed nowhere else has just left it.
@@ -3854,6 +4089,7 @@ do_pull(){
     reexec_after_self_update "$before" "$after" pull || true
   fi
   apply_payload_to_local
+  report_unpublished_merge
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   summarize_applied "$before" "$after"
   # Read only, and it fetches nothing: the ref this run already has is what the other clones are
@@ -4064,6 +4300,7 @@ do_sync(){
   stage_local_to_payload
   local pushed=0 branch before="" after=""
   local fetch_err="" pull_err="" stash_before=0 stash_after=0 stash_top="" gitdir=""
+  local derived_rc=0
   if have_git; then
     commit_if_changed && pushed=1
     branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
@@ -4105,12 +4342,25 @@ do_sync(){
         gitdir="$(git -C "$SYNC_REPO" rev-parse --absolute-git-dir 2>/dev/null || echo "$SYNC_REPO/.git")"
         derived_recovered=0
         if [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; then
-          # A conflict only in files this tool GENERATES is not two people's work in conflict
-          # (claude-config#282). Tried BEFORE the abort, because after an abort there is nothing
-          # left to continue, and it refuses on anything else, so the die below is still reached
-          # for every conflict that really is two people's work.
-          if resolve_derived_conflicts; then
+          # A conflict only in files this tool GENERATES, or only in appended lesson entries, is
+          # not two people's work in conflict (claude-config#282, claude-config#315). Tried BEFORE
+          # the abort, because after an abort there is nothing left to continue, and it refuses on
+          # anything else, so the die below is still reached for every conflict that really is two
+          # people's work.
+          # `|| rc=$?` rather than `; rc=$?`: this file runs under `set -e`, and a bare call
+          # that returns non-zero would take the whole run down, while a call in a condition
+          # context also turns -e off inside the function, which every early return here needs.
+          derived_rc=0; resolve_derived_conflicts || derived_rc=$?
+          if [ "$derived_rc" -eq 0 ]; then
             derived_recovered=1
+          elif [ "$derived_rc" -eq 2 ]; then
+            # A REAL clash on a lesson number, which is neither a merge failure nor something to
+            # reconcile by hand: both Macs wrote a different entry under one number, and the
+            # remedy is to renumber one of them. Its own message, because the catch-all's advice
+            # would send Dan to drive git for a problem git cannot solve (L11, L399).
+            git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
+            notify "lesson number clash in $LESSONS_FILE"
+            die "both Macs wrote a DIFFERENT lesson under the same number in $LESSONS_FILE ($LESSON_UNION_CLASH), so they cannot both keep it: every reference to that number would point at two different rules. Nothing was published and nothing was lost. Renumber this Mac's entry to the number 'claude-sync next-lesson' prints, then run 'claude-sync sync' again."
           else
             git -C "$SYNC_REPO" rebase --abort 2>/dev/null || true
             # git's own words are carried, and that is not decoration. This branch ASSERTS a cause
@@ -4158,6 +4408,10 @@ do_sync(){
     reexec_after_self_update "$before" "$after" apply-only || true
   fi
   apply_payload_to_local
+  # The apply may have MERGED a rule file, which lives only here until something sends it, and this
+  # is the path that sends (claude-config#312). Before the summary, so the closing line is only
+  # reached once the merge is provably in the repo.
+  publish_merged_rule_files
   script_changed_between "$before" "$after" && pulled_script_ok && restart_watch_daemon_if_installed
   # WHAT ARRIVED, on this path too (claude-config#283). do_pull has always listed what it wrote and
   # added the start a new session notice when an arriving file cannot be seen by a running session;
@@ -5101,6 +5355,8 @@ report_automatic_jobs(){
 }
 
 do_status(){
+  local line rel
+  local DRIFT_EXPANSIONS=0
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
   report_sync_times
   echo "--- local config vs repo payload (dry run) ---"
@@ -5129,8 +5385,31 @@ do_status(){
     # COMMON_EXCLUDES must match stage_local_to_payload: status is only useful
     # if it describes what a push would ACTUALLY do, and some skills are git
     # clones whose .git would otherwise dominate the output. (#737)
-    rsync -ainc --delete "${COMMON_EXCLUDES[@]}" $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' | sed "s|^|$d: |" || true
+    #
+    # Each line is then asked whether the two sides differ only by the home path placeholder
+    # (claude-config#313). rsync compares bytes and cannot know about the substitution, so the
+    # answer comes from payload_local_view, which is the same view the apply uses. Only the files
+    # rsync already flagged are re-read, so the ordinary case, where nothing differs, costs nothing
+    # extra, and every other kind of difference is still printed exactly as before.
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      # rsync -i prints the itemize flags, one space, then the path. A `*deleting` line has more
+      # than one space, so its "path" keeps a leading space, fails the file test below and is
+      # printed unchanged, which is what a deletion should do.
+      rel="${line#* }"
+      if payload_differs_only_by_home_path "$d/$rel"; then
+        DRIFT_EXPANSIONS=$(( DRIFT_EXPANSIONS + 1 ))
+        continue
+      fi
+      echo "$d: $line"
+    done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' || true)
   done
+  # COUNTED and said, never silently dropped. A section that quietly stops naming files cannot be
+  # told from one that has stopped looking (L98, L11), and the number is what makes a change in it
+  # visible without anybody having to remember the old one.
+  if [ "$DRIFT_EXPANSIONS" -gt 0 ]; then
+    echo "$DRIFT_EXPANSIONS file(s) differ from the payload only where it holds $TOKEN and this Mac holds its own home path, which is that substitution working. They are not drift and are not listed above."
+  fi
   for f in $(top_files_in "$CLAUDE_HOME"); do
     [ -f "$CLAUDE_HOME/$f" ] || continue
     cmp -s "$CLAUDE_HOME/$f" "$PAYLOAD/$f" 2>/dev/null || echo "$f: differs"
@@ -5236,7 +5515,7 @@ case "$SYNC_SCRATCH_MAX_AGE" in
 esac
 # Overridable so a test can point the scan at names of its own. It is not a knob anybody needs in
 # normal use: the default IS the list of every prefix this tool creates.
-SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-suite-work. claude-sync-suite-section. claude-sync-suite-run.}"
+SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-run. claude-sync-suite-work. claude-sync-suite-section. claude-sync-suite-run.}"
 
 # ---------- a directory of the tool's own, inside the temp root (#116) ----------
 # The sweep above globs the temp root, and that root belongs to the whole machine: 113,912 entries
@@ -5272,6 +5551,16 @@ case "$SYNC_SCRATCH_LEGACY_EVERY" in
     exit 2 ;;
 esac
 
+# How often a mutating run reclaims the abandoned scratch in the tool's own directory
+# (claude-config#314). Checked for the same reason as the two above: an unreadable value would
+# either sweep on every run or never, and both read as the feature working. 0 means every run.
+SYNC_REAP_INTERVAL="${SYNC_REAP_INTERVAL:-86400}"
+case "$SYNC_REAP_INTERVAL" in
+  ''|*[!0-9]*)
+    echo "claude-sync: SYNC_REAP_INTERVAL='$SYNC_REAP_INTERVAL' is not a whole number of seconds. Refusing to run rather than reclaiming scratch on a schedule nobody can read. Set it to 0 to sweep on every mutating run." >&2
+    exit 2 ;;
+esac
+
 # Where new scratch goes. Derived from SYNC_SCRATCH_ROOT rather than read from TMPDIR a second
 # time, so there is ONE answer to where scratch lives and a test can point every part of this at a
 # throwaway root (L2).
@@ -5280,19 +5569,82 @@ scratch_home(){ printf '%s' "${SYNC_SCRATCH_ROOT%/}/$SYNC_SCRATCH_DIRNAME"; }
 # test root carries its own and a temp cleaner removing it means the location is read again, which
 # is the safe direction to be wrong in.
 scratch_legacy_stamp(){ printf '%s' "$(scratch_home)/.legacy-swept"; }
+# THE CADENCE OF THE AUTOMATIC SWEEP, ON DISK (claude-config#314).
+#
+# claude-config#251 put a daily sweep in the watch daemon and it never fired once. Its clock was a
+# variable set to "now" when the loop STARTED and held in memory only, and the daemon is restarted
+# every time claude-sync itself changes, which is most days here. A twenty four hour timer that
+# restarts more often than daily can never reach its own deadline (L169, L175), so status went on
+# reporting a growing pile (73 items, 43 MB) whose only remedy was a command somebody had to type,
+# and a report like that is one people stop reading (L36).
+#
+# It lives in the scratch directory it governs, so a test root carries its own and a temp cleaner
+# removing it means the sweep runs again, which is the safe direction to be wrong in.
+scratch_reap_stamp(){ printf '%s' "$(scratch_home)/.last-reap"; }
 scratch_home_ready(){   # prints the directory to create scratch in; falls back to the flat root
   local d; d="$(scratch_home)"
   # A fallback that lands in the OLD location, deliberately, and not one that fails the run: the
   # flat location is still swept, so scratch written there is still reclaimed. What it gets wrong
   # is the cost, not the correctness, and it can only happen where the temp root itself is
   # unwritable, in which case nothing else here would work either (L93).
-  if mkdir -p "$d" 2>/dev/null; then printf '%s' "$d"; else printf '%s' "${SYNC_SCRATCH_ROOT%/}"; fi
+  if mkdir -p "$d" 2>/dev/null; then :; else d="${SYNC_SCRATCH_ROOT%/}"; fi
+  # HERE, not in each maker (claude-config#314). Every piece of scratch in this tool is created in
+  # the directory this function names, and the apply log is made with its own mktemp rather than
+  # through scratch_file, so hanging the note off the two makers left the commonest run of all
+  # writing none. One derivation, at the point they share (L41).
+  scratch_note_this_run "$d"
+  printf '%s' "$d"
 }
 
 # Every short-lived temp FILE in this tool is made here rather than by each call site writing its
 # own `mktemp`. One name, so every one of them is reclaimable, and one place to change it if that
 # name ever has to move. Seven call sites used a bare `mktemp`, which is anonymous the moment the
 # run holding it is killed, and 92 of those were on this Mac when #36 was measured.
+# WHAT A KILLED RUN WAS DOING (claude-config#314).
+#
+# status reported 73 abandoned scratch items on 2026-09-04, and a count is not something anybody
+# can act on: 73 of them is a signal about the tool rather than about the temp folder, and the
+# scratch is the only surviving evidence of each one. So a run that creates any scratch also leaves
+# ONE note beside it naming itself, and the note is removed on the way out like everything else, so
+# only a run that was killed leaves one behind (L114, L148).
+#
+# One per run, created lazily on the first piece of scratch, so a run that needs none writes none.
+#
+# NAMED FROM THE PID, never from mktemp, and that is load-bearing rather than a style choice. The
+# directory this is handed comes from scratch_home_ready, which every caller reaches through
+# `$(...)`, and a command substitution runs in a SUBSHELL: a path remembered in a variable there is
+# lost the moment it returns, so the parent could neither find the note again nor remove it, and
+# every single scratch file made another one. A name the parent can recompute needs no shared state
+# at all. It also survives reexec_after_self_update, which `exec`s and keeps the same pid, so the
+# resumed run adopts and removes the note its earlier self wrote.
+#
+# The cost is stated: a pid this machine hands out again, to a run starting inside the sweep's four
+# hour window, adopts a killed run's note and removes it on the way out. That loses one trace. It
+# cannot report a wrong one as current, which is the direction that would matter.
+scratch_note_this_run(){   # $1 = the directory scratch is being created in
+  [ "${SYNC_SCRATCH_NOTE:-1}" = "0" ] && return 0
+  local f="${1%/}/claude-sync-run.$$"
+  # Already written by this run. One stat per scratch file, against a write per scratch file.
+  [ -s "$f" ] && return 0
+  # Tab separated, and the command is the LAST field, so a report can read it with `cut` however
+  # many spaces the arguments hold.
+  printf '%s\t%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$$" "$SYNC_RUN_ARGV" > "$f" 2>/dev/null || true
+  # A named seam so the WRITER can be watched working (SYNC_SCRATCH_NOTE_ECHO=1). Without it the
+  # only thing any check can see is a note that a killed run left behind, which a test has to plant
+  # by hand, so the whole feature could be inert and every check would still pass (L1, L98, L159).
+  # The alternative is racing a real SIGKILL against a run that takes milliseconds, and a window
+  # that happens not to open proves nothing.
+  [ "${SYNC_SCRATCH_NOTE_ECHO:-0}" = "1" ] && printf 'SCRATCH-NOTE %s %s\n' "$f" "$(cat "$f" 2>/dev/null | tr '\t' ' ')" >&2
+  return 0
+}
+# Both locations, because scratch_home_ready falls back to the flat root when its own directory
+# cannot be made, and a cleanup that only knows the usual place leaves a note exactly on the runs
+# that were already having trouble.
+cleanup_scratch_note(){
+  rm -f "$(scratch_home)/claude-sync-run.$$" "${SYNC_SCRATCH_ROOT%/}/claude-sync-run.$$" 2>/dev/null || true
+  return 0
+}
+
 scratch_file(){ mktemp "$(scratch_home_ready)/claude-sync-work.XXXXXXXX"; }
 # The same rule for a temp DIRECTORY. Only the apply needs one, to hold the payload with this
 # Mac's home path put back (see apply_source_dir), and it is removed on every exit path.
@@ -5424,14 +5776,33 @@ scratch_human_size(){   # kb
 }
 
 report_scratch_leftovers(){
-  local list n kb
+  local list n kb doing
   list="$(scratch_leftovers)"
   n="$(printf '%s' "$list" | grep -c . || true)"
   [ "${n:-0}" -gt 0 ] || return 0
   kb="$(printf '%s\n' "$list" | scratch_total_kb)"
   echo "--- scratch the tool left behind ---"
   echo "  $n abandoned, holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT, each older than ${SYNC_SCRATCH_MAX_AGE}s."
-  echo "  Every one belongs to a run that was killed before it could clean up after itself. Reclaim them with: claude-sync reap-scratch"
+  echo "  Every one belongs to a run that was killed before it could clean up after itself. A mutating run reclaims them on its own every $(duration_in_words "$SYNC_REAP_INTERVAL"); to take them now: claude-sync reap-scratch"
+  # WHAT THOSE RUNS WERE DOING (claude-config#314). A count says the temp folder is filling up; the
+  # commands say which part of the tool is being killed, and only one of those can be acted on
+  # (L148). Runs from before the notes existed simply carry none, so this stays quiet rather than
+  # claiming they were doing nothing (L223, L11).
+  doing="$(scratch_run_summary "$list")"
+  [ -n "$doing" ] && echo "  Those runs were running: $doing."
+  return 0
+}
+
+# The commands named by whichever leftovers are run notes, counted, commonest first. One `cut` per
+# note and no shell loop building strings, because this runs inside `status`.
+scratch_run_summary(){   # $1 = the leftover paths, one per line
+  local notes
+  notes="$(printf '%s\n' "$1" | grep '/claude-sync-run\.' || true)"
+  [ -n "$notes" ] || return 0
+  printf '%s\n' "$notes" | tr '\n' '\0' | xargs -0 cut -f3 2>/dev/null \
+    | sed 's/^[[:space:]]*$/unknown/' \
+    | sort | uniq -c | sort -rn \
+    | awk '{ c=$1; $1=""; sub(/^ /, ""); out = out (out == "" ? "" : ", ") $0 " (" c ")" } END { printf "%s", out }'
   return 0
 }
 
@@ -5454,6 +5825,16 @@ do_reap_scratch(){
     return 0
   fi
   kb="$(printf '%s\n' "$list" | scratch_total_kb)"
+  removed="$(printf '%s\n' "$list" | remove_scratch_paths)"
+  echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT."
+  return 0
+}
+
+# The delete itself, written ONCE and used by the command somebody types and by the automatic sweep
+# alike. Two copies of an `rm -rf` guarded by a pattern would be two chances for the pattern to
+# drift, and only one of them would be the one anybody re-read (L370).
+remove_scratch_paths(){   # reads paths on stdin -> prints how many it removed
+  local p removed=0
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     # Judged again, independently, immediately before the delete. The list was built from the
@@ -5464,10 +5845,43 @@ do_reap_scratch(){
       "${SYNC_SCRATCH_ROOT%/}"/claude-sync-*) rm -rf "$p" && removed=$((removed + 1)) ;;
       *) echo "claude-sync: refusing to remove '$p', which is not scratch this tool owns." >&2 ;;
     esac
-  done <<EOF
-$list
-EOF
-  echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT."
+  done
+  printf '%s' "$removed"
+  return 0
+}
+
+# THE AUTOMATIC SWEEP. Run by every MUTATING command, through the same trap that releases the lock,
+# and by no read-only one: status is an inspection and a command whose name reads like a look must
+# not remove anything (L206).
+#
+# It sweeps only the tool's OWN scratch directory, never the flat location beside it. That one
+# belongs to the whole machine and is read on its own interval by `status` and unconditionally by
+# `reap-scratch`, which stays the way back to it that does not wait.
+reap_scratch_if_due(){
+  local stamp m now list n
+  [ "$SYNC_SCRATCH_MAX_AGE" -eq 0 ] && return 0
+  [ -d "$(scratch_home)" ] || return 0
+  stamp="$(scratch_reap_stamp)"
+  now="$(date +%s)"
+  if [ -f "$stamp" ]; then
+    m="$(file_mtime "$stamp")"
+    # An unreadable stamp is treated as OVERDUE, because not sweeping costs a leftover nobody
+    # hears about and sweeping costs one directory read, and only one of those two accumulates.
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    if [ "$(( now - m ))" -lt "$SYNC_REAP_INTERVAL" ]; then return 0; fi
+  fi
+  list="$(scratch_in_dir "$(scratch_home)")"
+  # Stamped once the READ has finished, which is the expensive half and the half this cadence
+  # exists to ration. Finding nothing is a completed sweep, so it stamps too: otherwise a clean
+  # machine re-reads the directory on every single run for ever (L98).
+  : > "$stamp" 2>/dev/null || true
+  is_blank "$list" && return 0
+  n="$(printf '%s\n' "$list" | remove_scratch_paths)"
+  case "${n:-0}" in ''|*[!0-9]*) n=0 ;; esac
+  [ "$n" -gt 0 ] || return 0
+  # Said out loud. A sweep that reclaimed a pile and one that ran and found nothing are different
+  # events, and the first is the one worth seeing (L11, L98).
+  echo "claude-sync: reclaimed $n abandoned scratch item(s) that earlier runs were killed before they could remove, in $(scratch_home)." >&2
   return 0
 }
 
@@ -5595,7 +6009,6 @@ do_watch(){
   local again
   # Started at the clock, so the first sweep happens one interval in rather than on the first edit
   # of the day: a daemon restarted often would otherwise sweep on every restart.
-  local last_reap now_reap; last_reap="$(date +%s)"
   "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" | while IFS= read -r _; do
     again=1
     while [ "$again" -eq 1 ]; do
@@ -5634,22 +6047,13 @@ do_watch(){
           *) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: finished, but said nothing about what it did: ${out:-<no output>}" ;;
         esac
       fi
-      # Scratch is reclaimed by the WATCHER, on its own cadence (claude-config#251). status
-      # reported 207 abandoned scratch directories holding 109 MB on 2026-08-31, every one of them
-      # past the threshold, and told the reader to run something by hand. Nothing did, so the
-      # number grew while reading as routine noise.
-      #
-      # Here rather than on the pull path, and that is the whole of the choice. The sweep reads
-      # the machine's WHOLE temp directory, which holds other software's files by the hundred
-      # thousand, so putting it on a path any test drives makes every test pay for it AND lets a
-      # test reach a live store, which is the thing tests must be structurally unable to do (L2).
-      # The daemon is the process that accumulates the scratch and the one place a daily cadence
-      # can live.
-      now_reap="$(date +%s)"
-      if [ "$(( now_reap - last_reap ))" -ge "${SYNC_REAP_INTERVAL:-86400}" ]; then
-        last_reap="$now_reap"
-        do_reap_scratch >/dev/null 2>&1 || true
-      fi
+      # Scratch used to be reclaimed HERE, by the watcher, on a clock this loop held in memory
+      # (claude-config#251). It never fired: the clock was set to "now" when the loop started, and
+      # the daemon is restarted every time claude-sync changes, so a twenty four hour timer that
+      # restarts more often than daily never reached its own deadline (claude-config#314, L169,
+      # L175). The cadence is a stamp on disk now, and every mutating run reads it, including this
+      # loop's own send, which takes the lock and so passes through the trap that runs the sweep.
+      # Nothing is needed here.
       # #262: everything that arrived while that send was running becomes ONE more send, not one
       # send each. A send takes seconds and can take minutes, so a burst of saves used to produce
       # a commit per event: six on 2026-09-02, of which CI cancelled five.

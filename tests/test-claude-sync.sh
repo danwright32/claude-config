@@ -2186,6 +2186,16 @@ export SYNC_CLONE_REGISTRY="$WORK/no-such-directory/clone-registry"
 # must be structurally unable to touch live config, so the safe value is the default
 # here and individual tests override it only to point at another throwaway file.
 export SYNC_ZSHRC="$WORK/zshrc-guard"
+# The tool's scratch root, for the WHOLE suite, and for the same reason as the two seams around it
+# (claude-config#314). It defaults to the shared temp directory, which belongs to the machine, and
+# the automatic sweep REMOVES what it finds there: every mutating run this suite makes would
+# reclaim the operator's own abandoned scratch, from a test, which is the one thing a test must be
+# structurally unable to do (L2). status's reading of that directory was the same fault one degree
+# milder. Sections that are ABOUT the scratch mechanism override it with a throwaway of their own,
+# and the two that run with TMPDIR unset unset this as well, or the fallback they exist to exercise
+# would never be reached (L322).
+export SYNC_SCRATCH_ROOT="$WORK/scratch-root"
+mkdir -p "$SYNC_SCRATCH_ROOT"
 # The send-side hook suite gate is ON in production and OFF for this suite, except in the one
 # section that tests it, which unsets this and sets it again afterwards (claude-config#244, #220).
 # Without it every git-backed section that happens to touch a hook would start launching real test
@@ -2928,7 +2938,7 @@ TQH="$WORK/tq-home"; TQR="$WORK/tq-repo"
 mkdir -p "$TQH/hooks" "$TQR/payload/hooks"; echo '{"hooks":{}}' > "$TQH/settings.json"
 printf 'aaaa\n' > "$TQH/hooks/tiny.sh"
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" push >/dev/null 2>&1
-SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" SYNC_SCRATCH_ROOT="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
 # Asked about SCRATCH by NAME, not about everything in the directory it lives in. The tool keeps
 # its scratch in a `claude-sync` directory inside the temp root (#116), and that directory, and the
 # stamp recording when the old flat location was last swept, are both deliberately left there: they
@@ -2938,7 +2948,7 @@ _tq_litter(){ ls -A "$TMPD" "$TMPD/claude-sync" 2>/dev/null | grep '^claude-sync
 check "a clean pull leaves no temp file behind" "[ -z \"\$(_tq_litter)\" ]"
 # same on the failure path: a pull that dies must not litter either
 printf '@NOPE.md\n' > "$TQR/payload/CLAUDE.md"
-SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" SYNC_SCRATCH_ROOT="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
 check "a failed pull leaves no temp file behind"  "[ -z \"\$(_tq_litter)\" ]"
 # The control: this cannot pass by looking in the wrong place. A file planted in either location
 # has to be reported, or both checks above are satisfied by a listing of nothing (L143, L159).
@@ -5771,13 +5781,15 @@ check "#38 the date helper still answers with GNU-shaped tools" \
 # reason unrelated to the code (L159) and does its real work only in CI, which is the argument for
 # having CI rather than an argument against the checks. A static sweep for the whole class, every
 # environment variable expanded with an operator and no default, found this as the only instance.
-_noTMPDIR="$(env -u TMPDIR SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1 || true)"
+_noTMPDIR="$(env -u TMPDIR -u SYNC_SCRATCH_ROOT SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1 || true)"
 # The positive control first: without it, a child that died for some entirely different reason
 # would satisfy the assertion below by never getting far enough to say "unbound variable" (L159).
 check "#38 the suite runs with no TMPDIR set at all" "grep -q '^PASS=' <<< \"\$_noTMPDIR\""
 check "#38 and names no unbound variable"            "! grep -q 'unbound variable' <<< \"\$_noTMPDIR\""
 # The tool itself too, and separately, because it is the half that runs unattended on both Macs.
-_noTMPDIRtool="$(env -u TMPDIR SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" bash "$SCRIPT" status 2>&1 || true)"; _noTMPDIRrc=$?
+# SYNC_SCRATCH_ROOT unset as well, or the suite-wide redirect answers for TMPDIR and the
+# fallback this exists to exercise is never reached (L322).
+_noTMPDIRtool="$(env -u TMPDIR -u SYNC_SCRATCH_ROOT SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" bash "$SCRIPT" status 2>&1 || true)"; _noTMPDIRrc=$?
 check "#38 the tool runs with no TMPDIR set either"  "[ '$_noTMPDIRrc' -eq 0 ]"
 check "#38 and it names no unbound variable"         "! grep -q 'unbound variable' <<< \"\$_noTMPDIRtool\""
 
@@ -12413,6 +12425,400 @@ check "#306 with no directory named it refuses" "[ '$fgc4_rc' -ne 0 ]"
 check "#306 and says what it needed" \
   "line_has \"\$out_fgc4\" 'forget-clone' 'director'"
 
+section "== the drift report stays silent about a placeholder expansion (claude-config#313) =="
+# The "local config vs repo payload" section compared the live tree against the payload's RAW
+# bytes, and a tokenized file never equals its payload copy byte for byte: the payload holds
+# __CLAUDE_HOME__ and the live copy holds this Mac's own home path, which is that mechanism working
+# exactly as designed. Three files reported as differing on every single status because of it
+# (skills/plan-council/SKILL.md and both of skills/production-ready/), so the one report that would
+# reveal genuine drift permanently carried three false alarms and taught the reader to skip it
+# (L36, L182).
+#
+# The expected set is DERIVED from the substitution rule itself rather than kept as a list of those
+# three names beside it (L41, L96), so a fourth tokenized file needs no edit here and a file that
+# stops being tokenized stops being excused.
+D13H="$WORK/drift313-home"; D13R="$WORK/drift313-repo"
+mkdir -p "$D13H/hooks" "$D13R/payload/hooks" "$D13R/payload/skills/tokdrift"
+echo '{"hooks":{}}' > "$D13H/settings.json"
+# The placeholder mechanism working. Written as the pair it actually is: the payload holds the
+# token and the live copy holds this Mac's expansion of it.
+mkskill "$D13H/skills/tokdrift/SKILL.md" "scriptPath: $D13H/skills/tokdrift/panel.workflow.js"
+mkskill "$D13R/payload/skills/tokdrift/SKILL.md" 'scriptPath: __CLAUDE_HOME__/skills/tokdrift/panel.workflow.js'
+# THE POSITIVE CONTROL. Suppressing the false alarms is worthless if it also silences a file that
+# has really moved, and a section that says nothing reads the same either way (L98, L159).
+echo 'the live version' > "$D13H/hooks/realdrift.sh"
+echo 'the payload version' > "$D13R/payload/hooks/realdrift.sh"
+# A tokenized file whose text ALSO differs for a real reason. The excuse is granted per file, so a
+# file that carries the token and has genuinely moved must still be named: excusing it would make
+# the token a way to hide from this report altogether.
+mkdir -p "$D13R/payload/skills/tokboth"
+mkskill "$D13H/skills/tokboth/SKILL.md" "scriptPath: $D13H/skills/tokboth/panel.workflow.js
+and a line only this Mac has"
+mkskill "$D13R/payload/skills/tokboth/SKILL.md" 'scriptPath: __CLAUDE_HOME__/skills/tokboth/panel.workflow.js'
+out13="$(CLAUDE_HOME="$D13H" SYNC_REPO="$D13R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#313 status said: $(printf '%s' "$out13" | tr '\n' '|')"
+check "#313 a difference that is only the placeholder is not called drift" \
+  "! grep -q 'tokdrift/SKILL\.md' <<< \"\$out13\""
+check "#313 a file that really moved is still named" \
+  "line_has \"\$out13\" 'hooks' 'realdrift\.sh'"
+check "#313 a tokenized file that ALSO really moved is still named" \
+  "line_has \"\$out13\" 'skills' 'tokboth/SKILL\.md'"
+# Not silently dropped. A report that quietly stops mentioning files cannot be told from one that
+# has stopped looking, so what was excused is counted and said (L98, L11).
+check "#313 the excused files are counted out loud" \
+  "line_has \"\$out13\" 'differ from the payload only' '__CLAUDE_HOME__'"
+check "#313 and the count is the one file that qualified" \
+  "line_has \"\$out13\" '\\b1 file' 'differ from the payload only'"
+# A file rsync flags for a TIMESTAMP, whose bytes are identical on both sides, is a different fact
+# with a different remedy. Excusing it here would file it under a sentence naming the placeholder,
+# which is a claim nothing measured (L11). The first cut of this asked only whether the content
+# matched and swallowed every one of them.
+echo 'byte for byte the same' > "$D13H/hooks/samebytes.sh"
+echo 'byte for byte the same' > "$D13R/payload/hooks/samebytes.sh"
+touch -t 202001010101 "$D13R/payload/hooks/samebytes.sh"
+out13c="$(CLAUDE_HOME="$D13H" SYNC_REPO="$D13R" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#313 status with a timestamp-only difference: $(printf '%s' "$out13c" | tr '\n' '|')"
+check "#313 a timestamp-only difference is still reported as it always was" \
+  "line_has \"\$out13c\" 'hooks' 'samebytes\.sh'"
+check "#313 and it is not counted under the placeholder" \
+  "line_has \"\$out13c\" '\\b1 file' 'differ from the payload only'"
+
+# A status on a tree with nothing tokenized must not speak at all, or the line becomes the noise it
+# was written to remove.
+D13H2="$WORK/drift313-home2"; D13R2="$WORK/drift313-repo2"
+mkdir -p "$D13H2/hooks" "$D13R2/payload/hooks"
+echo '{"hooks":{}}' > "$D13H2/settings.json"
+echo 'same on both sides' > "$D13H2/hooks/quiet.sh"
+echo 'same on both sides' > "$D13R2/payload/hooks/quiet.sh"
+out13b="$(CLAUDE_HOME="$D13H2" SYNC_REPO="$D13R2" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#313 status with nothing tokenized: $(printf '%s' "$out13b" | tr '\n' '|')"
+check "#313 nothing tokenized, nothing said about it" \
+  "! grep -q 'differ from the payload only' <<< \"\$out13b\""
+
+section "== two Macs appending to one lessons section are combined, not handed over (claude-config#315) =="
+# Two appended entries with distinct numbers never contradict each other, so the right merge is to
+# keep both. Git does not know that: on 2026-09-04 L396 was appended at the end of "Proof over
+# green" on one Mac and L588 at the end of the same section on the other, git reported a content
+# conflict on payload/LESSONS.md, and the sync died telling Dan to reconcile by hand, which is not
+# something he can do. claude-config#200 and #282 had already settled this for the DERIVED index;
+# both deliberately stood down here because LESSONS.md is a source.
+#
+# Resolved in the RECOVERY, after git has stopped, and deliberately not by a union merge rule in
+# .git/info/attributes beside the `ours` rule for the derived index. A rule resolves the file
+# inside the rebase, which is before anything can look at the result, so the one case that must
+# stop the sync, both Macs using one number for different entries, would be committed and pushed as
+# two entries under that number. The checks below hold that design: no clone may carry a merge rule
+# for the lessons file, in either half.
+unset SYNC_NO_GIT
+UNB="$WORK/union-bare.git"; git init -q --bare "$UNB"
+UNA="$WORK/union-repoA"; git clone -q "$UNB" "$UNA" 2>/dev/null
+UNHA="$WORK/union-homeA"; mkdir -p "$UNHA"
+echo '{"hooks":{}}' > "$UNHA/settings.json"
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$UNHA/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body one\n\n## Data safety\n\n- **L2. two.** body two\n' > "$UNHA/LESSONS.md"
+# $3.. are extra environment assignments, which is how the recovery half below turns the merge rule
+# off without a second copy of this helper.
+unsync(){ local h="$1" r="$2"; shift 2; env CLAUDE_HOME="$h" SYNC_REPO="$r" SYNC_NO_NOTIFY=1 "$@" bash "$SCRIPT" sync 2>&1; }
+# Appends at the SAME position, which is what makes git call it a conflict. Appending in different
+# sections merges cleanly and would test nothing (#282's fixture is deliberately the other shape).
+un_append(){   # $1 = lessons file  $2 = the entry line to add after L1
+  python3 - "$1" "$2" <<'UN_PY'
+import sys
+p, entry = sys.argv[1], sys.argv[2]
+t = open(p).read()
+old = "- **L1. one.** body one\n"
+assert t.count(old) == 1, "the fixture's anchor line is not where this expects it"
+open(p, "w").write(t.replace(old, old + entry + "\n"))
+UN_PY
+}
+unsync "$UNHA" "$UNA" >/dev/null 2>&1
+UNRB="$WORK/union-repoB"; UNHB="$WORK/union-homeB"
+git clone -q "$UNB" "$UNRB" 2>/dev/null; mkdir -p "$UNHB"; echo '{"hooks":{}}' > "$UNHB/settings.json"
+env CLAUDE_HOME="$UNHB" SYNC_REPO="$UNRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#315 both Macs start from the same published lessons" "grep -q 'L1. one' '$UNHB/LESSONS.md'"
+
+# ---- the ordinary case ----
+un_append "$UNHA/LESSONS.md" '- **L4. four.** written only on Mac A'
+unsync "$UNHA" "$UNA" >/dev/null 2>&1
+un_append "$UNHB/LESSONS.md" '- **L5. five.** written only on Mac B'
+out_un="$(unsync "$UNHB" "$UNRB")"; un_rc=$?
+dbg "#315 two sided append with the merge rule on said: $out_un"
+check "#315 the sync completes rather than dying on the lessons file" "[ '$un_rc' -eq 0 ]"
+check "#315 and it does not tell Dan to reconcile by hand" \
+  "! grep -q 'reconcile by hand' <<< \"\$out_un\""
+check "#315 the other Mac's entry arrived" "grep -q 'L4. four' '$UNHB/LESSONS.md'"
+check "#315 and this Mac's own entry survived" "grep -q 'L5. five' '$UNHB/LESSONS.md'"
+# ONCE each. A union that keeps both sides of a hunk is exactly the mechanism that can keep one of
+# them twice, and a doubled entry is a duplicate number, which is the state the band mechanism
+# exists to prevent.
+check "#315 each entry is present exactly once" \
+  "[ \"\$(grep -c 'L4. four' '$UNHB/LESSONS.md')\" = 1 ] && [ \"\$(grep -c 'L5. five' '$UNHB/LESSONS.md')\" = 1 ]"
+check "#315 no conflict marker survives in the lessons file" \
+  "! grep -q '^<<<<<<< ' '$UNHB/LESSONS.md'"
+check "#315 the index is regenerated from the combined lessons" \
+  "grep -q 'L4. four' '$UNHB/LESSONS-INDEX.md' && grep -q 'L5. five' '$UNHB/LESSONS-INDEX.md'"
+# PUBLISHED, not merely local. The whole failure this section is about is a merge that was true of
+# the live copy and never reached the repo (claude-config#312).
+check "#315 and the combined file reached the repo" \
+  "grep -q 'L5. five' '$UNRB/payload/LESSONS.md' && grep -q 'L4. four' '$UNRB/payload/LESSONS.md'"
+# It SAYS so. A run that combined two sides and one that never conflicted would otherwise read the
+# same, and the first is the one worth knowing about (L11, L98).
+check "#315 and it says it combined the two sides" \
+  "line_has \"\$out_un\" 'kept both' 'LESSONS\.md'"
+# The gate can only see a clash while git is still stopped, so a merge rule for the lessons file
+# would silently resolve it first and defeat the refusal below. Asserted on the clone that DOES
+# take the index's rule, which is where such a line would be added by mistake.
+check "#315 no merge rule is written for the lessons file" \
+  "! grep -q 'payload/LESSONS.md merge=' '$UNRB/.git/info/attributes' 2>/dev/null"
+check "#315 while the index's own rule really is there" \
+  "grep -q 'payload/LESSONS-INDEX.md merge=ours' '$UNRB/.git/info/attributes'"
+
+# ---- and again with the DERIVED index's own merge rule off ----
+# That rule is what normally stops the index conflicting, so turning it off makes both files
+# conflict at once, which is the shape that has to resolve in one pass and in the right order: the
+# index is regenerated from the lessons file, so combining them the other way round renders the
+# unmerged copy (claude-config#282's seam, used here for a second purpose).
+UNRC="$WORK/union-repoC"; UNHC="$WORK/union-homeC"
+git clone -q "$UNB" "$UNRC" 2>/dev/null; mkdir -p "$UNHC"; echo '{"hooks":{}}' > "$UNHC/settings.json"
+env SYNC_DERIVED_MERGE_RULE=0 CLAUDE_HOME="$UNHC" SYNC_REPO="$UNRC" SYNC_NO_NOTIFY=1 \
+  bash "$SCRIPT" pull >/dev/null 2>&1
+check "#315 no merge rule is written for the lessons file, with the index rule off" \
+  "! grep -q 'payload/LESSONS.md merge=' '$UNRC/.git/info/attributes' 2>/dev/null"
+un_append "$UNHA/LESSONS.md" '- **L8. eight.** a second entry from Mac A'
+unsync "$UNHA" "$UNA" >/dev/null 2>&1
+un_append "$UNHC/LESSONS.md" '- **L9. nine.** written only on Mac C'
+out_unc="$(unsync "$UNHC" "$UNRC" SYNC_DERIVED_MERGE_RULE=0)"; unc_rc=$?
+dbg "#315 two sided append with the merge rule off said: $out_unc"
+check "#315 the recovery carries the sync through too" "[ '$unc_rc' -eq 0 ]"
+check "#315 and the recovery does not hand it to Dan either" \
+  "! grep -q 'reconcile by hand' <<< \"\$out_unc\""
+check "#315 the recovery keeps both sides" \
+  "grep -q 'L8. eight' '$UNHC/LESSONS.md' && grep -q 'L9. nine' '$UNHC/LESSONS.md'"
+check "#315 and leaves no conflict marker behind" \
+  "! grep -q '^<<<<<<< ' '$UNHC/LESSONS.md'"
+
+# ---- A GENUINE COLLISION STILL STOPS ----
+# The stand down is no broader than the reason (L324). Two entries under ONE number are not two
+# appended entries, they are a clash nothing downstream can read apart, and unioning them would
+# publish both under that number.
+UNRD="$WORK/union-repoD"; UNHD="$WORK/union-homeD"
+git clone -q "$UNB" "$UNRD" 2>/dev/null; mkdir -p "$UNHD"; echo '{"hooks":{}}' > "$UNHD/settings.json"
+env CLAUDE_HOME="$UNHD" SYNC_REPO="$UNRD" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+un_append "$UNHA/LESSONS.md" '- **L11. eleven.** Mac A meant this one'
+unsync "$UNHA" "$UNA" >/dev/null 2>&1
+un_append "$UNHD/LESSONS.md" '- **L11. eleven.** Mac D meant something else entirely'
+out_und="$(unsync "$UNHD" "$UNRD")"; und_rc=$?
+dbg "#315 a genuine number collision said: $out_und"
+check "#315 a collision on one number is refused rather than combined" \
+  "[ '$und_rc' -ne 0 ]"
+check "#315 and the refusal names the number that clashed" \
+  "line_has \"\$out_und\" 'L11' 'LESSONS\.md'"
+check "#315 and nothing was published holding the number twice" \
+  "[ \"\$(grep -c 'L11\\.' '$UNRD/payload/LESSONS.md' 2>/dev/null || echo 0)\" -le 1 ]"
+
+section "== a merge that never reached the repo is not a successful sync (claude-config#312) =="
+# On 2026-09-04 a reconcile merged LESSONS.md and printed both "nothing was dropped" and
+# "Synced (sent local changes, pulled remote)". Both sentences were true ABOUT THE LIVE COPY under
+# ~/.claude, which held 472 lessons, while the copy committed in the repo held 468: four entries
+# existed on that one machine only, so the other Mac would never have received them and an
+# overwrite of the live file would have destroyed them.
+#
+# The mechanism is not a bug in the merge, it is the ORDER. Staging holds back a path this Mac has
+# not applied yet, so the local entry is not published; the pull then brings the other Mac's
+# version; and the apply merges the two into the LIVE file, which nothing sends. The run that
+# merges cannot say whether its merge reached the repo, and it reported success either way (L3,
+# L98).
+unset SYNC_NO_GIT
+MPB="$WORK/mpub-bare.git"; git init -q --bare "$MPB"
+MPA="$WORK/mpub-repoA"; git clone -q "$MPB" "$MPA" 2>/dev/null
+MPHA="$WORK/mpub-homeA"; mkdir -p "$MPHA"
+echo '{"hooks":{}}' > "$MPHA/settings.json"
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$MPHA/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body one\n\n## Data safety\n\n- **L2. two.** body two\n' > "$MPHA/LESSONS.md"
+mpsync(){ local h="$1" r="$2"; shift 2; env CLAUDE_HOME="$h" SYNC_REPO="$r" SYNC_NO_NOTIFY=1 "$@" bash "$SCRIPT" sync 2>&1; }
+mpsync "$MPHA" "$MPA" >/dev/null 2>&1
+MPRB="$WORK/mpub-repoB"; MPHB="$WORK/mpub-homeB"
+git clone -q "$MPB" "$MPRB" 2>/dev/null; mkdir -p "$MPHB"; echo '{"hooks":{}}' > "$MPHB/settings.json"
+env CLAUDE_HOME="$MPHB" SYNC_REPO="$MPRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#312 both Macs start from the same published lessons" "grep -q 'L2. two' '$MPHB/LESSONS.md'"
+
+# The other Mac publishes, and this clone RECEIVES that commit without applying it, which is the
+# state unapplied_paths exists to describe: the payload has moved and this Mac's config has not.
+# It is what makes staging hold this Mac's own edit back, and holding it back is the whole
+# mechanism. Reached the same way the tool reaches it, by moving the clone's head, rather than
+# through a seam: any run whose apply does not follow its pull leaves exactly this.
+printf -- '- **L4. four.** written only on Mac A\n' >> "$MPHA/LESSONS.md"
+mpsync "$MPHA" "$MPA" >/dev/null 2>&1
+mp_applied_before="$(cat "$MPRB/.last-applied" 2>/dev/null || true)"
+git -C "$MPRB" pull -q --rebase origin "$(git -C "$MPRB" symbolic-ref --short HEAD)" 2>/dev/null || true
+check "#312 the clone really did receive a commit it has not applied" \
+  "[ -n \"\$mp_applied_before\" ] && [ \"\$mp_applied_before\" != \"\$(git -C '$MPRB' rev-parse HEAD)\" ]"
+python3 - "$MPHB/LESSONS.md" <<'MP_PY'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+old = "- **L1. one.** body one\n"
+assert t.count(old) == 1
+open(p, "w").write(t.replace(old, old + "- **L5. five.** written only on Mac B\n"))
+MP_PY
+out_mp="$(mpsync "$MPHB" "$MPRB")"; mp_rc=$?
+dbg "#312 the reconcile said: $out_mp"
+check "#312 the reconcile completes" "[ '$mp_rc' -eq 0 ]"
+# The state the incident left, asserted from both sides. The live copy holding everything is
+# exactly what made the old message truthful and useless.
+check "#312 the live copy holds both Macs' entries" \
+  "grep -q 'L4. four' '$MPHB/LESSONS.md' && grep -q 'L5. five' '$MPHB/LESSONS.md'"
+check "#312 and so does the copy committed in the repo" \
+  "grep -q 'L5. five' '$MPRB/payload/LESSONS.md'"
+# The index travels in the SAME commit. It used to sit in three states at once, so the index the
+# other Mac loads named a shorter list than the file beside it.
+check "#312 the published index lists the merged entry too" \
+  "grep -q 'L5. five' '$MPRB/payload/LESSONS-INDEX.md'"
+check "#312 the index and the lessons file were committed together" \
+  "[ -z \"\$(git -C '$MPRB' status --porcelain -- payload)\" ]"
+# And it reached the SHARED repo, not just this clone: the other Mac reads that one. Read into a
+# variable first: a producer piped into `grep -q` is a short circuiting pipeline, and under
+# pipefail the producer being killed fails the whole check (L183).
+mp_origin="$(git -C "$MPRB" show "origin/$(git -C "$MPRB" symbolic-ref --short HEAD):payload/LESSONS.md" 2>/dev/null || true)"
+check "#312 the merged entry reached the shared repo" \
+  "grep -q 'L5. five' <<< \"\$mp_origin\""
+check "#312 and the run says the merge was published" \
+  "line_has \"\$out_mp\" 'published' 'LESSONS\.md'"
+check "#312 and still reports the sync as done" "grep -q '^Synced' <<< \"\$out_mp\""
+
+# ---- THE REFUSAL ----
+# A merge that could NOT be published must not be reported as a sync that worked, which is the
+# whole of this issue. Reached through a real path rather than a seam: a file already holding one
+# number twice is held back by the publish gate, so the merged entries genuinely cannot travel.
+MPRC="$WORK/mpub-repoC"; MPHC="$WORK/mpub-homeC"
+git clone -q "$MPB" "$MPRC" 2>/dev/null; mkdir -p "$MPHC"; echo '{"hooks":{}}' > "$MPHC/settings.json"
+env CLAUDE_HOME="$MPHC" SYNC_REPO="$MPRC" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+printf -- '- **L6. six.** a second entry from Mac A\n' >> "$MPHA/LESSONS.md"
+mpsync "$MPHA" "$MPA" >/dev/null 2>&1
+python3 - "$MPHC/LESSONS.md" <<'MP_PY2'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+old = "- **L1. one.** body one\n"
+assert t.count(old) == 1
+open(p, "w").write(t.replace(old, old + "- **L7. seven.** written on Mac C\n- **L7. seven again.** and the same number twice\n"))
+MP_PY2
+out_mpc="$(mpsync "$MPHC" "$MPRC")"; mpc_rc=$?
+dbg "#312 a merge that cannot be published said: $out_mpc"
+check "#312 a merge that could not be published is not reported as a done sync" \
+  "! grep -q '^Synced' <<< \"\$out_mpc\""
+check "#312 and it says which file did not reach the repo" \
+  "line_has \"\$out_mpc\" 'did NOT reach' 'LESSONS\.md'"
+check "#312 and the run exits non-zero so the watcher can see it" "[ '$mpc_rc' -ne 0 ]"
+# Nothing of the operator's was destroyed to produce that refusal. Asserted on the entry TEXT
+# rather than its number: the collision settling legitimately renumbers this Mac's unsent entry, so
+# a check on the number would go red on the merge working correctly (L103).
+check "#312 the merged entries are still on this Mac" \
+  "grep -q 'six\.\*\* a second entry from Mac A' '$MPHC/LESSONS.md' && grep -q 'written on Mac C' '$MPHC/LESSONS.md'"
+# And the refusal is about the file, not about a number that happens to be free: the number it
+# names is the one actually used twice in the file it names.
+check "#312 the refusal names the file that was held back" \
+  "line_has \"\$out_mpc\" 'did NOT reach' 'LESSONS\.md \\(L[0-9]'"
+
+# ---- NO REGRESSION ON THE ORDINARY RUN ----
+# A reconcile that merged nothing must be unaffected: it says what it always said, and says nothing
+# about publishing a merge that never happened (L11).
+out_mpq="$(mpsync "$MPHB" "$MPRB")"
+dbg "#312 a reconcile with nothing merged said: $out_mpq"
+check "#312 a reconcile with nothing to merge still reports the sync as done" \
+  "grep -q '^Synced' <<< \"\$out_mpq\""
+check "#312 and says nothing about publishing a merge" \
+  "! grep -q 'did NOT reach' <<< \"\$out_mpq\""
+
+section "== abandoned scratch is reclaimed unasked, and a killed run leaves a trace (claude-config#314) =="
+# status reported 73 abandoned scratch directories holding 43 MB, every one belonging to a run
+# killed before it could clean up after itself, and told the reader to type a command. Nothing did,
+# so the count only grew while reading as routine noise, and a report whose remedy is always a
+# manual command is one people stop reading (L36).
+#
+# claude-config#251 had already put a daily sweep in the watch daemon, and it never fired. Its
+# clock was a variable set to "now" when the loop STARTED, held in memory only, and the daemon is
+# restarted every time claude-sync itself changes, which here is most days. A twenty four hour
+# timer that restarts more often than daily never reaches its own deadline (L169, L175). So the
+# cadence is a stamp on disk that a restart cannot reset, and it is read by every mutating run
+# rather than by the daemon alone, so a Mac with no watcher reclaims its scratch too.
+RSR="$WORK/reap-root"; RSH="$WORK/reap-home"; RSP="$WORK/reap-repo"
+mkdir -p "$RSR/claude-sync" "$RSH" "$RSP/payload"; echo '{"hooks":{}}' > "$RSH/settings.json"
+# A run of a MUTATING command, which is where a run leaves scratch. status is asked separately
+# below and must not reclaim anything.
+rs_run(){ env SYNC_SCRATCH_ROOT="$RSR" CLAUDE_HOME="$RSH" SYNC_REPO="$RSP" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 "$@" bash "$SCRIPT" pull 2>&1; }
+rs_plant(){   # $1 = name  $2 = age in seconds
+  : > "$RSR/claude-sync/$1"
+  touch -t "$(date -v "-$2S" '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "-$2 seconds" '+%Y%m%d%H%M.%S')" "$RSR/claude-sync/$1"
+}
+# Older than the sweep's own threshold, and younger than it, so this measures the age rule rather
+# than "everything in the directory went".
+rs_plant claude-sync-work.OLD 99999
+rs_plant claude-sync-work.YOUNG 5
+rs_run >/dev/null 2>&1
+check "#314 a mutating run reclaims scratch old enough to be abandoned" \
+  "[ ! -e '$RSR/claude-sync/claude-sync-work.OLD' ]"
+check "#314 and leaves scratch too young to be" \
+  "[ -e '$RSR/claude-sync/claude-sync-work.YOUNG' ]"
+check "#314 the cadence is written down where a restart cannot reset it" \
+  "[ -f '$RSR/claude-sync/.last-reap' ]"
+
+# THE DURABLE CLOCK, which is the whole of the defect. A second run is a different process with a
+# different memory, and it must READ the stamp rather than start its own twenty four hours.
+rs_plant claude-sync-work.OLD2 99999
+rs_run >/dev/null 2>&1
+check "#314 a second run inside the interval does not sweep again" \
+  "[ -e '$RSR/claude-sync/claude-sync-work.OLD2' ]"
+# And once the stamp is old, the very next run sweeps, whatever happened in between.
+touch -t "$(date -v-3d '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '-3 days' '+%Y%m%d%H%M.%S')" "$RSR/claude-sync/.last-reap"
+rs_run >/dev/null 2>&1
+check "#314 and once the stamp is old the next run sweeps" \
+  "[ ! -e '$RSR/claude-sync/claude-sync-work.OLD2' ]"
+
+# status is an INSPECTION and must not remove anything, however overdue the sweep is (L206). It is
+# the command somebody runs to look around, and a look that deletes is the defect that rule names.
+rs_plant claude-sync-work.SEEN 99999
+touch -t "$(date -v-3d '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '-3 days' '+%Y%m%d%H%M.%S')" "$RSR/claude-sync/.last-reap"
+out_rs="$(env SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$RSR" CLAUDE_HOME="$RSH" SYNC_REPO="$RSP" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#314 status over overdue scratch said: $(printf '%s' "$out_rs" | tr '\n' '|')"
+check "#314 status removes nothing, however overdue the sweep is" \
+  "[ -e '$RSR/claude-sync/claude-sync-work.SEEN' ]"
+check "#314 and still reports what it found" \
+  "line_has \"\$out_rs\" 'abandoned' 'older than'"
+
+# ---- WHAT THE KILLED RUNS WERE DOING ----
+# 73 of them is a signal about the tool rather than about the temp folder, and the scratch is the
+# only surviving evidence of each one. A count alone cannot be acted on; the command each dead run
+# was executing can be (L148, L114).
+rs_plant claude-sync-run.KILLED 99999
+printf '2026-09-01T02:03:04\t4242\tsync\n' > "$RSR/claude-sync/claude-sync-run.KILLED"
+touch -t "$(date -v-2d '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '-2 days' '+%Y%m%d%H%M.%S')" "$RSR/claude-sync/claude-sync-run.KILLED"
+out_rs2="$(env SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$RSR" CLAUDE_HOME="$RSH" SYNC_REPO="$RSP" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#314 status over a killed run's note said: $(printf '%s' "$out_rs2" | tr '\n' '|')"
+check "#314 the report says what the killed runs were doing" \
+  "line_has \"\$out_rs2\" 'were running' 'sync'"
+# A run that FINISHES leaves no note, or the trace becomes the litter it exists to explain.
+RSR2="$WORK/reap-root2"; mkdir -p "$RSR2"
+env SYNC_SCRATCH_ROOT="$RSR2" CLAUDE_HOME="$RSH" SYNC_REPO="$RSP" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#314 a run that finishes leaves no note behind" \
+  "[ -z \"\$(ls -A '$RSR2/claude-sync' 2>/dev/null | grep '^claude-sync-run\\.' || true)\" ]"
+# THE CONTROL, and it is the one that matters. Without it the whole trace could be inert and the
+# check above would still pass, because a directory with no notes in it and a tool that writes none
+# look identical (L1, L98, L159). Watched through a named seam rather than by racing a real kill
+# against a run that takes milliseconds.
+RSR3="$WORK/reap-root3"; mkdir -p "$RSR3"
+out_rs3="$(env SYNC_SCRATCH_NOTE_ECHO=1 SYNC_SCRATCH_ROOT="$RSR3" CLAUDE_HOME="$RSH" SYNC_REPO="$RSP" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "#314 a run reported its own note: $(printf '%s' "$out_rs3" | grep SCRATCH-NOTE || true)"
+check "#314 a run really does write a note while it runs" \
+  "line_has \"\$out_rs3\" 'SCRATCH-NOTE' 'claude-sync-run\.'"
+# And it says what the run was DOING, which is the whole point of keeping it.
+check "#314 and the note names the command the run was executing" \
+  "line_has \"\$out_rs3\" 'SCRATCH-NOTE' ' pull\$'"
+check "#314 and that note is gone once the run finishes" \
+  "[ -z \"\$(ls -A '$RSR3/claude-sync' 2>/dev/null | grep '^claude-sync-run\.' || true)\" ]"
+check "#314 the run really did use that scratch root" \
+  "[ -d '$RSR2/claude-sync' ]"
+
 section "== the suite never reads or writes anything of the operator's (claude-config#301) =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
@@ -12435,12 +12841,19 @@ check "SYNC_LAUNCHAGENTS is redirected suite-wide" "[ \"\$SYNC_LAUNCHAGENTS\" = 
 # This file, found from where it is RUNNING rather than written down, so a relocated copy reads
 # itself rather than the one in the checkout it came from.
 SUITE_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-HOMESEAMS="$(grep -oE '\$\{(SYNC|CLAUDE)_[A-Z_]+:-\$HOME/' "$SCRIPT" 2>/dev/null \
-             | sed 's/^\${//; s/:-\$HOME\/$//' | sort -u)"
+# WIDENED to the shared temp directory as well (claude-config#314). It is not the operator's home,
+# and it is just as much theirs: SYNC_SCRATCH_ROOT defaults into it and the automatic sweep REMOVES
+# what it finds, so a seam left unset here means every mutating run in this suite reclaims the
+# operator's own scratch. The rule is "a default pointing at a store the machine shares", and
+# writing it as two patterns rather than one is what keeps that rule derived instead of a list.
+HOMESEAMS="$( { grep -oE '\$\{(SYNC|CLAUDE)_[A-Z_]+:-\$HOME/' "$SCRIPT" 2>/dev/null \
+                 | sed 's/^\${//; s/:-\$HOME\/$//'
+               grep -oE '\$\{(SYNC|CLAUDE)_[A-Z_]+:-\$\{TMPDIR' "$SCRIPT" 2>/dev/null \
+                 | sed 's/^\${//; s/:-\${TMPDIR$//'; } | sort -u)"
 # The derivation has to find some, or this passes by reading nothing (L98, L1).
 homeseam_n="$(printf '%s\n' "$HOMESEAMS" | grep -c . || true)"
-dbg "#301 seams defaulting into the home directory: $(printf '%s' "$HOMESEAMS" | tr '\n' ' ')"
-check "#301 the seam derivation really found the seams" "[ \"\${homeseam_n:-0}\" -ge 5 ]"
+dbg "#301 seams defaulting into a store the machine shares: $(printf '%s' "$HOMESEAMS" | tr '\n' ' ')"
+check "#301 the seam derivation really found the seams" "[ \"\${homeseam_n:-0}\" -ge 6 ]"
 unseamed=""
 while IFS= read -r _hs; do
   [ -n "$_hs" ] || continue
@@ -12449,7 +12862,7 @@ done <<HOME_SEAMS
 $HOMESEAMS
 HOME_SEAMS
 dbg "#301 seams not exported by this suite:${unseamed:- none}"
-check "#301 every seam defaulting into the operator's home is redirected by this suite" "[ -z \"\$unseamed\" ]"
+check "#301 every seam defaulting into a store the machine shares is redirected by this suite" "[ -z \"\$unseamed\" ]"
 
 suite_profile
 echo ""
