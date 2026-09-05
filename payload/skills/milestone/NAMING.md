@@ -111,7 +111,12 @@ satisfy the gate. The exemption is an exact title match, so `Ungrouped work and
 other things` is an ordinary title and still needs approval.
 
 Its progress bar never completes. That is expected: it is a holding pen, not a
-feature.
+feature. And because it never completes, closing it is easy to do by accident: anyone
+tidying a backlog and closing every milestone with no open issues will close this one
+too, and the next standalone issue then has nowhere to go. So a CLOSED catch-all is
+reopened without approval, on the same grounds its creation is exempt, and the reopen
+is announced rather than done in silence. Every other closed title still stops and
+asks, because closing one of those was a decision about a feature.
 
 ### Who creates a milestone
 

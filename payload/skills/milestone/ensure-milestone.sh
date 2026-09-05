@@ -246,6 +246,47 @@ case "$kind" in
     exit 0
     ;;
   CLOSED)
+    # THE CATCH-ALL REOPENS ITSELF (claude-config#317).
+    #
+    # Creating the pen is already exempt from the approval rule, because choosing it
+    # is not a decision anyone needs to make. A CLOSED pen is the same situation and
+    # was not treated as one: the branch below sent every standalone issue to a
+    # person, and there is nothing for that person to decide.
+    #
+    # It is reachable in ordinary use rather than a corner. The pen's own description
+    # says it never completes, so anybody tidying a backlog and closing the milestones
+    # with no open issues closes it, and the next issue then cannot be filed at all.
+    # That happened here on 2026-09-04. The exemption stays no broader than its reason
+    # (L362): every other closed title still stops and asks, because closing one of
+    # those was somebody's decision about a feature.
+    if is_catch_all "$title"; then
+      reopened="$(gh api -X PATCH "repos/$repo/milestones/$f2" -f state=open 2>"$gh_err")"
+      if [[ $? -ne 0 ]]; then
+        echo "Failed to reopen the catch-all milestone \"$f3\" (#$f2) in $repo: $(tr '\n' ' ' <"$gh_err")" >&2
+        exit 6
+      fi
+      # READ BACK, never assumed. A PATCH that returns success and leaves the state
+      # alone is indistinguishable from one that worked, and the caller would then
+      # file against a milestone that is still closed (L3).
+      state_now="$(printf '%s' "$reopened" | python3 -c '
+import sys, json
+try:
+    print(json.load(sys.stdin).get("state", ""))
+except Exception:
+    print("")
+')"
+      if [[ "$state_now" != "open" ]]; then
+        echo "Asked GitHub to reopen the catch-all milestone \"$f3\" (#$f2) in $repo and it reports state \"${state_now:-unreadable}\" rather than open. Nothing was filed against it." >&2
+        exit 6
+      fi
+      # SAID, not silent. A pen that was closed and is open again is a state change
+      # somebody made deliberately, and undoing it without a word would leave them
+      # wondering why it came back (L11).
+      echo "CATCH-ALL-REOPENED #$f2 \"$f3\" in $repo was closed and has been reopened, which needs no approval: it is the standalone holding pen and is never finished."
+      echo "MILESTONE-EXISTS $f2 $f3 $f4"
+      echo "MILESTONE-TITLE $f3"
+      exit 0
+    fi
     echo "CLOSED-MATCH #$f2 \"$f3\" already exists in $repo but is closed ($f4)."
     echo "Ask before proceeding: reopen that milestone, attach the issue to a different open one, or pick a new distinct title."
     exit 3

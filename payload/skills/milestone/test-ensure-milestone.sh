@@ -412,6 +412,50 @@ check_eq "an existing catch-all is reused" "0" "$rc"
 check "the existing catch-all is reported" "MILESTONE-EXISTS 12" "$out"
 check_eq "reusing the catch-all creates nothing" "0" "$(created_count)"
 
+# --- 11f. a CLOSED catch-all is reopened rather than handed to a person ---
+# Creating the pen needs no approval because choosing it is not a decision anyone
+# makes. A closed one is the same situation: its own description says it never
+# completes, so anyone tidying a backlog and closing every milestone with no open
+# issues closes it, and the next standalone issue then cannot be filed at all.
+# Measured on claude-config 2026-09-04, which is exactly how it was closed and
+# exactly what happened next (claude-config#317).
+cat >"$TMP/closedcatchall.json" <<'JSON'
+[
+  { "number": 3, "title": "Onboarding revamp", "state": "open", "html_url": "https://github.com/acme/widgets/milestone/3" },
+  { "number": 12, "title": "Ungrouped", "state": "closed", "html_url": "https://github.com/acme/widgets/milestone/12" }
+]
+JSON
+cat >"$TMP/reopened.json" <<'JSON'
+{ "number": 12, "title": "Ungrouped", "state": "open", "html_url": "https://github.com/acme/widgets/milestone/12" }
+JSON
+out="$(GH_FIXTURE="$TMP/closedcatchall.json" GH_CREATED="$TMP/reopened.json" ensure acme/widgets "Ungrouped")"; rc=$?
+check_eq "a closed catch-all is reopened rather than refused" "0" "$rc"
+check "the reopen is reported rather than done in silence" "CATCH-ALL-REOPENED" "$out"
+check "the caller still gets the title it has to file against" "MILESTONE-TITLE Ungrouped" "$out"
+# The one that exists, not a twin: a second pen is the split that makes both halves
+# invisible to whichever tool reads the other.
+check "it reopens the pen that exists" "milestones/12" "$(cat "$TMP/calls.log")"
+check "and it asks for the open state" "state=open" "$(cat "$TMP/calls.log")"
+
+# A reopen that did not take must not be reported as one. The answer is read back
+# rather than assumed, so a call that succeeded and changed nothing is caught.
+cat >"$TMP/stillclosed.json" <<'JSON'
+{ "number": 12, "title": "Ungrouped", "state": "closed", "html_url": "https://github.com/acme/widgets/milestone/12" }
+JSON
+out="$(GH_FIXTURE="$TMP/closedcatchall.json" GH_CREATED="$TMP/stillclosed.json" ensure acme/widgets "Ungrouped")"; rc=$?
+check_eq "a reopen that did not take is a failure" "6" "$rc"
+check_not "and it is not reported as a reopen" "CATCH-ALL-REOPENED" "$out"
+
+# THE EXEMPTION IS NO BROADER THAN ITS REASON. An ordinary closed title is somebody
+# else's decision to close and still stops to ask.
+out="$(ensure acme/widgets "Legacy cleanup")"; rc=$?
+check_eq "an ordinary closed title still stops" "3" "$rc"
+check "and still says it is closed" "CLOSED-MATCH" "$out"
+check_eq "and reopens nothing" "0" "$(created_count)"
+
+out="$(ensure acme/widgets "Ungrouped work and other things")"; rc=$?
+check_eq "a title merely containing the pen's word is not the pen" "5" "$rc"
+
 # --- 11d. the documented override lets a genuine exception through ---
 out="$(ALLOW_ANY_MILESTONE_TITLE=1 ensure acme/widgets "Say it once, and only when Dan can act on it" --create-approved --for-issues 2)"; rc=$?
 check_eq "the override creates the milestone" "0" "$rc"
