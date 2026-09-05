@@ -2166,11 +2166,25 @@ window is a count rather than a boundary.
   permissive side with no error ever raised. Parse through one shared helper that
   returns a value or null, and map null to the fail-safe side at each call site.
   (slate#1169, slate#1171)
-- **L71. A watchdog must not share the abort-on-error behaviour of the work it watches**,
-  because an incidental failure then kills the watchdog silently and leaves the work
-  running unobserved, which looks exactly like a healthy system. Give it its own error
-  handling and a fail-safe exit that stops the work it can no longer vouch for.
-  (overture#2106, overture#2109)
+- **L71. A watchdog's own liveness must never depend on the health of what it watches**, in
+  either direction. It must not share the abort-on-error behaviour of the work, because an
+  incidental failure then kills the watchdog silently and leaves the work running unobserved,
+  which looks exactly like a healthy system. And it must not be judged by the same instrument
+  it applies to that work: a watchdog that REPORTS BY FAILING, and that reads its own last
+  SUCCESS, is marked unhealthy by its own correct alarm and can never clear itself, because
+  every later run finds the gap one interval wider than the last. So give it its own error
+  handling, a fail-safe exit that stops the work it can no longer vouch for, and where it
+  judges itself, judge it on whether it still RUNS rather than on whether it passed. A run
+  that ran and failed is already reporting through its own failure; being dispatched at all is
+  the only thing about itself that nothing else would say.
+  (overture#2106, overture#2109; nursedex#1039: the scheduled job watchdog derives its watched
+  set from the workflow files, so it has always included itself, and it judged every entry on
+  its last successful scheduled run. It correctly reported a failing daily health check and
+  exited 1, which stopped its own success clock, so the next day it found ITSELF 47 hours
+  overdue, failed for that reason, and pushed its own clock a further day out. The health
+  check had recovered within hours of being reported and nothing else was ever wrong, while
+  nothing was watching the other 21 jobs for two days. A hand started run could not clear it
+  either, because the reading deliberately counts only scheduled runs)
 - **L77. An error deliberately classified as EXPECTED (a lost race, a declined payment, a
   rejected duplicate, a taken slot) must still be counted against a RATE.** The code waving
   it through has no notion of volume, so one benign instance and a systemic outage arrive on

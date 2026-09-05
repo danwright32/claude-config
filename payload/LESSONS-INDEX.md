@@ -203,7 +203,7 @@ to decide something: the body is where the failure it came from is described.
 - L230. A redaction or anonymisation step that changes the CONTAINER while leaving the identity inside it has anonymised nothing, and a guard written the same way passes every real person wearing a safe container.
 - L152. A change is usually reported by the surfaces that show what is still OUTSTANDING (a badge, a waiting list, a standing question), so an operation that RESOLVES everything silences every one of them and the most complete success is the one the product says least about.
 - L50. A value parsed from storage or input must never feed a comparison directly.
-- L71. A watchdog must not share the abort-on-error behaviour of the work it watches
+- L71. A watchdog's own liveness must never depend on the health of what it watches
 - L77. An error deliberately classified as EXPECTED (a lost race, a declined payment, a rejected duplicate, a taken slot) must still be counted against a RATE.
 - L94. A request or payload assembled in two places, a builder plus a caller that adds more fields, has nowhere its completeness can be seen, so a field missing from both halves is invisible to a reader of either.
 - L78. A report of what changed must be assembled from the finished state, never from one of the code paths that change it.
