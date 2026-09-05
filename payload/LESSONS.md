@@ -3296,6 +3296,20 @@ window is a count rather than a boundary.
   remedy is to record the old to new mapping: no mapping recovers history keyed on the id that
   was thrown away)
 
+- **L402. A control that EDITS a value must write the exact field the consuming path READS, so where a
+  per item override beats a shared default at the point of use, an edit control offered over the default
+  silently discards the edit for every item holding an override, while the surface reports it as
+  applied.** The review surface can be perfectly honest and the defect still ships, which is what makes
+  it hard to see.
+  (overture#3549, where a queue card previewed a show's shared draft with the Edit button and an
+  "Edited" badge under it, while the send path composed from a per recipient override that beat that
+  shared body for any directly addressed performer. The confirmation sheet and a smaller "will instead
+  receive" block both showed the real outgoing text, so nothing was lying, and an edit that added the
+  one sentence naming a recital Dan had already photographed for that performer would have been
+  discarded on send. The override had been read only since the phase that would have made it editable
+  was deferred and never built, so no control anywhere wrote the field the send reads. Distinct from
+  L64, which is about the reviewed artifact matching what ships: here it did)
+
 
 ## Security and privacy
 
