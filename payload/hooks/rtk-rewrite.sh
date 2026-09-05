@@ -112,7 +112,8 @@ if rtk --help 2>/dev/null | awk -v want="$rtk_dest_sub" '
   exit 0
 fi
 
-# NEVER rewrite a FILE COMPARISON into `rtk diff` (claude-config#318).
+# NEVER rewrite into a destination MEASURED to report a different verdict than the tool it
+# replaces (claude-config#318, claude-config#319).
 #
 # Two measurements against rtk 0.31.0 on 2026-09-05. `rtk diff` on two one line files that differ
 # prints the difference and EXITS 0, where the real diff exits 1, so anything judging by the exit
@@ -127,13 +128,27 @@ fi
 # cross-check against each other are the output and the exit code, and the exit code here carries
 # no verdict at all.
 #
-# No derivation from rtk's help for this one, unlike the summarisers above. The only thing a help
-# line offers to match on is the word "diff" in a description, and the day `git`'s description
-# mentions diffs that match refuses every git rewrite, which is the largest saving this hook
-# exists for. `rtk git diff` is a different destination and was measured to carry its exit code
-# through (a dirty tree gave 1 through both the real git and rtk), so it is untouched here and
-# `git diff --quiet` goes on answering.
-if [ "$rtk_dest_sub" = "diff" ]; then exit 0; fi
+# `rtk find` is the second, found by the check rather than by a person: `find ./no-such-dir` exits
+# 1 and `rtk find ./no-such-dir` exits 0, so a search over a path that does not exist, a typo or
+# something since moved, reads as a search that ran and found nothing (L100, L320).
+#
+# No derivation from rtk's help for these, unlike the summarisers above. The only thing a help line
+# offers to match on is a word in a description, and the day `git`'s description mentions diffs
+# that match refuses every git rewrite, which is the largest saving this hook exists for. What
+# stops this list being the only guard is not a cleverer pattern, it is a MEASUREMENT:
+# `check-rtk-exit-fidelity.sh` runs a genuinely failing case and a genuinely succeeding one through
+# both the real tool and whatever this hook substitutes, and fails when a destination it ALLOWS
+# disagrees. So the next liar is found by the check rather than by somebody remembering to add it
+# here (L96), and a destination listed here is reported by that check as contained rather than as
+# a finding.
+#
+# `rtk git diff` is a different destination and was measured to carry its exit code through (a
+# dirty tree gave 1 through both the real git and rtk), so it is untouched here and
+# `git diff --quiet` goes on answering. So do `rtk ls`, `rtk git status` and `rtk git log`, all
+# measured to agree in both directions.
+case " diff find " in
+  *" $rtk_dest_sub "*) exit 0 ;;
+esac
 
 # No change: nothing to do.
 if [ "$CMD" = "$REWRITTEN" ]; then
