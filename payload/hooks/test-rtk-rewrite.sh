@@ -226,6 +226,43 @@ check "#259 a floor destination is still refused when the derivation reads nothi
   "$(refused_to_rewrite 'rtk playwright test')"
 rtk_help_fixture
 
+# ---------------------------------------------------------------------------
+# A FILE COMPARISON is never rewritten into `rtk diff` (claude-config#318).
+#
+# Two measurements against rtk 0.31.0 on 2026-09-05. `rtk diff` on two one line files that differ
+# prints the difference and EXITS 0, where the real diff exits 1, so anything judging by the exit
+# code reads "different" as "same" (L184: judge a command by its exit code, and here the exit code
+# lies). And comparing a regenerated lessons index against the committed one, it printed
+# "[ok] Files are identical" for two files that genuinely differ; cmp on the same pair reported
+# "differ: char 44885, line 206", and a repeat of the same command a minute later reported the
+# difference correctly. That half is intermittent, which is worse than always wrong: it was caught
+# only because the line was read by hand afterwards.
+#
+# A comparison verdict has the same property as the test verdict above, that being wrong is
+# indistinguishable from being right, and it is worse in one way: the two things a reader could
+# cross-check against each other are the output and the exit code, and the exit code here carries
+# no verdict at all. So file comparisons pass through unfiltered and everything else keeps saving
+# tokens. Refused by DESTINATION, like the two refusals above.
+#
+# There is deliberately NO derivation from rtk's help for this one, unlike the test summarisers.
+# The only thing a help line offers to match on is the word "diff" in a description, and the day
+# `git`'s description mentions diffs that match refuses every git rewrite, which is the largest
+# saving this hook exists for. The floor is the whole rule here, and what justifies it is the
+# measured exit code rather than the name.
+check "#318 a file comparison is not condensed into rtk diff" "$(refused_to_rewrite 'rtk diff a.txt b.txt')"
+check "#318 nor one carrying flags through" "$(refused_to_rewrite 'rtk diff -u old/x.md new/x.md')"
+check "#318 nor the bare subcommand" "$(refused_to_rewrite 'rtk diff')"
+
+# The control, and it is what keeps the refusal from over-reaching: `rtk git diff` is a DIFFERENT
+# destination and was measured to preserve its exit code (a dirty tree gave 1 through both the real
+# git and rtk), so it must still be rewritten. A refusal that swallowed it would take
+# `git diff --quiet` with it, which is how a script asks whether anything changed at all.
+printf 'rtk git diff --quiet\n' > "$TMPROOT/rewrite"
+out_318="$(hook 'git diff --quiet')"
+[ "$(printf '%s' "$out_318" | rewritten_to)" = "rtk git diff --quiet" ] \
+  && check "#318 and rtk git diff, which does carry its exit code, is still rewritten" ok \
+  || check "#318 and rtk git diff, which does carry its exit code, is still rewritten" "out=$out_318"
+
 # ---- rtk's integrity baseline still describes the hook beside it (claude-config#259 follow-up) ----
 # rtk keeps a sha256 of this hook in .rtk-hook.sha256 and REFUSES TO RUN AT ALL when the two
 # disagree: no rewriting, no token saving, and a tamper banner on every command. #259 edited the
