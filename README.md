@@ -22,6 +22,14 @@ so an absolute path inside one is correct on both machines. The top-level rules 
 exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
 in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split.
 
+A file stored that way never equals its payload copy byte for byte, so every comparison between the
+two sides goes through one view of the payload as it should look on THIS Mac. `claude-sync status`
+did not, and reported three files as differing on every single run when nothing had moved, which
+made the one report that would reveal genuine drift permanently carry three false alarms. It now
+asks, per file, whether the placeholder is the whole of the difference, counts the ones where it is
+and says so, and still names a file that has really changed even when it also carries the
+placeholder.
+
 One consequence, worth knowing before writing a synced file that talks about the sync: the
 placeholder is expanded wherever it appears, and nothing can tell a line that MEANS the
 placeholder from a line that means a path. A file naming it in prose, or running a shell
@@ -590,8 +598,23 @@ One run at a time, and none of them open ended:
 
 The suite and every apply create scratch in `$TMPDIR/claude-sync` and remove it on the way out. A
 run that is force-killed never gets there. `claude-sync status` reports what has been abandoned
-(how many, and how much space), the suite reclaims it at the start of each run, and
-`claude-sync reap-scratch` does it on demand.
+(how many, how much space, and what those runs were doing), every mutating run reclaims it on a
+daily cadence, the suite reclaims it at the start of each run, and `claude-sync reap-scratch` does
+it on demand.
+
+A run that creates any scratch also writes one note beside it naming the date, its process id and
+the command it was executing. The note is removed on the way out like everything else, so only a
+killed run leaves one, and `status` reports which commands the killed runs were running. A count
+says the temp folder is filling up; the commands say which part of the tool is being killed, and
+only the second can be acted on.
+
+The daily cadence is a stamp on disk rather than a timer in the watch daemon's memory. It was a
+variable set to "now" when the loop started, and the daemon is restarted every time `claude-sync`
+itself changes, so a twenty four hour timer restarting more often than daily never reached its own
+deadline and the sweep never fired: `status` reported 73 abandoned items on 2026-09-04 with a
+manual command as the only remedy. Reading it from a mutating run rather than from the daemon also
+covers a Mac with no watcher installed. `status` never removes anything, however overdue the sweep
+is: it is an inspection.
 
 Only paths carrying this tool's own names are ever touched, never "old directories in the temp
 folder": on the day this was measured that same directory held 542 anonymous ones belonging to
@@ -609,6 +632,9 @@ reads it every time whatever the interval says.
 | `SYNC_SCRATCH_ROOT` | `$TMPDIR` | The temp root. Scratch is created in the `claude-sync` directory inside it, and the sweep looks there and, on an interval, in the root itself. |
 | `SYNC_SCRATCH_DIRNAME` | `claude-sync` | The name of that directory. It is half of the pattern deciding what `reap-scratch` may remove, so anything that is not a single directory name is refused. |
 | `SYNC_SCRATCH_MAX_AGE` | `14400` | Seconds before scratch counts as abandoned. Four times the suite's own 3600 second ceiling, so the longest run the tool permits is a quarter of the way to being swept, and 2400x the 6 second sync timed on 2026-08-17. The ratio against the ceiling is checked by the suite rather than stated here, because these are one setting living in two files and #152 moved half of it. The cost is that a burst of interrupted runs is not reclaimed until four hours after the last of them. `0` turns the sweep off entirely, and a value that is not a whole number is refused rather than guessed at. |
+| `SYNC_REAP_INTERVAL` | `86400` | Seconds between automatic sweeps of the tool's own scratch directory, read from a stamp inside that directory so a restarted process cannot reset it. Only mutating commands sweep, through the same handler that releases the sync lock, so no read-only command ever removes anything. `0` sweeps on every mutating run, and a value that is not a whole number is refused. |
+| `SYNC_SCRATCH_NOTE` | `1` | Whether a run writes the note naming what it was doing beside its scratch. `0` turns it off. |
+| `SYNC_SCRATCH_NOTE_ECHO` | `0` | `1` prints the note's path and content to stderr as it is written. It exists so the writer can be watched working: without it the only observable trace is a note a killed run left behind, which a test has to plant by hand, so the whole thing could be inert and every check would still pass. |
 | `SYNC_SCRATCH_LEGACY_EVERY` | `86400` | Seconds between reads of the old flat location in the temp root. Reading it is what costs six figures of directory entries, so it is not done on every call. The cost is stated: something left there can go unreported for up to this long, though `reap-scratch` always reads it. `0` reads it every call, and a value that is not a whole number is refused. |
 
 `claude-sync status` also reports watcher processes and test runs the tool left behind, counting

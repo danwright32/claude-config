@@ -2186,6 +2186,16 @@ export SYNC_CLONE_REGISTRY="$WORK/no-such-directory/clone-registry"
 # must be structurally unable to touch live config, so the safe value is the default
 # here and individual tests override it only to point at another throwaway file.
 export SYNC_ZSHRC="$WORK/zshrc-guard"
+# The tool's scratch root, for the WHOLE suite, and for the same reason as the two seams around it
+# (claude-config#314). It defaults to the shared temp directory, which belongs to the machine, and
+# the automatic sweep REMOVES what it finds there: every mutating run this suite makes would
+# reclaim the operator's own abandoned scratch, from a test, which is the one thing a test must be
+# structurally unable to do (L2). status's reading of that directory was the same fault one degree
+# milder. Sections that are ABOUT the scratch mechanism override it with a throwaway of their own,
+# and the two that run with TMPDIR unset unset this as well, or the fallback they exist to exercise
+# would never be reached (L322).
+export SYNC_SCRATCH_ROOT="$WORK/scratch-root"
+mkdir -p "$SYNC_SCRATCH_ROOT"
 # The send-side hook suite gate is ON in production and OFF for this suite, except in the one
 # section that tests it, which unsets this and sets it again afterwards (claude-config#244, #220).
 # Without it every git-backed section that happens to touch a hook would start launching real test
@@ -2928,7 +2938,7 @@ TQH="$WORK/tq-home"; TQR="$WORK/tq-repo"
 mkdir -p "$TQH/hooks" "$TQR/payload/hooks"; echo '{"hooks":{}}' > "$TQH/settings.json"
 printf 'aaaa\n' > "$TQH/hooks/tiny.sh"
 SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" push >/dev/null 2>&1
-SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" SYNC_SCRATCH_ROOT="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
 # Asked about SCRATCH by NAME, not about everything in the directory it lives in. The tool keeps
 # its scratch in a `claude-sync` directory inside the temp root (#116), and that directory, and the
 # stamp recording when the old flat location was last swept, are both deliberately left there: they
@@ -2938,7 +2948,7 @@ _tq_litter(){ ls -A "$TMPD" "$TMPD/claude-sync" 2>/dev/null | grep '^claude-sync
 check "a clean pull leaves no temp file behind" "[ -z \"\$(_tq_litter)\" ]"
 # same on the failure path: a pull that dies must not litter either
 printf '@NOPE.md\n' > "$TQR/payload/CLAUDE.md"
-SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
+SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 TMPDIR="$TMPD" SYNC_SCRATCH_ROOT="$TMPD" CLAUDE_HOME="$TQH" SYNC_REPO="$TQR" bash "$SCRIPT" pull >/dev/null 2>&1
 check "a failed pull leaves no temp file behind"  "[ -z \"\$(_tq_litter)\" ]"
 # The control: this cannot pass by looking in the wrong place. A file planted in either location
 # has to be reported, or both checks above are satisfied by a listing of nothing (L143, L159).
@@ -5771,13 +5781,15 @@ check "#38 the date helper still answers with GNU-shaped tools" \
 # reason unrelated to the code (L159) and does its real work only in CI, which is the argument for
 # having CI rather than an argument against the checks. A static sweep for the whole class, every
 # environment variable expanded with an operator and no default, found this as the only instance.
-_noTMPDIR="$(env -u TMPDIR SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1 || true)"
+_noTMPDIR="$(env -u TMPDIR -u SYNC_SCRATCH_ROOT SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1 || true)"
 # The positive control first: without it, a child that died for some entirely different reason
 # would satisfy the assertion below by never getting far enough to say "unbound variable" (L159).
 check "#38 the suite runs with no TMPDIR set at all" "grep -q '^PASS=' <<< \"\$_noTMPDIR\""
 check "#38 and names no unbound variable"            "! grep -q 'unbound variable' <<< \"\$_noTMPDIR\""
 # The tool itself too, and separately, because it is the half that runs unattended on both Macs.
-_noTMPDIRtool="$(env -u TMPDIR SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" bash "$SCRIPT" status 2>&1 || true)"; _noTMPDIRrc=$?
+# SYNC_SCRATCH_ROOT unset as well, or the suite-wide redirect answers for TMPDIR and the
+# fallback this exists to exercise is never reached (L322).
+_noTMPDIRtool="$(env -u TMPDIR -u SYNC_SCRATCH_ROOT SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" bash "$SCRIPT" status 2>&1 || true)"; _noTMPDIRrc=$?
 check "#38 the tool runs with no TMPDIR set either"  "[ '$_noTMPDIRrc' -eq 0 ]"
 check "#38 and it names no unbound variable"         "! grep -q 'unbound variable' <<< \"\$_noTMPDIRtool\""
 
@@ -12664,9 +12676,12 @@ check "#312 the published index lists the merged entry too" \
   "grep -q 'L5. five' '$MPRB/payload/LESSONS-INDEX.md'"
 check "#312 the index and the lessons file were committed together" \
   "[ -z \"\$(git -C '$MPRB' status --porcelain -- payload)\" ]"
-# And it reached the SHARED repo, not just this clone: the other Mac reads that one.
+# And it reached the SHARED repo, not just this clone: the other Mac reads that one. Read into a
+# variable first: a producer piped into `grep -q` is a short circuiting pipeline, and under
+# pipefail the producer being killed fails the whole check (L183).
+mp_origin="$(git -C "$MPRB" show "origin/$(git -C "$MPRB" symbolic-ref --short HEAD):payload/LESSONS.md" 2>/dev/null || true)"
 check "#312 the merged entry reached the shared repo" \
-  "git -C '$MPRB' show \"origin/\$(git -C '$MPRB' symbolic-ref --short HEAD):payload/LESSONS.md\" 2>/dev/null | grep -q 'L5. five'"
+  "grep -q 'L5. five' <<< \"\$mp_origin\""
 check "#312 and the run says the merge was published" \
   "line_has \"\$out_mp\" 'published' 'LESSONS\.md'"
 check "#312 and still reports the sync as done" "grep -q '^Synced' <<< \"\$out_mp\""
@@ -12715,6 +12730,95 @@ check "#312 a reconcile with nothing to merge still reports the sync as done" \
 check "#312 and says nothing about publishing a merge" \
   "! grep -q 'did NOT reach' <<< \"\$out_mpq\""
 
+section "== abandoned scratch is reclaimed unasked, and a killed run leaves a trace (claude-config#314) =="
+# status reported 73 abandoned scratch directories holding 43 MB, every one belonging to a run
+# killed before it could clean up after itself, and told the reader to type a command. Nothing did,
+# so the count only grew while reading as routine noise, and a report whose remedy is always a
+# manual command is one people stop reading (L36).
+#
+# claude-config#251 had already put a daily sweep in the watch daemon, and it never fired. Its
+# clock was a variable set to "now" when the loop STARTED, held in memory only, and the daemon is
+# restarted every time claude-sync itself changes, which here is most days. A twenty four hour
+# timer that restarts more often than daily never reaches its own deadline (L169, L175). So the
+# cadence is a stamp on disk that a restart cannot reset, and it is read by every mutating run
+# rather than by the daemon alone, so a Mac with no watcher reclaims its scratch too.
+RSR="$WORK/reap-root"; RSH="$WORK/reap-home"; RSP="$WORK/reap-repo"
+mkdir -p "$RSR/claude-sync" "$RSH" "$RSP/payload"; echo '{"hooks":{}}' > "$RSH/settings.json"
+# A run of a MUTATING command, which is where a run leaves scratch. status is asked separately
+# below and must not reclaim anything.
+rs_run(){ env SYNC_SCRATCH_ROOT="$RSR" CLAUDE_HOME="$RSH" SYNC_REPO="$RSP" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 "$@" bash "$SCRIPT" pull 2>&1; }
+rs_plant(){   # $1 = name  $2 = age in seconds
+  : > "$RSR/claude-sync/$1"
+  touch -t "$(date -v "-$2S" '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "-$2 seconds" '+%Y%m%d%H%M.%S')" "$RSR/claude-sync/$1"
+}
+# Older than the sweep's own threshold, and younger than it, so this measures the age rule rather
+# than "everything in the directory went".
+rs_plant claude-sync-work.OLD 99999
+rs_plant claude-sync-work.YOUNG 5
+rs_run >/dev/null 2>&1
+check "#314 a mutating run reclaims scratch old enough to be abandoned" \
+  "[ ! -e '$RSR/claude-sync/claude-sync-work.OLD' ]"
+check "#314 and leaves scratch too young to be" \
+  "[ -e '$RSR/claude-sync/claude-sync-work.YOUNG' ]"
+check "#314 the cadence is written down where a restart cannot reset it" \
+  "[ -f '$RSR/claude-sync/.last-reap' ]"
+
+# THE DURABLE CLOCK, which is the whole of the defect. A second run is a different process with a
+# different memory, and it must READ the stamp rather than start its own twenty four hours.
+rs_plant claude-sync-work.OLD2 99999
+rs_run >/dev/null 2>&1
+check "#314 a second run inside the interval does not sweep again" \
+  "[ -e '$RSR/claude-sync/claude-sync-work.OLD2' ]"
+# And once the stamp is old, the very next run sweeps, whatever happened in between.
+touch -t "$(date -v-3d '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '-3 days' '+%Y%m%d%H%M.%S')" "$RSR/claude-sync/.last-reap"
+rs_run >/dev/null 2>&1
+check "#314 and once the stamp is old the next run sweeps" \
+  "[ ! -e '$RSR/claude-sync/claude-sync-work.OLD2' ]"
+
+# status is an INSPECTION and must not remove anything, however overdue the sweep is (L206). It is
+# the command somebody runs to look around, and a look that deletes is the defect that rule names.
+rs_plant claude-sync-work.SEEN 99999
+touch -t "$(date -v-3d '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '-3 days' '+%Y%m%d%H%M.%S')" "$RSR/claude-sync/.last-reap"
+out_rs="$(env SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$RSR" CLAUDE_HOME="$RSH" SYNC_REPO="$RSP" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#314 status over overdue scratch said: $(printf '%s' "$out_rs" | tr '\n' '|')"
+check "#314 status removes nothing, however overdue the sweep is" \
+  "[ -e '$RSR/claude-sync/claude-sync-work.SEEN' ]"
+check "#314 and still reports what it found" \
+  "line_has \"\$out_rs\" 'abandoned' 'older than'"
+
+# ---- WHAT THE KILLED RUNS WERE DOING ----
+# 73 of them is a signal about the tool rather than about the temp folder, and the scratch is the
+# only surviving evidence of each one. A count alone cannot be acted on; the command each dead run
+# was executing can be (L148, L114).
+rs_plant claude-sync-run.KILLED 99999
+printf '2026-09-01T02:03:04\t4242\tsync\n' > "$RSR/claude-sync/claude-sync-run.KILLED"
+touch -t "$(date -v-2d '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '-2 days' '+%Y%m%d%H%M.%S')" "$RSR/claude-sync/claude-sync-run.KILLED"
+out_rs2="$(env SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$RSR" CLAUDE_HOME="$RSH" SYNC_REPO="$RSP" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#314 status over a killed run's note said: $(printf '%s' "$out_rs2" | tr '\n' '|')"
+check "#314 the report says what the killed runs were doing" \
+  "line_has \"\$out_rs2\" 'were running' 'sync'"
+# A run that FINISHES leaves no note, or the trace becomes the litter it exists to explain.
+RSR2="$WORK/reap-root2"; mkdir -p "$RSR2"
+env SYNC_SCRATCH_ROOT="$RSR2" CLAUDE_HOME="$RSH" SYNC_REPO="$RSP" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#314 a run that finishes leaves no note behind" \
+  "[ -z \"\$(ls -A '$RSR2/claude-sync' 2>/dev/null | grep '^claude-sync-run\\.' || true)\" ]"
+# THE CONTROL, and it is the one that matters. Without it the whole trace could be inert and the
+# check above would still pass, because a directory with no notes in it and a tool that writes none
+# look identical (L1, L98, L159). Watched through a named seam rather than by racing a real kill
+# against a run that takes milliseconds.
+RSR3="$WORK/reap-root3"; mkdir -p "$RSR3"
+out_rs3="$(env SYNC_SCRATCH_NOTE_ECHO=1 SYNC_SCRATCH_ROOT="$RSR3" CLAUDE_HOME="$RSH" SYNC_REPO="$RSP" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
+dbg "#314 a run reported its own note: $(printf '%s' "$out_rs3" | grep SCRATCH-NOTE || true)"
+check "#314 a run really does write a note while it runs" \
+  "line_has \"\$out_rs3\" 'SCRATCH-NOTE' 'claude-sync-run\.'"
+# And it says what the run was DOING, which is the whole point of keeping it.
+check "#314 and the note names the command the run was executing" \
+  "line_has \"\$out_rs3\" 'SCRATCH-NOTE' ' pull\$'"
+check "#314 and that note is gone once the run finishes" \
+  "[ -z \"\$(ls -A '$RSR3/claude-sync' 2>/dev/null | grep '^claude-sync-run\.' || true)\" ]"
+check "#314 the run really did use that scratch root" \
+  "[ -d '$RSR2/claude-sync' ]"
+
 section "== the suite never reads or writes anything of the operator's (claude-config#301) =="
 check "SYNC_ZSHRC is redirected suite-wide"  "[ \"\$SYNC_ZSHRC\" = '$WORK/zshrc-guard' ]"
 check "the guard file stayed inside the temp dir" "[ ! -e \"\$HOME/.zshrc.claude-sync-test\" ]"
@@ -12737,12 +12841,19 @@ check "SYNC_LAUNCHAGENTS is redirected suite-wide" "[ \"\$SYNC_LAUNCHAGENTS\" = 
 # This file, found from where it is RUNNING rather than written down, so a relocated copy reads
 # itself rather than the one in the checkout it came from.
 SUITE_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-HOMESEAMS="$(grep -oE '\$\{(SYNC|CLAUDE)_[A-Z_]+:-\$HOME/' "$SCRIPT" 2>/dev/null \
-             | sed 's/^\${//; s/:-\$HOME\/$//' | sort -u)"
+# WIDENED to the shared temp directory as well (claude-config#314). It is not the operator's home,
+# and it is just as much theirs: SYNC_SCRATCH_ROOT defaults into it and the automatic sweep REMOVES
+# what it finds, so a seam left unset here means every mutating run in this suite reclaims the
+# operator's own scratch. The rule is "a default pointing at a store the machine shares", and
+# writing it as two patterns rather than one is what keeps that rule derived instead of a list.
+HOMESEAMS="$( { grep -oE '\$\{(SYNC|CLAUDE)_[A-Z_]+:-\$HOME/' "$SCRIPT" 2>/dev/null \
+                 | sed 's/^\${//; s/:-\$HOME\/$//'
+               grep -oE '\$\{(SYNC|CLAUDE)_[A-Z_]+:-\$\{TMPDIR' "$SCRIPT" 2>/dev/null \
+                 | sed 's/^\${//; s/:-\${TMPDIR$//'; } | sort -u)"
 # The derivation has to find some, or this passes by reading nothing (L98, L1).
 homeseam_n="$(printf '%s\n' "$HOMESEAMS" | grep -c . || true)"
-dbg "#301 seams defaulting into the home directory: $(printf '%s' "$HOMESEAMS" | tr '\n' ' ')"
-check "#301 the seam derivation really found the seams" "[ \"\${homeseam_n:-0}\" -ge 5 ]"
+dbg "#301 seams defaulting into a store the machine shares: $(printf '%s' "$HOMESEAMS" | tr '\n' ' ')"
+check "#301 the seam derivation really found the seams" "[ \"\${homeseam_n:-0}\" -ge 6 ]"
 unseamed=""
 while IFS= read -r _hs; do
   [ -n "$_hs" ] || continue
@@ -12751,7 +12862,7 @@ done <<HOME_SEAMS
 $HOMESEAMS
 HOME_SEAMS
 dbg "#301 seams not exported by this suite:${unseamed:- none}"
-check "#301 every seam defaulting into the operator's home is redirected by this suite" "[ -z \"\$unseamed\" ]"
+check "#301 every seam defaulting into a store the machine shares is redirected by this suite" "[ -z \"\$unseamed\" ]"
 
 suite_profile
 echo ""

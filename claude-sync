@@ -33,6 +33,11 @@
 #   can be compared)
 set -euo pipefail
 
+# WHAT THIS RUN IS DOING, captured before anything can shift the positional parameters. It is
+# written into the run's scratch note (see scratch_note_this_run), which is the only evidence a
+# killed run leaves of itself (claude-config#314).
+SYNC_RUN_ARGV="${*:-<no arguments>}"
+
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 SYNC_REPO="${SYNC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 PAYLOAD="$SYNC_REPO/payload"
@@ -653,7 +658,10 @@ with_lock(){   # $@ = the command to run while holding the lock
   if have_git && unpushed_commits; then note_unsent_work; fi
   # In the trap, not on a line after the call: every failure in here leaves through die(), and a
   # run that pushed and then died on something later still sent what it sent.
-  trap 'record_sent_if_shipped; release_lock; cleanup_applied_log' EXIT
+  # The sweep rides HERE (claude-config#314), on the one trap every mutating command reaches and
+  # no read-only one does, and last, so a run's own scratch is removed by the handlers before it
+  # and cannot be counted as somebody else's leftover.
+  trap 'record_sent_if_shipped; release_lock; cleanup_applied_log; reap_scratch_if_due' EXIT
   "$@" || rc=$?
   release_lock
   # After release_lock, never before: this is where the minutes of hook suite behind the closing
@@ -2040,7 +2048,7 @@ APPLIED_LOG=""
 # Removed however the run ends, including the early exit die() takes, so a pull
 # never leaves a scratch file behind. Safe across the self-update hand-off: at
 # that point the apply has not run yet, so there is nothing to clean.
-cleanup_applied_log(){ if [ -n "$APPLIED_LOG" ]; then rm -f "$APPLIED_LOG"; fi; cleanup_expanded; return 0; }
+cleanup_applied_log(){ if [ -n "$APPLIED_LOG" ]; then rm -f "$APPLIED_LOG"; fi; cleanup_expanded; cleanup_scratch_note; return 0; }
 trap cleanup_applied_log EXIT
 record_applied(){   # $1 = added|updated|removed   $2 = path relative to ~/.claude
   if [ -n "$APPLIED_LOG" ]; then printf '%s\t%s\n' "$1" "$2" >> "$APPLIED_LOG"; fi
@@ -5507,7 +5515,7 @@ case "$SYNC_SCRATCH_MAX_AGE" in
 esac
 # Overridable so a test can point the scan at names of its own. It is not a knob anybody needs in
 # normal use: the default IS the list of every prefix this tool creates.
-SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-suite-work. claude-sync-suite-section. claude-sync-suite-run.}"
+SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-run. claude-sync-suite-work. claude-sync-suite-section. claude-sync-suite-run.}"
 
 # ---------- a directory of the tool's own, inside the temp root (#116) ----------
 # The sweep above globs the temp root, and that root belongs to the whole machine: 113,912 entries
@@ -5543,6 +5551,16 @@ case "$SYNC_SCRATCH_LEGACY_EVERY" in
     exit 2 ;;
 esac
 
+# How often a mutating run reclaims the abandoned scratch in the tool's own directory
+# (claude-config#314). Checked for the same reason as the two above: an unreadable value would
+# either sweep on every run or never, and both read as the feature working. 0 means every run.
+SYNC_REAP_INTERVAL="${SYNC_REAP_INTERVAL:-86400}"
+case "$SYNC_REAP_INTERVAL" in
+  ''|*[!0-9]*)
+    echo "claude-sync: SYNC_REAP_INTERVAL='$SYNC_REAP_INTERVAL' is not a whole number of seconds. Refusing to run rather than reclaiming scratch on a schedule nobody can read. Set it to 0 to sweep on every mutating run." >&2
+    exit 2 ;;
+esac
+
 # Where new scratch goes. Derived from SYNC_SCRATCH_ROOT rather than read from TMPDIR a second
 # time, so there is ONE answer to where scratch lives and a test can point every part of this at a
 # throwaway root (L2).
@@ -5551,19 +5569,82 @@ scratch_home(){ printf '%s' "${SYNC_SCRATCH_ROOT%/}/$SYNC_SCRATCH_DIRNAME"; }
 # test root carries its own and a temp cleaner removing it means the location is read again, which
 # is the safe direction to be wrong in.
 scratch_legacy_stamp(){ printf '%s' "$(scratch_home)/.legacy-swept"; }
+# THE CADENCE OF THE AUTOMATIC SWEEP, ON DISK (claude-config#314).
+#
+# claude-config#251 put a daily sweep in the watch daemon and it never fired once. Its clock was a
+# variable set to "now" when the loop STARTED and held in memory only, and the daemon is restarted
+# every time claude-sync itself changes, which is most days here. A twenty four hour timer that
+# restarts more often than daily can never reach its own deadline (L169, L175), so status went on
+# reporting a growing pile (73 items, 43 MB) whose only remedy was a command somebody had to type,
+# and a report like that is one people stop reading (L36).
+#
+# It lives in the scratch directory it governs, so a test root carries its own and a temp cleaner
+# removing it means the sweep runs again, which is the safe direction to be wrong in.
+scratch_reap_stamp(){ printf '%s' "$(scratch_home)/.last-reap"; }
 scratch_home_ready(){   # prints the directory to create scratch in; falls back to the flat root
   local d; d="$(scratch_home)"
   # A fallback that lands in the OLD location, deliberately, and not one that fails the run: the
   # flat location is still swept, so scratch written there is still reclaimed. What it gets wrong
   # is the cost, not the correctness, and it can only happen where the temp root itself is
   # unwritable, in which case nothing else here would work either (L93).
-  if mkdir -p "$d" 2>/dev/null; then printf '%s' "$d"; else printf '%s' "${SYNC_SCRATCH_ROOT%/}"; fi
+  if mkdir -p "$d" 2>/dev/null; then :; else d="${SYNC_SCRATCH_ROOT%/}"; fi
+  # HERE, not in each maker (claude-config#314). Every piece of scratch in this tool is created in
+  # the directory this function names, and the apply log is made with its own mktemp rather than
+  # through scratch_file, so hanging the note off the two makers left the commonest run of all
+  # writing none. One derivation, at the point they share (L41).
+  scratch_note_this_run "$d"
+  printf '%s' "$d"
 }
 
 # Every short-lived temp FILE in this tool is made here rather than by each call site writing its
 # own `mktemp`. One name, so every one of them is reclaimable, and one place to change it if that
 # name ever has to move. Seven call sites used a bare `mktemp`, which is anonymous the moment the
 # run holding it is killed, and 92 of those were on this Mac when #36 was measured.
+# WHAT A KILLED RUN WAS DOING (claude-config#314).
+#
+# status reported 73 abandoned scratch items on 2026-09-04, and a count is not something anybody
+# can act on: 73 of them is a signal about the tool rather than about the temp folder, and the
+# scratch is the only surviving evidence of each one. So a run that creates any scratch also leaves
+# ONE note beside it naming itself, and the note is removed on the way out like everything else, so
+# only a run that was killed leaves one behind (L114, L148).
+#
+# One per run, created lazily on the first piece of scratch, so a run that needs none writes none.
+#
+# NAMED FROM THE PID, never from mktemp, and that is load-bearing rather than a style choice. The
+# directory this is handed comes from scratch_home_ready, which every caller reaches through
+# `$(...)`, and a command substitution runs in a SUBSHELL: a path remembered in a variable there is
+# lost the moment it returns, so the parent could neither find the note again nor remove it, and
+# every single scratch file made another one. A name the parent can recompute needs no shared state
+# at all. It also survives reexec_after_self_update, which `exec`s and keeps the same pid, so the
+# resumed run adopts and removes the note its earlier self wrote.
+#
+# The cost is stated: a pid this machine hands out again, to a run starting inside the sweep's four
+# hour window, adopts a killed run's note and removes it on the way out. That loses one trace. It
+# cannot report a wrong one as current, which is the direction that would matter.
+scratch_note_this_run(){   # $1 = the directory scratch is being created in
+  [ "${SYNC_SCRATCH_NOTE:-1}" = "0" ] && return 0
+  local f="${1%/}/claude-sync-run.$$"
+  # Already written by this run. One stat per scratch file, against a write per scratch file.
+  [ -s "$f" ] && return 0
+  # Tab separated, and the command is the LAST field, so a report can read it with `cut` however
+  # many spaces the arguments hold.
+  printf '%s\t%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$$" "$SYNC_RUN_ARGV" > "$f" 2>/dev/null || true
+  # A named seam so the WRITER can be watched working (SYNC_SCRATCH_NOTE_ECHO=1). Without it the
+  # only thing any check can see is a note that a killed run left behind, which a test has to plant
+  # by hand, so the whole feature could be inert and every check would still pass (L1, L98, L159).
+  # The alternative is racing a real SIGKILL against a run that takes milliseconds, and a window
+  # that happens not to open proves nothing.
+  [ "${SYNC_SCRATCH_NOTE_ECHO:-0}" = "1" ] && printf 'SCRATCH-NOTE %s %s\n' "$f" "$(cat "$f" 2>/dev/null | tr '\t' ' ')" >&2
+  return 0
+}
+# Both locations, because scratch_home_ready falls back to the flat root when its own directory
+# cannot be made, and a cleanup that only knows the usual place leaves a note exactly on the runs
+# that were already having trouble.
+cleanup_scratch_note(){
+  rm -f "$(scratch_home)/claude-sync-run.$$" "${SYNC_SCRATCH_ROOT%/}/claude-sync-run.$$" 2>/dev/null || true
+  return 0
+}
+
 scratch_file(){ mktemp "$(scratch_home_ready)/claude-sync-work.XXXXXXXX"; }
 # The same rule for a temp DIRECTORY. Only the apply needs one, to hold the payload with this
 # Mac's home path put back (see apply_source_dir), and it is removed on every exit path.
@@ -5695,14 +5776,33 @@ scratch_human_size(){   # kb
 }
 
 report_scratch_leftovers(){
-  local list n kb
+  local list n kb doing
   list="$(scratch_leftovers)"
   n="$(printf '%s' "$list" | grep -c . || true)"
   [ "${n:-0}" -gt 0 ] || return 0
   kb="$(printf '%s\n' "$list" | scratch_total_kb)"
   echo "--- scratch the tool left behind ---"
   echo "  $n abandoned, holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT, each older than ${SYNC_SCRATCH_MAX_AGE}s."
-  echo "  Every one belongs to a run that was killed before it could clean up after itself. Reclaim them with: claude-sync reap-scratch"
+  echo "  Every one belongs to a run that was killed before it could clean up after itself. A mutating run reclaims them on its own every $(duration_in_words "$SYNC_REAP_INTERVAL"); to take them now: claude-sync reap-scratch"
+  # WHAT THOSE RUNS WERE DOING (claude-config#314). A count says the temp folder is filling up; the
+  # commands say which part of the tool is being killed, and only one of those can be acted on
+  # (L148). Runs from before the notes existed simply carry none, so this stays quiet rather than
+  # claiming they were doing nothing (L223, L11).
+  doing="$(scratch_run_summary "$list")"
+  [ -n "$doing" ] && echo "  Those runs were running: $doing."
+  return 0
+}
+
+# The commands named by whichever leftovers are run notes, counted, commonest first. One `cut` per
+# note and no shell loop building strings, because this runs inside `status`.
+scratch_run_summary(){   # $1 = the leftover paths, one per line
+  local notes
+  notes="$(printf '%s\n' "$1" | grep '/claude-sync-run\.' || true)"
+  [ -n "$notes" ] || return 0
+  printf '%s\n' "$notes" | tr '\n' '\0' | xargs -0 cut -f3 2>/dev/null \
+    | sed 's/^[[:space:]]*$/unknown/' \
+    | sort | uniq -c | sort -rn \
+    | awk '{ c=$1; $1=""; sub(/^ /, ""); out = out (out == "" ? "" : ", ") $0 " (" c ")" } END { printf "%s", out }'
   return 0
 }
 
@@ -5725,6 +5825,16 @@ do_reap_scratch(){
     return 0
   fi
   kb="$(printf '%s\n' "$list" | scratch_total_kb)"
+  removed="$(printf '%s\n' "$list" | remove_scratch_paths)"
+  echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT."
+  return 0
+}
+
+# The delete itself, written ONCE and used by the command somebody types and by the automatic sweep
+# alike. Two copies of an `rm -rf` guarded by a pattern would be two chances for the pattern to
+# drift, and only one of them would be the one anybody re-read (L370).
+remove_scratch_paths(){   # reads paths on stdin -> prints how many it removed
+  local p removed=0
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     # Judged again, independently, immediately before the delete. The list was built from the
@@ -5735,10 +5845,43 @@ do_reap_scratch(){
       "${SYNC_SCRATCH_ROOT%/}"/claude-sync-*) rm -rf "$p" && removed=$((removed + 1)) ;;
       *) echo "claude-sync: refusing to remove '$p', which is not scratch this tool owns." >&2 ;;
     esac
-  done <<EOF
-$list
-EOF
-  echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT."
+  done
+  printf '%s' "$removed"
+  return 0
+}
+
+# THE AUTOMATIC SWEEP. Run by every MUTATING command, through the same trap that releases the lock,
+# and by no read-only one: status is an inspection and a command whose name reads like a look must
+# not remove anything (L206).
+#
+# It sweeps only the tool's OWN scratch directory, never the flat location beside it. That one
+# belongs to the whole machine and is read on its own interval by `status` and unconditionally by
+# `reap-scratch`, which stays the way back to it that does not wait.
+reap_scratch_if_due(){
+  local stamp m now list n
+  [ "$SYNC_SCRATCH_MAX_AGE" -eq 0 ] && return 0
+  [ -d "$(scratch_home)" ] || return 0
+  stamp="$(scratch_reap_stamp)"
+  now="$(date +%s)"
+  if [ -f "$stamp" ]; then
+    m="$(file_mtime "$stamp")"
+    # An unreadable stamp is treated as OVERDUE, because not sweeping costs a leftover nobody
+    # hears about and sweeping costs one directory read, and only one of those two accumulates.
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    if [ "$(( now - m ))" -lt "$SYNC_REAP_INTERVAL" ]; then return 0; fi
+  fi
+  list="$(scratch_in_dir "$(scratch_home)")"
+  # Stamped once the READ has finished, which is the expensive half and the half this cadence
+  # exists to ration. Finding nothing is a completed sweep, so it stamps too: otherwise a clean
+  # machine re-reads the directory on every single run for ever (L98).
+  : > "$stamp" 2>/dev/null || true
+  is_blank "$list" && return 0
+  n="$(printf '%s\n' "$list" | remove_scratch_paths)"
+  case "${n:-0}" in ''|*[!0-9]*) n=0 ;; esac
+  [ "$n" -gt 0 ] || return 0
+  # Said out loud. A sweep that reclaimed a pile and one that ran and found nothing are different
+  # events, and the first is the one worth seeing (L11, L98).
+  echo "claude-sync: reclaimed $n abandoned scratch item(s) that earlier runs were killed before they could remove, in $(scratch_home)." >&2
   return 0
 }
 
@@ -5866,7 +6009,6 @@ do_watch(){
   local again
   # Started at the clock, so the first sweep happens one interval in rather than on the first edit
   # of the day: a daemon restarted often would otherwise sweep on every restart.
-  local last_reap now_reap; last_reap="$(date +%s)"
   "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" | while IFS= read -r _; do
     again=1
     while [ "$again" -eq 1 ]; do
@@ -5905,22 +6047,13 @@ do_watch(){
           *) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: finished, but said nothing about what it did: ${out:-<no output>}" ;;
         esac
       fi
-      # Scratch is reclaimed by the WATCHER, on its own cadence (claude-config#251). status
-      # reported 207 abandoned scratch directories holding 109 MB on 2026-08-31, every one of them
-      # past the threshold, and told the reader to run something by hand. Nothing did, so the
-      # number grew while reading as routine noise.
-      #
-      # Here rather than on the pull path, and that is the whole of the choice. The sweep reads
-      # the machine's WHOLE temp directory, which holds other software's files by the hundred
-      # thousand, so putting it on a path any test drives makes every test pay for it AND lets a
-      # test reach a live store, which is the thing tests must be structurally unable to do (L2).
-      # The daemon is the process that accumulates the scratch and the one place a daily cadence
-      # can live.
-      now_reap="$(date +%s)"
-      if [ "$(( now_reap - last_reap ))" -ge "${SYNC_REAP_INTERVAL:-86400}" ]; then
-        last_reap="$now_reap"
-        do_reap_scratch >/dev/null 2>&1 || true
-      fi
+      # Scratch used to be reclaimed HERE, by the watcher, on a clock this loop held in memory
+      # (claude-config#251). It never fired: the clock was set to "now" when the loop started, and
+      # the daemon is restarted every time claude-sync changes, so a twenty four hour timer that
+      # restarts more often than daily never reached its own deadline (claude-config#314, L169,
+      # L175). The cadence is a stamp on disk now, and every mutating run reads it, including this
+      # loop's own send, which takes the lock and so passes through the trap that runs the sweep.
+      # Nothing is needed here.
       # #262: everything that arrived while that send was running becomes ONE more send, not one
       # send each. A send takes seconds and can take minutes, so a burst of saves used to produce
       # a commit per event: six on 2026-09-02, of which CI cancelled five.
