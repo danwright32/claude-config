@@ -2064,6 +2064,24 @@ window is a count rather than a boundary.
   through both the real tool and its substitute. L184 is the reader side of this and is defeated
   by it, since it tells you to trust the exit code and this is the exit code lying)
 
+- **L406. A REMEDY a failure message tells somebody to RUN is executed by nothing until the
+  moment it is needed, so a test must run it and assert what it produces**, because it is written
+  once, read afterwards as authoritative, and its first real use is by somebody already dealing
+  with a failure and in no position to audit the fix they were handed.
+  (claude-config#319, 2026-09-05: rtk keeps a sha256 of its own hook beside it and refuses to run
+  at all when the two disagree. The suite's failure message named the re-record command as
+  `shasum -a 256 rtk-rewrite.sh | sed 's| .*| rtk-rewrite.sh|'`, which writes ONE space between
+  the hash and the name. rtk requires TWO, which is what shasum itself emits, and answered
+  "Invalid hash format (expected 'hash  filename')" and exited 1 on every command on the machine.
+  The suite stayed green throughout because the check beside that remedy read only the FIRST FIELD
+  with awk, so the format it demanded was never the format it checked (L63). It was found by
+  mistaking one of those exit 1s for a real verdict while measuring something unrelated. The fix
+  runs the remedy in a throwaway directory and requires its output to be byte for byte the
+  committed file, and holds the command in ONE string that both the message and that check read,
+  rather than two spellings that have to stay in step (L70). Related to L562, which is a worked
+  example teaching the inverse of its rule; this is the narrower and commoner case where the
+  example is a command and nothing ever runs it)
+
 - **L10. An error state and an empty state are different screens.** Never render a
   cheerful empty state over a failure, and return real not-found semantics rather than a
   200 shell. (16 issues, 3 repos)

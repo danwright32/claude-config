@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 503 lessons.
+LESSONS.md, which is NOT loaded into the session. 504 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -189,6 +189,7 @@ to decide something: the body is where the failure it came from is described.
 - L514. A signal that records THAT something ran must be written on every exit path, in a `finally`, never only on the success path
 - L184. Judge a command by its EXIT CODE, never by a line of its output, because a tool's final line is routinely a different measurement than its verdict and is usually the more reassuring of the two.
 - L404. A tool put on the path IN PLACE of another (a proxy, a compact output filter, a shim, an alias, a rewriting hook) must be proved to reproduce the original's EXIT CODE on a case that genuinely FAILS
+- L406. A REMEDY a failure message tells somebody to RUN is executed by nothing until the moment it is needed, so a test must run it and assert what it produces
 - L10. An error state and an empty state are different screens.
 - L199. A marker meant to be READ BY CODE (a prefix, an error code, a sentinel) must reach its reader unwrapped
 - L11. Distinct causes get distinct messages, and a message may claim only what its check actually measured.
