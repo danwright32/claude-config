@@ -1574,6 +1574,7 @@ window is a count rather than a boundary.
   from L367, which is about a SUM hiding one component collapsing: here no component was hidden and
   the number read was simply several steps downstream of the question being asked.)
 
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key

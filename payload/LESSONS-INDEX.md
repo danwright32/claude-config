@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 493 lessons.
+LESSONS.md, which is NOT loaded into the session. 497 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -61,6 +61,7 @@ to decide something: the body is where the failure it came from is described.
 - L98. A watcher, poller or wait-for-completion step that reports SUCCESS when it found NOTHING to watch is indistinguishable from one that saw everything pass.
 - L171. A positive control proves the query SHAPE, never that the query reached the period you are asking about, so a control satisfiable by data from outside that period cannot detect a lagging pipeline and an absence there is worthless.
 - L172. Before shipping a threshold, measure where it lands in the REAL distribution of the quantity it judges, because one sitting inside the dense middle turns the count it produces into noise: a small uniform shift carries dozens of items across at once and reads as a sudden regression rather than as the same population barely moving.
+- L398. A gate that decides whether a subject passes must read its criteria from the SAME revision it is judging, never from the checkout the gate happens to run in, because the two drift with no symptom and a criteria list short by one entry is a requirement nobody is waiting on.
 - L179. A status query about work in flight must be scoped to the exact revision it asks about, because a superseded run reports under the same check names and answers for the new one in both directions: a stale failure blocks a commit nothing has judged, and a stale pass merges one.
 - L119. A detection that ACCUSES on an empty answer from an external provider's derived index (a commit-to-PR association, a search index, a related-records lookup) must confirm against the primary record before acting, because a missing index entry and a real violation are indistinguishable and the index can stay permanently incomplete rather than catch up.
 - L173. A fallback added because a lookup failed must be reachable on EVERY way that lookup can fail, not only the flavour that was observed, because the remedy gets scoped to the symptom named in the incident report and is then absent in the neighbouring, worse failure.
@@ -138,6 +139,7 @@ to decide something: the body is where the failure it came from is described.
 - L564. An empty search result proves the SPELLING is absent, never the concept, so a conclusion drawn from it may claim only what was actually searched for.
 - L391. A cost guard's fixture must record the dimension the COST scales with, which is routinely a PAIRING or a MAXIMUM rather than a total, because a fixture matching every recorded total can still exercise an entirely different load while every drift check passes. Name what the cost is quadratic or conditional in, and record THAT.
 - L588. A displayed share or percentage must be ASSERTED to lie within its own range, because a value outside it is the only self-evident proof that the numerator and denominator measure different things, and nothing else will ever report it.
+- L396. A count of people who reached a LATE stage of a funnel (signups, checkouts, completions) is not a measure of how many ARRIVED, so never conclude that traffic has collapsed from a downstream number. Read arrivals at the entry point first, because a stage count falls both when fewer people come and when the same crowd stops converting, and those two demand opposite work.
 
 ## Data safety
 
@@ -300,6 +302,7 @@ to decide something: the body is where the failure it came from is described.
 - L18. Enforce authorization at the database layer, not only in application code.
 - L19. Secret checks fail closed and compare constant-time through one shared verifier.
 - L42. A control that exists to protect someone fails closed, not open.
+- L397. A control made of two halves, a write that ARMS it (adding to a block list, recording a suppression, stamping that a message was sent) and a read that ENFORCES it, must have BOTH halves checked, because the enforcing half is the one every audit looks at and a silently failed arming write leaves a correctly hardened enforcement point with nothing to enforce.
 - L43. A platform's built in request authentication is not caller authentication when it accepts your public client key.
 - L72. A gate's stored DEFAULT must be its OFF value, so that FORGETTING to set it produces the safe state rather than the live one.
 - L75. When identifying WHO or WHAT an outward action targets fails, refuse the action; never fall back to a nearby candidate.
@@ -338,6 +341,7 @@ to decide something: the body is where the failure it came from is described.
 - L99. A client side input mask or cap must never be stricter than the validator that accepts the value, because the form then refuses input the server would take and the person is blocked by a rule nothing states.
 - L150. A writer that accepts a value on its own terms must accept only what its READER can actually consume, so validate at the write against the reader's own predicate rather than a looser one.
 - L111. A message that tells someone HOW to recover must name an action that actually changes the state they are stuck in, so trace the suggested step against the stored state before shipping it.
+- L399. An instruction to a person must be written in the vocabulary of the place they will act, never in the terms of the constraint that motivated it.
 - L112. An alert's urgency is set by what the reader must DO and how soon, never by whether something is broken.
 - L113. A lookup table keyed by a vocabulary (a colour by status, an icon by type, a label by code) must have its completeness enforced by the type system or a test, because a missing key silently takes the default branch, and a default is indistinguishable from a deliberate choice.
 - L126. An action offered only on a transient surface (a run summary, a status message, a toast) cannot serve a condition that PERSISTS in the data, because the notice clears while the state stays, so every encounter after the first finds the fault still named and the remedy gone.
