@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 515 lessons.
+LESSONS.md, which is NOT loaded into the session. 516 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -148,6 +148,7 @@ to decide something: the body is where the failure it came from is described.
 - L414. A build product's mtime records when it was last WRITTEN, not when it was last built, and a source file's mtime records when it was last touched, not when it changed, so a freshness check comparing the two is red on a healthy tree in BOTH directions: a correct incremental build that relinks nothing leaves the product reading as permanently stale, and any generator that rewrites a source on every run leaves it permanently newer.
 - L416. A provenance record naming the COMMIT an artifact was built from describes what was committed, never what was compiled, so an install or deploy made from a checkout with uncommitted changes records a truthful commit while the artifact contains code that exists in no commit anywhere.
 - L417. Turning on a platform security control imposes requirements on parts of the build you never touched, and the resulting refusal happens only when the artifact RUNS, so a configuration nothing ever launches stays broken while every check that reads the configuration is green.
+- L418. A count taken over a STORED field is a claim about the store rather than about what anybody sees, because a surface that recomputes that value at display time ignores what is stored, so measure through the predicate the surface itself uses or the number describes data nothing renders.
 
 ## Data safety
 

@@ -1704,6 +1704,21 @@ window is a count rather than a boundary.
   anything launched the app, by the smoke check written for exactly that gap, and the fix is
   to remove the thing needing the exemption rather than to grant it)
 
+- **L418. A count taken over a STORED field is a claim about the store rather than about what
+  anybody sees, because a surface that recomputes that value at display time ignores what is
+  stored, so measure through the predicate the surface itself uses or the number describes data
+  nothing renders.** Distinct from L107, which is about reimplementing a predicate beside the code:
+  this one survives a faithful reimplementation, because the predicate was right and the COLUMN was
+  the wrong subject. Overture#3345 was filed at p1 on "37 shows badged as unreachable, 31 of them
+  holding a route", counted in SQL over the stored reason column, and worked from for a week. The
+  badge is drawn only under the no-email arm of a verdict that recomputes from the row's own
+  contacts, so on 24 of those 37 the stored reason was never rendered at all: measured through the
+  app's own predicate, 31 of 1,153 shows drew the sentence and not one held a route. The tell is a
+  field whose reader RECOMPUTES rather than reads back, which is ordinary wherever a value is
+  derived at display time (a computed property, a denormalised status, a cached count), and the
+  stored copy then goes on reading as a current measurement to anything that queries it.
+  (overture#3345, overture#3598)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
