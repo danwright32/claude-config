@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 510 lessons.
+LESSONS.md, which is NOT loaded into the session. 511 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -144,6 +144,7 @@ to decide something: the body is where the failure it came from is described.
 - L400. A check's NAME is not a statement of its coverage, so read what a monitor, smoke test or guard actually does before counting it as protection. A job named for the thing it does not check makes the gap permanently invisible, because nobody writes the missing check while a green tick with the right name is already on the board.
 - L411. A test that depends on a machine state it cannot SET from inside itself (a display awake, a device attached, a network reachable, a screen unlocked) must DETECT that state and report UNMEASURED rather than failing, because a failure there is indistinguishable from a real one and a standing red makes every other failure in the list unreadable.
 - L412. A guard that DERIVES its search terms from live data inherits that data's own placeholder values (TBD, N/A, Unknown, Untitled), which identify nothing and are by construction ordinary words, so it matches plain text everywhere and its noise reads as the guard working rather than as a defect in the guard.
+- L413. A test runner that DISCOVERS its suites by glob, directory walk or naming convention can only invoke each one ONE way, so any suite taking a parameter runs for ever in its DEFAULT mode while its other cases never run at all, and its name still appears in every green report.
 
 ## Data safety
 

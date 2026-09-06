@@ -1635,6 +1635,23 @@ window is a count rather than a boundary.
   placeholders is printed, because a guard reporting "derived 110 needles, found nothing" is
   making a claim about coverage that the reader cannot otherwise check)
 
+- **L413. A test runner that DISCOVERS its suites by glob, directory walk or naming
+  convention can only invoke each one ONE way, so any suite taking a parameter runs for
+  ever in its DEFAULT mode while its other cases never run at all, and its name still
+  appears in every green report.** Give the runner a way to enumerate a parameterised
+  suite's cases, or split it into files the discovery can see, and never let one file
+  stand for several subjects. (ovation#25, 2026-09-06: `run-tests.sh` runs
+  `scripts/test-*.sh` with no arguments, and `test-built-bundle-identity.sh` takes the
+  build configuration as `$1` defaulting to Debug, so its RELEASE assertions ran in no
+  suite and in no pre push gate. Those were the assertions that had caught a real defect
+  hours earlier: with a stable signing identity, Xcode added
+  `com.apple.security.get-task-allow` to BOTH configurations, letting any process attach a
+  debugger to the shipping build, while ENABLE_HARDENED_RUNTIME was YES throughout and both
+  bundles carried the runtime flag. It was found by running the Release case by hand during
+  the fix, and nothing would have found it again. The suite's name was in every green run
+  the whole time, which is L400 one step along: not a check whose name overstates it, but a
+  check half of which the runner cannot reach)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
