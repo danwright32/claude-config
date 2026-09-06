@@ -3486,6 +3486,22 @@ window is a count rather than a boundary.
   L64, which is about the reviewed artifact matching what ships: here it did)
 
 
+- **L419. A sort whose primary key TIES across most of its real inputs is actually ordered by its
+  tie-break, so a tie-break chosen for stability rather than meaning (an id, an insertion order, a
+  hash) silently becomes the order people see, and where that id is minted from the record's own
+  content it orders by that content's SPELLING.** The mirror of L170, which warns that a last-place
+  criterion never fires when an earlier one carries many distinct values: here the earlier one
+  carries ONE value on the shapes that matter, so the last place is the only place. Overture sorted a
+  show's contacts by `sendOrderRank` and broke ties on the recipient id. On a self-produced show every
+  performer shares rank 0, so the id decided everything, and `Recipient.makeId` mints the address when
+  there is one and the literal `"form:" + url` otherwise, so `form:` precedes any address from g to z
+  and every contact that could NOT receive the email sorted above the one that could. Measured on the
+  live store 2026-08-30: four performer contacts, three ids beginning `form:` and one address
+  beginning `s`. The card then named a contact with no address above a draft going to somebody else,
+  and nothing about role, seniority or billing was involved. The tell is a rank field whose
+  distribution you have never looked at: check how many distinct values it really takes on live data
+  before trusting anything above the tie-break. (overture#3284, overture#3603)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
