@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 512 lessons.
+LESSONS.md, which is NOT loaded into the session. 513 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -185,6 +185,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## Honest failure
 
+- L415. A screen that shows a change BEFORE the write lands owes a failure path that reverts it AND says so, because without one a failed write is indistinguishable from a slow one and the revert arrives long after the person has looked away.
 - L586. A redirect whose target is ITSELF a redirect drops the query string, so any outcome carried in it (a saved flag, a refusal message) is destroyed while both redirects read as correct in isolation, and the receiving page's notice becomes dead code that looks like working feedback.
 - L583. A fallback that relaxes only ONE dimension of a multi dimensional match does nothing wherever the shortage lives in another dimension, so name which dimension is actually thin before choosing what the fallback relaxes.
 - L529. An audit entry must record the old and new values of what changed, not merely which thing changed, because the question an audit exists to answer is what the state was at a given moment, and an entry without values can never answer it no matter how many entries there are.

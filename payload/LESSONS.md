@@ -2039,6 +2039,18 @@ window is a count rather than a boundary.
 
 ## Honest failure
 
+- **L415. A screen that shows a change BEFORE the write lands owes a failure path that reverts it AND
+  says so, because without one a failed write is indistinguishable from a slow one and the revert
+  arrives long after the person has looked away.** (overture#3583, 2026-09-06. Striking an email
+  address off a card hides it on the press, so the control answers immediately instead of after the
+  860 ms the queue takes to rebuild. The mark is cleared only by a thirty second ceiling borrowed from
+  another transient state, so a write that failed put the address back half a minute later with nothing
+  said. Dan, answering the post-merge quiz, expected "an error, address stays"; what shipped was a
+  silent return. Distinct from L12, which says to show success only after the write commits: that
+  forbids the pattern rather than saying how to do it safely, and latency routinely makes it worth
+  doing. The revert must be driven by the write's own answer rather than by a timer, because a timer
+  long enough not to flicker is always long enough to be missed.)
+
 - **L586. A redirect whose target is ITSELF a redirect drops the query string, so any outcome
   carried in it (a saved flag, a refusal message) is destroyed while both redirects read as
   correct in isolation, and the receiving page's notice becomes dead code that looks like
