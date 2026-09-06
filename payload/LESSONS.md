@@ -1671,6 +1671,23 @@ window is a count rather than a boundary.
   the OTHER side of the pair, asserting the same properties against the resolved build
   settings, which need no build and are never stale)
 
+- **L416. A provenance record naming the COMMIT an artifact was built from describes what was
+  committed, never what was compiled, so an install or deploy made from a checkout with
+  uncommitted changes records a truthful commit while the artifact contains code that
+  exists in no commit anywhere.** Record the working tree state in the same write that
+  records the commit, and assert the CLEAN case too, because a field that is never written
+  cannot be told from a genuinely clean build (L98). (overture#3584, 2026-09-06:
+  `mac/build-install.sh` writes version, commit, commitDate, repoPath and provenance, and
+  no dirty count. Its `build-provenance.sh` exists because of #2553, where the freshness
+  panel could not tell a build from an unmerged branch from a current one and said "up to
+  date" in exactly the words a correct install uses. That was fixed on ancestry rather than
+  on a branch name and answers WHICH COMMIT, one step short of what was compiled. Measured
+  the same day: the checkout stood on a non-main branch with one uncommitted file, so an
+  install from it would have recorded a truthful commit and a provenance of main with
+  nothing saying the bundle did not match. Downbeat records the count, citing downbeat#424,
+  and Ovation records the union of both siblings' fields, so the gap had already been
+  noticed twice from outside without ever being closed at the source)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
