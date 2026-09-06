@@ -1621,6 +1621,20 @@ window is a count rather than a boundary.
   passes with the screen off, which is the false negative the rig was built to prevent (L159).)
 
 
+- **L412. A guard that DERIVES its search terms from live data inherits that data's own
+  placeholder values (TBD, N/A, Unknown, Untitled), which identify nothing and are by
+  construction ordinary words, so it matches plain text everywhere and its noise reads as
+  the guard working rather than as a defect in the guard.** Exclude sentinel values before
+  searching, and report how many were dropped, because a needle set silently thinned is a
+  coverage claim nobody can check. (ovation#5, 2026-09-06: Ovation's identity guard derives
+  needles from the live Downbeat export so it cannot go blind when a hand maintained list is
+  missing, which is the L217 correction. On its first real run it refused on PRD.md, twice on
+  one line. The needle was `TBD`: one of nineteen real bookings carries venueName "TBD"
+  because its venue is not decided yet, and the PRD says TBD twice meaning to be decided. The
+  fix is the rule rather than an exemption naming that file (L362), and the count of dropped
+  placeholders is printed, because a guard reporting "derived 110 needles, found nothing" is
+  making a claim about coverage that the reader cannot otherwise check)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
