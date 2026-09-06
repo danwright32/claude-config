@@ -1603,6 +1603,23 @@ window is a count rather than a boundary.
   shared name suppresses comparison between two implementations: here one name suppressed the
   question of whether the thing existed.)
 
+- **L411. A test that depends on a machine state it cannot SET from inside itself (a display awake,
+  a device attached, a network reachable, a screen unlocked) must DETECT that state and report
+  UNMEASURED rather than failing, because a failure there is indistinguishable from a real one and
+  a standing red makes every other failure in the list unreadable.** (overture#3580, 2026-09-06.
+  Three hosted tests drive a real CGEvent scroll wheel into a real NSScrollView and assert the
+  content moved. At 00:10 the display went to sleep and from then on all three timed out, having
+  polled their condition about 4,800 times each, which is a healthy poll rate: the content genuinely
+  did not move, because the window is borderless and deliberately never ordered front, so AppKit
+  lays it out only while the screen is awake. They failed identically on main, and event creation
+  itself still worked, so the obvious suspect was wrong. Since that suite is the mandatory pre-push
+  gate and the only thing verifying the Mac app, no Swift change could be merged at all while the
+  screen was off, and nobody hitting it could tell an environmental red from a real one. Distinct
+  from L504, which says to SET the ambient configuration the test depends on: the case this covers
+  is the one where it cannot be set, and the answer is then a third outcome rather than a pass or a
+  fail. The wrong fix, named because it is the tempting one, is to assert something weaker that
+  passes with the screen off, which is the false negative the rig was built to prevent (L159).)
+
 
 ## Data safety
 
