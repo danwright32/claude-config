@@ -4148,6 +4148,19 @@ window is a count rather than a boundary.
   out does nothing with an empty stack, and with an earlier keep or dismiss in the session it
   reverses that instead, on a different show)
 
+- **L410. An automatic pass running beside a manual control hides every case the control's gate
+  cannot express, so compare the two predicates case by case before removing the pass: whatever only
+  the pass reached has no route at all once it goes.** The control goes on looking complete, because
+  its gate was written for the common case and the pass quietly served the rest, so the divergence
+  has no symptom for as long as both exist. Read the batch's predicate and the control's side by
+  side and name every state one admits and the other does not.
+  (overture#3573, 2026-09-05: the reply drafter ran automatically on every window open and also had
+  a per conversation button. The batch redrafted two cases, no draft yet AND a newer message arriving
+  after the last draft was requested; the button is gated on a mode that returns "ready to send" the
+  moment any draft text exists, with no comparison against when the newest message arrived. Removing
+  the automatic pass, which is what Dan asked for, would have left a contact who wrote again looking
+  at a draft written against their previous message with Send under it)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
