@@ -1678,6 +1678,25 @@ window is a count rather than a boundary.
   reading it as "timestamps are merely weak" is what produces this one: the honest cover is
   the OTHER side of the pair, asserting the same properties against the resolved build
   settings, which need no build and are never stale)
+- **L614. A freshness window between a job that PRODUCES a measurement and a job that ACTS on it
+  must be derived from the worst-case gap between their two schedules at the instant of use, and
+  proved by a test that evaluates the predicate at the consumer's scheduled instant against a row
+  stamped at the producer's.** A window sized by feel fails in one of two silent ways: narrower than
+  the gap, the consumer refuses every reading as stale and never acts, which reads as a quiet
+  night; wider than the gap, it protects nothing. L51 says to check the evaluating schedule and
+  L567 says to refuse a stored verification on its age; this is how large that age has to be.
+  (bidspoke#1196, 2026-09-06. The execution archive's deletion gate measures each day at 13:00 UTC
+  and looks back retention minus one days; a day becomes eligible for deletion two days after it
+  leaves that window, so at the 03:30 UTC purge every eligible day's last measurement is 38.5
+  hours old against a 36 hour allowance. Both purge jobs had run gated for two nights and reported
+  "truncated 0 partition(s)" because nothing was yet eligible, so the design had only been observed
+  on its safe half (L142). Found by computing the refusal at tomorrow's cron instant against the
+  real stored row before the first real deletion, which then had to be run by hand inside the
+  window. Step partitions had a second, circular block: a day's steps need the previous day
+  verified, but the previous day's execution partition was truncated the night before and a
+  truncated day re-measured refuses as a surplus.)
+
+
 
 - **L416. A provenance record naming the COMMIT an artifact was built from describes what was
   committed, never what was compiled, so an install or deploy made from a checkout with
@@ -2034,6 +2053,19 @@ window is a count rather than a boundary.
   profile in front of families on a credential nobody ever checked, with nothing watching for
   it. The gate that now refuses such an approval runs on the approve path only, and coming out
   of hidden or suspended is not that path)
+
+- **L601. A claim that there is NOTHING TO CORRECT, used to justify skipping a backfill or
+  migration, must be measured across every field the change can touch, never only the one the
+  change was framed around**, because a row that is empty in that field routinely carries real
+  values in the others and the skip reads as clean either way.
+  (pet#1244, #1299, 2026-09-05: a rep who left on the 1st had her month reattributed away from
+  her manager. The issue checked the five other reps termed on a 1st, found zero enrolled_units
+  and zero enrolled_volume in each of their termination months, and recorded "no backfill
+  needed: there is nothing to reattribute historically". Both numbers were right. Re-measured
+  with the commission columns included, four of the five carry real activity on those same rows,
+  6 and 8 and 9 and 1 top-out units against managers they had left, because a different job
+  writes those columns and creates the row when the enrolled half is empty. The framing of the
+  change decided which columns anybody looked at, and the answer it gave was the reassuring one)
 
 - **L575. Deleting cached content must clear the marker that RECORDS that content's coverage
   (a sync token, a cursor, a window bound, a last refreshed stamp) in the same write**, because
@@ -2834,6 +2866,19 @@ window is a count rather than a boundary.
   keep one audit entry and silently lose the other. One codebase, one action, both designs, and the
   difference decided whether his plan was safe)
 
+- **L612. In a shell running with `set -e`, a bare assignment from a command substitution carries
+  that command's exit status, so a capture-then-classify step dies on the capture line, the captured
+  output is never printed, and every branch of the classifier below it is unreachable dead code.**
+  Capture the status explicitly whenever the failure is something the code means to INSPECT rather
+  than abort on, because the classifier reads as the careful handling and its unit tests pass while
+  nothing can ever reach it.
+  (project-enrollment-tracker#1305, 2026-09-06: the daily build's feed gate ran
+  `SFTP_OUT=$(echo "ls ..." | sftp ... 2>&1)` and then classified the output into found, not-yet and
+  broken. Verified against the live server, sftp exits 1 on a clean not-found, so the step aborted
+  on the assignment. The not-yet branch, added by #462 precisely to tell a missing file apart from a
+  broken connection, had never once executed, and a real two minute connection timeout on 2026-08-25
+  left a log holding nothing but the exit code, because the diagnosis was sitting in the variable)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
@@ -2846,6 +2891,18 @@ window is a count rather than a boundary.
   same absence is a live product defect: every regenerate reshuffles the whole gallery, so
   changing one photo re-lays-out all 234, and the pre-render cache fingerprints the inputs as
   `seed:nil` so it can adopt a render of a different collage entirely.)
+- **L602. A bound applied to ONE derived value (a clip to an active window, a cap, a cutoff)
+  must be applied to every SIBLING derived from the same input**, because the surface then
+  shows the bounded figure beside unbounded ones about the same subject, and the careful one
+  is the only evidence anybody looked.
+  (pet#1300, 2026-09-05: a rep's days-worked count is clipped at the day they left the company,
+  deliberately and with its own issue behind it, so a departed rep stops accruing days they
+  were not employed for. Their pace and their end-of-month forecast are derived from the same
+  rep and the same month and were never clipped: pace divides by the whole month elapsed so
+  far and the forecast multiplies by the whole month's working days. A rep who left on the 1st
+  having sold two deals reads as 1 day worked and 4.4 units projected, and that forecast feeds
+  the headline number at the top of the board)
+
 - **L14. Derived state re-derives on every input that feeds it, and every action updates
   every surface showing what it changed.** Enumerate the inputs, then the surfaces; a
   correct save that still shows the old value reads as a failed save. (25 issues, 3 repos)
@@ -4323,6 +4380,184 @@ window is a count rather than a boundary.
   moment any draft text exists, with no comparison against when the newest message arrived. Removing
   the automatic pass, which is what Dan asked for, would have left a contact who wrote again looking
   at a draft written against their previous message with Send under it)
+- **L604. Copy that tells the reader what a CONTROL IS or what the SCREEN IS DOING (what this field
+  holds, what this heading contains, what the banner will say, which system owns this value) is
+  removed on sight by the person it was written for, while a DOMAIN term they cannot know (a lane
+  name, a field called Grid, "84 (75 today)") is left unexplained beside it.** The inclination is to
+  explain the interface defensively and leave the vocabulary bare, and a reader who knows the
+  business needs the opposite. Explain a term once, on the term, reachable by keyboard and screen
+  reader (a definition on the header, a `title` plus `sr-only` span), never as a paragraph over a
+  repeated row (L579), and write nothing about the interface at all. The test before shipping a
+  sentence: would a first time reader who knows the business still need it once they can see the
+  heading, the row and the shape of the control? If not, delete it.
+  (Try-Pennie/slate#1836, #1877, #1889, #1890, #1892, #1907, #1915, #1923, #1947, 2026-09-03 to
+  04: nine issues in one walk removed interface copy, among it a "Work email address" label with a
+  hint reading "The address they sign in to Google with", a standing two line warning describing a
+  banner the reader was not looking at, "Set in Salesforce (Agent Manager), and synced hourly",
+  the word "Label" over every row of a list, and a heading that was a sentence, "Coverage in the
+  hours currently saved". Dan: "I don't need to be told what waiting for a first sign in means."
+  In the same walk #1872, #1950 and #1938 asked FOR explanations: what each cron lane does and how
+  often it should run, what Grid, Notice and Buffer mean, what "84 (75 today)" means. Both
+  requests came from one reader on one day, so they are one rule rather than a contradiction)
+
+- **L605. A component that is correct in isolation names and explains itself, so a page COMPOSED
+  of such components states every fact twice, and the duplication exists only in the composition,
+  which is the one place nobody reads.** The page header and its only section share a title; a
+  column header and every value under it carry the same word; a mark sits beside its own caption
+  (L558); a status pill sits beside the control that shows and changes the same status; a unit
+  appears in the heading, the placeholder and the hint. Before shipping a page, read the RENDERED
+  whole as one surface and delete every second statement of a fact. A self titling panel that
+  becomes the whole page loses its own heading, a value under a header carrying the noun becomes
+  Yes or No, and a set of states gets one vocabulary derived from one list for the summary, the
+  headers and the key.
+  (Try-Pennie/slate#1915, 2026-09-04: five admin pages stated their own title twice, header then
+  first section, and two duplicated the description too. #1823: a column headed Bookable where
+  every value read Bookable. #1878: a role pill in the page header beside a Role select under it.
+  #1955: the unit stated three times per row, thirty times per section. #1799 and #1810: "showing
+  1 to 5 of 5 (of 136)" and "Agents (102 bookable / 136)". #1928 and #1938: the counts strip, the
+  key and the column headers each held their own vocabulary for one set of seven states)
+
+- **L606. UI ships unseen by two routes, a two row fixture and a green suite, and each reads as
+  having looked.** A fixture of two rows says nothing about a list at 136 agents or 60 buckets,
+  where a per row explanation becomes a wall, a name inside a button wraps to three lines, a glyph
+  becomes texture and sixty forms become one unreadable scroll; and a suite proves only the
+  property it measures, so a contrast suite green on every text against surface pairing shipped a
+  hover tint at 1.009:1, a badge with no visible fill and a dark theme whose muted text matched its
+  primary. Every list, table, picker and repeated row is screenshotted at the REAL record count, in
+  both themes, at a wide window and a laptop window, before merge, and the screenshot goes in the
+  PR body so the reviewer judges the picture. When a person finds by eye what a suite passed, the
+  suite's blind spot is the finding (L63).
+  (Try-Pennie/slate#1760, #1784, #1794, #1796 then #1812, #1896, #1947, #1955, 2026-09-02 to 04:
+  126 raw checkboxes and 8,755 `<option>` elements on one page, "View as Kenneth Johnson"
+  wrapping to three lines so every row was a different height, a tier glyph whose own issue said
+  to screenshot it against the full roster first and which shipped anyway and was replaced ("I
+  hate the change made to the teams"), sixty bordered forms in one scroll ("I don't even know
+  where to start with it"), thirty rows of page for ten numbers. And by eye under green suites:
+  #1851 a hover tint at 1.009:1, #1881 a badge fill at 1.08:1 against its header, #1958 muted text
+  at 13.70:1 beside primary at 13.73:1 in dark, #1821 a pill 9px off its header, #1945 no gap
+  between a textarea and its button, #1921 a digit optically off centre. Dan found every one of
+  those in one afternoon)
+
+- **L607. The browser's native control and the framework's default surface are what SHIP when
+  nothing replaces them, and to the person they read as a piece of the operating system pasted
+  into the product.** A native `<select>` drops the OS menu over a branded page and at several
+  hundred options fills the viewport; a select given the text input's class crowds its arrow
+  against the edge, because a select spends its right padding on the arrow; a textarea given the
+  input's class has its height fixed at one line and its text against the border; a product with
+  no error boundary shows the framework's raw dark error screen; a route with no loading boundary
+  leaves the old page on screen under a spinner. Every control the person touches and every
+  fallback surface (error, loading, not found) is a design system one from the first commit, with
+  its own class wherever its geometry differs (a select is not an input, a textarea is not an
+  input). Keep what the native control gave for free when replacing it (L568).
+  (Try-Pennie/slate#1746, #1849, #1854, #1945, #1970, #1848, #1792, 2026-09-02 to 04: a native
+  select inside the product's own account menu ("it looks like a piece of the OS pasted into the
+  page, not part of Slate"), 19 native selects across 13 files with the timezone one covering the
+  whole browser window, every select in the app borrowing `inputCls`, two admin textareas
+  rendered 44px tall with their `rows` ignored, no `error.tsx` or `global-error.tsx` anywhere so a
+  failed save after a deploy showed Next's black "This page couldn't load", no `loading.tsx` in
+  the admin tree, and a spinner drawn as a circle with one border edge turned transparent)
+
+- **L608. A server action that returns void and revalidates a route has told the person nothing:
+  the only sign it worked is a control somewhere on the page having changed, which is a
+  difference they would have to be already looking for, and a refusal it computed has nowhere to
+  land.** Every action returns an outcome, the page the form is on renders it, and the redirect
+  and the revalidate name THAT page rather than a hub or a landing page. A destructive or
+  irreversible control looks like one and confirms with the specific consequence, never a generic
+  "are you sure". Unsaved edits are guarded on refresh AND on in app navigation, which are
+  different mechanisms and the second is the common case in a console. And a key that commits a
+  field must not also submit the form, or the difference between picking a value and writing the
+  org's hours is one faint highlight.
+  (Try-Pennie/slate#1769, #1922, #1966, #1968, #1873, #1875, #1970, 2026-09-02 to 04: "Make
+  bookable", the slowest admin action in the app with a live Google call inside it, had no pending
+  state and returned void with `revalidatePath("/admin")` from a form on another route ("it
+  worked but it didn't immediately look like it did anything"); six saves redirected to
+  `/admin/settings`, a bare redirect since the hub split, so the outcome query and every
+  validation refusal were destroyed by the second redirect and the person landed on Health
+  believing they had saved; a refresh threw away a week of typed hours with no warning; Enter in a
+  time field saved the org's business hours to live data twice before anyone noticed; "Apply
+  company default hours", which overwrites a schedule, was styled identically to a reversible
+  local convenience; Deactivate was the same neutral button as Reactivate and its copy claimed
+  "fully reversible", which the code says it is not)
+
+- **L609. Ordering a screen, a row or a menu by the shape of the DATA (the code's digit order, the
+  column order the schema happens to have, the order the controls were written) puts what the
+  reader scans for wherever it happens to fall, and gives the commonest value the heaviest
+  treatment because it was styled without asking how often it appears.** First is the thing done
+  most often or the thing most in trouble; the rare, the dangerous and the irreversible go last,
+  so a keyboard user's default landing is never on them; and the commonest value gets the quietest
+  treatment so the exceptions are what stand out. Decide the axis by asking what question the
+  person arrives with, and write the chosen order down as a convention so the next table copies it
+  rather than picking its own.
+  (Try-Pennie/slate#1942, #1963, #1844, #1749, #1875, #1938, #1748, 2026-09-02 to 04: sixty
+  buckets sorted with the backend digit weighted 100 and the debt tier 10 ("that's not the
+  important part. we want to see debt bucket desc"); a row menu opening with keyboard focus on
+  "View as", the audited impersonation action, above Manage, the routine one; a roster whose Role
+  column rendered "agent" as a bold pill on 117 of 121 rows, placed ahead of Team; "View as
+  another user" as the first card on the admin landing page; Deactivate above the ordinary
+  editing controls; sixty rows in code order on a page whose only question is "which of these is
+  in trouble"; fifteen sections stacked in one 1,723 line page in the order they were added)
+
+- **L610. Collapsing content behind a disclosure, a toggle or a lazy fetch for tidiness, and
+  rendering nothing on the healthy day because every element was conditional on something being
+  wrong, both hide the thing the page exists to show, and a fully healthy page becomes
+  indistinguishable from one that failed to render.** What the reader came for renders open and
+  always, with a positive statement of what was checked and when on a good day. The inverse is
+  applied as firmly: a control used rarely is demoted or deleted rather than kept prominent and
+  re-explained, and a page that is empty by construction becomes a panel on the page people
+  already land on, not a route somebody has to remember.
+  (Try-Pennie/slate#1943, #1872, #1767, #1960, #1749, #1795, #1836, 2026-09-02 to 04: a booking's
+  history behind a toggle that fetched only when opened ("don't hide history. there should be no
+  toggle there"); nine cron lanes inside a closed `<details>` ("show the cron lanes all the
+  time"); a health page whose sync panel and notices rendered nothing when healthy, so the better
+  the fleet did the emptier the page got; a stuck deliveries route whose rows could only exist
+  after an alert had already fired ("feels like this page is meant to be empty so we probably
+  don't need to give it its own page"); the free text View as panel kept after the per row control
+  existed, with its copy rewritten to justify it, whose only unique reach turned out to be
+  offboarded employees)
+
+- **L611. A free text box for a value whose valid set already exists as a constant in code offers
+  every typo as an option and reports none of them, because the value is matched downstream rather
+  than validated, and the only symptom is a pool one person shorter.** If the valid values are
+  enumerable, the control enumerates them, derived from the same constant the reader uses so a
+  sixth value cannot exist in routing and be missing from the form, and the server refuses anything
+  outside the set because the form is never the only writer. An identifier nobody knows by heart
+  (a channel id, a zone name) is shown and chosen by its name.
+  (Try-Pennie/slate#1874, #1957, #1849, 2026-09-03 to 04: debt team and backend, the two
+  attributes every one of sixty buckets matches on, were comma separated text boxes with a
+  placeholder, beside a `role` field nothing reads, while `DEBT_TIER` and `BACKEND` sat in
+  `src/lib/xbc.ts` ("they should be idiot proof, with no typos possible"); the Slack destination
+  field asked for a channel id with the placeholder `default C09F4L6PLQP` ("nobody knows the
+  channel IDs offhand"); the timezone select offered every zone the runtime knew, several hundred,
+  to a roster spread over seven US zones)
+
+- **L613. A shared component created to end N copies converts the one site in front of whoever
+  built it and leaves the rest standing, and a superseded control is kept with its justification
+  rewritten rather than deleted, so the product ends up half converted with the old thing arguing
+  for itself in a docstring.** Consolidation is the component AND a guard that fails on the next
+  hand written copy, shipped in the same change, with a positive control proving the guard catches
+  the shape it exists to catch; a component alone is a suggestion. When a second way to do
+  something exists, the first is deleted along with the module, the comment and the test that
+  defended it, because a reason left standing over code nothing needs is read as a decision (L346,
+  L562).
+  (Try-Pennie/slate#1838, 2026-09-03: `AdminPageHeader`'s docstring said it existed because
+  "thirteen copies of it is how the widths in #1745 ended up disagreeing", and ten pages still
+  carried the hand written band it replaced, so restyling the component would have left the
+  console visibly half converted. #1745, #1765, #1768, #1792 and #1888: thirteen page widths, two
+  time pickers disagreeing about rounding, two focus ring recipes disagreeing about contrast, two
+  spinners, two spellings of one reading width, all found in one week. #1795 then #1836: the
+  older View as panel was kept and its copy rewritten to explain why it survived; when it was
+  finally removed, its one sentence was lifted into its own module whose docstring argued for its
+  own necessity, and a third issue had to remove that. #1774 and #1949: the components and the
+  back links a restructure made dead were left in place)
+
+
+
+
+
+
+
+
+
 
 ## External systems
 
@@ -5623,6 +5858,18 @@ window is a count rather than a boundary.
   without bringing that machinery across would have traded a crash safe lock for one that parks a
   stuck lock in front of the next run for half an hour, in exchange for a tidier estate. Ovation
   took both locks instead, by the mechanism each one uses, in a fixed order)
+- **L600. A lock guarding a job the platform RETRIES must let the retry recognise its dead
+  predecessor, because a retry arrives seconds after the kill carrying the same event identity, and
+  a lock that can only expire by deadline refuses the platform's own recovery while reading as
+  correct behaviour.** Stamp the lock with the event identity, so a holder carrying the retry's own
+  identity is proven dead: the platform only retries after the previous attempt has ended.
+  (bidspoke#1181, 2026-09-05: Cloudflare terminated the hourly archive invocation three times in
+  ten days, each shown in analytics as one `clientDisconnected` invocation with CPU far under the
+  limit, and re-dispatched the cron 43 seconds to 3 minutes later with the same `scheduledTime`.
+  Every retry read the dead run's lock as a live holder with nine minutes of deadline left,
+  recorded `skipped-locked`, and the hours waited a full cadence for the deadline rule. Two of the
+  three were never alerted because archive alerts were muted at the time)
+
 
 ## Test speed
 

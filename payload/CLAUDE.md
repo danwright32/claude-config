@@ -25,6 +25,21 @@ correctly.
 
 - **Time-taking actions must always show working / still-alive / failed as visibly distinct states.** Any action that does not return instantly (network calls, sends, detached AI or background runs, long computations) must never present a bare indefinite spinner. The user has to be able to tell, at a glance, three things apart: it actually started, it is still alive (elapsed time, a heartbeat, streamed progress, or a count), and it failed or stalled (a timeout that converts the in-progress state into an actionable error/retry). A spinner that looks identical whether the work is progressing, hung, or dead is a defect. Apply this to every such surface by default, not just the one a bug was reported on. (Dan, 2026-06-28: "that's a principle we should apply everywhere.")
 
+## Building UI (what Dan corrected walking Slate, 2026-09-02 to 04)
+
+Nine inclinations, each behind several of the 93 issues in Slate's UI Concerns milestone. The full
+rule and its evidence live in LESSONS.md as L604 to L611 and L613; these are the instructions.
+
+- **Explain the domain, never the interface (L604).** No sentence saying what a field is, what a heading contains, or what a banner will do. A domain term the reader cannot know is explained once, on the term, reachable by keyboard and screen reader, never as a paragraph over a repeated row.
+- **Every fact once per screen (L605).** Read the composed page as one surface and delete every second statement: a section repeating the page title, a value repeating its header, a pill beside the control that shows the same thing, a unit in heading and placeholder and hint. One vocabulary, derived from one list, for a set of states wherever it is shown.
+- **Look at it at the real count, in both themes, before merge (L606).** Every list, table, picker and repeated row is screenshotted at production scale (136 agents, 60 buckets) at a wide and a laptop window, and the screenshot goes in the PR. A two row fixture and a green suite are the two ways UI ships unseen.
+- **Nothing native, nothing default (L607).** Every control and every fallback surface (error, loading, not found) is a design system one from the first commit, with its own class where the geometry differs: a select is not an input, a textarea is not an input.
+- **An action says it started, says what it did, on the page you were on (L608).** Actions return an outcome; redirect and revalidate name the route the form is on; destructive controls look destructive and confirm with the specific consequence; unsaved edits are guarded on refresh and on in app navigation; a key that commits a field never also submits the form.
+- **Order for the reader, not the data (L609).** First is what is done most often or most in trouble; rare, dangerous and irreversible last; the commonest value gets the quietest treatment so exceptions stand out.
+- **The page's purpose is always open (L610).** No toggles, disclosures or lazy fetches over the content the reader came for, and a positive statement on the healthy day. The rare is demoted or deleted; a page empty by construction is a panel on the landing page, not a route.
+- **A vocabulary in code is a picker, never a text box (L611).** Enumerate from the same constant the reader uses, refuse anything outside it on the server, and show identifiers by name.
+- **Consolidation is the component plus the guard, in one change (L613).** Convert every site, ship a scan that fails on the next hand rolled copy, and delete the superseded thing with its docstring rather than rewriting its justification.
+
 ## Build-Time Reliability Rules
 
 These come from a 2026-07-06 audit of roughly 850 historical GitHub issues across all 4 active projects: the same handful of root causes kept recurring, self-discovered by Claude only after the fact instead of being caught while building. Apply these by default, not just retroactively.
