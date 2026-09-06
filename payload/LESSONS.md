@@ -1652,6 +1652,25 @@ window is a count rather than a boundary.
   the whole time, which is L400 one step along: not a check whose name overstates it, but a
   check half of which the runner cannot reach)
 
+- **L414. A build product's mtime records when it was last WRITTEN, not when it was last
+  built, and a source file's mtime records when it was last touched, not when it changed,
+  so a freshness check comparing the two is red on a healthy tree in BOTH directions: a
+  correct incremental build that relinks nothing leaves the product reading as permanently
+  stale, and any generator that rewrites a source on every run leaves it permanently
+  newer.** Assert the property you actually care about against something that is always
+  current, such as the resolved configuration the tool reports, rather than inferring
+  currency from timestamps. (ovation#25 and ovation#26, 2026-09-06: a suite judging the
+  signed Debug and Release bundles added an mtime check so a bundle built before an
+  entitlements change could not pass while saying nothing about the current configuration.
+  It fired on its first run for a real reason, then never stopped: `test-project-configuration.sh`
+  runs `xcodegen` on every run, so `project.pbxproj` was newer than every product within
+  seconds of a green suite, and rebuilding both configurations did not clear it either,
+  because the incremental build correctly relinked nothing and left the executable's mtime
+  where it was. L40 is the same comparison failing the other way, toward a false green, and
+  reading it as "timestamps are merely weak" is what produces this one: the honest cover is
+  the OTHER side of the pair, asserting the same properties against the resolved build
+  settings, which need no build and are never stale)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
