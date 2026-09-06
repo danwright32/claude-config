@@ -1688,6 +1688,22 @@ window is a count rather than a boundary.
   and Ovation records the union of both siblings' fields, so the gap had already been
   noticed twice from outside without ever being closed at the source)
 
+- **L417. Turning on a platform security control imposes requirements on parts of the build you
+  never touched, and the resulting refusal happens only when the artifact RUNS, so a
+  configuration nothing ever launches stays broken while every check that reads the
+  configuration is green.** Launch every configuration you ship OR develop in, not only the
+  one you ship. (ovation#20 and ovation#30, 2026-09-06: the Debug build could not start at
+  all. Three individually correct settings combined. Xcode's default `ENABLE_DEBUG_DYLIB`
+  splits Debug's code into a separate dylib; `ENABLE_HARDENED_RUNTIME` requires a loaded
+  library to validate against the loading process's Team ID; and the deliberate self signed
+  identity from ovation#9 has no Team ID at all. Both binaries were signed by the same
+  identity and both reported `TeamIdentifier=not set`, so nothing in the configuration read
+  as wrong, and the suite that asserts the signed bundle's identity passed throughout. Release
+  builds no such dylib and opened one window and quit cleanly, so the half everyone verifies
+  was the healthy half and the harm sat in the other (L142). It was found the first time
+  anything launched the app, by the smoke check written for exactly that gap, and the fix is
+  to remove the thing needing the exemption rather than to grant it)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
