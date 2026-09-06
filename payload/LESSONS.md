@@ -5430,6 +5430,24 @@ window is a count rather than a boundary.
   and therefore inert. The sync reported success; the only thing that noticed was the wiring check
   inside that hook's own suite, going red on the deployed Mac)
 
+- **L409. Two primitives that provide the same visible exclusion or ownership (a file lock against a
+  directory used as a mutex, a lease against a flag, a transaction against a hand rolled guard)
+  routinely differ in what happens when their HOLDER DIES, because some are released by the kernel
+  and some need cleanup that nobody runs after a crash, so swapping one for the other ships a
+  regression no test that does not crash can see.** Name the crash behaviour of BOTH before the
+  swap, and prove it by killing a holder rather than by reading the docs. (overture#3571,
+  2026-09-05: three Mac apps share one build machine, and Downbeat's runner asserts in a comment
+  that its lock "is shared with Overture deliberately" while `xcodebuild-tests.lock` appears
+  nowhere in Overture's tree, so the two have never excluded each other. The tidy fix, and the one
+  the implementation plan recommended, was to point Overture's runner at Downbeat's path. It is a
+  mechanism rewrite, not a path edit: Downbeat takes the lock by `mkdir` on a DIRECTORY, Overture
+  by `flock` on a FILE, and they cannot coexist at one path. The cost nobody had priced is that
+  `flock` is released by the kernel when its holder dies while a `mkdir` lock is not, which is
+  exactly why Downbeat carries `claim-stale-lock.sh` and a 1800 second timeout. Converting Overture
+  without bringing that machinery across would have traded a crash safe lock for one that parks a
+  stuck lock in front of the next run for half an hour, in exchange for a tidier estate. Ovation
+  took both locks instead, by the mechanism each one uses, in a fixed order)
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
