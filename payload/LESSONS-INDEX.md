@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 546 lessons.
+LESSONS.md, which is NOT loaded into the session. 547 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -544,6 +544,7 @@ to decide something: the body is where the failure it came from is described.
 - L386. A scheduled job's DECLARED time is not when it runs, because platforms delay scheduled work by hours under load, so two scheduled jobs must never be ordered by clock arithmetic between their crons.
 - L379. Doing by hand what a tool normally does performs the visible change and silently omits the tool's OTHER writes, and the one most often omitted is the record some monitor reads, so the system ends up correct while the monitor is permanently wrong.
 - L390. In a two way sync, a file REGENERATED from one side rather than mirrored gets none of the protection the mirrored files beside it get, so a merge rule written for the receiving direction has to be written again for the sending one.
+- L625. A two way mirror transmits what EXISTS and has no way to transmit what was REMOVED, so a replica that has not yet received a deletion restores the deleted item on its next send, and the restoration is indistinguishable from a legitimate addition.
 - L409. Two primitives that provide the same visible exclusion or ownership (a file lock against a directory used as a mutex, a lease against a flag, a transaction against a hand rolled guard) routinely differ in what happens when their HOLDER DIES, because some are released by the kernel and some need cleanup that nobody runs after a crash, so swapping one for the other ships a regression no test that does not crash can see.
 - L600. A lock guarding a job the platform RETRIES must let the retry recognise its dead predecessor, because a retry arrives seconds after the kill carrying the same event identity, and a lock that can only expire by deadline refuses the platform's own recovery while reading as correct behaviour.
 - L617. An operation that keeps its progress in an on disk resumable state (a git rebase or merge, a migration runner, a batch cursor) leaves that state behind when its process is killed, and the leftover reads as HEALTHY to every check that examines content, because the queue is empty, the tree is clean and nothing conflicts, so the next run must inspect the operation's own progress marker rather than the data it was moving.

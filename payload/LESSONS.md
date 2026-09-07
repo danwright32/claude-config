@@ -5969,6 +5969,22 @@ window is a count rather than a boundary.
   and therefore inert. The sync reported success; the only thing that noticed was the wiring check
   inside that hook's own suite, going red on the deployed Mac)
 
+- **L625. A two way mirror transmits what EXISTS and has no way to transmit what was REMOVED, so a
+  replica that has not yet received a deletion restores the deleted item on its next send, and the
+  restoration is indistinguishable from a legitimate addition.** Carry deletions explicitly, as a
+  tombstone or as a refusal to re-add anything deleted since that replica last received, rather
+  than trusting the mirror to convey an absence. Distinct from L390, which is about a REGENERATED
+  file beside mirrored ones: this item was mirrored, and mirroring is exactly what reversed it.
+  Distinct from L381, where the mirror has ONE authoritative side and the other side's edit is
+  correctly reverted: here both sides are authoritative and the stale one wins.
+  (claude-config#331, 2026-09-07: skills/running-design-rounds was renamed to skills/design-rounds
+  on one Mac and published. The other Mac, whose published apply state predated the rename, then
+  sent three times, and stage_local_to_payload re-added the old folder from its own home, putting
+  it back on both Macs. Two loadable skills then carried identical description frontmatter, so the
+  assistant saw two skills competing for one job. The receive reported the restored files as
+  ordinary additions, and it was noticed only because a name that had just been deleted reappeared
+  in the session's skill list.)
+
 - **L409. Two primitives that provide the same visible exclusion or ownership (a file lock against a
   directory used as a mutex, a lease against a flag, a transaction against a hand rolled guard)
   routinely differ in what happens when their HOLDER DIES, because some are released by the kernel
