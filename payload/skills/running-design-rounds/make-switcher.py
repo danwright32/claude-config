@@ -128,9 +128,13 @@ PAGE = """<!doctype html>
   .readout h2 { font-size: 15px; margin: 0 0 5px; font-weight: 600; }
   .readout p { margin: 0 0 6px; color: #3D342E; }
   .readout .measured { color: #6E6259; font-size: 13px; margin: 0; }
-  .stage { flex: 1; display: flex; }
-  /* Auto margins centre the screen in the space left over and, unlike centring
-     with align-items, never cut off the top of one taller than the window. */
+  /* The stage is a canvas, not leftover background: it fills the rest of the window and
+     says so, so the space around a small screen reads as room rather than as a void. */
+  .stage { flex: 1; display: flex; background: #E9E4DE;
+           border: 1px solid #DDD5CD; border-radius: 10px; padding: 24px;
+           box-sizing: border-box; overflow: auto; }
+  /* Auto margins centre the screen on the canvas and, unlike centring with align-items,
+     never cut off the top of one taller than the window. */
   .stage > * { margin: auto; }
   .hint { margin: 22px 0 0; color: #7C7168; font-size: 12px; flex: none; }
 </style>
