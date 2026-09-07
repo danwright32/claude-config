@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 518 lessons.
+LESSONS.md, which is NOT loaded into the session. 519 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -258,6 +258,7 @@ to decide something: the body is where the failure it came from is described.
 - L339. A generator that seeds from system entropy when no seed is supplied produces a different artifact on every run, so any comparison between two versions of it measures the seed rather than the change, and any cache keyed on its inputs is silently wrong.
 - L14. Derived state re-derives on every input that feeds it, and every action updates every surface showing what it changed.
 - L15. Key everything on stable identifiers.
+- L421. A write that SKIPS because its destination already exists must verify that the destination holds what it expects, or a damaged or foreign file at that path is silently adopted as this write's own result and the record pointing at it carries a value nothing checked.
 - L145. Changing a record's identity IN PLACE can land on an identity another record already holds, so check the destination is free before writing it.
 - L153. A path built from the user's home directory plus a literal folder name records where something happened to be, not what it is, so the first time anyone moves it the code points at nothing.
 - L16. A count and the rows it promises come from one shared predicate

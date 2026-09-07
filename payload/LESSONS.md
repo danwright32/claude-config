@@ -2852,6 +2852,18 @@ window is a count rather than a boundary.
 - **L15. Key everything on stable identifiers.** Never mutable strings, display names,
   positional indices, or fabricated fallbacks; when a key must change, record the
   old-to-new mapping for everything still holding the old one. (16 issues, 4 repos)
+- **L421. A write that SKIPS because its destination already exists must verify that the destination
+  holds what it expects, or a damaged or foreign file at that path is silently adopted as this write's
+  own result and the record pointing at it carries a value nothing checked.** The moment of writing is
+  the only one where the correct content is in hand, and every later check can say the record and the
+  file disagree without being able to repair it. The mirror of L145: that one covers a write landing on
+  an occupied destination, this one covers a write declining to happen because the destination is
+  occupied. Applies to content addressed storage, caches, uploads that skip on a matching name, and any
+  "already done" test in an idempotent job.
+  (ovation#90: documents are stored under a path derived from their content hash, so storing the same
+  receipt twice correctly reuses the existing file, and it returned on a bare file-exists test without
+  reading the bytes)
+
 - **L145. Changing a record's identity IN PLACE can land on an identity another record already holds, so
   check the destination is free before writing it.** Under a unique constraint the write either fails and
   leaves the record half-changed, or silently merges the two and destroys one's history, and both
