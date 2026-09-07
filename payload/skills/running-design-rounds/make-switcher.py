@@ -182,6 +182,15 @@ VARIANTS.forEach(function (variant, index) {
   tabs.append(button);
 });
 
+document.addEventListener("keydown", function (event) {
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.key === "ArrowRight") { show(current + 1); event.preventDefault(); return; }
+  if (event.key === "ArrowLeft") { show(current - 1); event.preventDefault(); return; }
+  for (var i = 0; i < VARIANTS.length; i++) {
+    if (VARIANTS[i].key === event.key.toLowerCase()) { show(i); event.preventDefault(); return; }
+  }
+});
+
 show(0);
 </script>
 </body>
