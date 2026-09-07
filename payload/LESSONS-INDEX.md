@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 557 lessons.
+LESSONS.md, which is NOT loaded into the session. 558 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -322,6 +322,7 @@ to decide something: the body is where the failure it came from is described.
 - L580. Editing something by DELETING and RECREATING it discards everything accumulated ALONGSIDE it, its run history, its metrics, its audit trail, so where the platform offers an in place alter, use that for an edit and reserve delete plus create for real creation and removal.
 - L402. A control that EDITS a value must write the exact field the consuming path READS, so where a per item override beats a shared default at the point of use, an edit control offered over the default silently discards the edit for every item holding an override, while the surface reports it as applied.
 - L419. A sort whose primary key TIES across most of its real inputs is actually ordered by its tie-break, so a tie-break chosen for stability rather than meaning (an id, an insertion order, a hash) silently becomes the order people see, and where that id is minted from the record's own content it orders by that content's SPELLING.
+- L432. A default that is RE-DERIVED from a sibling field whenever that field changes hides itself, because the values it produces vary and read as entered, and only the constant DIFFERENCE between the two fields reveals it. Check any derived looking field for a fixed offset across the whole population before pricing, billing or deciding anything from it.
 
 ## Security and privacy
 

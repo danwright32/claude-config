@@ -3663,6 +3663,26 @@ for reference; L6 was reviewed and deliberately not adopted.
   distribution you have never looked at: check how many distinct values it really takes on live data
   before trusting anything above the tie-break. (overture#3284, overture#3603)
 
+- **L432. A default that is RE-DERIVED from a sibling field whenever that field changes hides
+  itself, because the values it produces vary and read as entered, and only the constant
+  DIFFERENCE between the two fields reveals it. Check any derived looking field for a fixed
+  offset across the whole population before pricing, billing or deciding anything from it.**
+  (ovation#112, 2026-09-07: Ovation prices every invoice from `endsAt` minus `startsAt`, and PRD
+  5.3 records those as when Dan starts and stops shooting. Measured on the custody export, 16 of
+  19 real bookings carried a duration of exactly 3600 seconds. `BookingDraft.defaultEnd()` in
+  Downbeat is `defaultStart().addingTimeInterval(3600)`, and `BookingDraft.swift:499` re-derives
+  the end as start plus 3600 whenever the start is resolved, so the end follows the start and
+  nobody had ever set it. What made it invisible is that it MOVED: the 19 bookings carried 9
+  distinct start times of day, so the end times were all different and all plausible, and a
+  scan for a repeated constant would have found nothing. Every one of those invoices would have
+  billed $250.00 whatever the shoot actually took, and the amount totals correctly against its
+  own parts and reads as normal all the way to the client, which is L161. The guard already
+  planned for this (ovation#43, refuse a zero, negative or implausibly long duration) cannot
+  fire, because one hour is the most plausible value on the page. L548 and L113 both cover a
+  default that never moves, which shows up as a column of identical values; this is the half
+  that varies. The root fix is the same as L548's: record whether the value was ever set by
+  anyone, since "never touched" was not a state anything could query.)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
