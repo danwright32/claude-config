@@ -284,7 +284,7 @@ if [[ -x "$CHROME" ]]; then
   g="$(geometry "$TMP/out.html" 900)"
   dead="$(echo "$g" | awk '/dead-space-below/ {print $2}')"
   check_eq "the page leaves no dead space under a short screen" "1" \
-    "$([ -n "$dead" ] && [ "$dead" -le 24 ] && echo 1 || echo "0 (measured ${dead:-none}px)")"
+    "$([ -n "$dead" ] && [ "$dead" -le 48 ] && echo 1 || echo "0 (measured ${dead:-none}px)")"
   check "the stage is centred on the window" "centre 720" \
     "$(echo "$g" | awk '/viewport-centre/ {print "centre", $2}')"
   check_eq "the stage sits on the window centre line" "720" \

@@ -101,9 +101,13 @@ PAGE = """<!doctype html>
 <title>__TITLE__</title>
 <style>
   :root { color-scheme: light; }
-  body { margin: 0; background: #F4F1ED; color: #1B1613;
+  body { margin: 0; background: #F4F1ED; color: #1B1613; min-height: 100vh;
          font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  .frame { max-width: 1180px; margin: 0 auto; padding: 28px 24px 60px; }
+  /* The frame is the window, so a short screen leaves no dead ground under it: the
+     stage takes whatever height is left over. */
+  .frame { max-width: 1180px; margin: 0 auto; padding: 28px 24px 24px;
+           box-sizing: border-box; min-height: 100vh;
+           display: flex; flex-direction: column; }
   .eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
              color: #6E6259; margin: 0 0 6px; }
   h1 { font-size: 26px; line-height: 1.2; margin: 0 0 10px; font-weight: 600; }
@@ -124,8 +128,11 @@ PAGE = """<!doctype html>
   .readout h2 { font-size: 15px; margin: 0 0 5px; font-weight: 600; }
   .readout p { margin: 0 0 6px; color: #3D342E; }
   .readout .measured { color: #6E6259; font-size: 13px; margin: 0; }
-  .stage { display: flex; justify-content: center; }
-  .hint { margin: 22px 0 0; color: #7C7168; font-size: 12px; }
+  .stage { flex: 1; display: flex; }
+  /* Auto margins centre the screen in the space left over and, unlike centring
+     with align-items, never cut off the top of one taller than the window. */
+  .stage > * { margin: auto; }
+  .hint { margin: 22px 0 0; color: #7C7168; font-size: 12px; flex: none; }
 </style>
 <style>
 __STYLES__
