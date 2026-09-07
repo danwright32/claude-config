@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 547 lessons.
+LESSONS.md, which is NOT loaded into the session. 548 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -416,6 +416,7 @@ to decide something: the body is where the failure it came from is described.
 - L613. A shared component created to end N copies converts the one site in front of whoever built it and leaves the rest standing, and a superseded control is kept with its justification rewritten rather than deleted, so the product ends up half converted with the old thing arguing for itself in a docstring.
 - L424. An action taken from ONE row whose write reaches a whole population must say whether THAT row was among the ones it changed, because a truthful count of the others is indistinguishable from success on the one the person was looking at.
 - L623. A banner or badge announcing that the product is in a DANGEROUS or SPECIAL mode (impersonating somebody, a staging or test store, a dry run, an admin override) must be drawn in a treatment that appears nowhere else in the product, because one built from the ordinary palette reads as chrome and is looked past by exactly the person it is warning.
+- L626. A rule that conditionally OMITS a label (a group heading, a caption, a legend) does not remove the SPACE that label occupied, so wherever it fires the surface shows a gap with nothing in it, which reads as a layout fault rather than as the boundary it still is.
 
 ## External systems
 

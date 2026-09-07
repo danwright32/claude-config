@@ -4649,6 +4649,21 @@ window is a count rather than a boundary.
   before the backup was consulted)
 
 
+- **L626. A rule that conditionally OMITS a label (a group heading, a caption, a legend) does not
+  remove the SPACE that label occupied, so wherever it fires the surface shows a gap with nothing
+  in it, which reads as a layout fault rather than as the boundary it still is.** Whatever the
+  label was carrying, the separation and the meaning of the break, has to be carried by something
+  else in the same change, and the omission rule and the spacing live in different files so
+  neither call site looks wrong on its own.
+  (Try-Pennie/slate#2043, 2026-09-07: the admin sidebar suppresses a group's heading when the
+  group collapses to one item, because a heading over a single entry promises a section that is
+  not there (#1790). "Alerts and floors" became the only Monitoring item when #1960 moved stuck
+  deliveries to the health page, so the heading vanished while the 24px between groups margin
+  stayed, and Dan asked "why is there a space between webhooks and alerts/floors". The
+  compensating mark that did exist, a bottom rule under a headingless group (#1841), was written
+  for the first item in the list where there is no space above, so it sat on the wrong side of
+  the gap)
+
 
 
 
