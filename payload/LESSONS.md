@@ -3040,6 +3040,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   and the sibling sentence on the row below already renders one as "Oct 29". Dan read the banner,
   could not tell whether the clash was on the header's date or a later night of a run filed there,
   and asked. The fix is not to restore the false claim, it is to say "on Oct 2")
+- **L629. A number printed BESIDE a finding is read as evidence for that finding, so it must be
+  computed on the same key and the same population**, because one keyed differently (a scheduled
+  date against an event date, a rolling window against a calendar month) argues in whichever
+  direction its value happens to point, and it misleads in both: a high value reads as
+  confirmation and a zero reads as the finding being ruled out.
+  (project-enrollment-tracker#1344, 2026-09-07: a weekly check reports a rep-month that recorded
+  no enrollments despite days worked, and appends `(top X, cleared Y)` to each line. `top_units`
+  counts enrollments whose ORIGINAL SCHEDULED FIRST DRAFT falls in the month, not enrollments made
+  in it, so it can never reconcile against the count being reported. One flagged rep showed
+  `top 4, cleared 3`, which reads as four sales lost to a broken name, and all four were July
+  deals with August draft dates. The other showed `top 0, cleared 0`, which reads as a second
+  source confirming the zero, and that same rep's April row also reads `top 0, cleared 0` against
+  19 real April enrollments. The project's own CLAUDE.md already carried a section titled Two
+  commission calendars warning that the two never reconcile, and the parenthetical shipped anyway,
+  because a supporting number reads as a courtesy rather than as a claim)
 
 ## State and identity
 

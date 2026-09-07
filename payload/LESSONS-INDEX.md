@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 570 lessons.
+LESSONS.md, which is NOT loaded into the session. 571 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -266,6 +266,7 @@ to decide something: the body is where the failure it came from is described.
 - L427. A probe posted on a fixed interval that does not wait for the previous one to return records one event per interval that a single outage lasts
 - L431. A guard that skips expensive work when its inputs are unchanged saves nothing unless computing its KEY is cheaper than the work
 - L440. A message softened so it stops claiming something the check did not measure must then STATE what the check DID measure
+- L629. A number printed BESIDE a finding is read as evidence for that finding, so it must be computed on the same key and the same population
 
 ## State and identity
 
