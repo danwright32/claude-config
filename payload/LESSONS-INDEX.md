@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 537 lessons.
+LESSONS.md, which is NOT loaded into the session. 538 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -541,6 +541,7 @@ to decide something: the body is where the failure it came from is described.
 - L409. Two primitives that provide the same visible exclusion or ownership (a file lock against a directory used as a mutex, a lease against a flag, a transaction against a hand rolled guard) routinely differ in what happens when their HOLDER DIES, because some are released by the kernel and some need cleanup that nobody runs after a crash, so swapping one for the other ships a regression no test that does not crash can see.
 - L600. A lock guarding a job the platform RETRIES must let the retry recognise its dead predecessor, because a retry arrives seconds after the kill carrying the same event identity, and a lock that can only expire by deadline refuses the platform's own recovery while reading as correct behaviour.
 - L617. An operation that keeps its progress in an on disk resumable state (a git rebase or merge, a migration runner, a batch cursor) leaves that state behind when its process is killed, and the leftover reads as HEALTHY to every check that examines content, because the queue is empty, the tree is clean and nothing conflicts, so the next run must inspect the operation's own progress marker rather than the data it was moving.
+- L423. Configuration INSTALLED into the platform (a launch agent, a cron entry, a systemd unit, a git hook, a shell alias) is a COPY, so changing its definition in the source changes nothing on any machine until that machine re-runs the installer, and nothing reports a machine still running the old copy.
 
 ## Test speed
 

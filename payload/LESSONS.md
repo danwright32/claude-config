@@ -5926,6 +5926,20 @@ window is a count rather than a boundary.
   that had not happened, per claude-config#325)
 
 
+- **L423. Configuration INSTALLED into the platform (a launch agent, a cron entry, a systemd unit,
+  a git hook, a shell alias) is a COPY, so changing its definition in the source changes nothing on
+  any machine until that machine re-runs the installer, and nothing reports a machine still running
+  the old copy.** Record what each machine actually has installed and compare it against what the
+  current source would write, rather than assuming a definition change has travelled.
+  (claude-config#328. On 2026-09-07 the shared config tool's catch up timer was shortened from
+  weekly to daily because a weekly job could not bound a drift that appeared daily. The change
+  landed in the source, was committed and pushed, and both Macs pulled it within minutes, so every
+  signal said it had shipped. It had not: the launch agent is written only by `install-autosync`,
+  which nothing re-runs, so one Mac was on the new interval and the other was still on the old one
+  with nothing anywhere reporting the difference. The same shape covers this repo's own git hooks,
+  which are installed per checkout, and pg_cron jobs in bidspoke, where changing one setting mints
+  a new job id rather than editing the running one)
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
