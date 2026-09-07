@@ -2081,12 +2081,14 @@ refuse_resurrected_deletions(){
     # that could not be made would discard somebody's work on a guess (L50).
     git -C "$SYNC_REPO" show "$delcommit^:$p" 2>/dev/null | cmp -s - "$SYNC_REPO/$p" 2>/dev/null || continue
     rm -f "$SYNC_REPO/$p" 2>/dev/null || true
-    # The LOCAL copy is left alone by default, and that is a deliberate refusal rather than an
-    # oversight (L9). Removing it would complete the deletion in one step and end the matter, and
-    # the byte for byte comparison above is what would make that safe, but an automatic deletion
-    # from somebody's own config is a product decision and not a default this tool gets to pick.
-    # SYNC_ACCEPT_DELETIONS=1 turns it on for anybody who wants the one step version.
-    if [ "${SYNC_ACCEPT_DELETIONS:-0}" = "1" ]; then
+    # The LOCAL copy goes too, which completes the deletion in one step and ends the matter. That
+    # is a product decision and not one this tool got to pick, so it was put to Dan and it is his
+    # (2026-09-07). What makes it safe is the byte for byte comparison above: this is the copy the
+    # shared config deleted, unchanged, so nothing unique to this Mac is removed and git still
+    # holds it in the commit the message names (L5, L9). SYNC_ACCEPT_DELETIONS=0 leaves it alone
+    # for anybody who wants to decide file by file, and then the message is said once per file
+    # rather than on every save, because the file stays and the watcher fires on every edit.
+    if [ "${SYNC_ACCEPT_DELETIONS:-1}" != "0" ]; then
       rm -f "$CLAUDE_HOME/${p#payload/}" 2>/dev/null || true
       rmdir "$(dirname "$CLAUDE_HOME/${p#payload/}")" 2>/dev/null || true
       removed="${removed:+$removed }${p#payload/}"
@@ -2106,7 +2108,7 @@ refuse_resurrected_deletions(){
     fresh="${fresh:+$fresh }$p"
   done
   if [ -n "$removed" ]; then
-    echo "claude-sync: $removed was deleted from the shared config and this Mac still had that deleted copy unchanged, so it was NOT published back (that would undo the deletion for both Macs) and the local copy has been removed here too, because SYNC_ACCEPT_DELETIONS=1. It is recoverable from ${lastdel:0:8}, the commit that removed it." >&2
+    echo "claude-sync: $removed was deleted from the shared config and this Mac still had that deleted copy unchanged, so it was NOT published back (that would undo the deletion for both Macs) and the local copy has been removed here too, which is what applying that deletion should have done. Set SYNC_ACCEPT_DELETIONS=0 if you would rather decide file by file. It is recoverable from ${lastdel:0:8}, the commit that removed it." >&2
   elif [ -n "$fresh" ]; then
     echo "claude-sync: $fresh was deleted from the shared config and this Mac still has that deleted copy unchanged, so it was NOT published back: publishing it would undo the deletion for both Macs. Your copy is untouched and nothing here will remove it. Delete it yourself to accept the deletion, or change it and it publishes as your own. It is in ${lastdel:0:8}, the commit that removed it, if you want it back. Said once per file rather than on every edit." >&2
   fi
