@@ -6250,6 +6250,32 @@ for reference; L6 was reviewed and deliberately not adopted.
   which are installed per checkout, and pg_cron jobs in bidspoke, where changing one setting mints
   a new job id rather than editing the running one)
 
+- **L434. A character written as a backslash escape INSIDE a pattern handed to grep or sed is read
+  one way by the BSD tools a Mac has and another by the GNU tools every Linux runner has, and
+  neither errors, so the pattern silently stops matching and whatever consumed the result reads as
+  zero.** Produce the character instead (a tab from `printf`, a class like `[[:space:]]`), and
+  remember that a portable TOOL is not a portable PATTERN: a scan for tools only one platform has
+  cannot see this, because the tool is the same tool on both.
+  (claude-config#335. A count of tab separated records was written `grep -cE '^(diff|topdiff)\t'`.
+  BSD grep matches that as a tab; GNU grep matches a literal `t`, so on the runner the count came
+  back 0 whatever the enumerator had found, and `verify` called a Mac holding unsent work up to
+  date and exited 0, which was the exact reassuring answer the feature had just been written to
+  stop it giving. Green on both Macs and red on every Linux run for seven hours, with nothing
+  anywhere reporting an error)
+
+- **L435. A tool that writes commits of its own must pass its OWN identity on every git call that
+  can create a commit, because a machine may have none configured (every CI runner, any freshly set
+  up machine) and git REFUSES rather than defaulting.** A call without it works wherever git can
+  find or guess an identity, so it passes on the developer machine by silently borrowing the
+  operator's and fails on exactly the machines nobody is watching. Write the rule as the class,
+  every commit writing call, rather than as the one line that was caught.
+  (claude-config#335. `recover_unfinished_rebase` ran `git rebase --continue`, which writes a
+  commit, with no identity, while the same tool carried a `SYNC_GIT_IDENTITY` it used for every
+  other commit it made. On the runner git answered "Committer identity unknown", so the tool
+  declared the clone unable to send or receive and changed nothing. It could not be reproduced on
+  either Mac until the fixture took the machine's own git config out of reach and stopped git
+  guessing one from the username and hostname)
+
 
 ## Test speed
 
