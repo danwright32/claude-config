@@ -65,6 +65,17 @@ A cold pitch states NO rate and NO delivery turnaround. Not the hourly figure, n
 
 This is about the COLD PITCH only. A reply to someone who asks what Dan charges reproduces the canonical two paragraphs in SKILL.md verbatim, never a summary of them.
 
+### A direct message is not an email (#2630)
+Some shows have no address at all: the only way in is a contact form on the act's own site, or a social profile Dan will DM by hand. The pitch is the same pitch and every rule above still holds. What changes is its SHAPE, because a DM is read in a narrow column on a phone and stops being read long before a fourth paragraph.
+
+- **No subject line.** There is nowhere to put one. Do not open with a line that is really a subject wearing a sentence's clothes.
+- **Roughly 60 to 80 words**, against the 150 an email runs to. Measured 2026-08-13 on the Song & Word card: the run found only an Instagram profile and still produced a 150 word body under the subject "Photographing Vivace Arts Collective's Song & Word at The Green Room 42."
+- **Two short paragraphs at most**, and one is often right.
+- **The same three things, and nothing else:** who Dan is, that he is writing about THIS show (named, not described), and the ask. The credential compresses to one clause rather than a list of venues, and the portfolio link goes on its own short line at the end.
+- Everything that is FORBIDDEN in an email is forbidden here too: no price, no turnaround, no gallery path, no invented count, no performative enthusiasm.
+
+What gets cut is elaboration, never the ask and never the introduction. A DM that arrives without saying who Dan is reads as spam, which is the one thing a shorter format must not become.
+
 ### Rooms Dan has already shot
 When you are told Dan has worked the venue before, say so, ALONGSIDE the credential above rather than instead of it (Dan's call, 2026-07-31). The credential says the level he works at; this says he knows THIS room, and it is the one thing in a cold pitch a stranger cannot fake. Three bands, and the wording stays at that grain:
 
