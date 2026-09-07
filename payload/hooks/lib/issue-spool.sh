@@ -550,6 +550,12 @@ MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if 
 # Whose review this is. Empty when it cannot be known, and then nothing is marked: marking every
 # finding as somebody else's would be worse than marking none (L11).
 READER_SESSION = os.environ.get("CLAUDE_SPOOL_READER_SESSION") or ""
+# WHEN OWNERSHIP EXPIRES (claude-config#326). A record belongs to the session that produced it, and
+# only that session may settle it, which is right while that session is still running. A session
+# that has ended never runs another review, so past this window the record is treated exactly like
+# one naming no session at all: shown to whoever is reviewing, and filed by whoever clears. Filing
+# it away unread instead would empty the spool while losing the finding, which is worse.
+CLAIM_AFTER = int(os.environ.get("CLAUDE_ISSUE_SPOOL_CLAIM_AFTER") or 604800)
 
 # ---- how old a finding is, and whether the code it names has moved (claude-config#202) ----
 # A finding was offered as current however old it was, and one project's oldest pending findings
@@ -597,6 +603,18 @@ def age_words(ts):
             n = int(secs // div)
             return "%d %s%s ago" % (n, word, "" if n == 1 else "s")
     return ""
+
+
+def unclaimed(ts):
+    """Has nobody claimed this for long enough that anybody may?"""
+    t = _parsed(ts)
+    if t is None:
+        # An unreadable timestamp cannot be aged, so it stays owned. Erring the other way would
+        # hand a record to a stranger on the strength of a field nothing could read (L50).
+        return False
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=datetime.timezone.utc)
+    return (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() >= CLAIM_AFTER
 
 
 def moved_since(text, ts):
@@ -648,7 +666,8 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
     # Counted rather than dropped, and the count is printed at the end only when something else was
     # shown, so these can never be the reason a review fires. A notice carrying no action,
     # delivered every turn, is what teaches a person to skip the whole panel (L36).
-    if READER_SESSION and READER_SESSION in (rec.get("seen_by") or []):
+    if READER_SESSION and READER_SESSION in (rec.get("seen_by") or []) \
+       and not unclaimed(rec.get("ts", "")):
         already_seen += 1
         continue
     if status == "found":
@@ -696,8 +715,16 @@ for where, ts, f, sess in findings[:MAX_FINDINGS]:
     # has no context for judging one it did not cause: it will either file it badly or drop it. Its
     # own review will still be offered it, because a clear now files only its own session's.
     if READER_SESSION and sess and sess != READER_SESSION:
-        line += ("  [from another session working in this project, which has not seen it yet, "
-                 "so leave it to that session's own review unless you can judge it]")
+        if unclaimed(ts):
+            # The advice above would be wrong here: the session that owns it has had its window and
+            # is not coming back, so telling this reader to leave it to that review names an event
+            # that will not happen (L111).
+            line += ("  [from another session working in this project, which has not settled it in "
+                     "long enough that nobody is going to, so it is yours to judge and yours to "
+                     "file]")
+        else:
+            line += ("  [from another session working in this project, which has not seen it yet, "
+                     "so leave it to that session's own review unless you can judge it]")
     moved = moved_since(f, ts)
     if moved:
         line += ("  [%s has changed since this was written, so any line number in it "
@@ -1003,9 +1030,24 @@ issue_spool_clear_key() { # clear-key <key> [session id]
   if [ -n "$sid" ]; then
     mine="${file}.mine.$$"; others="${file}.others.$$"
     CLAUDE_SPOOL_SESSION="$sid" python3 -c '
-import json, os, sys
+import datetime, json, os, sys
 sid = os.environ["CLAUDE_SPOOL_SESSION"]
 src, mine, others = sys.argv[1], sys.argv[2], sys.argv[3]
+# OWNERSHIP EXPIRES (claude-config#326), on the same window and by the same reading as the render,
+# or a record would be shown to this reader as theirs to file and then put back by the clear that
+# follows, which is a worse loop than the one #322 removed (L70).
+CLAIM_AFTER = int(os.environ.get("CLAUDE_ISSUE_SPOOL_CLAIM_AFTER") or 604800)
+
+
+def unclaimed(ts):
+    try:
+        t = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc)
+    except Exception:
+        # Unreadable age keeps it owned, so nothing is handed to a stranger on a field nothing
+        # could read (L50).
+        return False
+    return (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() >= CLAIM_AFTER
 with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", encoding="utf-8") as m, open(others, "w", encoding="utf-8") as o:
     for line in fh:
         if not line.strip():
@@ -1018,7 +1060,7 @@ with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", e
             # ever, because nothing can ever claim it and the reader already reports it (L11).
             s = None
             rec = None
-        if s and s != sid:
+        if s and s != sid and not unclaimed(rec.get("ts", "") if isinstance(rec, dict) else ""):
             # MARKED AS SEEN BY THIS SESSION (claude-config#322), and nothing else about it is
             # touched: not filed, not moved, still owned by the session that produced it, still
             # offered to that session'"'"'s own review. What stops is being handed the same

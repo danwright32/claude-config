@@ -1700,6 +1700,62 @@ case "$seen_clear1" in
   *) check "#322 and does not answer with the step that was just taken" ok ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A finding NOBODY EVER CLAIMS does not sit here for ever (claude-config#326).
+# ---------------------------------------------------------------------------
+# claude-config#322 stopped an unsettleable finding being re-rendered at every review by marking it
+# as seen by the reader it was shown to. That silences the repeat but does not settle the record: a
+# clear files only the calling session's, so a finding produced by a session that has since ended
+# belongs to nobody and nothing would ever file it. Counted and visible, but unfileable, is where
+# the previous defect started.
+#
+# So ownership EXPIRES. Past a window a record is treated exactly like one that names no session at
+# all: shown to whoever is reviewing, and filed by whoever clears. The alternative, filing it away
+# unread, empties the spool while losing the finding, which is the worse of the two.
+#
+# The fixture's age is DERIVED from the window rather than written as a literal, because the third
+# party to that relationship is a constant somebody can change, and a literal chosen to sit past
+# today's window silently stands for a different case the day it moves (L401, L130).
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+OLD_A="$TMPROOT/old-a.jsonl"; : > "$OLD_A"
+OLD_B="$TMPROOT/old-b.jsonl"; : > "$OLD_B"
+CLAIM_WINDOW="${CLAUDE_ISSUE_SPOOL_CLAIM_AFTER:-604800}"
+old_ts="$(python3 -c 'import sys,datetime; w=int(sys.argv[1]); print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=w + 86400)).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$CLAIM_WINDOW")"
+new_ts="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+SPOOL_FILE="$(bash "$SPOOL_LIB" path "$REPO" "$OLD_A")"
+{
+  printf '{"ts":"%s","status":"found","agent":"tester","cwd":"%s","findings":["a finding nobody has claimed since before the window"],"session":"old-b","seen_by":["old-a"]}\n' "$old_ts" "$REPO"
+  printf '{"ts":"%s","status":"found","agent":"tester","cwd":"%s","findings":["a finding still inside the window"],"session":"old-b","seen_by":["old-a"]}\n' "$new_ts" "$REPO"
+} > "$SPOOL_FILE"
+pend_old="$(bash "$SPOOL_LIB" pending "$REPO" "$OLD_A" 2>/dev/null)"
+case "$pend_old" in
+  *"nobody has claimed since before the window"*)
+    check "#326 a finding older than the window is shown again, marked seen or not" ok ;;
+  *) check "#326 a finding older than the window is shown again, marked seen or not" "pending=${pend_old:0:400}" ;;
+esac
+# The control, in the same fixture: one that is still inside the window and marked seen stays
+# hidden, or this passes for a rule about age that is really a rule about nothing (L159).
+case "$pend_old" in
+  *"still inside the window"*)
+    check "#326 while one inside the window stays settled for this reader" "the recent one came back too" ;;
+  *) check "#326 while one inside the window stays settled for this reader" ok ;;
+esac
+# And this session can now FILE the expired one, which is the whole point: shown but unfileable is
+# the state being fixed, not a new spelling of it.
+bash "$SPOOL_LIB" clear "$REPO" "$OLD_A" >/dev/null 2>&1
+arch_old="$(bash "$SPOOL_LIB" archive "$REPO" "$OLD_A" 2>/dev/null)"
+case "$arch_old" in
+  *"nobody has claimed since before the window"*)
+    check "#326 and a clear from any session files it once ownership has expired" ok ;;
+  *) check "#326 and a clear from any session files it once ownership has expired" "archive=${arch_old:0:400}" ;;
+esac
+case "$arch_old" in
+  *"still inside the window"*)
+    check "#326 and the one inside the window is still left for its own session" "it was filed by the wrong session" ;;
+  *) check "#326 and the one inside the window is still left for its own session" ok ;;
+esac
+
 # A record with NO session cannot be claimed by anybody, so it is filed by whoever clears first,
 # which is what every record did before this existed. Leaving it pending for ever would be a worse
 # failure than the one being fixed (L526).
