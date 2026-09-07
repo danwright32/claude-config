@@ -7668,6 +7668,78 @@ check "#151 dealt out the old way, a section really is borrowed by a shard that 
 check "#151 and that old dealing is otherwise a sound division too" \
   "printf '%s\\n' \"\$_bw_old\" | shard_coverage_verdict 4 >/dev/null"
 
+section "== the suite can be run as Linux from a Mac (claude-config#337) =="
+# Two defects shipped on 2026-09-07 that were green on every machine anybody looks at and red only
+# on the runner, and each attempt to understand them cost a push and a five minute wait. The second
+# could not be reproduced on a Mac at all until the runner was made to print what it saw. A
+# container run closes that loop, so what is checked here is the things that would make it a
+# reassuring lie: an image that is not what CI uses, a missing tool nobody noticed, and a docker
+# that is not there being reported as a pass.
+_LIN="$(dirname "$SCRIPT_SELF")/run-on-linux.sh"
+check "#337 the runner script is here and executable" "[ -x '$_LIN' ]"
+_WF="$(dirname "$SCRIPT")/.github/workflows/tests.yml"
+
+# THE IMAGE IS DERIVED FROM THE WORKFLOW, never a second copy of that decision (L41). A workflow
+# moved to another operating system must not leave this claiming to reproduce CI.
+_lin_runner="$(sed 's/#.*//' "$_WF" | awk -F'runs-on:' '/runs-on:/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')"
+check "#337 the workflow still declares what it runs on ($_lin_runner)" "[ -n '$_lin_runner' ]"
+# Matched as a case ARM rather than as bare text, so a runner named only in a comment or in a
+# refusal message cannot answer for one the script actually handles (L103).
+check "#337 and the script resolves an image for exactly that" \
+  "grep -qE '(^|[|[:space:]])$_lin_runner([|)])' '$_LIN'"
+# And it REFUSES a runner it has no image for, rather than falling back to one and reporting the
+# result as CI's (L320). Proven on a planted tree, because the real workflow has to stay correct.
+_LINT="$WORK/lin-tree"
+mkdir -p "$_LINT/tests" "$_LINT/.github/workflows"
+cp "$_LIN" "$_LINT/tests/run-on-linux.sh"
+sed 's/runs-on: ubuntu-latest/runs-on: windows-2022/' "$_WF" > "$_LINT/.github/workflows/tests.yml"
+_lin_bad="$(bash "$_LINT/tests/run-on-linux.sh" 2>&1)"; _lin_bad_rc=$?
+check "#337 a runner it has no image for is refused" "[ '$_lin_bad_rc' -ne 0 ]"
+check "#337 and the refusal says it can no longer claim to reproduce CI" \
+  "line_has \"\$_lin_bad\" 'windows-2022' 'reproduce CI'"
+
+# EVERY TOOL THE WORKFLOW PROBES IS ONE THE CONTAINER INSTALLS. The workflow's environment step is
+# the list of what the suite actually shells out to, so it is read from there rather than kept by
+# hand beside it: a dependency added to CI would otherwise be absent from the container, and the
+# suite would fail there for a reason that has nothing to do with the code (L96, L41).
+_lin_probed="$( { sed -n 's/^ *\([a-z][a-z0-9_-]*\) --version.*/\1/p' "$_WF"
+                  sed -n 's/.*command -v \([a-z][a-z0-9_-]*\).*/\1/p' "$_WF"; } | sort -u | grep -v '^$' )"
+# Counted and rendered BEFORE the check rather than inside it. A `printf ... | grep` written into a
+# check, title included, is the shape the #55 scan bans, and it is right to: a pair of greps over
+# one captured value can be answered by two unrelated parts of it.
+_lin_probed_show="$(printf '%s' "$_lin_probed" | tr '\n' ' ')"
+_lin_probed_n="$(printf '%s\n' "$_lin_probed" | grep -c . || true)"
+check "#337 the workflow really names the tools it probes ($_lin_probed_show)" \
+  "[ '${_lin_probed_n:-0}' -ge 4 ]"
+_lin_missing=""
+while IFS= read -r _lin_t; do
+  [ -n "$_lin_t" ] || continue
+  grep -q "$_lin_t:" "$_LIN" || _lin_missing="$_lin_missing $_lin_t"
+done <<LINTOOLS
+$_lin_probed
+LINTOOLS
+check "#337 every tool the workflow probes has a package the container installs" \
+  "[ -z '$_lin_missing' ] || { echo '    missing:$_lin_missing' >&2; false; }"
+
+# A DOCKER THAT IS NOT THERE IS UNMEASURED, NEVER A PASS. This is the one that decides whether the
+# script is worth having: a run that could not happen and a run that found nothing look identical
+# unless it says so (L98, L411).
+_lin_nodocker="$(PATH=/usr/bin:/bin bash "$_LIN" 2>&1)"; _lin_nodocker_rc=$?
+check "#337 with no docker on the path it refuses" "[ '$_lin_nodocker_rc' -ne 0 ]"
+check "#337 and calls that UNMEASURED rather than a pass" \
+  "line_has \"\$_lin_nodocker\" 'docker is not installed' 'UNMEASURED'"
+
+# The checkout goes in READ ONLY and is copied inside. The suite writes scratch, clones fixtures and
+# kills process trees, and none of that belongs near the tree somebody is editing (L2).
+check "#337 the checkout is mounted read only" "grep -q ':ro' '$_LIN'"
+check "#337 and the run works in a copy, not in the mount" "grep -q 'cp -a /src /work' '$_LIN'"
+# The section knobs travel, or the only thing it can run is the whole suite and nobody uses it while
+# chasing one failure.
+# One claim per check. Two greps over one file joined by `&&` is the shape #55 bans, because the
+# pair can be answered by two unrelated places in it and neither half is then proved.
+check "#337 SECTION_ONLY is passed into the container" "grep -q 'e SECTION_ONLY' '$_LIN'"
+check "#337 and SECTION_UNTIL with it" "grep -q 'e SECTION_UNTIL' '$_LIN'"
+
 section "== the receive path records how long its suite took, and how much room is left (#218) =="
 # Every pull that lands a hook runs the whole suite on the receiving Mac and writes the verdict to
 # .hook-tests as outcome, epoch, exit status, suites ran, suites not run. There was no DURATION in
