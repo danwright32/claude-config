@@ -4969,6 +4969,28 @@ check "#324 and writes nothing against the stranded branch label" \
 check "#324 and leaves the conflict exactly where it was, for the person to settle" \
   "[ -n \"\$(git -C '$RBA2' diff --name-only --diff-filter=U 2>/dev/null)\" ]"
 
+# STATUS is the surface anybody consults to answer "is syncing healthy", and it said nothing about
+# the one state that stops all syncing (claude-config#330). On 2026-09-07 it printed "[ahead 1,
+# behind 8]" and a reassuring "last received 4 hours ago" for a clone that could not sync at all;
+# the stuck state was named only once a sync was actually run. Being behind reads as a clone that
+# will catch up on its next run, which is exactly wrong here (L98, L400). status is read only and
+# never takes the lock, so it does not recover the rebase, which makes reporting it the whole job.
+RBA5="$(_rb_setup "$WORK/rb5" resolve)"
+check "#330 the status fixture really is mid rebase" \
+  "[ -d '$RBA5/.git/rebase-merge' ] || [ -d '$RBA5/.git/rebase-apply' ]"
+out_rb5="$(CLAUDE_HOME="$RBH" SYNC_REPO="$RBA5" SYNC_HOSTNAME=macRB5 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#330 status over an unfinished rebase: $out_rb5"
+check "#330 status says this clone cannot send or receive at all" \
+  "grep -q 'CANNOT send or receive' <<< \"\$out_rb5\""
+check "#330 and names the unfinished rebase as why, rather than leaving it to the counts" \
+  "grep -q 'left mid rebase by an earlier run' <<< \"\$out_rb5\""
+check "#330 and status still left the rebase alone, being read only" \
+  "[ -d '$RBA5/.git/rebase-merge' ] || [ -d '$RBA5/.git/rebase-apply' ]"
+# The control: a healthy clone gets no such line, or the report says nothing by saying it always.
+out_rb5ok="$(CLAUDE_HOME="$RBH" SYNC_REPO="$RBA" SYNC_HOSTNAME=macRB SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#330 while a clone that is not stuck gets no such line" \
+  "! grep -q 'CANNOT send or receive' <<< \"\$out_rb5ok\""
+
 # #325: the message a person actually reads. Mid rebase, pull reported a two Mac divergence and
 # named `claude-sync sync` as the remedy. Both its numbers were true and the conclusion was wrong:
 # the ahead count came from the stranded branch label, the commit it named was already the rebased
@@ -12984,6 +13006,22 @@ un_append "$UNHB/LESSONS.md" '- **L5. five.** written only on Mac B'
 out_un="$(unsync "$UNHB" "$UNRB")"; un_rc=$?
 dbg "#315 two sided append with the merge rule on said: $out_un"
 check "#315 the sync completes rather than dying on the lessons file" "[ '$un_rc' -eq 0 ]"
+# AND THE REBASE ACTUALLY CONCLUDED (claude-config#329). This is the shape the section above is
+# already built from and the one assertion it never made: with the index's merge rule on, git
+# resolves the index itself and does NOT report it as conflicted, so the regenerated copy is left
+# modified in the working tree and never staged, and `rebase --continue` refuses with "You must
+# edit all merge conflicts". Measured directly on 2026-09-07 against a repository built the same
+# way: only the lessons file is reported unmerged, and an unstaged change to the auto resolved file
+# is enough for git to refuse. Observed for real on Dans-MacBook-Pro the same day, where the clone
+# sat mid rebase for about four hours, eight commits behind, until somebody ran git add by hand.
+#
+# Asked of the REPOSITORY rather than of the exit code, because the recovery loop treats a refused
+# continue as something to try again rather than as a failure, so it can return success over a
+# rebase that never finished (L184).
+check "#329 and the rebase it recovered from is actually finished, not merely reported as done" \
+  "[ ! -d '$UNRB/.git/rebase-merge' ] && [ ! -d '$UNRB/.git/rebase-apply' ]"
+check "#329 and the clone is back on a branch, so it can send and receive again" \
+  "git -C '$UNRB' symbolic-ref --short HEAD >/dev/null 2>&1"
 check "#315 and it does not tell Dan to reconcile by hand" \
   "! grep -q 'reconcile by hand' <<< \"\$out_un\""
 check "#315 the other Mac's entry arrived" "grep -q 'L4. four' '$UNHB/LESSONS.md'"

@@ -1517,6 +1517,17 @@ DERIVED_PATHS
     # Rebuilt from the source sitting beside it in the working tree, which is the MERGED one:
     # either LESSONS.md combined cleanly by git, or it was just combined above.
     regenerate_payload_index_from_worktree || return 1
+    # STAGED EXPLICITLY, not left to appear in the conflicted list (claude-config#329). The
+    # `merge=ours` rule a few functions up means git resolves the index ITSELF and never reports it
+    # as conflicted, so it is not among the paths staged below. Regenerating it then leaves a
+    # modified file nothing has added, and `rebase --continue` refuses the whole rebase with "You
+    # must edit all merge conflicts". Measured 2026-09-07 against a repository built the same way:
+    # with the rule on, only the lessons file comes back unmerged, and an unstaged change to the
+    # auto resolved one is enough for git to refuse. On Dans-MacBook-Pro that left the clone mid
+    # rebase for about four hours, eight commits behind, unable to send or receive, until somebody
+    # ran git add by hand. The two fixes each worked alone and cancelled each other combined, which
+    # is why the rule being on is the case that has to be tested.
+    git -C "$SYNC_REPO" add -- "payload/$LESSON_INDEX_FILE" >/dev/null 2>&1 || true
     while IFS= read -r p; do
       [ -n "$p" ] || continue
       git -C "$SYNC_REPO" add -- "$p" >/dev/null 2>&1 || return 1
@@ -1529,6 +1540,13 @@ DERIVED_ADD
     if GIT_EDITOR=true git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" rebase --continue >/dev/null 2>&1; then
       # Finished, unless it stopped again, which the next turn of the loop finds out.
       git -C "$SYNC_REPO" rev-parse --verify -q REBASE_HEAD >/dev/null 2>&1 || break
+    else
+      # A REFUSED continue is a failure, not something to go round again (claude-config#329). The
+      # loop used to ignore the exit code and fall through to `any=1`, so a rebase that never
+      # finished was reported as a recovery that worked, and the clone was left mid rebase while
+      # the sync said it had completed. Judge it by its exit code, never by having reached the end
+      # of the loop (L184).
+      return 1
     fi
   done
   [ "$any" -eq 1 ] || return 1
@@ -5608,6 +5626,31 @@ OTHERCLONEEOF
 # the unreadable window has passed, every commit arrives unjudged and the alert has already been
 # given once, so without this the only remaining trace is a log line nobody opens, which is the
 # same silence claude-config#323 was about. Says nothing when there is nothing to say.
+# The one state that stops ALL syncing, said on the surface built to report on syncing
+# (claude-config#330). status reported how far ahead or behind a clone was and when config last
+# moved, and said nothing about a clone that could not move anything at all: on 2026-09-07 it
+# printed "[ahead 1, behind 8]" and "last received 4 hours ago" for a clone stuck mid rebase, and
+# being behind reads as a clone that will catch up on its next run, which is exactly wrong here.
+#
+# status never takes the lock and recovers nothing, by design, so reporting it IS the job here. A
+# mutating run recovers it instead, which is why this names both what is wrong and what fixes it.
+report_blocked_clone(){
+  local state paths
+  have_git || return 0
+  state="$(sync_rebase_state)"
+  case "$state" in
+    concludable)
+      echo "this clone CANNOT send or receive: it was left mid rebase by an earlier run. Nothing is conflicted and nothing needs deciding, so the next sync, send or pull concludes it by itself. Run one, or conclude it yourself: git -C $SYNC_REPO rebase --continue" ;;
+    conflict)
+      paths="$(sync_rebase_conflict_paths | tr '\n' ' ' | sed 's/ $//')"
+      echo "this clone CANNOT send or receive: it was left mid rebase by an earlier run and is still waiting on a conflict in ${paths:-a step that has not been applied}. No sync can clear that, because only a person can settle it. In $SYNC_REPO, settle those paths and then 'git rebase --continue', or abandon it with 'git rebase --abort'." ;;
+    *) return 0 ;;
+  esac
+  # Said whatever the counts above showed. Ahead and behind are true and beside the point while
+  # nothing can move in either direction (L11).
+  return 0
+}
+
 report_ci_unreadable(){
   local since now elapsed window="${SYNC_CI_UNREADABLE_AFTER:-10800}"
   [ -f "$CI_UNREADABLE_SINCE_FILE" ] || return 0
@@ -5907,6 +5950,7 @@ do_status(){
   report_user_scope_plugins
   report_duplicate_plugin_skills || true
   report_conflict_copies
+  report_blocked_clone
   report_ci_unreadable
   report_behind_skips
   report_watcher_hold
