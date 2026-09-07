@@ -3674,11 +3674,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   the end as start plus 3600 whenever the start is resolved, so the end follows the start and
   nobody had ever set it. What made it invisible is that it MOVED: the 19 bookings carried 9
   distinct start times of day, so the end times were all different and all plausible, and a
-  scan for a repeated constant would have found nothing. Every one of those invoices would have
-  billed $250.00 whatever the shoot actually took, and the amount totals correctly against its
-  own parts and reads as normal all the way to the client, which is L161. The guard already
-  planned for this (ovation#43, refuse a zero, negative or implausibly long duration) cannot
-  fire, because one hour is the most plausible value on the page. L548 and L113 both cover a
+  scan for a repeated constant would have found nothing. CORRECTED the same day, and the
+  correction is the more useful half: Dan's process DEFAULTS every booking to an hour on purpose
+  and adjusts it after the shoot, because a performing arts event runs long or short and its real
+  length is not known until it ends, and all 19 of those bookings were in the FUTURE. So the
+  value was a deliberate placeholder rather than an untouched default, and the first conclusion
+  drawn from it, that every invoice would bill $250.00 whatever the shoot took, was wrong: it set
+  19 future placeholders against 173 completed invoices and read the difference as a defect
+  (L171, a control that is not scoped to the same population proves nothing). What survives is
+  exactly the rule above. A provisional value and a final one that happen to agree are byte
+  identical, so nothing can refuse to bill on the first, and the guard already planned for this
+  (ovation#43, refuse a zero, negative or implausibly long duration) cannot fire because one hour
+  is the most plausible value on the page. L548 and L113 both cover a
   default that never moves, which shows up as a column of identical values; this is the half
   that varies. The root fix is the same as L548's: record whether the value was ever set by
   anyone, since "never touched" was not a state anything could query.)
