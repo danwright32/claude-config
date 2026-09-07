@@ -6451,6 +6451,69 @@ check "#38 no BSD-only spelling survives outside the helpers that own them" "[ -
 check "#38 the portable helpers exist" \
   "grep -q '^file_mtime(){' '$SCRIPT' && grep -q '^file_mtimes(){' '$SCRIPT' && grep -q '^date_from_epoch(){' '$SCRIPT' && grep -q '^_suite_mtime(){' '$SCRIPT_SELF'"
 
+# ---- and no grep pattern relies on an escape only BSD grep understands (claude-config#335) ----
+# A portable TOOL is not a portable PATTERN. BSD grep, which is what a Mac has, matches a
+# backslash-t as a TAB. GNU grep, which every Linux runner has, does not: it matches a literal `t`,
+# so the pattern silently stops matching and whatever consumed the result reads as zero. Nothing
+# errors on either side, which is why #38 above could not see it: the tool is the same tool.
+#
+# It shipped on 2026-09-07 in local_unsent_count, as `grep -cE` over a tab separated record.
+# `verify` counted nothing on the runner, called a Mac holding unsent work up to date and exited 0,
+# which is the exact reassuring answer #320 had just been written to stop it giving. Green on both
+# Macs and red on every Linux run for seven hours.
+#
+# The house spelling is a tab produced by printf, which the tool already uses elsewhere, so those
+# are removed before a line is judged rather than being listed as exceptions by name (L362).
+_GTAWK="$WORK/grep-escape.awk"
+cat > "$_GTAWK" <<'GREPESC'
+BEGIN { BT = "\\" "t" }
+{
+  line = $0; out = $0
+  while ((p = index(line, "grep")) > 0) {
+    rest = substr(line, p + 4)
+    # The options between `grep` and its pattern, then the pattern itself. Bounded at a pipe, a
+    # semicolon or a closing bracket so a later command on the same line is never read as this
+    # one's pattern.
+    if (match(rest, /^[^'"|;)]*['"]/)) {
+      q = substr(rest, RSTART + RLENGTH - 1, 1)
+      body = substr(rest, RSTART + RLENGTH)
+      e = index(body, q)
+      if (e > 0 && index(substr(body, 1, e - 1), BT) > 0) { print FILENAME ":" FNR ": " out; break }
+    }
+    line = substr(line, p + 4)
+  }
+}
+GREPESC
+_grepescapes(){   # $@ = files to read
+  local f
+  for f in "$@"; do
+    # Comments stripped and continuation lines joined first, exactly as the scan above does it: a
+    # pattern written across two lines is otherwise read as two halves of nothing.
+    sed 's/#.*//' "$f" \
+      | sed -e :a -e '/\\$/N; s/\\\n//; ta' \
+      | sed 's/\$(printf [^)]*)//g' \
+      | awk -v FILENAME="$f" -f "$_GTAWK"
+  done
+  return 0
+}
+_gt_found="$(_grepescapes "$SCRIPT" "$SCRIPT_SELF")"
+check "#335 no grep pattern relies on a tab escape only BSD grep understands" \
+  "[ -z \"\$_gt_found\" ] || { printf '%s\n' \"\$_gt_found\" | awk 'NR <= 5' >&2; false; }"
+# Both directions, on a planted file, because a scan that matches nothing reads exactly like a
+# clean tree and this one is meant to sit at zero for ever (L182, L1). The banned line and the
+# correct spelling of the same intent are planted together, so the scan has to tell them apart
+# rather than merely fire.
+_GTP="$WORK/grep-escape-plant.sh"
+_gt_bs='\'
+printf 'grep -cE %s^(a%sb)%st%s somefile\n' "'" "|" "$_gt_bs" "'" >  "$_GTP"
+printf 'grep -q "$(printf %s%st%s)x" somefile\n'  "'" "$_gt_bs" "'" >> "$_GTP"
+_gt_plant="$(_grepescapes "$_GTP")"
+check "#335 the plant carries both spellings" "[ \"\$(grep -c . '$_GTP')\" -eq 2 ]"
+check "#335 a tab escape in a grep pattern is caught" \
+  "printf '%s' \"\$_gt_plant\" | grep -q ':1:'"
+check "#335 and the same tab, produced by printf, is not" \
+  "! printf '%s' \"\$_gt_plant\" | grep -q ':2:'"
+
 section "== the design record's numbers still match the code (#41) =="
 # DESIGN.md records every threshold as a MEASURED value with the reasoning behind it, and all of
 # them are also defaults in the code. Nothing kept the two in step. The document's whole value is

@@ -6096,8 +6096,15 @@ local_vs_payload_records(){
 # are excluded because they are the substitution working, and the notices are not differences at
 # all, so counting every line would report a healthy Mac as holding unsent work.
 local_unsent_count(){
-  local n
-  n="$(local_vs_payload_records | grep -cE '^(diff|topdiff)\t' || true)"
+  local n tab
+  # The tab is PRODUCED, never written as an escape in the pattern (claude-config#335). BSD grep,
+  # which is what a Mac has, matches a backslash-t as a tab; GNU grep, which every Linux runner
+  # has, matches a literal `t`, so the pattern matched nothing there and this returned 0 whatever
+  # the enumerator found. `verify` then called a Mac holding unsent work up to date and exited 0,
+  # which is the answer #320 exists to stop it giving. Neither grep errors, so it was green on both
+  # Macs and red on every Linux run.
+  tab="$(printf '\t')"
+  n="$(local_vs_payload_records | grep -cE "^(diff|topdiff)$tab" || true)"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
   printf '%s' "$n"
 }
