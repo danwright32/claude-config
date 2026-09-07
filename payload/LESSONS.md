@@ -4657,6 +4657,7 @@ window is a count rather than a boundary.
 
 
 
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
@@ -5496,6 +5497,22 @@ window is a count rather than a boundary.
   8,960 tests passing and every guard green. It was caught only because somebody happened to read
   one of those comments while sweeping an unrelated issue, and it would otherwise have run its first
   subtractive migration against real data.)
+
+- **L624. A step whose work list is what an earlier mechanism REPORTED as a problem (the
+  conflicted paths, the failed items, the flagged files) loses every subject a later fix stops
+  that mechanism reporting, and it still has to act on them, so a rule added to SILENCE a report
+  must be checked against every step that consumed that report as its queue.** Both changes are
+  correct on their own, and the second one makes the world quieter, which is why it reads as a
+  fix rather than as a removal. Distinct from L129, where an exemption leaves a CHECK with no
+  reviewer, and from L247, where the subject list is derived from a proxy spelling: here the list
+  is derived correctly from a live report, and the report itself was deliberately shortened
+  afterwards.
+  (claude-config#329, 2026-09-07: resolve_derived_conflicts stages the paths git reported as
+  conflicted, and a later .git/info/attributes rule made LESSONS-INDEX.md resolve as merge=ours
+  so it is never reported. The recovery still regenerates that index from the merged lessons and
+  never stages it, so rebase --continue refuses, and the Mac could neither send nor receive
+  config for four hours while telling the operator to settle the rebase by hand. Found only
+  because a sync was run by hand to push an unrelated skill rename.)
 
 ## Cross-system reliability
 
