@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 553 lessons.
+LESSONS.md, which is NOT loaded into the session. 557 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -108,6 +108,7 @@ to decide something: the body is where the failure it came from is described.
 - L239. Sampling a TRANSIENT surface to decide whether an action happened cannot tell "it never appeared" from "it appeared and was already dismissed", so judge by the durable record the action would have written instead.
 - L250. A list written to mean one thing (a `.gitignore`, an exclude file, a skip list) is read by every OTHER tool that consults it as a DIFFERENT instruction, so a guard built on a question that tool answers inherits an exclusion nobody chose for it, and goes blind exactly where unowned writes land.
 - L252. A test asserting a decision that has since been REVERSED stops being coverage and becomes the guard DEFENDING the rejected behaviour, so a reversal must hunt those tests down across every file and DELETE them rather than adjust them, because their whole content is the thing being removed.
+- L430. A test that has started failing because the code moved underneath it is a claim that one of the two is wrong, and deleting or rewriting it to match the code silently rules that the code is right. Before doing either, find the decision that test was written to defend and confirm it was actually reversed, because a behaviour lost by accident and one removed on purpose produce the identical red.
 - L253. A detector whose signature is a small TIME GAP between two stored instants is answered by any single write that stamps both from one clock variable, so the gap measures the WRITE rather than the events, and such a row must be told apart by evidence of that write (a third field carrying the same instant) rather than by treating the suspicious value as noise.
 - L254. A control whose press only RECORDS a request, while the work happens later in a shared batch, must not have its progress timed from the press against a window sized for the work, because that window then spans a queue wait the control does not govern and accuses a healthy run of being stuck.
 - L257. A check that decides whether a value is VALID by listing the values that are NOT valid (a sentinel blacklist, a set of known placeholders) admits every malformed value nobody thought to list, and because it is named for the question it appears to answer, every call site treats it as real validation.
@@ -259,6 +260,7 @@ to decide something: the body is where the failure it came from is described.
 - L612. In a shell running with `set -e`, a bare assignment from a command substitution carries that command's exit status, so a capture-then-classify step dies on the capture line, the captured output is never printed, and every branch of the classifier below it is unreachable dead code.
 - L622. A state meaning NEVER RECORDED, separated from the failure state only in the WORDING of the response while taking the same ACTION, is not separated at all
 - L427. A probe posted on a fixed interval that does not wait for the previous one to return records one event per interval that a single outage lasts
+- L431. A guard that skips expensive work when its inputs are unchanged saves nothing unless computing its KEY is cheaper than the work
 
 ## State and identity
 
@@ -505,6 +507,8 @@ to decide something: the body is where the failure it came from is described.
 - L585. A guard that bans raw values in favour of named tokens is structurally blind to a token that is REFERENCED but never DEFINED, because there is no literal for it to find, so the declaration reads as correct while the runtime silently substitutes its own fallback.
 - L407. A constraint recorded only as a COMMENT beside the code it governs is enforced by nothing, and sitting there makes it read as binding, so the first person to break it does so with every check green.
 - L624. A step whose work list is what an earlier mechanism REPORTED as a problem (the conflicted paths, the failed items, the flagged files) loses every subject a later fix stops that mechanism reporting, and it still has to act on them, so a rule added to SILENCE a report must be checked against every step that consumed that report as its queue.
+- L428. Adding a new threshold BESIDE an existing one, rather than changing it, leaves every reader of the old constant silently answering a question that has been superseded, and no rule about changing a limit fires because nothing was changed. When a rule's meaning splits across two constants, audit every reader of the old one and state which of the two questions it is asking.
+- L429. A file the platform loads AUTOMATICALLY into every session grows one entry at a time and has a size ceiling nothing in the project measures, so put a check on its size: past the ceiling the rules stop arriving rather than failing, and a rule that never arrived is indistinguishable from one that was followed.
 
 ## Cross-system reliability
 

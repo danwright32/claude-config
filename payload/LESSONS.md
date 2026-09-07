@@ -1019,50 +1019,50 @@ for reference; L6 was reviewed and deliberately not adopted.
   failure somewhere unrelated. Compute a costly fixture once per file, and read a timeout on an
   assertion that does no waiting as a measurement of the FILE rather than a fault in that assertion.
 
-A suite went red with `Test timed out in 5000ms` on a date formatting test whose whole body was
-three synchronous calls. The issue filed against it theorised about the one unusual thing that test
-did, and that theory was measured and disproved twice, on two operating systems. The real cause was
-in a different file entirely: it rebuilt a whole TypeScript parse of the app thirteen times, several
-of them inside one test, and had grown from 4450ms to 5841ms that same day as tests were added to
-it. Nothing reported the growth, because a test file has no budget, and the timeout pointed at
-whichever assertion was unlucky. Building the fixture once took the file to 3776ms and its slowest
-test to 963ms.
+  A suite went red with `Test timed out in 5000ms` on a date formatting test whose whole body was
+  three synchronous calls. The issue filed against it theorised about the one unusual thing that test
+  did, and that theory was measured and disproved twice, on two operating systems. The real cause was
+  in a different file entirely: it rebuilt a whole TypeScript parse of the app thirteen times, several
+  of them inside one test, and had grown from 4450ms to 5841ms that same day as tests were added to
+  it. Nothing reported the growth, because a test file has no budget, and the timeout pointed at
+  whichever assertion was unlucky. Building the fixture once took the file to 3776ms and its slowest
+  test to 963ms.
 
-(new-agent-onboarding#670, #689)
+  (new-agent-onboarding#670, #689)
 
 - **L517. When code sorts items into output buckets (paged versus logged, retried versus dead
-lettered, shown versus hidden), assert that every item lands in exactly ONE bucket across every
-combination of inputs.** A test that checks only one bucket is satisfied by an item that fell out of
-all of them, and silence caused by vanishing reads exactly like silence caused by health.
+  lettered, shown versus hidden), assert that every item lands in exactly ONE bucket across every
+  combination of inputs.** A test that checks only one bucket is satisfied by an item that fell out of
+  all of them, and silence caused by vanishing reads exactly like silence caused by health.
 
-PET#1107 changed a build watchdog three rounds running. Round 12 added a suppression so a step
-already alerting its own failure would not page twice, with seven tests covering it, every one
-asserting that no alert fired. The alert was correctly silent. A step that had never succeeded, was
-attempting daily and was self alerting was excluded from the paged list for self alerting and from
-the not paged list for attempting, so it was in neither, and the watchdog printed "All daily-build
-write steps have a fresh heartbeat" about a step that had never once worked. The same author had
-made the same class of mistake one round earlier. The fix that stuck was not another case: it was a
-loop over all sixteen combinations of the two stamps asserting each entry appears in exactly one
-output, plus a seam for what the watchdog PRINTS, which it had never had, so every test in the file
-had been asserting on the alert text alone.
+  PET#1107 changed a build watchdog three rounds running. Round 12 added a suppression so a step
+  already alerting its own failure would not page twice, with seven tests covering it, every one
+  asserting that no alert fired. The alert was correctly silent. A step that had never succeeded, was
+  attempting daily and was self alerting was excluded from the paged list for self alerting and from
+  the not paged list for attempting, so it was in neither, and the watchdog printed "All daily-build
+  write steps have a fresh heartbeat" about a step that had never once worked. The same author had
+  made the same class of mistake one round earlier. The fix that stuck was not another case: it was a
+  loop over all sixteen combinations of the two stamps asserting each entry appears in exactly one
+  output, plus a seam for what the watchdog PRINTS, which it had never had, so every test in the file
+  had been asserting on the alert text alone.
 
-(PET#1133, #1107)
+  (PET#1133, #1107)
 
 - **L518. A check that reads source by taking a FIXED NUMBER OF LINES from an anchor stops
-containing the code it checks the moment a comment is added above it, and it then fails on the
-comment rather than the code.** Slice from the anchor to the next structural boundary and strip
-comment lines, because the obvious fix of widening the number only resets the trap.
+  containing the code it checks the moment a comment is added above it, and it then fails on the
+  comment rather than the code.** Slice from the anchor to the next structural boundary and strip
+  comment lines, because the obvious fix of widening the number only resets the trap.
 
-PET#1107 round 17: a guard asserted that a workflow step reads a marker file and exits non zero,
-by slicing fourteen lines from the step's name. Adding a six line comment to that step pushed its
-`run:` body out of the window, so the guard failed while the step was correct, and the failure read
-as the assertion being wrong. Widening the slice would have passed and left the same trap one
-comment later. The fix was a shared reader returning everything from the heading to the next step
-with comment lines removed. Two sibling specs in the same repo still count lines. The same shape
-is waiting in any guard that reads "the line, or the comment block directly above it", whenever the
-window is a count rather than a boundary.
+  PET#1107 round 17: a guard asserted that a workflow step reads a marker file and exits non zero,
+  by slicing fourteen lines from the step's name. Adding a six line comment to that step pushed its
+  `run:` body out of the window, so the guard failed while the step was correct, and the failure read
+  as the assertion being wrong. Widening the slice would have passed and left the same trap one
+  comment later. The fix was a shared reader returning everything from the heading to the next step
+  with comment lines removed. Two sibling specs in the same repo still count lines. The same shape
+  is waiting in any guard that reads "the line, or the comment block directly above it", whenever the
+  window is a count rather than a boundary.
 
-(PET#1137, #1107)
+  (PET#1137, #1107)
 
 
 - **L239. Sampling a TRANSIENT surface to decide whether an action happened cannot tell "it never
@@ -1100,6 +1100,25 @@ window is a count rather than a boundary.
   what it exists to prove is exactly what was rejected. The cost here was one wasted suite run; the
   risk is the reversed assertion sitting in a file nobody re-runs, quietly becoming the authority for
   the old rule)
+
+- **L430. A test that has started failing because the code moved underneath it is a claim that one of
+  the two is wrong, and deleting or rewriting it to match the code silently rules that the code is
+  right. Before doing either, find the decision that test was written to defend and confirm it was
+  actually reversed, because a behaviour lost by accident and one removed on purpose produce the
+  identical red.**
+  (overture#3639, overture#3642: #133 gave a cancelled show two behaviours, hide it if Dan never
+  triaged it, strike it through if he was pursuing it. The hiding half was enforced in
+  `QueueModel.queueOrder`. #1567 moved queue membership to `StageNavigation`, which does not ask that
+  question, so the hiding stopped happening with no error and no red anywhere except the one test
+  asserting it. #2348 then deleted that test and wrote a comment recording the NEW answer as what
+  Overture does, citing the live behaviour as the authority. Both steps read as tidying: the test
+  genuinely was asserting something untrue of the code. What nobody asked was whether the code had
+  become wrong. Dan saw the result on 2026-09-07, two struck-through cards asking him to triage shows
+  the app already believed were cancelled, and said they should not be there, which is what #133 had
+  built and #1567 had removed. This is the INVERSE of L252, and the two are easy to confuse: there,
+  somebody deliberately reversed a rule and the old tests had to be hunted down; here nobody reversed
+  anything, and the deletion is what performed the reversal. The tell is that the test is older than
+  the change that made it fail and nothing in that change's history mentions the rule)
 
 - **L253. A detector whose signature is a small TIME GAP between two stored instants is answered by
   any single write that stamps both from one clock variable, so the gap measures the WRITE rather
@@ -2926,6 +2945,23 @@ window is a count rather than a boundary.
   time read 1,629s against a real 254s. The app told him in its own voice that it had stopped
   responding 611 times. The MAXIMUM was untouched, which is why every conclusion resting on the
   worst stall survived and only the counts and totals were wrong)
+
+- **L431. A guard that skips expensive work when its inputs are unchanged saves nothing unless
+  computing its KEY is cheaper than the work**, and a key derived by walking the whole dataset is the
+  same sweep the cache was meant to avoid, paid on every pass whether anything changed or not. Price
+  the key against the work it gates, and build it from something already maintained rather than from
+  a fresh scan.
+  (overture#3645, 2026-09-07: the Sources sheet cached three expensive derivations behind SwiftUI
+  `.onChange` keys, added by three separate issues that each measured a real freeze. But SwiftUI
+  evaluates a change key on every body pass, and all three keys were themselves whole-store
+  derivations: one hashed every prospect and sorted each row's source ids, one filtered all 1,224 rows
+  with two string trims each and then faulted their contacts and ran the full stage predicate, and the
+  third built and sorted a facet array per source and per client. A fourth, an O(clients x sources)
+  fuzzy match whose own source says a previous issue measured it freezing this sheet, was passed as an
+  argument to one of the keys and so evaluated at the call site every pass, uncached. Measured by the
+  app's own watchdog: 30 freezes on that surface in one day, median 1.34s, which is worse than the
+  queue every performance issue so far had been about. Nothing reported it because that surface has no
+  lifted pass, no counted corpus and no cost test, unlike the queue beside it)
 
 ## State and identity
 
@@ -5595,6 +5631,40 @@ window is a count rather than a boundary.
   config for four hours while telling the operator to settle the rebase by hand. Found only
   because a sync was run by hand to push an unrelated skill rename.)
 
+- **L428. Adding a new threshold BESIDE an existing one, rather than changing it, leaves every
+  reader of the old constant silently answering a question that has been superseded, and no rule
+  about changing a limit fires because nothing was changed. When a rule's meaning splits across
+  two constants, audit every reader of the old one and state which of the two questions it is
+  asking.** The old constant keeps its name, its comment and its callers, so each call site still
+  reads as correct, and the divergence exists only in the pair. Distinct from L227, where a limit
+  is RAISED and a margin derived from it silently shrinks, and from L542, where two rules differ
+  because each was decided separately: here one rule was split in two and its readers were left
+  pointing at the half that no longer governs.
+  (overture#3636, 2026-09-07: #1558 widened how far apart two nights of one show can be and still
+  read as one engagement, from 3 days to 56, by ADDING sameShowGapDays beside the existing
+  gapDays rather than moving it. DuplicateContactGuard, the only net against pitching one
+  production twice, still reads the 3, and its own comment still says it mirrors the grouping
+  window. The Infinite Wrench is stored as 15 cards for one weekly show at one venue, every
+  fragment weeks from its neighbour, so the guard cannot fire on any of them and a second pitch
+  to the same producer would go out with no warning.)
+
+- **L429. A file the platform loads AUTOMATICALLY into every session grows one entry at a time
+  and has a size ceiling nothing in the project measures, so put a check on its size: past the
+  ceiling the rules stop arriving rather than failing, and a rule that never arrived is
+  indistinguishable from one that was followed.** Distinct from L244, which is about such a
+  file's CONTENT going stale: here the content is perfectly correct and simply does not reach
+  the session. Every contributor adds a paragraph and none of them can see the total, so the
+  growth is nobody's decision, and the only thing that reports the crossing is a warning
+  somebody happens to have on screen at the time.
+  (overture#3640, 2026-09-07: AGENTS.md reached 150,888 characters against a 150,000 limit,
+  growing about 4,500 a day over the preceding week, and the crossing was found because Dan
+  saw the editor's warning. It still loaded in full at that size, verified by checking the
+  file's last line against what reached the session, so what the ceiling does above the warning
+  is still unmeasured. The same day, ~/.claude/LESSONS-INDEX.md measured 130,844 against the
+  same limit, growing one line per lesson, which is a second instance in a different config
+  system with roughly 80 lessons of headroom.)
+
+
 ## Cross-system reliability
 
 - **L405. A check deciding whether anything is NEW must compare what the artifact MEANS, never its
@@ -6297,9 +6367,9 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   comparison and is therefore immune to the noise. PostRoll#1328 and #1329 are the sweep for
   every other figure in that repo taken once)
 
-The rules that apply while shaping CI, a deploy workflow or a pre-push hook. Same audit as
-"Test speed" above. The recurring shape: the tests took seconds, the wait took minutes, and the
-difference was plumbing.
+  The rules that apply while shaping CI, a deploy workflow or a pre-push hook. Same audit as
+  "Test speed" above. The recurring shape: the tests took seconds, the wait took minutes, and the
+  difference was plumbing.
 
 - **L299. The tests are innocent until measured guilty and the pipeline rarely is, so the first
   move in any speed pass is per-step timing of every stage a push or merge waits on, read off the
