@@ -4639,6 +4639,14 @@ window is a count rather than a boundary.
   the same header slot was already bg-[var(--error)], so the routine condition had spent the one
   alarm colour and the two would have stacked as matching red bars)
 
+  the card did not change. His answer for that room had stood since 9 August and the press placed
+  nothing, because a scout run that morning had given every show there an address the fill only
+  ever skips. The banner truthfully said no show was waiting on it, which is the sharpest form of
+  this: the count was right, it was zero, and the one fact he was standing there to check, whether
+  THIS card had moved, was the one thing it did not say, while the same button sat under it
+  offering to try again. Measured against the app's own launch backup from the previous day; a
+  first reading taken from the current store alone inferred the opposite story and was filed
+  before the backup was consulted)
 
 
 
