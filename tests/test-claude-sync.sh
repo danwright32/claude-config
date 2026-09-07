@@ -9275,6 +9275,36 @@ check "#327 a verdict that can be read again clears the clock" \
 check "#327 and a green verdict never arms it in the first place" \
   "[ ! -f \"\$(ci_repo green)/.ci-unreadable-since\" ]"
 
+# EVERY state the gate names as an answer clears the clock, asserted one by one (L35, L113). The
+# list of readable verdicts is written twice, once here in the branch that clears and once in the
+# branch that acts on each, and two lists of one vocabulary drift silently. A fresh clone is never
+# armed, so each case is ARMED by hand first: without that the assertion is satisfied by a file
+# that was never going to be there (L159).
+for _ci_ok in green red pending cancelled none; do
+  # A publishes something new before each one, so the gate actually REACHES the classifier. Without
+  # it the Mac is level after the first tick and the gate short circuits on the ancestry test,
+  # which clears the clock for a different reason and would pass this check while proving nothing
+  # about the state under test (L159).
+  printf 'newer for clock %s\n' "$_ci_ok" > "$CIHA/hooks/from-A.sh"
+  CLAUDE_HOME="$CIHA" SYNC_REPO="$CIA" SYNC_CLONE_REGISTRY="$CI_REG" \
+    SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
+  printf '1\n' > "$(ci_repo unreadable)/.ci-unreadable-since"
+  ci_tick unreadable "$_ci_ok" >/dev/null 2>&1
+  check "#327 a $_ci_ok verdict clears the unreadable clock, because it is an answer" \
+    "[ ! -f \"\$(ci_repo unreadable)/.ci-unreadable-since\" ]"
+done
+
+# Once it has expired, config keeps arriving unjudged and the alert has already been given, so the
+# only thing left saying so is a log line nobody opens. That is the shape L77 warns about: an error
+# waved through as expected still has to be counted somewhere a person looks.
+printf '1\n' > "$(ci_repo unreadable)/.ci-unreadable-since"
+out_ci_st="$(CLAUDE_HOME="$(ci_home unreadable)" SYNC_REPO="$(ci_repo unreadable)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#327 status says the CI verdict has been unreadable and for how long" \
+  "case \"\$out_ci_st\" in *'could not be read'*) true ;; *) false ;; esac"
+check "#327 and says config is arriving without a verdict once the window has passed" \
+  "case \"\$out_ci_st\" in *'arriving WITHOUT a verdict'*) true ;; *) false ;; esac"
+rm -f "$(ci_repo unreadable)/.ci-unreadable-since"
+
 # NO CHECK AT ALL is not a failure, it is nothing to fail, and Dan chose to let it through
 # (2026-09-03). The catch is that "no run yet" and "no run ever" are the same empty answer for the
 # first minute of a commit's life, so taking the young one as green would defeat this gate in

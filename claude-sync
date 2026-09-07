@@ -4368,7 +4368,14 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
   # anything we do NOT, which is an ancestry test, not an inequality: do_sync commits local changes
   # BEFORE this runs, so our head always differs from theirs and comparing the two would gate every
   # run for ever. Mind the direction, the same way unapplied_remote_changes does.
-  git -C "$SYNC_REPO" merge-base --is-ancestor "$sha" HEAD 2>/dev/null && return 1
+  # Nothing to integrate also means the unreadable clock has nothing to be about: no verdict is
+  # being asked for, so leaving it armed would let `status` report a verdict as unreadable when
+  # nothing had tried to read one (L11). Cleared here as well as on every readable verdict below,
+  # because this arm returns before the classifier is ever called.
+  if git -C "$SYNC_REPO" merge-base --is-ancestor "$sha" HEAD 2>/dev/null; then
+    rm -f "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true
+    return 1
+  fi
   state="$(remote_ci_state "$sha")"
   # ANY readable verdict clears the unreadable clock (claude-config#327), including the ones that
   # block. red, pending and cancelled are answers: they mean the lookup is working and the gate is
@@ -5556,6 +5563,23 @@ OTHERCLONEEOF
 # The count on screen, because a log line is not a report: the real one left 21 skips in
 # ~/.claude-sync.log and nothing anybody would look at (claude-config#323). Silent when there is
 # nothing to say, so it distinguishes something when it does speak (L36).
+# An error waved through as expected still has to be counted somewhere a person looks (L77). Once
+# the unreadable window has passed, every commit arrives unjudged and the alert has already been
+# given once, so without this the only remaining trace is a log line nobody opens, which is the
+# same silence claude-config#323 was about. Says nothing when there is nothing to say.
+report_ci_unreadable(){
+  local since now elapsed window="${SYNC_CI_UNREADABLE_AFTER:-10800}"
+  [ -f "$CI_UNREADABLE_SINCE_FILE" ] || return 0
+  since="$(awk 'NR==1{print $1}' "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null)"
+  case "$since" in ''|*[!0-9]*) return 0 ;; esac
+  now="$(date +%s)"; elapsed=$(( now - since ))
+  if [ "$elapsed" -ge "$window" ] 2>/dev/null; then
+    echo "config is arriving WITHOUT a verdict: whether the shared repo's head passed its tests could not be read for $(age_in_words "$elapsed"), which is past the $(duration_in_words "$window") this waits, so it is being applied unjudged. Only the hook suite run after each apply is judging it. Check that gh is installed and logged in."
+  else
+    echo "the shared repo's test verdict could not be read for the last $(age_in_words "$elapsed"), so config is being held back. After $(duration_in_words "$window") it is applied anyway rather than held for ever. Check that gh is installed and logged in."
+  fi
+}
+
 report_behind_skips(){
   local n first now
   n="$(behind_skips_count)"
@@ -5834,6 +5858,7 @@ do_status(){
   report_user_scope_plugins
   report_duplicate_plugin_skills || true
   report_conflict_copies
+  report_ci_unreadable
   report_behind_skips
   report_watcher_hold
   report_automatic_jobs
