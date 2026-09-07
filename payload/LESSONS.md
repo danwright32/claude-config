@@ -351,6 +351,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   will happily accept the wrong identifier, field, or shape and stay green.
   (2026-07-29, milestone gate: 128 passing tests still had a milestone passed by number
   to a command that matches only by name)
+- **L420. Two artefacts describing ONE run (its results and its logs, an artifact and its
+  metadata) must be paired by the run's own identifier, never by each being the newest of its
+  kind in its own directory**, because the store holds several runs and a mismatched pair
+  produces a confident number that is pure artefact and reads as a finding. Pairing a check
+  run's results with another run's event streams reported "83 of 83 named people never had
+  their own site looked up", which was caught only by comparing the two files' session ids;
+  the correctly paired run read 0 of 9.
+  (overture#3345)
 - **L58. Two systems that must agree cannot be verified against records one of them wrote
   into the other.** A synced copy shares its source's spelling by construction, so the
   comparison passes for a reason unrelated to the rule under test; find or wait for a record

@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 517 lessons.
+LESSONS.md, which is NOT loaded into the session. 518 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -41,6 +41,7 @@ to decide something: the body is where the failure it came from is described.
 - L103. A guard that asserts the exact rendering of a value rather than the rule behind it fails the first legitimate refinement of that value, and when the value is a file's text it can also be satisfied by a comment ABOUT the thing, including one explaining that the thing was removed.
 - L48. A test fixture that claims to come from real data must be measured from it, never shaped so the rule under test fires.
 - L52. A test whose only outside dependency is a stub you wrote can only confirm your own assumption about the real interface.
+- L420. Two artefacts describing ONE run (its results and its logs, an artifact and its metadata) must be paired by the run's own identifier, never by each being the newest of its kind in its own directory
 - L58. Two systems that must agree cannot be verified against records one of them wrote into the other.
 - L56. A new validator on a live data path must be calibrated against a sample fetched through the same code path it will guard, and must be observed for one real cycle before it is allowed to block.
 - L68. A guard that reads live production data must assert the SIGNATURE of the failure it protects against, never the data's current emptiness.
