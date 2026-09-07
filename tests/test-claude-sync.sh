@@ -5155,6 +5155,24 @@ check "#324 and puts the clone back on a branch" \
   "git -C '$RBA' symbolic-ref --short HEAD >/dev/null 2>&1"
 check "#324 and says it did, rather than fixing it in silence" \
   "grep -q 'concluded an unfinished rebase' <<< \"\$out_rb\""
+# When it does NOT conclude, the failure above says only that a directory is still there, which
+# sends the reader to reproduce it before they can begin (L11, L80). This costs nothing on a green
+# run and is the whole diagnosis on a red one. It exists because these three went red on the Linux
+# runner and stayed green on both Macs, so the only way to learn what git actually said there was
+# to make that machine print it (L177).
+if [ -d "$RBA/.git/rebase-merge" ] || [ -d "$RBA/.git/rebase-apply" ]; then
+  {
+    printf '    the run said: %s\n' "$out_rb"
+    printf '    git here is: %s\n' "$(git --version 2>&1)"
+    # The identity git would sign the concluding commit with, which is the one thing a runner
+    # differs from a Mac on and the one thing nothing else here reports. It answers, rather than
+    # merely failing, and it changes nothing.
+    printf '    committer identity git would use: %s\n' "$(git -C "$RBA" var GIT_COMMITTER_IDENT 2>&1 | head -1)"
+    printf '    branch state: %s\n' "$(git -C "$RBA" status -sb 2>&1 | head -1)"
+    printf '    unmerged paths: %s\n' "$(git -C "$RBA" diff --name-only --diff-filter=U 2>&1 | tr '\n' ' ')"
+    printf '    todo left: %s\n' "$(cat "$RBA/.git/rebase-merge/git-rebase-todo" 2>/dev/null | grep -cEv '^[[:space:]]*(#|$)' || true)"
+  } >&2
+fi
 
 # A rebase with a REAL conflict outstanding is a different event and gets a different answer: it is
 # refused, by name, because concluding it would commit somebody's half merged file (L11, L42).
