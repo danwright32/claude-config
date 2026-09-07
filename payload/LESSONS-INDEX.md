@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 538 lessons.
+LESSONS.md, which is NOT loaded into the session. 539 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -411,6 +411,7 @@ to decide something: the body is where the failure it came from is described.
 - L610. Collapsing content behind a disclosure, a toggle or a lazy fetch for tidiness, and rendering nothing on the healthy day because every element was conditional on something being wrong, both hide the thing the page exists to show, and a fully healthy page becomes indistinguishable from one that failed to render.
 - L611. A free text box for a value whose valid set already exists as a constant in code offers every typo as an option and reports none of them, because the value is matched downstream rather than validated, and the only symptom is a pool one person shorter.
 - L613. A shared component created to end N copies converts the one site in front of whoever built it and leaves the rest standing, and a superseded control is kept with its justification rewritten rather than deleted, so the product ends up half converted with the old thing arguing for itself in a docstring.
+- L424. An action taken from ONE row whose write reaches a whole population must say whether THAT row was among the ones it changed, because a truthful count of the others is indistinguishable from success on the one the person was looking at.
 
 ## External systems
 

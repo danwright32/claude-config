@@ -4576,6 +4576,22 @@ window is a count rather than a boundary.
   own necessity, and a third issue had to remove that. #1774 and #1949: the components and the
   back links a restructure made dead were left in place)
 
+- **L424. An action taken from ONE row whose write reaches a whole population must say whether
+  THAT row was among the ones it changed, because a truthful count of the others is
+  indistinguishable from success on the one the person was looking at.** The acknowledgement is
+  never wrong, which is what makes it so convincing: the write really did land, the number really
+  is the number, and the only thing missing is the one fact the person is standing there checking.
+  It bites hardest where the control is offered on a WIDER set of rows than the write can reach,
+  since the row that offered it is then the row guaranteed not to be in the count. Distinct from
+  L287, where a notice's scope is wider than its surface and every number in it is about somewhere
+  else: here the action genuinely acted, just not on the thing that invoked it. Report the row's
+  own outcome first and the population second.
+  (overture#3623, 2026-09-07: Dan pressed "Say where it is" on a 54 Below card, typed a city, and
+  the card did not change. The answer was stored and reached the 55 shows at that room whose
+  location field was blank; his card held an unreadable address, which the fill only ever skips,
+  so it could never be among them. The banner said it had placed 55 shows and he had no way to
+  tell that from the one he pressed it on)
+
 
 
 
