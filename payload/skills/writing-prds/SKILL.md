@@ -45,16 +45,12 @@ The finished PRD has these parts, in this order, and these properties:
 
 ## Settling the visual identity
 
-This runs once, early in the build, and produces one committed file. Six things make it work:
-
-1. **Render, do not describe.** Dan does not pick a design from prose. Asked to choose between characters named in words he said "I think I need to see renderings of these to get an idea. I'm not really sure." Build the options, show them, ask afterwards.
-2. **One variable per round, everything else held byte identical.** Rounds that moved several things at once produced "still not loving any of them" and no usable signal. Rounds that moved one produced a precise answer every time. Expect eight to a dozen rounds and plan for them.
-3. **One window, full context, in a switcher.** Render the whole screen including the surrounding chrome, and let him swap options in place with buttons. A difference you scroll between is remembered; a difference that swaps under a frame that stays put is seen. His words: "render the whole page. I need the context", then "would it be possible for you to show it to me through a switch".
-4. **Colour last.** Settle structure, type and density in black and white first. Colour arguments absorb the attention that layout needs ("let's just do black and work on the rest of it before the color").
-5. **Treat every objection as a candidate rule.** Check it against the product, and where it holds, promote it into a standing rule with its reason rather than applying it once. "I don't think I like red because that feels like something is wrong" became a rule that red is reserved for the one place something is genuinely wrong.
-6. **Count the facts before showing any chrome.** No number may appear twice. A sidebar was rejected on sight for stating the same count in two places.
-
-**The deliverable.** The settled design is ONE self contained file committed in the repo: no build step, no hosted URL, fonts and assets embedded so it renders identically with no network, forever. Its decision record lives inside it, each decision with the reason it was made. Beside it, name the parts that are idioms of the rendering medium rather than design decisions, so they are translated rather than copied when the real screen is built. Ovation's `docs/design/` is the worked example: an HTML file standing in for a SwiftUI window, with its three web idioms named in the README. Every decision with code consequences also goes back into the PRD as numbered requirements, so the PRD stays the single alignment document.
+The process lives in the `running-design-rounds` skill, which owns the six rules, the
+switcher tool and the deliverable spec. Invoke it rather than restating it here. In
+short: render before asking, one variable per round, one window in a switcher, colour
+last, and the settled design ships as one self contained committed file with its
+decision record inside it. Every decision with code consequences comes back here as
+numbered requirements, so the PRD stays the single alignment document.
 
 ## Red flags, stop and interview instead
 
