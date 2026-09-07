@@ -4677,6 +4677,17 @@ window is a count rather than a boundary.
   positioning it absolutely, has its own catch on the second surface: the sidebar nav is a
   horizontal scroller below lg, which clips an absolutely positioned child (L566))
 
+- **L628. An incidental dismissal (a click outside, a page scroll, a resize) must not be wired to
+  the same handler as an explicit Cancel, because dismissing a surface is not a decision to discard
+  what is in it**, and the person whose click was never aimed at the picker gets no warning and no
+  undo. Closing on a gesture nobody made about the content keeps the content; only the Cancel
+  control and Escape restore the snapshot.
+  (Try-Pennie/slate#2048, 2026-09-07: `DateTimeField` snapshots its six segments when the popup
+  opens and passes `onClose={cancel}` to `AnchoredPanel`, which fires that on an outside mousedown
+  AND on any page scroll outside the panel. So picking a date and then clicking anywhere else, or
+  merely scrolling, wrote the old value back over it silently. Dan: "unless I click confirm, it
+  reverts. It shouldn't erase the date and time if I just click out of the picker")
+
 
 
 
