@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 550 lessons.
+LESSONS.md, which is NOT loaded into the session. 552 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -419,11 +419,13 @@ to decide something: the body is where the failure it came from is described.
 - L626. A rule that conditionally OMITS a label (a group heading, a caption, a legend) does not remove the SPACE that label occupied, so wherever it fires the surface shows a gap with nothing in it, which reads as a layout fault rather than as the boundary it still is.
 - L627. A transient indicator placed INSIDE a row (a spinner, a badge, a count) takes its width from the flow, so showing it moves every sibling beside it, and the feedback for the thing somebody clicked is delivered by making the things they did not click jump.
 - L628. An incidental dismissal (a click outside, a page scroll, a resize) must not be wired to the same handler as an explicit Cancel, because dismissing a surface is not a decision to discard what is in it
+- L426. An item held on screen past its own removal (a row fading out, a card playing an exit) must be reinserted at its OWN position rather than appended to the end, because anything anchored to it or to the group it belongs to (a scroll pin, a selection, a focus ring) follows it to wherever it lands.
 
 ## External systems
 
 - L513. A value a platform REPORTS is what is currently configured, never what is available
 - L23. Treat every external response as hostile and every event stream as unordered, late, and duplicated.
+- L425. A decoder that declares only the fields it needs today silently discards every sibling in the same object, and nothing anywhere reports the loss
 - L24. State the expected data volume before writing any query or loop.
 - L81. A batch must be sized in the UNIT the limit is actually expressed in, measured from the real inputs, never in a proxy unit calibrated on one sample.
 - L87. A change that multiplies how many items an existing request carries inherits that request's aggregate limit, and proving the change correct says nothing about whether it still fits.

@@ -4710,6 +4710,8 @@ window is a count rather than a boundary.
   must exist AT ALL so the card has somewhere to land; no test asserted the position)
 
 
+
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
