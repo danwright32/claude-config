@@ -1,6 +1,6 @@
 ---
 name: writing-prds
-description: Use when Dan asks for a PRD, product brief, or requirements document, or wants to "plan out" a new product or feature from source materials (call transcripts, decks, recordings, prototypes), before any build planning or code. Also use when reviewing or revising an existing PRD.
+description: Use when Dan asks for a PRD, product brief, or requirements document, or wants to "plan out" a new product or feature from source materials (call transcripts, decks, recordings, prototypes), before any build planning or code. Also use when reviewing or revising an existing PRD. Also use at the start of building any product or feature that has an agreed PRD but whose look is not yet settled, when the first screen, UI, layout or visual identity is about to be designed or built.
 ---
 
 # Writing PRDs
@@ -23,7 +23,7 @@ A PRD's job is to align the people deciding and the people building on the probl
    4. For every contested or consequential decision: whose sign-off does it need, by name.
 5. **Stress-test the problem statement.** Before drafting, check it for solution language (a problem section that names the feature is a feature brief) and for unverifiable claims.
 6. **Draft to the output spec below**, then deliver as a file plus a shareable artifact, and end with the list of what needs whose sign-off. Circulate for reaction, not approval.
-7. **Settle the visual identity before the first screen is built.** Once the PRD is agreed and the main screen's content is known, the first build task is a design round, not code. Not earlier: there is nothing to draw before the PRD says what is on the screen. Not later: once a screen exists in the real framework every round costs a rebuild instead of an edit, and the question quietly changes from what this should look like to what is cheap to change now. Run it as the section below describes and treat its result as a settled artifact, not a sketch.
+7. **Settle the visual identity before the first screen is built.** Once the PRD is agreed and the main screen's content is known, the first build task is a design round, not code. Not earlier: there is nothing to draw before the PRD says what is on the screen. Not later: once a screen exists in the real framework every round costs a rebuild instead of an edit, and the question quietly changes from what this should look like to what is cheap to change now. Run it as the section below describes and treat its result as a settled artifact, not a sketch. Because this step runs in a later session than the PRD, delivering the PRD also opens a tracked issue for it, in the PRD's own milestone, so it survives the session that wrote the document.
 8. **Keep it alive.** When Dan corrects any point, update every place it appears (sections cross-reference each other), fix all cross-reference numbers if items are added or removed, re-verify the numbering, and re-publish the same artifact URL. A PRD that diverges from the current understanding is worse than none.
 
 ## Output spec
