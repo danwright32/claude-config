@@ -20,6 +20,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 pass=0
 fail=0
+unmeasured=0
 check() { # check <description> <expected-substring> <actual>
   if [[ "$3" == *"$2"* ]]; then
     pass=$((pass + 1))
@@ -173,7 +174,61 @@ out="$(run)"; rc=$?
 check_eq "no arguments exits 2" "2" "$rc"
 check "no arguments prints usage" "Usage:" "$out"
 
+# --- 11. the keys actually work, proved in a browser engine ---
+#
+# The checks above read the emitted source, and source cannot tell a wired key from a
+# drawn one: that is exactly the regression this tool exists to stop. So the page is
+# loaded in real Chrome, keys are dispatched, and the rendered result is read back.
+# When Chrome is not on this machine the section reports UNMEASURED rather than passing,
+# because a check that silently skips is indistinguishable from one that succeeded.
+
+CHROME="${SWITCHER_TEST_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+
+probe() { # probe <page> -> the readout heading at the start and after each key
+  python3 - "$1" <<'PROBEPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+function heading() { return document.querySelector("#readout h2").textContent; }
+var log = [heading()];
+["ArrowRight", "1", "2", "ArrowLeft"].forEach(function (k) {
+  document.dispatchEvent(new KeyboardEvent("keydown", {key: k, bubbles: true}));
+  log.push(heading());
+});
+var out = document.createElement("pre"); out.id = "PROBE"; out.textContent = log.join(",");
+document.body.append(out);
+</script>
+"""
+open(sys.argv[1] + ".probe.html", "w", encoding="utf-8").write(page + harness)
+PROBEPY
+  "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+    --dump-dom "file://$1.probe.html" 2>/dev/null \
+    | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")'
+}
+
+if [[ ! -x "$CHROME" ]]; then
+  echo "UNMEASURED: no browser at $CHROME, so the keyboard wiring was not tested. Set SWITCHER_TEST_CHROME."
+  unmeasured=1
+else
+  keys="$(probe "$TMP/out.html")"
+  check_eq "arrows and jump keys move between the options" "Espresso,Ink,Espresso,Ink,Espresso" "$keys"
+
+  # The mutant: the same page with its key handler removed, which is exactly what a hand
+  # written switcher did on 2026-09-07 while still drawing the badges on every tab.
+  python3 - "$TMP/out.html" "$TMP/mutant.html" <<'MUTPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+start = page.index('document.addEventListener("keydown"')
+end = page.index("show(0);", start)
+open(sys.argv[2], "w", encoding="utf-8").write(page[:start] + page[end:])
+MUTPY
+  mutant="$(probe "$TMP/mutant.html")"
+  check_eq "a page whose keys are not wired is caught" "Espresso,Espresso,Espresso,Espresso,Espresso" "$mutant"
+fi
+
+
 echo
 echo "passed: $pass, failed: $fail"
-printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+printf 'SUITE-RESULT passed=%s failed=%s unmeasured=%s\n' "$pass" "$fail" "$unmeasured"
 [[ "$fail" -eq 0 ]]
