@@ -330,7 +330,13 @@ suite_filtered_tail(){   # $1 = how the run was scoped, for the summary   $2 = t
   [ "$FAIL" -eq 0 ]
 }
 
-section(){
+# Everything a section DOES, which is what the deadline machinery watches: the heading, the
+# accounting, the mark the watchdog reads, and the two seams that make a run pause or stall. The
+# fixture seam (claude-config#334) calls this directly, because the titles it produces are
+# deliberately NOT headings of this file: they exist only in a run that stops before any real
+# section, so they cannot travel with one, which is the harm #138 exists to report. `section` is
+# the wrapper every real heading uses, and #138 holds this to exactly those two callers.
+sec_begin(){
   section_close
   echo "$1"
   _SEC_TITLE="$1"; _SEC_T0=$SECONDS; _SEC_P0=$PASS; _SEC_F0=$FAIL
@@ -360,6 +366,7 @@ section(){
   fi
   return 0
 }
+section(){ sec_begin "$1"; }
 SUITE_SECTION_MARK=""
 
 # SECTION_UNTIL=<text> runs from the beginning UP TO AND INCLUDING the matching section, then stops.
@@ -413,6 +420,25 @@ SUITE_PRELUDE_END="sync (two-way) over a local fake remote"
 if [ -n "${SECTION_ONLY:-}" ] && [ -n "${SECTION_UNTIL:-}" ]; then
   echo "test suite: SECTION_ONLY='$SECTION_ONLY' and SECTION_UNTIL='$SECTION_UNTIL' were both given. They ask for different runs, so this refuses rather than picking one and leaving you to discover which. Use one." >&2
   exit 2
+fi
+
+# SUITE_FIXTURE_SECTIONS=<n> replaces the real sections with n of its own (claude-config#334, the
+# seam itself is further down, next to where a real run starts building its fixture). Judged HERE,
+# above the selectors, because those re-execute this file: a refusal written beside the seam would
+# sit after that re-execution and could never be reached by the run that needed it (L109).
+if [ -n "${SUITE_FIXTURE_SECTIONS:-}" ]; then
+  case "$SUITE_FIXTURE_SECTIONS" in
+    ''|*[!0-9]*|0)
+      echo "test suite: SUITE_FIXTURE_SECTIONS='$SUITE_FIXTURE_SECTIONS' is not a positive whole number of sections. Refusing rather than running none and reporting a pass over a set nobody chose (L98)." >&2
+      exit 2 ;;
+  esac
+  # Not combinable with the knobs that SELECT sections. Those choose from the real file and this
+  # replaces it, so a run given both would report a result about neither, and two knobs sitting
+  # beside each other is exactly how one gets reached for by mistake (claude-config#110).
+  if [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTION_LIST:-}" ] || [ -n "${SUITE_SHARD:-}" ]; then
+    echo "test suite: SUITE_FIXTURE_SECTIONS was given alongside a knob that picks real sections. They ask for different runs, so this refuses rather than choosing one and leaving you to discover which. Use one." >&2
+    exit 2
+  fi
 fi
 
 # Collected once, and used by BOTH filters. They used to resolve a name differently: SECTION_ONLY
@@ -2157,6 +2183,39 @@ hd_field(){   # $1 = the record line  $2 = the field name
   return 0
 }
 
+
+# ---- sections of a test's own making (claude-config#334) ----
+# SUITE_FIXTURE_SECTIONS=<n> runs n sections that do nothing but BE sections, reports, and stops.
+# It exists for the deadline tests (#152), whose whole subject is a run reaching one section after
+# another. Those used to watch a prefix of the REAL suite through SECTION_UNTIL, which coupled
+# their timing to content they have nothing to do with: a section added ahead of the cut-off
+# widened the gap between two section marks, and a stall bound chosen against the old width then
+# killed a healthy run. The failure named the deadline, so it read as the stall detection having
+# regressed rather than as the fixture having changed underneath it.
+#
+# Everything a real run has already happened by the time this is reached: the watchdog is armed
+# against the shipped SUITE_SECTION_MARK, the cleanup traps are installed, the lock is settled. So
+# a fixture run exercises the SHIPPED watchdog through the SHIPPED section() seam, and the only
+# made up part is what it is watching. The duration of such a run is n times SUITE_POLL_INTERVAL
+# and nothing else, so both halves of what the deadline tests need (every gap under the bound, the
+# whole run over it) are set by their own two numbers (L130, L401).
+# What this knob may hold, and what it may not be combined with, is settled far above, beside the
+# other knob refusals and BEFORE the section selectors re-execute this file. A refusal written here
+# would sit after that re-execution and could never be reached by the run that needed it (L109).
+if [ -n "${SUITE_FIXTURE_SECTIONS:-}" ]; then
+  _fx_i=1
+  while [ "$_fx_i" -le "$SUITE_FIXTURE_SECTIONS" ]; do
+    sec_begin "== deadline fixture section $_fx_i =="
+    check "fixture section $_fx_i ran" "[ 1 -eq 1 ]"
+    _fx_i=$(( _fx_i + 1 ))
+  done
+  section_close
+  echo ""
+  echo "PASS=$PASS FAIL=$FAIL (SUITE_FIXTURE_SECTIONS=$SUITE_FIXTURE_SECTIONS, NOT a real run)"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ]
+  exit $?
+fi
 
 # Named, not a bare `mktemp -d`. A run that is force-killed never reaches suite_cleanup, so this
 # directory is abandoned, and an ANONYMOUS one cannot be attributed to this suite afterwards: the
@@ -5613,26 +5672,63 @@ _st_tag="sttag$$-$SECONDS"
 # nothing about what is asserted: both deadlines are read off a clock either way, and the numbers
 # below move together with it.
 #
-# What it cannot go below is the slowest section the run passes through, because the stall bound
-# has to clear that or a healthy prelude trips it. Measured 2026-08-30, the run up to `apply is
-# idempotent` is 7 sections and 9.6 seconds with no pauses at all, and its slowest single section
-# is 3 seconds. So the bounds here are set against THAT rather than against the poll.
+# Every run below also watches SECTIONS OF ITS OWN, through SUITE_FIXTURE_SECTIONS
+# (claude-config#334). What the bounds have to clear used to be a measurement of the real suite:
+# "the run up to `apply is idempotent` is 7 sections and 9.6 seconds, slowest single section 3
+# seconds", taken on 2026-08-30 and true only until somebody added a section ahead of that
+# cut-off. Two people did on 2026-09-07, and both times the run went red naming the deadline. With
+# a fixture the same quantities are arithmetic instead: a healthy gap between two section marks is
+# one poll interval, and the whole run is the section count times it. Neither can be moved by
+# anything written elsewhere in this file.
 _st_poll=0.1
+# The fixture, derived rather than three constants that have to be kept in step (L41, L401). The
+# bound sits between the two things it separates, with a multiple of margin on each side: four
+# times the gap, so a healthy run is never called stopped, and a third of the total, so a run that
+# keeps moving genuinely outlasts it.
+_st_fx_poll=1
+_st_fx_stall=$(( _st_fx_poll * 4 ))
+_st_fx=$(( _st_fx_stall * 3 ))
+# Which fixture section the two hanging runs stall in. Not the first, so a run that never reached
+# any section at all cannot be mistaken for one that stopped in this one.
+_st_fx_hang='deadline fixture section 2'
+
+# The fixture the three runs below stand on, proven to produce sections BEFORE any of them relies
+# on it. A seam that silently produced none would leave every one of those runs reaching no section
+# at all, which is the state the watchdog kills, so the two hanging runs would still be killed and
+# still say what they are asserted to say (L159, L98).
+_st_fxout="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=600 SUITE_FIXTURE_SECTIONS=$_st_fx \
+  SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_fx_rc=$?
+_st_fx_n="$(printf '%s\n' "$_st_fxout" | grep -c '^== deadline fixture section ' || true)"
+check "#334 the fixture runs the sections it was asked for ($_st_fx_n of $_st_fx)" \
+  "[ '$_st_fx_n' -eq '$_st_fx' ]"
+check "#334 and a fixture run reports its own result" "[ '$_st_fx_rc' -eq 0 ]"
+# Both refusals the knob's own contract names, each PRODUCED rather than described (L151). A count
+# that is not a positive number would otherwise run no sections and report a pass over them, and a
+# count given alongside a selector would report a result about a set nobody chose.
+_st_fxbad="$(SUITE_FIXTURE_SECTIONS=0 SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_fxbad_rc=$?
+check "#334 a fixture count of zero is refused" "[ '$_st_fxbad_rc' -ne 0 ]"
+check "#334 and it says the count is what it refused" \
+  "line_has \"\$_st_fxbad\" 'SUITE_FIXTURE_SECTIONS' 'positive whole number'"
+_st_fxmix="$(SUITE_FIXTURE_SECTIONS=2 SECTION_UNTIL=push SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_fxmix_rc=$?
+check "#334 a fixture asked for alongside a real section selector is refused" "[ '$_st_fxmix_rc' -ne 0 ]"
+check "#334 and it says the two knobs ask for different runs" \
+  "line_has \"\$_st_fxmix\" 'SUITE_FIXTURE_SECTIONS' 'different runs'"
 
 # Killed for stopping, with the ceiling set far away so what killed it is not in doubt. This run
-# hangs in `push`, which a child reaches in 0.8 seconds measured 2026-08-30 over three runs, and
-# the stall timer restarts at every section, so what the bound has to clear is the widest gap
-# inside those 0.8 seconds and not the whole prelude. 4 is roughly five times the entire run up to
-# that point, which leaves room for a runner several times slower than this Mac.
+# hangs in the second fixture section. The stall timer restarts at every section, so what the bound
+# has to clear is the widest gap before that, which is the preamble this file runs before it
+# reaches any section at all: measured 2026-09-07 over three runs, under half a second. The bound
+# is several times that, leaving room for a runner much slower than this Mac.
 _st_t0="$(date +%s)"
-_st_hang="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=4 SUITE_HANG_IN=push SUITE_POLL_INTERVAL=$_st_poll \
+_st_hang="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=$_st_fx_stall SUITE_FIXTURE_SECTIONS=$_st_fx \
+  SUITE_HANG_IN="$_st_fx_hang" SUITE_POLL_INTERVAL=$_st_poll \
   SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_hang_rc=$?
 _st_hang_elapsed=$(( $(date +%s) - _st_t0 ))
 check "#152 a run that stopped making progress is killed" "[ '$_st_hang_rc' -ne 0 ]"
 check "#152 and it says plainly that there was no progress" \
   "case \"\$_st_hang\" in *'no progress'*) true ;; *) false ;; esac"
 check "#152 and still names the section it stopped in" \
-  "case \"\$_st_hang\" in *'still inside section: == push =='*) true ;; *) false ;; esac"
+  "case \"\$_st_hang\" in *\"still inside section: == \$_st_fx_hang ==\"*) true ;; *) false ;; esac"
 # It was the STALL timer and not the ceiling. The ceiling was set a hundred times further away, so
 # anything ending near the stall timeout can only have come from the stall timer. None of these
 # three numbers is measured, they are the fixture's own: the bound separates the two settings from
@@ -5645,23 +5741,20 @@ check "#152 and the ceiling 600s away was not what killed it (took ${_st_hang_el
 # MOVING is left alone however long it takes. Every section is made to pause, so the run outlasts
 # its own stall timeout several times over while never once stopping.
 _st_t1="$(date +%s)"
-# Far enough in that several sections run, since `push` is the FIRST one and a two section run
-# cannot outlast anything. Every section pauses, so the run spends a few seconds in each and many
-# times the stall timeout in total, without ever once stopping.
 # This run needs BOTH things at once, and they pull against each other. Every gap between two
 # sections must stay under the bound, or a healthy run is called stopped; and the whole run must
-# exceed the bound, or the check below passes without ever testing anything. The pause is what
-# supplies the second, so this run polls in whole seconds where the two above poll in tenths: at a
-# tenth the pauses contributed 0.7 seconds to a run whose natural length varies between 5 and 10
-# seconds on this Mac, and the control landed on exactly its own bound and went red.
+# exceed the bound, or the check below passes without ever testing anything (L159). Every fixture
+# section pauses, so the gap is one poll interval and the total is the section count times it, and
+# the three numbers were derived from each other at the top of this section.
 #
-# Measured 2026-08-30: 7 sections, 9.6 seconds with no pauses at all, widest single section 3
-# seconds. So a 1 second pause makes the widest gap 4 against a bound of 6, and the total at least
-# 12, which is both margins wider than the two second pause against a bound of 8 this replaces.
-_st_slow_poll=1
-_st_slow_stall=6
-_st_slow="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=$_st_slow_stall SUITE_SLOW_IN='==' SUITE_POLL_INTERVAL=$_st_slow_poll \
-  SECTION_UNTIL='apply is idempotent' SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_slow_rc=$?
+# It polls in whole seconds where the two hanging runs poll in tenths, because here the poll IS the
+# pause: measured 2026-08-30, at a tenth the pauses contributed 0.7 seconds to a run whose natural
+# length varied between 5 and 10 seconds, and the control landed on exactly its own bound and went
+# red. That reading is about the fixture this replaced. It is kept because it says WHY the two
+# poll intervals differ, which the derived numbers above do not.
+_st_slow_stall=$_st_fx_stall
+_st_slow="$(SUITE_TIMEOUT=600 SUITE_STALL_TIMEOUT=$_st_slow_stall SUITE_SLOW_IN='==' SUITE_POLL_INTERVAL=$_st_fx_poll \
+  SUITE_FIXTURE_SECTIONS=$_st_fx SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_slow_rc=$?
 _st_slow_elapsed=$(( $(date +%s) - _st_t1 ))
 # The control for the fixture first: if it did not actually outlast the stall timeout, the check
 # below passes by never having tested anything (L159, L101).
@@ -5677,7 +5770,8 @@ check "#152 and it still reports its own result" "[ '$_st_slow_rc' -eq 0 ]"
 # The ceiling is measured from the START of the run and not from the last section, so unlike the
 # two above it has nothing to clear: whatever this run is doing when it fires, a ceiling that
 # fires is what these three checks are about, and none of them names a section.
-_st_ceil="$(SUITE_TIMEOUT=3 SUITE_STALL_TIMEOUT=600 SUITE_HANG_IN=push SUITE_POLL_INTERVAL=$_st_poll \
+_st_ceil="$(SUITE_TIMEOUT=3 SUITE_STALL_TIMEOUT=600 SUITE_FIXTURE_SECTIONS=$_st_fx \
+  SUITE_HANG_IN="$_st_fx_hang" SUITE_POLL_INTERVAL=$_st_poll \
   SUITE_WATCHDOG_TAG="$_st_tag" SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF" 2>&1)"; _st_ceil_rc=$?
 check "#152 the absolute ceiling still kills a run that reaches it" "[ '$_st_ceil_rc' -ne 0 ]"
 check "#152 and says it was the ceiling" \
@@ -5697,6 +5791,40 @@ while [ "$_st_wait" -lt 25 ]; do
   sleep 0.2; _st_wait=$((_st_wait + 1))
 done
 check "#152 none of those runs left a watchdog behind" "[ '${_st_wd:-0}' -eq 0 ]"
+
+# ---- and it watches sections of its OWN, not a prefix of the real suite (claude-config#334) ----
+# The three runs above used to scope a child with SECTION_UNTIL and watch the real sections up to
+# that cut-off. That coupled this test's timing to content it has nothing to do with: any section
+# added ahead of the cut-off widened a gap between two section marks, the stall bound was then
+# short, and the run went red naming the DEADLINE. It fired twice on 2026-09-07 from unrelated
+# work, once from a section about launch agents and once from a section about deletions, and both
+# times the first reading was that the stall detection had regressed (L11: a message may claim only
+# what its check measured, and this one named the wrong thing entirely).
+#
+# So the coupling is checked rather than remembered. Read from this section's own source, because
+# the next person to want "a run with several sections in it" will reach for the knob that already
+# gives them one.
+# Read with continuation lines JOINED, because every launch below is written across two or three
+# of them and a rule applied line by line would read the environment of a run separately from the
+# command it belongs to.
+_st_src="$WORK/st-own-source.txt"
+awk '/^section "== the deadline kills a run that STOPPED/{f=1;next}
+     f&&/^section "== /{exit}
+     f{ line=$0
+        while (line ~ /\\$/) { sub(/\\$/,"",line); if ((getline nxt) <= 0) break; line = line nxt }
+        print line }' "$SCRIPT_SELF" > "$_st_src"
+# The token is SPLIT so these two lines are not themselves launches as far as the search is
+# concerned. A scan that has to name what it looks for matches itself, and here that reads as a run
+# breaking the rule rather than as the scan finding its own source (L245).
+_st_tok='bash "$SCRIPT''_SELF"'
+_st_launch_n="$(grep -cF -- "$_st_tok" "$_st_src" || true)"
+_st_launch_bad="$(grep -F -- "$_st_tok" "$_st_src" | grep -vc 'SUITE_FIXTURE_SECTIONS' || true)"
+# The positive control first: an extraction that matched nothing would satisfy the rule below by
+# having read no source at all, which is a scan that reached nothing reporting a clean tree (L98).
+check "#334 this section's own suite launches were really found ($_st_launch_n of them)" \
+  "[ '$_st_launch_n' -ge 4 ]"
+check "#334 and every run it starts watches sections of its own ($_st_launch_bad do not)" \
+  "[ '$_st_launch_bad' -eq 0 ]"
 
 section "== only one suite run at a time (#32) =="
 # Nothing stopped several copies of this suite running at once. Three did on 2026-08-17, competing
@@ -10970,6 +11098,246 @@ _sospawn_first="$(grep -nF "bash \"\$SCRIPT""_SELF\"" "$SCRIPT_SELF" | awk 'NR <
 check "#105 the filter is un-exported before anything spawns a run" \
   "[ -n \"\$_soexp_line\" ] && [ -n \"\$_sospawn_first\" ] && [ \"\$_soexp_line\" -lt \"\$_sospawn_first\" ]"
 
+section "== a section may only read what it sets, the prelude sets, or it declares (#333) =="
+# The suite deals its sections across workers by measured time, so two sections adjacent in the
+# file routinely land in different ones. A section that reads a variable the section above it set
+# then dies under `set -u`, and that worker produces NO result line at all rather than a failure:
+# the run reports a pass count missing a quarter of its checks, and points nowhere near the cause.
+# Walked into on 2026-09-07 while adding a section that used a variable defined in the one above
+# it. Which shard died moved from run to run, and it was diagnosed only by reading a whole run log
+# for the unbound variable message.
+#
+# #105 above catches it AFTER a run: SECTION_ONLY reads its own log for that message and refuses to
+# be trusted. What was missing is catching it BEFORE one, which is this. The rule is the convention
+# the runtime message already names: a section may read what it sets ITSELF, what the PRELUDE sets
+# (every shard runs the prelude), or what a section it declares with a `# needs:` line sets,
+# transitively. Anything else is a dependency nothing carries.
+#
+# It reports only names this file sets at TOP LEVEL somewhere. A name nothing here assigns is the
+# environment, a positional parameter, or a variable belonging to a script this file GENERATES, and
+# none of those is this rule's business. That is what keeps it quiet enough to be read: measured
+# 2026-09-07 over 142 sections it reports nothing, and stripping the four `# needs:` declarations
+# the file carries takes it to 56 findings across ten variables.
+_NSAWK="$WORK/needs-scan.awk"
+cat > "$_NSAWK" <<'NEEDSCAN'
+# Every place a section READS a top-level variable that a DIFFERENT section SETS, without
+# declaring that section with a `# needs:` line. Reported one per line as:
+#   <line>\t<variable>\t<reading section>\t<setting section>
+function trim(x){ sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+# One shell WORD consumed off the front of a value, respecting quotes and nested $( ). The
+# remainder is returned. A naive "strip up to the next quote" got `X="$(cmd "$Y")"` wrong and left
+# a fragment behind, which then read as a command following the assignment, so the assignment was
+# classified as an environment prefix and the variable looked as though nothing set it.
+function skipval(t,   i, ch, dq, sq, depth, n) {
+  n = length(t); i = 1; dq = 0; sq = 0; depth = 0
+  while (i <= n) {
+    ch = substr(t, i, 1)
+    if (sq) { if (ch == SQ) sq = 0; i++; continue }
+    if (ch == "\\") { i += 2; continue }
+    if (!dq && ch == SQ) { sq = 1; i++; continue }
+    if (ch == "\"") { dq = !dq; i++; continue }
+    if (ch == "$" && substr(t, i + 1, 1) == "(") { depth++; i += 2; continue }
+    if (ch == ")" && depth > 0) { depth--; i++; continue }
+    if (!dq && depth == 0 && (ch == " " || ch == "\t")) break
+    i++
+  }
+  return substr(t, i)
+}
+function lower(x){ return tolower(x) }
+BEGIN { sec = 0; hd = ""; nsec = 0; nread = 0; afterhead = 0; SQ = sprintf("%c", 39) }
+{
+  line = $0
+
+  # ---- heredoc bodies belong to whatever the heredoc is fed to, not to this file ----
+  if (hd != "") { if (trim(line) == hd) hd = ""; next }
+  if (line !~ /<<</ && match(line, /<<-?[ \t]*['"]?[A-Za-z_]/)) {
+    m = substr(line, RSTART)
+    sub(/^<<-?[ \t]*/, "", m)
+    gsub(/['"]/, "", m)
+    if (match(m, /^[A-Za-z_][A-Za-z0-9_]*/)) hd = substr(m, 1, RLENGTH)
+  }
+
+  # ---- section boundaries, and the `# needs:` lines directly beneath a heading ----
+  if (line ~ /^section "/) {
+    nsec++; sec = nsec; title[sec] = line; afterhead = 1
+    if (index(lower(line), lower(PRELUDE_END)) > 0) prelude_last = sec
+    next
+  }
+  if (afterhead && line ~ /^# needs:/) {
+    t = line; sub(/^# needs:[ \t]*/, "", t)
+    needs[sec] = needs[sec] trim(t) "\n"
+    next
+  }
+  afterhead = 0
+  if (line ~ /^[ \t]*#/) next
+
+  # ---- what this line DEFINES ----
+  s = line
+  # Split on statement separators ONLY. Splitting on brackets too tore `X="$(cmd)"` in half, and
+  # the fragment left behind then read as a command prefix rather than as X being set, so a section
+  # that captured a command into a variable was invisible to this scan.
+  n = split(s, parts, /;|&&|\|\||\||&/)
+  for (i = 1; i <= n; i++) {
+    p = parts[i]
+    sub(/^[ \t]+/, "", p)
+    # A name declared `local` (with a value or bare) belongs to a function, whose lifetime this
+    # scan cannot see, so it is excluded outright rather than counted as a section setting it.
+    if (p ~ /^(local|declare|typeset)([ \t]|$)/) {
+      q = p
+      sub(/^(local|declare|typeset)[ \t]+/, "", q)
+      sub(/^-[A-Za-z]+[ \t]+/, "", q)
+      gsub(/"[^"]*"/, "", q)
+      gsub(SQ "[^" SQ "]*" SQ, "", q)
+      cq = split(q, qt, /[ \t]+/)
+      for (z = 1; z <= cq; z++) { tk = qt[z]; sub(/=.*$/, "", tk); if (tk ~ /^[A-Za-z_][A-Za-z0-9_]*$/) everlocal[tk] = 1 }
+      continue
+    }
+    scoped = 0
+    sub(/^(export|readonly)[ \t]+/, "", p)
+    # A segment that is nothing BUT assignments defines them. One with a command after them is an
+    # environment prefix (HOME=x cmd), which defines nothing beyond that command.
+    rest = p; first = ""; nn_i = 0
+    while (match(rest, /^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=/)) {
+      nm = substr(rest, RSTART, RLENGTH); sub(/(\[[^]]*\])?\+?=$/, "", nm)
+      if (first == "") first = nm
+      names[++nn_i] = nm
+      rest = skipval(substr(rest, RSTART + RLENGTH))
+      sub(/^[ \t]+/, "", rest)
+    }
+    # Nothing but assignments defines them. A command after them makes it an environment prefix
+    # (HOME=x cmd), which sets nothing beyond the life of that command.
+    if (first != "" && rest == "") {
+      for (k = 1; k <= nn_i; k++) {
+        if (!((names[k] SUBSEP sec) in asg)) asg[names[k] SUBSEP sec] = FNR
+        allasg[names[k]] = 1
+      }
+    }
+    if (match(p, /^for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in/)) {
+      nm = p; sub(/^for[ \t]+/, "", nm); sub(/[ \t]+in.*$/, "", nm)
+      if (!((nm SUBSEP sec) in asg)) asg[nm SUBSEP sec] = FNR
+      allasg[nm] = 1
+    }
+  }
+  if (match(s, /read[ \t]+(-[A-Za-z]+[ \t]+)*[A-Za-z_]/)) {
+    r = substr(s, RSTART + 4)
+    gsub(/-[A-Za-z]+[ \t]+/, "", r)
+    sub(/^[ \t]+/, "", r)
+    nnn = split(r, rv, /[ \t]+/)
+    for (i = 1; i <= nnn; i++) {
+      if (rv[i] ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+        if (!((rv[i] SUBSEP sec) in asg)) asg[rv[i] SUBSEP sec] = FNR
+        allasg[rv[i]] = 1
+      } else break
+    }
+  }
+
+  # ---- what this line READS ----
+  r2 = line
+  while (match(r2, /\$\{?[A-Za-z_][A-Za-z0-9_]*/)) {
+    tok = substr(r2, RSTART, RLENGTH); sub(/^\$\{?/, "", tok)
+    nread++; rnm[nread] = tok; rsec[nread] = sec; rln[nread] = FNR
+    r2 = substr(r2, RSTART + RLENGTH)
+  }
+}
+END {
+  printf "SCAN-SAW sections=%d reads=%d prelude=%d\n", nsec, nread, prelude_last
+  # A `# needs:` text resolves the way the runtime resolves it: a case insensitive fixed substring
+  # of exactly one heading line. Anything else the runtime already refuses out loud, so it is left
+  # alone here rather than diagnosed twice in two wordings (L11).
+  for (i = 1; i <= nsec; i++) {
+    if (needs[i] == "") continue
+    cnt = split(needs[i], nd, "\n")
+    for (j = 1; j <= cnt; j++) {
+      if (nd[j] == "") continue
+      hits = 0; which = 0
+      for (k = 1; k <= nsec; k++) if (index(lower(title[k]), lower(nd[j])) > 0) { hits++; which = k }
+      if (hits == 1) dep[i SUBSEP which] = 1
+    }
+  }
+  # Transitively, and a single forward pass reaches it: a declaration must name an EARLIER section,
+  # which the runtime refuses the whole run over, so every prerequisite is closed before it is read.
+  for (i = 1; i <= nsec; i++)
+    for (k = 1; k < i; k++)
+      if ((i SUBSEP k) in dep)
+        for (m2 = 1; m2 < k; m2++)
+          if ((k SUBSEP m2) in dep) dep[i SUBSEP m2] = 1
+
+  for (x = 1; x <= nread; x++) {
+    nm = rnm[x]; s2 = rsec[x]; ln = rln[x]
+    if (s2 <= prelude_last) continue                 # every shard runs the prelude
+    if (!(nm in allasg)) continue                    # never set at top level: environment, or a generated script
+    if (nm in everlocal) continue                    # function scoped somewhere, so this cannot see its lifetime
+    if ((nm SUBSEP s2) in asg && asg[nm SUBSEP s2] <= ln) continue
+    src = 0
+    for (k = 1; k <= prelude_last; k++) if ((nm SUBSEP k) in asg) src = -1
+    if (src == -1) continue                          # the prelude sets it
+    for (k = 1; k <= nsec; k++) if (k != s2 && (nm SUBSEP k) in asg) { if (!((s2 SUBSEP k) in dep)) { src = k; break } }
+    if (src <= 0) continue
+    printf "%d\t%s\t%s\t%s\n", ln, nm, title[s2], title[src]
+  }
+}
+NEEDSCAN
+
+_ns_run(){   # $1 = a suite file to scan; prints the summary line, then one line per finding
+  awk -v PRELUDE_END="$SUITE_PRELUDE_END" -f "$_NSAWK" "$1"
+}
+_NSOUT="$WORK/needs-scan.out"
+_ns_run "$SCRIPT_SELF" > "$_NSOUT"
+_ns_saw="$(sed -n '1p' "$_NSOUT")"
+_ns_secs="$(printf '%s' "$_ns_saw" | sed -n 's/.*sections=\([0-9][0-9]*\).*/\1/p')"
+_ns_reads="$(printf '%s' "$_ns_saw" | sed -n 's/.*reads=\([0-9][0-9]*\).*/\1/p')"
+_ns_pre="$(printf '%s' "$_ns_saw" | sed -n 's/.*prelude=\([0-9][0-9]*\).*/\1/p')"
+# What the scan actually saw, before what it concluded. A scan that parsed no sections, or found
+# the prelude boundary nowhere, reports a clean file for the same reason an empty tree scans clean
+# (L98), and the ceiling below would then be protection over nothing (L182).
+check "#333 the scan read this file ($_ns_secs sections, $_ns_reads variable reads)" \
+  "[ '${_ns_secs:-0}' -ge 100 ] && [ '${_ns_reads:-0}' -ge 1000 ]"
+check "#333 and it placed the prelude boundary (section $_ns_pre)" \
+  "[ '${_ns_pre:-0}' -ge 1 ] && [ '${_ns_pre:-0}' -lt '${_ns_secs:-0}' ]"
+_ns_bad="$(sed '1d' "$_NSOUT")"
+check "#333 no section reads what another section set without declaring it" \
+  "[ -z \"\$_ns_bad\" ] || { printf '%s\n' \"\$_ns_bad\" | awk 'NR <= 5' >&2; false; }"
+
+# And the same scan over a copy carrying the defect, because a ceiling at zero stops being a
+# measurement and starts reading as proof the thing cannot happen (L182, L1). The plant is the
+# exact shape of the 2026-09-07 failure: a new section reading a variable the section above it set.
+# The planted name is SPLIT, so this section's own source never contains it. A scan that has to
+# name what it plants finds itself, and the self-match is indistinguishable from the plant it was
+# looking for (L245): with the name written whole, the DECLARED plant below came back dirty because
+# this section reads it, which reads as the declaration not being honoured.
+_ns_nm='_zzz''_planted'
+_NSP1="$WORK/needs-plant.sh"
+awk -v NM="$_ns_nm" '/^suite_profile$/ && !ins {
+       print "section \"== zzz a planted section that sets a value ==\""
+       print NM "=1"
+       print "section \"== zzz a planted section that reads it ==\""
+       print "echo \"$" NM "\""
+       ins = 1 } { print }' "$SCRIPT_SELF" > "$_NSP1"
+_nsp1_n="$(grep -c "^$_ns_nm=1\$" "$_NSP1" || true)"
+check "#333 the planted copy really carries the undeclared read" "[ '$_nsp1_n' -eq 1 ]"
+_ns_p1="$(_ns_run "$_NSP1" | sed '1d')"
+check "#333 an undeclared cross-section read is caught" "[ -n \"\$_ns_p1\" ]"
+# Naming all three, because a finding that says only that something is wrong sends the reader back
+# to the whole file, which is the diagnosis this exists to replace (L11, L80).
+check "#333 and the finding names the variable, the reader and the setter" \
+  "line_has \"\$_ns_p1\" '$_ns_nm' 'planted section that reads it' 'planted section that sets a value'"
+
+# The declaration is what makes it legitimate, so the same plant carrying one must come back clean.
+# Without this the check above is equally satisfied by a scan that flags every cross-section read,
+# which would condemn the four real dependencies this file declares and honours.
+_NSP2="$WORK/needs-plant-declared.sh"
+awk -v NM="$_ns_nm" '/^suite_profile$/ && !ins {
+       print "section \"== zzz a planted section that sets a value ==\""
+       print NM "=1"
+       print "section \"== zzz a planted section that reads it ==\""
+       print "# needs: zzz a planted section that sets a value"
+       print "echo \"$" NM "\""
+       ins = 1 } { print }' "$SCRIPT_SELF" > "$_NSP2"
+_nsp2_n="$(grep -c '^# needs: zzz a planted section that sets a value$' "$_NSP2" || true)"
+check "#333 the declared copy really carries the declaration" "[ '$_nsp2_n' -eq 1 ]"
+_ns_p2="$(_ns_run "$_NSP2" | sed '1d')"
+check "#333 and the same read, declared, is not a finding" "[ -z \"\$_ns_p2\" ]"
+
 section "== every heading this file writes is one its own reader can see (#138) =="
 # The collector recognises exactly one shape: a `section` call at column zero whose title is a
 # literal string, and it takes the title by dropping everything from the last quote. A heading
@@ -11013,6 +11381,16 @@ check "#138 every heading written is a heading the reader can see" "[ \"\$_hd_ca
 # match, so the section is listed and still cannot be run alone.
 # Counted rather than matched with `grep -q`, which leaves on its first hit and can kill its own
 # producer under pipefail (#132, L183), and the offenders are NAMED for the same reason as above.
+# The one call that is deliberately not a heading. `section` is a wrapper over `sec_begin`, and the
+# deadline fixture (claude-config#334) calls `sec_begin` itself to produce titles that are not
+# sections of this file. Held to exactly those two callers, or the split becomes a way past the
+# comparison above rather than an honest statement that a fixture title is not a heading.
+# The name is held in a variable so this line is not itself a call as far as the count is
+# concerned. A scan that has to name what it counts counts itself (L245).
+_hd_secfn='sec_begin'
+_hd_seccall="$(grep -c "$_hd_secfn"' "' "$SCRIPT_SELF" || true)"
+check "#138 the shared implementation is called by section() and the deadline fixture, and nothing else ($_hd_seccall call(s))" \
+  "[ '$_hd_seccall' -eq 2 ]"
 _hd_built="$(printf '%s' "$_hd_list" | grep '[$`]' || true)"
 check "#138 and every title the reader derived is literal, so a pattern can reach it" \
   "[ -z \"\$_hd_built\" ]"
