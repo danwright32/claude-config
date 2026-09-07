@@ -3857,7 +3857,13 @@ recover_unfinished_rebase(){
   # Concludable. GIT_EDITOR is disarmed because `rebase --continue` opens one for the commit
   # message of a step it is finishing, and a run under launchd has no terminal to open it in: it
   # would hang rather than fail, which is worse (L110).
-  if err="$(cd "$SYNC_REPO" && GIT_EDITOR=true git rebase --continue 2>&1)"; then
+  # The tool's OWN identity, the same one every other commit it makes is signed with
+  # (claude-config#335). Concluding a rebase writes a commit, and this ran without one: on a
+  # machine where git can find an identity it borrowed the operator's and worked, and on a machine
+  # where it cannot, which is every CI runner and any Mac nobody has configured git on, git refused
+  # with "Committer identity unknown" and this clone was declared unable to send or receive. The
+  # tool has never needed the operator's identity for anything it does by itself.
+  if err="$(cd "$SYNC_REPO" && GIT_EDITOR=true git "${SYNC_GIT_IDENTITY[@]}" rebase --continue 2>&1)"; then
     echo "claude-sync: concluded an unfinished rebase an earlier run left in this clone. There was no conflict outstanding and nothing to merge, only a rebase nobody finished, and it was holding this Mac off the shared config. Now on $(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo 'no branch')." >&2
     notify "concluded an unfinished rebase in the sync clone"
     return 0

@@ -5136,6 +5136,16 @@ _rb_setup(){   # $1 = path prefix   $2 = resolve|leave   -> prints the clone lef
   if [ "$2" = resolve ]; then
     printf 'resolved\n' > "$a/payload/f.txt"; git -C "$a" add payload/f.txt 2>/dev/null
   fi
+  # The machine's own git identity may NOT answer for the tool (claude-config#335). Concluding a
+  # rebase writes a commit, and the tool carries an identity of its own for exactly that reason, so
+  # a run that borrows the operator's works here and fails on any machine that has none. Every CI
+  # runner has none: this went red there and stayed green on both Macs for hours, and git's message
+  # ("Committer identity unknown") reached nobody until the runner was made to print it.
+  #
+  # useConfigOnly stops git guessing one from the username and hostname, which is what let this Mac
+  # answer a question the runner could not. The fixture SETS the condition rather than inheriting
+  # it, or the test measures the machine it runs on rather than the code (L504, L2).
+  git -C "$a" config user.useConfigOnly true 2>/dev/null
   printf '%s' "$a"
 }
 RBH="$WORK/rebase-home"; mkdir -p "$RBH"; echo '{"hooks":{}}' > "$RBH/settings.json"
@@ -5147,7 +5157,12 @@ check "#324 and HEAD really is detached there" \
   "! git -C '$RBA' symbolic-ref --short HEAD >/dev/null 2>&1"
 check "#324 and nothing is unmerged, so it is a rebase nobody finished rather than a conflict" \
   "[ -z \"\$(git -C '$RBA' diff --name-only --diff-filter=U 2>/dev/null)\" ]"
-out_rb="$(CLAUDE_HOME="$RBH" SYNC_REPO="$RBA" SYNC_HOSTNAME=macRB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1 || true)"
+# Run with the machine's own git config out of reach, which with the useConfigOnly the fixture set
+# leaves git no identity at all. That is what every CI runner is, and it is what a Mac somebody has
+# not configured git on is. Concluding a rebase writes a commit, so the identity the tool carries
+# for its own commits has to be the one that signs it (claude-config#335).
+out_rb="$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+  CLAUDE_HOME="$RBH" SYNC_REPO="$RBA" SYNC_HOSTNAME=macRB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1 || true)"
 dbg "sync over an unfinished rebase: $out_rb"
 check "#324 a run concludes a rebase with an empty todo and a clean tree" \
   "[ ! -d '$RBA/.git/rebase-merge' ] && [ ! -d '$RBA/.git/rebase-apply' ]"
@@ -5227,6 +5242,50 @@ check "#325 pull names the unfinished rebase as the cause" \
   "grep -q 'concluded an unfinished rebase' <<< \"\$out_rb3\""
 check "#325 and does not report it as a two Mac divergence" \
   "! grep -q 'this Mac and the shared repo have diverged' <<< \"\$out_rb3\""
+
+section "== every git call that writes a commit carries the tool's own identity (#335) =="
+# Concluding a rebase writes a commit, and `recover_unfinished_rebase` ran `git rebase --continue`
+# with no identity at all. On a machine where git can find one, which is every Mac somebody has
+# configured, it borrowed the operator's and worked. On a machine where it cannot, which is every
+# CI runner and any Mac nobody has configured git on, git refused with "Committer identity
+# unknown", so the tool declared the clone unable to send or receive and changed nothing. The tool
+# already carries SYNC_GIT_IDENTITY for exactly this and uses it for its own commits.
+#
+# So the rule is the class rather than that one line (L30): any git call that can write a commit
+# carries it. An abort writes none, and is excluded by that reason rather than by name (L362).
+_gi_re='git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|"\$\{SYNC_GIT_IDENTITY\[@\]\}"))*[[:space:]]+(commit|rebase|cherry-pick|revert|am|merge)([[:space:]]|$)'
+_gi_lines(){   # $1 = a copy of the tool to read
+  # Comments stripped and continuations joined, as every other source scan here does it. Message
+  # lines are dropped too: `die` and `echo` quote these very commands as advice to the reader, and
+  # advice is not an invocation.
+  sed 's/#.*//' "$1" \
+    | sed -e :a -e '/\\$/N; s/\\\n//; ta' \
+    | grep -vE '(die|echo|printf|notify|dbg) "' \
+    | grep -nE "$_gi_re" \
+    | grep -vE 'rebase[[:space:]]+--abort' || true
+}
+_gitidentity(){ _gi_lines "$1" | grep -v 'SYNC_GIT_IDENTITY' || true; }
+_gi_all="$(_gi_lines "$SCRIPT" | grep -c . || true)"
+# The floor first: a pattern that matched nothing would report a clean tool for the same reason an
+# empty scan reports a clean tree (L98), and this one is meant to sit at zero findings for ever.
+check "#335 the scan found the tool's commit writing git calls ($_gi_all of them)" \
+  "[ '${_gi_all:-0}' -ge 3 ]"
+_gi_bad="$(_gitidentity "$SCRIPT")"
+check "#335 every git call that can write a commit carries the tool's identity" \
+  "[ -z \"\$_gi_bad\" ] || { printf '%s\n' \"\$_gi_bad\" | awk 'NR <= 5' >&2; false; }"
+# And it is watched CATCHING one, on a copy with the identity taken off a single call, or a zero
+# reads as proof the shape cannot occur rather than as a measurement (L182, L1).
+_GIP="$WORK/git-identity-plant.sh"
+sed 's/ "${SYNC_GIT_IDENTITY\[@\]}"//' "$SCRIPT" > "$_GIP"
+# The plant is checked for having CHANGED anything, because a substitution that matched nothing
+# reports success and leaves the copy identical, and the catch below would then be satisfied by the
+# original file rather than by the plant (L100). It caught exactly that here: the first spelling of
+# this sed named a call shape the tool does not have, matched nothing, and passed for as long as
+# the real defect was still in the file.
+check "#335 the plant really removed an identity" "! cmp -s '$SCRIPT' '$_GIP'"
+check "#335 and left the same calls to judge, only without it" \
+  "[ \"\$(_gi_lines '$_GIP' | grep -c . || true)\" -eq '$_gi_all' ]"
+check "#335 a commit writing call with no identity is caught" "[ -n \"\$(_gitidentity '$_GIP')\" ]"
 
 section "== a Mac that no longer exists does not hold verify hostage (#26) =="
 # The markers are keyed on hostname, which is a MUTABLE string, so renaming or reinstalling
