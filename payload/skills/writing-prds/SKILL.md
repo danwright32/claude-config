@@ -23,7 +23,8 @@ A PRD's job is to align the people deciding and the people building on the probl
    4. For every contested or consequential decision: whose sign-off does it need, by name.
 5. **Stress-test the problem statement.** Before drafting, check it for solution language (a problem section that names the feature is a feature brief) and for unverifiable claims.
 6. **Draft to the output spec below**, then deliver as a file plus a shareable artifact, and end with the list of what needs whose sign-off. Circulate for reaction, not approval.
-7. **Keep it alive.** When Dan corrects any point, update every place it appears (sections cross-reference each other), fix all cross-reference numbers if items are added or removed, re-verify the numbering, and re-publish the same artifact URL. A PRD that diverges from the current understanding is worse than none.
+7. **Settle the visual identity before the first screen is built.** Once the PRD is agreed and the main screen's content is known, the first build task is a design round, not code. Not earlier: there is nothing to draw before the PRD says what is on the screen. Not later: once a screen exists in the real framework every round costs a rebuild instead of an edit, and the question quietly changes from what this should look like to what is cheap to change now. Run it as the section below describes and treat its result as a settled artifact, not a sketch.
+8. **Keep it alive.** When Dan corrects any point, update every place it appears (sections cross-reference each other), fix all cross-reference numbers if items are added or removed, re-verify the numbering, and re-publish the same artifact URL. A PRD that diverges from the current understanding is worse than none.
 
 ## Output spec
 
@@ -42,6 +43,19 @@ The finished PRD has these parts, in this order, and these properties:
 11. **Later versions.** Marked "directional, not committed"; proposed items keep their "pending [name]" tags here too.
 12. **Style:** plain language a non-engineer reads cold; numbered lists, never bullets; no dashes as punctuation, no emoji; testable wording (no "fast", "intuitive", "easily"); active voice with names; 3 to 6 pages. Read every sentence cold as its named reviewer and check it does not overstate anyone's position (what someone "did not object to" is not what they agreed to).
 
+## Settling the visual identity
+
+This runs once, early in the build, and produces one committed file. Six things make it work:
+
+1. **Render, do not describe.** Dan does not pick a design from prose. Asked to choose between characters named in words he said "I think I need to see renderings of these to get an idea. I'm not really sure." Build the options, show them, ask afterwards.
+2. **One variable per round, everything else held byte identical.** Rounds that moved several things at once produced "still not loving any of them" and no usable signal. Rounds that moved one produced a precise answer every time. Expect eight to a dozen rounds and plan for them.
+3. **One window, full context, in a switcher.** Render the whole screen including the surrounding chrome, and let him swap options in place with buttons. A difference you scroll between is remembered; a difference that swaps under a frame that stays put is seen. His words: "render the whole page. I need the context", then "would it be possible for you to show it to me through a switch".
+4. **Colour last.** Settle structure, type and density in black and white first. Colour arguments absorb the attention that layout needs ("let's just do black and work on the rest of it before the color").
+5. **Treat every objection as a candidate rule.** Check it against the product, and where it holds, promote it into a standing rule with its reason rather than applying it once. "I don't think I like red because that feels like something is wrong" became a rule that red is reserved for the one place something is genuinely wrong.
+6. **Count the facts before showing any chrome.** No number may appear twice. A sidebar was rejected on sight for stating the same count in two places.
+
+**The deliverable.** The settled design is ONE self contained file committed in the repo: no build step, no hosted URL, fonts and assets embedded so it renders identically with no network, forever. Its decision record lives inside it, each decision with the reason it was made. Beside it, name the parts that are idioms of the rendering medium rather than design decisions, so they are translated rather than copied when the real screen is built. Ovation's `docs/design/` is the worked example: an HTML file standing in for a SwiftUI window, with its three web idioms named in the README. Every decision with code consequences also goes back into the PRD as numbered requirements, so the PRD stays the single alignment document.
+
 ## Red flags, stop and interview instead
 
 | Rationalization | Reality |
@@ -51,6 +65,8 @@ The finished PRD has these parts, in this order, and these properties:
 | "They want the document, not questions" | The interview is minutes. A PRD full of invented settled decisions costs the team weeks. |
 | "I'll fill in a reasonable metric target" | An invented number reads as a commitment forever. TBD plus an owner is the honest version. |
 | "This decision is obviously right" | Then the named owner will approve it in one click. Attribute it anyway. |
+| "I'll describe the design options and let him pick" | Nobody picks a design from prose. Renderings first, question second. |
+| "Colour and layout can be settled in one round" | Colour absorbs the attention layout needed. Black and white until the structure is settled. |
 
 ## Common mistakes
 
