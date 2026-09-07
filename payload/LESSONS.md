@@ -1678,6 +1678,15 @@ window is a count rather than a boundary.
   reading it as "timestamps are merely weak" is what produces this one: the honest cover is
   the OTHER side of the pair, asserting the same properties against the resolved build
   settings, which need no build and are never stale)
+- **L621. A behaviour each call site must OPT INTO cannot be enforced by any scan, because a
+  site that never opts in is indistinguishable from one where the condition never arises, so it
+  must be owned by a shared component that makes omission impossible rather than written as a rule
+  each site is asked to follow.** Consolidating existing copies (L613) does not help here: the
+  failure is an ABSENCE, not a copy, and it lands hardest on the sites nobody thought about.
+  (paperboi#72, 2026-09-07: a working, still alive and failed treatment was designed and written
+  into the design document, and it appears only on a control that marks itself busy. One button in
+  the product did. Every slow action still to be built has to remember, a forgetting one looks
+  entirely normal, and no test can tell a button that is never busy from one that never says so)
 - **L614. A freshness window between a job that PRODUCES a measurement and a job that ACTS on it
   must be derived from the worst-case gap between their two schedules at the instant of use, and
   proved by a test that evaluates the predicate at the consumer's scheduled instant against a row
@@ -2891,6 +2900,18 @@ window is a count rather than a boundary.
   on the assignment. The not-yet branch, added by #462 precisely to tell a missing file apart from a
   broken connection, had never once executed, and a real two minute connection timeout on 2026-08-25
   left a log holding nothing but the exit code, because the diagnosis was sitting in the variable)
+
+- **L622. A state meaning NEVER RECORDED, separated from the failure state only in the WORDING of
+  the response while taking the same ACTION, is not separated at all**, so the first run after a
+  stamp based check ships fires on every subject at once. Seed the stamps in the same change, or
+  keep the never state silent until one full cadence has passed.
+  (project-enrollment-tracker#1335, 2026-09-07: #1185 replaced a silent webhook probe with a real
+  delivery, so a Slack connection quiet past its window gets a check message and only a failed
+  check speaks. `staleConnections` returned `never` and `stale` as separate reasons, with a comment
+  citing L11 saying a never proven connection on a fresh rollout must not page, but the caller
+  looped over both and sent to each. No delivery stamp existed yet, so the first scheduled run
+  posted a machine line into both channels at once, one of them #management, which the seven sales
+  team leads read. The wording was ready for the case; the control flow had never been)
 
 ## State and identity
 
@@ -4234,6 +4255,16 @@ window is a count rather than a boundary.
   own only entry point was a card labelled "Alert settings" because #1297 moved the business
   hours onto that page and renamed the page but not the door. Slate was offering times on Labor
   Day and the person who needed to close the date could not find the screen that does it)
+- **L619. Every destination a navigation OFFERS must be asserted to resolve to a real screen,
+  enumerated from the navigation rather than from the list of screens, because a nav entry is
+  written once and then read by everyone afterwards as proof its destination exists.** This is the
+  opposite direction from checking that every screen is reachable (L546), and neither check finds
+  the other's failure: enumerating routes cannot see a nav entry pointing at nothing, because
+  there is no route to enumerate.
+  (paperboi#68, 2026-09-07: the masthead had offered Invoices, Vendors and Spend since the first
+  comp, and six artboards and a full design system were built and reviewed without anyone noticing
+  that no vendors list had been drawn or routed. It was found by comparing the nav against the
+  artboard filenames, not by any of the guards, the suite, or three design review passes)
 - **L547. A control whose work is pure computation over data the page already holds must not be
   routed through a server round trip, because on a dynamic page that round trip re-runs every
   UNRELATED read on the page, so the control's cost becomes the whole page's cost and nothing at
@@ -4591,6 +4622,22 @@ window is a count rather than a boundary.
   location field was blank; his card held an unreadable address, which the fill only ever skips,
   so it could never be among them. The banner said it had placed 55 shows and he had no way to
   tell that from the one he pressed it on)
+- **L623. A banner or badge announcing that the product is in a DANGEROUS or SPECIAL mode
+  (impersonating somebody, a staging or test store, a dry run, an admin override) must be drawn
+  in a treatment that appears nowhere else in the product, because one built from the ordinary
+  palette reads as chrome and is looked past by exactly the person it is warning.** Reserve that
+  treatment before spending the palette's one alarm colour on an everyday condition, since a
+  colour a routine state already uses cannot make the rare one stand out and may end up stacked
+  beside it.
+  (Try-Pennie/slate#2037, 2026-09-07: the "Viewing as <name>. Actions you take happen as them."
+  banner was bg-pennie-navy with a pn-btn--primary sky button, and navy also drew the login hero,
+  the account and roster avatars, two Pill variants and the OOO stat grid, while sky primary
+  buttons appeared at nine sites, so the one surface saying every action lands on somebody else
+  read as ordinary Slate chrome. Dan: "the viewing as button and banner fit into the color scheme
+  too well. It should be jarring and obvious. Not anything that exists somewhere else in slate."
+  Making it red was not available either: the calendar-not-syncing banner directly below it in
+  the same header slot was already bg-[var(--error)], so the routine condition had spent the one
+  alarm colour and the two would have stacked as matching red bars)
 
 
 
@@ -5941,6 +5988,40 @@ window is a count rather than a boundary.
   behind, 15 lessons written on that Mac went unpublished, and `pull` blamed a two Mac divergence
   that had not happened, per claude-config#325)
 
+- **L618. A one time import or correction that copies data between two systems which both stay
+  live is a snapshot rather than a fix, so the check that proves the two still agree ships in the
+  same change.** The import's own idempotency re-run proves only that it was right at that moment,
+  and it is the most convincing possible evidence that nothing further is needed.
+  (slate#1738, slate#2031: 97 agent schedules were imported from cal.com into Slate on 2026-09-02
+  and the second dry run reported `would change: 0, already matching: 97`, which read as the job
+  being finished. Nothing re-checked them. Five days later 21 of 102 agents had drifted: 6 with a
+  different set of working days, 6 with different hours, 9 with a renamed timezone. Three were not
+  being offered a day they work and two were being offered a Saturday they do not, and no surface
+  in Slate could report any of it, because a stored week saying 08:00 is indistinguishable from an
+  agent who really starts at 08:00. It was found only because a comparison command was built for a
+  different reason, and the first thing it did was find it)
+
+- **L620. When replicating a system's behaviour, enumerate its inputs from what it ACTUALLY
+  consults at decision time, never from the upstream source those inputs are supposed to come
+  from.** The ones maintained by hand inside the incumbent have no source anybody thinks to list,
+  so they are the ones that get missed, and the replica looks complete because every input that
+  did have a source was ported correctly.
+  (slate#2033, 2026-09-07: Slate replaces cal.com's booking routing, and its routing attributes
+  were built from the Salesforce User fields both systems read: the five debt tier booleans and
+  the two backend servicer ones. Every one of those was ported faithfully. cal.com ALSO excludes
+  any agent whose `Redistribute Team` attribute is YES from every routing decision it makes, and
+  that attribute exists only in cal.com: the Salesforce User object has no such field, so it is
+  maintained by hand and nothing in Slate has ever heard of it. The consequence is that Slate's
+  routing pools are wider than cal.com's by however many agents are marked, so at cutover Slate
+  would route real leads to people deliberately held out of rotation, and an agent receiving a
+  booking looks identical whether or not they were meant to be excluded. It surfaced only because
+  cal.com stamps the rule it matched onto each booking as an `assignmentReason` string, which was
+  read while building an unrelated comparison; nothing else in either system would have said it.
+  Note the count could not then be measured, because cal.com's API returns 404 for per-user
+  attribute values, so the input that was invisible is also the one hardest to audit. The remedy
+  turned out to be cheap, since Slate's existing `bookable` flag already expresses exactly that
+  exclusion and the fix is a data correction rather than a new field: the entire cost was in not
+  knowing the input existed, which is the point)
 
 - **L423. Configuration INSTALLED into the platform (a launch agent, a cron entry, a systemd unit,
   a git hook, a shell alias) is a COPY, so changing its definition in the source changes nothing on

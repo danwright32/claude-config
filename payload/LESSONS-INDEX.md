@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 539 lessons.
+LESSONS.md, which is NOT loaded into the session. 545 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -147,6 +147,7 @@ to decide something: the body is where the failure it came from is described.
 - L412. A guard that DERIVES its search terms from live data inherits that data's own placeholder values (TBD, N/A, Unknown, Untitled), which identify nothing and are by construction ordinary words, so it matches plain text everywhere and its noise reads as the guard working rather than as a defect in the guard.
 - L413. A test runner that DISCOVERS its suites by glob, directory walk or naming convention can only invoke each one ONE way, so any suite taking a parameter runs for ever in its DEFAULT mode while its other cases never run at all, and its name still appears in every green report.
 - L414. A build product's mtime records when it was last WRITTEN, not when it was last built, and a source file's mtime records when it was last touched, not when it changed, so a freshness check comparing the two is red on a healthy tree in BOTH directions: a correct incremental build that relinks nothing leaves the product reading as permanently stale, and any generator that rewrites a source on every run leaves it permanently newer.
+- L621. A behaviour each call site must OPT INTO cannot be enforced by any scan, because a site that never opts in is indistinguishable from one where the condition never arises, so it must be owned by a shared component that makes omission impossible rather than written as a rule each site is asked to follow.
 - L614. A freshness window between a job that PRODUCES a measurement and a job that ACTS on it must be derived from the worst-case gap between their two schedules at the instant of use, and proved by a test that evaluates the predicate at the consumer's scheduled instant against a row stamped at the producer's.
 - L416. A provenance record naming the COMMIT an artifact was built from describes what was committed, never what was compiled, so an install or deploy made from a checkout with uncommitted changes records a truthful commit while the artifact contains code that exists in no commit anywhere.
 - L417. Turning on a platform security control imposes requirements on parts of the build you never touched, and the resulting refusal happens only when the artifact RUNS, so a configuration nothing ever launches stays broken while every check that reads the configuration is green.
@@ -256,6 +257,7 @@ to decide something: the body is where the failure it came from is described.
 - L589. A relative time or magnitude ("4 hours before", "2 days late") must name what it is relative TO, and where that anchor can MOVE between records it must name WHICH anchor it used, because otherwise a perfectly truthful history reads as corrupt.
 - L593. Write an audit or provenance record at the LOWEST layer every invocation path shares, usually the database function or the store itself, never in the API route or the UI handler.
 - L612. In a shell running with `set -e`, a bare assignment from a command substitution carries that command's exit status, so a capture-then-classify step dies on the capture line, the captured output is never printed, and every branch of the classifier below it is unreachable dead code.
+- L622. A state meaning NEVER RECORDED, separated from the failure state only in the WORDING of the response while taking the same ACTION, is not separated at all
 
 ## State and identity
 
@@ -389,6 +391,7 @@ to decide something: the body is where the failure it came from is described.
 - L330. An acknowledgement a person gives must be consulted by EVERY rule that raises the question it answers, not only the one whose control recorded it, because a second rule computing that question from raw state goes on asking after it has been answered, and no action is then left that could ever satisfy it.
 - L545. A set of values whose meaning is their ORDER relative to each other (medal colours, severity tints, tier sizes, ranked weights) is broken by changing ONE member for an unrelated reason such as a contrast fix, because every member stays individually valid and nothing compares them, so assert the ordering itself rather than each value.
 - L546. A screen that no navigation links to works perfectly for whoever built it, because they have the address, so it is invisible to every test, review and build and is found only by somebody hunting for it under pressure.
+- L619. Every destination a navigation OFFERS must be asserted to resolve to a real screen, enumerated from the navigation rather than from the list of screens, because a nav entry is written once and then read by everyone afterwards as proof its destination exists.
 - L547. A control whose work is pure computation over data the page already holds must not be routed through a server round trip, because on a dynamic page that round trip re-runs every UNRELATED read on the page, so the control's cost becomes the whole page's cost and nothing at the point it is written says so.
 - L549. A row aligned on its children's top or bottom EDGES aligns the CONTAINERS, not the controls inside them, so a column carrying a hint, an error or a second label line has its control silently pushed out of line while every column still reads as correctly aligned when read on its own.
 - L553. A column's header alignment and its cells' alignment are ONE fact set at two independent declaration sites, so they diverge silently while each site reads as correct on its own.
@@ -412,6 +415,7 @@ to decide something: the body is where the failure it came from is described.
 - L611. A free text box for a value whose valid set already exists as a constant in code offers every typo as an option and reports none of them, because the value is matched downstream rather than validated, and the only symptom is a pool one person shorter.
 - L613. A shared component created to end N copies converts the one site in front of whoever built it and leaves the rest standing, and a superseded control is kept with its justification rewritten rather than deleted, so the product ends up half converted with the old thing arguing for itself in a docstring.
 - L424. An action taken from ONE row whose write reaches a whole population must say whether THAT row was among the ones it changed, because a truthful count of the others is indistinguishable from success on the one the person was looking at.
+- L623. A banner or badge announcing that the product is in a DANGEROUS or SPECIAL mode (impersonating somebody, a staging or test store, a dry run, an admin override) must be drawn in a treatment that appears nowhere else in the product, because one built from the ordinary palette reads as chrome and is looked past by exactly the person it is warning.
 
 ## External systems
 
@@ -542,6 +546,8 @@ to decide something: the body is where the failure it came from is described.
 - L409. Two primitives that provide the same visible exclusion or ownership (a file lock against a directory used as a mutex, a lease against a flag, a transaction against a hand rolled guard) routinely differ in what happens when their HOLDER DIES, because some are released by the kernel and some need cleanup that nobody runs after a crash, so swapping one for the other ships a regression no test that does not crash can see.
 - L600. A lock guarding a job the platform RETRIES must let the retry recognise its dead predecessor, because a retry arrives seconds after the kill carrying the same event identity, and a lock that can only expire by deadline refuses the platform's own recovery while reading as correct behaviour.
 - L617. An operation that keeps its progress in an on disk resumable state (a git rebase or merge, a migration runner, a batch cursor) leaves that state behind when its process is killed, and the leftover reads as HEALTHY to every check that examines content, because the queue is empty, the tree is clean and nothing conflicts, so the next run must inspect the operation's own progress marker rather than the data it was moving.
+- L618. A one time import or correction that copies data between two systems which both stay live is a snapshot rather than a fix, so the check that proves the two still agree ships in the same change.
+- L620. When replicating a system's behaviour, enumerate its inputs from what it ACTUALLY consults at decision time, never from the upstream source those inputs are supposed to come from.
 - L423. Configuration INSTALLED into the platform (a launch agent, a cron entry, a systemd unit, a git hook, a shell alias) is a COPY, so changing its definition in the source changes nothing on any machine until that machine re-runs the installer, and nothing reports a machine still running the old copy.
 
 ## Test speed

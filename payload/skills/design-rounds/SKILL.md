@@ -1,9 +1,9 @@
 ---
-name: running-design-rounds
+name: design-rounds
 description: Use when a product or feature is about to get its look settled, when the first screen is about to be designed or built, when an existing screen is being redesigned, or when a choice between visual directions (layout, type, density, chrome, colour) has to be made with Dan. Also use when a settled design decision needs to survive past the session that made it.
 ---
 
-# Running design rounds
+# Design rounds
 
 ## Overview
 
@@ -53,7 +53,7 @@ switcher drew a keyboard badge on every tab and had no key handler at all, so it
 offered three shortcuts that did nothing, while the round before it had working ones.
 
 ```bash
-python3 ~/.claude/skills/running-design-rounds/make-switcher.py spec.json switcher.html
+python3 ~/.claude/skills/design-rounds/make-switcher.py spec.json switcher.html
 ```
 
 The spec names the round, the builder, and the options. Run the script with no

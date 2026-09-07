@@ -23,7 +23,7 @@ A PRD's job is to align the people deciding and the people building on the probl
    4. For every contested or consequential decision: whose sign-off does it need, by name.
 5. **Stress-test the problem statement.** Before drafting, check it for solution language (a problem section that names the feature is a feature brief) and for unverifiable claims.
 6. **Draft to the output spec below**, then deliver as a file plus a shareable artifact, and end with the list of what needs whose sign-off. Circulate for reaction, not approval.
-7. **Settle the visual identity before the first screen is built.** Once the PRD is agreed and the main screen's content is known, the first build task is a design round, not code. Not earlier: there is nothing to draw before the PRD says what is on the screen. Not later: once a screen exists in the real framework every round costs a rebuild instead of an edit, and the question quietly changes from what this should look like to what is cheap to change now. Run it with the `running-design-rounds` skill, and treat its result as a settled artifact, not a sketch. Because this step runs in a later session than the PRD, delivering the PRD also opens a tracked issue for it, in the PRD's own milestone, so it survives the session that wrote the document.
+7. **Settle the visual identity before the first screen is built.** Once the PRD is agreed and the main screen's content is known, the first build task is a design round, not code. Not earlier: there is nothing to draw before the PRD says what is on the screen. Not later: once a screen exists in the real framework every round costs a rebuild instead of an edit, and the question quietly changes from what this should look like to what is cheap to change now. Run it with the `design-rounds` skill, and treat its result as a settled artifact, not a sketch. Because this step runs in a later session than the PRD, delivering the PRD also opens a tracked issue for it, in the PRD's own milestone, so it survives the session that wrote the document.
 8. **Keep it alive.** When Dan corrects any point, update every place it appears (sections cross-reference each other), fix all cross-reference numbers if items are added or removed, re-verify the numbering, and re-publish the same artifact URL. A PRD that diverges from the current understanding is worse than none.
 
 ## Output spec
@@ -45,7 +45,7 @@ The finished PRD has these parts, in this order, and these properties:
 
 ## Settling the visual identity
 
-The process lives in the `running-design-rounds` skill, which owns the six rules, the
+The process lives in the `design-rounds` skill, which owns the six rules, the
 switcher tool and the deliverable spec. Invoke it rather than restating it here. In
 short: render before asking, one variable per round, one window in a switcher, colour
 last, and the settled design ships as one self contained committed file with its
