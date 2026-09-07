@@ -832,6 +832,71 @@ FRONTMATTER
   [ "$found" -eq 1 ]
 }
 
+# The VALUE of a frontmatter field, read the same way skill_frontmatter_has decides a field is
+# present, so the two cannot disagree about what counts as set (L70).
+skill_frontmatter_value(){   # $1 = a field name   $2 = the frontmatter block
+  local line rest val=""
+  while IFS= read -r line; do
+    case "$line" in
+      "$1:"*)
+        rest="${line#"$1:"}"
+        rest="${rest#"${rest%%[![:space:]]*}"}"
+        [ -n "$rest" ] && val="$rest" ;;
+    esac
+  done <<FRONTMATTER
+$2
+FRONTMATTER
+  printf '%s' "$val"
+}
+
+# TWO SKILLS CLAIMING THE SAME JOB (claude-config#331). The duplicate check above compares FOLDER
+# NAMES against the plugins, which cannot see this: on 2026-09-07 a skill folder renamed on one Mac
+# was resurrected under its old name by the other, and the two folders carried identical
+# `description` frontmatter. The description is what the assistant chooses on, so that is two
+# skills for one job and the choice between them is arbitrary. Grouped by description rather than
+# by name, because the names are exactly what differ.
+duplicate_local_skill_jobs(){   # prints "description<TAB>folder folder ..."
+  local dir="$CLAUDE_HOME/skills" e base fm d skip pskill
+  [ -d "$dir" ] || return 0
+  {
+    for e in "$dir"/*; do
+      [ -d "$e" ] || continue
+      base="${e##*/}"
+      case "$base" in .*) continue ;; esac
+      # A plugin manages these and the sync deliberately never carries them, so naming one here
+      # would report a problem about something this tool does not touch, exactly as
+      # unloadable_skill_entries already refuses to. A flag rather than `continue 2`, because this
+      # loop has no outer loop to continue.
+      skip=0
+      for pskill in ${PLUGIN_SKILLS[@]+"${PLUGIN_SKILLS[@]}"}; do
+        [ "$base" = "$pskill" ] && { skip=1; break; }
+      done
+      [ "$skip" = 1 ] && continue
+      [ -f "$e/SKILL.md" ] || continue
+      fm="$(skill_frontmatter "$e/SKILL.md")"
+      d="$(skill_frontmatter_value description "$fm")"
+      [ -n "$d" ] || continue
+      printf '%s\t%s\n' "$d" "$base"
+    done
+  } | awk -F'\t' '{ f[$1] = f[$1] " " $2; n[$1]++ }
+                  END { for (d in n) if (n[d] > 1) { sub(/^ /, "", f[d]); print d "\t" f[d] } }'
+  return 0
+}
+
+# Returns 0 when it found something, 1 when there was nothing, matching its neighbour above.
+report_duplicate_skill_jobs(){
+  local d folders found=""
+  while IFS="$(printf '\t')" read -r d folders; do
+    [ -n "${d:-}" ] || continue
+    found="$found  $folders: same description, so they are two skills competing for one job and the choice between them is arbitrary"$'\n'
+  done < <(duplicate_local_skill_jobs)
+  [ -z "$found" ] && return 1
+  echo "--- skills claiming the same job (claude-config#331) ---"
+  printf '%s' "$found"
+  echo "  Keep one and delete the other, or give each a description saying when it applies rather than the same one twice."
+  return 0
+}
+
 unloadable_skill_entries(){   # $1 = a skills directory
   local dir="$1" e base sk fm s
   [ -d "$dir" ] || return 0
@@ -1942,6 +2007,61 @@ last_applied_hook_block(){   # -> the hooks object of the last applied payload, 
 }
 
 # copy local config -> repo payload (no git)
+# A LEFTOVER COPY MUST NOT UNDO A DELETION (claude-config#331).
+#
+# stage_local_to_payload mirrors this Mac's ~/.claude over the payload, so an entry the shared
+# config has deleted, but which is still sitting in this Mac's home, is re-added by the next send
+# and the deletion is undone with nothing reporting it. Observed on 2026-09-07: a skill folder
+# renamed on the other Mac came back three sends later as 96 lines of new file, and the two folders
+# were then a loadable skill each with identical description frontmatter, so the assistant saw two
+# skills competing for one job. The same route can resurrect a deliberately deleted hook or agent.
+#
+# Written against the STATE rather than against a sequence: the repo has deleted it, this Mac has
+# recorded that it applied that, and the file is here anyway. That pair is what the production
+# commit shows, and it is what a run that died between merging and applying leaves behind.
+#
+# Content decides. A leftover is the deleted copy byte for byte; a deliberate re-creation under the
+# same name is different content and publishes normally, because a deletion must not become a
+# permanent ban on a name (L116, L362).
+refuse_resurrected_deletions(){
+  local p delcommit restored="" lastdel=""
+  have_git || return 0
+  git -C "$SYNC_REPO" rev-parse --verify -q HEAD >/dev/null 2>&1 || return 0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    # Has the shared repo ever DELETED this path? Asked of the whole history rather than of the
+    # range since this Mac last applied, because the marker is routinely already up to date by the
+    # time the leftover is noticed: the run that merged the deletion recorded it as applied, and
+    # the file is still here. A range keyed on that marker is empty exactly when this is needed.
+    # `-1` stops git at the most recent deletion, so this costs one walk per untracked file and
+    # untracked files in the payload are rare.
+    delcommit="$(git -C "$SYNC_REPO" log --format=%H --diff-filter=D -1 HEAD -- "$p" 2>/dev/null || true)"
+    [ -n "$delcommit" ] || continue
+    # And is it still deleted? A path deleted and later re-added deliberately is an ordinary file
+    # again, and blocking it would make one old deletion a permanent ban on the name (L362).
+    git -C "$SYNC_REPO" cat-file -e "HEAD:$p" 2>/dev/null && continue
+    # The content the repo deleted, read from the commit before the one that removed it. If it
+    # cannot be read the file is LEFT ALONE: refusing to publish on the strength of a comparison
+    # that could not be made would discard somebody's work on a guess (L50).
+    git -C "$SYNC_REPO" show "$delcommit^:$p" 2>/dev/null | cmp -s - "$SYNC_REPO/$p" 2>/dev/null || continue
+    rm -f "$SYNC_REPO/$p" 2>/dev/null || true
+    # AND THE LOCAL COPY, which is the half that ends the matter. The apply deliberately never
+    # deletes a local file the repo has not seen, because that could destroy work, so refusing to
+    # publish on its own would leave the file stuck for ever: never sent, never removed, and this
+    # message on every single edit, which is the alert that gets ignored (L36). The precondition is
+    # what makes it safe, and it is why the comparison above is byte for byte: this file is the
+    # copy the shared config deleted, unchanged, so nothing unique to this Mac is being removed and
+    # git still holds it in the commit named below.
+    rm -f "$CLAUDE_HOME/${p#payload/}" 2>/dev/null || true
+    rmdir "$(dirname "$CLAUDE_HOME/${p#payload/}")" 2>/dev/null || true
+    restored="${restored:+$restored }${p#payload/}"
+    lastdel="$delcommit"
+  done < <(git -C "$SYNC_REPO" ls-files --others --exclude-standard -- payload 2>/dev/null || true)
+  [ -n "$restored" ] || return 0
+  echo "claude-sync: $restored was deleted from the shared config and this Mac still had the deleted copy unchanged, so it was NOT published back (that would undo the deletion for both Macs) and the local copy has been removed here too, which is what applying that deletion should have done. It is recoverable from ${lastdel:0:8}, the commit that removed it. If you meant to bring it back, put it there again with a change of your own and it publishes as yours." >&2
+  return 0
+}
+
 stage_local_to_payload(){
   [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
   mkdir -p "$PAYLOAD"
@@ -2034,7 +2154,9 @@ $f"*) continue ;; esac      # numbering collision here; do not spread it
   # After everything has been mirrored in, and before the scan, so what is scanned and what is
   # committed are the same bytes the other Mac will receive.
   tokenize_payload
-  scan_secrets   # never let a credential reach the shared remote
+  scan_secrets   # never let a credential reach the shared remote  # LAST, once everything this send would carry is in the payload, so it sees the finished state
+  # rather than one of the code paths that built it (L78).
+  refuse_resurrected_deletions
 }
 
 # Block obvious credentials from being published. Uses gitleaks if installed,
@@ -5949,6 +6071,7 @@ do_status(){
   done <<< "$RECORDS"
   report_user_scope_plugins
   report_duplicate_plugin_skills || true
+  report_duplicate_skill_jobs || true
   report_conflict_copies
   report_blocked_clone
   report_ci_unreadable

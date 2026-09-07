@@ -2552,6 +2552,99 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SDC" SYNC_REPO="$SDR" bash "$SCRIPT" send >/dev/n
 check "send removed it from the repo"    "[ -z \"\$(git -C '$SDR' ls-files | grep nested)\" ]"
 check "send did NOT resurrect it locally" "[ ! -e '$SDC/skills/plan-council/.nested' ]"
 
+section "== a stale send does not restore what the other Mac deleted (#331) =="
+# stage_local_to_payload mirrors this Mac's ~/.claude over the payload, so a Mac that has not yet
+# RECEIVED a deletion re-adds the entry from its own home on its next send, and the deletion is
+# undone with nothing reporting it. Observed on 2026-09-07: skills/running-design-rounds was
+# renamed on one Mac and published, and the other sent three times with its last apply predating
+# the rename, restoring the old folder to the payload and back onto itself. The two folders were a
+# loadable skill each with identical description frontmatter, so the assistant saw two skills
+# competing for one job.
+#
+# unapplied_paths already holds back what this Mac has not applied, but it compares the last
+# applied commit against this clone's own HEAD, so a deletion that has been FETCHED and not merged
+# is invisible to it, and one that arrives during the rebase is replayed straight over.
+DELB="$WORK/delete-bare.git"; git init -q --bare -b main "$DELB"
+DELA="$WORK/delete-repoA"; git clone -q "$DELB" "$DELA" 2>/dev/null
+DELR="$WORK/delete-repoB"; git clone -q "$DELB" "$DELR" 2>/dev/null
+DELHA="$WORK/delete-homeA"; mkdir -p "$DELHA/skills/shared-skill"; echo '{"hooks":{}}' > "$DELHA/settings.json"
+DELHB="$WORK/delete-homeB"; mkdir -p "$DELHB"; echo '{"hooks":{}}' > "$DELHB/settings.json"
+mkskill "$DELHA/skills/shared-skill/SKILL.md" 'the skill that gets deleted'
+CLAUDE_HOME="$DELHA" SYNC_REPO="$DELA" SYNC_HOSTNAME=delMacA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$DELHB" SYNC_REPO="$DELR" SYNC_HOSTNAME=delMacB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#331 both Macs hold the skill before anything is deleted" \
+  "[ -f '$DELHB/skills/shared-skill/SKILL.md' ]"
+# A deletes it and publishes. B has not applied that yet and still holds its own copy, which is
+# exactly the state a Mac is in between the other one publishing and this one receiving.
+rm -rf "$DELHA/skills/shared-skill"
+CLAUDE_HOME="$DELHA" SYNC_REPO="$DELA" SYNC_HOSTNAME=delMacA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#331 the deletion really did reach the shared repo" \
+  "[ ! -e '$DELA/payload/skills/shared-skill' ]"
+check "#331 and this Mac still holds its own copy, which is what makes the send stale" \
+  "[ -f '$DELHB/skills/shared-skill/SKILL.md' ]"
+# B sends something of its own. The question is whether that send carries the deleted folder back.
+mkdir -p "$DELHB/skills/b-own"; mkskill "$DELHB/skills/b-own/SKILL.md" 'something only B has'
+out_del="$(CLAUDE_HOME="$DELHB" SYNC_REPO="$DELR" SYNC_HOSTNAME=delMacB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1 || true)"
+dbg "#331 stale send: $out_del"
+check "#331 a stale send does not restore the deleted skill to the shared repo" \
+  "[ ! -e '$DELR/payload/skills/shared-skill' ]"
+# The control, in the same run: B's own new work must still go out, or this passes by blocking
+# everything rather than by protecting the deletion (L159).
+check "#331 while this Mac's own new skill still goes out" \
+  "[ -f '$DELR/payload/skills/b-own/SKILL.md' ]"
+
+# The state the production commit actually shows. 0a0e9d1 on 2026-09-07 ADDED
+# payload/skills/running-design-rounds back as 96 new lines, so at commit time the payload had
+# already lost it and this Mac's home still held it. The exact interleaving that produces that pair
+# was not pinned down from here; what is certain is the pair itself, so the guard is written
+# against the STATE rather than against a sequence, and the fixture builds that state directly: the
+# repo has deleted the entry, this Mac has applied that deletion, and the folder is back in
+# ~/.claude, which is what a run that died between merging and applying leaves behind.
+CLAUDE_HOME="$DELHB" SYNC_REPO="$DELR" SYNC_HOSTNAME=delMacB SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+mkdir -p "$DELHB/skills/shared-skill"; mkskill "$DELHB/skills/shared-skill/SKILL.md" 'the skill that gets deleted'
+out_del2="$(CLAUDE_HOME="$DELHB" SYNC_REPO="$DELR" SYNC_HOSTNAME=delMacB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1 || true)"
+dbg "#331 leftover send: $out_del2"
+check "#331 a leftover copy is not published back over a deletion this Mac has already applied" \
+  "[ ! -e '$DELR/payload/skills/shared-skill' ]"
+check "#331 and it says so, rather than undoing the deletion in silence" \
+  "grep -q 'deleted from the shared config' <<< \"\$out_del2\""
+# The local copy goes too. The apply never deletes a local file the repo has not seen, by design,
+# so refusing to publish on its own would leave it stuck for ever: never sent, never removed, and
+# the message above on every edit. Safe only because the copy is byte for byte what was deleted.
+check "#331 and the leftover copy is removed here as well, so it is not stuck for ever" \
+  "[ ! -f '$DELHB/skills/shared-skill/SKILL.md' ]"
+check "#331 and it names the commit it can be recovered from" \
+  "grep -qE 'recoverable from [0-9a-f]{8}' <<< \"\$out_del2\""
+# A DELIBERATE re-creation is a different thing and must still publish, or the guard turns a
+# deletion into a permanent ban on the name (L116, L362). Different content is what tells them
+# apart: a leftover is the old copy byte for byte.
+mkskill "$DELHB/skills/shared-skill/SKILL.md" 'a deliberate new skill that happens to reuse the name'
+out_del3="$(CLAUDE_HOME="$DELHB" SYNC_REPO="$DELR" SYNC_HOSTNAME=delMacB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1 || true)"
+check "#331 while a genuinely new entry reusing the name still publishes" \
+  "[ -f '$DELR/payload/skills/shared-skill/SKILL.md' ]"
+
+# TWO SKILLS CLAIMING ONE JOB, which is the harm the resurrection above actually caused
+# (claude-config#331). The folder names differed, so the existing duplicate check, which compares
+# names against the plugins, could not see it. What the assistant chooses on is the description,
+# and both carried the same one, so it had two skills for one job and picked between them
+# arbitrarily.
+DUPH="$WORK/dupjob-home"; mkdir -p "$DUPH/skills/first-name" "$DUPH/skills/second-name" "$DUPH/skills/unrelated"
+echo '{"hooks":{}}' > "$DUPH/settings.json"
+DUPR="$WORK/dupjob-repo"; mkdir -p "$DUPR/payload"
+printf -- '---\nname: first-name\ndescription: Use when settling how a screen should look.\n---\nbody\n' > "$DUPH/skills/first-name/SKILL.md"
+printf -- '---\nname: second-name\ndescription: Use when settling how a screen should look.\n---\nbody\n' > "$DUPH/skills/second-name/SKILL.md"
+printf -- '---\nname: unrelated\ndescription: Use when doing something else entirely.\n---\nbody\n' > "$DUPH/skills/unrelated/SKILL.md"
+out_dup="$(CLAUDE_HOME="$DUPH" SYNC_REPO="$DUPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#331 duplicate job status: $out_dup"
+# The membership is asserted exactly, which is also how the third skill is proved to be left out:
+# a check that merely looked for its name would match the dry run listing above, where every skill
+# legitimately appears (L135).
+dup_line="$(grep 'competing for one job' <<< "$out_dup" || true)"
+check "#331 status names exactly the two folders that claim the same job, and no others" \
+  "grep -qE '^ *(first-name second-name|second-name first-name): same description' <<< \"\$dup_line\""
+check "#331 and says why two of them is a problem rather than just listing them" \
+  "grep -q 'competing for one job and the choice between them is arbitrary' <<< \"\$out_dup\""
+
 section "== auto-commit is scoped to payload; uncommitted tool edits aren't swept (issue 1.1) =="
 WB11="$WORK/w11bare.git"; git init -q --bare "$WB11"
 WR11="$WORK/w11repo"; git clone -q "$WB11" "$WR11"
