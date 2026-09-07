@@ -19,3 +19,4 @@ state/
 .behind-skips
 .ci-unreadable-since
 .resurrected-reported
+.ci-red-since

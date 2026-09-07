@@ -9892,6 +9892,63 @@ check "#221 a remote with no .git suffix gives the same" \
 check "#221 a remote that is not GitHub derives nothing" \
   "[ \"\$(slug_of /some/bare/repo.git)\" = 'none' ]"
 
+
+# A REPO THAT STAYS RED STOPS EVERY MAC RECEIVING, AND NOTHING SAID SO (claude-config#336).
+#
+# Refusing a red head is right and stays right. What was missing is any bound on it: the red arm
+# printed its sentence and returned, with no count, no start time and nothing on the status
+# surface, so a shared repo that stays red simply stops every Mac receiving config for as long as
+# it stays red. On 2026-09-07 that ran for seven hours across fourteen commits and was found by
+# reading the CI list by hand while looking at something else.
+#
+# The two neighbouring verdicts already have this and it is the shape copied here: `none` waits out
+# a grace period, and `unreadable` records when it started and eventually gives up (#327). The
+# difference is what happens at the end. Neither of those can be acted on by anybody, so they
+# eventually apply anyway; a red head CAN be acted on, and applying it would be lowering the gate,
+# so this escalates to the person instead and never applies (L42).
+check "#336 a red verdict starts a clock, so how long it has been red is knowable" \
+  "[ -s \"\$(ci_repo red)/.ci-red-since\" ]"
+check "#336 and a green head never arms it in the first place" \
+  "[ ! -f \"\$(ci_repo green)/.ci-red-since\" ]"
+# The clock has to SURVIVE from one run to the next, and that is asserted by the start time staying
+# put rather than by the file existing, because a file rewritten with a fresh timestamp exists just
+# as convincingly and would never reach its own window (L253, and the same trap #327 documents).
+_rd_first="$(awk 'NR==1{print $1}' "$(ci_repo red)/.ci-red-since" 2>/dev/null)"
+out_red2="$(ci_tick red failure)"
+dbg "#336 a second red tick: $out_red2"
+_rd_first2="$(awk 'NR==1{print $1}' "$(ci_repo red)/.ci-red-since" 2>/dev/null)"
+# The count is the SECOND field, and the only field that may be empty is the last, deliberately:
+# with the empty one in the middle awk reads the count out of the wrong column and it stays at 1 for
+# ever while the start time survives perfectly, which is what this assertion caught.
+_rd_n="$(awk 'NR==1{print $2}' "$(ci_repo red)/.ci-red-since" 2>/dev/null)"
+check "#336 a second red run keeps the first one's start time ($_rd_first then $_rd_first2)" \
+  "[ -n '$_rd_first' ] && [ '$_rd_first' = '$_rd_first2' ]"
+check "#336 and counts them, so a repo red once reads differently from one red all day ($_rd_n)" \
+  "[ '${_rd_n:-0}' -ge 2 ]"
+# status is the surface built to answer this and it said nothing at all while it was happening.
+out_rdst="$(CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#336 status on a repo that stays red: $out_rdst"
+check "#336 status says receiving is stuck, naming how many and how long" \
+  "line_has \"\$out_rdst\" 'receiving is stuck' 'in a row' 'ago'"
+# Past its window it says so in different words, because "it failed this time" and "it has been
+# failing all day" need different actions and one sentence covering both hides whichever it did not
+# name (L11). It still refuses to apply: the remedy is telling somebody, never lowering the gate.
+out_rd_old="$(SYNC_CI_RED_ALERT_AFTER=0 ci_tick red failure)"
+dbg "#336 red past its window: $out_rd_old"
+check "#336 a repo red for longer than the window says so in its own words" \
+  "case \"\$out_rd_old\" in *'has been red for'*) true ;; *) false ;; esac"
+check "#336 and it still refuses to apply a red head" \
+  "case \"\$out_rd_old\" in *'not applied here'*) true ;; *) false ;; esac"
+# And any readable verdict that is not red ends it, or the count goes on growing after the problem
+# is over and becomes a standing accusation rather than a measurement (L344, L160).
+out_rd_clear="$(ci_tick red success)"
+dbg "#336 green again: $out_rd_clear"
+check "#336 a verdict that is not red clears the clock" \
+  "[ ! -f \"\$(ci_repo red)/.ci-red-since\" ]"
+out_rdst2="$(CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#336 and status stops saying receiving is stuck" \
+  "! grep -q 'receiving is stuck' <<< \"\$out_rdst2\""
+
 section "== a two sided lesson does not stop on the derived index (claude-config#200) =="
 # LESSONS-INDEX.md is generated from LESSONS.md, and it is COMMITTED, so git combines it as though
 # somebody maintained it by hand. Whenever both Macs record a lesson between syncs the two

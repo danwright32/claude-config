@@ -82,6 +82,7 @@ LAST_RECEIVED_FILE="$SYNC_REPO/.last-received"
 # own is gone before the investigation that needs it arrives (L202), and scratch is swept hourly.
 BEHIND_SKIPS_FILE="$SYNC_REPO/.behind-skips"   # sends in a row that could not go out (#323)
 CI_UNREADABLE_SINCE_FILE="$SYNC_REPO/.ci-unreadable-since"   # since when no CI verdict could be read (#327)
+CI_RED_SINCE_FILE="$SYNC_REPO/.ci-red-since"   # since when the shared repo's head has been red (#336)
 RESURRECTED_REPORTED_FILE="$SYNC_REPO/.resurrected-reported"   # leftovers already reported once (#331)
 HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
 # The last verdict each send-side suite reached, against a digest of the hooks it judged (#269).
@@ -4597,6 +4598,9 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
   # because this arm returns before the classifier is ever called.
   if git -C "$SYNC_REPO" merge-base --is-ancestor "$sha" HEAD 2>/dev/null; then
     rm -f "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true
+    # And the red clock, for the same reason: nothing is being held back, so there is no run of
+    # refusals to be counting (claude-config#336).
+    rm -f "$CI_RED_SINCE_FILE" 2>/dev/null || true
     return 1
   fi
   state="$(remote_ci_state "$sha")"
@@ -4614,11 +4618,58 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
   ci_since="$(awk 'NR==1{print $1}' "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null)"
   ci_told="$(awk 'NR==1{print $2}' "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null)"
   rm -f "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true
+  # The red clock is read and cleared here for exactly the reason the unreadable one is: the case
+  # below is then the ONLY list of states, so the arm that acts is what re-arms the clock and a
+  # state added later cannot be handled in one place and forgotten in the other (L113).
+  local rd_since rd_told rd_n
+  # Fields are since, count, told, and the ONLY one that may be empty is the last. Written with the
+  # empty one in the middle, awk collapses the run of spaces and reads the count out of the wrong
+  # column, so the count silently stayed at 1 however long the repo had been red while the start
+  # time survived perfectly and every other check passed.
+  rd_since="$(awk 'NR==1{print $1}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
+  rd_n="$(awk 'NR==1{print $2}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
+  rd_told="$(awk 'NR==1{print $3}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
+  rm -f "$CI_RED_SINCE_FILE" 2>/dev/null || true
   case "$state" in
     green) return 1 ;;
     red)
+      # HOW LONG this has been going on, not just that it is (claude-config#336). Refusing a red
+      # head is right and stays right, but a refusal with no bound on it means a shared repo that
+      # stays red stops every Mac receiving config for as long as it stays red, and the only place
+      # that was said was the output of a run nobody was watching. It ran for seven hours on
+      # 2026-09-07 across fourteen commits.
+      #
+      # The clock is on the CONDITION, not on the commit: keyed per commit it would reset on every
+      # push and never reach its own window, which is the key mistake L186 describes, and a push
+      # is exactly what happens repeatedly while somebody is trying to fix the red.
+      local rd_now rd_window="${SYNC_CI_RED_ALERT_AFTER:-3600}" rd_age
+      rd_now="$(date +%s)"
+      case "$rd_since" in ''|*[!0-9]*) rd_since="$rd_now"; rd_told="" ;; esac
+      case "$rd_told" in *[!0-9]*) rd_told="" ;; esac
+      case "$rd_n" in ''|*[!0-9]*) rd_n=0 ;; esac
+      rd_n=$(( rd_n + 1 ))
+      rd_age=$(( rd_now - rd_since ))
       echo "claude-sync: the shared repo's newest commit (${sha:0:8}) FAILED its tests, so it was not applied here. Nothing is lost: it applies as soon as a green commit lands, or now if you run 'claude-sync pull' yourself." >&2
-      notify "not applied: the shared repo's head failed CI"
+      # Past the window it is a different event and gets different words, because "it failed this
+      # time" and "it has been failing all day" need different actions from the reader and one
+      # sentence covering both hides whichever it did not name (L11). It is never applied anyway:
+      # unlike an unreadable verdict, a red one is something a person can act on, so the escape is
+      # to tell them rather than to lower the gate (L42).
+      if [ "$rd_age" -ge "$rd_window" ] 2>/dev/null; then
+        echo "claude-sync: and it has been red for $(age_in_words "$rd_age") now, $(commits_in_words "$rd_n" 2>/dev/null || printf '%s run(s)' "$rd_n") in a row. Nothing on this Mac receives config until a green commit lands, so this needs fixing rather than waiting: look at the failing run with 'gh run list --limit 5'." >&2
+        # Told ONCE, on the transition, not on every automatic tick. A notification repeated every
+        # few minutes is what teaches somebody to dismiss the whole channel (L36).
+        if [ -z "$rd_told" ]; then
+          rd_told="$rd_now"
+          notify "receiving is stuck: the shared repo has been red for $(age_in_words "$rd_age")"
+        fi
+      else
+        notify "not applied: the shared repo's head failed CI"
+      fi
+      # Written back on EVERY path out of this arm, because the read above cleared the file. Miss
+      # one and the clock restarts on each run, so it can never reach its own window and the
+      # escalation never fires while every other check here still passes (L514).
+      printf '%s %s %s\n' "$rd_since" "$rd_n" "$rd_told" > "$CI_RED_SINCE_FILE" 2>/dev/null || true
       send_outcome ci-red ;;
     pending)
       echo "claude-sync: the shared repo's newest commit (${sha:0:8}) is still being tested, so it was not applied here yet. It applies once the tests finish." >&2
@@ -5862,6 +5913,22 @@ report_behind_skips(){
   echo "sending is stuck: skipped $n send(s) in a row, the first $(age_in_words "$(( now - first ))") ago, because this Mac is behind the shared repo and the reconcile each one tried did not clear it. Run 'claude-sync pull' and read what it says."
 }
 
+# What a shared repo that stays red is doing to this Mac (claude-config#336). The gate says it on
+# the run that refused, which reaches the watcher log and nothing else; this is the surface built to
+# answer the question, and it said nothing at all while every Mac sat not receiving for seven hours.
+report_red_skips(){
+  local n first now
+  [ -f "$CI_RED_SINCE_FILE" ] || return 0
+  n="$(awk 'NR==1{print $2}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  [ "$n" -gt 0 ] || return 0
+  now="$(date +%s)"
+  first="$(awk 'NR==1{print $1}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
+  case "$first" in ''|*[!0-9]*) first="$now" ;; esac
+  echo "receiving is stuck: the shared repo's newest commit has failed its tests $n time(s) in a row, the first $(age_in_words "$(( now - first ))") ago. Nothing here receives config until a green commit lands. Look at the failing run: gh run list --limit 5"
+  return 0
+}
+
 report_watcher_hold(){
   local left
   if left="$(hold_remaining)"; then
@@ -6150,6 +6217,7 @@ do_status(){
   report_blocked_clone
   report_ci_unreadable
   report_behind_skips
+  report_red_skips
   report_watcher_hold
   report_automatic_jobs
   report_hook_suite_result
