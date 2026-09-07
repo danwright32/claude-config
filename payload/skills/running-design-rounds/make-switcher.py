@@ -133,8 +133,10 @@ PAGE = """<!doctype html>
   .stage { flex: 1; display: flex; background: #E9E4DE;
            border: 1px solid #DDD5CD; border-radius: 10px; padding: 24px;
            box-sizing: border-box; overflow: auto; }
-  /* Auto margins centre the screen on the canvas and, unlike centring with align-items,
-     never cut off the top of one taller than the window. */
+  /* Centred on the canvas, settled with Dan on 2026-09-07 against pinning it to the top:
+     centred holds its position while options of different heights are switched between,
+     which is the whole activity. Auto margins do the centring because, unlike
+     align-items, they never cut off the top of a screen taller than the window. */
   .stage > * { margin: auto; }
   .hint { margin: 22px 0 0; color: #7C7168; font-size: 12px; flex: none; }
 </style>
