@@ -1201,6 +1201,41 @@ lesson_numbers_in(){   # $1.. = files -> one bare number per line, unsorted
 
 # The entries nothing here can read. Prints "file:line: text" for each, so the report can name what
 # to go and fix rather than only that something is wrong (L11, L80).
+# PROSE THAT BELONGS TO NO LESSON (claude-config#332).
+#
+# On 2026-09-07 the tail of an entry's citation was sitting loose at the top level of LESSONS.md,
+# unindented, and had already been published, so both Macs carried it. Nothing reported it, and it
+# masked a second divergence: report_pending_conflicts decides a set-aside copy is resolved by
+# asking whether its WORDS appear anywhere in the live file, deliberately word level rather than
+# line level (L278), and the stray paragraph supplied that match. The corrected text sat only in
+# the conflict copy while the report said nothing. The corruption was its own alibi, so the fix is
+# not a cleverer resolution check, it is a file that cannot supply a false match.
+#
+# A SECTION PREAMBLE is not a fault, and getting that wrong would have been worse than the defect:
+# prose under a heading, before that section's first entry, is how both the file's own top note and
+# the "Test speed" section are written. Measured against the real file before this shipped: 556
+# entries, and top level prose in five places, of which one was a preamble. A rule that refused
+# preambles would have refused every publish from either Mac for ever (L172, L147). So the counter
+# resets at every heading: prose is prose until that section's first entry, and orphaned after it.
+orphaned_lesson_prose(){   # $1 = tree to inspect -> "file:line:text"
+  local f
+  for f in $(top_files_in "$1"); do
+    [ -f "$1/$f" ] || continue
+    # The generated index is excluded by the same predicate its neighbour uses, for the same
+    # reason: it is a rendering of these lessons rather than a place any of them live.
+    lesson_source_file "$f" || continue
+    awk -v file="$f" '
+      /^## /                  { seen = 0; next }
+      /^#/                    { next }
+      /^[[:space:]]*$/        { next }
+      /^- \*\*L[0-9]+\./      { seen = 1; next }
+      /^[ \t]/                { next }
+      seen == 1               { printf "%s:%d:%s\n", file, NR, substr($0, 1, 80) }
+    ' "$1/$f" 2>/dev/null || true
+  done
+  return 0
+}
+
 malformed_lesson_entries(){   # $1 = tree to inspect
   local f line
   for f in $(top_files_in "$1"); do
@@ -2146,6 +2181,14 @@ PROT
       dupfiles="$(printf '%s\n' "$badlines" | cut -d: -f1 | sort -u)"
       echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because it holds lesson entries not written as '- **Lnnn. ...', which nothing here can read: $(printf '%s' "$badlines" | tr '\n' ';' | sed 's/;$//'). Rewrite each one to start with '- **L<number>. ' and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
       notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): unreadable lesson entry"
+    fi
+    # The third fault of the same kind, held back the same way and reported separately, because a
+    # stray paragraph, an unreadable entry and a collided number need three different fixes (L11).
+    local orphlines; orphlines="$(orphaned_lesson_prose "$CLAUDE_HOME")"
+    if ! is_blank "$orphlines"; then
+      dupfiles="$(printf '%s\n%s\n' "$dupfiles" "$(printf '%s\n' "$orphlines" | cut -d: -f1)" | grep -v '^$' | sort -u)"
+      echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because it holds text that belongs to no lesson: a non blank line at the top level, after a section has started, that is neither a heading nor an entry nor an indented continuation of one. $(printf '%s' "$orphlines" | tr '\n' ';' | sed 's/;$//'). Indent it under the entry it belongs to, or make it its own entry, and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
+      notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): text belonging to no lesson"
     fi
     duplines="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
     if ! is_blank "$duplines"; then

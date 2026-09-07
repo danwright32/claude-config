@@ -3954,6 +3954,42 @@ check "#164 while everything else still publishes" "[ -f '$LM/payload/hooks/keep
 SYNC_SKIP_LESSON_CHECK=1 _lm push >/dev/null 2>&1
 check "#164 the documented override publishes it anyway" "grep -q 'no bold on this one' '$LM/payload/LESSONS.md'"
 
+# PROSE THAT BELONGS TO NO LESSON (claude-config#332). On 2026-09-07 the tail of an entry's
+# citation was sitting loose at the top level of LESSONS.md, unindented, and had already been
+# published to the shared repo so both Macs carried it. Nothing reported it. Worse, it masked a
+# second divergence: the pending conflict report decides a set-aside copy is resolved by asking
+# whether its WORDS appear anywhere in the live file, deliberately word level rather than line
+# level (L278), and the stray paragraph supplied that match, so the corrected text sat only in the
+# conflict copy while the report said nothing. The corruption was its own alibi.
+printf '# Lessons\n\n## A section\n\n- **L1. one.** body\n  indented continuation, which is how every entry carries on\n\nloose prose that belongs to no lesson at all\n' > "$LMH/LESSONS.md"
+_lm_orph="$(_lm push)"
+check "#332 a file with prose belonging to no lesson is NOT published" \
+  "[ ! -f '$LM/payload/LESSONS.md' ] || ! grep -q 'belongs to no lesson' '$LM/payload/LESSONS.md'"
+check "#332 and the send names the file and the line rather than refusing in general" \
+  "line_has \"\$_lm_orph\" 'belongs to no lesson' 'LESSONS\.md'"
+check "#332 while everything else still publishes, as with the other lesson faults" \
+  "[ -f '$LM/payload/hooks/keep-syncing.sh' ]"
+# THE CONTROL, and it is the one that matters: a SECTION PREAMBLE is prose under a heading before
+# that section's first entry, and the real file has two of them. Measured before this shipped: 556
+# entries, 5 places with top level prose, and one of those was a preamble. A validator that refused
+# it would have refused every publish from either Mac for ever (L172, L147).
+printf '# Lessons\n\nA preamble under the title, which the real file has.\n\n## A section\n\nA preamble under this section, which the real file also has.\n\n- **L1. one.** body\n  indented continuation\n' > "$LMH/LESSONS.md"
+_lm_pre="$(_lm push)"
+check "#332 a section preamble is not mistaken for orphaned prose" \
+  "! grep -q 'belongs to no lesson' <<< \"\$_lm_pre\""
+check "#332 and that file publishes normally" \
+  "grep -q 'preamble under this section' '$LM/payload/LESSONS.md'"
+# The same override as the other two, because the three faults hold a file back the same way.
+printf '# Lessons\n\n## A section\n\n- **L1. one.** body\n\nloose prose that belongs to no lesson at all\n' > "$LMH/LESSONS.md"
+SYNC_SKIP_LESSON_CHECK=1 _lm push >/dev/null 2>&1
+check "#332 the documented override publishes it anyway" \
+  "grep -q 'belongs to no lesson' '$LM/payload/LESSONS.md'"
+# PUT BACK what the checks below this need. These share one fixture file, and a section that
+# rewrites it and walks away breaks its neighbour in a way that reads as a fault in the neighbour
+# (L205). This is the exact state the malformed entry checks above left it in.
+printf '# Lessons\n\n- **L1. one.** body\n- L9. no bold on this one.\n' > "$LMH/LESSONS.md"
+SYNC_SKIP_LESSON_CHECK=1 _lm push >/dev/null 2>&1
+
 # `lesson` must not answer "not in this file" about a number the file plainly holds. That reading
 # is what made the state believable: three tools agreeing, and the one that could have contradicted
 # them saying the entry does not exist (L11).
