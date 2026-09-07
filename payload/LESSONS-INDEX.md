@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 536 lessons.
+LESSONS.md, which is NOT loaded into the session. 537 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -486,6 +486,7 @@ to decide something: the body is where the failure it came from is described.
 - L542. Two similar rules that DIFFER may each be a recorded decision rather than an inconsistency, and the comment beside one documents only that one, so a change that aligns them can silently delete a product rule while reading as a cleanup. Before making two such rules agree, find the decision record for EACH side, and treat an observed divergence as evidence of a defect only once both records are in hand.
 - L374. A gitignore or exclude entry without a leading slash matches at EVERY depth, so a rule written for one top level folder silently swallows any same named directory anywhere in the tree, and the loss is invisible to status, diff and commit alike.
 - L554. A generated file committed beside its source conflicts on every aggregate it carries (a total, a count, a checksum, a timestamp), so two independent edits to the source that merge cleanly still collide there and block the merge over content nobody wrote.
+- L422. A derived artifact COMMITTED alongside its source is a standing claim that it is current, and nothing enforces that claim, so the check that regenerates it and compares ships in the same change that first commits it.
 - L383. A derived value exposed as a computed property or a getter is re-run in full by EVERY reader, and a reader's call site reads as a free field access, so nothing at the point of use says what it costs. Where the derivation walks a whole collection, compute it once at the top of the pass and hand the value down, and assert the NUMBER of call sites, because the shape alone cannot be read.
 - L556. When asking a stakeholder to rule on whether two surfaces should agree, enumerate every place they ALREADY disagree before asking, because the answer comes back as a rule about agreement rather than about the single case you showed, and it gets applied to the cases you never mentioned. Showing one instance also makes the decision look smaller than it is, so the reply is given on a smaller picture than the change it authorises.
 - L562. A named rule is copied through its WORKED EXAMPLE, so an example that contradicts the rule teaches the inverse and is then defended with the rule's own authority.

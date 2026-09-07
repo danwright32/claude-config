@@ -5322,6 +5322,19 @@ window is a count rather than a boundary.
   other readers skipped derived files for exactly this reason; the rebase was the fourth
   site and was left out. L41 is the opposite concern, deriving rather than hand
   maintaining, and says nothing about the derived artifact's own merges.)
+- **L422. A derived artifact COMMITTED alongside its source is a standing claim that it is
+  current, and nothing enforces that claim, so the check that regenerates it and compares
+  ships in the same change that first commits it.** A stale copy is invisible in review,
+  because the diff shows a plausible file while the source it no longer matches changed in a
+  different commit, and every test that reads the artifact goes on passing over the old
+  content. L41 says derive it rather than hand maintain it and L554 covers how it merges;
+  neither asks whether the committed copy is still what the source produces.
+  (ovation#102, 2026-09-07: `Ovation/Assets.xcassets` is generated from
+  `icon/ovation-app-icon.png` by `scripts/build-app-icon.sh`, and both are committed so a
+  machine without Pillow can still build the app, which is a real reason and is exactly what
+  creates the gap. The suite asserts the built bundle carries a full size icon, never that it
+  is the icon the artwork specifies, so replacing the artwork without re-running the script
+  ships the previous icon while the repository shows the new one, with every check green.)
 - **L383. A derived value exposed as a computed property or a getter is re-run in full by
   EVERY reader, and a reader's call site reads as a free field access, so nothing at the point
   of use says what it costs. Where the derivation walks a whole collection, compute it once at
