@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 552 lessons.
+LESSONS.md, which is NOT loaded into the session. 553 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -258,6 +258,7 @@ to decide something: the body is where the failure it came from is described.
 - L593. Write an audit or provenance record at the LOWEST layer every invocation path shares, usually the database function or the store itself, never in the API route or the UI handler.
 - L612. In a shell running with `set -e`, a bare assignment from a command substitution carries that command's exit status, so a capture-then-classify step dies on the capture line, the captured output is never printed, and every branch of the classifier below it is unreachable dead code.
 - L622. A state meaning NEVER RECORDED, separated from the failure state only in the WORDING of the response while taking the same ACTION, is not separated at all
+- L427. A probe posted on a fixed interval that does not wait for the previous one to return records one event per interval that a single outage lasts
 
 ## State and identity
 

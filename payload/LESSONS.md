@@ -2913,6 +2913,20 @@ window is a count rather than a boundary.
   posted a machine line into both channels at once, one of them #management, which the seven sales
   team leads read. The wording was ready for the case; the control flow had never been)
 
+- **L427. A probe posted on a fixed interval that does not wait for the previous one to return
+  records one event per interval that a single outage lasts**, so the outage's DURATION becomes its
+  event COUNT and every total taken from that log scales with how long things were broken rather
+  than how often. Make each probe wait on the last, and count the ones it skipped, because a
+  skipped probe that is silently dropped makes a wedged prober look like a healthy one.
+  (overture#3635, 2026-09-07: `MainThreadWatchdog` posted a ping to the main queue every 250ms and
+  never waited, so during a freeze the pings queued and all ran in the same instant when the main
+  thread drained, each recording its own lateness. One freeze wrote a strictly decreasing series
+  D, D-0.25, D-0.5 down to the floor, one record each. Measured on Dan's live log: 611 records for
+  129 real freezes, 79% duplicates, one 13.95s freeze wrote 47 of them, and the summed unresponsive
+  time read 1,629s against a real 254s. The app told him in its own voice that it had stopped
+  responding 611 times. The MAXIMUM was untouched, which is why every conclusion resting on the
+  worst stall survived and only the counts and totals were wrong)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
