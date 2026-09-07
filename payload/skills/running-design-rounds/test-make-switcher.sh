@@ -228,6 +228,17 @@ MUTPY
 fi
 
 
+# --- 12. the committed example is what the tool produces today ---
+#
+# example/switcher.html is generated and committed beside its own source, so it goes
+# stale silently the first time the generator changes. This regenerates it into a temp
+# file and compares, so a drifted example is a failure rather than a surprise later.
+
+python3 "$SCRIPT" "$DIR/example/spec.json" "$TMP/example-now.html" >/dev/null 2>&1
+check_eq "the committed example matches what the tool produces now" \
+  "$(shasum "$DIR/example/switcher.html" | cut -d' ' -f1)" \
+  "$(shasum "$TMP/example-now.html" | cut -d' ' -f1)"
+
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$unmeasured" -gt 0 ]] && echo "UNMEASURED-SECTIONS $unmeasured"
