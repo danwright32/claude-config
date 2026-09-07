@@ -4618,10 +4618,14 @@ window is a count rather than a boundary.
   else: here the action genuinely acted, just not on the thing that invoked it. Report the row's
   own outcome first and the population second.
   (overture#3623, 2026-09-07: Dan pressed "Say where it is" on a 54 Below card, typed a city, and
-  the card did not change. The answer was stored and reached the 55 shows at that room whose
-  location field was blank; his card held an unreadable address, which the fill only ever skips,
-  so it could never be among them. The banner said it had placed 55 shows and he had no way to
-  tell that from the one he pressed it on)
+  the card did not change. His answer for that room had stood since 9 August and the press placed
+  nothing, because a scout run that morning had given every show there an address the fill only
+  ever skips. The banner truthfully said no show was waiting on it, which is the sharpest form of
+  this: the count was right, it was zero, and the one fact he was standing there to check, whether
+  THIS card had moved, was the one thing it did not say, while the same button sat under it
+  offering to try again. Measured against the app's own launch backup from the previous day; a
+  first reading taken from the current store alone inferred the opposite story and was filed
+  before the backup was consulted)
 - **L623. A banner or badge announcing that the product is in a DANGEROUS or SPECIAL mode
   (impersonating somebody, a staging or test store, a dry run, an admin override) must be drawn
   in a treatment that appears nowhere else in the product, because one built from the ordinary
@@ -4638,16 +4642,6 @@ window is a count rather than a boundary.
   Making it red was not available either: the calendar-not-syncing banner directly below it in
   the same header slot was already bg-[var(--error)], so the routine condition had spent the one
   alarm colour and the two would have stacked as matching red bars)
-
-  the card did not change. His answer for that room had stood since 9 August and the press placed
-  nothing, because a scout run that morning had given every show there an address the fill only
-  ever skips. The banner truthfully said no show was waiting on it, which is the sharpest form of
-  this: the count was right, it was zero, and the one fact he was standing there to check, whether
-  THIS card had moved, was the one thing it did not say, while the same button sat under it
-  offering to try again. Measured against the app's own launch backup from the previous day; a
-  first reading taken from the current store alone inferred the opposite story and was filed
-  before the backup was consulted)
-
 
 - **L626. A rule that conditionally OMITS a label (a group heading, a caption, a legend) does not
   remove the SPACE that label occupied, so wherever it fires the surface shows a gap with nothing
@@ -4697,6 +4691,25 @@ window is a count rather than a boundary.
 
 
 
+- **L426. An item held on screen past its own removal (a row fading out, a card playing an
+  exit) must be reinserted at its OWN position rather than appended to the end, because
+  anything anchored to it or to the group it belongs to (a scroll pin, a selection, a focus
+  ring) follows it to wherever it lands.** Appending is the spelling everyone reaches for
+  (`surviving.filter { notLeaving } + Array(leaving.values)`) and it is invisible for as long
+  as something else in the group survives, because the group's position is registered by that
+  survivor and the departing row merely rejoins it. The day the departing item is the LAST one
+  in its group, the group itself first appears among the appended values and is rebuilt at the
+  bottom of the list. (overture#3634, 2026-09-07: Dan dismissed a whole night in the scout
+  queue, which takes every show on that date by construction, and the queue scrolled from
+  September to May. The scroll position is pinned to the date heading at the top of the screen,
+  that heading had just been rebuilt below every later night, and the ScrollView obediently
+  followed it to the end. Three call sites shared the one splice, so closing out or sending the
+  ONLY show on a night did it too and nobody had noticed, since those are one card rather than
+  a whole screen of them. The comment above the splice even named the ordering, "a night that
+  exists only for a departing card last", written to solve the different problem that the night
+  must exist AT ALL so the card has somewhere to land; no test asserted the position)
+
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
@@ -4714,6 +4727,19 @@ window is a count rather than a boundary.
   late, and duplicated.** Check status and shape before indexing, map the other system's
   vocabulary at the boundary, and give webhook handlers event-timestamp ordering guards.
   (28 issues, 5 repos)
+- **L425. A decoder that declares only the fields it needs today silently discards every sibling
+  in the same object, and nothing anywhere reports the loss**, so before any surface asks a person to
+  supply a value, check whether the payload it was read from already carries that value one field
+  over. The third case in a family: L506 is a field that is ABSENT, L194 is a sender that reduces a
+  fact to a FLAG about itself, and here the fact is present, complete, and never declared by the
+  reader.
+  (overture#3625: the Squarespace reader declared `addressTitle` and nothing else, so a chorus whose
+  own event block published "New York City Children's Chorus / 921 Madison Avenue / New York, NY,
+  10021" reached the store with the confusing first line as its venue and no location at all. The app
+  then put a panel in front of Dan asking him to say where that room is, which is a city sitting two
+  fields away in the same JSON object it had already fetched and parsed. His words on being shown the
+  panel: "that doesn't feel good though. why is it a venue at all?")
+
 - **L24. State the expected data volume before writing any query or loop.** Count
   server-side, paginate every list (PostgREST caps at 1,000 rows silently), batch N+1s,
   run independent awaits concurrently, keep heavy work out of render paths, ship the
