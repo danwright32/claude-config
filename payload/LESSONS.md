@@ -4664,6 +4664,19 @@ window is a count rather than a boundary.
   for the first item in the list where there is no space above, so it sat on the wrong side of
   the gap)
 
+- **L627. A transient indicator placed INSIDE a row (a spinner, a badge, a count) takes its width
+  from the flow, so showing it moves every sibling beside it, and the feedback for the thing
+  somebody clicked is delivered by making the things they did not click jump.** Give it a reserved
+  or an out of flow slot, and check every surface the shared component lands on, because a
+  vertical list hides the fault a row exposes.
+  (Try-Pennie/slate#2045, 2026-09-07: `LinkPending` renders a spinner as an ordinary child of the
+  nav link, and the spinner owns a horizontal margin by design (#1792). In the admin sidebar, a
+  stacked list, that is invisible and had been shipped and reviewed. In the header, a flex row,
+  clicking "My Availability" pushed "Team Requests" sideways for the length of the navigation.
+  Dan: "I don't like that the loader pushes other nav items out of the way." The obvious remedy,
+  positioning it absolutely, has its own catch on the second surface: the sidebar nav is a
+  horizontal scroller below lg, which clips an absolutely positioned child (L566))
+
 
 
 
