@@ -4789,6 +4789,35 @@ check "#323 and escalates once rather than on every edit" \
   "[ \"\$(grep -c . '$BHN' 2>/dev/null)\" -le 2 ]"
 check "#323 and it did escalate at all, so the count above is not zero by accident" \
   "[ -s '$BHN' ]"
+# A reconcile that keeps being refused is not attempted on every single edit (claude-config#327).
+# The reconcile is a fetch and a rebase against the shared repo, and while it is being refused for
+# the same reason each time (gh unreadable, no network) every keystroke paid for one. Backing off
+# delays the remedy by at most the window, which is nothing against the weekly timer this replaced.
+# From a clean slate: the stuck sends just above left the backoff armed, which is the tool working
+# but would make the first check below pass for the wrong reason, by never attempting at all rather
+# than by attempting once (L159).
+rm -f "$BHA/.behind-skips"
+BHTRY="$WORK/behind-reconcile-attempts.log"; : > "$BHTRY"
+BHCOUNTER="$WORK/behind-count-attempt.sh"
+printf '#!/usr/bin/env bash\nprintf "x\\n" >> %q\n' "$BHTRY" > "$BHCOUNTER"; chmod +x "$BHCOUNTER"
+bh_try(){   # one watcher send whose reconcile records that it was attempted, and does nothing else
+  CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=1 \
+    SYNC_SEND_RECONCILE="$BHCOUNTER" bash "$SCRIPT" send >/dev/null 2>&1 || true
+}
+mkskill "$BHHB/skills/theirs/SKILL.md" 'a third change only the other Mac has'
+CLAUDE_HOME="$BHHB" SYNC_REPO="$BHR" SYNC_HOSTNAME=macBB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+bh_try; bh_try; bh_try
+check "#327 three sends in a row do not each pay for a reconcile" \
+  "[ \"\$(grep -c . '$BHTRY')\" -le 1 ]"
+check "#327 and one of them did attempt it, so the backoff is not simply never trying" \
+  "[ -s '$BHTRY' ]"
+# The control: with the window set to nothing, every send attempts again. Without this, a backoff
+# that had broken outright and stopped attempting for ever would pass the two checks above (L159).
+: > "$BHTRY"
+SYNC_RECONCILE_RETRY=0 bh_try; SYNC_RECONCILE_RETRY=0 bh_try
+check "#327 with no backoff window every send attempts the reconcile again" \
+  "[ \"\$(grep -c . '$BHTRY')\" -ge 2 ]"
+
 # Readable without opening the log, which was the only trace the real one left.
 out_bhst="$(CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
 check "#323 status says how long sending has been stuck, without anybody opening a log" \
@@ -9155,6 +9184,17 @@ ci_case(){   # ci_case <label> <ci state, empty for a gh that refuses> -> the au
     CLAUDE_HOME="$CI_HOME" SYNC_REPO="$CI_REPO" \
     SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1
 }
+# Another automatic tick against the SAME clone a ci_case already built. ci_case makes a fresh
+# clone every time, deliberately, so nothing can be asked about a record that has to SURVIVE from
+# one run to the next, and the unreadable clock in claude-config#327 is exactly that kind of record.
+ci_tick(){   # ci_tick <label of an existing case> <ci state> -> that tick's output
+  local CI_REPO CI_HOME
+  CI_REPO="$(ci_repo "$1")"; CI_HOME="$(ci_home "$1")"
+  printf 'a later edit from B\n' > "$CI_HOME/hooks/from-B.sh"
+  CI_STATE="$2" SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 \
+    CLAUDE_HOME="$CI_HOME" SYNC_REPO="$CI_REPO" \
+    SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1
+}
 ci_applied(){   # did the case's Mac take what A published?
   grep -q "newer for $1" "$WORK/ci-Bhome-$1/hooks/from-A.sh" 2>/dev/null
 }
@@ -9205,6 +9245,35 @@ check "#221 and it says it could not read the answer, not that it failed" \
   "case \"\$out_unread\" in *'could not read whether'*) true ;; *) false ;; esac"
 check "#221 and unreadable carries its own marker" \
   "case \"\$out_unread\" in *'SEND-OUTCOME ci-unreadable'*) true ;; *) false ;; esac"
+
+# AN UNREADABLE VERDICT MUST NOT BLOCK FOR EVER (claude-config#327). Failing closed is right while
+# the answer might still arrive, and wrong once it is clear no answer is coming: gh not logged in,
+# no network, or a remote that is not GitHub all produce this state permanently, and the gate then
+# holds config back on a question nothing can answer, which is a gate with no way out (L362). The
+# neighbouring `none` case already had this shape and Dan's call on it (2026-09-03) was that
+# nothing to fail is not a failure.
+#
+# Measured in the same units as the condition: the clock is on the CONDITION, not on the commit.
+# Keyed per commit it would reset on every push and never expire, which is the same key mistake
+# L186 describes.
+check "#327 a blocked unreadable verdict starts a clock, so how long it has been unanswerable is knowable" \
+  "[ -s \"\$(ci_repo unreadable)/.ci-unreadable-since\" ]"
+out_unread_old="$(SYNC_CI_UNREADABLE_AFTER=0 ci_case unreadable-old "")"
+dbg "#327 unreadable past its window: $out_unread_old"
+check "#327 an unreadable verdict past its window stops blocking" \
+  "ci_applied unreadable-old"
+check "#327 and says it was applied WITHOUT a verdict, never that it passed" \
+  "case \"\$out_unread_old\" in *'applied here WITHOUT a verdict'*) true ;; *) false ;; esac"
+check "#327 and carries its own marker, distinct from the one that blocks" \
+  "case \"\$out_unread_old\" in *'SEND-OUTCOME ci-unreadable-expired'*) true ;; *) false ;; esac"
+# And the clock RESETS the moment anything readable comes back, or every Mac eventually expires
+# regardless of whether the problem ever ended (L160).
+out_unread_clear="$(ci_tick unreadable success)"
+dbg "#327 readable again: $out_unread_clear"
+check "#327 a verdict that can be read again clears the clock" \
+  "[ ! -f \"\$(ci_repo unreadable)/.ci-unreadable-since\" ]"
+check "#327 and a green verdict never arms it in the first place" \
+  "[ ! -f \"\$(ci_repo green)/.ci-unreadable-since\" ]"
 
 # NO CHECK AT ALL is not a failure, it is nothing to fail, and Dan chose to let it through
 # (2026-09-03). The catch is that "no run yet" and "no run ever" are the same empty answer for the

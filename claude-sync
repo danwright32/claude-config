@@ -81,6 +81,7 @@ LAST_RECEIVED_FILE="$SYNC_REPO/.last-received"
 # (claude-config#182). One file, not two: evidence kept somewhere with a retention schedule of its
 # own is gone before the investigation that needs it arrives (L202), and scratch is swept hourly.
 BEHIND_SKIPS_FILE="$SYNC_REPO/.behind-skips"   # sends in a row that could not go out (#323)
+CI_UNREADABLE_SINCE_FILE="$SYNC_REPO/.ci-unreadable-since"   # since when no CI verdict could be read (#327)
 HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
 # The last verdict each send-side suite reached, against a digest of the hooks it judged (#269).
 # Untracked and per clone, because it records what has been RUN here rather than what the config
@@ -4369,6 +4370,14 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
   # run for ever. Mind the direction, the same way unapplied_remote_changes does.
   git -C "$SYNC_REPO" merge-base --is-ancestor "$sha" HEAD 2>/dev/null && return 1
   state="$(remote_ci_state "$sha")"
+  # ANY readable verdict clears the unreadable clock (claude-config#327), including the ones that
+  # block. red, pending and cancelled are answers: they mean the lookup is working and the gate is
+  # doing its job. Only "nobody could tell" arms the clock, and only a return to being able to tell
+  # ends it, or a Mac that was briefly offline would go on counting towards an escape it no longer
+  # needs (L160).
+  case "$state" in
+    green|red|pending|cancelled|none) rm -f "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true ;;
+  esac
   case "$state" in
     green) return 1 ;;
     red)
@@ -4403,8 +4412,42 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       send_outcome ci-none
       return 1 ;;
     *)
-      echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests ($state), so it was not applied here. Run 'claude-sync pull' yourself, or check that gh is installed and logged in." >&2
-      notify "not applied: could not read CI for the shared repo's head"
+      # UNREADABLE, which is not a verdict at all (claude-config#327). Failing closed is right while
+      # an answer might still arrive and wrong once it is clear none is coming: gh not logged in, no
+      # network, or a remote that is not GitHub produce this state permanently, and the gate then
+      # holds config back for ever on a question nothing can answer. That is a gate with no way out
+      # (L362), and it is the residual of the 46 hours of silent drift in claude-config#323.
+      #
+      # So it blocks for a WINDOW and then stops. The clock is on the CONDITION, not on the commit:
+      # keyed per commit it would reset on every push to the shared repo and never expire, which is
+      # the key mistake L186 describes. It is armed here and cleared by any readable verdict above.
+      #
+      # It is not cleared by expiring. Once the verdict is judged unobtainable, config keeps
+      # arriving until the lookup works again; restarting the clock would deliver config in three
+      # hour bursts, which is a worse thing than either state.
+      local ci_since ci_now ci_told ci_window="${SYNC_CI_UNREADABLE_AFTER:-10800}"
+      ci_now="$(date +%s)"
+      ci_since="$(awk 'NR==1{print $1}' "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null)"
+      ci_told="$(awk 'NR==1{print $2}' "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null)"
+      case "$ci_since" in
+        ''|*[!0-9]*)
+          ci_since="$ci_now"; ci_told=""
+          printf '%s\n' "$ci_now" > "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true
+          # Told on the TRANSITION only. The watcher fires on every edit, and this used to raise a
+          # desktop alert on each one, which is the alert that gets ignored and is why the drift in
+          # claude-config#323 went unread for two days (L36).
+          notify "not applied: could not read CI for the shared repo's head" ;;
+      esac
+      if [ "$(( ci_now - ci_since ))" -ge "$ci_window" ] 2>/dev/null; then
+        echo "claude-sync: whether the shared repo's newest commit (${sha:0:8}) passed its tests has been unreadable for $(age_in_words "$(( ci_now - ci_since ))") ($state), which is longer than the $(duration_in_words "$ci_window") this waits, so it was applied here WITHOUT a verdict. Nothing judged it but the hook suite this Mac runs after an apply. Check that gh is installed and logged in, because until it is, every commit arrives this way." >&2
+        if [ -z "$ci_told" ]; then
+          printf '%s %s\n' "$ci_since" "$ci_now" > "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true
+          notify "applying shared config without a CI verdict: gh has been unreadable for $(age_in_words "$(( ci_now - ci_since ))")"
+        fi
+        send_outcome ci-unreadable-expired
+        return 1
+      fi
+      echo "claude-sync: could not read whether the shared repo's newest commit (${sha:0:8}) passed its tests ($state), so it was not applied here. It has been unreadable for $(age_in_words "$(( ci_now - ci_since ))"); after $(duration_in_words "$ci_window") it is applied anyway rather than held for ever. Run 'claude-sync pull' yourself, or check that gh is installed and logged in." >&2
       send_outcome ci-unreadable ;;
   esac
   return 0
@@ -4894,12 +4937,25 @@ clear_behind_skips_if_caught_up(){
   unapplied_remote_changes || clear_behind_skips
 }
 
-record_behind_skip(){   # prints the sentence for the caller to say
-  local n first now
+# When the reconcile was last actually ATTEMPTED, so it is not attempted on every keystroke while
+# it is being refused for the same reason each time (claude-config#327). A record with no fourth
+# field is one written before this existed, and reads as "never attempted", which errs toward
+# attempting: delaying the remedy is the worse mistake of the two (L223).
+behind_last_reconcile(){
+  local t
+  [ -f "$BEHIND_SKIPS_FILE" ] || return 1
+  t="$(awk 'NR==1{print $4}' "$BEHIND_SKIPS_FILE" 2>/dev/null)"
+  case "$t" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$t"
+}
+
+record_behind_skip(){   # $1 = when the reconcile was last attempted -> the sentence for the caller
+  local n first now tried="${1:-}"
   now="$(date +%s)"
   n="$(behind_skips_count)"; n=$(( n + 1 ))
   first="$(behind_skips_since || printf '%s' "$now")"
-  printf '%s %s %s\n' "$n" "$first" "$now" > "$BEHIND_SKIPS_FILE" 2>/dev/null || true
+  case "$tried" in ''|*[!0-9]*) tried="$now" ;; esac
+  printf '%s %s %s %s\n' "$n" "$first" "$now" "$tried" > "$BEHIND_SKIPS_FILE" 2>/dev/null || true
   # Told once at the threshold, then rarely. Every edit was the old behaviour and is why the real
   # one was ignored for two days.
   if [ "$n" -eq "$BEHIND_ESCALATE_AFTER" ] \
@@ -4956,6 +5012,20 @@ do_send(){
     # against the suite's own behind fixtures, that took out both the honest skip message and the
     # skip count. A subshell exit does not fire the parent's EXIT trap, so the lock is still held
     # and released exactly once.
+    # Attempted at most once every SYNC_RECONCILE_RETRY seconds. While it is being refused for the
+    # same reason each time (gh unreadable, no network) every single edit used to pay for a fetch
+    # and a rebase against the shared repo. Backing off delays the remedy by at most that window,
+    # which is nothing against the weekly timer this whole path replaced (claude-config#327).
+    local bh_now bh_last bh_tried bh_window="${SYNC_RECONCILE_RETRY:-300}"
+    bh_now="$(date +%s)"
+    if bh_last="$(behind_last_reconcile)" && [ "$(( bh_now - bh_last ))" -lt "$bh_window" ] 2>/dev/null; then
+      # Held off. Said in its own words, because "the reconcile just attempted did not clear it"
+      # would be a claim about something this run did not do (L11).
+      echo "claude-sync: this edit was not sent, because the shared repo holds changes this Mac has not applied. The reconcile that would fix it was attempted $(age_in_words "$(( bh_now - bh_last ))") ago and refused, so it is held off for another $(duration_in_words "$(( bh_window - (bh_now - bh_last) ))") rather than retried on every edit ($(record_behind_skip "$bh_last")). Run 'claude-sync pull' and read what it says." >&2
+      send_outcome behind
+      return 0
+    fi
+    bh_tried="$bh_now"
     ( send_reconcile ) || true
     if ! unapplied_remote_changes; then
       # It worked, and the send that follows is the one the edit asked for. Nothing is skipped, so
@@ -4964,7 +5034,7 @@ do_send(){
     else
       # It did not clear. THIS is the state worth counting: one is a hiccup, twenty in a row is a
       # Mac that has stopped syncing, and before this nothing could tell them apart.
-      echo "claude-sync: this edit was not sent, because the shared repo holds changes this Mac has not applied and the reconcile just attempted did not clear them ($(record_behind_skip)). Run 'claude-sync pull' and read what it says; until then nothing leaves this Mac." >&2
+      echo "claude-sync: this edit was not sent, because the shared repo holds changes this Mac has not applied and the reconcile just attempted did not clear them ($(record_behind_skip "$bh_tried")). Run 'claude-sync pull' and read what it says; until then nothing leaves this Mac." >&2
       send_outcome behind
       return 0
     fi
@@ -6389,6 +6459,11 @@ do_watch(){
           *"SEND-OUTCOME ci-red"*)        echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, the shared repo's head failed its tests" ;;
           *"SEND-OUTCOME ci-cancelled"*)  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, the tests for the shared repo's head were cancelled, so no verdict is coming" ;;
           *"SEND-OUTCOME ci-none"*)       echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: applied a commit that has no test run at all, and is old enough that none is coming" ;;
+          # BEFORE the plain ci-unreadable arm, and that ordering is load-bearing: `ci-unreadable`
+          # is a prefix of `ci-unreadable-expired`, so a substring pattern for the short one also
+          # matches the long one, and the case that APPLIED config would be logged as the case that
+          # refused it (claude-config#327).
+          *"SEND-OUTCOME ci-unreadable-expired"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: applied WITHOUT a CI verdict, because none could be read for long enough that none is coming" ;;
           *"SEND-OUTCOME ci-unreadable"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, could not read whether the shared repo's head passed its tests" ;;
           # A send that exited 0 and said nothing about what it did. Recorded as unknown rather
           # than as success: that is the state this whole line exists to stop being invisible
