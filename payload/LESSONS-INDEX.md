@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 558 lessons.
+LESSONS.md, which is NOT loaded into the session. 559 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -574,6 +574,7 @@ to decide something: the body is where the failure it came from is described.
 - L296. Anything that divides work between workers (shards, a launch order, a balance check) divides by a MEASURED cost, never by a count of items, and the check that guards the balance measures in the same unit (L63), or it passes while measuring the wrong thing.
 - L297. A scanner that guards a class of fault across the whole tree pays per line, so it is written as one pass per file from the start, and a failing guard's full output is kept (L148) so an intermittent failure can be diagnosed instead of retried.
 - L298. A harness that reruns the suite once per case (a mutation sweep, a property sweep, a matrix, a suite that tests itself by launching itself) pays the boot once per case, so the lever is the boot, then the cadence, and never the tests; the per-case verdict semantics that make the tool trustworthy must survive the change unchanged.
+- L433. Work a runner SPLITS across parallel workers must be self contained per unit, because the split is chosen at run time from measured cost and moves between runs, so a unit that reads what its neighbour set up passes until the day the two land in different workers.
 
 ## Pipeline speed
 

@@ -6368,6 +6368,19 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   each before the first section runs. PostRoll: 433 guards re-proved 33 times a week at four
   macOS runners for 23 minutes, for facts the per-pull-request job already proves)
 
+- **L433. Work a runner SPLITS across parallel workers must be self contained per unit, because the
+  split is chosen at run time from measured cost and moves between runs, so a unit that reads what
+  its neighbour set up passes until the day the two land in different workers.** It then fails by
+  DYING rather than by failing, and a worker that dies reports no verdict at all, which reads as
+  nothing wrong unless something counts the verdicts.
+  (claude-config#333, 2026-09-07: a suite section was added that read a variable the section above
+  it defined. The suite deals its sections to four workers by measured section time, so the pair
+  landed together in some runs and apart in others: under `set -u` the orphaned one died, its
+  worker printed no result line, and the total came back 1,232 instead of 1,590. Which worker died
+  moved from run to run, and three separate theories were measured and disproved before the run log
+  was read far enough to find the unbound variable message. The suite's own count guard is the only
+  reason it was caught at all, which is L288 working; nothing catches the cause)
+
 ## Pipeline speed
 
 - **L395. A speed improvement claimed from ONE reading per arm cannot be told from noise**, because
