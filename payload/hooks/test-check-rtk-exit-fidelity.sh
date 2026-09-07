@@ -113,6 +113,31 @@ grep -qi 'contained\|refused' <<< "$out" \
   || check "and the containment is reported rather than passed over in silence" "out=$out"
 
 # ---------------------------------------------------------------------------
+# Which tools the probe set actually reaches (claude-config#321).
+#
+# Every green above is about the probes that EXIST. A rewritten command with no probe is exempt
+# from the whole check while the run still reports a clean bill of health, which is the state
+# nobody can see (L96, L98). So the script says which tools it examined, and this holds that list
+# to the ones measured to be rewritten here with an exit code that means something.
+#
+# The list is written out rather than derived, and that is deliberate: rtk 0.31.0's rewrite
+# registry is ARGUMENT sensitive (`git status` rewrites, `git x` does not; `gh issue list` does,
+# `gh x` does not), so asking rtk about a generic shape reports git, gh and docker as never
+# rewritten and any guard built on it would be blind in precisely the safe looking direction
+# (L98). A written list that goes red when somebody drops a probe is the honest version.
+# ---------------------------------------------------------------------------
+REFUSE="" run > /dev/null; out="$(cat "$TMPROOT/out")"
+examined="$(grep -i '^tools examined:' <<< "$out" || true)"
+[ -n "$examined" ] \
+  && check "the run says which tools its probes examined" ok \
+  || check "the run says which tools its probes examined" "no 'tools examined' line in: $out"
+for t in diff find ls git grep curl gh; do
+  grep -q " $t\( \|$\)" <<< "$examined" \
+    && check "the probe set reaches $t, whose exit code carries a verdict" ok \
+    || check "the probe set reaches $t, whose exit code carries a verdict" "examined=[$examined]"
+done
+
+# ---------------------------------------------------------------------------
 # The instrument proving it can still tell a mismatch APART. Without this every green above is
 # satisfied by a script that compares nothing (L1, L159). It is deliberately built on `true` and
 # `false` rather than on the known rtk mismatch, because a control that rots the day rtk is fixed

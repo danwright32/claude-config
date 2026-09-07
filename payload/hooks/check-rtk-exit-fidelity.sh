@@ -29,6 +29,21 @@
 # Two seams, and they are the only two: RTK_FIDELITY_RTK and RTK_FIDELITY_HOOK. The point of this
 # script is to measure the REAL binary, so both default to the real thing and only its own tests
 # set them.
+#
+# Why the probe list below is WRITTEN OUT and not derived from rtk's own registry, which is what
+# the summariser refusals in rtk-rewrite.sh do (claude-config#321). Measured against rtk 0.31.0 on
+# 2026-09-07: the rewrite rules are ARGUMENT sensitive. `git status` and `gh issue list` rewrite,
+# `git x` and `gh x` do not; `ls` rewrites bare, `curl` and `diff` only with arguments. So there is
+# no generic shape to ask rtk about, and a derivation built on one reports git, gh and docker as
+# never rewritten. That guard would pass while blind, in the reassuring direction, which is worse
+# than no guard (L98). The written list is held to its coverage by test-check-rtk-exit-fidelity.sh
+# instead, which goes red when a tool is dropped from it.
+#
+# Not probed, and why, so the gaps are recorded rather than merely absent (L129):
+#   docker  rewritten, but `docker ps` exits 0 or 1 purely on whether the daemon happens to be
+#           running, so no fixture here stands for a fixed case (L130).
+#   wget    rewritten, but every wget that succeeds needs the network (L2).
+#   tree    rewritten, not installed on either Mac, so a probe would only ever report a skip.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +60,11 @@ if [ ! -f "$HOOK" ]; then
   echo "check-rtk-exit-fidelity: the rewrite hook is not at [$HOOK], so what actually gets substituted could not be asked. Nothing was measured." >&2
   exit 2
 fi
+
+# The gh probe below is local: outside a git repository gh fails on the missing repo before it
+# ever reaches the network. GH_REPO would defeat that by naming a repo for it, turning a probe into
+# a live API call, so it is cleared here rather than trusted to be unset (L2).
+unset GH_REPO
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.fidelity-probe.XXXXXXXX")" || WORK=""
 case "${WORK%/}" in
@@ -99,6 +119,27 @@ PROBES=(
   "git-outside-a-repo|git|plain|fail|git status"
   "git-dirty-tree|git|repo|fail|git diff --quiet"
   "git-clean-status|git|repo|pass|git status"
+  # grep, named in claude-config#321 as the obvious second `diff`: exit 1 means no match and every
+  # `if grep` in this repo branches on it. rtk 0.31.0 does not rewrite grep at all, so this
+  # reports as contained today. It is here for the day it does, which is the only day it matters.
+  #
+  # Written without the quiet flag on purpose. The probe harness discards output already, and the
+  # field separator here is a bare `|`, so a quiet flag straight after one reads to
+  # test-pipefail-shortcircuit.sh as a producer piped into a short circuiting consumer. Spelling
+  # the flag differently would only hide it from that guard, so the flag simply goes.
+  "grep-no-match|grep|plain|fail|grep zzzzz a.txt"
+  "grep-match|grep|plain|pass|grep alpha a.txt"
+  # curl, which IS rewritten. file:// URLs so the probe is local: no network, no live service (L2).
+  # A missing file exits 37, not 1, so this also watches a substitute flattening a code that is
+  # neither 0 nor 1.
+  "curl-missing-file|curl|plain|fail|curl -sf file://$WORK/plain/no-such-file"
+  "curl-present-file|curl|plain|pass|curl -sf file://$WORK/plain/a.txt"
+  # gh, the most rewritten command in this repo. Outside a git repository it fails locally on the
+  # missing repo, so this needs no network. There is deliberately NO passing gh probe: every gh
+  # command that succeeds talks to the API, and a test that reaches a live service is worse than a
+  # half measured one (L2). So the always-0 direction is watched here and the always-1 direction is
+  # not, which is named rather than left to be assumed (L142).
+  "gh-outside-a-repo|gh|plain|fail|gh issue list"
 )
 
 # What the hook ACTUALLY substitutes for a command: its own answer, not a guess at its rules.
@@ -165,6 +206,15 @@ done
 
 echo
 echo "control: the comparison was proved able to tell exit $c_true from exit $c_false before any verdict below."
+# WHICH tools were examined, not only how many comparisons happened. A rewritten command with no
+# probe here is exempt from this whole check while the run still reports a clean bill of health, so
+# the covered set has to be readable from the output or nobody can see what is missing (L96, L98).
+tools_seen=""
+for entry in "${PROBES[@]}"; do
+  IFS='|' read -r _ probe_tool _ _ _ <<< "$entry"
+  case " $tools_seen " in *" $probe_tool "*) ;; *) tools_seen="$tools_seen $probe_tool" ;; esac
+done
+echo "tools examined:$tools_seen"
 echo "compared $compared substitution(s) against the real tool, skipped $skipped, broken fixtures $broken, contained by the hook ${#contained[@]}."
 for c in "${contained[@]:-}"; do [ -n "$c" ] && echo "  contained: $c"; done
 
