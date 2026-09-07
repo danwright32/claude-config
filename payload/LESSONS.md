@@ -5895,6 +5895,22 @@ window is a count rather than a boundary.
   Every retry read the dead run's lock as a live holder with nine minutes of deadline left,
   recorded `skipped-locked`, and the hours waited a full cadence for the deadline rule. Two of the
   three were never alerted because archive alerts were muted at the time)
+- **L617. An operation that keeps its progress in an on disk resumable state (a git rebase or
+  merge, a migration runner, a batch cursor) leaves that state behind when its process is killed,
+  and the leftover reads as HEALTHY to every check that examines content, because the queue is
+  empty, the tree is clean and nothing conflicts, so the next run must inspect the operation's own
+  progress marker rather than the data it was moving.** The leftover is neither a failure nor a
+  conflict, which is what makes it invisible: there is nothing to resolve and nothing red. Check
+  for the marker at the START of a run, conclude it where it is clean, and refuse loudly where a
+  real conflict is pending.
+  (claude-config#324, 2026-09-07: `~/claude-config-sync` sat on `(no branch, rebasing main)` for
+  23 hours after a run was killed just after its rebase applied its one commit and just before it
+  concluded. `.git/rebase-merge/git-rebase-todo` was EMPTY, `git status` was clean, and no path was
+  unmerged, so every content check agreed the repo was fine; the only anomaly was `main` still
+  pointing at the pre rebase commit while `HEAD` held the rebased one, and nothing read that.
+  `git rebase --continue` fixed it and changed no content. Meanwhile the clone reached 26 commits
+  behind, 15 lessons written on that Mac went unpublished, and `pull` blamed a two Mac divergence
+  that had not happened, per claude-config#325)
 
 
 ## Test speed
