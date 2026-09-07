@@ -18,3 +18,4 @@ state/
 .send-suite-verdicts
 .behind-skips
 .ci-unreadable-since
+.resurrected-reported

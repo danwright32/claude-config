@@ -82,6 +82,7 @@ LAST_RECEIVED_FILE="$SYNC_REPO/.last-received"
 # own is gone before the investigation that needs it arrives (L202), and scratch is swept hourly.
 BEHIND_SKIPS_FILE="$SYNC_REPO/.behind-skips"   # sends in a row that could not go out (#323)
 CI_UNREADABLE_SINCE_FILE="$SYNC_REPO/.ci-unreadable-since"   # since when no CI verdict could be read (#327)
+RESURRECTED_REPORTED_FILE="$SYNC_REPO/.resurrected-reported"   # leftovers already reported once (#331)
 HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
 # The last verdict each send-side suite reached, against a digest of the hooks it judged (#269).
 # Untracked and per clone, because it records what has been RUN here rather than what the config
@@ -2024,7 +2025,7 @@ last_applied_hook_block(){   # -> the hooks object of the last applied payload, 
 # same name is different content and publishes normally, because a deletion must not become a
 # permanent ban on a name (L116, L362).
 refuse_resurrected_deletions(){
-  local p delcommit restored="" lastdel=""
+  local p delcommit restored="" removed="" lastdel=""
   have_git || return 0
   git -C "$SYNC_REPO" rev-parse --verify -q HEAD >/dev/null 2>&1 || return 0
   while IFS= read -r p; do
@@ -2045,20 +2046,35 @@ refuse_resurrected_deletions(){
     # that could not be made would discard somebody's work on a guess (L50).
     git -C "$SYNC_REPO" show "$delcommit^:$p" 2>/dev/null | cmp -s - "$SYNC_REPO/$p" 2>/dev/null || continue
     rm -f "$SYNC_REPO/$p" 2>/dev/null || true
-    # AND THE LOCAL COPY, which is the half that ends the matter. The apply deliberately never
-    # deletes a local file the repo has not seen, because that could destroy work, so refusing to
-    # publish on its own would leave the file stuck for ever: never sent, never removed, and this
-    # message on every single edit, which is the alert that gets ignored (L36). The precondition is
-    # what makes it safe, and it is why the comparison above is byte for byte: this file is the
-    # copy the shared config deleted, unchanged, so nothing unique to this Mac is being removed and
-    # git still holds it in the commit named below.
-    rm -f "$CLAUDE_HOME/${p#payload/}" 2>/dev/null || true
-    rmdir "$(dirname "$CLAUDE_HOME/${p#payload/}")" 2>/dev/null || true
+    # The LOCAL copy is left alone by default, and that is a deliberate refusal rather than an
+    # oversight (L9). Removing it would complete the deletion in one step and end the matter, and
+    # the byte for byte comparison above is what would make that safe, but an automatic deletion
+    # from somebody's own config is a product decision and not a default this tool gets to pick.
+    # SYNC_ACCEPT_DELETIONS=1 turns it on for anybody who wants the one step version.
+    if [ "${SYNC_ACCEPT_DELETIONS:-0}" = "1" ]; then
+      rm -f "$CLAUDE_HOME/${p#payload/}" 2>/dev/null || true
+      rmdir "$(dirname "$CLAUDE_HOME/${p#payload/}")" 2>/dev/null || true
+      removed="${removed:+$removed }${p#payload/}"
+    fi
     restored="${restored:+$restored }${p#payload/}"
     lastdel="$delcommit"
   done < <(git -C "$SYNC_REPO" ls-files --others --exclude-standard -- payload 2>/dev/null || true)
   [ -n "$restored" ] || return 0
-  echo "claude-sync: $restored was deleted from the shared config and this Mac still had the deleted copy unchanged, so it was NOT published back (that would undo the deletion for both Macs) and the local copy has been removed here too, which is what applying that deletion should have done. It is recoverable from ${lastdel:0:8}, the commit that removed it. If you meant to bring it back, put it there again with a change of your own and it publishes as yours." >&2
+  # Once per path, not on every edit. The watcher fires on every save and the file stays where it
+  # is by default, so a message per send is the alert that gets ignored (L36). The record is keyed
+  # on the path AND the content, so a file that CHANGES is a new decision and is reported again.
+  local stamp fresh=""
+  for p in $restored; do
+    stamp="$(printf '%s %s' "$p" "$(shasum "$CLAUDE_HOME/$p" 2>/dev/null | awk 'NR==1{print $1}')")"
+    grep -qxF -- "$stamp" "$RESURRECTED_REPORTED_FILE" 2>/dev/null && continue
+    printf '%s\n' "$stamp" >> "$RESURRECTED_REPORTED_FILE" 2>/dev/null || true
+    fresh="${fresh:+$fresh }$p"
+  done
+  if [ -n "$removed" ]; then
+    echo "claude-sync: $removed was deleted from the shared config and this Mac still had that deleted copy unchanged, so it was NOT published back (that would undo the deletion for both Macs) and the local copy has been removed here too, because SYNC_ACCEPT_DELETIONS=1. It is recoverable from ${lastdel:0:8}, the commit that removed it." >&2
+  elif [ -n "$fresh" ]; then
+    echo "claude-sync: $fresh was deleted from the shared config and this Mac still has that deleted copy unchanged, so it was NOT published back: publishing it would undo the deletion for both Macs. Your copy is untouched and nothing here will remove it. Delete it yourself to accept the deletion, or change it and it publishes as your own. It is in ${lastdel:0:8}, the commit that removed it, if you want it back. Said once per file rather than on every edit." >&2
+  fi
   return 0
 }
 

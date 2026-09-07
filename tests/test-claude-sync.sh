@@ -2608,13 +2608,24 @@ check "#331 a leftover copy is not published back over a deletion this Mac has a
   "[ ! -e '$DELR/payload/skills/shared-skill' ]"
 check "#331 and it says so, rather than undoing the deletion in silence" \
   "grep -q 'deleted from the shared config' <<< \"\$out_del2\""
-# The local copy goes too. The apply never deletes a local file the repo has not seen, by design,
-# so refusing to publish on its own would leave it stuck for ever: never sent, never removed, and
-# the message above on every edit. Safe only because the copy is byte for byte what was deleted.
-check "#331 and the leftover copy is removed here as well, so it is not stuck for ever" \
+# The local copy is LEFT, and that is deliberate. Removing it would end the matter in one step and
+# the byte for byte comparison is what would make it safe, but an automatic deletion from somebody's
+# own config is a product decision and not a default this tool gets to pick (L9).
+check "#331 and this Mac's own copy is left alone rather than deleted for them" \
+  "[ -f '$DELHB/skills/shared-skill/SKILL.md' ]"
+check "#331 and it names the commit the deleted copy is in, so it can be recovered" \
+  "grep -qE 'commit that removed it' <<< \"\$out_del2\""
+# ONCE per file. The watcher fires on every save and the file stays where it is, so a message per
+# send is the alert that gets ignored (L36).
+out_del2b="$(CLAUDE_HOME="$DELHB" SYNC_REPO="$DELR" SYNC_HOSTNAME=delMacB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1 || true)"
+check "#331 and the same leftover is not reported again on the next send" \
+  "! grep -q 'deleted from the shared config' <<< \"\$out_del2b\""
+check "#331 while still not being published on that send either" \
+  "[ ! -e '$DELR/payload/skills/shared-skill' ]"
+# And the one step version, for anybody who wants it, which is the opt in rather than the default.
+out_del2c="$(CLAUDE_HOME="$DELHB" SYNC_REPO="$DELR" SYNC_HOSTNAME=delMacB SYNC_NO_NOTIFY=1 SYNC_ACCEPT_DELETIONS=1 bash "$SCRIPT" sync 2>&1 || true)"
+check "#331 with SYNC_ACCEPT_DELETIONS=1 the leftover is removed here too" \
   "[ ! -f '$DELHB/skills/shared-skill/SKILL.md' ]"
-check "#331 and it names the commit it can be recovered from" \
-  "grep -qE 'recoverable from [0-9a-f]{8}' <<< \"\$out_del2\""
 # A DELIBERATE re-creation is a different thing and must still publish, or the guard turns a
 # deletion into a permanent ban on the name (L116, L362). Different content is what tells them
 # apart: a leftover is the old copy byte for byte.
