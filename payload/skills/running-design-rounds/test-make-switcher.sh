@@ -239,6 +239,80 @@ check_eq "the committed example matches what the tool produces now" \
   "$(shasum "$DIR/example/switcher.html" | cut -d' ' -f1)" \
   "$(shasum "$TMP/example-now.html" | cut -d' ' -f1)"
 
+# --- 13. the page fills the window, and a tall screen is never clipped ---
+#
+# Dan opened the first page this tool produced and said "there's weird dead grey space
+# at the bottom". Measured at 1440x900 it was 261px of empty background under the last
+# element, because the shell sat at its natural height at the top of the window. The
+# stage now takes the space that is left, which raises the opposite risk: a screen
+# taller than the window, centred with align-items, has its top cut off and unreachable.
+# Both are measured here in a real browser, at a viewport this test sets itself.
+
+geometry() { # geometry <page> <viewport-height> -> one line per measurement
+  python3 - "$1" <<'GEOMPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+function box(sel) {
+  var e = document.querySelector(sel);
+  if (!e) return sel + " missing";
+  var r = e.getBoundingClientRect();
+  return sel + " top=" + Math.round(r.top) + " bottom=" + Math.round(r.bottom) +
+         " centre=" + Math.round(r.x + r.width / 2);
+}
+var last = document.querySelector(".hint").getBoundingClientRect().bottom;
+var screenTop = document.querySelector(".stage > *").getBoundingClientRect().top;
+var lines = [
+  "viewport-centre " + window.innerWidth / 2,
+  "dead-space-below " + Math.round(window.innerHeight - last),
+  "screen-top " + Math.round(screenTop),
+  box(".stage")
+];
+var out = document.createElement("pre"); out.id = "G"; out.textContent = lines.join("\\n");
+document.body.append(out);
+</script>
+"""
+open(sys.argv[1] + ".geom.html", "w", encoding="utf-8").write(page + harness)
+GEOMPY
+  "$CHROME" --headless --disable-gpu --no-sandbox --window-size=1440,"$2" \
+    --virtual-time-budget=2000 --dump-dom "file://$1.geom.html" 2>/dev/null \
+    | python3 -c 'import sys,re; m=re.search(r"<pre id=\"G\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-GEOM")'
+}
+
+if [[ -x "$CHROME" ]]; then
+  g="$(geometry "$TMP/out.html" 900)"
+  dead="$(echo "$g" | awk '/dead-space-below/ {print $2}')"
+  check_eq "the page leaves no dead space under a short screen" "1" \
+    "$([ -n "$dead" ] && [ "$dead" -le 24 ] && echo 1 || echo "0 (measured ${dead:-none}px)")"
+  check "the stage is centred on the window" "centre 720" \
+    "$(echo "$g" | awk '/viewport-centre/ {print "centre", $2}')"
+  check_eq "the stage sits on the window centre line" "720" \
+    "$(echo "$g" | awk '/^.stage/ {for(i=1;i<=NF;i++) if ($i ~ /^centre=/) {sub("centre=","",$i); print $i}}')"
+
+  # A screen taller than the window must not have its top cut off, which is what
+  # centring an overflowing flex item does.
+  python3 - "$TMP/tallspec.json" <<'TALLPY'
+import json, sys
+spec = json.load(open(sys.argv[1].replace("tallspec.json", "spec.json")))
+open(sys.argv[1], "w").write(json.dumps(spec))
+TALLPY
+  printf 'function buildScreen(variant) { var d = document.createElement("div"); d.className = "screen"; d.style.height = "2000px"; d.style.width = "400px"; d.style.background = "#DDD"; return d; }\n' > "$TMP/tall-builder.js"
+  python3 - "$TMP/tallspec.json" "$TMP/tall.json" <<'TALLSPEC'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "tall-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+TALLSPEC
+  python3 "$SCRIPT" "$TMP/tall.json" "$TMP/tall.html" >/dev/null 2>&1
+  gt="$(geometry "$TMP/tall.html" 900)"
+  top="$(echo "$gt" | awk '/screen-top/ {print $2}')"
+  stagetop="$(echo "$gt" | awk '/^.stage/ {for(i=1;i<=NF;i++) if ($i ~ /^top=/) {sub("top=","",$i); print $i}}')"
+  check_eq "a screen taller than the window keeps its top reachable" "1" \
+    "$([ -n "$top" ] && [ -n "$stagetop" ] && [ "$top" -ge "$stagetop" ] && echo 1 || echo "0 (screen top ${top:-none} is above stage top ${stagetop:-none})")"
+fi
+
+
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$unmeasured" -gt 0 ]] && echo "UNMEASURED-SECTIONS $unmeasured"
