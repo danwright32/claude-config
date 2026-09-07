@@ -67,7 +67,7 @@ arguments for the exact shape, and see `example/` for a working one.
 | A page needing nothing from the network | It still renders in a year, on a plane, from a git checkout |
 | A refusal instead of a page, on any fault | A switcher with a dead frame or an unwired key looks finished |
 
-`bash test-make-switcher.sh` runs its 43 checks, and `run-all-tests.sh` finds it on its own.
+`bash test-make-switcher.sh` runs its checks, and `run-all-tests.sh` finds that suite on its own. The refusals above each have a test that produces them, including the unwired key.
 
 ## The deliverable
 

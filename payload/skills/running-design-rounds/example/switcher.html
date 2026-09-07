@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Demo, the invoice list</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; background: #F4F1ED; color: #1B1613;
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .frame { max-width: 1180px; margin: 0 auto; padding: 28px 24px 60px; }
+  .eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+             color: #6E6259; margin: 0 0 6px; }
+  h1 { font-size: 26px; line-height: 1.2; margin: 0 0 10px; font-weight: 600; }
+  .asks { margin: 0 0 6px; max-width: 62ch; color: #3D342E; }
+  .measurement { margin: 0 0 20px; max-width: 62ch; color: #6E6259; font-size: 13px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+  .tab { display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+         background: #FFFDFB; border: 1px solid #DAD1C8; border-radius: 7px;
+         padding: 7px 12px; font: inherit; font-size: 13px; color: #1B1613; }
+  .tab:hover { border-color: #B9AC9F; }
+  .tab[aria-pressed="true"] { background: #1B1613; border-color: #1B1613; color: #FBFAF8; }
+  .tab .badge { display: inline-grid; place-items: center; width: 17px; height: 17px;
+                border-radius: 4px; background: #EDE7E1; color: #584D45; font-size: 11px;
+                font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .tab[aria-pressed="true"] .badge { background: #453B34; color: #F6F3F0; }
+  .readout { border-left: 2px solid #D9D0C7; padding: 2px 0 2px 14px; margin: 0 0 20px;
+             max-width: 68ch; }
+  .readout h2 { font-size: 15px; margin: 0 0 5px; font-weight: 600; }
+  .readout p { margin: 0 0 6px; color: #3D342E; }
+  .readout .measured { color: #6E6259; font-size: 13px; margin: 0; }
+  .stage { display: flex; justify-content: center; }
+  .hint { margin: 22px 0 0; color: #7C7168; font-size: 12px; }
+</style>
+<style>
+.win { width: 520px; background: #FFFDFB; border: 1px solid #DAD1C8; border-radius: 8px; overflow: hidden; }
+.hd { padding: 10px 14px; background: #F1ECE7; font-weight: 600; }
+.row { padding: 9px 14px; border-top: 1px solid #EDE7E1; font-variant-numeric: tabular-nums; }
+.row.tight { padding: 4px 14px; }
+
+</style>
+</head>
+<body>
+<div class="frame">
+  <p class="eyebrow">Demo, the invoice list</p>
+  <h1>How tall should a row be</h1>
+  <p class="asks">Eleven rows have to fit without scrolling, and the amount has to stay readable.</p>
+  <p class="measurement">Both rows measured at 4.9 to 1 against the row fill.</p>
+  <div class="tabs" id="tabs"></div>
+  <div class="readout" id="readout"></div>
+  <div class="stage" id="stage"></div>
+  <p class="hint">Left and right arrows step through the options. The key on each tab jumps
+  straight to it.</p>
+</div>
+<script>
+function buildScreen(variant) {
+  var win = document.createElement("div");
+  win.className = "win " + variant.key;
+  var head = document.createElement("div");
+  head.className = "hd";
+  head.textContent = "Invoices";
+  win.append(head);
+  for (var i = 1; i <= 4; i++) {
+    var row = document.createElement("div");
+    row.className = "row " + (variant.density || "normal");
+    row.textContent = "Client " + i + "   Oct " + i + "   $" + (i * 250);
+    win.append(row);
+  }
+  return win;
+}
+
+</script>
+<script>
+var VARIANTS = [
+  {
+    "key": "1",
+    "name": "Normal",
+    "why": "The comfortable height, which fits eight rows in the window.",
+    "measured": "29px per row.",
+    "density": "normal"
+  },
+  {
+    "key": "2",
+    "name": "Tight",
+    "why": "Four pixels off the padding, which is what buys the other three rows.",
+    "measured": "19px per row.",
+    "density": "tight"
+  }
+];
+
+function el(tag, cls, text) {
+  var node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+var tabs = document.getElementById("tabs");
+var readout = document.getElementById("readout");
+var stage = document.getElementById("stage");
+var current = 0;
+
+function show(index) {
+  current = (index + VARIANTS.length) % VARIANTS.length;
+  var variant = VARIANTS[current];
+  Array.prototype.forEach.call(tabs.children, function (button, position) {
+    button.setAttribute("aria-pressed", String(position === current));
+  });
+  var lines = [el("h2", null, variant.name), el("p", null, variant.why)];
+  if (variant.measured) lines.push(el("p", "measured", variant.measured));
+  readout.replaceChildren.apply(readout, lines);
+  stage.replaceChildren(buildScreen(variant));
+}
+
+VARIANTS.forEach(function (variant, index) {
+  var button = el("button", "tab");
+  button.type = "button";
+  button.setAttribute("aria-pressed", "false");
+  button.append(el("span", "badge", variant.key), el("span", null, variant.name));
+  button.addEventListener("click", function () { show(index); });
+  tabs.append(button);
+});
+
+document.addEventListener("keydown", function (event) {
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.key === "ArrowRight") { show(current + 1); event.preventDefault(); return; }
+  if (event.key === "ArrowLeft") { show(current - 1); event.preventDefault(); return; }
+  for (var i = 0; i < VARIANTS.length; i++) {
+    if (VARIANTS[i].key === event.key.toLowerCase()) { show(i); event.preventDefault(); return; }
+  }
+});
+
+show(0);
+</script>
+</body>
+</html>
