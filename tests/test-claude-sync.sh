@@ -2380,6 +2380,81 @@ check "watcher runs the watch command"  "grep -q '<string>watch</string>' '$WPL'
 check "watcher stays alive"            "grep -q 'KeepAlive' '$WPL'"
 check "watcher sets Homebrew PATH"      "grep -q '/opt/homebrew/bin' '$WPL'"
 
+section "== a Mac still running an out of date launch agent is reported (#328) =="
+# The launch agents are written by install-autosync and by nothing else, so a change to what they
+# should be applies only where somebody re-runs that command by hand. Nothing detected a Mac still
+# running the previous definition and nothing said so. claude-config#323 shortened the catch up
+# timer from weekly to daily on 2026-09-07 and it took effect on one Mac only, with the other
+# needing a manual step that nothing would have reported if it were skipped. The agents are what
+# make syncing automatic at all, so a Mac quietly running an old definition is exactly the drift
+# the tool exists to prevent, and it is invisible from the other side.
+AGD="$WORK/agents-dir"; mkdir -p "$AGD"
+AGH="$WORK/agents-home"; mkdir -p "$AGH"; echo '{"hooks":{}}' > "$AGH/settings.json"
+AGR="$WORK/agents-repo"; mkdir -p "$AGR/payload"
+AGNOFS="$WORK/agents-no-fswatch"
+SYNC_LAUNCHAGENTS="$AGD" SYNC_NO_LAUNCHCTL=1 SYNC_INTERVAL=86400 SYNC_FSWATCH="$AGNOFS" \
+  CLAUDE_HOME="$AGH" bash "$SCRIPT" install-autosync >/dev/null 2>&1
+check "#328 the fixture really installed a timer to compare against" \
+  "[ -f '$AGD/com.claudesync.timer.plist' ]"
+ag_status(){   # $1 = the interval this run of the script would write
+  SYNC_LAUNCHAGENTS="$AGD" SYNC_INTERVAL="$1" CLAUDE_HOME="$AGH" SYNC_REPO="$AGR" \
+    SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1
+}
+out_ag_ok="$(ag_status 86400)"
+check "#328 status says nothing when what is installed is what this script would write" \
+  "! grep -q 'launch agents out of date' <<< \"\$out_ag_ok\""
+# The definition changes underneath it, which is exactly what shipping a new interval does.
+out_ag_stale="$(ag_status 3600)"
+dbg "#328 stale agents: $out_ag_stale"
+check "#328 status names the agent that no longer matches what this script would write" \
+  "grep -q 'launch agents out of date on this Mac: com.claudesync.timer' <<< \"\$out_ag_stale\""
+check "#328 and says what to run, since detecting one is not fixing it" \
+  "grep -q 'claude-sync install-autosync' <<< \"\$out_ag_stale\""
+# Re-installing clears it, or the report is a permanent accusation with no way to satisfy it (L344).
+SYNC_LAUNCHAGENTS="$AGD" SYNC_NO_LAUNCHCTL=1 SYNC_INTERVAL=3600 SYNC_FSWATCH="$AGNOFS" \
+  CLAUDE_HOME="$AGH" bash "$SCRIPT" install-autosync >/dev/null 2>&1
+out_ag_fixed="$(ag_status 3600)"
+check "#328 and re-installing clears the report" \
+  "! grep -q 'launch agents out of date' <<< \"\$out_ag_fixed\""
+
+section "== and the OTHER Mac's launch agents, which need publishing to be seen at all (#328) =="
+# Split from the section above rather than run as one: the two are different subjects, and the
+# suite's own stall watchdog measures the gap between progress markers, so one long silent stretch
+# of clones and syncs is what a stalled run looks like from outside.
+#
+# Its own fixture, borrowing nothing from the section above. Shards are dealt by measured section
+# time, so a section that reads a variable its neighbour set runs without it in whichever shard
+# splits the pair, and under `set -u` that kills the shard outright: it produces no result line at
+# all, which the suite reports as a run to distrust rather than as a failure to read. Measured
+# here, that is exactly what happened, and which shard died moved from run to run.
+AGNOFS="$WORK/agents-no-fswatch"
+AGBARE="$WORK/agents-bare.git"; git init -q --bare -b main "$AGBARE"
+AGR1="$WORK/agents-c1"; git clone -q "$AGBARE" "$AGR1" 2>/dev/null
+AGR2="$WORK/agents-c2"; git clone -q "$AGBARE" "$AGR2" 2>/dev/null
+AGH1="$WORK/agents-h1"; mkdir -p "$AGH1/skills/a"; echo '{"hooks":{}}' > "$AGH1/settings.json"
+AGH2="$WORK/agents-h2"; mkdir -p "$AGH2"; echo '{"hooks":{}}' > "$AGH2/settings.json"
+AGD1="$WORK/agents-d1"; AGD2="$WORK/agents-d2"; mkdir -p "$AGD1" "$AGD2"
+mkskill "$AGH1/skills/a/SKILL.md" 'A1'
+SYNC_LAUNCHAGENTS="$AGD1" SYNC_NO_LAUNCHCTL=1 SYNC_INTERVAL=86400 SYNC_FSWATCH="$AGNOFS" \
+  CLAUDE_HOME="$AGH1" bash "$SCRIPT" install-autosync >/dev/null 2>&1
+SYNC_LAUNCHAGENTS="$AGD2" SYNC_NO_LAUNCHCTL=1 SYNC_INTERVAL=604800 SYNC_FSWATCH="$AGNOFS" \
+  CLAUDE_HOME="$AGH2" bash "$SCRIPT" install-autosync >/dev/null 2>&1
+# Both publish. mac2's own script would write 86400 now, so its installed 604800 is out of date,
+# which is the state the real Dans-MacBook-Pro was left in.
+SYNC_LAUNCHAGENTS="$AGD1" SYNC_INTERVAL=86400 CLAUDE_HOME="$AGH1" SYNC_REPO="$AGR1" \
+  SYNC_HOSTNAME=agentMac1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+SYNC_LAUNCHAGENTS="$AGD2" SYNC_INTERVAL=86400 CLAUDE_HOME="$AGH2" SYNC_REPO="$AGR2" \
+  SYNC_HOSTNAME=agentMac2 SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+SYNC_LAUNCHAGENTS="$AGD1" SYNC_INTERVAL=86400 CLAUDE_HOME="$AGH1" SYNC_REPO="$AGR1" \
+  SYNC_HOSTNAME=agentMac1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_ag_v="$(SYNC_LAUNCHAGENTS="$AGD1" SYNC_INTERVAL=86400 CLAUDE_HOME="$AGH1" SYNC_REPO="$AGR1" \
+  SYNC_HOSTNAME=agentMac1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1 || true)"
+dbg "#328 verify with a stale other Mac: $out_ag_v"
+check "#328 verify names the other Mac's out of date launch agent" \
+  "grep -q 'agentMac2: launch agent' <<< \"\$out_ag_v\""
+check "#328 and does not accuse the Mac whose agents match" \
+  "! grep -q 'agentMac1: launch agent' <<< \"\$out_ag_v\""
+
 section "== watch: errors without fswatch; runs a sync per event when present =="
 out_nofs="$(SYNC_FSWATCH="$WORK/nope" CLAUDE_HOME="$CA" SYNC_REPO="$RA" bash "$SCRIPT" watch 2>&1)"; rcw=$?
 check "watch fails without fswatch"     "[ $rcw -ne 0 ]"
@@ -9275,29 +9350,35 @@ check "#327 a verdict that can be read again clears the clock" \
 check "#327 and a green verdict never arms it in the first place" \
   "[ ! -f \"\$(ci_repo green)/.ci-unreadable-since\" ]"
 
-# EVERY state the gate names as an answer clears the clock, asserted one by one (L35, L113). The
-# list of readable verdicts is written twice, once here in the branch that clears and once in the
-# branch that acts on each, and two lists of one vocabulary drift silently. A fresh clone is never
-# armed, so each case is ARMED by hand first: without that the assertion is satisfied by a file
-# that was never going to be there (L159).
-for _ci_ok in green red pending cancelled none; do
-  # A publishes something new before each one, so the gate actually REACHES the classifier. Without
-  # it the Mac is level after the first tick and the gate short circuits on the ancestry test,
-  # which clears the clock for a different reason and would pass this check while proving nothing
-  # about the state under test (L159).
-  printf 'newer for clock %s\n' "$_ci_ok" > "$CIHA/hooks/from-A.sh"
-  CLAUDE_HOME="$CIHA" SYNC_REPO="$CIA" SYNC_CLONE_REGISTRY="$CI_REG" \
-    SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
-  printf '1\n' > "$(ci_repo unreadable)/.ci-unreadable-since"
-  ci_tick unreadable "$_ci_ok" >/dev/null 2>&1
-  check "#327 a $_ci_ok verdict clears the unreadable clock, because it is an answer" \
-    "[ ! -f \"\$(ci_repo unreadable)/.ci-unreadable-since\" ]"
-done
+# THE CLOCK SURVIVES FROM ONE RUN TO THE NEXT. The gate reads the record and clears it before it
+# decides, so that the case which acts is the only list of states and no second list can drift from
+# it (L113); the unreadable arm then writes it back. Miss that write on any path and the clock
+# restarts every run, never reaches its own window, and the escape never fires while every other
+# check here still passes. Asserted by the START TIME staying put across two runs, not by the file
+# merely existing, because a file rewritten with a fresh timestamp exists just as convincingly.
+printf 'newer for clock a\n' > "$CIHA/hooks/from-A.sh"
+CLAUDE_HOME="$CIHA" SYNC_REPO="$CIA" SYNC_CLONE_REGISTRY="$CI_REG" \
+  SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
+printf '111 \n' > "$(ci_repo unreadable)/.ci-unreadable-since"
+ci_tick unreadable "" >/dev/null 2>&1
+check "#327 a second unreadable run keeps the start time the first one recorded" \
+  "[ \"\$(awk 'NR==1{print \$1}' \"\$(ci_repo unreadable)/.ci-unreadable-since\" 2>/dev/null)\" = '111' ]"
+
+# A verdict that BLOCKS still clears the clock, because it is an answer. Red is the one worth
+# driving: a check that only proved green clears it would be satisfied by a rule about passing
+# rather than about readability (L159).
+printf 'newer for clock b\n' > "$CIHA/hooks/from-A.sh"
+CLAUDE_HOME="$CIHA" SYNC_REPO="$CIA" SYNC_CLONE_REGISTRY="$CI_REG" \
+  SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
+printf '111 \n' > "$(ci_repo unreadable)/.ci-unreadable-since"
+ci_tick unreadable failure >/dev/null 2>&1
+check "#327 a red verdict clears the clock too, because it is an answer and not a pass" \
+  "[ ! -f \"\$(ci_repo unreadable)/.ci-unreadable-since\" ]"
 
 # Once it has expired, config keeps arriving unjudged and the alert has already been given, so the
 # only thing left saying so is a log line nobody opens. That is the shape L77 warns about: an error
 # waved through as expected still has to be counted somewhere a person looks.
-printf '1\n' > "$(ci_repo unreadable)/.ci-unreadable-since"
+printf '1 \n' > "$(ci_repo unreadable)/.ci-unreadable-since"
 out_ci_st="$(CLAUDE_HOME="$(ci_home unreadable)" SYNC_REPO="$(ci_repo unreadable)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
 check "#327 status says the CI verdict has been unreadable and for how long" \
   "case \"\$out_ci_st\" in *'could not be read'*) true ;; *) false ;; esac"

@@ -2580,19 +2580,30 @@ STATE_REF_PREFIX="refs/claude-sync-state"   # one ref per Mac, never on the conf
 
 publish_applied_marker(){
   have_git || return 0
-  local tree host file ts blob treeobj commit
+  local tree host file ts blob treeobj commit agents agentblob prev_tree prev_agents
   tree="$(payload_tree)"; [ -n "$tree" ] || return 0
   host="$(sync_hostname)"; file="$STATE_DIR/$host.applied"
+  # What this Mac's launch agents are, published alongside what it applied (claude-config#328). It
+  # is the same kind of fact: something only this Mac can see about itself, which the other Mac
+  # needs in order to report it. Without it a Mac still running last month's schedule is invisible
+  # from anywhere but its own screen.
+  agents="$(agents_state)"
   # Records the payload TREE, never HEAD. Keyed on HEAD the two Macs republish markers at
   # each other for ever: publishing moves HEAD, so the other Mac sees a new commit, applies,
   # publishes its own marker, which moves HEAD again. A marker-only commit does not change
   # the payload tree, so the exchange settles after one round and then writes nothing.
+  # Republished when EITHER changes. The tree alone would leave a Mac that re-installed its agents
+  # publishing the old answer until something unrelated changed the payload (L40). Markers live on
+  # their own refs, never on the config branch, so republishing moves no HEAD and cannot restart
+  # the exchange this early return was originally written to settle.
   if [ -f "$file" ]; then
-    case "$(cat "$file" 2>/dev/null || true)" in "$tree "*) return 0 ;; esac
+    prev_tree="$(awk 'NR==1{print $1}' "$file" 2>/dev/null || true)"
+    prev_agents="$(awk 'NR==2' "$file" 2>/dev/null || true)"
+    if [ "$prev_tree" = "$tree" ] && [ "$prev_agents" = "$agents" ]; then return 0; fi
   fi
   ts="$(date +%s)"
   mkdir -p "$STATE_DIR" 2>/dev/null || return 0
-  printf '%s %s\n' "$tree" "$ts" > "$file" 2>/dev/null || true
+  printf '%s %s\n%s\n' "$tree" "$ts" "$agents" > "$file" 2>/dev/null || true
 
   # Published on its OWN ref, NEVER as a commit on the config branch. Measured, not feared:
   # committing markers alongside the payload turned 27 unrelated tests red, because a marker
@@ -2603,7 +2614,12 @@ publish_applied_marker(){
   # One ref per Mac, so two Macs can never contend for the same one.
   blob="$(printf '%s %s\n' "$tree" "$ts" | git -C "$SYNC_REPO" hash-object -w --stdin 2>/dev/null || true)"
   [ -n "$blob" ] || return 0
-  treeobj="$(printf '100644 blob %s\tapplied\n' "$blob" | git -C "$SYNC_REPO" mktree 2>/dev/null || true)"
+  # A SECOND blob rather than a third field on the first one. Every existing reader of `applied`
+  # takes the last space separated field as the timestamp, so adding a field there would have made
+  # each of them read the agent state as a date (L510).
+  agentblob="$(printf '%s\n' "$agents" | git -C "$SYNC_REPO" hash-object -w --stdin 2>/dev/null || true)"
+  [ -n "$agentblob" ] || return 0
+  treeobj="$(printf '100644 blob %s\tagents\n100644 blob %s\tapplied\n' "$agentblob" "$blob" | git -C "$SYNC_REPO" mktree 2>/dev/null || true)"
   [ -n "$treeobj" ] || return 0
   commit="$(git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" \
               commit-tree "$treeobj" -m "applied by $host" 2>/dev/null || true)"
@@ -4378,13 +4394,19 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
   fi
   state="$(remote_ci_state "$sha")"
   # ANY readable verdict clears the unreadable clock (claude-config#327), including the ones that
-  # block. red, pending and cancelled are answers: they mean the lookup is working and the gate is
-  # doing its job. Only "nobody could tell" arms the clock, and only a return to being able to tell
-  # ends it, or a Mac that was briefly offline would go on counting towards an escape it no longer
-  # needs (L160).
-  case "$state" in
-    green|red|pending|cancelled|none) rm -f "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true ;;
-  esac
+  # block: red, pending and cancelled are answers, and they mean the lookup is working. Only
+  # "nobody could tell" arms it, and only being able to tell again ends it, or a Mac that was
+  # briefly offline goes on counting towards an escape it no longer needs (L160).
+  #
+  # Read, then CLEARED unconditionally, and re-armed by the unreadable arm below. Written the
+  # obvious way it needed a second list of the readable states beside the one the case already
+  # names, and two lists of one vocabulary drift silently (L113). This way the case that ACTS is
+  # the only list: whatever its catch-all catches is what arms the clock, by construction, so a
+  # state added later cannot be handled in one place and forgotten in the other.
+  local ci_since ci_told
+  ci_since="$(awk 'NR==1{print $1}' "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null)"
+  ci_told="$(awk 'NR==1{print $2}' "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null)"
+  rm -f "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true
   case "$state" in
     green) return 1 ;;
     red)
@@ -4432,25 +4454,28 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       # It is not cleared by expiring. Once the verdict is judged unobtainable, config keeps
       # arriving until the lookup works again; restarting the clock would deliver config in three
       # hour bursts, which is a worse thing than either state.
-      local ci_since ci_now ci_told ci_window="${SYNC_CI_UNREADABLE_AFTER:-10800}"
+      local ci_now ci_expired=0 ci_window="${SYNC_CI_UNREADABLE_AFTER:-10800}"
       ci_now="$(date +%s)"
-      ci_since="$(awk 'NR==1{print $1}' "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null)"
-      ci_told="$(awk 'NR==1{print $2}' "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null)"
       case "$ci_since" in
         ''|*[!0-9]*)
+          # The transition into the condition. Told once, here: the watcher fires on every edit and
+          # this used to raise a desktop alert on each one, which is the alert that gets ignored and
+          # is why the drift in claude-config#323 went unread for two days (L36).
           ci_since="$ci_now"; ci_told=""
-          printf '%s\n' "$ci_now" > "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true
-          # Told on the TRANSITION only. The watcher fires on every edit, and this used to raise a
-          # desktop alert on each one, which is the alert that gets ignored and is why the drift in
-          # claude-config#323 went unread for two days (L36).
           notify "not applied: could not read CI for the shared repo's head" ;;
       esac
-      if [ "$(( ci_now - ci_since ))" -ge "$ci_window" ] 2>/dev/null; then
+      case "$ci_told" in *[!0-9]*) ci_told="" ;; esac
+      [ "$(( ci_now - ci_since ))" -ge "$ci_window" ] 2>/dev/null && ci_expired=1
+      if [ "$ci_expired" = 1 ] && [ -z "$ci_told" ]; then
+        ci_told="$ci_now"
+        notify "applying shared config without a CI verdict: gh has been unreadable for $(age_in_words "$(( ci_now - ci_since ))")"
+      fi
+      # Written back on EVERY path out of this arm, because the read above cleared the file. Miss
+      # one and the clock silently restarts on each run, so it can never reach its own window and
+      # the escape this whole arm exists for never fires (L514).
+      printf '%s %s\n' "$ci_since" "$ci_told" > "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true
+      if [ "$ci_expired" = 1 ]; then
         echo "claude-sync: whether the shared repo's newest commit (${sha:0:8}) passed its tests has been unreadable for $(age_in_words "$(( ci_now - ci_since ))") ($state), which is longer than the $(duration_in_words "$ci_window") this waits, so it was applied here WITHOUT a verdict. Nothing judged it but the hook suite this Mac runs after an apply. Check that gh is installed and logged in, because until it is, every commit arrives this way." >&2
-        if [ -z "$ci_told" ]; then
-          printf '%s %s\n' "$ci_since" "$ci_now" > "$CI_UNREADABLE_SINCE_FILE" 2>/dev/null || true
-          notify "applying shared config without a CI verdict: gh has been unreadable for $(age_in_words "$(( ci_now - ci_since ))")"
-        fi
         send_outcome ci-unreadable-expired
         return 1
       fi
@@ -5180,7 +5205,7 @@ do_forget_mac(){
 # ---------- verify: do the Macs actually hold the same config? (#23) ----------
 do_verify(){
   have_git || die "verify needs the shared repo's git history, and this run has git disabled."
-  local tree me host file mtree mtime others=0 agreed=0 behind=0 retired=0 line now unsent rc=0
+  local tree me host file mtree mtime others=0 agreed=0 behind=0 retired=0 line now unsent rc=0 agentline
   now="$(date +%s)"
   tree="$(payload_tree)"
   me="$(sync_hostname)"
@@ -5269,6 +5294,22 @@ do_verify(){
       behind=$((behind+1))
     fi
     echo "  $line"
+    # The launch agents that Mac published, said on its own line (claude-config#328). Separate from
+    # the marker verdict above because they are a different question: a Mac can hold exactly the
+    # right config and still be running a schedule that stopped being current a month ago, and
+    # folding the two into one line would make each read as a comment on the other.
+    #
+    # A marker with NO agents field is one published before this existed, and nothing is said about
+    # it: claiming it is fine would be a claim about something nobody measured, and claiming it is
+    # unknown on every Mac for the first day would be noise nobody can act on (L98, L223). Every
+    # Mac republishes on its next sync, so the gap closes on its own.
+    agentline="$(git -C "$SYNC_REPO" cat-file blob "$file:agents" 2>/dev/null || true)"
+    case "$agentline" in
+      stale\ *)
+        echo "  $host: launch agent(s) out of date there: ${agentline#stale }. That Mac is running a definition its own claude-sync no longer writes, so its automatic sending or receiving is on old settings. On that Mac: claude-sync install-autosync" ;;
+      none)
+        echo "  $host: launch agent(s) not installed there at all, so that Mac never sends or receives on its own and every sync of its config is one somebody typed. On that Mac: claude-sync install-autosync" ;;
+    esac
     others=$((others+1))
   done
 
@@ -5728,6 +5769,14 @@ report_automatic_jobs(){
     fi
   else
     echo "change watcher: not installed, so this Mac sends nothing instantly and has no gated automatic receive. Install it with: claude-sync install-autosync (it needs fswatch)"
+  fi
+  # Installed, but not what this copy of the script would write now (claude-config#328). Said here
+  # rather than in a report of its own, because this is the section about these same agents and one
+  # subject split across two places reads as two subjects (L118).
+  local stale_agents
+  stale_agents="$(agents_out_of_date | tr '\n' ' ' | sed 's/ $//')"
+  if [ -n "$stale_agents" ]; then
+    echo "launch agents out of date on this Mac: $stale_agents. What is installed is not what this copy of claude-sync would write now (a changed interval, a changed path to the script, a new key), and a launch agent is a COPY: it goes on running the old definition until it is rewritten. Rewrite them with: claude-sync install-autosync"
   fi
   return 0
 }
@@ -6527,13 +6576,38 @@ watch_tick(){
   SYNC_IN_WATCH=1 with_lock do_send
 }
 
-writeplist(){ # label  arg  extra-keys-xml
-  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+# THE LAUNCH AGENTS THIS SCRIPT WOULD WRITE, defined once (claude-config#328).
+#
+# They are written by install-autosync and by nothing else, so a change to what they should be
+# applies only where somebody re-runs that command. Nothing detected a Mac still running the
+# previous definition: #323 shortened the catch up timer from weekly to daily on 2026-09-07 and it
+# took effect on one Mac, with the other needing a manual step nothing would have reported if it
+# were skipped. The agents are what make syncing automatic at all, so a Mac quietly on an old
+# definition is the drift this tool exists to prevent, and it is invisible from the other side.
+#
+# One definition, read by the installer that WRITES them and by the check that asks whether what is
+# installed still matches. Two copies would drift and the check would then be about a definition
+# nobody installs (L41, L70).
+agent_labels(){ printf '%s\n' com.claudesync.timer com.claudesync.watch; }
+agent_arg(){
+  case "$1" in
+    *.timer) printf 'sync' ;;
+    *.watch) printf 'watch' ;;
+  esac
+}
+agent_extra(){
+  case "$1" in
+    *.timer) printf '  <key>StartInterval</key><integer>%s</integer>' "${SYNC_INTERVAL:-86400}" ;;
+    *.watch) printf '  <key>KeepAlive</key><true/>\n  <key>RunAtLoad</key><true/>' ;;
+  esac
+}
+
+# The plist text itself, so the check can ask for it without writing anything. An inspection that
+# wrote a file would be the defect in L206.
+plist_text(){ # label  arg  extra-keys-xml
   local self; self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-sync"
   local jobpath="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-  local plist="$agentdir/$1.plist"
-  mkdir -p "$agentdir"
-  cat > "$plist" <<PL
+  cat <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -6546,10 +6620,50 @@ $3
   <key>StandardErrorPath</key><string>$HOME/.claude-sync.log</string>
 </dict></plist>
 PL
+}
+
+writeplist(){ # label  arg  extra-keys-xml
+  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  local plist="$agentdir/$1.plist"
+  mkdir -p "$agentdir"
+  plist_text "$1" "$2" "$3" > "$plist"
   if [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ]; then
     launchctl unload "$plist" 2>/dev/null || true
     launchctl load "$plist"
   fi
+}
+
+# Which INSTALLED agents no longer match what this script would write. Only ones that exist: an
+# agent that was never installed is a different fact and report_automatic_jobs already makes it,
+# and reporting it here as well would say one thing twice in different words (L118).
+agents_out_of_date(){   # prints the labels that differ, one per line
+  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}" label plist want have
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    plist="$agentdir/$label.plist"
+    [ -f "$plist" ] || continue
+    want="$(plist_text "$label" "$(agent_arg "$label")" "$(agent_extra "$label")" 2>/dev/null)"
+    have="$(cat "$plist" 2>/dev/null)"
+    [ "$want" = "$have" ] || printf '%s\n' "$label"
+  done <<AGENT_LABELS
+$(agent_labels)
+AGENT_LABELS
+}
+
+# The one sentence this Mac publishes about its agents, so the OTHER Mac can report it. Three
+# states, because "none installed" and "installed but out of date" need different actions and one
+# word covering both would hide whichever it did not name (L11).
+agents_state(){
+  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}" stale any=0 label
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    [ -f "$agentdir/$label.plist" ] && any=1
+  done <<AGENT_LABELS
+$(agent_labels)
+AGENT_LABELS
+  [ "$any" = 1 ] || { printf 'none'; return 0; }
+  stale="$(agents_out_of_date | tr '\n' ' ' | sed 's/ $//')"
+  if [ -n "$stale" ]; then printf 'stale %s' "$stale"; else printf 'ok'; fi
 }
 
 # ---------- install-autosync: receive-timer + (if available) fswatch watcher ----------
@@ -6620,15 +6734,14 @@ do_install_autosync(){
     [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ] && { launchctl unload "$lp" 2>/dev/null || true; }
     rm -f "$lp"
   done
-  # receive-timer: two-way sync on a schedule (catches the other Mac's changes when idle)
-  writeplist com.claudesync.timer sync \
-    "  <key>StartInterval</key><integer>$interval</integer>"
+  # receive-timer: two-way sync on a schedule (catches the other Mac's changes when idle).
+  # The keys come from agent_extra, which is also what the out of date check compares against, so
+  # the installer and the check cannot disagree about what current means (claude-config#328).
+  writeplist com.claudesync.timer "$(agent_arg com.claudesync.timer)" "$(agent_extra com.claudesync.timer)"
   echo "Installed receive-timer: two-way sync every $(duration_in_words "$interval")."
   # change-watcher: instant push on any edit, however deep (needs fswatch)
   if command -v "${SYNC_FSWATCH:-fswatch}" >/dev/null 2>&1; then
-    writeplist com.claudesync.watch watch \
-      "  <key>KeepAlive</key><true/>
-  <key>RunAtLoad</key><true/>"
+    writeplist com.claudesync.watch "$(agent_arg com.claudesync.watch)" "$(printf '%b' "$(agent_extra com.claudesync.watch)")"
     echo "Installed change-watcher (fswatch): pushes instantly on any edit."
   else
     rm -f "$agentdir/com.claudesync.watch.plist"
