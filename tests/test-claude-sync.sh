@@ -4523,6 +4523,63 @@ out_v2="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY
 check "#23 verify names the other Mac"        "grep -q 'macB: up to date with the shared config' <<< \"\$out_v2\""
 check "#23 verify says the two Macs agree"    "grep -qi 'both Macs agree on the same config' <<< \"\$out_v2\""
 
+# UNSENT LOCAL CHANGES are not "up to date" (claude-config#320).
+#
+# On 2026-09-06 Dans-MacBook-Pro had gone two days without the watcher sending anything, while
+# three sessions wrote lessons into its ~/.claude. `status` said LESSONS.md differs; `verify` said
+# "This Mac: up to date with the shared config". Both were reading the same state and only one of
+# them was measuring what its sentence claims: verify compares the marker each Mac PUBLISHED
+# against the shared payload, which answers whether this Mac has RECEIVED the shared config and
+# says nothing about whether it has SENT its own (L11, L53). The reassuring half is the one a
+# person reads, so a Mac whose lessons were never sent read as healthy for two days.
+#
+# The positive case is proved in the same fixture immediately afterwards, or "it never says up to
+# date" would satisfy this just as well as the fix does (L159).
+mkskill "$VFHA/skills/v/SKILL.md" 'V-unsent, never synced'
+out_uns="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1 || true)"
+check "#320 verify does not call this Mac up to date while it holds unsent changes" \
+  "! grep -q 'This Mac (macA): up to date' <<< \"\$out_uns\""
+check "#320 verify says this Mac has changes it has not sent" \
+  "grep -qiE 'not (been )?sent' <<< \"\$out_uns\""
+check "#320 and names how many, so the sentence is a measurement rather than a warning" \
+  "grep -qE 'macA\\).*[0-9]+ (local )?change' <<< \"\$out_uns\""
+check "#320 verify exits non-zero while this Mac has unsent changes" \
+  "! CLAUDE_HOME='$VFHA' SYNC_REPO='$VFA' SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash '$SCRIPT' verify >/dev/null 2>&1"
+# The other Mac is judged on what it published, which is all this Mac can know about it, so its
+# line must be untouched by any of the above.
+check "#320 the other Mac is still judged on what it published" \
+  "grep -q 'macB: up to date with the shared config' <<< \"\$out_uns\""
+# The control: send it, and the same command says up to date again. Without this, a verify that
+# had simply stopped saying "up to date" at all would pass every assertion above.
+CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$VFHB" SYNC_REPO="$VFR" SYNC_HOSTNAME=macB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_sent="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1 || true)"
+check "#320 once it is sent, the same Mac reads as up to date again" \
+  "grep -q 'This Mac (macA): up to date' <<< \"\$out_sent\""
+check "#320 and the unsent notice is gone" \
+  "! grep -qiE 'not (been )?sent' <<< \"\$out_sent\""
+
+# A difference of TIMESTAMP ONLY is not unsent work (claude-config#320). After any apply it is the
+# state of nearly every file, because the apply rewrites them: measured on Daniels-MacBook-Pro-2 on
+# 2026-09-07, minutes after a pull, 159 files itemized `.f..t` with identical content on both
+# sides. Counted as
+# unsent, verify would go red the moment anybody pulled and stay red, and a check that can only
+# ever say no stops being read, which is the same failure #26 exists for.
+#
+# status is asserted FIRST, because it proves the fixture actually produced a difference for rsync
+# to report. Without that, the verify assertion under it is satisfied by a touch that did nothing
+# at all (L159).
+touch "$VFHA/skills/v/SKILL.md"
+out_touch_st="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#320 status still names that file, with the timestamp only flags rsync gave it" \
+  "grep -qE 'skills: \\.f\\.\\.t[^ ]* v/SKILL\\.md' <<< \"\$out_touch_st\""
+out_touch="$(CLAUDE_HOME="$VFHA" SYNC_REPO="$VFA" SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash "$SCRIPT" verify 2>&1 || true)"
+check "#320 a timestamp only difference is not counted as unsent work" \
+  "grep -q 'This Mac (macA): up to date' <<< \"\$out_touch\""
+check "#320 verify exits zero on a timestamp only difference" \
+  "CLAUDE_HOME='$VFHA' SYNC_REPO='$VFA' SYNC_HOSTNAME=macA SYNC_NO_NOTIFY=1 bash '$SCRIPT' verify >/dev/null 2>&1"
+
 # A changes the config and publishes. B has not applied it, so B is BEHIND, and verify must
 # say so by name rather than reporting a clean bill of health.
 mkskill "$VFHA/skills/v/SKILL.md" 'V2 changed on A'
@@ -8500,6 +8557,41 @@ printf -- '- **L4. A late lesson still reaches the index.** body\n  (someproject
 CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
 check "#63 a hand edit to the index is overwritten"  "! grep -q 'typed into the index by hand' '$LXH/LESSONS-INDEX.md'"
 check "#63 a new lesson appears without touching it" "grep -q 'L4. A late lesson still reaches the index.' '$LXH/LESSONS-INDEX.md'"
+# A LESSON WRITTEN WHILE THE SEND CANNOT GO OUT still reaches the index (claude-config#320).
+#
+# The index was derived only from stage_local_to_payload, which do_send reaches only after two
+# gates: a watcher hold, and this Mac being behind the shared repo. On 2026-09-06 Dans-MacBook-Pro
+# had been behind for two days, so every watcher fire took the behind branch and returned before
+# staging. Three sessions wrote lessons into its LESSONS.md in that window and none of them reached
+# LESSONS-INDEX.md, which is the file CLAUDE.md actually imports, so every session on both Macs
+# loaded an index missing them and nothing said so.
+#
+# The index is a purely local derivation of the local LESSONS.md. Whether a send is allowed has
+# nothing to do with whether it is correct, so it is derived before the gates rather than after.
+#
+# The skip is asserted FIRST. Without it this passes on a fixture where the send went through
+# normally, which is the case that always worked (L159).
+IXB="$WORK/idx-bare.git"; git init -q --bare -b main "$IXB"
+IXA="$WORK/idx-repoA"; git clone -q "$IXB" "$IXA" 2>/dev/null
+IXHA="$WORK/idx-homeA"; mkdir -p "$IXHA"
+echo '{"hooks":{}}' > "$IXHA/settings.json"
+printf '# rules\n@LESSONS-INDEX.md\n' > "$IXHA/CLAUDE.md"
+printf '# Build-time lessons\n\n## Proof over green\n\n- **L1. The first lesson.** body\n  (someproject#21)\n' > "$IXHA/LESSONS.md"
+CLAUDE_HOME="$IXHA" SYNC_REPO="$IXA" SYNC_HOSTNAME=macIA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+IXR="$WORK/idx-repoB"; git clone -q "$IXB" "$IXR" 2>/dev/null
+IXHB="$WORK/idx-homeB"; mkdir -p "$IXHB/skills/s"
+echo '{"hooks":{}}' > "$IXHB/settings.json"
+CLAUDE_HOME="$IXHB" SYNC_REPO="$IXR" SYNC_HOSTNAME=macIB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+mkskill "$IXHB/skills/s/SKILL.md" 'moved on by the other Mac'
+CLAUDE_HOME="$IXHB" SYNC_REPO="$IXR" SYNC_HOSTNAME=macIB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+printf -- '- **L2. A lesson written while this Mac was behind still reaches the index.** body\n  (someproject#22)\n' >> "$IXHA/LESSONS.md"
+out_ix="$(CLAUDE_HOME="$IXHA" SYNC_REPO="$IXA" SYNC_HOSTNAME=macIA SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1 || true)"
+dbg "send while behind: $out_ix"
+check "#320 the send really did stop at the behind gate, so this is the case that was broken" \
+  "grep -q 'skipped sending' <<< \"\$out_ix\""
+check "#320 a lesson written while the send cannot go out still reaches the index" \
+  "grep -q 'L2. A lesson written while this Mac was behind still reaches the index.' '$IXHA/LESSONS-INDEX.md'"
+
 # A no-op run must not rewrite it: CLAUDE.md and its imports are watched, and rewriting one on
 # every sync re-triggers the watcher for ever.
 lx_sum_before="$(cksum < "$LXH/LESSONS-INDEX.md")"

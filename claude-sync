@@ -4723,6 +4723,26 @@ send_outcome(){   # $1 = sent|nothing|behind|held|failed
 
 do_send(){
   local hold_left
+  # The lessons index is derived BEFORE either gate below (claude-config#320).
+  #
+  # It used to be derived only inside stage_local_to_payload, which this function reaches only
+  # after both gates have let it past. On 2026-09-06 Dans-MacBook-Pro had been behind the shared
+  # repo for two days, so every watcher fire took the `behind` branch and returned here, and the
+  # three sessions that wrote lessons into its LESSONS.md in that window never reached the
+  # derivation. LESSONS-INDEX.md is the file CLAUDE.md imports, so every session on both Macs was
+  # loading an index missing those lessons, and nothing said so.
+  #
+  # The index is a purely LOCAL derivation of the LOCAL lessons file, into this Mac's own
+  # ~/.claude. It touches neither the payload nor the repo, so whether a send is ALLOWED has
+  # nothing to do with whether the index is correct, and gating one on the other was the defect.
+  # A held or behind Mac at least loads its own lessons now.
+  #
+  # It runs again inside stage_local_to_payload on a send that does go through, which is where it
+  # has to be for do_push, and that second derivation is silent: it rewrites nothing (the file
+  # already matches) and its reports speak only when a lesson is malformed. Measured on
+  # 2026-09-07, a full pass over the 6294 line LESSONS.md costs about 0.15s, against a send that
+  # already checksums the whole config tree.
+  write_lesson_index "$CLAUDE_HOME"
   # #262: the automatic send is what takes a deliberate commit's message and cancels its CI run,
   # so it is the one a hold stops. An explicit `claude-sync send` is unaffected.
   if [ "${SYNC_IN_WATCH:-0}" = "1" ] && hold_left="$(hold_remaining)"; then
@@ -4875,11 +4895,26 @@ do_forget_mac(){
 # ---------- verify: do the Macs actually hold the same config? (#23) ----------
 do_verify(){
   have_git || die "verify needs the shared repo's git history, and this run has git disabled."
-  local tree me host file mtree mtime others=0 agreed=0 behind=0 retired=0 line now
+  local tree me host file mtree mtime others=0 agreed=0 behind=0 retired=0 line now unsent rc=0
   now="$(date +%s)"
   tree="$(payload_tree)"
   me="$(sync_hostname)"
   [ -n "$tree" ] || die "the shared repo has no payload yet, so there is nothing to compare."
+
+  # What this Mac holds that the shared config does NOT (claude-config#320).
+  #
+  # Everything below reads the marker each Mac published, which records the payload tree it
+  # APPLIED. That answers whether a Mac has received the shared config and says nothing whatever
+  # about whether it has sent its own, so a Mac whose watcher had stopped sending read as "up to
+  # date" for two days on 2026-09-06 while three sessions' lessons sat unsent on it, and `status`
+  # was saying LESSONS.md differs the whole time. Two checks over one state that answer differently
+  # means at least one is not measuring what its sentence claims, and the reassuring one is the one
+  # a person reads (L11, L53).
+  #
+  # Measured through the SAME enumerator `status` lists from, so the two cannot drift into
+  # disagreeing again (L70). Only for THIS Mac: what another Mac holds locally is not visible from
+  # here, and its line must go on claiming no more than the marker it published supports.
+  unsent="$(local_unsent_count)"
 
   fetch_state_refs
   for file in $(git -C "$SYNC_REPO" for-each-ref --format='%(refname)' "$STATE_REF_PREFIX" 2>/dev/null || true); do
@@ -4891,8 +4926,17 @@ do_verify(){
     mtime="${line##* }"
     case "$mtime" in ''|*[!0-9]*) mtime="" ;; esac
     if [ "$mtree" = "$tree" ]; then
-      [ "$host" = "$me" ] && line="This Mac ($host): up to date with the shared config" \
-                          || line="$host: up to date with the shared config"
+      # `agreed` still counts this Mac, because it HAS applied the shared config and that is the
+      # question this counter asks. The unsent work is a separate condition with its own verdict
+      # below, rather than being folded into agreement, so neither answer has to stand in for the
+      # other (L53).
+      if [ "$host" = "$me" ] && [ "$unsent" -gt 0 ]; then
+        line="This Mac ($host): holds the shared config, but $unsent local change(s) have NOT been sent, so no other Mac can have them"
+      elif [ "$host" = "$me" ]; then
+        line="This Mac ($host): up to date with the shared config"
+      else
+        line="$host: up to date with the shared config"
+      fi
       agreed=$((agreed+1))
     elif [ "$host" != "$me" ] && [ -n "$mtime" ] \
          && [ "$((now - mtime))" -ge "${SYNC_MAC_RETIRE_AFTER:-5184000}" ] 2>/dev/null; then
@@ -4950,6 +4994,14 @@ do_verify(){
     return 1
   fi
   [ "$retired" -gt 0 ] && echo "  ($retired Mac(s) reported as retired above are not counted in the verdict)"
+  # Its own message and its own remedy, because "the other Mac has not applied yet" and "this Mac
+  # never sent" need different actions and one sentence covering both would hide whichever it did
+  # not name (L11). It does not suppress the marker verdict beneath it: both facts are true, and a
+  # reader needs to see which of them applies.
+  if [ "$unsent" -gt 0 ]; then
+    rc=1
+    echo "claude-sync: this Mac holds $unsent change(s) the shared config does not have, so the markers below cannot mean the Macs agree on them. Run 'claude-sync status' to see what, then 'claude-sync sync' to send it." >&2
+  fi
   if [ "$behind" -eq 0 ]; then
     # One Mac agreeing with itself is agreement with nobody, and saying "agree" there is the
     # same vacuous success the no-markers case above exists to prevent. Found on the real
@@ -4963,13 +5015,25 @@ do_verify(){
       echo "This Mac is up to date, but only this Mac has published what it applied, so whether the Macs agree cannot be answered yet. Run a sync on the other Mac, then verify again." >&2
       return 1
     fi
+    # The word "Verified" is a clean bill of health and is spoken only when there is one to give.
+    # With work still unsent the markers genuinely do agree, so the same fact is stated as an
+    # observation about the markers rather than as a verdict about the config: a reader who sees
+    # "Verified" stops reading, and the sentence they would have stopped before is the one telling
+    # them their lessons never left this Mac (L11, L152).
+    local marker_fact
     if [ "$agreed" -le 1 ]; then
-      echo "Verified: this Mac is up to date, and the only other Mac on record is retired."
-      return 0
+      marker_fact="this Mac is up to date, and the only other Mac on record is retired"
+    elif [ "$agreed" -eq 2 ]; then
+      marker_fact="both Macs agree on the same config"
+    else
+      marker_fact="all $agreed Macs agree on the same config"
     fi
-    if [ "$agreed" -eq 2 ]; then echo "Verified: both Macs agree on the same config."
-    else echo "Verified: all $agreed Macs agree on the same config."; fi
-    return 0
+    if [ "$rc" -eq 0 ]; then
+      echo "Verified: ${marker_fact}."
+    else
+      echo "  (on what each Mac has applied, ${marker_fact}; the unsent changes above are the outstanding part)"
+    fi
+    return "$rc"
   fi
   echo "claude-sync: $behind of $others Mac(s) have not applied the current config. Run 'claude-sync pull' on each one named above." >&2
   return 1
@@ -5354,12 +5418,26 @@ report_automatic_jobs(){
   return 0
 }
 
-do_status(){
-  local line rel
-  local DRIFT_EXPANSIONS=0
-  if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
-  report_sync_times
-  echo "--- local config vs repo payload (dry run) ---"
+# Every path where THIS Mac's ~/.claude differs from the payload it would send, as tagged records
+# on stdout, one per line: a tab separated TAG and text.
+#
+#   note      something the reader needs before believing the lines under it
+#   diff      a real difference inside a mirrored directory
+#   timeonly  a difference of timestamp alone, which a send carries nothing for
+#   expanded  a file differing ONLY where the payload holds the home path token, which is the
+#             substitution working rather than drift
+#   topdiff   a real difference in one of the top level files
+#
+# It exists because two commands ask this same question and used to answer it in different places
+# (claude-config#320). `status` listed the differences; `verify` did not look at all, and said "up
+# to date" on the strength of a marker that only records what this Mac has RECEIVED. Two
+# implementations of one question drift, and the drift is invisible because each reads correct on
+# its own (L70, L263), so there is one enumerator and both callers read it.
+#
+# It only PRINTS. Nothing here creates a directory or touches the payload, because `status` and
+# `verify` are both inspections and a tool named like one must not write (L206).
+local_vs_payload_records(){
+  local line rel d ex f flags rest
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
     # Said outright, because the two rsyncs this Mac might have disagree about it
@@ -5369,14 +5447,10 @@ do_status(){
     # CI runner have, marks the same files `>f+++++++`, newly created. A whole directory that is
     # new in the payload is exactly the case where every file in it is new, and that is the run
     # where the lines below can describe them as unchanged.
-    #
-    # status does NOT create the directory to make rsync happy. It is an inspection command, and
-    # creating anything in the payload from it is the defect in L206. So it says what it knows
-    # instead, which it can answer without reimplementing rsync's itemize output beside it (L107).
     if [ ! -d "$PAYLOAD/$d" ]; then
-      echo "$d: the payload has no $d yet, so EVERY file under $CLAUDE_HOME/$d is new. The lines below may show them as unchanged: the rsync on this Mac itemizes files under a missing destination that way."
+      printf 'note\t%s\n' "$d: the payload has no $d yet, so EVERY file under $CLAUDE_HOME/$d is new. The lines below may show them as unchanged: the rsync on this Mac itemizes files under a missing destination that way."
     fi
-    local ex=""; [ "$d" = skills ] && ex="$(skill_excludes)"
+    ex=""; [ "$d" = skills ] && ex="$(skill_excludes)"
     # -i is load-bearing: plain `rsync -an` prints NOTHING whatever differs, so
     # this whole section used to be decorative and status always read clean.
     # -c because -a quick-checks on size plus mtime, and a config edit that
@@ -5390,30 +5464,83 @@ do_status(){
     # (claude-config#313). rsync compares bytes and cannot know about the substitution, so the
     # answer comes from payload_local_view, which is the same view the apply uses. Only the files
     # rsync already flagged are re-read, so the ordinary case, where nothing differs, costs nothing
-    # extra, and every other kind of difference is still printed exactly as before.
+    # extra, and every other kind of difference is still reported exactly as before.
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       # rsync -i prints the itemize flags, one space, then the path. A `*deleting` line has more
       # than one space, so its "path" keeps a leading space, fails the file test below and is
-      # printed unchanged, which is what a deletion should do.
+      # reported unchanged, which is what a deletion should do.
       rel="${line#* }"
       if payload_differs_only_by_home_path "$d/$rel"; then
-        DRIFT_EXPANSIONS=$(( DRIFT_EXPANSIONS + 1 ))
+        printf 'expanded\t%s\n' "$d/$rel"
         continue
       fi
-      echo "$d: $line"
+      # A difference of TIMESTAMP ONLY is not a change the shared config lacks, and after any
+      # apply it is the state of nearly every file, because the apply rewrites them. Measured on
+      # Daniels-MacBook-Pro-2 on 2026-09-07, minutes after a pull: 159 files itemized `.f..t`,
+      # content identical on both sides, nothing for a send to carry, since git records no mtime.
+      # Counted as unsent they would leave verify permanently red the moment anybody pulled, and a
+      # check that can only ever say no stops being read, which is the same failure #26 is about.
+      #
+      # Still LISTED by status, exactly as before: status describes what a push would touch, and a
+      # push does restamp them. Only the count that decides verify's verdict leaves them out, which
+      # is the difference between the two questions rather than a disagreement about the answer.
+      # Asked as a pattern rather than by substituting the harmless characters away and testing
+      # for blank, which test-blank-check-cost.sh bans in this repo.
+      flags="${line%% *}"; rest="${flags:2}"
+      if [ "${flags:0:1}" = "." ]; then
+        case "$rest" in
+          *[!.t]*) ;;                                          # something other than the time differs
+          *) printf 'timeonly\t%s\n' "$d: $line"; continue ;;
+        esac
+      fi
+      printf 'diff\t%s\n' "$d: $line"
     done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' || true)
   done
+  for f in $(top_files_in "$CLAUDE_HOME"); do
+    [ -f "$CLAUDE_HOME/$f" ] || continue
+    cmp -s "$CLAUDE_HOME/$f" "$PAYLOAD/$f" 2>/dev/null || printf 'topdiff\t%s\n' "$f: differs"
+  done
+}
+
+# How many REAL differences that enumerator found: what a send would carry. Home path expansions
+# are excluded because they are the substitution working, and the notices are not differences at
+# all, so counting every line would report a healthy Mac as holding unsent work.
+local_unsent_count(){
+  local n
+  n="$(local_vs_payload_records | grep -cE '^(diff|topdiff)\t' || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+do_status(){
+  local line tag text
+  local DRIFT_EXPANSIONS=0
+  if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
+  report_sync_times
+  echo "--- local config vs repo payload (dry run) ---"
+  local RECORDS; RECORDS="$(local_vs_payload_records)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    tag="${line%%$'\t'*}"; text="${line#*$'\t'}"
+    case "$tag" in
+      note|diff|timeonly) echo "$text" ;;
+      expanded)  DRIFT_EXPANSIONS=$(( DRIFT_EXPANSIONS + 1 )) ;;
+    esac
+  done <<< "$RECORDS"
   # COUNTED and said, never silently dropped. A section that quietly stops naming files cannot be
   # told from one that has stopped looking (L98, L11), and the number is what makes a change in it
   # visible without anybody having to remember the old one.
   if [ "$DRIFT_EXPANSIONS" -gt 0 ]; then
     echo "$DRIFT_EXPANSIONS file(s) differ from the payload only where it holds $TOKEN and this Mac holds its own home path, which is that substitution working. They are not drift and are not listed above."
   fi
-  for f in $(top_files_in "$CLAUDE_HOME"); do
-    [ -f "$CLAUDE_HOME/$f" ] || continue
-    cmp -s "$CLAUDE_HOME/$f" "$PAYLOAD/$f" 2>/dev/null || echo "$f: differs"
-  done
+  # After the expansions line, exactly where it was before this became one enumerator: the top
+  # level files are reported last.
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    tag="${line%%$'\t'*}"; text="${line#*$'\t'}"
+    [ "$tag" = topdiff ] && echo "$text"
+  done <<< "$RECORDS"
   report_user_scope_plugins
   report_duplicate_plugin_skills || true
   report_conflict_copies
@@ -5424,6 +5551,7 @@ do_status(){
   report_stray_processes
   report_scratch_leftovers
 }
+
 
 # The process table, behind one seam so a test never reads or reports what happens to be running
 # on the real machine (L2). SYNC_PS_FIXTURE holds the same four fields in the same order.
