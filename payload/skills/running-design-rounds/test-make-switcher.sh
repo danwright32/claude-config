@@ -230,5 +230,7 @@ fi
 
 echo
 echo "passed: $pass, failed: $fail"
-printf 'SUITE-RESULT passed=%s failed=%s unmeasured=%s\n' "$pass" "$fail" "$unmeasured"
+[[ "$unmeasured" -gt 0 ]] && echo "UNMEASURED-SECTIONS $unmeasured"
+# The runner parses this exact shape, so nothing else goes on this line.
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
