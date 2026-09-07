@@ -2125,6 +2125,19 @@ window is a count rather than a boundary.
   back either. Noticed only because the snapshot's date was checked while writing up something
   else; the repair itself looked complete and correct)
 
+- **L615. Write a RESTRICTION's condition as the reason for restricting, never as a broader
+  property that happens to include it**, because the extra records lose an ability nobody meant
+  to take, and unlike a too broad exemption, which merely fails to protect, a too broad
+  restriction leaves no route out at all.
+  (slate#2006: a bucket's code, name and criteria were made read only because a seeder rewrites
+  them on every run, and the condition used was "this bucket already exists". The seeder writes
+  only the sixty codes of the XBC matrix, so a bucket created by hand outside it was never going
+  to be overwritten, and it was frozen anyway. The create form is the only place those fields
+  can be set, so a typo made once became permanent and the only route out was SQL. L324 is the
+  same mistake in the other direction, where a stand down condition broader than its reason
+  silently disables a guard; that one fails permissively and this one fails restrictively, which
+  is why the person is left with nothing they can do)
+
 ## Honest failure
 
 - **L415. A screen that shows a change BEFORE the write lands owes a failure path that reverts it AND
@@ -3747,6 +3760,19 @@ window is a count rather than a boundary.
   philosophy is hidden from anyone who has not signed up, and 30 listed nurses had written one. The
   same change had correctly gated LAST NAMES on exactly this reasoning, so the rule was understood
   and applied to one field and not to its neighbour in the same clause)
+
+- **L616. A product whose access model is a fixed list of named users needs, from the first
+  migration, a maintainer identity that can sign in and act with attribution but is excluded from
+  the users' notifications and from their irreversible or money moving actions.** The builder always
+  has to test the live system, and a plain extra user row puts them on every alert and lets a test
+  reach the real world. Model the role in the schema and derive the notification recipients and the
+  money predicate from it, never from the row count.
+  (paperboi#54, 2026-09-06: PaperBoi was designed around exactly two people. Every people row
+  received every reminder and Slack mention, the reminder fan-out asserted a recipient count of
+  two, and anyone in the table could approve and email a payment instruction to Chase. Dan needed
+  to sign in to troubleshoot; adding him as a third row would have put him on every nag and let a
+  test send reach the bank. Slate had already grown an impersonation and dev preview layer for the
+  same need)
 
 ## UX completeness
 
