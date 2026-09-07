@@ -4648,6 +4648,7 @@ window is a count rather than a boundary.
 
 
 
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
@@ -6036,6 +6037,7 @@ window is a count rather than a boundary.
   with nothing anywhere reporting the difference. The same shape covers this repo's own git hooks,
   which are installed per checkout, and pg_cron jobs in bidspoke, where changing one setting mints
   a new job id rather than editing the running one)
+
 
 ## Test speed
 
