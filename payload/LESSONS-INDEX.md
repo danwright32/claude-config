@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 519 lessons.
+LESSONS.md, which is NOT loaded into the session. 535 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -147,6 +147,7 @@ to decide something: the body is where the failure it came from is described.
 - L412. A guard that DERIVES its search terms from live data inherits that data's own placeholder values (TBD, N/A, Unknown, Untitled), which identify nothing and are by construction ordinary words, so it matches plain text everywhere and its noise reads as the guard working rather than as a defect in the guard.
 - L413. A test runner that DISCOVERS its suites by glob, directory walk or naming convention can only invoke each one ONE way, so any suite taking a parameter runs for ever in its DEFAULT mode while its other cases never run at all, and its name still appears in every green report.
 - L414. A build product's mtime records when it was last WRITTEN, not when it was last built, and a source file's mtime records when it was last touched, not when it changed, so a freshness check comparing the two is red on a healthy tree in BOTH directions: a correct incremental build that relinks nothing leaves the product reading as permanently stale, and any generator that rewrites a source on every run leaves it permanently newer.
+- L614. A freshness window between a job that PRODUCES a measurement and a job that ACTS on it must be derived from the worst-case gap between their two schedules at the instant of use, and proved by a test that evaluates the predicate at the consumer's scheduled instant against a row stamped at the producer's.
 - L416. A provenance record naming the COMMIT an artifact was built from describes what was committed, never what was compiled, so an install or deploy made from a checkout with uncommitted changes records a truthful commit while the artifact contains code that exists in no commit anywhere.
 - L417. Turning on a platform security control imposes requirements on parts of the build you never touched, and the resulting refusal happens only when the artifact RUNS, so a configuration nothing ever launches stays broken while every check that reads the configuration is green.
 - L418. A count taken over a STORED field is a claim about the store rather than about what anybody sees, because a surface that recomputes that value at display time ignores what is stored, so measure through the predicate the surface itself uses or the number describes data nothing renders.
@@ -182,10 +183,12 @@ to decide something: the body is where the failure it came from is described.
 - L381. A directory kept in step by an automatic mirror has ONE authoritative side, and an edit made to the other side is not merged but silently reverted, with a new file there deleted outright because the mirror has never heard of it.
 - L559. A rule that decides whether a record COUNTS (an eligibility test, a visibility window, an exclusion) must be applied where the record is READ, never also where it is WRITTEN, because the read-time application is the visible one and reads as the whole enforcement while the write-time copy silently withholds the record itself, so correcting or reversing the rule later recovers nothing.
 - L392. A one time correction that skips rows because of a state that can END (hidden, suspended, deleted, archived, paused) does not exempt them, it postpones them, and nothing re runs when that state ends, so either correct them anyway or make leaving that state re apply the rule.
+- L601. A claim that there is NOTHING TO CORRECT, used to justify skipping a backfill or migration, must be measured across every field the change can touch, never only the one the change was framed around
 - L575. Deleting cached content must clear the marker that RECORDS that content's coverage (a sync token, a cursor, a window bound, a last refreshed stamp) in the same write
 - L592. Two datasets meant to be read TOGETHER must be retained on the same boundary
 - L595. A configuration value that can live in more than one store
 - L599. Repairing a monitor that compares against a STORED BASELINE makes its first run a report about the OUTAGE rather than about the present
+- L615. Write a RESTRICTION's condition as the reason for restricting, never as a broader property that happens to include it
 
 ## Honest failure
 
@@ -252,10 +255,12 @@ to decide something: the body is where the failure it came from is described.
 - L550. A component that omits a state because of an assumption about ALL its callers (every action redirects with an outcome, every parent supplies the context, every input was validated upstream) is correct only while that assumption holds, and nothing enforces it, so it breaks at the first caller that does not honour it.
 - L589. A relative time or magnitude ("4 hours before", "2 days late") must name what it is relative TO, and where that anchor can MOVE between records it must name WHICH anchor it used, because otherwise a perfectly truthful history reads as corrupt.
 - L593. Write an audit or provenance record at the LOWEST layer every invocation path shares, usually the database function or the store itself, never in the API route or the UI handler.
+- L612. In a shell running with `set -e`, a bare assignment from a command substitution carries that command's exit status, so a capture-then-classify step dies on the capture line, the captured output is never printed, and every branch of the classifier below it is unreachable dead code.
 
 ## State and identity
 
 - L339. A generator that seeds from system entropy when no seed is supplied produces a different artifact on every run, so any comparison between two versions of it measures the seed rather than the change, and any cache keyed on its inputs is silently wrong.
+- L602. A bound applied to ONE derived value (a clip to an active window, a cap, a cutoff) must be applied to every SIBLING derived from the same input
 - L14. Derived state re-derives on every input that feeds it, and every action updates every surface showing what it changed.
 - L15. Key everything on stable identifiers.
 - L421. A write that SKIPS because its destination already exists must verify that the destination holds what it expects, or a damaged or foreign file at that path is silently adopted as this write's own result and the record pointing at it carries a value nothing checked.
@@ -332,6 +337,7 @@ to decide something: the body is where the failure it came from is described.
 - L268. A BULK query over a protected collection leaks the WHOLE collection in its ERROR message
 - L360. A value redacted where an object is CONSTRUCTED is unredacted by any later step that ENRICHES that same object, because the gate lives in the construction and the enrichment runs afterwards with no viewer to consult. Give the enriching function the same gate as an argument rather than letting it be called ungated, since every call site reads as correct and only the field added last escapes.
 - L388. A search or filter that matches a field the viewer is not permitted to READ hands that field's content back one guess at a time through the result count, without ever displaying it, so every searchable field must be gated by the same predicate that decides whether it is shown.
+- L616. A product whose access model is a fixed list of named users needs, from the first migration, a maintainer identity that can sign in and act with attribution but is excluded from the users' notifications and from their irreversible or money moving actions.
 
 ## UX completeness
 
@@ -396,6 +402,15 @@ to decide something: the body is where the failure it came from is described.
 - L597. When markup carries BOTH outcomes of a choice a client script will make, the state rendered by default must be the one that is correct if that script never runs, because a script that fails is silent and leaves a page that still looks finished while showing the wrong half.
 - L408. A control that acts on the TOP of a shared stack (undo, back, revert last) is silently redirected to an unrelated earlier entry by any action that records nothing onto that stack, so either every action on the surface records one, or a non recording action must block the control rather than let it reach past.
 - L410. An automatic pass running beside a manual control hides every case the control's gate cannot express, so compare the two predicates case by case before removing the pass: whatever only the pass reached has no route at all once it goes.
+- L604. Copy that tells the reader what a CONTROL IS or what the SCREEN IS DOING (what this field holds, what this heading contains, what the banner will say, which system owns this value) is removed on sight by the person it was written for, while a DOMAIN term they cannot know (a lane name, a field called Grid, "84 (75 today)") is left unexplained beside it.
+- L605. A component that is correct in isolation names and explains itself, so a page COMPOSED of such components states every fact twice, and the duplication exists only in the composition, which is the one place nobody reads.
+- L606. UI ships unseen by two routes, a two row fixture and a green suite, and each reads as having looked.
+- L607. The browser's native control and the framework's default surface are what SHIP when nothing replaces them, and to the person they read as a piece of the operating system pasted into the product.
+- L608. A server action that returns void and revalidates a route has told the person nothing: the only sign it worked is a control somewhere on the page having changed, which is a difference they would have to be already looking for, and a refusal it computed has nowhere to land.
+- L609. Ordering a screen, a row or a menu by the shape of the DATA (the code's digit order, the column order the schema happens to have, the order the controls were written) puts what the reader scans for wherever it happens to fall, and gives the commonest value the heaviest treatment because it was styled without asking how often it appears.
+- L610. Collapsing content behind a disclosure, a toggle or a lazy fetch for tidiness, and rendering nothing on the healthy day because every element was conditional on something being wrong, both hide the thing the page exists to show, and a fully healthy page becomes indistinguishable from one that failed to render.
+- L611. A free text box for a value whose valid set already exists as a constant in code offers every typo as an option and reports none of them, because the value is matched downstream rather than validated, and the only symptom is a pool one person shorter.
+- L613. A shared component created to end N copies converts the one site in front of whoever built it and leaves the rest standing, and a superseded control is kept with its justification rewritten rather than deleted, so the product ends up half converted with the old thing arguing for itself in a docstring.
 
 ## External systems
 
@@ -523,6 +538,7 @@ to decide something: the body is where the failure it came from is described.
 - L379. Doing by hand what a tool normally does performs the visible change and silently omits the tool's OTHER writes, and the one most often omitted is the record some monitor reads, so the system ends up correct while the monitor is permanently wrong.
 - L390. In a two way sync, a file REGENERATED from one side rather than mirrored gets none of the protection the mirrored files beside it get, so a merge rule written for the receiving direction has to be written again for the sending one.
 - L409. Two primitives that provide the same visible exclusion or ownership (a file lock against a directory used as a mutex, a lease against a flag, a transaction against a hand rolled guard) routinely differ in what happens when their HOLDER DIES, because some are released by the kernel and some need cleanup that nobody runs after a crash, so swapping one for the other ships a regression no test that does not crash can see.
+- L600. A lock guarding a job the platform RETRIES must let the retry recognise its dead predecessor, because a retry arrives seconds after the kill carrying the same event identity, and a lock that can only expire by deadline refuses the platform's own recovery while reading as correct behaviour.
 
 ## Test speed
 
