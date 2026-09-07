@@ -5182,8 +5182,8 @@ if [ -d "$RBA/.git/rebase-merge" ] || [ -d "$RBA/.git/rebase-apply" ]; then
     # The identity git would sign the concluding commit with, which is the one thing a runner
     # differs from a Mac on and the one thing nothing else here reports. It answers, rather than
     # merely failing, and it changes nothing.
-    printf '    committer identity git would use: %s\n' "$(git -C "$RBA" var GIT_COMMITTER_IDENT 2>&1 | head -1)"
-    printf '    branch state: %s\n' "$(git -C "$RBA" status -sb 2>&1 | head -1)"
+    printf '    committer identity git would use: %s\n' "$(git -C "$RBA" var GIT_COMMITTER_IDENT 2>&1 | awk 'NR == 1')"
+    printf '    branch state: %s\n' "$(git -C "$RBA" status -sb 2>&1 | awk 'NR == 1')"
     printf '    unmerged paths: %s\n' "$(git -C "$RBA" diff --name-only --diff-filter=U 2>&1 | tr '\n' ' ')"
     printf '    todo left: %s\n' "$(cat "$RBA/.git/rebase-merge/git-rebase-todo" 2>/dev/null | grep -cEv '^[[:space:]]*(#|$)' || true)"
   } >&2
@@ -6586,10 +6586,13 @@ printf 'grep -cE %s^(a%sb)%st%s somefile\n' "'" "|" "$_gt_bs" "'" >  "$_GTP"
 printf 'grep -q "$(printf %s%st%s)x" somefile\n'  "'" "$_gt_bs" "'" >> "$_GTP"
 _gt_plant="$(_grepescapes "$_GTP")"
 check "#335 the plant carries both spellings" "[ \"\$(grep -c . '$_GTP')\" -eq 2 ]"
+# Matched with `case` rather than through a pipe into `grep -q`: a short circuiting consumer can
+# exit before its producer and kill it, and under this suite's pipefail that reports a failure that
+# never happened (L183).
 check "#335 a tab escape in a grep pattern is caught" \
-  "printf '%s' \"\$_gt_plant\" | grep -q ':1:'"
+  "case \"\$_gt_plant\" in *':1:'*) true ;; *) false ;; esac"
 check "#335 and the same tab, produced by printf, is not" \
-  "! printf '%s' \"\$_gt_plant\" | grep -q ':2:'"
+  "case \"\$_gt_plant\" in *':2:'*) false ;; *) true ;; esac"
 
 section "== the design record's numbers still match the code (#41) =="
 # DESIGN.md records every threshold as a MEASURED value with the reasoning behind it, and all of
