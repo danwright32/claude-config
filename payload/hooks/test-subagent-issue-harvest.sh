@@ -1607,6 +1607,99 @@ case "$pend_marked" in
     check "#222 and its own finding is not marked" ok ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A finding this session CANNOT settle is not shown to it for ever (claude-config#322).
+# ---------------------------------------------------------------------------
+# The two rules above collide. A clear files only the calling session's records (#222), which is
+# right, and a review shows another session's so they are not dropped, which is also right.
+# Together they mean the reviewing session is handed findings it can never settle, at every
+# review, for as long as the owning session does not run its own, and a session that has ended
+# never will. Seen in Slate on 2026-09-07: the same five findings at two consecutive reviews, the
+# documented clear line run verbatim twice, and both times "nothing was pending under the key(s)
+# this project reads, so nothing was filed", whose advice is to run the line that was just run.
+#
+# So a clear MARKS the records it had to leave as seen by this session. They are not filed, not
+# moved, and not changed for the session that owns them: they simply stop being re-rendered to a
+# reader who has already been shown them and has answered the picker.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+SEEN_A="$TMPROOT/seen-a.jsonl"; : > "$SEEN_A"
+SEEN_B="$TMPROOT/seen-b.jsonl"; : > "$SEEN_B"
+bash "$SPOOL_LIB" note "$REPO" "a finding owned by seen-session A" tester "$SEEN_A" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "a finding owned by seen-session B" tester "$SEEN_B" >/dev/null 2>&1
+# Both reach A's first review, or everything below is satisfied by a spool that never held B's
+# record (L159).
+seen_first="$(bash "$SPOOL_LIB" pending "$REPO" "$SEEN_A" 2>/dev/null)"
+case "$seen_first" in
+  *"owned by seen-session B"*) check "#322 the other session's finding reaches the first review" ok ;;
+  *) check "#322 the other session's finding reaches the first review" "pending=${seen_first:0:300}" ;;
+esac
+seen_clear1="$(bash "$SPOOL_LIB" clear "$REPO" "$SEEN_A" 2>&1)"
+seen_second="$(bash "$SPOOL_LIB" pending "$REPO" "$SEEN_A" 2>/dev/null)"
+case "$seen_second" in
+  *"owned by seen-session B"*)
+    check "#322 and does not come back at this session's next review" "pending=${seen_second:0:300}" ;;
+  *) check "#322 and does not come back at this session's next review" ok ;;
+esac
+# The exact sequence the issue reports: the reader runs the documented clear line a SECOND time,
+# with nothing of its own left and somebody else's records still under the key. That used to answer
+# "nothing was pending under the key(s) this project reads, so nothing was filed" and advise
+# running the line the findings file names, which is the line that had just been run: a remedy that
+# cannot change the state it names (L111).
+seen_clear2="$(bash "$SPOOL_LIB" clear "$REPO" "$SEEN_A" 2>&1)"
+case "$seen_clear2" in
+  *"nothing of THIS session's was pending"*"belong to other sessions"*)
+    check "#322 a second clear says whose records are actually under the key" ok ;;
+  *) check "#322 a second clear says whose records are actually under the key" "said=${seen_clear2:0:500}" ;;
+esac
+case "$seen_clear2" in
+  *"run the line the findings file names"*)
+    check "#322 and does not send the reader back to the command they just ran" "said=${seen_clear2:0:500}" ;;
+  *) check "#322 and does not send the reader back to the command they just ran" ok ;;
+esac
+# The empty-key message must not ALSO be printed: two sentences, one saying nothing was pending and
+# one saying whose it is, read as a contradiction over the same key (L11).
+case "$seen_clear2" in
+  *"nothing was pending under the key(s) this project reads"*)
+    check "#322 and does not also claim the key is empty" "said=${seen_clear2:0:500}" ;;
+  *) check "#322 and does not also claim the key is empty" ok ;;
+esac
+
+# The whole point of leaving it: its OWN session must still be offered it. Marking it seen by one
+# reader that could not judge it must not take it away from the reader that can (L116).
+seen_owner="$(bash "$SPOOL_LIB" pending "$REPO" "$SEEN_B" 2>/dev/null)"
+case "$seen_owner" in
+  *"owned by seen-session B"*) check "#322 while its own session is still offered it" ok ;;
+  *) check "#322 while its own session is still offered it" "pending=${seen_owner:0:300}" ;;
+esac
+# And it can still be settled there, or this has moved the loss rather than removed it.
+bash "$SPOOL_LIB" clear "$REPO" "$SEEN_B" >/dev/null 2>&1
+seen_arch="$(bash "$SPOOL_LIB" archive "$REPO" "$SEEN_B" 2>/dev/null)"
+case "$seen_arch" in
+  *"owned by seen-session B"*) check "#322 and its own session can still file it" ok ;;
+  *) check "#322 and its own session can still file it" "archive=${seen_arch:0:300}" ;;
+esac
+
+# The message. "nothing was pending under this key" and "records are pending under this key but
+# belong to another session" had the same words, and the advice given for the second was to run
+# the line that had just been run (L11).
+case "$seen_clear1" in
+  *"other sessions"*"not yours to settle"*)
+    check "#322 the clear says the records it left belong to other sessions" ok ;;
+  *) check "#322 the clear says the records it left belong to other sessions" "said=${seen_clear1:0:400}" ;;
+esac
+# It says HOW MANY, so the sentence is a measurement rather than a standing warning that reads the
+# same whether one record was left or forty (L11).
+case "$seen_clear1" in
+  *"left 1 record(s)"*) check "#322 and how many it left" ok ;;
+  *) check "#322 and how many it left" "said=${seen_clear1:0:400}" ;;
+esac
+case "$seen_clear1" in
+  *"run the line the findings file names"*)
+    check "#322 and does not answer with the step that was just taken" "said=${seen_clear1:0:400}" ;;
+  *) check "#322 and does not answer with the step that was just taken" ok ;;
+esac
+
 # A record with NO session cannot be claimed by anybody, so it is filed by whoever clears first,
 # which is what every record did before this existed. Leaving it pending for ever would be a worse
 # failure than the one being fixed (L526).

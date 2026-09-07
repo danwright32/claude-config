@@ -623,6 +623,7 @@ seen = set()
 errors = {}
 unparsed = []
 corrupt = 0
+already_seen = 0
 findings = []
 
 for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
@@ -639,6 +640,17 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         continue
     where = rec.get("agent") or "subagent"
     status = rec.get("status")
+    # ALREADY SHOWN TO THIS READER, AND NOT ITS TO SETTLE (claude-config#322). A clear stamps the
+    # records it had to leave behind with the session that was shown them, so a review is not
+    # handed the same unsettleable finding every time it runs. The record is untouched for the
+    # session that owns it: this only stops the repeat here.
+    #
+    # Counted rather than dropped, and the count is printed at the end only when something else was
+    # shown, so these can never be the reason a review fires. A notice carrying no action,
+    # delivered every turn, is what teaches a person to skip the whole panel (L36).
+    if READER_SESSION and READER_SESSION in (rec.get("seen_by") or []):
+        already_seen += 1
+        continue
     if status == "found":
         for f in rec.get("findings") or []:
             # Exact repeats only. A fold that normalised case, punctuation and
@@ -715,6 +727,14 @@ for reason, info in errors.items():
 # Deliberately NOT printed here. The raw text is kept in the record and reaches
 # the archive, so a prompt fix can still be informed by it; what stops is the
 # interruption at every review.
+
+# Only when the review is happening anyway: `shown` is what decides whether one fires at all, so
+# this deliberately does not increment it. A run whose whole content is records somebody else must
+# settle produces no review, which is the correct outcome (L36).
+if already_seen and shown:
+    print("(%d finding(s) here belong to other sessions and have already been shown to this one, "
+          "so they are not repeated. They stay pending for those sessions' own reviews.)"
+          % already_seen)
 
 if corrupt:
     shown += 1
@@ -890,13 +910,20 @@ PY_MUTED
 # came back at the next review there was no way to tell a clear that had missed them from a
 # harvest that had written them again.
 issue_spool_clear() { # clear <dir> [session-transcript] -> file the pending records
-  local key rc=0 total=0 n keys=""
+  local key rc=0 total=0 left_total=0 n nleft pair keys=""
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     keys="${keys:+$keys, }$key"
-    if n="$(issue_spool_clear_key "$key" "$(issue_spool_session_id "${2:-}")")"; then
+    if pair="$(issue_spool_clear_key "$key" "$(issue_spool_session_id "${2:-}")")"; then
+      n="${pair%% *}"; nleft="${pair##* }"
       [ -n "$n" ] && [ "$n" -gt 0 ] 2>/dev/null && total=$(( total + n ))
+      [ -n "$nleft" ] && [ "$nleft" -gt 0 ] 2>/dev/null && left_total=$(( left_total + nleft ))
     else
+      # The counts still matter on a failure: the records this could not file are named by the
+      # message clear_key already printed, and the ones it LEFT for other sessions are a separate
+      # fact that a failure elsewhere does not make untrue.
+      pair="${pair:-0 0}"; nleft="${pair##* }"
+      [ -n "$nleft" ] && [ "$nleft" -gt 0 ] 2>/dev/null && left_total=$(( left_total + nleft ))
       rc=1
     fi
   done <<CLEAR_KEYS
@@ -907,7 +934,22 @@ CLEAR_KEYS
   # empty answer printed over a failure, with the loud message just above it contradicted by the
   # reassuring one below (L10, L11). The failure has already named itself and where the records
   # are; what this must not do is add a sentence saying there were none.
-  if [ "$total" -eq 0 ] && [ "$rc" -eq 0 ]; then
+  # WHAT IT LEFT, and why it could not take it (claude-config#322). Said whether or not anything
+  # was filed, because "I filed three of yours" and "and four here are not yours to settle" are two
+  # different facts and the second is the one that explains why the same findings keep appearing.
+  # The records have been marked as seen by this session, so this review will not be handed them
+  # again; they are untouched for the session that owns them.
+  if [ "$left_total" -gt 0 ]; then
+    echo "issue-spool: left $left_total record(s) that belong to other sessions working in this project. A clear files only the calling session's, so these are not yours to settle: they stay for those sessions' own reviews. They are now marked as seen by this session, so they will not be shown here again."
+  fi
+  if [ "$total" -eq 0 ] && [ "$rc" -eq 0 ] && [ "$left_total" -gt 0 ]; then
+    # DISTINCT from "nothing was pending" (claude-config#322). Both used to read identically, and
+    # the second told the reader to run the line the findings file names, which is exactly the line
+    # they had just run: a remedy that cannot change the state it names (L11, L111). Everything
+    # under this key was somebody else's, which is not the same event as an empty key and does not
+    # share its advice.
+    echo "issue-spool: nothing of THIS session's was pending under the key(s) this project reads (${keys:-none}), so nothing was filed. That is not an empty spool and not a wrong key: the records under those key(s) belong to other sessions, and no command run here can settle them."
+  elif [ "$total" -eq 0 ] && [ "$rc" -eq 0 ]; then
     # AND WHETHER THE SPOOL IS STILL HOLDING SOMETHING THIS DID NOT MATCH (claude-config#287).
     # "nothing was pending" and "nothing was pending under the key I happened to compute" read
     # identically, and only the second was ever true in the failure this comes from: 138 records
@@ -936,11 +978,15 @@ CLEAR_KEYS
 
 # Prints the number of records it filed, so the caller can total them. Says nothing on stdout when
 # there was nothing to file; the caller reports that once for the whole run rather than once per key.
+# Prints TWO numbers, "<filed> <left for other sessions>". The second exists because a clear that
+# files nothing and a clear that files nothing because everything under this key belongs to another
+# session had the same answer, and the advice given for the second was to run the command that had
+# just been run (claude-config#322).
 issue_spool_clear_key() { # clear-key <key> [session id]
-  local file archive staged count mine others sid="${2:-}"
+  local file archive staged count mine others sid="${2:-}" left=0
   file="$(issue_spool_path_for_key "$1")"
   archive="$(issue_spool_archive_for_key "$1")"
-  [ -s "$file" ] || { printf '0'; return 0; }
+  [ -s "$file" ] || { printf '0 0'; return 0; }
   mkdir -p "$(issue_spool_root)" 2>/dev/null || return 1
   staged="${file}.filing.$$"
   mv "$file" "$staged" 2>/dev/null || return 1
@@ -971,12 +1017,34 @@ with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", e
             # An unreadable line has no session to read. It is filed rather than left pending for
             # ever, because nothing can ever claim it and the reader already reports it (L11).
             s = None
-        (o if (s and s != sid) else m).write(line)
+            rec = None
+        if s and s != sid:
+            # MARKED AS SEEN BY THIS SESSION (claude-config#322), and nothing else about it is
+            # touched: not filed, not moved, still owned by the session that produced it, still
+            # offered to that session'"'"'s own review. What stops is being handed the same
+            # unsettleable finding at every review here, which is what teaches a reader to skip
+            # the whole panel.
+            if isinstance(rec, dict):
+                seen = rec.get("seen_by")
+                if not isinstance(seen, list):
+                    seen = []
+                if sid not in seen:
+                    seen.append(sid)
+                rec["seen_by"] = seen
+                o.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            else:
+                o.write(line)
+        else:
+            m.write(line)
 ' "$staged" "$mine" "$others" 2>/dev/null || { mine=""; others=""; }
     if [ -n "$mine" ] && [ -f "$mine" ]; then
       # Appended, never written over: a record that arrived while this was going created a NEW
       # pending file, and replacing it would destroy exactly what the rename was protecting.
-      if [ -s "$others" ]; then cat "$others" >> "$file" 2>/dev/null || true; fi
+      if [ -s "$others" ]; then
+        left="$(grep -c . "$others" 2>/dev/null || true)"
+        case "$left" in ''|*[!0-9]*) left=0 ;; esac
+        cat "$others" >> "$file" 2>/dev/null || true
+      fi
       rm -f "$others" 2>/dev/null || true
       mv "$mine" "$staged" 2>/dev/null || true
     fi
@@ -986,7 +1054,7 @@ with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", e
   case "$count" in ''|*[!0-9]*) count=0 ;; esac
   if [ "$count" -eq 0 ]; then
     rm -f "$staged" 2>/dev/null || true
-    printf '0'
+    printf '0 %s' "$left"
     return 0
   fi
 
@@ -998,12 +1066,12 @@ with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", e
     # drain that failed in silence is how an archive stops being written to without anybody
     # noticing, which is half of what claude-config#260 reported (L98, L11).
     echo "issue-spool: could NOT append $count record(s) to $(basename "$archive"). They are not lost: they are in $staged, and nothing has been added to the archive. Move that file by hand once you know why." >&2
-    printf '0'
+    printf '0 %s' "$left"
     return 1
   fi
 
   issue_spool_cap_archive "$archive"
-  printf '%s' "$count"
+  printf '%s %s' "$count" "$left"
   return 0
 }
 
