@@ -14,3 +14,13 @@ Sources read by the research pass:
 7. How to Write PRDs for AI Coding Agents, David Haberlah: https://medium.com/@haberlah/how-to-write-prds-for-ai-coding-agents-d60d72efb797
 8. Write a PRD That Engineers Actually Read, Ideaplan: https://www.ideaplan.io/blog/how-to-write-a-prd
 9. Shreyas Doshi on PRDs: https://x.com/shreyas/status/1249039986386583553
+
+## The visual identity step (added 2026-09-07)
+
+"Settling the visual identity" does not come from the sources above; none of them covers it. It is generalized from one worked case, eleven design rounds on Ovation's main screen with Dan on 2026-09-06, recorded in that project's memory (`dan-judges-design-by-looking`) and in its `docs/design/README.md`.
+
+What is evidenced there: the round structure (render before asking, one variable per round, a switcher inside a full window, colour deferred until the structure is settled), Dan's objections turning out to be principles worth promoting into rules, and the committed self contained artifact with its decision record inside it.
+
+What is inferred rather than measured: the placement. The argument for putting it at the start of the build, rather than anywhere else, is only that a screen already built in the real framework makes every subsequent round cost a rebuild. Nobody has run the alternative.
+
+This step is also a partial concession to the one disagreement noted above. Cagan's position in source 1 is that a prototype should be the primary spec and documents go unread. Here the document stays primary for the problem, and a rendering becomes primary for the look.
