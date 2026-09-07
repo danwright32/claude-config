@@ -80,6 +80,7 @@ LAST_RECEIVED_FILE="$SYNC_REPO/.last-received"
 # The last verdict the post-pull hook suite reached, and the runner's own words with it
 # (claude-config#182). One file, not two: evidence kept somewhere with a retention schedule of its
 # own is gone before the investigation that needs it arrives (L202), and scratch is swept hourly.
+BEHIND_SKIPS_FILE="$SYNC_REPO/.behind-skips"   # sends in a row that could not go out (#323)
 HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
 # The last verdict each send-side suite reached, against a digest of the hooks it judged (#269).
 # Untracked and per clone, because it records what has been RUN here rather than what the config
@@ -655,13 +656,17 @@ with_lock(){   # $@ = the command to run while holding the lock
   # Commits already waiting when this run started (a hand commit to the tool, a run that died
   # between committing and pushing). Read BEFORE the command, because afterwards there is no way
   # to tell work that was waiting from work that never existed.
+  # Before anything else this run does, and after the lock, because concluding a rebase is a write
+  # to the repository and two runs doing it at once is the failure the lock exists for
+  # (claude-config#324). A run that finds a real conflict stops here rather than working around it.
+  recover_unfinished_rebase
   if have_git && unpushed_commits; then note_unsent_work; fi
   # In the trap, not on a line after the call: every failure in here leaves through die(), and a
   # run that pushed and then died on something later still sent what it sent.
   # The sweep rides HERE (claude-config#314), on the one trap every mutating command reaches and
   # no read-only one does, and last, so a run's own scratch is removed by the handlers before it
   # and cannot be counted as somebody else's leftover.
-  trap 'record_sent_if_shipped; release_lock; cleanup_applied_log; reap_scratch_if_due' EXIT
+  trap 'record_sent_if_shipped; clear_behind_skips_if_caught_up; release_lock; cleanup_applied_log; reap_scratch_if_due' EXIT
   "$@" || rc=$?
   release_lock
   # After release_lock, never before: this is where the minutes of hook suite behind the closing
@@ -3168,9 +3173,15 @@ publish_merged_rule_files(){
   fi
   stage_local_to_payload
   commit_if_changed || true
-  branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
-  if git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1; then
-    git -C "$SYNC_REPO" push -u origin "$branch" -q 2>/dev/null || true
+  # Not pushed at a GUESSED ref: with HEAD detached the old fallback pushed at the literal `main`
+  # while something else was checked out (claude-config#324). The commit is made either way and
+  # goes out on the next run, so saying so beats acting on a ref nobody chose.
+  if branch="$(sync_branch)"; then
+    if git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1; then
+      git -C "$SYNC_REPO" push -u origin "$branch" -q 2>/dev/null || true
+    fi
+  else
+    echo "claude-sync: the merged rule files were committed here but NOT pushed, because this clone has no branch checked out (HEAD is detached), so there is no ref to push them at. They go out on the next run once $SYNC_REPO is back on a branch." >&2
   fi
   # Read back from the COMMIT, never from the payload directory. A file sitting in the working tree
   # is exactly the state this issue is about: it looks published and is not (L3).
@@ -3466,7 +3477,14 @@ unapplied_remote_changes(){
   # direction. A commit made here and not yet pushed also makes HEAD differ from
   # origin, and reading THAT as behind wedges sending in the one state where
   # sending is exactly what resolves it.
-  branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+  # Fails CLOSED (L42). This decides whether it is safe to mirror upward, and mirroring while the
+  # clone is in a state this cannot read is exactly how the other Mac's work gets reverted. With
+  # HEAD detached the old fallback compared against `origin/main` regardless of what was checked
+  # out, which is a comparison against a ref nobody chose (claude-config#324).
+  if ! branch="$(sync_branch)"; then
+    echo "claude-sync: treating this Mac as behind, because this clone has no branch checked out (HEAD is detached) and there is no ref to compare against the shared repo. Nothing will be sent until $SYNC_REPO is back on a branch." >&2
+    return 0
+  fi
   upstream="$(git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" 2>/dev/null || true)"
   if [ -n "$upstream" ] && [ -n "$head" ]; then
     if ! git -C "$SYNC_REPO" merge-base --is-ancestor "$upstream" "$head" 2>/dev/null; then
@@ -3559,6 +3577,87 @@ unpushed_commits(){
 }
 
 # ---------- push ----------
+# ---------- an unfinished rebase a previous run left behind (claude-config#324) ----------
+#
+# The tool resolves conflicts INSIDE its own rebase, but nothing ever asked whether a PREVIOUS run
+# left one unfinished. Found on 2026-09-07: ~/claude-config-sync had been on `(no branch, rebasing
+# main)` since 2026-09-06 12:16, about 23 hours. The rebase had applied its commit and had an empty
+# todo with a clean tree, so it was nobody's conflict to resolve, just a rebase nobody concluded.
+# `main` still pointed at the pre rebase commit while HEAD held the rebased one, the clone stopped
+# exchanging config, and no run noticed.
+#
+# Three states, told apart because they need three different actions and one message covering them
+# would hide the two it did not name (L11):
+#   none         nothing in progress
+#   concludable  in progress, no work left in the todo, nothing unmerged: finishing it is safe
+#   conflict     in progress with paths still unmerged: only a person can settle that
+sync_rebase_dir(){   # prints the directory of an in progress rebase, or nothing
+  local d
+  for d in rebase-merge rebase-apply; do
+    d="$(git -C "$SYNC_REPO" rev-parse --git-path "$d" 2>/dev/null || true)"
+    [ -n "$d" ] || continue
+    case "$d" in /*) ;; *) d="$SYNC_REPO/$d" ;; esac
+    [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+  done
+  return 1
+}
+
+# The paths git is still waiting on. Named rather than counted, because "resolve the conflict" with
+# no path is an instruction somebody has to go and reconstruct (L80, L399).
+sync_rebase_conflict_paths(){
+  git -C "$SYNC_REPO" diff --name-only --diff-filter=U 2>/dev/null | sort -u
+}
+
+sync_rebase_state(){   # -> none | concludable | conflict
+  local dir todo left
+  dir="$(sync_rebase_dir)" || { printf 'none'; return 0; }
+  if [ -n "$(sync_rebase_conflict_paths)" ]; then printf 'conflict'; return 0; fi
+  # A todo still holding work is not this run's to finish either: continuing it would replay
+  # commits nobody here asked for. Comments and blank lines are not work.
+  todo="$dir/git-rebase-todo"
+  if [ -f "$todo" ]; then
+    left="$(grep -cEv '^[[:space:]]*(#|$)' "$todo" 2>/dev/null || true)"
+    case "$left" in ''|*[!0-9]*) left=0 ;; esac
+    [ "$left" -gt 0 ] && { printf 'conflict'; return 0; }
+  fi
+  printf 'concludable'
+}
+
+# Called once per mutating run, from with_lock, which is the one place every one of them passes
+# through and where the lock makes it safe to touch the repository at all.
+recover_unfinished_rebase(){
+  local state paths err
+  have_git || return 0
+  [ -d "$SYNC_REPO/.git" ] || [ -f "$SYNC_REPO/.git" ] || return 0
+  state="$(sync_rebase_state)"
+  case "$state" in
+    none) return 0 ;;
+    conflict)
+      paths="$(sync_rebase_conflict_paths | tr '\n' ' ' | sed 's/ $//')"
+      die "this clone was left mid rebase by an earlier run and is still waiting on a conflict in: ${paths:-a step of the rebase that has not been applied}. NOTHING was changed here. Settle it in $SYNC_REPO, then 'git -C $SYNC_REPO rebase --continue', or abandon that rebase with 'git -C $SYNC_REPO rebase --abort'. Until then this Mac cannot send or receive config." ;;
+  esac
+  # Concludable. GIT_EDITOR is disarmed because `rebase --continue` opens one for the commit
+  # message of a step it is finishing, and a run under launchd has no terminal to open it in: it
+  # would hang rather than fail, which is worse (L110).
+  if err="$(cd "$SYNC_REPO" && GIT_EDITOR=true git rebase --continue 2>&1)"; then
+    echo "claude-sync: concluded an unfinished rebase an earlier run left in this clone. There was no conflict outstanding and nothing to merge, only a rebase nobody finished, and it was holding this Mac off the shared config. Now on $(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo 'no branch')." >&2
+    notify "concluded an unfinished rebase in the sync clone"
+    return 0
+  fi
+  die "this clone was left mid rebase by an earlier run, and concluding that rebase failed, so NOTHING was changed here. git said: ${err:-<no output>}. Settle it in $SYNC_REPO by hand ('git -C $SYNC_REPO rebase --continue' or 'git -C $SYNC_REPO rebase --abort'). Until then this Mac cannot send or receive config."
+}
+
+# The branch this clone is on, or a REFUSAL (claude-config#324).
+#
+# Five call sites each read this as `symbolic-ref --short HEAD || echo main`. When HEAD is detached
+# that fallback hands every one of them the literal string `main` while something else is checked
+# out, so a run can commit, push or compare against a ref nobody chose, and nothing says so (L320).
+# One reader, and it answers "I cannot tell you" rather than guessing; each caller decides what to
+# do with that, because refusing a push and refusing a comparison are not the same decision.
+sync_branch(){   # prints the branch and returns 0, or prints nothing and returns 1
+  git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null
+}
+
 do_push(){
   stage_local_to_payload
   echo "Staged config into $PAYLOAD"
@@ -3834,7 +3933,23 @@ pull_from_repo_or_die(){
   # No origin configured is not a failure to report: a repo with no remote has nothing to receive,
   # and the offline paths (and the suite's local-only fixtures) drive the payload directly.
   git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1 || return 0
-  branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+  # THE STATE OF THE REPOSITORY, BEFORE ANY READING TAKEN FROM IT (claude-config#325). Mid rebase
+  # this reported "this Mac and the shared repo have diverged", with both counts true and the
+  # conclusion wrong: the ahead count came from the stranded branch label, the commit it named was
+  # already the rebased result of the ones it called missing, and the remedy it gave reads the
+  # branch through the same fallback that misreads a detached HEAD. A message may claim only what
+  # its check measured (L11), and an ahead/behind count measures nothing about whether the repo is
+  # in a normal state. A mutating run has already been through recover_unfinished_rebase by now, so
+  # what reaches here is a rebase that could not be concluded, or a read only caller.
+  case "$(sync_rebase_state)" in
+    concludable)
+      die "this clone is mid rebase, left unfinished by an earlier run, so NOTHING was received and nothing on this Mac was changed. This is not a divergence between the two Macs and 'claude-sync sync' is not the remedy: conclude it with 'git -C $SYNC_REPO rebase --continue', or abandon it with 'git -C $SYNC_REPO rebase --abort'." ;;
+    conflict)
+      die "this clone is mid rebase with a conflict still waiting in: $(sync_rebase_conflict_paths | tr '\n' ' ' | sed 's/ $//'). NOTHING was received and nothing on this Mac was changed. This is not a divergence between the two Macs: settle those paths in $SYNC_REPO, then 'git -C $SYNC_REPO rebase --continue', or abandon it with 'git -C $SYNC_REPO rebase --abort'." ;;
+  esac
+  if ! branch="$(sync_branch)"; then
+    die "this clone has no branch checked out (HEAD is detached) and no rebase is in progress, so there is no ref to receive onto. NOTHING was received and nothing on this Mac was changed. Put $SYNC_REPO back on a branch, then run this again."
+  fi
   # Fetched separately, and first, for two reasons. Reaching the remote is the only thing a pull
   # can prove about the network, and it is what the outage clock measures, so it is stamped the
   # moment it is observed rather than at the end of a run that can still fail for reasons saying
@@ -4241,7 +4356,10 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
   [ "${SYNC_IN_WATCH:-0}" = "1" ] || return 1
   have_git || return 1
   git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1 || return 1
-  branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+  # Does NOT block when it cannot read the branch, matching every other thing this gate cannot
+  # judge: the pull is what recovers a clone in a bad state, and a gate that blocks it would hold
+  # the remedy shut (L362).
+  branch="$(sync_branch)" || return 1
   sha="$(git -C "$SYNC_REPO" rev-parse "origin/$branch" 2>/dev/null || true)"
   [ -n "$sha" ] || return 1
   # Nothing to integrate means nothing to gate: this Mac's own work must never be held up by a
@@ -4303,7 +4421,10 @@ do_sync(){
   local derived_rc=0
   if have_git; then
     commit_if_changed && pushed=1
-    branch="$(git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+    # recover_unfinished_rebase has already run for this command, so a detached HEAD here is
+    # something else again, and guessing `main` would push at a ref nobody checked out
+    # (claude-config#324).
+    branch="$(sync_branch)" || die "this clone has no branch checked out (HEAD is detached), so there is no ref to send at or receive onto. Nothing was sent. Put $SYNC_REPO back on a branch, then run this again."
     before="$(repo_head)"
     # A failed FETCH means the repo could not be REACHED (offline, VPN, asleep, revoked
     # credentials). That used to be swallowed by `|| true`, so the pull below failed a
@@ -4721,6 +4842,73 @@ send_outcome(){   # $1 = sent|nothing|behind|held|failed
   return 0
 }
 
+# ---------- sends that could not go out because this Mac is behind (claude-config#323) ----------
+#
+# Being behind blocked the send, and nothing but the weekly receive timer could clear it, so the
+# state sustained itself: measured in ~/.claude-sync.log on 2026-09-07, 21 consecutive skips over
+# 46 hours, 26 commits behind, 15 lessons written here and unpublished. The only trace was log
+# lines nothing reads, and the notify that did exist fired on EVERY edit, which is the alert that
+# gets ignored (L36, L98, L51).
+#
+# So a send that finds itself behind now RECONCILES, which is the actual remedy, and only counts a
+# skip when that reconcile did not clear it. The count is the thing worth having: one failure is a
+# hiccup, twenty in a row is a Mac that has stopped syncing, and nothing could tell them apart.
+BEHIND_ESCALATE_AFTER="${SYNC_BEHIND_ESCALATE_AFTER:-3}"   # skips in a row before anybody is told
+BEHIND_ESCALATE_EVERY="${SYNC_BEHIND_ESCALATE_EVERY:-10}"  # and how often after that
+
+# The reconcile, behind a seam. do_sync is the real one and is what runs unless a test says
+# otherwise; the seam exists so the "it did not clear" path can be driven without a deliberately
+# broken remote, which would be testing git rather than this (L291).
+send_reconcile(){
+  if [ -n "${SYNC_SEND_RECONCILE:-}" ]; then bash -c "$SYNC_SEND_RECONCILE"; return $?; fi
+  do_sync
+}
+
+behind_skips_count(){
+  local n
+  [ -f "$BEHIND_SKIPS_FILE" ] || { printf '0'; return 0; }
+  n="$(awk 'NR==1{print $1}' "$BEHIND_SKIPS_FILE" 2>/dev/null)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+behind_skips_since(){   # the epoch of the FIRST skip in this run of them, or nothing
+  local t
+  [ -f "$BEHIND_SKIPS_FILE" ] || return 1
+  t="$(awk 'NR==1{print $2}' "$BEHIND_SKIPS_FILE" 2>/dev/null)"
+  case "$t" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$t"
+}
+
+# Cleared by anything that actually got through, or the count stops being a measurement and becomes
+# a standing accusation that only ever grows (L344).
+clear_behind_skips(){ rm -f "$BEHIND_SKIPS_FILE" 2>/dev/null || true; }
+
+# Read from the FINISHED state rather than from whichever code path happened to fix it, and wired
+# into the one trap every mutating command passes through, so a pull, a sync, a push and a send all
+# clear it without any of them having to remember to (L78, L370). A count nothing clears stops
+# being a measurement and becomes a standing accusation that only grows (L344).
+clear_behind_skips_if_caught_up(){
+  [ -f "$BEHIND_SKIPS_FILE" ] || return 0
+  have_git || return 0
+  unapplied_remote_changes || clear_behind_skips
+}
+
+record_behind_skip(){   # prints the sentence for the caller to say
+  local n first now
+  now="$(date +%s)"
+  n="$(behind_skips_count)"; n=$(( n + 1 ))
+  first="$(behind_skips_since || printf '%s' "$now")"
+  printf '%s %s %s\n' "$n" "$first" "$now" > "$BEHIND_SKIPS_FILE" 2>/dev/null || true
+  # Told once at the threshold, then rarely. Every edit was the old behaviour and is why the real
+  # one was ignored for two days.
+  if [ "$n" -eq "$BEHIND_ESCALATE_AFTER" ] \
+     || { [ "$n" -gt "$BEHIND_ESCALATE_AFTER" ] && [ "$(( n % BEHIND_ESCALATE_EVERY ))" -eq 0 ]; }; then
+    notify "config has not sent for $(age_in_words "$(( now - first ))"): $n sends skipped"
+  fi
+  printf 'skipped %s send(s) in a row now, the first %s ago' "$n" "$(age_in_words "$(( now - first ))")"
+}
+
 do_send(){
   local hold_left
   # The lessons index is derived BEFORE either gate below (claude-config#320).
@@ -4756,10 +4944,30 @@ do_send(){
   # the next edit sends normally. Deliberately not an error: the watcher fires on
   # every edit, and a failure per edit while behind would be noise, not signal.
   if unapplied_remote_changes; then
-    echo "claude-sync: skipped sending, because the shared repo holds changes this Mac has not applied yet and mirroring now would overwrite them. Run 'claude-sync pull' (or wait for the receive timer); the next edit sends normally." >&2
-    notify "send skipped: pull first, this Mac is behind"
-    send_outcome behind
-    return 0
+    # RECONCILE, rather than skip and hope something else does it (claude-config#323). A send
+    # cannot mirror upward while behind, because that reverts the other Mac, but the thing that
+    # makes it safe again is a pull, and this is the moment we know one is needed. do_sync pulls,
+    # applies and then sends, and it keeps every gate it already had: the CI gate still holds back
+    # an untested shared head, and a real content clash is still reported in its own words.
+    # In a SUBSHELL, and that is load-bearing rather than style. The reconcile is do_sync, and
+    # do_sync reports several conditions through die(), which calls exit: run inline, a reconcile
+    # that legitimately refuses (a real divergence, an unreachable repo) would end the whole send
+    # with it, and `|| true` catches nothing because there is no subshell for it to catch. Measured
+    # against the suite's own behind fixtures, that took out both the honest skip message and the
+    # skip count. A subshell exit does not fire the parent's EXIT trap, so the lock is still held
+    # and released exactly once.
+    ( send_reconcile ) || true
+    if ! unapplied_remote_changes; then
+      # It worked, and the send that follows is the one the edit asked for. Nothing is skipped, so
+      # nothing is counted. The trap clears the record itself, from the finished state.
+      :
+    else
+      # It did not clear. THIS is the state worth counting: one is a hiccup, twenty in a row is a
+      # Mac that has stopped syncing, and before this nothing could tell them apart.
+      echo "claude-sync: this edit was not sent, because the shared repo holds changes this Mac has not applied and the reconcile just attempted did not clear them ($(record_behind_skip)). Run 'claude-sync pull' and read what it says; until then nothing leaves this Mac." >&2
+      send_outcome behind
+      return 0
+    fi
   fi
   stage_local_to_payload
   have_git || return 0
@@ -5275,6 +5483,18 @@ OTHERCLONEEOF
 # listed somewhere a person actually looks, or it becomes the reason the sync stopped that nobody
 # can find (L523). Silent when there is none, like everything else here: status reports what needs
 # attention.
+# The count on screen, because a log line is not a report: the real one left 21 skips in
+# ~/.claude-sync.log and nothing anybody would look at (claude-config#323). Silent when there is
+# nothing to say, so it distinguishes something when it does speak (L36).
+report_behind_skips(){
+  local n first now
+  n="$(behind_skips_count)"
+  [ "$n" -gt 0 ] 2>/dev/null || return 0
+  now="$(date +%s)"
+  first="$(behind_skips_since || printf '%s' "$now")"
+  echo "sending is stuck: skipped $n send(s) in a row, the first $(age_in_words "$(( now - first ))") ago, because this Mac is behind the shared repo and the reconcile each one tried did not clear it. Run 'claude-sync pull' and read what it says."
+}
+
 report_watcher_hold(){
   local left
   if left="$(hold_remaining)"; then
@@ -5544,6 +5764,7 @@ do_status(){
   report_user_scope_plugins
   report_duplicate_plugin_skills || true
   report_conflict_copies
+  report_behind_skips
   report_watcher_hold
   report_automatic_jobs
   report_hook_suite_result
@@ -6284,7 +6505,13 @@ ensure_zsh_alias(){
 
 do_install_autosync(){
   local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
-  local interval="${SYNC_INTERVAL:-604800}"   # default weekly
+  # DAILY, not weekly (claude-config#323). This timer is the backstop for a Mac whose watcher is
+  # not sending: since #323 a send that finds itself behind reconciles on the spot, so the timer no
+  # longer has to be the only way out, but it is still the only thing that runs when the watcher is
+  # dead or the reconcile keeps being refused. A weekly catch up cannot bound a problem that
+  # appears daily (L51), and it cost 46 hours of silent drift on 2026-09-07. It takes effect on the
+  # next `claude-sync install-autosync`, since that is what writes the launch agent.
+  local interval="${SYNC_INTERVAL:-86400}"   # default daily
   local legacy lp
   # retire superseded agents (old monthly pull, old WatchPaths auto)
   for legacy in com.claudesync.pull com.claudesync.auto; do

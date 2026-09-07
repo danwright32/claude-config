@@ -16,3 +16,4 @@ state/
 .hook-tests
 .resolved/
 .send-suite-verdicts
+.behind-skips

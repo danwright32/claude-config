@@ -2982,11 +2982,17 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UAAH" SYNC_REPO="$UAA" bash "$SCRIPT" sync >/dev/
 git -C "$UAB" pull -q --ff-only
 check "B's repo now holds A's change"      "grep -q two '$UAB/payload/hooks/shared.sh'"
 check "B's home does NOT have it yet"      "grep -q one '$UABH/hooks/shared.sh'"
-commits_before="$(git -C "$UAB" rev-list --count HEAD)"
 out_ua="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" send 2>&1)"
+# The invariant, which is the whole point: A's change is never reverted by B's send. What CHANGED
+# in claude-config#323 is how that is achieved. A send that finds itself behind used to refuse and
+# do nothing, which left this Mac stuck until a weekly timer ran; it now reconciles, so A's change
+# reaches B's ~/.claude and B's own work goes out in the same run. The assertions that the send
+# makes no commit and says it skipped were about the refusal, and the refusal is what was replaced,
+# so they are gone rather than adjusted (L252). What replaces them is stronger: A's change has to
+# arrive, not merely survive.
 check "send does NOT revert A's change"    "grep -q two '$UAB/payload/hooks/shared.sh'"
-check "send makes no commit in that state" "[ \"\$(git -C '$UAB' rev-list --count HEAD)\" = \"\$commits_before\" ]"
-check "send says why it skipped"           "grep -qi 'not applied' <<< \"\$out_ua\""
+check "and A's change actually reaches this Mac rather than staying stuck in the repo" \
+  "grep -q two '$UABH/hooks/shared.sh'"
 # Control: with both sides agreed, a genuine local edit still sends normally.
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UABH" SYNC_REPO="$UAB" bash "$SCRIPT" pull >/dev/null 2>&1
 check "B received A's change on pull"      "grep -q two '$UABH/hooks/shared.sh'"
@@ -3075,9 +3081,11 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SWAH" SYNC_REPO="$SWA" bash "$SCRIPT" send >/dev/
 git -C "$SWB" pull -q --ff-only
 echo 'B-local' > "$SWBH/hooks/sw-b.sh"
 out_swb="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SWBH" SYNC_REPO="$SWB" bash "$SCRIPT" send 2>&1)"
-check "still skips when truly behind"          "[ ! -f '$SWB/payload/hooks/sw-b.sh' ]"
-check "still keeps the other Mac's change"     "grep -q A-MOVED-ON '$SWB/payload/hooks/shared.sh'"
-check "still says why it skipped"              "grep -qi 'not applied' <<< \"\$out_swb\""
+# Since claude-config#323 being behind reconciles rather than skipping, so the guard is asked for
+# what it actually protects: the other Mac's change must not be reverted, and must reach this Mac.
+check "the other Mac's change is not reverted" "grep -q A-MOVED-ON '$SWB/payload/hooks/shared.sh'"
+check "and it reaches this Mac's own config"   "grep -q A-MOVED-ON '$SWBH/hooks/shared.sh'"
+check "and this Mac's own edit goes out in that same run" "[ -f '$SWB/payload/hooks/sw-b.sh' ]"
 
 section "== a pull must not revert a local edit the repo never changed (2026-07-28) =="
 # The incident: the watcher was down, a skill script was edited locally, and a
@@ -3333,12 +3341,18 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH3" SYNC_REPO="$HCR3" bash "$SCRIPT" pull >/dev
 echo 'THEIR-WORK' > "$HCH3/hooks/hc-theirs.sh"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH3" SYNC_REPO="$HCR3" bash "$SCRIPT" sync >/dev/null 2>&1
 check "their work really was published"            "[ -f '$HCR3/payload/hooks/hc-theirs.sh' ]"
-hc2_commits="$(git -C "$HCR2" rev-list --count HEAD)"
 echo 'mine while truly behind' > "$HCH2/hooks/hc-mine.sh"
 out_hcb="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH2" SYNC_REPO="$HCR2" bash "$SCRIPT" send 2>&1)"
-check "a real remote change still blocks the send" "[ ! -f '$HCR2/payload/hooks/hc-mine.sh' ]"
-check "it makes no commit in that state"           "[ \"\$(git -C '$HCR2' rev-list --count HEAD)\" = \"\$hc2_commits\" ]"
-check "and still says why it skipped"              "grep -qi 'not applied' <<< \"\$out_hcb\""
+# Same reversal as the two sections above (claude-config#323): the send reconciles instead of
+# refusing, so the control asks for the thing the refusal was protecting rather than for the
+# refusal itself. Their work must arrive here and survive in the payload, and this Mac's edit must
+# go out with it.
+check "their work reaches this Mac rather than being mirrored over" \
+  "grep -q THEIR-WORK '$HCH2/hooks/hc-theirs.sh'"
+check "and survives in the payload after this Mac's send" \
+  "grep -q THEIR-WORK '$HCR2/payload/hooks/hc-theirs.sh'"
+check "and this Mac's own edit goes out in the same run" \
+  "[ -f '$HCR2/payload/hooks/hc-mine.sh' ]"
 
 section "== a pull says which received files only take effect in a NEW session =="
 # Claude Code reads the rule files (CLAUDE.md and its @imports) once, at session
@@ -4714,6 +4728,157 @@ mkskill "$STH2/skills/s/SKILL.md" 'edit once more'
 CLAUDE_HOME="$STH2" SYNC_REPO="$STR2" SYNC_NOTIFIER="$FAKEN2" SYNC_NO_NOTIFY=0 \
   SYNC_OUTAGE_ALERT_AFTER=10800 bash "$SCRIPT" sync >/dev/null 2>&1 || true
 check "#25 a genuinely recent success still keeps a blip quiet" "[ ! -s '$NOTED2' ]"
+
+section "== being behind reconciles rather than skipping for ever (#323) =="
+# The watcher declined to act in exactly the state that needs action. Behind the shared repo it
+# logged `skipped, this Mac is behind the shared repo` and did nothing, and nothing else clears
+# being behind except the receive timer, which is set to once a week. So the state sustained
+# itself. Measured in ~/.claude-sync.log on 2026-09-07: 21 consecutive skips between 2026-09-05
+# 12:21 and 2026-09-07 10:32, during which nothing crossed in either direction, the clone reached
+# 26 commits behind, and 15 lessons written on that Mac sat unpublished. The only trace was log
+# lines that raise nothing (L98, L51).
+BHB="$WORK/behind-bare.git"; git init -q --bare -b main "$BHB"
+BHA="$WORK/behind-repoA"; git clone -q "$BHB" "$BHA" 2>/dev/null
+BHR="$WORK/behind-repoB"; git clone -q "$BHB" "$BHR" 2>/dev/null
+BHHA="$WORK/behind-homeA"; mkdir -p "$BHHA/skills/own"; echo '{"hooks":{}}' > "$BHHA/settings.json"
+BHHB="$WORK/behind-homeB"; mkdir -p "$BHHB/skills/theirs"; echo '{"hooks":{}}' > "$BHHB/settings.json"
+mkskill "$BHHA/skills/own/SKILL.md" 'A1'
+CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+CLAUDE_HOME="$BHHB" SYNC_REPO="$BHR" SYNC_HOSTNAME=macBB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+mkskill "$BHHB/skills/theirs/SKILL.md" 'a change only the other Mac has'
+CLAUDE_HOME="$BHHB" SYNC_REPO="$BHR" SYNC_HOSTNAME=macBB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+# A is now behind, and has its own unsent edit, which is the exact shape of the real case.
+mkskill "$BHHA/skills/own/SKILL.md" 'A2, written while behind'
+check "#323 the fixture really does leave this Mac behind before the send" \
+  "[ -n \"\$(git -C '$BHA' rev-list --count HEAD..origin/main 2>/dev/null | grep -v '^0$')\" ] || git -C '$BHA' fetch -q origin 2>/dev/null; [ \"\$(git -C '$BHA' rev-list --count HEAD..origin/main 2>/dev/null)\" != '0' ]"
+# Deliberately NOT under SYNC_IN_WATCH. The behind branch is the same either way, but the watcher
+# also arms the CI gate, and against a local bare repo gh can read no test run at all, so the gate
+# correctly refuses the reconcile and this would be measuring the gate rather than the reconcile.
+# The watcher case, where the reconcile is refused and the skip has to be counted, is the block
+# below.
+out_bh="$(CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_NO_NOTIFY=1 SYNC_CI_GRACE=0 bash "$SCRIPT" send 2>&1 || true)"
+dbg "watcher send while behind: $out_bh"
+check "#323 a send that finds itself behind reconciles instead of skipping" \
+  "[ -f '$BHHA/skills/theirs/SKILL.md' ]"
+check "#323 and this Mac is no longer behind afterwards" \
+  "[ \"\$(git -C '$BHA' rev-list --count HEAD..origin/main 2>/dev/null)\" = '0' ]"
+check "#323 and its own edit is not lost by the reconcile" \
+  "grep -q 'A2, written while behind' '$BHHA/skills/own/SKILL.md'"
+
+# When the reconcile CANNOT clear it, the skip is counted, said once, and readable without opening
+# a log. Driven through the reconcile seam, because a reconcile that genuinely cannot succeed needs
+# a broken remote and that would be testing git rather than this (L291).
+BHN="$WORK/behind-notify.log"; : > "$BHN"
+BHNOTIFIER="$WORK/behind-notifier.sh"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\n' "$BHN" > "$BHNOTIFIER"; chmod +x "$BHNOTIFIER"
+mkskill "$BHHB/skills/theirs/SKILL.md" 'another change only the other Mac has'
+CLAUDE_HOME="$BHHB" SYNC_REPO="$BHR" SYNC_HOSTNAME=macBB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+bh_stuck(){   # one watcher send whose reconcile does nothing at all
+  CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_IN_WATCH=1 \
+    SYNC_NOTIFIER="$BHNOTIFIER" SYNC_NO_NOTIFY=0 SYNC_SEND_RECONCILE=true bash "$SCRIPT" send 2>&1 || true
+}
+out_bh1="$(bh_stuck)"; out_bh2="$(bh_stuck)"; out_bh3="$(bh_stuck)"; out_bh4="$(bh_stuck)"
+dbg "stuck sends: 1=$out_bh1 4=$out_bh4"
+check "#323 a reconcile that clears nothing still reports the skip" \
+  "grep -q 'SEND-OUTCOME behind' <<< \"\$out_bh4\""
+check "#323 it counts how many sends in a row have been skipped" \
+  "grep -qE 'skipped [0-9]+ (send|time)' <<< \"\$out_bh4\""
+# Once, not once per edit. The whole reason the real one was ignored is that it fired on every
+# save, which is the alert that cries wolf (L36).
+check "#323 and escalates once rather than on every edit" \
+  "[ \"\$(grep -c . '$BHN' 2>/dev/null)\" -le 2 ]"
+check "#323 and it did escalate at all, so the count above is not zero by accident" \
+  "[ -s '$BHN' ]"
+# Readable without opening the log, which was the only trace the real one left.
+out_bhst="$(CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#323 status says how long sending has been stuck, without anybody opening a log" \
+  "grep -qE 'skipped [0-9]+ (send|time)' <<< \"\$out_bhst\""
+# And a send that gets through clears it, or the count becomes a permanent accusation (L344).
+CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_NO_NOTIFY=1 SYNC_CI_GRACE=0 bash "$SCRIPT" sync >/dev/null 2>&1
+out_bhst2="$(CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#323 and a run that gets through clears the count" \
+  "! grep -qE 'skipped [0-9]+ (send|time)' <<< \"\$out_bhst2\""
+
+section "== a rebase a killed run left behind is concluded or refused, never ignored (#324, #325) =="
+# A run killed part way through its own `pull --rebase` leaves the clone detached with the branch
+# label stranded, and no later run noticed. Found on 2026-09-07: ~/claude-config-sync had been on
+# `(no branch, rebasing main)` since 2026-09-06 12:16, about 23 hours. The rebase had applied its
+# commit and had an EMPTY todo with a clean tree, so it was not a conflict waiting on anybody, just
+# a rebase nobody concluded. Every branch read in the tool fell back to the literal string `main`
+# when HEAD is detached, so a run in that state could act on a ref nobody checked out (L320).
+_rb_commit(){ git -C "$1" -c user.email=probe@localhost -c user.name=probe commit -qm "$2"; }
+# Each scenario gets its OWN bare repo. Sharing one let an earlier scenario's push move the shared
+# head, so a later clone had nothing to rebase onto and was never mid rebase at all, while its
+# assertions passed on loose words in unrelated output. The fixture assertions below are what
+# caught that, which is the whole reason they are here (L159).
+_rb_setup(){   # $1 = path prefix   $2 = resolve|leave   -> prints the clone left mid rebase
+  local bare="$1-bare.git" a="$1-A" b="$1-B"
+  git init -q --bare -b main "$bare"
+  git clone -q "$bare" "$a" 2>/dev/null
+  mkdir -p "$a/payload"; printf 'base\n' > "$a/payload/f.txt"
+  git -C "$a" add payload/f.txt; _rb_commit "$a" base; git -C "$a" push -q origin main 2>/dev/null
+  git clone -q "$bare" "$b" 2>/dev/null
+  printf 'theirs\n' > "$b/payload/f.txt"; git -C "$b" add payload/f.txt; _rb_commit "$b" theirs
+  git -C "$b" push -q origin main 2>/dev/null
+  printf 'mine\n' > "$a/payload/f.txt"; git -C "$a" add payload/f.txt; _rb_commit "$a" mine
+  git -C "$a" fetch -q origin 2>/dev/null
+  git -C "$a" rebase origin/main >/dev/null 2>&1 || true
+  # `resolve` stages the file and stops there: empty todo, clean tree, still rebasing, which is the
+  # state found on the real clone. `leave` keeps the unmerged path, which only a person can settle.
+  if [ "$2" = resolve ]; then
+    printf 'resolved\n' > "$a/payload/f.txt"; git -C "$a" add payload/f.txt 2>/dev/null
+  fi
+  printf '%s' "$a"
+}
+RBH="$WORK/rebase-home"; mkdir -p "$RBH"; echo '{"hooks":{}}' > "$RBH/settings.json"
+
+RBA="$(_rb_setup "$WORK/rb1" resolve)"
+check "#324 the fixture really did leave a rebase in progress" \
+  "[ -d '$RBA/.git/rebase-merge' ] || [ -d '$RBA/.git/rebase-apply' ]"
+check "#324 and HEAD really is detached there" \
+  "! git -C '$RBA' symbolic-ref --short HEAD >/dev/null 2>&1"
+check "#324 and nothing is unmerged, so it is a rebase nobody finished rather than a conflict" \
+  "[ -z \"\$(git -C '$RBA' diff --name-only --diff-filter=U 2>/dev/null)\" ]"
+out_rb="$(CLAUDE_HOME="$RBH" SYNC_REPO="$RBA" SYNC_HOSTNAME=macRB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1 || true)"
+dbg "sync over an unfinished rebase: $out_rb"
+check "#324 a run concludes a rebase with an empty todo and a clean tree" \
+  "[ ! -d '$RBA/.git/rebase-merge' ] && [ ! -d '$RBA/.git/rebase-apply' ]"
+check "#324 and puts the clone back on a branch" \
+  "git -C '$RBA' symbolic-ref --short HEAD >/dev/null 2>&1"
+check "#324 and says it did, rather than fixing it in silence" \
+  "grep -q 'concluded an unfinished rebase' <<< \"\$out_rb\""
+
+# A rebase with a REAL conflict outstanding is a different event and gets a different answer: it is
+# refused, by name, because concluding it would commit somebody's half merged file (L11, L42).
+RBA2="$(_rb_setup "$WORK/rb2" leave)"
+check "#324 the conflict fixture really has an unmerged path" \
+  "[ -n \"\$(git -C '$RBA2' diff --name-only --diff-filter=U 2>/dev/null)\" ]"
+RBMAIN_BEFORE="$(git -C "$RBA2" rev-parse main 2>/dev/null || true)"
+out_rb2="$(CLAUDE_HOME="$RBH" SYNC_REPO="$RBA2" SYNC_HOSTNAME=macRB2 SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1 || true)"
+dbg "sync over a conflicted rebase: $out_rb2"
+check "#324 a rebase with a real conflict is refused, naming the path it waits on" \
+  "grep -q 'still waiting on a conflict in: payload/f.txt' <<< \"\$out_rb2\""
+check "#324 and does not claim to have concluded anything" \
+  "! grep -q 'concluded an unfinished rebase' <<< \"\$out_rb2\""
+check "#324 and writes nothing against the stranded branch label" \
+  "[ \"\$(git -C '$RBA2' rev-parse main 2>/dev/null)\" = '$RBMAIN_BEFORE' ]"
+check "#324 and leaves the conflict exactly where it was, for the person to settle" \
+  "[ -n \"\$(git -C '$RBA2' diff --name-only --diff-filter=U 2>/dev/null)\" ]"
+
+# #325: the message a person actually reads. Mid rebase, pull reported a two Mac divergence and
+# named `claude-sync sync` as the remedy. Both its numbers were true and the conclusion was wrong:
+# the ahead count came from the stranded branch label, the commit it named was already the rebased
+# result of the ones it called missing, and the remedy reads the branch through the same fallback
+# that misreads a detached HEAD.
+RBA3="$(_rb_setup "$WORK/rb3" resolve)"
+check "#325 the pull fixture really is mid rebase before pull is asked anything" \
+  "[ -d '$RBA3/.git/rebase-merge' ] || [ -d '$RBA3/.git/rebase-apply' ]"
+out_rb3="$(CLAUDE_HOME="$RBH" SYNC_REPO="$RBA3" SYNC_HOSTNAME=macRB3 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "pull over an unfinished rebase: $out_rb3"
+check "#325 pull names the unfinished rebase as the cause" \
+  "grep -q 'concluded an unfinished rebase' <<< \"\$out_rb3\""
+check "#325 and does not report it as a two Mac divergence" \
+  "! grep -q 'this Mac and the shared repo have diverged' <<< \"\$out_rb3\""
 
 section "== a Mac that no longer exists does not hold verify hostage (#26) =="
 # The markers are keyed on hostname, which is a MUTABLE string, so renaming or reinstalling
@@ -8585,10 +8750,13 @@ CLAUDE_HOME="$IXHB" SYNC_REPO="$IXR" SYNC_HOSTNAME=macIB SYNC_NO_NOTIFY=1 bash "
 mkskill "$IXHB/skills/s/SKILL.md" 'moved on by the other Mac'
 CLAUDE_HOME="$IXHB" SYNC_REPO="$IXR" SYNC_HOSTNAME=macIB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 printf -- '- **L2. A lesson written while this Mac was behind still reaches the index.** body\n  (someproject#22)\n' >> "$IXHA/LESSONS.md"
-out_ix="$(CLAUDE_HOME="$IXHA" SYNC_REPO="$IXA" SYNC_HOSTNAME=macIA SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1 || true)"
+# SYNC_SEND_RECONCILE=true pins the reconcile off, so this still measures what it was written for:
+# a send that CANNOT go out (claude-config#323 made a send that finds itself behind try to fix it
+# first, and with the fix working this fixture would otherwise sail past the gate it is about).
+out_ix="$(CLAUDE_HOME="$IXHA" SYNC_REPO="$IXA" SYNC_HOSTNAME=macIA SYNC_NO_NOTIFY=1 SYNC_SEND_RECONCILE=true bash "$SCRIPT" send 2>&1 || true)"
 dbg "send while behind: $out_ix"
 check "#320 the send really did stop at the behind gate, so this is the case that was broken" \
-  "grep -q 'skipped sending' <<< \"\$out_ix\""
+  "grep -q 'this edit was not sent' <<< \"\$out_ix\""
 check "#320 a lesson written while the send cannot go out still reaches the index" \
   "grep -q 'L2. A lesson written while this Mac was behind still reaches the index.' '$IXHA/LESSONS-INDEX.md'"
 
