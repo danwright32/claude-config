@@ -24,3 +24,5 @@ What is evidenced there: the round structure (render before asking, one variable
 What is inferred rather than measured: the placement. The argument for putting it at the start of the build, rather than anywhere else, is only that a screen already built in the real framework makes every subsequent round cost a rebuild. Nobody has run the alternative.
 
 This step is also a partial concession to the one disagreement noted above. Cagan's position in source 1 is that a prototype should be the primary spec and documents go unread. Here the document stays primary for the problem, and a rendering becomes primary for the look.
+
+The process itself moved to the `running-design-rounds` skill on 2026-09-07, so it can be reached from a build session rather than only from a PRD session. What stays here is the placement argument and this record.
