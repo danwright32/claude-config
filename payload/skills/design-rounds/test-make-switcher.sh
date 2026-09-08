@@ -351,9 +351,15 @@ check_eq "a refused round writes no picker options" "0" \
 
 # The committed example carries its picker list too, guarded the same way the page is.
 python3 "$SCRIPT" "$DIR/example/spec.json" "$TMP/example-now.html" >/dev/null 2>&1
+# Both sides are asserted PRESENT first: shasum of a missing file is empty, so a bare
+# hash comparison passes when neither exists and measures nothing at all.
+check_eq "the example ships a committed picker list" "1" \
+  "$([ -s "$DIR/example/switcher.picker.json" ] && echo 1 || echo 0)"
+check_eq "regenerating the example produces a picker list" "1" \
+  "$([ -s "$TMP/example-now.picker.json" ] && echo 1 || echo 0)"
 check_eq "the committed example's picker options match what the tool produces now" \
-  "$(shasum "$DIR/example/switcher.picker.json" 2>/dev/null | cut -d' ' -f1)" \
-  "$(shasum "$TMP/example-now.picker.json" 2>/dev/null | cut -d' ' -f1)"
+  "$(shasum "$DIR/example/switcher.picker.json" 2>/dev/null | cut -d' ' -f1)x" \
+  "$(shasum "$TMP/example-now.picker.json" 2>/dev/null | cut -d' ' -f1)x"
 
 
 echo
