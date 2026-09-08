@@ -7724,10 +7724,23 @@ check "#337 every tool the workflow probes has a package the container installs"
 # A DOCKER THAT IS NOT THERE IS UNMEASURED, NEVER A PASS. This is the one that decides whether the
 # script is worth having: a run that could not happen and a run that found nothing look identical
 # unless it says so (L98, L411).
-_lin_nodocker="$(PATH=/usr/bin:/bin bash "$_LIN" 2>&1)"; _lin_nodocker_rc=$?
-check "#337 with no docker on the path it refuses" "[ '$_lin_nodocker_rc' -ne 0 ]"
+# The absence is SET through the script's own seam, never by stripping the PATH and hoping the
+# machine has no docker. A GitHub runner has one: written the other way this both failed there and
+# made the suite actually build and run a container inside CI, 184 seconds of it measured on the
+# runner on 2026-09-07, which then
+# tripped the suite's own stall bound (L504, L322).
+_lin_nodocker="$(SYNC_DOCKER=/no/such/docker-command bash "$_LIN" 2>&1)"; _lin_nodocker_rc=$?
+check "#337 with no docker to run it refuses" "[ '$_lin_nodocker_rc' -ne 0 ]"
 check "#337 and calls that UNMEASURED rather than a pass" \
   "line_has \"\$_lin_nodocker\" 'docker is not installed' 'UNMEASURED'"
+# And the seam is really the only way in, or the check above proves nothing about what a real run
+# invokes: a hardcoded `docker` beside it would go on running for every caller (L322, L196).
+# Comments stripped and message lines dropped, the same distinction the identity scan makes: the
+# refusals here NAME docker in prose so the reader knows what to install, and advice is not an
+# invocation.
+_lin_bare="$(sed 's/#.*//' "$_LIN" | grep -vE '(echo|printf) "' | grep -nE '(^|[^A-Za-z_"$])docker ' | grep -v 'SYNC_DOCKER' || true)"
+check "#337 and nothing invokes docker except through that seam" \
+  "[ -z \"\$_lin_bare\" ] || { printf '%s\n' \"\$_lin_bare\" >&2; false; }"
 
 # The checkout goes in READ ONLY and is copied inside. The suite writes scratch, clones fixtures and
 # kills process trees, and none of that belongs near the tree somebody is editing (L2).
@@ -10009,6 +10022,15 @@ out_rd_old="$(SYNC_CI_RED_ALERT_AFTER=0 ci_tick red failure)"
 dbg "#336 red past its window: $out_rd_old"
 check "#336 a repo red for longer than the window says so in its own words" \
   "case \"\$out_rd_old\" in *'has been red for'*) true ;; *) false ;; esac"
+# It counts RUNS, and says so. The count is how many automatic ticks found the head red, and
+# several of those are routinely the SAME commit, so the nearest looking helper in this tool renders
+# it as "2 commits" and the sentence then makes a claim that is wrong twice over. Asserted on the
+# word it must use as well as the one it must not, because banning a word is not the same as
+# refusing the claim (L347).
+check "#336 and counts runs rather than commits" \
+  "line_has \"\$out_rd_old\" 'has been red for' 'run\\(s\\) in a row'"
+check "#336 and never calls those runs commits" \
+  "case \"\$out_rd_old\" in *'commits in a row'*|*'commit in a row'*) false ;; *) true ;; esac"
 check "#336 and it still refuses to apply a red head" \
   "case \"\$out_rd_old\" in *'not applied here'*) true ;; *) false ;; esac"
 # And any readable verdict that is not red ends it, or the count goes on growing after the problem

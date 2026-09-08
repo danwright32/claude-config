@@ -4656,7 +4656,10 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       # unlike an unreadable verdict, a red one is something a person can act on, so the escape is
       # to tell them rather than to lower the gate (L42).
       if [ "$rd_age" -ge "$rd_window" ] 2>/dev/null; then
-        echo "claude-sync: and it has been red for $(age_in_words "$rd_age") now, $(commits_in_words "$rd_n" 2>/dev/null || printf '%s run(s)' "$rd_n") in a row. Nothing on this Mac receives config until a green commit lands, so this needs fixing rather than waiting: look at the failing run with 'gh run list --limit 5'." >&2
+        # RUNS, not commits. The count is how many times an automatic tick found the head red, and
+        # several of those are routinely the same commit, so the nearest looking helper renders it
+        # as "2 commits" and says something that is not true twice over (L11, L118).
+        echo "claude-sync: and it has been red for $(age_in_words "$rd_age") now, over $rd_n run(s) in a row. Nothing on this Mac receives config until a green commit lands, so this needs fixing rather than waiting: look at the failing run with 'gh run list --limit 5'." >&2
         # Told ONCE, on the transition, not on every automatic tick. A notification repeated every
         # few minutes is what teaches somebody to dismiss the whole channel (L36).
         if [ -z "$rd_told" ]; then

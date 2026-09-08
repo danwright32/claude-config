@@ -53,11 +53,19 @@ esac
 # compared against the workflow's without an exception nobody can see.
 TOOL_PACKAGES="bash:bash git:git rsync:rsync jq:jq perl:perl pgrep:procps"
 
-if ! command -v docker >/dev/null 2>&1; then
+# The container runner is a SEAM (claude-config#337). Without it the only way to test the refusal
+# was to run this with docker off the PATH, which is a claim about the machine rather than a
+# condition the test sets: a GitHub runner HAS docker, so that test both failed there and made the
+# suite actually build and run a container inside CI, which took 184 seconds on the runner on
+# 2026-09-07 and tripped the
+# suite's own stall bound. A test that depends on machine state it cannot set has to set it (L504).
+DOCKER="${SYNC_DOCKER:-docker}"
+
+if ! command -v "$DOCKER" >/dev/null 2>&1; then
   echo "run-on-linux: docker is not installed, so the Linux run could not be made. This is UNMEASURED, not a pass. Install Docker Desktop, or run the suite on the real runner by pushing." >&2
   exit 3
 fi
-if ! docker info >/dev/null 2>&1; then
+if ! "$DOCKER" info >/dev/null 2>&1; then
   echo "run-on-linux: docker is installed but its daemon is not running, so the Linux run could not be made. This is UNMEASURED, not a pass. Start Docker Desktop and try again." >&2
   exit 3
 fi
@@ -68,7 +76,7 @@ target="${1:-}"
 # The checkout is mounted READ ONLY and copied inside, so a run cannot touch the working tree this
 # was launched from. The suite writes scratch, clones fixtures and kills process trees; none of that
 # belongs anywhere near the tree somebody is editing (L2).
-docker run --rm -i \
+"$DOCKER" run --rm -i \
   -v "$ROOT:/src:ro" \
   -e SECTION_ONLY -e SECTION_UNTIL -e SECTION_LIST -e SUITE_JOBS -e SUITE_DEBUG \
   -e TARGET="$target" -e PACKAGES="$packages" \
