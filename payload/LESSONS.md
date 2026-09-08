@@ -344,6 +344,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   so the guard passes for the whole time the defect is growing and the detector goes back to
   being the person who notices.
   (overture#1913, overture#1992)
+- **L644. A check that an override EXISTS cannot see whether it WINS**, because precedence in a
+  layered system (a CSS cascade, a config merge, an environment chain, a settings hierarchy) is
+  decided by order or specificity the check never reads, so an override written above the rule it
+  overrides loses in silence while the check reports green. Assert the resulting VALUE, or assert
+  the position that decides it.
+  (paperboi#128, 2026-09-08: a media query carries no extra specificity, so `.grid-2` stacked
+  inside a narrow media block still rendered two columns because the base rule came 300 lines
+  later. A guard confirming the override was present passed the whole time, and the dropdown it
+  was meant to widen stayed cut off at 186px reading "ACH, the vendor's d". Only re-measuring the
+  rendered page caught it. The replacement guard asserts position rather than presence, and
+  paperboi#133 records that it reads only the first media block, which is the same blindness one
+  level along.)
 - **L103. A guard that asserts the exact rendering of a value rather than the rule behind it fails
   the first legitimate refinement of that value, and when the value is a file's text it can also be
   satisfied by a comment ABOUT the thing, including one explaining that the thing was removed.**
@@ -1834,6 +1846,29 @@ for reference; L6 was reviewed and deliberately not adopted.
   answer 404, so the narrowing had to be read from the routing forms' own conditions or from the
   `assignmentReason` each booking carries. L620 is the neighbouring rule for replicating a
   system's behaviour; this is the rule for CHECKING you match it.)
+
+- **L645. A tool reached through a shell FUNCTION is not the tool it is named after**, so a
+  flag combination's behaviour has to be measured through the name the script actually calls
+  rather than read from the real tool's manual, because a shim can answer a DIFFERENT question
+  while every other flag behaves identically.
+  (claude-config, 2026-09-08: `grep` in Dan's shells is a function shimming to ugrep, and
+  ugrep's `-q` combined with `-v` reports whether the PATTERN matched rather than whether any
+  line was SELECTED. Measured truth table, wanted against ugrep against real grep: pattern
+  matches nothing so lines survive, 0/0/0; pattern matches some lines while others survive,
+  **0/1/0**; pattern matches every line so nothing survives, 1/1/1. The middle row is the
+  ordinary case, so `grep -qv` in a conditional answers no whenever the pattern matches
+  anything at all, silently and always in the same direction. It was found because a CI wait
+  loop polled a merged pull request for two and a half hours: its condition asked whether any
+  check line was not pending or skipping, one line said skipping, and the shim therefore said
+  no on every one of 25 measured evaluations. `grep -c` on the same input reported 10 surviving
+  lines, which is what proved the two disagreed rather than the data being empty. Both the
+  hand-checked condition and the real grep binary give the opposite answer, so nothing short of
+  running it through the shim would have shown it. Remedy: filter and count, or call
+  `command grep`, which is the real binary and is correct. Distinct from L183, which is the
+  same construct family for a different reason: there the pipeline's STATUS is corrupted by
+  SIGPIPE under pipefail and it depends on the input's size, where this is grep's own answer
+  and is deterministic. The wait loop that exposed it is L110: with no deadline it could not
+  fail, only hang, so a permanently false condition ran for hours instead of erroring once.)
 
 ## Data safety
 
@@ -3912,6 +3947,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   information_schema for the table against the view, watched failing on the exact recurrence
   by adding a column to the table and leaving the view alone, because the next ALTER TABLE ADD
   COLUMN will not come with a reminder.)
+
+- **L646. A control that seeds its own state from a prop and writes shared state from a MOUNT
+  EFFECT reverts the person's change every time its container remounts**, because a panel, menu
+  or drawer that renders nothing while closed destroys the local state and replays the stale
+  prop over what they just chose. Own such a value somewhere that outlives the surface, and
+  never reapply an initial value on mount without first checking it is still the newest one.
+  (slate#2100, 2026-09-08: the theme control lives in the header's account menu. Its selection
+  was `useState(preference)`, seeded from a prop the page had server rendered, and it applied
+  the resolved theme to `document.documentElement` from a mount effect. The panel renders
+  nothing while closed. So choosing Light applied light and persisted it, and closing the menu
+  and opening it again remounted the toggle from the prop the page loaded with (the server
+  action revalidated nothing), showed System as selected, and the mount effect wrote system
+  back onto the document, turning the page dark again. Every part read as correct on its own.
+  The same mount effect was also the ONLY thing resolving the preference on the client, so a
+  session whose cookie had never been seeded painted light until somebody opened the menu,
+  which read to the person as the account menu changing their theme.)
 
 ## Security and privacy
 

@@ -23,6 +23,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-grep-quiet-invert.sh",
+            "timeout": 30,
+            "statusMessage": "Checking pushed changes for style-guide violations"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/lessons-advisory.sh",
             "timeout": 30,
             "statusMessage": "Checking pushed changes against the recorded lessons"
