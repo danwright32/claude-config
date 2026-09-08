@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 571 lessons.
+LESSONS.md, which is NOT loaded into the session. 583 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -155,6 +155,7 @@ to decide something: the body is where the failure it came from is described.
 - L417. Turning on a platform security control imposes requirements on parts of the build you never touched, and the resulting refusal happens only when the artifact RUNS, so a configuration nothing ever launches stays broken while every check that reads the configuration is green.
 - L418. A count taken over a STORED field is a claim about the store rather than about what anybody sees, because a surface that recomputes that value at display time ignores what is stored, so measure through the predicate the surface itself uses or the number describes data nothing renders.
 - L442. A control has two testable surfaces, the VALUE it computes and the INPUT PATH a person drives it through, and the input path usually holds its own rules inside an event handler where nobody writes cases. A full green suite over the value model says nothing about whether the control can be used at all, so drive every control the way a person does before showing it to anybody.
+- L643. A reconciliation between two systems must compare the DECISIONS each one makes, never the list of who or what is ELIGIBLE to be chosen
 
 ## Data safety
 
@@ -267,6 +268,8 @@ to decide something: the body is where the failure it came from is described.
 - L431. A guard that skips expensive work when its inputs are unchanged saves nothing unless computing its KEY is cheaper than the work
 - L440. A message softened so it stops claiming something the check did not measure must then STATE what the check DID measure
 - L629. A number printed BESIDE a finding is read as evidence for that finding, so it must be computed on the same key and the same population
+- L632. A step whose only job is to REPORT a problem must never be able to fail the pipeline stage that follows it, because a message that could not be DELIVERED says nothing about whether the work is safe to continue.
+- L633. An aggregate read (a sum, a count, a total) over rows hidden by row level security returns a confident zero rather than refusing, because an ungrouped aggregate over zero rows is still one valid row, so a reader who is not permitted, or whose session has expired, receives a plausible number instead of an error.
 
 ## State and identity
 
@@ -296,6 +299,7 @@ to decide something: the body is where the failure it came from is described.
 - L175. A value read once at startup is only true at startup, and when the thing it describes lives OUTSIDE the program (a checkout, a config file, a device, another service) there is no action inside the program to hang a re-read on, so it goes stale invisibly and its silence reads as an assurance.
 - L176. A field name that asserts a ROLE or a DIRECTION (who referred whom, source versus destination, sender versus recipient, parent versus child) must be verified against the code that RENDERS it, because the rendered wording is the authority and a backwards name silently recruits every future writer into filling it the wrong way round, with nothing anywhere reporting a problem.
 - L185. A statement that NORMALIZES a value on the way in (a COALESCE, a lowercase, a trim, a default standing for absent) must group or deduplicate by the NORMALIZED form, never by the raw one, because two raw spellings that normalize to the same thing survive as separate groups and then collide on one stored key.
+- L641. A dedup or change guard stamp that is NARROWER than what its message CLAIMS lets a changed claim hash identically, so the guard stays silent while the message goes on asserting something that has stopped being true.
 - L186. A durable record that exists to stop an action repeating is only as durable as its KEY.
 - L192. A value INFERRED from content (a name pulled out of caption text, a category guessed from a title, a type read off a filename) must never be presented as the recorded fact it stands in for.
 - L200. A record that permanently EXCLUDES something on the grounds that another record covers it (a night another card holds, a task another job owns, an item another order fulfils) must re-check that other record at read time, because deleting it leaves the exclusion standing over nothing and the gap is invisible on both sides.
@@ -329,6 +333,8 @@ to decide something: the body is where the failure it came from is described.
 - L402. A control that EDITS a value must write the exact field the consuming path READS, so where a per item override beats a shared default at the point of use, an edit control offered over the default silently discards the edit for every item holding an override, while the surface reports it as applied.
 - L419. A sort whose primary key TIES across most of its real inputs is actually ordered by its tie-break, so a tie-break chosen for stability rather than meaning (an id, an insertion order, a hash) silently becomes the order people see, and where that id is minted from the record's own content it orders by that content's SPELLING.
 - L432. A default that is RE-DERIVED from a sibling field whenever that field changes hides itself, because the values it produces vary and read as entered, and only the constant DIFFERENCE between the two fields reveals it. Check any derived looking field for a fixed offset across the whole population before pricing, billing or deciding anything from it.
+- L636. When an automation creates a record in a state that only a person can advance it out of, record that it is WAITING and why, because the same state chosen by a person on purpose looks identical, and the queue of things awaiting a human is otherwise invisible.
+- L637. A wildcard resolved when a definition is CREATED rather than when it is read (a view's `select *`, a generated type, a snapshotted schema) reads as everything always and is actually everything once
 
 ## Security and privacy
 
@@ -350,6 +356,7 @@ to decide something: the body is where the failure it came from is described.
 - L360. A value redacted where an object is CONSTRUCTED is unredacted by any later step that ENRICHES that same object, because the gate lives in the construction and the enrichment runs afterwards with no viewer to consult. Give the enriching function the same gate as an argument rather than letting it be called ungated, since every call site reads as correct and only the field added last escapes.
 - L388. A search or filter that matches a field the viewer is not permitted to READ hands that field's content back one guess at a time through the result count, without ever displaying it, so every searchable field must be gated by the same predicate that decides whether it is shown.
 - L616. A product whose access model is a fixed list of named users needs, from the first migration, a maintainer identity that can sign in and act with attribution but is excluded from the users' notifications and from their irreversible or money moving actions.
+- L630. An entitlement DERIVED from a downstream artifact (access from a team, a role from an assignment, a quota from a subscription row) is absent for precisely the NEWEST subject
 
 ## UX completeness
 
@@ -429,6 +436,8 @@ to decide something: the body is where the failure it came from is described.
 - L626. A rule that conditionally OMITS a label (a group heading, a caption, a legend) does not remove the SPACE that label occupied, so wherever it fires the surface shows a gap with nothing in it, which reads as a layout fault rather than as the boundary it still is.
 - L627. A transient indicator placed INSIDE a row (a spinner, a badge, a count) takes its width from the flow, so showing it moves every sibling beside it, and the feedback for the thing somebody clicked is delivered by making the things they did not click jump.
 - L628. An incidental dismissal (a click outside, a page scroll, a resize) must not be wired to the same handler as an explicit Cancel, because dismissing a surface is not a decision to discard what is in it
+- L634. A heading separated from the content beneath it by WEIGHT alone, or rendered smaller or lighter than that content, reads as an emphasised sentence rather than a level, and the fault is invisible at the declaration site because each element's own classes are individually reasonable.
+- L639. A compensating offset applied to a CONTAINER aligns whichever child comes FIRST, never a named one, so a cancellation written to line up a component's LABEL stops holding the moment that component may lead with an icon, mark or badge.
 - L426. An item held on screen past its own removal (a row fading out, a card playing an exit) must be reinserted at its OWN position rather than appended to the end, because anything anchored to it or to the group it belongs to (a scroll pin, a selection, a focus ring) follows it to wherever it lands.
 
 ## External systems
@@ -517,6 +526,7 @@ to decide something: the body is where the failure it came from is described.
 - L428. Adding a new threshold BESIDE an existing one, rather than changing it, leaves every reader of the old constant silently answering a question that has been superseded, and no rule about changing a limit fires because nothing was changed. When a rule's meaning splits across two constants, audit every reader of the old one and state which of the two questions it is asking.
 - L429. A file the platform loads AUTOMATICALLY into every session grows one entry at a time and has a size ceiling nothing in the project measures, so put a check on its size: past the ceiling the rules stop arriving rather than failing, and a rule that never arrived is indistinguishable from one that was followed.
 - L437. Code lifted out of a file to be reused elsewhere leaves behind everything it was inheriting from that file's AMBIENT SCOPE (a stylesheet's `body` or `:root` rule, a module's top level setup, a test file's shared fixture), and because the inherited thing is usually a DEFAULT, the extracted copy still runs and still looks finished while quietly using the platform's default instead. Prove it by reading back what the running system actually applied, never by checking that the extraction renders.
+- L631. Resolving a conflict by splicing both sides together can drop the delimiter that closed the block at the seam, so check the file's STRUCTURE afterwards (braces balance, brackets close) rather than only that the conflict markers are gone.
 
 ## Cross-system reliability
 
@@ -538,6 +548,7 @@ to decide something: the body is where the failure it came from is described.
 - L34. Verify domain and vendor data semantics against real samples before building on them.
 - L35. Classify errors once, explicitly.
 - L36. An alert that cries wolf gets ignored.
+- L635. Measuring how often an alert FIRES says nothing about whether its findings can be ACTED on
 - L37. History is stamped at write time.
 - L38. Deletes, renames, and state exits enumerate every derived resource.
 - L39. One timezone, one date helper.
@@ -573,6 +584,7 @@ to decide something: the body is where the failure it came from is described.
 - L435. A tool that writes commits of its own must pass its OWN identity on every git call that can create a commit, because a machine may have none configured (every CI runner, any freshly set up machine) and git REFUSES rather than defaulting.
 - L441. A lock taken with `flock` on a plain file descriptor is inherited by every process started while it is held, and an inherited descriptor holds the lock exactly as the opener's does, so any process that outlives the run keeps the exclusion without ever having asked for it and no care in the locking code can reach it. Open such a descriptor close on exec, and make the blocked wait NAME its current holder, because the usual reassurance that the kernel releases a flock when its holder dies is true of the opener and false of every inheritor.
 - L444. A guard that identifies its own leftovers by matching text against a MACHINE WIDE namespace (the process table, a port, a temp path, a shared lock list) claims everything that matches, including work it never started, so assert against the process GROUP or the pid it actually created.
+- L640. A migration applied before the code that needs it deploys must leave the DEPLOYED code working, because the two are live together for the length of the deploy.
 
 ## Test speed
 
