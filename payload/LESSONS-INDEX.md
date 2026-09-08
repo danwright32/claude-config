@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 583 lessons.
+LESSONS.md, which is NOT loaded into the session. 585 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -155,6 +155,7 @@ to decide something: the body is where the failure it came from is described.
 - L417. Turning on a platform security control imposes requirements on parts of the build you never touched, and the resulting refusal happens only when the artifact RUNS, so a configuration nothing ever launches stays broken while every check that reads the configuration is green.
 - L418. A count taken over a STORED field is a claim about the store rather than about what anybody sees, because a surface that recomputes that value at display time ignores what is stored, so measure through the predicate the surface itself uses or the number describes data nothing renders.
 - L442. A control has two testable surfaces, the VALUE it computes and the INPUT PATH a person drives it through, and the input path usually holds its own rules inside an event handler where nobody writes cases. A full green suite over the value model says nothing about whether the control can be used at all, so drive every control the way a person does before showing it to anybody.
+- L638. A test that asserts agreement with a DESIGNED ARTIFACT (a comp, a golden file, another system's published output) must READ that artifact, never the rule you believe produced it
 - L643. A reconciliation between two systems must compare the DECISIONS each one makes, never the list of who or what is ELIGIBLE to be chosen
 
 ## Data safety
@@ -585,6 +586,7 @@ to decide something: the body is where the failure it came from is described.
 - L441. A lock taken with `flock` on a plain file descriptor is inherited by every process started while it is held, and an inherited descriptor holds the lock exactly as the opener's does, so any process that outlives the run keeps the exclusion without ever having asked for it and no care in the locking code can reach it. Open such a descriptor close on exec, and make the blocked wait NAME its current holder, because the usual reassurance that the kernel releases a flock when its holder dies is true of the opener and false of every inheritor.
 - L444. A guard that identifies its own leftovers by matching text against a MACHINE WIDE namespace (the process table, a port, a temp path, a shared lock list) claims everything that matches, including work it never started, so assert against the process GROUP or the pid it actually created.
 - L640. A migration applied before the code that needs it deploys must leave the DEPLOYED code working, because the two are live together for the length of the deploy.
+- L642. In a SQUASH MERGE repo no merged branch is ever an ancestor of main, so every local way of asking whether a branch has shipped reports a merged branch as UNMERGED
 
 ## Test speed
 

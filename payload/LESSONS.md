@@ -1803,6 +1803,38 @@ for reference; L6 was reviewed and deliberately not adopted.
   name, and again no case touched the handler.)
 
 
+- **L638. A test that asserts agreement with a DESIGNED ARTIFACT (a comp, a golden file, another
+  system's published output) must READ that artifact, never the rule you believe produced it**,
+  because a rule reimplemented beside it agrees with your own derivation while the artifact says
+  something else, and the test's NAME then tells every later reader that the two match.
+  (paperboi#125: a helper called compOrder, documented as "the order the ARTBOARD shows", derived
+  the ordering rule from the fixture and compared it against the SQL. Both sides were honest
+  derivations of the DATABASE's rule and the test's coverage was real, so it passed. The artboard
+  renders the review queue as 131, 133, 134, 135 and the rule gives 134, 135, 131, 133, because the
+  mockup builder sorts only one of its three tables and without a tie break, so two of them render
+  in whatever order the fixture ARRAY happens to list them. It was caught by opening
+  Main.dc.html and reading the row ids out of it, which took one command, having gone unnoticed
+  through writing the test, watching it fail, watching it pass, and a PR body repeating the claim.
+  The reader's side of this is L400 and the reimplemented number is L107; this is the writer naming
+  a check after a source never opened.)
+
+- **L643. A reconciliation between two systems must compare the DECISIONS each one makes,
+  never the list of who or what is ELIGIBLE to be chosen**, because every rule that narrows the
+  list at decision time is invisible to a list comparison, so the check reports agreement while
+  the two systems disagree on every real outcome.
+  (Slate#2088, 2026-09-08: the roster half of the cal.com parity command read `hosts[]` off the
+  team's event type, which lists everybody who CAN take a booking, and reported the two rosters
+  in agreement. Six of cal.com's seven routing forms then carry a `Redistribute Team (does not
+  equal) yes` clause on every route, so the pool it actually routes to is narrower than the host
+  list. Measured across 400 recent bookings, 16 agents bookable in Slate with real working hours
+  received none, where chance predicts about 2, and every one of them would have started taking
+  real leads at cutover. The reverse direction was covered and this one was not: the sweep speaks
+  when Slate offers somebody cal.com never lists, and stays silent when cal.com lists somebody it
+  never chooses. Note the API could not be asked either way, since per user attribute values
+  answer 404, so the narrowing had to be read from the routing forms' own conditions or from the
+  `assignmentReason` each booking carries. L620 is the neighbouring rule for replicating a
+  system's behaviour; this is the rule for CHECKING you match it.)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -3056,6 +3088,45 @@ for reference; L6 was reviewed and deliberately not adopted.
   commission calendars warning that the two never reconcile, and the parenthetical shipped anyway,
   because a supporting number reads as a courtesy rather than as a claim)
 
+- **L632. A step whose only job is to REPORT a problem must never be able to fail the
+  pipeline stage that follows it, because a message that could not be DELIVERED says
+  nothing about whether the work is safe to continue.** Record the undelivered message and
+  let a step AFTER the work redden the run. This is the opposite direction from L71, which
+  is about the work's failure killing the watchdog and which even tells a watchdog to stop
+  work it cannot vouch for: that is right when the check could not VERIFY something, and
+  wrong when it merely could not deliver news about a fault already known.
+  (PET#1350, 2026-09-07: an alert about a failed prior-month capture was moved off a raw
+  curl, which always exits 0, onto the shared alert library, which sets a non-zero exit
+  code on an undelivered message by design. That step is 17 of the daily build against the
+  deploy's 25 and is not continue-on-error, so a Slack outage on a morning the capture had
+  also failed would have stopped the job before the board was ever built. The capture
+  failing is an ordinary days 1 to 3 event, which is exactly why THAT step is
+  continue-on-error, so the compound case was not remote. It was caught by a session
+  reflection asking whether the step being changed was allowed to fail, not by any test,
+  and the PR description had listed the delivery guarantee as an improvement)
+- **L633. An aggregate read (a sum, a count, a total) over rows hidden by row level security
+  returns a confident zero rather than refusing, because an ungrouped aggregate over zero rows
+  is still one valid row, so a reader who is not permitted, or whose session has expired,
+  receives a plausible number instead of an error.** Make the function refuse on the permission
+  check itself, and assert that refusal with a positive control proving a permitted reader still
+  gets the figure. This is the neighbouring case to L215, where the empty answer comes from an
+  accessor that THREW; here nothing throws and nothing is wrong, which is what makes it worse.
+  (paperboi#95, 2026-09-07: `public.owed_right_now()` is one ungrouped aggregate over a
+  `security_invoker` view, written deliberately as the single definition of what the company owes
+  because three surfaces have to answer that question the same way. Its TypeScript reader THROWS
+  rather than returning zeros, and its docstring says why: "zero owed is a legitimate and
+  reassuring state: a failed read that answered zero would be indistinguishable from a quiet
+  week, on the one number the product exists to keep honest (L215, L67)". A plan to move the
+  dashboard's reads onto the visitor's own session, so Postgres would enforce the allowlist,
+  was justified in writing by "a page that forgets gets zero rows instead of everything, so
+  forgetting becomes impossible". For every LIST that is true. For the aggregate it is exactly
+  backwards: RLS filters the view to nothing, `coalesce(sum(...), 0)` and `count(*)` return one
+  row of six zeros with `error: null`, the reader passes all four of its own checks, and the home
+  screen says everything is settled. The plan's own test, "owed_right_now() refuses", was
+  unwritable as specified, so the likely outcome was an implementer asserting zero and recording
+  the disaster as expected behaviour. Two independent reviews, given different briefs, both led
+  with it, and neither the function's author nor the plan's author had seen it)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
@@ -3302,6 +3373,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   groups that collapse to one key. Measured live: 11 rows with NULL and 0 with '', which is the
   only reason a nightly job has never hit it, and a single execution written with the empty
   string would freeze the dashboard rollup until that row aged out of raw retention)
+
+- **L641. A dedup or change guard stamp that is NARROWER than what its message CLAIMS lets a
+  changed claim hash identically, so the guard stays silent while the message goes on asserting
+  something that has stopped being true.** Build the stamp from the same payload the message is
+  handed, and where a field is deliberately left out because it varies without meaning, record
+  that the message may then not claim it. The nearest neighbours cover the other two ways a key
+  fails: L186 a stamp that does not survive a restart, L405 one so broad it fires every run.
+  (project-enrollment-tracker#1371, and #1107 which hit this in four consecutive review rounds
+  with a different field each time: the stored id, the applied team, then whether the promotion
+  was actually written. Every time the stamp was built from the DOMAIN object while the message
+  was handed something wider, so a conflict that resolved the other way hashed the same and the
+  standing message went on naming the team the rep had left. lib/speak-on-change.js's stampItems
+  exists because of it and states the exclusion rule in its header, where nothing enforces it)
 
 - **L186. A durable record that exists to stop an action repeating is only as durable as its
   KEY.** One keyed on an identifier minted in memory per attempt (a fresh UUID, an object
@@ -3783,6 +3867,40 @@ for reference; L6 was reviewed and deliberately not adopted.
   that varies. The root fix is the same as L548's: record whether the value was ever set by
   anyone, since "never touched" was not a state anything could query.)
 
+- **L636. When an automation creates a record in a state that only a person can advance it
+  out of, record that it is WAITING and why, because the same state chosen by a person on
+  purpose looks identical, and the queue of things awaiting a human is otherwise invisible.**
+  A non-bookable agent, an unset schedule, an unassigned owner, an unreviewed draft: each is
+  a legitimate resting state somebody may have chosen, and each is also where a new record
+  sits until a person acts. Nothing can list "these are waiting on you" unless the writer
+  says which, so the queue only surfaces when a downstream measure comes up short.
+  (slate#2071, 2026-09-08: four agents hired since the roster flip sat non-bookable with a
+  debt tier ticked in Salesforce and cal.com routing to two of them, indistinguishable from a
+  manager deliberately held out of the pool; slate#1753, 2026-09-02: every agent's seeded
+  working week read as a valid week somebody set, which hid 81 of 100 having different hours
+  for months. The fix in both was the same shape: a mark saying the automation is waiting,
+  cleared by whatever settles it, so the pending set is a query rather than an inference.)
+
+- **L637. A wildcard resolved when a definition is CREATED rather than when it is read (a
+  view's `select *`, a generated type, a snapshotted schema) reads as everything always and
+  is actually everything once**, so every field added to the source afterwards is silently
+  absent from it, and nothing reports the gap because nothing reads the new field until the
+  day somebody needs it. Derive the list from the source at read time, or hold the two to each
+  other with a check that fails when the source grows a field the definition does not carry.
+  This is the trap L41 warns about wearing the costume of the fix: `select *` LOOKS like
+  derivation, which is exactly why nobody re-examines it.
+  (paperboi#119, 2026-09-08: `public.invoice_queue`, the view the whole dashboard reads, was
+  created in migration 0002 as `select i.*` from invoices. Three later migrations added
+  columns to that table: `approved_at` and `approved_by` in 0004, `attachment_file_id` in
+  0006. None of the three was readable through the view, across four migrations, and nothing
+  was broken and nothing complained, because no surface had yet needed them. It surfaced only
+  when a new query needed `approved_by` to say who had approved an invoice and the migration
+  refused to apply with "column q.approved_by does not exist". The view carried 20 of the
+  table's 23 columns. The fix was one line; what makes it not recur is a test comparing
+  information_schema for the table against the view, watched failing on the exact recurrence
+  by adding a column to the table and leaving the view alone, because the next ALTER TABLE ADD
+  COLUMN will not come with a reminder.)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -3964,6 +4082,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   to sign in to troubleshoot; adding him as a third row would have put him on every nag and let a
   test send reach the bank. Slate had already grown an impersonation and dev preview layer for the
   same need)
+
+- **L630. An entitlement DERIVED from a downstream artifact (access from a team, a role from an
+  assignment, a quota from a subscription row) is absent for precisely the NEWEST subject**,
+  because that artifact does not exist until somebody upstream acts, and the newest subject is the
+  one most likely to try to use it. Nothing reports the gap, because every check written to catch a
+  locked out subject is written over the subjects that already HAVE the artifact.
+  (project-enrollment-tracker#1346, 2026-09-07: #1037 retired PET's hand kept access list and
+  derived it from the auto discovered tracked teams, which is the right change and closed a real
+  exposure. A rep promoted to manager on 2026-09-01 had no reps assigned to her in Salesforce yet,
+  so no team was discovered, so no access entry was derived, so the edge gate bounces her. She is
+  the only person in the company who had a reason to sign in to PET for the first time that week.
+  `teamsLockedOut` exists for exactly this failure and is silent, because it enumerates managers
+  who HAVE a tracked team and checks their address against the list; the manager with no team is
+  outside its population and outside every other check's. The weekly drift check did name her, and
+  told the reader her date was wrong or her team had left Salesforce, neither of which was true)
 
 ## UX completeness
 
@@ -4851,6 +4984,34 @@ for reference; L6 was reviewed and deliberately not adopted.
   AND on any page scroll outside the panel. So picking a date and then clicking anywhere else, or
   merely scrolling, wrote the old value back over it silently. Dan: "unless I click confirm, it
   reverts. It shouldn't erase the date and time if I just click out of the picker")
+
+- **L634. A heading separated from the content beneath it by WEIGHT alone, or rendered smaller or
+  lighter than that content, reads as an emphasised sentence rather than a level, and the fault is
+  invisible at the declaration site because each element's own classes are individually
+  reasonable.** Give the level a treatment the content cannot have (a size step, small capitals, a
+  rule) and check it against the content it heads rather than on its own.
+  (Try-Pennie/slate#2069 and #2070, 2026-09-08: Dan on the alert cooldown groups, "these feel like
+  they're supposed to be headers but it's not clear". Five hand rolled group labels across the
+  admin area, every one a real `h3` so every accessibility check passed, all five styled
+  `text-xs font-semibold`: on the alerts page over rows at that same 12px, so weight was the only
+  difference, and on three other sections over 14px content in a lighter colour, so the heading was
+  smaller and fainter than the thing it headed. The rows around them carried separators while the
+  headings carried none, leaving the one element that marks a boundary drawn without one. The one
+  site that worked used small capitals plus letter spacing, a treatment nothing else on its page
+  had, and the design system's own heading classes were reached for by none of the five)
+
+- **L639. A compensating offset applied to a CONTAINER aligns whichever child comes FIRST, never a
+  named one, so a cancellation written to line up a component's LABEL stops holding the moment that
+  component may lead with an icon, mark or badge.** Derive the offset from what actually leads the
+  element and assert the leading mark case, because each call site still reads as correct and only
+  the composed screen shows the drift.
+  (Try-Pennie/slate#2082, 2026-09-08: `Pill` gained `alignToColumn` in #1821 to put a table cell's
+  pill label under its column header rather than 9px right of it, implemented as `-ml-[9px]`
+  cancelling the pill's own border plus padding. `BookablePill` then led with an 8px status dot, so
+  the nudge lined the header up with the dot and left the word Yes/No about 12px right of it, while
+  the Role column beside it, whose pill leads with its label, lined up correctly. Two columns
+  starting their text at different offsets is the exact drift the mechanism was written to remove,
+  and the docstring went on promising the label)
 
 
 
@@ -5804,6 +5965,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   already being the neighbouring screen's names column.)
 
 
+- **L631. Resolving a conflict by splicing both sides together can drop the delimiter that
+  closed the block at the seam, so check the file's STRUCTURE afterwards (braces balance,
+  brackets close) rather than only that the conflict markers are gone.** In a format whose
+  parse errors are silent, such as CSS discarding every rule after an unbalanced brace,
+  nothing else will report it: the build, the linter and the type checker all read the
+  truncated file as a healthy one, and the diff looks like a clean append.
+  (slate#2064, 2026-09-07: two UI changes each appended a block to the end of globals.css,
+  so both conflicted on the same lines against main, and both resolutions dropped the
+  closing brace of the rule immediately above the seam. Each was caught only by counting
+  braces by hand; every gate in the pre-push suite passed over the broken file.)
+
 ## Cross-system reliability
 
 - **L405. A check deciding whether anything is NEW must compare what the artifact MEANS, never its
@@ -6014,6 +6186,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   false-positive sources at creation, give it a window longer than what it measures,
   aggregate during broad outages, dedupe repeats, and never embed canned remediation
   text that can steer a diagnosis wrong. (20 issues, 3 repos)
+- **L635. Measuring how often an alert FIRES says nothing about whether its findings can be
+  ACTED on**, so before shipping one, name the remedy for every cause it can fire on, and treat
+  a cause whose only remedies would be wrong as a gap in the system rather than a line in the
+  message. L147 asks for the firing rate and L36 for the false positives, and an alert can pass
+  both while still being the one people learn to skim, because a truthful finding nobody can act
+  on teaches exactly what a false one does.
+  (PET#1144/#1355/#1361, 2026-09-08: a new weekly check comparing PET's roster against Salesforce
+  was measured before shipping, as L147 asks, and fired on exactly ONE of 107 active reps, which
+  read as a quiet and honest alert. The single finding turned out to have no valid remedy: that
+  rep is on indefinite leave and still employed, PET has no way to record leave at all, and the
+  message's first suggestion was to set a term date, which marks a current employee as departed
+  and drops the months they worked. It would have said so every week. The frequency was measured
+  and the actionability was never asked about, so the check shipped recommending harm on the only
+  case it had)
 - **L37. History is stamped at write time.** Records about the past carry point-in-time
   attributes captured then; rendering or finalizing a past period reads that period's
   stored state, never the live present. (10 issues, 2 repos)
@@ -6430,6 +6616,36 @@ for reference; L6 was reviewed and deliberately not adopted.
   on a real stray in its own group AND seen to PASS with an identical unrelated process outside it,
   or the half that matters is unproved)
 
+
+- **L640. A migration applied before the code that needs it deploys must leave the DEPLOYED code
+  working, because the two are live together for the length of the deploy.** An additive change
+  (a new column, a new function) does this for free. A rename, a dropped column or a changed
+  function signature does not: keep the old form until the new code is live, and remove it in a
+  following migration, the same two step shape as a column rename. Say which step a migration is
+  in its header.
+  (slate#2083, 2026-09-08: migration 0117 changed `replace_availability_rules` from two arguments
+  to three and dropped the two argument form in the same file; applied to production at 16:00 UTC
+  per the runbook's apply-then-merge order, with the code calling the new form deploying at 16:17.
+  For those minutes every hours save in the deployed app would have failed on a function that no
+  longer existed. Nothing was hit, by timing alone.)
+
+- **L642. In a SQUASH MERGE repo no merged branch is ever an ancestor of main, so every local way of
+  asking whether a branch has shipped reports a merged branch as UNMERGED**, and the only reliable
+  answer before deleting one is the forge's own pull request record. The same merge strategy is why
+  the branches pile up in the first place: `gh pr merge --delete-branch` FAILS inside a git
+  worktree, because deleting the branch makes it check out the default branch that the primary
+  checkout already holds, and the merge itself still succeeds, so the failure reads as a merge
+  problem while actually being a cleanup problem nobody notices.
+  (paperboi, 2026-09-08: eight `worktree-*` branches had accumulated in two days of work. Three
+  instruments were tried and all three were wrong in the same direction. `merge-base
+  --is-ancestor` says no because the squash rewrote history; `git cherry` says no because patch ids
+  do not survive squashing; matching commit SUBJECTS says no because the squash takes the pull
+  request's title instead of the commits'. A fourth check, which files are unique to the branch,
+  can only see files a branch ADDED and would silently pass one holding a modified line main never
+  received. `gh pr list --head <branch> --state all` answered it in one call: all eight had merged
+  pull requests. Delete the ref with `gh api -X DELETE repos/<owner>/<name>/git/refs/heads/<branch>`,
+  which needs no checkout. This is L119's shape, confirm against the primary record before acting,
+  with the twist that here it is the LOCAL answers that are the unreliable derived index.)
 
 ## Test speed
 
