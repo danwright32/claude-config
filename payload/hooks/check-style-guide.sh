@@ -54,18 +54,11 @@ repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
 
-base=""
-upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
-if [ -n "$upstream" ]; then
-  base="$upstream"
-else
-  base="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
-  if [ -z "$base" ]; then
-    for c in origin/main origin/master main master; do
-      if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then base="$c"; break; fi
-    done
-  fi
-fi
+# The ref to judge against comes from the shared helper, not from a copy here (claude-config#339).
+# A second push gate needed the same answer, and two copies of "what is this push being compared
+# with" drift invisibly: a wrong base scopes a gate to the wrong diff while still reporting a clean
+# run (L70, L613).
+base="$(ps_base_ref || true)"
 
 commit_in_chain=0
 add_in_chain=0

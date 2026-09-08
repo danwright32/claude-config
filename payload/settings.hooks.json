@@ -23,6 +23,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/linux-sections-before-push.sh",
+            "timeout": 300,
+            "statusMessage": "Running the changed test sections on Linux"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/lessons-advisory.sh",
             "timeout": 30,
             "statusMessage": "Checking pushed changes against the recorded lessons"

@@ -174,6 +174,35 @@ e2e_nl="$(e2e_verdict "$(printf 'git add -A && git commit -q -m x\n%s origin HEA
   && check "#97 and refuses the same change with the push on its own line" ok \
   || check "#97 and refuses the same change with the push on its own line" "exit=$e2e_nl"
 
+# --- ps_base_ref (claude-config#339): the ref a push is judged AGAINST. Three push gates need the
+#     same answer and it used to be written out inside one of them, so a second gate would have
+#     been a second copy, and two answers to "what is this push compared with" drift invisibly.
+BR="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-baseref.XXXXXXXX")"
+case "${BR%/}" in ''|/|"${HOME%/}") echo "refusing: throwaway came back as '$BR'" >&2; exit 2 ;; esac
+trap 'rm -rf "$BR"' EXIT
+git init -q "$BR/r" 2>/dev/null
+( cd "$BR/r" && printf 'x\n' > f && git add f && git -c user.email=p@l -c user.name=p commit -qm seed ) >/dev/null 2>&1
+
+# With no upstream and no remote at all, it falls through to the local names it knows.
+got="$( cd "$BR/r" && ps_base_ref || true )"
+[ "$got" = "main" ] || [ "$got" = "master" ] \
+  && check "ps_base_ref falls back to the local default branch" ok \
+  || check "ps_base_ref falls back to the local default branch" "got=$got"
+
+# And it prefers what the remote itself says over guessing from a list of names.
+( cd "$BR/r" && git branch -f origin/zeta HEAD && git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/zeta ) >/dev/null 2>&1
+got2="$( cd "$BR/r" && ps_base_ref || true )"
+[ "$got2" = "origin/zeta" ] \
+  && check "ps_base_ref prefers the remote's own default branch" ok \
+  || check "ps_base_ref prefers the remote's own default branch" "got=$got2"
+
+# Nothing at all to compare with is a refusal, never a guess: "judge against HEAD~1" and "judge
+# nothing" are different decisions and the gates do not make them the same way.
+git init -q "$BR/empty" 2>/dev/null
+( cd "$BR/empty" && ps_base_ref ) >/dev/null 2>&1 \
+  && check "ps_base_ref refuses when there is nothing to compare with" "it returned 0" \
+  || check "ps_base_ref refuses when there is nothing to compare with" ok
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
