@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 585 lessons.
+LESSONS.md, which is NOT loaded into the session. 586 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -271,6 +271,7 @@ to decide something: the body is where the failure it came from is described.
 - L629. A number printed BESIDE a finding is read as evidence for that finding, so it must be computed on the same key and the same population
 - L632. A step whose only job is to REPORT a problem must never be able to fail the pipeline stage that follows it, because a message that could not be DELIVERED says nothing about whether the work is safe to continue.
 - L633. An aggregate read (a sum, a count, a total) over rows hidden by row level security returns a confident zero rather than refusing, because an ungrouped aggregate over zero rows is still one valid row, so a reader who is not permitted, or whose session has expired, receives a plausible number instead of an error.
+- L445. A failing assertion renders its own operands, so comparing against a LARGE value (a whole file, a full response body, a big collection) prints that value over the message explaining what went wrong.
 
 ## State and identity
 

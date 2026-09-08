@@ -3127,8 +3127,6 @@ for reference; L6 was reviewed and deliberately not adopted.
   the disaster as expected behaviour. Two independent reviews, given different briefs, both led
   with it, and neither the function's author nor the plan's author had seen it)
 
-## State and identity
-
 - **L445. A failing assertion renders its own operands, so comparing against a LARGE value (a whole
   file, a full response body, a big collection) prints that value over the message explaining what
   went wrong.** Reduce the comparison to a small value before asserting, and let the message carry
@@ -3140,6 +3138,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   it. Distinct from L351, where a reporter TRUNCATES the message, and from L148, where it is written
   to a surface that dies: here the message survives intact and is simply buried by the assertion's
   own rendering of what it compared)
+
+## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
   different artifact on every run, so any comparison between two versions of it measures the
