@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 566 lessons.
+LESSONS.md, which is NOT loaded into the session. 567 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -568,6 +568,7 @@ to decide something: the body is where the failure it came from is described.
 - L423. Configuration INSTALLED into the platform (a launch agent, a cron entry, a systemd unit, a git hook, a shell alias) is a COPY, so changing its definition in the source changes nothing on any machine until that machine re-runs the installer, and nothing reports a machine still running the old copy.
 - L434. A character written as a backslash escape INSIDE a pattern handed to grep or sed is read one way by the BSD tools a Mac has and another by the GNU tools every Linux runner has, and neither errors, so the pattern silently stops matching and whatever consumed the result reads as zero.
 - L435. A tool that writes commits of its own must pass its OWN identity on every git call that can create a commit, because a machine may have none configured (every CI runner, any freshly set up machine) and git REFUSES rather than defaulting.
+- L441. A lock taken with `flock` on a plain file descriptor is inherited by every process started while it is held, and an inherited descriptor holds the lock exactly as the opener's does, so any process that outlives the run keeps the exclusion without ever having asked for it and no care in the locking code can reach it. Open such a descriptor close on exec, and make the blocked wait NAME its current holder, because the usual reassurance that the kernel releases a flock when its holder dies is true of the opener and false of every inheritor.
 
 ## Test speed
 

@@ -6344,6 +6344,24 @@ for reference; L6 was reviewed and deliberately not adopted.
   either Mac until the fixture took the machine's own git config out of reach and stopped git
   guessing one from the username and hostname)
 
+- **L441. A lock taken with `flock` on a plain file descriptor is inherited by every process
+  started while it is held, and an inherited descriptor holds the lock exactly as the opener's
+  does, so any process that outlives the run keeps the exclusion without ever having asked for it
+  and no care in the locking code can reach it. Open such a descriptor close on exec, and make the
+  blocked wait NAME its current holder, because the usual reassurance that the kernel releases a
+  flock when its holder dies is true of the opener and false of every inheritor.**
+  (overture#3680. `verify-and-merge-branch.sh` takes the single verify slot with `flock 9` and its
+  own comment says a crashed holder releases it by dying. Measured 2026-09-07: a leaked shell
+  fixture, `check-pure-suite-imports.test.sh`, PID 50639, orphaned to launchd and spinning in state
+  R for 5h37m, held that lock and blocked the merge of PR #3679 for fourteen minutes with no sign
+  anywhere. The fixture's source contains no reference to any lock: it never asked for one, it
+  inherited fd 9 from whatever started it. `ps` showed no xcodebuild at all, so the machine looked
+  idle, and only `lsof` on the lock file named the holder. Killing it released the lock instantly,
+  and `lsof` then showed `git` and `git-remote-https` carrying the same fd as ordinary children,
+  which is the same defect one step from happening again. Sharpens L409, whose "released by the
+  kernel when its holder dies" is the half that made this invisible; L235 is the same inheritance
+  mechanism reaching stdout instead of a lock)
+
 
 ## Test speed
 
