@@ -56,17 +56,21 @@ what this should look like to what is cheap to change now.
 Every round closes the same way: build the switcher, tell him it is open, then put up
 the picker. Not a sentence inviting a reply, not a numbered list in the message.
 
+**The options are not retyped.** `make-switcher.py` writes them beside the page, as
+`<out>.picker.json`, and names that file in its output. Read it and use what is in it:
+one option per tab, in the switcher's order, labelled as the tab is and described by
+what the readout says that option is testing. Typing them out again is a second copy of
+two facts already on screen, and it drifts, so the picker ends up naming an option
+differently from the tab or giving a different reason for it.
+
 - **One question per call.** Multi question calls have lost answers mid selection. So a
   round that has both a choice to make and a follow up to ask puts up the choice, waits,
   then puts up the follow up.
-- **One option per switcher tab**, with the SAME label the tab carries, so the thing on
-  screen and the thing being selected are named identically.
-- **Each option's description is what that option is testing**, the same text the
-  switcher's readout shows for it, so the reason is in front of him as he chooses.
-- **Order the options the switcher orders them in.** A picker that reorders them makes
-  him re-find each one.
-- The picker's own free text answer is the escape hatch, so do not add a none of these
-  option: it invites a rejection when the round's job is a comparison.
+- The file carries no none of these option, deliberately. The picker's own free text
+  answer is the escape hatch, and offering a refusal invites one when the round's job is
+  a comparison.
+- The one thing it does not give you is the picker's short header chip, so write that
+  yourself.
 
 The same applies to every OTHER question the round raises, which is where prose creeps
 back in. Carry on with another round or settle here, promote this objection to a standing
@@ -94,6 +98,7 @@ arguments for the exact shape, and see `example/` for a working one.
 | One `buildScreen(variant)` for every option | Makes "everything else identical" structural rather than a promise |
 | A page needing nothing from the network | It still renders in a year, on a plane, from a git checkout |
 | A refusal instead of a page, on any fault | A switcher with a dead frame or an unwired key looks finished |
+| `<out>.picker.json`, the closing picker's options | The tab and the picker entry are the same two facts, so they are emitted once rather than retyped |
 
 `bash test-make-switcher.sh` runs its checks, and `run-all-tests.sh` finds that suite on its own. The refusals above each have a test that produces them, including the unwired key.
 
@@ -126,3 +131,5 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
    keystroke comparison back into a message he has to write.
 8. Putting the option choice in a picker and then asking everything else that round in
    prose, which is the same mistake wearing the rule as cover.
+9. Retyping the picker's options instead of reading the ones the tool wrote, which is how
+   the tab and the picker come to disagree about what an option is called.
