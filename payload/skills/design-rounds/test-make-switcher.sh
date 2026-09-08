@@ -313,6 +313,49 @@ TALLSPEC
 fi
 
 
+# --- 14. the picker's options are emitted from the spec, not retyped ---
+#
+# The round closes with an AskUserQuestion picker carrying one option per tab, each
+# labelled as the tab is and described by what that option is testing. Those are the
+# same two facts the switcher already draws, so retyping them by hand is a second
+# derivation that drifts: the picker ends up naming an option differently from the tab
+# on screen, or giving a different reason for it, and the person comparing has to
+# reconcile the two. The tool writes them beside the page instead.
+
+spec "$TMP/spec.json" "$TWO"
+out="$(run "$TMP/spec.json" "$TMP/out.html")"; rc=$?
+check_eq "a good spec still exits 0" "0" "$rc"
+check_eq "the picker options are written beside the page" "1" \
+  "$([ -e "$TMP/out.picker.json" ] && echo 1 || echo 0)"
+check "the run says where the picker options went" "out.picker.json" "$out"
+
+picker="$(cat "$TMP/out.picker.json" 2>/dev/null)"
+check_eq "there is one option per switcher tab and no extra escape option" "2" \
+  "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["options"]))' "$TMP/out.picker.json" 2>/dev/null)"
+check_eq "the first option is labelled as its tab is" "Espresso" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["options"][0]["label"])' "$TMP/out.picker.json" 2>/dev/null)"
+check_eq "the options are in the switcher's own order" "Ink" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["options"][1]["label"])' "$TMP/out.picker.json" 2>/dev/null)"
+check "an option is described by what it is testing" "asks whether the panel or the colour" "$picker"
+check "an option's measured number rides with its description" "Worst contrast 5.65." "$picker"
+check "the picker asks the round's own question" "Which colour carries the rail" "$picker"
+check_not "no none of these option is offered" "one of these" "$picker"
+
+# The refusals must not leave a picker list behind either: a stale options file beside a
+# page that was never written is a list of options nobody can look at.
+rm -f "$TMP/nowhy.html" "$TMP/nowhy.picker.json"
+spec "$TMP/nowhy.json" "$NO_WHY"
+run "$TMP/nowhy.json" "$TMP/nowhy.html" >/dev/null 2>&1
+check_eq "a refused round writes no picker options" "0" \
+  "$([ -e "$TMP/nowhy.picker.json" ] && echo 1 || echo 0)"
+
+# The committed example carries its picker list too, guarded the same way the page is.
+python3 "$SCRIPT" "$DIR/example/spec.json" "$TMP/example-now.html" >/dev/null 2>&1
+check_eq "the committed example's picker options match what the tool produces now" \
+  "$(shasum "$DIR/example/switcher.picker.json" 2>/dev/null | cut -d' ' -f1)" \
+  "$(shasum "$TMP/example-now.picker.json" 2>/dev/null | cut -d' ' -f1)"
+
+
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$unmeasured" -gt 0 ]] && echo "UNMEASURED-SECTIONS $unmeasured"
