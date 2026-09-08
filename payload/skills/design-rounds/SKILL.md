@@ -109,7 +109,8 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
 
 1. Its decision record lives inside it, each decision with its reason.
 2. **Strip the switcher out of it.** The committed file is the design, not the chooser it
-   came from. Ovation's was committed with all six candidates still in it and a README
+   came from. The options file the tool writes beside the page goes with the chooser:
+   it is a working file for choosing with, never kept alongside the settled design. Ovation's was committed with all six candidates still in it and a README
    calling it "the agreed design", which was false: anyone opening it got a picker.
 3. Name the parts that are idioms of the rendering medium rather than design decisions,
    so they get translated instead of copied. Ovation's README names the three web idioms
