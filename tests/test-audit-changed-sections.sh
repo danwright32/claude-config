@@ -144,6 +144,61 @@ grep -q 'LISTED beta' <<< "$o6" \
   && check "a pure deletion still attributes to its section" ok \
   || check "a pure deletion still attributes to its section" "exit=$c6 out=$o6"
 
+# --- ON LINUX (claude-config#339). The audit can run each changed section through the container
+#     runner instead of this shell, so a push is judged by the operating system CI uses. What is
+#     checked here is the three answers that decide whether the gate is worth having, through a
+#     STUB runner: the real one starts containers, and this is about the audit's handling of what
+#     it is told, not about docker.
+mkrunner(){               # $1 = repo path   $2 = the exit status the stub should return
+  cat > "$1/tests/run-on-linux.sh" <<STUB
+#!/usr/bin/env bash
+echo "stub linux runner ran: SECTION_ONLY=\${SECTION_ONLY:-} target=\${1:-}"
+exit $2
+STUB
+  chmod +x "$1/tests/run-on-linux.sh"
+}
+runlinux(){ ( cd "$1" && AUDIT_ON_LINUX=1 AUDIT_SUITE="$1/tests/test-claude-sync.sh" bash "$AUDIT" HEAD 2>&1 ); }
+
+# Asked for Linux with no runner there: refused, rather than quietly falling back to this machine
+# and reporting the result as Linux's.
+R7="$(mkrepo linuxnorunner)"
+perl -pi -e 's/^echo a$/echo a-edited/' "$R7/tests/test-claude-sync.sh"
+o7="$(runlinux "$R7")"; c7=$?
+[ "$c7" -eq 2 ] && check "asked for Linux with no runner, it refuses" ok \
+                || check "asked for Linux with no runner, it refuses" "exit=$c7 out=$o7"
+grep -q 'no runner at' <<< "$o7" \
+  && check "and says what is missing rather than falling back" ok \
+  || check "and says what is missing rather than falling back" "out=$o7"
+
+# The runner really is used, and a section that FAILS there fails the audit.
+R8="$(mkrepo linuxfails)"
+perl -pi -e 's/^echo a$/echo a-edited/' "$R8/tests/test-claude-sync.sh"
+mkrunner "$R8" 1
+o8="$(runlinux "$R8")"; c8=$?
+grep -q 'stub linux runner ran' <<< "$o8" \
+  && check "the audit runs a changed section through the Linux runner" ok \
+  || check "the audit runs a changed section through the Linux runner" "out=$o8"
+grep -q 'stub linux runner ran.*LISTED alpha' <<< "$o8" \
+  && check "and tells it which section, so it is not running the whole suite" ok \
+  || check "and tells it which section, so it is not running the whole suite" "out=$o8"
+[ "$c8" -ne 0 ] && check "a section that fails on Linux fails the audit" ok \
+                || check "a section that fails on Linux fails the audit" "exit=$c8 out=$o8"
+
+# And a runner that could not run at all is UNMEASURED, not a pass and not a block: a machine with
+# no docker must not have its pushes stopped by a question it cannot ask, and must be told.
+R9="$(mkrepo linuxunmeasured)"
+perl -pi -e 's/^echo a$/echo a-edited/' "$R9/tests/test-claude-sync.sh"
+mkrunner "$R9" 3
+o9="$(runlinux "$R9")"; c9=$?
+[ "$c9" -eq 0 ] && check "a Linux run that could not happen does not block the push" ok \
+                || check "a Linux run that could not happen does not block the push" "exit=$c9 out=$o9"
+grep -q 'UNMEASURED' <<< "$o9" \
+  && check "and it says UNMEASURED rather than reporting a pass" ok \
+  || check "and it says UNMEASURED rather than reporting a pass" "out=$o9"
+grep -q 'LISTED alpha' <<< "$o9" \
+  && check "and names the section nothing judged" ok \
+  || check "and names the section nothing judged" "out=$o9"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

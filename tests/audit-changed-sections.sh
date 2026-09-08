@@ -91,15 +91,43 @@ if [ "$titles_found" -eq 0 ]; then
   exit 2
 fi
 
-n=0; bad=""
+# WHERE a changed section is run (claude-config#339). By default this machine, which is what this
+# has always done. With AUDIT_ON_LINUX=1 it goes through the container runner beside it instead, so
+# a push can be judged by the operating system CI actually uses rather than the one it is being
+# made from. Two defects shipped on 2026-09-07 that were green on every Mac and red only there.
+#
+# The runner answers 3 for "this could not be run at all", which is NOT a failure of the section:
+# a machine with no docker has to let the push through rather than block on a question it cannot
+# ask, and it has to say so, because a gate that silently does nothing is worse than no gate
+# (L98, L11).
+LINUX_RUNNER="$(dirname "$SUITE_ABS")/run-on-linux.sh"
+if [ -n "${AUDIT_ON_LINUX:-}" ] && [ ! -x "$LINUX_RUNNER" ]; then
+  echo "audit-changed-sections: asked to audit on Linux, but there is no runner at $LINUX_RUNNER. Refusing rather than falling back to this machine and reporting the result as Linux's (L320)." >&2
+  exit 2
+fi
+run_one(){   # $1 = section title -> that section's exit status
+  if [ -n "${AUDIT_ON_LINUX:-}" ]; then
+    SECTION_ONLY="$1" bash "$LINUX_RUNNER" "$REL"
+  else
+    SECTION_ONLY="$1" bash "$SUITE"
+  fi
+}
+
+n=0; bad=""; unmeasured=""
 while IFS= read -r _t; do
   [ -n "$_t" ] || continue
   n=$((n + 1))
   echo ""
   echo "audit-changed-sections: running only $_t"
-  if ! SECTION_ONLY="$_t" bash "$SUITE"; then
-    bad="$bad$_t
+  _rc=0; run_one "$_t" || _rc=$?
+  if [ "$_rc" -ne 0 ]; then
+    if [ -n "${AUDIT_ON_LINUX:-}" ] && [ "$_rc" -eq 3 ]; then
+      unmeasured="$unmeasured$_t
 "
+    else
+      bad="$bad$_t
+"
+    fi
   fi
 done <<TITLES
 $(printf '%s' "$titles" | sort -u)
@@ -113,6 +141,16 @@ case "$bad" in *[![:space:]]*)
   exit 1 ;;
 esac
 
+# UNMEASURED is said, and it is not a pass. Nothing here can be concluded about those sections, and
+# the difference between "Linux is happy with them" and "Linux was never asked" is the whole value
+# of running them there at all (L98, L11).
+case "$unmeasured" in *[![:space:]]*)
+  echo "" >&2
+  echo "audit-changed-sections: these changed sections were NOT judged, because the Linux runner could not run here:" >&2
+  printf '%s' "$unmeasured" | sed 's/^/  /' >&2
+  echo "That is UNMEASURED, not a pass. The push is not blocked on a question this machine cannot ask; CI will still ask it." >&2 ;;
+esac
+
 echo ""
-echo "audit-changed-sections: audited $n section(s) changed against $BASE, and each one ran on its own and passed."
+echo "audit-changed-sections: audited $n section(s) changed against $BASE${AUDIT_ON_LINUX:+, on Linux}, and each one ran on its own and passed."
 exit 0
