@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 561 lessons.
+LESSONS.md, which is NOT loaded into the session. 562 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -191,6 +191,7 @@ to decide something: the body is where the failure it came from is described.
 - L595. A configuration value that can live in more than one store
 - L599. Repairing a monitor that compares against a STORED BASELINE makes its first run a report about the OUTAGE rather than about the present
 - L615. Write a RESTRICTION's condition as the reason for restricting, never as a broader property that happens to include it
+- L436. The completeness of an import is a property of the PERIOD it must cover, not of the source it reads, and a source that is complete about itself says nothing about the years before it existed. Establish the earliest record the business actually has before scoping an import to whichever system holds the data today.
 
 ## Honest failure
 

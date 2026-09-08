@@ -2166,6 +2166,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   silently disables a guard; that one fails permissively and this one fails restrictively, which
   is why the person is left with nothing they can do)
 
+- **L436. The completeness of an import is a property of the PERIOD it must cover, not of the
+  source it reads, and a source that is complete about itself says nothing about the years before
+  it existed. Establish the earliest record the business actually has before scoping an import to
+  whichever system holds the data today.** (ovation#118, 2026-09-07: Ovation's QuickBooks
+  migration milestone was scoped on the assumption that Dan's invoice history lives in QuickBooks,
+  and it pauses until a QuickBooks sample arrives. A Freshbooks export turned up on his disk
+  covering 2019-01-06 to 2024-12-20, 171 invoices across 41 clients, from before he moved tools.
+  Nothing would have reported the hole: the importer would succeed, the year end export would run,
+  and whole tax years would simply be absent, which under an accrual basis are years with real
+  income in them (L98). The tell is that nobody had asked what the earliest invoice in the CHOSEN
+  source is, only whether that source could be parsed. Adjacent to L171, which is the same
+  confusion one stage later: there a control proves the query's shape and not that it reached the
+  period, here a source proves its own completeness and not that it covers the period.)
+
 ## Honest failure
 
 - **L415. A screen that shows a change BEFORE the write lands owes a failure path that reverts it AND
