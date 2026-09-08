@@ -2209,6 +2209,26 @@ for reference; L6 was reviewed and deliberately not adopted.
   confusion one stage later: there a control proves the query's shape and not that it reached the
   period, here a source proves its own completeness and not that it covers the period.)
 
+- **L443. An object held in memory from before another writer changed the same record still
+  carries the old values, and its next save writes them back over the newer ones with nothing
+  reporting a fault, so a field owned by a separate writer must never be savable from a surface
+  holding an older copy.** (ovation#133, 2026-09-08: Ovation's serialized writers are `@ModelActor`
+  types, each with its own SwiftData context, because that is what makes a rule enforceable where
+  the data is STORED rather than in whichever screen happens to be writing. Measured directly: a
+  screen's context inserts an invoice, the allocator's context writes `number = 1123` and saves,
+  the screen then saves an unrelated edit to a different field, and afterwards the store holds the
+  edit and `number == nil`. Two contexts over one container do not merge on their own. It is
+  silent in both directions, which is what makes it worse than an ordinary race: nothing throws,
+  nothing logs, and the surface's OWN edit lands correctly, so it reports success. What is lost is
+  precisely the value the actor was serialized to protect, and the only later sign is an invoice
+  with no number, or the same number handed out twice because the store no longer shows it as
+  taken. The same shape is a lost update against any store with more than one writer: a Supabase
+  row read into client state and saved back whole, an ORM session holding an entity across a
+  background job, a form posting every field it was rendered with. Adjacent to L510, which is the
+  same symptom by a different mechanism: there an object is REBUILT from the fields the writer
+  happens to know about, here it is a whole stale copy, and both silently revert a field the
+  writer never meant to touch.)
+
 ## Honest failure
 
 - **L415. A screen that shows a change BEFORE the write lands owes a failure path that reverts it AND
