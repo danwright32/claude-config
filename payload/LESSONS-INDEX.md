@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 567 lessons.
+LESSONS.md, which is NOT loaded into the session. 568 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -154,6 +154,7 @@ to decide something: the body is where the failure it came from is described.
 - L416. A provenance record naming the COMMIT an artifact was built from describes what was committed, never what was compiled, so an install or deploy made from a checkout with uncommitted changes records a truthful commit while the artifact contains code that exists in no commit anywhere.
 - L417. Turning on a platform security control imposes requirements on parts of the build you never touched, and the resulting refusal happens only when the artifact RUNS, so a configuration nothing ever launches stays broken while every check that reads the configuration is green.
 - L418. A count taken over a STORED field is a claim about the store rather than about what anybody sees, because a surface that recomputes that value at display time ignores what is stored, so measure through the predicate the surface itself uses or the number describes data nothing renders.
+- L442. A control has two testable surfaces, the VALUE it computes and the INPUT PATH a person drives it through, and the input path usually holds its own rules inside an event handler where nobody writes cases. A full green suite over the value model says nothing about whether the control can be used at all, so drive every control the way a person does before showing it to anybody.
 
 ## Data safety
 

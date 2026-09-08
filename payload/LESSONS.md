@@ -1787,6 +1787,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   stored copy then goes on reading as a current measurement to anything that queries it.
   (overture#3345, overture#3598)
 
+- **L442. A control has two testable surfaces, the VALUE it computes and the INPUT PATH a person
+  drives it through, and the input path usually holds its own rules inside an event handler where
+  nobody writes cases. A full green suite over the value model says nothing about whether the
+  control can be used at all, so drive every control the way a person does before showing it to
+  anybody.** Distinct from L3, which is about proving a guard actually executes in the shipping
+  runtime: here the code executes perfectly and the tests are simply aimed at the wrong surface.
+  (ovation#111, 2026-09-07, twice in one session. A segmented time field had 14 passing cases
+  covering the arithmetic, the wrapping, 12 AM being midnight and all 1440 minutes of the day
+  surviving a round trip, while the field could not reach 10, 11 or 12, because the accumulate
+  versus replace rule lived in a keydown handler that no case touched: Dan found it in seconds.
+  Rewriting the same logic as a testable function and mutating it back to what had shipped failed
+  66 of 87 cases. An hour later the same shape again: a control labelled "Set it" for an unrecorded
+  tax status silently recorded "not exempt", which is the one assumption the requirement forbids by
+  name, and again no case touched the handler.)
+
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
