@@ -44,16 +44,21 @@ what this should look like to what is cheap to change now.
    that red is reserved for the one place something is genuinely wrong.
 6. **Count the facts before showing any chrome.** No number may appear twice. A sidebar
    was rejected on sight for stating the same count in two places.
-7. **Ask with a picker, never in prose.** The round ends with an AskUserQuestion picker,
-   always, one per round. A round that renders properly and then asks in a paragraph
-   hands Dan the switcher's work back as typing, and he answers by selecting.
+7. **Ask with a picker, never in prose.** EVERY question this skill puts to Dan is an
+   AskUserQuestion picker: the choice between rendered options, and equally whether a
+   round settled it or needs another, whether an objection should become a standing
+   rule, what the next round's one variable should be, and whether the design is done.
+   He answers by selecting, so a question asked in a paragraph hands him the work back
+   as typing.
 
 ## Asking for the choice
 
 Every round closes the same way: build the switcher, tell him it is open, then put up
 the picker. Not a sentence inviting a reply, not a numbered list in the message.
 
-- **One question per call.** Multi question calls have lost answers mid selection.
+- **One question per call.** Multi question calls have lost answers mid selection. So a
+  round that has both a choice to make and a follow up to ask puts up the choice, waits,
+  then puts up the follow up.
 - **One option per switcher tab**, with the SAME label the tab carries, so the thing on
   screen and the thing being selected are named identically.
 - **Each option's description is what that option is testing**, the same text the
@@ -62,6 +67,11 @@ the picker. Not a sentence inviting a reply, not a numbered list in the message.
   him re-find each one.
 - The picker's own free text answer is the escape hatch, so do not add a none of these
   option: it invites a rejection when the round's job is a comparison.
+
+The same applies to every OTHER question the round raises, which is where prose creeps
+back in. Carry on with another round or settle here, promote this objection to a standing
+rule or apply it once, which variable the next round moves: each of those is a picker with
+the concrete candidates as its options, never a question at the end of a paragraph.
 
 ## The tool
 
@@ -114,3 +124,5 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
 6. Committing the chooser as though it were the design.
 7. Building the switcher and then asking for the pick in prose, which turns a one
    keystroke comparison back into a message he has to write.
+8. Putting the option choice in a picker and then asking everything else that round in
+   prose, which is the same mistake wearing the rule as cover.
