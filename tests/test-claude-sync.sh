@@ -7762,6 +7762,48 @@ check "#337 and the run works in a copy, not in the mount" "grep -q 'cp -a /src 
 check "#337 SECTION_ONLY is passed into the container" "grep -q 'e SECTION_ONLY' '$_LIN'"
 check "#337 and SECTION_UNTIL with it" "grep -q 'e SECTION_UNTIL' '$_LIN'"
 
+# ---- and the image is built once, not rebuilt every run (claude-config#338) ----
+# Installing the tools inside a fresh container on every invocation was most of the minute a run
+# cost. The cost is what decides whether this gets used at all: a run somebody has to decide to
+# wait for is one they skip when they are in a hurry, which is exactly when the defect it catches
+# gets pushed. Measured 2026-09-07 on this Mac, one section went from 18.6 seconds to 3.7.
+#
+# Everything below is asked of the PLAN, which is the script saying what it would do without
+# starting anything, so none of it needs docker and none of it builds an image.
+_lin_plan="$(SYNC_DOCKER=/no/such-docker SYNC_LINUX_PRINT_PLAN=1 bash "$_LIN" 2>&1)"; _lin_plan_rc=$?
+check "#338 it can say what it would do with no docker at all" "[ '$_lin_plan_rc' -eq 0 ]"
+check "#338 and the plan names the image it would use" "line_has \"\$_lin_plan\" 'image:' 'ubuntu'"
+_lin_tag1="$(printf '%s\n' "$_lin_plan" | sed -n 's/^tag: //p')"
+check "#338 and the tag it would reuse ($_lin_tag1)" "[ -n '$_lin_tag1' ]"
+_lin_plan2="$(SYNC_DOCKER=/no/such-docker SYNC_LINUX_PRINT_PLAN=1 bash "$_LIN" 2>&1)"
+_lin_tag2="$(printf '%s\n' "$_lin_plan2" | sed -n 's/^tag: //p')"
+check "#338 the same inputs give the same tag, or nothing is ever reused" \
+  "[ '$_lin_tag1' = '$_lin_tag2' ]"
+# The two things that decide what the image CONTAINS both move it, or a tool added to the workflow
+# is silently missing from a stale image and every run after that is judged by the wrong container
+# (L40, L431). Proven by moving each in a copy, not by reading the line that hashes them.
+_LINT2="$WORK/lin-tree-image"
+mkdir -p "$_LINT2/tests" "$_LINT2/.github/workflows"
+cp "$_LIN" "$_LINT2/tests/run-on-linux.sh"
+sed 's/runs-on: ubuntu-latest/runs-on: ubuntu-22.04/' "$_WF" > "$_LINT2/.github/workflows/tests.yml"
+_lin_tag3="$(SYNC_DOCKER=/no/such-docker SYNC_LINUX_PRINT_PLAN=1 bash "$_LINT2/tests/run-on-linux.sh" 2>&1 | sed -n 's/^tag: //p')"
+check "#338 a different image gives a different tag ($_lin_tag3)" \
+  "[ -n '$_lin_tag3' ] && [ '$_lin_tag3' != '$_lin_tag1' ]"
+_LINT3="$WORK/lin-tree-tools"
+mkdir -p "$_LINT3/tests" "$_LINT3/.github/workflows"
+sed 's/pgrep:procps/pgrep:procps curl:curl/' "$_LIN" > "$_LINT3/tests/run-on-linux.sh"
+cp "$_WF" "$_LINT3/.github/workflows/tests.yml"
+_lin_tag4="$(SYNC_DOCKER=/no/such-docker SYNC_LINUX_PRINT_PLAN=1 bash "$_LINT3/tests/run-on-linux.sh" 2>&1 | sed -n 's/^tag: //p')"
+check "#338 and a different tool list does too ($_lin_tag4)" \
+  "[ -n '$_lin_tag4' ] && [ '$_lin_tag4' != '$_lin_tag1' ]"
+# And the run really uses what was built. A tag computed and then not used would pass every check
+# above while every run still paid the install (L3).
+_lin_runbody="$(awk '/^"\$DOCKER" run/{f=1} f' "$_LIN")"
+check "#338 the run uses the built tag rather than the base image" \
+  "case \"\$_lin_runbody\" in *'\"\$TAG\" bash'*) true ;; *) false ;; esac"
+check "#338 and installs nothing at run time, because the image already has it" \
+  "case \"\$_lin_runbody\" in *apt-get*) false ;; *) true ;; esac"
+
 section "== the receive path records how long its suite took, and how much room is left (#218) =="
 # Every pull that lands a hook runs the whole suite on the receiving Mac and writes the verdict to
 # .hook-tests as outcome, epoch, exit status, suites ran, suites not run. There was no DURATION in

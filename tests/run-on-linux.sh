@@ -10,6 +10,10 @@
 #   tests/run-on-linux.sh                          the whole suite
 #   tests/run-on-linux.sh tests/test-claude-sync.sh one suite file
 #   SECTION_ONLY='...' tests/run-on-linux.sh        one section, the same knob the suite takes
+#   SYNC_LINUX_PRINT_PLAN=1 tests/run-on-linux.sh  what it would do, without starting anything
+#
+# Measured on this Mac on 2026-09-07: one section took 18.6 seconds on the run that built the
+# image and 3.7 on every run after it.
 #
 # The container carries NO git identity, deliberately. That is what a runner is, and it is the
 # condition the second defect above needed. Anything that has to commit must bring its own.
@@ -53,6 +57,34 @@ esac
 # compared against the workflow's without an exception nobody can see.
 TOOL_PACKAGES="bash:bash git:git rsync:rsync jq:jq perl:perl pgrep:procps"
 
+packages="$(printf '%s\n' $TOOL_PACKAGES | awk -F: '{print $2}' | sort -u | tr '\n' ' ')"
+target="${1:-}"
+
+# The image is BUILT ONCE and reused (claude-config#338). Installing the packages inside a fresh
+# container on every invocation was most of the minute a run cost and needed a network, and the
+# cost is what decides whether this gets used: a run somebody has to decide to wait for is one they
+# skip when they are in a hurry, which is exactly when the defect it catches gets pushed.
+#
+# The tag is keyed on the two things that decide what the image CONTAINS, so a tool added to the
+# workflow invalidates it rather than being silently missing from a stale image (L40, L431). The
+# Dockerfile is generated from the same derived list rather than kept beside it as a second copy
+# that has to be remembered (L41).
+key="$(printf '%s|%s' "$IMAGE" "$packages" | { shasum -a 256 2>/dev/null || sha256sum 2>/dev/null; } | awk 'NR==1{print $1}')"
+case "$key" in
+  '' )
+    echo "run-on-linux: could not hash what the image should contain, so there is no safe name to cache it under. Refusing rather than reusing an image that may not match (L98)." >&2
+    exit 2 ;;
+esac
+TAG="claude-sync-linux:$(printf '%s' "$key" | cut -c1-12)"
+
+# What it WOULD do, without needing docker at all. It exists so the derivations above can be
+# checked without building anything, and because "what would this run" is a fair question to be
+# able to ask of a script that starts containers.
+if [ -n "${SYNC_LINUX_PRINT_PLAN:-}" ]; then
+  printf 'runner: %s\nimage: %s\ntag: %s\npackages: %s\n' "$runner" "$IMAGE" "$TAG" "$packages"
+  exit 0
+fi
+
 # The container runner is a SEAM (claude-config#337). Without it the only way to test the refusal
 # was to run this with docker off the PATH, which is a claim about the machine rather than a
 # condition the test sets: a GitHub runner HAS docker, so that test both failed there and made the
@@ -70,8 +102,16 @@ if ! "$DOCKER" info >/dev/null 2>&1; then
   exit 3
 fi
 
-packages="$(printf '%s\n' $TOOL_PACKAGES | awk -F: '{print $2}' | sort -u | tr '\n' ' ')"
-target="${1:-}"
+if ! "$DOCKER" image inspect "$TAG" >/dev/null 2>&1; then
+  # Said out loud. A first run that quietly takes two minutes reads as a hang, and the whole point
+  # of this is that a run is cheap enough to reach for (L106).
+  echo "run-on-linux: building $TAG from $IMAGE with [$packages]. This happens once per change to that list; every later run reuses it." >&2
+  if ! printf 'FROM %s\nENV DEBIAN_FRONTEND=noninteractive\nRUN apt-get update -qq && apt-get install -y -qq %s && rm -rf /var/lib/apt/lists/*\n' "$IMAGE" "$packages" \
+       | "$DOCKER" build -q -t "$TAG" - >/dev/null; then
+    echo "run-on-linux: that build failed, so the Linux run could not be made. This is UNMEASURED, not a pass." >&2
+    exit 3
+  fi
+fi
 
 # The checkout is mounted READ ONLY and copied inside, so a run cannot touch the working tree this
 # was launched from. The suite writes scratch, clones fixtures and kills process trees; none of that
@@ -79,13 +119,9 @@ target="${1:-}"
 "$DOCKER" run --rm -i \
   -v "$ROOT:/src:ro" \
   -e SECTION_ONLY -e SECTION_UNTIL -e SECTION_LIST -e SUITE_JOBS -e SUITE_DEBUG \
-  -e TARGET="$target" -e PACKAGES="$packages" \
-  "$IMAGE" bash -c '
+  -e TARGET="$target" \
+  "$TAG" bash -c '
     set -uo pipefail
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq >/dev/null 2>&1 || { echo "run-on-linux: apt-get update failed inside the container, so the tools the suite needs are not there. UNMEASURED." >&2; exit 3; }
-    # shellcheck disable=SC2086
-    apt-get install -y -qq $PACKAGES >/dev/null 2>&1 || { echo "run-on-linux: could not install [$PACKAGES] inside the container. UNMEASURED." >&2; exit 3; }
     cp -a /src /work && cd /work || { echo "run-on-linux: could not copy the checkout into the container. UNMEASURED." >&2; exit 3; }
     # Deliberately no git identity: that is what a runner is, and it is the condition a whole class
     # of defect needs in order to appear at all.
