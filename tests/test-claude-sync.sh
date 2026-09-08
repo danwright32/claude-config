@@ -10133,6 +10133,47 @@ check "#340 a run inside the interval asks nothing at all ($_op_calls_before the
 check "#340 and the call log really was recording ($_op_calls_before call(s) by now)" \
   "[ '$_op_calls_before' -gt 0 ]"
 
+# THE OTHER TWO ENDINGS THE CONTRACT NAMES, each PRODUCED rather than described (L151).
+#
+# Read through the RECORD's own fields, never through the file merely existing: the run that clears
+# it also ships, and shipping writes a fresh record, so the file is there either way. What tells a
+# cleared record from a kept one is that a fresh one starts with no told marker and a start time of
+# its own, while a kept one carries the previous run's (L253: a detector has to key on evidence of
+# the write, not on the thing being present).
+#
+# A cancelled run is the common case here rather than an oddity: this repo's workflow cancels a
+# superseded run, so every push landing while an earlier one is still going cancels it, and there
+# is nothing to report about a run nobody finished.
+out_op7a="$(op_run failure 'red once more')"
+_op_told_before="$(awk 'NR==1{print $4}' "$OPR/.my-push" 2>/dev/null)"
+check "#340 that red run really left a told marker, so losing it means something" \
+  "[ -n '$_op_told_before' ]"
+out_op7="$(op_run cancelled 'sixth edit')"
+dbg "#340 cancelled: $out_op7"
+check "#340 a cancelled run ends it, with nothing said" \
+  "! grep -q 'FAILED its tests' <<< \"\$out_op7\""
+_op_told_after="$(awk 'NR==1{print $4}' "$OPR/.my-push" 2>/dev/null)"
+check "#340 and the record it left behind is a fresh one, not the old one carried on" \
+  "[ -z '$_op_told_after' ]"
+
+# A verdict that never arrives is given up on, or a commit nothing ever judges leaves every run
+# from here on asking about it (L110). The age is PLANTED rather than waited for, and the window is
+# left at its shipped value, so what is exercised is the number that actually ships (L290, L322).
+_op_sha_now="$(awk 'NR==1{print $1}' "$OPR/.my-push" 2>/dev/null)"
+_op_now="$(date +%s)"
+printf '%s %s %s %s\n' "$_op_sha_now" "$_op_now" "111" "" > "$OPR/.my-push"
+out_op8="$(op_run pending 'seventh edit')"
+_op_kept_when="$(awk 'NR==1{print $2}' "$OPR/.my-push" 2>/dev/null)"
+check "#340 a pending verdict is kept rather than guessed at ($_op_now then $_op_kept_when)" \
+  "[ '$_op_kept_when' = '$_op_now' ]"
+check "#340 and pending says nothing either way" \
+  "! grep -q 'FAILED its tests' <<< \"\$out_op8\""
+printf '%s %s %s %s\n' "$_op_sha_now" "111" "111" "" > "$OPR/.my-push"
+out_op9="$(op_run pending 'eighth edit')"
+_op_gave_when="$(awk 'NR==1{print $2}' "$OPR/.my-push" 2>/dev/null)"
+check "#340 a verdict that never arrived is given up on ($_op_gave_when)" \
+  "[ -n '$_op_gave_when' ] && [ '$_op_gave_when' != '111' ]"
+
 section "== a two sided lesson does not stop on the derived index (claude-config#200) =="
 # LESSONS-INDEX.md is generated from LESSONS.md, and it is COMMITTED, so git combines it as though
 # somebody maintained it by hand. Whenever both Macs record a lesson between syncs the two
