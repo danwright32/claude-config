@@ -3956,12 +3956,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   (slate#2100, 2026-09-08: the theme control lives in the header's account menu. Its selection
   was `useState(preference)`, seeded from a prop the page had server rendered, and it applied
   the resolved theme to `document.documentElement` from a mount effect. The panel renders
-  nothing while closed. So choosing Light applied light and persisted it, and closing the menu
-  and opening it again remounted the toggle from the prop the page loaded with (the server
-  action revalidated nothing), showed System as selected, and the mount effect wrote system
-  back onto the document, turning the page dark again. Every part read as correct on its own.
-  The same mount effect was also the ONLY thing resolving the preference on the client, so a
-  session whose cookie had never been seeded painted light until somebody opened the menu,
+  nothing while closed, and the server action revalidated nothing, so the prop carried the load
+  time value for the life of the page: choosing Light, closing the menu and opening it again
+  remounted the toggle from that stale prop and wrote the old theme back onto the document.
+  Every part read as correct on its own. The reported instance was worse, because the prop and
+  the write were also keyed on DIFFERENT PEOPLE (the prop was the impersonated user, the write
+  the real admin), so the two could never agree at all; measuring both database rows was what
+  told the two mechanisms apart, and the remount replay is the one that remains for an ordinary
+  session. The same mount effect was also the ONLY thing resolving the preference on the client,
+  so a session whose cookie had never been seeded painted light until somebody opened the menu,
   which read to the person as the account menu changing their theme.)
 
 ## Security and privacy
