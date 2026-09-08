@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 586 lessons.
+LESSONS.md, which is NOT loaded into the session. 589 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -39,6 +39,7 @@ to decide something: the body is where the failure it came from is described.
 - L581. A merge or conflict resolution that writes its result to the LOCAL copy must read back the SHARED copy and confirm the merged entries are there before reporting success, because a merge that resolved correctly and a merge that also propagated produce the identical message.
 - L212. A count of source sites that CREATE a resource against source sites that RELEASE it cannot measure whether anything leaks, because one shared helper runs once per caller and a single missing teardown inside it multiplies invisibly, so measure what actually survives at runtime.
 - L63. A regression guard must assert the quantity it exists to protect, never a proxy for it.
+- L644. A check that an override EXISTS cannot see whether it WINS
 - L103. A guard that asserts the exact rendering of a value rather than the rule behind it fails the first legitimate refinement of that value, and when the value is a file's text it can also be satisfied by a comment ABOUT the thing, including one explaining that the thing was removed.
 - L48. A test fixture that claims to come from real data must be measured from it, never shaped so the rule under test fires.
 - L52. A test whose only outside dependency is a stub you wrote can only confirm your own assumption about the real interface.
@@ -157,6 +158,7 @@ to decide something: the body is where the failure it came from is described.
 - L442. A control has two testable surfaces, the VALUE it computes and the INPUT PATH a person drives it through, and the input path usually holds its own rules inside an event handler where nobody writes cases. A full green suite over the value model says nothing about whether the control can be used at all, so drive every control the way a person does before showing it to anybody.
 - L638. A test that asserts agreement with a DESIGNED ARTIFACT (a comp, a golden file, another system's published output) must READ that artifact, never the rule you believe produced it
 - L643. A reconciliation between two systems must compare the DECISIONS each one makes, never the list of who or what is ELIGIBLE to be chosen
+- L645. A tool reached through a shell FUNCTION is not the tool it is named after
 
 ## Data safety
 
@@ -337,6 +339,7 @@ to decide something: the body is where the failure it came from is described.
 - L432. A default that is RE-DERIVED from a sibling field whenever that field changes hides itself, because the values it produces vary and read as entered, and only the constant DIFFERENCE between the two fields reveals it. Check any derived looking field for a fixed offset across the whole population before pricing, billing or deciding anything from it.
 - L636. When an automation creates a record in a state that only a person can advance it out of, record that it is WAITING and why, because the same state chosen by a person on purpose looks identical, and the queue of things awaiting a human is otherwise invisible.
 - L637. A wildcard resolved when a definition is CREATED rather than when it is read (a view's `select *`, a generated type, a snapshotted schema) reads as everything always and is actually everything once
+- L646. A control that seeds its own state from a prop and writes shared state from a MOUNT EFFECT reverts the person's change every time its container remounts
 
 ## Security and privacy
 
