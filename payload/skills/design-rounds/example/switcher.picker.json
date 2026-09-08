@@ -1,0 +1,14 @@
+{
+  "round": "How tall should a row be",
+  "question": "How tall should a row be?",
+  "options": [
+    {
+      "label": "Normal",
+      "description": "The comfortable height, which fits eight rows in the window. 29px per row."
+    },
+    {
+      "label": "Tight",
+      "description": "Four pixels off the padding, which is what buys the other three rows. 19px per row."
+    }
+  ]
+}

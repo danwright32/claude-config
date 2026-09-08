@@ -32,6 +32,12 @@ buildScreen(variant) receives the whole variant object and returns one element:
 the entire screen, chrome included. Every option goes through that one function
 with one field changed between them, which is what makes "everything else held
 byte identical" structural rather than a promise.
+
+Beside the page it writes <out>.picker.json, the options for the picker the round
+closes with: one per tab, in the same order, labelled as the tab is and described
+by what that option is testing. The tab and the picker entry are the same two
+facts, so they are emitted from one list rather than retyped, which is the drift
+this tool already exists to stop for the keyboard shortcuts.
 """
 
 import json
@@ -215,6 +221,27 @@ def escape_text(value):
     return (str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
+def picker_options(spec, variants):
+    """The round's closing picker, derived from the same list the tabs are drawn from.
+
+    The label is the tab's own name and the description is what the readout shows
+    for that option, so the thing on screen and the thing being selected can never
+    say different things. No none of these option is added: the picker's own free
+    text answer is the escape hatch, and offering a refusal invites one when the
+    round's job is a comparison.
+    """
+    round_text = str(spec.get("round", "Which of these")).strip().rstrip("?").strip()
+    options = []
+    for variant in variants:
+        description = str(variant.get("why", "")).strip()
+        measured = str(variant.get("measured", "")).strip()
+        if measured:
+            description = description + " " + measured
+        options.append({"label": str(variant.get("name", "")).strip(),
+                        "description": description})
+    return {"round": round_text, "question": round_text + "?", "options": options}
+
+
 def main(argv):
     if len(argv) != 3:
         print(__doc__.split("\n\n")[1].strip().replace(
@@ -258,14 +285,19 @@ def main(argv):
     page = page.replace("__VARIANTS__",
                         json.dumps(variants, indent=2).replace("</", "<\\/"))
 
+    picker_path = os.path.splitext(out_path)[0] + ".picker.json"
     try:
         with open(out_path, "w", encoding="utf-8") as handle:
             handle.write(page)
+        with open(picker_path, "w", encoding="utf-8") as handle:
+            json.dump(picker_options(spec, variants), handle, indent=2)
+            handle.write("\n")
     except OSError as err:
         fail("the page could not be written to %s (%s)" % (out_path, err))
 
     print("SWITCHER %s options=%d keys=%s"
           % (out_path, len(variants), ",".join(v["key"] for v in variants)))
+    print("PICKER %s, one option per tab, ready for AskUserQuestion" % picker_path)
     return 0
 
 
