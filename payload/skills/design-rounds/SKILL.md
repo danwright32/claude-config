@@ -102,6 +102,28 @@ arguments for the exact shape, and see `example/` for a working one.
 
 `bash test-make-switcher.sh` runs its checks, and `run-all-tests.sh` finds that suite on its own. The refusals above each have a test that produces them, including the unwired key.
 
+**The page's own chrome is namespaced `dr-`, and the screen keeps whatever width it
+declares.** Both were failures, on 2026-09-08, in one round. The chrome styled a class it
+called `frame` with a 1180px ceiling, and the round's builder happened to name its element
+`frame` too; separately, the stage is a flexbox, so a screen wider than the stage was
+shrunk to fit whatever it was called. Three options declaring 1100, 1440 and 1720 all drew
+at the same size, under a readout naming three different widths, and nothing refused,
+because the page was structurally perfect. A person spotted that the pictures matched.
+So: every class the chrome styles now carries the `dr-` prefix, the round's heading has a
+class rather than being a bare `h1` that reached into the screen, and `.dr-stage > *` is
+`flex: none` so the stage scrolls rather than squeezing. A builder may use any class name
+it likes except a `dr-` one. Two tests hold this, one asserting the namespace and one
+measuring that a 1400px screen is 1400px on the page.
+
+**Draw an option wider than the window inside an iframe, scaled, and say the scale on
+screen.** A screen 1720px wide cannot be shown actual size in a 1330px window, and the
+three ways of coping all lie: clamping it draws the wrong width, clipping it hides the
+part being judged, and scrolling it defeats the comparison. Scale it, and caption it with
+its true width and the percentage, so a scaled option can never be mistaken for a clamped
+one. It has to be an iframe rather than a scaled div, because a media query inside a
+scaled div answers to the outer window and reports the wrong width, which is precisely the
+variable a round about width is testing.
+
 ## The deliverable
 
 The settled design is ONE self contained file committed in the repo: no build step, no

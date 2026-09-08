@@ -261,13 +261,13 @@ function box(sel) {
   return sel + " top=" + Math.round(r.top) + " bottom=" + Math.round(r.bottom) +
          " centre=" + Math.round(r.x + r.width / 2);
 }
-var last = document.querySelector(".hint").getBoundingClientRect().bottom;
-var screenTop = document.querySelector(".stage > *").getBoundingClientRect().top;
+var last = document.querySelector(".dr-hint").getBoundingClientRect().bottom;
+var screenTop = document.querySelector(".dr-stage > *").getBoundingClientRect().top;
 var lines = [
   "viewport-centre " + window.innerWidth / 2,
   "dead-space-below " + Math.round(window.innerHeight - last),
   "screen-top " + Math.round(screenTop),
-  box(".stage")
+  box(".dr-stage")
 ];
 var out = document.createElement("pre"); out.id = "G"; out.textContent = lines.join("\\n");
 document.body.append(out);
@@ -288,7 +288,7 @@ if [[ -x "$CHROME" ]]; then
   check "the stage is centred on the window" "centre 720" \
     "$(echo "$g" | awk '/viewport-centre/ {print "centre", $2}')"
   check_eq "the stage sits on the window centre line" "720" \
-    "$(echo "$g" | awk '/^.stage/ {for(i=1;i<=NF;i++) if ($i ~ /^centre=/) {sub("centre=","",$i); print $i}}')"
+    "$(echo "$g" | awk '/^.dr-stage/ {for(i=1;i<=NF;i++) if ($i ~ /^centre=/) {sub("centre=","",$i); print $i}}')"
 
   # A screen taller than the window must not have its top cut off, which is what
   # centring an overflowing flex item does.
@@ -307,7 +307,7 @@ TALLSPEC
   python3 "$SCRIPT" "$TMP/tall.json" "$TMP/tall.html" >/dev/null 2>&1
   gt="$(geometry "$TMP/tall.html" 900)"
   top="$(echo "$gt" | awk '/screen-top/ {print $2}')"
-  stagetop="$(echo "$gt" | awk '/^.stage/ {for(i=1;i<=NF;i++) if ($i ~ /^top=/) {sub("top=","",$i); print $i}}')"
+  stagetop="$(echo "$gt" | awk '/^.dr-stage/ {for(i=1;i<=NF;i++) if ($i ~ /^top=/) {sub("top=","",$i); print $i}}')"
   check_eq "a screen taller than the window keeps its top reachable" "1" \
     "$([ -n "$top" ] && [ -n "$stagetop" ] && [ "$top" -ge "$stagetop" ] && echo 1 || echo "0 (screen top ${top:-none} is above stage top ${stagetop:-none})")"
 fi
@@ -360,6 +360,74 @@ check_eq "regenerating the example produces a picker list" "1" \
 check_eq "the committed example's picker options match what the tool produces now" \
   "$(shasum "$DIR/example/switcher.picker.json" 2>/dev/null | cut -d' ' -f1)x" \
   "$(shasum "$TMP/example-now.picker.json" 2>/dev/null | cut -d' ' -f1)x"
+
+# --- the chrome must not collide with the project's own class names ---
+#
+# Dated regression, 2026-09-08, PaperBoi round 63. The chrome styled a class it
+# called `frame` with `max-width: 1180px`. A project builder that also called its
+# element `frame` inherited that ceiling, so three options declaring 1100, 1440 and
+# 1720 all rendered at 1180: identical pictures under three different labels, with
+# the readout confidently naming three widths. Nothing refused, because the page was
+# structurally fine. It was caught by a person noticing the pictures matched.
+#
+# The fix is a namespace the project cannot reach by accident, so this asserts the
+# namespace itself rather than the one name that happened to collide.
+
+chrome_classes() { # chrome_classes <page> -> one class selector per line, chrome block only
+  python3 - "$1" <<'CHROMEPY'
+import re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+blocks = re.findall(r"<style>(.*?)</style>", page, re.S)
+if len(blocks) < 1:
+    print("NO-STYLE-BLOCK")
+    raise SystemExit
+# The FIRST block is the tool's own chrome; the second is the project's stylesheet.
+for name in sorted(set(re.findall(r"\.([A-Za-z][\w-]*)", blocks[0]))):
+    print(name)
+CHROMEPY
+}
+
+# Its own spec and its own output file: a test that reads a path an earlier test
+# wrote is judging that test's output, not its own.
+spec "$TMP/ns.json" '[{"key":"1","name":"A","why":"first"},{"key":"2","name":"B","why":"second"}]'
+python3 "$SCRIPT" "$TMP/ns.json" "$TMP/ns.html" || fail=$((fail + 1))
+bare="$(chrome_classes "$TMP/ns.html" | grep -v '^dr-' | tr '\n' ' ')"
+check_eq "every class the chrome styles is namespaced, so a project cannot collide with one" "" "${bare% }"
+
+# The project's own stylesheet is left alone: namespacing the chrome must not rewrite
+# the project's classes, or every existing round's builder stops being styled.
+check "the project's own class is untouched in its own block" ".screen { color: #111; }" \
+  "$(cat "$TMP/ns.html")"
+
+if [[ -x "$CHROME" ]]; then
+  # End to end, the exact failure: a builder whose element is called `frame` and asks
+  # for 1400px must be 1400px on the page, not clamped to the chrome's ceiling.
+  printf 'function buildScreen(variant) { var d = document.createElement("div"); d.className = "frame"; d.style.width = "1400px"; d.style.height = "200px"; return d; }\n' > "$TMP/collide-builder.js"
+  python3 - "$TMP/ns.json" "$TMP/collide.json" <<'COLLIDE'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "collide-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+COLLIDE
+  python3 "$SCRIPT" "$TMP/collide.json" "$TMP/collide.html" || fail=$((fail + 1))
+  width="$(python3 - "$TMP/collide.html" <<'WIDTHPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+var e = document.querySelector("#stage > *");
+var out = document.createElement("pre"); out.id = "W";
+out.textContent = e ? String(Math.round(e.getBoundingClientRect().width)) : "missing";
+document.body.append(out);
+</script>
+"""
+open(sys.argv[1] + ".w.html", "w", encoding="utf-8").write(page + harness)
+WIDTHPY
+  "$CHROME" --headless --disable-gpu --no-sandbox --window-size=1900,900 \
+    --virtual-time-budget=2000 --dump-dom "file://$TMP/collide.html.w.html" 2>/dev/null \
+    | python3 -c 'import sys,re; m=re.search(r"<pre id=\"W\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1).strip() if m else "NO-WIDTH")')"
+  check_eq "a project element named like the chrome keeps its own width" "1400" "$width"
+fi
 
 
 echo
