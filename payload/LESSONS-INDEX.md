@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 562 lessons.
+LESSONS.md, which is NOT loaded into the session. 566 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -29,6 +29,7 @@ to decide something: the body is where the failure it came from is described.
 - L151. Every outcome a guard's own contract ENUMERATES must have a test that PRODUCES that outcome, not merely a test that passes.
 - L246. A feasibility check must exercise the HARDEST thing the plan depends on, not the easiest thing that proves the tool runs at all, because a green on the easy case reads as permission to build and the capability nobody measured is the one the plan actually rests on.
 - L248. A finding that rules a capability OUT must be measured under the same control as one that rules it in, because nothing downstream ever re-tests a closed door: the work that would have exercised it is exactly the work the finding stopped anyone writing.
+- L439. A variable one test EXPORTS is inherited by every later test's subprocesses, so a fixture that is correct on its own silently changes what the code under test BELIEVES in every test after it, and the symptom surfaces far away with nothing naming the cause.
 - L2. Tests must be structurally unable to touch live data, production services, or paid APIs.
 - L196. A component that CONSTRUCTS its own dependency rather than receiving one is beyond every refusal that dependency could offer
 - L322. Isolation set through an ENVIRONMENT VARIABLE is only real if the tool being isolated actually honours it, so measure where the writes LAND rather than trusting the variable.
@@ -262,6 +263,7 @@ to decide something: the body is where the failure it came from is described.
 - L622. A state meaning NEVER RECORDED, separated from the failure state only in the WORDING of the response while taking the same ACTION, is not separated at all
 - L427. A probe posted on a fixed interval that does not wait for the previous one to return records one event per interval that a single outage lasts
 - L431. A guard that skips expensive work when its inputs are unchanged saves nothing unless computing its KEY is cheaper than the work
+- L440. A message softened so it stops claiming something the check did not measure must then STATE what the check DID measure
 
 ## State and identity
 
@@ -511,6 +513,7 @@ to decide something: the body is where the failure it came from is described.
 - L624. A step whose work list is what an earlier mechanism REPORTED as a problem (the conflicted paths, the failed items, the flagged files) loses every subject a later fix stops that mechanism reporting, and it still has to act on them, so a rule added to SILENCE a report must be checked against every step that consumed that report as its queue.
 - L428. Adding a new threshold BESIDE an existing one, rather than changing it, leaves every reader of the old constant silently answering a question that has been superseded, and no rule about changing a limit fires because nothing was changed. When a rule's meaning splits across two constants, audit every reader of the old one and state which of the two questions it is asking.
 - L429. A file the platform loads AUTOMATICALLY into every session grows one entry at a time and has a size ceiling nothing in the project measures, so put a check on its size: past the ceiling the rules stop arriving rather than failing, and a rule that never arrived is indistinguishable from one that was followed.
+- L437. Code lifted out of a file to be reused elsewhere leaves behind everything it was inheriting from that file's AMBIENT SCOPE (a stylesheet's `body` or `:root` rule, a module's top level setup, a test file's shared fixture), and because the inherited thing is usually a DEFAULT, the extracted copy still runs and still looks finished while quietly using the platform's default instead. Prove it by reading back what the running system actually applied, never by checking that the extraction renders.
 
 ## Cross-system reliability
 
@@ -578,6 +581,7 @@ to decide something: the body is where the failure it came from is described.
 - L297. A scanner that guards a class of fault across the whole tree pays per line, so it is written as one pass per file from the start, and a failing guard's full output is kept (L148) so an intermittent failure can be diagnosed instead of retried.
 - L298. A harness that reruns the suite once per case (a mutation sweep, a property sweep, a matrix, a suite that tests itself by launching itself) pays the boot once per case, so the lever is the boot, then the cadence, and never the tests; the per-case verdict semantics that make the tool trustworthy must survive the change unchanged.
 - L433. Work a runner SPLITS across parallel workers must be self contained per unit, because the split is chosen at run time from measured cost and moves between runs, so a unit that reads what its neighbour set up passes until the day the two land in different workers.
+- L438. A measurement taken by SAMPLING from inside the same context as the thing being measured (polling in a script that shares the browser's frames, a profiler on the thread it profiles, a logger on the loop it watches) can itself be the load that changes the result, so a reading saying the thing under test is slow or dead is first evidence about the MEASUREMENT. Judge by the events the platform emits for that work rather than by observing it from beside it.
 
 ## Pipeline speed
 

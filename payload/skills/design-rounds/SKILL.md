@@ -25,7 +25,7 @@ says what is on the screen. Not later: once the screen exists in the real framew
 every round costs a rebuild rather than an edit, and the question quietly changes from
 what this should look like to what is cheap to change now.
 
-## The six rules
+## The seven rules
 
 1. **Render, do not describe.** Build the options and show them. Ask afterwards.
 2. **One variable per round.** Everything else identical, produced by one builder, so
@@ -44,6 +44,24 @@ what this should look like to what is cheap to change now.
    that red is reserved for the one place something is genuinely wrong.
 6. **Count the facts before showing any chrome.** No number may appear twice. A sidebar
    was rejected on sight for stating the same count in two places.
+7. **Ask with a picker, never in prose.** The round ends with an AskUserQuestion picker,
+   always, one per round. A round that renders properly and then asks in a paragraph
+   hands Dan the switcher's work back as typing, and he answers by selecting.
+
+## Asking for the choice
+
+Every round closes the same way: build the switcher, tell him it is open, then put up
+the picker. Not a sentence inviting a reply, not a numbered list in the message.
+
+- **One question per call.** Multi question calls have lost answers mid selection.
+- **One option per switcher tab**, with the SAME label the tab carries, so the thing on
+  screen and the thing being selected are named identically.
+- **Each option's description is what that option is testing**, the same text the
+  switcher's readout shows for it, so the reason is in front of him as he chooses.
+- **Order the options the switcher orders them in.** A picker that reorders them makes
+  him re-find each one.
+- The picker's own free text answer is the escape hatch, so do not add a none of these
+  option: it invites a rejection when the round's job is a comparison.
 
 ## The tool
 
@@ -94,3 +112,5 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
 5. Rewriting the switcher by hand each round, which is how the working keyboard
    shortcuts were lost between one round and the next.
 6. Committing the chooser as though it were the design.
+7. Building the switcher and then asking for the pick in prose, which turns a one
+   keystroke comparison back into a message he has to write.

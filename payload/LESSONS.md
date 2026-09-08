@@ -253,6 +253,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   one build with the suspect switched on and off and the state sampled once a second, measured the
   opposite: the app reports runningForeground and the tree is about 17,800 characters throughout.
   Only the close ACTION fails. Reading, which is what had been written off, works perfectly)
+- **L439. A variable one test EXPORTS is inherited by every later test's subprocesses, so a
+  fixture that is correct on its own silently changes what the code under test BELIEVES in
+  every test after it, and the symptom surfaces far away with nothing naming the cause.**
+  Export only from the shared setup, and have a test that must set one set it back.
+  (claude-config#341. A section of the sync suite exported a GitHub repository name at top
+  level, for its own fixtures. Every section after it in the same worker then handed that
+  name to every invocation of the tool, so ordinary fixtures believed they were a repository
+  that is not this one. It sat harmless until a CI verdict lookup landed on the path every
+  mutating run takes, at which point those fixtures began asking the operator's real
+  authenticated GitHub CLI about it: the suite went from 190 to 351 seconds and twenty nine
+  timing sensitive checks failed, not one of them anywhere near the section responsible, and
+  none of them naming CI at all)
+
 - **L2. Tests must be structurally unable to touch live data, production services, or
   paid APIs.** Inject seams for stores, directories, clocks, and external calls, plus a
   refusal inside the service itself. (10 issues, 6 repos)
@@ -2976,6 +2989,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   app's own watchdog: 30 freezes on that surface in one day, median 1.34s, which is worse than the
   queue every performance issue so far had been about. Nothing reported it because that surface has no
   lifted pass, no counted corpus and no cost test, unlike the queue beside it)
+
+- **L440. A message softened so it stops claiming something the check did not measure must then STATE
+  what the check DID measure**, or the vaguer sentence is truthful and uninformative at once, and it
+  sends the reader hunting for a fact the code was already holding at the moment it composed the
+  sentence. Refusing to overclaim is only half the rule (L11): the other half is naming what was
+  found.
+  (overture#3672, 2026-09-07: a date header in Overture's queue reads "Another pitch is already in
+  progress on a night one of these runs plays". The wording is deliberate, because the check reads
+  every night of a multi night run and the clash it reports is often not the header's own date, so
+  the earlier "on this date" would have been a claim about the date printed directly above it that
+  the check never made. What it gave up is the night itself, which the same code has in hand: the
+  function deciding which of the two wordings to use walks the very overlaps that carry the night,
+  and the sibling sentence on the row below already renders one as "Oct 29". Dan read the banner,
+  could not tell whether the clash was on the header's date or a later night of a run filed there,
+  and asked. The fix is not to restore the false claim, it is to say "on Oct 2")
 
 ## State and identity
 
@@ -5706,6 +5734,25 @@ for reference; L6 was reviewed and deliberately not adopted.
   system with roughly 80 lessons of headroom.)
 
 
+- **L437. Code lifted out of a file to be reused elsewhere leaves behind everything it was
+  inheriting from that file's AMBIENT SCOPE (a stylesheet's `body` or `:root` rule, a module's
+  top level setup, a test file's shared fixture), and because the inherited thing is usually a
+  DEFAULT, the extracted copy still runs and still looks finished while quietly using the
+  platform's default instead. Prove it by reading back what the running system actually
+  applied, never by checking that the extraction renders.** Distinct from L218, which is about
+  an OMITTED rule falling back to a neighbouring rule inside one policy chain: here nothing was
+  omitted from the thing extracted, the loss is in what surrounded it. Distinct from L501,
+  where the clone carries stale VALUES: here the values are correct and a rule is simply absent.
+  (ovation#120, 2026-09-07: the settled screen was lifted out of a committed design file to
+  build a design round on it, taking the fonts, the palette and every screen rule but not the
+  page chrome those rules sat beside. The settled typeface was set on `body`, so the whole
+  window rendered in the system face. All four faces still LOADED, since the mono and serif
+  rules named their families directly, so a check that the embedded fonts were present passed;
+  what caught it was reading `document.fonts` back and seeing Archivo reported `unloaded`
+  because nothing was asking for it. A class name collided in the same extraction, `.nrow`
+  already being the neighbouring screen's names column.)
+
+
 ## Cross-system reliability
 
 - **L405. A check deciding whether anything is NEW must compare what the artifact MEANS, never its
@@ -6427,6 +6474,22 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   moved from run to run, and three separate theories were measured and disproved before the run log
   was read far enough to find the unbound variable message. The suite's own count guard is the only
   reason it was caught at all, which is L288 working; nothing catches the cause)
+
+- **L438. A measurement taken by SAMPLING from inside the same context as the thing being measured
+  (polling in a script that shares the browser's frames, a profiler on the thread it profiles, a
+  logger on the loop it watches) can itself be the load that changes the result, so a reading
+  saying the thing under test is slow or dead is first evidence about the MEASUREMENT. Judge by
+  the events the platform emits for that work rather than by observing it from beside it.**
+  Distinct from L356 and L294, which are about what ELSE the machine is running: here the observer
+  is the load, so the reading is true about that run and false about the code, and it gets worse
+  the harder you look.
+  (ovation#111, 2026-09-07: four transitions were checked by clicking a row and then sampling the
+  computed style every few frames from the same script. One option read as never moving at all,
+  and it was reported to Dan as broken. Re-measured with the browser's own `transitionstart` and
+  `transitionend` events, with the script doing nothing in between, that same option ran from 33ms
+  to 307ms, which is the 280ms it was written to take. The three options that appeared fine were
+  simply shorter than the sampling was slow.)
+
 
 ## Pipeline speed
 
