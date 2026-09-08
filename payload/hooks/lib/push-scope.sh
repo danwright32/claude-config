@@ -196,3 +196,24 @@ ps_merge_base() {
   fi
   printf '%s' "$mb"
 }
+
+# The ref a push should be judged AGAINST (claude-config#339). The upstream if there is one, then
+# the remote's own default branch, then the usual names, then nothing. Written once here because
+# three push hooks each need the same answer and three copies of it would drift, and this is the
+# half whose drift is invisible: a wrong base scopes a gate to the wrong diff while still reporting
+# a clean run (L70, L613).
+#
+# Prints the ref and returns 0, or prints nothing and returns 1. A caller that gets nothing must
+# decide for itself what to do; there is no fallback here, because "judge against HEAD~1" and
+# "judge nothing" are different decisions and the gates do not make them the same way.
+ps_base_ref() {
+  local up base c
+  up="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
+  if [ -n "$up" ]; then printf '%s' "$up"; return 0; fi
+  base="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
+  if [ -n "$base" ]; then printf '%s' "$base"; return 0; fi
+  for c in origin/main origin/master main master; do
+    if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
