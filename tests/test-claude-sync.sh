@@ -9782,22 +9782,29 @@ CLAUDE_HOME="$CIHA" SYNC_REPO="$CIA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash 
 # A stub gh answering the ONE endpoint the gate asks about, in the shape the real one answers in,
 # because a stub written to match my own idea of the reply proves only that (L52).
 CIBIN="$WORK/ci-bin"; mkdir -p "$CIBIN"
-cat > "$CIBIN/gh" <<'STUB'
+# The log path is baked in when the stub is WRITTEN, not read from the environment when it runs
+# (claude-config#341). Reading it meant exporting CI_CALLS, and an export made here is inherited by
+# every section after this one in the same worker. The run time values below stay dynamic.
+cat > "$CIBIN/gh" <<STUB
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$CI_CALLS"
+printf '%s\n' "\$*" >> "$WORK/ci-calls.log"
 # Three answers, and they are different facts: a state, an EMPTY list from a gh that worked, and a
 # gh that refused. The middle one is what a commit with no run at all looks like, and reading it as
 # the third would report a working lookup as a broken one (L10, L11).
-[ "${CI_STATE:-}" = "none" ] && exit 0
-[ -n "${CI_STATE:-}" ] || exit 1
-printf '%s\n' "$CI_STATE"
+[ "\${CI_STATE:-}" = "none" ] && exit 0
+[ -n "\${CI_STATE:-}" ] || exit 1
+printf '%s\n' "\$CI_STATE"
 STUB
 chmod +x "$CIBIN/gh"
-export CI_CALLS="$WORK/ci-calls.log"; : > "$CI_CALLS"
+CI_CALLS="$WORK/ci-calls.log"; : > "$CI_CALLS"
 # The repo the gate asks about. The fixtures push to a bare repo on disk, and no derivation can
 # turn a local path into an owner and a name, so the slug is named here and the DERIVATION is
 # tested on its own below against the URL forms GitHub actually hands out.
-export SYNC_REPO_SLUG="acme/widgets"
+# Carried to each run as a PREFIX rather than exported (claude-config#341). Exported, it reached
+# every section after this one, so ordinary fixtures believed they were a GitHub repository that is
+# not this one, and once a verdict lookup landed on the path every mutating run takes they began
+# asking the operator's real authenticated gh about it.
+CI_SLUG="acme/widgets"
 # A registry these runs can actually write. The prelude points it at a directory that does not
 # exist, deliberately, and a sync that gets far enough to record its clone dies on it. The gated
 # runs return before they reach it and the ungated ones do not, so without this the escape hatch
@@ -9829,7 +9836,7 @@ ci_case(){   # ci_case <label> <ci state, empty for a gh that refuses> -> the au
     SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
   # B ticks AUTOMATICALLY, with a local edit of its own so there is something to send as well.
   printf 'edit from B\n' > "$CI_HOME/hooks/from-B.sh"
-  CI_STATE="$2" SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 \
+  CI_STATE="$2" SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 SYNC_REPO_SLUG="$CI_SLUG" \
     CLAUDE_HOME="$CI_HOME" SYNC_REPO="$CI_REPO" \
     SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1
 }
@@ -9840,7 +9847,7 @@ ci_tick(){   # ci_tick <label of an existing case> <ci state> -> that tick's out
   local CI_REPO CI_HOME
   CI_REPO="$(ci_repo "$1")"; CI_HOME="$(ci_home "$1")"
   printf 'a later edit from B\n' > "$CI_HOME/hooks/from-B.sh"
-  CI_STATE="$2" SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 \
+  CI_STATE="$2" SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 SYNC_REPO_SLUG="$CI_SLUG" \
     CLAUDE_HOME="$CI_HOME" SYNC_REPO="$CI_REPO" \
     SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1
 }
@@ -10114,7 +10121,7 @@ op_run(){   # op_run <ci state> <what to write into the home> -> that run's outp
   # The verdict is asked for at most once a minute, and never in the first one, because a real
   # verdict cannot exist that soon and an unconditional lookup put a network call on every mutating
   # run. This fixture runs in seconds, so it has to say so rather than inherit the production wait.
-  CI_STATE="$1" SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 SYNC_CLONE_REGISTRY="$CI_REG" \
+  CI_STATE="$1" SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 SYNC_CLONE_REGISTRY="$CI_REG" SYNC_REPO_SLUG="$CI_SLUG" \
     SYNC_OWN_PUSH_ASK_EVERY="${OP_EVERY:-0}" \
     CLAUDE_HOME="$OPH" SYNC_REPO="$OPR" \
     SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1
@@ -11848,6 +11855,43 @@ check "#333 the declared copy really carries the declaration" "[ '$_nsp2_n' -eq 
 _ns_p2="$(_ns_run "$_NSP2" | sed '1d')"
 check "#333 and the same read, declared, is not a finding" "[ -z \"\$_ns_p2\" ]"
 
+# ---- and a section may not CHANGE what the sections after it see (claude-config#341) ----
+# The other direction of the same isolation. A variable a section EXPORTS is inherited by every
+# later section's subprocesses, so a fixture that is correct on its own silently changes what the
+# tool BELIEVES in every section after it. One did: a GitHub repository name exported here for its
+# own fixtures meant ordinary fixtures believed they were a repository that is not this one, and
+# once a CI verdict lookup landed on the path every mutating run takes they began asking the
+# operator's real authenticated gh about it. Measured 2026-09-07, the suite went from 190 to 351
+# seconds and twenty nine timing sensitive checks failed, not one of them near the section
+# responsible.
+#
+# The scan above cannot see this: it reads what the suite reads from itself, and this travels
+# through the environment of a child process instead. The PRELUDE is exempt because every worker
+# runs it, which is what makes it the right place for anything genuinely suite wide.
+_ns_exports="$(awk -v PRE="$SUITE_PRELUDE_END" '
+  /^section "/ { nsec++; if (index(tolower($0), tolower(PRE)) > 0) pre = nsec }
+  /^[[:space:]]*export / { if (nsec > 0 && pre > 0 && nsec > pre) printf "%d: %s\n", FNR, $0 }
+' "$SCRIPT_SELF")"
+check "#341 no section after the prelude exports anything to the ones after it" \
+  "[ -z \"\$_ns_exports\" ] || { printf '%s\n' \"\$_ns_exports\" | awk 'NR <= 5' >&2; false; }"
+# Watched CATCHING one, on a copy, because a ceiling at zero stops being a measurement and starts
+# reading as proof the shape cannot occur (L182, L1). Planted after the prelude, where it matters,
+# and a second one planted INSIDE the prelude must not be reported, or the rule is just a ban on
+# the word.
+_NSX="$WORK/needs-export-plant.sh"
+awk '/^suite_profile$/ && !ins {
+       print "section \"== zzz a planted section that exports ==\""
+       print "export ZZZ_PLANTED_LEAK=1"
+       ins = 1 } { print }' "$SCRIPT_SELF" > "$_NSX"
+_ns_x="$(awk -v PRE="$SUITE_PRELUDE_END" '
+  /^section "/ { nsec++; if (index(tolower($0), tolower(PRE)) > 0) pre = nsec }
+  /^[[:space:]]*export / { if (nsec > 0 && pre > 0 && nsec > pre) printf "%d: %s\n", FNR, $0 }
+' "$_NSX")"
+check "#341 an export planted after the prelude is caught" \
+  "case \"\$_ns_x\" in *ZZZ_PLANTED_LEAK*) true ;; *) false ;; esac"
+check "#341 and the prelude's own exports are not reported" \
+  "case \"\$_ns_x\" in *SYNC_NO_NOTIFY*) false ;; *) true ;; esac"
+
 section "== every heading this file writes is one its own reader can see (#138) =="
 # The collector recognises exactly one shape: a `section` call at column zero whose title is a
 # literal string, and it takes the title by dropping everything from the last quote. A heading
@@ -12701,7 +12745,12 @@ WT_FS="$WT/fake-fswatch"; WT_HITS="$WT/hits"
 # rather than on a fixed pause. A `sleep 0.3` here would have been a bet that the machine gets
 # round to the send inside the drain window, which is a bet about load, and it is judged hardest
 # exactly when the machine is busiest (L290).
-cat > "$WT_FS" <<'FSEOF'
+# The path is baked in when this is WRITTEN (claude-config#341). It is a separate process, so it
+# used to read the name from the environment, which meant exporting it, and an export made in a
+# section is inherited by every section after it in the same worker. Removing that export without
+# this left the loop below comparing against an empty name, which is always true, so it spun for
+# ever: the export was load bearing in a way nothing said out loud.
+cat > "$WT_FS" <<FSEOF
 #!/usr/bin/env bash
 echo one
 # Poll granularity, not a wait for a duration: the loop below ends the moment the send lands.
@@ -12712,7 +12761,6 @@ echo four
 echo five
 FSEOF
 chmod +x "$WT_FS"
-export WT_HITS
 WT_HOME="$WT/home"; mkdir -p "$WT_HOME/hooks"
 : > "$WT_HITS"
 SYNC_FSWATCH="$WT_FS" SYNC_WATCH_SEND="printf 'x\n' >> '$WT_HITS'" \
