@@ -6398,6 +6398,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   kernel when its holder dies" is the half that made this invisible; L235 is the same inheritance
   mechanism reaching stdout instead of a lock)
 
+- **L444. A guard that identifies its own leftovers by matching text against a MACHINE WIDE namespace
+  (the process table, a port, a temp path, a shared lock list) claims everything that matches,
+  including work it never started, so assert against the process GROUP or the pid it actually
+  created.** The failure lands on whoever happens to be running something ordinary at the time and
+  reads as a defect in the code under test, which is the direction that gets a gate re-run rather
+  than read.
+  (Overture#3689: the fixture runner's leaked-process assertions call `pgrep -f 'sleep 300'` over the
+  whole machine and sit inside the mandatory pre-push run. On 2026-09-08 a session that had been
+  polling long builds with backgrounded `sleep 300` commands turned the cheap lane red four times
+  over, `expected: 0, actual: 2`, and the same fixture passed all 128 of its assertions on its own
+  moments later with nothing changed. The runner already puts each fixture in its own process group
+  for exactly this attribution problem, so the answer was there and unused. Adjacent to L245, which
+  is the SELF matching half of this: a script that names a marker in order to search for it finds
+  itself. This is the other half, finding a stranger. Whatever replaces such a check is seen to fail
+  on a real stray in its own group AND seen to PASS with an identical unrelated process outside it,
+  or the half that matters is unproved)
+
 
 ## Test speed
 
