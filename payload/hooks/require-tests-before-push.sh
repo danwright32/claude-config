@@ -185,6 +185,17 @@ is_test() {
   # function tests follow. Without this they read as untested source code.
   printf '%s' "$f" | grep -Eiq '_test\.(ts|tsx|js|jsx|mjs|cjs)$'       && return 0
   printf '%s' "$f" | grep -Eiq '_spec\.rb$'                           && return 0
+  # `<rule>.cases.js` beside `<rule>.js` (ovation#130). Ovation's design rules ship as executable
+  # functions with their cases in a sibling file, run by the ordinary suite. The classifier saw the
+  # rule as source and the cases as nothing, so a push adding two cases, one of which failed on the
+  # code as it stood, was blocked as untested and overridden. Those cases change every time a rule
+  # does, and an override that becomes routine stops being a decision, which is how a gate is worn
+  # down to nothing (L36).
+  #
+  # Matched by CONVENTION, not by that project's directory, for the reason every other branch here
+  # is: a rule written as one repository's path is absent the moment the next project adopts the
+  # convention, and it reads as coverage while covering nothing (L362).
+  printf '%s' "$f" | grep -Eiq '\.cases\.(ts|tsx|js|jsx|mjs|cjs)$'      && return 0
   printf '%s' "$f" | grep -Eiq 'Tests?\.(java|kt|cs|swift|scala)$'    && return 0
   printf '%s' "$f" | grep -Eiq '(^|/)conftest\.py$'                   && return 0
   # Shell suites (claude-config#95). A whole language of tests was invisible here, and the config

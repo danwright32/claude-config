@@ -44,6 +44,28 @@ want_nottest "hooks/test-helpers.sh"
 want_nottest "scripts/test-fixtures.sh"
 want_nottest "hooks/testimonials.sh"
 
+# --- ovation#130: a `.cases.js` file is the executable form of a rule ---
+# Ovation's design rules live as `docs/design/rules/<rule>.js` with their cases beside them as
+# `<rule>.cases.js`, run by the ordinary suite. The classifier saw the rule as source and the cases
+# as nothing, so a push adding two cases (one of which failed on the code as it was) was blocked as
+# untested and overridden. 137 cases will change every time a rule does, and an override that
+# becomes routine stops being a decision, which is how a gate is worn down to nothing (L36).
+#
+# Matched by CONVENTION rather than by that one repository's path, for the same reason every other
+# branch here is: a rule written as one project's directory is absent the moment the next project
+# adopts the convention, and it would read as coverage while covering nothing (L362).
+want_test "docs/design/rules/time-field.cases.js"
+want_test "docs/design/rules/typing.cases.js"
+want_test "src/pricing.cases.ts"
+want_test "lib/duration.cases.mjs"
+
+# The rule itself is still SOURCE and still not a test, which is the whole point: changing a rule
+# with no case is what the gate must go on blocking. Nothing asserts that the CASES file is not
+# source, because the classifier loop asks is_test first and skips a match, so is_source is never
+# consulted for it, exactly as it is never consulted for `Foo.test.ts`.
+want_source "docs/design/rules/time-field.js"
+want_nottest "docs/design/rules/time-field.js"
+
 # --- existing conventions must still register (regression) ---
 want_test "src/components/Foo.test.ts"
 want_test "src/components/Foo.spec.tsx"
