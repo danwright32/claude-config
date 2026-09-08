@@ -11667,9 +11667,9 @@ BEGIN { sec = 0; hd = ""; nsec = 0; nread = 0; afterhead = 0; SQ = sprintf("%c",
 
   # ---- heredoc bodies belong to whatever the heredoc is fed to, not to this file ----
   if (hd != "") { if (trim(line) == hd) hd = ""; next }
-  if (line !~ /<<</ && match(line, /<<-?[ \t]*['"]?[A-Za-z_]/)) {
+  if (line !~ /<<</ && match(line, /<<-?['"]?[A-Za-z_]/)) {
     m = substr(line, RSTART)
-    sub(/^<<-?[ \t]*/, "", m)
+    sub(/^<<-?/, "", m)
     gsub(/['"]/, "", m)
     if (match(m, /^[A-Za-z_][A-Za-z0-9_]*/)) hd = substr(m, 1, RLENGTH)
   }
@@ -11807,8 +11807,13 @@ _ns_pre="$(printf '%s' "$_ns_saw" | sed -n 's/.*prelude=\([0-9][0-9]*\).*/\1/p')
 # What the scan actually saw, before what it concluded. A scan that parsed no sections, or found
 # the prelude boundary nowhere, reports a clean file for the same reason an empty tree scans clean
 # (L98), and the ceiling below would then be protection over nothing (L182).
-check "#333 the scan read this file ($_ns_secs sections, $_ns_reads variable reads)" \
-  "[ '${_ns_secs:-0}' -ge 100 ] && [ '${_ns_reads:-0}' -ge 1000 ]"
+# EVERY section, not merely a lot of them. A floor is satisfied by a scan that stopped two thirds
+# of the way through, which is exactly what an unterminated heredoc does to it: on 2026-09-07 a
+# comment containing the characters a heredoc opens with took this from 146 sections to 117, and
+# the floor of 100 passed while the scan was blind to the last third of the file (L98, L288).
+_ns_real="$(grep -c '^section "' "$SCRIPT_SELF" || true)"
+check "#333 the scan read EVERY section of this file ($_ns_secs of $_ns_real, $_ns_reads variable reads)" \
+  "[ '${_ns_secs:-0}' -eq '${_ns_real:-0}' ] && [ '${_ns_reads:-0}' -ge 1000 ]"
 check "#333 and it placed the prelude boundary (section $_ns_pre)" \
   "[ '${_ns_pre:-0}' -ge 1 ] && [ '${_ns_pre:-0}' -lt '${_ns_secs:-0}' ]"
 _ns_bad="$(sed '1d' "$_NSOUT")"
@@ -11868,10 +11873,30 @@ check "#333 and the same read, declared, is not a finding" "[ -z \"\$_ns_p2\" ]"
 # The scan above cannot see this: it reads what the suite reads from itself, and this travels
 # through the environment of a child process instead. The PRELUDE is exempt because every worker
 # runs it, which is what makes it the right place for anything genuinely suite wide.
-_ns_exports="$(awk -v PRE="$SUITE_PRELUDE_END" '
-  /^section "/ { nsec++; if (index(tolower($0), tolower(PRE)) > 0) pre = nsec }
-  /^[[:space:]]*export / { if (nsec > 0 && pre > 0 && nsec > pre) printf "%d: %s\n", FNR, $0 }
-' "$SCRIPT_SELF")"
+# Heredoc bodies are SKIPPED. This file writes stub scripts by the dozen, and an `export` inside
+# one belongs to the generated script rather than to this shell, so counting it would fire on a
+# legitimate change with a message about a leak that is not there. Found by planting one rather
+# than by reasoning about it (L1).
+_NSXAWK="$WORK/export-scan.awk"
+# In a FILE, written by a quoted heredoc, for the same reason the scan above is: its own pattern
+# has to name the two angle brackets a heredoc opens with, and any line carrying that pattern is
+# itself read as opening one by every scanner here that tracks them. Written inline it silently
+# swallowed the rest of the file and three checks went red at once, none of them about heredocs,
+# and the comment explaining WHY did it a second time (L245). Inside a heredoc body, both skip it.
+cat > "$_NSXAWK" <<'EXPORTSCAN'
+function trim(x){ sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+{
+  if (hd != "") { if (trim($0) == hd) hd = ""; next }
+  if ($0 !~ /<<</ && match($0, /<<-?['"]?[A-Za-z_]/)) {
+    m = substr($0, RSTART); sub(/^<<-?/, "", m); gsub(/['"]/, "", m)
+    if (match(m, /^[A-Za-z_][A-Za-z0-9_]*/)) hd = substr(m, 1, RLENGTH)
+  }
+  if ($0 ~ /^section "/) { nsec++; if (index(tolower($0), tolower(PRE)) > 0) pre = nsec }
+  if ($0 ~ /^[[:space:]]*export /) { if (nsec > 0 && pre > 0 && nsec > pre) printf "%d: %s\n", FNR, $0 }
+}
+EXPORTSCAN
+_ns_export_scan(){ awk -v PRE="$SUITE_PRELUDE_END" -f "$_NSXAWK" "$1"; }
+_ns_exports="$(_ns_export_scan "$SCRIPT_SELF")"
 check "#341 no section after the prelude exports anything to the ones after it" \
   "[ -z \"\$_ns_exports\" ] || { printf '%s\n' \"\$_ns_exports\" | awk 'NR <= 5' >&2; false; }"
 # Watched CATCHING one, on a copy, because a ceiling at zero stops being a measurement and starts
@@ -11882,15 +11907,23 @@ _NSX="$WORK/needs-export-plant.sh"
 awk '/^suite_profile$/ && !ins {
        print "section \"== zzz a planted section that exports ==\""
        print "export ZZZ_PLANTED_LEAK=1"
+       # The opener is SPLIT, or this line is itself read as opening a heredoc in THIS file, whose
+       # terminator only ever appears inside another print and so never matches: it swallowed the
+       # last third of the suite from both scanners at once (L245, for the fourth time tonight).
+       print "cat > /dev/null <" "<ZZHEREDOC"
+       print "export ZZZ_INSIDE_A_HEREDOC=1"
+       print "ZZHEREDOC"
        ins = 1 } { print }' "$SCRIPT_SELF" > "$_NSX"
-_ns_x="$(awk -v PRE="$SUITE_PRELUDE_END" '
-  /^section "/ { nsec++; if (index(tolower($0), tolower(PRE)) > 0) pre = nsec }
-  /^[[:space:]]*export / { if (nsec > 0 && pre > 0 && nsec > pre) printf "%d: %s\n", FNR, $0 }
-' "$_NSX")"
+_ns_x="$(_ns_export_scan "$_NSX")"
 check "#341 an export planted after the prelude is caught" \
   "case \"\$_ns_x\" in *ZZZ_PLANTED_LEAK*) true ;; *) false ;; esac"
 check "#341 and the prelude's own exports are not reported" \
   "case \"\$_ns_x\" in *SYNC_NO_NOTIFY*) false ;; *) true ;; esac"
+# An export inside a generated script belongs to that script, not to this shell. This scan reported
+# one when it shipped, which would have fired on a legitimate stub with a message about a leak that
+# was not there.
+check "#341 and an export inside a heredoc is not a leak" \
+  "case \"\$_ns_x\" in *ZZZ_INSIDE_A_HEREDOC*) false ;; *) true ;; esac"
 
 section "== every heading this file writes is one its own reader can see (#138) =="
 # The collector recognises exactly one shape: a `section` call at column zero whose title is a
