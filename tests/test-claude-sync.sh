@@ -2283,6 +2283,15 @@ export SYNC_TEMP_ROOTS="/no-such-temp-root-exists-here"
 # which is the guard working correctly against a fixture that lied about being one machine.
 export SYNC_WATCH_PID_FILE="$WORK/watch-pid-guard.${SUITE_SHARD:-0}"
 export SYNC_HOLD_FILE="$WORK/hold-guard"
+# The GitHub CLI. Its default is whatever `gh` the operator has, authenticated as them, and the
+# #221 section exports a repo slug for the whole run, so from that point on ANY fixture that asks
+# for a CI verdict reaches real GitHub about a repository that is not this one. It was reached the
+# moment a verdict lookup landed on the path every mutating run takes (claude-config#340): measured
+# 2026-09-07 it took this suite from 190 to 235 seconds and failed twenty nine timing sensitive
+# checks that had nothing to do with CI, none of them naming the cause. Pointed at nothing, once,
+# here, exactly as the notifier and the launch agents are; the five sections that are ABOUT the
+# gate set their own stub (L2, and the same rule as claude-config#301).
+export SYNC_GH="$WORK/no-such-gh-here"
 # The launch agents, which is where other_sync_clones finds sibling clones (claude-config#301).
 # Left at its default this suite read the operator's REAL agents, found the real scheduled clone,
 # and read that clone's real .hook-tests and its real position against the remote. On 2026-09-03
@@ -10043,6 +10052,87 @@ out_rdst2="$(CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOT
 check "#336 and status stops saying receiving is stuck" \
   "! grep -q 'receiving is stuck' <<< \"\$out_rdst2\""
 
+section "== the Mac that SENT a commit learns when its tests failed (#340) =="
+# needs: only a commit CI has passed is applied automatically
+# #336 tells the RECEIVING end that config has stopped arriving, after a while. It says nothing at
+# all to the person whose push caused it, and nothing in the first hour. That hour is where the
+# whole cost sits: on 2026-09-07 the gap between a push turning the shared repo red and anybody
+# knowing was seven hours across fourteen commits, and the author is the one person who could have
+# fixed it in seconds.
+#
+# It cannot WAIT for the verdict: a run holds the lock and a CI run takes minutes, so waiting would
+# block every other sync on this Mac for the length of a test run (L110, L366). So the sha is
+# recorded when a run ships, and the NEXT run asks about it, which costs nothing on the ticks where
+# there is no record and reuses the cadence the watcher already has.
+OPB="$WORK/op-bare.git"; git init -q --bare -b main "$OPB"
+OPR="$WORK/op-repo"; git clone -q "$OPB" "$OPR" 2>/dev/null
+OPH="$WORK/op-home"; mkdir -p "$OPH/hooks"; echo '{"hooks":{}}' > "$OPH/settings.json"
+op_run(){   # op_run <ci state> <what to write into the home> -> that run's output
+  printf '%s\n' "$2" > "$OPH/hooks/op.sh"
+  # The verdict is asked for at most once a minute, and never in the first one, because a real
+  # verdict cannot exist that soon and an unconditional lookup put a network call on every mutating
+  # run. This fixture runs in seconds, so it has to say so rather than inherit the production wait.
+  CI_STATE="$1" SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 SYNC_CLONE_REGISTRY="$CI_REG" \
+    SYNC_OWN_PUSH_ASK_EVERY="${OP_EVERY:-0}" \
+    CLAUDE_HOME="$OPH" SYNC_REPO="$OPR" \
+    SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1
+}
+op_status(){ CLAUDE_HOME="$OPH" SYNC_REPO="$OPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true; }
+
+out_op1="$(op_run success 'first edit')"
+dbg "#340 first send: $out_op1"
+check "#340 a run that shipped records the head it left the repo at" "[ -s '$OPR/.my-push' ]"
+_op_sha1="$(awk 'NR==1{print $1}' "$OPR/.my-push" 2>/dev/null)"
+check "#340 and the record names a real commit ($_op_sha1)" \
+  "git -C '$OPR' cat-file -e '${_op_sha1:-nosuchsha}^{commit}' 2>/dev/null"
+
+# The next run asks about THAT commit, and this is the whole feature.
+out_op2="$(op_run failure 'second edit')"
+dbg "#340 next run, its own commit red: $out_op2"
+check "#340 the next run says this Mac's own send failed its tests" \
+  "line_has \"\$out_op2\" 'this Mac sent' 'FAILED its tests'"
+# The emptiness guard is not decoration: with no sha recorded the pattern below is empty, and an
+# empty pattern matches everything, so this check passed while the feature did not exist (L98).
+check "#340 and names the commit, so it can be looked at" \
+  "[ -n '$_op_sha1' ] && case \"\$out_op2\" in *\"${_op_sha1:0:8}\"*) true ;; *) false ;; esac"
+
+# Said ONCE, on the transition. A line repeated on every automatic tick is what teaches somebody to
+# stop reading the log it lands in (L36), and status is what carries it afterwards.
+out_op3="$(op_run failure 'third edit')"
+check "#340 a later run does not say it again" \
+  "! grep -q 'FAILED its tests' <<< \"\$out_op3\""
+out_opst="$(op_status)"
+dbg "#340 status while its own send is red: $out_opst"
+check "#340 while status still carries it, for as long as it stands" \
+  "line_has \"\$out_opst\" 'this Mac sent' 'failed its tests'"
+
+# And a green verdict ends it, or the record outlives the problem and every later run reports a
+# repo that was fixed hours ago (L344, L160).
+out_op4="$(op_run success 'fourth edit')"
+dbg "#340 green again: $out_op4"
+check "#340 a green verdict on that commit clears the record" \
+  "[ ! -f '$OPR/.my-push' ] || [ \"\$(awk 'NR==1{print \$1}' '$OPR/.my-push')\" != '$_op_sha1' ]"
+out_opst2="$(op_status)"
+check "#340 and status stops carrying it" \
+  "! grep -q 'FAILED its tests' <<< \"\$out_opst2\""
+
+# AND IT DOES NOT ASK ON EVERY RUN. This sits on the path every mutating run takes, so an
+# unconditional lookup is a network call on every sync, pull, push and watcher tick: measured
+# 2026-09-07, written that way it took this suite from 190 to 351 seconds and failed ten timing
+# sensitive checks with nothing wrong in them. Counted through the stub's own call log, because the saving is the whole
+# reason the interval exists and a saving nothing measures stops happening silently (L289).
+_op_calls_before="$(grep -c . "$CI_CALLS" 2>/dev/null || true)"
+case "$_op_calls_before" in ''|*[!0-9]*) _op_calls_before=0 ;; esac
+out_op6="$(OP_EVERY=60 op_run failure 'fifth edit')"
+_op_calls_after="$(grep -c . "$CI_CALLS" 2>/dev/null || true)"
+case "$_op_calls_after" in ''|*[!0-9]*) _op_calls_after=0 ;; esac
+check "#340 a run inside the interval asks nothing at all ($_op_calls_before then $_op_calls_after)" \
+  "[ '$_op_calls_after' -eq '$_op_calls_before' ]"
+# The control for that control: the log is live, or the comparison above is two zeros agreeing
+# with each other (L98).
+check "#340 and the call log really was recording ($_op_calls_before call(s) by now)" \
+  "[ '$_op_calls_before' -gt 0 ]"
+
 section "== a two sided lesson does not stop on the derived index (claude-config#200) =="
 # LESSONS-INDEX.md is generated from LESSONS.md, and it is COMMITTED, so git combines it as though
 # somebody maintained it by hand. Whenever both Macs record a lesson between syncs the two
@@ -11239,6 +11329,49 @@ check "#87 with no trace of the Mac that wrote it"     "! grep -q '$TKHB' '$TKHA
 
 
 section "== the suite can run ONE section, and what it needs (#105) =="
+# EVERY PATTERN THIS FILE USES ON ITSELF STILL RESOLVES TO ONE HEADING (claude-config#340).
+#
+# Sections here run each other by short patterns: SECTION_ONLY=push, SECTION_UNTIL=pull. A heading
+# added anywhere in the file can make one of those match two, and the suite then correctly refuses
+# the child run. What it looks like is twenty nine failures in the lock sections, none of them
+# naming the cause, because the section that broke it is nowhere near the sections that fail. A new
+# section called "the Mac that pushed ..." did exactly that on 2026-09-07 and cost half an hour.
+#
+# Only MORE THAN ONE is judged. A literal matching none is a different question and the runtime
+# refuses it at once, by name, on the run that uses it; several here deliberately match nothing in
+# this file because they name a heading only a constructed copy carries.
+_pat_headings="$(grep '^section "' "$SCRIPT_SELF")"
+# A pattern that is ambiguous ON PURPOSE is the fixture for the refusal itself, and it is exempted
+# by a marker ON ITS OWN LINE rather than by naming it here: written as a name, the second one to
+# arrive is unguarded and nobody notices (L362, L96). The marker is read before comments are
+# stripped, which is the only order that can see it.
+# The marker is SPLIT so the two lines that search for it are not themselves exemptions. A scan
+# that has to name what it looks for finds itself, and here that reads as the exemption quietly
+# covering two more sites (L245).
+_pat_marker='AMBIGUOUS ON ''PURPOSE'
+_pat_lits="$(grep -v "$_pat_marker" "$SCRIPT_SELF" | sed 's/#.*//' \
+  | grep -oE "SECTION_(ONLY|UNTIL)=('[^']*'|\"[^\"]*\"|[^ ;]+)" \
+  | sed -E "s/^SECTION_(ONLY|UNTIL)=//; s/^'//; s/'\$//; s/^\"//; s/\"\$//" \
+  | grep -v '[$`]' | grep -v '^$' | sort -u)"
+_pat_n="$(printf '%s\n' "$_pat_lits" | grep -c . || true)"
+check "#340 the patterns this file uses on itself were really found ($_pat_n of them)" \
+  "[ '${_pat_n:-0}' -ge 4 ]"
+_pat_bad=""
+while IFS= read -r _pat_p; do
+  [ -n "$_pat_p" ] || continue
+  _pat_hits="$(printf '%s\n' "$_pat_headings" | grep -icF -- "$_pat_p" || true)"
+  case "$_pat_hits" in ''|*[!0-9]*) _pat_hits=0 ;; esac
+  [ "$_pat_hits" -le 1 ] || _pat_bad="$_pat_bad[$_pat_p matches $_pat_hits headings]"
+done <<PATLITS
+$_pat_lits
+PATLITS
+_pat_ex="$(grep -c -- "$_pat_marker" "$SCRIPT_SELF" || true)"
+# Two lines carry it and they are the two refusal fixtures. Held to that count, so a third arriving
+# quietly is a failure rather than a silently widened exemption (L182).
+check "#340 exactly the two refusal fixtures are exempted ($_pat_ex)" "[ '${_pat_ex:-0}' -eq 2 ]"
+check "#340 and none of them matches more than one heading" \
+  "[ -z '$_pat_bad' ] || { echo '    $_pat_bad' >&2; false; }"
+
 # SECTION_UNTIL runs from the top UP TO a section, so reaching the last section costs a full run,
 # and the last section is where new work lands. SECTION_ONLY runs the PRELUDE plus one section plus
 # anything that section declares it needs.
@@ -11274,7 +11407,7 @@ check "#105 the summary names the heading it resolved and says NOT a full run" \
 # earliest answer; "run only" does not, and silently running a section nobody asked for while
 # reporting success under the typed pattern is a filter that matched the wrong thing (L100, L154).
 _SO2="$WORK/so-amb.txt"
-SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_ONLY="pull" bash "$SCRIPT_SELF" > "$_SO2" 2>&1; _so2_rc=$?
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_ONLY="pull" bash "$SCRIPT_SELF" > "$_SO2" 2>&1; _so2_rc=$?   # AMBIGUOUS ON PURPOSE
 check "#105 an ambiguous pattern is refused" "[ '$_so2_rc' -ne 0 ]"
 check "#105 the ambiguity refusal says how many it matched" "line_has \"\$(cat '$_SO2')\" 'SECTION_ONLY' 'matches [0-9]+ sections'"
 check "#105 an ambiguous pattern runs nothing at all" "! grep -q '^PASS=' '$_SO2'"
@@ -11366,7 +11499,7 @@ check "#111 the old expression would have mangled it" "[ \"\$_hd_old\" != '== a 
 # different rules means which rules apply depends on which one you happened to reach for
 # (claude-config#110).
 _SU1="$WORK/su-amb.txt"
-SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL="pull" bash "$SCRIPT_SELF" > "$_SU1" 2>&1; _su1_rc=$?
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SECTION_UNTIL="pull" bash "$SCRIPT_SELF" > "$_SU1" 2>&1; _su1_rc=$?   # AMBIGUOUS ON PURPOSE
 check "#110 an ambiguous SECTION_UNTIL is refused too" "[ '$_su1_rc' -ne 0 ]"
 check "#110 and it lists the candidates" "line_has \"\$(cat '$_SU1')\" 'SECTION_UNTIL' 'matches [0-9]+ sections'"
 check "#110 an ambiguous SECTION_UNTIL runs nothing" "! grep -q '^PASS=' '$_SU1'"
@@ -14158,6 +14291,12 @@ $HOMESEAMS
 HOME_SEAMS
 dbg "#301 seams not exported by this suite:${unseamed:- none}"
 check "#301 every seam defaulting into a store the machine shares is redirected by this suite" "[ -z \"\$unseamed\" ]"
+# And the one whose default is not a PATH in the home but a command on the PATH, which that
+# derivation cannot see: the operator's own authenticated GitHub CLI (claude-config#340).
+check "#301 the GitHub CLI is redirected suite-wide too" \
+  "[ ! -x \"\$SYNC_GH\" ]"
+check "#301 and it points inside this run's own directory" \
+  "case \"\$SYNC_GH\" in \"$WORK\"/*) true ;; *) false ;; esac"
 
 suite_profile
 echo ""

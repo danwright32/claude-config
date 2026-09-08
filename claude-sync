@@ -83,6 +83,7 @@ LAST_RECEIVED_FILE="$SYNC_REPO/.last-received"
 BEHIND_SKIPS_FILE="$SYNC_REPO/.behind-skips"   # sends in a row that could not go out (#323)
 CI_UNREADABLE_SINCE_FILE="$SYNC_REPO/.ci-unreadable-since"   # since when no CI verdict could be read (#327)
 CI_RED_SINCE_FILE="$SYNC_REPO/.ci-red-since"   # since when the shared repo's head has been red (#336)
+MY_PUSH_FILE="$SYNC_REPO/.my-push"   # the head this Mac last sent, and what became of it (#340)
 RESURRECTED_REPORTED_FILE="$SYNC_REPO/.resurrected-reported"   # leftovers already reported once (#331)
 HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
 # The last verdict each send-side suite reached, against a digest of the hooks it judged (#269).
@@ -211,6 +212,7 @@ record_sent_if_shipped(){
   n="$(git -C "$SYNC_REPO" rev-list --count "$up..HEAD" 2>/dev/null || echo unknown)"
   case "$n" in ''|*[!0-9]*) return 0 ;; esac      # unreadable is not evidence of a send (L50)
   [ "$n" -eq 0 ] || return 0
+  record_own_push
   # The one case this reads wrongly, said out loud rather than left to be discovered: a rebase that
   # DROPS this Mac's commit (because the same content already went up from elsewhere) also ends
   # level, and would stamp. The work is in the shared repo either way, which is what the indicator
@@ -218,6 +220,91 @@ record_sent_if_shipped(){
   record_sent
 }
 record_received(){ date +%s > "$LAST_RECEIVED_FILE" 2>/dev/null || true; }
+
+# WHAT THIS MAC LAST SENT, so the next run can ask what became of it (claude-config#340).
+#
+# It cannot be asked here. A verdict takes minutes and this run holds the lock, so waiting would
+# block every other sync on this Mac for the length of a test run (L110, L366). The sha is written
+# down instead and the NEXT run asks, which costs nothing on the ticks where there is no record and
+# reuses the cadence the watcher already has.
+#
+# Recorded from the FINISHED state, in the one place that decides whether a run shipped at all,
+# rather than beside whichever of the several push sites happened to run (L78).
+record_own_push(){
+  local head prev_when prev_asked prev_told now
+  head="$(git -C "$SYNC_REPO" rev-parse HEAD 2>/dev/null || true)"
+  case "$head" in ''|*[!0-9a-f]*) return 0 ;; esac
+  now="$(date +%s)"
+  # A record still standing means the last send was never cleared by a green verdict, so this is
+  # the SAME run of redness rather than a new event: its start time and its told marker are kept
+  # and only the commit moves. Otherwise every push made while the repo is red is announced again,
+  # and a notice repeated on every edit is what teaches somebody to stop reading it (L36, L186).
+  if [ -f "$MY_PUSH_FILE" ]; then
+    prev_when="$(awk 'NR==1{print $2}' "$MY_PUSH_FILE" 2>/dev/null)"
+    prev_asked="$(awk 'NR==1{print $3}' "$MY_PUSH_FILE" 2>/dev/null)"
+    prev_told="$(awk 'NR==1{print $4}' "$MY_PUSH_FILE" 2>/dev/null)"
+  fi
+  case "${prev_when:-}" in ''|*[!0-9]*) prev_when="$now" ;; esac
+  case "${prev_asked:-}" in ''|*[!0-9]*) prev_asked="$now" ;; esac
+  case "${prev_told:-}" in *[!0-9]*) prev_told="" ;; esac
+  # Only the LAST field may be empty. Written with the empty one in the middle, awk collapses the
+  # run of spaces and reads the next column instead, which is how #336's count silently stayed at 1.
+  printf '%s %s %s %s\n' "$head" "$prev_when" "$prev_asked" "${prev_told:-}" > "$MY_PUSH_FILE" 2>/dev/null || true
+  return 0
+}
+
+# What became of it, asked on a LATER run (claude-config#340). #336 tells the receiving end that
+# config has stopped arriving, after a while. This tells the person who caused it, and it is the
+# half that matters: the gap between a push turning the shared repo red and anybody knowing was
+# seven hours on 2026-09-07, and the author is the one person who could have cleared it in seconds.
+report_own_push_verdict(){
+  have_git || return 0
+  [ -f "$MY_PUSH_FILE" ] || return 0
+  local sha when asked told state now age window="${SYNC_OWN_PUSH_GIVE_UP_AFTER:-10800}"
+  local every="${SYNC_OWN_PUSH_ASK_EVERY:-60}"
+  sha="$(awk 'NR==1{print $1}' "$MY_PUSH_FILE" 2>/dev/null)"
+  when="$(awk 'NR==1{print $2}' "$MY_PUSH_FILE" 2>/dev/null)"
+  asked="$(awk 'NR==1{print $3}' "$MY_PUSH_FILE" 2>/dev/null)"
+  told="$(awk 'NR==1{print $4}' "$MY_PUSH_FILE" 2>/dev/null)"
+  # A record that cannot be read is not evidence of anything, and keeping it would leave every run
+  # asking about a commit nobody can name (L50).
+  case "$sha" in ''|*[!0-9a-f]*) rm -f "$MY_PUSH_FILE" 2>/dev/null || true; return 0 ;; esac
+  now="$(date +%s)"
+  case "$when" in ''|*[!0-9]*) when="$now" ;; esac
+  case "$asked" in ''|*[!0-9]*) asked="$now" ;; esac
+  age=$(( now - when ))
+  # ASKED AT MOST ONCE AN INTERVAL, and never in the first one. This sits on the path every
+  # mutating run takes, so an unconditional lookup put a network call on every sync, pull, push and
+  # watcher tick: measured 2026-09-07 it took this repo's own suite from 190 to 351 seconds and
+  # broke ten timing sensitive checks that had nothing to do with it. A verdict cannot exist seconds
+  # after a push anyway, since a test run takes minutes, so asking sooner can only ever be told
+  # "pending" (L353: the cost of a call on a hot path is a measurement nobody took).
+  [ "$(( now - asked ))" -ge "$every" ] 2>/dev/null || return 0
+  asked="$now"
+  state="$(remote_ci_state "$sha")"
+  case "$state" in
+    # Green is the end of it. Cancelled is too, and it is the COMMON case here rather than an
+    # oddity: the workflow cancels a superseded run, so every push that lands while an earlier one
+    # is still going cancels it, and there is nothing to report about a run nobody finished.
+    green|cancelled) rm -f "$MY_PUSH_FILE" 2>/dev/null || true; return 0 ;;
+    red)
+      if [ -z "$told" ]; then
+        echo "claude-sync: the commit this Mac sent (${sha:0:8}) FAILED its tests. Until a green commit lands nothing receives config, on this Mac or the other one, and you are the only person who can clear it: look at the run with 'gh run list --limit 5', then fix it or revert it." >&2
+        notify "the commit this Mac sent failed its tests"
+        told="$now"
+      fi
+      printf '%s %s %s %s\n' "$sha" "$when" "$asked" "$told" > "$MY_PUSH_FILE" 2>/dev/null || true
+      return 0 ;;
+  esac
+  # Pending, no run at all, or a verdict nobody could read: no answer yet, so nothing is claimed.
+  # Bounded, or a commit nothing ever judges leaves every run from here on asking about it (L110).
+  if [ "$age" -ge "$window" ]; then
+    rm -f "$MY_PUSH_FILE" 2>/dev/null || true
+    return 0
+  fi
+  printf '%s %s %s %s\n' "$sha" "$when" "$asked" "$told" > "$MY_PUSH_FILE" 2>/dev/null || true
+  return 0
+}
 
 # The threshold below was chosen by judgement, not measurement, and BOTH ways of being wrong
 # are invisible in use: too low it alerts on blips until the alert is ignored, too high a
@@ -663,6 +750,11 @@ with_lock(){   # $@ = the command to run while holding the lock
   # to the repository and two runs doing it at once is the failure the lock exists for
   # (claude-config#324). A run that finds a real conflict stops here rather than working around it.
   recover_unfinished_rebase
+  # What became of the last thing this Mac sent, on the ONE path every mutating run takes
+  # (claude-config#340). It sat in do_send first, which looked right and was not: do_sync has its
+  # own push and never calls do_send, so the commonest route of all, the watcher's tick, never
+  # asked. A step that has to happen on every run belongs where every run already passes (L247).
+  report_own_push_verdict
   if have_git && unpushed_commits; then note_unsent_work; fi
   # In the trap, not on a line after the call: every failure in here leaves through die(), and a
   # run that pushed and then died on something later still sent what it sent.
@@ -5932,6 +6024,19 @@ report_red_skips(){
   return 0
 }
 
+# The same fact, on the surface built to answer it (claude-config#340). Only once the verdict is
+# actually in: a record still waiting for one says nothing, because "no answer yet" and "your commit
+# broke it" are different things and one sentence covering both hides the second (L11).
+report_my_push(){
+  local sha told
+  [ -f "$MY_PUSH_FILE" ] || return 0
+  sha="$(awk 'NR==1{print $1}' "$MY_PUSH_FILE" 2>/dev/null)"
+  told="$(awk 'NR==1{print $4}' "$MY_PUSH_FILE" 2>/dev/null)"
+  [ -n "$told" ] || return 0
+  echo "the commit this Mac sent (${sha:0:8}) failed its tests, so nothing here or on the other Mac receives config until a green commit lands. Look at the run: gh run list --limit 5"
+  return 0
+}
+
 report_watcher_hold(){
   local left
   if left="$(hold_remaining)"; then
@@ -6221,6 +6326,7 @@ do_status(){
   report_ci_unreadable
   report_behind_skips
   report_red_skips
+  report_my_push
   report_watcher_hold
   report_automatic_jobs
   report_hook_suite_result

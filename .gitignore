@@ -20,3 +20,4 @@ state/
 .ci-unreadable-since
 .resurrected-reported
 .ci-red-since
+.my-push
