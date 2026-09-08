@@ -3129,6 +3129,18 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## State and identity
 
+- **L445. A failing assertion renders its own operands, so comparing against a LARGE value (a whole
+  file, a full response body, a big collection) prints that value over the message explaining what
+  went wrong.** Reduce the comparison to a small value before asserting, and let the message carry
+  the detail: the reader needs the reason and the remedy, not the haystack.
+  (overture#3701, 2026-09-08: 126 guards in one test target assert `#expect(!source.contains(needle))`
+  over a whole source file. Hit twice in one session, on two unrelated changes, and worked around by
+  hand both times before it was recognised as a class. The message each of those guards carries is
+  where the reason and the remedy live, and Swift Testing prints thousands of words of source above
+  it. Distinct from L351, where a reporter TRUNCATES the message, and from L148, where it is written
+  to a surface that dies: here the message survives intact and is simply buried by the assertion's
+  own rendering of what it compared)
+
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
   different artifact on every run, so any comparison between two versions of it measures the
   seed rather than the change, and any cache keyed on its inputs is silently wrong.** Persist
