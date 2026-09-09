@@ -2346,6 +2346,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   neither the test suite nor the production run could have revealed it; after cutover the same code
   silently orphans a day of appointments)
 
+- **L667. A refusal added to a LATE step of a multi step write converts the leftover the step
+  ordering was designed to make rare into one that happens on every ordinary refused attempt,
+  so put the check at the first step that can answer it and keep the late one only for the
+  state changing underneath.**
+  (paperboi#203, 2026-09-09: storeInvoiceFile runs three steps in a crash safe order, record the
+  file row as uploading, put the bytes in the bucket, then attach_file finalises, precisely so a
+  crash leaves a visible uploading row rather than a silent orphan. #140 put the new settled
+  invoice refusal into lifecycle_gate, which attach_file reaches at step three, so attaching to a
+  paid invoice now writes the row, stores the bytes and THEN refuses. What had been a rare crash
+  artefact became one produced reliably by an ordinary action, and a person who tries twice leaves
+  two. begin_file_upload could have answered the same question before anything was written)
+
 
 ## Honest failure
 
