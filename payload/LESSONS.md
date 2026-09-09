@@ -3269,6 +3269,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   The new details were written nowhere and the screen said nothing. The commonest reason a real
   lead returns with different details is that the first ones were wrong.)
 
+- **L665. A refusal that can only be cleared by re-running a process whose scope is a moving
+  window becomes permanent the moment the refused item falls outside that window**, and it goes on
+  reading as pending rather than as stalled, so either the clearing process must be able to reach
+  everything it can refuse, or a refusal older than that window must be reported as stuck. The
+  whole path can look correct while it is dead: every component behaves as designed, the refusal
+  is truthful, and the thing that would settle it simply never looks that far back again.
+  (bidspoke#1249: the execution deletion gate refuses a day whose measurement is older than 36
+  hours, and refreshes measurements only for the RETENTION_DAYS + 1 days back from today. Two days
+  from 2026-08-14 and 15 carried readings five days old, holding zero archived hours and zero
+  executions, and had fallen outside the candidate window, so the age could never be refreshed and
+  the refusal could never clear. Because a step partition for day D may only go once day D-1 is
+  verified, the permanently refused 08-15 stranded 2026-08-16's step partition for good: 17
+  execution days authorised against 16 step days. Nothing reported it, because a correctly refused
+  day and a permanently refused day are the same row.)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a

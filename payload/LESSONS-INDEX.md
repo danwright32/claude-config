@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 608 lessons.
+LESSONS.md, which is NOT loaded into the session. 609 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -280,6 +280,7 @@ to decide something: the body is where the failure it came from is described.
 - L647. Adding a Suspense or error boundary ABOVE existing code changes what a throw beneath it MEANS: a redirect or refusal that reached the caller as a status code becomes a payload streamed inside a 200 with the fallback rendered, so the route now answers healthier than before and the escape depends on the client script running.
 - L654. A monitor that judges an outcome over ALL runs cannot see a fallback path, because a fallback is rare by construction and its collapse to zero moves the overall rate by nothing.
 - L664. When a submission is matched to an existing record and redirected onto it (a dedupe, a move, an upsert), decide explicitly what happens to every field the person just entered, because the redirected path was written for its own inputs and silently discards the rest, and a discarded correction reads to the person as a saved one.
+- L665. A refusal that can only be cleared by re-running a process whose scope is a moving window becomes permanent the moment the refused item falls outside that window
 
 ## State and identity
 
