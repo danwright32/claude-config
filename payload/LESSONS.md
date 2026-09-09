@@ -6170,6 +6170,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   closing brace of the rule immediately above the seam. Each was caught only by counting
   braces by hand; every gate in the pre-push suite passed over the broken file.)
 
+- **L655. Finding the right shared place to PUT new logic is not the same as checking whether that
+  logic already EXISTS, and doing the first well is what makes the second feel finished.** So search
+  for the PREDICATE by what it computes before writing it, including on the side of an import
+  boundary you cannot call from: an existing copy there is invisible to every search scoped to your
+  own tree, and duplicating it feels correct because calling it really is impossible. Distinct from
+  L613, which is a shared component created and then only half adopted: here the shared thing was
+  never found at all, by somebody who had just done a careful search and concluded correctly.
+  (slate#2128: a guard was placed in `planScheduleReplacement`, genuinely the one validator every
+  write path uses, so the consolidation question felt answered. The zone comparison inside it was
+  then written from scratch while `zonesAgree` already did exactly that in `scripts/lib`, added days
+  earlier for the cal.com parity check and citing the same two zone pairs. `src` may not import from
+  `scripts`, so no search of `src` could have surfaced it and no call could have reached it. The two
+  sample different windows, 400 days from today against two years from January of the save year, so
+  they can disagree at the margins with nothing comparing them, which is L107's ad hoc second
+  definition arriving through a door the tree structure held open.)
+
 ## Cross-system reliability
 
 - **L405. A check deciding whether anything is NEW must compare what the artifact MEANS, never its

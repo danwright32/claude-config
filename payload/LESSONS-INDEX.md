@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 597 lessons.
+LESSONS.md, which is NOT loaded into the session. 598 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -540,6 +540,7 @@ to decide something: the body is where the failure it came from is described.
 - L429. A file the platform loads AUTOMATICALLY into every session grows one entry at a time and has a size ceiling nothing in the project measures, so put a check on its size: past the ceiling the rules stop arriving rather than failing, and a rule that never arrived is indistinguishable from one that was followed.
 - L437. Code lifted out of a file to be reused elsewhere leaves behind everything it was inheriting from that file's AMBIENT SCOPE (a stylesheet's `body` or `:root` rule, a module's top level setup, a test file's shared fixture), and because the inherited thing is usually a DEFAULT, the extracted copy still runs and still looks finished while quietly using the platform's default instead. Prove it by reading back what the running system actually applied, never by checking that the extraction renders.
 - L631. Resolving a conflict by splicing both sides together can drop the delimiter that closed the block at the seam, so check the file's STRUCTURE afterwards (braces balance, brackets close) rather than only that the conflict markers are gone.
+- L655. Finding the right shared place to PUT new logic is not the same as checking whether that logic already EXISTS, and doing the first well is what makes the second feel finished.
 
 ## Cross-system reliability
 
