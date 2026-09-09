@@ -147,7 +147,7 @@ Paths use a tilde, never a real home directory: the sync rewrites this file for 
 `check-home-paths.sh` refuses an absolute one.
 
 On Daniels-MacBook-Pro-2:
-- `~/Non-icloudDocuments/Photography Assets/Dan Wright Photography/Marketing/Outreach/Overture`: Overture, which is nowhere near where its name suggests
+- `~/Non-icloudDocuments/Apps/Overture`: moved here 2026-09-08, from `Photography Assets/Dan Wright Photography/Marketing/Outreach/`, after that checkout was deleted while the disk was full and the repo was re-cloned. It no longer lives anywhere surprising.
 - `~/Non-icloudDocuments/Apps/Downbeat`
 - `~/Non-icloudDocuments/Apps/NurseDex`
 - `~/Non-icloudDocuments/Apps/PostRoll`
