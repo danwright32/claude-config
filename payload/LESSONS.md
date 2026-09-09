@@ -5397,6 +5397,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   live booker, not by any test; the same formatter is used by the manage booking page, so the same
   field was broken in two places at once.)
 
+- **L666. When a system is built to REPLACE another that is still live, every parity check gets
+  written about the DATA the two systems hold and none about the SCREEN the person sees, so the
+  replacement silently drops whatever the incumbent's surface accumulated and nobody wrote down.**
+  The requirements were written from what the replacement had to DO, and the incumbent's screen
+  grew features over years that are recorded only in its own markup, so a replacement built
+  faithfully to the spec is still a downgrade in ways no check can name. Read the incumbent's
+  RENDERED screen against the replacement's, element by element, and treat anything the incumbent
+  offers and the replacement does not as a finding to be argued down rather than as a design
+  choice already made.
+  (slate#2165, 2026-09-09: Slate carries six commands comparing itself against the live cal.com
+  (schedules, roster membership, availability truth, Twilio routing facts, parallel run readiness),
+  every one of them comparing stored values, and all of them green. Reading the two confirmation
+  screens side by side took ten minutes and found that cal.com names the advisor who will call and
+  offers four add to calendar buttons, and Slate's does neither, on the one screen a lead sees
+  after committing to a call. It surfaced only because Dan asked an unrelated question about an
+  illustration on that screen.)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
