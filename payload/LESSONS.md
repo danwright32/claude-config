@@ -5352,6 +5352,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   this and no surface read it, which is the tell: the code knew it could not show the value and
   said nothing.)
 
+- **L663. An input that REWRITES its own value as the person types (a phone or card mask, a currency
+  or date formatter, an uppercaser) moves the caret to the END on every keystroke unless it is
+  explicitly put back, so a person cannot correct a character in the middle of what they have already
+  typed.** Restore the caret by counting the SIGNIFICANT characters before it (the digits, the
+  letters) rather than the raw offset, because the formatter inserts and removes separators as the
+  value grows and a character count drifts by one every time a bracket, space or hyphen appears. It
+  is invisible to every ordinary test and to every hand check, because both type from empty and
+  always at the end, which is the one position the defect cannot occur in: the cases to write are
+  typing mid value, deleting mid value, typing next to a separator, and typing over a selection.
+  (slate#2162: the booker's phone field formats through `formatPhoneAsTyped` on every change and
+  never restored the caret, so putting the cursor between two digits of an already typed number and
+  typing sent the cursor to the end and put the digit there. Reported by Dan clicking through the
+  live booker, not by any test; the same formatter is used by the manage booking page, so the same
+  field was broken in two places at once.)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
