@@ -4291,6 +4291,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   against that path: Logpush reads the message as the Worker emits it, long before anything of ours
   writes a row. The account is shared with unrelated projects, so the job had been added by
   somebody with no knowledge of this service, and nothing in the codebase mentioned it.)
+- **L446. A redaction implemented by overriding how a type DESCRIBES itself is bypassed by every
+  renderer that REFLECTS it instead, and holding the value behind a reference type does not help,
+  because reflection reads a class's stored properties exactly as it reads a struct's.** Swift's
+  `dump()`, Node's `console.log` and `util.inspect`, and a dataclass repr all take the reflecting
+  path and never consult the description. Measure EVERY route that can print the value, and close
+  the reflecting one at its own seam (Swift `CustomReflectable`, JS `util.inspect.custom`), then
+  hold all of them with one test, because a guard written only against the route somebody happened
+  to think of passes while the others leak.
+  (overture#3655/#3732, 2026-09-09: measured on Swift 6.3.3 / Xcode 26.6 before shipping a
+  searchable contact value. `#expect`'s failure diff and string interpolation both honoured the
+  redacting `CustomStringConvertible`; `dump()` printed `<contact redacted>` as the node's own
+  header and then reflected the stored properties underneath it, emitting the full name and the
+  full email local part one line below the word "redacted". The issue's own proposed escape, a
+  reference type, was measured in the same run and leaked identically.)
 
 ## UX completeness
 

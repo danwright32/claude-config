@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 601 lessons.
+LESSONS.md, which is NOT loaded into the session. 602 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -370,6 +370,7 @@ to decide something: the body is where the failure it came from is described.
 - L653. A redaction wired to a record's structured fields leaves every free text field on the same record untouched (a log line, a message, a note), and a diagnostic print of the whole payload is exactly what lands in those fields.
 - L657. A wildcard read that crosses into a different retention or trust domain (an export, a warehouse copy, a log sink, an API response) makes every future column an automatic disclosure nobody reviewed
 - L658. On a managed runtime a diagnostic print is an EGRESS rather than local output
+- L446. A redaction implemented by overriding how a type DESCRIBES itself is bypassed by every renderer that REFLECTS it instead, and holding the value behind a reference type does not help, because reflection reads a class's stored properties exactly as it reads a struct's.
 
 ## UX completeness
 
