@@ -5697,6 +5697,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   had been reading, #959, #1023, #1156 and #1115. The eight findings the auditing session's own
   review then received were all restatements of open issues too)
 
+- **L660. A claim that a shared mechanism already covers your code is checkable in one command, so
+  check it rather than asserting it**, because the assertion is most convincing exactly when you
+  have copied a neighbouring block's shape without joining its registry: the call site then looks
+  identical to the ones that are covered, and the thing doing the covering has no way to report
+  what opted out (L96).
+  (bidspoke#1209, 2026-09-09: two new checks were added to a daily cron batch with a bare
+  `ctx.waitUntil` instead of the `track()` helper that batch uses. `track()` pushes into the array
+  the batch waits on before stamping its heartbeat completed, so both checks could still be running
+  when the batch reported itself finished, and a kill during one would read as a finished run. The
+  pre-push lessons scan named the applicable rule TWICE while they were being written, and both
+  times the answer given was that the batch heartbeat covered them, which was a confident statement
+  about a batch they had never joined and which one grep would have disproved. The existing
+  heartbeat tests could not see it either: they enumerate what the batch TRACKED rather than what it
+  STARTED. An issue filed weeks earlier had predicted this exact defect, down to the mutation check.)
+
 ## Codebase hygiene
 
 - **L217. A guard whose forbidden or expected values are DERIVED from a shipped dataset covers

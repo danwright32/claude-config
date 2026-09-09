@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 603 lessons.
+LESSONS.md, which is NOT loaded into the session. 604 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -498,6 +498,7 @@ to decide something: the body is where the failure it came from is described.
 - L249. A decision ATTRIBUTED to somebody inside your own artifact (a PR body, a plan, an issue comment) must be quoted from the record that holds it and carry that record's own date, because a paraphrase with a date on it reads as authority and is the one claim a reviewer will not go and check, so a decision nobody made can ship with tests written to defend it.
 - L340. A defensive normalization that coerces a response into the shape you asked for (truncating a list to its first entry, taking the first match, clamping a count) destroys the only evidence that the instruction was ignored, and the coerced value is indistinguishable from a compliant one, so record the violation as a finding rather than quietly trimming it.
 - L363. A deduplication that runs before findings are filed must compare against the store they are filed INTO, never only against the batch that produced them, because any audit of that store restates its records and each one then arrives as a fresh finding.
+- L660. A claim that a shared mechanism already covers your code is checkable in one command, so check it rather than asserting it
 
 ## Codebase hygiene
 
