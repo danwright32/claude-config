@@ -4276,6 +4276,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   holds. L637 was recorded the day before, from a view frozen at creation, and its stated fix is
   to derive the list at read time, which is exactly the construct producing this defect.)
 
+- **L658. On a managed runtime a diagnostic print is an EGRESS rather than local output**, because
+  the platform captures console output before any of your code runs, into a stream whose
+  destinations are configured outside your repository and, on a shared account, by people who have
+  never heard of your service. So redaction applied where you write your own records cannot reach
+  it, which makes L653 necessary and not sufficient, and the only controls are not printing the
+  value and auditing that pipeline's field list.
+  (bidspoke#1230, 2026-09-09: a code node printed the applicant before calling a partner, SSN, date
+  of birth, name and address, on about 180 runs a day. It was filed as PII sitting in our own
+  database, where an ADR deliberately allows it, and the redactor was extended to cover log lines
+  on that understanding. Reading the Cloudflare Logpush configuration then showed an account
+  scoped job exporting the `Logs` field, defined as the console messages of each invocation, to an
+  external vendor, last delivering minutes before it was read. The redactor fix was powerless
+  against that path: Logpush reads the message as the Worker emits it, long before anything of ours
+  writes a row. The account is shared with unrelated projects, so the job had been added by
+  somebody with no knowledge of this service, and nothing in the codebase mentioned it.)
+
 ## UX completeness
 
 - **L651. A control that navigates to a route whose guard REDIRECTS an unpermitted viewer is a
