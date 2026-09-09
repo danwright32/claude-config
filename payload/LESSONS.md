@@ -4263,6 +4263,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   still land in the logs column, and it was found only because a read-only diagnosis of an
   unrelated outage printed a step's logs to the terminal.)
 
+- **L657. A wildcard read that crosses into a different retention or trust domain (an export, a
+  warehouse copy, a log sink, an API response) makes every future column an automatic disclosure
+  nobody reviewed**, so name the columns there and hold the list to the source with a check that
+  FAILS on a new one rather than absorbing it. This is where L637's remedy inverts: deriving at
+  read time is right while the read stays inside one domain and wrong the moment it leaves.
+  (bidspoke#1222, 2026-09-09: the execution archive reads `execution_steps` and
+  `workflow_executions` with `.select('*')` and writes the rows into a store with 13 month
+  retention, while Postgres keeps them 7 days. Any column added to either table therefore begins
+  copying into long term storage on the next hourly run, unreviewed and unsignalled, and the
+  erasure path and the data classification map both depend on a stated list of what the archive
+  holds. L637 was recorded the day before, from a view frozen at creation, and its stated fix is
+  to derive the list at read time, which is exactly the construct producing this defect.)
+
 ## UX completeness
 
 - **L651. A control that navigates to a route whose guard REDIRECTS an unpermitted viewer is a

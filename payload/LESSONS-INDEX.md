@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 599 lessons.
+LESSONS.md, which is NOT loaded into the session. 600 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -368,6 +368,7 @@ to decide something: the body is where the failure it came from is described.
 - L616. A product whose access model is a fixed list of named users needs, from the first migration, a maintainer identity that can sign in and act with attribution but is excluded from the users' notifications and from their irreversible or money moving actions.
 - L630. An entitlement DERIVED from a downstream artifact (access from a team, a role from an assignment, a quota from a subscription row) is absent for precisely the NEWEST subject
 - L653. A redaction wired to a record's structured fields leaves every free text field on the same record untouched (a log line, a message, a note), and a diagnostic print of the whole payload is exactly what lands in those fields.
+- L657. A wildcard read that crosses into a different retention or trust domain (an export, a warehouse copy, a log sink, an API response) makes every future column an automatic disclosure nobody reviewed
 
 ## UX completeness
 
