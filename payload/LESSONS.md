@@ -3254,6 +3254,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   detector requires a 0.90 stable mean and never watched it, and the weekly dead check paged four
   days later with advice that the reference path was wrong.)
 
+- **L664. When a submission is matched to an existing record and redirected onto it (a dedupe, a
+  move, an upsert), decide explicitly what happens to every field the person just entered, because
+  the redirected path was written for its own inputs and silently discards the rest, and a discarded
+  correction reads to the person as a saved one.** Enumerate the submitted fields against what the
+  redirected path writes, and for each one either apply it, or say on screen that it was not applied.
+  Distinct from L12, which is about claiming success before a write lands: here every write that ran
+  succeeded, and the loss is in a field no write was ever asked to carry.
+  (slate#2164, 2026-09-09: the pilot booking for the parallel run. A lead booked, came back on the
+  same link with a different email and phone, was correctly recognised by Salesforce id as a strong
+  match and offered the Move (#1337). The Move goes through the lead reschedule endpoint, which
+  changes the time and nothing else, so the booking kept the original contact, Google rewrote the
+  invite for the original address, and Regal received the reschedule against the original profile.
+  The new details were written nowhere and the screen said nothing. The commonest reason a real
+  lead returns with different details is that the first ones were wrong.)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
