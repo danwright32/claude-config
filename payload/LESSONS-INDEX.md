@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 589 lessons.
+LESSONS.md, which is NOT loaded into the session. 593 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -199,6 +199,7 @@ to decide something: the body is where the failure it came from is described.
 - L615. Write a RESTRICTION's condition as the reason for restricting, never as a broader property that happens to include it
 - L436. The completeness of an import is a property of the PERIOD it must cover, not of the source it reads, and a source that is complete about itself says nothing about the years before it existed. Establish the earliest record the business actually has before scoping an import to whichever system holds the data today.
 - L443. An object held in memory from before another writer changed the same record still carries the old values, and its next save writes them back over the newer ones with nothing reporting a fault, so a field owned by a separate writer must never be savable from a surface holding an older copy.
+- L649. An automation that performs the same state change as an existing human control inherits the ACTION but not the SAFEGUARD around it
 
 ## Honest failure
 
@@ -274,6 +275,7 @@ to decide something: the body is where the failure it came from is described.
 - L632. A step whose only job is to REPORT a problem must never be able to fail the pipeline stage that follows it, because a message that could not be DELIVERED says nothing about whether the work is safe to continue.
 - L633. An aggregate read (a sum, a count, a total) over rows hidden by row level security returns a confident zero rather than refusing, because an ungrouped aggregate over zero rows is still one valid row, so a reader who is not permitted, or whose session has expired, receives a plausible number instead of an error.
 - L445. A failing assertion renders its own operands, so comparing against a LARGE value (a whole file, a full response body, a big collection) prints that value over the message explaining what went wrong.
+- L647. Adding a Suspense or error boundary ABOVE existing code changes what a throw beneath it MEANS: a redirect or refusal that reached the caller as a status code becomes a payload streamed inside a 200 with the fallback rendered, so the route now answers healthier than before and the escape depends on the client script running.
 
 ## State and identity
 
@@ -340,6 +342,7 @@ to decide something: the body is where the failure it came from is described.
 - L636. When an automation creates a record in a state that only a person can advance it out of, record that it is WAITING and why, because the same state chosen by a person on purpose looks identical, and the queue of things awaiting a human is otherwise invisible.
 - L637. A wildcard resolved when a definition is CREATED rather than when it is read (a view's `select *`, a generated type, a snapshotted schema) reads as everything always and is actually everything once
 - L646. A control that seeds its own state from a prop and writes shared state from a MOUNT EFFECT reverts the person's change every time its container remounts
+- L650. A mapping that MERGES several values onto one label (two seasonal abbreviations to one, several statuses to one word, spellings to a canonical form) is correct only while everything it merges means the same thing at the moment of use, and each row reads as correct alone, so the fault exists only in the relationship between rows and no per row test can see it.
 
 ## Security and privacy
 
@@ -444,6 +447,7 @@ to decide something: the body is where the failure it came from is described.
 - L634. A heading separated from the content beneath it by WEIGHT alone, or rendered smaller or lighter than that content, reads as an emphasised sentence rather than a level, and the fault is invisible at the declaration site because each element's own classes are individually reasonable.
 - L639. A compensating offset applied to a CONTAINER aligns whichever child comes FIRST, never a named one, so a cancellation written to line up a component's LABEL stops holding the moment that component may lead with an icon, mark or badge.
 - L426. An item held on screen past its own removal (a row fading out, a card playing an exit) must be reinserted at its OWN position rather than appended to the end, because anything anchored to it or to the group it belongs to (a scroll pin, a selection, a focus ring) follows it to wherever it lands.
+- L648. When a quantity can be wrong in two directions and one direction is harmless while the other silently hides content, never aim for the exact value: bias it hard toward the harmless side and record why
 
 ## External systems
 

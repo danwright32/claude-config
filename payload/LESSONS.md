@@ -2296,6 +2296,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   happens to know about, here it is a whole stale copy, and both silently revert a field the
   writer never meant to touch.)
 
+- **L649. An automation that performs the same state change as an existing human control inherits
+  the ACTION but not the SAFEGUARD around it**, because the confirmation, the warning and the count
+  of consequences live in the screen rather than in the shared operation, and there is nobody for
+  the automation to ask. Put that check inside the operation both callers share, and expect the gap
+  to be invisible while the system still carries no real data, which is exactly when the automation
+  gets written.
+  (slate#2115, 2026-09-09: taking an agent out of the bookable pool by hand stops and asks the
+  admin to confirm, because that agent's booked appointments stay on their calendar with nobody
+  looking after them (#1215). The new hourly Twilio sync does the same pool exit for anybody
+  carrying a Redistribute tag and asks nobody. The first live run turned twelve agents not bookable
+  and stranded nothing, but only because cal.com still takes every lead during the parallel run, so
+  neither the test suite nor the production run could have revealed it; after cutover the same code
+  silently orphans a day of appointments)
+
+
 ## Honest failure
 
 - **L415. A screen that shows a change BEFORE the write lands owes a failure path that reverts it AND
@@ -3174,6 +3189,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   to a surface that dies: here the message survives intact and is simply buried by the assertion's
   own rendering of what it compared)
 
+- **L647. Adding a Suspense or error boundary ABOVE existing code changes what a throw beneath it
+  MEANS: a redirect or refusal that reached the caller as a status code becomes a payload streamed
+  inside a 200 with the fallback rendered, so the route now answers healthier than before and the
+  escape depends on the client script running.** Re-assert the STATUS of every gated route in the
+  same change that adds a boundary, because the page that answers 200 is the one that looks fine.
+  (slate#2104, 2026-09-08: `/me` and `/admin` each call `redirect("/login")` when there is no
+  session, and both segments carry a `loading.tsx`. React catches the redirect at that boundary,
+  streams the skeleton as the fallback, and passes the redirect down as
+  `<template data-dgst="NEXT_REDIRECT;replace;/login;307;">`, so an unauthenticated request to four
+  signed-in routes answered 200 with a skeleton of a page it may not see. The pages were correct
+  before a boundary existed above them, which is why nothing caught it: the defect was introduced
+  by a file added in a different directory that named none of them. Found by measuring production
+  after a deploy rather than by any test, and the reason it survived is L597's shape, the markup
+  carrying both outcomes with the wrong one rendered by default. `/admin` had carried it since
+  #1848 and nobody had asked a signed-out request what it got back)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
@@ -3966,6 +3997,29 @@ for reference; L6 was reviewed and deliberately not adopted.
   session. The same mount effect was also the ONLY thing resolving the preference on the client,
   so a session whose cookie had never been seeded painted light until somebody opened the menu,
   which read to the person as the account menu changing their theme.)
+
+- **L650. A mapping that MERGES several values onto one label (two seasonal abbreviations to one,
+  several statuses to one word, spellings to a canonical form) is correct only while everything it
+  merges means the same thing at the moment of use, and each row reads as correct alone, so the
+  fault exists only in the relationship between rows and no per row test can see it.** It also
+  HIDES any defect in the value feeding it, since many inputs now render as one output, so assert
+  the merged form maps back to ONE meaning across every input the system can actually receive, and
+  test the value before the merge or through an input the merge does not flatten. Distinct from
+  L185, where normalizing on the way in and grouping on the raw form collide on one key: there the
+  write fails outright, here every write succeeds and the label is quietly wrong. Distinct from
+  L118, which is one word naming two units in copy: this is one value naming two states in a
+  payload another system reads.
+  (slate#2117: a Regal payload collapsed EST and EDT to "ET", which is one zone at two times of
+  year and correct, and by the same table collapsed MST and MDT to "MT", which is two DIFFERENT
+  zones at one moment. Arizona keeps standard time all year, so from March to November a Phoenix
+  booking read "MT" while sitting an hour behind Denver, which also read "MT". Arizona is the
+  second commonest zone on that roster, 28 of 148 agent schedules. Every row of the table was
+  individually right and the only wrong thing was the pair. The same collapse then hid a second
+  defect completely: the label was read at `DateTime.now()` rather than at the booking's instant,
+  and since a zone's two seasonal forms both render "ET", the bug and its fix produced identical
+  output on every zone anybody had tested. It was caught only by choosing an input the collapse
+  does not flatten, a London booking, whose two forms do not share a label, and asserting both
+  directions in one run so a clock read once could not satisfy them.)
 
 ## Security and privacy
 
@@ -5106,6 +5160,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   exists only for a departing card last", written to solve the different problem that the night
   must exist AT ALL so the card has somewhere to land; no test asserted the position)
 
+
+- **L648. When a quantity can be wrong in two directions and one direction is harmless
+  while the other silently hides content, never aim for the exact value: bias it hard
+  toward the harmless side and record why**, because a hand maintained exact number
+  drifts into the harmful side with nothing reporting it. Where a surface's own
+  documentation names the asymmetry, that is the instruction, not a footnote.
+  (paperboi#159, 2026-09-08: the design canvas sizes each artboard's frame from a number
+  held in a map beside the screens. Surplus frame paints the artboard's background and
+  costs nothing; a short frame CLIPS, and the clip is invisible from the artboard file
+  itself, which scrolls. The canvas format says exactly this, "surplus frame paints the
+  artboard's background, clipping is the only failure". The narrow map was measured with a
+  written convention, the measured height rounded up plus 40 of headroom, and all twenty
+  of its boards cleared their content. The wide map beside it carried estimates aimed at
+  the right number, and SEVEN of its twenty were short, Instruction by 328px, about a
+  fifth of the screen that draws the payment email. Nothing reported it for as long as
+  those boards were reviewed and approved)
 
 
 
