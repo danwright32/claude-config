@@ -4309,6 +4309,20 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## UX completeness
 
+- **L659. Copy on a surface reachable by more than one route must be true on EVERY route, and the
+  sentence most likely to be false is the one naming WHO decided something (the range you chose,
+  your settings, the filter you applied), because the other routes are precisely the ones where the
+  system decided and the reader chose nothing.** It is written while looking at the one route the
+  author drove, where the claim is true, and it reads as a helpful specific rather than as an
+  assumption. Nothing fails: the screen renders, the state is correct, and the only thing wrong is a
+  sentence pointing the reader at a decision they never made, which sends them hunting for a control
+  they never touched. Enumerate the ways in before writing the words, and where the answer differs
+  by route, either name the thing rather than its author, or say which route this was.
+  (slate#2136, 2026-09-09: the coverage panel's empty state read "no upcoming bookings in the range
+  you chose", true when somebody set the range on that panel and false on the two routes that matter
+  most, a time off approval and an offboarding, both of which enqueue the sweep with a range the
+  system picked and link the reader straight to the result)
+
 - **L651. A control that navigates to a route whose guard REDIRECTS an unpermitted viewer is a
   silent no-op for exactly those viewers, and it is undetectable when the redirect target is the
   page they were already on, so gate the control on the same predicate the route guard uses rather
