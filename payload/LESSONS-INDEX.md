@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 595 lessons.
+LESSONS.md, which is NOT loaded into the session. 597 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -276,6 +276,7 @@ to decide something: the body is where the failure it came from is described.
 - L633. An aggregate read (a sum, a count, a total) over rows hidden by row level security returns a confident zero rather than refusing, because an ungrouped aggregate over zero rows is still one valid row, so a reader who is not permitted, or whose session has expired, receives a plausible number instead of an error.
 - L445. A failing assertion renders its own operands, so comparing against a LARGE value (a whole file, a full response body, a big collection) prints that value over the message explaining what went wrong.
 - L647. Adding a Suspense or error boundary ABOVE existing code changes what a throw beneath it MEANS: a redirect or refusal that reached the caller as a status code becomes a payload streamed inside a 200 with the fallback rendered, so the route now answers healthier than before and the escape depends on the client script running.
+- L654. A monitor that judges an outcome over ALL runs cannot see a fallback path, because a fallback is rare by construction and its collapse to zero moves the overall rate by nothing.
 
 ## State and identity
 
@@ -365,6 +366,7 @@ to decide something: the body is where the failure it came from is described.
 - L388. A search or filter that matches a field the viewer is not permitted to READ hands that field's content back one guess at a time through the result count, without ever displaying it, so every searchable field must be gated by the same predicate that decides whether it is shown.
 - L616. A product whose access model is a fixed list of named users needs, from the first migration, a maintainer identity that can sign in and act with attribution but is excluded from the users' notifications and from their irreversible or money moving actions.
 - L630. An entitlement DERIVED from a downstream artifact (access from a team, a role from an assignment, a quota from a subscription row) is absent for precisely the NEWEST subject
+- L653. A redaction wired to a record's structured fields leaves every free text field on the same record untouched (a log line, a message, a note), and a diagnostic print of the whole payload is exactly what lands in those fields.
 
 ## UX completeness
 

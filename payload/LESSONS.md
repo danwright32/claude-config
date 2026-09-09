@@ -3205,6 +3205,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   carrying both outcomes with the wrong one rendered by default. `/admin` had carried it since
   #1848 and nobody had asked a signed-out request what it got back)
 
+- **L654. A monitor that judges an outcome over ALL runs cannot see a fallback path, because a
+  fallback is rare by construction and its collapse to zero moves the overall rate by nothing.**
+  Judge it over the runs that actually reached it, which is the only population where the rate has
+  a meaning, and let a stability gate written for common fields exclude a fallback from the fast
+  detector rather than pretend to cover it. Distinct from L139, where a volume floor discards a
+  small sample: here the sample is large and the field is simply diluted by runs it never ran on.
+  (bidspoke#1215, 2026-09-09: the Scout fields resolve on 1 to 8 Main Flow runs a day because Scout
+  runs only when Equifax returned no debt and answers with a value on about 2.5 percent of those.
+  When FFN's firewall began blocking the Worker's address at 06:00 UTC on 2026-09-05 the field went
+  to zero over hundreds of reached runs a day, a clean signal on a one day window, but the hourly
+  detector requires a 0.90 stable mean and never watched it, and the weekly dead check paged four
+  days later with advice that the reference path was wrong.)
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
@@ -4217,6 +4230,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   who HAVE a tracked team and checks their address against the list; the manager with no team is
   outside its population and outside every other check's. The weekly drift check did name her, and
   told the reader her date was wrong or her team had left Salesforce, neither of which was true)
+
+- **L653. A redaction wired to a record's structured fields leaves every free text field on the
+  same record untouched (a log line, a message, a note), and a diagnostic print of the whole
+  payload is exactly what lands in those fields.** Redact every column that can carry content, and
+  prove it by driving a payload printed into a log line through the redactor and asserting the
+  identity is gone. Distinct from L360, where the leak is a later step re-enriching a redacted
+  object: here the redactor never looked at the column at all, and the debug print that fills it is
+  written by whoever is most anxious to see the raw data.
+  (bidspoke#1214, 2026-09-09: the Main Flow Eligibility Scout node logs `Sending body to
+  Eligibility Scout: {...}` with the applicant's SSN, date of birth, name and address, and that line
+  is stored verbatim in `execution_steps.logs` on about 180 runs a day. `flushStepLogs` applies
+  `redactPii` to `input` and `output` only, so even with `PII_REDACTION_FIELDS` set the SSN would
+  still land in the logs column, and it was found only because a read-only diagnosis of an
+  unrelated outage printed a step's logs to the terminal.)
 
 ## UX completeness
 
