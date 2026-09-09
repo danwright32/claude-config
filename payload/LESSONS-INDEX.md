@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 593 lessons.
+LESSONS.md, which is NOT loaded into the session. 594 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -368,6 +368,7 @@ to decide something: the body is where the failure it came from is described.
 
 ## UX completeness
 
+- L651. A control that navigates to a route whose guard REDIRECTS an unpermitted viewer is a silent no-op for exactly those viewers, and it is undetectable when the redirect target is the page they were already on, so gate the control on the same predicate the route guard uses rather than rendering it for everyone and letting the guard sort it out.
 - L341. A curve assembled from piecewise segments must be checked for continuity of its RATE OF CHANGE, not only of its value, because matching the values at each seam is what everyone verifies while a step in the rate is what the person actually sees.
 - L20. Accessibility is part of building each control.
 - L560. An ARIA role that names a STRUCTURE (menu, tablist, list, radiogroup, table) is a promise about the element's CHILDREN

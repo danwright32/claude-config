@@ -4220,6 +4220,20 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## UX completeness
 
+- **L651. A control that navigates to a route whose guard REDIRECTS an unpermitted viewer is a
+  silent no-op for exactly those viewers, and it is undetectable when the redirect target is the
+  page they were already on, so gate the control on the same predicate the route guard uses rather
+  than rendering it for everyone and letting the guard sort it out.** Nothing catches this: the
+  route exists, the link is valid, every test passes, and the control is dead only for the roles
+  the guard excludes, which is never the role of whoever built it. A guard that REFUSES leaves the
+  person a page saying why; one that RELOCATES them leaves them looking at the control they just
+  pressed. This is the permission twin of L619, which asks whether a navigation's destination
+  exists at all: here it exists, and is forbidden.
+  (slate#2119, 2026-09-09: Team Time Off offered managers a "View the coverage sweep" button
+  pointing at an agent's page, whose guard sends anyone below super admin back to /admin/ooo until
+  the console goes live. That is the page the button was pressed from, so it did literally nothing.
+  It was the only such link a manager could reach, because their sidebar is empty by construction,
+  and it was found by reading the route's guard rather than by any check)
 - **L341. A curve assembled from piecewise segments must be checked for continuity of its RATE
   OF CHANGE, not only of its value, because matching the values at each seam is what everyone
   verifies while a step in the rate is what the person actually sees.** Sample it finely and
