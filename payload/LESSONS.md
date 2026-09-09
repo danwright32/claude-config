@@ -5193,6 +5193,23 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 
 
+- **L652. A picker that cannot display the stored value SUBMITS its fallback in place of it, because a
+  control posts what it DISPLAYS rather than what it was given, so the next save silently overwrites
+  a real value with a plausible one and reports success.** Either enforce the value's set at every
+  write so a stored value can never fall outside the list, or make the surface say it could not show
+  what was stored and refuse to save until somebody chooses. Distinct from L532, where a form
+  defaults because NOTHING is stored: here something is stored, it is correct, and the default
+  destroys it. Distinct from L611, which is a free text box for a value that should be a picker:
+  this is the picker itself meeting a value outside its own list.
+  (slate#2126: the zone picker was fixed to seven US zones and the rule that anything outside it is
+  refused on the server was written down and enforced nowhere, so a cal.com import wrote each
+  agent's zone through verbatim. Ten live agents, nine of them bookable, ended up on a zone the
+  picker could not show, and their hours page rendered `defaultValue=resolveZone(timezone).id`,
+  which falls back to Eastern. Ticking one day and saving would have moved a Boise agent's entire
+  bookable day two hours. The resolver already returned a `wasOutsideList` flag written for exactly
+  this and no surface read it, which is the tell: the code knew it could not show the value and
+  said nothing.)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,

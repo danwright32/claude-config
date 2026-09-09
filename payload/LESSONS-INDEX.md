@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 594 lessons.
+LESSONS.md, which is NOT loaded into the session. 595 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -449,6 +449,7 @@ to decide something: the body is where the failure it came from is described.
 - L639. A compensating offset applied to a CONTAINER aligns whichever child comes FIRST, never a named one, so a cancellation written to line up a component's LABEL stops holding the moment that component may lead with an icon, mark or badge.
 - L426. An item held on screen past its own removal (a row fading out, a card playing an exit) must be reinserted at its OWN position rather than appended to the end, because anything anchored to it or to the group it belongs to (a scroll pin, a selection, a focus ring) follows it to wherever it lands.
 - L648. When a quantity can be wrong in two directions and one direction is harmless while the other silently hides content, never aim for the exact value: bias it hard toward the harmless side and record why
+- L652. A picker that cannot display the stored value SUBMITS its fallback in place of it, because a control posts what it DISPLAYS rather than what it was given, so the next save silently overwrites a real value with a plausible one and reports success.
 
 ## External systems
 
