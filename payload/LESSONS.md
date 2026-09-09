@@ -1502,6 +1502,24 @@ for reference; L6 was reviewed and deliberately not adopted.
   pattern above.", which is the truth and is also indistinguishable from a gap, and the
   availability canary scored the day healthy because the times really were computable.)
 
+- **L662. Before enforcing a rule whose default is the RESTRICTIVE value and whose
+  permissive case is an explicit marker, count how many records actually carry that
+  marker, because nothing had to maintain it while the field did nothing, so
+  enforcement excludes the whole population rather than the exceptions.** This is
+  L543 in the mirror: there an empty list of exceptions ships the feature inert and
+  the harm is that it never fires, and here an empty list of affirmatives ships it
+  total and the harm is that it fires on everybody. Both read as the mechanism
+  working, because in each case the code is correct and the data is what nobody
+  entered. Measure the marker's real fill rate against the live population, and put
+  the number in front of whoever is deciding, before the rule is switched on.
+  (slate#2098, 2026-09-09: legal eligibility moved from a field an admin was expected
+  to set, which 0 of 101 agents held, to the Twilio tag that feeds the incumbent, with
+  the rule "the default is N, Y is the only one called out". Exactly 1 of 126 workers
+  carried the positive tag, and that one agent was already withheld for another
+  reason, so recording what the source says took all ten legal routing buckets from
+  73, 56, 37, 17 and 6 agents to zero. The rule was right, the data was empty, and
+  slate#2141 is the tagging that closes it.)
+
 
 
 - **L373. A test whose premise is that a change has NOT yet been made (a migration rehearsal, a dry
