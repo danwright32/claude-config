@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 598 lessons.
+LESSONS.md, which is NOT loaded into the session. 599 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -13,6 +13,7 @@ to decide something: the body is where the failure it came from is described.
 - L277. A defect's output can be the only record of a fact the system never stored deliberately, so shipping the fix silently removes the evidence the diagnosis was made from. Before shipping one, name what the failure was incidentally reporting and record that fact directly.
 - L284. A test that sets some of a script's seams runs every unset collaborator for real, and the real ones are the slow and the dangerous ones, so enumerate every seam the script honours beside the test and assert each is either set once for the whole suite or deliberately left real by a section that tests it.
 - L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is written, because a hard-coded setTimeout forces every end-to-end test that crosses it to wait for real.
+- L656. A duration measured in the same run is only a yardstick if it comes from SEVERAL samples
 - L224. A check that compares elapsed time against a FIXED number is a check on what else the machine is running, so compare it against a duration measured in the same run.
 - L215. A reader that answers with an EMPTY collection when its own accessor throws is indistinguishable from a correct reader of an empty collection, and because the swallowing construct usually sits INSIDE the loop, one element of an unexpected shape empties the whole result.
 - L216. When two independent readings of the same input disagree, a disagreement rate that is CONCENTRATED and TOTAL, near 100% on a few named fields and near 0% on the rest, indicts the pipeline rather than the input, because a genuine data problem is spread out and partial.

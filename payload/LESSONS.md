@@ -58,6 +58,24 @@ for reference; L6 was reviewed and deliberately not adopted.
   of the same shape for the same reason; Slate carries none because every retry path there takes
   a clock.)
 
+- **L656. A duration measured in the same run is only a yardstick if it comes from SEVERAL
+  samples**, because one sample carries that run's worst stall and then becomes the standard every
+  other sample is judged against. Take the median of the observed intervals, or read the interval
+  the code itself planned, and never the first one, which races startup. This is the refinement
+  L224 needs: L224 prescribes measuring the baseline in the same run, and that is exactly what
+  fails here, so same-run is necessary and one-sample is not sufficient. Distinct from L395, which
+  is about how many readings a claimed DIFFERENCE takes; this is about a test's own internal
+  yardstick.
+  (PET#1386, 2026-09-09: tests/rankings-bar-entry.spec.js measured the Power Rankings wave's step
+  from the gap between rows 0 and 1, then required every later gap to exceed half of it. On a
+  loaded CI runner that first gap stalled to 85ms against a real step of about 40ms, and the next
+  gap, a normal 17ms, failed against the inflated 42.5ms floor. It failed all three attempts,
+  blocked a pull request whose diff was three SQL-parsing files no browser spec can reach, and
+  passed 14 of 14 locally. Its own error message said the wave "halts partway down", the opposite
+  of what happened, because the test could not tell a stalled baseline from a collapsed wave. The
+  plan the step comes from was already exposed to the test two lines above, read for a different
+  field.)
+
 - **L224. A check that compares elapsed time against a FIXED number is a check on what else the
   machine is running, so compare it against a duration measured in the same run.** External load
   makes it fail on commits that changed nothing, and raising the threshold to stop that removes the
