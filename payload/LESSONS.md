@@ -4306,6 +4306,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   full email local part one line below the word "redacted". The issue's own proposed escape, a
   reference type, was measured in the same run and leaked identically.)
 
+
 ## UX completeness
 
 - **L651. A control that navigates to a route whose guard REDIRECTS an unpermitted viewer is a
