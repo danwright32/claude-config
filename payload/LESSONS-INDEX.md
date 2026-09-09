@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 604 lessons.
+LESSONS.md, which is NOT loaded into the session. 605 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -345,6 +345,7 @@ to decide something: the body is where the failure it came from is described.
 - L637. A wildcard resolved when a definition is CREATED rather than when it is read (a view's `select *`, a generated type, a snapshotted schema) reads as everything always and is actually everything once
 - L646. A control that seeds its own state from a prop and writes shared state from a MOUNT EFFECT reverts the person's change every time its container remounts
 - L650. A mapping that MERGES several values onto one label (two seasonal abbreviations to one, several statuses to one word, spellings to a canonical form) is correct only while everything it merges means the same thing at the moment of use, and each row reads as correct alone, so the fault exists only in the relationship between rows and no per row test can see it.
+- L661. A manual override the product itself offers (mark done, skip, force) must write every field the automated path writes for that same state, because the gates downstream read the automation's richer record rather than the status.
 
 ## Security and privacy
 

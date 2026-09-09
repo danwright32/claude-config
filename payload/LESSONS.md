@@ -4052,6 +4052,27 @@ for reference; L6 was reviewed and deliberately not adopted.
   does not flatten, a London booking, whose two forms do not share a label, and asserting both
   directions in one run so a clock read once could not satisfy them.)
 
+- **L661. A manual override the product itself offers (mark done, skip, force) must write every
+  field the automated path writes for that same state, because the gates downstream read the
+  automation's richer record rather than the status.** The person taking the override is by
+  definition the one who could not run the automation, so a gate keyed on a field only the
+  automation writes can never be cleared, and the remedy it names is the action they were already
+  denied. Distinct from L379, which is a person substituting a manual step for a tool from outside
+  the system: this is a control the product ships, so the incomplete write is a design decision
+  rather than an omission. Distinct from L55 and L384, which are a second writer added later and a
+  field set on update but not on insert: here both paths are original and peers.
+  (new-agent-onboarding#722, 2026-09-09: the Google Workspace step was marked done by hand for a
+  real hire, and the Regal contacts step then refused to run, saying "Create the Google accounts
+  first". `Mark done` writes only `{ status: "done" }`; the Regal gate reads
+  `steps.google.createdEmails`, which only the Google automation's success branch writes, so the
+  agent read as awaiting an account that already existed. Reopening and running the automation
+  could not clear it either: adoption of an existing account is derived server side from the D1
+  ledger, a hand created account has no ledger row, so Google answers 409 and the step errors.
+  Skip, which records a step that never happened, was the only way past. The same field is what
+  `isAgentLocked` reads, so the hand done path also left the agent's name and company email
+  editable after the real account existed, which is the exact desync that lock was built to
+  prevent.)
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
