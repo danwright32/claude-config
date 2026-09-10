@@ -190,7 +190,7 @@ import sys
 page = open(sys.argv[1], encoding="utf-8").read()
 harness = """
 <script>
-function heading() { return document.querySelector("#readout h2").textContent; }
+function heading() { return document.querySelector(".dr-readout h2").textContent; }
 var log = [heading()];
 ["ArrowRight", "1", "2", "ArrowLeft"].forEach(function (k) {
   document.dispatchEvent(new KeyboardEvent("keydown", {key: k, bubbles: true}));
@@ -415,7 +415,7 @@ import sys
 page = open(sys.argv[1], encoding="utf-8").read()
 harness = """
 <script>
-var e = document.querySelector("#stage > *");
+var e = document.querySelector(".dr-stage > *");
 var out = document.createElement("pre"); out.id = "W";
 out.textContent = e ? String(Math.round(e.getBoundingClientRect().width)) : "missing";
 document.body.append(out);
@@ -479,7 +479,7 @@ if [[ -x "$CHROME" ]]; then
   render() { # render <page> -> the stage's markup after load
     "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
       --dump-dom "file://$1" 2>/dev/null \
-      | python3 -c 'import sys,re; m=re.search(r"<div class=\"dr-stage\" id=\"stage\">(.*?)</div>\s*<p class=\"dr-hint\"", sys.stdin.read(), re.S); print((m.group(1).strip() if m else "NO-STAGE")[:200])'
+      | python3 -c 'import sys,re; m=re.search(r"<div class=\"dr-stage\"[^>]*>(.*?)</div>\s*<p class=\"dr-hint\"", sys.stdin.read(), re.S); print((m.group(1).strip() if m else "NO-STAGE")[:200])'
   }
 
   # The exact failure: a builder holding the same names AND reassigning them while it
@@ -552,6 +552,218 @@ else
   echo "UNMEASURED: no headless Chrome, so the script collision was checked in the source only"
 fi
 
+
+# --- and the last two surfaces the chrome shares with the project (claude-config#356) ---
+#
+# Third instance of one pattern. The style names were namespaced after PaperBoi round 63,
+# the script moved into its own scope after claude-config#355, and the same two words were
+# still sitting on the elements as bare ids, with a keydown listener on the whole document
+# beside them. Each namespace left open fails the identical silent way, and the remedy
+# keeps being scoped to whichever one the last incident named (L452).
+#
+# So this asserts the NAMESPACE, derived from the chrome's own markup, rather than the
+# three ids that happen to be there today.
+
+chrome_ids() { # chrome_ids <page> -> one id per line, from the chrome's own markup only
+  python3 - "$1" <<'IDPY'
+import re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+body = page.split("<body>", 1)[-1].split("<script>", 1)[0]
+found = re.findall(r'\bid="([^"]+)"', body)
+if not found:
+    print("NO-IDS-FOUND")
+for name in sorted(set(found)):
+    print(name)
+IDPY
+}
+
+bare_ids="$(chrome_ids "$TMP/js.html" | grep -v '^dr-' | tr '\n' ' ')"
+check_eq "every id the chrome puts on the page is namespaced" "" "${bare_ids% }"
+# The extractor really found the markup, so the check above is not passing on an empty read.
+check_not "the id extractor read the chrome's markup" "NO-IDS-FOUND" "$(chrome_ids "$TMP/js.html")"
+
+# The keydown listener is the other shared surface, and it cannot simply move: the page has
+# nothing focusable, so scoping it to the frame would stop the arrow keys working at all.
+# It YIELDS instead. A project that claims a key gets it, because the project's screen is
+# the thing being judged, and a key typed into the design is the design's, not a shortcut.
+check "the chrome stands down on a key the project claimed" "defaultPrevented" "$(cat "$TMP/js.html")"
+check "the chrome stands down inside a field" "isContentEditable" "$(cat "$TMP/js.html")"
+
+if [[ -x "$CHROME" ]]; then
+  # A builder that binds its own arrow and digit keys. Both listeners are on the document
+  # and the builder's is registered first, so it runs first: if it claims the key, the tab
+  # strip must not also move.
+  cat > "$TMP/keys-builder.js" <<'KB'
+document.addEventListener("keydown", function (event) {
+  if (event.key === "2") { event.preventDefault(); }
+});
+function buildScreen(variant) {
+  var d = document.createElement("div");
+  d.textContent = "drawn:" + variant.name;
+  return d;
+}
+KB
+  python3 - "$TMP/js.json" "$TMP/keys.json" <<'KJ'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "keys-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+KJ
+  python3 "$SCRIPT" "$TMP/keys.json" "$TMP/keys.html" || fail=$((fail + 1))
+
+  press() { # press <page> <key> <out> -> renders after that key is pressed
+    python3 - "$1" "$2" "$3" <<'PRESS'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = '<script>document.dispatchEvent(new KeyboardEvent("keydown", {key: "%s", bubbles: true, cancelable: true}));</script>' % sys.argv[2]
+open(sys.argv[3], "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
+PRESS
+    render "$3"
+  }
+
+  check "a key the project claimed does not also move the tabs" "drawn:A" \
+    "$(press "$TMP/keys.html" 2 "$TMP/keys-2.html")"
+  # The control: a key the project did NOT claim still works, or the yield has simply
+  # turned the shortcuts off (L159). Its own builder, because the shared fixture writes the
+  # option into a class and leaves the element empty, so a check for the name would be
+  # looking for text that is never drawn whatever the keys do.
+  printf 'function buildScreen(variant) { var d = document.createElement("div"); d.textContent = "drawn:" + variant.name; return d; }\n' \
+    > "$TMP/plain-builder.js"
+  python3 - "$TMP/js.json" "$TMP/plain.json" <<'PJ'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "plain-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+PJ
+  python3 "$SCRIPT" "$TMP/plain.json" "$TMP/plain.html" || fail=$((fail + 1))
+  check "the option drawn before any key is the first one" "drawn:A" "$(render "$TMP/plain.html")"
+  check "a key the project left alone still works" "drawn:B" \
+    "$(press "$TMP/plain.html" 2 "$TMP/plain-2.html")"
+  check "the arrow keys still step through the options" "drawn:B" \
+    "$(press "$TMP/plain.html" ArrowRight "$TMP/plain-right.html")"
+
+  # A design carrying a text field: typing its own key into it must not jump tabs.
+  cat > "$TMP/field-builder.js" <<'FB'
+function buildScreen(variant) {
+  var d = document.createElement("div");
+  d.textContent = "drawn:" + variant.name;
+  var input = document.createElement("input");
+  input.id = "typed";
+  d.appendChild(input);
+  return d;
+}
+FB
+  python3 - "$TMP/js.json" "$TMP/field.json" <<'FJ'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "field-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+FJ
+  python3 "$SCRIPT" "$TMP/field.json" "$TMP/field.html" || fail=$((fail + 1))
+  python3 - "$TMP/field.html" "$TMP/field-typed.html" <<'TYPED'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+var box = document.getElementById("typed");
+box.focus();
+box.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true, cancelable: true}));
+</script>
+"""
+open(sys.argv[2], "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
+TYPED
+  check "a key typed into the design's own field does not jump tabs" "drawn:A" \
+    "$(render "$TMP/field-typed.html")"
+else
+  unmeasured=$((unmeasured + 1))
+  echo "UNMEASURED: no headless Chrome, so the key yielding was checked in the source only"
+fi
+
+# A builder that THROWS is the third answer the page can give about sameness, and it needs
+# a case that produces it: an outcome a contract enumerates and no test reaches is a branch
+# nobody has run (L151). It must not read as "the options are fine", and it must say what
+# it could not do rather than what it found.
+if [[ -x "$CHROME" ]]; then
+  printf 'function buildScreen(variant) { throw new Error("no canvas here"); }\n' > "$TMP/throw-builder.js"
+  python3 - "$TMP/js.json" "$TMP/throw.json" <<'TJ'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "throw-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+TJ
+  python3 "$SCRIPT" "$TMP/throw.json" "$TMP/throw.html" || fail=$((fail + 1))
+  # Read the STRIP's own text, not the whole document: the script that can build either
+  # sentence carries both of them, so a check against the raw dump passes on every page.
+  strip_text() { # strip_text <page> -> what the warning strip actually says, or NO-STRIP
+    "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+      --dump-dom "file://$1" 2>/dev/null \
+      | python3 -c 'import sys,re
+m = re.search(r"<p class=\"dr-sameness\">(.*?)</p>", sys.stdin.read(), re.S)
+print(re.sub(r"\s+", " ", m.group(1)).strip() if m else "NO-STRIP")'
+  }
+  throw_strip="$(strip_text "$TMP/throw.html")"
+  check "a builder that throws is reported as unchecked" "could not be checked" "$throw_strip"
+  check "and the strip quotes what the builder actually said" "no canvas here" "$throw_strip"
+  # It must not make the CLASH CLAIM, which is a different thing from not using the clash
+  # sentence's words: this strip says "whether these options draw the same picture could
+  # not be checked", which contains those words while asserting the opposite. The claim is
+  # NAMING a pair, so that is what is checked (L347).
+  check_not "it does not also name a pair as matching" "A and B" "$throw_strip"
+fi
+
+# --- how many times the builder is asked to draw (claude-config#357) ---
+#
+# The sameness check draws every option once at load. Left beside a show() that redraws on
+# every press, that is one MORE call per option than before, and for a builder that does
+# anything besides return a picture (touches the page itself, starts a fetch, keeps state
+# between calls) the extra call happens far away from anything that would explain it.
+#
+# The answer is to draw each option ONCE and keep it, which is what the sameness check
+# already has to do anyway. That is strictly fewer calls than before the check existed,
+# where every press rebuilt, so the cost question closes rather than being traded.
+
+if [[ -x "$CHROME" ]]; then
+  cat > "$TMP/counting-builder.js" <<'CB'
+var calls = 0;
+function buildScreen(variant) {
+  calls = calls + 1;
+  var d = document.createElement("div");
+  d.textContent = "drawn:" + variant.name + " calls:" + calls;
+  return d;
+}
+CB
+  python3 - "$TMP/js.json" "$TMP/counting.json" <<'CJ'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "counting-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+CJ
+  python3 "$SCRIPT" "$TMP/counting.json" "$TMP/counting.html" || fail=$((fail + 1))
+
+  # Two options, so two calls, ever. The first option shows the first of them.
+  check "each option is drawn once at load" "drawn:A calls:1" "$(render "$TMP/counting.html")"
+
+  # Walking away and back must not draw it again. Three presses, and the number the second
+  # option carries is the one it was given at load.
+  python3 - "$TMP/counting.html" "$TMP/counting-walk.html" <<'WALK'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+function press(k) {
+  document.dispatchEvent(new KeyboardEvent("keydown", {key: k, bubbles: true, cancelable: true}));
+}
+press("2"); press("1"); press("2");
+</script>
+"""
+open(sys.argv[2], "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
+WALK
+  check "revisiting an option does not draw it again" "drawn:B calls:2" \
+    "$(render "$TMP/counting-walk.html")"
+else
+  unmeasured=$((unmeasured + 1))
+  echo "UNMEASURED: no headless Chrome, so how often the builder is called was not counted"
+fi
 
 echo
 echo "passed: $pass, failed: $fail"

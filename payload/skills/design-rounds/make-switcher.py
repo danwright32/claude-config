@@ -162,11 +162,11 @@ __STYLES__
   <h1 class="dr-round">__ROUND__</h1>
   __ASKS__
   __MEASUREMENT__
-  <div class="dr-tabs" id="tabs"></div>
-  <div class="dr-readout" id="readout"></div>
-  <div class="dr-stage" id="stage"></div>
+  <div class="dr-tabs" id="dr-tabs"></div>
+  <div class="dr-readout" id="dr-readout"></div>
+  <div class="dr-stage" id="dr-stage"></div>
   <p class="dr-hint">Left and right arrows step through the options. The key on each tab jumps
-  straight to it.</p>
+  straight to it, unless the design on the stage wants that key for itself.</p>
 </div>
 <script>
 __BUILDER__
@@ -199,10 +199,11 @@ __BUILDER__
   }
 
   var frame = document.querySelector(".dr-frame");
-  var tabs = document.getElementById("tabs");
-  var readout = document.getElementById("readout");
-  var stage = document.getElementById("stage");
+  var tabs = document.getElementById("dr-tabs");
+  var readout = document.getElementById("dr-readout");
+  var stage = document.getElementById("dr-stage");
   var current = 0;
+  var built = [];
 
   function show(index) {
     current = (index + VARIANTS.length) % VARIANTS.length;
@@ -213,29 +214,48 @@ __BUILDER__
     var lines = [el("h2", null, variant.name), el("p", null, variant.why)];
     if (variant.measured) lines.push(el("p", "dr-measured", variant.measured));
     readout.replaceChildren.apply(readout, lines);
-    stage.replaceChildren(buildScreen(variant));
+    /* The picture drawn at load, not a fresh one. See drawAll below: the builder is asked
+       for each option exactly once, and the same element is moved onto the stage every
+       time that option is chosen. The fallback covers the one case where drawAll could not
+       finish, so a page whose builder threw is still usable rather than blank. */
+    stage.replaceChildren(built[current] || buildScreen(variant));
   }
 
-  /* Do the options actually differ?
+  /* Draw every option once, keep the pictures, and say whether any two are the same.
 
-     The tool that wrote this page cannot know: the drawing happens here, in the browser,
-     so the refusal has to live where the information is. Two options that render the same
-     markup are either a collision like the one above or a round whose options do not
-     differ, and both are worth saying out loud rather than handing somebody a page that
-     looks finished.
+     ONE call per option for the life of the page, which is fewer than this page used to
+     make: show() rebuilt on every press, so walking back and forth redrew each option
+     again and again. That matters for a builder that does anything besides return an
+     element, such as touching the page itself or starting a fetch, because the extra work
+     would happen far away from anything that would explain it (claude-config#357). The
+     contract is that buildScreen is a function of its argument; this makes the cost of
+     breaking it a fixed one rather than one that grows with how long somebody looks.
 
-     A builder that throws when handed a detached node is a THIRD answer and gets its own
-     sentence, because a check that could not run must not read as a check that passed. */
-  function sameness() {
+     What it gives up, and it is worth stating: a builder that reads the window size draws
+     once and no longer refreshes on the next press. A design round is a comparison at one
+     size, and the pictures staying identical between presses is the property being
+     compared, so that is the right way round.
+
+     The sameness answer falls out of the same pass. Two options rendering the same markup
+     are either a collision between this page and the builder or a round whose options do
+     not differ, and both are worth saying out loud rather than handing somebody a page
+     that looks finished.
+
+     A builder that THROWS is a third answer with its own sentence, because a check that
+     could not run must never read as a check that passed. */
+  function drawAll() {
     var seen = {};
     var clashes = [];
     for (var i = 0; i < VARIANTS.length; i++) {
-      var probe = document.createElement("div");
+      var node;
       try {
-        probe.appendChild(buildScreen(VARIANTS[i]));
+        node = buildScreen(VARIANTS[i]);
       } catch (err) {
         return { ran: false, why: String(err && err.message ? err.message : err) };
       }
+      built[i] = node;
+      var probe = document.createElement("div");
+      probe.appendChild(node);
       var mark = probe.innerHTML;
       if (Object.prototype.hasOwnProperty.call(seen, mark)) {
         clashes.push(VARIANTS[seen[mark]].name + " and " + VARIANTS[i].name);
@@ -251,7 +271,7 @@ __BUILDER__
     frame.insertBefore(strip, frame.firstChild);
   }
 
-  var verdict = sameness();
+  var verdict = drawAll();
   if (!verdict.ran) {
     warn("Whether these options draw the same picture could not be checked, because the "
          + "builder threw when it was asked to draw one on its own: " + verdict.why
@@ -273,8 +293,26 @@ __BUILDER__
     tabs.append(button);
   });
 
+  /* The listener has to stay on the document: nothing on this page is focusable, so
+     scoping it to the frame would stop the arrow keys working at all. What it does
+     instead is YIELD, because the document is the last surface this page shares with the
+     project and the project's screen is the thing being judged (claude-config#356, L452).
+
+     Two ways to lose the key, and both are the project winning on purpose:
+
+       the project CLAIMED it. Its own listener is registered first, because its script
+         runs first, so it sees the key first. If it called preventDefault, that key is
+         spoken for and this page must not also act on it.
+
+       the key was typed INTO the design. A design carrying a text field would otherwise
+         have every "1" and "2" jump tabs while somebody types in it, which is the key
+         being stolen rather than shared (L596). */
   document.addEventListener("keydown", function (event) {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.defaultPrevented) return;
+    var target = event.target;
+    if (target && (target.isContentEditable
+        || /^(INPUT|TEXTAREA|SELECT|OPTION)$/.test(target.tagName || ""))) return;
     if (event.key === "ArrowRight") { show(current + 1); event.preventDefault(); return; }
     if (event.key === "ArrowLeft") { show(current - 1); event.preventDefault(); return; }
     for (var i = 0; i < VARIANTS.length; i++) {
