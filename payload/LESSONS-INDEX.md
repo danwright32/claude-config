@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 611 lessons.
+LESSONS.md, which is NOT loaded into the session. 612 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -161,6 +161,7 @@ to decide something: the body is where the failure it came from is described.
 - L638. A test that asserts agreement with a DESIGNED ARTIFACT (a comp, a golden file, another system's published output) must READ that artifact, never the rule you believe produced it
 - L643. A reconciliation between two systems must compare the DECISIONS each one makes, never the list of who or what is ELIGIBLE to be chosen
 - L645. A tool reached through a shell FUNCTION is not the tool it is named after
+- L447. A sweep that exercises every member of a surface in ONE accumulating pass stops covering everything an earlier step made unreachable, and the count it reports still reads as coverage
 
 ## Data safety
 

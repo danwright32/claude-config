@@ -1906,6 +1906,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   and is deterministic. The wait loop that exposed it is L110: with no deadline it could not
   fail, only hang, so a permanently false condition ran for hours instead of erroring once.)
 
+- **L447. A sweep that exercises every member of a surface in ONE accumulating pass stops
+  covering everything an earlier step made unreachable, and the count it reports still reads
+  as coverage**, so drive each member from the same starting state, or assert that count
+  against what the surface can actually reach.
+  (ovation#184: the design record's rendering harness presses every control on a page and
+  re-reads the console, which is what caught ovation#170, a page that threw only on a fixture
+  three buttons from the one it opens on. It presses them in one render, in document order,
+  so each press lands in the state the previous ones left. The invoice screen's "do not bill"
+  confirmation replaces the foot of the page entirely, so every control below it is
+  unpressable for the rest of that pass and is never exercised at all. The harness prints how
+  many it pressed, which is the part that hides it: 58 is a real number and nothing compares
+  it against how many the pages can actually reach across their states.)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
