@@ -101,12 +101,12 @@ mk_style_repo() {
   printf '%s' "$root/work"
 }
 run_style_hook() {
-  # $1 cwd, $2 command -> sets STYLE_CODE
+  # $1 cwd, $2 command -> sets STYLE_CODE and STYLE_MSG (what it told the reader)
   local p
   p="$(HK_CMD="$2" HK_CWD="$1" python3 -c 'import json,os,sys
 sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
-  printf '%s' "$p" | bash "$HOOK" >/dev/null 2>&1
-  STYLE_CODE=$?
+  # stderr to the capture, stdout to nowhere: the refusal is what is being read.
+  STYLE_MSG="$(printf '%s' "$p" | bash "$HOOK" 2>&1 >/dev/null)"; STYLE_CODE=$?
 }
 want_style_code() {
   if [ "$STYLE_CODE" = "$1" ]; then pass=$((pass+1));
@@ -129,6 +129,137 @@ want_style_code 2 "git -C push from a non-repo cwd must still be checked"
 W="$(mk_style_repo 'const label = "Loading, please wait";')"
 run_style_hook "$E2E" "cd $W && git push"
 want_style_code 0 "clean copy pushed the same way is allowed"
+
+# --- what the push would actually CARRY, not what happens to be lying about ----
+#
+# This gate is PreToolUse, so on a chained commit and push it runs BEFORE the commit
+# exists and falls back to the working tree. It fell back to the WHOLE working tree,
+# including files the commit was never going to take, and blocked a push naming two
+# untracked planning documents belonging to another session (claude-config#350).
+#
+# An untracked file nobody staged cannot be pushed, so it can never introduce anything.
+# Neither can a tracked file modified but not named in the add, which is the same fault
+# and the one the incident did not happen to show.
+
+says_style() {  # $1 = a LITERAL needle
+  case "$STYLE_MSG" in *"$1"*) return 0 ;; *) return 1 ;; esac
+}
+want_says() {
+  if says_style "$1"; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: $2: message did not say [$1], said: $STYLE_MSG"; fi
+}
+want_silent_on() {
+  if says_style "$1"; then fail=$((fail+1)); echo "FAIL: $2: message wrongly said [$1]";
+  else pass=$((pass+1)); fi
+}
+
+# A repo whose committed history is CLEAN, carrying whatever pending state a case needs.
+#   $1 = content for app/copy.ts, left untracked (the file a case names in its add)
+#   $2 = content for stranger.md, left untracked and NEVER named
+#   $3 = content to write over the tracked README.md, left modified and never named
+mk_pending_repo() {
+  local root; root="$(mktemp -d)"
+  git init -q --bare "$root/origin.git"
+  git init -q -b main "$root/work"
+  (
+    cd "$root/work" || exit 1
+    git config user.email t@t.t; git config user.name t
+    echo baseline > README.md
+    git add README.md; git commit -qm init
+    git remote add origin "$root/origin.git"
+    git push -qu origin main
+    mkdir -p app
+    printf '%s\n' "$1" > app/copy.ts
+    printf '%s\n' "$2" > stranger.md
+    printf '%s\n' "$3" > README.md
+  ) >/dev/null 2>&1
+  printf '%s' "$root/work"
+}
+
+CLEAN='const label = "Loading, please wait";'
+
+# 1. The incident. The add names one clean file; the forbidden character is in an
+#    untracked file nobody staged, so nothing this push carries introduces it.
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm copy && git push"
+want_style_code 0 "an untracked file nobody staged must not block the push"
+
+# 2. The control, in the same shape: name the file that DOES carry one and it blocks.
+#    Without this, case 1 is satisfied by a gate that stopped reading pending work at all.
+W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm copy && git push"
+want_style_code 2 "a file the add DOES name must still block"
+
+# 3. The same fault on a TRACKED file: modified, not named, so the commit will not take
+#    it. The incident showed only the untracked half; this is the other half (L30).
+W="$(mk_pending_repo "$CLEAN" "$CLEAN" "$BAD")"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm copy && git push"
+want_style_code 0 "a modified tracked file nobody named must not block the push"
+
+# 4. But an add that really does take everything, takes everything.
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add -A && git commit -qm copy && git push"
+want_style_code 2 "git add -A stages the stranger, so it is judged"
+
+# 5. And a commit that stages tracked changes itself takes those.
+W="$(mk_pending_repo "$CLEAN" "$CLEAN" "$BAD")"
+run_style_hook "$E2E" "cd $W && git commit -qam copy && git push"
+want_style_code 2 "commit -a stages the tracked change, so it is judged"
+
+# 6. Content already in the INDEX is carried by a bare commit with no add at all.
+W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
+( cd "$W" && git add app/copy.ts ) >/dev/null 2>&1
+run_style_hook "$E2E" "cd $W && git commit -qm copy && git push"
+want_style_code 2 "content already staged is judged even with no add in the chain"
+
+# 7. A push on its own judges the COMMITS only, and never the working tree. This is the
+#    property the remedy in the message rests on, so it is asserted rather than assumed.
+W="$(mk_pending_repo "$BAD" "$BAD" "$BAD")"
+run_style_hook "$E2E" "cd $W && git push"
+want_style_code 0 "a push on its own ignores everything uncommitted"
+
+# 8. When the add's paths cannot be worked out, the gate must NOT narrow to nothing.
+#    Reading no content and reporting a clean run is the one outcome this change could
+#    have introduced, and it is indistinguishable from a push with nothing wrong in it
+#    (L98). So it falls back to the whole working tree AND says that is what it did.
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add does-not-exist.txt && git commit -qm copy && git push"
+want_style_code 2 "an unresolvable path falls back rather than narrowing to nothing"
+want_says "could not be worked out" "an unresolvable path says the reading was widened"
+want_says "two separate commands" "the widened reading names the way to settle it"
+
+# 9. The same when the command cannot be tokenised at all, which is a different route to
+#    the same answer and so needs its own case (L173).
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add \"app/copy.ts && git commit -qm copy && git push"
+want_style_code 2 "an unparseable command falls back rather than narrowing to nothing"
+want_says "could not be worked out" "an unparseable command says the reading was widened"
+
+# 10. And the widened reading is not the old behaviour by another name: with the paths
+#     readable, the stranger is left alone and nothing says the reading was widened.
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm copy && git push"
+want_style_code 0 "a resolvable path keeps the reading narrow"
+
+# --- the message may claim only what it measured (L11) ------------------------
+#
+# It said "this push introduces an em dash", which is a claim about the push, on a
+# reading taken from the working tree. A reader believes their own change is at fault
+# and goes looking in the wrong place.
+
+# Committed content: the original claim is the true one here, so it stays.
+W="$(mk_style_repo "$BAD")"
+run_style_hook "$E2E" "cd $W && git push"
+want_style_code 2 "committed content still blocks"
+want_says "this push introduces" "a committed finding"
+
+# Pending content: true that it would ship, false that the push introduces it, because
+# nothing has committed it yet.
+W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm copy && git push"
+want_silent_on "this push introduces" "a pending finding must not claim the push carries it"
+want_says "about to make" "a pending finding names the commit it read"
+want_says "not been committed yet" "a pending finding says what it measured"
 
 echo
 echo "passed: $pass, failed: $fail"
