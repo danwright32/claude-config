@@ -5508,6 +5508,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   a refusal. Dan hit it on the pilot link and read it as the product having forgotten him, which
   is exactly what slate#2166 had been opened to end one step earlier in the same flow.)
 
+- **L677. A step removed from a flow takes with it every capability that only that step offered**,
+  and those are invisible because the step is named for its main purpose rather than for what it
+  also made possible, so before removing one, enumerate everything reachable ONLY through it. The
+  removal is usually right, and the loss reads as nothing at all: the step is gone, so the control
+  it carried has no empty space to leave behind.
+  (slate#2207, 2026-09-10: the booker's details form was taken off the path a recognised lead
+  takes to move a call, because it collected nothing they had not already been identified by. It
+  was also the ONLY place they could correct a wrong phone number or email, which slate#2164 had
+  put there deliberately, applying the correction before the move so the rewritten invite and the
+  emitted payload both carried the new values. The panel could now move a call and cancel a call
+  and not change what we would ring, and the person that hurt was the one the cancel had been
+  built for: somebody who never received the invite email, and so had no manage link either.)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
