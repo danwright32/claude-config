@@ -7809,3 +7809,14 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   ORG's date rather than the agent's own zone and instant, which collapses the boundary where
   one company day falls on two different local weekdays for the same person. Neither is
   reachable from a single zone fixture on an ordinary week.)
+
+- **L682. A live path is only as outage tolerant as its LEAST cached read, so inventory every read
+  on it and give each one a served-stale fallback**, because a short TTL cache that hard fails on a
+  miss protects nothing past one TTL, and caching most of a path's inputs while one read stays on
+  the database still lets that one read take the whole path down, with every cached input reading
+  as resilience that was never there. (Bidspoke, 2026-09-10, bidspoke#1296: Supabase was
+  unresponsive for ten minutes. The workflow definition, environment variables and Salesforce
+  credentials were all served from KV with last-good copies, but the custom endpoint record was
+  cached for 60 seconds and answered 503 on a failed lookup, and the partner config was read from
+  the database on every bid attempt. Leads arrived at the normal rate throughout and about 600
+  Engine leads were refused, roughly 400 never bid on.)
