@@ -37,6 +37,70 @@ if mt_is_pr_merge "cd /tmp && $MERGE 7"; then pass; else fail "a merge behind a 
 if mt_is_pr_merge "gh pr view 7"; then fail "gh pr view was read as a merge"; else pass; fi
 if mt_is_pr_merge ""; then fail "an empty command was read as a merge"; else pass; fi
 
+echo "merge-target: a command, not its payload (claude-config#349)"
+
+# The matcher used to test the whole command string for the phrase, with no command
+# position check at all, so a command that merely CONTAINED it in its payload tripped
+# a PreToolUse DENY. Hit twice on 2026-09-10, both times writing an issue body about
+# merging: the whole command was refused, the heredoc never ran, and the failure
+# surfaced one step later as a missing file rather than as the block that caused it.
+#
+# The correct matcher already existed in pr-merge-quiz.sh, a NON blocking hook, while
+# the blocking gates shared the wrong one. That is the wrong way round: a false
+# positive costs most where it denies.
+
+# Command position, in every shape a real merge arrives in.
+if mt_is_pr_merge "GH_TOKEN=abc $MERGE 42"; then pass; else fail "leading env assignments hid the merge"; fi
+if mt_is_pr_merge "git fetch origin && $MERGE 42 --squash"; then pass; else fail "a merge in the second segment was missed"; fi
+if mt_is_pr_merge "git fetch origin ; $MERGE 42"; then pass; else fail "a merge after a semicolon was missed"; fi
+if mt_is_pr_merge "/opt/homebrew/bin/${MERGE} 42"; then pass; else fail "gh called by absolute path was missed"; fi
+
+# Payload position. Each of these is a command that TALKS about merging and merges nothing.
+if mt_is_pr_merge "echo \"$MERGE 42\""; then fail "an echo of the phrase was read as a merge"; else pass; fi
+if mt_is_pr_merge "gh issue comment 5 --body \"then run $MERGE\""; then
+  fail "an issue comment naming the phrase was read as a merge"; else pass; fi
+if mt_is_pr_merge "grep -r \"$MERGE\" ."; then fail "a grep for the phrase was read as a merge"; else pass; fi
+if mt_is_pr_merge "gh pr view 42 --json state"; then fail "gh pr view was read as a merge"; else pass; fi
+
+# The incident itself: a heredoc writing prose about merging. Its body carries a
+# semicolon, which is what a segment splitter cuts on, so the body has to be removed
+# BEFORE the split rather than merely split carefully. Without the strip, the line
+# after the semicolon starts a segment of its own.
+heredoc_body="cat > docs/merge-notes.md <<'EOF'
+The gate resolves the number; then $MERGE 7 --squash is what runs
+EOF"
+if mt_is_pr_merge "$heredoc_body"; then fail "a heredoc body mentioning the phrase was read as a merge"; else pass; fi
+
+# A herestring is not a heredoc, and neither is an arithmetic shift. Stripping must not
+# eat the rest of a command because it saw two angle brackets.
+if mt_is_pr_merge "grep -q x <<< \"$MERGE\""; then fail "a herestring payload was read as a merge"; else pass; fi
+if mt_is_pr_merge "echo \$((1 << 3)) && $MERGE 42"; then pass; else fail "an arithmetic shift swallowed the rest of the command"; fi
+
+echo "merge-target: merges that do not say gh (claude-config#349)"
+
+# A repo's own wrapper merges INTERNALLY, in a subprocess no hook can see. The quiz has
+# to fire on it or it is silently dodged by using the project's recommended command.
+#
+# The BLOCKING gates deliberately must NOT: block-red-merge.sh tells somebody to run the
+# wrapper, so firing on the wrapper would refuse the exact command it just recommended,
+# and a refusal that can only be cleared by the thing it forbids is a deadlock (L109).
+# So the two questions are two predicates over one tokeniser, not one predicate.
+for w in "scripts/merge-when-green.sh 42" "./scripts/merge-when-green.sh 42" \
+         "merge-when-green.sh 42" "bash .github/scripts/merge-pr.sh 680" "npm run merge -- 680"; do
+  if mt_runs_merge "$w"; then pass; else fail "a merge wrapper was not read as a merge: $w"; fi
+  if mt_is_pr_merge "$w"; then fail "a merge wrapper was read as a direct merge: $w"; else pass; fi
+done
+
+# Exactly `merge`, so the readiness check that merges nothing does not count.
+if mt_runs_merge "npm run merge-ready -- 680"; then fail "the readiness check was read as a merge"; else pass; fi
+if mt_runs_merge "echo \"use npm run merge -- 680\""; then fail "a mention of the npm script was read as a merge"; else pass; fi
+if mt_runs_merge "ls merge-when-green.sh"; then fail "a wrapper named as an argument was read as a merge"; else pass; fi
+
+# A direct merge is a merge under both questions.
+if mt_runs_merge "$MERGE 42"; then pass; else fail "a direct merge was not read as a merge"; fi
+if mt_runs_merge "echo \"$MERGE 42\""; then fail "an echo of the phrase was read as a merge"; else pass; fi
+if mt_runs_merge ""; then fail "an empty command was read as a merge"; else pass; fi
+
 echo "merge-target: which pull request"
 
 eq "$(mt_pr_number "$MERGE 7 --squash")" "7" "number before the flags"
@@ -45,6 +109,16 @@ eq "$(mt_pr_number "cd /tmp/x && $MERGE 42 --squash")" "42" "number behind a cd"
 # No number means gh resolves it from the current branch, which is what the
 # merge itself would do. Empty is the correct answer, not a failure.
 eq "$(mt_pr_number "$MERGE --squash")" "" "no number named"
+
+# The same command-versus-payload distinction, because the number reader scanned the
+# whole string too: a heredoc naming a different pull request would be read in
+# preference to the one actually being merged, and afterwards the gate's verdict about
+# the wrong pull request is indistinguishable from one about the right one (L70).
+pr_note="cat > docs/merge-notes.md <<'EOF'
+one day this will run $MERGE 999 --squash
+EOF
+$MERGE 7 --squash"
+eq "$(mt_pr_number "$pr_note")" "7" "the number comes from the command, not from a heredoc"
 
 echo "merge-target: which directory the merge runs in"
 

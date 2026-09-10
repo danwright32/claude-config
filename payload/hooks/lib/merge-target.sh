@@ -8,6 +8,7 @@
 # rather than once per gate:
 #
 #   mt_is_pr_merge   is this command actually a merge
+#   mt_runs_merge    does it cause one by any route, wrappers included
 #   mt_repo_dir      which directory the merge will run in, which is not
 #                      necessarily the session cwd
 #   mt_checkout_dir  the checkout a directory belongs to, which is the part of
@@ -29,19 +30,153 @@
 # tests while disagreeing with the other about which pull request it is looking
 # at.
 
-# True when the command runs a pull request merge.
+# Is this command a merge, and which kind.
+#
+# Two questions, one tokeniser, because they have different answers and both are
+# needed:
+#
+#   mt_is_pr_merge   does a segment run the gh merge command itself
+#   mt_runs_merge    does a segment cause a merge by ANY route, including a
+#                      repo's own wrapper, which merges internally in a
+#                      subprocess no hook can see
+#
+# The blocking gates ask the first. They must NOT fire on a wrapper:
+# block-red-merge.sh TELLS somebody to run the wrapper where a repo has one, so a
+# gate that then refused it would name a remedy only that gate forbids, which is
+# a refusal nothing can clear (L109). The quiz asks the second, because a quiz
+# that only knows the direct form is silently dodged by using the project's own
+# recommended merge command.
+#
+# Both read the LEADING TOKENS of each shell segment, never the whole string. The
+# whole string version denied any command that merely TALKED about merging: a
+# heredoc, an issue body, a commit message, an echo (L673). Hit twice on
+# 2026-09-10 writing issue bodies about merge tooling, and because it is a
+# PreToolUse deny the whole command was refused, so the heredoc never ran and the
+# failure surfaced one step later as a missing file. This matcher was already
+# written correctly in pr-merge-quiz.sh, a hook that only ADVISES, while the
+# blocking gates shared the wrong one; it lives here now and that hook calls it,
+# so the two cannot drift (claude-config#349).
+
+MT_MERGE_WRAPPERS="merge-when-green.sh merge-pr.sh"
+
+# The command with every heredoc BODY removed, so text nobody is executing is not
+# read as something somebody is. Done BEFORE the segment split rather than during
+# it, because a body is ordinary prose and prose carries semicolons: splitting
+# first turns the sentence after a semicolon into a segment of its own.
+#
+# A herestring is blanked first. Three angle brackets hold two starting at the
+# second character, so a herestring whose word follows immediately would
+# otherwise be read as opening a heredoc named for that word, and would swallow
+# the rest of the command.
+#
+# Its one blind spot, stated rather than hidden: two angle brackets inside a
+# quoted string open a heredoc here that the shell would not. That direction
+# loses lines, so it can only make a matcher fail to fire, never fire wrongly.
+mt_strip_heredocs() {  # $1 = command
+  local line probe delim="" trimmed in_body=0 out=""
+  local opener='<<-?[[:space:]]*("[A-Za-z_][A-Za-z0-9_]*"|'"'"'[A-Za-z_][A-Za-z0-9_]*'"'"'|[A-Za-z_][A-Za-z0-9_]*)'
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_body" = 1 ]; then
+      trimmed="${line#"${line%%[![:space:]]*}"}"
+      trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+      [ "$trimmed" = "$delim" ] && in_body=0
+      continue
+    fi
+    out="$out$line"$'\n'
+    probe="${line//<<</   }"
+    if [[ "$probe" =~ $opener ]]; then
+      delim="${BASH_REMATCH[1]}"
+      delim="${delim%\"}"; delim="${delim#\"}"
+      delim="${delim%\'}"; delim="${delim#\'}"
+      in_body=1
+    fi
+  done <<MTEOF
+$1
+MTEOF
+  printf '%s' "$out"
+}
+
+# The first three tokens of every shell segment, one segment per line, with any
+# leading environment assignments dropped. Three because the longest thing being
+# looked for is three tokens.
+#
+# Split on `&&`, `||` and `;` only. A pipe and a bare `&` also start a command,
+# and are deliberately left alone: nothing ever pipes into a merge, so splitting
+# on them buys nothing while giving a quoted payload one more way to be cut into
+# a segment that starts with the phrase.
+mt_command_heads() {  # $1 = command
+  local body seg first second third rest
+  body="$(mt_strip_heredocs "$1")"
+  body="${body//&&/$'\n'}"
+  body="${body//||/$'\n'}"
+  body="${body//;/$'\n'}"
+  while IFS= read -r seg; do
+    seg="${seg#"${seg%%[![:space:]]*}"}"
+    while [[ "$seg" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+(.*)$ ]]; do
+      seg="${BASH_REMATCH[1]}"
+    done
+    first=""; second=""; third=""; rest=""
+    read -r first second third rest <<MTEOF
+$seg
+MTEOF
+    printf '%s %s %s\n' "$first" "$second" "$third"
+  done <<MTEOF
+$body
+MTEOF
+}
+
+# True when a segment runs the gh merge command itself. The leading `(^|/)` lets
+# gh be called by an absolute path without letting the phrase match inside a
+# quoted word.
+#
+# The cheap substring test comes first, so an ordinary command (which is every
+# command in every session, since both blocking gates ask this before anything
+# else) is answered by one glob and no subshell.
 mt_is_pr_merge() {  # $1 = command
-  case "$1" in
-    *"gh pr me""rge"*) return 0 ;;
-    *) return 1 ;;
-  esac
+  case "$1" in *merge*) ;; *) return 1 ;; esac
+  mt_command_heads "$1" \
+    | grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'
+}
+
+# True when a segment causes a merge by any route: the direct command, a repo's
+# own merge wrapper in command position (as the first token, or the second when
+# the first is an interpreter), or `npm run merge`, which is how one of those
+# wrappers is invoked and which a basename match cannot see, because what follows
+# `npm run` is a script name rather than a path.
+#
+# `merge` has to match EXACTLY there: `npm run merge-ready` only reports and
+# merges nothing, so a prefix match would fire on every look at a pull request.
+mt_runs_merge() {  # $1 = command
+  case "$1" in *merge*) ;; *) return 1 ;; esac
+  local heads line first second third wrapper
+  heads="$(mt_command_heads "$1")"
+  if printf '%s' "$heads" \
+      | grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
+    return 0
+  fi
+  while IFS= read -r line; do
+    first=""; second=""; third=""
+    read -r first second third <<MTEOF
+$line
+MTEOF
+    for wrapper in $MT_MERGE_WRAPPERS; do
+      [ -n "$first" ] && [ "${first##*/}" = "$wrapper" ] && return 0
+      case "$first" in
+        bash|sh|zsh) [ -n "$second" ] && [ "${second##*/}" = "$wrapper" ] && return 0 ;;
+      esac
+    done
+    [ "$first" = "npm" ] && [ "$second" = "run" ] && [ "$third" = "merge" ] && return 0
+  done <<MTEOF
+$heads
+MTEOF
+  return 1
 }
 
 # The pull request number if the command names one; empty otherwise, in which
 # case gh resolves it from the current branch, which is also what the merge
 # itself would do.
 mt_pr_number() {  # $1 = command
-  printf '%s' "$1" \
+  mt_strip_heredocs "$1" \
     | grep -oE 'gh pr me''rge[[:space:]]+(--[^[:space:]]+[[:space:]]+)*([0-9]+)' \
     | grep -oE '[0-9]+$' | awk 'NR <= 1'
 }

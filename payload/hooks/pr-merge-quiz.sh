@@ -21,9 +21,11 @@
 #     the only thing that earns a quiz). A shell script cannot read the tool's exit status reliably
 #     from the hook payload, and cannot read a diff at all. So it does not try.
 #
-# The matcher reads the LEADING TOKENS of each shell segment, never the whole string, so a command
-# whose payload merely mentions "gh pr merge" (an echo, an issue comment) does not fire. That is
-# the command-vs-payload distinction check-closing-keyword.sh had to learn the hard way.
+# The matcher is lib/merge-target.sh's, shared with the blocking merge gates. It reads the
+# LEADING TOKENS of each shell segment, never the whole string, so a command whose payload merely
+# mentions a merge (an echo, an issue comment, a heredoc) does not fire. That is the
+# command-vs-payload distinction check-closing-keyword.sh had to learn the hard way, and the
+# blocking gates learned it late (claude-config#349).
 #
 # What the quiz may ask (Dan's spec, 2026-07-29): only how the system behaves NOW that the change
 # has shipped, in the present tense, ideally as a concrete scenario. Questions about the old
@@ -58,8 +60,9 @@ payload="$(cat)"
 
 
 # The library, not a copy: five near copies of this had already drifted (claude-config#102).
-# `raw` because this hook searches the whole command rather than splitting it, and quoting a
-# command back at somebody with its newlines rewritten shows them something they did not type.
+# `raw` because the shared matcher does its own splitting and has to see the heredocs intact to
+# strip them, and because quoting a command back at somebody with its newlines rewritten shows
+# them something they did not type.
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
@@ -72,50 +75,22 @@ if grep -Eq '(^|[[:space:];&|])SKIP_PR_QUIZ=1([[:space:]]|$)' <<< "$cmd"; then
   exit 0
 fi
 
-# Does any shell segment RUN a merge (as opposed to merely mentioning it)? Three forms count:
-#   1. `gh pr merge ...` directly.
-#   2. a project's own merge wrapper, which merges INTERNALLY via `gh pr merge` in a subprocess this
-#      hook cannot see. Matching the wrapper is the only way the quiz is not silently dodged by using
-#      the project's own recommended merge command, and in agent-onboarding it is worse than
-#      recommended: the merge gate REFUSES a plain merge there, so the wrapper is the only route and
-#      matching only `gh pr merge` would mean the quiz never fires in that repo again.
-#   3. `npm run merge ...`, which is how one of those wrappers is invoked. Kept as its own rule rather
-#      than folded into the wrapper list, because what follows `npm run` is a script name and not a
-#      path, so a basename match cannot see it.
-# All are matched on the LEADING TOKENS of each segment (after stripping leading env assignments), so
-# a payload that merely NAMES one (an echo, an ls, an issue comment) does not fire. A wrapper is
-# matched only in command position: as the first token, or the second when the first is an interpreter
-# (bash/sh/zsh). A basename match (preceded by `/` or start of token) covers ./scripts/...,
-# scripts/..., and a bare name alike.
-MERGE_WRAPPERS="merge-when-green.sh merge-pr.sh"
-is_merge=0
-while IFS= read -r seg; do
-  stripped="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//')"
-  head_tokens="$(printf '%s' "$stripped" | awk '{print $1, $2, $3}')"
-  if grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' <<< "$head_tokens"; then
-    is_merge=1
-    break
-  fi
-  first="$(printf '%s' "$stripped" | awk '{print $1}')"
-  second="$(printf '%s' "$stripped" | awk '{print $2}')"
-  third="$(printf '%s' "$stripped" | awk '{print $3}')"
-  for wrapper in $MERGE_WRAPPERS; do
-    if [ "${first##*/}" = "$wrapper" ]; then
-      is_merge=1
-      break 2
-    fi
-    if grep -Eq '^(bash|sh|zsh)$' <<< "$first" && [ "${second##*/}" = "$wrapper" ]; then
-      is_merge=1
-      break 2
-    fi
-  done
-  # Exactly `merge`, so `npm run merge-ready` (which only reports, and merges nothing) does not fire.
-  if [ "$first" = "npm" ] && [ "$second" = "run" ] && [ "$third" = "merge" ]; then
-    is_merge=1
-    break
-  fi
-done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;)/\n/g')
-[ "$is_merge" -eq 1 ] || exit 0
+# Does any shell segment RUN a merge, as opposed to merely mentioning one? Three
+# forms count, and the shared predicate knows all three: the direct command, a
+# project's own wrapper (which merges INTERNALLY in a subprocess this hook cannot
+# see, so matching the wrapper is the only way the quiz is not silently dodged by
+# using the project's own recommended merge command), and `npm run merge`, which
+# is how one of those wrappers is invoked.
+#
+# The matcher used to live HERE, correct, while the two BLOCKING gates shared a
+# whole string match in lib/merge-target.sh that fired on any command merely
+# naming the phrase. That was the wrong way round: a false positive costs most
+# where it denies. It moved into the library and this hook calls it, so the
+# advising hook and the blocking gates cannot answer differently
+# (claude-config#349).
+# shellcheck source=lib/merge-target.sh
+. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
+mt_runs_merge "$cmd" || exit 0
 
 # Fire: hand Claude an instruction to run the comprehension quiz before moving on. The reason is a
 # single JSON string; newlines are \n. Kept free of dashes and emoji per the writing-style rule.

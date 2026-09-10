@@ -269,6 +269,29 @@ out=$(run_hook "$dir" "$MERGE 7 --squash")
 if denied "$out"; then pass; else fail "an empty answer from gh let the merge through: $out"; fi
 rm -rf "$dir"
 
+# 11. A command that merely TALKS about merging is not a merge, and this gate is a
+#     PreToolUse DENY, so a false positive refuses the WHOLE command and nothing in
+#     it runs. Both times it happened on 2026-09-10 the command was writing an issue
+#     body about merge tooling, and the heredoc that never ran surfaced one step
+#     later as a missing file (claude-config#349).
+#
+#     The library has its own cases for the matcher. This one is here because a
+#     correct predicate is worth nothing until the gate actually CALLS it (L3), and
+#     this gate is the one where being wrong costs the most.
+dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY")
+note="cat > docs/merge-notes.md <<'EOF'
+The gate resolves the number; then $MERGE 7 --squash is what runs
+EOF"
+out=$(run_hook "$dir" "$note")
+if denied "$out"; then fail "a heredoc about merging was refused as a merge: $out"; else pass; fi
+out=$(run_hook "$dir" "gh issue comment 5 --body \"then run $MERGE\"")
+if denied "$out"; then fail "an issue comment about merging was refused as a merge: $out"; else pass; fi
+# And the positive control in the SAME fixture, so the two above are not passing
+# because this repo, registry or fake gh happens to allow everything (L159).
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out"; then pass; else fail "the real merge was not refused, so the cases above prove nothing: $out"; fi
+rm -rf "$dir"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

@@ -532,6 +532,41 @@ esac
 rm -rf "$dir"
 unset GH_CALL_LOG
 
+# A command that merely TALKS about merging is not a merge. This gate is a PreToolUse
+# DENY, so a false positive refuses the WHOLE command and nothing in it runs: on
+# 2026-09-10 a heredoc writing an issue body about merge tooling was refused with a
+# message about pinning a commit that no command was trying to merge, and the file the
+# next step expected was simply not there (claude-config#349).
+#
+# lib/merge-target.sh has the matcher's own cases. These are here because a correct
+# predicate is worth nothing until the gate actually CALLS it (L3).
+#
+# Assembled from $MERGE rather than written out, so the payload of the command that
+# WRITES this file does not itself trip the gate.
+MERGE_CMD="gh pr me""rge"
+dir=$(make_repo without-tool "$RED")
+note="cat > docs/merge-notes.md <<'EOF'
+The gate resolves the number; then $MERGE_CMD 7 --squash is what runs
+EOF"
+out=$(run_hook "$dir" "$note")
+if denied "$out"; then fail "a heredoc about merging was refused as a merge: $out"; else pass; fi
+out=$(run_hook "$dir" "gh issue comment 5 --body \"then run $MERGE_CMD\"")
+if denied "$out"; then fail "an issue comment about merging was refused as a merge: $out"; else pass; fi
+# The positive control in the SAME fixture: without it, the two above are satisfied by a
+# gate that has stopped refusing anything at all (L159). This rollup is RED, so a real
+# merge here must be denied.
+out=$(run_hook "$dir" "$MERGE_CMD 7 --squash")
+if denied "$out"; then pass; else fail "a red pull request merged, so the cases above prove nothing: $out"; fi
+rm -rf "$dir"
+
+# And the wrapper stays OUT of this gate's question. Where a repo carries its own commit
+# pinned tool this gate NAMES that tool as the route to take, so firing on it would refuse
+# the very command it had just recommended, which is a refusal nothing can clear (L109).
+dir=$(make_repo with-npm-tool "$GREEN")
+out=$(run_hook "$dir" "npm run merge -- 7")
+if denied "$out"; then fail "the gate refused the merge route it tells people to use: $out"; else pass; fi
+rm -rf "$dir"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
