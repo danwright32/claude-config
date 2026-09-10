@@ -1966,6 +1966,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   same shape is waiting wherever a justification is validated inside a delimiter: a closing
   quote, a bracket, a YAML or CSV terminator.)
 
+- **L451. A measurement taken from a rendered page measures the DOCUMENT MODE as well as the
+  markup, and a file with no doctype renders in quirks mode, which lays out a line box by
+  different rules, so any HTML that will be measured, screenshotted or compared against another
+  file has to declare one.**
+  (ovation#194: five standalone design files stand in for the app's screens, two declared a
+  doctype and three did not, and nothing had ever compared a rendering of one against a
+  rendering of another. Lifting one screen into a design round harness did exactly that, and the
+  same markup, the same stylesheet, the same embedded fonts and every computed property
+  identical measured 37.95px in the file and 41.06px in the harness. The cause is the quirks
+  mode line box rule, which ignores the containing block's strut when the line holds only inline
+  content carrying its own line height; the whole screen still measured 633px tall, so it was
+  invisible until two renderings were put side by side. A geometry check across those files was
+  already passing, and its agreement was partly a fact about the document mode that nothing in
+  it named. Locale, fonts and the flex context were each ruled out by measuring before the
+  doctype was tested, which is the only reason the cause is the cause rather than the last
+  thing tried.)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -6103,6 +6120,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   a failed phase and deactivating instead, so the longest running work in the app was the one
   kind that still failed in silence, and the sweep reported all clear while checking five real
   sites)
+- **L452. Code you write and code somebody else supplies, running in one shared environment (a
+  page, a process, a shell), share EVERY namespace that environment offers rather than only the
+  one that happened to collide, so a namespace added after an incident must enumerate the rest
+  (variable names, element ids, style names, event targets, storage keys) and close them in the
+  same change, because each one left open fails the identical silent way: the surface looks
+  finished while showing the wrong thing.** The remedy always gets scoped to the namespace the
+  incident named, which is why this arrives once per namespace instead of once, and each time it
+  reads as a fresh and puzzling bug rather than as the same one. Assert the NAMESPACE, never the
+  names that collided, so the next surface is caught by the check that already exists (L30, L173).
+  (claude-config#355 and #356, three incidents on one tool. PaperBoi round 63: the chrome styled a
+  class called `frame` and a project element of the same name inherited its 1180px ceiling, so
+  three options declaring 1100, 1440 and 1720 all drew at 1180. 2026-09-10: the chrome kept `tabs`,
+  `stage` and `el` as globals and a project declaring the same names took over its tab strip, so
+  every option drew the identical screen. Left open after both: the same three words as element
+  ids, and a keydown listener on the document that a project listener fights. Every one of them
+  looks like a round whose options genuinely do not differ, which is a real finding, so the tool
+  reports nothing and the reader believes the design)
 - **L450. When more than one control sits on the same action, check each control's recogniser
   against the route the OTHER controls push people onto, because a control that recognises only
   one route drops to ZERO coverage rather than partial coverage the moment a neighbour makes a
