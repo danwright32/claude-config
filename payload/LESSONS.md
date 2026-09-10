@@ -5546,6 +5546,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   the dashboard now reconciles, and the surface with zero signals was never mentioned, because
   its absence looks exactly like a board that is current.)
 
+- **L680. A message written about a MOMENT (it just happened, something is on its way, we are
+  working on it) must be driven by the ACTION that produced that moment, never by a stored
+  status**, because a status records that something EVER happened, so the message is shown for
+  ever and its time-bound claims become false the instant the moment passes. The mirror of L126,
+  where a transient surface is made to serve a condition that persists.
+  (slate#2215, 2026-09-10: the manage page's "Your call is moved" banner was gated on the booking's
+  stored status, which a reschedule sets permanently, so it appeared on every later visit to that
+  link. Dan met it by clicking the link inside the new invite: the banner told him a fresh invite
+  was on its way to his address while he was standing in that very email, having opened it. The
+  same element was also the only confirmation for a reschedule done ON that page, so it read as
+  correct to whoever wrote it and was tested from that one direction.)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,

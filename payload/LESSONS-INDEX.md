@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 625 lessons.
+LESSONS.md, which is NOT loaded into the session. 626 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -472,6 +472,7 @@ to decide something: the body is where the failure it came from is described.
 - L676. A control that carries somebody ONWARD from a screen where the system has already identified them must carry that identification with it
 - L677. A step removed from a flow takes with it every capability that only that step offered
 - L678. A warning is read by its PRESENCE, so a surface that never got one is indistinguishable from a surface with nothing to warn about.
+- L680. A message written about a MOMENT (it just happened, something is on its way, we are working on it) must be driven by the ACTION that produced that moment, never by a stored status
 
 ## External systems
 
