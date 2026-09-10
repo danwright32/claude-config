@@ -328,6 +328,23 @@ __BUILDER__
 """
 
 
+def chrome_ids(page):
+    """The names of the elements THIS PAGE owns, read out of the markup that defines them.
+
+    Derived rather than listed, because a list that must mirror another source of truth
+    drifts the moment somebody edits one of them, and the drift is silent: add a fourth
+    element with an id and a hand written tuple simply would not mention it, so the refusal
+    below would stop covering it while still reporting a clean build (L41, L452).
+
+    Returns the bare names, without the dr- namespace, because that is the form a builder
+    written against its own standalone page would use.
+    """
+    return tuple(sorted(set(re.findall(r'id="dr-([A-Za-z0-9_-]+)"', page))))
+
+
+CHROME_IDS = chrome_ids(PAGE)
+
+
 def escape_text(value):
     return (str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
@@ -388,7 +405,7 @@ def main(argv):
     # The namespace stays. What changes is that this is said HERE, where the person is
     # holding the spec and the builder, rather than left to throw at load with the cause
     # nowhere near the symptom. Same principle as the two refusals above.
-    reached = [name for name in ("stage", "tabs", "readout")
+    reached = [name for name in CHROME_IDS
                if ('getElementById("%s")' % name) in builder
                or ("getElementById('%s')" % name) in builder
                or ('querySelector("#%s")' % name) in builder
@@ -399,7 +416,9 @@ def main(argv):
              "handed one option and must RETURN the element to draw for it, rather than "
              "reach for somewhere to put it: whatever it returns is placed on the stage for "
              "it. If that line is the file's own bootstrap for running as a page on its own, "
-             "it does not belong in the builder."
+             "it does not belong in the builder. This is a text match over the ways that "
+             "lookup is usually written, so a builder that spells it some other way is not "
+             "caught here and will simply find nothing when the page opens."
              % (builder_name, ", ".join(reached), reached[0]))
 
     styles = ""

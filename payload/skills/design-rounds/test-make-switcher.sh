@@ -711,6 +711,51 @@ print(re.sub(r"\s+", " ", m.group(1)).strip() if m else "NO-STRIP")'
   check_not "it does not also name a pair as matching" "A and B" "$throw_strip"
 fi
 
+# --- the names that refusal protects come FROM the template, not from a list beside it ---
+#
+# The refusal below shipped holding its own tuple of the three names, two hundred lines from
+# the markup that defines them. Add a fourth element with an id and the refusal would not
+# know, silently, which is the same fault as the two lists of merge tools and the namespaces
+# that were each closed one incident at a time this session (L41, L452). Derived, so the
+# fourth element is protected by the code that already exists.
+
+ids_from() { # ids_from <page text> -> the names the tool derives from it
+  python3 - "$DIR" "$1" <<'IDSPY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ms", sys.argv[1] + "/make-switcher.py")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(",".join(mod.chrome_ids(sys.argv[2])))
+IDSPY
+}
+
+check_eq "the names are read out of the real template" "readout,stage,tabs" \
+  "$(ids_from "$(python3 -c "
+import importlib.util
+spec = importlib.util.spec_from_file_location('ms', '$DIR/make-switcher.py')
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+print(mod.PAGE)")")"
+
+# The one that proves it is DERIVED rather than a tuple that happens to agree: a page
+# carrying a fourth element is protected without anybody editing the refusal.
+check_eq "a fourth element in the template is protected too" "notes,readout,stage,tabs" \
+  "$(ids_from '<div id="dr-stage"></div><div id="dr-tabs"></div><div id="dr-readout"></div><div id="dr-notes"></div>')"
+
+# A page it can read nothing out of would leave the refusal protecting nothing while still
+# reporting a clean build, which is the one outcome a derived list can fail into (L98).
+check_eq "a template with no namespaced ids derives nothing" "" "$(ids_from '<div id="stage"></div>')"
+
+# And the list the tool ACTUALLY uses is not empty, because a derived list that came back
+# with nothing would leave the refusal protecting nothing while every case above still
+# passed (L98). Read from the constant the refusal reads, not from a fresh derivation, so
+# this is about what ships rather than about the function in isolation.
+live_ids="$(python3 -c "
+import importlib.util
+spec = importlib.util.spec_from_file_location('ms', '$DIR/make-switcher.py')
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+print(len(mod.CHROME_IDS))")"
+check_eq "the refusal ships with the template's three names" "3" "$live_ids"
+
 # --- a builder that reaches for the page's own element is refused, not left to throw ---
 #
 # Found by looking at the real design files after namespacing the ids (claude-config#356).
@@ -749,6 +794,11 @@ done
 # It must name the file, because the person is looking at a spec and a builder and needs to
 # know which one to open (L80).
 check "the refusal names the builder file" "reach-builder.js" "$out"
+# A text match knows the spellings it was given and no others, and a builder that computes
+# the name simply finds nothing at load. The message says so rather than implying the check
+# is exhaustive, because a refusal that overstates what it measured is the reason somebody
+# trusts it the next time it stays quiet (L11, L440).
+check "the refusal says its matching is a text scan" "text match" "$out"
 
 # The control: an ordinary builder is untouched, or this refusal has simply stopped the
 # tool working (L159). Its own spec, so it is not reading a file another case wrote.
