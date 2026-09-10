@@ -122,10 +122,42 @@ if denied "$(run_hook "$dir" "gh pr merge 7 --squash")"; then pass; else
 fi
 rm -rf "$dir"
 
-# 3. The visible override, for the one case where the tool cannot be used.
+# 3. The visible override for the one case where the tool cannot be used, under the tool rule's
+#    OWN name. It used to share ALLOW_UNPINNED_MERGE with the commit pin, so bypassing the script
+#    also dropped the pin and landed on the weakest merge available (#347).
 dir=$(make_repo with-tool "$GREEN")
-if denied "$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; then
-  fail "the visible override did not let the merge through"
+if denied "$(run_hook "$dir" "SKIP_MERGE_TOOL=1 gh pr merge 7 --squash --match-head-commit $HEAD_SHA")"; then
+  fail "the tool rule's own override did not let a pinned merge through"
+else pass; fi
+rm -rf "$dir"
+
+# 3b. And skipping the tool does NOT skip the pin. This is the whole of #347: one token switching
+#     off two rules meant whoever bypassed the script silently lost a rule they never named.
+dir=$(make_repo with-tool "$GREEN")
+out=$(run_hook "$dir" "SKIP_MERGE_TOOL=1 gh pr merge 7 --squash")
+if denied "$out"; then pass; else
+  fail "skipping the repo tool also skipped the commit pin: $out"
+fi
+if holds "$out" "--match-head-commit $HEAD_SHA"; then pass; else
+  fail "the refusal is not the pin rule's: $out"
+fi
+rm -rf "$dir"
+
+# 3c. Each override answers only its OWN rule. The pin's override does not get you past the tool.
+dir=$(make_repo with-tool "$GREEN")
+out=$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")
+if denied "$out"; then pass; else
+  fail "the pin's override let a plain merge past the repo tool rule: $out"
+fi
+if holds "$out" "SKIP_MERGE_TOOL=1"; then pass; else
+  fail "the tool refusal does not name its own override: $out"
+fi
+rm -rf "$dir"
+
+# 3d. Both, for somebody who genuinely means both.
+dir=$(make_repo with-tool "$GREEN")
+if denied "$(run_hook "$dir" "SKIP_MERGE_TOOL=1 ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; then
+  fail "naming both overrides did not let the merge through"
 else pass; fi
 rm -rf "$dir"
 
@@ -174,7 +206,7 @@ rm -rf "$dir"
 
 # 7. The visible override works for the second tool too.
 dir=$(make_repo with-npm-tool "$GREEN")
-if denied "$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; then
+if denied "$(run_hook "$dir" "SKIP_MERGE_TOOL=1 gh pr merge 7 --squash --match-head-commit $HEAD_SHA")"; then
   fail "the visible override did not let the merge through for the shell wrapper"
 else pass; fi
 rm -rf "$dir"
@@ -182,7 +214,7 @@ rm -rf "$dir"
 # 8. And a red PR there is still refused by the ORIGINAL gate, reached through
 #    the override, so the two rules do not answer for each other (L178).
 dir=$(make_repo with-npm-tool "$RED")
-if denied "$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; then pass; else
+if denied "$(run_hook "$dir" "SKIP_MERGE_TOOL=1 gh pr merge 7 --squash")"; then pass; else
   fail "a red PR was allowed through once the pinned-tool rule was overridden"
 fi
 rm -rf "$dir"

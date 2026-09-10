@@ -17,9 +17,11 @@
 # than about a commit and is read a moment before the merge (#345). GitHub
 # refuses the merge if the head has moved since.
 #
-# Deliberate overrides, both visible in the command, so neither can happen by
-# accident or go unnoticed in the transcript: ALLOW_RED_MERGE=1 for the green
-# reading, ALLOW_UNPINNED_MERGE=1 for the commit pin.
+# Deliberate overrides, one per rule and all visible in the command, so none can
+# happen by accident or go unnoticed in the transcript: ALLOW_RED_MERGE=1 skips
+# the whole gate, SKIP_MERGE_TOOL=1 skips a repo's own merge script, and
+# ALLOW_UNPINNED_MERGE=1 skips the commit pin. Each answers only its own rule,
+# because one token carrying two rules silently widens every use of it (L448).
 
 set -uo pipefail
 
@@ -115,11 +117,16 @@ elif [ -f ".github/scripts/merge-pr.sh" ]; then
   pinned_how="npm run merge -- ${pr:-<pr>}"
 fi
 
+# ONE OVERRIDE PER RULE. This rule reads SKIP_MERGE_TOOL, and the commit pin at the foot of the
+# file reads ALLOW_UNPINNED_MERGE. They shared the second name until #347, which meant somebody
+# bypassing this repo's script silently also lost the pin, landing on the weakest merge available
+# and the one they were least likely to have asked for: a second rule put behind an existing
+# override widens every use of that override, and nothing at the point of use says so (L448).
 if [ -n "$pinned_tool" ]; then
   case "$command" in
-    *ALLOW_UNPINNED_MERGE=1*) ;;
+    *SKIP_MERGE_TOOL=1*) ;;
     *)
-      deny "This repo merges through its own commit pinned tool ($pinned_tool), not through gh pr merge. Run: $pinned_how . It judges the checks against the commit at the head and hands GitHub that commit, so a push landing in the seconds between the two cannot be merged unjudged, and it confirms afterwards that the commit landed on the base its checks were run against. A plain merge skips all of that and looks identical afterwards. Deliberate override: ALLOW_UNPINNED_MERGE=1 <the same command>."
+      deny "This repo merges through its own commit pinned tool ($pinned_tool), not through gh pr merge. Run: $pinned_how . It judges the checks against the commit at the head and hands GitHub that commit, so a push landing in the seconds between the two cannot be merged unjudged, and it confirms afterwards that the commit landed on the base its checks were run against. A plain merge skips all of that and looks identical afterwards. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>, which skips this rule only: the merge must still pin its commit."
       ;;
   esac
 fi
