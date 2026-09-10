@@ -6055,11 +6055,22 @@ report_watcher_hold(){
 # locally, and pushing it builds on work that is already in the shared repo but absent there.
 #
 # The clones are read from the registry, which is derived from what has actually taken the lock
-# rather than from prose somebody maintains by hand (L41, L244). Nothing is FETCHED: this run has
-# just fetched its own remote, and both clones share it, so the other clone's HEAD is measured
-# against the ref this run already has. That also means a clone holding a commit this one has
-# never seen cannot be judged from here, and that is said rather than reported as up to date
-# (L98).
+# rather than from prose somebody maintains by hand (L41, L244). Nothing is fetched here: this run
+# has just pulled its own remote, and both clones share it, so the other clone's HEAD is measured
+# against the ref this run already has.
+#
+# PRECONDITION, and it is what makes the missing commit case readable: this runs AFTER
+# pull_from_repo_or_die, from do_pull and from nowhere else. test-claude-sync.sh pins that, because
+# a caller added before the pull would make every message below claim something it had not
+# measured (L407, L11).
+#
+# A commit this clone cannot see is therefore a commit the SHARED REPO does not have, which is the
+# other clone holding work nobody pushed. That used to be reported as a question that could not be
+# answered, with a remedy telling somebody to fetch in that clone. Both halves were wrong, and
+# measured wrong on 2026-09-10 with two real clones: the object is missing HERE, so a fetch THERE
+# leaves it exactly as missing and the same line comes back. Found on the live machine, where the
+# clone the scheduled sync runs from was four commits ahead and printing that line all day
+# (claude-config#359, L111).
 report_other_clones_position(){
   local up d head n line said=0
   have_git || return 0
@@ -6083,7 +6094,7 @@ report_other_clones_position(){
       said=1; continue
     fi
     if ! git -C "$SYNC_REPO" cat-file -e "${head}^{commit}" 2>/dev/null; then
-      echo "claude-sync: the checkout at $d is on a commit this clone has never seen ($head), so how far behind it is cannot be answered from here. Run 'git -C $d fetch' there." >&2
+      echo "claude-sync: the checkout at $d is on a commit the shared repo does not have ($head), so it is holding work nobody pushed. This run has already pulled its own remote, so that commit is missing here because it was never shared, not because this clone is behind. See what it is with: git -C $d log --oneline @{upstream}..HEAD" >&2
       said=1; continue
     fi
     n="$(git -C "$SYNC_REPO" rev-list --count "${head}..${up}" 2>/dev/null || true)"

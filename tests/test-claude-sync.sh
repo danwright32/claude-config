@@ -14462,6 +14462,93 @@ check "#301 the GitHub CLI is redirected suite-wide too" \
 check "#301 and it points inside this run's own directory" \
   "case \"\$SYNC_GH\" in \"$WORK\"/*) true ;; *) false ;; esac"
 
+section "== a clone holding what the shared repo lacks is named as that, not as a fetch (claude-config#359) =="
+# The line this replaces read: "the checkout at <dir> is on a commit this clone has never seen
+# (<sha>), so how far behind it is cannot be answered from here. Run 'git -C <dir> fetch' there."
+#
+# Both halves were wrong, and both were measured on 2026-09-10 with two real clones rather than
+# reasoned about. The remedy names the WRONG CLONE: the missing object is in THIS clone, and a
+# fetch in the other one leaves it exactly as missing, so somebody who runs the command watches
+# the same line come back (L111). And "cannot be answered" is not true where this runs.
+# report_other_clones_position is called from do_pull and from nowhere else, AFTER this clone has
+# pulled its own remote, so a commit still missing at that point is a commit the SHARED REPO does
+# not have: the other clone is holding work nobody pushed. That is a finding, and a more alarming
+# one than being behind, and it was being reported as a question that could not be answered (L11).
+#
+# Found on the live machine: ~/claude-config-sync, the clone the scheduled sync runs from, was
+# four commits ahead and twenty seven behind, and had been printing that line all day.
+unset SYNC_NO_GIT
+OC_BARE="$WORK/otherclone-bare.git"; git init -q --bare "$OC_BARE"
+OC_A="$WORK/otherclone-A"; git clone -q "$OC_BARE" "$OC_A" 2>/dev/null
+OC_HA="$WORK/otherclone-homeA"; mkdir -p "$OC_HA/hooks"
+OC_REG="$WORK/otherclone-registry"
+OC_AGENTS="$WORK/otherclone-agents"; mkdir -p "$OC_AGENTS"
+sh_settings "$OC_HA" "__CLAUDE_HOME__/hooks/alpha.sh"
+printf '#!/usr/bin/env bash\n' > "$OC_HA/hooks/alpha.sh"
+CLAUDE_HOME="$OC_HA" SYNC_REPO="$OC_A" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+OC_B="$WORK/otherclone-B"; git clone -q "$OC_BARE" "$OC_B" 2>/dev/null
+printf '%s\n' "$OC_B" > "$OC_REG"
+
+oc_pull(){
+  CLAUDE_HOME="$OC_HA" SYNC_REPO="$OC_A" SYNC_CLONE_REGISTRY="$OC_REG" \
+  SYNC_LAUNCHAGENTS="$OC_AGENTS" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1
+}
+
+# The fixture is real: B is a clone of the same bare repo A pushes to.
+check "#359 the second clone really is a checkout of the same repo" \
+  "[ -d '$OC_B/.git' ] && [ -n \"\$(git -C '$OC_B' rev-parse HEAD 2>/dev/null)\" ]"
+
+# 1. LEVEL. Nothing is said about it, or every run carries a line about a clone that is fine.
+out_oc0="$(oc_pull)"
+check "#359 a clone level with the shared repo is not reported on" \
+  "out_lacks \"\$out_oc0\" 'otherclone-B'"
+
+# 2. BEHIND. The existing reading, kept: this is the case the whole reporter exists for, and it
+#    must survive the change or the fix has traded one blind spot for another (L159).
+sh_settings "$OC_HA" "__CLAUDE_HOME__/hooks/alpha.sh" "__CLAUDE_HOME__/hooks/beta.sh"
+printf '#!/usr/bin/env bash\n' > "$OC_HA/hooks/beta.sh"
+CLAUDE_HOME="$OC_HA" SYNC_REPO="$OC_A" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+out_oc1="$(oc_pull)"
+check "#359 a clone that is merely behind is still told how far behind" \
+  "grep -qE 'commit\(s\) behind' <<< \"\$out_oc1\""
+
+# 3. HOLDING WORK NOBODY PUSHED. The case that was being reported as unanswerable.
+git -C "$OC_B" config user.email t@t.t; git -C "$OC_B" config user.name t
+mkdir -p "$OC_B/payload"
+printf 'only here\n' > "$OC_B/payload/local-only.txt"
+git -C "$OC_B" add payload/local-only.txt >/dev/null 2>&1
+git -C "$OC_B" commit -qm "a commit nobody pushed" >/dev/null 2>&1
+# The condition really holds: A cannot see B's commit even after A has pulled.
+CLAUDE_HOME="$OC_HA" SYNC_REPO="$OC_A" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#359 the fixture really puts a commit beyond the shared repo's reach" \
+  "! git -C '$OC_A' cat-file -e \"\$(git -C '$OC_B' rev-parse HEAD)^{commit}\" 2>/dev/null"
+
+out_oc2="$(oc_pull)"
+check "#359 the clone is named as holding work that was never pushed" \
+  "grep -qE 'not been pushed|nobody pushed|the shared repo does not have' <<< \"\$out_oc2\""
+check "#359 and the clone it names is the one holding it" \
+  "grep -qF 'otherclone-B' <<< \"\$out_oc2\""
+# The measured no-op: a fetch in that clone leaves the object exactly as missing, so telling
+# somebody to run one is telling them to watch the same line come back (L111).
+check "#359 it does not send anybody to fetch in the clone that already has the commit" \
+  "out_lacks \"\$out_oc2\" \"fetch\" i"
+# And it must not claim the question cannot be answered, because here it can.
+check "#359 it does not report an answerable state as unanswerable" \
+  "out_lacks \"\$out_oc2\" 'cannot be answered'"
+
+# The PRECONDITION the messages above rest on, enforced rather than trusted to a comment (L407).
+# Every one of them claims the shared repo's position is already known, which is only true because
+# this runs after the pull. A caller added before it, or a second caller anywhere else, would make
+# each message assert something it had not measured, and no behavioural test would see it because
+# the fixtures would still be arranged correctly (L11).
+OC_CALLERS="$(grep -c '^  report_other_clones_position$' "$SCRIPT" 2>/dev/null || echo 0)"
+check "#359 the reporter has exactly one caller" "[ \"$OC_CALLERS\" = 1 ]"
+# Captured into a variable and compared, never piped into a quiet grep: a producer feeding a
+# consumer that leaves on its first match dies of SIGPIPE, and under `set -o pipefail` the
+# pipeline reports a failure that never happened (L183).
+OC_ORDER="$(awk '/^do_pull\(\)\{/{inp=1} inp&&/pull_from_repo_or_die/{pulled=NR} inp&&/^  report_other_clones_position$/{print (pulled>0 && NR>pulled) ? "yes" : "no"; exit}' "$SCRIPT")"
+check "#359 and that caller runs after this clone has pulled" "[ \"$OC_ORDER\" = yes ]"
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
