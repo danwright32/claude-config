@@ -3342,6 +3342,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   verified, the permanently refused 08-15 stranded 2026-08-16's step partition for good: 17
   execution days authorised against 16 step days. Nothing reported it, because a correctly refused
   day and a permanently refused day are the same row.)
+- **L679. A consequence sentence that ENUMERATES what an action touches is a second copy of the
+  action's own list, so the day the action touches one more thing the sentence stays true and
+  becomes incomplete, and nothing detects it because every word still there is correct.** Derive
+  the list from the action, or hold the two together with a check that fails when the action writes
+  something the sentence does not name. Distinct from L180, where the sentence is asserted rather
+  than derived from the state it is about to change, and from L38, which is the action itself
+  reaching N minus 1 of N: here the action is complete and the copy describing it is not, so the
+  reader is told the truth and still does not learn what they are agreeing to.
+  (paperboi#229: a merge confirmation named the invoices that move, the sender addresses that
+  union, that the merged vendor is kept rather than deleted, and that nothing can undo it, every
+  line read off merge_vendors by hand, while a planned change to move the merged vendor's notes in
+  the same function would have left the dialog silent about notes with the whole suite green)
 
 ## State and identity
 

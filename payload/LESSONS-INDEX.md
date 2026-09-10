@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 624 lessons.
+LESSONS.md, which is NOT loaded into the session. 625 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -285,6 +285,7 @@ to decide something: the body is where the failure it came from is described.
 - L654. A monitor that judges an outcome over ALL runs cannot see a fallback path, because a fallback is rare by construction and its collapse to zero moves the overall rate by nothing.
 - L664. When a submission is matched to an existing record and redirected onto it (a dedupe, a move, an upsert), decide explicitly what happens to every field the person just entered, because the redirected path was written for its own inputs and silently discards the rest, and a discarded correction reads to the person as a saved one.
 - L665. A refusal that can only be cleared by re-running a process whose scope is a moving window becomes permanent the moment the refused item falls outside that window
+- L679. A consequence sentence that ENUMERATES what an action touches is a second copy of the action's own list, so the day the action touches one more thing the sentence stays true and becomes incomplete, and nothing detects it because every word still there is correct.
 
 ## State and identity
 
