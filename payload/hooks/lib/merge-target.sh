@@ -2,13 +2,16 @@
 #
 # merge-target.sh: shared helpers for hooks that gate a pull request merge.
 #
-# Sourced, never executed. Holds the four things every merge gate has to work
-# out before it can say anything about a pull request, so they exist once rather
-# than once per gate:
+# Sourced by the gates. Also runnable, for the one caller that is not bash: see
+# the dispatch at the foot of the file. Holds the things every merge gate has to
+# work out before it can say anything about a pull request, so they exist once
+# rather than once per gate:
 #
 #   mt_is_pr_merge   is this command actually a merge
 #   mt_repo_dir      which directory the merge will run in, which is not
 #                      necessarily the session cwd
+#   mt_checkout_dir  the checkout a directory belongs to, which is the part of
+#                      that answer a non-merge caller needs too
 #   mt_pr_number     the pull request the command names, if it names one
 #   mt_remote_slug   owner/name from the git remote, read from the CURRENT
 #                      directory, so callers cd first
@@ -51,7 +54,7 @@ mt_pr_number() {  # $1 = command
 # the merge itself will run. Otherwise the session cwd, then walk up for a repo,
 # then look one level down.
 mt_repo_dir() {  # $1 = command, $2 = session cwd
-  local command="$1" d="$2" from_cd="" up sub
+  local command="$1" d="$2" from_cd=""
 
   # Bash's own regex, not sed: macOS sed is BRE and treats \+ as a literal plus,
   # so a sed version of this silently matched nothing and every merge was blocked.
@@ -62,6 +65,25 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
   fi
   if [ -n "$from_cd" ] && [ -d "$from_cd" ]; then printf '%s' "$from_cd"; return; fi
 
+  [ -n "$d" ] && [ -d "$d" ] || d=$PWD
+  mt_checkout_dir "$d"
+}
+
+# The checkout a directory belongs to: the directory itself, else the first
+# ancestor holding a .git, else the first child holding one. When there is none
+# anywhere, the directory itself, unchanged, so a caller is still handed
+# somewhere it can run and reports the refusal in its own words.
+#
+# Named and separate because a second caller asks the same question for a
+# different reason: the issue review's duplicate check has to find the checkout
+# before it can ask gh anything, and it used to assume the project directory was
+# one. In PET it is not, the workspace root sits above pet/, so gh refused there
+# and the check had never once run in that project (claude-config#344). Two
+# copies of this walk, one of them in Python, would be two rules that drift with
+# each suite passing its own (L263, L370), so the copy in Python is a call to
+# the executed mode at the foot of this file instead.
+mt_checkout_dir() {  # $1 = a directory
+  local d="$1" up sub
   [ -n "$d" ] && [ -d "$d" ] || d=$PWD
 
   up=$d
@@ -161,3 +183,21 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
   jq -nc --arg wrong "$wrong" '{found: false, wrongRepo: $wrong}'
   return 1
 }
+
+# EXECUTED mode, for a caller that cannot source bash. Guarded on this file
+# being the script rather than the source, because both merge gates source it
+# and a dispatch that ran on the way in would run with whatever positional
+# arguments the gate was holding.
+#
+# It refuses a subcommand it does not know rather than falling back to a default
+# answer: a run about the wrong thing is indistinguishable afterwards from a run
+# about the right one (L320).
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    checkout-dir) mt_checkout_dir "${2:-}" ;;
+    *)
+      echo "merge-target.sh: unknown subcommand [${1:-}] (known: checkout-dir <dir>)" >&2
+      exit 2
+      ;;
+  esac
+fi

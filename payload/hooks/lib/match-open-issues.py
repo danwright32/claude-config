@@ -17,7 +17,10 @@ matcher that ruled would be a word counter deciding what a reader can see for th
 none: it would talk somebody out of filing a real finding.
 
 FAILS OPEN. No gh, no network, no repo, a slow call: the findings go out unannotated. This is a
-convenience on a review, and losing it must never cost the review itself.
+convenience on a review, and losing it must never cost the review itself. Which is also why the
+repo is RESOLVED rather than assumed: failing open in a project whose checkout sits below the
+workspace root meant this never ran there at all, and a footnote at the foot of the findings does
+not read as "this whole review was blind" (claude-config#344).
 
 Usage:  match-open-issues.py <project dir> < findings.txt > annotated.txt
 """
@@ -46,13 +49,42 @@ GENERIC = {
 }
 
 
+def checkout_dir(project):
+    """The checkout `project` belongs to, so gh has a repository to resolve from.
+
+    The project directory is NOT always a checkout. In PET the workspace root is one level above
+    the repo, so `gh issue list` run there refused with "not a git repository" and every review in
+    that project fell back to the unannotated list: the duplicate check had never once run there
+    (claude-config#344). Failing open was right; being blind for months was not.
+
+    The walk itself lives in merge-target.sh, which the merge gates source, because a second copy
+    of it here would be a second rule that drifts, each half passing its own suite (L263, L370).
+    Its executed mode exists for this caller.
+
+    Fails open to the directory as given: a missing helper, a broken bash, a slow one, and gh is
+    asked exactly what it used to be asked.
+    """
+    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "merge-target.sh")
+    if not os.path.isfile(helper):
+        return project
+    try:
+        out = subprocess.run(["bash", helper, "checkout-dir", project],
+                             capture_output=True, text=True, timeout=TIMEOUT)
+    except Exception:
+        return project
+    resolved = (out.stdout or "").strip()
+    if out.returncode != 0 or not resolved or not os.path.isdir(resolved):
+        return project
+    return resolved
+
+
 def open_issues(project):
     """(issues, why it could not be read). Both empty means the repo genuinely has no open issue."""
     try:
         out = subprocess.run(
             ["gh", "issue", "list", "--state", "open", "--limit", "300",
              "--json", "number,title,body"],
-            cwd=project, capture_output=True, text=True, timeout=TIMEOUT)
+            cwd=checkout_dir(project), capture_output=True, text=True, timeout=TIMEOUT)
     except Exception as exc:
         return [], "gh could not be run (%s)" % type(exc).__name__
     if out.returncode != 0:

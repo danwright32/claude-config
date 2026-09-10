@@ -359,6 +359,49 @@ case "$mo_pathonly" in
   *"already #412"*) check "#256 a shared path with no shared subject word is not a match" "out=$mo_pathonly" ;;
   *) check "#256 a shared path with no shared subject word is not a match" ok ;;
 esac
+# The PROJECT DIRECTORY IS NOT ALWAYS THE CHECKOUT (claude-config#344). In PET the workspace root
+# is one level above the repo, so `gh issue list` run there refused with "not a git repository" and
+# the matcher fell back to its honest OPEN ISSUES NOT READ line. Failing open was right, but the
+# effect was that the duplicate check had never once run in that project: every review there judged
+# duplicates with no sight of the backlog, which is the condition #265 was written about, and the
+# notice reads as a footnote rather than as "this whole review was blind".
+#
+# This gh REFUSES outside a checkout, the way the real one does, so a matcher that did not resolve
+# the repo cannot pass. It gets its own bin directory rather than overwriting the stub above, which
+# the cases before this one still depend on.
+mkdir -p "$WORK/bin-pet"
+cat > "$WORK/bin-pet/gh" <<'STUB'
+#!/usr/bin/env bash
+if [ ! -e .git ]; then
+  echo "fatal: not a git repository (or any of the parent directories): .git" >&2
+  exit 1
+fi
+cat "$GH_ISSUES"
+STUB
+chmod +x "$WORK/bin-pet/gh"
+PET_ROOT="$(mktemp -d "$WORK/pet.XXXXXX")"
+mkdir -p "$PET_ROOT/pet/.git"
+mo_pet="$(printf '%s\n' 'FINDING (a, b): widget/cache.py keeps a stale entry after a rename' \
+  | PATH="$WORK/bin-pet:$PATH" python3 "$MATCHER" "$PET_ROOT" 2>/dev/null)"
+case "$mo_pet" in
+  *"already #412"*) check "#344 a project whose checkout is one level down is still matched" ok ;;
+  *) check "#344 a project whose checkout is one level down is still matched" "out=$mo_pet" ;;
+esac
+case "$mo_pet" in
+  *"OPEN ISSUES NOT READ"*) check "#344 and it does not report itself blind" "out=$mo_pet" ;;
+  *) check "#344 and it does not report itself blind" ok ;;
+esac
+# The control. Resolving must find a checkout, never invent one: a directory with no repo anywhere
+# still fails open and still SAYS so, or the case above would be satisfied by a matcher that had
+# simply stopped reporting when it could not look (L11, L159).
+BARE_ROOT="$(mktemp -d "$WORK/bare.XXXXXX")"
+mo_bare="$(printf '%s\n' 'FINDING (a, b): widget/cache.py keeps a stale entry after a rename' \
+  | PATH="$WORK/bin-pet:$PATH" python3 "$MATCHER" "$BARE_ROOT" 2>/dev/null)"
+case "$mo_bare" in
+  *"OPEN ISSUES NOT READ"*) check "#344 a directory with no checkout anywhere still says it could not look" ok ;;
+  *) check "#344 a directory with no checkout anywhere still says it could not look" "out=$mo_bare" ;;
+esac
+
 # Text with no findings in it comes back untouched, so the matcher can never eat a report.
 mo_plain="$(matcher_out 'HARVEST FAILED: one agent could not be read')"
 case "$mo_plain" in

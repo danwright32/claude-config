@@ -72,6 +72,43 @@ eq "$(mt_repo_dir "cd \"$root/plain\" && $MERGE 7" "$root/parent")" "$root/plain
 # the gate in the wrong place and it would answer about the wrong repo.
 eq "$(mt_repo_dir "cd $root/nope && $MERGE 7" "$root/plain")" "$root/plain" "cd to a missing directory is ignored"
 
+echo "merge-target: the checkout under a project directory (#344)"
+
+# The walk that finds a checkout from a directory is the SAME question the issue
+# review's duplicate check has to answer before it can ask gh anything, and that
+# check had an assumption of its own instead: it ran gh in the project directory
+# and gave up when that directory was not a checkout, which in PET it never is,
+# so the check had never once run there (claude-config#344). One named predicate
+# rather than a second copy of the walk, and the executed mode below is how a
+# caller that cannot source bash reaches it.
+eq "$(mt_checkout_dir "$root/plain")" "$root/plain" "the directory is itself the checkout"
+eq "$(mt_checkout_dir "$root/parent")" "$root/parent/pet" "the checkout is one level down"
+eq "$(mt_checkout_dir "$root/deep/a/b")" "$root/deep" "the checkout is above the directory"
+
+# No checkout anywhere: the directory itself, unchanged. The caller still gets
+# something it can run in, and the refusal stays where the caller can report it
+# in its own words rather than being turned into a wrong answer here.
+mkdir -p "$root/bare"
+eq "$(mt_checkout_dir "$root/bare")" "$root/bare" "no checkout anywhere leaves the directory alone"
+
+# The executed mode. One implementation with two callers, because the other
+# caller is Python: a second copy of this walk in another language is two rules
+# that drift silently, each passing its own suite (L263, L370).
+eq "$(bash "$HOOK_DIR/lib/merge-target.sh" checkout-dir "$root/parent")" "$root/parent/pet" \
+  "the executed mode answers what the function answers"
+
+# And SOURCING stays inert. Both merge gates source this file, and a dispatch
+# that ran on the way in would run with whatever positional arguments the gate
+# happened to be holding.
+sourced_noise="$(bash -c '. "$1" checkout-dir /tmp; :' _ "$HOOK_DIR/lib/merge-target.sh" 2>&1)"
+eq "$sourced_noise" "" "sourcing the file prints nothing and runs nothing"
+
+# An argument it cannot serve is refused, never answered with the default scope:
+# a run about the wrong thing looks exactly like a run about the right one (L320).
+if bash "$HOOK_DIR/lib/merge-target.sh" nonsense "$root/parent" >/dev/null 2>&1; then
+  fail "an unknown subcommand was accepted"
+else pass; fi
+
 echo "merge-target: which repo"
 
 ( cd "$root/plain" && git init -q && git remote add origin "https://github.com/acme/widget.git" )
