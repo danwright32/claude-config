@@ -11,9 +11,12 @@ Dan does not write code and should never have to pump the loop by typing "what's
 
 If there is an open PR for the work just finished:
 1. Check CI yourself: `gh pr checks <pr> --watch` (run in the background if slow; report elapsed progress, never a silent wait).
-2. When green, merge it yourself: `gh pr merge <pr> --squash --delete-branch` (match the repo's
-   usual merge style if different), and then CONFIRM it, because a merge command that exits 0 is
-   not a merge. Ask `gh pr view <pr> --json state --jq .state` and treat anything but `MERGED` as
+2. When green, merge it yourself, PINNED to the commit whose checks you just read:
+   `gh pr merge <pr> --squash --delete-branch --match-head-commit $(gh pr view <pr> --json headRefOid --jq .headRefOid)`
+   (match the repo's usual merge style if different). The pin is what stops a push that lands
+   between the check reading and the merge being merged unjudged, and the merge gate refuses an
+   unpinned merge for that reason (claude-config#345). Then CONFIRM it, because a merge command
+   that exits 0 is not a merge. Ask `gh pr view <pr> --json state --jq .state` and treat anything but `MERGED` as
    not merged: say so, do not delete a branch, do not close the issue, and do not move on to the
    next one. Measured 2026-08-13 in Overture: `gh pr merge` failed with a transient
    `GraphQL: Something went wrong while executing your query`, and the script around it reported

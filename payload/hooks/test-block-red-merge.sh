@@ -59,8 +59,14 @@ run_hook() {  # $1 = repo dir, $2 = command ; prints the hook's stdout
     | (cd "$1/repo" && PATH="$1/bin:$PATH" bash "$HOOK")
 }
 
-GREEN='{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}]}'
-RED='{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"FAILURE"}]}'
+# The commit the rollup was read for. The gate now has to hand it to the merge, so it is a
+# fixture value rather than an incidental one (#345).
+HEAD_SHA='a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+GREEN='{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"}'
+RED='{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"FAILURE"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"}'
+# Green, but gh did not say which commit it was green FOR. The gate cannot pin what it cannot
+# read, and it must not merge unpinned in silence either (#345).
+GREEN_NO_HEAD='{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}]}'
 # A pull request with NO checks at all. GitHub answers this way for two very different reasons,
 # and the gate has to tell them apart (claude-config#131).
 NONE_CLEAN='{"number":7,"statusCheckRollup":[],"mergeable":"MERGEABLE"}'
@@ -123,11 +129,12 @@ if denied "$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; 
 else pass; fi
 rm -rf "$dir"
 
-# 4. The control: a repo WITHOUT the tool still merges the old way, or this
-#    rule would have quietly blocked every other project (L159).
+# 4. The control: a repo WITHOUT the tool still merges, PINNED to the commit
+#    the gate just read. Before #345 this case asserted that a plain merge went
+#    through, which is the behaviour that change reverses.
 dir=$(make_repo without-tool "$GREEN")
-if denied "$(run_hook "$dir" "gh pr merge 7 --squash")"; then
-  fail "a green PR in a repo without the tool was blocked"
+if denied "$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")"; then
+  fail "a green PR pinned to the judged commit was blocked"
 else pass; fi
 rm -rf "$dir"
 
@@ -178,6 +185,91 @@ dir=$(make_repo with-npm-tool "$RED")
 if denied "$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; then pass; else
   fail "a red PR was allowed through once the pinned-tool rule was overridden"
 fi
+rm -rf "$dir"
+
+echo "block-red-merge: the merge is pinned to the commit that was judged (#345)"
+
+# The rollup answers about the pull request, not about a commit, and it is read a moment BEFORE
+# the merge runs. A push landing in that gap is merged unjudged, and afterwards it looks exactly
+# like a merge that was judged, which is the failure the whole gate exists to prevent (L179).
+# Until #345 the only repos protected were the two carrying their own pinned merge tool.
+#
+# gh pr merge already takes --match-head-commit, and GitHub refuses when the head has moved, so
+# the gate requires the flag rather than needing a tool per repo.
+
+# 1. A plain merge of a GREEN pull request is refused for carrying no pin.
+dir=$(make_repo without-tool "$GREEN")
+out=$(run_hook "$dir" "gh pr merge 7 --squash")
+if denied "$out"; then pass; else
+  fail "a green pull request was merged without pinning the commit its checks were read for: $out"
+fi
+# And the refusal hands over the command to run, or it is a dead end: the person is left
+# knowing a flag exists and not which commit to give it (L406, L111).
+if holds "$out" "--match-head-commit $HEAD_SHA"; then pass; else
+  fail "the refusal does not name the command to run instead: $out"
+fi
+rm -rf "$dir"
+
+# 2. Pinned to a DIFFERENT commit is worse than unpinned, not better: it hands GitHub a commit
+#    nothing judged while reading as the careful route. Distinct cause, distinct message (L11).
+dir=$(make_repo without-tool "$GREEN")
+other=0000000000000000000000000000000000000000
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $other")
+if denied "$out"; then pass; else
+  fail "a merge pinned to a commit the gate never judged was allowed: $out"
+fi
+# It has to name BOTH, or the reader cannot see which of the two is the judged one.
+if { holds "$out" "$HEAD_SHA" && holds "$out" "$other"; }; then pass; else
+  fail "the refusal does not name both the judged commit and the one the command pinned: $out"
+fi
+rm -rf "$dir"
+
+# 3. Green, but gh did not say WHICH commit it was green for. The gate cannot pin what it cannot
+#    read, and merging unpinned in silence is the thing this rule exists to stop, so it fails
+#    closed. Its own message, because "you did not pin it" would send somebody to add a flag whose
+#    value nothing here can supply (L11, L109).
+dir=$(make_repo without-tool "$GREEN_NO_HEAD")
+out=$(run_hook "$dir" "gh pr merge 7 --squash")
+if denied "$out"; then pass; else
+  fail "a green rollup with no head commit in it was merged unpinned: $out"
+fi
+if says "$out" "head commit"; then pass; else
+  fail "the refusal does not say the head commit could not be read: $out"
+fi
+if holds "$out" "--match-head-commit $HEAD_SHA"; then
+  fail "it told the person to pin a commit it had just said it could not read: $out"
+else pass; fi
+rm -rf "$dir"
+
+# 4. The visible override, under the name already used for exactly this: merging without a commit
+#    pin. A second name for one idea is two vocabularies for one rule.
+dir=$(make_repo without-tool "$GREEN")
+if denied "$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; then
+  fail "the visible override did not let an unpinned merge through"
+else pass; fi
+rm -rf "$dir"
+
+# 5. A RED pull request is still refused BY THE GREEN GATE, in its own words. The new rule must not
+#    answer for the old one: a red run reported as "you did not pin the commit" sends somebody to
+#    add a flag and try again, and the second attempt is the merge this gate was built to stop
+#    (L11, L178).
+dir=$(make_repo without-tool "$RED")
+out=$(run_hook "$dir" "gh pr merge 7 --squash")
+if denied "$out"; then pass; else
+  fail "a red pull request was allowed once the pin rule was added"
+fi
+if says "$out" "not green"; then pass; else
+  fail "a red pull request was refused for the wrong reason: $out"
+fi
+rm -rf "$dir"
+
+# 6. And a repo with no CI at all still merges plain. The pin protects a VERDICT, and there is no
+#    verdict here to protect, so requiring it would block every repo without tests for a reason
+#    that does not apply to them (L615, L324).
+dir=$(make_repo without-tool "$NONE_CLEAN")
+if denied "$(run_hook "$dir" "gh pr merge 7 --squash")"; then
+  fail "a repo with no CI at all was blocked for not pinning a commit nothing had judged"
+else pass; fi
 rm -rf "$dir"
 
 echo "block-red-merge: a pull request with no checks at all (#131)"
@@ -286,7 +378,7 @@ case "$*" in
   *"auth token -u "*) printf 'tok-other\n' ;;
   *"pr view"*)
     if [ "${GH_TOKEN:-}" = "tok-nursedexapp" ]; then
-      printf '%s\n' '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"url":"https://github.com/acme/widget/pull/7"}'
+      printf '%s\n' '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"SUCCESS"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678","url":"https://github.com/acme/widget/pull/7"}'
     fi
     ;;
 esac
@@ -302,7 +394,7 @@ case "$*" in
   *"auth token -u "*) printf 'tok-nursedexapp\n' ;;
   *"pr view"*)
     if [ "${GH_TOKEN:-}" = "tok-nursedexapp" ]; then
-      printf '%s\n' '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"FAILURE"}],"url":"https://github.com/acme/widget/pull/7"}'
+      printf '%s\n' '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"FAILURE"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678","url":"https://github.com/acme/widget/pull/7"}'
     fi
     ;;
 esac
@@ -330,7 +422,7 @@ SH
 
 dir=$(make_remote_repo acme/widget second-account-green)
 GH_CALL_LOG="$dir/gh-calls.log"; export GH_CALL_LOG; : > "$GH_CALL_LOG"
-out=$(run_hook "$dir" "gh pr merge 7 --squash")
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
 if denied "$out"; then
   fail "a green pull request was blocked because the ACTIVE account cannot see the repo: $out"
 else pass; fi

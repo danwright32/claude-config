@@ -12,8 +12,14 @@
 # produced the mistake. A repo with no checks at all is allowed, since there is
 # nothing that could be red.
 #
-# Deliberate override: ALLOW_RED_MERGE=1 gh pr merge ... (visible in the command,
-# so it cannot happen by accident or go unnoticed in the transcript).
+# And once it reads green, the merge must PIN that commit with
+# --match-head-commit, because the rollup answers about the pull request rather
+# than about a commit and is read a moment before the merge (#345). GitHub
+# refuses the merge if the head has moved since.
+#
+# Deliberate overrides, both visible in the command, so neither can happen by
+# accident or go unnoticed in the transcript: ALLOW_RED_MERGE=1 for the green
+# reading, ALLOW_UNPINNED_MERGE=1 for the commit pin.
 
 set -uo pipefail
 
@@ -75,6 +81,14 @@ cd "$(mt_repo_dir "$command" "$cwd")" 2>/dev/null || true
 # case, and two copies of it drift: the whole point of the rule is that one
 # mechanism has one implementation.
 #
+# It still earns its place now that EVERY repo pins the merge (#345). The two
+# mechanisms cover different halves of the list above: --match-head-commit
+# refuses a head that moved, and that is all it does, while these tools also
+# WAIT for the checks rather than reading whatever is there, and confirm
+# afterwards that the commit landed on the base its checks were run against. So
+# this is not the duplicate the paragraph above warns about: a repo carrying one
+# of these tools gets the two halves the general pin cannot reach.
+#
 # Only where a tool exists, so every other project keeps the old gate rather
 # than being blocked by a rule about a file it does not have.
 pinned_tool=""
@@ -114,7 +128,10 @@ fi
 # have been read as this pull request's verdict.
 remote_slug=$(mt_remote_slug)
 
-envelope=$(mt_pr_view "$pr" "number,statusCheckRollup,mergeable,url" "$remote_slug")
+# headRefOid comes from the SAME call as the verdict, deliberately: the commit the merge is
+# pinned to has to be the commit these checks were read for, and a second lookup could answer
+# about a head that had already moved (L70, #345).
+envelope=$(mt_pr_view "$pr" "number,statusCheckRollup,mergeable,url,headRefOid" "$remote_slug")
 if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" = "true" ]; then
   rollup=$(printf '%s' "$envelope" | jq -c '.view')
 else
@@ -174,5 +191,44 @@ fi
 bad=$(printf '%s' "$verdicts" | jq -r '[.[] | select(.result | IN("SUCCESS","NEUTRAL","SKIPPED") | not)] | map("\(.name)=\(if .result == "" then "PENDING" else .result end)") | join(", ")')
 
 [ -n "$bad" ] && deny "PR #$number is not green: $bad. Wait for it, or fix it. This gate exists because a red run was merged on 2026-07-28 by misreading the output. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+
+# GREEN. Now pin the merge to the commit that reading was ABOUT (#345).
+#
+# Everything above answers about the pull request rather than about a commit, and it is read a
+# moment BEFORE the merge runs. A push landing in that gap is merged unjudged, and afterwards it
+# is indistinguishable from a merge that was judged (L179). Until now the only repos protected
+# were the two carrying their own pinned merge tool, which is a script per repo for a rule that
+# applies to all of them.
+#
+# gh pr merge takes --match-head-commit, and GitHub refuses the merge when the head has moved, so
+# every repo gets that protection from one flag.
+#
+# Reached only on a POSITIVE green reading, deliberately: the empty-rollup paths above exit before
+# this, because the pin protects a VERDICT and there is no verdict in a repo with no CI. Requiring
+# it there would block those repos for a reason that does not apply to them (L615, L324).
+case "$command" in
+  *ALLOW_UNPINNED_MERGE=1*) exit 0 ;;
+esac
+
+head_sha=$(printf '%s' "$rollup" | jq -r '.headRefOid // ""' 2>/dev/null)
+
+# Green, but gh did not say which commit it was green FOR. Fails closed, in its own words: telling
+# somebody to add a flag whose value nothing here can supply is a refusal that cannot be cleared
+# by the remedy it names (L11, L109).
+[ -z "$head_sha" ] && deny "PR #$number reads green, but gh did not report its head commit, so this merge cannot be pinned to the commit those checks were actually run for. A rollup is about the pull request, not about a commit, and it is read a moment before the merge: without the pin, a push landing in between is merged unjudged and looks identical afterwards. Check which commit is at the head and that its checks are the green ones, then merge with ALLOW_UNPINNED_MERGE=1 <the same command>."
+
+pinned_sha=$(printf '%s' "$command" \
+  | grep -oE '\-\-match-head-commit[[:space:]=]+[0-9a-fA-F]+' \
+  | grep -oE '[0-9a-fA-F]+$' | awk 'NR <= 1')
+
+if [ -z "$pinned_sha" ]; then
+  deny "PR #$number is green at $head_sha, but the merge does not pin that commit. The rollup just read is about the pull request, not about a commit, so a push landing between this reading and the merge would be merged unjudged and would look identical afterwards. Run: $command --match-head-commit $head_sha . GitHub refuses the merge if the head has moved. Deliberate override: ALLOW_UNPINNED_MERGE=1 <the same command>."
+fi
+
+# Pinned to something else is worse than unpinned, not better: it hands GitHub a commit nothing
+# here judged while reading as the careful route.
+if [ "$(printf '%s' "$pinned_sha" | tr 'A-F' 'a-f')" != "$(printf '%s' "$head_sha" | tr 'A-F' 'a-f')" ]; then
+  deny "PR #$number is green at $head_sha, but this merge pins $pinned_sha, which is a different commit and not the one these checks were read for. Merging it would land a commit nothing judged, by the route that is supposed to prevent exactly that. Pin $head_sha instead, or re-read the checks if the head has genuinely moved. Deliberate override: ALLOW_UNPINNED_MERGE=1 <the same command>."
+fi
 
 exit 0
