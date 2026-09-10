@@ -96,6 +96,81 @@ fi
 . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
 mt_runs_merge "$cmd" || exit 0
 
+# WHAT THE GATE DECIDED, kept so a gate that never fires is visible (claude-config#354).
+#
+# The label gate below fails open on every route, which is right, but it makes a gate that
+# has never once silenced a quiz indistinguishable from one that is working and simply
+# meeting a visible change every time. Dan would go on declining quizzes exactly as before
+# with nothing reporting that the fix was inert (L557).
+#
+# One line per VERDICT KIND, never one per merge, so the file is a handful of lines however
+# many merges pass through it and nothing has to drain it (L526). Each fail open route gets
+# its own name, because "the gate never skips" and "gh has answered nothing for a fortnight"
+# are different readings needing different remedies (L11).
+#
+# A named seam with its default OUTSIDE ~/.claude, the same shape as the issue spool's:
+# anything under ~/.claude auto pushes to the other Mac within seconds, and a counter that
+# ticks on every merge is not config.
+#
+# Every write here is best effort. A counter that cannot be written must never stop a quiz.
+QUIZ_VERDICT_THRESHOLD="${CLAUDE_QUIZ_VERDICT_THRESHOLD:-10}"
+
+qv_file() { printf '%s/counts' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
+
+qv_get() {  # $1 = key ; prints its number, 0 when absent
+  awk -v k="$1" '$1 == k { print $2 + 0; found = 1 } END { if (!found) print 0 }' \
+    "$(qv_file)" 2>/dev/null || printf '0'
+}
+
+qv_set() {  # $1 = key, $2 = value (absolute), or $1 = key with $2 = + to increment
+  local file tmp
+  file="$(qv_file)"
+  mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
+  [ -f "$file" ] || : > "$file" 2>/dev/null || return 0
+  tmp="$file.$$"
+  awk -v k="$1" -v v="$2" '
+    BEGIN { seen = 0 }
+    $1 == k { print k, (v == "+" ? $2 + 1 : v); seen = 1; next }
+    { print }
+    END { if (!seen) print k, (v == "+" ? 1 : v) }
+  ' "$file" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
+  mv "$tmp" "$file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+# The counts, most frequent first, as one readable phrase. This IS the diagnosis: no-label
+# says the repo does not use the convention, no-answer says gh is not answering at all.
+qv_breakdown() {
+  awk '$1 !~ /^(fired_since_quiet|warned)$/ { print $2 + 0, $1 }' "$(qv_file)" 2>/dev/null \
+    | sort -rn \
+    | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }'
+}
+
+qv_record() {  # $1 = verdict
+  qv_set "$1" +
+  if [ "$1" = "quiet" ]; then
+    qv_set fired_since_quiet 0
+    qv_set warned 0
+  else
+    qv_set fired_since_quiet +
+  fi
+}
+
+# The notice, once, when the gate has run the threshold's worth of quizzes without silencing
+# one. Cleared by a quiet verdict, so if the gate starts working and later stops again it
+# says so again rather than staying silent for ever (L523). A notice repeated on every merge
+# is what teaches somebody to skim the whole instruction (L36).
+qv_notice() {
+  local fired warned
+  fired="$(qv_get fired_since_quiet)"
+  warned="$(qv_get warned)"
+  [ "$warned" = "0" ] || return 0
+  [ "$fired" -ge "$QUIZ_VERDICT_THRESHOLD" ] 2>/dev/null || return 0
+  qv_set warned 1
+  printf '\n\nSAY THIS TO DAN IN ONE LINE FIRST, then run the quiz as normal: the changelog label gate has now run %s times without once silencing a quiz. What it has recorded: %s. If those were all genuinely user facing changes then nothing is wrong. If they were not, the gate is not reading the label, and that breakdown names the step that is failing.' \
+    "$fired" "$(qv_breakdown)"
+}
+
 # Did anything a person could notice actually ship?
 #
 # The quiz fired five times in one session on 2026-09-10 and was declined five times,
@@ -131,45 +206,80 @@ mt_runs_merge "$cmd" || exit 0
 # visible. The difference is that this skip is driven by a label a person set and can
 # see on the pull request, rather than by a judgement made out of his sight.
 quiz_is_owed() {
+  QUIZ_VERDICT="no-gh"
   # An early exit, not the safeguard: gh's absence is answered again below, where
   # mt_pr_view finds nothing and this returns 0 anyway. Kept because it saves the
   # whole auth dance, and named so nobody reads it as the thing deciding.
   command -v gh >/dev/null 2>&1 || return 0
+  QUIZ_VERDICT="no-node"
   command -v node >/dev/null 2>&1 || return 0
+  QUIZ_VERDICT="no-jq"
   command -v jq >/dev/null 2>&1 || return 0
 
+  QUIZ_VERDICT="no-repo"
   cd "$(mt_repo_dir "$cmd" "$cwd")" 2>/dev/null || return 0
 
-  local slug pr envelope labels verdict
+  local slug pr envelope labels
   slug="$(mt_remote_slug)"
   pr="$(mt_pr_number "$cmd")"
   envelope="$(mt_pr_view "$pr" "number,url,labels" "$slug")"
-  [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" = "true" ] || return 0
+  if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" != "true" ]; then
+    # An answer about ANOTHER repo is not this pull request's record, and it is a
+    # different fault from gh saying nothing: one means the wrong repository was
+    # resolved, the other that gh is not answering at all (L11).
+    if [ -n "$(printf '%s' "$envelope" | jq -r '.wrongRepo // ""' 2>/dev/null)" ]; then
+      QUIZ_VERDICT="wrong-repo"
+    else
+      QUIZ_VERDICT="no-answer"
+    fi
+    return 0
+  fi
 
+  QUIZ_VERDICT="unreadable"
   labels="$(printf '%s' "$envelope" | jq -c '.view.labels // []' 2>/dev/null)"
   [ -n "$labels" ] || return 0
 
-  verdict="$(printf '%s' "$labels" | HOOK_DIR="$HOOK_DIR" node -e '
+  QUIZ_VERDICT="$(printf '%s' "$labels" | HOOK_DIR="$HOOK_DIR" node -e '
     var entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
     var raw = "";
     process.stdin.on("data", function (d) { raw += d; });
     process.stdin.on("end", function () {
       var labels;
-      try { labels = JSON.parse(raw); } catch (e) { process.stdout.write("unknown"); return; }
+      try { labels = JSON.parse(raw); } catch (e) { process.stdout.write("unreadable"); return; }
       var kinds = entry.changelogLabels(labels);
-      if (!kinds.length) { process.stdout.write("unknown"); return; }
+      if (!kinds.length) { process.stdout.write("no-label"); return; }
       process.stdout.write(kinds.indexOf(entry.VISIBLE) === -1 ? "quiet" : "visible");
     });
   ' 2>/dev/null)"
+  case "$QUIZ_VERDICT" in
+    quiet|visible|no-label|unreadable) ;;
+    *) QUIZ_VERDICT="unreadable" ;;
+  esac
 
-  [ "$verdict" = "quiet" ] && return 1
+  [ "$QUIZ_VERDICT" = "quiet" ] && return 1
   return 0
 }
 
-quiz_is_owed || exit 0
+QUIZ_VERDICT=""
+if quiz_is_owed; then
+  qv_record "$QUIZ_VERDICT"
+else
+  qv_record "$QUIZ_VERDICT"
+  exit 0
+fi
+notice="$(qv_notice)"
 
 # Fire: hand Claude an instruction to run the comprehension quiz before moving on. The reason is a
 # single JSON string; newlines are \n. Kept free of dashes and emoji per the writing-style rule.
-cat <<'JSON'
+quiz_json="$(cat <<'JSON'
 {"decision":"block","reason":"A `gh pr merge` command just ran. Before you do ANYTHING else (do NOT suggest, pick, or start the next issue, and do NOT run the next-issue flow) run a short PR comprehension quiz, then continue normally.\n\nStep 1, confirm it shipped: look at the actual output of the merge command you just ran. If the merge did NOT succeed (it errored, was already merged, needed input, or was a no-op), say so in one line and proceed as normal. Do NOT quiz on a merge that did not happen.\n\nStep 2, the user-facing gate, and this is the ONLY thing that decides whether to quiz at all: read what shipped (`gh pr view <number> --json title,body,url` and `gh pr diff <number>`; if no number was given, resolve the PR for the merged branch first). Quiz ONLY if a person using this thing could notice a difference. Any of these counts: what they see (a screen, copy, a label, a price, an email, an alert), what they interact with (a flow, a control, an input, a command), what they receive and when (a notification, a schedule, the timing of something going out), what happens when something goes wrong (error handling, a retry, alerting, an error message), or a fix to a rare edge case, since that situation now behaves differently. When the repo you merged in is Dan's own tooling (a hook, a skill, a gate, a script, his Claude config), Dan IS the user: a change to how it behaves in his sessions is user-facing.\n\nSkip the quiz when what shipped is ONLY internal. These never quiz: tests, fixtures, and test infrastructure; documentation of any kind in any repo, including README, CLAUDE.md, lessons, plan docs, and code comments; refactors and internal restructuring, meaning how the program works inside; performance work, even a speedup someone would feel; build, CI, dependencies, version bumps, formatting, whitespace, and config plumbing; and groundwork that ships nothing visible yet, such as a column nothing reads or a module nothing calls. How the program works inside is never a reason to quiz.\n\nOn a skip, say so in ONE line that names what you judged and what you actually saw, for example: Skipping quiz, nothing user-facing shipped (test coverage plus a refactor of the matcher). Do not skip silently, because Dan has to be able to see the judgement and say 'quiz me anyway' when it is wrong. Then carry on as normal.\n\nA mixed change: if ANY user-facing change is in the diff then the quiz fires, however small that part is and however large the internal part. But draw every question only from the user-facing part, and never ask about the internal, test, or documentation parts even when they are most of what shipped.\n\nStep 3, quiz: otherwise write 1 to 4 questions, scaled to how much of the USER-FACING part shipped and not the size of the whole diff (a one line copy change riding along with a big refactor gets 1; a substantial user-facing feature gets 3 or 4). Every question must be about the current behavior of the system as it stands NOW that this change has shipped, asked in the present tense, in plain language. Prefer a concrete scenario whenever one fits: name a situation and ask what happens in it now (for example, 'a user with no saved payment method opens checkout, what happens?'). FORBIDDEN, with no exceptions: the old behavior or what anything used to do, before and after comparisons, what problem this solved or what bug it fixed, why the change was needed, and code trivia like file names or function names. If a question only makes sense to someone who already knows the state before the change, it is the wrong question: rewrite it as a question about how the system behaves now. Ask them ONE AT A TIME, one AskUserQuestion picker per question, each with plausible concrete options. ANTI-GAMING, this matters: vary which option is the correct one from question to question and do NOT default to putting the correct answer first (choosing the first option must never be a winning strategy). Give NO tell: do not mark any option 'Recommended', and keep all options similar in length, specificity, and plausibility so the answer is not guessable from shape. After each answer: if it is correct, just move on with a quiet check mark, no explanation. If it is wrong, state the correct current behavior briefly in plain language and in the present tense, without describing the old behavior or what the change did to it.\n\nStep 4, a wrong answer is a product signal, not just a miss: the option Dan picked is the behavior he EXPECTED, so the shipped behavior may be the thing that is wrong. Right after correcting him, ask with ONE AskUserQuestion picker whether the behavior should stay as it is or become what he expected. Give at least three options: keep it as it shipped, change it to what he picked, and log it and decide later. If he wants it changed or logged, do NOT start coding in the middle of the quiz: open a GitHub issue in the repo you just merged in, stating the expected behavior in his words and the behavior that ships today, then carry on with the remaining questions. Quiz answers are never logged anywhere; the only thing that persists is an issue he asks for. Only after every question is answered, and any issue he asked for is opened, may you go on to the next issue."}
 JSON
+)"
+
+# Appended through jq rather than by rebuilding the reason, because the reason is a single
+# JSON string carrying its own escapes and re-quoting it by hand is how they get lost.
+if [ -n "$notice" ] && command -v jq >/dev/null 2>&1; then
+  printf '%s' "$quiz_json" | jq -c --arg extra "$notice" '.reason = .reason + $extra'
+else
+  printf '%s' "$quiz_json"
+fi

@@ -76,7 +76,7 @@
 3 payload/hooks/test-measure-lessons-advisory.sh
 0 payload/hooks/test-no-ai-tells-detect.sh
 1 payload/hooks/test-post-compact.sh
-5 payload/hooks/test-pr-merge-quiz.sh
+2 payload/hooks/test-pr-merge-quiz.sh
 0 payload/hooks/test-require-issue-fields.sh
 1 payload/hooks/test-require-tests-before-push.sh
 0 payload/hooks/test-rtk-rewrite.sh
