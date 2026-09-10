@@ -9,6 +9,8 @@
          font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   /* The frame is the window, so a short screen leaves no dead ground under it: the
      stage takes whatever height is left over. */
+  .dr-sameness { margin: 0 0 16px; padding: 10px 12px; border-radius: 6px;
+         background: #FDECEA; color: #6B1A12; border: 1px solid #E4A9A1; font-weight: 600; }
   .dr-frame { max-width: 1180px; margin: 0 auto; padding: 28px 24px 24px;
            box-sizing: border-box; min-height: 100vh;
            display: flex; flex-direction: column; }
@@ -87,7 +89,24 @@ function buildScreen(variant) {
 
 </script>
 <script>
-var VARIANTS = [
+/* Everything this page needs is INSIDE this scope, and nothing it declares reaches the
+   page's top level.
+
+   The builder is a second top level script in this same page, so a global here is a
+   global the project can collide with. It did: on 2026-09-10 a project declaring var
+   stage and var tabs and its own function el took over this page's tab strip and stage,
+   show() threw on tabs.children at every press, and the stage kept whatever was already
+   on it. Every option then drew the identical screen, which is exactly what a round whose
+   options do not differ looks like, so nothing refused and the round read as a real
+   finding about the design (claude-config#355).
+
+   Same remedy as the chrome's CSS namespace, for the same reason: a project must not be
+   able to reach this by accident. buildScreen is still read from the top level, because
+   that is the one name this page and the builder agree on by contract. */
+(function () {
+  "use strict";
+
+  var VARIANTS = [
   {
     "key": "1",
     "name": "Normal",
@@ -104,49 +123,99 @@ var VARIANTS = [
   }
 ];
 
-function el(tag, cls, text) {
-  var node = document.createElement(tag);
-  if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-var tabs = document.getElementById("tabs");
-var readout = document.getElementById("readout");
-var stage = document.getElementById("stage");
-var current = 0;
-
-function show(index) {
-  current = (index + VARIANTS.length) % VARIANTS.length;
-  var variant = VARIANTS[current];
-  Array.prototype.forEach.call(tabs.children, function (button, position) {
-    button.setAttribute("aria-pressed", String(position === current));
-  });
-  var lines = [el("h2", null, variant.name), el("p", null, variant.why)];
-  if (variant.measured) lines.push(el("p", "dr-measured", variant.measured));
-  readout.replaceChildren.apply(readout, lines);
-  stage.replaceChildren(buildScreen(variant));
-}
-
-VARIANTS.forEach(function (variant, index) {
-  var button = el("button", "dr-tab");
-  button.type = "button";
-  button.setAttribute("aria-pressed", "false");
-  button.append(el("span", "dr-badge", variant.key), el("span", null, variant.name));
-  button.addEventListener("click", function () { show(index); });
-  tabs.append(button);
-});
-
-document.addEventListener("keydown", function (event) {
-  if (event.metaKey || event.ctrlKey || event.altKey) return;
-  if (event.key === "ArrowRight") { show(current + 1); event.preventDefault(); return; }
-  if (event.key === "ArrowLeft") { show(current - 1); event.preventDefault(); return; }
-  for (var i = 0; i < VARIANTS.length; i++) {
-    if (VARIANTS[i].key === event.key.toLowerCase()) { show(i); event.preventDefault(); return; }
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
   }
-});
 
-show(0);
+  var frame = document.querySelector(".dr-frame");
+  var tabs = document.getElementById("tabs");
+  var readout = document.getElementById("readout");
+  var stage = document.getElementById("stage");
+  var current = 0;
+
+  function show(index) {
+    current = (index + VARIANTS.length) % VARIANTS.length;
+    var variant = VARIANTS[current];
+    Array.prototype.forEach.call(tabs.children, function (button, position) {
+      button.setAttribute("aria-pressed", String(position === current));
+    });
+    var lines = [el("h2", null, variant.name), el("p", null, variant.why)];
+    if (variant.measured) lines.push(el("p", "dr-measured", variant.measured));
+    readout.replaceChildren.apply(readout, lines);
+    stage.replaceChildren(buildScreen(variant));
+  }
+
+  /* Do the options actually differ?
+
+     The tool that wrote this page cannot know: the drawing happens here, in the browser,
+     so the refusal has to live where the information is. Two options that render the same
+     markup are either a collision like the one above or a round whose options do not
+     differ, and both are worth saying out loud rather than handing somebody a page that
+     looks finished.
+
+     A builder that throws when handed a detached node is a THIRD answer and gets its own
+     sentence, because a check that could not run must not read as a check that passed. */
+  function sameness() {
+    var seen = {};
+    var clashes = [];
+    for (var i = 0; i < VARIANTS.length; i++) {
+      var probe = document.createElement("div");
+      try {
+        probe.appendChild(buildScreen(VARIANTS[i]));
+      } catch (err) {
+        return { ran: false, why: String(err && err.message ? err.message : err) };
+      }
+      var mark = probe.innerHTML;
+      if (Object.prototype.hasOwnProperty.call(seen, mark)) {
+        clashes.push(VARIANTS[seen[mark]].name + " and " + VARIANTS[i].name);
+      } else {
+        seen[mark] = i;
+      }
+    }
+    return { ran: true, clashes: clashes };
+  }
+
+  function warn(text) {
+    var strip = el("p", "dr-sameness", text);
+    frame.insertBefore(strip, frame.firstChild);
+  }
+
+  var verdict = sameness();
+  if (!verdict.ran) {
+    warn("Whether these options draw the same picture could not be checked, because the "
+         + "builder threw when it was asked to draw one on its own: " + verdict.why
+         + ". Read the options against each other yourself before reading anything into "
+         + "this round.");
+  } else if (verdict.clashes.length) {
+    warn(verdict.clashes.join(", ") + " draw the same picture. That is what a round whose "
+         + "options do not differ looks like, and it is also what it looks like when the "
+         + "builder and this page collide over a name. Check the builder actually reads "
+         + "its argument before reading anything into this round.");
+  }
+
+  VARIANTS.forEach(function (variant, index) {
+    var button = el("button", "dr-tab");
+    button.type = "button";
+    button.setAttribute("aria-pressed", "false");
+    button.append(el("span", "dr-badge", variant.key), el("span", null, variant.name));
+    button.addEventListener("click", function () { show(index); });
+    tabs.append(button);
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "ArrowRight") { show(current + 1); event.preventDefault(); return; }
+    if (event.key === "ArrowLeft") { show(current - 1); event.preventDefault(); return; }
+    for (var i = 0; i < VARIANTS.length; i++) {
+      if (VARIANTS[i].key === event.key.toLowerCase()) { show(i); event.preventDefault(); return; }
+    }
+  });
+
+  show(0);
+})();
 </script>
 </body>
 </html>

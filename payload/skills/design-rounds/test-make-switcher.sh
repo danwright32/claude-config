@@ -430,6 +430,129 @@ WIDTHPY
 fi
 
 
+# --- the chrome's JAVASCRIPT must not collide with the project's own either ---
+#
+# claude-config#355, 2026-09-10. The chrome kept its state in top level globals: tabs,
+# stage, readout, current, show and el. The builder is a second top level script in the
+# same page, so a project that declares any of those names wins or loses by script order,
+# silently. Ovation's clients.html declares var stage and var tabs, and both design files
+# declare function el.
+#
+# The symptom is the same one the CSS collision above produced: EVERY OPTION DRAWS THE
+# IDENTICAL SCREEN, which is exactly what a round whose options do not differ looks like,
+# so the tool reports nothing and the round reads as a real finding about the design.
+#
+# Same remedy as the CSS: a namespace the project cannot reach by accident. For script
+# that means a scope, so the assertion is on the SCOPE rather than on the six names that
+# happened to collide.
+
+chrome_globals() { # chrome_globals <page> -> one top level declaration per line, chrome block only
+  python3 - "$1" <<'GLOBPY'
+import re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+blocks = re.findall(r"<script>(.*?)</script>", page, re.S)
+if len(blocks) < 2:
+    print("NO-CHROME-SCRIPT")
+    raise SystemExit
+# The FIRST script block is the project's builder; the SECOND is the tool's own chrome.
+for line in blocks[1].split("\n"):
+    m = re.match(r"^(?:var|let|const|function)\s+([A-Za-z_$][\w$]*)", line)
+    if m:
+        print(m.group(1))
+GLOBPY
+}
+
+spec "$TMP/js.json" '[{"key":"1","name":"A","why":"first"},{"key":"2","name":"B","why":"second"}]'
+python3 "$SCRIPT" "$TMP/js.json" "$TMP/js.html" || fail=$((fail + 1))
+leaked="$(chrome_globals "$TMP/js.html" | tr '\n' ' ')"
+check_eq "the chrome's script declares nothing at the page's top level" "" "${leaked% }"
+# And the block is really there, so the check above is not passing because the extractor
+# found no script at all and printed nothing (L98).
+check "the chrome's script block was found to look at" "VARIANTS" "$(cat "$TMP/js.html")"
+
+# The page says so when two options draw the same thing, rather than looking finished. The
+# tool cannot know this at build time, because the drawing happens in the browser, so the
+# refusal lives where the information is.
+check "the page checks its options actually differ" "draw the same" "$(cat "$TMP/js.html")"
+
+if [[ -x "$CHROME" ]]; then
+  render() { # render <page> -> the stage's markup after load
+    "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+      --dump-dom "file://$1" 2>/dev/null \
+      | python3 -c 'import sys,re; m=re.search(r"<div class=\"dr-stage\" id=\"stage\">(.*?)</div>\s*<p class=\"dr-hint\"", sys.stdin.read(), re.S); print((m.group(1).strip() if m else "NO-STAGE")[:200])'
+  }
+
+  # The exact failure: a builder holding the same names AND reassigning them while it
+  # draws, which is what makes the page's own tabs and stage stop being the page's.
+  cat > "$TMP/collide-js-builder.js" <<'JSB'
+var tabs = null;
+var stage = null;
+function el(tag) { return document.createElement(tag); }
+function buildScreen(variant) {
+  tabs = { children: [] };
+  stage = document.createElement("div");
+  var d = el("div");
+  d.className = "screen";
+  d.textContent = "drawn:" + variant.name;
+  return d;
+}
+JSB
+  python3 - "$TMP/js.json" "$TMP/collide-js.json" <<'CJ'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "collide-js-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+CJ
+  python3 "$SCRIPT" "$TMP/collide-js.json" "$TMP/collide-js.html" || fail=$((fail + 1))
+  first="$(render "$TMP/collide-js.html")"
+  check "a builder holding the chrome's own names still draws its option" "drawn:A" "$first"
+
+  # And the option really CHANGES, which is the half the symptom hides: a page stuck on
+  # option one looks exactly like a page whose options are identical.
+  # show() is deliberately NOT reachable from outside the scope any more, so the page is
+  # driven by the key the badge advertises instead, which is what a person actually presses.
+  python3 - "$TMP/collide-js.html" "$TMP/collide-js-key.html" <<'KEYED'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+document.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+</script>
+"""
+open(sys.argv[2], "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
+KEYED
+  second="$(render "$TMP/collide-js-key.html")"
+  check "pressing the second option's key draws the second option" "drawn:B" "$second"
+
+  # A builder that ignores its argument draws one picture under every label. The tool
+  # cannot see that at build time, so the page has to say it (L98, L11).
+  printf 'function buildScreen(variant) { var d = document.createElement("div"); d.textContent = "always the same"; return d; }\n' \
+    > "$TMP/same-builder.js"
+  python3 - "$TMP/js.json" "$TMP/same.json" <<'SAME'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "same-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+SAME
+  python3 "$SCRIPT" "$TMP/same.json" "$TMP/same.html" || fail=$((fail + 1))
+  same_dom="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+    --dump-dom "file://$TMP/same.html" 2>/dev/null)"
+  # Matched on the RENDERED attribute, not the bare class name: the script that can build
+  # the strip names it too, and a check the source satisfies would pass on every page.
+  check "a page whose options draw the same thing says so" 'class="dr-sameness"' "$same_dom"
+  check "and it names which options matched" "A and B" "$same_dom"
+
+  # The control: options that genuinely differ must NOT carry the warning, or the notice
+  # is on every page and means nothing (L36, L159).
+  differ_dom="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+    --dump-dom "file://$TMP/collide-js.html" 2>/dev/null)"
+  check_not "a page whose options differ carries no warning" 'class="dr-sameness"' "$differ_dom"
+else
+  unmeasured=$((unmeasured + 1))
+  echo "UNMEASURED: no headless Chrome, so the script collision was checked in the source only"
+fi
+
+
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$unmeasured" -gt 0 ]] && echo "UNMEASURED-SECTIONS $unmeasured"
