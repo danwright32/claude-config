@@ -113,6 +113,14 @@ mt_runs_merge "$cmd" || exit 0
 # ticks on every merge is not config.
 #
 # Every write here is best effort. A counter that cannot be written must never stop a quiz.
+#
+# It ASSUMES IT RUNS TWICE and accepts what that costs, rather than not having been asked:
+# Dan runs concurrent sessions on one machine, so two merges can read and write this file
+# at once. The write is a rewrite to a temporary file followed by a mv, which is atomic, so
+# the file cannot be left half written and no reader ever sees a torn one. What a race can
+# lose is one increment, which delays the notice by a merge. A lock for that would be a
+# lock taken on every merge to protect a diagnostic count, so the trade is stated here
+# rather than defended by a mechanism nothing else needs.
 QUIZ_VERDICT_THRESHOLD="${CLAUDE_QUIZ_VERDICT_THRESHOLD:-10}"
 
 qv_file() { printf '%s/counts' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
