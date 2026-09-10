@@ -219,6 +219,55 @@ record_sent_if_shipped(){
   # is asked about, so the reading is defensible where it is wrong.
   record_sent
 }
+# ---- and when a run HELD work and did not get it up (claude-config#360) ----
+#
+# The stamp above is honest, and that is exactly why nothing spoke. Measured on this Mac
+# 2026-09-10: the clone the change watcher runs from held four commits stamped 12:44 to 17:02 that
+# never reached the shared repo, and its own .last-sent correctly read 23:10 the night before.
+# Twenty hours. A number recorded and never spoken is not a detector (L357), and a background job
+# that stops working in silence is what L13 exists to forbid.
+#
+# WHAT IS MEASURED is the age of the OLDEST thing still waiting, not the age of the stamp. Those
+# differ in the case that matters: a clone that has never sent at all has no stamp to age, and is
+# the one most likely to be stuck. The oldest unsent commit answers the real question, which is how
+# long work has been waiting, and it answers it the same way in both cases.
+#
+# The WINDOW has to be longer than an ordinary lost race and shorter than a working day. A remote
+# moving under a run is normal and self healing, and speaking on every one of those is the noise
+# that gets a whole surface skipped (L36); anything longer than a few hours would not be seen the
+# day it happened. Two hours sits between those, and it is a seam so a test can drive both sides
+# without waiting for real time to pass (L290).
+SEND_STUCK_AFTER="${SYNC_SEND_STUCK_AFTER:-7200}"
+
+report_send_stuck(){
+  have_git || return 0
+  # Only a run that was HOLDING something can be stuck. A Mac with nothing to send is not stuck,
+  # it is idle, and the two must not share a message (L11).
+  [ "${SEND_PENDING:-0}" = "1" ] || return 0
+  local up n oldest now age waited since
+  up="$(git -C "$SYNC_REPO" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  [ -n "$up" ] || return 0
+  n="$(git -C "$SYNC_REPO" rev-list --count "$up..HEAD" 2>/dev/null || echo unknown)"
+  case "$n" in ''|*[!0-9]*) return 0 ;; esac      # unreadable is not evidence of anything (L50)
+  [ "$n" -gt 0 ] || return 0
+
+  oldest="$(git -C "$SYNC_REPO" log --format=%ct "$up..HEAD" 2>/dev/null | tail -1)"
+  case "$oldest" in ''|*[!0-9]*) return 0 ;; esac
+  now="$(date +%s)"
+  age=$(( now - oldest ))
+  [ "$age" -ge "$SEND_STUCK_AFTER" ] || return 0
+  # Through the two helpers that own these renderings, never by hand: one place turns a gap into
+  # words (#77), and one place formats an epoch portably, because `date -r` is BSD only and every
+  # Linux runner reads it the other way (#38, L434).
+  waited="$(duration_in_words "$age")"
+  since="$(date_from_epoch "$oldest" '+%Y-%m-%d %H:%M')"
+  [ -n "$since" ] || since="an unknown date"
+
+  echo "claude-sync: this clone has not sent for $waited. $n commit(s) are waiting here and are not in the shared repo, the oldest since $since. If the change watcher runs from this clone, config changed on this Mac is not reaching the other one. See what is waiting with: git -C $SYNC_REPO log --oneline @{upstream}..HEAD" >&2
+  notify "not sending: $n commit(s) have waited here $waited"
+  return 0
+}
+
 record_received(){ date +%s > "$LAST_RECEIVED_FILE" 2>/dev/null || true; }
 
 # WHAT THIS MAC LAST SENT, so the next run can ask what became of it (claude-config#340).
@@ -761,7 +810,7 @@ with_lock(){   # $@ = the command to run while holding the lock
   # The sweep rides HERE (claude-config#314), on the one trap every mutating command reaches and
   # no read-only one does, and last, so a run's own scratch is removed by the handlers before it
   # and cannot be counted as somebody else's leftover.
-  trap 'record_sent_if_shipped; clear_behind_skips_if_caught_up; release_lock; cleanup_applied_log; reap_scratch_if_due' EXIT
+  trap 'record_sent_if_shipped; report_send_stuck; clear_behind_skips_if_caught_up; release_lock; cleanup_applied_log; reap_scratch_if_due' EXIT
   "$@" || rc=$?
   release_lock
   # After release_lock, never before: this is where the minutes of hook suite behind the closing

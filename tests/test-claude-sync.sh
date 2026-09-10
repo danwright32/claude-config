@@ -14549,6 +14549,85 @@ check "#359 the reporter has exactly one caller" "[ \"$OC_CALLERS\" = 1 ]"
 OC_ORDER="$(awk '/^do_pull\(\)\{/{inp=1} inp&&/pull_from_repo_or_die/{pulled=NR} inp&&/^  report_other_clones_position$/{print (pulled>0 && NR>pulled) ? "yes" : "no"; exit}' "$SCRIPT")"
 check "#359 and that caller runs after this clone has pulled" "[ \"$OC_ORDER\" = yes ]"
 
+section "== a clone that has stopped sending says so (claude-config#360) =="
+# Measured on the live machine 2026-09-10: ~/claude-config-sync, the clone the change watcher and
+# the receive timer both run from, held four commits stamped 12:44 to 17:02 that never reached the
+# shared repo, and its own .last-sent read 23:10 the previous night. Twenty hours, and nothing
+# raised it. The stamp was CORRECT, which is the point: record_sent_if_shipped writes it only when
+# a run held work and ended level, so it honestly said no send had landed. A number recorded and
+# never spoken is not a detector (L357), and a background job that stops working silently is what
+# L13 exists to forbid.
+#
+# The push is made to FAIL deterministically with a pre-receive hook on the bare repo, rather than
+# by racing a second pusher, so what is under test is the reporting rather than a timing window.
+unset SYNC_NO_GIT
+ST_BARE="$WORK/stuck-bare.git"; git init -q --bare "$ST_BARE"
+ST_R="$WORK/stuck-repo"; git clone -q "$ST_BARE" "$ST_R" 2>/dev/null
+ST_H="$WORK/stuck-home"; mkdir -p "$ST_H/hooks"
+sh_settings "$ST_H" "__CLAUDE_HOME__/hooks/alpha.sh"
+printf '#!/usr/bin/env bash\n' > "$ST_H/hooks/alpha.sh"
+# One send that WORKS, so the clone has an upstream and a real stamp to age.
+CLAUDE_HOME="$ST_H" SYNC_REPO="$ST_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#360 the fixture clone really sent once to begin with" \
+  "[ -s '$ST_R/.last-sent' ]"
+
+# From here the remote refuses everything.
+printf '#!/bin/sh\nexit 1\n' > "$ST_BARE/hooks/pre-receive"
+chmod +x "$ST_BARE/hooks/pre-receive"
+
+st_send(){ CLAUDE_HOME="$ST_H" SYNC_REPO="$ST_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1; }
+
+# New work this Mac is holding, which the remote will not take.
+printf '#!/usr/bin/env bash\n# beta\n' > "$ST_H/hooks/beta.sh"
+sh_settings "$ST_H" "__CLAUDE_HOME__/hooks/alpha.sh" "__CLAUDE_HOME__/hooks/beta.sh"
+
+# 1. A send that has JUST failed is not an alarm. The remote moving under a run is ordinary and
+#    self healing, and speaking on every one of those is the noise that gets the whole surface
+#    ignored (L36). The window is left at its shipped default here, so what is measured is the
+#    real threshold rather than the seam.
+out_st1="$(st_send)"
+check "#360 the fixture is really holding work the remote refused" \
+  "[ \"\$(git -C '$ST_R' rev-list --count '@{upstream}..HEAD' 2>/dev/null)\" != 0 ]"
+check "#360 a send that has only just failed does not raise an alarm" \
+  "out_lacks \"\$out_st1\" 'has not sent' i"
+
+# 2. STUCK. The same held work, with the window driven to zero rather than by waiting for two
+#    hours of real time to pass (L290).
+out_st2="$(SYNC_SEND_STUCK_AFTER=0 st_send)"
+check "#360 a clone that has been holding work past the window says so" \
+  "grep -qiE 'has not sent' <<< \"\$out_st2\""
+check "#360 and it says how much is waiting" \
+  "grep -qE '[0-9]+ commit' <<< \"\$out_st2\""
+check "#360 and it names how to see what is waiting" \
+  "grep -qF '@{upstream}..HEAD' <<< \"\$out_st2\""
+
+# 3. WHICH CLOCK. It reads the age of the oldest thing WAITING, never the age of the send stamp.
+#    Those differ exactly where it matters: a clone that has never sent at all has no stamp to age
+#    and is the one most likely to be stuck. A fresh stamp must not silence a real backlog.
+date +%s > "$ST_R/.last-sent"
+out_st_clock="$(SYNC_SEND_STUCK_AFTER=0 st_send)"
+check "#360 a fresh send stamp does not silence work that is still waiting" \
+  "grep -qiE 'has not sent' <<< \"\$out_st_clock\""
+rm -f "$ST_R/.last-sent"
+out_st_nostamp="$(SYNC_SEND_STUCK_AFTER=0 st_send)"
+check "#360 and a clone with no send stamp at all is still judged" \
+  "grep -qiE 'has not sent' <<< \"\$out_st_nostamp\""
+
+# 4. IDLE IS NOT STUCK. A run holding nothing must never say this, whatever the window (L11).
+ST_IDLE_R="$WORK/stuck-idle-repo"; git clone -q "$ST_BARE" "$ST_IDLE_R" 2>/dev/null
+out_st_idle="$(CLAUDE_HOME="$ST_H" SYNC_REPO="$ST_IDLE_R" SYNC_NO_NOTIFY=1 SYNC_SEND_STUCK_AFTER=0 bash "$SCRIPT" status 2>&1)"
+check "#360 a clone holding nothing to send is not called stuck" \
+  "out_lacks \"\$out_st_idle\" 'has not sent' i"
+
+# 5. THE CONTROL, and it is what stops the fix becoming "complain on every run" (L159). The remote
+#    accepts again, the clone catches up, and the alarm goes with the condition.
+rm -f "$ST_BARE/hooks/pre-receive"
+out_st3="$(SYNC_SEND_STUCK_AFTER=0 CLAUDE_HOME="$ST_H" SYNC_REPO="$ST_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"
+check "#360 the clone catches up once the remote accepts again" \
+  "[ \"\$(git -C '$ST_R' rev-list --count '@{upstream}..HEAD' 2>/dev/null)\" = 0 ]"
+check "#360 and it stops saying it has not sent" \
+  "out_lacks \"\$out_st3\" 'has not sent' i"
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
