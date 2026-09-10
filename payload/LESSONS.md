@@ -7535,6 +7535,23 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   Nearest neighbours are L314, which is CI that has stopped rather than CI that always fails, and
   L179 on a superseded run answering for the wrong revision.)
 
+- **L671. A concurrency rule that cancels a superseded run saves the whole cost of a read
+  only job and is a crash part way through a writing one, so decide cancellation per workflow
+  by what it WRITES (a database, a commit, an external call), never by sweeping one rule across
+  every file.** The sweep is tempting because the cost argument is identical for all of them and
+  the damage is visible in none of them: a cancelled read only run costs a re-run, and a
+  cancelled write leaves a partial one that nothing reports. Nearest neighbours are L301, the
+  same work done twice per event, and L307, a job priced in the slots it holds, both of which
+  are about paying twice and neither of which sees the hazard.
+  (Try-Pennie/project-enrollment-tracker#1420, 2026-09-10: 16 of 20 workflows carried no
+  concurrency block, and a push to a branch whose suite was still running left both going, on a
+  maxed 2,000 minute cap with a browser suite measured at 10m28s, 9m59s and about 10 minutes
+  across three runs. `ci.yml` wants `cancel-in-progress: true`, keyed on the ref so two pull
+  requests cannot cancel each other. The same line would be wrong on `alias-snapshot`, which
+  pushes to main, and on the backfill, cleanup and restore workflows, which write to the
+  database. `daily-build.yml` already models the right answer, a group with
+  `cancel-in-progress: false` and a comment saying why)
+
 - **L380. Two build or test invocations that share an output or cache directory share no work
   unless every setting that keys that output also matches, so a differing configuration, flag or
   compilation condition makes the shared path share nothing while still reading as evidence of
