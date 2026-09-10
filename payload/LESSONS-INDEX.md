@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 626 lessons.
+LESSONS.md, which is NOT loaded into the session. 628 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -473,6 +473,7 @@ to decide something: the body is where the failure it came from is described.
 - L677. A step removed from a flow takes with it every capability that only that step offered
 - L678. A warning is read by its PRESENCE, so a surface that never got one is indistinguishable from a surface with nothing to warn about.
 - L680. A message written about a MOMENT (it just happened, something is on its way, we are working on it) must be driven by the ACTION that produced that moment, never by a stored status
+- L449. Automating a task changes what every counter of that task MEANS, from work waiting to a fact about the data, and nothing re-examines the counter: it goes on occupying the place reserved for things that need a person.
 
 ## External systems
 
@@ -531,6 +532,7 @@ to decide something: the body is where the failure it came from is described.
 - L41. A list that must mirror another source of truth is derived from it, never maintained by hand beside it.
 - L96. A guard driven by a hand-written registry checks only what the registry lists, so anything missing from it is exempt from the very check meant to catch it, and the guard reports green while blind.
 - L247. A sweep that requires every place doing X to also do Y must enumerate its subjects by the STATE they reach, never by one spelling of X, because a place reaching that state by another route is never enumerated and is exempt from the rule the sweep exists to enforce, while the sweep goes on passing the subjects it did find.
+- L450. When more than one control sits on the same action, check each control's recogniser against the route the OTHER controls push people onto, because a control that recognises only one route drops to ZERO coverage rather than partial coverage the moment a neighbour makes a different route mandatory, and it is then silently inert in exactly the project the neighbour is configured for.
 - L129. A category deliberately EXEMPTED from a review or check, for a CORRECT reason, has no reviewer at all unless one is named in the same change, and the gap is invisible precisely because the exemption was right.
 - L582. When one fact is recorded by two mechanisms that deliberately exclude each other's territory, assert their union against the real population, because each exclusion can be correct while a third group belongs to neither and is recorded zero times.
 - L57. A correction recorded only in memory or a transcript will recur, because the artifact that actually governs the behavior never changed.

@@ -5558,6 +5558,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   same element was also the only confirmation for a reschedule done ON that page, so it read as
   correct to whoever wrote it and was tested from that one direction.)
 
+- **L449. Automating a task changes what every counter of that task MEANS, from work waiting to a
+  fact about the data, and nothing re-examines the counter: it goes on occupying the place reserved
+  for things that need a person.** Shipping an automation must name every surface that counted the
+  work it replaced and decide what each of them now says. The counter still renders a truthful
+  number, which is why nobody looks at it again, and the surface it sits on is usually the one place
+  in the product that promises a number there means somebody has to act.
+  (ovation#187, 2026-09-10: the sidebar card was deliberately cut to four counts on the rule that a
+  number in the chrome only ever means this many things need you. A fifth, Money held, was added
+  three days before the design rounds that settled Ovation applying held money to an invoice by
+  itself, so on the day that shipped the count stopped marking work and started marking money
+  sitting, which the product now deals with unaided. Two further faults were sitting under it and
+  neither had a reader: the requirement still described four lines and mapped four, and the fifth
+  counts CLIENTS while the other four count invoices.)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
@@ -6076,6 +6090,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   a failed phase and deactivating instead, so the longest running work in the app was the one
   kind that still failed in silence, and the sweep reported all clear while checking five real
   sites)
+- **L450. When more than one control sits on the same action, check each control's recogniser
+  against the route the OTHER controls push people onto, because a control that recognises only
+  one route drops to ZERO coverage rather than partial coverage the moment a neighbour makes a
+  different route mandatory, and it is then silently inert in exactly the project the neighbour
+  is configured for.** Distinct from L247, where a sweep enumerates its subjects from one spelling
+  of an action and misses the ones reaching that state another way: here nothing is missed by
+  degrees, because the neighbouring control REMOVES the only route the first one can see, so the
+  gap is total and it opens in the project the rule was written for. Each control reads as correct
+  on its own and its tests pass, since the fault exists only in the relationship between them.
+  (claude-config#351: require-changelog-tag.sh recognises only the direct gh merge command, while
+  block-red-merge.sh refuses that command in any repo carrying its own commit pinned merge tool
+  and names the tool as the route to take. PET carries one, so the changelog record was enforced
+  by nothing there, in the repo whose manager update cost 499 pull request titles read by hand and
+  for which the gate was built. Measured by driving the real hook: the direct command was denied
+  correctly, and both wrapper routes produced no output at all)
 - **L129. A category deliberately EXEMPTED from a review or check, for a CORRECT reason, has no
   reviewer at all unless one is named in the same change, and the gap is invisible precisely
   because the exemption was right.** The excluded content still needs reviewing, just by something
