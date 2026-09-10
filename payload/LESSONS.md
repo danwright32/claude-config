@@ -131,6 +131,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   successful grant, so it never blocked anything. A second app with the identical signing
   shape being granted then killed the replacement theory too)
 
+- **L681. A defect report whose CAUSE was inferred by reading code side by side, rather
+  than by driving the behaviour, must have that cause REPRODUCED before it is fixed,
+  because the symptom can be real while the named code is structurally unable to produce
+  it, and a fix aimed there is untestable while the real fault goes on shipping.**
+  (pet#501, pet#1442, 2026-09-10: an audit compared two class reset lists in the same file,
+  found one a class shorter, and filed the shorter one as the cause of mis-coloured volume
+  cells. Driving the real click cycle showed that painter's output never survives: every
+  call site runs a full re-render a moment later that rewrites the whole table body, so the
+  stacking it described could not occur and no test could ever fail on it. The mis-coloured
+  cell was real and came from somewhere else entirely, one precedence rule written four
+  times with two copies inverted, which the same reading had walked straight past. Fixing
+  the filed mechanism would have shipped a green change that left the defect untouched)
+
 - **L205. A test that touches a shared mutable object other tests also touch can pass
   purely because its own fixture is SLOW enough to outlive a neighbour's reset, so making
   that fixture faster is what exposes it: remove the dependency on the shared object
