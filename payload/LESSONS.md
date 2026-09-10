@@ -7320,7 +7320,13 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   the whole `<main>` subtree having failed to hydrate. It had not: both are page world expandos and
   invisible from the extension's world, and a value set through the native setter never reached
   React's tracker, so nothing was ever dirty. A listener change was made on the strength of that
-  reading and reverted an hour later.)
+  reading and reverted an hour later. A SECOND cause was tangled into the same conclusion and is
+  worth separating, because the remedy is different: every geometry read in that session also
+  returned zero, and that was not the realm at all but a BACKGROUNDED TAB, which Chrome skips
+  layout for. `getBoundingClientRect` gives zeros and `getClientRects()` is empty on elements a
+  screenshot plainly paints, while `document.body` still reports a real width. Taking a screenshot
+  first forces a frame and every reading afterwards is correct: measured on one page, 0 of 100
+  elements had client rects before a screenshot and 100 of 100 after.)
 
 - **L438. A measurement taken by SAMPLING from inside the same context as the thing being measured
   (polling in a script that shares the browser's frames, a profiler on the thread it profiles, a
