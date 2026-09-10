@@ -4415,6 +4415,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   only thing bounding that gap, nothing anywhere said so, and raising the session to 14 days for a
   weekly user removed the backstop while every sentence about revocation stayed literally true.)
 
+
+
+
+
+
+
+
 ## UX completeness
 
 - **L659. Copy on a surface reachable by more than one route must be true on EVERY route, and the
@@ -5712,6 +5719,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   a daily field presence check four days in, naming a symptom rather than the cause. The block page
   carried a Cloudflare Ray ID throughout, which is the one identifier the partner's own firewall
   log can be searched by, and is exactly what an unparsed body throws away)
+
 
 ## Building with AI
 
@@ -7120,6 +7128,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   milestones and judged duplicates with no sight of the backlog, which is the exact condition
   claude-config#265 was written about. The same assumption had already bitten the merge gate in
   the same project, which now resolves its repo from the `cd`)
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ## Test speed
 
