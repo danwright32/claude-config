@@ -4401,6 +4401,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   reference type, was measured in the same run and leaked identically.)
 
 
+- **L669. Lengthening an expiry, TTL or retention window silently removes the ceiling it was
+  placing on every OTHER staleness that window happened to bound**, and that dependency is
+  usually recorded nowhere, because the short window made it invisible rather than because
+  anybody chose it. Before raising one, name what each separate control's freshness was actually
+  relying on, not only the numbers derived from it. Distinct from L227, where the dependent limit
+  exists as a number somebody calculated as a multiple, and from L174, which is the same blindness
+  in the shortening direction.
+  (new-agent-onboarding#740, 2026-09-10: the sign-in session was capped at 12 hours and the
+  per-request guard re-reads an ops-editable allowlist, which is documented as making removal
+  immediate. That is true of our own list and silently false of Google: an operator whose Workspace
+  account is switched off keeps access until a human edits the app's list. The 12 hour cap was the
+  only thing bounding that gap, nothing anywhere said so, and raising the session to 14 days for a
+  weekly user removed the backstop while every sentence about revocation stayed literally true.)
+
 ## UX completeness
 
 - **L659. Copy on a surface reachable by more than one route must be true on EVERY route, and the

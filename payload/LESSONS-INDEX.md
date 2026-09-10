@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 613 lessons.
+LESSONS.md, which is NOT loaded into the session. 614 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -377,6 +377,7 @@ to decide something: the body is where the failure it came from is described.
 - L657. A wildcard read that crosses into a different retention or trust domain (an export, a warehouse copy, a log sink, an API response) makes every future column an automatic disclosure nobody reviewed
 - L658. On a managed runtime a diagnostic print is an EGRESS rather than local output
 - L446. A redaction implemented by overriding how a type DESCRIBES itself is bypassed by every renderer that REFLECTS it instead, and holding the value behind a reference type does not help, because reflection reads a class's stored properties exactly as it reads a struct's.
+- L669. Lengthening an expiry, TTL or retention window silently removes the ceiling it was placing on every OTHER staleness that window happened to bound
 
 ## UX completeness
 
