@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 616 lessons.
+LESSONS.md, which is NOT loaded into the session. 618 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -631,6 +631,7 @@ to decide something: the body is where the failure it came from is described.
 - L297. A scanner that guards a class of fault across the whole tree pays per line, so it is written as one pass per file from the start, and a failing guard's full output is kept (L148) so an intermittent failure can be diagnosed instead of retried.
 - L298. A harness that reruns the suite once per case (a mutation sweep, a property sweep, a matrix, a suite that tests itself by launching itself) pays the boot once per case, so the lever is the boot, then the cadence, and never the tests; the per-case verdict semantics that make the tool trustworthy must survive the change unchanged.
 - L433. Work a runner SPLITS across parallel workers must be self contained per unit, because the split is chosen at run time from measured cost and moves between runs, so a unit that reads what its neighbour set up passes until the day the two land in different workers.
+- L672. A probe running in a DIFFERENT JS realm from the page (a browser extension's isolated world, a devtools evaluation, a sandboxed frame) cannot see the page's own globals or a framework's element properties, and a value it writes bypasses that framework's change tracking, so an ABSENCE read through it is never evidence and every conclusion drawn from one has to be discarded.
 - L438. A measurement taken by SAMPLING from inside the same context as the thing being measured (polling in a script that shares the browser's frames, a profiler on the thread it profiles, a logger on the loop it watches) can itself be the load that changes the result, so a reading saying the thing under test is slow or dead is first evidence about the MEASUREMENT. Judge by the events the platform emits for that work rather than by observing it from beside it.
 
 ## Pipeline speed
@@ -655,6 +656,7 @@ to decide something: the body is where the failure it came from is described.
 - L315. Anything divided into fixed-size pieces under a fixed deadline needs a test holding the measured size of the largest piece to a fraction of the deadline (L172, L224) and pieces dealt by measured cost rather than by count (L296), because a sweep sized by count grows into its own deadline and the red it then produces names the sweep's size as a broken guard (L11).
 - L316. A recorded decision carries the premise it was made on, and the premise can expire while the decision stands, so record the premise in a form that can be re-measured (a pin, a command, a number with its source) rather than as a dated sentence, because a date on a number makes it MORE trusted, not less (L61, L244, L210).
 - L538. A build left red for a known unrelated reason stops being a signal for everything else, because a genuinely new failure then arrives indistinguishable from the standing one in every list. Fix or quarantine the standing failure rather than working alongside it, since the longer it stands the more changes get merged with nothing actually judging them.
+- L671. A concurrency rule that cancels a superseded run saves the whole cost of a read only job and is a crash part way through a writing one, so decide cancellation per workflow by what it WRITES (a database, a commit, an external call), never by sweeping one rule across every file.
 - L380. Two build or test invocations that share an output or cache directory share no work unless every setting that keys that output also matches, so a differing configuration, flag or compilation condition makes the shared path share nothing while still reading as evidence of reuse. Measure what actually recompiles rather than concluding reuse from the shared path.
 - L571. A gate that performs an external network call BEFORE the check it is named for can fail without ever running that check, so its red is indistinguishable from the failure it exists to report and merging becomes dependent on a third party being up.
 - L573. Before running a pure check once per item, count the DISTINCT inputs it will actually see, because a loop that reads as once per thing is usually mostly repeats. Cache on the WHOLE input, never a coarser key, since a coarser one is fast and silently wrong in exactly the cases a uniform fixture never contains.

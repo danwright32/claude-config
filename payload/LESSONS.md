@@ -7288,6 +7288,21 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   was read far enough to find the unbound variable message. The suite's own count guard is the only
   reason it was caught at all, which is L288 working; nothing catches the cause)
 
+- **L672. A probe running in a DIFFERENT JS realm from the page (a browser extension's isolated
+  world, a devtools evaluation, a sandboxed frame) cannot see the page's own globals or a
+  framework's element properties, and a value it writes bypasses that framework's change tracking,
+  so an ABSENCE read through it is never evidence and every conclusion drawn from one has to be
+  discarded.** Verify through trusted input and through what the page itself renders. Distinct from
+  L438, where the observer perturbs the thing measured: here the observer simply cannot see it, and
+  the reading comes back confidently empty rather than noisy.
+  (slate#2189, 2026-09-10: rolling an unsaved-work guard out to every admin form, the in app half
+  was checked by dispatching a click and reading state. `window.__guardDebug` came back undefined
+  and `Object.keys(form).filter(k => k.startsWith("__react"))` came back empty, which was read as
+  the whole `<main>` subtree having failed to hydrate. It had not: both are page world expandos and
+  invisible from the extension's world, and a value set through the native setter never reached
+  React's tracker, so nothing was ever dirty. A listener change was made on the strength of that
+  reading and reverted an hour later.)
+
 - **L438. A measurement taken by SAMPLING from inside the same context as the thing being measured
   (polling in a script that shares the browser's frames, a profiler on the thread it profiles, a
   logger on the loop it watches) can itself be the load that changes the result, so a reading
