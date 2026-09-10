@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 619 lessons.
+LESSONS.md, which is NOT loaded into the session. 620 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -494,6 +494,7 @@ to decide something: the body is where the failure it came from is described.
 - L534. A platform setting whose DEFAULT is derived from another setting flips silently when you flip that other one
 - L552. Pinning a tool's VERSION pins its output only when that tool does the work locally, so a command that delegates to a hosted service (a generator invoked with a project id and an access token rather than a database or a file) emits whatever the server currently produces, and the pin, the comment explaining it, and every check built on comparing the result character for character go on reading as reproducibility. Pin the thing that PRODUCES the artifact, or normalise what you cannot pin.
 - L670. A refusal from an INTERMEDIARY in front of an API
+- L674. A fault you learn about only when live traffic HAPPENS to exercise the affected path has a detection delay set by that path's rate rather than by your monitoring, and its RECOVERY is silent
 
 ## Building with AI
 

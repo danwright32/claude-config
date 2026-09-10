@@ -5740,6 +5740,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   log can be searched by, and is exactly what an unparsed body throws away)
 
 
+- **L674. A fault you learn about only when live traffic HAPPENS to exercise the affected path has a
+  detection delay set by that path's rate rather than by your monitoring, and its RECOVERY is
+  silent**, because a path that starts working again emits nothing at all until the next request
+  arrives. Probe such a path on a schedule, so both edges of the outage are events. Distinct from
+  L654, where a rare path is diluted inside a rate computed over everything, and from L160, which
+  is about judging an all clear once samples exist: here there are no samples between requests.
+  (Bidspoke, 2026-09-10, bidspoke#1274: Achieve's firewall blocked the shared Cloudflare Workers
+  address every Eligibility Scout call leaves from. Scout runs only when Equifax found no debt,
+  about seven leads an hour, so attempts are tens of minutes apart in the day and hours apart
+  overnight. The partner lifted the block at 16:08 UTC and four calls succeeded; it returned at
+  16:49 and six consecutive calls were refused. Nobody and nothing observed either edge: the
+  recovery was found by querying execution logs by hand, and the regression was found the same way
+  forty minutes later, while the product reported an ordinary empty result throughout. A partner
+  fix that works produces no signal, so the only way to learn it worked is to ask the partner)
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and
