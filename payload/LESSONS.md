@@ -7074,6 +7074,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   which needs no checkout. This is L119's shape, confirm against the primary record before acting,
   with the twist that here it is the LOCAL answers that are the unreliable derived index.)
 
+- **L668. A tool that locates a resource by assuming the directory it was invoked in IS that
+  resource (a git checkout, a package root, a project) is inert in every project whose checkout
+  sits below that directory, and because such a tool almost always fails open, the capability it
+  provides disappears while the run still reports normally.** Resolve the resource by searching for
+  its own marker, and make a run that could not resolve it say so where the verdict is read rather
+  than in a footnote. Related to L557, where a check that has never once passed is not measuring
+  anything: here it never RAN, and the run that could not run it was truthful about that in a place
+  nobody reads.
+  (2026-09-10, claude-config#344: the end of turn issue review's duplicate check runs `gh issue
+  list` with `cwd` set to the project directory it was handed. PET's workspace root is
+  `Project Enrollment Tracker (PET)/` and its git repo is one level down in `pet/`, so `gh` refused
+  with `fatal: not a git repository` and the renderer appended an honest `OPEN ISSUES NOT READ`
+  line at the bottom of the findings file. Every review in that project has therefore chosen
+  milestones and judged duplicates with no sight of the backlog, which is the exact condition
+  claude-config#265 was written about. The same assumption had already bitten the merge gate in
+  the same project, which now resolves its repo from the `cd`)
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

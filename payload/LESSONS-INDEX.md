@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 612 lessons.
+LESSONS.md, which is NOT loaded into the session. 613 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -614,6 +614,7 @@ to decide something: the body is where the failure it came from is described.
 - L444. A guard that identifies its own leftovers by matching text against a MACHINE WIDE namespace (the process table, a port, a temp path, a shared lock list) claims everything that matches, including work it never started, so assert against the process GROUP or the pid it actually created.
 - L640. A migration applied before the code that needs it deploys must leave the DEPLOYED code working, because the two are live together for the length of the deploy.
 - L642. In a SQUASH MERGE repo no merged branch is ever an ancestor of main, so every local way of asking whether a branch has shipped reports a merged branch as UNMERGED
+- L668. A tool that locates a resource by assuming the directory it was invoked in IS that resource (a git checkout, a package root, a project) is inert in every project whose checkout sits below that directory, and because such a tool almost always fails open, the capability it provides disappears while the run still reports normally.
 
 ## Test speed
 
