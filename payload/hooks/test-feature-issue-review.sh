@@ -391,6 +391,25 @@ case "$mo_pet" in
   *"OPEN ISSUES NOT READ"*) check "#344 and it does not report itself blind" "out=$mo_pet" ;;
   *) check "#344 and it does not report itself blind" ok ;;
 esac
+# TWO checkouts under one project directory: it must not pick one (claude-config#346). Reading
+# another repository's open issues would put THAT repository's issue numbers beside these findings,
+# and a wrong "already #N" is the one outcome this whole matcher is built to avoid, because it
+# would talk somebody out of filing a real finding.
+AMBIG_ROOT="$(mktemp -d "$WORK/ambig.XXXXXX")"
+mkdir -p "$AMBIG_ROOT/alpha/.git" "$AMBIG_ROOT/beta/.git"
+mo_ambig="$(printf '%s\n' 'FINDING (a, b): widget/cache.py keeps a stale entry after a rename' \
+  | PATH="$WORK/bin-pet:$PATH" python3 "$MATCHER" "$AMBIG_ROOT" 2>/dev/null)"
+case "$mo_ambig" in
+  *"already #"*) check "#346 a project directory holding two checkouts is never matched" "out=$mo_ambig" ;;
+  *) check "#346 a project directory holding two checkouts is never matched" ok ;;
+esac
+# And it says WHY, naming the ambiguity rather than reporting gh's complaint about a directory
+# that is not a repository, which is true and is a different fault with a different remedy (L11).
+case "$mo_ambig" in
+  *"more than one checkout"*) check "#346 and says which fault stopped it looking" ok ;;
+  *) check "#346 and says which fault stopped it looking" "out=$mo_ambig" ;;
+esac
+
 # The control. Resolving must find a checkout, never invent one: a directory with no repo anywhere
 # still fails open and still SAYS so, or the case above would be satisfied by a matcher that had
 # simply stopped reporting when it could not look (L11, L159).

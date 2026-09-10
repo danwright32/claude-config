@@ -65,6 +65,20 @@ pr=$(mt_pr_number "$command")
 cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)
 cd "$(mt_repo_dir "$command" "$cwd")" 2>/dev/null || true
 
+# Landed somewhere that is not a checkout, with MORE THAN ONE below it. The resolver refuses to
+# guess between them (claude-config#346), so say which they were: everything after this would
+# answer about whichever repository gh happened to resolve, and the generic "gh returned nothing"
+# further down is a true sentence about a different fault that sends somebody to check a pull
+# request in the wrong project (L11, L521).
+if [ ! -e ".git" ]; then
+  ambiguous=$(mt_checkout_candidates "$PWD" | tr '\n' ' ')
+  case "$ambiguous" in
+    *" "*" "*)
+      deny "Refusing to merge: $PWD is not a checkout and holds more than one below it ($ambiguous), so nothing here can say which repository this merge is about. Run the merge from inside the one you mean, or put an explicit cd at the head of the command. Guessing is what this gate exists to stop, and picking one of them would look identical afterwards to having read the right one."
+      ;;
+  esac
+fi
+
 # A repo carrying its own commit pinned merge tool must merge through it
 # (#711 for PostRoll, agent-onboarding #673).
 #

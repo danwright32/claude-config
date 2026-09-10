@@ -91,11 +91,35 @@ eq "$(mt_checkout_dir "$root/deep/a/b")" "$root/deep" "the checkout is above the
 mkdir -p "$root/bare"
 eq "$(mt_checkout_dir "$root/bare")" "$root/bare" "no checkout anywhere leaves the directory alone"
 
+# TWO checkouts under one directory: refuse to guess. The old walk returned whichever the glob
+# yielded first, which is a lookup answering ANY where it needs exactly ONE (L521), and addressing
+# something by its position measures whatever happens to occupy that position (L237). It matters
+# because the issue review now resolves its repository this way: the wrong answer is not an odd
+# place to look, it is another project's issue numbers stamped onto this project's findings, and
+# match-open-issues.py is built on a wrong "already #N" being worse than none (claude-config#346).
+mkdir -p "$root/two/alpha/.git" "$root/two/beta/.git"
+eq "$(mt_checkout_dir "$root/two")" "$root/two" "two sibling checkouts resolve to neither"
+
+# And the candidates are readable, so a caller refusing can NAME what it found rather than
+# reporting the generic "nothing answered" that would otherwise stand in for this (L11).
+eq "$(mt_checkout_candidates "$root/two" | sort | tr '\n' ' ')" "$root/two/alpha $root/two/beta " \
+  "both candidates are listed"
+# One candidate is still one: the list is not a way of re-introducing the guess.
+eq "$(mt_checkout_candidates "$root/parent")" "$root/parent/pet" "a single candidate is listed alone"
+eq "$(mt_checkout_candidates "$root/bare")" "" "no candidates where there is no checkout"
+
+# The ancestor walk still WINS over the ambiguity, because a directory inside a checkout is not
+# ambiguous at all: it belongs to the checkout above it whatever its children look like.
+mkdir -p "$root/deep/two/alpha/.git" "$root/deep/two/beta/.git"
+eq "$(mt_checkout_dir "$root/deep/two")" "$root/deep" "a directory inside a checkout is not ambiguous"
+
 # The executed mode. One implementation with two callers, because the other
 # caller is Python: a second copy of this walk in another language is two rules
 # that drift silently, each passing its own suite (L263, L370).
 eq "$(bash "$HOOK_DIR/lib/merge-target.sh" checkout-dir "$root/parent")" "$root/parent/pet" \
   "the executed mode answers what the function answers"
+eq "$(bash "$HOOK_DIR/lib/merge-target.sh" checkout-candidates "$root/two" | sort | tr '\n' ' ')" \
+  "$root/two/alpha $root/two/beta " "the candidates are reachable from the executed mode too"
 
 # And SOURCING stays inert. Both merge gates source this file, and a dispatch
 # that ran on the way in would run with whatever positional arguments the gate

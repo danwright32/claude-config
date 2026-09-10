@@ -12,6 +12,9 @@
 #                      necessarily the session cwd
 #   mt_checkout_dir  the checkout a directory belongs to, which is the part of
 #                      that answer a non-merge caller needs too
+#   mt_checkout_candidates
+#                    the child checkouts under a directory, so a caller that
+#                      cannot resolve one can say which it was torn between
 #   mt_pr_number     the pull request the command names, if it names one
 #   mt_remote_slug   owner/name from the git remote, read from the CURRENT
 #                      directory, so callers cd first
@@ -70,9 +73,19 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
 }
 
 # The checkout a directory belongs to: the directory itself, else the first
-# ancestor holding a .git, else the first child holding one. When there is none
-# anywhere, the directory itself, unchanged, so a caller is still handed
-# somewhere it can run and reports the refusal in its own words.
+# ancestor holding a .git, else its ONE child holding one. When there is none
+# anywhere, or more than one, the directory itself, unchanged, so a caller is
+# still handed somewhere it can run and reports the refusal in its own words.
+#
+# More than one child is a refusal rather than a choice. The walk used to take
+# whichever the glob yielded first, which answers ANY where the question needs
+# exactly ONE (L521) and addresses a thing by its position rather than its
+# identity (L237). Harmless while only the merge gate used it; not harmless once
+# the issue review resolved its repository this way, because the wrong answer
+# there is another project's issue numbers stamped onto this project's findings,
+# and match-open-issues.py rests on a wrong "already #N" being worse than none
+# (claude-config#346). An ancestor still wins: a directory INSIDE a checkout
+# belongs to it whatever its own children look like.
 #
 # Named and separate because a second caller asks the same question for a
 # different reason: the issue review's duplicate check has to find the checkout
@@ -92,10 +105,29 @@ mt_checkout_dir() {  # $1 = a directory
     up=$(dirname "$up")
   done
 
-  for sub in "$d"/*/; do
-    [ -e "${sub}.git" ] && { printf '%s' "${sub%/}"; return; }
-  done
+  local found="" n=0
+  while IFS= read -r sub; do
+    [ -n "$sub" ] || continue
+    found=$sub; n=$((n + 1))
+  done <<EOF
+$(mt_checkout_candidates "$d")
+EOF
+  [ "$n" = 1 ] && { printf '%s' "$found"; return; }
   printf '%s' "$d"
+}
+
+# The child directories of $1 that are themselves checkouts, one per line, in
+# glob order. Separate from the resolution above so a caller that has to REFUSE
+# can name what it found: without it, an ambiguous directory reports through
+# whatever generic "nothing answered" its caller falls back to, which is a
+# different fault with a different remedy (L11).
+mt_checkout_candidates() {  # $1 = a directory
+  local d="$1" sub
+  [ -n "$d" ] && [ -d "$d" ] || return 0
+  for sub in "$d"/*/; do
+    [ -e "${sub}.git" ] && printf '%s\n' "${sub%/}"
+  done
+  return 0
 }
 
 # owner/name from the git remote of the CURRENT directory.
@@ -195,8 +227,9 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     checkout-dir) mt_checkout_dir "${2:-}" ;;
+    checkout-candidates) mt_checkout_candidates "${2:-}" ;;
     *)
-      echo "merge-target.sh: unknown subcommand [${1:-}] (known: checkout-dir <dir>)" >&2
+      echo "merge-target.sh: unknown subcommand [${1:-}] (known: checkout-dir <dir>, checkout-candidates <dir>)" >&2
       exit 2
       ;;
   esac

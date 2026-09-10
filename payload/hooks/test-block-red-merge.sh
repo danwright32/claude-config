@@ -187,6 +187,38 @@ if denied "$(run_hook "$dir" "ALLOW_UNPINNED_MERGE=1 gh pr merge 7 --squash")"; 
 fi
 rm -rf "$dir"
 
+echo "block-red-merge: a directory holding more than one checkout (#346)"
+
+# The gate resolves the directory the merge will run in, and when the session sits above the
+# checkout it looks one level down. With TWO checkouts down there it used to take whichever the
+# glob yielded first and answer about that repo's pull request #7. Now it refuses, and names them,
+# because the generic "gh returned nothing" it would otherwise reach is a true sentence about a
+# different fault and sends somebody to look at the wrong thing (L11, L521).
+run_hook_above() {  # $1 = the directory ABOVE the checkouts, $2 = command
+  printf '{"tool_input":{"command":%s},"cwd":%s}' \
+    "$(printf '%s' "$2" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+    "$(printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+    | (cd "$1" && PATH="$1/bin:$PATH" bash "$HOOK")
+}
+dir=$(make_repo without-tool "$GREEN")
+mkdir -p "$dir/other/.git"
+out=$(run_hook_above "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+if denied "$out"; then pass; else
+  fail "a merge run above two checkouts was allowed, so the gate picked one of them: $out"
+fi
+if { holds "$out" "$dir/repo" && holds "$out" "$dir/other"; }; then pass; else
+  fail "the refusal does not name both checkouts it was torn between: $out"
+fi
+rm -rf "$dir"
+
+# The control: ONE checkout below the session directory still resolves, or this would have blocked
+# every project shaped like PET, which is the shape the walk was written for (L159).
+dir=$(make_repo without-tool "$GREEN")
+if denied "$(run_hook_above "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")"; then
+  fail "a merge run above a single checkout was blocked"
+else pass; fi
+rm -rf "$dir"
+
 echo "block-red-merge: the merge is pinned to the commit that was judged (#345)"
 
 # The rollup answers about the pull request, not about a commit, and it is read a moment BEFORE
