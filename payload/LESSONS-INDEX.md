@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 631 lessons.
+LESSONS.md, which is NOT loaded into the session. 632 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -673,3 +673,4 @@ to decide something: the body is where the failure it came from is described.
 - L380. Two build or test invocations that share an output or cache directory share no work unless every setting that keys that output also matches, so a differing configuration, flag or compilation condition makes the shared path share nothing while still reading as evidence of reuse. Measure what actually recompiles rather than concluding reuse from the shared path.
 - L571. A gate that performs an external network call BEFORE the check it is named for can fail without ever running that check, so its red is indistinguishable from the failure it exists to report and merging becomes dependent on a third party being up.
 - L573. Before running a pure check once per item, count the DISTINCT inputs it will actually see, because a loop that reads as once per thing is usually mostly repeats. Cache on the WHOLE input, never a coarser key, since a coarser one is fast and silently wrong in exactly the cases a uniform fixture never contains.
+- L682. A live path is only as outage tolerant as its LEAST cached read, so inventory every read on it and give each one a served-stale fallback
