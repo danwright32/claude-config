@@ -57,7 +57,19 @@
 # blocking gates shared the wrong one; it lives here now and that hook calls it,
 # so the two cannot drift (claude-config#349).
 
+# The routes a merge actually arrives by, beyond the direct command.
+#
+# MT_MERGE_WRAPPERS merge whenever they run. MT_MERGE_WAITERS merge only with a flag:
+# PET's tool WAITS for the checks and merges nothing without --merge, so matching it
+# bare would fire on every look at a pull request. That is why the whole segment is
+# read for these and not only its leading tokens.
+#
+# An interpreter is matched by BASENAME, so a tool run out of a virtualenv
+# (venv/bin/python, .venv/bin/python) is the same route as one run by python3.
 MT_MERGE_WRAPPERS="merge-when-green.sh merge-pr.sh"
+MT_MERGE_WAITERS="wait_for_checks.py"
+MT_MERGE_WAITER_FLAG="--merge"
+MT_INTERPRETERS="bash sh zsh python python3"
 
 # The command with every heredoc BODY removed, so text nobody is executing is not
 # read as something somebody is. Done BEFORE the segment split rather than during
@@ -104,8 +116,8 @@ MTEOF
 # and are deliberately left alone: nothing ever pipes into a merge, so splitting
 # on them buys nothing while giving a quoted payload one more way to be cut into
 # a segment that starts with the phrase.
-mt_command_heads() {  # $1 = command
-  local body seg first second third rest
+mt_command_segments() {  # $1 = command
+  local body seg
   body="$(mt_strip_heredocs "$1")"
   body="${body//&&/$'\n'}"
   body="${body//||/$'\n'}"
@@ -115,14 +127,55 @@ mt_command_heads() {  # $1 = command
     while [[ "$seg" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+(.*)$ ]]; do
       seg="${BASH_REMATCH[1]}"
     done
+    printf '%s\n' "$seg"
+  done <<MTEOF
+$body
+MTEOF
+}
+
+mt_command_heads() {  # $1 = command
+  local seg first second third rest
+  while IFS= read -r seg; do
     first=""; second=""; third=""; rest=""
     read -r first second third rest <<MTEOF
 $seg
 MTEOF
     printf '%s %s %s\n' "$first" "$second" "$third"
-  done <<MTEOF
-$body
+  done < <(mt_command_segments "$1")
+}
+
+# True when this ONE segment causes a merge, by any route other than the direct command.
+mt_segment_runs_wrapper() {  # $1 = a cleaned segment
+  local seg="$1" first second third rest target wrapper
+  # Four variables for three tokens, deliberately: `read` gives the LAST variable
+  # everything that is left, so reading three would make `third` the whole remainder
+  # and `npm run merge -- 680` would never match `merge` exactly.
+  read -r first second third rest <<MTEOF
+$seg
 MTEOF
+  [ -n "$first" ] || return 1
+
+  # The wrapper is either the command itself, or the argument to an interpreter.
+  target="$first"
+  case " $MT_INTERPRETERS " in
+    *" ${first##*/} "*) target="$second" ;;
+  esac
+
+  for wrapper in $MT_MERGE_WRAPPERS; do
+    [ -n "$target" ] && [ "${target##*/}" = "$wrapper" ] && return 0
+  done
+  for wrapper in $MT_MERGE_WAITERS; do
+    if [ -n "$target" ] && [ "${target##*/}" = "$wrapper" ]; then
+      case " $seg " in
+        *" $MT_MERGE_WAITER_FLAG "*|*" $MT_MERGE_WAITER_FLAG") return 0 ;;
+      esac
+    fi
+  done
+
+  # `npm run merge`, exactly: what follows `npm run` is a script name rather than a
+  # path, so a basename match cannot see it, and `npm run merge-ready` only reports.
+  [ "$first" = "npm" ] && [ "$second" = "run" ] && [ "$third" = "merge" ] && return 0
+  return 1
 }
 
 # True when a segment runs the gh merge command itself. The leading `(^|/)` lets
@@ -148,27 +201,11 @@ mt_is_pr_merge() {  # $1 = command
 # merges nothing, so a prefix match would fire on every look at a pull request.
 mt_runs_merge() {  # $1 = command
   case "$1" in *merge*) ;; *) return 1 ;; esac
-  local heads line first second third wrapper
-  heads="$(mt_command_heads "$1")"
-  if printf '%s' "$heads" \
-      | grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
-    return 0
-  fi
-  while IFS= read -r line; do
-    first=""; second=""; third=""
-    read -r first second third <<MTEOF
-$line
-MTEOF
-    for wrapper in $MT_MERGE_WRAPPERS; do
-      [ -n "$first" ] && [ "${first##*/}" = "$wrapper" ] && return 0
-      case "$first" in
-        bash|sh|zsh) [ -n "$second" ] && [ "${second##*/}" = "$wrapper" ] && return 0 ;;
-      esac
-    done
-    [ "$first" = "npm" ] && [ "$second" = "run" ] && [ "$third" = "merge" ] && return 0
-  done <<MTEOF
-$heads
-MTEOF
+  mt_is_pr_merge "$1" && return 0
+  local seg
+  while IFS= read -r seg; do
+    mt_segment_runs_wrapper "$seg" && return 0
+  done < <(mt_command_segments "$1")
   return 1
 }
 
@@ -176,9 +213,53 @@ MTEOF
 # case gh resolves it from the current branch, which is also what the merge
 # itself would do.
 mt_pr_number() {  # $1 = command
-  mt_strip_heredocs "$1" \
+  local direct seg first second third rest prev tok target
+  local -a MT_TOKENS
+  direct="$(mt_strip_heredocs "$1" \
     | grep -oE 'gh pr me''rge[[:space:]]+(--[^[:space:]]+[[:space:]]+)*([0-9]+)' \
-    | grep -oE '[0-9]+$' | awk 'NR <= 1'
+    | grep -oE '[0-9]+$' | awk 'NR <= 1')"
+  [ -n "$direct" ] && { printf '%s' "$direct"; return; }
+
+  # A wrapper takes the number as its FIRST POSITIONAL argument, and reading it beats
+  # inferring one from the current branch, which after a merge is the thing most likely
+  # to have moved (claude-config#351).
+  #
+  # A token is positional when the token before it is not a flag. `--` is the end of
+  # options marker rather than a flag, so `npm run merge -- 680` still names 680.
+  #
+  # When no positional number can be found it answers EMPTY, deliberately, so gh
+  # resolves from the branch. The tempting fallback, taking the first run of digits
+  # anywhere in the segment, reads `--timeout 900 42` as pull request 900, and a gate
+  # that reads the wrong pull request's record is worse than one that reads none (L75).
+  while IFS= read -r seg; do
+    mt_segment_runs_wrapper "$seg" || continue
+    read -r first second third rest <<MTEOF
+$seg
+MTEOF
+    target="$first"
+    case " $MT_INTERPRETERS " in
+      *" ${first##*/} "*) target="$second" ;;
+    esac
+    prev=""
+    # Read into an array rather than looping over an unquoted expansion, which would
+    # let a `*` in the command glob against the working directory.
+    read -ra MT_TOKENS <<MTEOF
+$seg
+MTEOF
+    for tok in "${MT_TOKENS[@]}"; do
+      case "$tok" in
+        [0-9]*[!0-9]*|"") prev="$tok"; continue ;;
+        [0-9]*) ;;
+        *) prev="$tok"; continue ;;
+      esac
+      case "$prev" in
+        --) printf '%s' "$tok"; return ;;
+        -*) prev="$tok"; continue ;;
+        "") prev="$tok"; continue ;;
+        *) printf '%s' "$tok"; return ;;
+      esac
+    done
+  done < <(mt_command_segments "$1")
 }
 
 # Resolve the directory the merge will actually run in.

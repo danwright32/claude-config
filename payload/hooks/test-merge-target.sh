@@ -91,6 +91,28 @@ for w in "scripts/merge-when-green.sh 42" "./scripts/merge-when-green.sh 42" \
   if mt_is_pr_merge "$w"; then fail "a merge wrapper was read as a direct merge: $w"; else pass; fi
 done
 
+# PET merges through its own commit pinned tool, run under a python interpreter, and
+# that route was recognised by NOTHING: not the quiz, so it never fired in PET, and not
+# the changelog gate, which block-red-merge makes the only route there by refusing the
+# direct command (claude-config#351).
+for w in "venv/bin/python tools/wait_for_checks.py 7 --merge" \
+         "python3 tools/wait_for_checks.py 7 --merge" \
+         ".venv/bin/python tools/wait_for_checks.py 7 --merge"; do
+  if mt_runs_merge "$w"; then pass; else fail "PET's pinned tool was not read as a merge: $w"; fi
+  if mt_is_pr_merge "$w"; then fail "PET's pinned tool was read as a direct merge: $w"; else pass; fi
+done
+
+# Without --merge the same tool only WAITS for the checks and merges nothing, so firing
+# on it would quiz and gate every look at a pull request. The flag is the whole
+# difference, which is why the segment is read rather than only its leading tokens.
+if mt_runs_merge "venv/bin/python tools/wait_for_checks.py 7"; then
+  fail "the tool merely waiting for checks was read as a merge"
+else pass; fi
+# And a mention of it is still only a mention.
+if mt_runs_merge "echo \"run venv/bin/python tools/wait_for_checks.py 7 --merge\""; then
+  fail "a mention of PET's tool was read as a merge"
+else pass; fi
+
 # Exactly `merge`, so the readiness check that merges nothing does not count.
 if mt_runs_merge "npm run merge-ready -- 680"; then fail "the readiness check was read as a merge"; else pass; fi
 if mt_runs_merge "echo \"use npm run merge -- 680\""; then fail "a mention of the npm script was read as a merge"; else pass; fi
@@ -119,6 +141,21 @@ one day this will run $MERGE 999 --squash
 EOF
 $MERGE 7 --squash"
 eq "$(mt_pr_number "$pr_note")" "7" "the number comes from the command, not from a heredoc"
+
+# A wrapper takes the pull request number as its first positional argument, and reading
+# it is better than inferring one from the current branch: after a merge the branch is
+# the thing most likely to have moved (claude-config#351).
+eq "$(mt_pr_number "venv/bin/python tools/wait_for_checks.py 7 --merge")" "7" "PET's tool names its number"
+eq "$(mt_pr_number "npm run merge -- 680")" "680" "the npm route names its number"
+eq "$(mt_pr_number "bash .github/scripts/merge-pr.sh 680")" "680" "the shell wrapper names its number"
+eq "$(mt_pr_number "./scripts/merge-when-green.sh 42")" "42" "the green wrapper names its number"
+# A flag's own value is not a positional argument, so it is not the pull request.
+eq "$(mt_pr_number "./scripts/merge-when-green.sh --timeout 900 42")" "42" "a flag value is not read as the number"
+# No number named at all stays empty, so gh resolves it from the branch, which is what
+# the merge itself would do. Empty is the correct answer here, not a failure.
+eq "$(mt_pr_number "./scripts/merge-when-green.sh")" "" "a wrapper naming no number answers empty"
+# The direct form still wins where both could be read.
+eq "$(mt_pr_number "$MERGE 7 --squash")" "7" "the direct command still names its own number"
 
 echo "merge-target: which directory the merge runs in"
 

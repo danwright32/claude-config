@@ -562,6 +562,10 @@ rm -rf "$dir"
 # And the wrapper stays OUT of this gate's question. Where a repo carries its own commit
 # pinned tool this gate NAMES that tool as the route to take, so firing on it would refuse
 # the very command it had just recommended, which is a refusal nothing can clear (L109).
+dir=$(make_repo with-tool "$GREEN")
+out=$(run_hook "$dir" "venv/bin/python tools/wait_for_checks.py 7 --merge")
+if denied "$out"; then fail "the gate refused PET's own pinned tool: $out"; else pass; fi
+rm -rf "$dir"
 dir=$(make_repo with-npm-tool "$GREEN")
 out=$(run_hook "$dir" "npm run merge -- 7")
 if denied "$out"; then fail "the gate refused the merge route it tells people to use: $out"; else pass; fi

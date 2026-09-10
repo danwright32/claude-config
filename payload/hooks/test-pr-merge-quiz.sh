@@ -130,6 +130,16 @@ run "the wrapper name as a bare arg" skip 'ls .github/scripts/merge-pr.sh'
 run "the readiness check alone"      skip 'npm run merge-ready -- 680'
 run "an unrelated npm script"        skip 'npm run test'
 
+# PET's own commit pinned tool, run under a python interpreter. block-red-merge refuses
+# the direct command in that repo, so this is the only route there, and the quiz had
+# never once fired in PET (claude-config#351).
+run "PET's tool merging"             fire 'venv/bin/python tools/wait_for_checks.py 7 --merge'
+run "the same tool under python3"    fire 'python3 tools/wait_for_checks.py 7 --merge'
+# Without --merge it only waits for the checks, so quizzing on it would fire on every
+# look at a pull request.
+run "the same tool only waiting"     skip 'venv/bin/python tools/wait_for_checks.py 7'
+run "PET's tool only mentioned"      skip 'echo "run venv/bin/python tools/wait_for_checks.py 7 --merge"'
+
 # --- Things that are not a merge must stay quiet ---
 run "closing without merging"        skip 'gh pr close 42'
 run "viewing a pr"                   skip 'gh pr view 42 --json state'

@@ -292,6 +292,32 @@ out=$(run_hook "$dir" "$MERGE 7 --squash")
 if denied "$out"; then pass; else fail "the real merge was not refused, so the cases above prove nothing: $out"; fi
 rm -rf "$dir"
 
+# 12. A merge through a repo's own wrapper carries the same record as any other, and the
+#     gate was blind to every one of them (claude-config#351). It matters most in PET,
+#     where block-red-merge REFUSES the direct command because the repo carries a commit
+#     pinned tool, so the route this gate could not see was the only route available and
+#     the gate was enforcing nothing at all in the repo it was built for.
+dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY")
+for route in "venv/bin/python tools/wait_for_checks.py 7 --merge" \
+             "npm run merge -- 7" \
+             "bash .github/scripts/merge-pr.sh 7" \
+             "./scripts/merge-when-green.sh 7"; do
+  out=$(run_hook "$dir" "$route")
+  if denied "$out"; then pass; else fail "an untagged PR merged through a wrapper: $route"; fi
+done
+# The tool merely WAITING for checks merges nothing, so it must not be gated: refusing it
+# would block a person from looking at a pull request they have not tried to merge.
+out=$(run_hook "$dir" "venv/bin/python tools/wait_for_checks.py 7")
+if denied "$out"; then fail "waiting for checks was refused as a merge: $out"; else pass; fi
+rm -rf "$dir"
+
+# 13. And a TAGGED pull request goes through by those same routes, so case 12 is not
+#     satisfied by a gate that refuses every wrapper regardless of the record (L159).
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+out=$(run_hook "$dir" "venv/bin/python tools/wait_for_checks.py 7 --merge")
+if denied "$out"; then fail "a correctly tagged PR was blocked on the wrapper route: $out"; else pass; fi
+rm -rf "$dir"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

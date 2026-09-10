@@ -29,6 +29,10 @@
 # one means the gate cannot tell whether this repo is in scope, and an unlisted
 # repo means somebody chose not to gate it.
 #
+# Covers every route to a merge, including a repo's own wrapper, because a gate that
+# only knows the direct command is dodged by the very route another gate makes
+# mandatory (claude-config#351).
+#
 # Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command> (visible in the
 # command, so it cannot happen by accident or go unnoticed in the transcript).
 #
@@ -43,7 +47,19 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload=$(cat)
 command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)
 
-mt_is_pr_merge "$command" || exit 0
+# Any route to a merge, not only the direct command (claude-config#351).
+#
+# This gate asked mt_is_pr_merge, which recognises only the direct form, while
+# block-red-merge.sh REFUSES that form in any repo carrying its own commit pinned merge
+# tool and names the tool as the route to take. PET carries one, so the only route
+# available there was the one this gate could not see, and the record was enforced by
+# nothing in the repo whose manager update cost 499 pull request titles read by hand.
+#
+# The two gates ask different questions on purpose. block-red-merge stays on
+# mt_is_pr_merge, because firing on the wrapper it has just recommended would be a
+# refusal nothing can clear (L109). This gate's rule has nothing to do with which route
+# is taken, so it asks about the merge itself.
+mt_runs_merge "$command" || exit 0
 
 deny() {
   jq -nc --arg reason "$1" '{
