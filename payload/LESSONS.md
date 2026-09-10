@@ -7129,6 +7129,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   claude-config#265 was written about. The same assumption had already bitten the merge gate in
   the same project, which now resolves its repo from the `cd`)
 
+- **L448. Putting a SECOND rule behind an EXISTING override, skip flag or suppression token
+  silently widens every use of that token**, because whoever reaches for it is bypassing the rule
+  they know about and loses a rule they have never heard of, and nothing at the point of use says
+  a second thing now hangs off it. Give each rule its own visible name, or make the shared token
+  fall THROUGH to the rules it was not written for rather than exiting on it. Distinct from L259,
+  which is one flag's blast radius reaching processes it starts: this is one flag's MEANING
+  growing where it is read. (claude-config#347, 2026-09-10: claude-config#345 added a general
+  `--match-head-commit` requirement to the merge gate and reused `ALLOW_UNPINNED_MERGE=1`, the
+  override that already existed for the per repo pinned merge tool rule. In the two repos carrying
+  such a tool the one token now switches off both, so somebody bypassing that repo's script also
+  loses the commit pin and merges with nothing tied to a commit, which is the weakest outcome
+  available and the one the override is least likely to have been reached for. Noticed in the
+  review of the change that introduced it, not by any test: every case passed, because each rule
+  was tested against its own override)
+
 
 
 
