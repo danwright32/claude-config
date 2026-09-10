@@ -1709,6 +1709,25 @@ for reference; L6 was reviewed and deliberately not adopted.
   passes with the screen off, which is the false negative the rig was built to prevent (L159).)
 
 
+- **L673. A guard that decides whether a command DOES something by matching a phrase
+  anywhere in the command string also fires on every command that merely TALKS about it (a
+  heredoc, an issue body, a commit message, an echo), so match only in COMMAND POSITION, on
+  the leading tokens of each shell segment.** A blocking gate is where a false positive costs
+  most: the deny names its own override, taking it is the obvious move when the block is
+  plainly wrong, and reaching for a safety gate's escape hatch on a false positive is how it
+  gets used on a true one. Distinct from L135, which is a guard matching over a whole file and
+  PASSING wrongly; this one FIRES wrongly, and from L245, where the script matches itself.
+  (danwright32/claude-config#349, 2026-09-10: `mt_is_pr_merge` in `hooks/lib/merge-target.sh`
+  is a bare glob over the whole command, and it blocked a heredoc writing an issue body that
+  described merging. The deny talked about pinning a commit that no command was trying to
+  merge, and because a PreToolUse deny refuses the WHOLE command, the heredoc never ran and the
+  failure surfaced one step later as a missing file rather than as the block that caused it.
+  The correct implementation was already sitting beside it: `pr-merge-quiz.sh` splits on `&&`,
+  `||` and `;`, strips leading environment assignments and matches only in command position,
+  and its comments say the distinction was learned the hard way by a third hook. The wrong one
+  was in the SHARED library the blocking gates use; the right one was a private copy in the
+  hook that only advises)
+
 - **L412. A guard that DERIVES its search terms from live data inherits that data's own
   placeholder values (TBD, N/A, Unknown, Untitled), which identify nothing and are by
   construction ordinary words, so it matches plain text everywhere and its noise reads as

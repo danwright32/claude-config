@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 618 lessons.
+LESSONS.md, which is NOT loaded into the session. 619 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -149,6 +149,7 @@ to decide something: the body is where the failure it came from is described.
 - L396. A count of people who reached a LATE stage of a funnel (signups, checkouts, completions) is not a measure of how many ARRIVED, so never conclude that traffic has collapsed from a downstream number. Read arrivals at the entry point first, because a stage count falls both when fewer people come and when the same crowd stops converting, and those two demand opposite work.
 - L400. A check's NAME is not a statement of its coverage, so read what a monitor, smoke test or guard actually does before counting it as protection. A job named for the thing it does not check makes the gap permanently invisible, because nobody writes the missing check while a green tick with the right name is already on the board.
 - L411. A test that depends on a machine state it cannot SET from inside itself (a display awake, a device attached, a network reachable, a screen unlocked) must DETECT that state and report UNMEASURED rather than failing, because a failure there is indistinguishable from a real one and a standing red makes every other failure in the list unreadable.
+- L673. A guard that decides whether a command DOES something by matching a phrase anywhere in the command string also fires on every command that merely TALKS about it (a heredoc, an issue body, a commit message, an echo), so match only in COMMAND POSITION, on the leading tokens of each shell segment.
 - L412. A guard that DERIVES its search terms from live data inherits that data's own placeholder values (TBD, N/A, Unknown, Untitled), which identify nothing and are by construction ordinary words, so it matches plain text everywhere and its noise reads as the guard working rather than as a defect in the guard.
 - L413. A test runner that DISCOVERS its suites by glob, directory walk or naming convention can only invoke each one ONE way, so any suite taking a parameter runs for ever in its DEFAULT mode while its other cases never run at all, and its name still appears in every green report.
 - L414. A build product's mtime records when it was last WRITTEN, not when it was last built, and a source file's mtime records when it was last touched, not when it changed, so a freshness check comparing the two is red on a healthy tree in BOTH directions: a correct incremental build that relinks nothing leaves the product reading as permanently stale, and any generator that rewrites a source on every run leaves it permanently newer.
