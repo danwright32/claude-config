@@ -5697,6 +5697,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   a sentence blaming a migration that never happened, while a real schema change would have been
   invisible behind it. The comments in both files stated that the pin guarded against exactly this)
 
+- **L670. A refusal from an INTERMEDIARY in front of an API** (a WAF, a CDN, a load balancer, a
+  corporate proxy) arrives as a well formed HTTP response carrying an HTML page, so a client that
+  reads only the status code, or that tries to parse the body as data, files somebody else's
+  refusal as the API's own answer, and it then wears whatever label that status happens to carry.
+  Detect the HTML body itself and report the intermediary, because the API never saw the request.
+  (Bidspoke, twice. 2026-07-22: Salesforce Edge answered HTTP 400 with an HTML page and the engine
+  classified it permanent, so leads were dropped rather than retried against a transient front end
+  fault. 2026-09-10, bidspoke#1265: FFN's Cloudflare firewall auto blocked the shared Workers
+  egress address every Cloudflare tenant leaves from, for another tenant's scanning, and answered
+  every Eligibility Scout call with a 403 and a "Sorry, you have been blocked" page. The node's
+  outer catch folded it into the same all null output a legitimately empty result produces, so for
+  five days a live path returned nothing with no error anywhere, and the first surface to speak was
+  a daily field presence check four days in, naming a symptom rather than the cause. The block page
+  carried a Cloudflare Ray ID throughout, which is the one identifier the partner's own firewall
+  log can be searched by, and is exactly what an unparsed body throws away)
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and

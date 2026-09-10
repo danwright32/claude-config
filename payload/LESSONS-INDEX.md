@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 614 lessons.
+LESSONS.md, which is NOT loaded into the session. 615 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -492,6 +492,7 @@ to decide something: the body is where the failure it came from is described.
 - L280. A rule enforced at ONE stage of a pipeline is not enforced by the pipeline, because every later stage that rewrites the same content can reintroduce exactly what the rule removed, and the enforcing stage has already run, so nothing reports the regression.
 - L534. A platform setting whose DEFAULT is derived from another setting flips silently when you flip that other one
 - L552. Pinning a tool's VERSION pins its output only when that tool does the work locally, so a command that delegates to a hosted service (a generator invoked with a project id and an access token rather than a database or a file) emits whatever the server currently produces, and the pin, the comment explaining it, and every check built on comparing the result character for character go on reading as reproducibility. Pin the thing that PRODUCES the artifact, or normalise what you cannot pin.
+- L670. A refusal from an INTERMEDIARY in front of an API
 
 ## Building with AI
 
