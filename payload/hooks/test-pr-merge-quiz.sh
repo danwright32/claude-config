@@ -20,6 +20,53 @@ HOOK="$DIR/pr-merge-quiz.sh"
 pass=0
 fail=0
 
+# One repo and one fake gh for the whole suite, because every case now reaches the
+# label check and a case that reached the REAL gh would be a test talking to a live
+# service (L2) and paying a network round trip to do it.
+#
+# The repo is real, with a real remote, because mt_pr_view refuses an answer that is
+# not about the repo the remote names: a fixture without one would exercise a
+# different path from the one that ships.
+#
+# With FAKE_PR_JSON unset the fake gh says NOTHING, which is the fail open case, so
+# every case below that does not choose a record fires exactly as it did before the
+# label gate existed.
+FIXTURE="$(mktemp -d)"
+mkdir -p "$FIXTURE/repo" "$FIXTURE/bin"
+( cd "$FIXTURE/repo" && git init -q && git remote add origin "https://github.com/acme/widget.git" )
+cat > "$FIXTURE/bin/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
+  *"auth token -u "*) printf 'tok\n' ;;
+  *"pr view"*)
+    if [ -n "${FAKE_PR_JSON:-}" ] && [ -f "$FAKE_PR_JSON" ]; then cat "$FAKE_PR_JSON"; fi
+    ;;
+esac
+SH
+chmod +x "$FIXTURE/bin/gh"
+
+# Where the fake gh reads its answer. Exported ONCE for the whole suite rather than
+# threaded through run()'s env argument, because a case that also has to override PATH
+# would otherwise have to pass two assignments, and the one that quietly went missing
+# is the one that decides what is being tested (it did: the two missing-tool cases
+# below were firing because gh had no answer, not because the tool was absent).
+#
+# So the record's presence is state a case SETS, and every case that cares says which
+# it wants. An exported variable is inherited by every later subprocess (L439), which
+# is the point here and the reason each case is explicit rather than relying on order.
+export FAKE_PR_JSON="$FIXTURE/pr.json"
+
+record() {  # $1 = a JSON labels array
+  printf '{"number":42,"url":"https://github.com/acme/widget/pull/42","labels":%s}' "$1" \
+    > "$FAKE_PR_JSON"
+}
+no_record() { rm -f "$FAKE_PR_JSON"; }
+
+# The matcher cases below choose no record, so gh answers nothing and every merge fires
+# exactly as it did before the label gate existed.
+no_record
+
 # run <description> <fire|skip> <command-string> [env-assignment]
 # Builds a PostToolUse payload, pipes it to the hook, and checks stdout for a decision:block.
 run() {
@@ -27,12 +74,14 @@ run() {
   local payload out fired
   payload="$(python3 -c '
 import json, sys
-print(json.dumps({"tool_input": {"command": sys.argv[1]}, "cwd": "/tmp"}))
-' "$command")"
+print(json.dumps({"tool_input": {"command": sys.argv[1]}, "cwd": sys.argv[2]}))
+' "$command" "$FIXTURE/repo")"
   if [ -n "$envassign" ]; then
-    out="$(printf '%s' "$payload" | env "$envassign" "$HOOK" 2>/dev/null)"
+    out="$(printf '%s' "$payload" \
+      | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" "$envassign" "$HOOK" ) 2>/dev/null)"
   else
-    out="$(printf '%s' "$payload" | "$HOOK" 2>/dev/null)"
+    out="$(printf '%s' "$payload" \
+      | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" "$HOOK" ) 2>/dev/null)"
   fi
   if printf '%s' "$out" | grep -q '"decision"[[:space:]]*:[[:space:]]*"block"'; then
     fired="fire"
@@ -96,11 +145,82 @@ run "a grep for the phrase"          skip 'grep -r "gh pr merge" .'
 run "the documented override"        skip 'SKIP_PR_QUIZ=1 gh pr merge 42'
 run "a detached headless run"        skip 'gh pr merge 42' 'CLAUDE_DETACHED_RUN=1'
 
+# --- The changelog label decides whether the quiz fires at all (claude-config#348) ---
+#
+# Dan's call, 2026-09-10, after the quiz fired five times in one session and was
+# declined five times, every one correctly judged internal. He was offered turning it
+# off and chose to narrow it instead.
+#
+# changelog/visible means exactly what the quiz's own user facing gate means, it is set
+# by a person at pull request time, and PET and Slate already enforce it at merge. So
+# the label narrows what reaches Claude. It does NOT replace the judgement: a mixed
+# pull request can carry changelog/technical while touching something visible, so the
+# instruction keeps its own gate and the cases further down still pin it.
+record '[{"name":"changelog/technical"}]'
+run "a technical record does not quiz"  skip 'gh pr merge 42'
+record '[{"name":"changelog/none"}]'
+run "a none record does not quiz"       skip 'gh pr merge 42'
+record '[{"name":"changelog/visible"}]'
+run "a visible record quizzes"          fire 'gh pr merge 42'
+# Mixed labels: visible wins, because the quiz is owed wherever any part of it shows.
+record '[{"name":"changelog/technical"},{"name":"changelog/visible"}]'
+run "visible beside technical quizzes"  fire 'gh pr merge 42'
+# Case and stray whitespace are the label reader's business, not this hook's, and the
+# reader is the same module the merge gate enforces with, so this proves the two agree.
+record '[{"name":"  Changelog/Technical  "}]'
+run "a label is read case blind"        skip 'gh pr merge 42'
+
+# THE FALLBACK, and it is the one that matters most: a repo that does not use the
+# convention has to keep working exactly as before, with Claude doing the judging. It
+# is also the case a future edit would quietly break, since every other case here would
+# still pass.
+record '[{"name":"priority-p2"}]'
+run "no changelog label quizzes"        fire 'gh pr merge 42'
+record '[]'
+run "no labels at all quizzes"          fire 'gh pr merge 42'
+
+# Fail OPEN on every way the reading can fail. A hook that silently stops asking is
+# worse than one that asks too often, and firing is the behaviour that already shipped.
+no_record
+run "gh saying nothing quizzes"         fire 'gh pr merge 42'
+printf 'not json at all' > "$FAKE_PR_JSON"
+run "a corrupt answer quizzes"          fire 'gh pr merge 42'
+# An answer about a DIFFERENT repo is not this pull request's record, so reading its
+# label would skip the quiz on the strength of somebody else's pull request (L70). The
+# label chosen here is the one that WOULD silence the quiz, so this fails if the repo
+# identity check is dropped.
+printf '{"number":42,"url":"https://github.com/someone/else/pull/42","labels":[{"name":"changelog/none"}]}' \
+  > "$FAKE_PR_JSON"
+run "an answer about another repo quizzes" fire 'gh pr merge 42'
+
+# A tool missing entirely is the same fail open by a different route, and each route
+# needs its own case rather than being assumed to share one (L173).
+#
+# Both are set up with a QUIET record deliberately, which is the strong form of the
+# assertion: not merely that an unreadable state fires, but that a record which WOULD
+# silence the quiz cannot silence it while the reading is impossible.
+#
+# Measured, rather than assumed, by mutating the hook: dropping the node guard and
+# making an unreadable verdict mean quiet turns "node not on PATH" red, so that guard is
+# what carries it. "gh not on PATH" stays green under the same mutation, because gh's
+# absence is ALSO answered downstream by mt_pr_view finding nothing. Its guard is an
+# early exit rather than the safeguard, and the case pins the OUTCOME on that route,
+# which is what the contract promises.
+NODE_DIR="$(dirname "$(command -v node)")"
+record '[{"name":"changelog/none"}]'
+run "gh not on PATH quizzes"            fire 'gh pr merge 42' "PATH=$NODE_DIR:/usr/bin:/bin"
+run "node not on PATH quizzes"          fire 'gh pr merge 42' "PATH=$FIXTURE/bin:/usr/bin:/bin"
+# The control, on the SAME record with both tools present: it DOES silence the quiz, so
+# the two above are not passing because this fixture never skips at all (L159).
+run "the same record with both tools"   skip 'gh pr merge 42'
+no_record
+
 # --- Failure path: a broken or empty payload must fail QUIET, never fire or crash ---
 raw() {
   local desc="$1" want="$2" rawpayload="$3"
   local out fired
-  out="$(printf '%s' "$rawpayload" | "$HOOK" 2>/dev/null)"
+  out="$(printf '%s' "$rawpayload" \
+    | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" "$HOOK" ) 2>/dev/null)"
   if printf '%s' "$out" | grep -q '"decision"[[:space:]]*:[[:space:]]*"block"'; then fired="fire"; else fired="skip"; fi
   if [ "$fired" = "$want" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $desc (wanted $want, got $fired)"; fi
 }
@@ -113,7 +233,8 @@ raw "an empty payload"               skip ''
 #     questions Claude ends up asking, so what it CAN pin is that the instruction it hands Claude
 #     actually carries the constraint. Without these, a future edit could quietly drop it. ---
 instruction() {
-  printf '%s' '{"tool_input": {"command": "gh pr merge 42"}, "cwd": "/tmp"}' | "$HOOK" 2>/dev/null
+  printf '{"tool_input": {"command": "gh pr me%s 42"}, "cwd": "%s"}' "rge" "$FIXTURE/repo" \
+    | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" "$HOOK" ) 2>/dev/null
 }
 REASON="$(instruction)"
 
@@ -204,6 +325,8 @@ absent "drops the old triviality framing"  'triviality gate'
 absent "drops the old skip message"        'Nothing substantive shipped'
 absent "drops the old narrow skip list"    'only comments, docs, formatting'
 absent "drops the inconsequential test"    'If the change is inconsequential'
+
+rm -rf "$FIXTURE"
 
 echo
 echo "passed: $pass   failed: $fail"
