@@ -7138,11 +7138,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   growing where it is read. (claude-config#347, 2026-09-10: claude-config#345 added a general
   `--match-head-commit` requirement to the merge gate and reused `ALLOW_UNPINNED_MERGE=1`, the
   override that already existed for the per repo pinned merge tool rule. In the two repos carrying
-  such a tool the one token now switches off both, so somebody bypassing that repo's script also
-  loses the commit pin and merges with nothing tied to a commit, which is the weakest outcome
-  available and the one the override is least likely to have been reached for. Noticed in the
-  review of the change that introduced it, not by any test: every case passed, because each rule
-  was tested against its own override)
+  such a tool the one token switched off both, so somebody bypassing that repo's script also lost
+  the commit pin and merged with nothing tied to a commit, which is the weakest outcome available
+  and the one the override is least likely to have been reached for. Noticed in the review of the
+  change that introduced it, not by any test: every case passed, because each rule was tested
+  against its own override. Fixed by splitting the names, SKIP_MERGE_TOOL for the script and
+  ALLOW_UNPINNED_MERGE for the pin, each answering only its own rule)
 
 
 
