@@ -93,9 +93,14 @@ fi
 # merge either takes that commit or is refused. None of that is worth anything
 # if the safe route is merely available, so where one exists it is the only one.
 #
-# A table rather than a branch per repo. The reasoning is identical in every
-# case, and two copies of it drift: the whole point of the rule is that one
-# mechanism has one implementation.
+# A table rather than a branch per repo, and ONE table rather than one per question.
+# It lives in lib/merge-target.sh as MT_MERGE_TOOLS, beside the matcher that decides
+# which COMMANDS run these tools, because this gate asking which REPOS carry one is the
+# same list read for a different reason. Keeping a second copy here is what produced
+# claude-config#351: wait_for_checks.py was named in this file and missing from the
+# matcher, so the changelog gate enforced nothing in PET (L41). test-block-red-merge.sh
+# scans this file for a tool path of its own, since two copies agreeing is exactly what
+# the tests looked like until the day they stopped.
 #
 # It still earns its place now that EVERY repo pins the merge (#345). The two
 # mechanisms cover different halves of the list above: --match-head-commit
@@ -107,15 +112,9 @@ fi
 #
 # Only where a tool exists, so every other project keeps the old gate rather
 # than being blocked by a rule about a file it does not have.
-pinned_tool=""
+pinned_tool="$(mt_pinned_tool "$PWD" || true)"
 pinned_how=""
-if [ -f "tools/wait_for_checks.py" ]; then
-  pinned_tool="tools/wait_for_checks.py"
-  pinned_how="venv/bin/python tools/wait_for_checks.py ${pr:-<pr>} --merge"
-elif [ -f ".github/scripts/merge-pr.sh" ]; then
-  pinned_tool=".github/scripts/merge-pr.sh"
-  pinned_how="npm run merge -- ${pr:-<pr>}"
-fi
+[ -n "$pinned_tool" ] && pinned_how="$(mt_pinned_how "$PWD" "${pr:-}")"
 
 # ONE OVERRIDE PER RULE. This rule reads SKIP_MERGE_TOOL, and the commit pin at the foot of the
 # file reads ALLOW_UNPINNED_MERGE. They shared the second name until #347, which meant somebody

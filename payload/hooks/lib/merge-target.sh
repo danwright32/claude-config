@@ -8,7 +8,9 @@
 # rather than once per gate:
 #
 #   mt_is_pr_merge   is this command actually a merge
-#   mt_runs_merge    does it cause one by any route, wrappers included
+#   mt_runs_merge    does it cause one by any route, a repo's own tool included
+#   MT_MERGE_TOOLS   the one declaration of those tools, and the helpers
+#                      mt_pinned_tool / mt_pinned_how that read it
 #   mt_repo_dir      which directory the merge will run in, which is not
 #                      necessarily the session cwd
 #   mt_checkout_dir  the checkout a directory belongs to, which is the part of
@@ -57,19 +59,84 @@
 # blocking gates shared the wrong one; it lives here now and that hook calls it,
 # so the two cannot drift (claude-config#349).
 
-# The routes a merge actually arrives by, beyond the direct command.
+# THE ONE DECLARATION of a repo's own merge tool. Every question anybody asks about
+# these tools is answered from here.
 #
-# MT_MERGE_WRAPPERS merge whenever they run. MT_MERGE_WAITERS merge only with a flag:
-# PET's tool WAITS for the checks and merges nothing without --merge, so matching it
-# bare would fire on every look at a pull request. That is why the whole segment is
-# read for these and not only its leading tokens.
+# There used to be two lists. This library decided which COMMANDS count as a merge, and
+# block-red-merge.sh decided which REPOS must merge through their own tool, each naming
+# the same tools separately and overlapping without being identical. That is how
+# claude-config#351 happened: wait_for_checks.py sat in the second list and not the
+# first, so the changelog gate enforced nothing in PET, the repo it was built for. A list
+# that must mirror another is derived from it, never maintained beside it (L41).
 #
+# Four fields, pipe separated:
+#
+#   1  the repo relative PATH whose presence marks a repo as carrying this tool, and
+#        whose basename is what the command matcher looks for
+#   2  how to INVOKE it, with %s where the pull request number goes, because the refusal
+#        quotes this at somebody and a remedy nobody can run is a refusal nothing can
+#        clear (L109, L406)
+#   3  `pinned` when block-red-merge.sh must INSIST on it, `route` when it merges but
+#        makes no commit pin promise. merge-when-green.sh is the second kind: the quiz
+#        has to fire on it, and refusing a plain merge in its favour would be demanding
+#        a guarantee it does not give. Keeping both facts in one row is the whole point.
+#   4  a FLAG the command must carry to count as a merge, or empty for a tool that
+#        merges whenever it runs. wait_for_checks.py without --merge only WAITS for the
+#        checks, so matching it bare would fire on every look at a pull request.
+#
+# ORDER IS LOAD BEARING: mt_pinned_tool takes the first pinned tool present, which
+# preserves the branch this replaced, where the python tool won over the shell one.
+MT_MERGE_TOOLS=(
+  "tools/wait_for_checks.py|venv/bin/python tools/wait_for_checks.py %s --merge|pinned|--merge"
+  ".github/scripts/merge-pr.sh|npm run merge -- %s|pinned|"
+  "scripts/merge-when-green.sh|./scripts/merge-when-green.sh %s|route|"
+)
+
 # An interpreter is matched by BASENAME, so a tool run out of a virtualenv
 # (venv/bin/python, .venv/bin/python) is the same route as one run by python3.
-MT_MERGE_WRAPPERS="merge-when-green.sh merge-pr.sh"
-MT_MERGE_WAITERS="wait_for_checks.py"
-MT_MERGE_WAITER_FLAG="--merge"
 MT_INTERPRETERS="bash sh zsh python python3"
+
+mt_declared_tool_paths() {
+  local row
+  for row in "${MT_MERGE_TOOLS[@]}"; do printf '%s\n' "${row%%|*}"; done
+}
+
+# The invocation for one declared path, with the number filled in. `<pr>` rather than an
+# empty slot when the number is not known, so the sentence still reads as a command.
+mt_pinned_how_for() {  # $1 = a declared path, $2 = pr number or empty
+  local row rest how pr="${2:-<pr>}"
+  [ -n "$pr" ] || pr="<pr>"
+  for row in "${MT_MERGE_TOOLS[@]}"; do
+    [ "${row%%|*}" = "$1" ] || continue
+    rest="${row#*|}"
+    how="${rest%%|*}"
+    # shellcheck disable=SC2059
+    printf "$how" "$pr"
+    return 0
+  done
+  return 1
+}
+
+# The commit pinned tool this directory carries, if any, as its repo relative path.
+# Only a `pinned` row counts: a route that merges without pinning is not something to
+# refuse a plain merge in favour of.
+mt_pinned_tool() {  # $1 = a directory
+  local row path kind rest d="${1:-$PWD}"
+  for row in "${MT_MERGE_TOOLS[@]}"; do
+    path="${row%%|*}"
+    rest="${row#*|}"; rest="${rest#*|}"
+    kind="${rest%%|*}"
+    [ "$kind" = "pinned" ] || continue
+    if [ -f "$d/$path" ]; then printf '%s' "$path"; return 0; fi
+  done
+  return 1
+}
+
+mt_pinned_how() {  # $1 = a directory, $2 = pr number or empty
+  local path
+  path="$(mt_pinned_tool "$1")" || return 1
+  mt_pinned_how_for "$path" "${2:-}"
+}
 
 # The command with every heredoc BODY removed, so text nobody is executing is not
 # read as something somebody is. Done BEFORE the segment split rather than during
@@ -145,8 +212,12 @@ MTEOF
 }
 
 # True when this ONE segment causes a merge, by any route other than the direct command.
+#
+# Reads MT_MERGE_TOOLS, so a tool added to the declaration is recognised here with
+# nothing to remember. The whole segment is passed rather than its leading tokens,
+# because a tool's required flag sits after its arguments.
 mt_segment_runs_wrapper() {  # $1 = a cleaned segment
-  local seg="$1" first second third rest target wrapper
+  local seg="$1" first second third rest target row path flag
   # Four variables for three tokens, deliberately: `read` gives the LAST variable
   # everything that is left, so reading three would make `third` the whole remainder
   # and `npm run merge -- 680` would never match `merge` exactly.
@@ -155,25 +226,28 @@ $seg
 MTEOF
   [ -n "$first" ] || return 1
 
-  # The wrapper is either the command itself, or the argument to an interpreter.
+  # The tool is either the command itself, or the argument to an interpreter.
   target="$first"
   case " $MT_INTERPRETERS " in
     *" ${first##*/} "*) target="$second" ;;
   esac
+  [ -n "$target" ] || return 1
 
-  for wrapper in $MT_MERGE_WRAPPERS; do
-    [ -n "$target" ] && [ "${target##*/}" = "$wrapper" ] && return 0
-  done
-  for wrapper in $MT_MERGE_WAITERS; do
-    if [ -n "$target" ] && [ "${target##*/}" = "$wrapper" ]; then
-      case " $seg " in
-        *" $MT_MERGE_WAITER_FLAG "*|*" $MT_MERGE_WAITER_FLAG") return 0 ;;
-      esac
-    fi
+  for row in "${MT_MERGE_TOOLS[@]}"; do
+    path="${row%%|*}"
+    [ "${target##*/}" = "${path##*/}" ] || continue
+    flag="${row##*|}"
+    [ -n "$flag" ] || return 0
+    case " $seg " in
+      *" $flag "*|*" $flag") return 0 ;;
+    esac
   done
 
-  # `npm run merge`, exactly: what follows `npm run` is a script name rather than a
-  # path, so a basename match cannot see it, and `npm run merge-ready` only reports.
+  # `npm run merge`, exactly. This one route cannot be matched from the declaration:
+  # what follows `npm run` is a script NAME rather than a path, so no basename of any
+  # declared file appears in the command at all. It reaches .github/scripts/merge-pr.sh,
+  # which is why that row's invocation is written as the npm form. `merge-ready` only
+  # reports, so the match has to be exact rather than a prefix.
   [ "$first" = "npm" ] && [ "$second" = "run" ] && [ "$third" = "merge" ] && return 0
   return 1
 }

@@ -123,6 +123,63 @@ if mt_runs_merge "$MERGE 42"; then pass; else fail "a direct merge was not read 
 if mt_runs_merge "echo \"$MERGE 42\""; then fail "an echo of the phrase was read as a merge"; else pass; fi
 if mt_runs_merge ""; then fail "an empty command was read as a merge"; else pass; fi
 
+echo "merge-target: the one declaration of a repo's own merge tool (claude-config#352)"
+
+# The tools were named in TWO places that had to agree by hand: this library decided which
+# commands count as a merge, block-red-merge.sh decided which repos must merge through
+# their own tool, and the two lists overlapped without being identical. That is the exact
+# shape of claude-config#351, where a tool sat in one list and not the other and a gate
+# enforced nothing in the repo it was built for. One declaration, read by both (L41).
+
+tools_root=$(mktemp -d)
+mkdir -p "$tools_root/pet/tools" "$tools_root/onboarding/.github/scripts" \
+         "$tools_root/green/scripts" "$tools_root/plain" "$tools_root/both/tools" \
+         "$tools_root/both/.github/scripts"
+: > "$tools_root/pet/tools/wait_for_checks.py"
+: > "$tools_root/onboarding/.github/scripts/merge-pr.sh"
+: > "$tools_root/green/scripts/merge-when-green.sh"
+: > "$tools_root/both/tools/wait_for_checks.py"
+: > "$tools_root/both/.github/scripts/merge-pr.sh"
+
+eq "$(mt_pinned_tool "$tools_root/pet")" "tools/wait_for_checks.py" "PET's tool is found by its path"
+eq "$(mt_pinned_tool "$tools_root/onboarding")" ".github/scripts/merge-pr.sh" "the shell tool is found by its path"
+eq "$(mt_pinned_tool "$tools_root/plain")" "" "a repo with no tool has none"
+# Order is preserved from the branch this replaced: where both exist, the python tool wins.
+eq "$(mt_pinned_tool "$tools_root/both")" "tools/wait_for_checks.py" "the first declared tool wins"
+
+# merge-when-green.sh is a merge ROUTE without being a PINNED tool. The quiz has to fire on
+# it, and block-red-merge must NOT insist on it, because it makes no commit pin promise.
+# One declaration carrying both facts is the whole point: two lists is what let them drift.
+eq "$(mt_pinned_tool "$tools_root/green")" "" "a wrapper that is not commit pinned is not insisted on"
+if mt_runs_merge "./scripts/merge-when-green.sh 42"; then pass; else
+  fail "the unpinned wrapper stopped counting as a merge"; fi
+
+# The invocation the refusal tells somebody to run has to be RUNNABLE, so it carries the
+# pull request number. A remedy nobody can run is a refusal nothing can clear (L109, L406).
+eq "$(mt_pinned_how "$tools_root/pet" 7)" "venv/bin/python tools/wait_for_checks.py 7 --merge" \
+  "PET's tool is quoted with its number"
+eq "$(mt_pinned_how "$tools_root/onboarding" 680)" "npm run merge -- 680" \
+  "the npm route is quoted with its number"
+# With no number known, a placeholder rather than an empty slot, so the sentence still reads.
+eq "$(mt_pinned_how "$tools_root/pet" "")" "venv/bin/python tools/wait_for_checks.py <pr> --merge" \
+  "an unknown number is a visible placeholder"
+
+# Every declared tool must be a route the matcher recognises, or the declaration says one
+# thing and the matcher another, which is the drift this replaced (L58, L263). Derived from
+# the declaration rather than listed again here, so a tool added later is covered by this
+# check without anybody remembering to extend it.
+while IFS= read -r decl_path; do
+  [ -n "$decl_path" ] || continue
+  if mt_runs_merge "$(mt_pinned_how_for "$decl_path" 7)"; then pass; else
+    fail "a declared tool is not recognised as a merge: $decl_path"; fi
+done < <(mt_declared_tool_paths)
+# And the declaration is not empty, because a loop over nothing passes every assertion in it
+# at once (L98).
+if [ "$(mt_declared_tool_paths | grep -c .)" -ge 3 ]; then pass; else
+  fail "the tool declaration came back with fewer than the three known tools"; fi
+
+rm -rf "$tools_root"
+
 echo "merge-target: which pull request"
 
 eq "$(mt_pr_number "$MERGE 7 --squash")" "7" "number before the flags"

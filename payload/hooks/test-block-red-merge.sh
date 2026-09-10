@@ -571,6 +571,22 @@ out=$(run_hook "$dir" "npm run merge -- 7")
 if denied "$out"; then fail "the gate refused the merge route it tells people to use: $out"; else pass; fi
 rm -rf "$dir"
 
+# The gate must hold NO list of its own. It kept one, testing for each tool's file by
+# hand, while lib/merge-target.sh kept a second list for a different question, and the two
+# had to agree by hand. That is what claude-config#351 was, so the guard is on the
+# duplication rather than on any one tool (L41, L30).
+#
+# A source scan, because behaviour cannot see this: both copies agreeing is exactly what
+# the passing tests looked like right up to the day they stopped.
+own_list=$(grep -nE '^[^#]*\[ -f "(tools|\.github|scripts)/' "$(dirname "$HOOK")/block-red-merge.sh" || true)
+if [ -n "$own_list" ]; then
+  fail "the gate tests for a merge tool's file itself instead of asking the declaration: $own_list"
+else pass; fi
+# And it really does consult the shared declaration, so the check above is not satisfied by
+# a gate that simply stopped looking for tools at all (L98).
+if grep -q 'mt_pinned_tool' "$(dirname "$HOOK")/block-red-merge.sh"; then pass; else
+  fail "the gate does not read the shared tool declaration"; fi
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
