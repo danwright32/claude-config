@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 623 lessons.
+LESSONS.md, which is NOT loaded into the session. 624 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -470,6 +470,7 @@ to decide something: the body is where the failure it came from is described.
 - L666. When a system is built to REPLACE another that is still live, every parity check gets written about the DATA the two systems hold and none about the SCREEN the person sees, so the replacement silently drops whatever the incumbent's surface accumulated and nobody wrote down.
 - L676. A control that carries somebody ONWARD from a screen where the system has already identified them must carry that identification with it
 - L677. A step removed from a flow takes with it every capability that only that step offered
+- L678. A warning is read by its PRESENCE, so a surface that never got one is indistinguishable from a surface with nothing to warn about.
 
 ## External systems
 

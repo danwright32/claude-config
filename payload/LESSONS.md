@@ -5521,6 +5521,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   and not change what we would ring, and the person that hurt was the one the cancel had been
   built for: somebody who never received the invite email, and so had no manage link either.)
 
+- **L678. A warning is read by its PRESENCE, so a surface that never got one is
+  indistinguishable from a surface with nothing to warn about.** When you add a warning to one
+  screen, enumerate every screen showing the same data and either add it or record why that
+  screen does not need it. Nobody looking at the screen without the warning thinks to ask where
+  it is, which is why the gap survives review by the very people who wrote the warning.
+  (PET#1435, 2026-09-10: the dashboard was given a header badge naming how far behind the board
+  is, plus a hover tip carrying the build time and the one action that starts a fresh build. The
+  commission board, which reads the same builds and is the page a manager uses to work out what
+  somebody gets paid, has no freshness signal at all: no badge, no build time, no notice. Two
+  pull requests and a screenshot review went by on the copy and the hierarchy of the two signals
+  the dashboard now reconciles, and the surface with zero signals was never mentioned, because
+  its absence looks exactly like a board that is current.)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
