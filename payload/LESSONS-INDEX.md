@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 621 lessons.
+LESSONS.md, which is NOT loaded into the session. 622 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -468,6 +468,7 @@ to decide something: the body is where the failure it came from is described.
 - L652. A picker that cannot display the stored value SUBMITS its fallback in place of it, because a control posts what it DISPLAYS rather than what it was given, so the next save silently overwrites a real value with a plausible one and reports success.
 - L663. An input that REWRITES its own value as the person types (a phone or card mask, a currency or date formatter, an uppercaser) moves the caret to the END on every keystroke unless it is explicitly put back, so a person cannot correct a character in the middle of what they have already typed.
 - L666. When a system is built to REPLACE another that is still live, every parity check gets written about the DATA the two systems hold and none about the SCREEN the person sees, so the replacement silently drops whatever the incumbent's surface accumulated and nobody wrote down.
+- L676. A control that carries somebody ONWARD from a screen where the system has already identified them must carry that identification with it
 
 ## External systems
 

@@ -5494,6 +5494,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   after committing to a call. It surfaced only because Dan asked an unrelated question about an
   illustration on that screen.)
 
+- **L676. A control that carries somebody ONWARD from a screen where the system has already
+  identified them must carry that identification with it**, because clearing it drops them into
+  the anonymous path, which then re-collects what was just established and whose only possible
+  outcome is the refusal that identification would have avoided. The fallback is silent because
+  the anonymous path is the default and works perfectly, and the re-collected form reads as
+  ordinary product rather than as a fault.
+  (slate#2203, 2026-09-10: the booker recognises a lead from the Salesforce id in the landing URL
+  and names the call they already have. Pressing "Pick another time" ran setExistingCall(null),
+  so they were handed the empty Name, Email and Phone form, retyped all three, and were declined
+  with a 409 that returned the very call the page had shown them two clicks earlier. The form
+  collected nothing: it existed only to make them re-identify themselves, and its one outcome was
+  a refusal. Dan hit it on the pilot link and read it as the product having forgotten him, which
+  is exactly what slate#2166 had been opened to end one step earlier in the same flow.)
+
 ## External systems
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
