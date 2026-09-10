@@ -1938,6 +1938,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   many it pressed, which is the part that hides it: 58 is a real number and nothing compares
   it against how many the pages can actually reach across their states.)
 
+- **L675. A check that requires an escape hatch to carry a REASON must require that reason to
+  begin with a WORD, never merely a non-whitespace character, because the syntax wrapping the
+  marker satisfies the looser test and the empty exemption then reads as one somebody reasoned
+  about.**
+  (Try-Pennie/slate#2200: nineteen convention guards in one repo each let a call site opt out
+  by writing a one line reason, and each carries its own copy of the reader. Every one matched
+  the reason as the marker followed by `\\s*\\S`. The place these have to be written in JSX is a
+  `{/* ... */}` block, where the block's own `*/` is a non-whitespace character sitting right
+  after the colon, so `{/* unsaved-ok: */}` passed as a considered exemption while saying
+  nothing at all. It was found only by writing the TWENTIETH such guard and testing the empty
+  case against the comment form the convention actually uses; the existing guard's own suite
+  tested the empty case in a `//` comment, where nothing follows the colon, and passed. The
+  same shape is waiting wherever a justification is validated inside a delimiter: a closing
+  quote, a bracket, a YAML or CSV terminator.)
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
