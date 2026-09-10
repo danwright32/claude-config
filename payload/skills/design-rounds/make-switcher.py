@@ -376,6 +376,32 @@ def main(argv):
         fail("the builder %s does not define buildScreen, which is the one function the page "
              "calls for every option" % builder_name)
 
+    # A builder that reaches for one of the page's OWN elements by its bare name.
+    #
+    # Ovation's design files are each a page in their own right, with their own stage, and
+    # they carry a bootstrap line like document.getElementById("stage").replaceChildren(...).
+    # Lift the script out as a builder and, before the ids were namespaced, that line found
+    # the CHROME's stage and wrote into it, which show() then replaced: wasteful and silent,
+    # and it survived. With the ids namespaced it finds nothing and throws part way through,
+    # so whatever the file declares below that line never runs (claude-config#356).
+    #
+    # The namespace stays. What changes is that this is said HERE, where the person is
+    # holding the spec and the builder, rather than left to throw at load with the cause
+    # nowhere near the symptom. Same principle as the two refusals above.
+    reached = [name for name in ("stage", "tabs", "readout")
+               if ('getElementById("%s")' % name) in builder
+               or ("getElementById('%s')" % name) in builder
+               or ('querySelector("#%s")' % name) in builder
+               or ("querySelector('#%s')" % name) in builder]
+    if reached:
+        fail("the builder %s reaches for an element called %s, which is this page's own and "
+             "is now called dr-%s so that a project cannot take it by accident. A builder is "
+             "handed one option and must RETURN the element to draw for it, rather than "
+             "reach for somewhere to put it: whatever it returns is placed on the stage for "
+             "it. If that line is the file's own bootstrap for running as a page on its own, "
+             "it does not belong in the builder."
+             % (builder_name, ", ".join(reached), reached[0]))
+
     styles = ""
     styles_name = str(spec.get("styles", "")).strip()
     if styles_name:

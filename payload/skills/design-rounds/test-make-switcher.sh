@@ -711,6 +711,69 @@ print(re.sub(r"\s+", " ", m.group(1)).strip() if m else "NO-STRIP")'
   check_not "it does not also name a pair as matching" "A and B" "$throw_strip"
 fi
 
+# --- a builder that reaches for the page's own element is refused, not left to throw ---
+#
+# Found by looking at the real design files after namespacing the ids (claude-config#356).
+# Four of Ovation's carry a standalone bootstrap line, document.getElementById("stage")
+# .replaceChildren(...), because each is a page in its own right with its own stage. Lift
+# the script out as a builder and that line used to find the CHROME's stage and write into
+# it, which show() then replaced: wasteful and silent, but it survived. With the ids
+# namespaced it finds nothing and throws part way through the builder, so whatever the file
+# declares below that line never runs.
+#
+# The namespace is still right, and the answer is not to give the id back. It is to say so
+# at build time, in the tool that already refuses a missing buildScreen and an unwirable
+# key, rather than let the page throw at load where the cause is nowhere near the symptom.
+
+reaches_builder() { # reaches_builder <file> <expression>
+  printf 'function buildScreen(variant) { %s; return document.createElement("div"); }\n' "$2" > "$1"
+}
+
+for reach in 'document.getElementById("stage")' \
+             'document.getElementById("tabs")' \
+             'document.getElementById("readout")' \
+             'document.querySelector("#stage")'; do
+  reaches_builder "$TMP/reach-builder.js" "$reach"
+  python3 - "$TMP/js.json" "$TMP/reach.json" <<'RJ'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "reach-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+RJ
+  out="$(run "$TMP/reach.json" "$TMP/reach.html")"; rc=$?
+  # 2 is this tool's refusal code, the same one every other refusal here exits with.
+  check_eq "a builder reaching for the page's own element is refused: $reach" "2" "$rc"
+  check "the refusal names what the builder reached for: $reach" "stage" "$out$reach"
+  check "the refusal says to return the element instead: $reach" "return" "$out"
+done
+# It must name the file, because the person is looking at a spec and a builder and needs to
+# know which one to open (L80).
+check "the refusal names the builder file" "reach-builder.js" "$out"
+
+# The control: an ordinary builder is untouched, or this refusal has simply stopped the
+# tool working (L159). Its own spec, so it is not reading a file another case wrote.
+printf 'function buildScreen(variant) { var d = document.createElement("div"); d.textContent = variant.name; return d; }\n' \
+  > "$TMP/fine-builder.js"
+python3 - "$TMP/js.json" "$TMP/fine.json" <<'FJ'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "fine-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+FJ
+run "$TMP/fine.json" "$TMP/fine.html" >/dev/null; check_eq "an ordinary builder still builds" "0" "$?"
+
+# And a builder that names the chrome's NAMESPACED element is left alone: that is a
+# deliberate reach at something that exists, not a name it expected to be its own.
+reaches_builder "$TMP/ns-reach-builder.js" 'document.getElementById("dr-stage")'
+python3 - "$TMP/js.json" "$TMP/ns-reach.json" <<'NJ'
+import json, sys
+spec = json.load(open(sys.argv[1]))
+spec["builder"] = "ns-reach-builder.js"
+json.dump(spec, open(sys.argv[2], "w"))
+NJ
+run "$TMP/ns-reach.json" "$TMP/ns-reach.html" >/dev/null
+check_eq "reaching for the namespaced element is not refused" "0" "$?"
+
 # --- how many times the builder is asked to draw (claude-config#357) ---
 #
 # The sameness check draws every option once at load. Left beside a show() that redraws on
