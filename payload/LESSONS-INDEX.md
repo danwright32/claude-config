@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 634 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 636 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -168,6 +168,7 @@ apply it, because the body is where the failure it came from is described.
 - L447. A sweep exercising a surface in ONE accumulating pass stops covering whatever an earlier step made unreachable, and its count still reads as coverage.
 - L675. A check requiring an escape hatch to carry a REASON must require it to begin with a WORD, or the surrounding syntax satisfies it and reads as reasoned.
 - L451. A rendered page measurement reads the DOCUMENT MODE too, and a file with no doctype is in quirks mode, so any HTML to be measured must declare one.
+- L684. A `for...of` over a STRING iterates its characters and type checks silently, so a collection built by `join`, `split` or a template and then looped over runs once per letter and every check inside it asks a question about a single character.
 
 ## Data safety
 
@@ -573,6 +574,7 @@ apply it, because the body is where the failure it came from is described.
 - L437. Code lifted out of a file leaves behind everything it inherited from that file's AMBIENT SCOPE, and the inherited thing is usually a default.
 - L631. Resolving a conflict by splicing both sides can drop the delimiter that closed the block, so check the file's STRUCTURE, not just that markers are gone.
 - L655. Finding the right shared place to PUT new logic is not the same as checking whether it already EXISTS, and doing the first well hides the second.
+- L683. A change that redefines the UNIT a number counts silently re-aims every consumer of that number, and the one that gets corrected is whichever surface the change was framed around, so enumerate the readers from where the value is PUBLISHED rather than from the issue.
 
 ## Cross-system reliability
 
