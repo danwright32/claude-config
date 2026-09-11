@@ -1,0 +1,37 @@
+# Functions that answer into a global while every call site reads them in a subshell
+# (claude-config#372). One "path: count" per line.
+#
+# lesson_index_entry_cap recorded "this hook exists but carries no cap" in a shared variable, while
+# every call site read the function through a command substitution. That is a subshell, so the
+# assignment was discarded on return and the warning it fed could never fire, with the code setting
+# it reading as entirely correct. The tests caught it; inspection would not have.
+#
+# scan-subshell-globals.py derives the real counts and fails if any file's count GROWS, and fails
+# when a count here is HIGHER than the file's, so a number that is no longer real has to come down
+# rather than sit as a permanent allowance (L182).
+#
+# WHAT A FINDING MEANS. The severe case is a function whose ANSWER is the global: the caller reads
+# nothing and the code looks right. The mild case is a private working variable that was never
+# given `local`, which leaks outward rather than losing anything. Measured 2026-09-11: 8 flagged,
+# of which one was the severe kind (tip_payload_dir, whose caller could never see TIP_PAYLOAD_DIR,
+# so the extracted copy of the whole shared payload was never removed) and it was fixed in the same
+# change. The rest are the mild kind.
+#
+# A function also called PLAINLY somewhere is not flagged at all: answering into a global is a
+# legitimate design when the caller is in the same shell, and this repo has such functions on
+# purpose (lesson_band_locked is one, and its own comment says why).
+#
+# Every entry carries the reason it was accepted (L233).
+
+# tzinfo, inside a python program this function pipes into python3. It is python's variable, not
+# the shell's, and the scanner skips heredoc bodies but not this shape.
+payload/hooks/lib/issue-spool.sh: 1
+
+# _sk and _src_*: private working variables in two readers that both answer on stdout. Missing a
+# `local`, so they leak outward; nothing reads them and no answer is lost.
+payload/hooks/run-all-tests.sh: 2
+
+# _sdn_*, _fd_* and n: the same shape again, in three suite helpers that all answer on stdout.
+# This file is run under `sh` compatible rules in places and its helpers deliberately avoid
+# `local`, which is why these read as findings.
+tests/test-claude-sync.sh: 3
