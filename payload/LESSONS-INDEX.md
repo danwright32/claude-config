@@ -1,11 +1,13 @@
 # Lessons index (generated, do not edit)
 
-One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 634 lessons.
+One line per lesson: a SHORTENED form of the rule, carrying its condition and its
+instruction, and routinely dropping the clause that says what the failure looks like.
+Generated from LESSONS.md, which is NOT loaded into the session. 634 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
-to decide something: the body is where the failure it came from is described.
+to decide something: a line here is enough to tell you a rule APPLIES, and not enough to
+apply it, because the body is where the failure it came from is described.
 
 ## Proof over green
 
