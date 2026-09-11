@@ -33,6 +33,11 @@ payload/hooks/test-check-free-space.sh: 1
 #   5093  "Verified:"                the verdict line a single published Mac must not get. Its own
 #         comment records that an earlier version banned the WORD and wrongly failed on the correct
 #         message, so this one deliberately targets a string the suite never writes.
-#   13764 "unindentedcontinuation"   the glued form the generator must not produce. The unglued
+#   13773 "unindentedcontinuation"   the glued form the generator must not produce. The unglued
 #         form is asserted positively one check above, in the same fixture.
-tests/test-claude-sync.sh: 5
+#   15491 "does not have the command"  added 2026-09-11 with claude-config#379, and caught by this
+#         scan on the day it landed, which is what it is for. It is the phrase the tool prints
+#         about a clone missing a command, asserted absent for a clone that has every one. Sound
+#         for the same reason as the five above: the needle names what the TOOL would print, and
+#         the test that rules it out has no reason to contain it.
+tests/test-claude-sync.sh: 6
