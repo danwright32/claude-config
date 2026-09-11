@@ -134,8 +134,13 @@ check "and it really considered the repo's functions, rather than none" "$([ "${
 # answer in a global its only caller read through a command substitution, so the cleanup that reads
 # that variable could never fire and every comparison left a copy of the whole shared payload
 # behind. Asserted here rather than only in the sync suite, because this is the scan that found it.
-check "and claude-sync no longer holds the finding it found there" \
-  "$(printf '%s\n' "$OUT" | grep -q 'claude-sync:' && echo 'claude-sync is flagged again' || echo ok)"
+# Matched with `case` over a variable, never piped into `grep -q`: under pipefail a short
+# circuiting consumer kills its producer and the pipeline reports a failure that never happened
+# (L183), and this repo ratchets the count of such pipelines down rather than up.
+case "$OUT" in
+  *"claude-sync:"*) check "and claude-sync no longer holds the finding it found there" "claude-sync is flagged again" ;;
+  *) check "and claude-sync no longer holds the finding it found there" ok ;;
+esac
 
 echo
 echo "passed: $pass, failed: $fail"

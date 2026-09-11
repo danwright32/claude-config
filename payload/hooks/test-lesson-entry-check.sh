@@ -143,6 +143,31 @@ out="$(payload_for Edit "$HOME_FIX/LESSONS.md" | CLAUDE_HOME="$HOME_FIX" SYNC_CL
 says "with no clone to ask, it says the entry was NOT checked" "$out" "could not"
 says "and names what it was looking for" "$out" "claude-sync"
 
+# A clone that does not KNOW the command has judged nothing, and saying the lesson is broken
+# because the tool could not be asked is a claim this never measured (L11, L440). It happens by
+# DESIGN rather than by accident: the clone this calls updates on its own schedule, so between this
+# config reaching a Mac and that clone pulling, the command is genuinely absent. A change applied
+# before the code that needs it deploys has to leave the deployed code working (L640).
+OLD="$WORK/oldclone"; mkdir -p "$OLD"
+cat > "$OLD/claude-sync" <<'OLDEOF'
+#!/usr/bin/env bash
+echo "claude-sync: unknown command '$1' (try: push, pull, sync, status, check-lessons, help)" >&2
+exit 1
+OLDEOF
+chmod +x "$OLD/claude-sync"
+printf '%s
+' "$OLD" > "$WORK/oldreg"
+printf '# Lessons
+
+## Proof over green
+
+- L2. bare.
+' > "$HOME_FIX/LESSONS.md"
+out="$(payload_for Edit "$HOME_FIX/LESSONS.md" | CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$WORK/oldreg" bash "$HOOK" 2>&1)"
+says "a clone too old to know the command says the entry was NOT checked" "$out" "could not be checked"
+says "and names the clone that has to be updated" "$out" "$OLD"
+case "$out" in *"leaves the file unable to publish"*) check "and does not claim the lesson is broken" "it blamed the lesson" ;; *) check "and does not claim the lesson is broken" ok ;; esac
+
 # A payload it cannot read is the same kind of failure and must not read as a clean file.
 out="$(printf 'not json at all' | CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
 silent "an unreadable payload names no file, so there is nothing to check and nothing to say" "$out"

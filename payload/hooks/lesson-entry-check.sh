@@ -99,6 +99,16 @@ fi
 out="$(CLAUDE_HOME="$CLAUDE_HOME" SYNC_NO_NOTIFY=1 "$sync" lesson-faults 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && exit 0
 
+# A clone that does not KNOW this command has not judged anything, and saying the lesson is broken
+# because the tool could not be asked is a claim this never measured (L11, L440). It happens by
+# design rather than by accident: the clone this calls updates on its own schedule, so between the
+# config reaching this Mac and that clone pulling, the command is genuinely absent. A migration
+# applied before the code that needs it deploys has to leave the deployed code working (L640).
+case "$out" in
+  *"unknown command 'lesson-faults'"*)
+    block "The lesson you just wrote into $CLAUDE_HOME/LESSONS.md could not be checked: the clone of claude-sync at $(dirname "$sync") does not have the 'lesson-faults' command yet, so nothing here could judge the entry. That clone updates on its own schedule, and this config reached this Mac first. Run 'claude-sync pull' from that clone, then check the entry with: $sync lesson-faults" ;;
+esac
+
 block "The lesson entry just written into $CLAUDE_HOME/LESSONS.md leaves the file unable to publish. Fix it now, in this session, rather than leaving it: until it is fixed the entry is absent from LESSONS-INDEX.md (which loads into every session in every project), unreadable by 'claude-sync lesson', uncounted by the duplicate check and by the number minter, and the WHOLE lessons file is held back from the next send, so every other lesson written since is stuck behind it too.
 
 What claude-sync lesson-faults said:
