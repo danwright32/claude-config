@@ -4185,6 +4185,111 @@ printf 'ENTRY_CAP=80\n' > "$LCAPH/hooks/test-rule-file-budget.sh"
 # reader can find nothing in production, hold nothing back, and read as a working check (L96).
 check "cap: the real budget hook carries a cap in the shape the send reads" \
   "grep -qE '^ENTRY_CAP=[0-9]+' \"\$(dirname '$SCRIPT')/payload/hooks/test-rule-file-budget.sh\""
+section "== check-lessons runs every predicate that holds a lessons file back =="
+# claude-config#373. check-lessons is the read only command for asking whether LESSONS.md can
+# publish. It ran two of the four predicates the send runs, so on 2026-09-11 it printed "lesson
+# numbering is sound (next free: L685)" and exited 0 on a file the send was refusing to publish,
+# with both of its entries rendering at 273 and 248 characters against a 160 cap.
+#
+# That is L686: a read only PREVIEW of a gate must run every predicate the gate runs, DERIVED from
+# the gate rather than maintained beside it, or its all clear is a prediction about a subset. So
+# the kinds are enumerated below OUT OF THE TOOL, and a fifth arriving with no fixture here fails
+# this section rather than quietly going unpreviewed.
+#
+# Its own fixture: sections are dealt to parallel workers by measured time, so one that reads a
+# neighbour's variable passes until the day the deal changes.
+CLK="$WORK/clkrepo"; mkdir -p "$CLK/payload"
+CLKH="$WORK/clkhome"; mkdir -p "$CLKH/hooks"
+echo '{"hooks":{}}' > "$CLKH/settings.json"
+echo '#!/bin/sh' > "$CLKH/hooks/keep-syncing.sh"
+printf '# rules\n@LESSONS-INDEX.md\n' > "$CLKH/CLAUDE.md"
+# Deliberately not the real cap, for the same reason the section above gives: a fixture carrying
+# 160 would pass just as well against a tool that hardcoded 160 (L70).
+printf 'ENTRY_CAP=80\n' > "$CLKH/hooks/test-rule-file-budget.sh"
+_clk(){ SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CLKH" SYNC_REPO="$CLK" bash "$SCRIPT" "$@" 2>&1; }
+_clk_long="A rule long enough to render past the fixture cap of eighty characters but well inside the real one."
+
+# One fixture per fault kind, each exhibiting ONLY its own fault, so a refusal proves that
+# predicate ran rather than that something somewhere was wrong.
+_clk_write(){   # _clk_write <kind>
+  case "$1" in
+    malformed) printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\n- L2. an entry with the bold left off.\n' > "$CLKH/LESSONS.md" ;;
+    orphaned)  printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\nthis paragraph belongs to no lesson at all.\n' > "$CLKH/LESSONS.md" ;;
+    duplicate) printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\n- **L1. claimed twice.** body\n' > "$CLKH/LESSONS.md" ;;
+    overcap)   printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\n- **L2. %s** body\n' "$_clk_long" > "$CLKH/LESSONS.md" ;;
+    *) return 1 ;;
+  esac
+}
+
+# The control FIRST, on a file with none of the four faults: a preview that refuses everything
+# reports nothing (L104).
+printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\n- **L2. also sound.** body\n' > "$CLKH/LESSONS.md"
+_clk_ok="$(_clk check-lessons)"; _clk_ok_rc=$?
+check "#373 a sound lessons file still passes check-lessons" "[ '$_clk_ok_rc' -eq 0 ]"
+check "#373 and it still reports the next free number" \
+  "case \"\$_clk_ok\" in *'next free: L3'*) true ;; *) false ;; esac"
+
+# The kinds are read out of the TOOL, never listed here, so this section cannot fall behind the
+# gate it is checking (L41). A kind with no fixture above is a failure, not a skip.
+_clk_kinds="$(sed -n 's/^LESSON_PUBLISH_FAULT_KINDS="\(.*\)"$/\1/p' "$SCRIPT")"
+check "#373 the tool names the faults that hold a lessons file back, in one place" \
+  "[ -n \"\$_clk_kinds\" ]"
+for _clk_kind in $_clk_kinds; do
+  if _clk_write "$_clk_kind"; then
+    check "#373 fault kind '$_clk_kind' has a fixture in this section" "true"
+  else
+    check "#373 fault kind '$_clk_kind' has a fixture in this section" "false  # add one to _clk_write above"
+    continue
+  fi
+  _clk_out="$(_clk check-lessons)"; _clk_rc=$?
+  check "#373 check-lessons refuses a file whose only fault is '$_clk_kind'" "[ '$_clk_rc' -ne 0 ]"
+  # And the gate it previews refuses the same file, which is the agreement the preview claims.
+  _clk_send="$(_clk push)"
+  check "#373 and the send holds that same file back ('$_clk_kind')" \
+    "case \"\$_clk_send\" in *'NOT publishing'*) true ;; *) false ;; esac"
+done
+
+# The one that was actually missing, named rather than left to the loop, because it is the case
+# the issue was opened about and its remedy is a specific thing to write.
+_clk_write overcap
+_clk_cap="$(_clk check-lessons)"
+check "#373 the over-cap refusal names the lesson" \
+  "case \"\$_clk_cap\" in *L2*) true ;; *) false ;; esac"
+check "#373 and says what to write, not merely that something is wrong" \
+  "case \"\$_clk_cap\" in *'SHORT:'*) true ;; *) false ;; esac"
+
+# All faults in ONE run, never as an else-if. A file routinely commits two at once, and dying at
+# the first sends somebody back for a second run to discover the second, which is exactly how the
+# cap fault surfaced only after the bold markers were fixed.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\n- **L1. claimed twice.** body\n- **L2. %s** body\n' "$_clk_long" > "$CLKH/LESSONS.md"
+_clk_both="$(_clk check-lessons)"
+check "#373 a duplicate and an over-cap entry are both reported in one run" \
+  "case \"\$_clk_both\" in *'used 2 times'*) true ;; *) false ;; esac"
+check "#373 and the over-cap half of that same run is reported too" \
+  "case \"\$_clk_both\" in *'against a 80 cap'*) true ;; *) false ;; esac"
+
+# A cap that IS readable while the rule that APPLIES it is not there measures nothing, and the
+# silence is indistinguishable from a clean file (L98). Distinct from the budget hook carrying no
+# cap line, which is a config to repair rather than an incomplete install, so the two get distinct
+# messages (L11). Driven from a copy of the tool with no payload beside it and a home with no
+# hooks/lib, which is the only way that state occurs.
+CLKC="$WORK/clkclone"; mkdir -p "$CLKC"
+cp "$SCRIPT" "$CLKC/claude-sync"
+_clk_write overcap
+_clk_norule="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CLKH" SYNC_REPO="$CLKC" bash "$CLKC/claude-sync" check-lessons 2>&1)"
+check "#373 a readable cap with no rule to apply it is reported, not passed over" \
+  "case \"\$_clk_norule\" in *'lesson-index-cap.sh'*) true ;; *) false ;; esac"
+check "#373 and that message says nothing was measured against the cap" \
+  "case \"\$_clk_norule\" in *'no lesson was measured'*) true ;; *) false ;; esac"
+# The positive control in the SAME fixture: the very same lessons file, read by a copy of the tool
+# that CAN reach the rule, is refused for being over the cap. Without it the check above passes
+# against a file that was never over anything (L159).
+_clk_rule="$(_clk check-lessons)"
+check "#373 and the same file IS refused by a copy that can reach the rule" \
+  "case \"\$_clk_rule\" in *'against a 80 cap'*) true ;; *) false ;; esac"
+check "#373 and that copy says nothing about a missing rule" \
+  "case \"\$_clk_rule\" in *'lesson-index-cap.sh'*) false ;; *) true ;; esac"
+
 section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
 # needs: #15: duplicate lesson numbers must not be published or go unnoticed
 # The settled rule (see the 2026-08-05 note above): the published copy keeps the

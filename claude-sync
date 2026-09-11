@@ -48,13 +48,19 @@ PAYLOAD="$SYNC_REPO/payload"
 # run of every test, and a check that silently stops running looks exactly like one that found
 # nothing to report (L98). The code ships beside the tool; the CONFIG it reads does not.
 SYNC_SELF_PAYLOAD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/payload"
+# The tool's OWN copy first, then the one installed into the live config. Two genuinely different
+# copies rather than one lookup twice: a checkout always ships the payload beside the tool, and a
+# Mac that has ever applied a config always holds hooks/lib/ under CLAUDE_HOME.
 LESSON_CAP_LIB="$SYNC_SELF_PAYLOAD/hooks/lib/lesson-index-cap.sh"
-if [ ! -f "$LESSON_CAP_LIB" ]; then
-  echo "claude-sync: this checkout is missing $LESSON_CAP_LIB, which holds the one rule deciding whether a lesson is too long for the index that loads into every session. Refusing to run rather than carrying on with that check quietly absent, which would publish lessons unchecked while reading as a working send." >&2
-  exit 4
+[ -f "$LESSON_CAP_LIB" ] || LESSON_CAP_LIB="$CLAUDE_HOME/hooks/lib/lesson-index-cap.sh"
+# NOT a refusal to run. Whether the cap can be applied at all is already decided by whether a
+# budget hook carrying an ENTRY_CAP line is there, so a missing rule matters only when there IS a
+# cap to apply, and lesson_fault_unavailable says so in those words at the point it matters. Dying
+# here instead would make a tool that syncs hooks and skills unusable over a check about lessons.
+if [ -f "$LESSON_CAP_LIB" ]; then
+  # shellcheck source=payload/hooks/lib/lesson-index-cap.sh
+  . "$LESSON_CAP_LIB"
 fi
-# shellcheck source=payload/hooks/lib/lesson-index-cap.sh
-. "$LESSON_CAP_LIB"
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
 MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
@@ -1431,6 +1437,10 @@ over_cap_lesson_entries(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:Lnnn 
   cap="$(lesson_index_entry_cap)"
   [ -n "$cap" ] || return 0
   case "$cap" in UNREADABLE:*) return 0 ;; esac
+  # The shared rule is what APPLIES that cap. Missing, this reports nothing, and
+  # lesson_fault_unavailable is what says out loud that nothing was measured, so the silence here
+  # can never be read as a clean file (L98).
+  lesson_cap_rule_available || return 0
   # The rule itself is lesson_index_cap_scan's, shared with payload/hooks/test-rule-file-budget.sh
   # so that a change to how an over-cap line is decided cannot land in one copy only (#370). The
   # floor is ZERO here, deliberately: the budget hook measures the whole generated index and a
@@ -1475,6 +1485,90 @@ duplicate_lesson_numbers(){   # $1 = tree to inspect
              | awk '$1 > 1 { printf "%s used %s times\n", $2, $1 }')
   done
   return 0
+}
+
+# ---- the faults that hold a lessons file back, in ONE list (claude-config#373) ----
+# The send refuses to publish a lessons file carrying any of these, and `check-lessons` is the read
+# only command for asking whether it will. That command ran two of them, so on 2026-09-11 it
+# printed "lesson numbering is sound (next free: L685)" and exited 0 on a file the send was
+# refusing, whose two entries rendered at 273 and 248 characters against a 160 cap.
+#
+# L686: a read only PREVIEW of a gate must run every predicate the gate runs, DERIVED from the gate
+# rather than maintained beside it, or its all clear is a prediction about a subset. So the list
+# lives here once and both sites walk it. A fifth fault is added by adding a kind here and a branch
+# to each of the four functions below, and it reaches the preview with nothing else to remember.
+LESSON_PUBLISH_FAULT_KINDS="malformed orphaned duplicate overcap"
+
+# The detail lines for one kind, from that kind's own predicate.
+lesson_fault_lines(){   # $1 = kind, $2 = tree to inspect
+  case "$1" in
+    malformed) malformed_lesson_entries "$2" ;;
+    orphaned)  orphaned_lesson_prose "$2" ;;
+    duplicate) duplicate_lesson_numbers "$2" ;;
+    overcap)   over_cap_lesson_entries "$2" ;;
+    # Never a silent 0. A kind added to the list above and forgotten here would make the send and
+    # the preview both report a clean file, which is the exact shape of failure this list exists to
+    # end (L98, L113).
+    *) echo "claude-sync: '$1' is named in LESSON_PUBLISH_FAULT_KINDS but no predicate answers for it, so a lessons file was judged on fewer faults than this tool claims to check." >&2; return 2 ;;
+  esac
+}
+
+# WHY that fault stops the file publishing, and WHAT to write instead. One wording each, spoken by
+# the send and by the preview, because two sites explaining one fault drift into two accounts of it
+# and only the pair is wrong (L118). What each site adds is its own tail: the send says the file
+# will go out on the next send, the preview says nothing of the kind because it publishes nothing.
+lesson_fault_cause(){   # $1 = kind
+  case "$1" in
+    malformed) printf '%s' "it holds lesson entries not written as '- **Lnnn. ...', so nothing here can read them: not the index that loads into every session, not 'claude-sync lesson', not the duplicate check, and not the number minter" ;;
+    orphaned)  printf '%s' "it holds text that belongs to no lesson: a non blank line at the top level, after a section has started, that is neither a heading nor an entry nor an indented continuation of one" ;;
+    duplicate) printf '%s' "the same lesson number is used twice, which silently breaks every reference to it" ;;
+    overcap)   printf '%s' "it holds lesson entries whose line in the generated index runs past the cap, and that index loads into every session in every project" ;;
+    *) return 2 ;;
+  esac
+}
+lesson_fault_remedy(){   # $1 = kind
+  case "$1" in
+    malformed) printf '%s' "Rewrite each one to start with '- **L<number>. '" ;;
+    orphaned)  printf '%s' "Indent it under the entry it belongs to, or make it its own entry" ;;
+    duplicate) printf '%s' "Renumber the later entry ('claude-sync next-lesson' prints the next free number)" ;;
+    overcap)   printf '%s' "Give each one a 'SHORT: <the rule in one line>' line inside its entry; the full rule stays exactly as it is and the index renders the short form instead" ;;
+    *) return 2 ;;
+  esac
+}
+# The few words a desktop notification has room for.
+lesson_fault_notice(){   # $1 = kind
+  case "$1" in
+    malformed) printf '%s' "unreadable lesson entry" ;;
+    orphaned)  printf '%s' "text belonging to no lesson" ;;
+    duplicate) printf '%s' "duplicate lesson number" ;;
+    overcap)   printf '%s' "lesson too long for the index" ;;
+    *) return 2 ;;
+  esac
+}
+
+# The cap predicate is the one that can be UNAVAILABLE rather than clean: it reads its number out
+# of the budget hook, and a hook that is present but carries no cap line leaves it measuring
+# nothing. Said out loud by whoever asked, or the whole check is inert while reading as active
+# (L98, L557). Prints the sentence, or nothing when there is nothing to say.
+lesson_fault_unavailable(){
+  local capval; capval="$(lesson_index_entry_cap)"
+  case "$capval" in
+    # No budget hook at all is not a fault and says nothing: nothing in this config claims to cap
+    # an index line, so there is no check to be inert.
+    '') return 0 ;;
+    UNREADABLE:*) printf '%s' "${capval#UNREADABLE:} holds no 'ENTRY_CAP=<number>' line, so nothing here could tell whether a lesson is too long for the index that loads into every session. Restore that line, or this check is inert while reading as active."; return 0 ;;
+  esac
+  # A cap IS readable and the rule that applies it is not here. Distinct cause, distinct message
+  # (L11): the first is a config to repair, this is an incomplete install of the tool itself.
+  lesson_cap_rule_available && return 0
+  printf '%s' "the $capval character cap on an index line is readable, but $LESSON_CAP_LIB, which holds the rule that applies it, is not there, so no lesson was measured against it. Restore that file, or this check is inert while reading as active."
+  return 0
+}
+
+# Is the shared over-cap rule loaded? Asked in one place so the two readers cannot drift into two
+# different ideas of what counts as available.
+lesson_cap_rule_available(){
+  declare -F lesson_index_cap_scan >/dev/null 2>&1
 }
 
 # One past the highest number in use, never a gap: a skipped number was skipped
@@ -2407,56 +2501,30 @@ PROT
   # published, so the broken numbering does not spread to the other Mac. Only that
   # file waits: failing the whole send would stop hooks and skills moving between
   # Macs, which is the wedge this tool has already been bitten by twice.
-  local dupfiles="" duplines="" badlines=""
+  # THE FOUR FAULTS that hold a lessons file back, walked from the one list the read only
+  # `check-lessons` walks (claude-config#373). Each is reported SEPARATELY and all of them are
+  # reported in one run, never as an else-if: a file routinely commits two at once (an entry nobody
+  # can read is exactly the entry whose number gets claimed twice), they need different fixes
+  # (L11), and dying at the first sends somebody back for a second run to discover the second.
+  #
+  # Only the FILES at fault wait. Failing the whole send would stop hooks and skills moving between
+  # Macs, which is the more expensive failure and the wedge this tool has already been bitten by
+  # twice.
+  local dupfiles="" faultlines="" kind
   if [ "${SYNC_SKIP_LESSON_CHECK:-0}" != "1" ]; then
-    # An entry nothing can read is held back for the same reason a collided number is: it is not
-    # merely useless where it sits, it claims a number the other Mac's minter cannot see, so
-    # sending it plants the collision there rather than here (claude-config#164). Same override,
-    # same "only that file waits" rule, and reported separately from a duplicate because the two
-    # need different fixes (L11).
-    badlines="$(malformed_lesson_entries "$CLAUDE_HOME")"
-    if ! is_blank "$badlines"; then
-      dupfiles="$(printf '%s\n' "$badlines" | cut -d: -f1 | sort -u)"
-      echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because it holds lesson entries not written as '- **Lnnn. ...', which nothing here can read: $(printf '%s' "$badlines" | tr '\n' ';' | sed 's/;$//'). Rewrite each one to start with '- **L<number>. ' and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
-      notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): unreadable lesson entry"
+    # A cap that cannot be read is not a clean file, and saying nothing about it would leave that
+    # whole check inert while reading as active (L98, L557).
+    local capwarn; capwarn="$(lesson_fault_unavailable)"
+    if [ -n "$capwarn" ]; then
+      echo "claude-sync: $capwarn Lessons were published unchecked." >&2
     fi
-    # The third fault of the same kind, held back the same way and reported separately, because a
-    # stray paragraph, an unreadable entry and a collided number need three different fixes (L11).
-    local orphlines; orphlines="$(orphaned_lesson_prose "$CLAUDE_HOME")"
-    if ! is_blank "$orphlines"; then
-      dupfiles="$(printf '%s\n%s\n' "$dupfiles" "$(printf '%s\n' "$orphlines" | cut -d: -f1)" | grep -v '^$' | sort -u)"
-      echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because it holds text that belongs to no lesson: a non blank line at the top level, after a section has started, that is neither a heading nor an entry nor an indented continuation of one. $(printf '%s' "$orphlines" | tr '\n' ';' | sed 's/;$//'). Indent it under the entry it belongs to, or make it its own entry, and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
-      notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): text belonging to no lesson"
-    fi
-    duplines="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
-    if ! is_blank "$duplines"; then
-      dupfiles="$(printf '%s\n%s\n' "$dupfiles" "$duplines" | cut -d: -f1 | grep -v '^$' | sort -u)"
-      echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because the same lesson number is used twice, which silently breaks every reference to it: $(printf '%s' "$duplines" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number) and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
-      notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): duplicate lesson number"
-    fi
-    # The FOURTH fault of the same kind, held back the same way and reported separately because it
-    # needs a different fix again (L11). This entry is readable and correctly numbered; what is
-    # wrong is that its line in the generated index runs past the cap, and that index loads into
-    # every session in every project, where the platform warns past 150,000 characters (L429).
-    #
-    # payload/hooks/test-rule-file-budget.sh owns that cap and fails on it, but it runs in the
-    # CONFIG REPO, while lessons are written in whatever project the session happens to be in. The
-    # watcher mirrors them up and pushes, so without this the first anybody hears of an over-cap
-    # lesson is CI going red long after the author has moved on, and while it is red the other Mac
-    # receives NOTHING, because its automatic receive waits for green. Catching it at the send puts
-    # the message in front of the session that wrote the lesson, which is the only one that can
-    # write its short form.
-    local caplines capval
-    capval="$(lesson_index_entry_cap)"
-    caplines="$(over_cap_lesson_entries "$CLAUDE_HOME")"
-    case "$capval" in UNREADABLE:*)
-      echo "claude-sync: ${capval#UNREADABLE:} holds no 'ENTRY_CAP=<number>' line, so nothing here could tell whether a lesson is too long for the index that loads into every session. Lessons were published unchecked. Restore that line, or this check is inert while reading as active." >&2 ;;
-    esac
-    if ! is_blank "$caplines"; then
-      dupfiles="$(printf '%s\n%s\n' "$dupfiles" "$(printf '%s\n' "$caplines" | cut -d: -f1)" | grep -v '^$' | sort -u)"
-      echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because it holds lesson entries whose line in the generated index runs past the cap, and that index loads into every session in every project: $(printf '%s' "$caplines" | tr '\n' ';' | sed 's/;$//'). Give each one a 'SHORT: <the rule in one line>' line inside its entry; the full rule stays exactly as it is and the index renders the short form instead. It publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
-      notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): lesson too long for the index"
-    fi
+    for kind in $LESSON_PUBLISH_FAULT_KINDS; do
+      faultlines="$(lesson_fault_lines "$kind" "$CLAUDE_HOME")"
+      is_blank "$faultlines" && continue
+      dupfiles="$(printf '%s\n%s\n' "$dupfiles" "$(printf '%s\n' "$faultlines" | cut -d: -f1)" | grep -v '^$' | sort -u)"
+      echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because $(lesson_fault_cause "$kind"): $(printf '%s' "$faultlines" | tr '\n' ';' | sed 's/;$//'). $(lesson_fault_remedy "$kind") and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
+      notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): $(lesson_fault_notice "$kind")"
+    done
   fi
   # Regenerated here rather than trusted, so the copy that travels always matches the lessons file
   # sitting beside it, whatever anybody has typed into it (#63).
@@ -7552,22 +7620,28 @@ case "$cmd" in
   lesson) do_lesson "${2:-}" ;;         # read-only: one lesson in full, with its provenance
   check-skills) do_check_skills ;;      # read-only: is any skill provided by a plugin AND locally
   check-lessons)
-    # Asked FIRST, because an entry nothing can read is also an entry the duplicate scan below
-    # cannot count, so reporting sound numbering before this has been settled is reporting about a
-    # file only partly read (claude-config#164).
-    # BOTH faults are asked, and both are reported, never as an else-if: a file routinely commits
-    # the two at once (an entry nobody can read is exactly the entry whose number gets claimed
-    # twice), and dying at the first sends somebody back for a second run to discover the second.
+    # EVERY fault that holds a lessons file back, walked from the same list the send walks
+    # (claude-config#373). This command is the read only way of asking whether LESSONS.md can
+    # publish, and it used to run two of the four, so it returned a clean all clear on a file the
+    # send was refusing. A preview enforcing a subset of its gate is read as a prediction about the
+    # whole verdict (L686), and the remedy is that the list is derived rather than restated here
+    # (L41).
+    #
+    # ALL of them are reported, never as an else-if: a file routinely commits two at once (an entry
+    # nobody can read is exactly the entry whose number gets claimed twice), they need different
+    # fixes (L11), and dying at the first sends somebody back for a second run to discover the
+    # second. That is exactly how the cap fault surfaced only after the bold markers were fixed.
     # The same rule check-home-paths follows for its three (claude-config#164, #108).
-    badlessons="$(malformed_lesson_entries "$CLAUDE_HOME")"
-    dups="$(duplicate_lesson_numbers "$CLAUDE_HOME")"
     lessonfaults=""
-    if ! is_blank "$badlessons"; then
-      lessonfaults="these lesson entries are not written as '- **Lnnn. ...', so nothing here can read them: not the index that loads into every session, not 'claude-sync lesson', not the duplicate check, and not the number minter. $(printf '%s' "$badlessons" | tr '\n' ';' | sed 's/;$//'). Rewrite each one to start with '- **L<number>. ' and it becomes visible to all four."
-    fi
-    if ! is_blank "$dups"; then
-      lessonfaults="${lessonfaults:+$lessonfaults }duplicate lesson numbers: $(printf '%s' "$dups" | tr '\n' ';' | sed 's/;$//')"
-    fi
+    # A cap that cannot be read is not a clean file, and a preview silent about it would be inert
+    # while reading as active (L98, L557).
+    capwarn="$(lesson_fault_unavailable)"
+    if [ -n "$capwarn" ]; then lessonfaults="$capwarn"; fi
+    for faultkind in $LESSON_PUBLISH_FAULT_KINDS; do
+      faultlines="$(lesson_fault_lines "$faultkind" "$CLAUDE_HOME")"
+      is_blank "$faultlines" && continue
+      lessonfaults="${lessonfaults:+$lessonfaults }$(lesson_fault_cause "$faultkind"): $(printf '%s' "$faultlines" | tr '\n' ';' | sed 's/;$//'). $(lesson_fault_remedy "$faultkind")."
+    done
     if ! is_blank "$lessonfaults"; then die "$lessonfaults"; fi
     lesson_band_locked
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
