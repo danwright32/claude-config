@@ -91,6 +91,18 @@ says "and says the number is stale" "$OUT" "stale"
 
 # A run that scanned NOTHING passes every comparison at once and reads exactly like a clean tree
 # (L98), so it refuses instead.
+# A file this cannot OPEN is not a file with nothing in it. Returning "nothing judged, no
+# findings" would make an unreadable file indistinguishable from a clean one, and the count it
+# feeds is the whole verdict (L10, L11, L215).
+UNREAD="$FIX/unreadable"; mkdir -p "$UNREAD"
+printf 'echo hi\n' > "$UNREAD/test-x.sh"
+chmod 000 "$UNREAD/test-x.sh"
+printf '# empty\n' > "$UNREAD/baseline.txt"
+OUT="$(python3 "$SCAN" --root "$UNREAD" --baseline "$UNREAD/baseline.txt" 2>&1)"; RC=$?
+chmod 644 "$UNREAD"/*.sh 2>/dev/null || true
+check "a file it cannot read is a finding, not a clean result" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "and it says the file could not be read" "$OUT" "could not be read"
+
 EMPTY="$FIX/empty"; mkdir -p "$EMPTY"
 OUT="$(python3 "$SCAN" --root "$EMPTY" --baseline "$FIX/baseline.txt" 2>&1)"; RC=$?
 check "a run that found no suites refuses rather than passing" "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC")"

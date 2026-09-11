@@ -100,8 +100,13 @@ def functions_in(lines):
 def scan_file(path):
     try:
         lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
-    except OSError:
-        return 0, []
+    except OSError as e:
+        # A file this cannot OPEN is not a file with nothing in it. Returning "nothing judged, no
+        # findings" makes an unreadable file indistinguishable from a clean one, and the count it
+        # feeds is the whole verdict (L10, L11, L215). Reported and counted as a finding, so a
+        # tree that has become unreadable fails rather than quietly shrinking what is scanned.
+        print("  %s: could not be read (%s), so nothing in it was judged" % (path, e), file=sys.stderr)
+        return 0, [(0, "UNREADABLE", ["the file could not be read"])]
     considered = 0
     found = []
     for name, at, body in functions_in(lines):
@@ -192,7 +197,10 @@ def main():
           % (considered, len(files), sum(now.values())))
     for rel in sorted(detail):
         for at, name, names in detail[rel]:
-            print("  %s:%d  %s sets %s" % (rel, at, name, ", ".join(names)))
+            if name == "UNREADABLE":
+                print("  %s  could not be read, so nothing in it was judged" % rel)
+            else:
+                print("  %s:%d  %s sets %s" % (rel, at, name, ", ".join(names)))
 
     grew = [(r, base.get(r, 0), c) for r, c in sorted(now.items()) if c > base.get(r, 0)]
     shrank = [(r, base[r], now.get(r, 0)) for r in sorted(base) if base[r] > now.get(r, 0)]
