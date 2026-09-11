@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 637 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 638 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -509,6 +509,7 @@ apply it, because the body is where the failure it came from is described.
 - L552. Pinning a tool's VERSION pins its output only when the tool works locally; one that delegates to a hosted service emits whatever the server makes today.
 - L670. A refusal from an INTERMEDIARY in front of an API
 - L674. A fault found only when live traffic HAPPENS to exercise a path has a detection delay set by that path's rate, and its recovery is silent.
+- L685. A PostgREST upsert is an INSERT, so a PARTIAL row hits every NOT NULL constraint and cannot upsert onto an existing row however complete. Refresh is UPDATE.
 
 ## Building with AI
 
