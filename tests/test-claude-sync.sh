@@ -14600,6 +14600,14 @@ check "#360 and it says how much is waiting" \
   "grep -qE '[0-9]+ commit' <<< \"\$out_st2\""
 check "#360 and it names how to see what is waiting" \
   "grep -qF '@{upstream}..HEAD' <<< \"\$out_st2\""
+# It may claim only what it measured (L11). The count comes from @{upstream}, which is this
+# clone's own record of the remote and is as current as its last fetch, so this cannot assert what
+# the shared repo does or does not contain. It fires hardest when a send just failed, which is
+# exactly when that record is most likely to be stale.
+check "#360 it does not claim what the shared repo contains" \
+  "out_lacks \"\$out_st2\" 'not in the shared repo'"
+check "#360 and it says what the reading was taken against" \
+  "grep -qiE 'last fetch|its own record' <<< \"\$out_st2\""
 
 # 3. WHICH CLOCK. It reads the age of the oldest thing WAITING, never the age of the send stamp.
 #    Those differ exactly where it matters: a clone that has never sent at all has no stamp to age

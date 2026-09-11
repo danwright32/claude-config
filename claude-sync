@@ -263,7 +263,11 @@ report_send_stuck(){
   since="$(date_from_epoch "$oldest" '+%Y-%m-%d %H:%M')"
   [ -n "$since" ] || since="an unknown date"
 
-  echo "claude-sync: this clone has not sent for $waited. $n commit(s) are waiting here and are not in the shared repo, the oldest since $since. If the change watcher runs from this clone, config changed on this Mac is not reaching the other one. See what is waiting with: git -C $SYNC_REPO log --oneline @{upstream}..HEAD" >&2
+  # Claims only what it measured (L11). The count comes from @{upstream}, which is this clone's
+  # own record of the remote and is as current as its last fetch, so this cannot assert what the
+  # shared repo does or does not contain. It fires hardest when a send has just failed, which is
+  # exactly when that record is most likely to be stale.
+  echo "claude-sync: this clone has not sent for $waited. $n commit(s) here have not gone up from it, the oldest waiting since $since, read against its own record of the remote from the last fetch. If the change watcher runs from this clone, config changed on this Mac is not reaching the other one. See what is waiting with: git -C $SYNC_REPO log --oneline @{upstream}..HEAD" >&2
   notify "not sending: $n commit(s) have waited here $waited"
   return 0
 }
