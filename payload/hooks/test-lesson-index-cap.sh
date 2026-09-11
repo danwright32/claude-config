@@ -127,8 +127,13 @@ want "claude-sync holds no second length-against-the-cap test" "" "$stray"
 NOLIB="$WORK/nolib"; mkdir -p "$NOLIB/hooks/lib"
 cp "$BUDGET" "$NOLIB/hooks/test-rule-file-budget.sh"
 out="$(bash "$NOLIB/hooks/test-rule-file-budget.sh" 2>&1 || true)"
-check "the budget hook refuses when the shared rule is missing" \
-  "$(printf '%s\n' "$out" | grep -q 'lesson-index-cap.sh' && echo ok || echo "it did not name the missing rule (said: $(printf '%s' "$out" | head -1))")"
+# Matched with `case` over a variable, never piped into `grep -q`: under pipefail a short
+# circuiting consumer kills its producer and the pipeline reports a failure that never happened
+# (L183), and this repo ratchets the count of such pipelines down rather than up.
+case "$out" in
+  *lesson-index-cap.sh*) check "the budget hook refuses when the shared rule is missing" ok ;;
+  *) check "the budget hook refuses when the shared rule is missing" "it did not name the missing rule (said: ${out%%$'\n'*})" ;;
+esac
 
 echo "lesson index cap: all three consumers agree on one fixture"
 
@@ -180,8 +185,10 @@ want "and measured the same number of entries in total" "3" "$budget_entries"
 # And the floor still bites where it is meant to: this fixture holds 3 entries against the hook's
 # floor of 100, so the hook must ALSO say it measured almost nothing. Without this the count above
 # could be agreement between two scans that both found nothing.
-check "the budget hook still reports a fixture too small to measure against" \
-  "$(printf '%s\n' "$budgetout" | grep -q 'index entries were found to measure' && echo ok || echo 'it did not say the fixture was too small')"
+case "$budgetout" in
+  *"index entries were found to measure"*) check "the budget hook still reports a fixture too small to measure against" ok ;;
+  *) check "the budget hook still reports a fixture too small to measure against" "it did not say the fixture was too small" ;;
+esac
 
 echo
 echo "passed: $pass, failed: $fail"

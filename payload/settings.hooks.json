@@ -83,6 +83,15 @@
             "statusMessage": "Checking for a merged PR to quiz on"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/lesson-entry-check.sh"
+          }
+        ]
       }
     ],
     "Notification": [

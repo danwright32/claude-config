@@ -18,7 +18,8 @@
 #   claude-sync release           # lift that hold now rather than waiting for it to run out
 #   claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
 #   claude-sync next-lesson       # the next free lesson number, so none is picked by eye
-#   claude-sync check-lessons     # fail if two lessons share a number
+#   claude-sync check-lessons     # fail if anything would stop the lessons file publishing
+#   claude-sync lesson-faults     # the same faults, lock free and silent when there are none
 #   claude-sync lesson L174       # one lesson in full, with its provenance
 #   claude-sync cite-scan L2      # which synced files cite that lesson number
 #   claude-sync check-skills      # fail if a plugin and the skills folder provide the same skill
@@ -1569,6 +1570,28 @@ lesson_fault_unavailable(){
 # different ideas of what counts as available.
 lesson_cap_rule_available(){
   declare -F lesson_index_cap_scan >/dev/null 2>&1
+}
+
+# EVERY fault holding a lessons file back, as one sentence a person can act on, or nothing at all
+# when the file can publish. Read only and LOCK FREE on purpose: this is what a hook runs the
+# moment a lesson is written, and a check that waits on the sync lock would hang whatever session
+# wrote it (L110). Nothing in here writes, so there is nothing for the lock to protect.
+#
+# ALL faults are reported, never as an else-if: a file routinely commits two at once (an entry
+# nobody can read is exactly the entry whose number gets claimed twice), they need different fixes
+# (L11), and dying at the first sends somebody back for a second run to discover the second.
+lesson_publish_faults(){   # $1 = tree to inspect -> the sentence, or nothing
+  local tree="$1" faults="" kind lines
+  # A cap that cannot be applied is not a clean file, and silence about it would leave that whole
+  # check inert while reading as active (L98, L557).
+  faults="$(lesson_fault_unavailable)"
+  for kind in $LESSON_PUBLISH_FAULT_KINDS; do
+    lines="$(lesson_fault_lines "$kind" "$tree")"
+    is_blank "$lines" && continue
+    faults="${faults:+$faults }$(lesson_fault_cause "$kind"): $(printf '%s' "$lines" | tr '\n' ';' | sed 's/;$//'). $(lesson_fault_remedy "$kind")."
+  done
+  printf '%s' "$faults"
+  return 0
 }
 
 # One past the highest number in use, never a gap: a skipped number was skipped
@@ -7619,6 +7642,14 @@ case "$cmd" in
   cite-check) do_cite_check ;;          # read-only: has any cited number come to mean something else
   lesson) do_lesson "${2:-}" ;;         # read-only: one lesson in full, with its provenance
   check-skills) do_check_skills ;;      # read-only: is any skill provided by a plugin AND locally
+  # Read only, LOCK FREE, and silent when there is nothing wrong: what a hook runs the moment a
+  # lesson is written, so the session that wrote it is still there to fix it (claude-config#374).
+  # check-lessons is this plus the band and the next free number, which is the part that can take
+  # the lock, so the two cannot disagree about what a fault is.
+  lesson-faults)
+    faults="$(lesson_publish_faults "$CLAUDE_HOME")"
+    if ! is_blank "$faults"; then die "$faults"; fi
+    ;;
   check-lessons)
     # EVERY fault that holds a lessons file back, walked from the same list the send walks
     # (claude-config#373). This command is the read only way of asking whether LESSONS.md can
@@ -7632,16 +7663,7 @@ case "$cmd" in
     # fixes (L11), and dying at the first sends somebody back for a second run to discover the
     # second. That is exactly how the cap fault surfaced only after the bold markers were fixed.
     # The same rule check-home-paths follows for its three (claude-config#164, #108).
-    lessonfaults=""
-    # A cap that cannot be read is not a clean file, and a preview silent about it would be inert
-    # while reading as active (L98, L557).
-    capwarn="$(lesson_fault_unavailable)"
-    if [ -n "$capwarn" ]; then lessonfaults="$capwarn"; fi
-    for faultkind in $LESSON_PUBLISH_FAULT_KINDS; do
-      faultlines="$(lesson_fault_lines "$faultkind" "$CLAUDE_HOME")"
-      is_blank "$faultlines" && continue
-      lessonfaults="${lessonfaults:+$lessonfaults }$(lesson_fault_cause "$faultkind"): $(printf '%s' "$faultlines" | tr '\n' ';' | sed 's/;$//'). $(lesson_fault_remedy "$faultkind")."
-    done
+    lessonfaults="$(lesson_publish_faults "$CLAUDE_HOME")"
     if ! is_blank "$lessonfaults"; then die "$lessonfaults"; fi
     lesson_band_locked
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
@@ -7654,5 +7676,5 @@ case "$cmd" in
   help|-h|--help) awk 'NR > 1 { if ($0 ~ /^# *Env overrides/) exit; buf[n++] = $0 }
                         END { while (n > 0 && buf[n-1] == "#") n--; for (i = 0; i < n; i++) print buf[i] }' \
                     "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
 esac

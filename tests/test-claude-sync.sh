@@ -4290,6 +4290,28 @@ check "#373 and the same file IS refused by a copy that can reach the rule" \
 check "#373 and that copy says nothing about a missing rule" \
   "case \"\$_clk_rule\" in *'lesson-index-cap.sh'*) false ;; *) true ;; esac"
 
+# ---- lesson-faults: the same verdict, lock free and silent (claude-config#374) ----
+# What the write time hook runs. It exists because check-lessons can reach the band claim, which
+# waits on the sync lock and then REFUSES, so on that path a session would be told nothing about
+# the lesson it just wrote precisely while the watcher was busy (L110, L109). It is the same
+# predicate list, so the two can never disagree about what a fault is.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\n- **L2. also sound.** body\n' > "$CLKH/LESSONS.md"
+_clk_faults_ok="$(_clk lesson-faults)"; _clk_faults_ok_rc=$?
+check "#374 lesson-faults exits 0 on a file that can publish" "[ '$_clk_faults_ok_rc' -eq 0 ]"
+check "#374 and says nothing at all about it" "[ -z \"\$(printf '%s' \"\$_clk_faults_ok\" | tr -d '[:space:]')\" ]"
+
+# Every kind, again, because a command that answers for two of the four is the defect #373 fixed
+# one level up, and nothing would compare them (L686).
+for _clk_kind in $_clk_kinds; do
+  _clk_write "$_clk_kind" || continue
+  _clk_f="$(_clk lesson-faults)"; _clk_f_rc=$?
+  _clk_c="$(_clk check-lessons)"
+  check "#374 lesson-faults refuses a file whose only fault is '$_clk_kind'" "[ '$_clk_f_rc' -ne 0 ]"
+  # The same words, so a reader cannot be given two accounts of one fault (L118).
+  check "#374 and says the same thing check-lessons says about it ('$_clk_kind')" \
+    "case \"\$_clk_c\" in *\"\$(printf '%s' \"\$_clk_f\" | sed 's/^claude-sync: //')\"*) true ;; *) false ;; esac"
+done
+
 section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
 # needs: #15: duplicate lesson numbers must not be published or go unnoticed
 # The settled rule (see the 2026-08-05 note above): the published copy keeps the
