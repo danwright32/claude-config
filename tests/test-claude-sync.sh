@@ -5697,6 +5697,56 @@ check "#364 a snapshot holding work the shared repo lacks is NOT called supersed
   "! grep -q 'superseded' <<< \"\$out_sn6\""
 check "#364 and nothing is left out of the dry run as superseded" \
   "! grep -q 'superseded snapshot' <<< \"\$out_sn6\""
+
+# ---- the commits a drop parked are listed and expire (claude-config#365) ----
+# drop_snapshot_already_in_tip writes the commits it is about to discard under a ref of its own so
+# nothing is lost. That name then appeared nowhere else: nothing listed the refs, nothing pruned
+# them, and the only time the name was ever spoken was one message in a terminal that closes. So
+# each ref kept its commit and every object under it alive with no ceiling, and the record failed
+# the job it was added for, because somebody looking for work they believed was lost had no way to
+# enumerate what is there (L46, L523).
+#
+# SN1R is the clone the drop above really happened in, so this is measured on a real parked ref
+# rather than one the test wrote.
+out_dr="$(CLAUDE_HOME="$SN1H" SYNC_REPO="$SN1R" SYNC_HOSTNAME=macsn1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#365 status over a clone holding a parked drop: $out_dr"
+check "#365 status names the commits a drop parked in this clone" \
+  "line_has \"\$out_dr\" 'refs/claude-sync/dropped' 'parked'"
+check "#365 and says when, so an old one can be told from a recent one" \
+  "line_has \"\$out_dr\" 'refs/claude-sync/dropped' \"\$(date +%Y-%m-%d)\""
+check "#365 and says how to read one back" \
+  "grep -q 'git -C' <<< \"\$out_dr\" && line_has \"\$out_dr\" 'refs/claude-sync/dropped' 'log'"
+
+# A clone that has parked nothing says so, in one line. Otherwise "nothing is parked here" and
+# "this section has stopped looking" arrive as the same silence (L98).
+check "#365 a clone holding no parked commits says so rather than going quiet" \
+  "line_has \"\$out_sn6\" 'parked' 'none'"
+
+# ---- they expire, and the removal is said ----
+# Aged by writing a ref whose own stamp is old, which is where the drop records the moment it
+# happened. Nothing here waits for time to pass (L290).
+DRKEEP=30
+git -C "$SN1R" update-ref "refs/claude-sync/dropped/19990101-120000-1" "$SN1_HEAD_BEFORE" 2>/dev/null
+git -C "$SN1R" update-ref "refs/claude-sync/dropped/$(date +%Y%m%d)-120000-2" "$SN1_HEAD_BEFORE" 2>/dev/null
+# A name nothing can read is a reason to KEEP: this is the only copy of somebody's work and a
+# guess in the deleting direction cannot be taken back (L5).
+git -C "$SN1R" update-ref "refs/claude-sync/dropped/not-a-date-at-all" "$SN1_HEAD_BEFORE" 2>/dev/null
+DR_BEFORE="$(git -C "$SN1R" for-each-ref --format='%(refname)' refs/claude-sync/dropped 2>/dev/null | wc -l | tr -d ' ')"
+check "#365 the fixture really parked three refs to sweep" "[ \"\$DR_BEFORE\" -ge 3 ]"
+out_drs="$(SYNC_BACKUP_KEEP_DAYS=$DRKEEP CLAUDE_HOME="$SN1H" SYNC_REPO="$SN1R" SYNC_HOSTNAME=macsn1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"
+dbg "#365 sync sweeping parked drops: $out_drs"
+check "#365 a parked ref past the window is removed" \
+  "! git -C '$SN1R' rev-parse --verify -q refs/claude-sync/dropped/19990101-120000-1 >/dev/null 2>&1"
+check "#365 and the removal is said, not done in silence" \
+  "line_has \"\$out_drs\" 'removed' 'parked' '19990101-120000-1'"
+check "#365 a recent one is kept" \
+  "git -C '$SN1R' rev-parse --verify -q \"refs/claude-sync/dropped/\$(date +%Y%m%d)-120000-2\" >/dev/null 2>&1"
+check "#365 and one whose stamp cannot be read is kept rather than guessed at" \
+  "git -C '$SN1R' rev-parse --verify -q refs/claude-sync/dropped/not-a-date-at-all >/dev/null 2>&1"
+# A run that removed nothing must not read like one that removed ten (L98).
+out_drs2="$(SYNC_BACKUP_KEEP_DAYS=$DRKEEP CLAUDE_HOME="$SN1H" SYNC_REPO="$SN1R" SYNC_HOSTNAME=macsn1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"
+check "#365 and a second run says nothing, because it removed nothing" \
+  "! grep -q 'parked commit' <<< \"\$out_drs2\" || ! grep -q 'removed' <<< \"\$out_drs2\""
 # Deliberately NOT an assertion that the file IS listed there. Whether rsync reports it at all
 # depends on whether the two copies' mtimes happen to differ, which is a property of the machine
 # rather than of this code (L290). What proves the suppression in sn5 is real is its own count

@@ -2894,6 +2894,9 @@ $f
   # run that actually wrote one (claude-config#158).
   sweep_old_syncbaks
   report_syncbaks
+  # Beside the .syncbak sweep, on the same window and for the same reason: both are a superseded
+  # copy kept in case the run that superseded it turns out to have been wrong.
+  sweep_old_dropped_snapshots
 }
 
 # The previous copy of a file about to be overwritten, kept beside it (claude-config#158).
@@ -4355,6 +4358,101 @@ PATHS
   return 0
 }
 
+# ---- the commits a drop parked (claude-config#362, claude-config#365) ----
+# ONE spelling of the namespace, because the drop writes it, status lists it and the sweep removes
+# it, and three copies of a path is how a reader ends up looking under a name nothing writes (L41).
+DROPPED_REF_PREFIX="refs/claude-sync/dropped"
+
+# The parked refs, newest stamp first, as "<ref>\t<the moment of the drop, unix, or empty>".
+#
+# The moment comes from the ref's own NAME, which is where the drop records when it happened. The
+# commit's own date is when the snapshot was TAKEN, which is a different question and routinely
+# much older. A name this cannot read yields an empty field, and every reader below treats that as
+# a reason to keep rather than to guess (L5).
+dropped_snapshot_refs(){
+  local ref stamp when
+  have_git || return 0
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    stamp="${ref##*/}"; stamp="${stamp%-*}"      # YYYYmmdd-HHMMSS, with the pid taken off
+    when=""
+    case "$stamp" in
+      [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9])
+        when="$(date_to_epoch "${stamp%-*}" "${stamp#*-}")" ;;
+    esac
+    printf '%s\t%s\n' "$ref" "$when"
+  done <<DROPPEDREFS
+$(git -C "$SYNC_REPO" for-each-ref --sort=-refname --format='%(refname)' "$DROPPED_REF_PREFIX" 2>/dev/null || true)
+DROPPEDREFS
+  return 0
+}
+
+# YYYYmmdd plus HHMMSS to a unix time, or nothing. BSD date and GNU date take different flags for
+# this and neither errors usefully on the other's, so both are tried and the answer is checked for
+# being a number rather than for the command having exited 0 (L434, L184).
+date_to_epoch(){   # $1 = YYYYmmdd  $2 = HHMMSS
+  local out
+  out="$(date -j -f '%Y%m%d%H%M%S' "$1$2" +%s 2>/dev/null || true)"
+  case "$out" in ''|*[!0-9]*) out="$(date -d "${1:0:4}-${1:4:2}-${1:6:2} ${2:0:2}:${2:2:2}:${2:4:2}" +%s 2>/dev/null || true)" ;; esac
+  case "$out" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$out"
+}
+
+# What this clone is holding, named on the surface that answers that question. Before this the only
+# time the ref name was ever spoken was the drop message itself, in a terminal that closes, so
+# somebody looking for work they believed was lost had nothing to enumerate (L46, L523).
+report_dropped_snapshots(){
+  local line ref when n=0 shown=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    ref="${line%%$'\t'*}"; when="${line#*$'\t'}"
+    n=$(( n + 1 ))
+    case "$when" in
+      ''|*[!0-9]*) shown="${shown}  parked $ref (the ref name carries no readable date, so this one is never swept)
+" ;;
+      # date_from_epoch, never a bare `date -r`, which is the BSD spelling and answers nothing on a
+      # Linux runner. It validates its input first and returns nothing it cannot read, so the
+      # fallback below prints the raw stamp rather than a confident 1969 (L50).
+      *) shown="${shown}  parked $ref (dropped $(date_from_epoch "$when" '+%Y-%m-%d %H:%M' || true))
+" ;;
+    esac
+  done <<< "$(dropped_snapshot_refs)"
+  if [ "$n" -eq 0 ]; then
+    # Said rather than skipped: "nothing is parked here" and "this section has stopped looking"
+    # are otherwise the same silence (L98).
+    echo "--- commits parked by a drop in this clone: none ---"
+    return 0
+  fi
+  echo "--- commits parked by a drop in this clone: $n ---"
+  printf '%s' "$shown"
+  echo "  These are commits a sync discarded because the shared repo already held the same content, kept so the work can still be read back. Read one with: git -C $SYNC_REPO log refs/claude-sync/dropped/<the stamp above>. Any past $(duration_in_words "$(( $(backup_keep_days) * 86400 ))") old are removed on the next run that applies anything."
+  return 0
+}
+
+# Reclaim the ones nobody is coming back for, on the same window and for the same reason as the
+# .syncbak copies: both are a superseded copy kept in case the run that superseded it turns out to
+# have been wrong, and two numbers for one decision drift (L428, L41). Every removal is ANNOUNCED,
+# and a run that removed nothing must not read like one that removed ten (L98).
+sweep_old_dropped_snapshots(){
+  have_git || return 0
+  local line ref when days cutoff now n=0 gone=""
+  days="$(backup_keep_days)"
+  now="$(date +%s)"
+  cutoff=$(( now - days * 86400 ))
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    ref="${line%%$'\t'*}"; when="${line#*$'\t'}"
+    # A date nothing can read is a reason to KEEP: this is the only copy of work somebody may come
+    # back for, and a guess in the deleting direction cannot be taken back (L5).
+    case "$when" in ''|*[!0-9]*) continue ;; esac
+    [ "$when" -lt "$cutoff" ] || continue
+    git -C "$SYNC_REPO" update-ref -d "$ref" >/dev/null 2>&1 || continue
+    n=$(( n + 1 )); gone="${gone:+$gone }$ref"
+  done <<< "$(dropped_snapshot_refs)"
+  [ "$n" -gt 0 ] && echo "claude-sync: removed $n parked commit ref(s) older than $(duration_in_words "$(( days * 86400 ))"): $gone. They held snapshots this tool had already dropped because the shared repo carried the same content." >&2
+  return 0
+}
+
 # Drops it, and SAYS SO. Nothing here is recoverable from the message alone, so the commits are put
 # under a ref of their own first: `git reset --hard` leaves them reachable only through the reflog,
 # which expires, and somebody looking for work they believe was lost needs a name to look under
@@ -4365,7 +4463,7 @@ drop_snapshot_already_in_tip(){   # $1 = branch. 0 = dropped, 1 = kept, nothing 
   head="$(git -C "$SYNC_REPO" rev-parse HEAD 2>/dev/null || true)"
   [ -n "$head" ] || return 1
   n="$(git -C "$SYNC_REPO" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo 0)"
-  ref="refs/claude-sync/dropped/$(date +%Y%m%d-%H%M%S)-$$"
+  ref="$DROPPED_REF_PREFIX/$(date +%Y%m%d-%H%M%S)-$$"
   # Written BEFORE the reset, and the reset abandoned if it could not be written: the backup
   # existing is the condition under which throwing the commits away is safe, so it is verified
   # rather than attempted alongside (L5).
@@ -6764,6 +6862,7 @@ do_status(){
   local DRIFT_EXPANSIONS=0 SUPERSEDED_FILES=0
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
   report_superseded_snapshot
+  report_dropped_snapshots
   report_sync_times
   echo "--- local config vs repo payload (dry run) ---"
   local RECORDS; RECORDS="$(local_vs_payload_records)"
