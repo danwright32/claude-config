@@ -6574,9 +6574,12 @@ report_watcher_hold(){
 # locally, and pushing it builds on work that is already in the shared repo but absent there.
 #
 # The clones are read from the registry, which is derived from what has actually taken the lock
-# rather than from prose somebody maintains by hand (L41, L244). Nothing is fetched here: this run
-# has just pulled its own remote, and both clones share it, so the other clone's HEAD is measured
-# against the ref this run already has.
+# rather than from prose somebody maintains by hand (L41, L244). The COUNT does not need a fetch:
+# this run has just pulled its own remote, and both clones share it, so the other clone's HEAD is
+# measured against the ref this run already has. Each clone is nevertheless fetched, for a
+# different reason entirely, which claude-config#375 is about: without it that clone's OWN
+# origin/main is whatever it was when somebody last worked there, and git asked inside it reports
+# it level while it is behind.
 #
 # PRECONDITION, and it is what makes the missing commit case readable: this runs AFTER
 # pull_from_repo_or_die, from do_pull and from nowhere else. test-claude-sync.sh pins that, because
@@ -6591,7 +6594,7 @@ report_watcher_hold(){
 # clone the scheduled sync runs from was four commits ahead and printing that line all day
 # (claude-config#359, L111).
 report_other_clones_position(){
-  local up d head n line said=0
+  local up d head n line said=0 ck_refreshed ck_note
   have_git || return 0
   up="$(git -C "$SYNC_REPO" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
   [ -n "$up" ] || return 0
@@ -6607,6 +6610,20 @@ report_other_clones_position(){
       echo "claude-sync: the clone recorded at $d is not there any more, so how far behind it is cannot be answered. If it has gone for good: claude-sync forget-clone $d" >&2
       said=1; continue
     fi
+    # THE CLONE'S OWN RECORD OF THE REMOTE, refreshed before anything is measured
+    # (claude-config#375). The count below is right without this, because it is taken against a ref
+    # THIS run has just fetched. What was wrong is what a person then finds INSIDE that checkout:
+    # `git status` and `git rev-list --left-right --count origin/main...HEAD` both read its own
+    # origin/main, which nothing had ever fetched, so both reported it level while it was three
+    # commits behind. The check and the thing it checks came from one stale ref, so they could only
+    # confirm they agreed with each other (L70). The sync script's warning was the sole truthful
+    # signal and it is only seen on a run of the script.
+    #
+    # A fetch and nothing more: it writes that clone's remote tracking refs and touches neither its
+    # working tree nor its index nor its branch, so a session working in it sees nothing move
+    # except the answer to a question that was wrong.
+    ck_refreshed=1
+    git -C "$d" fetch -q --no-tags 2>/dev/null || ck_refreshed=0
     head="$(git -C "$d" rev-parse HEAD 2>/dev/null || true)"
     if [ -z "$head" ]; then
       echo "claude-sync: the checkout at $d has no commit this could read, so how far behind it is cannot be answered." >&2
@@ -6619,7 +6636,13 @@ report_other_clones_position(){
     n="$(git -C "$SYNC_REPO" rev-list --count "${head}..${up}" 2>/dev/null || true)"
     case "$n" in ''|*[!0-9]*) continue ;; esac
     [ "$n" -gt 0 ] || continue
-    echo "claude-sync: the checkout at $d is $n commit(s) behind $up. Config edited there is being written against a copy the shared repo has already moved past: run 'git -C $d pull' before working in it." >&2
+    # The refresh failing does not change this count, which is measured here against a ref this run
+    # fetched. It changes what somebody working in that checkout is told by git, so it is said on
+    # the SAME line as the claim it qualifies, rather than left as a silence that reads as the
+    # checkout now being honest about itself (L98, L11, L440).
+    ck_note=""
+    [ "$ck_refreshed" -eq 1 ] || ck_note=" Its own record of the remote could not be refreshed, so git asked inside that checkout will still report it level."
+    echo "claude-sync: the checkout at $d is $n commit(s) behind $up.$ck_note Config edited there is being written against a copy the shared repo has already moved past: run 'git -C $d pull' before working in it." >&2
     said=1
   done < "$CLONE_REGISTRY"
   return 0

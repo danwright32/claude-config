@@ -13671,6 +13671,14 @@ CKB2="$WORK/checkout-B"; git clone -q "$CKB" "$CKB2" 2>/dev/null
 CKHB="$WORK/checkout-homeB"; mkdir -p "$CKHB"
 echo '{"hooks":{}}' > "$CKHB/settings.json"
 CKREG="$WORK/checkout-clones"; printf '%s\n%s\n' "$CKB2" "$CKDEV" > "$CKREG"
+# ---- claude-config#375: the stale checkout's own record of the remote ----
+# Measured BEFORE the pull, because that is the state the issue is about: the dev checkout is
+# genuinely behind, and git asked inside it says level, because its own origin/main was never
+# fetched. The check and the thing it checks come from the same stale local ref, so it can only
+# confirm it is self consistent, never that it is correct (L70).
+ck375_before="$(git -C "$CKDEV" rev-list --left-right --count 'origin/main...HEAD' 2>/dev/null || echo unreadable)"
+check "#375 the stale checkout really does report itself level before the pull" \
+  "[ \"\$ck375_before\" = \"$(printf '0\t0')\" ]"
 dbg "#266 about to pull"
 out_266="$(CLAUDE_HOME="$CKHB" SYNC_REPO="$CKB2" SYNC_CLONE_REGISTRY="$CKREG" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
 dbg "#266 pull with a stale checkout registered: $out_266"
@@ -13679,6 +13687,15 @@ dbg "#266 pull with a stale checkout registered: $out_266"
 line_266="$(printf '%s\n' "$out_266" | sed -n "\|$CKDEV|p" | sed -n '/behind/p')"
 check "#266 the pull says the other checkout is behind, and by how much" \
   "case \"\$line_266\" in *'1 commit'*) true ;; *) false ;; esac"
+# And the checkout's OWN record now agrees with that warning. Before this the sync script's
+# sentence was the sole truthful signal, and it is only seen on a run of the script: a session that
+# opens the checkout and asks git directly got a green light and then edited shared config against
+# an old copy (claude-config#375).
+ck375_after="$(git -C "$CKDEV" rev-list --left-right --count 'origin/main...HEAD' 2>/dev/null || echo unreadable)"
+check "#375 and the checkout's own origin ref was refreshed, so git asked inside it agrees" \
+  "[ \"\$ck375_after\" = \"$(printf '1\t0')\" ]"
+check "#375 and that count really changed, so the refresh is what moved it" \
+  "[ \"\$ck375_after\" != \"\$ck375_before\" ]"
 # The control. A checkout that is level says nothing, or the line is on every pull (L36).
 git -C "$CKDEV" pull -q 2>/dev/null || true
 out_266b="$(CLAUDE_HOME="$CKHB" SYNC_REPO="$CKB2" SYNC_CLONE_REGISTRY="$CKREG" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
@@ -13689,6 +13706,21 @@ CKREG2="$WORK/checkout-clones2"; printf '%s\n%s\n' "$CKB2" "$WORK/checkout-that-
 out_266c="$(CLAUDE_HOME="$CKHB" SYNC_REPO="$CKB2" SYNC_CLONE_REGISTRY="$CKREG2" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
 check "#266 a clone that has gone is reported as unanswerable, not as up to date" \
   "case \"\$out_266c\" in *'is not there any more'*) true ;; *) false ;; esac"
+
+# A refresh that CANNOT run must not leave the checkout reading as level with nothing said. The
+# count this run reports is measured here and is right either way, but the checkout's own record
+# stays stale, and a session working in it would still get a green light from git (L98, L11).
+CKGONE="$WORK/checkout-dev-unreachable"; git clone -q "$CKB" "$CKGONE" 2>/dev/null
+git -C "$CKGONE" remote set-url origin "$WORK/no-such-bare.git"
+printf '# rules a third time\n' > "$CKHA/CLAUDE.md"
+CLAUDE_HOME="$CKHA" SYNC_REPO="$CKA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+CKREG3="$WORK/checkout-clones3"; printf '%s\n%s\n' "$CKB2" "$CKGONE" > "$CKREG3"
+out_375="$(CLAUDE_HOME="$CKHB" SYNC_REPO="$CKB2" SYNC_CLONE_REGISTRY="$CKREG3" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+line_375="$(printf '%s\n' "$out_375" | sed -n "\|$CKGONE|p" | sed -n '/behind/p')"
+check "#375 a checkout whose remote cannot be reached is still reported as behind" \
+  "[ -n \"\$line_375\" ]"
+check "#375 and the same line says its own record could not be refreshed" \
+  "case \"\$line_375\" in *'could not be refreshed'*) true ;; *) false ;; esac"
 
 # ---- #196: every send outcome reaches the log, not only the failures ----
 # Local config changes sat unsent for 29 hours on 2026-08-23 while the watch daemon was running,
