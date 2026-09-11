@@ -1,0 +1,38 @@
+# Absence assertions whose needle appears nowhere else in their own suite
+# (claude-config#371). One "path: count" per line.
+#
+# A `! grep -q 'NEEDLE'` assertion is satisfied by ABSENCE, so a needle that can never match is
+# indistinguishable from the behaviour being correct (L159, L100). On 2026-09-11 a fixture's sample
+# text was reworded and two assertions were left matching the old wording: the positive one failed
+# honestly, and the negative one passed while searching for a string that existed nowhere in the
+# run. Only its positive twin revealed it.
+#
+# scan-absence-needles.py derives the real counts and fails if any file's count GROWS, so a new one
+# is read on the day it lands. It also fails when a count here is HIGHER than the file's, which
+# forces the number down as sites are settled rather than letting it sit as a permanent allowance
+# (L182).
+#
+# READ THIS BEFORE TREATING A FINDING AS A DEFECT. Most findings are sound. A needle naming
+# something the TOOL would print if the defect were present correctly appears nowhere in the test
+# that asserts it is absent. Measured 2026-09-11 over this repo: 140 assertions judged, 6 flagged,
+# and all six were sound on reading. The scan is a prompt to go and look.
+#
+# Every entry carries the reason it was accepted, because an entry with no written reason beside
+# neighbours that each have one is evidence it was never reasoned about (L233).
+
+# The needle names services the message must NOT guess at. They appear nowhere in the suite
+# precisely because the hook never writes them, which is the assertion.
+payload/hooks/test-check-free-space.sh: 1
+
+# Five, each a phrase the TOOL prints in the state being ruled out:
+#   2599  "agentMac1: launch agent"  the twin one line above says agentMac2, and the two differ by
+#         one character, so no literal run of six or more is shared. Sound, and the closest thing
+#         here to a case the scan could be taught to pair up.
+#   2869  "Received changes from the shared repo"  a header a first pull must not print.
+#   4533  "points somewhere else"    a conflict the tool must not report for a tilde alias.
+#   5093  "Verified:"                the verdict line a single published Mac must not get. Its own
+#         comment records that an earlier version banned the WORD and wrongly failed on the correct
+#         message, so this one deliberately targets a string the suite never writes.
+#   13764 "unindentedcontinuation"   the glued form the generator must not produce. The unglued
+#         form is asserted positively one check above, in the same fixture.
+tests/test-claude-sync.sh: 5
