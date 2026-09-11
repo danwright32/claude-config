@@ -2113,6 +2113,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   thing tried.)
   SHORT: A rendered page measurement reads the DOCUMENT MODE too, and a file with no doctype is in quirks mode, so any HTML to be measured must declare one.
 
+- **L684. A `for...of` over a STRING iterates its characters and type checks silently, so a
+  collection built by `join`, `split` or a template and then looped over runs once per letter
+  and every check inside it asks a question about a single character.** (slate#2218: a guard
+  forbade a retired attribute name anywhere in the tree, so the test that had to NAME that
+  attribute in order to check for it built the two forbidden spellings out of parts,
+  `["legal", "eligible"].join("_")`, to avoid tripping the guard on itself. `join` answers one
+  string. The loop below it read `for (const key of RETIRED_CRITERIA_KEYS)` and asked whether
+  each of `l`, `e`, `g`, `a` and the rest was a key on sixty bucket criteria objects, which
+  none of them is, so the whole block passed over a bucket builder that could have carried the
+  criterion on every code. TypeScript accepts it: a string IS iterable, and `key` is inferred
+  as `string`, which is exactly what the body expects. It was caught only by planting the
+  criterion back into the real builder and requiring the block to fail, which it then did
+  thirty times. The general form is that any expression that MIGHT be a string and MIGHT be an
+  array of strings loops without complaint either way, and the wrong one is silent.)
+  SHORT: A `for...of` over a STRING iterates its CHARACTERS and type checks silently, so a collection built by join or split runs the loop once per letter.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -7047,6 +7063,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   they can disagree at the margins with nothing comparing them, which is L107's ad hoc second
   definition arriving through a door the tree structure held open.)
   SHORT: Finding the right shared place to PUT new logic is not the same as checking whether it already EXISTS, and doing the first well hides the second.
+
+- **L683. A change that redefines the UNIT a number counts silently re-aims every consumer of that
+  number, and the one that gets corrected is whichever surface the change was framed around, so
+  enumerate the readers from where the value is PUBLISHED rather than from the issue.** (slate#1909
+  changed what a rung counts: a Beyond bucket code now walks two rungs per debt tier, because the
+  ladder gained a sideways overflow to the other backend service before each tier drop. The issue
+  named the Slack alert, which counted rungs and escalated at two, so that was rewritten to derive
+  debt tiers from the two bucket codes instead. The same number is also published to callers as
+  `rungsDropped` by two booking API routes and stored on every booking's routing trace, and nothing
+  named those, so a consumer reading it as debt tiers now gets the right answer for some codes and
+  double for others, with no error anywhere. The field name stayed accurate throughout; what broke
+  is that two readings which used to coincide stopped doing so. L220 records the same mechanism for
+  guards calibrated against a quantity, and a guard at least fails loudly when it can no longer
+  reach its threshold; a published value simply goes on being read. slate#2231)
+  SHORT: A change that redefines the UNIT a number counts re-aims every consumer, so enumerate the readers from where the value is PUBLISHED, not from the issue.
 
 ## Cross-system reliability
 
