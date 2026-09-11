@@ -5632,6 +5632,15 @@ check "#362 and names the file it compared on the line that claims the drop" \
   "line_has \"\$out_sn1\" 'dropped' 'skills/s/SKILL.md'"
 check "#362 and keeps the dropped commit reachable rather than destroying it" \
   "[ -n \"\$(git -C '$SN1R' for-each-ref --format='%(objectname)' refs/claude-sync/dropped 2>/dev/null)\" ]"
+# And it cleaned up the copy of the shared tip it extracted to answer the question
+# (claude-config#372). tip_payload_dir recorded that directory in a variable its ONLY caller read
+# through a command substitution, which is a subshell, so the assignment was discarded on return
+# and the cleanup that reads it could never fire. Every comparison therefore left a full copy of
+# the shared payload behind, and the scan written for #372 is what found it: the code setting the
+# variable reads as entirely correct.
+_sn1_left="$(find "${SYNC_SCRATCH_ROOT:-${TMPDIR:-/tmp}}/claude-sync" -maxdepth 1 -name 'claude-sync-expand.*' -type d 2>/dev/null | wc -l | tr -d ' ')"
+check "#372 the extracted copy of the shared tip is removed, not left behind" \
+  "[ \"\${_sn1_left:-0}\" -eq 0 ]"
 check "#362 and the shared repo still holds the development checkout's newer work" \
   "grep -q 'L450' \"\$(git -C '$SN1R' rev-parse --show-toplevel)/payload/skills/s/SKILL.md\""
 check "#362 and this Mac's live config was not rolled back to the snapshot" \
@@ -10403,6 +10412,129 @@ check "#83 a file that really clashes is still kept and reported" \
   "line_has \"\$out_ix2\" 'could NOT be merged' 'RTK\.md'"
 check "#83 and its copy is still set aside" "ls '$IXHB'/RTK.md.conflict-* >/dev/null 2>&1"
 
+
+section "== a short form still means what its rule means (claude-config#369) =="
+# LESSONS-INDEX.md renders a hand written SHORT: line for 480 of the 638 lessons rather than the
+# rule sentence itself, so that the file which loads into every session fits under the platform's
+# 150,000 character memory warning. test-rule-file-budget.sh enforces the LENGTH cap, and nothing
+# checked that a short form still SAYS what its rule says. A short form that drifts, or one edited
+# without its rule, is what every session then reads in place of the lesson, and it carries the
+# rule's authority while meaning something else (L562).
+#
+# The pairs come from claude-sync's own extraction, the same one the index is rendered from, so
+# this cannot agree with the generator only until one of them is refined (L370).
+#
+# THE MEASURE is how much of the short form's significant vocabulary appears in its rule. That
+# direction, not the reverse: a short form is a compression, so nearly all of its words should be
+# in the rule, while most of the rule's words are legitimately absent from it.
+_sf_score="$WORK/shortform-score.py"
+cat > "$_sf_score" <<'PYEOF'
+import re, sys
+# Words too common to carry meaning, and too short to be one. The list is deliberately small: a
+# large one starts deciding the answer rather than measuring it.
+STOP = set("""the a an and or but of to in on for with that this it is are was were be been as by
+at from into over under not no any every each which who whom whose what when where why how its
+their they them there here than then so such can cannot must may might will would shall should do
+does did done have has had you your we our one two both all only ever never else same other
+another about after before again against because while during through""".split())
+def sig(t):
+    return {w for w in re.findall(r"[a-z0-9]+", t.lower()) if len(w) >= 4 and w not in STOP}
+floor = float(sys.argv[1])
+bad = []
+orphans = []
+n = 0
+for line in sys.stdin:
+    parts = line.rstrip("\n").split("\t")
+    if parts[0] == "ORPHAN" and len(parts) >= 3:
+        orphans.append("line %s: %s" % (parts[1], parts[2][:60])); continue
+    if parts[0] != "PAIR" or len(parts) < 4: continue
+    num, rule, short = parts[1], parts[2], parts[3]
+    ss = sig(short)
+    if not ss:
+        bad.append("%s: its short form carries no significant word at all" % num); continue
+    n += 1
+    score = len(sig(rule) & ss) / len(ss)
+    if score < floor:
+        bad.append("%s: %.2f of its short form's vocabulary is in its rule, under the %.2f floor (%s)"
+                   % (num, score, floor, short[:60]))
+for o in orphans:
+    print("ORPHAN %s" % o)
+for b in bad:
+    print("DRIFT %s" % b)
+print("MEASURED %d" % n)
+PYEOF
+# The FLOOR, measured rather than chosen (L172). On 2026-09-11, over the 480 short forms in this
+# repo: the weakest genuine pairing scored 0.438, the median 0.923, and the first percentile 0.583.
+# Against 4,000 randomly MISMATCHED pairings from the same file the median was 0.000, the 99th
+# percentile 0.200 and the highest 0.444. So 0.40 sits below every genuine pairing and above all
+# but a handful in ten thousand mismatches. Re-measure before moving it, by scoring the file both
+# ways, never by picking a number that makes today's file pass.
+_sf_floor=0.40
+
+_sf_pairs="$(CLAUDE_HOME="$(dirname "$SCRIPT")/payload" bash "$SCRIPT" lesson-short-forms 2>/dev/null)"
+_sf_n="$(printf '%s\n' "$_sf_pairs" | awk -F'\t' '$1 == "PAIR" { n++ } END { print n + 0 }')"
+# A scan that found nothing passes every assertion below at once and reads exactly like a file
+# whose every short form is sound (L98).
+check "#369 the real lessons file yields short forms to measure" "[ \"\${_sf_n:-0}\" -gt 100 ]"
+_sf_out="$(printf '%s\n' "$_sf_pairs" | python3 "$_sf_score" "$_sf_floor")"
+dbg "#369 drift report: $_sf_out"
+check "#369 no short form has drifted from the rule it stands for" \
+  "case \"\$_sf_out\" in *DRIFT*) false ;; *) true ;; esac"
+check "#369 and no SHORT line belongs to no entry at all" \
+  "case \"\$_sf_out\" in *ORPHAN*) false ;; *) true ;; esac"
+
+# ---- and it can actually fail ----
+# A guard that has only ever been run against passing input has not been shown to work (L1, L159).
+# The fixture SWAPS two short forms between lessons, which is the exact fault: each entry is still
+# well formed, each short form is still a real sentence, and every length check still passes.
+_sf_fix="$WORK/shortform-fixture"; mkdir -p "$_sf_fix"
+cat > "$_sf_fix/LESSONS.md" <<'LEOF'
+# Lessons
+
+## Proof over green
+
+- **L1. A guard is only real once it has been seen to fail against a deliberate defect, because a
+  check that has only ever run against passing input proves nothing about what it catches.**
+  SHORT: A guard is only real once it has been seen to fail against a deliberate defect.
+- **L2. A scheduled job that reports success when it found nothing to do is indistinguishable from
+  one that saw every item pass, so it must say which of the two happened.**
+  SHORT: A scheduled job reporting success on nothing found cannot be told from one that saw every item pass.
+LEOF
+_sf_good="$(bash "$SCRIPT" lesson-short-forms "$_sf_fix/LESSONS.md" 2>/dev/null)"
+_sf_good_out="$(printf '%s\n' "$_sf_good" | python3 "$_sf_score" "$_sf_floor")"
+check "#369 the fixture's own short forms pass before anything is swapped" \
+  "case \"\$_sf_good_out\" in *DRIFT*) false ;; *) true ;; esac"
+check "#369 and the fixture really produced two pairs to judge" \
+  "case \"\$_sf_good_out\" in *'MEASURED 2'*) true ;; *) false ;; esac"
+
+# Now swap them. Nothing about either entry is malformed; only the meaning has moved.
+python3 - "$_sf_fix/LESSONS.md" <<'SWAPEOF'
+import sys
+p = sys.argv[1]
+lines = open(p).read().split("\n")
+idx = [i for i, l in enumerate(lines) if l.strip().startswith("SHORT:")]
+lines[idx[0]], lines[idx[1]] = lines[idx[1]], lines[idx[0]]
+open(p, "w").write("\n".join(lines))
+SWAPEOF
+_sf_swapped="$(bash "$SCRIPT" lesson-short-forms "$_sf_fix/LESSONS.md" 2>/dev/null | python3 "$_sf_score" "$_sf_floor")"
+dbg "#369 swapped report: $_sf_swapped"
+check "#369 a short form swapped between two lessons is caught" \
+  "case \"\$_sf_swapped\" in *DRIFT*) true ;; *) false ;; esac"
+check "#369 and BOTH of them are named, not just the first" \
+  "line_has \"\$(printf '%s' \"\$_sf_swapped\" | tr '\n' ' ')\" 'L1' 'L2'"
+
+# A SHORT: line belonging to no entry renders nowhere, so it reads as a short form somebody wrote
+# while being a line nothing anywhere consults (L46). It must fail loudly rather than be skipped.
+printf '# Lessons\n\n## Proof over green\n\nSHORT: a short form under no entry at all\n\n- **L1. A rule.**\n  SHORT: A rule.\n' > "$_sf_fix/LESSONS.md"
+_sf_orph="$(bash "$SCRIPT" lesson-short-forms "$_sf_fix/LESSONS.md" 2>/dev/null | python3 "$_sf_score" "$_sf_floor")"
+# And a file it cannot read is refused rather than answered for by the default one (L320).
+_sf_missing="$(bash "$SCRIPT" lesson-short-forms "$_sf_fix/no-such-file.md" 2>&1 || true)"
+check "#369 a file it cannot read is refused, not answered for by this Mac's own" \
+  "case \"\$_sf_missing\" in *'not a file'*) true ;; *) false ;; esac"
+check "#369 a SHORT line belonging to no entry is reported" \
+  "case \"\$_sf_orph\" in *ORPHAN*) true ;; *) false ;; esac"
+check "#369 and the report names the line it is on" \
+  "case \"\$_sf_orph\" in *'line 5'*) true ;; *) false ;; esac"
 
 section "== a lesson keeps an identity a renumber cannot move (claude-config#199) =="
 # Both Macs mint numbers from their own band and a collision still happened on 2026-08-29: each had

@@ -20,6 +20,7 @@
 #   claude-sync next-lesson       # the next free lesson number, so none is picked by eye
 #   claude-sync check-lessons     # fail if anything would stop the lessons file publishing
 #   claude-sync lesson-faults     # the same faults, lock free and silent when there are none
+#   claude-sync lesson-short-forms [FILE] # every short form beside the rule it stands for
 #   claude-sync lesson L174       # one lesson in full, with its provenance
 #   claude-sync cite-scan L2      # which synced files cite that lesson number
 #   claude-sync check-skills      # fail if a plugin and the skills folder provide the same skill
@@ -1632,12 +1633,35 @@ lesson_index_body(){   # $1 = the full lessons file
   printf 'read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about\n'
   printf 'to decide something: a line here is enough to tell you a rule APPLIES, and not enough to\n'
   printf 'apply it, because the body is where the failure it came from is described.\n'
+  lesson_entries_render "$1" index
+  return 0
+}
+
+# Every SHORT form beside the RULE it stands for (claude-config#369), one per line, tab separated:
+#   PAIR<TAB>Lnnn<TAB>the rule sentence<TAB>the short form
+#   ORPHAN<TAB>line number<TAB>the text      a SHORT: line belonging to no entry at all
+#
+# Read by the SAME extraction the index is rendered from, never a second one written beside it.
+# The index renders the short form in place of the rule, so a drifted short form is what every
+# session then reads, carrying the rule's authority while meaning something else (L562). A checker
+# with its own idea of where a rule sentence starts and ends would agree with the generator only
+# until one of them was refined (L370).
+lesson_short_form_pairs(){   # $1 = the full lessons file
+  lesson_entries_render "$1" pairs
+  return 0
+}
+
+# ONE reading of a lessons file, in two shapes. The walk, the wrap joining and the SHORT: scan are
+# the fiddly parts and they are written once: the index and the drift check cannot come to two
+# different ideas of what a lesson's rule sentence is (L370, L70).
+lesson_entries_render(){   # $1 = the full lessons file  $2 = index | pairs
+  [ -f "$1" ] || return 0
   # The whole file is read into an array first, rather than walked with getline. getline CONSUMES
   # the line it reads, so a continuation loop had no way to put back a line that turned out to
   # start the NEXT entry, and an entry whose bold marker never closes therefore swallowed every
   # entry after it until one happened to contain a `**` (claude-config#194). With the lines in
   # hand the loop can simply stop at a boundary and the next entry is still there to be rendered.
-  awk '
+  awk -v mode="$2" '
     { line[NR] = $0 }
     END {
       for (i = 1; i <= NR; i++) {
@@ -1686,13 +1710,38 @@ lesson_index_body(){   # $1 = the full lessons file
             break
           }
         }
+        if (short != "") { gsub(/[[:space:]]+/, " ", short); sub(/[[:space:]]+$/, "", short) }
+        if (mode == "pairs") {
+          if (short != "" && match(rule, /^L[0-9]+\./)) {
+            num = substr(rule, 1, RLENGTH - 1)
+            sentence = rule
+            sub(/^L[0-9]+\.[[:space:]]*/, "", sentence)
+            printf "PAIR\t%s\t%s\t%s\n", num, sentence, short
+          }
+          claimed[i] = 1
+          for (k = i + 1; k <= NR; k++) {
+            if (line[k] ~ /^- \*\*L[0-9]+\./ || line[k] ~ /^## /) break
+            claimed[k] = 1
+          }
+          continue
+        }
         if (short != "" && match(rule, /^L[0-9]+\./)) {
-          gsub(/[[:space:]]+/, " ", short)
-          sub(/[[:space:]]+$/, "", short)
           rule = substr(rule, 1, RLENGTH) " " short
         }
         if (section != lastsec) { printf "\n## %s\n\n", section; lastsec = section }
         printf "- %s\n", rule
+      }
+      # A SHORT: line that belongs to no entry at all. It renders nowhere, so it reads as a short
+      # form somebody wrote while being a line nothing anywhere consults (L46). Reported only in
+      # pairs mode, where something is asking about short forms.
+      if (mode == "pairs") {
+        for (i = 1; i <= NR; i++) {
+          if (line[i] !~ /^[[:space:]]*SHORT: /) continue
+          if (i in claimed) continue
+          txt = line[i]
+          sub(/^[[:space:]]*SHORT:[[:space:]]*/, "", txt)
+          printf "ORPHAN\t%d\t%s\n", i, txt
+        }
       }
     }
   ' "$1"
@@ -4280,7 +4329,11 @@ tip_payload_dir(){   # $1 = branch -> prints a directory holding the shared tip'
     return 1
   fi
   [ -d "$d/payload" ] || { rm -rf "$d" 2>/dev/null || true; return 1; }
-  TIP_PAYLOAD_DIR="$d"
+  # It ANSWERS IN ITS RETURN VALUE and records nothing (claude-config#372). It used to set
+  # TIP_PAYLOAD_DIR here too, and its only caller reads it through a command substitution, which is
+  # a subshell: the assignment was discarded the moment it returned, so the cleanup that reads that
+  # variable could never fire and every comparison left a whole copy of the shared payload behind.
+  # The code setting it read as entirely correct, which is why the scan for that shape exists.
   printf '%s' "$d/payload"
 }
 
@@ -4315,6 +4368,10 @@ tip_holds_local_commits_inner(){   # $1 = branch
   # on a reading it does not have is the one thing it must not do.
   [ -n "$paths" ] || return 1
   tipdir="$(tip_payload_dir "$branch")" || return 1
+  # Recorded HERE, where it survives: this function is called plainly by the wrapper that cleans
+  # up, so an assignment made here reaches it. The directory to remove is the one holding the
+  # payload, which is what was extracted into.
+  TIP_PAYLOAD_DIR="${tipdir%/payload}"
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     # Only payload/ is ever committed by a snapshot. Anything else is a hand commit to the tool,
@@ -7836,6 +7893,17 @@ case "$cmd" in
   # lesson is written, so the session that wrote it is still there to fix it (claude-config#374).
   # check-lessons is this plus the band and the next free number, which is the part that can take
   # the lock, so the two cannot disagree about what a fault is.
+  # Read only: every SHORT form beside the rule it stands for, and any SHORT: line belonging to no
+  # entry (claude-config#369). What the drift check consumes, and readable by hand.
+  # An explicit file is READ, never ignored in favour of the default: a tool handed a target it
+  # then quietly does not use looks exactly like one that used it (L320).
+  lesson-short-forms)
+    if [ -n "${2:-}" ]; then
+      [ -f "$2" ] || die "lesson-short-forms was given '$2', which is not a file it can read. Nothing was measured."
+      lesson_short_form_pairs "$2"
+    else
+      lesson_short_form_pairs "$CLAUDE_HOME/$LESSONS_FILE"
+    fi ;;
   lesson-faults)
     faults="$(lesson_publish_faults "$CLAUDE_HOME")"
     if ! is_blank "$faults"; then die "$faults"; fi
@@ -7866,5 +7934,5 @@ case "$cmd" in
   help|-h|--help) awk 'NR > 1 { if ($0 ~ /^# *Env overrides/) exit; buf[n++] = $0 }
                         END { while (n > 0 && buf[n-1] == "#") n--; for (i = 0; i < n; i++) print buf[i] }' \
                     "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-short-forms, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
 esac
