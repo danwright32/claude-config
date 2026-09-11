@@ -1382,6 +1382,49 @@ orphaned_lesson_prose(){   # $1 = tree to inspect -> "file:line:text"
   return 0
 }
 
+# THE CAP ON A SINGLE RENDERED INDEX LINE, read from the suite that owns it rather than written
+# again here. Two numbers that have to agree drift, and each site reads as correct on its own
+# (L41, L70). The live config is looked at FIRST, because that is the copy a send publishes from.
+#
+# A config that simply does not carry that hook is not a fault and says nothing; a hook that is
+# there but holds no ENTRY_CAP line IS one, and the caller reports it, because a reader that
+# silently finds nothing would leave this whole check inert while reading as active (L98, L557).
+# Answers in its RETURN VALUE, never through a global. Every caller reads this through a command
+# substitution, which is a subshell, so a variable set in here is discarded the moment it returns:
+# the first version did exactly that, and the "hook present but carrying no cap" report could never
+# fire while the code setting it read as perfectly correct.
+lesson_index_entry_cap(){   # prints the cap, or "UNREADABLE:<path>", or nothing at all
+  local f n
+  for f in "$CLAUDE_HOME/hooks/test-rule-file-budget.sh" "$PAYLOAD/hooks/test-rule-file-budget.sh"; do
+    [ -f "$f" ] || continue
+    # One awk over the file rather than grep piped into head: a short circuiting consumer exits
+    # first and can kill its producer, and under pipefail that reports a failure that never
+    # happened (L183). awk reads the file itself, so there is no pipeline to short circuit.
+    n="$(awk -F= '/^ENTRY_CAP=[0-9]+$/ { print $2; exit }' "$f" 2>/dev/null)"
+    if [ -n "$n" ]; then printf '%s' "$n"; else printf 'UNREADABLE:%s' "$f"; fi
+    return 0
+  done
+  return 0
+}
+
+# Lesson entries whose INDEX LINE would run past that cap. Measured on the RENDERED line, which is
+# the same string the budget suite measures, never on the rule sentence: an entry carrying a SHORT:
+# form renders that instead and is not over anything, so measuring the rule would hold back exactly
+# the entries that have already been fixed.
+over_cap_lesson_entries(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:Lnnn (n chars ...)" lines
+  local src="$1/$LESSONS_FILE" cap
+  [ -f "$src" ] || return 0
+  cap="$(lesson_index_entry_cap)"
+  [ -n "$cap" ] || return 0
+  case "$cap" in UNREADABLE:*) return 0 ;; esac
+  lesson_index_body "$src" 2>/dev/null | awk -v cap="$cap" -v f="$LESSONS_FILE" '
+    /^- L[0-9]+\./ && length($0) > cap {
+      n = $0; sub(/^- /, "", n); sub(/\..*$/, "", n)
+      printf "%s:%s (%d characters against a %d cap)\n", f, n, length($0), cap
+    }'
+  return 0
+}
+
 malformed_lesson_entries(){   # $1 = tree to inspect
   local f line
   for f in $(top_files_in "$1"); do
@@ -2373,6 +2416,29 @@ PROT
       dupfiles="$(printf '%s\n%s\n' "$dupfiles" "$duplines" | cut -d: -f1 | grep -v '^$' | sort -u)"
       echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because the same lesson number is used twice, which silently breaks every reference to it: $(printf '%s' "$duplines" | tr '\n' ';' | sed 's/;$//'). Renumber the later entry ('claude-sync next-lesson' prints the next free number) and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
       notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): duplicate lesson number"
+    fi
+    # The FOURTH fault of the same kind, held back the same way and reported separately because it
+    # needs a different fix again (L11). This entry is readable and correctly numbered; what is
+    # wrong is that its line in the generated index runs past the cap, and that index loads into
+    # every session in every project, where the platform warns past 150,000 characters (L429).
+    #
+    # payload/hooks/test-rule-file-budget.sh owns that cap and fails on it, but it runs in the
+    # CONFIG REPO, while lessons are written in whatever project the session happens to be in. The
+    # watcher mirrors them up and pushes, so without this the first anybody hears of an over-cap
+    # lesson is CI going red long after the author has moved on, and while it is red the other Mac
+    # receives NOTHING, because its automatic receive waits for green. Catching it at the send puts
+    # the message in front of the session that wrote the lesson, which is the only one that can
+    # write its short form.
+    local caplines capval
+    capval="$(lesson_index_entry_cap)"
+    caplines="$(over_cap_lesson_entries "$CLAUDE_HOME")"
+    case "$capval" in UNREADABLE:*)
+      echo "claude-sync: ${capval#UNREADABLE:} holds no 'ENTRY_CAP=<number>' line, so nothing here could tell whether a lesson is too long for the index that loads into every session. Lessons were published unchecked. Restore that line, or this check is inert while reading as active." >&2 ;;
+    esac
+    if ! is_blank "$caplines"; then
+      dupfiles="$(printf '%s\n%s\n' "$dupfiles" "$(printf '%s\n' "$caplines" | cut -d: -f1)" | grep -v '^$' | sort -u)"
+      echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because it holds lesson entries whose line in the generated index runs past the cap, and that index loads into every session in every project: $(printf '%s' "$caplines" | tr '\n' ';' | sed 's/;$//'). Give each one a 'SHORT: <the rule in one line>' line inside its entry; the full rule stays exactly as it is and the index renders the short form instead. It publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
+      notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): lesson too long for the index"
     fi
   fi
   # Regenerated here rather than trusted, so the copy that travels always matches the lessons file

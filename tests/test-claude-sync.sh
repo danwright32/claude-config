@@ -4111,6 +4111,80 @@ check "#164 and the pull says so when it lands, not only on the next send" \
 check "#164 and the arrival report says what shape it should have been" \
   "case \"\$_lm_arr\" in *'- **L'*) true ;; *) false ;; esac"
 
+section "== a lesson too long for the index is held back from the send until it carries a short form =="
+# LESSONS-INDEX.md loads into every session in every project, and the platform warns past 150,000
+# characters (L429). payload/hooks/test-rule-file-budget.sh caps a single rendered index line, but
+# that suite runs in THIS repo, while lessons are written in whatever project the session happens
+# to be in. The watcher mirrors them up and pushes, so without this the first anybody hears of an
+# over-cap lesson is CI going red long after the author moved on, and while it is red the other
+# Mac receives NOTHING at all, because its automatic receive waits for green.
+#
+# Only that file is held back, never the whole send: refusing everything would stop hooks and
+# skills reaching the other Mac too, which is the more expensive failure and the wedge this tool
+# has already been bitten by twice (the same rule the malformed entry check above uses).
+#
+# Its own fixture rather than the one above it. Sections are dealt to parallel workers by measured
+# time, so two that sit next to each other in this file routinely run in different processes, and
+# one that reads a neighbour's variable passes until the day the deal changes.
+LCAP="$WORK/lcaprepo"; mkdir -p "$LCAP/payload"
+LCAPH="$WORK/lcaphome"; mkdir -p "$LCAPH/hooks"
+echo '{"hooks":{}}' > "$LCAPH/settings.json"
+echo '#!/bin/sh' > "$LCAPH/hooks/keep-syncing.sh"
+printf '# rules\n@LESSONS-INDEX.md\n' > "$LCAPH/CLAUDE.md"
+# The fixture's cap is deliberately NOT the real one. A fixture carrying 160 would pass just as
+# well against a tool that hardcoded 160, so it could never tell a cap that is read from this file
+# from one written twice, which is the whole point of the check (L70). The long rule below renders
+# past 80 and well inside 160, so only a tool that actually reads this number catches it.
+printf 'ENTRY_CAP=80\n' > "$LCAPH/hooks/test-rule-file-budget.sh"
+_lcap(){ SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LCAPH" SYNC_REPO="$LCAP" bash "$SCRIPT" "$@" 2>&1; }
+_lcap_long="A rule long enough to pass the fixture cap but short enough that a hardcoded 160 lets it by."
+
+# The control FIRST, on a file whose entries all fit: a check that fires on everything is as
+# useless as one that fires on nothing (L104).
+printf '# Lessons\n\n## Proof over green\n\n- **L1. short enough to render inside the cap.** body\n' > "$LCAPH/LESSONS.md"
+_lcap push >/dev/null 2>&1
+check "cap: a lessons file whose entries all fit publishes normally" \
+  "grep -q 'short enough to render inside the cap' '$LCAP/payload/LESSONS.md'"
+
+printf '# Lessons\n\n## Proof over green\n\n- **L1. short enough to render inside the cap.** body\n- **L2. %s** body\n' "$_lcap_long" > "$LCAPH/LESSONS.md"
+_lcap_over="$(_lcap push)"
+check "cap: an over-cap lesson is NOT published" \
+  "! grep -q 'hardcoded 160 lets it by' '$LCAP/payload/LESSONS.md'"
+check "cap: and the send names the file and the lesson that needs a short form" \
+  "line_has \"\$_lcap_over\" 'NOT publishing' 'LESSONS\.md' 'L2'"
+check "cap: and it says what to write, not merely that something is wrong" \
+  "case \"\$_lcap_over\" in *'SHORT:'*) true ;; *) false ;; esac"
+check "cap: while everything else still publishes" "[ -f '$LCAP/payload/hooks/keep-syncing.sh' ]"
+
+# The same lesson goes out once it carries a short form, and the index renders that rather than the
+# rule. Without this the check could be one that never lets anything through (L159).
+printf '# Lessons\n\n## Proof over green\n\n- **L1. short enough to render inside the cap.** body\n- **L2. %s** body\n  SHORT: A long rule keeps its full text and the index renders a short form.\n' "$_lcap_long" > "$LCAPH/LESSONS.md"
+_lcap push >/dev/null 2>&1
+check "cap: the same lesson publishes once it carries a short form" \
+  "grep -q 'hardcoded 160 lets it by' '$LCAP/payload/LESSONS.md'"
+check "cap: and the index renders the short form, not the rule" \
+  "grep -q '^- L2. A long rule keeps its full text' '$LCAP/payload/LESSONS-INDEX.md'"
+
+# A SHORT line that is ITSELF over the cap is the same fault. Without this the check is satisfied
+# by writing any short form at all, which passes while protecting nothing.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. short enough to render inside the cap.** body\n- **L2. %s** body\n  SHORT: %s\n' "$_lcap_long" "$_lcap_long" > "$LCAPH/LESSONS.md"
+_lcap_over2="$(_lcap push)"
+check "cap: a short form that is itself over the cap is caught too" \
+  "line_has \"\$_lcap_over2\" 'NOT publishing' 'L2'"
+
+# A hook that is PRESENT but carries no cap is a fault, and saying nothing about it would leave
+# this whole check inert while it read as active (L98, L557).
+printf '# no cap line here\n' > "$LCAPH/hooks/test-rule-file-budget.sh"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. short enough to render inside the cap.** body\n' > "$LCAPH/LESSONS.md"
+_lcap_nocap="$(_lcap push)"
+check "cap: a budget hook carrying no cap line is reported, not passed over" \
+  "case \"\$_lcap_nocap\" in *'no '*'ENTRY_CAP'*) true ;; *) false ;; esac"
+printf 'ENTRY_CAP=80\n' > "$LCAPH/hooks/test-rule-file-budget.sh"
+
+# And the REAL hook carries the line in the exact shape the send greps for. Without this the
+# reader can find nothing in production, hold nothing back, and read as a working check (L96).
+check "cap: the real budget hook carries a cap in the shape the send reads" \
+  "grep -qE '^ENTRY_CAP=[0-9]+' \"\$(dirname '$SCRIPT')/payload/hooks/test-rule-file-budget.sh\""
 section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
 # needs: #15: duplicate lesson numbers must not be published or go unnoticed
 # The settled rule (see the 2026-08-05 note above): the published copy keeps the
@@ -14355,6 +14429,33 @@ check "#315 and this Mac's own entry survived" "grep -q 'L5. five' '$UNHB/LESSON
 # ONCE each. A union that keeps both sides of a hunk is exactly the mechanism that can keep one of
 # them twice, and a doubled entry is a duplicate number, which is the state the band mechanism
 # exists to prevent.
+# A LESSON CARRYING A SHORT FORM SURVIVES THE TWO-MAC MERGE, and survives it ONCE.
+#
+# A rule sentence too long for the index cap carries an indented `SHORT:` line, and most do, so
+# this is the ordinary shape of a new lesson rather than a rare one. The dedupe above is written
+# on the ENTRY line: `--union` keeps both sides of a conflicted hunk, and an entry both Macs wrote
+# identically would otherwise publish a duplicate number, so identical entry lines are collapsed.
+# Nothing collapses the lines UNDER an entry, which is correct for body prose and provenance, and
+# is the thing to check here rather than assume: a SHORT line kept twice renders the same index
+# (the generator takes the first it finds) while the lessons file quietly grows a copy per merge.
+# $'...' so the SHORT line is a REAL newline and a real indent. Written with a literal backslash n
+# it lands on the body's line, where a grep for its text still matches and the generator, which
+# looks for the marker at the START of a line, correctly does not: three checks then pass on a
+# fixture that holds nothing like a short form.
+un_append "$UNHA/LESSONS.md" $'- **L6. a rule long enough that its index line would run past the cap without a short form.** body\n  SHORT: A long rule keeps its full text and the index renders a short form.'
+unsync "$UNHA" "$UNA" >/dev/null 2>&1
+env CLAUDE_HOME="$UNHB" SYNC_REPO="$UNRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+check "#315 the fixture really put the short form on its own indented line" \
+  "grep -qE '^[[:space:]]+SHORT: A long rule keeps' '$UNHA/LESSONS.md'"
+check "#315 a lesson written with a short form reaches the other Mac" \
+  "grep -q 'L6. a rule long enough' '$UNHB/LESSONS.md'"
+check "#315 and its short form travels with it" \
+  "grep -q 'SHORT: A long rule keeps its full text' '$UNHB/LESSONS.md'"
+check "#315 and the short form is there exactly once, not once per merge" \
+  "[ \"\$(grep -c 'SHORT: A long rule keeps its full text' '$UNHB/LESSONS.md')\" = '1' ]"
+check "#315 and the index on the other Mac renders the short form, not the rule" \
+  "grep -q '^- L6. A long rule keeps its full text' '$UNHB/LESSONS-INDEX.md'"
+
 check "#315 each entry is present exactly once" \
   "[ \"\$(grep -c 'L4. four' '$UNHB/LESSONS.md')\" = 1 ] && [ \"\$(grep -c 'L5. five' '$UNHB/LESSONS.md')\" = 1 ]"
 check "#315 no conflict marker survives in the lessons file" \

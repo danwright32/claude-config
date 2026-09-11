@@ -113,6 +113,39 @@ else
   FAIL=$((FAIL+1)); echo "FAIL: instruction missing LESSONS.md or approval requirement"
 fi
 
+# THE SHORT FORM. A lesson's rule sentence runs long because it carries the condition that makes
+# it apply, and LESSONS-INDEX.md renders one line per lesson into every session in every project,
+# where the platform warns past 150,000 characters (L429). About three quarters of the existing
+# rules are too long for the cap, so a lesson written without a short form is the normal case, not
+# the edge one. This instruction is the only thing that puts one there at the moment of writing;
+# the send refuses to publish an over-cap lessons file, which is the guard behind it, because a
+# rule that lives only in a prompt is a hope (L27).
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'gh issue create -t x -b y')" "$T")
+case "$out" in *'SHORT:'*) _has_short=1 ;; *) _has_short=0 ;; esac
+if [ "$_has_short" = 1 ]; then
+  PASS=$((PASS+1)); echo "PASS: instruction asks for a SHORT form on a rule too long for the index"
+else
+  FAIL=$((FAIL+1)); echo "FAIL: instruction says nothing about a SHORT form, so a new lesson arrives over the index cap and the send holds the whole lessons file back"
+fi
+
+# AND THE NUMBER IN IT IS THE REAL ONE. The instruction quotes the cap so a writer knows roughly
+# what length to aim at, which makes it a SECOND copy of a number that already lives in
+# test-rule-file-budget.sh. A document kept in step by a check on one token leaves the sentence
+# beside it unverified, and the passing check makes that sentence MORE trusted rather than less
+# (L210), so the quoted figure is compared against the cap itself.
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'gh issue create -t x -b y')" "$T")
+budget="$(dirname "${BASH_SOURCE[0]}")/test-rule-file-budget.sh"
+realcap="$(awk -F= '/^ENTRY_CAP=[0-9]+$/ { print $2; exit }' "$budget" 2>/dev/null)"
+if [ -z "$realcap" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL: could not read ENTRY_CAP from $budget, so the figure quoted in the instruction was compared against nothing"
+elif case "$out" in *"$realcap characters today"*) true ;; *) false ;; esac; then
+  PASS=$((PASS+1)); echo "PASS: the cap quoted in the instruction is the one the budget suite enforces ($realcap)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL: the instruction quotes a different cap than the $realcap the budget suite enforces, so a lesson written to it is refused by the send"
+fi
+
 echo "----"
 echo "passed $PASS, failed $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
