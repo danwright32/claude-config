@@ -1,0 +1,29 @@
+# The ONE fixture both ratchet readers are driven against (claude-config#377).
+#
+# There are two implementations, one in bash and one in python, because two of the guards that use
+# them are shell suites and two are python scans, and neither language can call the other's reader
+# without paying a process per run. Twin implementations in two languages consume one shared
+# committed fixture, or they agree on the day they are written and nowhere after it (L26).
+#
+# One case per line, tab separated:
+#   <name>  <baseline text, \n for a newline>  <measured text, \n for a newline>  <verdict>
+#
+# measured is the same shape as a baseline: what a fresh scan found. verdict is one of
+#   ok       nothing grew and nothing is stale
+#   grown    a path measures higher than recorded, which is the fault these exist to catch
+#   stale    a path measures lower than recorded, so the number has to come down (L182)
+#   both     one path grew and another is stale, in the same run
+# A reader that reports only the first of those two would pass every case but this one.
+a clean run	a.sh: 1\nb.sh: 2	a.sh: 1\nb.sh: 2	ok
+a path that grew	a.sh: 1	a.sh: 2	grown
+a path that appeared	a.sh: 1	a.sh: 1\nb.sh: 3	grown
+a path that shrank	a.sh: 2	a.sh: 1	stale
+a path that went to zero	a.sh: 2	a.sh: 0	stale
+a path that vanished	a.sh: 2\nb.sh: 1	b.sh: 1	stale
+one of each at once	a.sh: 1\nb.sh: 2	a.sh: 2\nb.sh: 1	both
+an empty baseline and nothing found	# only a comment	# only a comment	ok
+an empty baseline and something found	# only a comment	a.sh: 1	grown
+comments and blank lines are not entries	# c\n\na.sh: 1\n\n# d	a.sh: 1	ok
+whitespace around the count is not a value	a.sh:   3	a.sh: 3	ok
+a zero recorded and a zero found	a.sh: 0	a.sh: 0	ok
+a path with a slash in it	x/y/a.sh: 1	x/y/a.sh: 2	grown

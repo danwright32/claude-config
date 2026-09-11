@@ -33,6 +33,9 @@ import re
 import shlex
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/lib")
+import ratchet  # noqa: E402  the one rule a count based ratchet applies (claude-config#377)
+
 FN_DEF = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
 DECLARED = re.compile(r"^\s*(local|declare|typeset|export|readonly)\s+(.*)$")
 ASSIGN_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
@@ -137,23 +140,6 @@ def scan_file(path):
     return considered, found
 
 
-def read_baseline(path):
-    counts = {}
-    try:
-        text = open(path, encoding="utf-8").read()
-    except OSError:
-        return None
-    for line in text.split("\n"):
-        line = line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        parts = line.rsplit(":", 1)
-        if len(parts) != 2 or not parts[1].strip().isdigit():
-            continue
-        counts[parts[0].strip()] = int(parts[1])
-    return counts
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
@@ -186,7 +172,10 @@ def main():
             now[rel] = len(found)
             detail[rel] = found
 
-    base = read_baseline(baseline_path)
+    try:
+        base = ratchet.read_baseline(open(baseline_path, encoding="utf-8").read())
+    except OSError:
+        base = None
     if base is None:
         print("scan-subshell-globals: no baseline at %s, so there is nothing to compare against "
               "and nothing was verified." % baseline_path, file=sys.stderr)
@@ -202,20 +191,19 @@ def main():
             else:
                 print("  %s:%d  %s sets %s" % (rel, at, name, ", ".join(names)))
 
-    grew = [(r, base.get(r, 0), c) for r, c in sorted(now.items()) if c > base.get(r, 0)]
-    shrank = [(r, base[r], now.get(r, 0)) for r in sorted(base) if base[r] > now.get(r, 0)]
+    grown, stale = ratchet.verdict(base, now)
     rc = 0
-    if grew:
+    if grown:
         print("\nFAIL: a file has gained a function that answers into a global while every caller "
               "reads it in a subshell, where that assignment is discarded on return. Answer in the "
               "return value instead.")
-        for r, b, c in grew:
+        for r, b, c in grown:
             print("  %s: %d, was %d" % (r, c, b))
         rc = 1
-    if shrank:
+    if stale:
         print("\nFAIL: the baseline claims findings a file no longer has, so a number here is "
               "stale. Lower it in the same change.")
-        for r, b, c in shrank:
+        for r, b, c in stale:
             print("  %s: %d, baseline says %d" % (r, c, b))
         rc = 1
     if rc == 0:

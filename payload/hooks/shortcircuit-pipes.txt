@@ -1,5 +1,8 @@
-# How many short circuiting pipelines each file still has, one "count path" per line
-# (claude-config#132).
+# How many short circuiting pipelines each file still has, one "<path>: <count>" per line
+# (claude-config#132). That shape is shared with absence-needles.txt and subshell-globals.txt and
+# is read by hooks/lib/ratchet.sh, whose python twin serves the two scans (claude-config#377). It
+# was "<count> <path>" until 2026-09-11 and was converted mechanically, with the converted file
+# read back through the shared reader and compared against the old map before it replaced anything.
 #
 # `producer | grep -q needle` under `set -o pipefail` can report a failure that never happened:
 # grep -q leaves on its FIRST match, the producer is killed by SIGPIPE, and the pipeline's status
@@ -59,41 +62,41 @@
 # made sites that were always here visible for the first time. Read the jump as the measurement being
 # corrected, never as the tree getting worse, and read the number from here on as a ratchet again.
 
-0 claude-sync
-0 payload/hooks/block-red-merge.sh
-0 payload/hooks/check-home-paths.sh
-0 payload/hooks/durable-lesson-check.sh
-0 payload/hooks/lessons-advisory.sh
-0 payload/hooks/pr-merge-quiz.sh
-0 payload/hooks/run-all-tests.sh
-0 payload/hooks/test-block-red-merge.sh
-1 payload/hooks/test-check-home-paths.sh
-0 payload/hooks/test-check-project-list.sh
-0 payload/hooks/test-checkpoint-save.sh
-2 payload/hooks/test-durable-lesson-check.sh
-1 payload/hooks/test-feature-discovery-nudge.sh
-2 payload/hooks/test-lessons-advisory.sh
-3 payload/hooks/test-measure-lessons-advisory.sh
-0 payload/hooks/test-no-ai-tells-detect.sh
-1 payload/hooks/test-post-compact.sh
-2 payload/hooks/test-pr-merge-quiz.sh
-0 payload/hooks/test-require-issue-fields.sh
-1 payload/hooks/test-require-tests-before-push.sh
-0 payload/hooks/test-rtk-rewrite.sh
-0 payload/hooks/test-rule-files-changed.sh
-4 payload/hooks/test-run-all-tests.sh
-1 payload/hooks/test-session-namer.sh
-1 payload/hooks/test-stop-hooks.sh
-0 payload/hooks/test-subagent-digest.sh
-1 payload/hooks/test-subagent-issue-harvest.sh
-1 payload/hooks/test-suite-result-line.sh
-0 payload/hooks/test-teammate-challenge-gate.sh
-0 payload/skills/milestone/create-milestone.sh
-0 payload/skills/milestone/ensure-priority-labels.sh
-0 payload/skills/plan-council/healthcheck.sh
-0 payload/skills/plan-council/post-discussion.sh
-0 payload/skills/production-ready/healthcheck.sh
-0 tests/audit-changed-sections.sh
-0 tests/test-audit-changed-sections.sh
-53 tests/test-claude-sync.sh
-2 tools/test-measure-sync-gaps.sh
+claude-sync: 0
+payload/hooks/block-red-merge.sh: 0
+payload/hooks/check-home-paths.sh: 0
+payload/hooks/durable-lesson-check.sh: 0
+payload/hooks/lessons-advisory.sh: 0
+payload/hooks/pr-merge-quiz.sh: 0
+payload/hooks/run-all-tests.sh: 0
+payload/hooks/test-block-red-merge.sh: 0
+payload/hooks/test-check-home-paths.sh: 1
+payload/hooks/test-check-project-list.sh: 0
+payload/hooks/test-checkpoint-save.sh: 0
+payload/hooks/test-durable-lesson-check.sh: 2
+payload/hooks/test-feature-discovery-nudge.sh: 1
+payload/hooks/test-lessons-advisory.sh: 2
+payload/hooks/test-measure-lessons-advisory.sh: 3
+payload/hooks/test-no-ai-tells-detect.sh: 0
+payload/hooks/test-post-compact.sh: 1
+payload/hooks/test-pr-merge-quiz.sh: 2
+payload/hooks/test-require-issue-fields.sh: 0
+payload/hooks/test-require-tests-before-push.sh: 1
+payload/hooks/test-rtk-rewrite.sh: 0
+payload/hooks/test-rule-files-changed.sh: 0
+payload/hooks/test-run-all-tests.sh: 4
+payload/hooks/test-session-namer.sh: 1
+payload/hooks/test-stop-hooks.sh: 1
+payload/hooks/test-subagent-digest.sh: 0
+payload/hooks/test-subagent-issue-harvest.sh: 1
+payload/hooks/test-suite-result-line.sh: 1
+payload/hooks/test-teammate-challenge-gate.sh: 0
+payload/skills/milestone/create-milestone.sh: 0
+payload/skills/milestone/ensure-priority-labels.sh: 0
+payload/skills/plan-council/healthcheck.sh: 0
+payload/skills/plan-council/post-discussion.sh: 0
+payload/skills/production-ready/healthcheck.sh: 0
+tests/audit-changed-sections.sh: 0
+tests/test-audit-changed-sections.sh: 0
+tests/test-claude-sync.sh: 53
+tools/test-measure-sync-gaps.sh: 2

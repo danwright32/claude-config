@@ -27,6 +27,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/lib")
+import ratchet  # noqa: E402  the one rule a count based ratchet applies (claude-config#377)
+
 NEEDLE = re.compile(r"!\s*grep\s+-[A-Za-z]*q[A-Za-z]*\s+(?:-[A-Za-z-]+\s+)*(['\"])(.+?)\1")
 # The characters that make a needle a pattern rather than a string. Splitting on them leaves the
 # literal runs, and one of those appearing elsewhere is enough: an anchored needle like `^Synced`
@@ -94,24 +97,6 @@ def scan_file(path):
     return judged, found
 
 
-def read_baseline(path):
-    """-> {relative path: count}. Blank lines and comments are not entries."""
-    counts = {}
-    try:
-        text = open(path, encoding="utf-8").read()
-    except OSError:
-        return None
-    for line in text.split("\n"):
-        line = line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        parts = line.rsplit(":", 1)
-        if len(parts) != 2 or not parts[1].strip().isdigit():
-            continue
-        counts[parts[0].strip()] = int(parts[1])
-    return counts
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
@@ -148,7 +133,10 @@ def main():
             now[rel] = len(found)
             detail[rel] = found
 
-    base = read_baseline(baseline_path)
+    try:
+        base = ratchet.read_baseline(open(baseline_path, encoding="utf-8").read())
+    except OSError:
+        base = None
     if base is None:
         print("scan-absence-needles: no baseline at %s, so there is nothing to compare against "
               "and nothing was verified." % baseline_path, file=sys.stderr)
@@ -163,22 +151,21 @@ def main():
             else:
                 print("  %s:%d  ! grep -q '%s'" % (rel, n, needle))
 
-    grew = [(r, base.get(r, 0), c) for r, c in sorted(now.items()) if c > base.get(r, 0)]
-    shrank = [(r, base[r], now.get(r, 0)) for r in sorted(base) if base[r] > now.get(r, 0)]
+    grown, stale = ratchet.verdict(base, now)
 
     rc = 0
-    if grew:
+    if grown:
         print("\nFAIL: a suite has gained an absence assertion whose needle appears nowhere else "
               "in it. Go and read each one: most are sound, and the one that is not asserts "
               "nothing at all while passing.")
-        for r, b, c in grew:
+        for r, b, c in grown:
             print("  %s: %d, was %d" % (r, c, b))
         rc = 1
-    if shrank:
+    if stale:
         print("\nFAIL: the baseline claims findings a suite no longer has, so a number here is "
               "stale. Lower it in the same change, or a count nobody has to tighten becomes a "
               "permanent allowance.")
-        for r, b, c in shrank:
+        for r, b, c in stale:
             print("  %s: %d, baseline says %d" % (r, c, b))
         rc = 1
     if rc == 0:

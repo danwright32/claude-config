@@ -32,6 +32,16 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASELINE="${SHORTCIRCUIT_BASELINE:-$DIR/shortcircuit-pipes.txt}"
+# The rule a count based ratchet applies, shared with the two scans rather than written again here
+# (claude-config#377). Its twin in lib/ratchet.py serves the python ones, and one committed fixture
+# is driven through both so they cannot drift (L26).
+RATCHET_LIB="$DIR/lib/ratchet.sh"
+if [ ! -f "$RATCHET_LIB" ]; then
+  echo "test-pipefail-shortcircuit: no $RATCHET_LIB, so the baseline could not be compared against anything. Refusing rather than passing a check that measured nothing." >&2
+  exit 2
+fi
+# shellcheck source=lib/ratchet.sh
+. "$RATCHET_LIB"
 ROOT="${SHORTCIRCUIT_ROOT:-$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)}"
 
 pass=0
@@ -235,21 +245,32 @@ fi
 grew=""
 shrank=""
 gone=""
+measured=""
 seen=0
-while IFS=' ' read -r want rel; do
+while IFS=' ' read -r rel want; do
   case "$want" in ''|*[!0-9]*) continue ;; esac
   [ -n "$rel" ] || continue
   seen=$((seen + 1))
   f="$ROOT/$rel"
   if [ ! -f "$f" ]; then gone="$gone  $rel
 "; continue; fi
-  have="$(count_uncommented "$f")"
-  if [ "$have" -gt "$want" ]; then grew="$grew  $rel: $want recorded, $have now
-"; fi
-  if [ "$have" -lt "$want" ]; then shrank="$shrank  $rel: $want recorded, $have now
-"; fi
+  measured="$measured$rel: $(count_uncommented "$f")
+"
 done <<EOF
-$(grep -vE '^[[:space:]]*(#|$)' "$BASELINE")
+$(ratchet_read_baseline "$(cat "$BASELINE")")
+EOF
+
+# The comparison itself, from the shared rule, so a change to how a ratchet decides reaches all
+# three guards rather than this one (claude-config#377).
+while IFS= read -r line; do
+  case "$line" in
+    "GROWN "*) set -- $line; grew="$grew  $2: $3 recorded, $4 now
+" ;;
+    "STALE "*) set -- $line; shrank="$shrank  $2: $3 recorded, $4 now
+" ;;
+  esac
+done <<EOF
+$(ratchet_verdict "$(cat "$BASELINE")" "$measured")
 EOF
 
 [ "$seen" -ge 10 ] \
@@ -267,8 +288,10 @@ while IFS= read -r rel; do
   grep -q 'pipefail' "$f" 2>/dev/null || continue
   have="$(count_uncommented "$f")"
   [ "${have:-0}" -gt 0 ] || continue
-  grep -qE "^[0-9]+ $rel\$" "$BASELINE" || unlisted="$unlisted  $rel: $have
-"
+  case "
+$(ratchet_read_baseline "$(cat "$BASELINE")")" in *"
+$rel "*) ;; *) unlisted="$unlisted  $rel: $have
+" ;; esac
 done <<EOF
 $(git -C "$ROOT" ls-files 2>/dev/null || true)
 EOF
@@ -346,7 +369,7 @@ if [ -z "${SHORTCIRCUIT_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
       i=1
       while [ "$i" -le 10 ]; do
         printf 'set -uo pipefail\necho clean\n' > "$sc_probe/listed$i.sh"
-        printf '0 listed%s.sh\n' "$i" >> "$sc_probe/base.txt"
+        printf 'listed%s.sh: 0\n' "$i" >> "$sc_probe/base.txt"
         i=$((i + 1))
       done
       git -C "$sc_probe" add . >/dev/null 2>&1
@@ -408,7 +431,7 @@ fi
 # and every one that is left is in a `test-*.sh`. A new one anywhere else fails this suite on the
 # day it lands, rather than being added to the list.
 _ship_bad=""; _ship_seen=0
-while read -r _sc_n _sc_path; do
+while read -r _sc_path _sc_n; do
   case "$_sc_n" in ''|*[!0-9]*) continue ;; esac
   [ -n "$_sc_path" ] || continue
   _ship_seen=$(( _ship_seen + 1 ))
@@ -416,7 +439,7 @@ while read -r _sc_n _sc_path; do
   case "${_sc_path##*/}" in test-*) continue ;; esac
   _ship_bad="$_ship_bad
   $_sc_path: $_sc_n"
-done < <(grep -vE '^[[:space:]]*#' "$BASELINE" | grep -vE '^[[:space:]]*$')
+done < <(ratchet_read_baseline "$(cat "$BASELINE")")
 # Reading NOTHING is not a clean answer. The first version of this named the wrong variable, read
 # an empty file, and passed while measuring nothing, which is the exact failure this whole suite is
 # organised against (L98, and it was caught by reading the code rather than by the check).
