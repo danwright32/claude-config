@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+#
+# check-add-scope.sh
+# Claude Code PreToolUse(Bash) hook: refuse an UNSCOPED `git add` when the checkout holds changes
+# this session did not make (claude-config#366).
+#
+# CLAUDE.md already says to scope every `git add` to named paths, never `-A` or `.`, because a
+# checkout is routinely shared by concurrent sessions. Nothing enforced it. On 2026-09-10 a session
+# working on claude-config#362 committed with an unscoped add and carried another session's half
+# finished generator change and its six tests into commits 580842f and after, under a message that
+# does not describe them, and pushed them. The work was correct so nothing broke, but it was judged
+# by a test gate that was not asked about it and it is recorded as somebody else's change. A rule
+# that lives only in a prompt is a hope (L27).
+#
+# It does NOT fire on a checkout with no foreign changes, because an unscoped add is fine when a
+# session is alone, and a gate that fires on the ordinary case is one nobody reads (L36, L104).
+#
+# WHICH CHANGES ARE THIS SESSION'S is read from the session's own transcript: every file path an
+# Edit or Write named, and the full text of every Bash command it ran. The second half is not
+# optional. A great deal of this repo's own editing happens through heredocs and python one liners
+# inside Bash, and a gate that could only see Edit calls would call all of that foreign and be
+# turned off within the hour.
+#
+# The match is deliberately GENEROUS, on the side of allowing: a path counts as this session's if
+# the session mentioned it anywhere. Being wrong that way lets one unscoped add through; being
+# wrong the other way blocks ordinary work until somebody disables the gate, and then it protects
+# nothing at all.
+#
+# The transcript is read INCREMENTALLY, from a byte offset kept beside a per session cache, because
+# this runs on every git add and a transcript grows all session.
+#
+# Override, per this repo's convention, explained to the person first and never silently:
+#   SKIP_ADD_SCOPE_CHECK=1 as an inline prefix, good for that one command.
+
+set -uo pipefail
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+
+payload="$(cat 2>/dev/null || true)"
+parsed="$(ps_parse_payload "$payload" segmented 2>/dev/null)" || exit 0
+cmd="${parsed%%$'\x1f'*}"
+cwd="${parsed#*$'\x1f'}"
+[ -n "$cmd" ] || exit 0
+[ -n "$cwd" ] || cwd="$PWD"
+
+ps_has_override "$cmd" SKIP_ADD_SCOPE_CHECK && exit 0
+
+# Does any SEGMENT run an unscoped `git add`? Judged on the leading tokens of each segment, never
+# as a substring of the whole command, so an echo or a commit message that merely mentions one
+# cannot fire this (the discipline every gate here follows).
+unscoped=0
+while IFS= read -r seg; do
+  stripped="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//')"
+  case "$stripped" in
+    git\ *|rtk\ git\ *|*/git\ *) ;;
+    *) continue ;;
+  esac
+  # `git [-C dir] [-c k=v] add …`
+  # Counted rather than piped into `grep -q`: under pipefail a short circuiting consumer kills its
+  # producer and the pipeline reports a failure that never happened (L183).
+  matched="$(printf '%s' "$stripped" | grep -cE '(^|/)(rtk[[:space:]]+)?git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' 2>/dev/null)"
+  case "$matched" in ''|0) continue ;; esac
+  args="${stripped#*add}"
+  # A pathspec of `.`, `-A`, `--all`, `-u` with no path, or `:/` takes whatever is in the tree.
+  # `--` before a path list is the scoped form and is what this asks for.
+  case " $args " in
+    *" -A "*|*" --all "*|*" . "*|*" :/ "*|*" -u "*) unscoped=1; break ;;
+  esac
+  # `git add` with no pathspec at all stages nothing, so it is not the shape being guarded.
+done <<SEGMENTS
+$(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;)/\n/g')
+SEGMENTS
+[ "$unscoped" -eq 1 ] || exit 0
+
+repo="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
+[ -n "$repo" ] || exit 0
+
+# Everything the add would sweep up. --porcelain gives "XY path"; a rename gives "old -> new" and
+# both halves are checked, because staging a rename touches both.
+changed="$(git -C "$repo" status --porcelain 2>/dev/null | sed -E 's/^.{3}//; s/^.* -> //' | sed 's/^"//; s/"$//' || true)"
+[ -n "$changed" ] || exit 0
+
+transcript="$(printf '%s' "$payload" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    d = {}
+print(d.get("transcript_path") or "")
+' 2>/dev/null || true)"
+
+# NOT silence. Without the transcript there is no way to tell this session's work from another
+# session's, and "everything is yours" is the assumption that produced the incident. Refusing is
+# the safe direction and costs one override; the other direction costs somebody else's work being
+# committed under a message that does not describe it (L42, L98).
+if [ -z "$transcript" ] || [ ! -f "$transcript" ]; then
+  cat >&2 <<MSG
+claude-sync: REFUSED an unscoped 'git add' in $repo.
+
+This checkout holds changes, and this hook could not read the session transcript, so it cannot tell which of them this session made. An unscoped add would stage every one of them, including anything a concurrent session is still working on.
+
+Stage the paths you actually changed, by name:
+
+  git -C $repo add <path> [<path> ...]
+
+The changes currently in the tree:
+$(printf '%s\n' "$changed" | sed 's/^/  /')
+MSG
+  exit 2
+fi
+
+# The cache of what this session has mentioned, topped up from wherever the last read stopped.
+key="$(printf '%s' "$transcript" | shasum | cut -c1-12)"
+STATE_DIR="${CLAUDE_ADD_SCOPE_STATE_DIR:-${TMPDIR:-/tmp}}"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+MENTIONS="$STATE_DIR/claude-add-scope-$key.mentions"
+OFFSET="$STATE_DIR/claude-add-scope-$key.offset"
+
+from=0
+[ -f "$OFFSET" ] && from="$(cat "$OFFSET" 2>/dev/null || echo 0)"
+case "$from" in ''|*[!0-9]*) from=0 ;; esac
+size="$(wc -c < "$transcript" 2>/dev/null | tr -d ' ')"
+case "$size" in ''|*[!0-9]*) size=0 ;; esac
+# A transcript that SHRANK is a different file under the same name (a compaction, a fresh session
+# reusing the path), and reading on from the old offset would read the middle of a line. Start over
+# rather than carry a stale cache forward.
+if [ "$size" -lt "$from" ]; then from=0; : > "$MENTIONS"; fi
+
+if [ "$size" -gt "$from" ]; then
+  tail -c "+$(( from + 1 ))" "$transcript" 2>/dev/null | python3 -c '
+import json, sys
+out = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    stack = [rec]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in ("file_path", "notebook_path", "path") and isinstance(v, str):
+                    out.append(v)
+                elif k == "command" and isinstance(v, str):
+                    out.append(v)
+                else:
+                    stack.append(v)
+        elif isinstance(node, list):
+            stack.extend(node)
+sys.stdout.write("\n".join(out))
+sys.stdout.write("\n" if out else "")
+' >> "$MENTIONS" 2>/dev/null || true
+  printf '%s' "$size" > "$OFFSET" 2>/dev/null || true
+fi
+
+# Every changed path sorted into exactly ONE bucket, in one pass. A second loop asking the inverse
+# question would be a second reading of the same evidence and the two drift (L16, L517).
+foreign=""
+mine=""
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  # Matched on the repo relative path and on the absolute one, because a session names a file both
+  # ways: an Edit records the absolute path and a command typically uses the relative one.
+  if grep -qF -- "$p" "$MENTIONS" 2>/dev/null || grep -qF -- "$repo/$p" "$MENTIONS" 2>/dev/null; then
+    mine="${mine:+$mine }$p"
+  else
+    foreign="${foreign}  $p
+"
+  fi
+done <<CHANGED
+$changed
+CHANGED
+
+[ -n "$foreign" ] || exit 0
+
+cat >&2 <<MSG
+claude-sync: REFUSED an unscoped 'git add' in $repo.
+
+These changes are in the tree and this session never touched them, so they belong to another session working in the same checkout:
+$foreign
+An unscoped add stages them too, and they then travel in a commit whose message does not describe them, judged by a test gate that was not asked about them. That happened on 2026-09-10, in this repo, and the work only survived because it happened to be correct.
+
+Stage what this session actually changed, by name:
+
+  git -C $repo add${mine:+ $mine}
+
+If those paths really are this session's, say so and add SKIP_ADD_SCOPE_CHECK=1 to that one command.
+MSG
+exit 2
