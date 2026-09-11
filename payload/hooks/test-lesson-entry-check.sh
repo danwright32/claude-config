@@ -21,6 +21,21 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/lesson-entry-check.sh"
 REPO="$(cd "$DIR/../.." && pwd)"
+# WHERE THIS IS RUNNING. Two copies of these hooks exist: the repo's payload/hooks, which sits
+# beside a claude-sync and a payload/, and the INSTALLED copy under the config root, which does
+# not. This suite drives the real claude-sync, so in the installed copy it was measuring a tool
+# that is not there and failing for that reason alone. Measured 2026-09-11, by the first
+# `claude-sync recheck` that was able to finish.
+#
+# Said in the one agreed shape the runner reads, so it is reported as NOT RUN rather than as broken
+# code, and never as a pass.
+if [ ! -f "$REPO/claude-sync" ] || [ ! -d "$REPO/payload" ]; then
+  echo "test-lesson-entry-check: $REPO is not a checkout of this repo (no claude-sync and payload/ in it), so the tool this suite drives is not there." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository above it, and $REPO is not one"
+  echo "passed: 0, failed: 0"
+  printf 'SUITE-RESULT passed=0 failed=0\n'
+  exit 2
+fi
 SYNC="$REPO/claude-sync"
 
 pass=0
