@@ -87,6 +87,21 @@ check "a reading that cannot be parsed exits 2, not 0" \
 check "and says it could not measure, rather than reporting a number it does not have" \
   "$(grep -qi 'could not' <<< "$blind_msg" && echo ok || echo "said: $blind_msg")"
 
+# ---- a SETTING that is not a number is refused, not compared against ----
+# The reading is validated, and the four numbers that judge it were not. A floor of "abc" makes
+# every arithmetic test error, which bash reads as false, so the check falls through to "there is
+# room" on a disk with 1 GB left: silently landing on the permissive side is exactly the failure
+# L50 describes, and nothing anywhere would have said so.
+for bad_setting in FREE_SPACE_FLOOR_GB FREE_SPACE_HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS; do
+  S_BAD="$TMPROOT/state-bad-$bad_setting"; mkdir -p "$S_BAD"
+  bad_msg="$(env "$bad_setting=abc" FREE_SPACE_BYTES="$((1 * GB))" FREE_SPACE_NOW="$T0" \
+    FREE_SPACE_STATE_DIR="$S_BAD" FREE_SPACE_PATH=/fixture bash "$CHECK" 2>&1)"; bad_rc=$?
+  check "$bad_setting set to something that is not a number is refused, never compared against" \
+    "$([ "$bad_rc" -eq 2 ] && grep -qi 'could not' <<< "$bad_msg" && echo ok || echo "exit $bad_rc, said: $bad_msg")"
+  check "and the refusal names which setting it was, so it can be fixed" \
+    "$(grep -q "$bad_setting" <<< "$bad_msg" && echo ok || echo "said: $bad_msg")"
+done
+
 # ---- falling fast, while still above the floor ----
 # 240 GB now, 300 GB three hours ago: 20 GB an hour, so zero is twelve hours out. That is outside
 # the six hour horizon, so it must NOT fire: a warning that fires on any fall at all is the noise
@@ -97,7 +112,8 @@ probe "$((240 * GB))" "$T0" "$S_SLOW"; slow_msg="$PROBE_MSG"
 check "a fall that does not reach zero inside the horizon stays quiet" \
   "$([ "$PROBE_RC" -eq 0 ] && echo ok || echo "exit $PROBE_RC, said: $slow_msg")"
 
-# 60 GB now, 300 GB three hours ago: 80 GB an hour, so zero is 45 minutes out.
+# 60 GB now, 300 GB three hours ago: 80 GB an hour, so zero is 45 minutes out. Every number in
+# this section is set by the fixture beside it and not measured from anything.
 S_FAST="$TMPROOT/state-fast"; mkdir -p "$S_FAST"
 probe "$((300 * GB))" "$((T0 - 10800))" "$S_FAST"
 probe "$((60 * GB))" "$T0" "$S_FAST"; fast_msg="$PROBE_MSG"

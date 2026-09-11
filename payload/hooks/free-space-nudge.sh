@@ -65,7 +65,16 @@ STATE="$STATE_DIR/$session"
 # measured again here, so the two cannot disagree about what was reported (L70). A verdict carrying
 # no figure (the check could not measure) keys on the verdict alone, which is right: there is one
 # such answer and repeating it every prompt would say nothing new.
-gb="$(printf '%s' "$answer" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) GB free on.*/\1/p' | head -1)"
+# Pure shell rather than a pipeline into `head`. A short circuiting consumer kills its producer,
+# and under pipefail that is a failure that never happened, which this repo tracks as a hazard of
+# its own (L183). There is nothing to pipe here anyway: the figure is the word before the phrase.
+gb=""
+case "$answer" in
+  *" GB free on "*)
+    gb="${answer%% GB free on *}"
+    gb="${gb##* }"
+    ;;
+esac
 case "$gb" in ''|*[!0-9]*) key="$verdict" ;; *) key="$verdict-$((gb / 5))" ;; esac
 
 if [ -f "$STATE" ] && [ "$(cat "$STATE" 2>/dev/null || true)" = "$key" ]; then

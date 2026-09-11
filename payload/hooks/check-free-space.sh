@@ -66,6 +66,15 @@ cannot(){   # $1 = what could not be done
 
 is_number(){ case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
+# THE SETTINGS ARE VALIDATED TOO, not only the reading (L50). A floor of "abc" makes every
+# arithmetic test below error, which the shell reads as false, so the check falls through to "there
+# is room" on a disk with 1 GB left. A value parsed from input that feeds a comparison directly
+# lands on the permissive side when it is bad, and nothing says so. Refused here instead, by name,
+# because a message that does not say which of the four is wrong cannot be acted on (L11, L80).
+for _setting in FREE_SPACE_FLOOR_GB:"$FLOOR_GB" FREE_SPACE_HORIZON_HOURS:"$HORIZON_HOURS"                 FREE_SPACE_MIN_SPAN_MIN:"$MIN_SPAN_MIN" FREE_SPACE_WINDOW_HOURS:"$WINDOW_HOURS"; do
+  is_number "${_setting#*:}" || cannot "${_setting%%:*} is set to '${_setting#*:}', which is not a number"
+done
+
 now="${FREE_SPACE_NOW:-$(date +%s 2>/dev/null || true)}"
 is_number "$now" || cannot "the clock gave '$now'"
 
