@@ -57,6 +57,18 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAYLOAD="$(cd "$DIR/.." && pwd)"
 
+# The over-cap rule itself lives in lib/, shared with claude-sync's send staging, which holds an
+# over-cap lessons file back before it can reach the other Mac (claude-config#370). Absent, this
+# suite refuses rather than skipping that section: a check that quietly stops running reads exactly
+# like one that found nothing wrong (L98).
+CAP_LIB="$DIR/lib/lesson-index-cap.sh"
+if [ ! -f "$CAP_LIB" ]; then
+  echo "test-rule-file-budget: no $CAP_LIB, so the entry cap could not be applied to anything. Refusing rather than passing a section that measured nothing." >&2
+  exit 2
+fi
+# shellcheck source=lib/lesson-index-cap.sh
+. "$CAP_LIB"
+
 pass=0
 fail=0
 ok() { pass=$((pass + 1)); }
@@ -164,22 +176,29 @@ index_rel="LESSONS-INDEX.md"
 if [ ! -f "$PAYLOAD/$index_rel" ]; then
   bad "$index_rel is not there, so no entry was measured at all"
 else
-  entries=0; toolong=0; longest=0; longest_num=""
-  while IFS= read -r entry; do
-    entries=$((entries + 1))
-    len=${#entry}
-    if [ "$len" -gt "$longest" ]; then longest=$len; longest_num="${entry%%.*}"; fi
-    if [ "$len" -gt "$ENTRY_CAP" ]; then toolong=$((toolong + 1)); fi
-  done < <(grep -E '^- L[0-9]+\.' "$PAYLOAD/$index_rel" 2>/dev/null)
+  # The floor of 100 is THIS site's, passed in rather than baked into the rule: a scan that matched
+  # nothing passes the length test on every entry it did not find, and reads exactly like an index
+  # where every entry is short (L98). The real index holds hundreds. The send staging shares this
+  # rule and passes no floor at all, because a LESSONS.md holding one lesson is legitimate.
+  ENTRY_FLOOR=100
+  if ! report="$(lesson_index_cap_scan "$ENTRY_CAP" "$ENTRY_FLOOR" < "$PAYLOAD/$index_rel")"; then
+    bad "the entry cap rule refused the cap it was given ($ENTRY_CAP), so no index entry was measured at all"
+    report=""
+  fi
+  entries="$(printf '%s\n' "$report" | awk '/^ENTRIES /{ print $2 }')"
+  longest="$(printf '%s\n' "$report" | awk '/^LONGEST /{ print $2 }')"
+  longest_num="$(printf '%s\n' "$report" | awk '/^LONGEST /{ print $3 }')"
+  # Counted in awk, never `grep -c`, which prints 0 AND exits non-zero on no match, so a `|| echo 0`
+  # beside it fires as well and the variable ends up holding two numbers.
+  toolong="$(printf '%s\n' "$report" | awk '/^OVER /{ n++ } END { print n + 0 }')"
+  underfloor="$(printf '%s\n' "$report" | awk '/^UNDERFLOOR /{ print "yes" }')"
 
-  # A scan that matched nothing passes the length test on every entry it did not find, and reads
-  # exactly like an index where every entry is short (L98).
-  if [ "$entries" -ge 100 ]; then ok; else
+  if [ -z "$underfloor" ]; then ok; else
     bad "only $entries index entries were found to measure; the index holds hundreds, so the cap above was applied to almost nothing"
   fi
 
   if [ "$toolong" -gt 0 ]; then
-    bad "$toolong of $entries lessons render an index line longer than $ENTRY_CAP characters (longest: ${longest_num#- } at $longest). Give each one a 'SHORT: <the rule in one line>' line in its LESSONS.md entry; the full rule stays exactly as it is and the index renders the short form."
+    bad "$toolong of $entries lessons render an index line longer than $ENTRY_CAP characters (longest: $longest_num at $longest). Give each one a 'SHORT: <the rule in one line>' line in its LESSONS.md entry; the full rule stays exactly as it is and the index renders the short form."
   else ok; fi
 
   printf '  %-20s %8s entries, longest %s chars against a %s cap\n' "$index_rel" "$entries" "$longest" "$ENTRY_CAP"

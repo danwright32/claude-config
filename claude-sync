@@ -41,6 +41,20 @@ SYNC_RUN_ARGV="${*:-<no arguments>}"
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 SYNC_REPO="${SYNC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 PAYLOAD="$SYNC_REPO/payload"
+
+# ---- the one over-cap rule, shared with the suite that enforces it (claude-config#370) ----
+# Resolved from THIS SCRIPT's OWN location, never from SYNC_REPO. The test suite points SYNC_REPO
+# at a throwaway directory holding no payload at all, so a lib looked for there is absent in every
+# run of every test, and a check that silently stops running looks exactly like one that found
+# nothing to report (L98). The code ships beside the tool; the CONFIG it reads does not.
+SYNC_SELF_PAYLOAD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/payload"
+LESSON_CAP_LIB="$SYNC_SELF_PAYLOAD/hooks/lib/lesson-index-cap.sh"
+if [ ! -f "$LESSON_CAP_LIB" ]; then
+  echo "claude-sync: this checkout is missing $LESSON_CAP_LIB, which holds the one rule deciding whether a lesson is too long for the index that loads into every session. Refusing to run rather than carrying on with that check quietly absent, which would publish lessons unchecked while reading as a working send." >&2
+  exit 4
+fi
+# shellcheck source=payload/hooks/lib/lesson-index-cap.sh
+. "$LESSON_CAP_LIB"
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
 MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
@@ -1417,11 +1431,14 @@ over_cap_lesson_entries(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:Lnnn 
   cap="$(lesson_index_entry_cap)"
   [ -n "$cap" ] || return 0
   case "$cap" in UNREADABLE:*) return 0 ;; esac
-  lesson_index_body "$src" 2>/dev/null | awk -v cap="$cap" -v f="$LESSONS_FILE" '
-    /^- L[0-9]+\./ && length($0) > cap {
-      n = $0; sub(/^- /, "", n); sub(/\..*$/, "", n)
-      printf "%s:%s (%d characters against a %d cap)\n", f, n, length($0), cap
-    }'
+  # The rule itself is lesson_index_cap_scan's, shared with payload/hooks/test-rule-file-budget.sh
+  # so that a change to how an over-cap line is decided cannot land in one copy only (#370). The
+  # floor is ZERO here, deliberately: the budget hook measures the whole generated index and a
+  # handful of entries there means it measured nothing, while this reads whatever LESSONS.md holds,
+  # which is legitimately one entry on a fresh Mac.
+  lesson_index_cap_scan "$cap" 0 < <(lesson_index_body "$src" 2>/dev/null) \
+    | awk -v f="$LESSONS_FILE" -v cap="$cap" '
+        /^OVER / { printf "%s:%s (%d characters against a %d cap)\n", f, $2, $3, cap }'
   return 0
 }
 
