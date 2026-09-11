@@ -5638,6 +5638,71 @@ check "#362 and that refusal changed nothing in the clone, as pull promises" \
 check "#362 and left no staged payload behind from looking" \
   "[ \"\$(git -C '$SN4R' status --porcelain 2>/dev/null | wc -l | tr -d ' ')\" = '$SN4_STATUS_BEFORE' ]"
 
+# ---- status says the same thing the drop says, without doing anything (claude-config#364) ----
+# `status` is the surface anybody consults to answer whether syncing is healthy, and it reported
+# `[ahead 1, behind 1]` and listed the file under "local config vs repo payload" for a clone whose
+# unpushed commits the shared repo already holds in full. That is the same wrong sentence #362
+# removed from the syncing path, left standing on the reporting one (L11, L400). It is milder than
+# a clone being stuck, because one sync settles it, but until that sync runs the report reads as a
+# divergence needing attention when there is nothing to reconcile.
+#
+# status is READ ONLY and takes no lock, so it must not drop anything. It asks the question the
+# drop already answers and SAYS the answer.
+_snap_setup sn5 \
+  "mkskill \"\$SH/skills/s/SKILL.md\" 'L1
+L449'" \
+  "mkskill \"\$SD/payload/skills/s/SKILL.md\" 'L1
+L449
+L450'" \
+  "mkskill \"\$SH/skills/s/SKILL.md\" 'L1
+L449
+L450'"
+SN5R="$SR"; SN5H="$SH"
+SN5_HEAD_BEFORE="$(git -C "$SN5R" rev-parse HEAD)"
+out_sn5="$(CLAUDE_HOME="$SN5H" SYNC_REPO="$SN5R" SYNC_HOSTNAME=macsn5 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#364 status over a superseded snapshot: $out_sn5"
+check "#364 status says the unpushed commits are superseded rather than a divergence" \
+  "line_has \"\$out_sn5\" 'superseded' 'already holds'"
+check "#364 and names the file it measured that on, so the claim can be checked" \
+  "line_has \"\$out_sn5\" 'superseded' 'skills/s/SKILL.md'"
+check "#364 and names the one command that settles it" \
+  "line_has \"\$out_sn5\" 'superseded' 'sync'"
+# The dry run listed the same file as a local difference for the same reason: the payload in the
+# working tree still holds the superseded snapshot. It is counted and explained, not listed as
+# work this Mac is holding, which is the same treatment the home path expansions already get.
+check "#364 and the dry run no longer lists that file as a local difference" \
+  "! grep -qE '^skills: .*s/SKILL\.md' <<< \"\$out_sn5\""
+check "#364 and says how many it left out, rather than silently dropping them" \
+  "line_has \"\$out_sn5\" 'superseded snapshot' 'file'"
+# READ ONLY. status must not drop, reset or push anything, whatever it has worked out.
+check "#364 and status changed nothing in the clone" \
+  "[ \"\$(git -C '$SN5R' rev-parse HEAD)\" = '$SN5_HEAD_BEFORE' ]"
+check "#364 and parked no commits, because it dropped none" \
+  "[ -z \"\$(git -C '$SN5R' for-each-ref --format='%(objectname)' refs/claude-sync/dropped 2>/dev/null)\" ]"
+
+# The NEGATIVE control, on a clone whose snapshot really is unsent work. A report that says
+# "superseded" about everything says nothing (L104), and this is the case where the ahead count is
+# a real divergence and has to keep reading as one.
+_snap_setup sn6 \
+  "mkskill \"\$SH/skills/t/SKILL.md\" 'base t
+local only line'" \
+  "mkskill \"\$SD/payload/skills/s/SKILL.md\" 'L1
+L450'" \
+  "mkskill \"\$SH/skills/t/SKILL.md\" 'base t
+local only line'"
+SN6R="$SR"; SN6H="$SH"
+out_sn6="$(CLAUDE_HOME="$SN6H" SYNC_REPO="$SN6R" SYNC_HOSTNAME=macsn6 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#364 status over a snapshot holding real work: $out_sn6"
+check "#364 a snapshot holding work the shared repo lacks is NOT called superseded" \
+  "! grep -q 'superseded' <<< \"\$out_sn6\""
+check "#364 and nothing is left out of the dry run as superseded" \
+  "! grep -q 'superseded snapshot' <<< \"\$out_sn6\""
+# Deliberately NOT an assertion that the file IS listed there. Whether rsync reports it at all
+# depends on whether the two copies' mtimes happen to differ, which is a property of the machine
+# rather than of this code (L290). What proves the suppression in sn5 is real is its own count
+# line: it prints only when a record was actually left out, so it cannot pass against a dry run
+# that never held one.
+
 section "== every git call that writes a commit carries the tool's own identity (#335) =="
 # Concluding a rebase writes a commit, and `recover_unfinished_rebase` ran `git rebase --continue`
 # with no identity at all. On a machine where git can find one, which is every Mac somebody has

@@ -6722,21 +6722,78 @@ local_unsent_count(){
   printf '%s' "$n"
 }
 
+# ---- a superseded snapshot, SAID rather than acted on (claude-config#364) ----
+#
+# status reported `[ahead 1, behind 1]` and listed the file under "local config vs repo payload"
+# for a clone whose unpushed commits the shared repo already holds in full. That is the same wrong
+# sentence #362 removed from the SYNCING path, left standing on the REPORTING one (L11, L400).
+#
+# status is read only and takes no lock, so it must not drop anything. It asks the question the
+# drop already answers, through the same side effect free predicate, and says the answer. One
+# derivation, so the report and the drop can never disagree about which commits are superseded
+# (L70), and one `claude-sync sync` settles it.
+SUPERSEDED_SNAPSHOT_PATHS=""
+report_superseded_snapshot(){
+  SUPERSEDED_SNAPSHOT_PATHS=""
+  local branch n files
+  branch="$(sync_branch)" || return 0
+  [ -n "$branch" ] || return 0
+  tip_already_holds_local_commits "$branch" || return 0
+  n="$(git -C "$SYNC_REPO" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo 0)"
+  SUPERSEDED_SNAPSHOT_PATHS="$DROPPED_SNAPSHOT_PATHS"
+  files="$(printf '%s' "$DROPPED_SNAPSHOT_PATHS" | tr '\n' ' ' | sed 's/ *$//')"
+  # The claim AND what it was measured on, on one line, because "you are fine really" is something
+  # nobody can check and this contradicts the counts printed right above it (L11, L80).
+  echo "The $(commits_in_words "$n") above that this clone has not pushed are superseded, not a divergence: the shared repo already holds exactly what this Mac is running for every file they touch ($files). They are snapshots taken while another checkout was working on the same files, and that checkout's push overtook them. One 'claude-sync sync' drops them and the clone is level; there is nothing here to reconcile by hand."
+}
+
+# Which payload relative path a dry run record is about, so the superseded set can be matched
+# against it in one place rather than each reader parsing the line its own way (L41).
+record_payload_path(){   # $1 = tag, $2 = the record's text
+  case "$1" in
+    # "<dir>: <rsync itemize flags> <path under that dir>"
+    diff|timeonly) printf '%s/%s' "${2%%:*}" "${2##* }" ;;
+    # "<file>: differs"
+    topdiff) printf '%s' "${2%%:*}" ;;
+    *) return 1 ;;
+  esac
+}
+
 do_status(){
-  local line tag text
-  local DRIFT_EXPANSIONS=0
+  local line tag text rel
+  local DRIFT_EXPANSIONS=0 SUPERSEDED_FILES=0
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
+  report_superseded_snapshot
   report_sync_times
   echo "--- local config vs repo payload (dry run) ---"
   local RECORDS; RECORDS="$(local_vs_payload_records)"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     tag="${line%%$'\t'*}"; text="${line#*$'\t'}"
+    # A file the superseded snapshot touched differs from the payload for exactly that reason: the
+    # payload in the working tree still holds the snapshot, while the shared tip and this Mac
+    # agree. Counted and explained rather than listed as work this Mac is holding, which is the
+    # same treatment the home path expansions below already get.
+    if [ -n "$SUPERSEDED_SNAPSHOT_PATHS" ] && rel="$(record_payload_path "$tag" "$text")"; then
+      case "
+$SUPERSEDED_SNAPSHOT_PATHS" in
+        *"
+payload/$rel")     SUPERSEDED_FILES=$(( SUPERSEDED_FILES + 1 )); continue ;;
+        *"
+payload/$rel
+"*) SUPERSEDED_FILES=$(( SUPERSEDED_FILES + 1 )); continue ;;
+      esac
+    fi
     case "$tag" in
       note|diff|timeonly) echo "$text" ;;
       expanded)  DRIFT_EXPANSIONS=$(( DRIFT_EXPANSIONS + 1 )) ;;
     esac
   done <<< "$RECORDS"
+  # Counted and said, never silently dropped, for the same reason the expansions line exists: a
+  # section that quietly stops naming files cannot be told from one that has stopped looking (L98).
+  if [ "$SUPERSEDED_FILES" -gt 0 ]; then
+    echo "$SUPERSEDED_FILES file(s) differ from the payload only because it still holds this clone's superseded snapshot, explained above. They are not unsent work and are not listed here."
+  fi
   # COUNTED and said, never silently dropped. A section that quietly stops naming files cannot be
   # told from one that has stopped looking (L98, L11), and the number is what makes a change in it
   # visible without anybody having to remember the old one.
@@ -6748,7 +6805,18 @@ do_status(){
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     tag="${line%%$'\t'*}"; text="${line#*$'\t'}"
-    [ "$tag" = topdiff ] && echo "$text"
+    [ "$tag" = topdiff ] || continue
+    if [ -n "$SUPERSEDED_SNAPSHOT_PATHS" ] && rel="$(record_payload_path "$tag" "$text")"; then
+      case "
+$SUPERSEDED_SNAPSHOT_PATHS" in
+        *"
+payload/$rel")     SUPERSEDED_FILES=$(( SUPERSEDED_FILES + 1 )); continue ;;
+        *"
+payload/$rel
+"*) SUPERSEDED_FILES=$(( SUPERSEDED_FILES + 1 )); continue ;;
+      esac
+    fi
+    echo "$text"
   done <<< "$RECORDS"
   report_user_scope_plugins
   report_duplicate_plugin_skills || true
