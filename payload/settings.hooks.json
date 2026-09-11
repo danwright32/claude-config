@@ -6,6 +6,10 @@
         "hooks": [
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/rtk-rewrite.sh",
             "if": "Bash(git *)|Bash(npm *)|Bash(ls *)|Bash(cat *)|Bash(grep *)|Bash(find *)"
           },
@@ -62,6 +66,15 @@
             "command": "__CLAUDE_HOME__/hooks/linux-sections-before-push.sh",
             "timeout": 300,
             "statusMessage": "Running the changed test sections on Linux"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh"
           }
         ]
       }

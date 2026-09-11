@@ -45,8 +45,11 @@
 #                                  two sessions would overwrite each other's record.
 set -uo pipefail
 
-SYNC_WATCH_PID_FILE="${SYNC_WATCH_PID_FILE:-$HOME/.claude-sync-watch.pid}"
-SYNC_HOLD_FILE="${SYNC_HOLD_FILE:-$HOME/.claude-sync-hold}"
+# The four questions about a checkout, from the library the payload write gate shares, so the two
+# cannot come to two different answers about whether a hold is in force (claude-config#367, L370).
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/sync-clone.sh
+. "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null || exit 0
 
 input="$(cat 2>/dev/null || true)"
 
@@ -70,20 +73,7 @@ if [ "$session" = "-" ] || [ -z "$session" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Is this a clone of this tool at all, and where is its root? Found by walking up for a directory
-# holding BOTH a claude-sync and a payload/, which is what makes a directory a clone of it. Not
-# through git: a session is routinely in a subdirectory, a worktree, or a copy with no repository,
-# and the question is about the mirror rather than about revision control.
-clone_root_of(){ # clone_root_of <dir> -> the clone root, or nothing
-  local d
-  d="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
-  while [ -n "$d" ] && [ "$d" != "/" ]; do
-    if [ -f "$d/claude-sync" ] && [ -d "$d/payload" ]; then printf '%s' "$d"; return 0; fi
-    d="$(dirname "$d")"
-  done
-  return 1
-}
-root="$(clone_root_of "$cwd")" || exit 0
+root="$(sc_clone_root_of "$cwd")" || exit 0
 [ -n "$root" ] || exit 0
 
 # ---------------------------------------------------------------------------
@@ -95,27 +85,14 @@ root="$(clone_root_of "$cwd")" || exit 0
 # stale pid is reused by the system constantly, and a number alone cannot tell a live watcher from
 # whatever inherited it (L237). This is deliberately the same test claude-sync's own
 # watch_already_running applies, for the same reason.
-watcher_cmd(){ # -> a live watcher's command line, or nothing
-  local pid cmd
-  [ -f "$SYNC_WATCH_PID_FILE" ] || return 1
-  pid="$(head -1 "$SYNC_WATCH_PID_FILE" 2>/dev/null || true)"
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$pid" 2>/dev/null || return 1
-  cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
-  case "$cmd" in *claude-sync*watch*) printf '%s' "$cmd"; return 0 ;; esac
-  return 1
-}
-wcmd="$(watcher_cmd || true)"
+wcmd="$(sc_watcher_cmd || true)"
 
 # WHETHER it is this checkout is answered by substring against the whole command line, not by
 # parsing a path out of it. A command line cannot be tokenised unambiguously when a path holds a
 # space, and the question that decides whether to speak is the one that must not be got wrong. The
 # boundary matters: without it a watcher at /x/a/b/claude-sync would answer for a checkout at /a/b
 # and the notice would go quiet on the checkout it exists for.
-is_this_checkout(){
-  case "$wcmd" in "$root/claude-sync"*|*" $root/claude-sync"*) return 0 ;; esac
-  return 1
-}
+is_this_checkout(){ sc_is_this_clone "$root" "$wcmd"; }
 
 # WHICH clone it is, for the message only. This one is a parse, so it is allowed to fail: the
 # first absolute argument ending in /claude-sync. A path holding a space defeats it, and then the
@@ -133,14 +110,7 @@ watcher_clone_name(){
 # An UNREADABLE marker is not a hold: obeying one would silence this for as long as the bad file
 # sits there, and that is the direction that loses a day of work. It is left on disk for claude-sync
 # itself to report and clear, which it does in its own words.
-hold_live(){
-  local until now
-  [ -f "$SYNC_HOLD_FILE" ] || return 1
-  until="$(awk 'NR==1{print $1}' "$SYNC_HOLD_FILE" 2>/dev/null)"
-  case "$until" in ''|*[!0-9]*) return 1 ;; esac
-  now="$(date +%s)"
-  [ "$now" -lt "$until" ]
-}
+hold_live(){ sc_hold_live; }
 
 # ---------------------------------------------------------------------------
 # The state this prompt is in, in one line. Everything that would change what the person needs to
