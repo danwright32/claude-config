@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 639 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 646 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -171,6 +171,12 @@ apply it, because the body is where the failure it came from is described.
 - L684. A `for...of` over a STRING iterates its CHARACTERS and type checks silently, so a collection built by join or split runs the loop once per letter.
 - L686. A read only PREVIEW of a gate must run every predicate the gate runs, derived from it, or its all clear is a prediction about a subset.
 - L687. A check reading a tree a build writes into has a different verdict before and after a build, and CI only ever sees one of the two states.
+- L461. A check reading a tree a build writes into has a different verdict before and after a build, and CI only ever sees one of the two states.
+- L455. Two parameters of the same type are transposable, so a reversed call silently asks a different question: make them distinguishable at the call site.
+- L456. A guard enumerating its subjects from what version control TRACKS cannot see the file being written, which is the one it exists to judge.
+- L458. A monitor's grace period must not cover a run that has ALREADY failed, so read the newest run's outcome before applying it.
+- L459. A performance log read as what people experience must record whether the product was IN USE, or idle and in use merge into one distribution.
+- L460. A claim that something CANNOT be measured must come from attempting it, never fixed text, or a test on its wording keeps a false claim green.
 
 ## Data safety
 
@@ -293,6 +299,7 @@ apply it, because the body is where the failure it came from is described.
 - L664. When a submission is redirected onto an existing record, decide what happens to every field just entered, or a discarded correction reads as saved.
 - L665. A refusal cleared only by re-running a process with a moving window becomes permanent once the refused item falls outside that window.
 - L679. A consequence sentence ENUMERATING what an action touches is a second copy of its list, so it stays true and goes incomplete the day the action grows.
+- L457. A marker stamped inside one phase cannot see the phase before it, so its zero reads as the operation never running: stamp at the entry point instead.
 
 ## State and identity
 

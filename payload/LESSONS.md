@@ -2163,6 +2163,106 @@ for reference; L6 was reviewed and deliberately not adopted.
   paperboi#239 exists to check the built one on every push)
   SHORT: A check reading a tree a build writes into has a different verdict before and after a build, and CI only ever sees one of the two states.
 
+- **L461. A check that reads a tree a build writes into has TWO verdicts, one before a
+  build and one after, and CI almost never builds before checking, so the state it never
+  sees is the one nothing guards.** Exclude build output by naming your own sources, and
+  where a check legitimately reads a build product, run it in BOTH states before trusting
+  either. The failure is quiet in the worst direction: the automated run stays green while
+  every person who has built recently meets the failure, and what that costs is the check
+  itself, because somebody who meets fifteen thousand problems once stops running it.
+  (paperboi#236, 2026-09-11: `pnpm lint` was clean in CI, which never builds, and reported
+  about 15,000 problems in `.next` and `.open-next` on any machine that had run
+  `pnpm cf:build`, 2,323 of them errors, none in a file anybody wrote. The same afternoon
+  and the same repo, `tsconfig.worker.json` suppressed an import of the generated bundle
+  that errors as TS2307 when absent and TS7016 when present, so the suppression was only
+  ever proved in the unbuilt state CI runs; both states had to be checked by hand, and
+  paperboi#239 exists to check the built one on every push)
+  SHORT: A check reading a tree a build writes into has a different verdict before and after a build, and CI only ever sees one of the two states.
+  SHORT: A rendered page measurement reads the DOCUMENT MODE too, and a file with no doctype is in quirks mode, so any HTML to be measured must declare one.
+
+
+
+- **L455. Two parameters of the same type are transposable at every call site and no compiler can
+  see it, so a reversed call runs and silently asks a different question, often passing.** Make them
+  distinguishable where they are CALLED (named arguments, distinct types, or a check the callee makes
+  on what it was handed), never by documenting the order.
+  (overture#3782, 2026-09-11: `assert_contains` and `assert_not_contains` in the shell fixture
+  library take (desc, haystack, needle). Fourteen calls in a new fixture were written
+  (desc, needle, haystack). Every one still ran. The `assert_not_contains` among them printed `ok`
+  for several rounds having asserted nothing, because the short fixed phrase never contains the
+  whole output, so the negative assertion passes unconditionally. The runner already refuses a
+  fixture whose output shows bash could not resolve a command or could not parse a line, and neither
+  can see this: the call resolved and parsed perfectly. It was found by accident, from a confusing
+  message on the one call that failed, rather than by anything checking.)
+  SHORT: Two parameters of the same type are transposable, so a reversed call silently asks a different question: make them distinguishable at the call site.
+
+- **L456. A guard that enumerates what it judges from what version control TRACKS cannot see the
+  file being written, which is the one it exists to judge, so it passes locally and fails in CI on
+  the commit that adds it. Enumerate from the working tree, or state which population the verdict
+  is about.** Deriving the list rather than maintaining it by hand (L41, L96) is not enough on its
+  own: the derivation itself decides what the guard can see, and one keyed on committed state is a
+  claim about the committed state (L418) while the change under judgement is by definition not in
+  it yet.
+  (claude-config#376, 2026-09-11: test-pipefail-shortcircuit.sh lists its subjects with
+  `git ls-files`. Two new suites were written with real short circuiting pipelines in them, the
+  ratchet was run before committing and reported "38 file(s) tracked, 10 passed" both times, and CI
+  went red on the commit that added each of them. The guard was right about the violations and
+  simply could not see them at the moment anybody would have acted on them. test-hook-coverage.sh,
+  beside it, walks the filesystem with globs and does see untracked files, so the two guards in one
+  directory disagreed about their own population and nothing compared them.)
+  SHORT: A guard enumerating its subjects from what version control TRACKS cannot see the file being written, which is the one it exists to judge.
+
+- **L458. A grace period is for an answer that has NOT arrived, so read whether it has arrived and
+  is NEGATIVE before applying one. Inside the window a run still going and a run that has already
+  failed are indistinguishable, because in both cases there is no success yet, and being patient
+  about the second hides a condition that is already known and already actionable.** The two states
+  need different responses, which is the test for whether they are one condition or two (L11): a run
+  in flight needs nothing, and runs that are happening and failing need somebody now. The remedy is
+  to read the newest run's CONCLUSION as well as the newest SUCCESSFUL run's timestamp: a newest run
+  that is queued or in progress keeps its grace, and a newest run that failed has already answered,
+  so the window is protecting nothing.
+  (danwright32/ovation#212, 2026-09-11: `check-ci-liveness.sh` asks whether a SUCCESSFUL run has
+  followed the newest commit and allows a 24 hour grace so a run in flight is not a fault, which is
+  right for the condition it was built for, CI quietly ceasing to trigger. The `CI liveness`
+  workflow reported SUCCESS on both `8bff90f` and `ef8efdf` while the `CI` workflow was FAILING on
+  both. Main was red for two commits with nothing anywhere saying so, and the guard built to notice
+  would have spoken a day later.)
+  SHORT: A monitor's grace period must not cover a run that has ALREADY failed, so read the newest run's outcome before applying it.
+
+- **L459. A performance or stall log that will be read as a measure of what PEOPLE EXPERIENCE must
+  record whether anybody was actually USING the product at the time, not only what else the machine
+  was doing, because idle and in use merge into one distribution and a bar phrased about use cannot
+  then be read off it.** The machine's own load is the contamination everybody thinks of (L356); this
+  is the other half, and it is worse, because the product's own idle work looks exactly like the
+  product's work for somebody. Record the condition at the moment of the reading, never reconstruct it
+  afterwards from timestamps and memory.
+  (overture#3788, 2026-09-11: Dan said he was not using Overture at all, no window open, only the menu
+  bar item, and asked why `freeze-log.ndjson` was still growing. It was: 9 records in a few minutes,
+  the newest 49 seconds old, every one carrying `passes: 1`, so the queue was being rebuilt and the
+  main thread stalled 0.2s to 0.67s with ZERO windows, confirmed through System Events. The watchdog's
+  ping counter stood at 71,060, about two hours of continuous watching. Milestone 80's bar is "a day of
+  Dan's ordinary use produces no baseline-load stall over 100ms", read off that file, and the file had
+  been mixing the two regimes since it was written, so every distribution quoted from it, the
+  2026-09-07 baseline included, was two populations in one number. The record already carried
+  `loadAverage` and `load`, which is L356 correctly applied, and still could not answer the one
+  question its own bar was phrased around)
+  SHORT: A performance log read as what people experience must record whether the product was IN USE, or idle and in use merge into one distribution.
+
+- **L460. A statement that something CANNOT be measured must be produced by ATTEMPTING the
+  measurement, never printed as fixed text, because a test asserting that sentence's wording makes a
+  false claim permanently green, and a negative claim is the one nothing downstream ever
+  contradicts.** Saying out loud which figures are not reproducible is right (L98, L316); printing
+  that sentence as a literal is what turns the honesty into a guard for the error. The check that
+  says a field is absent must look for it, so the day it appears the sentence changes on its own.
+  (ovation#215, 2026-09-11. PRD 5a0 and 5a both recorded that the Downbeat export carries no tax
+  status field, and `measure-booking-export.py` printed that on every run, against the very file it
+  was reading. The field is `isTaxExempt`, present on 6 of 31 clients, which is exactly the "6 of 31
+  carry one" the same paragraph said could not be re-derived from any committed source. Downbeat's
+  own `Integration/OvertureExport/CONTRACT.md:313` had listed the field all along. The claim stood
+  for two weeks and `test-measure-booking-export.sh:104` asserted the false sentence was printed, so
+  a green check was defending it, and a feature was planned on top of it)
+  SHORT: A claim that something CANNOT be measured must come from attempting it, never fixed text, or a test on its wording keeps a false claim green.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -3641,6 +3741,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   line read off merge_vendors by hand, while a planned change to move the merged vendor's notes in
   the same function would have left the dialog silent about notes with the whole suite green)
   SHORT: A consequence sentence ENUMERATING what an action touches is a second copy of its list, so it stays true and goes incomplete the day the action grows.
+
+- **L457. A progress or occurrence marker stamped INSIDE one phase of a multi phase operation
+  cannot see time spent in the phase BEFORE it, so a count of zero reads as the operation never
+  having run rather than as the instrument not covering where the cost was.** Stamp at the
+  operation's own entry point, or give each phase its own term. The reader of that count then draws
+  the opposite conclusion from the right one: it sends the next diagnosis away from the phase the
+  time was actually spent in, and it does so most confidently where the uncounted phase is the
+  expensive one.
+  (overture#3783, 2026-09-11: `QueueView.makeRenderData()` stamps `freezeWatch?.recordPass()` on
+  its first line, while the `@Query` fetch that feeds it is satisfied on the store change
+  notification beforehand and is measured separately at 168.4 ms, 45% of the whole wait. A stall
+  inside that fetch therefore records `passes: 0` on `surface: queue`, and
+  `scripts/what-froze-the-queue.sh` reports `0` as the positive claim that the surface did not
+  rebuild and that "the next diagnosis belongs somewhere else". 12 of the logged stalls over 1s said
+  exactly that, every one of them on the queue)
+  SHORT: A marker stamped inside one phase cannot see the phase before it, so its zero reads as the operation never running: stamp at the entry point instead.
 
 ## State and identity
 
