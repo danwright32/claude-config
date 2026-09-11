@@ -2129,6 +2129,24 @@ for reference; L6 was reviewed and deliberately not adopted.
   array of strings loops without complaint either way, and the wrong one is silent.)
   SHORT: A `for...of` over a STRING iterates its CHARACTERS and type checks silently, so a collection built by join or split runs the loop once per letter.
 
+- **L686. A read only command that PREVIEWS whether a gate will pass must run every predicate
+  that gate runs, derived from the gate rather than maintained beside it, because a preview
+  enforcing a subset returns a clean all clear on work the gate will refuse, and its pass is
+  read as a prediction about the whole verdict.** Distinct from L400, which tells a READER not to
+  count a check as protection without reading what it does: here the same person wrote both, at
+  different times, and the preview simply never gained the third rule. L41 covers the remedy, a
+  list that must mirror another source of truth is derived from it rather than maintained by hand
+  beside it, and a predicate list is exactly such a list.
+  (claude-config#373, 2026-09-11: `claude-sync check-lessons` is the read only command for asking
+  whether LESSONS.md can publish. It runs the malformed entry check and the duplicate number
+  check. The third fault that holds the file back, an entry whose rendered index line runs past
+  ENTRY_CAP, is checked only inside the send staging. After two entries were given their missing
+  bold markers, check-lessons printed "lesson numbering is sound" and exited 0 while both rendered
+  at 273 and 248 characters against a 160 cap, so the file was still held back and the command
+  built to say so had just said the opposite. The second fault was reachable only once the first
+  was fixed, which is why one run of the preview could never have seen both.)
+  SHORT: A read only PREVIEW of a gate must run every predicate the gate runs, derived from it, or its all clear is a prediction about a subset.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -6263,6 +6281,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   forty minutes later, while the product reported an ordinary empty result throughout. A partner
   fix that works produces no signal, so the only way to learn it worked is to ask the partner)
   SHORT: A fault found only when live traffic HAPPENS to exercise a path has a detection delay set by that path's rate, and its recovery is silent.
+
+- **L685. A PostgREST upsert is an INSERT with an ON CONFLICT clause, so every column a row OMITS is
+  NULL on the tentative insert and every NOT NULL constraint still applies, which means a PARTIAL
+  row can never upsert onto an existing row however complete that row already is. A refresh of a
+  row that exists is an UPDATE.** (slate#2232: `scripts/seed-buckets.ts` is the documented way to
+  push a name or criteria change out to all sixty routing buckets. It sent its sixty refresh rows
+  as one POST carrying `Prefer: resolution=merge-duplicates` and only the four fields the seeder
+  owns. `buckets.event_type_id` is NOT NULL, and the refresh row had deliberately stopped carrying
+  it six months earlier so the seeder would stop reverting a per bucket choice somebody had edited.
+  Every run since then answered `400 23502 null value in column "event_type_id" violates not-null
+  constraint` on the FIRST row and wrote nothing at all. Nobody noticed, because it is a hand run
+  command whose failure is loud only to whoever runs it, and nobody had run it. The guard over that
+  file asked which FIELDS the seeder owns, which is a different question from whether the request
+  it builds can be accepted, so it passed throughout. The fix is a PATCH per row with the identity
+  expressed as a FILTER rather than in the body, so the request cannot be turned back into an
+  insert by changing the verb alone.)
+  SHORT: A PostgREST upsert is an INSERT, so a PARTIAL row hits every NOT NULL constraint and can never upsert onto an existing row. A refresh is an UPDATE.
 
 ## Building with AI
 

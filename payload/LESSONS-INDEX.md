@@ -509,7 +509,7 @@ apply it, because the body is where the failure it came from is described.
 - L552. Pinning a tool's VERSION pins its output only when the tool works locally; one that delegates to a hosted service emits whatever the server makes today.
 - L670. A refusal from an INTERMEDIARY in front of an API
 - L674. A fault found only when live traffic HAPPENS to exercise a path has a detection delay set by that path's rate, and its recovery is silent.
-- L685. A PostgREST upsert is an INSERT, so a PARTIAL row hits every NOT NULL constraint and cannot upsert onto an existing row however complete. Refresh is UPDATE.
+- L685. A PostgREST upsert is an INSERT, so a PARTIAL row hits every NOT NULL constraint and can never upsert onto an existing row. A refresh is an UPDATE.
 
 ## Building with AI
 
