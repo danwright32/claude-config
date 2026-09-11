@@ -52,21 +52,43 @@ sc_commands_offered(){   # $1 = path to a claude-sync -> one command per line, s
 # write the command down, and reading that as a dependency is the shape where a script matches
 # itself because it has to name the thing it looks for (L245).
 sc_commands_needed(){   # $1 = hooks directory, $2 = path to a claude-sync -> one per line, sorted
-  local offered
+  local offered f
   offered="$(sc_commands_offered "${2:-}")"
   [ -n "$offered" ] || return 0
   [ -d "${1:-}" ] || return 0
-  # ONLY the form a hook actually invokes it by: the tool's path in a variable, then the command.
-  # A bare `claude-sync <word>` is how a hook WRITES ABOUT the tool, in a comment or in a message
-  # telling somebody what to run, and counting those made `status` a dependency of a hook that only
-  # mentions it. Comment lines are dropped first for the same reason (L245, L673).
-  grep -rhv '^[[:space:]]*#' "$1" 2>/dev/null \
-    | grep -ohE '"[$][A-Za-z_][A-Za-z0-9_]*"[[:space:]]+[a-z0-9-]+' \
-    | awk '{print $2}' | sort -u | while IFS= read -r c; do
+  # Per FILE, because the variable holding the tool is named in that file and nowhere else.
+  #
+  # A variable is only the tool if the file assigns it a path ENDING in claude-sync, which is
+  # the executable. Merely CONTAINING it is not enough: run-all-tests.sh writes
+  # `_live_copies="$(mktemp -d .../claude-sync-work.XXX)"`, a throwaway directory whose template
+  # holds the word, and every command that variable was ever handed read as a claude-sync one.
+  # Matching any
+  # `"$var" <command>` instead counted `git -C "$repo" status` and `git -C "$R" push` as
+  # dependencies on claude-sync's own `status` and `push`, which is a claim the check never
+  # measured (L11). Those two happen to exist everywhere, so it would have been wrong and silent.
+  for f in "$1"/*; do
+    [ -f "$f" ] || continue
+    {
+      grep -hv '^[[:space:]]*#' "$f" 2>/dev/null \
+        | grep -ohE '[A-Za-z_][A-Za-z0-9_]*=[^;&|]*claude-sync"?[[:space:]]*$' \
+        | sed 's/=.*//' | sort -u \
+        | while IFS= read -r v; do
+            [ -n "$v" ] || continue
+            grep -hv '^[[:space:]]*#' "$f" 2>/dev/null \
+              | grep -ohE "\"\\\$$v\"[[:space:]]+[a-z0-9-]+" \
+              | awk '{print $2}'
+          done
+    } | sort -u
+  done | sort -u | while IFS= read -r c; do
     [ -n "$c" ] || continue
+    # A WHOLE line, never a prefix of one: `clean` matched `clean-backups` and `in` matched
+    # `install-autosync`, so two words that are no command at all were reported as dependencies
+    # (L135, L263).
     case "
-$offered" in *"
-$c"*) printf '%s\n' "$c" ;; esac
+$offered
+" in *"
+$c
+"*) printf '%s\n' "$c" ;; esac
   done
   return 0
 }
@@ -90,8 +112,10 @@ sc_report_missing(){   # $1 = hooks dir, $2 = the tool the payload was built aga
   while IFS= read -r c; do
     [ -n "$c" ] || continue
     case "
-$offered" in *"
-$c"*) ;; *) missing="${missing:+$missing }$c" ;; esac
+$offered
+" in *"
+$c
+"*) ;; *) missing="${missing:+$missing }$c" ;; esac
   done <<NEEDED
 $needed
 NEEDED

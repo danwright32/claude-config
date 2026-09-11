@@ -86,6 +86,55 @@ status"*) check "a command named only in a comment or a message is not a depende
   *) check "a command named only in a comment or a message is not a dependency" ok ;;
 esac
 
+# A PREFIX of a real command is not that command. `clean` is a prefix of `clean-backups` and `in`
+# of `install-autosync`, and a membership test matching a prefix reported both as dependencies of
+# this repo's own hooks when nothing calls either (L135, L263). Measured on the real tool, so this
+# cannot pass against a fixture that happens to have no such pair.
+cat > "$FIX/hooks/c.sh" <<'EOF'
+out="$("$tool" clean)"
+other="$("$tool" in)"
+EOF
+needed="$(sc_commands_needed "$FIX/hooks" "$SYNC")"
+case "
+$needed" in *"
+clean
+"*|*"
+clean") check "a prefix of a real command is not counted as one" "clean was counted" ;;
+  *) check "a prefix of a real command is not counted as one" ok ;; esac
+case "
+$needed" in *"
+in
+"*|*"
+in") check "and neither is a prefix of another" "in was counted" ;;
+  *) check "and neither is a prefix of another" ok ;; esac
+rm -f "$FIX/hooks/c.sh"
+
+# A variable holding something ELSE is not the tool, however much its name or its value looks like
+# it. `git -C "$repo" status` is not a claude-sync command, and a throwaway directory whose mktemp
+# template happens to hold the word claude-sync is not the tool either. Both were counted as
+# dependencies before this, which is a claim the check never measured (L11), and both happen to
+# name commands that exist everywhere, so it would have been wrong and silent.
+cat > "$FIX/hooks/d.sh" <<'EOF'
+repo="/some/checkout"
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.XXXX")"
+git -C "$repo" status
+"$scratch" lesson-faults
+EOF
+needed="$(sc_commands_needed "$FIX/hooks" "$SYNC")"
+case "
+$needed" in *"
+status
+"*|*"
+status") check "a git command through another variable is not a claude-sync one" "status was counted" ;;
+  *) check "a git command through another variable is not a claude-sync one" ok ;; esac
+# The positive control in the same fixture: a.sh still assigns a path ENDING in claude-sync and its
+# command is still found, so the rule above narrowed rather than switched everything off (L159).
+case "
+$needed" in *"
+lesson-faults"*) check "and a variable that really is the tool still counts" ok ;;
+  *) check "and a variable that really is the tool still counts" "got: $(printf '%s' "$needed" | tr '\n' ' ')" ;; esac
+rm -f "$FIX/hooks/d.sh"
+
 echo "sync commands: the verdict, and the message"
 
 # The state the issue is about: a clone that is simply older than the payload it has just received.
