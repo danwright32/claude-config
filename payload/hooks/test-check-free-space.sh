@@ -249,9 +249,23 @@ check "a check that could not measure is reported rather than passed over" \
 check "and still does not block the prompt" "$([ "$n_blind_rc" -eq 0 ] && echo ok || echo "exit $n_blind_rc")"
 
 # The hook is wired, not merely written: built is not wired (L3).
-SETTINGS="$DIR/../settings.hooks.json"
-check "the nudge is named in the synced hooks block" \
-  "$(grep -q 'free-space-nudge.sh' "$SETTINGS" 2>/dev/null && echo ok || echo "not in $SETTINGS")"
+#
+# WHERE the hooks block lives depends on which copy of the tree this is running from. In the repo
+# it is payload/settings.hooks.json. Installed under ~/.claude it is the hooks section of
+# settings.json, which is the file Claude Code actually reads and the only copy that makes the hook
+# fire. The first version of this named the repo's spelling alone, so it passed in the checkout and
+# failed on the machine the config was installed on, which is the side where wired actually means
+# something. Caught by the hook suite claude-sync runs after a pull.
+SETTINGS=""
+for _fs_candidate in "$DIR/../settings.hooks.json" "$DIR/../settings.json"; do
+  if [ -f "$_fs_candidate" ]; then SETTINGS="$_fs_candidate"; break; fi
+done
+# Neither being there is NOT a pass. A check with no file to read would otherwise answer exactly as
+# one that found the hook properly wired (L98).
+check "there is a settings file holding the hooks block to read" \
+  "$([ -n "$SETTINGS" ] && echo ok || echo "neither settings.hooks.json nor settings.json beside $DIR")"
+check "the nudge is named in the hooks block that is actually loaded" \
+  "$([ -n "$SETTINGS" ] && grep -q 'free-space-nudge.sh' "$SETTINGS" 2>/dev/null && echo ok || echo "not in ${SETTINGS:-<no settings file>}")"
 
 # The skill the notice points at has to exist, or the remedy names nothing (L111).
 SKILL="$DIR/../skills/disk-full/SKILL.md"
