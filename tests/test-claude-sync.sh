@@ -1734,6 +1734,45 @@ fan_totals_verdict(){   # $1 = shards expected; SUITE-SECTIONS lines on stdin
 # this suite writes, and a grep that matches nothing looks exactly like a shard with nothing to
 # say. The shard NUMBER is attached here, because the shard itself is a filtered run and does not
 # know which of them it is.
+# WHAT BECAME OF A SHARD that said nothing (claude-config#368).
+#
+# The refusal above reported only the shard NUMBER. On 2026-09-10 a run came back failed with
+# PASS=1380 FAIL=0 and "shard(s) 1 said nothing about which sections their checks came from".
+# Nothing said whether that shard crashed, was killed for resource contention, or exited early, and
+# the only way to find out was to re-run it and see if it recurred. It did not, so the cause is
+# still unknown.
+#
+# The distinction that decides what to do next is a shard KILLED by something outside it against
+# one that stopped ITSELF: the first is a re-run and the second is a defect. A status of 128 plus a
+# signal number is what a shell reports for the first. Three other outcomes get their own sentences
+# rather than being folded into either, because a message may only claim what it measured (L11):
+# exiting 0 and still saying nothing, no status recorded at all, and an output file that is empty.
+shard_death_note(){   # $1 = directory of shard files, $2 = shard number -> one sentence
+  _sdn_rc="$(cat "$1/$2.rc" 2>/dev/null || true)"
+  case "$_sdn_rc" in
+    '')
+      printf 'shard %s: no exit status was recorded for it, so what became of it cannot be answered from here' "$2" ;;
+    0)
+      printf 'shard %s: exited 0 and still said nothing, so it finished without reaching the line every run prints' "$2" ;;
+    *[!0-9]*)
+      printf 'shard %s: the exit status recorded for it is not a number (%s), so what became of it cannot be answered from here' "$2" "$_sdn_rc" ;;
+    *)
+      if [ "$_sdn_rc" -gt 128 ]; then
+        _sdn_sig="$(kill -l "$(( _sdn_rc - 128 ))" 2>/dev/null || true)"
+        [ -n "$_sdn_sig" ] || _sdn_sig="$(( _sdn_rc - 128 ))"
+        printf 'shard %s: killed by SIG%s (exit %s), so something outside it took it rather than it failing: re-run before looking for a defect' "$2" "$_sdn_sig" "$_sdn_rc"
+      else
+        printf 'shard %s: exited %s on its own, which is a defect in what it ran rather than the machine taking it' "$2" "$_sdn_rc"
+      fi ;;
+  esac
+  # Its last lines, because the exit status says what happened to it and these say where it was.
+  # An EMPTY file is its own answer and must not read as lines nobody kept (L98).
+  _sdn_tail="$(tail -n 5 "$1/$2.out" 2>/dev/null | tr '\n' '|' | sed 's/|$//')"
+  if [ -n "$_sdn_tail" ]; then printf '. Its last lines: %s' "$_sdn_tail"
+  else printf '. Its output file is empty, so it printed nothing at all'; fi
+  return 0
+}
+
 fan_totals_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards expected
   _fd_all=""
   _fd_i=1
@@ -1743,7 +1782,22 @@ fan_totals_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards expe
 "
     _fd_i=$(( _fd_i + 1 ))
   done
-  printf '%s\n' "$_fd_all" | fan_totals_verdict "$2"
+  _fd_out="$(printf '%s\n' "$_fd_all" | fan_totals_verdict "$2")"; _fd_rc=$?
+  if [ "$_fd_rc" -ne 0 ]; then
+    # A death note for every shard that never spoke. Attached HERE rather than inside the verdict,
+    # because the verdict has to stay drivable with lines this suite writes and knows nothing about
+    # a directory; this reader already has both (claude-config#368).
+    _fd_i=1
+    while [ "$_fd_i" -le "$2" ]; do
+      case "$_fd_all" in *"shard=$_fd_i"*) ;;
+        *) _fd_out="$_fd_out
+  $(shard_death_note "$1" "$_fd_i")" ;;
+      esac
+      _fd_i=$(( _fd_i + 1 ))
+    done
+  fi
+  printf '%s\n' "$_fd_out"
+  return "$_fd_rc"
 }
 
 #
@@ -1890,8 +1944,20 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
     _fan_pids="$_fan_pids $!"
     _fan_i=$((_fan_i + 1))
   done
+  # Each shard's EXIT STATUS, recorded beside its output (claude-config#368). Waited on in the
+  # order the pids were collected, which is shard order, so the status and the shard it belongs to
+  # come from one derivation rather than two that have to stay in step (L70). Without this a shard
+  # that said nothing could only be reported as silent, and being killed by the machine and dying
+  # of a defect are the two answers that decide what to do next.
   _fan_rc=0
-  for _fan_p in $_fan_pids; do wait "$_fan_p" || _fan_rc=1; done
+  _fan_i=1
+  for _fan_p in $_fan_pids; do
+    _fan_prc=0
+    wait "$_fan_p" || _fan_prc=$?
+    printf '%s\n' "$_fan_prc" > "$_fan_dir/$_fan_i.rc"
+    [ "$_fan_prc" -eq 0 ] || _fan_rc=1
+    _fan_i=$(( _fan_i + 1 ))
+  done
 
   _fan_pass=0; _fan_fail=0; _fan_missing=""
   _fan_i=1
@@ -1912,6 +1978,14 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
     fi
     _fan_i=$((_fan_i + 1))
   done
+  # WHY each silent shard said nothing, collected while the directory still EXISTS: it is removed
+  # below, and a note read afterwards would say "no exit status was recorded" about every one of
+  # them, which is the reassuring answer rather than the true one (claude-config#368).
+  _fan_death=""
+  for _fan_m in $_fan_missing; do
+    _fan_death="$_fan_death$(printf 'test suite:   %s\n' "$(shard_death_note "$_fan_dir" "$_fan_m")")
+"
+  done
   # Whether the shards, between them, ran every section (#137). Read before the directory goes.
   _fan_cov_say="$(shard_coverage_over_dir "$_fan_dir" "$SUITE_JOBS")" || {
     echo "test suite: $_fan_cov_say" >&2
@@ -1924,6 +1998,7 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   echo ""
   if [ -n "$_fan_missing" ]; then
     echo "test suite: shard(s)$_fan_missing produced no result line, so their checks are NOT in the total below. Treat this run as failed." >&2
+    printf '%s' "$_fan_death" >&2
   fi
   # The deadline's headroom, checked HERE, against the whole run. #112 asserts it too, but that
   # section now runs inside a shard, where the elapsed time is a quarter of the real thing, so it
@@ -7965,6 +8040,106 @@ check "#146 and a real line's buckets add up to what that run reported" \
 _ft_prel="$(printf '%s' "$_ft_line" | sed -n 's/.*prelude_pass=\([0-9]*\).*/\1/p')"
 check "#146 and its prelude bucket is the bulk of the checks, which is why repeating it mattered" \
   "[ \"\${_ft_prel:-0}\" -gt 10 ]"
+
+section "== a shard that said nothing says WHY, not only that it was silent (claude-config#368) =="
+# When a shard produces no result line the suite correctly refuses to count the run, but it
+# reported only the shard NUMBER. On 2026-09-10 a run came back failed with PASS=1380 FAIL=0 and
+# the line "shard(s) 1 said nothing about which sections their checks came from". Nothing said
+# whether that shard crashed, was killed for resource contention, or exited early, and the only way
+# to find out was to re-run it and see if it recurred. It did not, so the cause is still unknown.
+#
+# The distinction that matters is a shard KILLED by something outside it (contention, memory, a
+# watchdog) against one that stopped ITSELF, because the first is a re-run and the second is a
+# defect. Distinct causes get distinct messages (L11).
+_sd_dir="$WORK/sharddeath"; mkdir -p "$_sd_dir"
+
+# Killed by a signal. 137 is 128 plus 9, which is what a shell reports for a process the machine
+# took, and it is the shape the incident would have shown.
+printf '%s\n' "== a section ==" "  ok: something" "  ok: something else" > "$_sd_dir/1.out"
+printf '137\n' > "$_sd_dir/1.rc"
+_sd_killed="$(shard_death_note "$_sd_dir" 1)"
+dbg "#368 killed shard note: $_sd_killed"
+check "#368 a shard killed by a signal is named as killed" \
+  "case \"\$_sd_killed\" in *killed*) true ;; *) false ;; esac"
+check "#368 and the signal is named, so SEGV can be told from KILL" \
+  "case \"\$_sd_killed\" in *KILL*) true ;; *) false ;; esac"
+check "#368 and it says a re-run is the next step, not a hunt for a defect" \
+  "case \"\$_sd_killed\" in *'re-run'*) true ;; *) false ;; esac"
+check "#368 and it carries the last lines that shard managed to print" \
+  "case \"\$_sd_killed\" in *'something else'*) true ;; *) false ;; esac"
+
+# Died on its own. A plain non-zero exit is the shard's own doing and re-running it is the wrong
+# advice, which is exactly why the two need different sentences.
+printf '%s\n' "== a section ==" "  ok: something" > "$_sd_dir/2.out"
+printf '1\n' > "$_sd_dir/2.rc"
+_sd_own="$(shard_death_note "$_sd_dir" 2)"
+dbg "#368 self-exited shard note: $_sd_own"
+check "#368 a shard that exited on its own is named as that" \
+  "case \"\$_sd_own\" in *'on its own'*) true ;; *) false ;; esac"
+check "#368 and its exit status is in the sentence" \
+  "case \"\$_sd_own\" in *'exited 1'*) true ;; *) false ;; esac"
+check "#368 and it does NOT tell the reader to re-run it" \
+  "case \"\$_sd_own\" in *'re-run'*) false ;; *) true ;; esac"
+
+# Exited 0 and still said nothing. That is neither of the two above and needs its own sentence, or
+# it is filed under whichever of them the reader happens to assume (L11).
+printf '%s\n' "== a section ==" > "$_sd_dir/3.out"
+printf '0\n' > "$_sd_dir/3.rc"
+_sd_zero="$(shard_death_note "$_sd_dir" 3)"
+check "#368 a shard that exited 0 and still said nothing is its own case" \
+  "case \"\$_sd_zero\" in *'exited 0'*) true ;; *) false ;; esac"
+
+# No status recorded at all. "It was killed" and "nothing here knows" are different answers and
+# reporting the second as the first is a claim the check never measured (L11, L440).
+printf '%s\n' "== a section ==" > "$_sd_dir/4.out"
+rm -f "$_sd_dir/4.rc"
+_sd_norc="$(shard_death_note "$_sd_dir" 4)"
+check "#368 a shard with no recorded status says so rather than guessing" \
+  "case \"\$_sd_norc\" in *'no exit status'*) true ;; *) false ;; esac"
+
+# An empty output file is not the same as output nobody kept.
+: > "$_sd_dir/5.out"
+printf '137\n' > "$_sd_dir/5.rc"
+_sd_empty="$(shard_death_note "$_sd_dir" 5)"
+check "#368 a shard that printed nothing at all says that too" \
+  "case \"\$_sd_empty\" in *'empty'*) true ;; *) false ;; esac"
+
+# And the note reaches the refusal that reported only a number. Driven through the reader that
+# actually builds it, over a directory holding one shard that spoke and one that did not, because a
+# helper proven only on its own says nothing about whether anybody calls it (L3).
+_sd_dir2="$WORK/sharddeath2"; mkdir -p "$_sd_dir2"
+printf '%s\n' "SUITE-SECTIONS prelude_pass=10 prelude_fail=0 target_pass=20 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=30 total_fail=0" > "$_sd_dir2/1.out"
+printf '0\n' > "$_sd_dir2/1.rc"
+printf '%s\n' "== a section ==" "  ok: got this far" > "$_sd_dir2/2.out"
+printf '137\n' > "$_sd_dir2/2.rc"
+_sd_verdict="$(fan_totals_over_dir "$_sd_dir2" 2)"; _sd_verdict_rc=$?
+dbg "#368 verdict over a dead shard: $_sd_verdict"
+check "#368 a run with a silent shard is still refused" "[ '$_sd_verdict_rc' -ne 0 ]"
+check "#368 and the refusal still names which shard" \
+  "case \"\$_sd_verdict\" in *'shard'*2*) true ;; *) false ;; esac"
+check "#368 and now says what became of it" \
+  "case \"\$_sd_verdict\" in *KILL*) true ;; *) false ;; esac"
+check "#368 and carries what it managed to print" \
+  "case \"\$_sd_verdict\" in *'got this far'*) true ;; *) false ;; esac"
+# The control: a directory where every shard spoke gets no death note at all, or the note is on
+# every run and stops being read (L36).
+printf '%s\n' "SUITE-SECTIONS prelude_pass=10 prelude_fail=0 target_pass=20 target_fail=0 repeat_pass=0 repeat_fail=0 total_pass=30 total_fail=0" > "$_sd_dir2/2.out"
+_sd_ok="$(fan_totals_over_dir "$_sd_dir2" 2)"; _sd_ok_rc=$?
+check "#368 a run where every shard spoke is counted" "[ '$_sd_ok_rc' -eq 0 ]"
+check "#368 and says nothing about anything dying" \
+  "case \"\$_sd_ok\" in *KILL*|*killed*) false ;; *) true ;; esac"
+
+# The notes are read while the shard directory still EXISTS. It is removed a few lines later, and a
+# note read afterwards says "no exit status was recorded" about every shard, which is a reassuring
+# sentence rather than a true one: the guard would still print, still name the shard, and have
+# stopped answering the question it was added for (L98). Written the first time with exactly that
+# fault, so it is asserted rather than left to a comment (L407).
+_sd_death_ln="$(grep -n '_fan_death="\$_fan_death' "$SCRIPT_SELF" | awk -F: 'NR <= 1 { print $1 }')"
+_sd_rm_ln="$(grep -n 'rm -rf "\$_fan_dir"' "$SCRIPT_SELF" | awk -F: 'NR <= 1 { print $1 }')"
+check "#368 both the note builder and the removal are still there to compare" \
+  "[ -n \"\$_sd_death_ln\" ] && [ -n \"\$_sd_rm_ln\" ]"
+check "#368 the death notes are built before the shard directory is removed" \
+  "[ \"\${_sd_death_ln:-0}\" -lt \"\${_sd_rm_ln:-0}\" ]"
 
 section "== a section is never run twice to satisfy a needs declaration (#151) =="
 # A shard ran any section its own targets declared with a `# needs:` line, including sections
