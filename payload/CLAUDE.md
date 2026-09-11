@@ -1,12 +1,12 @@
 @RTK.md
 @LESSONS-INDEX.md
 
-The lessons index above is one line per lesson: the rule, without the evidence it came from. The
-full text lives in ~/.claude/LESSONS.md and is deliberately NOT loaded into the session. Read the
-whole entry whenever a rule is about to decide something, with
-`~/claude-config-sync/claude-sync lesson L174` or by reading the entry in that file: the body is
-where the failure behind the rule is described, and the rule alone is often too short to apply
-correctly.
+The lessons index above is one line per lesson, and that line is a SHORTENED form of the rule,
+not the rule itself: it carries the condition and the instruction, and routinely drops the clause
+saying what the failure looks like. The full sentence and the evidence live in ~/.claude/LESSONS.md,
+which is deliberately NOT loaded into the session. So read the whole entry whenever a rule is about
+to decide something, with `~/claude-config-sync/claude-sync lesson L174` or by reading the entry in
+that file. The index line is enough to tell you a rule APPLIES; it is not enough to apply it.
 
 ## General Behavior
 

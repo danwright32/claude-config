@@ -11,474 +11,474 @@ apply it, because the body is where the failure it came from is described.
 
 ## Proof over green
 
-- L394. In Python a default argument binds ONCE, when the function is defined, so writing a collaborator or a path as a default (`def f(run=measure)`, `def f(path=RECORD)`) gives you the parameter without the replaceability
-- L277. A defect's output can be the only record of a fact the system never stored deliberately, so shipping the fix silently removes the evidence the diagnosis was made from. Before shipping one, name what the failure was incidentally reporting and record that fact directly.
-- L284. A test that sets some of a script's seams runs every unset collaborator for real, and the real ones are the slow and the dangerous ones, so enumerate every seam the script honours beside the test and assert each is either set once for the whole suite or deliberately left real by a section that tests it.
-- L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is written, because a hard-coded setTimeout forces every end-to-end test that crosses it to wait for real.
+- L394. A Python default argument binds ONCE at definition, so a collaborator or path written as a default gives you the parameter without the replaceability.
+- L277. Before fixing a defect, name what its output was incidentally recording, because the fix removes the only evidence the diagnosis was made from.
+- L284. A test that sets some of a script's seams runs every unset one for real, so enumerate every seam and assert each is set or deliberately left real.
+- L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is written, or every test that crosses it waits for real.
 - L656. A duration measured in the same run is only a yardstick if it comes from SEVERAL samples
-- L224. A check that compares elapsed time against a FIXED number is a check on what else the machine is running, so compare it against a duration measured in the same run.
-- L215. A reader that answers with an EMPTY collection when its own accessor throws is indistinguishable from a correct reader of an empty collection, and because the swallowing construct usually sits INSIDE the loop, one element of an unexpected shape empties the whole result.
-- L216. When two independent readings of the same input disagree, a disagreement rate that is CONCENTRATED and TOTAL, near 100% on a few named fields and near 0% on the rest, indicts the pipeline rather than the input, because a genuine data problem is spread out and partial.
-- L203. A cause inferred from two things co-occurring in a log or a trace is not established until you find a case where the suspected cause is present and the effect is ABSENT, because a busy system produces near simultaneous events constantly and a coincidence reads exactly like a mechanism.
-- L681. A defect report whose CAUSE was inferred by reading code side by side, rather than by driving the behaviour, must have that cause REPRODUCED before it is fixed, because the symptom can be real while the named code is structurally unable to produce it, and a fix aimed there is untestable while the real fault goes on shipping.
-- L205. A test that touches a shared mutable object other tests also touch can pass purely because its own fixture is SLOW enough to outlive a neighbour's reset, so making that fixture faster is what exposes it: remove the dependency on the shared object rather than serializing around it, and re-check any such test after speeding its fixture.
+- L224. A check comparing elapsed time against a FIXED number measures what else the machine is running; compare it against a duration measured in the same run.
+- L215. A reader returning an EMPTY collection when its accessor throws is indistinguishable from a correct read of an empty one, and empties the whole result.
+- L216. When two readings of one input disagree, a rate CONCENTRATED and TOTAL on a few fields indicts the pipeline; a real data problem is spread and partial.
+- L203. A cause inferred from two things co-occurring is not established until you find a case where the suspected cause is present and the effect is ABSENT.
+- L681. A defect whose cause was inferred by reading code must have it REPRODUCED before the fix, or the fix is untestable and the real fault ships on.
+- L205. A test touching shared mutable state can pass only because its fixture is SLOW, so remove the dependency rather than serializing around it.
 - L1. A test or guard is only real once it has been seen to fail.
-- L557. A monitor or validator that has never once PASSED is not measuring anything, because every failure it reports reads as a finding about the data rather than about itself. Record its outcomes so a lifetime success count of zero is detectable, and treat that as the check being broken.
-- L584. Data archived as a serialized bundle (a gzipped payload in one column, an object in a blob store) is recoverable one record at a time and cannot be aggregated, so reaching the warehouse is not the same as being analysable.
-- L140. A test asserting that something THREW is satisfied by ANY throw, including one raised by its own fixture, so assert on the specific failure (the message, the type, the state left behind) rather than on the mere fact of an error.
-- L154. A tool that reports whether a check CAUGHT a deliberate defect must name WHICH check fired, because a defect large enough to break everything makes every check fail and is indistinguishable from the one that should have.
-- L177. When a failure reproduces only in an environment you cannot run (a CI runner, another machine, a device), make that environment PRINT the fact in question before changing any code, because a theory built from the symptom is cheap to believe and expensive to ship.
-- L178. A check written as two conditions over one body of text is satisfied by two unrelated places in it, so it proves neither half and passes hardest when nothing works at all.
-- L182. A ratchet or violation count driven to ZERO stops being read as a measurement and starts being read as proof the thing cannot occur, so nobody re-examines it.
+- L557. A monitor that has never once PASSED is measuring nothing, so record its outcomes and treat a lifetime success count of zero as the check being broken.
+- L584. Data archived as a serialized bundle is recoverable one record at a time and cannot be aggregated, so reaching the warehouse is not being analysable.
+- L140. A test asserting something THREW is satisfied by any throw, its own fixture's included, so assert on the specific message, type or state left behind.
+- L154. A tool reporting whether a check CAUGHT a deliberate defect must name WHICH check fired, because a big enough defect makes every check fail.
+- L177. When a failure reproduces only in an environment you cannot run, make that environment PRINT the fact in question before changing any code.
+- L178. A check written as two conditions over one body of text is satisfied by two unrelated places in it, and passes hardest when nothing works at all.
+- L182. A ratchet or violation count driven to ZERO stops being read as a measurement and reads as proof the thing cannot occur, so nobody re-examines it.
 - L151. Every outcome a guard's own contract ENUMERATES must have a test that PRODUCES that outcome, not merely a test that passes.
-- L246. A feasibility check must exercise the HARDEST thing the plan depends on, not the easiest thing that proves the tool runs at all, because a green on the easy case reads as permission to build and the capability nobody measured is the one the plan actually rests on.
-- L248. A finding that rules a capability OUT must be measured under the same control as one that rules it in, because nothing downstream ever re-tests a closed door: the work that would have exercised it is exactly the work the finding stopped anyone writing.
-- L439. A variable one test EXPORTS is inherited by every later test's subprocesses, so a fixture that is correct on its own silently changes what the code under test BELIEVES in every test after it, and the symptom surfaces far away with nothing naming the cause.
+- L246. A feasibility check must exercise the HARDEST thing the plan depends on, because a green on the easy case reads as permission to build.
+- L248. A finding that rules a capability OUT needs the same control as one ruling it in, because nothing downstream ever re-tests a closed door.
+- L439. A variable one test EXPORTS is inherited by every later test's subprocesses, silently changing what the code under test believes, far from any cause.
 - L2. Tests must be structurally unable to touch live data, production services, or paid APIs.
 - L196. A component that CONSTRUCTS its own dependency rather than receiving one is beyond every refusal that dependency could offer
-- L322. Isolation set through an ENVIRONMENT VARIABLE is only real if the tool being isolated actually honours it, so measure where the writes LAND rather than trusting the variable.
-- L323. A duration compared against its own history measures the SYSTEM only while the workload is constant, so a job whose cost varies with its input must be divided by a measure of that input before any trend is read from it.
+- L322. Isolation set through an ENVIRONMENT VARIABLE is only real if the tool honours it, so measure where the writes LAND rather than trusting the variable.
+- L323. A duration compared against its own history measures the system only while the workload is constant, so divide it by a measure of the input first.
 - L3. Built is not wired, and wired is not proven.
 - L4. A merged fix is not a deployed fix.
-- L581. A merge or conflict resolution that writes its result to the LOCAL copy must read back the SHARED copy and confirm the merged entries are there before reporting success, because a merge that resolved correctly and a merge that also propagated produce the identical message.
-- L212. A count of source sites that CREATE a resource against source sites that RELEASE it cannot measure whether anything leaks, because one shared helper runs once per caller and a single missing teardown inside it multiplies invisibly, so measure what actually survives at runtime.
+- L581. A merge writing its result to the LOCAL copy must read back the SHARED copy and confirm the entries are there, or resolved and propagated read alike.
+- L212. Counting source sites that CREATE a resource against those that RELEASE it cannot see a leak inside a shared helper; measure what survives at runtime.
 - L63. A regression guard must assert the quantity it exists to protect, never a proxy for it.
 - L644. A check that an override EXISTS cannot see whether it WINS
-- L103. A guard that asserts the exact rendering of a value rather than the rule behind it fails the first legitimate refinement of that value, and when the value is a file's text it can also be satisfied by a comment ABOUT the thing, including one explaining that the thing was removed.
+- L103. A guard asserting a value's exact rendering rather than the rule behind it breaks on the first refinement, and over file text a comment ABOUT it passes.
 - L48. A test fixture that claims to come from real data must be measured from it, never shaped so the rule under test fires.
 - L52. A test whose only outside dependency is a stub you wrote can only confirm your own assumption about the real interface.
-- L420. Two artefacts describing ONE run (its results and its logs, an artifact and its metadata) must be paired by the run's own identifier, never by each being the newest of its kind in its own directory
+- L420. Two artefacts describing ONE run must be paired by that run's own identifier, never by each being the newest of its kind in its own directory.
 - L58. Two systems that must agree cannot be verified against records one of them wrote into the other.
-- L56. A new validator on a live data path must be calibrated against a sample fetched through the same code path it will guard, and must be observed for one real cycle before it is allowed to block.
+- L56. Calibrate a new validator against a sample fetched through the same path it will guard, and watch one real cycle before letting it block.
 - L68. A guard that reads live production data must assert the SIGNATURE of the failure it protects against, never the data's current emptiness.
 - L65. A guard shipped deliberately inactive needs the issue that activates it filed in the same change.
 - L70. A check whose expected value and its actual value come from the same lookup can only prove that lookup is self-consistent, never that it is correct.
-- L345. A guard that can REFUSE a reading must not draw on the same source as the reading itself, because the guard then falls silent exactly when that source fails and the unrefused reading is at its least trustworthy.
+- L345. A guard that can REFUSE a reading must not draw on the same source as the reading itself, or it falls silent exactly when that source fails.
 - L561. A record written so that a failure can be RECOVERED from must be written by a DIFFERENT operation than the one that fails
-- L82. When a platform primitive's DOCUMENTED guarantee is the entire reason a guard is safe (a clock that excludes sleep, a delivery that happens once, a write that is atomic), measure that guarantee on the real target before shipping.
-- L188. A limit your code SETS (a minimum size, a timeout, a cap, a default) is only in force if nothing downstream recomputes it, because a framework or platform deriving the same value from other inputs overwrites yours silently and the line goes on reading as protection while protecting nothing, so measure the value in the RUNNING system rather than trusting the assignment.
-- L572. A limit that governs an operation already under way cannot be set from INSIDE that operation, because the mechanism enforcing it was armed when the operation began and read the value at that moment, so the assignment silently applies only to the next one.
-- L84. A recorded expectation (a baseline screenshot, a golden file, an approved snapshot) captures whatever the surface happened to be showing when it was recorded, including an error or empty state caused by a dependency the harness never fed it, and then defends that broken state as correct for as long as it lives.
+- L82. When a platform's DOCUMENTED guarantee is the whole reason a guard is safe, measure that guarantee on the real target before shipping.
+- L188. A limit your code SETS holds only if nothing downstream recomputes it, so measure the value in the RUNNING system rather than trusting the assignment.
+- L572. A limit governing an operation already under way cannot be set from INSIDE it: the mechanism was armed at the start, so it applies only to the next one.
+- L84. A baseline, golden file or snapshot captures whatever the surface was showing, an error state included, then defends it as correct as long as it lives.
 - L85. Two changes that are each green can merge into a broken main, because each one was verified against a base that did not contain the other.
-- L88. A CI job that runs only when certain paths change must have those paths derived from every input its tests actually read, not from where the code under test lives.
-- L92. When you make a removal or refusal durable by recording it against an identifier (an email, an id, a URL), every item the action can apply to must actually carry that identifier, or the ones lacking it silently keep the exact defect the recording was added to fix.
-- L93. A guard that avoids a wrong action by falling back to a different action has only chosen which defect to ship, so name what the fallback gets wrong and measure how often the guard fires on real data.
-- L362. An exemption written as ONE NAMED CASE rather than as the reason for exempting stops covering the moment a second case satisfies that reason, and where the exemption exists to keep a REMEDY reachable the result is a deadlock: the tool refuses while naming a condition only that tool could clear. Write the condition as the reason, and hold the list of names to it with a test.
-- L324. A guard's STAND DOWN condition must be no broader than the reason for standing down, because the broader form silently disables it in cases nobody meant to exempt, and those are the runs least like the ones it was tested on.
+- L88. A CI job gated on changed paths must derive those paths from every input its tests actually read, not from where the code under test lives.
+- L92. Recording a removal against an identifier fixes nothing for the items that lack that identifier: they silently keep the defect it was added to fix.
+- L93. A guard that avoids a wrong action by falling back to another has only chosen which defect ships, so name what the fallback gets wrong and how often.
+- L362. Write an exemption as the REASON for exempting, never as one named case, or it stops covering the second case that satisfies the same reason.
+- L324. A guard's STAND DOWN condition must be no broader than the reason for standing down, or it silently disables the guard on runs nobody exempted.
 - L98. A watcher, poller or wait-for-completion step that reports SUCCESS when it found NOTHING to watch is indistinguishable from one that saw everything pass.
-- L171. A positive control proves the query SHAPE, never that the query reached the period you are asking about, so a control satisfiable by data from outside that period cannot detect a lagging pipeline and an absence there is worthless.
-- L172. Before shipping a threshold, measure where it lands in the REAL distribution of the quantity it judges, because one sitting inside the dense middle turns the count it produces into noise: a small uniform shift carries dozens of items across at once and reads as a sudden regression rather than as the same population barely moving.
-- L398. A gate that decides whether a subject passes must read its criteria from the SAME revision it is judging, never from the checkout the gate happens to run in, because the two drift with no symptom and a criteria list short by one entry is a requirement nobody is waiting on.
-- L179. A status query about work in flight must be scoped to the exact revision it asks about, because a superseded run reports under the same check names and answers for the new one in both directions: a stale failure blocks a commit nothing has judged, and a stale pass merges one.
-- L119. A detection that ACCUSES on an empty answer from an external provider's derived index (a commit-to-PR association, a search index, a related-records lookup) must confirm against the primary record before acting, because a missing index entry and a real violation are indistinguishable and the index can stay permanently incomplete rather than catch up.
-- L173. A fallback added because a lookup failed must be reachable on EVERY way that lookup can fail, not only the flavour that was observed, because the remedy gets scoped to the symptom named in the incident report and is then absent in the neighbouring, worse failure.
-- L214. A fallback written for a source being ABSENT must not be reached when that source is PRESENT but EMPTY, because those are different situations: taking the absent branch on empty silently redirects the work to a different target than the one it was pointed at, and everything downstream then reports about something nobody asked about.
-- L120. A fan out that delivers only to recipients matching a subscription list reports SUCCESS when it matches ZERO of them, so a newly added event, topic or category is silently delivered to nobody while the send path looks healthy.
-- L100. An operation that finds its target by matching text (a marker to insert at, a file to stash, a pattern to replace, a helper name to call) reports SUCCESS when it matches NOTHING, so the next step acts on a state nobody created.
-- L143. A test double that selects what it intercepts by PATTERN (a route glob, a URL matcher, a path prefix) silently becomes NO double at all when the pattern misses, so the test talks to the real dependency and reports whatever that produces as the behaviour under test.
-- L133. A detector that identifies records written BEFORE a fix must key on a recorded stamp, never on a property of the stored value itself, because a store that re-encodes on save normalizes that property away and the detector then reports every row as already correct.
-- L223. A check that finds records made BEFORE a change by reading a marker those records carry can never see anything written before the marker itself shipped, which is exactly the population it exists to find, so cover the unmarked backlog with evidence the store already holds (a file date, a created time) rather than letting a missing marker read as up to date.
-- L101. A code path that switches behaviour on the SIZE of its input will always take the small branch under test, because a fixture is minimal by construction, so the mode that actually ships is the one never exercised and the suite is green the whole time.
-- L102. A cost or latency measured while the expensive path is switched off measures the short circuit, not the work, so the number reads as reassurance for exactly the case nobody has tested.
-- L331. A measurement written into a store that later DECIDES something (a launch order, a shard balance, a retry budget) must record whether the run it came from actually did the work, because a run that refused, was locked out or died early reports a real and very small number, and nothing downstream can tell that from a genuinely fast one.
-- L289. A fast path that falls back to doing the work when it cannot read its own record (a cache, a memo, a skip if unchanged gate) fails SILENTLY, because the fallback is correct and merely slower, so every test stays green while the saving quietly stops happening.
-- L361. A filter that EXCLUDES content by testing a property of its whole container (a paragraph that starts with a marker, a block beginning with a comment character) fails in both directions as soon as one container mixes excluded and wanted content: the excluded thing leaks in wherever it is not first, and the wanted thing is discarded with it wherever it is. Strip the excluded elements from inside the container rather than judging the container by its start.
-- L104. A filter that identifies data by its SHAPE (a redaction regex, a content classifier, a profanity or spam rule) must be tested against the content it has to PRESERVE, not only against the content it has to catch, because the shape it matches is rarely unique to its target and an over match reads exactly like the feature working.
-- L107. A number measured to justify a design decision must be produced by the code's own predicate, never by a query written beside it, because an ad-hoc reimplementation is a second definition that drifts silently and in the direction that flatters the argument being made.
-- L156. A success check that looks for a SUBSTRING OF THE THING BEING TALKED TO (a hostname, a command name, a file path, a resource id) also matches the ERROR about it, because a failure message quotes its target, so match the shape of the SUCCESS output instead.
-- L183. A pipeline under `set -o pipefail` can be failed by its PRODUCER being killed when a short-circuiting consumer (`grep -q`, `head`) exits first, so a correct check reports a failure that never happened.
-- L115. A harness that measures whether content is VISIBLE must be checked against the substitutes its own renderer makes for content it cannot draw, because a placeholder is itself a mark on the page and measures as presence.
-- L141. A visibility check that measures ink over a whole surface is answered by whatever that surface paints for ITSELF, a fill, a border, a panel, so the words it exists to check can be drawn in the background colour while the measurement barely moves.
-- L535. Code behind a flag that shipped OFF has never run, so turning it on is shipping untested code, and its ERROR paths are the least exercised part of it because the observe phase existed precisely to stop them executing.
-- L147. A guard seen to fail on a fixture you chose has only been shown to work on the shape you had in mind, so measure how often it fires on the REAL values it will meet.
-- L117. A per-item ceiling judged against a POOLED total cannot notice one item running away, because the expensive item is paid for out of the cheap ones' headroom, and a single-item run is the only size where the ceiling and the total are the same number.
-- L130. A test fixture whose meaning is the RELATIONSHIP between a stored date and the clock (a show still ahead, a licence not yet expired, a record inside its retention window) must pin BOTH ends, because pinning only the fixture lets real time walk the pair into a different state and the test then passes while asserting about a case nobody chose.
-- L401. A fixture whose meaning is its relationship to a CONFIGURABLE threshold (a lead time window, a cap, a retention period, a rate limit) must be DERIVED from that threshold rather than written as a literal chosen to sit at its edge, because pinning both ends of the fixture does not help when the third party to the relationship is a constant somebody can change: the day it moves, the fixture silently stands for a different case.
-- L134. A test that derives two inputs from the same LIVE shared resource read at different moments must ASSERT the separation it depends on, never assume it, because the healthy margin is usually one unit of that resource's own granularity and a single stale read closes it exactly.
-- L220. A change that SPLITS work into parts silently re-aims every guard calibrated against the whole: the guard goes on running, and passing, while now measuring a fragment, so it can no longer reach the threshold it was set to catch.
-- L135. A guard that matches source text over a WHOLE FILE is satisfied by any occurrence in it, so a second legitimate use of the same construct elsewhere in that file answers the check while the region it was written about is broken.
-- L142. When phasing a risky change into observe then enforce, check WHICH half the observation covers: the observed half is usually the one you understand, and the harm usually lives in the other, so an observe phase that never exercises the dangerous path buys confidence about the wrong thing.
-- L144. A monitor reporting whether an action HAPPENED must judge by the same predicate the action used to decide whether to ACT, or the two disagree precisely when the action correctly declined, and the resulting false alarm cannot be cleared by the remedy it names, because re-running the action makes it decline again.
-- L146. To check that content reached a rendered surface, measure the surface WITHOUT that content and take the difference, because any quantity computed over the whole surface (ink, coverage, a pixel count) also counts the fill, the border and the controls, and can even RISE when the content is removed, since removing it changes what the commonest colour is.
-- L165. A fixture built by damaging the END of something lets the scenario finish its real work before failing, so the case under test never occurs while the test reads as convincing, and it passes for a reason unrelated to what it claims.
-- L502. A setting whose OFF state stops something being RECORDED must be monitored by asserting its current VALUE on a schedule, never only by auditing changes to it, because an application level audit cannot see a change made directly to the database, and the setting's whole effect is to remove the evidence that would reveal it.
-- L504. A test can only tell two implementations apart when the environment it runs in makes them behave differently, so when the ambient configuration (the host timezone, the locale, the filesystem's case sensitivity) is what separates a correct implementation from a wrong one, the test must SET that configuration itself rather than inherit it.
-- L506. A guard that branches on a field arriving from OUTSIDE the system is only real once that field's presence has been measured on live traffic, because an absent field makes a strict comparison silently false and the guard then reads as an active safeguard while refusing nobody.
-- L551. A precise branch added beside an HONEST fallback is invisible when it never fires, because the fallback's label is truthful and reads as the system working rather than as a signal that never matched
-- L209. A threshold measured while a co-varying component is held constant attaches itself to the wrong variable, because the part the fixture moves stands in for the sum.
+- L171. A positive control proves the query SHAPE, never that it reached the period asked about, so one satisfiable by older data cannot see a lagging pipeline.
+- L172. Before shipping a threshold, measure where it lands in the REAL distribution it judges: one inside the dense middle turns its count into noise.
+- L398. A gate must read its criteria from the SAME revision it is judging, never from the checkout it runs in, because the two drift with no symptom.
+- L179. A status query about work in flight must be scoped to the exact revision it asks about, or a superseded run answers for it in both directions.
+- L119. A detection that ACCUSES on an empty answer from a derived index must confirm against the primary record, because a missing entry looks like a breach.
+- L173. A fallback added because a lookup failed must be reachable on EVERY way that lookup can fail, not only the flavour named in the incident report.
+- L214. A fallback written for an ABSENT source must not be reached when it is PRESENT but EMPTY, or the work retargets and reports about the wrong thing.
+- L120. A fan out matching recipients against a subscription list reports SUCCESS on ZERO matches, so a new event reaches nobody while the path looks healthy.
+- L100. An operation that finds its target by matching text reports SUCCESS when it matches NOTHING, so the next step acts on a state nobody created.
+- L143. A test double selecting what it intercepts by PATTERN becomes NO double at all when the pattern misses, and the test then talks to the real dependency.
+- L133. A detector for records written BEFORE a fix must key on a recorded stamp, never a property the store normalizes away when it re-encodes on save.
+- L223. A check keyed on a marker cannot see records written before that marker shipped, which is the population it exists to find, so use dates the store has.
+- L101. A path that switches behaviour on input SIZE always takes the small branch under test, so the mode that ships is the one never exercised.
+- L102. A cost measured while the expensive path is switched off measures the short circuit, not the work, and reassures about exactly the case nobody tested.
+- L331. A measurement a store later DECIDES from must record whether its run did the work, or a run that refused or died early looks just like a fast one.
+- L289. A fast path that falls back to doing the work when it cannot read its own record fails SILENTLY: tests stay green while the saving stops happening.
+- L361. Strip excluded elements from inside a container rather than judging it by how it starts, or mixed content leaks in and wanted content is lost.
+- L104. A filter identifying data by its SHAPE must be tested against what it must PRESERVE, not only what it must catch; an over match reads as it working.
+- L107. A number justifying a design decision must come from the code's own predicate, never a query beside it, which drifts toward flattering the argument.
+- L156. A success check looking for a substring of the thing being talked to also matches the ERROR about it, so match the shape of the SUCCESS output instead.
+- L183. Under pipefail a short circuiting consumer like grep -q kills the producer, so a correct check reports a failure that never happened.
+- L115. A harness measuring whether content is VISIBLE must be checked against its renderer's placeholders: a placeholder is a mark and measures as presence.
+- L141. A visibility check measuring ink over a whole surface is answered by what the surface paints for itself, so words can be drawn in the background colour.
+- L535. Code behind a flag that shipped OFF has never run, so turning it on ships untested code, and its error paths are the least exercised part of it.
+- L147. A guard seen to fail on a fixture you chose works only on the shape you had in mind, so measure how often it fires on the REAL values it will meet.
+- L117. A per-item ceiling judged against a POOLED total cannot see one item running away: it is paid for out of the cheap ones' headroom.
+- L130. A fixture whose meaning is a relationship between a stored date and the clock must pin BOTH ends, or real time walks the pair into a different state.
+- L401. Derive a fixture from the CONFIGURABLE threshold it relates to, never a literal at its edge, because the day that constant moves it means another case.
+- L134. A test deriving two inputs from one LIVE shared resource read at different moments must ASSERT the separation it depends on, never assume it.
+- L220. A change that SPLITS work re-aims every guard calibrated against the whole: each goes on passing while now measuring only a fragment.
+- L135. A guard matching source text over a WHOLE FILE is satisfied by any occurrence, so a second use elsewhere answers it while the guarded region is broken.
+- L142. When phasing a change into observe then enforce, check WHICH half is observed: the harm usually lives in the path the observe phase never ran.
+- L144. A monitor reporting whether an action HAPPENED must use the predicate the action used to decide, or it false alarms when the action correctly declined.
+- L146. To check content reached a rendered surface, measure the surface WITHOUT it and take the difference: any whole surface quantity counts the chrome too.
+- L165. A fixture built by damaging the END of something lets the scenario finish its real work first, so the case under test never occurs at all.
+- L502. A setting whose OFF state stops something being RECORDED must be monitored by asserting its VALUE on a schedule: an audit cannot see a direct change.
+- L504. When the ambient configuration (timezone, locale, case sensitivity) separates a right implementation from a wrong one, the test must SET it itself.
+- L506. A guard branching on a field from OUTSIDE the system is real only once that field's presence is measured on live traffic, or it silently refuses nobody.
+- L551. A precise branch added beside an HONEST fallback is invisible when it never fires, because the fallback's truthful label reads as the system working.
+- L209. A threshold measured while a co-varying component is held constant attaches to the wrong variable: the part the fixture moves stands in for the sum.
 - L225. An invariant between two stored values must be checked by something that reads the VALUES, never only inside the tool that normally writes them
 - L228. A comparison asking whether two things hold the SAME ELEMENTS says nothing about their ORDER
 - L511. A test that times out names the assertion that was running, not the cost that caused it.
-- L517. When code sorts items into output buckets (paged versus logged, retried versus dead lettered, shown versus hidden), assert that every item lands in exactly ONE bucket across every combination of inputs.
-- L518. A check that reads source by taking a FIXED NUMBER OF LINES from an anchor stops containing the code it checks the moment a comment is added above it, and it then fails on the comment rather than the code.
-- L239. Sampling a TRANSIENT surface to decide whether an action happened cannot tell "it never appeared" from "it appeared and was already dismissed", so judge by the durable record the action would have written instead.
-- L250. A list written to mean one thing (a `.gitignore`, an exclude file, a skip list) is read by every OTHER tool that consults it as a DIFFERENT instruction, so a guard built on a question that tool answers inherits an exclusion nobody chose for it, and goes blind exactly where unowned writes land.
-- L252. A test asserting a decision that has since been REVERSED stops being coverage and becomes the guard DEFENDING the rejected behaviour, so a reversal must hunt those tests down across every file and DELETE them rather than adjust them, because their whole content is the thing being removed.
-- L430. A test that has started failing because the code moved underneath it is a claim that one of the two is wrong, and deleting or rewriting it to match the code silently rules that the code is right. Before doing either, find the decision that test was written to defend and confirm it was actually reversed, because a behaviour lost by accident and one removed on purpose produce the identical red.
-- L253. A detector whose signature is a small TIME GAP between two stored instants is answered by any single write that stamps both from one clock variable, so the gap measures the WRITE rather than the events, and such a row must be told apart by evidence of that write (a third field carrying the same instant) rather than by treating the suspicious value as noise.
-- L254. A control whose press only RECORDS a request, while the work happens later in a shared batch, must not have its progress timed from the press against a window sized for the work, because that window then spans a queue wait the control does not govern and accuses a healthy run of being stuck.
-- L257. A check that decides whether a value is VALID by listing the values that are NOT valid (a sentinel blacklist, a set of known placeholders) admits every malformed value nobody thought to list, and because it is named for the question it appears to answer, every call site treats it as real validation.
-- L278. A check that decides whether content was LOST by comparing whole LINES is defeated by reformatting, because re-wrapping a paragraph changes every line boundary while losing no words, so compare in the unit the meaning lives in (words, or a whitespace collapsed body) rather than the unit the file happens to be stored in.
-- L288. A test run is judged first by the count it EXECUTED against the count expected, and only then by its failures, because a run that loses a worker's share or matches half a selection still prints a verdict, and a check for zero catches none of it. Record the expected count, refuse a run below it, and do that BEFORE any change to how the suite runs (parallel workers, sharding, a new scheme or reporter), which is the moment the half run appears.
-- L320. A tool that takes a target as an argument must REFUSE one it cannot use, never fall back to its default scope, because a silently ignored target makes a run about everything look exactly like a run about the one thing that was asked for.
-- L329. A tool that scans a file for matching lines stops printing them and reports only that the file MATCHED once that file contains a byte it treats as binary
-- L336. A check satisfied by PROOF that it already passed never runs again, so it can only catch a change in its inputs and never drift in what it depends on (a date, seeded data, an upstream image, a dependency resolved at run time).
-- L528. A detector that reads production counters also reads whatever your own smoke canary or synthetic monitor writes into them, so check whether the canary ALONE can satisfy its floor before trusting any verdict it reaches.
+- L517. When code sorts items into output buckets, assert every item lands in exactly ONE of them across every combination of inputs.
+- L518. A check reading a FIXED NUMBER OF LINES from an anchor stops containing the code it checks the moment a comment is added, then fails on the comment.
+- L239. Sampling a TRANSIENT surface cannot tell never appeared from already dismissed, so judge by the durable record the action would have written.
+- L250. A list like a gitignore is read by every other tool as a different instruction, so a guard built on it inherits an exclusion nobody chose for it.
+- L252. A test asserting a decision since REVERSED becomes the guard defending the rejected behaviour, so a reversal must DELETE such tests, not adjust them.
+- L430. Before deleting a test the code has outgrown, find the decision it defended and confirm it was reversed; accident and intent produce the same red.
+- L253. A detector keyed on a small TIME GAP between two stored instants is answered by one write stamping both, so it measures the write, not the events.
+- L254. A control whose press only RECORDS a request must not be timed from the press against a window sized for the work it does not govern.
+- L257. A check deciding validity by listing invalid sentinels admits every malformed value nobody listed, and its name makes callers treat it as validation.
+- L278. A check for LOST content comparing whole LINES is defeated by rewrapping, so compare in the unit the meaning lives in, words or collapsed whitespace.
+- L288. Judge a test run first by the count it EXECUTED against the count expected, especially before any change to how the suite runs, when half runs appear.
+- L320. A tool taking a target as an argument must REFUSE one it cannot use, never fall back to its default scope, which looks just like running on that one.
+- L329. A tool scanning for matching lines stops printing them and says only that the file MATCHED once it holds a byte the tool treats as binary.
+- L336. A check satisfied by proof it already passed never runs again, so it catches a change in its inputs but never drift in what it depends on.
+- L528. A detector reading production counters also reads your own canary, so check whether the canary ALONE can satisfy its floor before trusting any verdict.
 - L347. A test that asserts a message does not use a forbidden WORD does not assert that it does not make the forbidden CLAIM
 - L348. A build or compile check aimed at ONE target of a multi target project says nothing about the others
-- L350. An optimisation that lets work be SKIPPED also removes that work's observations from every instrument whose rate is computed over them, so the sample shrinks as the optimisation succeeds and a threshold calibrated on the old sample turns into noise while still reading as a measurement.
-- L352. A validator that compares a step's output against the PREVIOUS step's output can only see damage that step did, so anything broken before it becomes the baseline every later guard defends as correct.
-- L353. A comment estimating that some work is small enough to run somewhere costly (briefly on the UI thread, inside a lock, in a request handler, on the hot path) is a measurement nobody took, and it licenses the same choice at every later call site, so name the quantity the cost scales with and what bounds it, because the costs that grow with usage are exactly the ones that read as small on the day they are written.
-- L354. A fixture sized by a number measured once from real data silently under-represents production as that data grows, and it fails in the GREEN direction, so a cost or scale guard goes on passing while protecting a smaller world than the one that ships.
-- L355. A sampled profile shows the SHAPE of one stack, and only becomes a measurement of COST once the sample count is read, so a stack seen a handful of times cannot support a claim about where the time went.
-- L356. A performance measurement taken on the machine that also builds and tests the product measures both, so record what else was running at the moment of the reading rather than filtering it out afterwards.
-- L537. A "how far behind" reading computed as the newest item minus the last processed one measures the interval between the two most recent items, not elapsed delay, so on a sparse stream an item seconds old reads as hours behind and a genuinely stalled lane is indistinguishable from a healthy one.
-- L539. A detector comparing a PERIOD TO DATE cumulative rate against a per period baseline lets a burst heal itself as the denominator grows, so it clears with nothing fixed, never fires at all later in the period, and reports a duration set by the check's tick rather than by the event.
-- L540. A reconciliation that declares everything accounted for by summing named buckets is satisfied by the very defect it hunts, as long as that item lands in the bucket standing for legitimate cases, because the arithmetic balances whatever the labels claim. So every member of an expected absence bucket must carry a measured reason, never membership earned by failing to match the good case.
-- L548. A record still holding a seeded default does not merely escape detection, it COUNTS TOWARD any coverage or health measure computed over its population, so the placeholder makes the system read healthier than it is and can mask the very gap the measure exists to find. Exclude never-set records from such measures, or record whether a value was ever set by anyone.
-- L364. A check deciding whether a machine is clean enough to measure on must judge by what is UNUSUAL for that machine, never by what is running on it, because the always-present load (a sync daemon, a backup agent, an indexer) makes an absolute-quiet rule refuse every measurement anybody ever takes.
+- L350. An optimisation that lets work be SKIPPED shrinks the sample every rate over it is computed from, so a calibrated threshold becomes noise as it works.
+- L352. A validator comparing a step's output against the previous step's sees only that step's damage; earlier damage becomes the baseline guards defend.
+- L353. A comment estimating work is small enough to run somewhere costly is a measurement nobody took; name what the cost scales with and what bounds it.
+- L354. A fixture sized from real data measured once under-represents production as that data grows, and it fails GREEN, so the guard protects a smaller world.
+- L355. A sampled profile shows the SHAPE of a stack and measures COST only once the sample count is read; a few samples support no claim about where time went.
+- L356. A performance reading taken on the machine that also builds and tests measures both, so record what else was running rather than filtering it out later.
+- L537. A how far behind reading taken as newest minus last processed measures the gap between two items, so on a sparse stream a fresh item reads as stale.
+- L539. A detector comparing a period to date rate against a per period baseline lets a burst heal itself as the denominator grows, clearing with nothing fixed.
+- L540. Every member of an expected absence bucket must carry a measured reason, never membership earned by failing to match the good case.
+- L548. A record still holding a seeded default COUNTS TOWARD coverage measures over its population, so exclude never-set records or record who last set one.
+- L364. A check deciding a machine is clean enough to measure on must judge by what is UNUSUAL for it, or always-present load refuses every measurement.
 - L367. An alert or threshold on a SUM cannot see one of its components collapsing while another grows to replace it, because the total never moves.
-- L543. A feature whose data is a list of EXCEPTIONS (holidays, overrides, blocked entries, allowlisted cases) ships INERT when that list is empty, and empty is a legitimate domain value meaning no exceptions apply, so nothing can distinguish a correctly quiet feature from one whose data was never entered.
-- L662. Before enforcing a rule whose default is the RESTRICTIVE value and whose permissive case is an explicit marker, count how many records actually carry that marker, because nothing had to maintain it while the field did nothing, so enforcement excludes the whole population rather than the exceptions.
-- L373. A test whose premise is that a change has NOT yet been made (a migration rehearsal, a dry run, an assertion that the thing about to be dropped is still there) is CONSUMED by that change shipping, so retire or invert it in the same commit that ships the change. Left behind it goes permanently red for a reason that looks exactly like a real defect, and a standing red makes every other failure in the same list unreadable.
-- L375. A before and after comparison of shared state attributes every change it sees to whatever it was bracketing, so on any store with a second legitimate writer it accuses rather than finds, and it accuses loudest exactly when that writer is busiest.
-- L376. A guard that compares the current environment against the ONE it was calibrated in fails on every machine that legitimately differs, because a developer machine and a CI runner never upgrade together.
-- L378. A guard that exists to save an EXPENSIVE step must run on every entry point that reaches that step, because wiring it only into the thorough path leaves it absent from the quick one people use while iterating, which is exactly when the mistake it catches is made. Its own cost is the wrong thing to weigh: two seconds on every fast run is nothing against one doomed build it prevents.
-- L382. A poll that repeats an IDENTICAL request can be served the same cached answer every time, so it re-reads its own first attempt and can never observe the change it is waiting for. Make each attempt demand a fresh read, and prove the value can change inside one run rather than trusting that the loop is looking again.
-- L385. A test asserting an invariant that a SCHEDULED repair restores (a launch migration, a nightly cleanup, a periodic reconcile) must RUN that repair first and assert what is LEFT, because between two runs of the repair the violated state is the system's normal one, so the test reports the interval rather than a defect and goes red on ordinary days.
+- L543. A feature whose data is a list of EXCEPTIONS ships INERT when that list is empty, and empty is legitimate, so quiet and never entered look alike.
+- L662. Before enforcing a rule whose permissive case is an explicit marker, count how many records carry it: nothing maintained it while the field did nothing.
+- L373. A test whose premise is that a change has NOT yet been made is CONSUMED when it ships, so retire or invert it in the same commit or it stands red.
+- L375. A before and after comparison of shared state blames whatever it bracketed for every change, so with another writer it accuses rather than finds.
+- L376. A guard comparing the environment against the ONE it was calibrated in fails on every machine that legitimately differs, and CI never upgrades with you.
+- L378. A guard that saves an EXPENSIVE step must run on every entry point reaching it, including the quick path people iterate on, where the mistake is made.
+- L382. A poll repeating an IDENTICAL request can be served one cached answer forever, so make each attempt demand a fresh read and prove the value can change.
+- L385. A test asserting an invariant a SCHEDULED repair restores must RUN the repair first and assert what is LEFT, or it reports the interval, not a defect.
 - L564. An empty search result proves the SPELLING is absent, never the concept, so a conclusion drawn from it may claim only what was actually searched for.
-- L391. A cost guard's fixture must record the dimension the COST scales with, which is routinely a PAIRING or a MAXIMUM rather than a total, because a fixture matching every recorded total can still exercise an entirely different load while every drift check passes. Name what the cost is quadratic or conditional in, and record THAT.
-- L588. A displayed share or percentage must be ASSERTED to lie within its own range, because a value outside it is the only self-evident proof that the numerator and denominator measure different things, and nothing else will ever report it.
-- L396. A count of people who reached a LATE stage of a funnel (signups, checkouts, completions) is not a measure of how many ARRIVED, so never conclude that traffic has collapsed from a downstream number. Read arrivals at the entry point first, because a stage count falls both when fewer people come and when the same crowd stops converting, and those two demand opposite work.
-- L400. A check's NAME is not a statement of its coverage, so read what a monitor, smoke test or guard actually does before counting it as protection. A job named for the thing it does not check makes the gap permanently invisible, because nobody writes the missing check while a green tick with the right name is already on the board.
-- L411. A test that depends on a machine state it cannot SET from inside itself (a display awake, a device attached, a network reachable, a screen unlocked) must DETECT that state and report UNMEASURED rather than failing, because a failure there is indistinguishable from a real one and a standing red makes every other failure in the list unreadable.
-- L673. A guard that decides whether a command DOES something by matching a phrase anywhere in the command string also fires on every command that merely TALKS about it (a heredoc, an issue body, a commit message, an echo), so match only in COMMAND POSITION, on the leading tokens of each shell segment.
-- L412. A guard that DERIVES its search terms from live data inherits that data's own placeholder values (TBD, N/A, Unknown, Untitled), which identify nothing and are by construction ordinary words, so it matches plain text everywhere and its noise reads as the guard working rather than as a defect in the guard.
-- L413. A test runner that DISCOVERS its suites by glob, directory walk or naming convention can only invoke each one ONE way, so any suite taking a parameter runs for ever in its DEFAULT mode while its other cases never run at all, and its name still appears in every green report.
-- L414. A build product's mtime records when it was last WRITTEN, not when it was last built, and a source file's mtime records when it was last touched, not when it changed, so a freshness check comparing the two is red on a healthy tree in BOTH directions: a correct incremental build that relinks nothing leaves the product reading as permanently stale, and any generator that rewrites a source on every run leaves it permanently newer.
-- L621. A behaviour each call site must OPT INTO cannot be enforced by any scan, because a site that never opts in is indistinguishable from one where the condition never arises, so it must be owned by a shared component that makes omission impossible rather than written as a rule each site is asked to follow.
-- L614. A freshness window between a job that PRODUCES a measurement and a job that ACTS on it must be derived from the worst-case gap between their two schedules at the instant of use, and proved by a test that evaluates the predicate at the consumer's scheduled instant against a row stamped at the producer's.
-- L416. A provenance record naming the COMMIT an artifact was built from describes what was committed, never what was compiled, so an install or deploy made from a checkout with uncommitted changes records a truthful commit while the artifact contains code that exists in no commit anywhere.
-- L417. Turning on a platform security control imposes requirements on parts of the build you never touched, and the resulting refusal happens only when the artifact RUNS, so a configuration nothing ever launches stays broken while every check that reads the configuration is green.
-- L418. A count taken over a STORED field is a claim about the store rather than about what anybody sees, because a surface that recomputes that value at display time ignores what is stored, so measure through the predicate the surface itself uses or the number describes data nothing renders.
-- L442. A control has two testable surfaces, the VALUE it computes and the INPUT PATH a person drives it through, and the input path usually holds its own rules inside an event handler where nobody writes cases. A full green suite over the value model says nothing about whether the control can be used at all, so drive every control the way a person does before showing it to anybody.
-- L638. A test that asserts agreement with a DESIGNED ARTIFACT (a comp, a golden file, another system's published output) must READ that artifact, never the rule you believe produced it
+- L391. A cost guard's fixture must record the dimension the COST scales with, often a pairing or a maximum rather than a total, or it exercises another load.
+- L588. Assert a displayed share lies within its own range: a value outside it is the only self-evident proof the two halves measure different things.
+- L396. A count of people reaching a LATE funnel stage is not a measure of arrivals, so read the entry point before concluding traffic has collapsed.
+- L400. A check's NAME is not a statement of its coverage, so read what a monitor or guard actually does before counting it as protection.
+- L411. A test depending on machine state it cannot SET must DETECT that state and report UNMEASURED, because a red there is indistinguishable from a real one.
+- L673. A guard matching a phrase anywhere in a command also fires on commands that merely TALK about it, so match only in COMMAND position, on leading tokens.
+- L412. A guard deriving its search terms from live data inherits placeholders like TBD or Unknown, which are ordinary words and match plain text everywhere.
+- L413. A runner discovering suites by glob invokes each ONE way, so a suite taking a parameter only ever runs in its default mode while still reporting green.
+- L414. A build product's mtime records when it was WRITTEN, not built, so a freshness check against source mtimes is red on a healthy tree in both directions.
+- L621. A behaviour each call site must OPT INTO cannot be enforced by a scan, so own it in a shared component that makes omission impossible.
+- L614. Derive a freshness window from the worst-case gap between the producing and consuming schedules, and test it at the consumer's scheduled instant.
+- L416. A provenance record naming the COMMIT describes what was committed, never what was compiled, so a build from a dirty checkout records a truthful lie.
+- L417. Turning on a platform security control imposes requirements on parts of the build you never touched, and refuses only when the artifact RUNS.
+- L418. A count over a STORED field is a claim about the store, not about what anybody sees, so measure through the predicate the surface itself uses.
+- L442. A control has two testable surfaces, the VALUE it computes and the INPUT PATH a person drives, so drive every control as a person does before shipping.
+- L638. A test asserting agreement with a DESIGNED ARTIFACT must READ that artifact, never the rule you believe produced it.
 - L643. A reconciliation between two systems must compare the DECISIONS each one makes, never the list of who or what is ELIGIBLE to be chosen
 - L645. A tool reached through a shell FUNCTION is not the tool it is named after
-- L447. A sweep that exercises every member of a surface in ONE accumulating pass stops covering everything an earlier step made unreachable, and the count it reports still reads as coverage
-- L675. A check that requires an escape hatch to carry a REASON must require that reason to begin with a WORD, never merely a non-whitespace character, because the syntax wrapping the marker satisfies the looser test and the empty exemption then reads as one somebody reasoned about.
-- L451. A measurement taken from a rendered page measures the DOCUMENT MODE as well as the markup, and a file with no doctype renders in quirks mode, which lays out a line box by different rules, so any HTML that will be measured, screenshotted or compared against another file has to declare one.
+- L447. A sweep exercising a surface in ONE accumulating pass stops covering whatever an earlier step made unreachable, and its count still reads as coverage.
+- L675. A check requiring an escape hatch to carry a REASON must require it to begin with a WORD, or the surrounding syntax satisfies it and reads as reasoned.
+- L451. A rendered page measurement reads the DOCUMENT MODE too, and a file with no doctype is in quirks mode, so any HTML to be measured must declare one.
 
 ## Data safety
 
-- L285. A store that several independent consumers draw from must be drained by the same key it is written by, because a clear keyed more coarsely than the writes destroys work belonging to consumers the clearing one does not represent, and the loss is silent on both sides: the clearer sees a successful cleanup and the others simply never receive anything.
-- L206. A tool mode whose NAME reads like an inspection (reach, check, status, list, show, verify) must not create or modify live data, because it will be run to look around by somebody who has not re-read the docs, and being reached for in a hurry is the whole point of such a tool.
+- L285. A store several consumers draw from must be drained by the key it is written by, or a coarser clear destroys work belonging to consumers it cannot see.
+- L206. A tool mode whose NAME reads like an inspection must not create or modify live data: it gets run to look around by somebody in a hurry.
 - L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an injected path the loader alone uses) does not cover the way OUT
 - L5. Never destroy good state before its replacement is verified to exist.
-- L567. A stored verification result that AUTHORISES an irreversible action (a backup proved complete, a lock confirmed free, a health check passed) must be refused on its AGE at the point of use, because a truthful measurement of a past state is indistinguishable from a current one and the record says nothing about when it stopped being true.
+- L567. A stored verification that AUTHORISES an irreversible action must be refused on its AGE at use: a past measurement looks exactly like a current one.
 - L95. Adding a WRITE to an error path re-audits every error that can reach it
 - L7. User data gets a rotating backup and a restore path from day one.
 - L8. Own your paths.
-- L574. An undo, revert or reactivate that restores FEWER fields than the action changed is not the inverse of that action, so any copy calling it reversible is a claim about two separate writes and has to be checked against both.
-- L9. Destructive actions get confirmation or undo from the first build, and any automatic deletion or retention policy is the user's product decision, never a silent default.
+- L574. An undo that restores FEWER fields than the action changed is not its inverse, so any copy calling it reversible is a claim about two separate writes.
+- L9. Destructive actions get confirmation or undo from the first build, and any automatic deletion or retention policy is the user's decision, never a default.
 - L40. A check that decides to SKIP work must compare something that changes whenever the content changes.
-- L105. A read, modify, write cycle whose read answers EMPTY when it fails will erase the whole record the first time the read fails, and it does so at the exact moment the record is worth having.
-- L116. A rule that only encodes somebody's PREFERENCE must be enforced by filtering what is shown, never by deleting the data it filters, because a preference can be reversed and the data cannot be brought back.
-- L136. Clearing a field to CORRECT bad data is a state change whose consequences live in every reader of that field, and a constant named for the empty case (a noManager message, a notSet label) can be a hard REFUSAL rather than a graceful fallback, so read what the null branch DOES before writing the null.
-- L168. A parameter a function needs in order to be CORRECT must never carry a default standing for absent, because a caller that forgets it then receives silently missing data instead of a compile error, and the failure surfaces far away as a blank value rather than as a refusal.
-- L174. Shortening a retention or expiry window makes every later step keyed to a longer window unreachable, and that step goes on reading as an active safeguard rather than as dead code.
-- L191. A write into a CAPPED or rolling store (a log with a maximum, a ring buffer, a recent list) does not merely add noise, it EVICTS the oldest real records, so a cheap writer (a test, a retry, a health check) destroys the expensive observations the store exists to hold, and any count derived from the store then reports the junk as real.
-- L202. Evidence attached to a record that is itself swept on a retention schedule inherits that schedule's lifetime, so it is gone before the investigation that needs it, which by definition arrives days later.
-- L211. A cleanup that deletes whatever its read did NOT mention turns every incompleteness in that read into permanent deletion, so it must refuse on a SHORT read and not only on a failed one
+- L105. A read, modify, write cycle whose read answers EMPTY on failure erases the whole record the first time it fails, when the record is worth most.
+- L116. A rule encoding only a PREFERENCE must filter what is shown, never delete the data, because a preference can be reversed and the data cannot.
+- L136. Clearing a field to CORRECT bad data changes state for every reader of it, and the constant named for the empty case can be a refusal, so read it first.
+- L168. A parameter a function needs to be CORRECT must never default to a value standing for absent, or a forgetful caller gets missing data, not an error.
+- L174. Shortening a retention or expiry window makes every later step keyed to a longer one unreachable, while it still reads as an active safeguard.
+- L191. A write into a CAPPED or rolling store EVICTS the oldest real records, so a cheap writer destroys the expensive observations the store exists to hold.
+- L202. Evidence attached to a record swept on a retention schedule inherits that lifetime, so it is gone before the investigation that needs it arrives.
+- L211. A cleanup deleting whatever its read did not mention must refuse on a SHORT read, not only a failed one, or incompleteness becomes permanent deletion.
 - L219. A test that drives a real browser and does not assert on its CONSOLE discards a diagnosis the browser already made
-- L256. Before dropping a stored column, measure what it holds against its DECLARED DEFAULT rather than against null, because a defaulted column is non-null on every row whether anybody set it or not, and a never-written optional is null on every row, so a null test reports a harmless column as full of data and can equally let a column holding real values read as empty.
+- L256. Before dropping a stored column, measure it against its DECLARED DEFAULT rather than null, which reports a harmless column as full of data.
 - L260. Two outcomes a guard gives distinct MESSAGES but the same CONSEQUENCE are one outcome in practice
-- L598. A page already open in somebody's browser is a client from whichever version was live when it loaded, so every deploy turns every open page into a stale client, and anything that page holds which was minted at BUILD time (a server action id, a chunk name, an asset hash) stops resolving against the running server.
+- L598. A page already open is a client of whichever version was live when it loaded, so every deploy breaks whatever that page minted at BUILD time.
 - L267. Running a new version that AUTO MIGRATES a shared store consumes your ability to run the PREVIOUS version against it
-- L338. Archiving a run's INPUTS and OUTPUTS but not the record of what it DID leaves the question anybody actually asks later, whether it did the work, unanswerable, and the surviving pair reads as complete evidence rather than as a gap, so decide explicitly what carries the process record and how long it lives instead of letting it default to the live file's lifetime.
-- L377. Retiring a feature must delete the STORED POINTERS to what it produced, not only its writer and its screen, because a consumer written to be generic over those pointers has no list anybody could have updated and goes on acting on every one left behind.
-- L381. A directory kept in step by an automatic mirror has ONE authoritative side, and an edit made to the other side is not merged but silently reverted, with a new file there deleted outright because the mirror has never heard of it.
-- L559. A rule that decides whether a record COUNTS (an eligibility test, a visibility window, an exclusion) must be applied where the record is READ, never also where it is WRITTEN, because the read-time application is the visible one and reads as the whole enforcement while the write-time copy silently withholds the record itself, so correcting or reversing the rule later recovers nothing.
-- L392. A one time correction that skips rows because of a state that can END (hidden, suspended, deleted, archived, paused) does not exempt them, it postpones them, and nothing re runs when that state ends, so either correct them anyway or make leaving that state re apply the rule.
-- L601. A claim that there is NOTHING TO CORRECT, used to justify skipping a backfill or migration, must be measured across every field the change can touch, never only the one the change was framed around
-- L575. Deleting cached content must clear the marker that RECORDS that content's coverage (a sync token, a cursor, a window bound, a last refreshed stamp) in the same write
+- L338. Archiving a run's INPUTS and OUTPUTS but not what it DID leaves the only question anybody asks later unanswerable, while reading as complete evidence.
+- L377. Retiring a feature must delete the STORED POINTERS to what it produced, not only its writer and screen, or a generic consumer acts on every one left.
+- L381. A mirrored directory has ONE authoritative side: an edit to the other is silently reverted, and a new file there is deleted outright.
+- L559. A rule deciding whether a record COUNTS belongs where it is READ, never also where it is WRITTEN, or reversing the rule later recovers nothing.
+- L392. A one time correction skipping rows for a state that can END postpones rather than exempts them, and nothing re-runs when that state ends.
+- L601. A claim that there is NOTHING TO CORRECT must be measured across every field the change can touch, not only the one the change was framed around.
+- L575. Deleting cached content must clear the marker recording its coverage, a cursor, sync token or last refreshed stamp, in the same write.
 - L592. Two datasets meant to be read TOGETHER must be retained on the same boundary
 - L595. A configuration value that can live in more than one store
 - L599. Repairing a monitor that compares against a STORED BASELINE makes its first run a report about the OUTAGE rather than about the present
 - L615. Write a RESTRICTION's condition as the reason for restricting, never as a broader property that happens to include it
-- L436. The completeness of an import is a property of the PERIOD it must cover, not of the source it reads, and a source that is complete about itself says nothing about the years before it existed. Establish the earliest record the business actually has before scoping an import to whichever system holds the data today.
-- L443. An object held in memory from before another writer changed the same record still carries the old values, and its next save writes them back over the newer ones with nothing reporting a fault, so a field owned by a separate writer must never be savable from a surface holding an older copy.
+- L436. An import's completeness is a property of the PERIOD it must cover, not the source it reads, so establish the earliest record the business has.
+- L443. An object held in memory from before another writer changed the record writes the old values back, so a field owned elsewhere must not be saved from it.
 - L649. An automation that performs the same state change as an existing human control inherits the ACTION but not the SAFEGUARD around it
-- L667. A refusal added to a LATE step of a multi step write converts the leftover the step ordering was designed to make rare into one that happens on every ordinary refused attempt, so put the check at the first step that can answer it and keep the late one only for the state changing underneath.
+- L667. Put a refusal at the first step that can answer it: added to a LATE step it makes the rare leftover happen on every ordinary refused attempt.
 
 ## Honest failure
 
-- L415. A screen that shows a change BEFORE the write lands owes a failure path that reverts it AND says so, because without one a failed write is indistinguishable from a slow one and the revert arrives long after the person has looked away.
-- L586. A redirect whose target is ITSELF a redirect drops the query string, so any outcome carried in it (a saved flag, a refusal message) is destroyed while both redirects read as correct in isolation, and the receiving page's notice becomes dead code that looks like working feedback.
-- L583. A fallback that relaxes only ONE dimension of a multi dimensional match does nothing wherever the shortage lives in another dimension, so name which dimension is actually thin before choosing what the fallback relaxes.
-- L529. An audit entry must record the old and new values of what changed, not merely which thing changed, because the question an audit exists to answer is what the state was at a given moment, and an entry without values can never answer it no matter how many entries there are.
-- L283. A guard asserting that a rewrite does not CONTAIN something is satisfied by a rewrite that DELETED it, so wherever the thing is a reference to a resource (a photo marker, a link, a citation, a merge field), check for its LOSS as well as its presence, because disappearance is the worse failure and the only one the guard cannot see.
+- L415. A screen showing a change BEFORE the write lands owes a failure path that reverts it AND says so, or a failed write looks exactly like a slow one.
+- L586. A redirect whose target is ITSELF a redirect drops the query string, destroying any outcome carried in it while both redirects read as correct alone.
+- L583. A fallback relaxing only ONE dimension of a match does nothing where the shortage is in another, so name which dimension is actually thin first.
+- L529. An audit entry must record the old and new values, not merely which thing changed, or it can never answer what the state was at a given moment.
+- L283. A guard asserting a rewrite does not CONTAIN something is satisfied by one that DELETED it, so check for a reference's LOSS as well as its presence.
 - L515. Cleanup placed in a `finally` is only reached by the paths that THROW
 - L514. A signal that records THAT something ran must be written on every exit path, in a `finally`, never only on the success path
-- L184. Judge a command by its EXIT CODE, never by a line of its output, because a tool's final line is routinely a different measurement than its verdict and is usually the more reassuring of the two.
-- L404. A tool put on the path IN PLACE of another (a proxy, a compact output filter, a shim, an alias, a rewriting hook) must be proved to reproduce the original's EXIT CODE on a case that genuinely FAILS
+- L184. Judge a command by its EXIT CODE, never a line of its output: a tool's final line is often a different measurement, and the more reassuring one.
+- L404. A tool put on the path IN PLACE of another must be proved to reproduce the original's EXIT CODE on a case that genuinely FAILS.
 - L406. A REMEDY a failure message tells somebody to RUN is executed by nothing until the moment it is needed, so a test must run it and assert what it produces
 - L10. An error state and an empty state are different screens.
 - L199. A marker meant to be READ BY CODE (a prefix, an error code, a sentinel) must reach its reader unwrapped
 - L11. Distinct causes get distinct messages, and a message may claim only what its check actually measured.
-- L319. A marker that exists to prove a run is in a SPECIAL mode (a synthetic or test store banner, a staging watermark, a dry run notice) must be produced by whatever ESTABLISHES that mode, never by one surface that happens to display it, because a surface that never opens makes the marker's absence mean both "not in that mode" and "in it, and saying nothing".
+- L319. A marker proving a run is in a SPECIAL mode must come from whatever ESTABLISHES the mode, or its absence means both not in it and in it and silent.
 - L12. Show success only after the write commits, and report what verifiably happened.
 - L13. Background jobs and webhooks alert on failure and on the absence of an expected run.
 - L53. Two independent checks must never share one status field.
 - L90. A counter or category whose only input is a value nothing in the system ever writes reports ZERO, and zero is indistinguishable from a true measurement.
 - L47. A batch that partly fails must record the attempt on the items it failed, not only on the ones it completed.
-- L67. A placeholder rendered in place of a missing required value (no subject, unknown, not set) is a DETECTION that the value is absent, so it must block the action it appears in, never merely label it.
-- L138. A templating or interpolation layer usually renders a MISSING setting as an EMPTY value rather than an absent one, so every absence check written as a null fallback silently accepts it and the default it promises never applies.
-- L229. Literal text handed to an interpolating evaluator can have a sigil prefixed span silently deleted from it, so the tool acts on text nobody wrote and every verdict it reports afterwards is about something else.
-- L230. A redaction or anonymisation step that changes the CONTAINER while leaving the identity inside it has anonymised nothing, and a guard written the same way passes every real person wearing a safe container.
-- L152. A change is usually reported by the surfaces that show what is still OUTSTANDING (a badge, a waiting list, a standing question), so an operation that RESOLVES everything silences every one of them and the most complete success is the one the product says least about.
+- L67. A placeholder shown for a missing required value is a DETECTION that it is absent, so it must block the action it appears in, never merely label it.
+- L138. A templating layer renders a MISSING setting as EMPTY rather than absent, so every null fallback absence check accepts it and the default never applies.
+- L229. Literal text handed to an interpolating evaluator can lose a sigil prefixed span silently, so the tool acts on text nobody wrote.
+- L230. Redaction that changes the CONTAINER while leaving the identity inside anonymises nothing, and a guard written the same way passes every real person.
+- L152. Surfaces report what is still OUTSTANDING, so an operation that RESOLVES everything silences them all and the most complete success says least.
 - L50. A value parsed from storage or input must never feed a comparison directly.
 - L71. A watchdog's own liveness must never depend on the health of what it watches
 - L77. An error deliberately classified as EXPECTED (a lost race, a declined payment, a rejected duplicate, a taken slot) must still be counted against a RATE.
-- L94. A request or payload assembled in two places, a builder plus a caller that adds more fields, has nowhere its completeness can be seen, so a field missing from both halves is invisible to a reader of either.
+- L94. A payload assembled in two places has nowhere its completeness can be seen, so a field missing from both halves is invisible to a reader of either.
 - L78. A report of what changed must be assembled from the finished state, never from one of the code paths that change it.
-- L106. A liveness signal emitted on a timer (a heartbeat, a keepalive, a still-working marker) proves only that its EMITTER is alive, never that the work is progressing, so a live signal over dead work is indistinguishable from a healthy run.
-- L108. A check that validates a value's recognisable PREFIX or shape, but not its completeness, accepts a truncated paste and then stays silent, and that silence reads as confirmation the whole value is good.
-- L109. A refusal message that can only be spoken by an action, while the same predicate that would produce it disables that action, can never be spoken, so the person is left with a dead control and no reason while the code reads as careful and its tests pass.
-- L110. A wait for a condition with no deadline cannot fail, it can only hang, and a hang is worse than a failure because it is indistinguishable from slowness and holds whatever shared resource it acquired.
-- L236. A platform call that may need the PERSON to authorize it (a keychain read, a permission check, a credential store) must never run on the thread that would have to draw the question, because the two wait on each other and the whole app disappears rather than the one surface that asked.
-- L241. Work that BLOCKS must never run on a bounded shared worker pool (Swift's cooperative pool, a fixed size thread pool, an event loop), because such pools do not grow and a few blocked items starve every other piece of concurrent work in the process.
-- L121. A retry or self heal step that decides from a RECORDED success marker (a stored status, an effects string, an ok field) cannot notice that the artifact it created has since been deleted, so it suppresses its own repair permanently.
-- L122. A permission or capability check written as equality against ONE rank of a ranked vocabulary silently excludes every rank ABOVE it, so the most privileged person is the one refused.
-- L125. A function answering WHEN something comes due must not fold in the test for whether it is due YET, because reporting nothing for a moment still in the future is indistinguishable from having no moment at all, and any fold that takes the soonest of several such clocks then confidently names a later one.
-- L139. A minimum volume floor added so a RATE is not noisy at small samples also silences the SATURATION case, because a proportion cannot tell one bad out of two from twelve bad out of twelve.
-- L148. A durable control whose failure reason is written only to a surface that dies with the attempt (a terminal window that closes, a process's stderr, a toast) leaves the person facing the same control, the same unchanged condition, and no way to learn why it did nothing, so pressing it again is the only diagnosis available.
-- L158. When the text a failure is diagnosed FROM can come from more than one place (a launcher shell and the process it launched, a supervisor and its child), a rule that takes whichever place is non empty hands the diagnosis to the launcher, because the launcher speaks exactly when the real work never started.
-- L160. A condition is only OVER once it has stayed healthy for a re-arm window, never on the first healthy sample, and its duration must be measured to the last observed failure rather than to the moment the all clear is sent.
-- L164. Failure recording that lives INSIDE the program a launcher starts cannot record any failure of the launcher itself, so a missing directory, a bad path or an unreadable interpreter leaves no trace at all and reads exactly like the control never having been pressed.
-- L505. A value that resolves to undefined is DROPPED from a serialized payload rather than sent as empty, so a wrong field reference is indistinguishable from a field nobody meant to send, and both ends read the absence as normal.
-- L218. A policy with a defined fallback chain (a CSP directive, a CSS cascade, an inherited config) treats an OMITTED rule as a NEIGHBOURING rule rather than as no rule, so the omission silently applies a restriction written for different content.
-- L516. A repair that BACKFILLS a field after the fact (a duration from a child record, a finish time from the last known activity) writes the value the work would have had if nothing had gone wrong, so it erases the evidence of the delay it repaired.
-- L520. A failure message built only from a response BODY says nothing when the request could not carry a body (an HTTP HEAD, a 204), and the empty payload then reads as no information rather than as the diagnosis it is.
+- L106. A liveness signal on a timer proves only its EMITTER is alive, so a live signal over dead work is indistinguishable from a healthy run.
+- L108. A check validating a value's PREFIX but not its completeness accepts a truncated paste, and its silence reads as confirmation the whole value is good.
+- L109. A refusal only an action can speak, while the same predicate disables that action, is never spoken, leaving a dead control and no reason.
+- L110. A wait with no deadline cannot fail, only hang, which is worse: indistinguishable from slowness and still holding whatever it acquired.
+- L236. A platform call that may need the PERSON to authorize it must never run on the thread that would draw the question, or the whole app disappears.
+- L241. Work that BLOCKS must never run on a bounded shared worker pool: it does not grow, and a few blocked items starve every other concurrent task.
+- L121. A self heal step deciding from a RECORDED success marker cannot see the artifact was since deleted, so it suppresses its own repair permanently.
+- L122. A permission check written as equality against ONE rank excludes every rank ABOVE it, so the most privileged person is the one refused.
+- L125. A function answering WHEN something comes due must not fold in whether it is due YET, or a future moment is indistinguishable from no moment at all.
+- L139. A minimum volume floor that stops a RATE being noisy also silences SATURATION: a proportion cannot tell one bad in two from twelve bad in twelve.
+- L148. A control whose failure reason goes only to a surface that dies with the attempt leaves pressing it again as the only diagnosis available.
+- L158. When a failure's text can come from a launcher or child, taking whichever is non empty hands diagnosis to the launcher, which speaks when nothing ran.
+- L160. A condition is OVER only after a re-arm window of health, never the first good sample, and its duration is measured to the last observed failure.
+- L164. Failure recording INSIDE the program a launcher starts cannot record the launcher's own failures, which then look like the control never being pressed.
+- L505. A value resolving to undefined is DROPPED from a serialized payload, so a wrong field reference looks exactly like a field nobody meant to send.
+- L218. A policy with a fallback chain treats an OMITTED rule as a NEIGHBOURING one, not as no rule, silently applying a restriction written for other content.
+- L516. A repair that BACKFILLS a field writes the value the work would have had if nothing went wrong, erasing the evidence of the delay it repaired.
+- L520. A failure message built only from a response BODY says nothing for a HEAD or a 204, and the empty payload reads as no information, not as a diagnosis.
 - L523. A suppression set by hand (a mute, a snooze, a maintenance window, a disabled check) must carry an EXPIRY and be listed somewhere visible.
-- L251. A substitution can only rewrite text that is PRESENT, so one used to also supply a separator when joining two pieces inserts nothing at all on the input that lacks it, and the pieces fuse into a single corrupted value.
+- L251. A substitution can only rewrite text that is PRESENT, so one also supplying a separator inserts nothing where the input lacks it and the pieces fuse.
 - L264. A durable record that exists only because a CALLER redirects the tool's output belongs to that caller, not the tool
-- L282. Seeded, demo or fixture data that sets a STATUS field must also satisfy every record that status implies, because the schema does not enforce a derived invariant and the app's own checks will correctly report the fabricated rows as corrupt.
-- L325. A measurement a process reports by PRINTING reaches its reader only while that process's stdout does, so any change in how the work is EXECUTED (a worker process, a background job, a sandbox, a parallel lane) silently removes the measurement while the work itself still succeeds.
-- L337. Making a reader that silently returned a benign default THROW instead re-audits every caller, because the same refusal that is right behind an error screen leaves a caller driving a control with a pending state it never clears.
-- L344. A counter that ACCUSES once it passes a threshold (N consecutive misses means cancelled, N failures means dead) has no upper bound, so an input that merely stopped MATCHING goes on incrementing and the verdict reads as more certain the more broken the match is.
+- L282. Seeded or fixture data setting a STATUS field must satisfy every record that status implies, or the app's own checks correctly call the rows corrupt.
+- L325. A measurement reported by PRINTING reaches its reader only while that stdout does, so moving the work to a worker or job silently removes it.
+- L337. Making a reader that returned a benign default THROW re-audits every caller: the same refusal right behind an error screen strands a control mid-action.
+- L344. A counter that ACCUSES past a threshold has no upper bound, so an input that merely stopped MATCHING reads as more certain the more broken the match is.
 - L530. A surface whose content is derived by JOINING two or more reads must gate its could-not-measure state on EVERY one of them.
-- L531. A validator placed on the path an input is ASSUMED to arrive by is absent on every other path that can produce the same input, and its message inherits the same assumption, so it names an origin it never measured.
-- L351. A reporter that folds a child's failure into a single summary row keeps only the FIRST line of that failure's message, so a message written summary first, with the files, counts and remedy beneath, loses precisely the part that says what to do.
+- L531. A validator on the path an input is ASSUMED to arrive by is absent on every other path, and its message names an origin it never measured.
+- L351. A reporter folding a failure into one summary row keeps only the FIRST line, losing the files, counts and remedy written beneath it.
 - L357. A counter that renders its number on a screen is not a detector, because detection requires something that speaks on its own when the number is wrong.
 - L532. A form that falls back to a DEFAULT when nothing is stored cannot show that a save failed
 - L536. A language or API that silently yields NOTHING for a construct it does not support makes the FIX indistinguishable from the BUG
-- L550. A component that omits a state because of an assumption about ALL its callers (every action redirects with an outcome, every parent supplies the context, every input was validated upstream) is correct only while that assumption holds, and nothing enforces it, so it breaks at the first caller that does not honour it.
-- L589. A relative time or magnitude ("4 hours before", "2 days late") must name what it is relative TO, and where that anchor can MOVE between records it must name WHICH anchor it used, because otherwise a perfectly truthful history reads as corrupt.
-- L593. Write an audit or provenance record at the LOWEST layer every invocation path shares, usually the database function or the store itself, never in the API route or the UI handler.
-- L612. In a shell running with `set -e`, a bare assignment from a command substitution carries that command's exit status, so a capture-then-classify step dies on the capture line, the captured output is never printed, and every branch of the classifier below it is unreachable dead code.
-- L622. A state meaning NEVER RECORDED, separated from the failure state only in the WORDING of the response while taking the same ACTION, is not separated at all
+- L550. A component omitting a state on an assumption about ALL its callers holds only while that assumption does, and nothing enforces it.
+- L589. A relative time must name what it is relative TO, and which anchor it used where that can move, or a truthful history reads as corrupt.
+- L593. Write an audit record at the LOWEST layer every invocation path shares, usually the store itself, never in the API route or the UI handler.
+- L612. Under set -e an assignment from a command substitution carries its exit status, so a capture then classify step dies before any branch below it runs.
+- L622. A state meaning NEVER RECORDED, separated from failure only in WORDING while taking the same action, is not separated at all.
 - L427. A probe posted on a fixed interval that does not wait for the previous one to return records one event per interval that a single outage lasts
 - L431. A guard that skips expensive work when its inputs are unchanged saves nothing unless computing its KEY is cheaper than the work
 - L440. A message softened so it stops claiming something the check did not measure must then STATE what the check DID measure
 - L629. A number printed BESIDE a finding is read as evidence for that finding, so it must be computed on the same key and the same population
-- L632. A step whose only job is to REPORT a problem must never be able to fail the pipeline stage that follows it, because a message that could not be DELIVERED says nothing about whether the work is safe to continue.
-- L633. An aggregate read (a sum, a count, a total) over rows hidden by row level security returns a confident zero rather than refusing, because an ungrouped aggregate over zero rows is still one valid row, so a reader who is not permitted, or whose session has expired, receives a plausible number instead of an error.
-- L445. A failing assertion renders its own operands, so comparing against a LARGE value (a whole file, a full response body, a big collection) prints that value over the message explaining what went wrong.
-- L647. Adding a Suspense or error boundary ABOVE existing code changes what a throw beneath it MEANS: a redirect or refusal that reached the caller as a status code becomes a payload streamed inside a 200 with the fallback rendered, so the route now answers healthier than before and the escape depends on the client script running.
-- L654. A monitor that judges an outcome over ALL runs cannot see a fallback path, because a fallback is rare by construction and its collapse to zero moves the overall rate by nothing.
-- L664. When a submission is matched to an existing record and redirected onto it (a dedupe, a move, an upsert), decide explicitly what happens to every field the person just entered, because the redirected path was written for its own inputs and silently discards the rest, and a discarded correction reads to the person as a saved one.
-- L665. A refusal that can only be cleared by re-running a process whose scope is a moving window becomes permanent the moment the refused item falls outside that window
-- L679. A consequence sentence that ENUMERATES what an action touches is a second copy of the action's own list, so the day the action touches one more thing the sentence stays true and becomes incomplete, and nothing detects it because every word still there is correct.
+- L632. A step whose only job is to REPORT a problem must never fail the stage that follows: an undelivered message says nothing about the work being safe.
+- L633. An aggregate over rows hidden by row level security returns a confident zero rather than refusing, so an unpermitted reader gets a plausible number.
+- L445. A failing assertion renders its operands, so comparing against a LARGE value buries the message explaining what went wrong.
+- L647. A Suspense or error boundary ABOVE existing code turns a throw beneath it from a status code into a 200 with a fallback, so the route reads healthier.
+- L654. A monitor judging an outcome over ALL runs cannot see a fallback path: it is rare by construction, so its collapse to zero moves the rate by nothing.
+- L664. When a submission is redirected onto an existing record, decide what happens to every field just entered, or a discarded correction reads as saved.
+- L665. A refusal cleared only by re-running a process with a moving window becomes permanent once the refused item falls outside that window.
+- L679. A consequence sentence ENUMERATING what an action touches is a second copy of its list, so it stays true and goes incomplete the day the action grows.
 
 ## State and identity
 
-- L339. A generator that seeds from system entropy when no seed is supplied produces a different artifact on every run, so any comparison between two versions of it measures the seed rather than the change, and any cache keyed on its inputs is silently wrong.
+- L339. A generator seeding from system entropy when given no seed differs on every run, so any comparison measures the seed and any cache keyed on it is wrong.
 - L602. A bound applied to ONE derived value (a clip to an active window, a cap, a cutoff) must be applied to every SIBLING derived from the same input
 - L14. Derived state re-derives on every input that feeds it, and every action updates every surface showing what it changed.
 - L15. Key everything on stable identifiers.
-- L421. A write that SKIPS because its destination already exists must verify that the destination holds what it expects, or a damaged or foreign file at that path is silently adopted as this write's own result and the record pointing at it carries a value nothing checked.
+- L421. A write that SKIPS because its destination exists must verify what is there, or a damaged or foreign file is adopted as this write's own result.
 - L145. Changing a record's identity IN PLACE can land on an identity another record already holds, so check the destination is free before writing it.
-- L153. A path built from the user's home directory plus a literal folder name records where something happened to be, not what it is, so the first time anyone moves it the code points at nothing.
+- L153. A path built from a home directory plus a literal folder name records where something happened to be, so it points at nothing the first time it moves.
 - L16. A count and the rows it promises come from one shared predicate
 - L17. Long-running work belongs to an owner that outlives the screen that started it
 - L342. Share a predicate only where both call sites ask the SAME question.
 - L55. A reader whose correctness depends on which code path produced the state it reads breaks silently when a second path starts producing that state.
-- L59. Bookkeeping state that changes for reasons unrelated to the data (a scroll position, an in flight animation, a hover, a tick) must not live on the component that derives the expensive data, because every such write pays the whole derivation again.
-- L60. A one-shot trigger (navigate to, scroll to, present, run once) must carry an event with its own identity, never the destination value, because a change-detecting effect cannot see a repeat request for the same target and silently drops it.
-- L83. A fact that could sit at either of two levels (the organisation or the contact, the order or its line, the show or the person on it) must have ONE declared home, and every writer and reader must use it.
-- L86. A short lived component that registers actions, observers or callbacks into a longer lived shared host (an undo stack, a notification center, an event target, a subscription registry) must either own a private instance of that host or deregister on teardown, because these hosts routinely hold unowned references and outlive the component.
-- L89. When two controls can write the same stored field, their option lists are one vocabulary and must be reconciled against each other, not each against some third reference.
+- L59. Bookkeeping state like a scroll position or a hover must not live on the component deriving expensive data, or every write pays the derivation again.
+- L60. A one-shot trigger must carry an event with its own identity, never the destination value, or a repeat request for the same target is silently dropped.
+- L83. A fact that could sit at either of two levels must have ONE declared home, and every writer and reader must use it.
+- L86. A short lived component registering into a longer lived shared host must own a private instance or deregister on teardown; such hosts outlive it.
+- L89. When two controls write the same stored field, their option lists are one vocabulary and must be reconciled against each other, not a third reference.
 - L91. A user action's visible response must not wait on a derivation whose cost scales with the whole collection rather than with what changed.
-- L275. An image drawn small must be DECODED small, because the renderer decodes the WHOLE source file to build its texture, and the platform discards that texture whenever the app leaves the foreground.
-- L131. A map keyed by a value the real data can repeat (a date, a name, a day) silently keeps the LAST writer and discards every earlier one, and because the surface renders one row per key the loss is invisible on the very screen that exists to report it.
-- L162. A completion flag whose only writers are actions performed INSIDE your product is permanently wrong for anyone who does the work in the tool that work actually lives in (a mail client, a CRM, a calendar), so when the truth is visible in a system you already read, derive it from there rather than waiting to be told.
-- L163. When the model has no field for a fact, never express that fact by NEGATING a neighbouring one, because the negated field goes on being read as its own fact everywhere else and the system then confidently asserts the opposite of what happened.
-- L166. An action that carries out a decision must be addressed by every attribute the decision was made over, because an instruction scoped by fewer names a FAMILY where the decision named one MEMBER, and it silently acts on the records the decision deliberately excluded.
-- L169. A variable recording that a step has ALREADY HAPPENED is inherited by every process that step starts, so a descendant reads it as true of ITSELF and skips work it never did.
-- L454. A local copy of something that lives elsewhere (a git tracking ref, a cached response, a mirrored table) is usually NAMED after the thing it mirrors, so a reading of it looks identical to a reading of the source and nothing in it says when it was last refreshed. State what a report was read against, and check it against the source before anybody acts on it, because the first action taken on a stale copy is what discovers the staleness.
-- L175. A value read once at startup is only true at startup, and when the thing it describes lives OUTSIDE the program (a checkout, a config file, a device, another service) there is no action inside the program to hang a re-read on, so it goes stale invisibly and its silence reads as an assurance.
-- L176. A field name that asserts a ROLE or a DIRECTION (who referred whom, source versus destination, sender versus recipient, parent versus child) must be verified against the code that RENDERS it, because the rendered wording is the authority and a backwards name silently recruits every future writer into filling it the wrong way round, with nothing anywhere reporting a problem.
-- L185. A statement that NORMALIZES a value on the way in (a COALESCE, a lowercase, a trim, a default standing for absent) must group or deduplicate by the NORMALIZED form, never by the raw one, because two raw spellings that normalize to the same thing survive as separate groups and then collide on one stored key.
-- L641. A dedup or change guard stamp that is NARROWER than what its message CLAIMS lets a changed claim hash identically, so the guard stays silent while the message goes on asserting something that has stopped being true.
+- L275. An image drawn small must be DECODED small: the renderer decodes the whole source file, and the platform drops that texture on leaving the foreground.
+- L131. A map keyed by a value the real data repeats keeps the LAST writer and discards the rest, invisibly, on the very screen meant to report them.
+- L162. A completion flag written only by actions INSIDE your product is permanently wrong for anyone doing the work in the tool it really lives in.
+- L163. When the model has no field for a fact, never express it by NEGATING a neighbouring one, which is still read as its own fact everywhere else.
+- L166. An action carrying out a decision must be addressed by every attribute the decision was made over, or it silently acts on records that were excluded.
+- L169. A variable recording that a step ALREADY HAPPENED is inherited by every process it starts, which reads it as true of itself and skips work it never did.
+- L454. A local copy of something that lives elsewhere is named after what it mirrors, so state what a report was read against and check it against the source.
+- L175. A value read once at startup is only true at startup, and when it describes something OUTSIDE the program nothing inside prompts a re-read.
+- L176. A field name asserting a ROLE or DIRECTION must be checked against the code that RENDERS it, or a backwards name recruits every future writer.
+- L185. A statement that NORMALIZES a value on the way in must group or deduplicate by the NORMALIZED form, or two spellings survive and collide on one key.
+- L641. A dedup stamp NARROWER than what its message CLAIMS lets a changed claim hash identically, so the guard stays silent while the message goes stale.
 - L186. A durable record that exists to stop an action repeating is only as durable as its KEY.
-- L192. A value INFERRED from content (a name pulled out of caption text, a category guessed from a title, a type read off a filename) must never be presented as the recorded fact it stands in for.
-- L200. A record that permanently EXCLUDES something on the grounds that another record covers it (a night another card holds, a task another job owns, an item another order fulfils) must re-check that other record at read time, because deleting it leaves the exclusion standing over nothing and the gap is invisible on both sides.
-- L507. A category defined as a REMAINDER (the total minus every named category) records no members anywhere, so it can never be enumerated, audited or expanded, and it is exactly where the cases nobody has explained accumulate. If any surface will one day have to show what is in that bucket, record its members at the moment it is computed, because the subtraction cannot be run backwards.
-- L509. A shared value that consumers EXTEND (a style token, a base config, a set of default props) must not set anything a consumer legitimately overrides, because the winner is then decided by a merge or emit order invisible at the call site, so the call site reads as correct while the override silently loses.
-- L204. When a change removes an invariant other code silently relied on (only one of these can be alive, this only runs on one thread, this id is unique), find every reliance by searching for the invariant itself rather than by reasoning about the feature, because the reliance is usually recorded only in a comment that reads as reassurance and the code it justifies becomes actively destructive the moment the invariant goes.
-- L510. Code that recomputes part of an object must override the fields it changes on a COPY of the original, never rebuild the object from a list of the fields it happens to know about, because every field added later is then silently dropped and the loss surfaces far away as a blank rather than as an error.
+- L192. A value INFERRED from content, a name pulled from a caption or a type read off a filename, must never be presented as the recorded fact it stands for.
+- L200. A record that EXCLUDES something because another record covers it must re-check that other record at read time, or deleting it leaves a gap nobody sees.
+- L507. A category defined as a REMAINDER records no members, so it can never be enumerated or audited; record its members when it is computed.
+- L509. A shared value consumers EXTEND must not set anything a consumer legitimately overrides, or a merge order invisible at the call site decides the winner.
+- L204. When a change removes an invariant other code relied on, search for the invariant itself rather than reasoning about the feature; it lives in comments.
+- L510. Code recomputing part of an object must override fields on a COPY, never rebuild from the fields it knows, or every field added later is dropped.
 - L318. A setting that acts as a DEFAULT is usually read at USE time by every item that never overrode it, so changing the setting silently rewrites all of them
-- L317. A type whose two halves of a round trip are maintained differently, one generated by the compiler and one written by hand, silently drops every field added afterwards
+- L317. A type whose two halves of a round trip are maintained differently, one generated and one hand written, silently drops every field added afterwards.
 - L521. A lookup that requires exactly one match must treat MANY matches as its own refusal, never as absence
 - L326. A chain of fallback matchers gives no redundancy when every arm reads a field from the SAME upstream payload
-- L261. Several behaviours a design treats as ONE condition (this run is not real, this tenant is internal, this build is disposable) must all read ONE predicate
-- L327. When a record's identifier is minted from whichever route it happens to carry (an email, else a prefixed URL, else a generated handle), any sort that breaks ties on that identifier orders by which KIND of route the record has
-- L332. A repair or cleanup pass wired to STARTUP is blind to everything the running system writes after it, so the state a person actually works in is the un repaired one.
-- L334. A deduplication that breaks a tie by AGE systematically keeps the copy holding the STALEST picture of the outside world, because being stored longest is exactly what gave it time to go stale.
-- L335. A deduplication that deletes the copy whose identity the UPSTREAM SOURCE publishes gets that duplicate back on the very next sync, so the merge repeats forever and destroys the fresher row every time.
-- L343. A collection read from a store carries no order unless the read declares one, so a list rendered straight from a query result appears in whatever order the store happened to return.
-- L349. A result the mutating action ALREADY RETURNED must be rendered from that return value, never left to a re-fetch or refresh to bring it back, because that read races the write it is reading and, when it loses, the person sees nothing from an action that fully succeeded, which is indistinguishable from the action having failed.
-- L358. A unique user count from a client side analytics tool counts the identities that tool has ISSUED, never people, and any environment that isolates or clears storage (an in app browser, a private window, a fresh device) turns one person into several, always inflating the figure. Near zero overlap between two populations that plainly SHOULD overlap is evidence of that fragmentation rather than of independent audiences, so measure the overlap before reporting either count as a headcount.
-- L359. A URL that carries a freshly minted credential (a signed storage URL, a presigned link, a tokenised CDN path) is a NEW cache key on every render, so every cache downstream of it, the CDN, the image optimiser and the visitor's own browser, MISSES forever while still returning the correct bytes. Re-sign on a schedule and reuse the URL, or put a stable path in front of the signing, and prove it with a cache HIT on a second load rather than by reading the code.
-- L368. A one-shot observer or trigger that records itself as FIRED before confirming its work succeeded turns a transient failure into a permanent loss, because nothing will ever try again.
-- L544. A value and the flag describing how it was obtained (the load failed, it is stale, it is a built in default) are ONE fact and must be one discriminated value, never two pieces of state beside each other.
-- L594. A control holding several values in ONE text box (a time with its am or pm, an amount with its currency, a number with its unit) is edited a fragment at a time, and deleting one fragment leaves a value that is still WELL FORMED under a different interpretation, so every refuse the invalid guard passes it silently.
-- L555. Matching a query against several fields CONCATENATED into one string makes the joining separator matchable, so a query spanning the boundary matches text that exists in no record.
-- L384. A field stamped on the UPDATE path and not on the INSERT path leaves every freshly created record without it, and the gap is invisible because every record that has ever been updated looks correct, so the population missing it is exactly the newest one. Stamp it where the record is CONSTRUCTED, and measure the field's presence against record age rather than reading the writer.
-- L563. A sync that refreshes only the records its upstream QUERY returned leaves every record that query stopped matching frozen at its last synced values, and a frozen copy is indistinguishable from a freshly confirmed one.
-- L565. A key recomputed from a record's own data is only as durable as whatever the recomputation CONSULTS, so an attribution resolved by asking the filesystem or a tool about a path stops resolving once that path is removed, and a temporary working directory is removed by design.
-- L576. A stamp recording WHEN something was first seen must be keyed on the identity that DISAPPEARS when that thing is replaced, never on its descriptive attributes.
-- L389. A writer that only fills records going FORWARD leaves every record that existed when it shipped permanently unfilled, and each consumer of that data then runs correctly over an empty set, so the whole feature reads as working while producing nothing. Measure how much of the store the writer can never reach before building anything that depends on it.
-- L580. Editing something by DELETING and RECREATING it discards everything accumulated ALONGSIDE it, its run history, its metrics, its audit trail, so where the platform offers an in place alter, use that for an edit and reserve delete plus create for real creation and removal.
-- L402. A control that EDITS a value must write the exact field the consuming path READS, so where a per item override beats a shared default at the point of use, an edit control offered over the default silently discards the edit for every item holding an override, while the surface reports it as applied.
-- L419. A sort whose primary key TIES across most of its real inputs is actually ordered by its tie-break, so a tie-break chosen for stability rather than meaning (an id, an insertion order, a hash) silently becomes the order people see, and where that id is minted from the record's own content it orders by that content's SPELLING.
-- L432. A default that is RE-DERIVED from a sibling field whenever that field changes hides itself, because the values it produces vary and read as entered, and only the constant DIFFERENCE between the two fields reveals it. Check any derived looking field for a fixed offset across the whole population before pricing, billing or deciding anything from it.
-- L636. When an automation creates a record in a state that only a person can advance it out of, record that it is WAITING and why, because the same state chosen by a person on purpose looks identical, and the queue of things awaiting a human is otherwise invisible.
-- L637. A wildcard resolved when a definition is CREATED rather than when it is read (a view's `select *`, a generated type, a snapshotted schema) reads as everything always and is actually everything once
+- L261. Several behaviours a design treats as ONE condition, this run is not real or this tenant is internal, must all read ONE predicate.
+- L327. When a record's identifier is minted from whichever route it carries, any sort breaking ties on it orders by which KIND of route the record has.
+- L332. A repair wired to STARTUP is blind to everything the running system writes after it, so the state a person actually works in is the unrepaired one.
+- L334. A deduplication breaking a tie by AGE keeps the copy holding the STALEST picture of the outside world, because age is what gave it time to go stale.
+- L335. A deduplication deleting the copy whose identity the UPSTREAM publishes gets it back next sync, so the merge repeats and destroys the fresher row.
+- L343. A collection read from a store carries no order unless the read declares one, so a list rendered straight from a query is in whatever order came back.
+- L349. Render a mutating action's result from the value it RETURNED, never a re-fetch, which races the write and shows nothing when it loses.
+- L358. A unique user count from client side analytics counts identities it ISSUED, and any isolated storage turns one person into several, always inflating.
+- L359. A URL carrying a freshly minted credential is a NEW cache key on every render, so every cache downstream misses forever while returning correct bytes.
+- L368. A one-shot observer that records itself as FIRED before confirming its work succeeded turns a transient failure into permanent loss.
+- L544. A value and the flag describing how it was obtained are ONE fact and must be one discriminated value, never two pieces of state beside each other.
+- L594. A control holding several values in ONE text box is edited a fragment at a time, and deleting one leaves a value well formed under another reading.
+- L555. Matching a query against several fields CONCATENATED into one string makes the separator matchable, so a query can match text that exists in no record.
+- L384. A field stamped on UPDATE and not on INSERT leaves every fresh record without it, so stamp it where the record is CONSTRUCTED and measure against age.
+- L563. A sync refreshing only the records its upstream QUERY returned freezes every record that query stopped matching, and frozen looks freshly confirmed.
+- L565. A key recomputed from a record's own data is only as durable as what the recomputation CONSULTS, and a temporary working directory is removed by design.
+- L576. A stamp recording WHEN something was first seen must key on the identity that DISAPPEARS when it is replaced, never on its descriptive attributes.
+- L389. A writer that only fills records going FORWARD never reaches anything that existed when it shipped, so consumers run correctly over an empty set.
+- L580. Editing by DELETING and RECREATING discards the run history, metrics and audit trail with it, so use an in place alter where the platform offers one.
+- L402. A control that EDITS a value must write the exact field the consuming path READS, or an edit over a shared default is discarded for every override.
+- L419. A sort whose primary key TIES across most real inputs is actually ordered by its tie-break, so a meaningless tie-break becomes the order people see.
+- L432. A default RE-DERIVED from a sibling field whenever that field changes hides itself, and only the constant DIFFERENCE between the two reveals it.
+- L636. When an automation creates a record only a person can advance, record that it is WAITING and why, or the queue awaiting a human is invisible.
+- L637. A wildcard resolved when a definition is CREATED rather than read reads as everything always, and is actually everything once.
 - L646. A control that seeds its own state from a prop and writes shared state from a MOUNT EFFECT reverts the person's change every time its container remounts
-- L650. A mapping that MERGES several values onto one label (two seasonal abbreviations to one, several statuses to one word, spellings to a canonical form) is correct only while everything it merges means the same thing at the moment of use, and each row reads as correct alone, so the fault exists only in the relationship between rows and no per row test can see it.
-- L661. A manual override the product itself offers (mark done, skip, force) must write every field the automated path writes for that same state, because the gates downstream read the automation's richer record rather than the status.
+- L650. A mapping that MERGES several values onto one label is correct only while they still mean the same thing, and no per row test can see the fault.
+- L661. A manual override the product offers must write every field the automated path writes for that state, because gates downstream read the richer record.
 
 ## Security and privacy
 
 - L18. Enforce authorization at the database layer, not only in application code.
 - L19. Secret checks fail closed and compare constant-time through one shared verifier.
 - L42. A control that exists to protect someone fails closed, not open.
-- L397. A control made of two halves, a write that ARMS it (adding to a block list, recording a suppression, stamping that a message was sent) and a read that ENFORCES it, must have BOTH halves checked, because the enforcing half is the one every audit looks at and a silently failed arming write leaves a correctly hardened enforcement point with nothing to enforce.
+- L397. A control made of a write that ARMS it and a read that ENFORCES it needs BOTH halves checked, or a failed arming leaves enforcement with nothing to do.
 - L43. A platform's built in request authentication is not caller authentication when it accepts your public client key.
 - L72. A gate's stored DEFAULT must be its OFF value, so that FORGETTING to set it produces the safe state rather than the live one.
 - L75. When identifying WHO or WHAT an outward action targets fails, refuse the action; never fall back to a nearby candidate.
 - L124. A platform's DEFAULT grant may already give away what you are about to grant
-- L541. A REVOKE that is PRESENT can still be ineffective, because revoking from PUBLIC does not remove a grant made DIRECTLY to a role, so a platform's default grants to its own roles survive it untouched.
+- L541. A REVOKE that is PRESENT can still be ineffective: revoking from PUBLIC does not remove a grant made DIRECTLY to a role.
 - L503. An over-broad permission is invisible, because the code never attempts what it is not meant to do, while a missing one fails loudly on the first run
 - L123. Declining to PROVISION someone is not declining to AUTHENTICATE them
-- L137. A grant checked only where it is GRANTED (a login, a signup, an invite) is never re-checked for anyone already holding a session, so removing someone from an access list takes nothing away from the people most likely to be removed, and the gap stays invisible until the first real removal.
-- L222. A privacy guard that scans your REPOSITORY cannot see what a tool PRINTS, so any tool that reads a live system (its screen, its database, its API) delivers real customer names and addresses straight into transcripts, terminal scrollback and logs by a route the guard never inspects, and from there into whatever somebody pastes them into.
-- L155. An issue or plan written with REAL measured evidence becomes the source whoever implements it copies into fixtures, so redact people's identities where the evidence is RECORDED rather than trusting the implementer to anonymise it later.
+- L137. A grant checked only where it is GRANTED is never re-checked for anyone holding a session, so removing someone takes nothing away from them.
+- L222. A privacy guard that scans your REPOSITORY cannot see what a tool PRINTS, so any tool reading a live system puts real customer data into transcripts.
+- L155. An issue written with REAL measured evidence is what the implementer copies into fixtures, so redact identities where the evidence is RECORDED.
 - L268. A BULK query over a protected collection leaks the WHOLE collection in its ERROR message
-- L360. A value redacted where an object is CONSTRUCTED is unredacted by any later step that ENRICHES that same object, because the gate lives in the construction and the enrichment runs afterwards with no viewer to consult. Give the enriching function the same gate as an argument rather than letting it be called ungated, since every call site reads as correct and only the field added last escapes.
-- L388. A search or filter that matches a field the viewer is not permitted to READ hands that field's content back one guess at a time through the result count, without ever displaying it, so every searchable field must be gated by the same predicate that decides whether it is shown.
-- L616. A product whose access model is a fixed list of named users needs, from the first migration, a maintainer identity that can sign in and act with attribution but is excluded from the users' notifications and from their irreversible or money moving actions.
-- L630. An entitlement DERIVED from a downstream artifact (access from a team, a role from an assignment, a quota from a subscription row) is absent for precisely the NEWEST subject
-- L653. A redaction wired to a record's structured fields leaves every free text field on the same record untouched (a log line, a message, a note), and a diagnostic print of the whole payload is exactly what lands in those fields.
-- L657. A wildcard read that crosses into a different retention or trust domain (an export, a warehouse copy, a log sink, an API response) makes every future column an automatic disclosure nobody reviewed
+- L360. A value redacted where an object is CONSTRUCTED is unredacted by any later step that ENRICHES it, so give the enriching function the same gate.
+- L388. A search matching a field the viewer cannot READ hands its content back one guess at a time through the result count, without ever displaying it.
+- L616. A product whose access is a fixed list of named users needs a maintainer identity from the first migration, excluded from the users' notifications.
+- L630. An entitlement DERIVED from a downstream artifact, access from a team or a role from an assignment, is absent for precisely the NEWEST subject.
+- L653. A redaction wired to a record's structured fields leaves every free text field untouched, and a diagnostic print of the payload lands in exactly those.
+- L657. A wildcard read crossing into a different retention or trust domain makes every future column an automatic disclosure nobody reviewed.
 - L658. On a managed runtime a diagnostic print is an EGRESS rather than local output
-- L446. A redaction implemented by overriding how a type DESCRIBES itself is bypassed by every renderer that REFLECTS it instead, and holding the value behind a reference type does not help, because reflection reads a class's stored properties exactly as it reads a struct's.
+- L446. A redaction implemented by overriding how a type DESCRIBES itself is bypassed by every renderer that REFLECTS it, and a reference type does not help.
 - L669. Lengthening an expiry, TTL or retention window silently removes the ceiling it was placing on every OTHER staleness that window happened to bound
 
 ## UX completeness
 
-- L659. Copy on a surface reachable by more than one route must be true on EVERY route, and the sentence most likely to be false is the one naming WHO decided something (the range you chose, your settings, the filter you applied), because the other routes are precisely the ones where the system decided and the reader chose nothing.
-- L651. A control that navigates to a route whose guard REDIRECTS an unpermitted viewer is a silent no-op for exactly those viewers, and it is undetectable when the redirect target is the page they were already on, so gate the control on the same predicate the route guard uses rather than rendering it for everyone and letting the guard sort it out.
-- L341. A curve assembled from piecewise segments must be checked for continuity of its RATE OF CHANGE, not only of its value, because matching the values at each seam is what everyone verifies while a step in the rate is what the person actually sees.
+- L659. Copy on a surface reachable by more than one route must be true on EVERY route, especially a sentence naming WHO decided something.
+- L651. A control navigating to a route whose guard REDIRECTS an unpermitted viewer is a silent no-op for them, so gate it on the same predicate the guard uses.
+- L341. A curve assembled from piecewise segments must be checked for continuity of its RATE OF CHANGE, not only its value; the step in the rate is what shows.
 - L20. Accessibility is part of building each control.
 - L560. An ARIA role that names a STRUCTURE (menu, tablist, list, radiogroup, table) is a promise about the element's CHILDREN
-- L149. A colour token that clears the level for an icon or a border does not thereby clear it for TEXT, because an interface component needs 3:1 and body text needs 4.5:1, so an accent reused for a label ships under the line while every check that measures whether it DREW reports it as fine.
+- L149. A colour token clearing the level for an icon or border does not clear it for TEXT, which needs 4.5:1 against an interface component's 3:1.
 - L21. Read every new user-facing sentence cold, rendered, in the state that produces it.
-- L118. One word must name one unit across the whole product, and an added qualifier is not enough to separate two, because each sentence is correct read alone and the contradiction exists only in the reading.
+- L118. One word must name one unit across the product, and a qualifier is not enough to separate two: each sentence reads right and only the pair is wrong.
 - L22. Walk the whole flow as the user before calling it done.
 - L44. A request to stop, cancel, or undo gets its own acknowledged state the instant it is accepted, distinct from both running and stopped.
 - L45. When filtered views are the only way to reach records, the filters must cover the whole state space between them.
 - L49. A control must look like a control at rest, not only on hover and not only in a tooltip.
 - L54. A guard may refuse only what the system genuinely cannot do; when the work is possible, confirm it instead of blocking it.
-- L64. What a person reviews and approves must be exactly what ships, including WHO it goes to, so anything the system composes onto it (a greeting, a header, a footer) or chooses on its behalf (which of several addresses, accounts or targets) belongs in the reviewed artifact.
+- L64. What a person reviews must be exactly what ships, WHO it goes to included, so anything the system composes or chooses belongs in the review.
 - L69. A preview or approval surface must render the content on both light and dark backgrounds.
-- L76. A region that clips its content must show, at rest and with no interaction, that content continues past the edge, and must stop showing it once the end is reached.
-- L79. A notice placed in a container the platform may collapse, overflow or truncate (a toolbar slot, a header that condenses, a single row) is not shipped until it has been seen at the window size the person actually uses.
-- L566. An element positioned absolutely inside a scrolling container is CLIPPED by that container, and setting overflow on ONE axis makes the other axis clip too, because a `visible` axis computes to `auto` beside a non-visible one.
-- L189. A persistent surface pinned over the edge of a scrolling region must RESERVE space inside that region rather than float above it, or the last item in the scroll is permanently unreachable.
+- L76. A region that clips its content must show, at rest and with no interaction, that content continues past the edge, and stop showing it at the end.
+- L79. A notice placed in a container the platform may collapse or truncate is not shipped until it has been seen at the window size the person actually uses.
+- L566. An element positioned absolutely inside a scrolling container is CLIPPED by it, and overflow on ONE axis makes the other clip too.
+- L189. A persistent surface pinned over the edge of a scrolling region must RESERVE space inside it, or the last item is permanently unreachable.
 - L80. When a message names a specific record, source or item so the person can act on it, the surface showing it must carry that action.
 - L97. An undo whose input is the very thing the action removed from the screen is not an undo, because the action destroys the only key to its own reversal.
-- L99. A client side input mask or cap must never be stricter than the validator that accepts the value, because the form then refuses input the server would take and the person is blocked by a rule nothing states.
-- L150. A writer that accepts a value on its own terms must accept only what its READER can actually consume, so validate at the write against the reader's own predicate rather than a looser one.
-- L111. A message that tells someone HOW to recover must name an action that actually changes the state they are stuck in, so trace the suggested step against the stored state before shipping it.
+- L99. A client side input mask must never be stricter than the validator that accepts the value, or the form refuses input by a rule nothing states.
+- L150. A writer accepting a value on its own terms must accept only what its READER can consume, so validate against the reader's own predicate.
+- L111. A message telling someone HOW to recover must name an action that changes the state they are stuck in, so trace the step against the stored state first.
 - L399. An instruction to a person must be written in the vocabulary of the place they will act, never in the terms of the constraint that motivated it.
 - L112. An alert's urgency is set by what the reader must DO and how soon, never by whether something is broken.
-- L113. A lookup table keyed by a vocabulary (a colour by status, an icon by type, a label by code) must have its completeness enforced by the type system or a test, because a missing key silently takes the default branch, and a default is indistinguishable from a deliberate choice.
-- L126. An action offered only on a transient surface (a run summary, a status message, a toast) cannot serve a condition that PERSISTS in the data, because the notice clears while the state stays, so every encounter after the first finds the fault still named and the remedy gone.
-- L180. A confirmation dialog's consequence sentence must be derived from the state it is about to change, never asserted, because a warning shown on every delete carries no information and reads identically whether it is taking one row or a subtree of ten.
+- L113. A lookup keyed by a vocabulary needs its completeness enforced by types or a test, because a missing key takes the default and looks deliberate.
+- L126. An action offered only on a transient surface cannot serve a condition that PERSISTS, so every encounter after the first finds the fault and no remedy.
+- L180. A confirmation's consequence sentence must be derived from the state it is about to change, or it reads the same taking one row or a subtree of ten.
 - L187. A control gated on a collection holding MORE THAN ONE member is absent in the commonest case, which is one member.
-- L568. Replacing a native form control with a custom one silently drops everything the platform was supplying for free: submission by `name` inside the form, keyboard operation, type ahead, screen reader semantics, and freedom from being clipped by an ancestor.
-- L596. A custom control placed inside a form also INHERITS the platform's form behaviours, so every key the control handles for its own purposes must decide explicitly whether that key still reaches the form.
-- L508. A control that renders a value the BROWSER itself validates (a date input, a number input, a select) shows NOTHING when it is handed a value it rejects, so a message refusing that value stands beside an empty control and the two halves of the screen contradict each other about what was asked for.
-- L207. A constraint imposed by the surface your output is DISPLAYED on (a phone's notch or safe area, a host app's own overlay chrome, a fold, a print bleed) leaves no trace in the artifact you render or in any check you run over it, so it is only ever discovered on a real device.
-- L221. A limit calibrated against the DEVICE somebody owns is looser than the same device turned down, because display scaling, text size and browser zoom are settings a person changes with no code change and nothing re-runs the check, so calibrate against the most constrained SETTING the hardware can be put into rather than against the hardware itself.
-- L569. A surface token (a hover tint, a zebra stripe, a card, a header row) is one half of a pair with the surface BEHIND it, so a contrast check that only measures what sits ON it proves the text is readable while saying nothing about whether the surface is visible at all.
-- L213. A colour token that only has meaning as one half of a PAIR (a foreground against its background, a border against its fill) must be overridden as a pair, because a call site that swaps only the background silently keeps the base variant's foreground, the two can land on the same value, and the result is content that is present in the DOM, correctly named to a screen reader, and invisible on screen.
-- L231. A container's background is only the background until something that paints its OWN is placed inside it (a platform list or table, a text view, an embedded frame, a third party widget), so every call site can name the correct token and still render differently, and any check that reads the declaration passes while the screen disagrees.
-- L232. A minimum reserved for one part of a shared space (a pane's floor, a sidebar's minimum width, a gutter, a buffer) is SUBTRACTED from whatever shares that space, so it must be checked for being too LARGE as much as too small, because over reserving breaks nothing and fails no test: the neighbour simply cannot grow, and the number goes on reading as prudence.
-- L238. A modal or sheet driven by a single flag on shared application state is presented once per SURFACE bound to it, not once, so a second window puts up a second copy of the same thing and dismissing one leaves the others standing.
-- L242. A surface that can show only ONE of something at a time (a sheet, a modal, a dialog) silently ignores every request past the first, so attaching several independent presenters to one surface means all but one of those conditions can vanish with nothing said.
-- L243. A surface presented from a boolean saying that SOMETHING is showing cannot notice that WHICH thing is showing has changed, so replacing one modal, alert or toast with another while it is open leaves the previous content on screen.
-- L269. A finding the system cannot verify was acted on (an advisory check, a review warning, a flagged suggestion) must carry its own resolve and dismiss controls, because the person acts on it in text or in the world where nothing can observe the fix, so the notice goes on standing after the work is done and teaches them to ignore the whole panel.
-- L272. A check that can DERIVE the correct value it is demanding must APPLY it rather than report it, because a panel of findings the system could have fixed itself is work handed back to the person, and it teaches them to skim the panel where the findings that genuinely need their judgement live.
-- L526. A store that collects items for a PERSON to act on is only as useful as the rate they can be taken out of it, so size the drain against the rate it fills.
-- L279. A record's usefulness that depends on a COMBINATION of individually optional inputs is stated nowhere, because each field reads as independently optional at the point of entry, so name the requirement on the form itself and give the partly filled state its own label saying what is still missing.
-- L287. A notice computed over a WIDER scope than the screen it is placed on inherits that screen's scope from its position, so a sentence that is accurate about the whole collection reads as a false claim about the one record on view. State the scope inside the message rather than trusting the reader to know where its numbers came from.
-- L330. An acknowledgement a person gives must be consulted by EVERY rule that raises the question it answers, not only the one whose control recorded it, because a second rule computing that question from raw state goes on asking after it has been answered, and no action is then left that could ever satisfy it.
-- L545. A set of values whose meaning is their ORDER relative to each other (medal colours, severity tints, tier sizes, ranked weights) is broken by changing ONE member for an unrelated reason such as a contrast fix, because every member stays individually valid and nothing compares them, so assert the ordering itself rather than each value.
-- L546. A screen that no navigation links to works perfectly for whoever built it, because they have the address, so it is invisible to every test, review and build and is found only by somebody hunting for it under pressure.
-- L619. Every destination a navigation OFFERS must be asserted to resolve to a real screen, enumerated from the navigation rather than from the list of screens, because a nav entry is written once and then read by everyone afterwards as proof its destination exists.
-- L547. A control whose work is pure computation over data the page already holds must not be routed through a server round trip, because on a dynamic page that round trip re-runs every UNRELATED read on the page, so the control's cost becomes the whole page's cost and nothing at the point it is written says so.
-- L549. A row aligned on its children's top or bottom EDGES aligns the CONTAINERS, not the controls inside them, so a column carrying a hint, an error or a second label line has its control silently pushed out of line while every column still reads as correctly aligned when read on its own.
-- L553. A column's header alignment and its cells' alignment are ONE fact set at two independent declaration sites, so they diverge silently while each site reads as correct on its own.
-- L558. A mark drawn BESIDE a caption of the same fact is decoration, so a spec that asks for BOTH ships the duplication as a requirement and no implementation can avoid it.
-- L577. A request to remove ON SCREEN text can be removing a control's only accessible name, or the target of an `aria-describedby`, and both failures are silent.
-- L578. A list of RECORDS laid out as flow rows, one flex row per record, has no columns at all: each field's position is set by the width of everything before it, so it reads as aligned only while that leading field is a uniform width, which a fixture always is and real data never is.
-- L579. An explanation added because ONE record's value was confusing gets attached to the record TEMPLATE, so it is correct at one row and becomes a wall of identical text at the real record count, which no fixture reaches.
-- L587. A key, legend or swatch and the THING it describes are two consumers of one style record, so any field only ONE of them reads makes the key describe a treatment the thing does not have, and both call sites read as correct in isolation.
-- L590. A display gated on a derived identifier being PRESENT hides it on precisely the record where the user's input is still choosing it, and shows it on every record where it can no longer change.
-- L591. Vertically centring text centres its LINE BOX, which reserves descender space that an all-caps label never uses, so the capitals sit visibly high and any dot or icon centred beside them appears to sit low.
-- L597. When markup carries BOTH outcomes of a choice a client script will make, the state rendered by default must be the one that is correct if that script never runs, because a script that fails is silent and leaves a page that still looks finished while showing the wrong half.
-- L408. A control that acts on the TOP of a shared stack (undo, back, revert last) is silently redirected to an unrelated earlier entry by any action that records nothing onto that stack, so either every action on the surface records one, or a non recording action must block the control rather than let it reach past.
-- L410. An automatic pass running beside a manual control hides every case the control's gate cannot express, so compare the two predicates case by case before removing the pass: whatever only the pass reached has no route at all once it goes.
-- L604. Copy that tells the reader what a CONTROL IS or what the SCREEN IS DOING (what this field holds, what this heading contains, what the banner will say, which system owns this value) is removed on sight by the person it was written for, while a DOMAIN term they cannot know (a lane name, a field called Grid, "84 (75 today)") is left unexplained beside it.
-- L605. A component that is correct in isolation names and explains itself, so a page COMPOSED of such components states every fact twice, and the duplication exists only in the composition, which is the one place nobody reads.
+- L568. Replacing a native form control drops submission by name, keyboard operation, type ahead, screen reader semantics, and freedom from being clipped.
+- L596. A custom control inside a form INHERITS the platform's form behaviours, so every key it handles must decide whether that key still reaches the form.
+- L508. A control rendering a value the BROWSER validates shows NOTHING when handed one it rejects, so the message and the empty control contradict each other.
+- L207. A constraint imposed by the surface your output is DISPLAYED on leaves no trace in the artifact or any check, so it is only found on a real device.
+- L221. A limit calibrated against the DEVICE somebody owns is looser than the same device turned down, so calibrate against its most constrained SETTING.
+- L569. A surface token is one half of a pair with the surface BEHIND it, so checking only what sits ON it says nothing about whether the surface is visible.
+- L213. A colour token meaningful only as a PAIR must be overridden as a pair, or a call site swapping one keeps the other and the content becomes invisible.
+- L231. A container's background stops being the background once something painting its OWN is placed inside, so every call site can be right and still differ.
+- L232. A minimum reserved for one part of a shared space is SUBTRACTED from whatever shares it, so check it for being too LARGE as much as too small.
+- L238. A modal driven by a single flag on shared state is presented once per SURFACE, so a second window puts up a second copy and dismissing one leaves it.
+- L242. A surface that shows only ONE thing at a time ignores every request past the first, so conditions attached to it can vanish with nothing said.
+- L243. A surface presented from a boolean saying SOMETHING is showing cannot notice WHICH thing changed, so replacing one modal with another leaves the first.
+- L269. A finding the system cannot verify was acted on must carry its own resolve and dismiss controls, or it stands after the work and teaches people to skim.
+- L272. A check that can DERIVE the value it demands must APPLY it, not report it, or the panel fills with handed back work and the real findings are skimmed.
+- L526. A store collecting items for a PERSON to act on is only as useful as the rate they can be taken out of it, so size the drain against the rate it fills.
+- L279. A record's usefulness depending on a COMBINATION of optional inputs is stated nowhere, so name it on the form and label the partly filled state.
+- L287. A notice computed over a WIDER scope than the screen it sits on inherits that screen's scope, so state the scope inside the message.
+- L330. An acknowledgement a person gives must be consulted by EVERY rule raising that question, or a second rule asks on with nothing able to satisfy it.
+- L545. A set of values whose meaning is their ORDER is broken by changing ONE member for an unrelated reason, so assert the ordering itself, not each value.
+- L546. A screen no navigation links to works perfectly for whoever built it, and is invisible to every test, review and build until somebody needs it.
+- L619. Every destination a navigation OFFERS must be asserted to resolve to a real screen, enumerated from the navigation rather than from the list of screens.
+- L547. A control whose work is pure computation over data the page holds must not be routed through a server round trip, which re-runs every unrelated read.
+- L549. A row aligned on its children's EDGES aligns the containers, so a column carrying a hint or an error pushes its control silently out of line.
+- L553. A column's header alignment and its cells' alignment are ONE fact set at two declaration sites, so they diverge while each site reads as correct alone.
+- L558. A mark drawn BESIDE a caption of the same fact is decoration, so a spec asking for BOTH ships the duplication as a requirement.
+- L577. A request to remove ON SCREEN text can be removing a control's only accessible name, or the target of an aria-describedby, and both failures are silent.
+- L578. A list of RECORDS laid out as flow rows has no columns: each field's position is set by the width of what precedes it, which a fixture keeps uniform.
+- L579. An explanation added because ONE record was confusing attaches to the record TEMPLATE, so it becomes a wall of identical text at the real count.
+- L587. A key and the THING it describes are two consumers of one style record, so a field only ONE reads makes the key describe a treatment the thing lacks.
+- L590. A display gated on a derived identifier being PRESENT hides it on the record where the input is still choosing it, and shows it where it cannot change.
+- L591. Vertically centring text centres its LINE BOX, which reserves descender space an all-caps label never uses, so the capitals sit visibly high.
+- L597. When markup carries BOTH outcomes of a choice a script will make, the default must be the one correct if that script never runs.
+- L408. A control acting on the TOP of a shared stack is redirected to an unrelated entry by any action that records nothing, so either all record or it blocks.
+- L410. An automatic pass beside a manual control hides every case the control's gate cannot express, so compare the two predicates before removing the pass.
+- L604. Explain the DOMAIN, never the interface: a sentence saying what a field holds is deleted on sight, while the domain term beside it goes unexplained.
+- L605. A component correct in isolation names and explains itself, so a page COMPOSED of them states every fact twice, and only the composition shows it.
 - L606. UI ships unseen by two routes, a two row fixture and a green suite, and each reads as having looked.
-- L607. The browser's native control and the framework's default surface are what SHIP when nothing replaces them, and to the person they read as a piece of the operating system pasted into the product.
-- L608. A server action that returns void and revalidates a route has told the person nothing: the only sign it worked is a control somewhere on the page having changed, which is a difference they would have to be already looking for, and a refusal it computed has nowhere to land.
-- L609. Ordering a screen, a row or a menu by the shape of the DATA (the code's digit order, the column order the schema happens to have, the order the controls were written) puts what the reader scans for wherever it happens to fall, and gives the commonest value the heaviest treatment because it was styled without asking how often it appears.
-- L610. Collapsing content behind a disclosure, a toggle or a lazy fetch for tidiness, and rendering nothing on the healthy day because every element was conditional on something being wrong, both hide the thing the page exists to show, and a fully healthy page becomes indistinguishable from one that failed to render.
-- L611. A free text box for a value whose valid set already exists as a constant in code offers every typo as an option and reports none of them, because the value is matched downstream rather than validated, and the only symptom is a pool one person shorter.
-- L613. A shared component created to end N copies converts the one site in front of whoever built it and leaves the rest standing, and a superseded control is kept with its justification rewritten rather than deleted, so the product ends up half converted with the old thing arguing for itself in a docstring.
-- L424. An action taken from ONE row whose write reaches a whole population must say whether THAT row was among the ones it changed, because a truthful count of the others is indistinguishable from success on the one the person was looking at.
-- L623. A banner or badge announcing that the product is in a DANGEROUS or SPECIAL mode (impersonating somebody, a staging or test store, a dry run, an admin override) must be drawn in a treatment that appears nowhere else in the product, because one built from the ordinary palette reads as chrome and is looked past by exactly the person it is warning.
-- L626. A rule that conditionally OMITS a label (a group heading, a caption, a legend) does not remove the SPACE that label occupied, so wherever it fires the surface shows a gap with nothing in it, which reads as a layout fault rather than as the boundary it still is.
-- L627. A transient indicator placed INSIDE a row (a spinner, a badge, a count) takes its width from the flow, so showing it moves every sibling beside it, and the feedback for the thing somebody clicked is delivered by making the things they did not click jump.
-- L628. An incidental dismissal (a click outside, a page scroll, a resize) must not be wired to the same handler as an explicit Cancel, because dismissing a surface is not a decision to discard what is in it
-- L634. A heading separated from the content beneath it by WEIGHT alone, or rendered smaller or lighter than that content, reads as an emphasised sentence rather than a level, and the fault is invisible at the declaration site because each element's own classes are individually reasonable.
-- L639. A compensating offset applied to a CONTAINER aligns whichever child comes FIRST, never a named one, so a cancellation written to line up a component's LABEL stops holding the moment that component may lead with an icon, mark or badge.
-- L426. An item held on screen past its own removal (a row fading out, a card playing an exit) must be reinserted at its OWN position rather than appended to the end, because anything anchored to it or to the group it belongs to (a scroll pin, a selection, a focus ring) follows it to wherever it lands.
-- L648. When a quantity can be wrong in two directions and one direction is harmless while the other silently hides content, never aim for the exact value: bias it hard toward the harmless side and record why
-- L652. A picker that cannot display the stored value SUBMITS its fallback in place of it, because a control posts what it DISPLAYS rather than what it was given, so the next save silently overwrites a real value with a plausible one and reports success.
-- L663. An input that REWRITES its own value as the person types (a phone or card mask, a currency or date formatter, an uppercaser) moves the caret to the END on every keystroke unless it is explicitly put back, so a person cannot correct a character in the middle of what they have already typed.
-- L666. When a system is built to REPLACE another that is still live, every parity check gets written about the DATA the two systems hold and none about the SCREEN the person sees, so the replacement silently drops whatever the incumbent's surface accumulated and nobody wrote down.
+- L607. The native control and the framework's default surface are what SHIP when nothing replaces them, and they read as the OS pasted into the product.
+- L608. A server action returning void and revalidating has told the person nothing, and a refusal it computed has nowhere to land.
+- L609. Ordering a screen by the shape of the DATA puts what the reader scans for wherever it falls, and gives the commonest value the heaviest treatment.
+- L610. Collapsing content behind a disclosure, or rendering nothing on the healthy day, both hide the thing the page exists to show.
+- L611. A free text box for a value whose valid set exists as a constant offers every typo as an option, and the only symptom is a pool one person shorter.
+- L613. A shared component made to end N copies converts the one site in front of you and leaves the rest, with the superseded thing arguing for itself.
+- L424. An action taken from ONE row whose write reaches a whole population must say whether THAT row changed, or a truthful count reads as success on it.
+- L623. A banner announcing a DANGEROUS mode must use a treatment found nowhere else, because one built from the ordinary palette reads as chrome.
+- L626. A rule that conditionally OMITS a label does not remove the SPACE it occupied, so the surface shows a gap that reads as a layout fault.
+- L627. A transient indicator INSIDE a row takes its width from the flow, so feedback for the thing clicked is delivered by making its neighbours jump.
+- L628. An incidental dismissal must not share a handler with an explicit Cancel: dismissing a surface is not a decision to discard what is in it.
+- L634. A heading separated from its content by WEIGHT alone reads as an emphasised sentence, and each element's own classes look reasonable in isolation.
+- L639. A compensating offset applied to a CONTAINER aligns whichever child comes FIRST, so it stops holding when a component may lead with an icon or badge.
+- L426. An item held on screen past its own removal must be reinserted at its OWN position, or anything anchored to it follows it to the end.
+- L648. When a quantity can be wrong in two directions and one hides content, never aim for the exact value: bias hard toward the harmless side and say why.
+- L652. A picker that cannot display the stored value SUBMITS its fallback instead, so the next save overwrites a real value with a plausible one.
+- L663. An input that REWRITES its own value as the person types moves the caret to the END unless it is put back, so nothing mid-string can be corrected.
+- L666. Building a replacement for a live system gets parity checks about the DATA and none about the SCREEN, so whatever the incumbent accumulated is dropped.
 - L676. A control that carries somebody ONWARD from a screen where the system has already identified them must carry that identification with it
 - L677. A step removed from a flow takes with it every capability that only that step offered
 - L678. A warning is read by its PRESENCE, so a surface that never got one is indistinguishable from a surface with nothing to warn about.
-- L680. A message written about a MOMENT (it just happened, something is on its way, we are working on it) must be driven by the ACTION that produced that moment, never by a stored status
-- L449. Automating a task changes what every counter of that task MEANS, from work waiting to a fact about the data, and nothing re-examines the counter: it goes on occupying the place reserved for things that need a person.
+- L680. A message written about a MOMENT must be driven by the ACTION that produced it, never by a stored status.
+- L449. Automating a task changes what every counter of it MEANS, from work waiting to a fact about the data, and nothing re-examines the counter.
 
 ## External systems
 
@@ -487,108 +487,108 @@ apply it, because the body is where the failure it came from is described.
 - L425. A decoder that declares only the fields it needs today silently discards every sibling in the same object, and nothing anywhere reports the loss
 - L24. State the expected data volume before writing any query or loop.
 - L81. A batch must be sized in the UNIT the limit is actually expressed in, measured from the real inputs, never in a proxy unit calibrated on one sample.
-- L87. A change that multiplies how many items an existing request carries inherits that request's aggregate limit, and proving the change correct says nothing about whether it still fits.
+- L87. A change that multiplies how many items a request carries inherits that request's aggregate limit, and proving it correct says nothing about the fit.
 - L25. Pin everything.
 - L26. Twin implementations in two languages consume one shared committed fixture
-- L127. An identifier you SUPPLY to an external system is a request, never a fact, so read back the one it actually assigned before storing it as the key to any later operation.
-- L157. An atomic operation guarantees only its own span, so acting on a judgement formed BEFORE it (remove this lock because it was stale, revoke this token because it had expired, evict this entry because it was cold) reintroduces the race the atomicity appears to close, and reads as rigorous precisely because the primitive really is atomic.
-- L159. A test asserting that something did NOT happen is satisfied by a fixture in which it COULD not happen, so prove the positive case fires in the SAME fixture before trusting the negative.
-- L181. Inferring that a person DID something from a provider's record must key on that provider's own committed state marker, never on an attribute a merely started attempt shares with a finished one (its author, its recipient, its subject), because platforms routinely return drafts, pending items and abandoned attempts in the same collection as completed ones.
-- L237. Addressing something by its POSITION rather than its identity (screen coordinates, an array index, an nth child selector, a row number) measures whatever currently OCCUPIES that position, so prove the thing you named is the thing there, and refuse when you cannot.
-- L190. A read back verifying that another application performed a write must be proved to read the store THAT application writes to, never a second system subscribed to the same account.
-- L193. A feature that resolves user supplied values through a stored REFERENCE dataset (a postcode to coordinates table, a currency or carrier list, a tax rate table) is only as complete as that dataset, and a missing row is indistinguishable from a user who supplied nothing, so measure the join's real hit rate against live data before building on it rather than treating the table as authoritative because it exists.
-- L198. A check that verifies another system's work must match values no more strictly than that system does, because a verifier stricter than the actor reports failure on every correct run and can never report anything else.
+- L127. An identifier you SUPPLY to an external system is a request, never a fact, so read back the one it assigned before storing it as a key.
+- L157. An atomic operation guarantees only its own span, so acting on a judgement formed BEFORE it reintroduces the race the atomicity appears to close.
+- L159. A test asserting something did NOT happen is satisfied by a fixture where it COULD not, so prove the positive fires in the SAME fixture first.
+- L181. Inferring a person DID something must key on the provider's own committed state marker, never an attribute a merely started attempt also has.
+- L237. Addressing something by its POSITION measures whatever currently occupies that position, so prove the thing you named is there, and refuse if not.
+- L190. A read back verifying another application performed a write must be proved to read the store THAT application writes to, not a second subscriber.
+- L193. A feature resolving user values through a stored REFERENCE dataset is only as complete as that dataset, so measure the join's real hit rate first.
+- L198. A check verifying another system's work must match values no more strictly than that system does, or it reports failure on every correct run.
 - L265. Before building a path that carries on past an external service's negative verdict, check whether that service is also the GATE on the action
 - L266. Removing a prefix by SUBSTRING REPLACEMENT matches anywhere in the value, not only at the start
 - L271. A cross repository deliverable phrased as what YOUR side must WRITE says nothing about whether the consuming side can READ it
-- L273. A normalization written to make a comparison forgiving covers only the character class its author happened to think of, so state the reason it exists and apply it to EVERY class that reason covers, because the classes left out are total mismatches rather than near misses.
-- L280. A rule enforced at ONE stage of a pipeline is not enforced by the pipeline, because every later stage that rewrites the same content can reintroduce exactly what the rule removed, and the enforcing stage has already run, so nothing reports the regression.
+- L273. A normalization written to make a comparison forgiving covers only the character class its author thought of, so state its reason and cover them all.
+- L280. A rule enforced at ONE stage of a pipeline is not enforced by the pipeline: every later stage that rewrites the content can reintroduce it.
 - L534. A platform setting whose DEFAULT is derived from another setting flips silently when you flip that other one
-- L552. Pinning a tool's VERSION pins its output only when that tool does the work locally, so a command that delegates to a hosted service (a generator invoked with a project id and an access token rather than a database or a file) emits whatever the server currently produces, and the pin, the comment explaining it, and every check built on comparing the result character for character go on reading as reproducibility. Pin the thing that PRODUCES the artifact, or normalise what you cannot pin.
+- L552. Pinning a tool's VERSION pins its output only when the tool works locally; one that delegates to a hosted service emits whatever the server makes today.
 - L670. A refusal from an INTERMEDIARY in front of an API
-- L674. A fault you learn about only when live traffic HAPPENS to exercise the affected path has a detection delay set by that path's rate rather than by your monitoring, and its RECOVERY is silent
+- L674. A fault found only when live traffic HAPPENS to exercise a path has a detection delay set by that path's rate, and its recovery is silent.
 
 ## Building with AI
 
-- L270. A rule stated in a prompt is contradicted by every example, reference document and line of surrounding prose that breaks it, and the demonstration outweighs the instruction, so anything a prompt BANS must be absent from the whole payload the model receives, not merely forbidden in one sentence of it.
+- L270. A rule stated in a prompt is contradicted by every example that breaks it, and the demonstration outweighs the instruction.
 - L27. A rule that lives only in a prompt is a hope.
-- L194. A payload that reduces a stored fact to a FLAG ABOUT ITSELF (a hasProducer boolean, an isEmpty, a count) tells its reader the fact exists while denying it the value, so the reader is sent to rediscover at cost what the sender already held, and its failure to find it reads as the fact never having existed.
+- L194. A payload reducing a stored fact to a FLAG ABOUT ITSELF tells its reader the fact exists while denying it the value, and the rediscovery can fail.
 - L28. Treat a detached AI run as an untrusted subprocess.
-- L128. A field whose only writer is an AI prompt, and whose ABSENCE is itself a legitimate value in the domain, cannot tell a model that IGNORED the instruction from one that judged the field inapplicable, so the feature stays dormant forever while every reader reports its honest default.
-- L161. When an AI writes a fact the system ALREADY HOLDS the true value for (a date, a venue, a price, a name), check what it wrote AGAINST that value rather than merely checking that something is there, because a presence check passes a contradicted fact, and a wrong fact reaching a stranger is worse than an omitted one, which at least reads as missing.
-- L328. A reader that can INDEPENDENTLY source what the payload failed to send produces a correct looking result for a reason the sender never supplied, so its success is no evidence the payload is complete, and the omission surfaces only on the inputs where that independent sourcing fails.
-- L333. Agents dispatched on ONE brief each reach the same finding, so any outward action they can take alone (filing an issue, commenting, pushing) is multiplied by the batch size and the finding arrives as N records of one defect.
-- L167. An AI writer that can READ the code consuming its output derives its contract from that code's permissiveness, so an optional field is not neutral, it is permission: any combination the schema tolerates will eventually be emitted and defended as valid.
-- L249. A decision ATTRIBUTED to somebody inside your own artifact (a PR body, a plan, an issue comment) must be quoted from the record that holds it and carry that record's own date, because a paraphrase with a date on it reads as authority and is the one claim a reviewer will not go and check, so a decision nobody made can ship with tests written to defend it.
-- L340. A defensive normalization that coerces a response into the shape you asked for (truncating a list to its first entry, taking the first match, clamping a count) destroys the only evidence that the instruction was ignored, and the coerced value is indistinguishable from a compliant one, so record the violation as a finding rather than quietly trimming it.
-- L363. A deduplication that runs before findings are filed must compare against the store they are filed INTO, never only against the batch that produced them, because any audit of that store restates its records and each one then arrives as a fresh finding.
+- L128. A field whose only writer is an AI prompt, and whose ABSENCE is a legitimate value, cannot tell an ignored instruction from a considered judgement.
+- L161. When an AI writes a fact the system already HOLDS, check what it wrote AGAINST that value: a presence check passes a contradicted fact.
+- L328. A reader that can INDEPENDENTLY source what the payload failed to send succeeds for a reason the sender never supplied, hiding the omission.
+- L333. Agents dispatched on ONE brief each reach the same finding, so any outward action they can take alone arrives as N records of one defect.
+- L167. An AI writer that can READ the consuming code derives its contract from that code's permissiveness, so an optional field is permission, not neutrality.
+- L249. A decision ATTRIBUTED to somebody inside your own artifact must be quoted from the record that holds it and carry that record's own date.
+- L340. A defensive normalization that coerces a response into the shape you asked for destroys the only evidence the instruction was ignored.
+- L363. A deduplication running before findings are filed must compare against the store they are filed INTO, or any audit of it restates its own records.
 - L660. A claim that a shared mechanism already covers your code is checkable in one command, so check it rather than asserting it
 
 ## Codebase hygiene
 
-- L217. A guard whose forbidden or expected values are DERIVED from a shipped dataset covers only what that dataset happens to contain, so a real value that never enters it is permanently exempt from the very check written to catch it.
+- L217. A guard whose forbidden values are DERIVED from a shipped dataset covers only what that dataset contains, so a real value never in it is exempt.
 - L29. Dead code is worse than deleted code.
-- L346. A recorded reason for LEAVING something as it is (a docstring saying why a check is not tightened, a comment saying why a value is kept) is read by everyone afterwards as a considered decision, so confirm the thing is still on a live path before writing one. A justification attached to code nothing calls converts dead code into a decision nobody revisits, and the next person argues with the reason instead of deleting the code.
+- L346. A recorded reason for LEAVING something as it is reads as a considered decision, so confirm the thing is still on a live path before writing one.
 - L46. Stored data needs a reader, not just a writer.
 - L30. Fix the class, not the instance.
 - L31. Everything the product depends on lives in git.
 - L32. Docs state testable claims.
-- L210. A check that keeps a document in sync with the code by comparing a machine readable token (a number, a name, a version) leaves the sentence beside it unverified, and the passing check makes that sentence MORE trusted rather than less.
+- L210. A check keeping a document in sync by comparing a machine readable token leaves the sentence beside it unverified, and more trusted for passing.
 - L41. A list that must mirror another source of truth is derived from it, never maintained by hand beside it.
-- L96. A guard driven by a hand-written registry checks only what the registry lists, so anything missing from it is exempt from the very check meant to catch it, and the guard reports green while blind.
-- L247. A sweep that requires every place doing X to also do Y must enumerate its subjects by the STATE they reach, never by one spelling of X, because a place reaching that state by another route is never enumerated and is exempt from the rule the sweep exists to enforce, while the sweep goes on passing the subjects it did find.
-- L452. Code you write and code somebody else supplies, running in one shared environment (a page, a process, a shell), share EVERY namespace that environment offers rather than only the one that happened to collide, so a namespace added after an incident must enumerate the rest (variable names, element ids, style names, event targets, storage keys) and close them in the same change, because each one left open fails the identical silent way: the surface looks finished while showing the wrong thing.
-- L450. When more than one control sits on the same action, check each control's recogniser against the route the OTHER controls push people onto, because a control that recognises only one route drops to ZERO coverage rather than partial coverage the moment a neighbour makes a different route mandatory, and it is then silently inert in exactly the project the neighbour is configured for.
-- L129. A category deliberately EXEMPTED from a review or check, for a CORRECT reason, has no reviewer at all unless one is named in the same change, and the gap is invisible precisely because the exemption was right.
-- L582. When one fact is recorded by two mechanisms that deliberately exclude each other's territory, assert their union against the real population, because each exclusion can be correct while a third group belongs to neither and is recorded zero times.
+- L96. A guard driven by a hand-written registry checks only what the registry lists, so anything missing from it is exempt from the check meant to catch it.
+- L247. A sweep requiring every place doing X to also do Y must enumerate by the STATE reached, never one spelling of X, or another route is never enumerated.
+- L452. Your code and somebody else's in one shared environment share EVERY namespace it offers, so close the rest in the same change as the one that collided.
+- L450. When more than one control sits on an action, check each recogniser against the route the OTHERS push people onto, or one drops to zero coverage.
+- L129. A category deliberately EXEMPTED from a check has no reviewer unless one is named in the same change, and the gap is invisible because it was right.
+- L582. When one fact is recorded by two mechanisms that exclude each other's territory, assert their union against the real population.
 - L57. A correction recorded only in memory or a transcript will recur, because the artifact that actually governs the behavior never changed.
 - L61. A decision recorded on an issue is only true as of its date, so re-check it against what has shipped since before building to it.
-- L62. A guard on a function's first line cannot protect against the cost of building its arguments, because every language evaluates those before the call runs.
-- L132. A generated catalogue that a PERSON reviews (a copy inventory, an API surface list, a route map) must be derived from what is REACHABLE, not from what merely appears in the source, because an entry for code nothing calls is indistinguishable from a live one and every reader spends real attention reasoning about a surface that cannot exist.
-- L170. A criterion placed last in a strictly ordered comparison chain is consulted only on an exact tie of everything above it, so any earlier criterion carrying many distinct values (a count, a rating, a timestamp) makes it permanently inert while the code reads as a criterion that ranks.
-- L501. A new thing built by cloning a proven pattern copies that pattern AS FIRST WRITTEN, including every value already corrected in the original, so clone the CURRENT version and re-check each constant against the rule it has to satisfy.
+- L62. A guard on a function's first line cannot protect against the cost of building its arguments, which every language evaluates before the call.
+- L132. A generated catalogue a PERSON reviews must be derived from what is REACHABLE, or an entry for dead code is indistinguishable from a live one.
+- L170. A criterion placed last in a strictly ordered comparison chain is consulted only on an exact tie above it, so a many-valued earlier one makes it inert.
+- L501. A new thing cloned from a proven pattern copies it AS FIRST WRITTEN, corrections included, so clone the CURRENT version and re-check each constant.
 - L195. A newly recorded lesson governs only the code written after it, so when you record one, sweep the OTHER projects for the same defect at once
-- L233. In a list of exclusions or skip cases, an entry carrying no written reason while its neighbours each carry one is evidence it was never reasoned about rather than deliberately chosen
-- L244. A file that is auto loaded into every session is believed without being re-checked, so any status it records (an open question, a pending issue, a not yet done) must be derived from the system that owns that truth or carry a check that fails when it drifts.
-- L262. A constraint that has only ever been satisfied as a side effect of somebody doing the work by hand is recorded nowhere and checked by nothing, so the first time that work is GENERATED rather than placed the constraint silently stops holding, and every existing check passes because each one was written against the hand made cases.
-- L570. A sequence applied only incrementally forward (database migrations, an append-only provisioning or setup script) is never run from empty, so a step that quietly depends on state one particular machine already had keeps passing there while failing on every fresh environment, and the rot surfaces only when somebody first needs one.
-- L263. A shared NAME is read as evidence of shared BEHAVIOUR, so two same-named functions on either side of a boundary are never compared and can implement different rules indefinitely, while every caller on each side reads as correct in isolation.
-- L370. Sharing a rule's DATA while copying the code that APPLIES it is not consolidation: the shared constant reads as the single source of truth, so nobody asks whether the logic beside it was duplicated, and a change to how the data is applied lands in one copy only.
-- L274. An exception a collection singles out for ONE item (skip this one, do not touch that one) must be answered by the ITEM itself, never by a predicate repeated inline at each place that iterates the collection, because a second loop written later omits it and the item is then protected at one site and handled normally at the other.
-- L281. Behaviour that is correct only as a SIDE EFFECT of an unrelated rule has no test, no comment and no owner, so the first change to that rule removes it silently while every check stays green.
-- L286. A derivation every test in a suite needs (a tree walk, a parse, a store clone) is recomputed once per test unless its default input is memoised, so memoise the no-argument form, keep the callers that inject their own input building, and make the memo unable to capture an empty result, because a memoised empty scan passes every guard at once.
-- L542. Two similar rules that DIFFER may each be a recorded decision rather than an inconsistency, and the comment beside one documents only that one, so a change that aligns them can silently delete a product rule while reading as a cleanup. Before making two such rules agree, find the decision record for EACH side, and treat an observed divergence as evidence of a defect only once both records are in hand.
-- L374. A gitignore or exclude entry without a leading slash matches at EVERY depth, so a rule written for one top level folder silently swallows any same named directory anywhere in the tree, and the loss is invisible to status, diff and commit alike.
-- L554. A generated file committed beside its source conflicts on every aggregate it carries (a total, a count, a checksum, a timestamp), so two independent edits to the source that merge cleanly still collide there and block the merge over content nobody wrote.
-- L422. A derived artifact COMMITTED alongside its source is a standing claim that it is current, and nothing enforces that claim, so the check that regenerates it and compares ships in the same change that first commits it.
-- L383. A derived value exposed as a computed property or a getter is re-run in full by EVERY reader, and a reader's call site reads as a free field access, so nothing at the point of use says what it costs. Where the derivation walks a whole collection, compute it once at the top of the pass and hand the value down, and assert the NUMBER of call sites, because the shape alone cannot be read.
-- L556. When asking a stakeholder to rule on whether two surfaces should agree, enumerate every place they ALREADY disagree before asking, because the answer comes back as a rule about agreement rather than about the single case you showed, and it gets applied to the cases you never mentioned. Showing one instance also makes the decision look smaller than it is, so the reply is given on a smaller picture than the change it authorises.
-- L562. A named rule is copied through its WORKED EXAMPLE, so an example that contradicts the rule teaches the inverse and is then defended with the rule's own authority.
-- L387. A change that fixes a defect CLASS must be searched for a fresh instance of that same class before it ships. The fix is written by somebody holding the class in mind, which makes it the likeliest place to repeat it, and the new instance arrives carrying the authority of the remedy so nobody re-examines it. Sweep the DIFF, not only the existing code.
-- L585. A guard that bans raw values in favour of named tokens is structurally blind to a token that is REFERENCED but never DEFINED, because there is no literal for it to find, so the declaration reads as correct while the runtime silently substitutes its own fallback.
-- L407. A constraint recorded only as a COMMENT beside the code it governs is enforced by nothing, and sitting there makes it read as binding, so the first person to break it does so with every check green.
-- L624. A step whose work list is what an earlier mechanism REPORTED as a problem (the conflicted paths, the failed items, the flagged files) loses every subject a later fix stops that mechanism reporting, and it still has to act on them, so a rule added to SILENCE a report must be checked against every step that consumed that report as its queue.
-- L428. Adding a new threshold BESIDE an existing one, rather than changing it, leaves every reader of the old constant silently answering a question that has been superseded, and no rule about changing a limit fires because nothing was changed. When a rule's meaning splits across two constants, audit every reader of the old one and state which of the two questions it is asking.
-- L429. A file the platform loads AUTOMATICALLY into every session grows one entry at a time and has a size ceiling nothing in the project measures, so put a check on its size: past the ceiling the rules stop arriving rather than failing, and a rule that never arrived is indistinguishable from one that was followed.
-- L437. Code lifted out of a file to be reused elsewhere leaves behind everything it was inheriting from that file's AMBIENT SCOPE (a stylesheet's `body` or `:root` rule, a module's top level setup, a test file's shared fixture), and because the inherited thing is usually a DEFAULT, the extracted copy still runs and still looks finished while quietly using the platform's default instead. Prove it by reading back what the running system actually applied, never by checking that the extraction renders.
-- L631. Resolving a conflict by splicing both sides together can drop the delimiter that closed the block at the seam, so check the file's STRUCTURE afterwards (braces balance, brackets close) rather than only that the conflict markers are gone.
-- L655. Finding the right shared place to PUT new logic is not the same as checking whether that logic already EXISTS, and doing the first well is what makes the second feel finished.
+- L233. In a list of exclusions, an entry carrying no written reason while its neighbours each carry one is evidence it was never reasoned about.
+- L244. A file auto loaded into every session is believed without re-checking, so any status it records must be derived, or carry a check that fails on drift.
+- L262. A constraint only ever satisfied as a side effect of somebody doing the work by hand stops holding the first time that work is GENERATED.
+- L570. A sequence applied only incrementally forward is never run from empty, so a step depending on state one machine already had fails on every fresh one.
+- L263. A shared NAME is read as evidence of shared BEHAVIOUR, so two same-named functions either side of a boundary can implement different rules forever.
+- L370. Sharing a rule's DATA while copying the code that APPLIES it is not consolidation: the shared constant stops anyone asking whether the logic was copied.
+- L274. An exception singling out ONE item must be answered by the ITEM, never a predicate repeated at each loop, or a later loop omits it.
+- L281. Behaviour correct only as a SIDE EFFECT of an unrelated rule has no test, comment or owner, so the first change to that rule removes it silently.
+- L286. A derivation every test needs is recomputed per test unless its default input is memoised, and the memo must not be able to capture an empty result.
+- L542. Two similar rules that DIFFER may each be a recorded decision, so find the decision record for EACH side before making them agree.
+- L374. A gitignore entry without a leading slash matches at EVERY depth, so a rule for one top level folder swallows any same named directory anywhere.
+- L554. A generated file committed beside its source conflicts on every aggregate it carries, so two clean edits still collide over content nobody wrote.
+- L422. A derived artifact COMMITTED beside its source claims to be current, so the check that regenerates and compares ships in the same change.
+- L383. A derived value exposed as a computed property is re-run in full by EVERY reader, and the call site reads as a free field access.
+- L556. Before asking whether two surfaces should agree, enumerate every place they ALREADY disagree, because the answer comes back as a rule about all of them.
+- L562. A named rule is copied through its WORKED EXAMPLE, so an example that contradicts the rule teaches the inverse with the rule's authority behind it.
+- L387. A change fixing a defect CLASS must have its own DIFF searched for a fresh instance, because it is written by somebody holding the class in mind.
+- L585. A guard banning raw values in favour of tokens is blind to a token REFERENCED but never DEFINED, because there is no literal for it to find.
+- L407. A constraint recorded only as a COMMENT is enforced by nothing, and sitting there makes it read as binding.
+- L624. A step whose work list is what an earlier mechanism REPORTED loses every subject a later fix stops it reporting, and still has to act on them.
+- L428. Adding a new threshold BESIDE an existing one leaves every reader of the old constant answering a superseded question, and no change rule fires.
+- L429. A file the platform loads AUTOMATICALLY into every session has a size ceiling nothing measures, so check its size: past it the rules stop arriving.
+- L437. Code lifted out of a file leaves behind everything it inherited from that file's AMBIENT SCOPE, and the inherited thing is usually a default.
+- L631. Resolving a conflict by splicing both sides can drop the delimiter that closed the block, so check the file's STRUCTURE, not just that markers are gone.
+- L655. Finding the right shared place to PUT new logic is not the same as checking whether it already EXISTS, and doing the first well hides the second.
 
 ## Cross-system reliability
 
-- L405. A check deciding whether anything is NEW must compare what the artifact MEANS, never its whole serialized form, because a record routinely carries provenance that changes on every run (a timestamp, a run id, a commit), so the check fires every time, the work repeats, and any verification already earned against the previous version is silently invalidated.
-- L403. An automated flow that both PUSHES a branch and OPENS a pull request must use the ONE credential for both halves, because a platform gates or suppresses the workflow runs triggered by its own default identity, so the update silently carries no checks and an empty check list is indistinguishable from one whose checks have not started yet (L98).
-- L393. An automated job that creates a NAMED outside thing somebody has to act on (a pull request, an issue, a draft, a branch keyed on a date) collides with its OWN previous output for as long as that output sits unconsumed
-- L365. A retry must read what the refusal itself says about when it could succeed, because a backoff measured in seconds cannot outlast a limit measured in hours, and every attempt against a spent allowance spends more of the exhausted thing to be told the same answer.
-- L276. A CI job is priced in allowance minutes, which is the runner's multiplier (macOS ten, Windows two) times its rounded-up minutes, and that price is set before the job is added
-- L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state (an open that is also a close, a mute that is also an unmute) is inverted by the second attempt, and the loop can report success while leaving the state nobody asked for.
-- L512. A process that advances strictly forward and never revisits (a watermark, a cursor, a high water mark) needs a targeted redo path built in from the start whenever anything downstream requires completeness
-- L240. A background job killed in the same breath it is started can outlive the kill, because the signal can arrive before the job has finished starting, and a `wait` on it then blocks for that job's whole lifetime while every assertion still passes.
-- L321. The pid a shell records for a background job names the WRAPPER, not the work, because the command it is sleeping in is a child of that pid and survives a kill aimed at it, so start such a job under job control and signal its process GROUP.
-- L235. A background process inherits the stdout it was started with, so one still running holds a `$(...)` capture or a runner's pipe open long after its parent has exited, and the caller then waits for the CHILD rather than for the work.
-- L234. A test runner or linter that finds its inputs by a default recursive glob also collects every nested checkout inside the repo (an agent worktree, a vendored clone), so name the directories your own sources live in rather than trusting the tool's default excludes.
-- L208. A substitution applied across a whole set of files cannot tell a line that MEANS the placeholder from a line that means a value, so any file describing the mechanism has its own text rewritten
-- L245. A script that finds other scripts by searching for a marker phrase will match ITSELF, because it has to name the marker in order to search for it, and when the matched list is then EXECUTED the result is unbounded recursion rather than a wrong answer.
+- L405. A check deciding whether anything is NEW must compare what the artifact MEANS, not its serialized form, which carries provenance that changes each run.
+- L403. An automated flow that PUSHES a branch and OPENS a pull request must use ONE credential for both, or the platform suppresses the checks it triggers.
+- L393. An automated job creating a NAMED outside thing collides with its OWN previous output for as long as that output sits unconsumed.
+- L365. A retry must read what the refusal says about when it could succeed: a backoff in seconds cannot outlast a limit measured in hours.
+- L276. A CI job is priced in the runner's multiplier times its rounded-up minutes, and that price is set before the job is added.
+- L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state is inverted by the second attempt while the loop reports success.
+- L512. A process that advances strictly forward and never revisits needs a targeted redo path built in from the start wherever completeness matters downstream.
+- L240. A background job killed in the same breath it is started can outlive the kill, and a wait on it then blocks for that job's whole lifetime.
+- L321. The pid a shell records for a background job names the WRAPPER, not the work, so start it under job control and signal its process GROUP.
+- L235. A background process inherits the stdout it was started with, so one still running holds a capture or a runner's pipe open after its parent exits.
+- L234. A runner finding inputs by a default recursive glob also collects every nested checkout, so name the directories your own sources live in.
+- L208. A substitution applied across a whole set of files cannot tell a line that MEANS the placeholder from one that means a value.
+- L245. A script finding other scripts by a marker phrase matches ITSELF, because it has to name the marker, and executing the matches recurses without bound.
 - L197. A function that returns whether it CLAIMED something (a lock, a slot, a run) is only a guard where the caller checks the answer
 - L33. Make the pair of a database write and an external side effect crash-safe.
 - L34. Verify domain and vendor data semantics against real samples before building on them.
@@ -599,7 +599,7 @@ apply it, because the body is where the failure it came from is described.
 - L38. Deletes, renames, and state exits enumerate every derived resource.
 - L39. One timezone, one date helper.
 - L51. A time based threshold is only as timely as the schedule that evaluates it.
-- L66. When several records are collapsed onto one shared external identifier (one email thread, one payment, one batch call), decide for EACH downstream fact whether it belongs to the group or to one member, and refuse to write a member level fact the external system does not name.
+- L66. When several records collapse onto one shared external identifier, decide for EACH fact whether it belongs to the group or to one member.
 - L73. Independent steps sharing one handler each need their own failure boundary.
 - L74. A deadline, age or due date computed from the current clock at read time can never age, because every evaluation moves it forward with the clock.
 - L114. A tool that creates a throwaway workspace must also remove what that workspace caused to be created OUTSIDE it.
@@ -611,70 +611,70 @@ apply it, because the body is where the failure it came from is described.
 - L255. A consumer that gates on an exact SET of accepted format versions turns the producer's next additive bump into a total outage of itself
 - L258. A consumer that acknowledges work by DELETING the record makes an absent record mean both "consumed successfully" and "never written"
 - L259. An escape hatch that switches a gate OFF is inherited by every process that command starts, including the gate's OWN self-test
-- L522. A time or size budget calibrated for ONE execution context is wrong when the same code is reached from another (a scheduled job versus a request, a worker versus a CLI, a foreground run versus a background one), because the platform ceiling differs
-- L527. A retry that CHANGES the request on the assumption of one particular cause (stripping an id it guesses collided, dropping a field it guesses was rejected, narrowing a scope) must confirm that cause from the actual error before altering anything
-- L533. A job on a sparse schedule (weekly, monthly) whose only failure remedy is running it again needs an automatic re-attempt within the same period, because an in-process retry measured in seconds cannot outlast a real outage, and a transiently failed run otherwise silently costs the whole schedule interval.
-- L369. A lock that serialises heavy work must be scoped to the RESOURCE it protects, never to the project that created it, because another project on the same machine does the same heavy work and cannot take a lock it has never heard of.
-- L372. A script that changes its own working directory must capture its own location BEFORE the cd, because a path re-derived from `$0` afterwards is relative to where the script was INVOKED from rather than where it now is, so it resolves for one invocation and silently misses for another.
-- L386. A scheduled job's DECLARED time is not when it runs, because platforms delay scheduled work by hours under load, so two scheduled jobs must never be ordered by clock arithmetic between their crons.
-- L379. Doing by hand what a tool normally does performs the visible change and silently omits the tool's OTHER writes, and the one most often omitted is the record some monitor reads, so the system ends up correct while the monitor is permanently wrong.
-- L390. In a two way sync, a file REGENERATED from one side rather than mirrored gets none of the protection the mirrored files beside it get, so a merge rule written for the receiving direction has to be written again for the sending one.
-- L625. A two way mirror transmits what EXISTS and has no way to transmit what was REMOVED, so a replica that has not yet received a deletion restores the deleted item on its next send, and the restoration is indistinguishable from a legitimate addition.
-- L409. Two primitives that provide the same visible exclusion or ownership (a file lock against a directory used as a mutex, a lease against a flag, a transaction against a hand rolled guard) routinely differ in what happens when their HOLDER DIES, because some are released by the kernel and some need cleanup that nobody runs after a crash, so swapping one for the other ships a regression no test that does not crash can see.
-- L600. A lock guarding a job the platform RETRIES must let the retry recognise its dead predecessor, because a retry arrives seconds after the kill carrying the same event identity, and a lock that can only expire by deadline refuses the platform's own recovery while reading as correct behaviour.
-- L617. An operation that keeps its progress in an on disk resumable state (a git rebase or merge, a migration runner, a batch cursor) leaves that state behind when its process is killed, and the leftover reads as HEALTHY to every check that examines content, because the queue is empty, the tree is clean and nothing conflicts, so the next run must inspect the operation's own progress marker rather than the data it was moving.
-- L618. A one time import or correction that copies data between two systems which both stay live is a snapshot rather than a fix, so the check that proves the two still agree ships in the same change.
-- L620. When replicating a system's behaviour, enumerate its inputs from what it ACTUALLY consults at decision time, never from the upstream source those inputs are supposed to come from.
-- L423. Configuration INSTALLED into the platform (a launch agent, a cron entry, a systemd unit, a git hook, a shell alias) is a COPY, so changing its definition in the source changes nothing on any machine until that machine re-runs the installer, and nothing reports a machine still running the old copy.
-- L434. A character written as a backslash escape INSIDE a pattern handed to grep or sed is read one way by the BSD tools a Mac has and another by the GNU tools every Linux runner has, and neither errors, so the pattern silently stops matching and whatever consumed the result reads as zero.
-- L435. A tool that writes commits of its own must pass its OWN identity on every git call that can create a commit, because a machine may have none configured (every CI runner, any freshly set up machine) and git REFUSES rather than defaulting.
-- L441. A lock taken with `flock` on a plain file descriptor is inherited by every process started while it is held, and an inherited descriptor holds the lock exactly as the opener's does, so any process that outlives the run keeps the exclusion without ever having asked for it and no care in the locking code can reach it. Open such a descriptor close on exec, and make the blocked wait NAME its current holder, because the usual reassurance that the kernel releases a flock when its holder dies is true of the opener and false of every inheritor.
-- L444. A guard that identifies its own leftovers by matching text against a MACHINE WIDE namespace (the process table, a port, a temp path, a shared lock list) claims everything that matches, including work it never started, so assert against the process GROUP or the pid it actually created.
-- L640. A migration applied before the code that needs it deploys must leave the DEPLOYED code working, because the two are live together for the length of the deploy.
-- L642. In a SQUASH MERGE repo no merged branch is ever an ancestor of main, so every local way of asking whether a branch has shipped reports a merged branch as UNMERGED
-- L668. A tool that locates a resource by assuming the directory it was invoked in IS that resource (a git checkout, a package root, a project) is inert in every project whose checkout sits below that directory, and because such a tool almost always fails open, the capability it provides disappears while the run still reports normally.
+- L522. A budget calibrated for ONE execution context is wrong when the same code is reached from another, because the platform ceiling differs.
+- L527. A retry that CHANGES the request on an assumed cause must confirm that cause from the actual error before altering anything.
+- L533. A job on a sparse schedule whose only remedy is running it again needs an automatic re-attempt in the same period, or one failure costs the interval.
+- L369. A lock serialising heavy work must be scoped to the RESOURCE it protects, never the project that created it, since another project cannot take it.
+- L372. A script that changes its own working directory must capture its own location BEFORE the cd, or a path re-derived from its name resolves elsewhere.
+- L386. A scheduled job's DECLARED time is not when it runs, so two scheduled jobs must never be ordered by clock arithmetic between their crons.
+- L379. Doing by hand what a tool normally does omits the tool's OTHER writes, most often the record some monitor reads.
+- L390. In a two way sync, a file REGENERATED from one side gets none of the protection the mirrored files beside it get.
+- L625. A two way mirror transmits what EXISTS and cannot transmit a REMOVAL, so a replica that has not received a deletion restores the deleted item.
+- L409. Two primitives giving the same visible exclusion differ in what happens when their HOLDER DIES, so swapping one for the other ships a regression.
+- L600. A lock guarding a job the platform RETRIES must let the retry recognise its dead predecessor, which arrives seconds later with the same event identity.
+- L617. An operation keeping progress in on disk resumable state leaves it behind when killed, and the leftover reads as HEALTHY to every content check.
+- L618. A one time import between two systems that both stay live is a snapshot, so the check proving they still agree ships in the same change.
+- L620. When replicating a system's behaviour, enumerate its inputs from what it ACTUALLY consults, never from the upstream source they should come from.
+- L423. Configuration INSTALLED into the platform is a COPY, so changing its definition changes nothing until each machine re-runs the installer.
+- L434. A backslash escape inside a pattern handed to grep or sed reads differently under BSD and GNU tools, and neither errors, so the pattern stops matching.
+- L435. A tool that writes commits of its own must pass its OWN identity on every git call: a machine may have none and git REFUSES rather than defaulting.
+- L441. A flock on a plain file descriptor is inherited by every process started while it is held, so open it close on exec and make the wait NAME its holder.
+- L444. A guard identifying its leftovers by matching text against a MACHINE WIDE namespace claims work it never started, so assert against the pid it created.
+- L640. A migration applied before the code that needs it deploys must leave the DEPLOYED code working, because the two are live together during the deploy.
+- L642. In a SQUASH MERGE repo no merged branch is ever an ancestor of main, so every local way of asking whether a branch shipped reports it as UNMERGED.
+- L668. A tool locating a resource by assuming its invocation directory IS that resource is inert in every project whose checkout sits below that directory.
 - L448. Putting a SECOND rule behind an EXISTING override, skip flag or suppression token silently widens every use of that token
-- L453. The operation that REGENERATES a shared artifact is routinely the one outside the locking every reader of it takes, because regenerating reads as a rare setup step rather than as work, so put the writer under the same lock as the readers and have it refuse rather than wait.
+- L453. The operation that REGENERATES a shared artifact is usually outside the locking every reader takes, so put the writer under the same lock and refuse.
 
 ## Test speed
 
-- L290. A test that waits a FIXED time for something (a click to land, a clock to move, a poll to fire) is asserting about the machine's load, so wait on the condition itself, or SET the clock, and the instant version is the stronger test.
-- L291. A test that can only pass by REACHING something (a network, a live service, a real client) is either an integration test that lives with the others, or a test with a missing seam, and one that asserts only that a failure happened is satisfied by the environment failing and pays a timeout to prove nothing.
-- L292. A subsumption sweep (which tests are strictly weaker than a neighbour, which titles are duplicated) is worth running even when it finds nothing, and when it does find a deletion, name which surviving test covers each deleted assertion.
-- L293. A flake is a speed cost priced at a full re-run, and a retry hides the price, so count flakes on every run, put the count where a reviewer looks, and rank a recurring one with the speed findings rather than the reliability backlog.
-- L294. On a starved runner, per-test durations measure the runner, not the tests, and some runner formats print elapsed-since-start rather than cost, so read the format and the core count before reading the numbers, and keep only what is slow in every one of several runs.
-- L295. When the tests are the time, the suite's own concurrency setting is the first thing to read, in the runner you actually use, and the reading is arithmetic: sum the per-test durations and compare with the wall clock, because equal means one core and no reading of the source will tell you that.
-- L296. Anything that divides work between workers (shards, a launch order, a balance check) divides by a MEASURED cost, never by a count of items, and the check that guards the balance measures in the same unit (L63), or it passes while measuring the wrong thing.
-- L297. A scanner that guards a class of fault across the whole tree pays per line, so it is written as one pass per file from the start, and a failing guard's full output is kept (L148) so an intermittent failure can be diagnosed instead of retried.
-- L298. A harness that reruns the suite once per case (a mutation sweep, a property sweep, a matrix, a suite that tests itself by launching itself) pays the boot once per case, so the lever is the boot, then the cadence, and never the tests; the per-case verdict semantics that make the tool trustworthy must survive the change unchanged.
-- L433. Work a runner SPLITS across parallel workers must be self contained per unit, because the split is chosen at run time from measured cost and moves between runs, so a unit that reads what its neighbour set up passes until the day the two land in different workers.
-- L672. A probe running in a DIFFERENT JS realm from the page (a browser extension's isolated world, a devtools evaluation, a sandboxed frame) cannot see the page's own globals or a framework's element properties, and a value it writes bypasses that framework's change tracking, so an ABSENCE read through it is never evidence and every conclusion drawn from one has to be discarded.
-- L438. A measurement taken by SAMPLING from inside the same context as the thing being measured (polling in a script that shares the browser's frames, a profiler on the thread it profiles, a logger on the loop it watches) can itself be the load that changes the result, so a reading saying the thing under test is slow or dead is first evidence about the MEASUREMENT. Judge by the events the platform emits for that work rather than by observing it from beside it.
+- L290. A test that waits a FIXED time for something is asserting about the machine's load, so wait on the condition itself, or SET the clock.
+- L291. A test that can only pass by REACHING a real service is either an integration test or one with a missing seam, and pays a timeout to prove nothing.
+- L292. Run a subsumption sweep even when it finds nothing, and when it does find a deletion, name which surviving test covers each deleted assertion.
+- L293. A flake is a speed cost priced at a full re-run, and a retry hides the price, so count flakes and rank a recurring one with the speed findings.
+- L294. On a starved runner per-test durations measure the runner, so read the format and core count first, and keep only what is slow in several runs.
+- L295. When the tests are the time, read the suite's own concurrency setting: sum the per-test durations against the wall clock, because equal means one core.
+- L296. Anything dividing work between workers divides by a MEASURED cost, never a count of items, and the guard measures in the same unit.
+- L297. A scanner guarding a class of fault across the whole tree pays per line, so write it as one pass per file, and keep a failing guard's full output.
+- L298. A harness that reruns the suite once per case pays the boot each time, so the lever is the boot, then the cadence, and never the tests.
+- L433. Work a runner SPLITS across parallel workers must be self contained per unit, because the split moves between runs and neighbours land elsewhere.
+- L672. A probe in a DIFFERENT JS realm cannot see the page's globals or a framework's element properties, so an ABSENCE read through one is never evidence.
+- L438. A measurement sampled from inside the same context as the thing measured can itself be the load, so judge by the events the platform emits.
 
 ## Pipeline speed
 
 - L395. A speed improvement claimed from ONE reading per arm cannot be told from noise
-- L299. The tests are innocent until measured guilty and the pipeline rarely is, so the first move in any speed pass is per-step timing of every stage a push or merge waits on, read off the CI API, before a single test is opened.
-- L300. A gate's own guards are a pipeline and they are never timed because nobody thinks of them as tests, so time every stage a push waits on including the ones that guard the guards, and put the measurement where the claim about it lives, so the next drift is a diff rather than a discovery.
-- L301. Look for the same work done twice per event: a suite run by two jobs, an artifact built twice per pull request, a merge verified by two workflows, migrations applied by two adjacent steps, a target compiled for a runner that never launches it.
-- L302. Serial steps with no dependency on each other are free wall clock, so split them, but only what is independent and only when the split leg is on the critical path, because a split buys the shorter leg at the price of a duplicated setup.
-- L303. Cache or kill the cold starts (a build cache, a browser download, container images, package checkouts), keyed on the thing that invalidates them; a tool invoked through `npx` that is not in `package.json` is downloaded on every run at whatever version is latest that day and wants a pinned devDependency, not a cache; a cold start that cannot be cached can often be started earlier; and a cache that RESTORES on every run is only a log line until a measured difference in what gets rebuilt says it saves anything (L3, L98).
-- L304. A report-only check still gates in practice: if the merge flow waits for every check to go green, "report-only" describes the workflow file and not the waiting, so price an informational job as if it were a gate, because to the person waiting it is one.
-- L305. Job and check names are load-bearing: workflow files, guard scripts and branch rulesets all key on them, and the ruleset is the one a search of the repo cannot find, so a job split or rename ships a fan-in job holding the old name plus a pin that its requirements list stays complete.
-- L306. Wall-clock minutes and billed minutes are different budgets, so price every pipeline change in both, read the paid currency off the billing system rather than the plan page, and read the multiplier off the runner label, because a macOS runner draws ten allowance minutes per minute and a self-hosted one draws none.
-- L307. On a free public repository the runner concurrency limit is the budget, so a job is priced in the slots it holds times how long it holds them, whoever is waiting, and every job launched over the limit delays every other.
-- L308. The speed lever you refuse is part of the audit: name in writing the biggest lever you deliberately did not pull and what it would change in what is measured or caught, so a future speed pass does not "discover" it.
-- L309. A structural change to how a suite runs (a job split, a worker count, a shard scheme, a new reporter) rides on an instrument that already reports the thing the change could break, and if no instrument exists, or the existing one only reads the shape of run it has already seen, building or re-fitting it is the first issue, ahead of anything it would judge.
-- L310. Every job bills a minimum of one minute, so a tiny always-on job is expensive when its isolation is decorative and worth keeping when the isolation does work (it gates something on its own, it must be able to fail alone); and a job sitting just OVER the minute is worth the same look as one just under it.
-- L311. An audit of "PR testing" stops at the PR unless it walks to production, so time the path from merge to live as carefully as the path from push to green, because it is the wait a person actually sits through after clicking merge, and it may hold the largest serial block in the whole pipeline.
-- L312. Name the consumer of every run before ranking anything, because a run whose only reader is a person is priced in that person's minutes and a run with no reader is priced entirely in the paid currency; and when the merge tool proves the merged tree is byte for byte the pull request's tree (linear history, up to date branch, squash merge, identical tree hash), the post-merge re-run is provably redundant and can be skipped fail closed on that proof, never on a path or a trigger.
-- L313. Every CI job carries an explicit timeout (a hang is worse than a failure: L110, and on a metered Mac runner a six hour default costs two months of allowance), and the guard that requires it points at the directory and at every repo the class can appear in, not at the one file it was written for.
-- L314. CI that has stopped is the slowest test suite there is and it stops quietly: a refused run looks like a failed run in every list, nothing alerts on an exhausted allowance, and a repo that goes quiet for a month looks like a repo nobody is working on, so a speed pass begins by confirming the tests are running at all, and a repo on a capped or metered runner needs a visible surface showing how much of the month is left before the day it is zero (L13, L523).
-- L315. Anything divided into fixed-size pieces under a fixed deadline needs a test holding the measured size of the largest piece to a fraction of the deadline (L172, L224) and pieces dealt by measured cost rather than by count (L296), because a sweep sized by count grows into its own deadline and the red it then produces names the sweep's size as a broken guard (L11).
-- L316. A recorded decision carries the premise it was made on, and the premise can expire while the decision stands, so record the premise in a form that can be re-measured (a pin, a command, a number with its source) rather than as a dated sentence, because a date on a number makes it MORE trusted, not less (L61, L244, L210).
-- L538. A build left red for a known unrelated reason stops being a signal for everything else, because a genuinely new failure then arrives indistinguishable from the standing one in every list. Fix or quarantine the standing failure rather than working alongside it, since the longer it stands the more changes get merged with nothing actually judging them.
-- L671. A concurrency rule that cancels a superseded run saves the whole cost of a read only job and is a crash part way through a writing one, so decide cancellation per workflow by what it WRITES (a database, a commit, an external call), never by sweeping one rule across every file.
-- L380. Two build or test invocations that share an output or cache directory share no work unless every setting that keys that output also matches, so a differing configuration, flag or compilation condition makes the shared path share nothing while still reading as evidence of reuse. Measure what actually recompiles rather than concluding reuse from the shared path.
-- L571. A gate that performs an external network call BEFORE the check it is named for can fail without ever running that check, so its red is indistinguishable from the failure it exists to report and merging becomes dependent on a third party being up.
-- L573. Before running a pure check once per item, count the DISTINCT inputs it will actually see, because a loop that reads as once per thing is usually mostly repeats. Cache on the WHOLE input, never a coarser key, since a coarser one is fast and silently wrong in exactly the cases a uniform fixture never contains.
+- L299. The tests are innocent until measured guilty, so the first move in a speed pass is per-step timing of every stage a push waits on.
+- L300. A gate's own guards are an untimed pipeline, so time every stage a push waits on and put the measurement where the claim about it lives.
+- L301. Look for the same work done twice per event: a suite run by two jobs, an artifact built twice, a merge verified by two workflows.
+- L302. Serial steps with no dependency are free wall clock, so split them, but only what is independent and only on the critical path.
+- L303. Cache or kill the cold starts, keyed on what invalidates them, and prove a cache saves something by a measured difference in what gets rebuilt.
+- L304. A report-only check still gates in practice if the merge flow waits for every check, so price an informational job as if it were a gate.
+- L305. Job and check names are load-bearing and a branch ruleset cannot be found by searching the repo, so a rename ships a fan-in job holding the old name.
+- L306. Wall-clock and billed minutes are different budgets, so price every pipeline change in both and read the multiplier off the runner label.
+- L307. On a free public repository the runner concurrency limit is the budget, so a job is priced in the slots it holds times how long it holds them.
+- L308. Name in writing the biggest speed lever you deliberately did not pull, so a future pass does not discover it.
+- L309. A structural change to how a suite runs rides on an instrument that already reports what the change could break, and building one is the first issue.
+- L310. Every job bills a minimum of one minute, so a tiny always-on job is expensive when its isolation is decorative and worth keeping when it does work.
+- L311. An audit of PR testing stops at the PR unless it walks to production, so time merge to live as carefully as push to green.
+- L312. Name the consumer of every run before ranking anything, and skip a provably redundant post-merge re-run on proof of an identical tree, never on a path.
+- L313. Every CI job carries an explicit timeout, and the guard requiring it points at every repo the class can appear in, not the one file it was written for.
+- L314. CI that has stopped is the slowest suite there is and it stops quietly, so a speed pass begins by confirming the tests are running at all.
+- L315. Anything divided into fixed-size pieces under a fixed deadline needs the largest piece held to a fraction of it, and pieces dealt by measured cost.
+- L316. A recorded decision carries a premise that can expire, so record the premise in a form that can be re-measured, not as a dated sentence.
+- L538. A build left red for a known unrelated reason stops being a signal for everything else, so fix or quarantine it rather than working alongside it.
+- L671. A concurrency rule cancelling a superseded run saves a read only job and crashes a writing one, so decide per workflow by what it WRITES.
+- L380. Two build invocations sharing an output directory share no work unless every setting keying that output matches, so measure what actually recompiles.
+- L571. A gate performing a network call BEFORE the check it is named for can fail without running that check, and merging then depends on a third party.
+- L573. Before running a pure check once per item, count the DISTINCT inputs it will see, and cache on the WHOLE input, never a coarser key.
 - L682. A live path is only as outage tolerant as its LEAST cached read, so inventory every read on it and give each one a served-stale fallback
