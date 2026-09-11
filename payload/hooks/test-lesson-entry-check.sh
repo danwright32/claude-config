@@ -28,11 +28,14 @@ fail=0
 check() { # check <description> <result>   ("ok" passes, anything else is the failure text)
   if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi
 }
+# Both trim with parameter expansion rather than piping into `head`. Under pipefail a short
+# circuiting consumer kills its producer and the pipeline reports a failure that never happened
+# (L183), and this repo ratchets the count of such pipelines down rather than up.
 says() { # says <description> <text> <substring>
-  case "$2" in *"$3"*) check "$1" ok ;; *) check "$1" "did not say '$3' (said: $(printf '%s' "$2" | head -c 200))" ;; esac
+  case "$2" in *"$3"*) check "$1" ok ;; *) check "$1" "did not say '$3' (said: ${2:0:200})" ;; esac
 }
 silent() { # silent <description> <text>
-  if [ -z "$(printf '%s' "$2" | tr -d '[:space:]')" ]; then check "$1" ok; else check "$1" "it said: $(printf '%s' "$2" | head -c 200)"; fi
+  if [ -z "$(printf '%s' "$2" | tr -d '[:space:]')" ]; then check "$1" ok; else check "$1" "it said: ${2:0:200}"; fi
 }
 
 [ -f "$HOOK" ] || { echo "FAIL: no hook at $HOOK"; echo "passed: 0, failed: 1"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
@@ -102,7 +105,8 @@ out="$(payload_for Edit "$HOME_FIX/LESSONS.md" | CLAUDE_HOME="$HOME_FIX" SYNC_CL
        SYNC_NOTIFIER="$WORK/fake-notifier" PATH="$WORK:$PATH" bash "$HOOK" 2>&1)"
 says "the fault still reaches the session" "$out" '"decision":"block"'
 if [ -s "$NOTED" ]; then
-  check "and nothing was pushed to the desktop" "it notified: $(head -c 120 "$NOTED")"
+  _noted="$(cat "$NOTED")"
+  check "and nothing was pushed to the desktop" "it notified: ${_noted:0:120}"
 else
   check "and nothing was pushed to the desktop" ok
 fi
