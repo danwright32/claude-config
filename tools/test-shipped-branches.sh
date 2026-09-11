@@ -110,6 +110,65 @@ if [ "$rows_for_main" = 0 ]; then ok; else bad "the default branch was judged ag
 rows_total="$(grep -cE '^  (SHIPPED|UNMATCHED) ' <<< "$out" | tr -d ' ')"
 if [ "$rows_total" = 3 ]; then ok; else bad "expected three judged branches, got $rows_total"; fi
 
+echo "shipped-branches: it judges the remote, not a stale local copy of it"
+
+# Found within an hour of shipping this tool, by trying to act on what it said. It enumerated
+# refs/remotes/origin, which is this clone's REMEMBERED copy of the remote and is only as current
+# as the last prune. On the real repo that copy held 50 branches while the remote held exactly one:
+# every other branch had been deleted on the server long ago and nothing here had noticed. So the
+# tool answered confidently, at length, about 49 branches that do not exist, and the first command
+# anybody ran on the strength of it failed with "remote ref does not exist".
+#
+# A report about a list nobody verified against its source is the thing this tool was built to
+# replace, so it now reads the remote when it can, and says so plainly when it cannot (L11, L175).
+
+# A branch that was pushed, fetched, and then removed from the remote behind this clone's back.
+git_q "$R" checkout -qb deleted-elsewhere
+printf 'five\n' > "$R/i.txt"
+git_q "$R" add i.txt; git_q "$R" commit -qm "Work that was later removed from the remote"
+git_q "$R" push -q origin deleted-elsewhere
+git_q "$R" checkout -q main
+git_q "$R" fetch -q origin
+git -C "$BARE" update-ref -d refs/heads/deleted-elsewhere
+# The stale ref really is still here, or the case below is about nothing (L159).
+check_stale="$(git -C "$R" for-each-ref --format='%(refname:short)' refs/remotes/origin/deleted-elsewhere)"
+if [ -n "$check_stale" ]; then ok; else bad "the fixture did not leave a stale tracking ref behind"; fi
+
+out_rm="$(bash "$TOOL" "$R" 2>&1)"
+says "a branch gone from the remote is named as gone" "deleted-elsewhere" "$out_rm"
+says "and it is called gone rather than judged as work" "GONE" "$out_rm"
+says "and it says how to clear the stale copy" "prune" "$out_rm"
+# It must NOT be reported as unfinished work, which is the reading that sent somebody to delete
+# a branch that was not there.
+if grep -qE '^  UNMATCHED +origin/deleted-elsewhere' <<< "$out_rm"; then
+  bad "a branch that no longer exists was reported as work that never landed"
+else ok; fi
+
+# origin/HEAD is the symbolic pointer at the default branch, not a branch anybody wrote. It
+# shortens to plain `origin`, so an exclusion written against the short name keeps it and it gets
+# reported as a branch called origin that is gone from the remote, with a prune that would not
+# clear it: a remedy for a thing that is not a problem (L11, L111).
+lacks "the symbolic HEAD pointer is not reported as a branch" "  GONE       origin  " "$out_rm"
+if grep -qE '^  (SHIPPED|UNMATCHED|GONE) +origin$' <<< "$out_rm"; then
+  bad "origin/HEAD was listed as a branch in its own right"
+else ok; fi
+
+# The branches that ARE on the remote are still judged, so this has not turned into a tool that
+# only ever reports staleness (L159).
+says "a branch still on the remote is still judged" "still-open" "$out_rm"
+
+# When the remote cannot be reached at all, it falls back to the remembered copy and SAYS that,
+# rather than presenting a stale list as current (L98).
+UNREACHABLE="$WORK/unreachable-clone"
+cp -R "$R" "$UNREACHABLE"
+git -C "$UNREACHABLE" remote set-url origin "$WORK/no-such-bare-repo.git"
+out_un="$(bash "$TOOL" "$UNREACHABLE" 2>&1)"
+says "an unreachable remote is said out loud" "could not be read" "$out_un"
+says "and it names what it fell back to" "last fetch" "$out_un"
+# It still produces a report rather than refusing, because a stale answer that says it is stale is
+# more use than nothing when somebody is offline.
+says "it still judges what it has" "still-open" "$out_un"
+
 echo "shipped-branches: what it refuses"
 
 # A target it cannot use is refused rather than silently answered about somewhere else (L320).

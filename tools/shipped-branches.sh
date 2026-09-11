@@ -46,11 +46,39 @@ default="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 
 git -C "$repo" rev-parse --verify --quiet "$default" >/dev/null 2>&1 \
   || fail "cannot work out which branch things merge into ($default is not a ref here)"
 
-# Every remote branch except the default and the symbolic HEAD.
-branches="$(git -C "$repo" for-each-ref --format='%(refname:short)' refs/remotes/origin \
-  | grep -v '^origin/HEAD$' | grep -vx "$default" || true)"
+# WHICH BRANCHES EXIST, asked of the remote rather than of this clone's memory of it.
+#
+# The first version read refs/remotes/origin, which is only as current as the last prune. On the
+# real repo that copy held 50 branches while the remote held exactly one: every other branch had
+# been deleted on the server long ago and nothing here had noticed. The tool then reported at
+# length on 49 branches that do not exist, and the first command run on the strength of it failed
+# with "remote ref does not exist". A report about a list nobody checked against its source is the
+# thing this tool exists to replace (L11, L175).
+#
+# So the remote is asked. When it cannot be reached the remembered copy is used and that is said
+# plainly, because a stale answer that admits it is stale is worth more than nothing to somebody
+# offline, and worth much more than a stale answer presented as current (L98).
+remote_heads="$(git -C "$repo" ls-remote --heads origin 2>/dev/null | awk '{print $2}' | sed 's#^refs/heads/#origin/#' || true)"
+remote_read=1
+[ -n "$remote_heads" ] || remote_read=0
 
-if [ -z "$branches" ]; then
+tracked="$(git -C "$repo" for-each-ref --format='%(refname)' refs/remotes/origin \
+  | grep -v '^refs/remotes/origin/HEAD$' \
+  | sed 's#^refs/remotes/##' || true)"
+
+if [ "$remote_read" = 1 ]; then
+  branches="$(printf '%s\n' "$remote_heads" | grep -vx "$default" || true)"
+  # Refs this clone still remembers for branches the remote no longer has. Not work, and not a
+  # verdict about work: a local tidy up, named as one.
+  gone="$(comm -23 \
+    <(printf '%s\n' "$tracked" | grep -vx "$default" | sort) \
+    <(printf '%s\n' "$remote_heads" | sort) 2>/dev/null || true)"
+else
+  branches="$(printf '%s\n' "$tracked" | grep -vx "$default" || true)"
+  gone=""
+fi
+
+if [ -z "$branches" ] && [ -z "$gone" ]; then
   printf 'shipped-branches: %s has no branches besides %s, so there is nothing to judge.\n' \
     "$repo" "$default"
   exit 0
@@ -64,7 +92,15 @@ git -C "$repo" log --format='%H %s' "$default" > "$subjects" 2>/dev/null
 
 shipped=0
 unmatched=0
-printf 'shipped-branches: %s, judged against %s\n\n' "$repo" "$default"
+gone_count=0
+printf 'shipped-branches: %s, judged against %s\n' "$repo" "$default"
+if [ "$remote_read" = 1 ]; then
+  printf '  branches read from the remote itself.\n\n'
+else
+  printf '  the remote could not be read, so this is what this clone remembered at its last fetch\n'
+  printf '  and a branch deleted on the server since then still appears below. Refresh it with:\n'
+  printf '  git -C %s fetch --prune\n\n' "$repo"
+fi
 
 while IFS= read -r branch; do
   [ -n "$branch" ] || continue
@@ -99,7 +135,19 @@ done <<EOF
 $branches
 EOF
 
-printf '\n  %d shipped, %d unmatched.\n' "$shipped" "$unmatched"
+while IFS= read -r stale; do
+  [ -n "$stale" ] || continue
+  printf '  GONE       %-46s no longer on the remote; this clone still remembers it\n' "$stale"
+  gone_count=$((gone_count + 1))
+done <<EOF
+$gone
+EOF
+
+printf '\n  %d shipped, %d unmatched, %d gone from the remote.\n' "$shipped" "$unmatched" "$gone_count"
+if [ "$gone_count" -gt 0 ]; then
+  printf '  A GONE branch is not work and not a verdict about work: the branch was removed on the\n'
+  printf '  server and this clone has not caught up. Clear those with: git -C %s fetch --prune\n' "$repo"
+fi
 if [ "$unmatched" -gt 0 ]; then
   printf '  An UNMATCHED branch is one to look at, not one to act on: a branch reworded when it\n'
   printf '  merged looks exactly like this. Read one with: git -C %s log --oneline %s..<branch>\n' \
