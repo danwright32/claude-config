@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 647 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 648 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -178,6 +178,7 @@ apply it, because the body is where the failure it came from is described.
 - L459. A performance log read as what people experience must record whether the product was IN USE, or idle and in use merge into one distribution.
 - L460. A claim that something CANNOT be measured must come from attempting it, never fixed text, or a test on its wording keeps a false claim green.
 - L462. Commit a file before a tool rewrites it in place: cleaning up its leftover damage means a revert, which also destroys uncommitted work.
+- L463. An isolation mechanism isolates only what it was built to: enumerate what it does NOT cover, because those stay shared and the isolation hides them.
 
 ## Data safety
 

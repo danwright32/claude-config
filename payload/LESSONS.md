@@ -2277,6 +2277,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   whoever cleans up)
   SHORT: Commit a file before a tool rewrites it in place: cleaning up its leftover damage means a revert, which also destroys uncommitted work.
 
+- **L463. An isolation mechanism isolates only what it was built to isolate, so before relying on one,
+  ENUMERATE what it does not cover: those resources stay shared, and the isolation is what invites you to
+  forget them.** A git worktree separates the file tree and nothing else, so the installed binary, the
+  stash, the live database, a login agent, the global config and every machine wide lock are still shared
+  between the sessions it appeared to separate. The danger is not the sharing, which is obvious once
+  stated, but the confidence the isolation supplies.
+  (overture#3798, 2026-09-11: two Claude sessions worked the same repository in separate worktrees, which
+  kept their files apart perfectly. One of them ran `mac/build-install.sh` three times in an evening,
+  which quits the running app and replaces `/Applications/Overture.app`. The other had no way to know and
+  the installer had no way to ask. Worse than the interruption: the app holds the live store, so the
+  second session was reading one build before each install and another after it, with nothing in either
+  transcript marking the boundary (L216, L420). Dan's global rules already record the sharpest instance,
+  that the stash is shared and a worktree does not isolate it; this is the class)
+  SHORT: An isolation mechanism isolates only what it was built to: enumerate what it does NOT cover, because those stay shared and the isolation hides them.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
