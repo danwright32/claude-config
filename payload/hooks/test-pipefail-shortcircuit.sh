@@ -273,6 +273,43 @@ done <<EOF
 $(git -C "$ROOT" ls-files 2>/dev/null || true)
 EOF
 
+# ---------------------------------------------------------------------------
+# THE FILE BEING WRITTEN RIGHT NOW (claude-config#376).
+#
+# Everything above enumerates from `git ls-files`, which lists TRACKED files, so a suite that has
+# not been committed yet is invisible to it. Measured 2026-09-11, twice in one session: two new
+# suites were written with real sites in them, this ratchet was run before committing and said
+# nothing both times, and CI went red on the commit that added each of them. The guard was right
+# about the violations and simply could not see them at the moment anybody would have acted on
+# them (L376's own case, and the reason L456 exists).
+#
+# Reported as a NOTICE and deliberately NOT counted in the verdict. Counting them would make this
+# suite's pass or fail depend on uncommitted local state, so a draft nobody intends to commit would
+# fail it while CI, which sees only what was committed, passed: local and CI would then disagree in
+# the other direction, which is the same defect facing the other way (L376). What the notice gives
+# is the information at the moment it can be acted on, and it says outright that these WILL count
+# once committed, so the silence that produced the incident is gone without the verdict moving.
+pending=""
+while IFS= read -r rel; do
+  [ -n "$rel" ] || continue
+  case "$rel" in *.sh|claude-sync) ;; *) continue ;; esac
+  f="$ROOT/$rel"
+  [ -f "$f" ] || continue
+  grep -q 'pipefail' "$f" 2>/dev/null || continue
+  have="$(count_uncommented "$f")"
+  [ "${have:-0}" -gt 0 ] || continue
+  pending="$pending  $rel: $have
+"
+done <<EOF
+$(git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null || true)
+EOF
+case "$pending" in
+  *[![:space:]]*)
+    echo "test-pipefail-shortcircuit: NOT YET COUNTED, because these are not committed, and this suite judges what git tracks so that its verdict matches CI's. They WILL be counted the moment they are, and the verdict below does not include them:"
+    printf '%s' "$pending"
+    echo "  Read the producer into a variable and match with \`case\`, or write it to a file and let grep read that." ;;
+esac
+
 case "$grew$unlisted" in
   *[![:space:]]*)
     check "no file has gained a short circuiting pipeline" "these have:
@@ -286,6 +323,76 @@ case "$shrank$gone" in
 $shrank$gone  Lower the recorded number, so what is left keeps meaning something." ;;
   *) check "the baseline has been lowered as sites were converted" ok ;;
 esac
+
+# ---------------------------------------------------------------------------
+# The notice above, driven end to end against a throwaway repository (claude-config#376).
+# ---------------------------------------------------------------------------
+# A guard seen only against passing input has not been shown to work (L1), and this one has three
+# outcomes that have to stay apart: a site in an UNCOMMITTED file is reported and NOT counted, the
+# same site once COMMITTED is counted and fails, and a clean untracked file says nothing at all.
+# Run as a nested copy of this very file against its own fixture, so what is proved is the code
+# that ships rather than a restatement of it (L52).
+if [ -z "${SHORTCIRCUIT_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
+  sc_probe="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.shortcircuit.XXXXXXXX")" || sc_probe=""
+  case "${sc_probe%/}" in
+    ''|/|"${HOME%/}") echo "test-pipefail-shortcircuit: refusing to run its own fixture: throwaway directory came back as '$sc_probe'." >&2 ;;
+    *)
+      git init -q "$sc_probe" 2>/dev/null
+      git -C "$sc_probe" config user.email t@e 2>/dev/null
+      git -C "$sc_probe" config user.name t 2>/dev/null
+      printf '# empty baseline\n' > "$sc_probe/base.txt"
+      # Ten listed files, because the baseline's own floor refuses a fixture that proves almost
+      # nothing, and that floor is this suite's, not something this fixture may opt out of.
+      i=1
+      while [ "$i" -le 10 ]; do
+        printf 'set -uo pipefail\necho clean\n' > "$sc_probe/listed$i.sh"
+        printf '0 listed%s.sh\n' "$i" >> "$sc_probe/base.txt"
+        i=$((i + 1))
+      done
+      git -C "$sc_probe" add . >/dev/null 2>&1
+      git -C "$sc_probe" -c commit.gpgsign=false commit -q -m seed >/dev/null 2>&1
+      sc_run(){ SHORTCIRCUIT_NESTED=1 SHORTCIRCUIT_ROOT="$sc_probe" SHORTCIRCUIT_BASELINE="$sc_probe/base.txt" bash "${BASH_SOURCE[0]}" 2>&1; }
+
+      # A clean untracked file says nothing: a notice on every run is the noise this exists to
+      # prevent (L36).
+      printf 'set -uo pipefail\necho clean\n' > "$sc_probe/fresh.sh"
+      sc_out="$(sc_run)"; sc_rc=$?
+      case "$sc_out" in
+        *"NOT YET COUNTED"*) check "a clean uncommitted file is not announced" "it was announced" ;;
+        *) check "a clean uncommitted file is not announced" ok ;;
+      esac
+
+      # A site in an uncommitted file IS announced, and does NOT move the verdict.
+      # ASSEMBLED, never written out: spelled literally this line would itself hold the shape this
+      # suite counts, and the file would report ITSELF for ever, which is the guard working
+      # correctly and is why every other pattern here is assembled too (L245).
+      sc_bad='printf %s "$x" | gr'"ep -q needle"
+      printf 'set -uo pipefail\n%s\n' "$sc_bad" > "$sc_probe/fresh.sh"
+      sc_out="$(sc_run)"; sc_rc=$?
+      case "$sc_out" in
+        *"NOT YET COUNTED"*fresh.sh*) check "a site in an uncommitted file is announced" ok ;;
+        *) check "a site in an uncommitted file is announced" "it was not: $sc_out" ;;
+      esac
+      [ "$sc_rc" -eq 0 ] \
+        && check "and it does not move the verdict, which judges what git tracks" ok \
+        || check "and it does not move the verdict, which judges what git tracks" "the run failed ($sc_rc)"
+
+      # THE POSITIVE CONTROL, in the same fixture: the identical file, once committed, IS counted
+      # and DOES fail. Without it the two checks above would pass against a scan that found nothing
+      # anywhere (L159).
+      git -C "$sc_probe" add fresh.sh >/dev/null 2>&1
+      git -C "$sc_probe" -c commit.gpgsign=false commit -q -m add >/dev/null 2>&1
+      sc_out="$(sc_run)"; sc_rc=$?
+      [ "$sc_rc" -ne 0 ] \
+        && check "the same file, once committed, is counted and fails" ok \
+        || check "the same file, once committed, is counted and fails" "it still passed"
+      case "$sc_out" in
+        *"NOT YET COUNTED"*) check "and is no longer announced as uncounted" "it is still announced" ;;
+        *) check "and is no longer announced as uncounted" ok ;;
+      esac
+      rm -rf "$sc_probe" ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # And NOTHING outside a test fixture may carry one at all (claude-config#197).
