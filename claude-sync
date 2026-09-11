@@ -63,6 +63,15 @@ if [ -f "$LESSON_CAP_LIB" ]; then
   # shellcheck source=payload/hooks/lib/lesson-index-cap.sh
   . "$LESSON_CAP_LIB"
 fi
+# Whether the clones on this Mac have the commands the arriving config's hooks call
+# (claude-config#379). Resolved from this script's own location for the same reason as the rule
+# above: the suite points SYNC_REPO at a throwaway directory holding no payload.
+SYNC_COMMANDS_LIB="$SYNC_SELF_PAYLOAD/hooks/lib/sync-commands.sh"
+[ -f "$SYNC_COMMANDS_LIB" ] || SYNC_COMMANDS_LIB="$CLAUDE_HOME/hooks/lib/sync-commands.sh"
+if [ -f "$SYNC_COMMANDS_LIB" ]; then
+  # shellcheck source=payload/hooks/lib/sync-commands.sh
+  . "$SYNC_COMMANDS_LIB"
+fi
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
 MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
@@ -5098,6 +5107,9 @@ do_pull(){
   # Read only, and it fetches nothing: the ref this run already has is what the other clones are
   # measured against (claude-config#266).
   report_other_clones_position
+  # After the payload has landed, because the question is about the hooks that just arrived
+  # (claude-config#379).
+  report_clones_missing_commands
   report_when_lock_released "Pulled shared config onto this Mac (memory/permissions untouched)"
 }
 
@@ -6650,6 +6662,30 @@ report_watcher_hold(){
 # leaves it exactly as missing and the same line comes back. Found on the live machine, where the
 # clone the scheduled sync runs from was four commits ahead and printing that line all day
 # (claude-config#359, L111).
+# Which clones on this Mac are older than the config that has just landed (claude-config#379).
+#
+# The payload and the tool travel separately: the payload reaches a Mac through an apply, while
+# each clone updates when that clone next pulls. So an apply can install a hook calling a command
+# the deployed copy does not have, and the hook then refuses work for a reason that has nothing to
+# do with the work, days later, about something else. Said HERE, at the apply, which is the moment
+# the mismatch is created and the only moment anybody is looking at it.
+#
+# Silent when every clone has everything, because a line on every apply is the noise this exists to
+# prevent (L36). A clone it cannot read says so, which is not the same silence (L98, L11).
+report_clones_missing_commands(){
+  local d
+  command -v sc_report_missing >/dev/null 2>&1 || return 0
+  [ -f "$CLONE_REGISTRY" ] || return 0
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    is_under_temp_dir "$d" && continue
+    # The hooks as they now stand in the LIVE config, which is what will actually run, and the
+    # commands measured against THIS tool, which is the one the config was built alongside.
+    sc_report_missing "$CLAUDE_HOME/hooks" "${BASH_SOURCE[0]}" "$d/claude-sync" >&2
+  done < "$CLONE_REGISTRY"
+  return 0
+}
+
 report_other_clones_position(){
   local up d head n line said=0 ck_refreshed ck_note
   have_git || return 0

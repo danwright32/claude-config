@@ -15443,6 +15443,53 @@ check "#359 the reporter has exactly one caller" "[ \"$OC_CALLERS\" = 1 ]"
 OC_ORDER="$(awk '/^do_pull\(\)\{/{inp=1} inp&&/pull_from_repo_or_die/{pulled=NR} inp&&/^  report_other_clones_position$/{print (pulled>0 && NR>pulled) ? "yes" : "no"; exit}' "$SCRIPT")"
 check "#359 and that caller runs after this clone has pulled" "[ \"$OC_ORDER\" = yes ]"
 
+section "== a clone older than the config it just received is named at the apply (claude-config#379) =="
+# The payload and the tool travel separately. The payload reaches a Mac through an apply, while
+# each clone of the tool updates when that clone next pulls, so an apply can install a hook calling
+# a command the deployed copy does not have. Measured 2026-09-11: a hook calling
+# `claude-sync lesson-faults` met a clone answering "unknown command", read that as a verdict about
+# the lesson, and blocked the edit saying the file could not publish, which is a claim it never
+# measured (L11, L640).
+#
+# Said at the APPLY, which is the moment the mismatch is created and the only moment anybody is
+# looking at it, rather than at run time days later about something else.
+SCB="$WORK/synccmd-bare.git"; git init -q --bare -b main "$SCB"
+SCR="$WORK/synccmd-repo"; git clone -q "$SCB" "$SCR" 2>/dev/null
+git -C "$SCR" checkout -q -b main 2>/dev/null || true
+mkdir -p "$SCR/payload/hooks"
+printf '#!/bin/sh\n' > "$SCR/payload/hooks/keep.sh"
+# The hook ARRIVES with the config, which is the real shape: an apply installs it, and the clone it
+# will call has not caught up. Written into the payload rather than only into the live home,
+# because the apply mirrors the payload over the home and would delete a hook that exists only
+# there, which is what the first version of this fixture did.
+printf '#!/usr/bin/env bash\nsync="$clone/claude-sync"\nout="$("$sync" lesson-faults 2>&1)"\n' > "$SCR/payload/hooks/needs-it.sh"
+echo '{"hooks":{}}' > "$SCR/payload/settings.hooks.json"
+git -C "$SCR" add -A
+git -C "$SCR" -c user.name=t -c user.email=t@e commit -q -m seed
+git -C "$SCR" push -q -u origin main
+SCH="$WORK/synccmd-home"; mkdir -p "$SCH/hooks"
+echo '{"hooks":{}}' > "$SCH/settings.json"
+
+# An OLD clone: a claude-sync whose dispatch predates the command. Registered, so the apply finds it.
+SCOLD="$WORK/synccmd-oldclone"; mkdir -p "$SCOLD"
+printf '%s\n' '#!/usr/bin/env bash' 'cmd="${1:-help}"' 'case "$cmd" in' '  pull) ;;' '  status) ;;' '  *) echo "unknown command" >&2; exit 1 ;;' 'esac' > "$SCOLD/claude-sync"
+chmod +x "$SCOLD/claude-sync"
+SCREG="$WORK/synccmd-clones"; printf '%s\n' "$SCOLD" > "$SCREG"
+
+out_sc="$(CLAUDE_HOME="$SCH" SYNC_REPO="$SCR" SYNC_CLONE_REGISTRY="$SCREG" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#379 pull with an old clone registered: $out_sc"
+check "#379 the apply names a clone missing a command the hooks call" \
+  "line_has \"\$out_sc\" 'lesson-faults' '$SCOLD'"
+check "#379 and gives the command that updates it" \
+  "line_has \"\$out_sc\" '$SCOLD' 'pull'"
+
+# The control. A clone that HAS everything says nothing, or the line is on every apply and stops
+# being read (L36, L104).
+SCREG2="$WORK/synccmd-clones2"; printf '%s\n' "$(dirname "$SCRIPT")" > "$SCREG2"
+out_sc2="$(CLAUDE_HOME="$SCH" SYNC_REPO="$SCR" SYNC_CLONE_REGISTRY="$SCREG2" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#379 a clone that has every command is not named" \
+  "! grep -q 'does not have the command' <<< \"\$out_sc2\""
+
 section "== a clone that has stopped sending says so (claude-config#360) =="
 # Measured on the live machine 2026-09-10: ~/claude-config-sync, the clone the change watcher and
 # the receive timer both run from, held four commits stamped 12:44 to 17:02 that never reached the
