@@ -2263,6 +2263,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   a green check was defending it, and a feature was planned on top of it)
   SHORT: A claim that something CANNOT be measured must come from attempting it, never fixed text, or a test on its wording keeps a false claim green.
 
+- **L462. COMMIT a file before letting any tool temporarily rewrite it IN PLACE (a mutation tester, a
+  codemod, a formatter or migration rehearsal), because the cleanup for the damage such a tool leaves
+  behind when it is interrupted is a revert, and a revert takes any uncommitted work in that file with
+  it.** The two share one fate and only one of them is meant to go. The leftover is visibly broken, so
+  it gets noticed, which is exactly why somebody reaches for the general fix; the specific fix is then
+  "re-apply the lines the tool removed", from the tool's own output or from memory.
+  (overture#3792, 2026-09-11: `scripts/mutate.sh` breaks a file, runs the suite and restores it. It was
+  run twice in one session over uncommitted work, the second time within the hour of the rule being
+  stated out loud and resolved upon, which is the argument for the tool refusing rather than the person
+  remembering (L27). The tool already refuses for several conditions that look like a result and mean
+  nothing, and an uncommitted target is the same shape: the run works and the cost lands later, on
+  whoever cleans up)
+  SHORT: Commit a file before a tool rewrites it in place: cleaning up its leftover damage means a revert, which also destroys uncommitted work.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key

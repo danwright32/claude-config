@@ -177,7 +177,7 @@ apply it, because the body is where the failure it came from is described.
 - L458. A monitor's grace period must not cover a run that has ALREADY failed, so read the newest run's outcome before applying it.
 - L459. A performance log read as what people experience must record whether the product was IN USE, or idle and in use merge into one distribution.
 - L460. A claim that something CANNOT be measured must come from attempting it, never fixed text, or a test on its wording keeps a false claim green.
-- L462. Commit a file before a tool temporarily rewrites it in place, because the cleanup for its leftover damage is a revert that also destroys uncommitted work.
+- L462. Commit a file before a tool rewrites it in place: cleaning up its leftover damage means a revert, which also destroys uncommitted work.
 
 ## Data safety
 
