@@ -3589,6 +3589,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   time rather than a burst, so no process count tripped and it read as a suite merely taking a
   while. It happened twice in one session, the second time after the first had been fixed)
 
+- **L454. A local copy of something that lives elsewhere (a git tracking ref, a cached response,
+  a mirrored table) is usually NAMED after the thing it mirrors, so a reading of it looks identical
+  to a reading of the source and nothing in it says when it was last refreshed. State what a report
+  was read against, and check it against the source before anybody acts on it, because the first
+  action taken on a stale copy is what discovers the staleness.** Distinct from L175, where a value
+  read once goes stale and its silence reads as an assurance: here the naming is what hides it, so
+  every tool built on the copy inherits the confusion and reports it with the source's authority.
+  (claude-config#358 and #361, three times in one day. `refs/remotes/origin/*` was read as the list
+  of branches on origin and reported as 48 stale branches, twice, in an issue and in a review. A
+  tool was then built on that same reading and confidently judged 49 branches that did not exist;
+  the remote held exactly one. It surfaced only when a deletion was approved and `git push origin
+  --delete` answered "remote ref does not exist". `git ls-remote` had the truth throughout, and a
+  third instance was already in a message written while fixing the second, claiming what the shared
+  repo held from a tracking ref that is only as current as the last fetch)
 - **L175. A value read once at startup is only true at startup, and when the thing it describes
   lives OUTSIDE the program (a checkout, a config file, a device, another service) there is no
   action inside the program to hang a re-read on, so it goes stale invisibly and its silence reads
@@ -7346,6 +7360,24 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 
 
+
+- **L453. The operation that REGENERATES a shared artifact is routinely the one outside the
+  locking every reader of it takes, because regenerating reads as a rare setup step rather than
+  as work, so put the writer under the same lock as the readers and have it refuse rather than
+  wait.**
+  (ovation#202: `Ovation.xcodeproj` is generated from a manifest and gitignored, and the helper
+  that makes one deliberately never rewrites an existing one, precisely because that rewrites the
+  file underneath an open Xcode. But the manifest lists DIRECTORIES and the generated project
+  lists FILES, so adding a source file forces somebody to delete and remake it, and nothing asks
+  whether a build is reading it at that moment. On 2026-09-10 `rm -rf` and a regenerate ran while
+  the test runner was in its Xcode phase; it survived, which is evidence of luck rather than of
+  safety, and the run's only symptom was picking up the new files midway. The repository already
+  had the mechanism: the test runner takes file locks, including two sibling projects', so the one
+  operation that rewrites the project out from under a build was the one operation outside the
+  locking. A refusal is the right answer rather than a wait, because regenerating is a deliberate
+  act somebody is performing at a keyboard and waiting silently behind a ten minute suite is worse
+  than being told to try again. Distinct from L369, which is a lock scoped too narrowly; this is a
+  writer that takes none.)
 
 ## Test speed
 

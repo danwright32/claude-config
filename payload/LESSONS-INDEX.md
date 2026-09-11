@@ -1,7 +1,7 @@
 # Lessons index (generated, do not edit)
 
 One line per lesson: the rule itself, without the body or the provenance. Generated from
-LESSONS.md, which is NOT loaded into the session. 632 lessons.
+LESSONS.md, which is NOT loaded into the session. 634 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -314,6 +314,7 @@ to decide something: the body is where the failure it came from is described.
 - L163. When the model has no field for a fact, never express that fact by NEGATING a neighbouring one, because the negated field goes on being read as its own fact everywhere else and the system then confidently asserts the opposite of what happened.
 - L166. An action that carries out a decision must be addressed by every attribute the decision was made over, because an instruction scoped by fewer names a FAMILY where the decision named one MEMBER, and it silently acts on the records the decision deliberately excluded.
 - L169. A variable recording that a step has ALREADY HAPPENED is inherited by every process that step starts, so a descendant reads it as true of ITSELF and skips work it never did.
+- L454. A local copy of something that lives elsewhere (a git tracking ref, a cached response, a mirrored table) is usually NAMED after the thing it mirrors, so a reading of it looks identical to a reading of the source and nothing in it says when it was last refreshed. State what a report was read against, and check it against the source before anybody acts on it, because the first action taken on a stale copy is what discovers the staleness.
 - L175. A value read once at startup is only true at startup, and when the thing it describes lives OUTSIDE the program (a checkout, a config file, a device, another service) there is no action inside the program to hang a re-read on, so it goes stale invisibly and its silence reads as an assurance.
 - L176. A field name that asserts a ROLE or a DIRECTION (who referred whom, source versus destination, sender versus recipient, parent versus child) must be verified against the code that RENDERS it, because the rendered wording is the authority and a backwards name silently recruits every future writer into filling it the wrong way round, with nothing anywhere reporting a problem.
 - L185. A statement that NORMALIZES a value on the way in (a COALESCE, a lowercase, a trim, a default standing for absent) must group or deduplicate by the NORMALIZED form, never by the raw one, because two raw spellings that normalize to the same thing survive as separate groups and then collide on one stored key.
@@ -631,6 +632,7 @@ to decide something: the body is where the failure it came from is described.
 - L642. In a SQUASH MERGE repo no merged branch is ever an ancestor of main, so every local way of asking whether a branch has shipped reports a merged branch as UNMERGED
 - L668. A tool that locates a resource by assuming the directory it was invoked in IS that resource (a git checkout, a package root, a project) is inert in every project whose checkout sits below that directory, and because such a tool almost always fails open, the capability it provides disappears while the run still reports normally.
 - L448. Putting a SECOND rule behind an EXISTING override, skip flag or suppression token silently widens every use of that token
+- L453. The operation that REGENERATES a shared artifact is routinely the one outside the locking every reader of it takes, because regenerating reads as a rare setup step rather than as work, so put the writer under the same lock as the readers and have it refuse rather than wait.
 
 ## Test speed
 
