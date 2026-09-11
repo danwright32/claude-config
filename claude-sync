@@ -1448,11 +1448,13 @@ lesson_index_body(){   # $1 = the full lessons file
   [ -f "$1" ] || return 0
   n="$(grep -c '^- \*\*L[0-9]\+\.' "$1" 2>/dev/null || true)"
   printf '# Lessons index (generated, do not edit)\n\n'
-  printf 'One line per lesson: the rule itself, without the body or the provenance. Generated from\n'
-  printf 'LESSONS.md, which is NOT loaded into the session. %s lessons.\n\n' "${n:-0}"
+  printf 'One line per lesson: a SHORTENED form of the rule, carrying its condition and its\n'
+  printf 'instruction, and routinely dropping the clause that says what the failure looks like.\n'
+  printf 'Generated from LESSONS.md, which is NOT loaded into the session. %s lessons.\n\n' "${n:-0}"
   printf 'To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or\n'
   printf 'read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about\n'
-  printf 'to decide something: the body is where the failure it came from is described.\n'
+  printf 'to decide something: a line here is enough to tell you a rule APPLIES, and not enough to\n'
+  printf 'apply it, because the body is where the failure it came from is described.\n'
   # The whole file is read into an array first, rather than walked with getline. getline CONSUMES
   # the line it reads, so a continuation loop had no way to put back a line that turned out to
   # start the NEXT entry, and an entry whose bold marker never closes therefore swallowed every
@@ -1484,6 +1486,34 @@ lesson_index_body(){   # $1 = the full lessons file
         rule = (end > 0) ? substr(rest, 1, end - 1) : rest
         gsub(/[[:space:]]+/, " ", rule)
         sub(/[[:space:]]+$/, "", rule)
+        # A long rule may carry a one line SHORT: form, and that is what the index renders. The
+        # rule sentences run long because each carries the condition that makes it apply, so
+        # shortening them in place would destroy the thing a reader needs; the full rule stays
+        # in LESSONS.md, one lookup away, exactly as written.
+        #
+        # The entry is SCANNED for the marker rather than read at a fixed offset from its start,
+        # because a fixed count stops containing what it was written about the moment a line is
+        # added above it (L518). It stops at the two things that can only begin something else.
+        #
+        # A lesson with no SHORT: line renders its full rule, and that fallback is deliberately
+        # not the silent kind: what stops the index growing back is a cap on the length of the
+        # GENERATED LINE, held in test-rule-file-budget.sh, never a check that the marker is
+        # present. So a rule already short enough needs no second copy of itself, and a long one
+        # without a short form fails the suite loudly instead of quietly costing context.
+        short = ""
+        for (k = i + 1; k <= NR; k++) {
+          if (line[k] ~ /^- \*\*L[0-9]+\./ || line[k] ~ /^## /) break
+          if (line[k] ~ /^[[:space:]]*SHORT: /) {
+            short = line[k]
+            sub(/^[[:space:]]*SHORT:[[:space:]]*/, "", short)
+            break
+          }
+        }
+        if (short != "" && match(rule, /^L[0-9]+\./)) {
+          gsub(/[[:space:]]+/, " ", short)
+          sub(/[[:space:]]+$/, "", short)
+          rule = substr(rule, 1, RLENGTH) " " short
+        }
         if (section != lastsec) { printf "\n## %s\n\n", section; lastsec = section }
         printf "- %s\n", rule
       }
@@ -4028,6 +4058,156 @@ sync_branch(){   # prints the branch and returns 0, or prints nothing and return
   git -C "$SYNC_REPO" symbolic-ref --short HEAD 2>/dev/null
 }
 
+# ---------- a snapshot the shared repo already holds (claude-config#362) ----------
+#
+# On 2026-09-10 the sync clone refused `pull` with "diverged: 4 commits here the repo has not seen,
+# and 33 commits there", and the `sync` that message names as the remedy failed on a content
+# conflict in payload/LESSONS.md and backed out, leaving a merge to settle by hand. The four local
+# commits were snapshots this tool had taken of the live ~/.claude while the DEVELOPMENT checkout
+# was mid work on the same files. That checkout finished and pushed straight to the shared repo, so
+# the shared tip already held the one lesson the first snapshot added, word for word, and newer
+# versions of everything the other three touched. Byte for byte, the whole synced set under
+# ~/.claude and the shared tip agreed. The conflict was over nothing, and 19 sends were skipped in
+# nine hours because of it. It recurs on every day the development checkout and the sync clone are
+# both live on one Mac, which is every day the tool itself is worked on.
+#
+# The rebase cannot see it. It compares the snapshot COMMIT against the shared history and finds
+# two different additions at one spot. Git's own skipped cherry pick detection catches nothing
+# either, because the snapshots were never identical commits, only identical or older CONTENT.
+#
+# So the question is asked here, and it is asked of the LIVE ~/.claude rather than of anything in
+# git. Neither side of the git comparison can answer it: HEAD is the stale snapshot, origin is the
+# newer work, and they genuinely differ. What does not differ is the shared tip and the config this
+# Mac is actually running. A snapshot is unsent work only if this Mac still HOLDS something the
+# shared repo lacks; once the shared tip and the live config agree on every file the snapshot
+# touched, there is nothing left in it to send, and rebasing it can only raise a conflict over
+# content that is already published.
+#
+# Reading the live config rather than the staged payload is not a detail. stage_local_to_payload
+# deliberately holds back any path the repo has changed since this Mac last applied, which after a
+# failed send is exactly the path the snapshot touched, so the staged payload still holds the
+# STALE copy and a comparison made there answers about the snapshot rather than about this Mac.
+# That is what the first version of this did, and it never once fired.
+#
+# Every comparison goes through payload_local_view, which is where the tokenized home path is
+# resolved, because a raw byte comparison reports a tokenized file as different on every run
+# (claude-config#313 documents that at length). The payload it reads is the SHARED TIP's, extracted
+# to scratch, not the one in the working tree.
+TIP_PAYLOAD_DIR=""
+tip_payload_dir(){   # $1 = branch -> prints a directory holding the shared tip's payload
+  local d
+  d="$(scratch_dir 2>/dev/null)" || return 1
+  [ -n "$d" ] || return 1
+  if ! git -C "$SYNC_REPO" archive --format=tar "origin/$1" payload 2>/dev/null | tar -x -C "$d" 2>/dev/null; then
+    rm -rf "$d" 2>/dev/null || true
+    return 1
+  fi
+  [ -d "$d/payload" ] || { rm -rf "$d" 2>/dev/null || true; return 1; }
+  TIP_PAYLOAD_DIR="$d"
+  printf '%s' "$d/payload"
+}
+
+DROPPED_SNAPSHOT_PATHS=""
+tip_already_holds_local_commits(){   # $1 = branch. 0 = the tip holds it all, 1 = it does not
+  local rc=0
+  DROPPED_SNAPSHOT_PATHS=""
+  TIP_PAYLOAD_DIR=""
+  tip_holds_local_commits_inner "$1" || rc=1
+  [ -n "$TIP_PAYLOAD_DIR" ] && rm -rf "$TIP_PAYLOAD_DIR" 2>/dev/null || true
+  TIP_PAYLOAD_DIR=""
+  [ "$rc" -eq 0 ] || DROPPED_SNAPSHOT_PATHS=""
+  return "$rc"
+}
+
+tip_holds_local_commits_inner(){   # $1 = branch
+  local branch="$1" ahead paths p rel tipdir live tip view compared=0
+  have_git || return 1
+  git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1 || return 1
+  ahead="$(git -C "$SYNC_REPO" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo 0)"
+  case "$ahead" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$ahead" -gt 0 ] || return 1
+  # Uncommitted work in the clone is somebody's edit to the tool itself, and the drop below is a
+  # hard reset. Nothing is dropped while anything is standing on it (L5). The snapshot is kept and
+  # the caller's existing refusal explains the divergence, exactly as before.
+  git -C "$SYNC_REPO" diff --quiet HEAD 2>/dev/null || return 1
+  # Three dots: the paths THIS clone's unpushed commits touched since the two sides last agreed.
+  # Two dots would also list everything the other Mac changed, so a clone merely behind would be
+  # measured on files it never touched.
+  paths="$(git -C "$SYNC_REPO" diff --name-only "origin/$branch...HEAD" 2>/dev/null || true)"
+  # Unpushed commits that change no file are a state this has no reading of, and dropping commits
+  # on a reading it does not have is the one thing it must not do.
+  [ -n "$paths" ] || return 1
+  tipdir="$(tip_payload_dir "$branch")" || return 1
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    # Only payload/ is ever committed by a snapshot. Anything else is a hand commit to the tool,
+    # which is real work whatever the payload says.
+    case "$p" in payload/*) ;; *) return 1 ;; esac
+    rel="${p#payload/}"
+    # A derived file is regenerated from its source on both Macs independently, so it differs
+    # whenever the source has moved and carries no work of its own. Three other readers already
+    # skip it for that reason (claude-config#238).
+    is_derived_rule_file "$rel" && continue
+    if [ "$rel" = "settings.hooks.json" ]; then
+      live="$(jq -c '.hooks // {}' "$CLAUDE_HOME/settings.json" 2>/dev/null || true)"
+      tip="$(detok < "$tipdir/settings.hooks.json" 2>/dev/null | jq -c '.hooks // {}' 2>/dev/null || true)"
+      [ -n "$live" ] || return 1
+      [ "$live" = "$tip" ] || return 1
+      compared=$((compared+1))
+      continue
+    fi
+    # Gone from this Mac while the tip still has it is a local DELETION, which is work, not
+    # absence. Kept for the rebase to carry up.
+    [ -f "$CLAUDE_HOME/$rel" ] || return 1
+    # Written out and compared as two files rather than piped into cmp. `cmp -s` stops at the
+    # first difference, which SIGPIPEs its producer, and under pipefail a pipeline killed that way
+    # reports 141: non-zero either way here, so the answer would still be "keep", but it is the
+    # shape that makes a failure that never happened look like a real one (L183).
+    view="$(scratch_file 2>/dev/null)" || return 1
+    ( PAYLOAD="$tipdir"; payload_local_view "$rel" ) > "$view" 2>/dev/null || true
+    if ! cmp -s "$view" "$CLAUDE_HOME/$rel"; then
+      rm -f "$view" 2>/dev/null || true
+      return 1
+    fi
+    rm -f "$view" 2>/dev/null || true
+    compared=$((compared+1))
+  done <<PATHS
+$paths
+PATHS
+  # Nothing actually compared means every path was skipped, and a run that measured nothing must
+  # not answer as though everything agreed (L98). Kept, and the rebase handles it as it always has.
+  [ "$compared" -gt 0 ] || return 1
+  DROPPED_SNAPSHOT_PATHS="$paths"
+  return 0
+}
+
+# Drops it, and SAYS SO. Nothing here is recoverable from the message alone, so the commits are put
+# under a ref of their own first: `git reset --hard` leaves them reachable only through the reflog,
+# which expires, and somebody looking for work they believe was lost needs a name to look under
+# rather than a window that closes (L5, L7). The ref carries the run, so two drops never collide.
+drop_snapshot_already_in_tip(){   # $1 = branch. 0 = dropped, 1 = kept, nothing changed
+  local branch="$1" head n ref files
+  tip_already_holds_local_commits "$branch" || return 1
+  head="$(git -C "$SYNC_REPO" rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$head" ] || return 1
+  n="$(git -C "$SYNC_REPO" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo 0)"
+  ref="refs/claude-sync/dropped/$(date +%Y%m%d-%H%M%S)-$$"
+  # Written BEFORE the reset, and the reset abandoned if it could not be written: the backup
+  # existing is the condition under which throwing the commits away is safe, so it is verified
+  # rather than attempted alongside (L5).
+  git -C "$SYNC_REPO" update-ref "$ref" "$head" >/dev/null 2>&1 || return 1
+  if ! git -C "$SYNC_REPO" reset --hard -q "origin/$branch" >/dev/null 2>&1; then
+    git -C "$SYNC_REPO" update-ref -d "$ref" >/dev/null 2>&1 || true
+    return 1
+  fi
+  files="$(printf '%s' "$DROPPED_SNAPSHOT_PATHS" | tr '\n' ' ' | sed 's/ *$//')"
+  # One line carrying the claim AND what it was measured on, because "dropped some commits" is
+  # something nobody can check, and this throws work away if it is ever wrong (L11, L80).
+  echo "claude-sync: dropped $(commits_in_words "$n") this clone had not sent, because the shared repo already holds exactly what this Mac is running for every file they touched: $files. They were snapshots of ~/.claude taken while another checkout was working on the same files, and that checkout's push superseded them, so rebasing them could only have raised a conflict over content that is already published. Nothing was lost: this Mac's config is untouched, and the dropped commits are kept at $ref ('git -C $SYNC_REPO log $ref')." >&2
+  notify "dropped a snapshot the shared repo already holds"
+  return 0
+}
+
 do_push(){
   stage_local_to_payload
   echo "Staged config into $PAYLOAD"
@@ -4346,7 +4526,16 @@ pull_from_repo_or_die(){
     # the Mac behind indefinitely. The resolution is `sync`, which rebases this Mac's commits onto
     # the repo's and pushes them, and which already has the wording for a real content clash, so
     # this points at it rather than writing a second explanation of the same thing (#80).
-    die "this Mac and the shared repo have diverged: $(commits_in_words "$ahead") here the repo has not seen, and $(commits_in_words "$behind") there this Mac does not have. NOTHING was received and nothing on this Mac was changed, because a pull can only fast-forward. Reconcile with: claude-sync sync"
+    # Unless what this clone is holding is a snapshot the shared repo already has, in which case
+    # there is nothing to reconcile and the refusal would be spent on nothing (claude-config#362).
+    # This is the command the phantom divergence was actually met on, and the `sync` it names as
+    # the remedy is where the conflict then happened, so answering it here is what ends the round
+    # trip. It leaves the clone exactly as it found it whenever it does not drop.
+    if drop_snapshot_already_in_tip "$branch"; then
+      ahead=0
+    else
+      die "this Mac and the shared repo have diverged: $(commits_in_words "$ahead") here the repo has not seen, and $(commits_in_words "$behind") there this Mac does not have. NOTHING was received and nothing on this Mac was changed, because a pull can only fast-forward. Reconcile with: claude-sync sync"
+    fi
   fi
   if ! err="$(git -C "$SYNC_REPO" pull --ff-only -q 2>&1)"; then
     die "git refused to fast-forward this Mac onto the shared repo, so NOTHING was received and nothing on this Mac was changed. The two sides have not diverged ($(commits_in_words "$ahead") here the repo has not seen, $(commits_in_words "$behind") there), so this is git's own refusal: ${err:-<no output>}"
@@ -4930,6 +5119,11 @@ do_sync(){
     # integrate the other Mac's changes (only if the remote branch exists yet)
     ensure_derived_file_merge_rule
     if git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1; then
+      # Before the rebase is asked to replay anything, because a snapshot the shared repo already
+      # holds has nothing to replay and the rebase's only possible answer to it is a conflict over
+      # nothing (claude-config#362). The live config has just been staged and committed above, so
+      # the comparison this makes is against what this Mac is actually running.
+      drop_snapshot_already_in_tip "$branch" || true
       # Counted around the pull because git DROPS the autostash on a clean restore and
       # KEEPS it on a conflicted one. See the check after the pull for why that matters.
       stash_before="$(git -C "$SYNC_REPO" stash list 2>/dev/null | wc -l | tr -d ' ')"

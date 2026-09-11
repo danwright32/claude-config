@@ -5252,6 +5252,191 @@ check "#325 pull names the unfinished rebase as the cause" \
 check "#325 and does not report it as a two Mac divergence" \
   "! grep -q 'this Mac and the shared repo have diverged' <<< \"\$out_rb3\""
 
+section "== a snapshot the shared repo already holds is dropped, not rebased into a conflict (#362) =="
+# On 2026-09-10 the sync clone on Daniels-MacBook-Pro-2 refused `pull` with "diverged: 4 commits
+# here the repo has not seen, and 33 commits there", and the `sync` that message names as the
+# remedy then failed on a content conflict in payload/LESSONS.md and backed out, leaving Dan to
+# settle a merge by hand. The four local commits were snapshots the tool had taken of the live
+# ~/.claude between 12:44 and 17:02 while the DEVELOPMENT checkout was mid work on the same files.
+# That checkout finished the work and pushed straight to the shared repo, so the shared tip already
+# held the one lesson the first snapshot added, word for word, and newer versions of every file the
+# other three touched. A byte for byte comparison of the whole synced set under ~/.claude against
+# the shared tip found zero differences. The conflict was over nothing, and 19 sends were skipped
+# over nine hours because of it.
+#
+# The rebase cannot see that. It compares the snapshot COMMIT against the shared history and finds
+# two different additions at one spot. Git's own skipped cherry pick detection catches nothing
+# either, because the snapshots were never identical commits, only identical or older CONTENT.
+#
+# The question nobody asked is the one settled here: does the shared tip already hold everything
+# this clone's unpushed commits changed, measured against the live ~/.claude this Mac is actually
+# running? The live config is the third party that settles it, and it is why neither side of the
+# git comparison alone can: HEAD is the stale snapshot and origin is the newer work, and they
+# genuinely differ. What does not differ is the shared tip and the config this Mac is running.
+#
+# This recurs on every day the tool itself is worked on, which is every day the development
+# checkout and the sync clone are both live on one Mac.
+
+# The shape that produces it: a bare repo, the SYNC clone with its own live ~/.claude, and a second
+# clone standing in for the development checkout, which pushes straight to the shared repo without
+# going through ~/.claude at all.
+_snap_setup(){   # $1 = prefix  $2 = snapshot body  $3 = what the shared tip gets  $4 = live body
+  SB="$WORK/$1-bare.git"; git init -q --bare -b main "$SB"
+  SR="$WORK/$1-sync"; git clone -q "$SB" "$SR" 2>/dev/null
+  git -C "$SR" checkout -q -b main 2>/dev/null || true
+  # The real repo ignores .last-applied; without this the fixture commits it and it starts
+  # answering assertions written about the files the test actually cares about.
+  printf '.last-applied\n' > "$SR/.gitignore"
+  git -C "$SR" add .gitignore
+  git -C "$SR" -c user.name=t -c user.email=t@e commit -q -m seed
+  git -C "$SR" push -q -u origin main
+  SH="$WORK/$1-home"; mkdir -p "$SH/skills/s" "$SH/skills/t"
+  mkskill "$SH/skills/s/SKILL.md" 'L1'
+  mkskill "$SH/skills/t/SKILL.md" 'base t'
+  echo '{"hooks":{}}' > "$SH/settings.json"
+  CLAUDE_HOME="$SH" SYNC_REPO="$SR" SYNC_HOSTNAME="mac$1" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+  # THE SNAPSHOT, left unpushed. An unreachable remote is the only way to leave one on purpose, and
+  # it is exactly what the watcher leaves behind whenever a send cannot reach the repo.
+  git -C "$SR" remote set-url origin "$WORK/$1-vanished.git"
+  eval "$2"
+  CLAUDE_HOME="$SH" SYNC_REPO="$SR" SYNC_HOSTNAME="mac$1" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1 || true
+  git -C "$SR" remote set-url origin "$SB"
+  # THE DEVELOPMENT CHECKOUT, pushing straight to the shared repo.
+  SD="$WORK/$1-dev"; git clone -q "$SB" "$SD" 2>/dev/null
+  eval "$3"
+  git -C "$SD" add -A payload
+  git -C "$SD" -c user.name=t -c user.email=t@e commit -q -m "the development checkout ships its work"
+  git -C "$SD" push -q origin main
+  # What the live ~/.claude holds by the time the sync clone next runs. In the incident the
+  # development checkout had already installed its work here, so this Mac and the shared tip agreed.
+  eval "$4"
+}
+
+# ---- the redundant snapshot: both sides appended at the same spot, and the tip is the superset ----
+_snap_setup sn1 \
+  "mkskill \"\$SH/skills/s/SKILL.md\" 'L1
+L449'" \
+  "mkskill \"\$SD/payload/skills/s/SKILL.md\" 'L1
+L449
+L450'" \
+  "mkskill \"\$SH/skills/s/SKILL.md\" 'L1
+L449
+L450'"
+SN1R="$SR"; SN1H="$SH"; SN1B="$SB"
+SN1_HEAD_BEFORE="$(git -C "$SN1R" rev-parse HEAD)"
+SN1_TIP="$(git -C "$SN1R" ls-remote "$SN1B" refs/heads/main 2>/dev/null | awk '{print $1}')"
+check "#362 the fixture really left an unpushed snapshot behind" \
+  "[ -n \"\$(git -C '$SN1R' log --oneline -1 2>/dev/null)\" ] && [ '$SN1_HEAD_BEFORE' != '$SN1_TIP' ]"
+check "#362 and the two sides really have diverged, which is what makes a pull refuse" \
+  "git -C '$SN1R' fetch -q origin 2>/dev/null; [ \"\$(git -C '$SN1R' rev-list --count origin/main..HEAD)\" -gt 0 ] && [ \"\$(git -C '$SN1R' rev-list --count HEAD..origin/main)\" -gt 0 ]"
+# The fixture must actually produce the phantom conflict, or the drop below is being measured
+# against a rebase that would have succeeded anyway and proves nothing (L159, L1). Rehearsed in a
+# throwaway copy so the clone the test then runs against is untouched.
+SN1_REH="$WORK/sn1-rehearsal"; cp -R "$SN1R" "$SN1_REH" 2>/dev/null || true
+git -C "$SN1_REH" -c user.name=t -c user.email=t@e rebase origin/main >/dev/null 2>&1 || true
+check "#362 and rebasing that snapshot really does conflict, which is the failure being fixed" \
+  "[ -n \"\$(git -C '$SN1_REH' diff --name-only --diff-filter=U 2>/dev/null)\" ]"
+git -C "$SN1_REH" rebase --abort >/dev/null 2>&1 || true
+
+out_sn1="$(CLAUDE_HOME="$SN1H" SYNC_REPO="$SN1R" SYNC_HOSTNAME=macsn1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_sn1=$?
+dbg "#362 sync over a redundant snapshot: $out_sn1"
+check "#362 sync completes instead of refusing" "[ $rc_sn1 -eq 0 ]"
+check "#362 and does not report it as two Macs changing the same config" \
+  "! grep -q 'both Macs changed the same config' <<< \"\$out_sn1\""
+check "#362 and leaves no half finished rebase behind" \
+  "[ ! -d \"\$(git -C '$SN1R' rev-parse --absolute-git-dir)/rebase-merge\" ] && [ ! -d \"\$(git -C '$SN1R' rev-parse --absolute-git-dir)/rebase-apply\" ]"
+check "#362 and adds no commit: the clone ends level with the shared repo" \
+  "[ \"\$(git -C '$SN1R' rev-list --count origin/main..HEAD 2>/dev/null)\" = 0 ]"
+check "#362 and says what it dropped, rather than tidying it away in silence" \
+  "line_has \"\$out_sn1\" 'dropped 1 commit' 'had not sent' 'shared repo already holds'"
+# On the SAME line as the drop, not merely somewhere in the output: every conflict message this
+# tool prints names the file too, so a loose grep passed against the code that had no drop at all
+# and was evidence of nothing (L178).
+check "#362 and names the file it compared on the line that claims the drop" \
+  "line_has \"\$out_sn1\" 'dropped' 'skills/s/SKILL.md'"
+check "#362 and keeps the dropped commit reachable rather than destroying it" \
+  "[ -n \"\$(git -C '$SN1R' for-each-ref --format='%(objectname)' refs/claude-sync/dropped 2>/dev/null)\" ]"
+check "#362 and the shared repo still holds the development checkout's newer work" \
+  "grep -q 'L450' \"\$(git -C '$SN1R' rev-parse --show-toplevel)/payload/skills/s/SKILL.md\""
+check "#362 and this Mac's live config was not rolled back to the snapshot" \
+  "grep -q 'L450' '$SN1H/skills/s/SKILL.md'"
+
+# ---- the snapshot that must be KEPT: one line the shared tip has never seen ----
+# The drop cannot be answered by "the file exists upstream": here it does exist upstream, with
+# content, and the only difference is a single line this Mac holds and the shared repo does not.
+_snap_setup sn2 \
+  "mkskill \"\$SH/skills/t/SKILL.md\" 'base t
+local only line'" \
+  "mkskill \"\$SD/payload/skills/s/SKILL.md\" 'L1
+L450'" \
+  "mkskill \"\$SH/skills/t/SKILL.md\" 'base t
+local only line'"
+SN2R="$SR"; SN2H="$SH"
+check "#362 the keep fixture's file really does exist in the shared repo already" \
+  "git -C '$SN2R' cat-file -e origin/main:payload/skills/t/SKILL.md 2>/dev/null || git -C '$SN2R' fetch -q origin 2>/dev/null; git -C '$SN2R' cat-file -e origin/main:payload/skills/t/SKILL.md"
+out_sn2="$(CLAUDE_HOME="$SN2H" SYNC_REPO="$SN2R" SYNC_HOSTNAME=macsn2 SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_sn2=$?
+dbg "#362 sync over a snapshot holding real work: $out_sn2"
+check "#362 a snapshot holding a line the shared repo lacks is NOT dropped" \
+  "! grep -q 'shared repo already holds' <<< \"\$out_sn2\""
+check "#362 and that sync still succeeds" "[ $rc_sn2 -eq 0 ]"
+# Read into variables and compared whole, rather than piped into a matcher. A short circuiting
+# consumer can kill its producer under pipefail and report a failure that never happened, which
+# this suite tracks as a hazard of its own (L183); and the whole file is a stronger assertion than
+# one line of it, since it also says nothing else was lost on the way up.
+git -C "$SN2R" fetch -q origin 2>/dev/null || true
+SN2_T="$(git -C "$SN2R" show origin/main:payload/skills/t/SKILL.md 2>/dev/null || true)"
+SN2_S="$(git -C "$SN2R" show origin/main:payload/skills/s/SKILL.md 2>/dev/null || true)"
+SN2_T_WANT="$(printf -- '---\nname: t\ndescription: a fixture skill for the suite\n---\nbase t\nlocal only line')"
+SN2_S_WANT="$(printf -- '---\nname: s\ndescription: a fixture skill for the suite\n---\nL1\nL450')"
+check "#362 and the line this Mac held reaches the shared repo" \
+  "[ \"\$SN2_T\" = \"\$SN2_T_WANT\" ]"
+check "#362 and the development checkout's own work is still there beside it" \
+  "[ \"\$SN2_S\" = \"\$SN2_S_WANT\" ]"
+
+# ---- pull, which is the command that refused first and sent Dan to the one that failed ----
+# `pull` is where this was met: it refused with "diverged" and named `sync` as the remedy, and sync
+# is where the conflict then happened. A pull that can settle a redundant snapshot settles it, so
+# the refusal is kept for the case that really is unsent work and spent on nothing else.
+_snap_setup sn3 \
+  "mkskill \"\$SH/skills/s/SKILL.md\" 'L1
+L449'" \
+  "mkskill \"\$SD/payload/skills/s/SKILL.md\" 'L1
+L449
+L450'" \
+  "mkskill \"\$SH/skills/s/SKILL.md\" 'L1
+L449
+L450'"
+SN3R="$SR"; SN3H="$SH"
+out_sn3="$(CLAUDE_HOME="$SN3H" SYNC_REPO="$SN3R" SYNC_HOSTNAME=macsn3 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"; rc_sn3=$?
+dbg "#362 pull over a redundant snapshot: $out_sn3"
+check "#362 pull completes instead of refusing over a snapshot the repo already holds" \
+  "[ $rc_sn3 -eq 0 ]"
+check "#362 and does not send the reader to sync for a divergence that is not one" \
+  "! grep -q 'this Mac and the shared repo have diverged' <<< \"\$out_sn3\""
+check "#362 and leaves the clone level with the shared repo" \
+  "git -C '$SN3R' fetch -q origin 2>/dev/null; [ \"\$(git -C '$SN3R' rev-list --count origin/main..HEAD 2>/dev/null)\" = 0 ]"
+
+# A pull facing a snapshot that really IS unsent work must still refuse, and must leave the clone
+# exactly as it found it: pull's whole contract is that nothing here changed.
+_snap_setup sn4 \
+  "mkskill \"\$SH/skills/t/SKILL.md\" 'base t
+local only line'" \
+  "mkskill \"\$SD/payload/skills/s/SKILL.md\" 'L1
+L450'" \
+  "mkskill \"\$SH/skills/t/SKILL.md\" 'base t
+local only line'"
+SN4R="$SR"; SN4H="$SH"
+SN4_HEAD_BEFORE="$(git -C "$SN4R" rev-parse HEAD)"
+SN4_STATUS_BEFORE="$(git -C "$SN4R" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+out_sn4="$(CLAUDE_HOME="$SN4H" SYNC_REPO="$SN4R" SYNC_HOSTNAME=macsn4 SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"; rc_sn4=$?
+dbg "#362 pull over a snapshot holding real work: $out_sn4"
+check "#362 pull still refuses when the snapshot holds work the shared repo lacks" \
+  "[ $rc_sn4 -ne 0 ] && line_has \"\$out_sn4\" 'have diverged' 'NOTHING was received'"
+check "#362 and that refusal changed nothing in the clone, as pull promises" \
+  "[ \"\$(git -C '$SN4R' rev-parse HEAD)\" = '$SN4_HEAD_BEFORE' ]"
+check "#362 and left no staged payload behind from looking" \
+  "[ \"\$(git -C '$SN4R' status --porcelain 2>/dev/null | wc -l | tr -d ' ')\" = '$SN4_STATUS_BEFORE' ]"
+
 section "== every git call that writes a commit carries the tool's own identity (#335) =="
 # Concluding a rebase writes a commit, and `recover_unfinished_rebase` ran `git rebase --continue`
 # with no identity at all. On a machine where git can find one, which is every Mac somebody has
@@ -9400,6 +9585,33 @@ printf -- '- **L4. A late lesson still reaches the index.** body\n  (someproject
 CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
 check "#63 a hand edit to the index is overwritten"  "! grep -q 'typed into the index by hand' '$LXH/LESSONS-INDEX.md'"
 check "#63 a new lesson appears without touching it" "grep -q 'L4. A late lesson still reaches the index.' '$LXH/LESSONS-INDEX.md'"
+
+# A LONG RULE CARRIES A SHORT FORM, AND THE INDEX IS GENERATED FROM THAT.
+#
+# The index loads into every session in every project and the platform warns past 150,000
+# characters (L429). The rule sentences are long because each one carries the condition that
+# makes it apply, so shortening them in place would destroy the thing that makes them usable.
+# A lesson may therefore carry a SHORT: line, which is what the index renders; the full rule
+# stays in LESSONS.md, one lookup away, exactly as written.
+#
+# The fallback is deliberate and is NOT the silent kind: a lesson with no SHORT: line renders
+# its full rule, and the gate that stops the index growing back is a cap on the length of the
+# GENERATED LINE (in test-rule-file-budget.sh), not a check that a SHORT: line is present. So
+# a short rule needs no duplicate of itself, and a long rule without a short form fails loudly.
+printf -- '- **L5. A rule sentence written at full length carries every condition that makes it apply, which is why it runs long, and shortening it in place would destroy the very thing a reader needs.** The body says more.\n  SHORT: A long rule keeps its full text in LESSONS.md and renders a short form in the index.\n  (someproject#15)\n' >> "$LXH/LESSONS.md"
+CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+check "#354 the index renders the short form when one is given" \
+  "grep -q '^- L5. A long rule keeps its full text in LESSONS.md and renders a short form in the index.$' '$LXH/LESSONS-INDEX.md'"
+check "#354 the long rule sentence does not reach the index" \
+  "! grep -q 'destroy the very thing a reader needs' '$LXH/LESSONS-INDEX.md'"
+check "#354 while the full rule is untouched in the lessons file" \
+  "grep -q 'destroy the very thing a reader needs' '$LXH/LESSONS.md'"
+check "#354 the SHORT marker is not itself rendered" \
+  "! grep -q 'SHORT:' '$LXH/LESSONS-INDEX.md'"
+check "#354 a lesson with no short form still renders its full rule" \
+  "grep -q '^- L3. Never destroy good state before its replacement exists.$' '$LXH/LESSONS-INDEX.md'"
+check "#354 the short form does not leak into the neighbouring entry" \
+  "! grep -q 'L4.*renders a short form' '$LXH/LESSONS-INDEX.md'"
 # A LESSON WRITTEN WHILE THE SEND CANNOT GO OUT still reaches the index (claude-config#320).
 #
 # The index was derived only from stage_local_to_payload, which do_send reaches only after two
