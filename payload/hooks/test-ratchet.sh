@@ -116,7 +116,22 @@ echo "ratchet: there is no fourth copy"
 
 # Consolidation is the component PLUS the guard, in one change: converting the sites in front of
 # you and leaving the next hand rolled copy unreported is how the count got to three (L613).
+# WHERE THIS IS RUNNING. Two copies of these hooks exist: the repo's payload/hooks, which sits
+# beside a claude-sync and a payload/, and the INSTALLED copy under the config root, which does
+# not. `$DIR/../..` is the repo in the first and the HOME DIRECTORY in the second, so a suite that
+# assumes the first walks all of $HOME in the second. Measured 2026-09-11: that is what made
+# `claude-sync recheck` exceed its 30 minute ceiling and report the whole config unverified.
+#
+# Said in the one agreed shape the runner reads, so it is reported as NOT RUN rather than as broken
+# code, and never as a pass: this suite is about the repo, and the installed copy is not one.
 REPO="$(cd "$DIR/../.." && pwd)"
+if [ ! -f "$REPO/claude-sync" ] || [ ! -d "$REPO/payload" ]; then
+  echo "test-ratchet: $REPO is not a checkout of this repo (no claude-sync and payload/ in it), so there was nothing here to scan." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository above it, and $REPO is not one"
+  echo "passed: 0, failed: 0"
+  printf 'SUITE-RESULT passed=0 failed=0\n'
+  exit 2
+fi
 for consumer in payload/hooks/test-pipefail-shortcircuit.sh payload/hooks/scan-absence-needles.py payload/hooks/scan-subshell-globals.py; do
   if grep -q 'ratchet' "$REPO/$consumer" 2>/dev/null; then
     check "$consumer reads the shared rule" ok
