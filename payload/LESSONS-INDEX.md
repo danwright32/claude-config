@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 651 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 656 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -303,6 +303,8 @@ apply it, because the body is where the failure it came from is described.
 - L664. When a submission is redirected onto an existing record, decide what happens to every field just entered, or a discarded correction reads as saved.
 - L665. A refusal cleared only by re-running a process with a moving window becomes permanent once the refused item falls outside that window.
 - L679. A consequence sentence ENUMERATING what an action touches is a second copy of its list, so it stays true and goes incomplete the day the action grows.
+- L688. Validate every required field when building a typed object from env or JSON: the type is erased, so a missing one fails far away.
+- L691. A tool printing a secret MASKS it by default, keeping its prefix and length, so it passes every completeness check and fails only at use.
 - L457. A marker stamped inside one phase cannot see the phase before it, so its zero reads as the operation never running: stamp at the entry point instead.
 - L465. A durable write gated on a bounded collection having GROWN stops for ever once it is full, and the silent store reads as a quiet period.
 
@@ -374,6 +376,7 @@ apply it, because the body is where the failure it came from is described.
 - L646. A control that seeds its own state from a prop and writes shared state from a MOUNT EFFECT reverts the person's change every time its container remounts
 - L650. A mapping that MERGES several values onto one label is correct only while they still mean the same thing, and no per row test can see the fault.
 - L661. A manual override the product offers must write every field the automated path writes for that state, because gates downstream read the richer record.
+- L692. A rule specific to ONE consumer must live in that consumer's own field, never in a zeroed shared quantity every other reader silently acts on.
 
 ## Security and privacy
 
@@ -652,6 +655,8 @@ apply it, because the body is where the failure it came from is described.
 - L668. A tool locating a resource by assuming its invocation directory IS that resource is inert in every project whose checkout sits below that directory.
 - L448. Putting a SECOND rule behind an EXISTING override, skip flag or suppression token silently widens every use of that token
 - L453. The operation that REGENERATES a shared artifact is usually outside the locking every reader takes, so put the writer under the same lock and refuse.
+- L689. Monitor a deadline by the GAP between promised and actual completion, never only whether the work happened: a late job passes an absence check.
+- L690. A running total built with `x += await f()` loses every concurrent addition but the last, so sum where the concurrency is owned.
 
 ## Test speed
 

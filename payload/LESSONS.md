@@ -2320,6 +2320,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   reach a conclusion the first comparison would have given)
   SHORT: Reproduce a red from a run you NARROWED on the unchanged base at the same scope before blaming your change: a scope dependent test misleads as a pair.
 
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -3798,6 +3799,33 @@ for reference; L6 was reviewed and deliberately not adopted.
   line read off merge_vendors by hand, while a planned change to move the merged vendor's notes in
   the same function would have left the dialog silent about notes with the whole suite green)
   SHORT: A consequence sentence ENUMERATING what an action touches is a second copy of its list, so it stays true and goes incomplete the day the action grows.
+- **L688. A function that assembles a typed object out of environment variables, JSON or any
+  other untyped source must validate every field its type declares as required, because the
+  annotation is erased at runtime and is the only thing asserting the field is there, so a
+  missing value travels on as undefined and surfaces far away as a type error naming a method
+  call rather than the setting.** Every consumer reads the type, sees a required field, and uses
+  it without checking, which is exactly what the type is for; the reader is the one place that
+  can know, and it is the one place that does not look. Distinct from L168, where the language
+  would have refused the call and a default suppressed it, and from L50, where a value did arrive
+  and parsed badly: here the field never arrived and the type says it did.
+  (bidspoke#1312: readSnowflakeConfig returns all seven fields straight from env with no check,
+  so a new caller doing config.schema.toUpperCase() on an unset SNOWFLAKE_SCHEMA would have
+  reached Slack as a nightly export failure whose message was about toUpperCase)
+  SHORT: Validate every required field when building a typed object from env or JSON: the type is erased, so a missing one fails far away.
+
+- **L691. A tool that prints a secret MASKS it by default, and the mask keeps the prefix and
+  the length, so a masked value passes every completeness check, is accepted by every store,
+  and is rejected by every use.** Take a secret from a reveal flag or an API rather than from a
+  display, and assert it is plain ASCII before storing it, because the failure surfaces as an
+  authentication error far from the copy that caused it. Distinct from L108, which is answered
+  by checking prefix and length together: here both are already right and only the body is
+  false.
+  (paperboi#258, 2026-09-11: `supabase projects api-keys` masked its output with middle dots,
+  which are legal in a file and illegal in an HTTP header, so `wrangler secret put` stored the
+  masked key without complaint and every request to a brand new production database failed as
+  Invalid API key, while the health page reported the database unreachable and sent the search
+  to networking. The real key needed `--reveal`.)
+  SHORT: A tool printing a secret MASKS it by default, keeping its prefix and length, so it passes every completeness check and fails only at use.
 
 - **L457. A progress or occurrence marker stamped INSIDE one phase of a multi phase operation
   cannot see time spent in the phase BEFORE it, so a count of zero reads as the operation never
@@ -4731,6 +4759,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   editable after the real account existed, which is the exact desync that lock was built to
   prevent.)
   SHORT: A manual override the product offers must write every field the automated path writes for that state, because gates downstream read the richer record.
+
+- **L692. A rule that applies to ONE consumer must be written into that consumer's own field, never
+  expressed by zeroing or clearing a shared quantity, because the shared field records nothing about
+  whose rule it is and every other reader silently changes behaviour with no symptom at any of
+  them.** The tell is a justification naming one partner, one product or one screen attached to a
+  write into a value several of them read. Distinct from L163, where no field existed for the fact
+  and a neighbouring flag was negated: here the consumer specific field was already there and went
+  untouched.
+  (bidspoke#1329: Discover cannot be a sole creditor for Achieve enrollment, so the rule was
+  expressed by setting Salesforce's `EngineDebt__c` to 0 for those leads. That field is what every
+  buyer routing gate in the Main Flow reads, so a lead carrying 31,397 dollars of Discover revolving
+  balance took the under-10k Engine fallback, returned zero loan offers, and was never offered to
+  Tripoint or AmOne. `AchieveEligibleDebt__c` and `AchieveUnsecuredDebt__c`, the fields the rule was
+  actually about, were both still 31,397. The same zero then reached the Achieve node's own debt
+  figure and was written back over `EnrolledPennieDebt__c` in Salesforce, so three consumers changed
+  behaviour and none of them reported anything: bidspoke#1328, bidspoke#1330)
+  SHORT: A rule specific to ONE consumer must live in that consumer's own field, never in a zeroed shared quantity every other reader silently acts on.
 
 ## Security and privacy
 
@@ -8088,6 +8133,44 @@ for reference; L6 was reviewed and deliberately not adopted.
   than being told to try again. Distinct from L369, which is a lock scoped too narrowly; this is a
   writer that takes none.)
   SHORT: The operation that REGENERATES a shared artifact is usually outside the locking every reader takes, so put the writer under the same lock and refuse.
+
+- **L689. A deadline is missed by being LATE far more often than by never happening, so
+  monitor the GAP between the promised time and when the work actually landed, and alert on that
+  gap. A check that fires only on total absence reports a job hours past its deadline as
+  completely healthy.**
+  (pet#1451: PET's premise is that sales managers open the board by noon, and the daily build's
+  only deadline check, `deployDeadlineAlert`, fires at the 1 PM Eastern cron when there has been
+  NO deploy that day. On 2026-08-27 GitHub's scheduled dispatch went from about 20 minutes late to
+  hours late and stayed there. Measured 2026-09-11 from `build_history`, the first deploy of the
+  day moved from a 7:41 AM median over the preceding 29 days to 10:53 AM over the following 16,
+  it did not once land before 9 AM in those 16 days against 26 of 29 before, and it landed after
+  noon on four of them. Every run was green and every run executed in 2 to 4 minutes, so nothing
+  failed and nothing was slow; the work simply started late. The regression was invisible for two
+  weeks and was found only while building the measurement, because the one monitor that could
+  have spoken was asking whether the deploy happened rather than when. This is the gap L13 leaves:
+  alerting on failure and on the absence of an expected run is exactly what was built, and
+  lateness is neither. Distinct from L386, which is about ordering two scheduled jobs by clock
+  arithmetic; this is about never measuring one against its own promise.)
+  SHORT: Monitor a deadline by the GAP between promised and actual completion, never only whether the work happened: a late job passes an absence check.
+
+- **L690. Accumulating a running total with `x += await f()` reads x BEFORE it awaits, so
+  several units running concurrently each add to the value they saw at the start and only
+  the last to settle survives; sum inside whatever owns the concurrency, or collect the
+  results and reduce them afterwards.** The writes the units perform are unaffected, which
+  is what makes it survive review: only the COUNT is wrong, and a count is usually feeding
+  something that decides.
+  (slate#2252, 2026-09-11: the every minute recompute lane was changed to do one unit of work
+  per routing pool rather than per bucket code, and the route accumulated its cycle total that
+  way inside a six wide concurrency wave. Every pool wrote its rows correctly, confirmed in the
+  database by six codes sharing one computed_at, while the lane reported one pool's worth as the
+  whole cycle. That total feeds `drained = refreshed >= due`, so the lane judged itself behind on
+  every single tick and the behind streak was about five cycles from paging about a fall behind
+  that was not happening. Two live cycles read `refreshed=3 due=9 pools=3` and
+  `refreshed=6 due=12 pools=2`: exactly one pool each time. The fix moved the summing into the
+  function that owns the concurrency, so the next caller cannot write the line again. The tests
+  missed it because the stand in for the drain ran the units ONE AT A TIME, and a lost update
+  cannot occur serially, so both replacement tests drive the units concurrently on purpose.)
+  SHORT: A running total built with `x += await f()` loses every concurrent addition but the last, so sum where the concurrency is owned.
 
 ## Test speed
 
