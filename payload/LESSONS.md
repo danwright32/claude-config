@@ -2292,6 +2292,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   that the stash is shared and a worktree does not isolate it; this is the class)
   SHORT: An isolation mechanism isolates only what it was built to: enumerate what it does NOT cover, because those stay shared and the isolation hides them.
 
+- **L464. A red from a run you NARROWED must be reproduced on the UNCHANGED BASE at the SAME scope before
+  it is attributed to your change, because a scope dependent test makes the green full run and the red
+  scoped run both honest about themselves and the pair misleading.** The natural reading of a red that
+  appeared when you narrowed is "I broke this", so it sends you disproving your own work, and every
+  theory you form about your change is unfalsifiable until the base is run the same way.
+  (overture#3805, 2026-09-11: two hosted suites PASS in a full run and FAIL when the run is scoped to
+  them, on the same commit. Discovered while investigating a one line change, and three theories were
+  formed and abandoned first, each plausible and each about the change: a closed app window disturbing
+  the screen, an interaction with a full run, a worktree difference. The tests build their own NSWindow,
+  so the first was refuted by reading forty lines of the test. What settled it was running the same two
+  suites on clean main at the same scope, which failed identically, and then running the whole hosted
+  target in the same worktree with the change backed out, which also failed identically. Four runs to
+  reach a conclusion the first comparison would have given)
+  SHORT: Reproduce a red from a run you NARROWED on the unchanged base at the same scope before blaming your change: a scope dependent test misleads as a pair.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
