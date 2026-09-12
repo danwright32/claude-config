@@ -7,6 +7,20 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L467. A guard that a required call is PRESENT cannot see a SECOND one, so where that call
+  increments a counter or emits an event, assert it happens EXACTLY once.** Two changes can each add it
+  correctly and the overcount then reads as real activity rather than as a fault. (overture#3836:
+  `EveryRenderPassIsCountedTests` enumerates every file running a render pass and fails one that never
+  calls `recordPass()`. #3645 lifted the Sources sheet's derivation into a pass that bumps on its first
+  line, and #3762 independently added a bump to the same view's body. Each was correct alone and each
+  passed the guard; together every rebuild of that sheet would have been counted twice, and `passes` is
+  the field that says whether a freeze was one slow rebuild or a BURST of them, so the overcount would
+  have read as the burst this milestone had spent weeks ruling out. Caught by reading a merge conflict
+  by hand, which is not a method. The same shape fires an analytics event twice, writes an audit row
+  twice, and inflates a retry counter, and a presence check passes all three)
+  SHORT: A presence guard on a call that increments a counter is blind to a second one, so assert exactly once: an overcount reads as real activity.
+
+
 - **L466. A COUNT of events occurring inside a measured window cannot apportion that window, so an
   instrument recording how many times something happened during a slowdown can never say what share
   of it they were.** Record each occurrence's DURATION beside the count, or any share claimed from it
