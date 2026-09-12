@@ -3802,6 +3802,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   exactly that, every one of them on the queue)
   SHORT: A marker stamped inside one phase cannot see the phase before it, so its zero reads as the operation never running: stamp at the entry point instead.
 
+- **L465. A durable write gated on a bounded in-memory collection having GROWN stops happening
+  the moment that collection reaches its bound, because its size stops changing while events keep
+  arriving, and the store then goes quiet looking exactly like a period with nothing to record.**
+  Decide what is WRITTEN separately from what is HELD, and have the moment the two part say so.
+  (overture#3812: `MainThreadWatchdog.recordIfStalled` decided whether to append a stall to
+  `freeze-log.ndjson` by reading `kept.records.count` before and after adding it, and `StallLog.cap`
+  is 200. At the cap the add appends and then evicts, so the count goes 200, 201, 200 and the
+  comparison is false for ever after. Three of Dan's sessions sit on exactly 200 records; one of
+  them stopped recording 29 minutes before the process ended, while the watchdog was still running
+  and still counting evictions into a field nothing reads. Every distribution milestone 80 reads off
+  that file is therefore the first 200 stalls of each session rather than a sample of it, and the
+  censoring is worst in the sessions with the most stalls)
+  SHORT: A durable write gated on a bounded collection having GROWN stops for ever once it is full, and the silent store reads as a quiet period.
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
