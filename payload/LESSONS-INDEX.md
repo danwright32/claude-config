@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 650 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 651 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -11,6 +11,7 @@ apply it, because the body is where the failure it came from is described.
 
 ## Proof over green
 
+- L466. A count of events inside a measured window cannot apportion it, so record each occurrence's duration beside the count or no share can be claimed.
 - L394. A Python default argument binds ONCE at definition, so a collaborator or path written as a default gives you the parameter without the replaceability.
 - L277. Before fixing a defect, name what its output was incidentally recording, because the fix removes the only evidence the diagnosis was made from.
 - L284. A test that sets some of a script's seams runs every unset one for real, so enumerate every seam and assert each is set or deliberately left real.

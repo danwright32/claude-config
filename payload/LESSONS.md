@@ -7,6 +7,19 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L466. A COUNT of events occurring inside a measured window cannot apportion that window, so an
+  instrument recording how many times something happened during a slowdown can never say what share
+  of it they were.** Record each occurrence's DURATION beside the count, or any share claimed from it
+  is arithmetic performed on a measurement taken somewhere else. (overture#3815: `StallRecord.passes`
+  counts the render passes a freeze spanned. Over 1,040 records the most any stall ever spanned was 2,
+  and the three longest, 29.354s, 19.177s and 15.855s, spanned exactly 1 each. That was read as the
+  render pass being innocent, on the strength of a cost test pricing a HEALTHY pass at 172 ms on a
+  quiet machine, which makes the pass 0.6 percent of the freeze. The record cannot support it: one
+  pass taking 29 seconds and one ordinary pass beside 29 seconds of something else are the same
+  reading, and they call for opposite work. Nothing recorded how long `makeRenderData()` took)
+  SHORT: A count of events inside a measured window cannot apportion it, so record each occurrence's duration beside the count or no share can be claimed.
+
+
 - **L394. In Python a default argument binds ONCE, when the function is defined, so writing a
   collaborator or a path as a default (`def f(run=measure)`, `def f(path=RECORD)`) gives you the
   parameter without the replaceability**: a test that swaps that name on the module is silently
