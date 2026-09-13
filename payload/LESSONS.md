@@ -2334,6 +2334,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   reach a conclusion the first comparison would have given)
   SHORT: Reproduce a red from a run you NARROWED on the unchanged base at the same scope before blaming your change: a scope dependent test misleads as a pair.
 
+- **L694. A subject added to a monitor's registry is only half the change, because it must also be
+  instrumented: a subject that is listed but never reports is indistinguishable from one that is
+  failing, so the watcher accuses it on every cycle for ever, with a remedy aimed at something that
+  was never wrong.** Distinct from L96 and L660, where a subject MISSING from a registry is silently
+  exempt: here the subject is present and the instrumentation is absent, which inverts the symptom
+  from silence to a permanent accusation, and the accusation is the more convincing of the two
+  because the watcher is doing exactly what it was built to do.
+  (bidspoke#1332, 2026-09-13: PR #1324 registered the execution archive's 13 month expiry job in the
+  cron dead-man switch's job list and never added the writeHeartbeat call every other watched job
+  has. The job ran and finished cleanly at 13:00 UTC on two consecutive days, recorded in job_runs
+  with its outcome, while the switch alerted every six hours that it had never run since it was first
+  observed. The alert's fix hint told the reader to confirm the worker deployed with its cron
+  triggers, which were correct, so following the remedy could only ever confirm the thing that was
+  not broken. An independent record of the same fact sat unread in the database the whole time)
+  SHORT: A subject in a monitor's registry but never instrumented reads as a FAILING one, so it is accused for ever with a remedy aimed at the wrong thing.
+
 
 ## Data safety
 
