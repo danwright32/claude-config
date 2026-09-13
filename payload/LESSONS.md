@@ -8267,6 +8267,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   `repo#N` for its own issues, `claude-config#N` and `downbeat#N` included, is exposed the same way.)
   SHORT: A closing keyword works only before #N or owner/repo#N; a short prefix like repo#N leaves the issue open, so write Closes #N and confirm it closed.
 
+- **L469. A manual check handed to a person that says "open the app" tests whichever copy macOS
+  picks, and a build copy in Xcode's build products carries the installed app's name, so the check
+  can run against a build with its own data folder and settings and report on the wrong app.** Name
+  the exact bundle by its path in the step (`open -a /Applications/<App>.app`), and confirm from
+  THAT bundle's own data folder that it was the one that ran before recording the result. This is
+  the person facing half of the rule for keystrokes, identify the target by its executable path and
+  never by its name, and L237's, prove the thing you named is the thing there.
+  (ovation#264, 2026-09-13: straight after `build-install.sh` put a Release build in
+  `/Applications`, Spotlight's index held only the two Xcode build copies, and opening Ovation by
+  name started the Debug one. Dan chose a backup folder in it and reported the relaunch check as
+  good. The installed app's data folder had not changed since the install, the Debug copy had
+  written its own `Ovation-Debug` folder, and its chosen folder held no archive at all. The check
+  was redone with `open -a /Applications/Ovation.app` and confirmed from that app's own folder.)
+  SHORT: A manual check saying "open the app" tests whichever same-named copy macOS picks; open it by path, and confirm from that copy's data before recording.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

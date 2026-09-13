@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 662 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 663 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -663,6 +663,7 @@ apply it, because the body is where the failure it came from is described.
 - L690. A running total built with `x += await f()` loses every concurrent addition but the last, so sum where the concurrency is owned.
 - L693. A unique constraint on one BOUND of an interval cannot prevent overlap: a grid finer than the duration makes adjacent values distinct and overlapping.
 - L468. A closing keyword works only before #N or owner/repo#N; a short prefix like repo#N leaves the issue open, so write Closes #N and confirm it closed.
+- L469. A manual check saying "open the app" tests whichever same-named copy macOS picks; open it by path, and confirm from that copy's data before recording.
 
 ## Test speed
 
