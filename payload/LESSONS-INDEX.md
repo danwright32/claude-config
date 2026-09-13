@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 666 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 667 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -667,6 +667,7 @@ apply it, because the body is where the failure it came from is described.
 - L468. A closing keyword works only before #N or owner/repo#N; a short prefix like repo#N leaves the issue open, so write Closes #N and confirm it closed.
 - L469. A manual check saying "open the app" tests whichever same-named copy macOS picks; open it by path, and confirm from that copy's data before recording.
 - L470. A process crash is attributed by the runner to whatever item was current, so confirm the named item's body really ran before investigating it.
+- L473. A trap on INT or TERM that only cleans up lets the script carry on, so end it with an exit, or stopping needs a kill that skips the cleanup.
 
 ## Test speed
 

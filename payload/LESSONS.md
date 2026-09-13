@@ -8325,6 +8325,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   test. Two sessions investigated the named test before its own body was ever checked.)
   SHORT: A process crash is attributed by the runner to whatever item was current, so confirm the named item's body really ran before investigating it.
 
+- **L473. A shell trap on INT or TERM that only cleans up does not stop the script: the shell runs
+  the handler and then resumes where it was, so a request to stop becomes a cleanup followed by
+  more work, and the only stop left is a forced kill that skips the cleanup entirely.** End every
+  INT and TERM handler with an explicit exit (130 and 143 by convention), and keep the EXIT trap for
+  the cleanup itself. The forced kill is worst exactly where the cleanup mattered: a lock that does
+  not clear when its holder dies (a mkdir lock, L409) is left planted for everyone else.
+  (ovation#274, 2026-09-13: `scripts/run-tests.sh` installs `trap release_locks EXIT INT TERM`. Two
+  push gate runs stopped with an ordinary signal released their locks and went straight back to
+  waiting for them, still alive seconds later, and each needed `kill -9`, done only after confirming
+  neither held Downbeat's directory lock at that moment.)
+  SHORT: A trap on INT or TERM that only cleans up lets the script carry on, so end it with an exit, or stopping needs a kill that skips the cleanup.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
