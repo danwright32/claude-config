@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 665 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 666 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -50,6 +50,7 @@ apply it, because the body is where the failure it came from is described.
 - L48. A test fixture that claims to come from real data must be measured from it, never shaped so the rule under test fires.
 - L52. A test whose only outside dependency is a stub you wrote can only confirm your own assumption about the real interface.
 - L420. Two artefacts describing ONE run must be paired by that run's own identifier, never by each being the newest of its kind in its own directory.
+- L472. A rig that wraps the subject in something the product never uses measures the wrapper, worst where that wrapper defeats the mechanism under test.
 - L58. Two systems that must agree cannot be verified against records one of them wrote into the other.
 - L56. Calibrate a new validator against a sample fetched through the same path it will guard, and watch one real cycle before letting it block.
 - L68. A guard that reads live production data must assert the SIGNATURE of the failure it protects against, never the data's current emptiness.

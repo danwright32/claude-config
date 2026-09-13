@@ -468,6 +468,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   the correctly paired run read 0 of 9.
   (overture#3345)
   SHORT: Two artefacts describing ONE run must be paired by that run's own identifier, never by each being the newest of its kind in its own directory.
+- **L472. A test rig that wraps the subject in something the product never uses is measuring the
+  wrapper as much as the subject, and the risk is worst where that wrapper defeats the very mechanism
+  under test.** Enumerate every structural difference between the rig and the shipped composition, and
+  re-take any reading that difference could explain, because the rig is written once and then trusted
+  by every test that copies it.
+  (overture#3877, overture#3876, 2026-09-13: all eight hosted suites host their root as
+  `NSHostingView(rootView: AnyView(view))`, while `grep -rn "AnyView" mac/Overture` returns NOTHING.
+  `AnyView` type-erases, and SwiftUI cannot diff an erased view structurally, so an invalidation
+  re-evaluates everything inside it. That is precisely the mechanism these suites exist to measure:
+  several of them assert that a surface does NOT rebuild, and over-rebuilding is the direction the
+  wrapper pushes. It was found only because a whole-store pass attributed to the app was re-taken
+  hosting the real view type as a control; that reading came back identical and the wrapper was
+  exonerated for THAT measurement, and remains unruled-out for the others.)
+  SHORT: A rig that wraps the subject in something the product never uses measures the wrapper, worst where that wrapper defeats the mechanism under test.
+
 - **L58. Two systems that must agree cannot be verified against records one of them wrote
   into the other.** A synced copy shares its source's spelling by construction, so the
   comparison passes for a reason unrelated to the rule under test; find or wait for a record
