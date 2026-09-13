@@ -2365,6 +2365,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   not broken. An independent record of the same fact sat unread in the database the whole time)
   SHORT: A subject in a monitor's registry but never instrumented reads as a FAILING one, so it is accused for ever with a remedy aimed at the wrong thing.
 
+- **L475. A test that discards the result of a step its final assertion depends on reports that
+  step's refusal as the final behaviour failing, so the red names the wrong defect.** Assert every
+  intermediate outcome the last line relies on, before asserting the last line, so a step that
+  stopped early fails on its own line with its own detail. This is the reverse of L140 and L159,
+  where a check passes for the wrong reason: here it fails for the wrong reason, and the
+  investigation goes to the behaviour that never got the chance to run.
+  (ovation#279, 2026-09-13: a store launch test ran the launch sequence twice with `_ = await` and
+  then asserted a notice had cleared. It failed twice on a busy Mac, once in 265 whole suite runs
+  and once in 50 under heavy load, with "the notice is still open", which reads as the clearing
+  logic being broken. The suspected cause is the second launch refusing at its checkpoint before it
+  ever reached the step that clears the notice, and nothing in the failure could say which, so the
+  cause is still unknown.)
+  SHORT: A test that discards a middle step's result reports that step failing as the final behaviour failing; assert each outcome the last line relies on.
+
 
 ## Data safety
 
