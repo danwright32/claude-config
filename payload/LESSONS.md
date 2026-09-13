@@ -5168,6 +5168,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   weekly user removed the backstop while every sentence about revocation stayed literally true.)
 
 
+- **L697. To keep a page out of search results, allow crawling and serve a `noindex` header.**
+  A `robots.txt` Disallow stops the crawler FETCHING the page at all, so it never sees the
+  noindex, and the URL can still be indexed from a link elsewhere: the two controls look like
+  they reinforce each other and actually cancel out. Set the header, leave the crawl allowed,
+  and guard the pairing, because a Disallow added later silently disables the header rather
+  than failing.
+  (slate#1756, 2026-09-13: the public booker at `/book?xbc=<code>` can create a real booking
+  against a real agent, a real calendar invite and a real Regal webhook, on a guessable three
+  digit code. Measured against production: 200 with no `X-Robots-Tag` and no noindex in the
+  markup, 462 real slots served anonymously, and the `robots.txt` the domain returns is
+  Cloudflare's injected content signals file carrying no Disallow at all. "Nothing links to it"
+  was doing the work, and a Workers Custom Domain is in the public certificate transparency
+  logs. The fix serves `noindex, nofollow` globally and deliberately ships NO Disallow, with
+  `scripts/test-global-headers.ts` asserting both halves.)
+  SHORT: A robots Disallow and a noindex header cancel out: a disallowed page is never fetched, so allow the crawl and serve noindex to keep it out of search.
+
+
 
 
 
