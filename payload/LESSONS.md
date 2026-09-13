@@ -3904,6 +3904,24 @@ for reference; L6 was reviewed and deliberately not adopted.
   recognises one that simply started working again)
   SHORT: An alert judged by one aggregate over a fixed trailing window cannot stand down until the window clears, so decide recovery on recent samples instead.
 
+- **L696. A predicate about the NEWEST bucket of a time series is a predicate about an
+  INCOMPLETE period, because the current day, hour or month is still being written, so an event
+  that has simply not arrived yet is indistinguishable from one that never will.** Judge the
+  newest COMPLETE bucket, or accept the newest two, and never let the running bucket alone decide
+  that something is ABSENT. Distinct from L539, which is the partial period diluting a RATE so an
+  alert clears with nothing fixed: this is the partial period reading as an absence, so an alert
+  fires with nothing wrong.
+  (bidspoke#1340, 2026-09-13: a recovery predicate shipped that morning stood a dead output field
+  down when it had resolved on the most recent judgeable day. The check reads seven days with no
+  upper bound and runs at 13:00 UTC, so the newest row is always today, part written. Measured
+  over the week to 09-13 for a field resolving one to three times a day in three thousand runs,
+  09-10's only resolution landed AFTER 13:00, so at check time that day read as zero while the
+  field had in fact recovered, and one healthy morning in four had nothing yet at 13:00. Every
+  fixture had a complete newest day and production never does, which is why the tests were green.
+  The same codebase already knew the trap: its sibling tier deliberately excludes today's row,
+  and the new tier was written without it)
+  SHORT: A predicate about the newest bucket of a time series judges an incomplete period, so an event that has not arrived yet reads as one that never will.
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
