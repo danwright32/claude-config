@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 657 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 658 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -658,6 +658,7 @@ apply it, because the body is where the failure it came from is described.
 - L453. The operation that REGENERATES a shared artifact is usually outside the locking every reader takes, so put the writer under the same lock and refuse.
 - L689. Monitor a deadline by the GAP between promised and actual completion, never only whether the work happened: a late job passes an absence check.
 - L690. A running total built with `x += await f()` loses every concurrent addition but the last, so sum where the concurrency is owned.
+- L693. A unique constraint on one BOUND of an interval cannot prevent overlap: a grid finer than the duration makes adjacent values distinct and overlapping.
 
 ## Test speed
 
