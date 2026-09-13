@@ -8253,6 +8253,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   bookings concurrently.)
   SHORT: A unique constraint on one BOUND of an interval cannot prevent overlap: a grid finer than the duration makes adjacent values distinct and overlapping.
 
+- **L468. A pull request closes an issue only when a closing keyword sits directly before `#N` or
+  `owner/repo#N`, so a project's own short prefix such as `ovation#N` is read as plain text and the
+  issue stays open after the merge, reading as work still outstanding.** Write the closing line as
+  `Closes #N`, and confirm the issue actually closed after merging rather than assuming the merge did
+  it, because the merge succeeds and says nothing either way.
+  (ovation#261, 2026-09-13: every Ovation issue and commit names issues as `ovation#N`, so pull
+  request descriptions wrote `Closes ovation#N`. Four pull requests in two days left their issues
+  open: #245 left ovation#232 open with its code already shipped, #251 left ovation#247 and
+  ovation#231, and #256 left ovation#252 and ovation#254. ovation#232 was then offered by the next
+  issue picker as the next thing to work on, a day after the work had merged. The push gate cannot
+  see a pull request's description, so nothing could catch it. Every repository that writes
+  `repo#N` for its own issues, `claude-config#N` and `downbeat#N` included, is exposed the same way.)
+  SHORT: A closing keyword works only before #N or owner/repo#N; a short prefix like repo#N leaves the issue open, so write Closes #N and confirm it closed.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
