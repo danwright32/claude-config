@@ -7231,6 +7231,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   the production half.)
   SHORT: A derived value exposed as a computed property is re-run in full by EVERY reader, and the call site reads as a free field access.
 
+- **L471. A render body runs for reasons that are not data changes at all, a window becoming key,
+  a focus or an appearance change among them, so a whole collection derivation computed merely ONCE
+  per pass is still paid at a rate nothing in the data predicts.** Memoise it against its inputs, and
+  measure what an event that changes NO data costs, because that is the reading which says whether
+  the derivation is bounded by the data or by the window server.
+  (overture#3876, overture#3805, 2026-09-13: `ArchiveView.swift:168` calls `makeScope()` from inside
+  `body`, deriving the whole table. A probe firing candidate triggers one at a time, with a null and a
+  positive control both asserted, found a window becoming key costs a FULL pass of 120 rows while
+  activation, occlusion, screen parameters, forced layout and appearance all cost zero. The same
+  reading holds with no `@Query` anywhere in the tree, so it is the view re-evaluating rather than the
+  query re-fetching. At this repo's own measured pass cost, 385.3 ms over 1,224 rows, clicking back
+  into the app costs that on the main thread. L383 is the same view and the other half of the rule: it
+  makes the pass cost one derivation instead of two, and says nothing about how often the pass runs.)
+  SHORT: A render body runs on events that change no data, so a whole collection derivation computed once per pass is still paid at an unpredictable rate.
+
 
 - **L556. When asking a stakeholder to rule on whether two surfaces should agree, enumerate
   every place they ALREADY disagree before asking, because the answer comes back as a rule

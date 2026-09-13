@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 664 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 665 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -585,6 +585,7 @@ apply it, because the body is where the failure it came from is described.
 - L554. A generated file committed beside its source conflicts on every aggregate it carries, so two clean edits still collide over content nobody wrote.
 - L422. A derived artifact COMMITTED beside its source claims to be current, so the check that regenerates and compares ships in the same change.
 - L383. A derived value exposed as a computed property is re-run in full by EVERY reader, and the call site reads as a free field access.
+- L471. A render body runs on events that change no data, so a whole collection derivation computed once per pass is still paid at an unpredictable rate.
 - L556. Before asking whether two surfaces should agree, enumerate every place they ALREADY disagree, because the answer comes back as a rule about all of them.
 - L562. A named rule is copied through its WORKED EXAMPLE, so an example that contradicts the rule teaches the inverse with the rule's authority behind it.
 - L387. A change fixing a defect CLASS must have its own DIFF searched for a fresh instance, because it is written by somebody holding the class in mind.
