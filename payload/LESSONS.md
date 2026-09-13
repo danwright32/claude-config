@@ -2843,6 +2843,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   two. begin_file_upload could have answered the same question before anything was written)
   SHORT: Put a refusal at the first step that can answer it: added to a LATE step it makes the rare leftover happen on every ordinary refused attempt.
 
+- **L474. A read only SQLite connection to a database in WAL mode still writes the shm index file
+  beside it, so a guard or monitor that opens a live store with mode=ro changes live files and
+  trips anything comparing them before and after.** Read a copy of the database, its wal and its
+  shm from a temporary directory instead. SQLite's immutable flag writes nothing, but it ignores
+  changes not yet folded into the main file, so a reader that needs recent writes (a guard hunting
+  for names added today) silently misses them (L215). It reads as intermittent because not every
+  open rewrites the index, so the symptom looks like flakiness in whatever compares the files
+  rather than like a write.
+  (ovation#276, 2026-09-13: `check-identity-leaks.sh` opens Dan's live store with
+  `sqlite3.connect("file:...?mode=ro")`, under a docstring saying a guard must not write to it. The
+  push gate runs it outside any lock, so a second worktree's push, whose live data check watches
+  `Ovation.store-shm`, was refused after every suite passed. Opening the store the guard's way with
+  one count query moved `Ovation.store-shm` from 18:54:45 to 18:55:28.)
+  SHORT: Opening a live SQLite store read only still rewrites its shm file beside it, so a guard must read a copy of the store, wal and shm instead.
+
 
 ## Honest failure
 

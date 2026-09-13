@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 667 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 668 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -226,6 +226,7 @@ apply it, because the body is where the failure it came from is described.
 - L443. An object held in memory from before another writer changed the record writes the old values back, so a field owned elsewhere must not be saved from it.
 - L649. An automation that performs the same state change as an existing human control inherits the ACTION but not the SAFEGUARD around it
 - L667. Put a refusal at the first step that can answer it: added to a LATE step it makes the rare leftover happen on every ordinary refused attempt.
+- L474. Opening a live SQLite store read only still rewrites its shm file beside it, so a guard must read a copy of the store, wal and shm instead.
 
 ## Honest failure
 
