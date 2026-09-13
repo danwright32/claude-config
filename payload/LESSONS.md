@@ -3887,6 +3887,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   censoring is worst in the sessions with the most stalls)
   SHORT: A durable write gated on a bounded collection having GROWN stops for ever once it is full, and the silent store reads as a quiet period.
 
+- **L695. A condition judged by ONE aggregate over a fixed trailing window cannot stand down
+  until the window itself clears, so the recovery is announced a whole window late and the correct
+  fix is paged about every day in between.** Decide the stand down from recent samples judged on
+  their own, never from the same aggregate that raised the alarm. Distinct from L160, which is about
+  standing down too EARLY on the first good sample, and from L539, where the aggregate clears too
+  easily with nothing fixed: here it cannot clear at all, however healthy the present is.
+  (bidspoke#1336, 2026-09-13: Main Flow's `pennie_or_eligibility.eligibility` went to zero for five
+  days when FFN's firewall blocked the Worker's egress. Eligibility Scout recovered on 09-10 and the
+  field resolved on the 10th, 11th, 12th and 13th, but `classifyDead` sums `ran_count` and
+  `present_count` across the whole 7 day window in one pass and has no branch asking whether the
+  field is carrying values now, so it paged again on the 12th and the 13th, four days after the
+  outage ended, and would have gone on until the zeros aged out on the 17th. Eight consecutive
+  daily pages about a condition that ended on the fourth. It is the same complaint #1119 was raised
+  and fixed for, in its second form: #1119 recognises a reference that was DELETED, and nothing
+  recognises one that simply started working again)
+  SHORT: An alert judged by one aggregate over a fixed trailing window cannot stand down until the window clears, so decide recovery on recent samples instead.
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a

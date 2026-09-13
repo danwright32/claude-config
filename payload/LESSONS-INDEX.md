@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 659 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 660 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -309,6 +309,7 @@ apply it, because the body is where the failure it came from is described.
 - L691. A tool printing a secret MASKS it by default, keeping its prefix and length, so it passes every completeness check and fails only at use.
 - L457. A marker stamped inside one phase cannot see the phase before it, so its zero reads as the operation never running: stamp at the entry point instead.
 - L465. A durable write gated on a bounded collection having GROWN stops for ever once it is full, and the silent store reads as a quiet period.
+- L695. An alert judged by one aggregate over a fixed trailing window cannot stand down until the window clears, so decide recovery on recent samples instead.
 
 ## State and identity
 
