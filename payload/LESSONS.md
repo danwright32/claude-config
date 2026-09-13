@@ -8186,6 +8186,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   cannot occur serially, so both replacement tests drive the units concurrently on purpose.)
   SHORT: A running total built with `x += await f()` loses every concurrent addition but the last, so sum where the concurrency is owned.
 
+- **L693. A uniqueness constraint on ONE BOUND of an interval, a start time or an effective-from
+  date, cannot prevent two intervals OVERLAPPING, so wherever the grid or step is finer than the
+  duration, adjacent values are distinct to the constraint and overlapping in reality.** Guard the
+  range itself, with an exclusion constraint over the interval, rather than a bound that stands in
+  for it.
+  (slate#2274, found by the first booking load run that ever confirmed a booking: three pairs of
+  confirmed bookings on one agent, 17:50 to 18:10 against 18:00 to 18:20, each pair created about
+  200ms apart by two different leads. The event type is 20 minutes on a 10 minute grid, copied from
+  production, so every adjacent offered time overlaps by ten; the guard was
+  `unique (assigned_user_id, starts_at)`, which sees two different starts and admits both, doing
+  exactly what it was written to do. The read that would have caught it is blind in the same window,
+  since 200ms apart neither confirm has the other's busy row yet, so the two checks fail together.
+  A year of green suites never saw it because no test and no earlier soak had ever confirmed two
+  bookings concurrently.)
+  SHORT: A unique constraint on one BOUND of an interval cannot prevent overlap: a grid finer than the duration makes adjacent values distinct and overlapping.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
