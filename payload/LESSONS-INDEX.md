@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 669 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 670 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -411,6 +411,7 @@ apply it, because the body is where the failure it came from is described.
 - L658. On a managed runtime a diagnostic print is an EGRESS rather than local output
 - L446. A redaction implemented by overriding how a type DESCRIBES itself is bypassed by every renderer that REFLECTS it, and a reference type does not help.
 - L669. Lengthening an expiry, TTL or retention window silently removes the ceiling it was placing on every OTHER staleness that window happened to bound
+- L697. A robots Disallow and a noindex header cancel out: a disallowed page is never fetched, so allow the crawl and serve noindex to keep it out of search.
 
 ## UX completeness
 
