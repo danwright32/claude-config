@@ -8282,6 +8282,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   was redone with `open -a /Applications/Ovation.app` and confirmed from that app's own folder.)
   SHORT: A manual check saying "open the app" tests whichever same-named copy macOS picks; open it by path, and confirm from that copy's data before recording.
 
+- **L470. A crash that kills the whole test or job process is attributed by the runner to whatever
+  item was current, so a red naming an item is not evidence that item ran at all.** Confirm the
+  named item's own body executed before investigating it, and expect the item named to be a fast or
+  skipped one, because that is where the run loop is pumped with nothing occupying it, which is
+  exactly when a deferred crash lands.
+  (overture#3874, overture#3875, 2026-09-13: the Mac hosted suite's host died 8 times under
+  `-test-iterations`, and every crash was reported against `measureWhatAPressCosts()`. That test is
+  gated behind an environment variable nothing in the repository sets, so it had executed a guard, a
+  print and a return. No test code appeared anywhere on the triggered stack, which was XCTest's own
+  wait between tests pumping the main run loop into a SwiftData observer left behind by an earlier
+  test. Two sessions investigated the named test before its own body was ever checked.)
+  SHORT: A process crash is attributed by the runner to whatever item was current, so confirm the named item's body really ran before investigating it.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
