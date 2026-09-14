@@ -16,23 +16,29 @@ Files in this folder:
 | `analyze.py` | The numbers. Run it; never recompute by hand. |
 | `template.html` | The page. Fill every double-brace slot; keep the CSS. |
 | `recommended.json` | Every coffee ever recommended. Read before recommending, append after. |
-| `state/last-run.json` | Written by `analyze.py`; what "since last time" is measured against. |
+| `runs/last-run.json` | What "since last time" is measured against. Written ONLY by `analyze.py --record`; every other invocation leaves it alone. |
 | `test-coffee-profile.sh` | The suite. Run it after any change to `analyze.py`. |
 
 ## 1. Get the numbers
 
 ```
-python3 ~/.claude/skills/coffee-profile/analyze.py
+python3 ~/.claude/skills/coffee-profile/analyze.py --record
 ```
 
-It reads the newest `Coffee Tracker*.csv` in `~/Downloads`. Three refusals,
+Run that ONCE per profile. It reads the newest `Coffee Tracker*.csv` in
+`~/Downloads` and records this run as the baseline the next profile
+compares against. To look at the numbers again during the same run (for
+example `--json`), leave `--record` off: a second recorded run would make the
+next profile compare against today instead of the run before it.
+
+Three refusals,
 each with its own exit code and message, and each one stops the run:
 
 | Exit | Meaning | What to tell Dan |
 |---|---|---|
 | 2 | No export in Downloads | Export the sheet as CSV (File, Download, CSV) into Downloads, then run again. |
 | 3 | A column was renamed | Name the column from the message. Do not guess a mapping; ask what it means now. |
-| 4 | `state/last-run.json` is corrupt | Show the message. Do not proceed as if there were no previous run. |
+| 4 | `runs/last-run.json` is corrupt | Show the message. Do not proceed as if there were no previous run. |
 
 The output is the whole evidence base for the page. Read all of it. The
 `Confounds` block lists every group difference that one roaster carries.
@@ -60,14 +66,14 @@ what goes in them:
 |---|---|
 | `N`, `MEAN`, `YES`, `NO`, `RUN_DATE` | From the first two lines of the output. `MEAN` to one decimal. |
 | `LEDE` | Three or four sentences: the palate in plain words. Body, bitterness, finish, sweetness, then the roast lean if there is one, then the one consistent miss. |
-| `SHIFT` | One or two sentences on what changed since the previous run: new coffees, and any correlation or average that moved by 0.1 or more. First run: "First profile; nothing to compare against yet." |
-| `CORR_ROWS` | One `div.bar` per attribute, strongest first, bar width = correlation as a percentage. Copy the markup shape from the 2026-09-14 page below. |
-| `DRIVER_FINDINGS` | Four or five `li` findings, each `<b>bold claim.</b> evidence`. Body floor, finish, sweetness by level, bitterness, aroma. Use the per-level means. |
+| `SHIFT` | One or two sentences on what changed since the previous run: new coffees, and any correlation or average that moved by 0.1 or more. First run: "First profile; nothing to compare against yet." Same data as last time: say so plainly, with the previous run's date. |
+| `CORR_ROWS` | One `div.bar` per attribute, strongest first by the unrounded value in `--json` (two can round to the same two decimals), bar width = correlation as a percentage. Copy the markup shape below. |
+| `DRIVER_FINDINGS` | Four or five `li` findings, each `<b>bold claim.</b> evidence`. Body floor, finish, sweetness by level, bitterness, aroma. Use the per-level means, and the per-level `max` for any ceiling claim ("nothing scored weak went above 6"). |
 | `ROAST_ROWS` | One `tr` per roast level, best average first, blanks excluded. |
 | `ROAST_PROSE` | One or two `p`. If a roast level is in the Confounds block, say which roaster carries it and what the others average. |
-| `ORIGIN_ROASTER_FINDINGS` | Two or three `li`. Roasters with a Yes, roasters with none, origins that repeat. Any group in Confounds is named by roaster. |
-| `TOP_ITEMS`, `BOTTOM_ITEMS` | Five `li` each from the Top and Bottom blocks: `<span class="score">9</span>Name, Roaster<span class="sub">roast, notes</span>`. |
-| `WORDS_YES`, `WORDS_NO` | `li` chips: label words that appear in the notes of coffees scored 7+ (yes) and 3 or below (no). Words only, no claim about cause. |
+| `ORIGIN_ROASTER_FINDINGS` | Two or three `li`. Roasters with a Yes, roasters with none, and origins that repeat, from the `Origin` block of the output (note its blank count). Any group in Confounds is named by roaster. |
+| `TOP_ITEMS`, `BOTTOM_ITEMS` | Five `li` each from the Top and Bottom blocks: `<span class="score">9</span>Name, Roaster<span class="sub">roast, notes</span>`. A blank roast is written "roast not recorded". Notes are transcribed as a lowercase comma list: the sheet's own text carries bullets and dashes that must not reach the page. |
+| `WORDS_YES`, `WORDS_NO` | `li` chips from the `Label words` block: `yes` phrases and `no` phrases. Leave out the `both` list (a chip cannot be green and struck through), leave out Dan's own verdicts that live in the notes column ("far too sweet", "very sweet" are his remarks, not label copy), and shorten a long phrase to its label word ("subtle undertones of dark chocolate" is "dark chocolate"). Words only, no claim about cause. |
 | `RECOMMENDATIONS` | The six items from step 3, filled in last. |
 | `CAVEATS` | Three `p`: sample size and category overlap; the sweetness scale; scores are Overall Enjoyment out of 10, not the sheet's computed rating. |
 
@@ -82,7 +88,8 @@ Markup shapes, copied from the first page:
 <li><b>Partners Coffee, Manhattan</b><span class="tag">new company</span><br>Dark, full-bodied, baker's chocolate and caramel. 12 oz for $20.<br><a href="https://www.partnerscoffee.com/products/manhattan">partnerscoffee.com/products/manhattan</a></li>
 ```
 
-Before publishing, this must print `0`:
+Before publishing, this must print `0` (grep also exits 1 on zero matches,
+which is the pass here; judge by the printed count, not the exit code):
 
 ```
 grep -c '{{' <the filled page>
@@ -142,4 +149,5 @@ End with the artifact link, the six recommendations, and the one-line
 | Treating "washed" or "natural" as a finding | Check the blank count. On 2026-09-14 only four roasters recorded process at all. |
 | Recommending from memory | Every link fetched, every run. Sold out and dead pages are the norm a year on. |
 | Reusing the last page's URL | New artifact each run. |
-| Recomputing a number by hand | `analyze.py --json` has every number. |
+| Recomputing a number by hand | `analyze.py --json` has every number, every coffee with its notes and origin, and the label words. Reading the CSV directly means something is missing from the script: add it there, test first. |
+| Running `--record` twice in one profile | The second run makes the next profile compare against today. Record once, look as often as you like. |
