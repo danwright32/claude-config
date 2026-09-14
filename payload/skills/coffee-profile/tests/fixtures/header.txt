@@ -1,0 +1,1 @@
+Coffee Name,Roaster,Website,Type,Origin,Notes,Milling Process,Drying Process,Roast Level,Grind,,,Aroma,Boldness,Bitterness,Sweetness,Aftertaste,Smoothness,,,Overall Enjoyment,Buy Again?,,,Overal Rating

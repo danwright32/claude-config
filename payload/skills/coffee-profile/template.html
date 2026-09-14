@@ -1,0 +1,225 @@
+<title>Dan's Coffee Palate</title>
+<!-- Template for the coffee-profile skill. Every double-brace slot must be filled before publishing; the SKILL.md check greps for any that remain. Keep the CSS; rewrite only the slots. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --ground: #f1efe9;
+    --surface: #e7e3da;
+    --ink: #2a1f17;
+    --ink-2: #5d5046;
+    --ink-3: #8a7d72;
+    --line: #d3cdc1;
+    --crema: #a9761f;
+    --like: #3f6f47;
+    --dislike: #a8402c;
+    --roast-light: #d3b384;
+    --roast-dark: #2c1a10;
+    --display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+    --body: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #1a1411;
+      --surface: #262019;
+      --ink: #efe8dd;
+      --ink-2: #c4b8a9;
+      --ink-3: #8d8175;
+      --line: #3b322a;
+      --crema: #d9a441;
+      --like: #7db485;
+      --dislike: #e0755d;
+      --roast-light: #c9a878;
+      --roast-dark: #0f0805;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #1a1411;
+    --surface: #262019;
+    --ink: #efe8dd;
+    --ink-2: #c4b8a9;
+    --ink-3: #8d8175;
+    --line: #3b322a;
+    --crema: #d9a441;
+    --like: #7db485;
+    --dislike: #e0755d;
+    --roast-light: #c9a878;
+    --roast-dark: #0f0805;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.55;
+    padding-block: 48px 96px;
+    padding-inline: 20px;
+  }
+  main { max-width: 720px; margin: 0 auto; display: grid; gap: 56px; }
+  h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.05; }
+  h1 { font-size: clamp(40px, 8vw, 64px); font-weight: 800; letter-spacing: -0.02em; }
+  h2 { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 14px; }
+  h3 { font-size: 18px; font-weight: 700; }
+  p { margin: 0 0 14px; max-width: 65ch; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 10px; }
+  .lede { font-size: 21px; line-height: 1.45; color: var(--ink); max-width: 34ch; margin-top: 18px; }
+  .lede strong { color: var(--crema); font-weight: 600; }
+  header { display: grid; gap: 4px; }
+  .spec { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 28px; }
+  .spec div { padding: 12px 0; }
+  .spec div + div { border-left: 1px solid var(--line); padding-left: 16px; }
+  .spec .k { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+  .spec .v { font-family: var(--display); font-size: 22px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .spec .v small { font-size: 14px; font-weight: 500; color: var(--ink-2); }
+
+  .bars { display: grid; gap: 8px; margin: 18px 0 8px; }
+  .bar { display: grid; grid-template-columns: 110px 1fr 52px; align-items: center; gap: 12px; font-family: var(--mono); font-size: 13px; }
+  .bar .track { height: 10px; background: var(--surface); border-radius: 2px; overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--crema); }
+  .bar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .bar .l { color: var(--ink); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 15px; margin: 14px 0 8px; }
+  th, td { text-align: left; padding: 8px 10px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); font-weight: 400; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+  td.name { font-weight: 600; }
+  td .sub { color: var(--ink-3); font-size: 14px; font-weight: 400; display: block; }
+  .tablewrap { overflow-x: auto; }
+
+  .roast { display: flex; height: 14px; border-radius: 2px; overflow: hidden; margin: 10px 0 6px; }
+  .roast span { flex: 1; }
+  .roast-key { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+
+  .findings { display: grid; gap: 18px; padding: 0; margin: 0; list-style: none; }
+  .findings li { display: grid; grid-template-columns: 8px 1fr; gap: 14px; }
+  .findings li::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--crema); margin-top: 9px; }
+  .findings b { font-family: var(--display); font-weight: 700; }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .split h3 { margin-bottom: 8px; }
+  .split ol { margin: 0; padding-left: 22px; }
+  .split li { margin-bottom: 8px; }
+  .split li .sub { color: var(--ink-3); font-size: 14px; display: block; }
+  .score { font-family: var(--mono); font-size: 13px; margin-right: 6px; }
+  .up .score { color: var(--like); }
+  .down .score { color: var(--dislike); }
+
+  .card { background: var(--surface); padding: 22px 24px; border-radius: 6px; }
+  .card h3 { margin-bottom: 8px; }
+  .words { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; padding: 0; list-style: none; }
+  .words li { font-family: var(--mono); font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--ground); }
+  .words.yes li { border-color: var(--like); color: var(--like); }
+  .words.no li { border-color: var(--dislike); color: var(--dislike); text-decoration: line-through; text-decoration-thickness: 1px; }
+
+  .next ol { padding-left: 22px; margin: 0; }
+  .next li { margin-bottom: 10px; }
+  .next li b { font-family: var(--display); }
+
+  .recs ol { padding-left: 22px; margin: 0; }
+  .recs li { margin-bottom: 12px; }
+  .recs li b { font-family: var(--display); }
+  .recs .tag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin-left: 6px; }
+  .recs a { color: var(--crema); word-break: break-all; }
+  .shift { font-size: 15px; color: var(--ink-2); }
+  .caveats { color: var(--ink-2); font-size: 15px; border-top: 1px solid var(--line); padding-top: 18px; }
+  .caveats p { margin-bottom: 8px; }
+
+  @media (max-width: 560px) {
+    .split { grid-template-columns: 1fr; }
+    .spec { grid-template-columns: 1fr; }
+    .spec div + div { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; }
+    .bar { grid-template-columns: 92px 1fr 48px; }
+  }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">Coffee tracker, {{N}} coffees logged, read {{RUN_DATE}}</div>
+    <h1>Dan's Coffee Palate</h1>
+    <p class="lede">{{LEDE}}</p>
+    <div class="spec">
+      <div><div class="k">Average enjoyment</div><div class="v">{{MEAN}} <small>of 10</small></div></div>
+      <div><div class="k">Would buy again</div><div class="v">{{YES}} <small>of {{N}}</small></div></div>
+      <div><div class="k">Would not</div><div class="v">{{NO}} <small>of {{N}}</small></div></div>
+    </div>
+    <p class="shift">{{SHIFT}}</p>
+  </header>
+
+  <section>
+    <h2>What moves your score</h2>
+    <p>How closely each attribute tracks your overall enjoyment, across all {{N}} coffees. A higher bar means that attribute predicts your score better.</p>
+    <div class="bars">
+{{CORR_ROWS}}
+    </div>
+    <ul class="findings">
+{{DRIVER_FINDINGS}}
+    </ul>
+  </section>
+
+  <section>
+    <h2>Roast level</h2>
+    <div class="roast" aria-hidden="true">
+      <span style="background:var(--roast-light)"></span><span style="background:color-mix(in srgb, var(--roast-light) 75%, var(--roast-dark))"></span><span style="background:color-mix(in srgb, var(--roast-light) 50%, var(--roast-dark))"></span><span style="background:color-mix(in srgb, var(--roast-light) 25%, var(--roast-dark))"></span><span style="background:var(--roast-dark)"></span>
+    </div>
+    <div class="roast-key"><span>Light</span><span>Dark</span></div>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Roast</th><th class="num">Coffees</th><th class="num">Avg score</th><th class="num">Yes</th><th class="num">No</th></tr></thead>
+      <tbody>
+{{ROAST_ROWS}}
+      </tbody>
+    </table>
+    </div>
+    {{ROAST_PROSE}}
+  </section>
+
+  <section>
+    <h2>Origin and roaster</h2>
+    <ul class="findings">
+{{ORIGIN_ROASTER_FINDINGS}}
+    </ul>
+  </section>
+
+  <section>
+    <h2>Top and bottom of the log</h2>
+    <div class="split">
+      <div class="up">
+        <h3>Loved</h3>
+        <ol>
+{{TOP_ITEMS}}
+        </ol>
+      </div>
+      <div class="down">
+        <h3>Regretted</h3>
+        <ol>
+{{BOTTOM_ITEMS}}
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>Reading a bag</h3>
+    <p>Words on a roaster's label that match your hits, and words that match your misses. These describe the coffees you scored, not why you scored them that way.</p>
+    <ul class="words yes">
+{{WORDS_YES}}
+    </ul>
+    <ul class="words no">
+{{WORDS_NO}}
+    </ul>
+  </section>
+
+  <section class="recs">
+    <h2>Try next</h2>
+    <p>Chosen against the profile above. Each link was checked live on {{RUN_DATE}}.</p>
+    <ol>
+{{RECOMMENDATIONS}}
+    </ol>
+  </section>
+
+  <section class="caveats">
+{{CAVEATS}}
+  </section>
+</main>

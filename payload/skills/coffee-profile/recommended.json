@@ -1,0 +1,11 @@
+{
+  "_about": "Every coffee the skill has recommended, so it never suggests one twice. A company listed here is excluded as a NEW company on later runs; it becomes eligible again for an UNTRIED bag once it has a Yes in the tracker. Append, never edit history.",
+  "recommendations": [
+    {"date": "2026-09-14", "roaster": "Partners Coffee", "coffee": "Manhattan", "url": "https://www.partnerscoffee.com/products/manhattan", "kind": "new-company"},
+    {"date": "2026-09-14", "roaster": "Counter Culture Coffee", "coffee": "Forty-Six", "url": "https://counterculturecoffee.com/products/12-oz-forty-six", "kind": "new-company"},
+    {"date": "2026-09-14", "roaster": "Onyx Coffee Lab", "coffee": "Monarch", "url": "https://onyxcoffeelab.com/products/monarch", "kind": "new-company"},
+    {"date": "2026-09-14", "roaster": "Peet's Coffee", "coffee": "Brazil", "url": "https://www.peets.com/products/brazil", "kind": "new-company"},
+    {"date": "2026-09-14", "roaster": "Volcanica Coffee", "coffee": "Sumatra Mandheling Reserve dark roast", "url": "https://volcanicacoffee.com/products/sumatra-mandheling-reserve-coffee-dark-roast", "kind": "new-company"},
+    {"date": "2026-09-14", "roaster": "Irving Farm", "coffee": "Blackstrap Espresso", "url": "https://irvingfarmcoffee.com/products/blackstrap-espresso", "kind": "new-company"}
+  ]
+}
