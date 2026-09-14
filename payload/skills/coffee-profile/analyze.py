@@ -15,7 +15,9 @@ check exists because the first profile blamed "fully washed" and "medium-light"
 for what was one roaster (see memory: check-confounds-before-categorical-claims).
 
 Usage:
-  python3 analyze.py                       # newest export in ~/Downloads, readable summary
+  python3 analyze.py --record              # the real run: newest export in ~/Downloads, and
+                                           # remember it as the previous run for next time
+  python3 analyze.py                       # look only; the previous-run record is not touched
   python3 analyze.py --json                # same, as JSON
   python3 analyze.py --csv PATH            # a specific export
   python3 analyze.py --downloads DIR --state DIR   # seams, used by the tests
@@ -34,12 +36,14 @@ ATTRIBUTES = ["Aroma", "Boldness", "Bitterness", "Sweetness", "Aftertaste", "Smo
 REQUIRED = ["Coffee Name", "Roaster", "Type", "Origin", "Notes", "Milling Process",
             "Roast Level", "Grind", *ATTRIBUTES, "Overall Enjoyment", "Buy Again?"]
 GROUPS = {"roast": "Roast Level", "roaster": "Roaster", "grind": "Grind",
-          "process": "Milling Process", "type": "Type"}
+          "process": "Milling Process", "type": "Type", "origin": "Origin"}
+LIKED_AT, DISLIKED_AT = 7, 3   # label words come from coffees scored at or beyond these
 EXPORT_GLOB = "Coffee Tracker*.csv"
 MIN_DEVIATION = 0.75  # a group closer than this to the overall mean has no effect to explain
 STATE_FILE = "last-run.json"
 DEFAULT_DOWNLOADS = Path.home() / "Downloads"
-DEFAULT_STATE = Path(__file__).resolve().parent / "state"
+# Named "runs", not "state": the config sync ignores any folder called state at any depth.
+DEFAULT_STATE = Path(__file__).resolve().parent / "runs"
 
 
 class NoExport(Exception):
@@ -123,11 +127,10 @@ def analyze(records):
         levels = defaultdict(list)
         for v, e in pts:
             levels[v].append(e)
-        result["level_means"][a] = {str(k): {"n": len(v), "mean": statistics.mean(v)}
+        result["level_means"][a] = {str(k): {"n": len(v), "mean": statistics.mean(v), "max": max(v)}
                                     for k, v in sorted(levels.items())}
     for key, col in GROUPS.items():
-        field = {"roast": "roast", "roaster": "roaster", "grind": "grind",
-                 "process": "process", "type": "type"}[key]
+        field = key
         values = defaultdict(list)
         blank = 0
         for r in scored:
@@ -151,7 +154,28 @@ def analyze(records):
     result["roasters"] = {"all": roasters,
                           "liked": [x for x in roasters if any(r["roaster"] == x and r["buy"] == 3 for r in scored)]}
     result["coffees_logged"] = [r["name"] for r in scored]
+    result["coffees"] = [{k: r[k] for k in ("name", "roaster", "roast", "origin", "notes", "process", "grind", "enjoy", "buy")}
+                         for r in ranked]
+    result["label_words"] = _label_words(scored)
     return result
+
+
+def _phrases(notes):
+    """Split a Notes cell into lowercase label phrases. Separators are commas,
+    periods, semicolons, the bullet some roasters use, and dashes, so none of
+    those characters ever survives into a phrase."""
+    parts = re.split(r"[,.;\u2022\u2013\u2014]+", notes.lower())
+    return {p.strip() for p in parts if p.strip()}
+
+
+def _label_words(scored):
+    liked, disliked = set(), set()
+    for r in scored:
+        if r["enjoy"] >= LIKED_AT:
+            liked |= _phrases(r["notes"])
+        elif r["enjoy"] <= DISLIKED_AT:
+            disliked |= _phrases(r["notes"])
+    return {"yes": sorted(liked - disliked), "no": sorted(disliked - liked), "both": sorted(liked & disliked)}
 
 
 def _confounds(group, values, overall):
@@ -189,7 +213,7 @@ def _confounds(group, values, overall):
     return flags
 
 
-def run(csv_path, state_dir):
+def run(csv_path, state_dir, record=False):
     state_dir = Path(state_dir)
     state_path = state_dir / STATE_FILE
     previous = None
@@ -206,6 +230,9 @@ def run(csv_path, state_dir):
     result["previous"] = previous and {k: previous.get(k) for k in ("run_date", "n", "mean_enjoy", "correlations", "buy")}
     seen_before = set(previous["coffees_logged"]) if previous else set()
     result["new_coffees"] = [c for c in result["coffees_logged"] if c not in seen_before] if previous else []
+    result["recorded"] = record
+    if not record:
+        return result
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps({k: result[k] for k in ("run_date", "n", "mean_enjoy", "correlations", "buy", "coffees_logged")}, indent=2))
     return result
@@ -214,7 +241,7 @@ def run(csv_path, state_dir):
 def summary(r):
     out = []
     p = out.append
-    p(f"Coffee profile, {r['run_date']}, from {r['csv']}")
+    p(f"Coffee profile, {r['run_date']}, from {r['csv']}" + ("" if r["recorded"] else "  (look only: not recorded as the previous run)"))
     p(f"{r['n']} coffees, mean enjoyment {r['mean_enjoy']:.2f}, buy again yes {r['buy']['yes']} / consider {r['buy']['consider']} / no {r['buy']['no']}")
     if r["previous"]:
         pv = r["previous"]
@@ -227,7 +254,7 @@ def summary(r):
         p(f"  {a:11} {c:+.2f}  n={r['correlation_n'][a]}" if c is not None else f"  {a:11} n/a")
     p("\nMean enjoyment by level:")
     for a in ATTRIBUTES:
-        p(f"  {a:11} " + "  ".join(f"{k}: {v['mean']:.1f} (n{v['n']})" for k, v in r["level_means"][a].items()))
+        p(f"  {a:11} " + "  ".join(f"{k}: mean {v['mean']:.1f} max {v['max']} (n{v['n']})" for k, v in r["level_means"][a].items()))
     for key, g in r["groups"].items():
         p(f"\n{g['column']} ({g['blank']} blank):")
         for k, v in g["values"].items():
@@ -243,6 +270,13 @@ def summary(r):
     p("Bottom:")
     for c in r["bottom"]:
         p(f"  {c['enjoy']:2} {c['name']} ({c['roaster']}, {c['roast'] or '?'}) {c['notes']}")
+    p("\nLabel words (from the notes of coffees scored 7+ / 3 or below / both sides):")
+    p(f"  yes:  {', '.join(r['label_words']['yes'])}")
+    p(f"  no:   {', '.join(r['label_words']['no'])}")
+    p(f"  both: {', '.join(r['label_words']['both']) or 'none'}")
+    p("\nEvery coffee (score, name, roaster, roast, origin, notes):")
+    for c in r["coffees"]:
+        p(f"  {c['enjoy']:2} {c['name']} | {c['roaster']} | {c['roast'] or 'roast not recorded'} | {c['origin'] or 'origin not recorded'} | {c['notes']}")
     p(f"\nRoasters with a Yes (eligible for an untried bag): {', '.join(r['roasters']['liked'])}")
     p(f"All roasters in the tracker (excluded as new companies): {', '.join(r['roasters']['all'])}")
     return "\n".join(out)
@@ -254,10 +288,11 @@ def main(argv=None):
     ap.add_argument("--downloads", default=str(DEFAULT_DOWNLOADS))
     ap.add_argument("--state", default=str(DEFAULT_STATE))
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--record", action="store_true", help="remember this run as the previous run for next time")
     args = ap.parse_args(argv)
     try:
         csv_path = Path(args.csv) if args.csv else find_csv(args.downloads)
-        result = run(csv_path, args.state)
+        result = run(csv_path, args.state, record=args.record)
     except NoExport as e:
         print(f"NO EXPORT: {e}", file=sys.stderr)
         return 2
