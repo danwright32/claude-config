@@ -36,55 +36,57 @@ def row(**fields):
     return cells
 
 
-# A synthetic log shaped so one roaster carries a whole roast level.
+# A synthetic log shaped so one roaster carries a whole roast level. The
+# sheet writes its scale labels with an en dash ("2 \u2013 Mild"); it is
+# written here as an escape so no literal dash sits in this file.
 # Bad Co is three medium-light coffees scored 1, 2, 3. Mid Co has two
 # medium-light coffees scored 7 and 6. So medium-light averages 3.8 with
 # Bad Co and 6.5 without it: the confound the script must name.
 FIXTURE_ROWS = [
     row(**{"Coffee Name": "Alpha", "Roaster": "Good Co", "Roast Level": "Dark", "Grind": "Whole Bean",
-           "Type": "Blend", "Origin": "Peru", "Notes": "Dark chocolate, hazelnut, brown sugar", "Milling Process": "", "Boldness": "5 – Incredibly bold", "Bitterness": "5 – No bitterness at all",
-           "Sweetness": "5 – Subtle hint", "Aftertaste": "5 – Amazing", "Smoothness": "5 – Silky", "Aroma": "4 – Nice aroma",
-           "Overall Enjoyment": "9 – Fantastic", "Buy Again?": "3 - Yes"}),
+           "Type": "Blend", "Origin": "Peru", "Notes": "Dark chocolate, hazelnut, brown sugar", "Milling Process": "", "Boldness": "5 \u2013 Incredibly bold", "Bitterness": "5 \u2013 No bitterness at all",
+           "Sweetness": "5 \u2013 Subtle hint", "Aftertaste": "5 \u2013 Amazing", "Smoothness": "5 \u2013 Silky", "Aroma": "4 \u2013 Nice aroma",
+           "Overall Enjoyment": "9 \u2013 Fantastic", "Buy Again?": "3 - Yes"}),
     row(**{"Coffee Name": "Bravo", "Roaster": "Good Co", "Roast Level": "Dark", "Grind": "Whole Bean",
-           "Type": "Blend", "Origin": "Peru", "Notes": "MOLASSES • DARK CHOCOLATE", "Milling Process": "", "Boldness": "4 – Full-bodied", "Bitterness": "4 – Slight",
-           "Sweetness": "4 – No sweetness", "Aftertaste": "4 – Rich", "Smoothness": "4 – Very smooth", "Aroma": "3 – Decent",
-           "Overall Enjoyment": "8 – Really liked it", "Buy Again?": "3 - Yes"}),
+           "Type": "Blend", "Origin": "Peru", "Notes": "MOLASSES \u2022 DARK CHOCOLATE", "Milling Process": "", "Boldness": "4 \u2013 Full-bodied", "Bitterness": "4 \u2013 Slight",
+           "Sweetness": "4 \u2013 No sweetness", "Aftertaste": "4 \u2013 Rich", "Smoothness": "4 \u2013 Very smooth", "Aroma": "3 \u2013 Decent",
+           "Overall Enjoyment": "8 \u2013 Really liked it", "Buy Again?": "3 - Yes"}),
     row(**{"Coffee Name": "Charlie", "Roaster": "Good Co", "Roast Level": "Medium-Dark", "Grind": "Pre-Ground",
-           "Type": "Blend", "Milling Process": "", "Boldness": "4 – Full-bodied", "Bitterness": "4 – Slight",
-           "Sweetness": "3 – Noticeable", "Aftertaste": "3 – Pleasant", "Smoothness": "4 – Very smooth", "Aroma": "3 – Decent",
-           "Overall Enjoyment": "7 – Solid choice", "Buy Again?": "3 - Yes"}),
+           "Type": "Blend", "Milling Process": "", "Boldness": "4 \u2013 Full-bodied", "Bitterness": "4 \u2013 Slight",
+           "Sweetness": "3 \u2013 Noticeable", "Aftertaste": "3 \u2013 Pleasant", "Smoothness": "4 \u2013 Very smooth", "Aroma": "3 \u2013 Decent",
+           "Overall Enjoyment": "7 \u2013 Solid choice", "Buy Again?": "3 - Yes"}),
     row(**{"Coffee Name": "Delta", "Roaster": "Bad Co", "Roast Level": "Medium-Light", "Grind": "Whole Bean",
-           "Type": "Single-Origin", "Origin": "Guji, Ethiopia", "Notes": "Jasmine, and brown sugar. Far too sweet", "Milling Process": "Fully Washed", "Boldness": "1 – Weak", "Bitterness": "3 – Balanced",
-           "Sweetness": "1 – Way too sweet", "Aftertaste": "1 – Unpleasant", "Smoothness": "2 – A little rough", "Aroma": "2 – Faint",
-           "Overall Enjoyment": "1 – Can’t stand it", "Buy Again?": "1 - No"}),
+           "Type": "Single-Origin", "Origin": "Guji, Ethiopia", "Notes": "Jasmine, and brown sugar. Far too sweet", "Milling Process": "Fully Washed", "Boldness": "1 \u2013 Weak", "Bitterness": "3 \u2013 Balanced",
+           "Sweetness": "1 \u2013 Way too sweet", "Aftertaste": "1 \u2013 Unpleasant", "Smoothness": "2 \u2013 A little rough", "Aroma": "2 \u2013 Faint",
+           "Overall Enjoyment": "1 \u2013 Can’t stand it", "Buy Again?": "1 - No"}),
     row(**{"Coffee Name": "Echo", "Roaster": "Bad Co", "Roast Level": "Medium-Light", "Grind": "Whole Bean",
-           "Type": "Single-Origin", "Milling Process": "Fully Washed", "Boldness": "2 – Mild", "Bitterness": "3 – Balanced",
-           "Sweetness": "1 – Way too sweet", "Aftertaste": "2 – Short", "Smoothness": "3 – Smooth enough", "Aroma": "2 – Faint",
-           "Overall Enjoyment": "2 – Not great", "Buy Again?": "1 - No"}),
+           "Type": "Single-Origin", "Milling Process": "Fully Washed", "Boldness": "2 \u2013 Mild", "Bitterness": "3 \u2013 Balanced",
+           "Sweetness": "1 \u2013 Way too sweet", "Aftertaste": "2 \u2013 Short", "Smoothness": "3 \u2013 Smooth enough", "Aroma": "2 \u2013 Faint",
+           "Overall Enjoyment": "2 \u2013 Not great", "Buy Again?": "1 - No"}),
     row(**{"Coffee Name": "Foxtrot", "Roaster": "Bad Co", "Roast Level": "Medium-Light", "Grind": "Whole Bean",
-           "Type": "Single-Origin", "Milling Process": "Fully Washed", "Boldness": "2 – Mild", "Bitterness": "2 – Strong",
-           "Sweetness": "2 – Too much", "Aftertaste": "2 – Short", "Smoothness": "3 – Smooth enough", "Aroma": "1 – Harsh",
-           "Overall Enjoyment": "3 – Meh", "Buy Again?": "1 - No"}),
+           "Type": "Single-Origin", "Milling Process": "Fully Washed", "Boldness": "2 \u2013 Mild", "Bitterness": "2 \u2013 Strong",
+           "Sweetness": "2 \u2013 Too much", "Aftertaste": "2 \u2013 Short", "Smoothness": "3 \u2013 Smooth enough", "Aroma": "1 \u2013 Harsh",
+           "Overall Enjoyment": "3 \u2013 Meh", "Buy Again?": "1 - No"}),
     row(**{"Coffee Name": "Golf", "Roaster": "Mid Co", "Roast Level": "Medium-Light", "Grind": "Whole Bean",
-           "Type": "Single-Origin", "Milling Process": "", "Boldness": "4 – Full-bodied", "Bitterness": "5 – No bitterness at all",
-           "Sweetness": "3 – Noticeable", "Aftertaste": "4 – Rich", "Smoothness": "4 – Very smooth", "Aroma": "",
-           "Overall Enjoyment": "7 – Solid choice", "Buy Again?": "3 - Yes"}),
+           "Type": "Single-Origin", "Milling Process": "", "Boldness": "4 \u2013 Full-bodied", "Bitterness": "5 \u2013 No bitterness at all",
+           "Sweetness": "3 \u2013 Noticeable", "Aftertaste": "4 \u2013 Rich", "Smoothness": "4 \u2013 Very smooth", "Aroma": "",
+           "Overall Enjoyment": "7 \u2013 Solid choice", "Buy Again?": "3 - Yes"}),
     row(**{"Coffee Name": "Hotel", "Roaster": "Mid Co", "Roast Level": "Dark", "Grind": "Pre-Ground",
-           "Type": "Blend", "Milling Process": "", "Boldness": "3 – Medium-bodied", "Bitterness": "4 – Slight",
-           "Sweetness": "3 – Noticeable", "Aftertaste": "3 – Pleasant", "Smoothness": "4 – Very smooth", "Aroma": "3 – Decent",
-           "Overall Enjoyment": "6 – Pretty good", "Buy Again?": "2 - Would Consider"}),
+           "Type": "Blend", "Milling Process": "", "Boldness": "3 \u2013 Medium-bodied", "Bitterness": "4 \u2013 Slight",
+           "Sweetness": "3 \u2013 Noticeable", "Aftertaste": "3 \u2013 Pleasant", "Smoothness": "4 \u2013 Very smooth", "Aroma": "3 \u2013 Decent",
+           "Overall Enjoyment": "6 \u2013 Pretty good", "Buy Again?": "2 - Would Consider"}),
     row(**{"Coffee Name": "India", "Roaster": "Mid Co", "Roast Level": "Light", "Grind": "Whole Bean",
-           "Type": "Single-Origin", "Milling Process": "Fully Washed", "Boldness": "3 – Medium-bodied", "Bitterness": "2 – Strong",
-           "Sweetness": "3 – Noticeable", "Aftertaste": "3 – Pleasant", "Smoothness": "3 – Smooth enough", "Aroma": "2 – Faint",
-           "Overall Enjoyment": "5 – Decent", "Buy Again?": "2 - Would Consider"}),
+           "Type": "Single-Origin", "Milling Process": "Fully Washed", "Boldness": "3 \u2013 Medium-bodied", "Bitterness": "2 \u2013 Strong",
+           "Sweetness": "3 \u2013 Noticeable", "Aftertaste": "3 \u2013 Pleasant", "Smoothness": "3 \u2013 Smooth enough", "Aroma": "2 \u2013 Faint",
+           "Overall Enjoyment": "5 \u2013 Decent", "Buy Again?": "2 - Would Consider"}),
     row(**{"Coffee Name": "Juliet", "Roaster": "Mid Co", "Roast Level": "", "Grind": "Pre-Ground",
-           "Type": "", "Milling Process": "", "Boldness": "2 – Mild", "Bitterness": "3 – Balanced",
-           "Sweetness": "3 – Noticeable", "Aftertaste": "2 – Short", "Smoothness": "3 – Smooth enough", "Aroma": "2 – Faint",
-           "Overall Enjoyment": "4 – Fine", "Buy Again?": "1 - No"}),
+           "Type": "", "Milling Process": "", "Boldness": "2 \u2013 Mild", "Bitterness": "3 \u2013 Balanced",
+           "Sweetness": "3 \u2013 Noticeable", "Aftertaste": "2 \u2013 Short", "Smoothness": "3 \u2013 Smooth enough", "Aroma": "2 \u2013 Faint",
+           "Overall Enjoyment": "4 \u2013 Fine", "Buy Again?": "1 - No"}),
     row(**{"Coffee Name": "Kilo", "Roaster": "Mid Co", "Roast Level": "Medium-Light", "Grind": "Whole Bean",
-           "Type": "Single-Origin", "Milling Process": "", "Boldness": "3 – Medium-bodied", "Bitterness": "4 – Slight",
-           "Sweetness": "3 – Noticeable", "Aftertaste": "3 – Pleasant", "Smoothness": "4 – Very smooth", "Aroma": "3 – Decent",
-           "Overall Enjoyment": "6 – Pretty good", "Buy Again?": "2 - Would Consider"}),
+           "Type": "Single-Origin", "Milling Process": "", "Boldness": "3 \u2013 Medium-bodied", "Bitterness": "4 \u2013 Slight",
+           "Sweetness": "3 \u2013 Noticeable", "Aftertaste": "3 \u2013 Pleasant", "Smoothness": "4 \u2013 Very smooth", "Aroma": "3 \u2013 Decent",
+           "Overall Enjoyment": "6 \u2013 Pretty good", "Buy Again?": "2 - Would Consider"}),
 ]
 
 
@@ -145,8 +147,8 @@ class TestLoad(unittest.TestCase):
         self.assertNotIn("Aroma", str(ctx.exception))
 
     def test_parses_the_leading_number_of_each_score_and_blank_as_none(self):
-        self.assertEqual(analyze.score("2 – Mild, lacking body"), 2)
-        self.assertEqual(analyze.score("10 – Loved it (will reorder)"), 10)
+        self.assertEqual(analyze.score("2 \u2013 Mild, lacking body"), 2)
+        self.assertEqual(analyze.score("10 \u2013 Loved it (will reorder)"), 10)
         self.assertIsNone(analyze.score(""))
         self.assertIsNone(analyze.score("Yes"))
 
