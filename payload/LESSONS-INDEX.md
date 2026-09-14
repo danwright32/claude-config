@@ -228,7 +228,7 @@ apply it, because the body is where the failure it came from is described.
 - L649. An automation that performs the same state change as an existing human control inherits the ACTION but not the SAFEGUARD around it
 - L667. Put a refusal at the first step that can answer it: added to a LATE step it makes the rare leftover happen on every ordinary refused attempt.
 - L474. Opening a live SQLite store read only still rewrites its shm file beside it, so a guard must read a copy of the store, wal and shm instead.
-- L698. A build that bakes env files into the artifact ships every local env file, so prove a throwaway deploy holds NO production credential by reading the artifact.
+- L698. A build that bakes env files into the artifact ships every local env file, so prove a throwaway deploy holds NO production credential by reading it.
 
 ## Honest failure
 

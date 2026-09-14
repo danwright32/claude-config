@@ -2872,6 +2872,24 @@ for reference; L6 was reviewed and deliberately not adopted.
   one count query moved `Ovation.store-shm` from 18:54:45 to 18:55:28.)
   SHORT: Opening a live SQLite store read only still rewrites its shm file beside it, so a guard must read a copy of the store, wal and shm instead.
 
+- **L698. A build that bakes env files into the artifact makes every local env file part of the
+  deploy, and an isolated environment that sets only SOME of its bindings inherits the rest from that
+  file, so prove a throwaway deployment holds NO production credential by reading the built artifact,
+  never by assuming it starts empty.** The isolation is what invites the assumption: "Cloudflare secrets
+  are per environment, so a fresh deployment starts with none of production's" was true of the
+  bindings and false of the bundle. The check is cheap (list the names in the compiled env file
+  against an allowlist of public build-time values) and belongs in the build step, because the
+  runbook sentence saying the token must stay unset was enforced by nothing.
+  (slate#2335, 2026-09-14: the load test Worker was built in a worktree holding a copy of production
+  `.env.local`. `@opennextjs/cloudflare` writes every `.env*` value into
+  `.open-next/cloudflare/next-env.mjs`, and at runtime bindings win while that file fills every unset
+  name with `??=`. The `loadtest` environment set three secrets, so 22 production values went live in
+  a throwaway Worker: the Slack token paged the real alerts channel about a synthetic roster for six
+  minutes, and the Google service account key, Salesforce, Twilio and cal.com credentials sat in the
+  bundle until the run was killed. Two earlier runs from worktrees without the file were quiet, which
+  is what made the runbook's claim look confirmed.)
+  SHORT: A build that bakes env files into the artifact ships every local env file, so prove a throwaway deploy holds NO production credential by reading it.
+
 
 ## Honest failure
 
