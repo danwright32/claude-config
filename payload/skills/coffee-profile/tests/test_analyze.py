@@ -5,12 +5,11 @@ CSV it reads, and the state directory it remembers the previous run in. None
 of them is left real, so the suite never touches the actual tracker export or
 the actual run history (LESSONS L284, L2).
 
-The one exception is test_real_export_if_present, which reads the real export
-ONLY to pin the numbers the profile was first built from, and reports itself
-UNMEASURED rather than failing when that file is absent (L411).
+TestFirstExport reads a frozen copy of the real export the first profile
+was built from (tests/fixtures/export-2026-09-14.csv), so the numbers that
+profile reported stay pinned however the live sheet grows.
 """
 import csv
-import io
 import json
 import os
 import subprocess
@@ -26,7 +25,7 @@ sys.path.insert(0, str(SKILL))
 import analyze  # noqa: E402
 
 HEADER = (HERE / "fixtures" / "header.txt").read_text().strip().split(",")
-REAL_EXPORT = Path.home() / "Downloads" / "Coffee Tracker - Sheet1.csv"
+FIRST_EXPORT = HERE / "fixtures" / "export-2026-09-14.csv"
 
 
 def row(**fields):
@@ -257,23 +256,20 @@ class TestCli(unittest.TestCase):
         self.assertIn("confounds", data)
 
 
-class TestRealExport(unittest.TestCase):
-    def test_real_export_if_present(self):
-        """Pins the numbers the first profile was built from (2026-09-14).
-
-        Reads the real export when it is where the skill looks. The state dir
-        is a temp dir so this never touches the real run history.
-        """
-        if not REAL_EXPORT.exists():
-            self.skipTest(f"UNMEASURED: {REAL_EXPORT} is not present")
+class TestFirstExport(unittest.TestCase):
+    def test_pins_the_numbers_the_first_profile_reported(self):
+        """The 2026-09-14 profile said these; a change here changes that page's claims."""
         with tempfile.TemporaryDirectory() as s:
-            r = analyze.run(REAL_EXPORT, state_dir=s)
-        self.assertGreaterEqual(r["n"], 34)
-        if r["n"] == 34:
-            self.assertAlmostEqual(r["correlations"]["Boldness"], 0.72, places=2)
-            self.assertAlmostEqual(r["mean_enjoy"], 5.29, places=2)
-            ml = [f for f in r["confounds"] if f["value"] == "Medium-Light"]
-            self.assertEqual(ml[0]["roaster"], "Tandem Coffee Roasters")
+            r = analyze.run(FIRST_EXPORT, state_dir=s)
+        self.assertEqual(r["n"], 34)
+        self.assertAlmostEqual(r["correlations"]["Boldness"], 0.72, places=2)
+        self.assertAlmostEqual(r["correlations"]["Aftertaste"], 0.72, places=2)
+        self.assertAlmostEqual(r["mean_enjoy"], 5.29, places=2)
+        self.assertEqual(r["buy"], {"yes": 11, "consider": 11, "no": 12})
+        self.assertEqual(r["groups"]["process"]["blank"], 19)
+        flagged = {(f["group"], f["value"], f["roaster"]) for f in r["confounds"]}
+        self.assertEqual(flagged, {("roast", "Medium-Light", "Tandem Coffee Roasters"),
+                                   ("process", "Fully Washed", "Tandem Coffee Roasters")})
 
 
 if __name__ == "__main__":
