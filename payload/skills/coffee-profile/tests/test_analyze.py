@@ -42,11 +42,11 @@ def row(**fields):
 # Bad Co and 6.5 without it: the confound the script must name.
 FIXTURE_ROWS = [
     row(**{"Coffee Name": "Alpha", "Roaster": "Good Co", "Roast Level": "Dark", "Grind": "Whole Bean",
-           "Type": "Blend", "Milling Process": "", "Boldness": "5 – Incredibly bold", "Bitterness": "5 – No bitterness at all",
+           "Type": "Blend", "Origin": "Peru", "Notes": "Dark chocolate, hazelnut, brown sugar", "Milling Process": "", "Boldness": "5 – Incredibly bold", "Bitterness": "5 – No bitterness at all",
            "Sweetness": "5 – Subtle hint", "Aftertaste": "5 – Amazing", "Smoothness": "5 – Silky", "Aroma": "4 – Nice aroma",
            "Overall Enjoyment": "9 – Fantastic", "Buy Again?": "3 - Yes"}),
     row(**{"Coffee Name": "Bravo", "Roaster": "Good Co", "Roast Level": "Dark", "Grind": "Whole Bean",
-           "Type": "Blend", "Milling Process": "", "Boldness": "4 – Full-bodied", "Bitterness": "4 – Slight",
+           "Type": "Blend", "Origin": "Peru", "Notes": "MOLASSES • DARK CHOCOLATE", "Milling Process": "", "Boldness": "4 – Full-bodied", "Bitterness": "4 – Slight",
            "Sweetness": "4 – No sweetness", "Aftertaste": "4 – Rich", "Smoothness": "4 – Very smooth", "Aroma": "3 – Decent",
            "Overall Enjoyment": "8 – Really liked it", "Buy Again?": "3 - Yes"}),
     row(**{"Coffee Name": "Charlie", "Roaster": "Good Co", "Roast Level": "Medium-Dark", "Grind": "Pre-Ground",
@@ -54,7 +54,7 @@ FIXTURE_ROWS = [
            "Sweetness": "3 – Noticeable", "Aftertaste": "3 – Pleasant", "Smoothness": "4 – Very smooth", "Aroma": "3 – Decent",
            "Overall Enjoyment": "7 – Solid choice", "Buy Again?": "3 - Yes"}),
     row(**{"Coffee Name": "Delta", "Roaster": "Bad Co", "Roast Level": "Medium-Light", "Grind": "Whole Bean",
-           "Type": "Single-Origin", "Milling Process": "Fully Washed", "Boldness": "1 – Weak", "Bitterness": "3 – Balanced",
+           "Type": "Single-Origin", "Origin": "Guji, Ethiopia", "Notes": "Jasmine, brown sugar. Far too sweet", "Milling Process": "Fully Washed", "Boldness": "1 – Weak", "Bitterness": "3 – Balanced",
            "Sweetness": "1 – Way too sweet", "Aftertaste": "1 – Unpleasant", "Smoothness": "2 – A little rough", "Aroma": "2 – Faint",
            "Overall Enjoyment": "1 – Can’t stand it", "Buy Again?": "1 - No"}),
     row(**{"Coffee Name": "Echo", "Roaster": "Bad Co", "Roast Level": "Medium-Light", "Grind": "Whole Bean",
@@ -204,6 +204,30 @@ class TestAnalyze(Fixture):
         self.assertEqual([c["name"] for c in self.result["top"]], ["Alpha", "Bravo", "Charlie", "Golf", "Hotel"])
         self.assertEqual([c["name"] for c in self.result["bottom"]], ["Delta", "Echo", "Foxtrot", "Juliet", "India"])
 
+    def test_level_means_carry_the_maximum_so_a_ceiling_claim_needs_no_recount(self):
+        bold = self.result["level_means"]["Boldness"]
+        self.assertEqual(bold["2"]["max"], 4)   # Echo 2, Foxtrot 3, Juliet 4
+        self.assertEqual(bold["5"]["max"], 9)
+
+    def test_origins_are_grouped_like_the_other_categories(self):
+        o = self.result["groups"]["origin"]
+        self.assertEqual(o["blank"], 8)
+        self.assertEqual(o["values"]["Peru"], {"n": 2, "mean": 8.5, "yes": 2, "no": 0})
+
+    def test_label_words_split_by_score_and_overlaps_are_set_aside(self):
+        w = self.result["label_words"]
+        # 7+ : Alpha, Bravo, Charlie, Golf. 3 or below: Delta, Echo, Foxtrot.
+        self.assertEqual(w["yes"], ["dark chocolate", "hazelnut", "molasses"])
+        self.assertEqual(w["no"], ["far too sweet", "jasmine"])
+        self.assertEqual(w["both"], ["brown sugar"])
+
+    def test_every_coffee_is_listed_with_its_notes_and_origin(self):
+        coffees = self.result["coffees"]
+        self.assertEqual(len(coffees), 11)
+        alpha = next(c for c in coffees if c["name"] == "Alpha")
+        self.assertEqual(alpha["origin"], "Peru")
+        self.assertEqual(alpha["notes"], "Dark chocolate, hazelnut, brown sugar")
+
     def test_roasters_split_into_liked_and_not(self):
         self.assertEqual(self.result["roasters"]["liked"], ["Good Co", "Mid Co"])
         self.assertEqual(self.result["roasters"]["all"], ["Bad Co", "Good Co", "Mid Co"])
@@ -215,15 +239,34 @@ class TestPreviousRun(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "t.csv"
             write_csv(p, HEADER, FIXTURE_ROWS[:10])
-            first = analyze.run(p, state_dir=d)
+            first = analyze.run(p, state_dir=d, record=True)
             self.assertIsNone(first["previous"])
             write_csv(p, HEADER, FIXTURE_ROWS)
-            second = analyze.run(p, state_dir=d)
+            second = analyze.run(p, state_dir=d, record=True)
             self.assertEqual(second["previous"]["n"], 10)
             self.assertEqual(second["n"], 11)
             self.assertEqual(second["new_coffees"], ["Kilo"])
             saved = json.loads((Path(d) / "last-run.json").read_text())
             self.assertEqual(saved["n"], 11)
+
+    def test_a_run_without_record_reads_the_previous_run_but_does_not_overwrite_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t.csv"
+            write_csv(p, HEADER, FIXTURE_ROWS[:10])
+            analyze.run(p, state_dir=d, record=True)
+            before = (Path(d) / "last-run.json").read_bytes()
+            write_csv(p, HEADER, FIXTURE_ROWS)
+            look = analyze.run(p, state_dir=d)
+            self.assertEqual(look["previous"]["n"], 10)
+            self.assertEqual(look["new_coffees"], ["Kilo"])
+            self.assertEqual((Path(d) / "last-run.json").read_bytes(), before)
+
+    def test_default_state_folder_is_not_one_the_config_sync_ignores(self):
+        # ~/claude-config-sync/.gitignore has "state/" with no leading slash,
+        # which matches at every depth (L374), so a folder by that name here
+        # would never reach the other Mac and each Mac would keep its own history.
+        self.assertNotEqual(analyze.DEFAULT_STATE.name, "state")
+        self.assertEqual(analyze.DEFAULT_STATE.parent, SKILL)
 
     def test_a_corrupt_state_file_is_reported_not_treated_as_no_previous_run(self):
         with tempfile.TemporaryDirectory() as d:
@@ -250,10 +293,15 @@ class TestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as s:
             write_csv(Path(d) / "Coffee Tracker - Sheet1.csv", HEADER, FIXTURE_ROWS)
             out = self.run_cli("--downloads", d, "--state", s, "--json")
+            self.assertFalse((Path(s) / "last-run.json").exists())
+            recorded = self.run_cli("--downloads", d, "--state", s, "--record", "--json")
+            self.assertTrue((Path(s) / "last-run.json").exists())
         self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
         data = json.loads(out.stdout)
         self.assertEqual(data["n"], 11)
         self.assertIn("confounds", data)
+        self.assertIn("label_words", data)
 
 
 class TestFirstExport(unittest.TestCase):
