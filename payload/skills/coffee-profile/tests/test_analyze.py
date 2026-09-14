@@ -54,7 +54,7 @@ FIXTURE_ROWS = [
            "Sweetness": "3 – Noticeable", "Aftertaste": "3 – Pleasant", "Smoothness": "4 – Very smooth", "Aroma": "3 – Decent",
            "Overall Enjoyment": "7 – Solid choice", "Buy Again?": "3 - Yes"}),
     row(**{"Coffee Name": "Delta", "Roaster": "Bad Co", "Roast Level": "Medium-Light", "Grind": "Whole Bean",
-           "Type": "Single-Origin", "Origin": "Guji, Ethiopia", "Notes": "Jasmine, brown sugar. Far too sweet", "Milling Process": "Fully Washed", "Boldness": "1 – Weak", "Bitterness": "3 – Balanced",
+           "Type": "Single-Origin", "Origin": "Guji, Ethiopia", "Notes": "Jasmine, and brown sugar. Far too sweet", "Milling Process": "Fully Washed", "Boldness": "1 – Weak", "Bitterness": "3 – Balanced",
            "Sweetness": "1 – Way too sweet", "Aftertaste": "1 – Unpleasant", "Smoothness": "2 – A little rough", "Aroma": "2 – Faint",
            "Overall Enjoyment": "1 – Can’t stand it", "Buy Again?": "1 - No"}),
     row(**{"Coffee Name": "Echo", "Roaster": "Bad Co", "Roast Level": "Medium-Light", "Grind": "Whole Bean",

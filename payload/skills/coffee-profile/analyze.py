@@ -165,7 +165,8 @@ def _phrases(notes):
     periods, semicolons, the bullet some roasters use, and dashes, so none of
     those characters ever survives into a phrase."""
     parts = re.split(r"[,.;\u2022\u2013\u2014]+", notes.lower())
-    return {p.strip() for p in parts if p.strip()}
+    phrases = (re.sub(r"^(and|with|of)\s+", "", p.strip()) for p in parts)
+    return {p for p in phrases if p}
 
 
 def _label_words(scored):
