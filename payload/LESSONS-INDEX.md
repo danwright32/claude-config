@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 672 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 673 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -509,6 +509,7 @@ apply it, because the body is where the failure it came from is described.
 
 ## External systems
 
+- L477. A browser error reporter files every uncaught error on the page as yours, including a host in-app browser's injected script: check your bundle first.
 - L513. A value a platform REPORTS is what is currently configured, never what is available
 - L23. Treat every external response as hostile and every event stream as unordered, late, and duplicated.
 - L425. A decoder that declares only the fields it needs today silently discards every sibling in the same object, and nothing anywhere reports the loss

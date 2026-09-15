@@ -6387,6 +6387,20 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## External systems
 
+- **L477. A browser error reporter captures every uncaught error on the page, including ones
+  thrown by scripts you never loaded**, so a page opened inside an in-app browser files that host
+  app's own bridge failures as your project's crashes, and the alert channel fills with defects
+  nobody can fix. Judge such an issue by whether the throwing code appears in your own bundle or in
+  any script you load, and when it does not, silence the family rather than each new string.
+  SHORT: A browser error reporter files every uncaught error on the page as yours, including a host in-app browser's injected script: check your bundle first.
+  (nursedex#1071: Sentry filed NURSEDEX-SITE-5 for Instagram's Android bridge ("Java object is
+  gone") in March and NURSEDEX-SITE-Y for its iOS twin,
+  `window.webkit.messageHandlers[t].postMessage`, on 2026-09-15. Neither string appears anywhere in
+  the shipped bundle, and the three scripts loaded at runtime (Cloudflare Turnstile, PostHog
+  array.js and recorder.js) were fetched and contain no reference to either bridge. Each one cost a
+  Slack alert from the 15 minute poller and a session to diagnose, and the fix both times was one
+  more literal in `ignoreErrors`)
+
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
   so a design that reads an observed setting as the ceiling silently inherits a default nobody
   chose. Ask what the maximum is, by probe if the console will not say it, before building a
