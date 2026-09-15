@@ -8401,6 +8401,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   neither held Downbeat's directory lock at that moment.)
   SHORT: A trap on INT or TERM that only cleans up lets the script carry on, so end it with an exit, or stopping needs a kill that skips the cleanup.
 
+- **L476. A pull request the platform reports as CONFLICTING has no workflow run SCHEDULED for it
+  at all, so checks that never appear are a fact about the merge rather than about CI, and that
+  absence is indistinguishable from a queue.** Read the mergeable state before investigating why
+  nothing ran: the platform cannot build the merge commit its pull request events are computed
+  against, so it creates no run to report, and every status surface truthfully says no checks
+  reported. L265 covers the same flag REFUSING a merge and L98 covers an empty check list reading
+  as green; neither says the runs are never created.
+  (ovation#350, 2026-09-15: pull requests 347 and 348 sat over half an hour with no run of any kind
+  while GitHub's status page reported Actions operational and a third pull request opened minutes
+  later ran normally. About forty minutes went into incidents, credentials and trigger filters
+  before `gh pr view --json mergeable` answered CONFLICTING for both, on one line of a committed
+  count each.)
+  SHORT: A pull request reported as CONFLICTING has no workflow run scheduled at all, so read mergeable before investigating checks that never appear.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
