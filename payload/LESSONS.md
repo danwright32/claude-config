@@ -2379,6 +2379,37 @@ for reference; L6 was reviewed and deliberately not adopted.
   cause is still unknown.)
   SHORT: A test that discards a middle step's result reports that step failing as the final behaviour failing; assert each outcome the last line relies on.
 
+- **L699. A residual computed by subtracting an inner span from an outer one lies on BOTH sides of
+  that inner span, so attributing it to one side is a guess.** Measure each side from its own
+  boundary before naming a cause. The subtraction is arithmetically correct and says nothing about
+  WHERE the time went, so the reading carries no warning that it is being read as half of itself.
+  (slate#2340: the booking path load run's confirm profile timed the confirm and the archived log
+  carried the whole invocation, and the difference between them was read as the time BEFORE the
+  handler started and attributed to the Next.js server bundle being evaluated on a fresh isolate.
+  Measured from the log line's own timestamp instead, on the same 613 confirms: the 32 costing over
+  two seconds of CPU spent 297ms before the profile and 2,758ms AFTER it, against 209ms and 258ms
+  for the 409 costing under half a second. The time was almost entirely on the other side, in a
+  webhook send deferred past the response that no lead waits for. The wrong half was written into
+  the issue, into a merged judge bar aimed at cold starts, and into a bundle change justified by it.)
+  SHORT: A residual of outer minus inner span lies on BOTH sides of it, so measure each side from its own boundary before naming a cause.
+
+
+- **L701. A committed baseline whose values every machine reproduces slightly
+  differently is rewritten in FULL by whoever records it, so the one value a change
+  actually moved is invisible among the rest and the whole diff is approved as
+  noise. Record such a file from ONE declared environment, or write only the values
+  that moved, so the diff states the change.** (paperboi#285: measured-heights.json
+  holds 58 content heights, one per screen per width, recorded by driving a real
+  Chrome. Re-recording it after a change that could only affect the text inside a
+  few records moved all 58, by 3 to 30 pixels, including Login and NotFound, which
+  the change could not touch. Measuring the UNCHANGED tree with the same browser
+  produced the same 58 differences, so the drift was the local Chrome against
+  whichever last wrote the file, and exactly ONE number belonged to the change. The
+  check over these numbers is deliberately one directional, so nothing was broken
+  and nothing failed; what was lost was any way for a reviewer to see which number
+  the change moved, since separating the two took a second measurement of the base
+  that a reviewer reading the diff cannot take.)
+  SHORT: A baseline every machine measures differently is rewritten in full by whoever records it, so the one value a change moved is invisible in review.
 
 ## Data safety
 
@@ -4904,6 +4935,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   behaviour and none of them reported anything: bidspoke#1328, bidspoke#1330)
   SHORT: A rule specific to ONE consumer must live in that consumer's own field, never in a zeroed shared quantity every other reader silently acts on.
 
+- **L700. Excluding somebody from a ranking means removing them from the COHORT the scores are
+  computed over, never only blanking their own row, because any percentile, curve or score
+  normalised across a cohort moves every other member when one is left in it.** The tell is a
+  hold-out implemented where the row is RENDERED (a null goal, a dash, an unranked label) while the
+  cohort the statistics are built from is untouched. It reads as working, because the excluded
+  member's own row is exactly right and the damage lands entirely on everybody else's number, where
+  nothing names them. Distinct from L602, where the bound was applied to one derived value and not
+  its siblings: here it is applied to the display and not to the population.
+  (project-enrollment-tracker#1466: a rep on leave was to be held out of Power Rankings by a second
+  payload flag feeding `noTarget`, which reaches only goal, remaining, pctToGoal and the two pace
+  fields. The cohort hold-out is a different flag read directly at `calc.js:574`, so the rep would
+  have stayed in the percentile pool at zero production, lifting every teammate's Production
+  percentile, with Production weighted 47 percent. `calc.js:563` already carried the warning from
+  the previous feature that made the same mistake.)
+  SHORT: Excluding somebody from a ranking must remove them from the COHORT, never only blank their row, or every other member's percentile moves.
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
@@ -5208,6 +5255,21 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 
 
+
+- **L702. In SQL a comparison against NULL is UNKNOWN rather than false, so an allow list
+  looked up per kind yields NULL for a kind nobody listed and a guard written as `if not (value
+  = any (allowed))` never fires, permitting every value instead of refusing it. Give every such
+  CASE an `else` that raises, because unlike most languages the missing arm makes the guard SKIP
+  rather than take a default.** (paperboi#286: clear_flag validates the way a flag is cleared
+  against a per kind array built by a CASE with four arms and no else. A fifth kind,
+  attachment_mismatch, was added to the enum by a later migration that changed nothing else, so
+  for that kind v_allowed is NULL, `v_how = any (NULL)` is NULL, `not NULL` is NULL, and `if NULL
+  then raise` does not fire. Measured on a local database rather than reasoned about: an
+  attachment_mismatch flag cleared with closed_fraudulent, a way legal only for unknown_sender,
+  answered applied and closed the invoice as fraudulent. Nothing had reached it because no
+  surface sent a way for that kind yet, so the hole was opened by the migration that added the
+  kind and would have been found by the first screen built on it.)
+  SHORT: A SQL allow list returning NULL for an unlisted kind makes `if not (x = any(allowed))` skip and permit everything, so give the CASE an else that raises.
 
 ## UX completeness
 
