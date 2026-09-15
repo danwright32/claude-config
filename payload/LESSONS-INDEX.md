@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 673 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 677 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -185,6 +185,8 @@ apply it, because the body is where the failure it came from is described.
 - L464. Reproduce a red from a run you NARROWED on the unchanged base at the same scope before blaming your change: a scope dependent test misleads as a pair.
 - L694. A subject in a monitor's registry but never instrumented reads as a FAILING one, so it is accused for ever with a remedy aimed at the wrong thing.
 - L475. A test that discards a middle step's result reports that step failing as the final behaviour failing; assert each outcome the last line relies on.
+- L699. A residual of outer minus inner span lies on BOTH sides of it, so measure each side from its own boundary before naming a cause.
+- L701. A baseline every machine measures differently is rewritten in full by whoever records it, so the one value a change moved is invisible in review.
 
 ## Data safety
 
@@ -385,6 +387,7 @@ apply it, because the body is where the failure it came from is described.
 - L650. A mapping that MERGES several values onto one label is correct only while they still mean the same thing, and no per row test can see the fault.
 - L661. A manual override the product offers must write every field the automated path writes for that state, because gates downstream read the richer record.
 - L692. A rule specific to ONE consumer must live in that consumer's own field, never in a zeroed shared quantity every other reader silently acts on.
+- L700. Excluding somebody from a ranking must remove them from the COHORT, never only blank their row, or every other member's percentile moves.
 
 ## Security and privacy
 
@@ -413,6 +416,7 @@ apply it, because the body is where the failure it came from is described.
 - L446. A redaction implemented by overriding how a type DESCRIBES itself is bypassed by every renderer that REFLECTS it, and a reference type does not help.
 - L669. Lengthening an expiry, TTL or retention window silently removes the ceiling it was placing on every OTHER staleness that window happened to bound
 - L697. A robots Disallow and a noindex header cancel out: a disallowed page is never fetched, so allow the crawl and serve noindex to keep it out of search.
+- L702. A SQL allow list returning NULL for an unlisted kind makes `if not (x = any(allowed))` skip and permit everything, so give the CASE an else that raises.
 
 ## UX completeness
 
