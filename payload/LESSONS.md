@@ -6398,8 +6398,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   `window.webkit.messageHandlers[t].postMessage`, on 2026-09-15. Neither string appears anywhere in
   the shipped bundle, and the three scripts loaded at runtime (Cloudflare Turnstile, PostHog
   array.js and recorder.js) were fetched and contain no reference to either bridge. Each one cost a
-  Slack alert from the 15 minute poller and a session to diagnose, and the fix both times was one
-  more literal in `ignoreErrors`)
+  Slack alert from the 15 minute poller and a session to diagnose, and the fix for the Android one
+  was a single added literal in `ignoreErrors`, which is the per string approach this rule exists to
+  stop repeating)
 
 - **L513. A value a platform REPORTS is what is currently configured, never what is available**,
   so a design that reads an observed setting as the ceiling silently inherits a default nobody
