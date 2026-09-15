@@ -8507,6 +8507,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   before `gh pr view --json mergeable` answered CONFLICTING for both, on one line of a committed
   count each.)
   SHORT: A pull request reported as CONFLICTING has no workflow run scheduled at all, so read mergeable before investigating checks that never appear.
+- **L704. A loop bounded only by wall time does unbounded work when its I/O is fast, so bound the
+  work a tick may do by a COUNT as well as a clock, and read a run with the dependency stubbed as the
+  UPPER bound on compute rather than the lighter case.** A lane that walks agents until its time budget
+  runs out is bounded, in production, by how long the outside system takes to answer, and that waiting
+  is what keeps its CPU small. Stub the dependency to answer instantly and the same lane gets through
+  many times more items in the same wall, every one of them compute, so the tick's CPU has no ceiling of
+  its own and the run reads as a heavier system rather than a faster one. A pass bar placed AT the
+  platform's kill limit then passes at 99 percent in the same words as at 3 percent.
+  (slate#2357, 2026-09-15: on the passing booking path load run the heaviest minute tick cost 119,137 ms
+  of CPU against a 120,000 ms kill limit, with the sync lane processing 36 of 93 stubbed calendars in
+  175 s and the selfheal sweep running to its own 180 s deadline; the peak had been 27 s two days
+  earlier and 65 s the day before, on the same roster shape. The judge's cron half accepted it because
+  it was under the limit.)
+  SHORT: A loop bounded only by wall time does unbounded work when I/O is fast, so bound each tick by a count too, and read a stubbed run as the compute ceiling.
+
 
 ## Test speed
 
