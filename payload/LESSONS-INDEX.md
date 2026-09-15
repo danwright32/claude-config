@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 677 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 678 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -317,6 +317,7 @@ apply it, because the body is where the failure it came from is described.
 - L465. A durable write gated on a bounded collection having GROWN stops for ever once it is full, and the silent store reads as a quiet period.
 - L695. An alert judged by one aggregate over a fixed trailing window cannot stand down until the window clears, so decide recovery on recent samples instead.
 - L696. A predicate about the newest bucket of a time series judges an incomplete period, so an event that has not arrived yet reads as one that never will.
+- L703. Copy shipped with one phase of a staged feature must describe only what that phase does, or it is false to every reader until the last phase lands.
 
 ## State and identity
 

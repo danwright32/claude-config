@@ -4015,6 +4015,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   and the new tier was written without it)
   SHORT: A predicate about the newest bucket of a time series judges an incomplete period, so an event that has not arrived yet reads as one that never will.
 
+- **L703. User-facing copy shipped with one phase of a staged feature must describe only what
+  that phase actually does, never the finished feature it belongs to, because the sentence
+  reads as true to whoever is holding the whole design in mind and is false to every reader
+  until the last phase lands.** The tell is a sentence in the present tense about behaviour
+  that lives in a different issue. It survives review because the author is the one person
+  who knows the destination, and it survives the suite because a copy test asserts a phrase
+  is PRESENT rather than that its claim is TRUE, which is L347's failure in the opposite
+  direction. Rendering the message at real values is what catches it, and nothing else does.
+  (project-enrollment-tracker#1475, #1468: the first phase of an eight issue feature shipped a
+  weekly Slack line reading "PET holds them out of goals and rankings, which is correct". Goals
+  and rankings were the next two issues and neither had shipped, so the sentence was false the
+  day it was written. The same line also said "Salesforce cannot account for them while they
+  are out", which was true of the one rep on leave, whose Agent_Manager__c is null, and not
+  true of leave in general, which that check never measures. Fourteen tests passed throughout.)
+  SHORT: Copy shipped with one phase of a staged feature must describe only what that phase does, or it is false to every reader until the last phase lands.
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
