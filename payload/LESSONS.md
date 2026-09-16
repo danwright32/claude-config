@@ -4048,6 +4048,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   true of leave in general, which that check never measures. Fourteen tests passed throughout.)
   SHORT: Copy shipped with one phase of a staged feature must describe only what that phase does, or it is false to every reader until the last phase lands.
 
+- **L707. A cooldown, snooze or dedup window keyed more COARSELY than the subject its
+  message is about lets one subject's incident silence every other subject sharing that
+  key, and the silence is invisible because the first page looked entirely correct.** Key
+  the suppression on the narrowest thing the message actually names, not on the category
+  the code happens to group by. The trap is that the grouping is usually right for the
+  reason it was introduced (one page per shared cause, not one per affected item) and stays
+  right only while the subjects really are one subject; the day two independent subjects
+  share a key, the second one is not quiet, it is unreported. Distinct from L186, which is
+  about a key nothing can recompute, and from L641, where the stamp is too NARROW and the
+  guard therefore speaks too often: here it is too WIDE and the guard stops speaking at all.
+  (bidspoke#1361: partner API outages were grouped under one cause with a 30 minute cooldown
+  keyed on organization plus cause, while each bidding workflow calls a DIFFERENT partner and
+  the remedy is to contact that partner. Measured 2026-09-15, GigFi and LendSwift both
+  degraded the same day, 119 and 198 failed leads, so whichever paged first would have
+  silenced the other for half an hour with nothing recording that it had.)
+  SHORT: A cooldown keyed COARSER than the subject its message names lets one subject's incident silence the others, behind a first page that looks correct.
+
 ## State and identity
 
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
