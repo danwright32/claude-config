@@ -2429,6 +2429,25 @@ for reference; L6 was reviewed and deliberately not adopted.
   writing a ::before knows they have stepped outside the checker.)
   SHORT: A fix that RELOCATES what a checker objected to can move it out of reach, which looks identical to compliance, so prove the thing is still checked.
 
+- **L709. When code clips an interval to a boundary, clip BOTH ends in the same
+  change. Whichever end is in mind gets handled and the other is left open, and
+  the gap is invisible in normal use because it only affects the members sitting
+  near the end nobody thought about.** (PET#1497: the live board counts a rep's
+  days worked as the month's elapsed working days minus their absences, and
+  twenty lines above that it clips those same day sets at the rep's LAST roster
+  day, so somebody who LEAVES mid-month is stopped correctly. The day they
+  ARRIVE is never consulted, so a rep who started today is credited with every
+  elapsed working day of the month. Production per day is 47% of the Power
+  Rankings score and volume per day another 20%, so two thirds of a new hire's
+  score was computed against days they were not employed: one rep reading 0.09
+  units per day was at 1.00 against the single day he had worked, above the
+  company median rather than at 8% of it. It survived because the only people it
+  distorts are the newest, whose low numbers look unremarkable. The correct rule
+  already existed in a shared helper the CLOSED-month writers use, so the two
+  halves of the product measured the same rep differently depending on whether
+  the month had ended.)
+  SHORT: Clip an interval at BOTH bounds in one change: the end you are not thinking about ships unclipped and shows only on members near it.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key

@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 683 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 684 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -188,6 +188,7 @@ apply it, because the body is where the failure it came from is described.
 - L699. A residual of outer minus inner span lies on BOTH sides of it, so measure each side from its own boundary before naming a cause.
 - L701. A baseline every machine measures differently is rewritten in full by whoever records it, so the one value a change moved is invisible in review.
 - L708. A fix that RELOCATES what a checker objected to can move it out of reach, which looks identical to compliance, so prove the thing is still checked.
+- L709. Clip an interval at BOTH bounds in one change: the end you are not thinking about ships unclipped and shows only on members near it.
 
 ## Data safety
 
