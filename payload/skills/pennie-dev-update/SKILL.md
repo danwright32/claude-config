@@ -279,21 +279,39 @@ updates, as in the June to August post.
 
 ## 6. Format
 
-Taken from Dan's own rewrite of the first post. Follow it exactly.
+Taken from Dan's own rewrite of the first post, and from the draft he accepted on
+2026-09-16 after rejecting a longer-bulleted one. Follow it exactly. **It reads like
+release notes**: many bullets, one change each, most under 25 words. The 2026-09-16 post
+covered 53 manager-visible PRs in 70 bullets.
 
 ```
-Update for the week of September 8
+Update for August 31 to September 15
 
 Some of these you may have noticed and some you will not, because they are backend-only.
 
+GOALS
+- The automatic unit goal is now two tiers: 15 units for months 1 to 3, 22 units from month 4 on. The old 20 and 25 tiers are gone.
+- Volume goals follow, so a rep on 22 units carries a $1.1M volume goal.
+- April through August have been re-scaled to the new tiers, so goal attainment on those history pages has changed.
+
+POWER RANKINGS
+- Units, Volume and Conversion now show beside each rep's score, replacing the Focus column.
+- A rep too new for a conversion rate shows "New" instead of 0%.
+- On All Teams, the profile bars no longer sit empty for two seconds and then pop into place.
+
 COMMISSION AND FIRST PAY
-- The first thing that changed
-- The second thing that changed
+- New Rolled column: how many of each rep's deals had their first payment moved to a later month. Click it for the clients and the date each moved to.
+- A deal with no deposit and no estimated first pay date is no longer counted as rolled. This moved 16 deals in June and 8 in July, all on Achieve.
+- The August servicer split was briefly showing zero on both sides while the total was right. Fixed.
 
 BEHIND THE SCENES (technical, skip unless curious)
-- Testing: what changed
-- Build and deploy: what changed
+- Data checks: weekly checks for a rep who worked a month but recorded nothing, and for the Beyond and Achieve volume split
+- Build and deploy: the daily build is triggered from a Cloudflare Worker with the GitHub crons as backstop
 ```
+
+Note the shape of the visible bullets above: a PR whose Changelog block carried four
+facts (the two-tier goal) became four bullets, one per fact, with the detail kept and the
+connective prose dropped. That is the target for the FIRST draft, not a rewrite.
 
 **Structure**
 - **No title line.** Open with the period line.
@@ -439,7 +457,8 @@ gh issue edit <n> --repo <owner>/<name> --remove-label priority-p3 --add-label p
 
 - Each run classifies issues **opened or updated since the last run**.
 - Issues **already carrying `user-facing`** are revisited only to **remove the label** when the
-  issue is closed, fixed, or was misjudged.
+  issue was misjudged. **A closed issue keeps the label** (Dan, 2026-09-16): it is the record
+  of which fixes were manager-visible, and stripping it on close would erase that.
 - **Never lower a priority.** Dan or a human reviewer may have set it deliberately.
 
 ### Report it
