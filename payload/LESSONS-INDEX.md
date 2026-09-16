@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 686 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 687 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -190,6 +190,7 @@ apply it, because the body is where the failure it came from is described.
 - L708. When a checker REFUSES something, keep the fix WITHIN its reach: relocating what it objected to turns the complaint green while removing the coverage.
 - L709. Clip an interval at BOTH bounds in one change: the end you are not thinking about ships unclipped and shows only on members near it.
 - L711. A rate's numerator and denominator must cover the same window: a mismatch hides at scale and breaks the moment the denominator is small.
+- L478. A rate compared across groups is only comparable where each group's outcome is DETECTED the same way, or a detection gap reads as poor performance.
 
 ## Data safety
 

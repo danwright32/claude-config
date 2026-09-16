@@ -2461,6 +2461,25 @@ for reference; L6 was reviewed and deliberately not adopted.
   PUSH on the morning they start. The defect was fully present the whole time and
   only ever observable at the one sample size nobody tests.)
   SHORT: A rate's numerator and denominator must cover the same window: a mismatch hides at scale and breaks the moment the denominator is small.
+- **L478. A rate compared ACROSS GROUPS is only comparable where the OUTCOME is
+  detected the same way in every group, so name the detection path for each before
+  drawing a conclusion. A group whose outcome cannot be observed reads as one that
+  performs badly, and from inside the data the two are indistinguishable.**
+  (overture#3946: Overture's live store, 2026-09-16, reply rate by outreach channel:
+  email 14 replies from 35 sends (40%), contact form 2 from 14 (14%). The obvious
+  reading, that contact forms convert at a third of email's rate, was one query from
+  being acted on. A contact form pitch sends no email, so it has no Gmail thread, no
+  message id and no subject, and every one of the 12 sent recipients carrying no
+  thread was a contact_form. Overture's reply detection watches threads, so for that
+  channel it is not weaker, it is absent: a reply arrives as a fresh email with
+  nothing to attach to unless Dan links it by hand. So 14% may be the channel's real
+  rate, or it may be the detection gap, and nothing in the store can separate them,
+  because an absence of recorded replies is exactly what both produce (L98). The
+  denominators were fine and the arithmetic was fine, which is what made it
+  convincing. Answering it at all needs a second source, a Gmail search for messages
+  from those organisations after each send, which is a measurement outside the
+  system whose gap is in question.)
+  SHORT: A rate compared across groups is only comparable where each group's outcome is DETECTED the same way, or a detection gap reads as poor performance.
 
 ## Data safety
 
