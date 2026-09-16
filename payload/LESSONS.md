@@ -2498,6 +2498,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   calls the mutation directly hands it the collaborator itself and can never notice a view
   that does not.)
   SHORT: A line reference in an issue that has DRIFTED is the signal to re-derive the claim around it, never to confirm it.
+- **L712. A derived figure that ships must have its FILL RATE measured across the whole live
+  population, not only its VALUE checked on a sample, because a figure that is null on every record
+  is a derivation defect, and a sample check passes when both sides of the comparison are empty.**
+  Measure it on the first real run and treat 100 percent null as a bug to find, never as a fact about
+  the population, since the absence is indistinguishable from the event never happening.
+  SHORT: Measure a new derived figure's FILL RATE over the live population; null on every record is a derivation defect a sample check cannot see.
+  (bidspoke#1370, 2026-09-16. The Achieve credit metrics derive months since a major delinquency
+  from an Equifax date on each trade. The field is present on 186 of 262 live reports, but Equifax
+  writes it as month and year with the day as 00, and the shared date parser rejects any day below
+  1, so the figure was null on 320 of 320 leads ever sent, including the 46 that Achieve's own
+  outcome report declined for serious delinquency. The metrics had been verified against two live
+  leads' raw reports and every figure matched, because a null compared against a raw string the
+  checker could not read as a date either looked like agreement. Nothing measured the column
+  across the population until an external dataset made the gap visible. Related to L90, whose
+  counter reports zero because nothing ever writes its input, and to L34, which says to verify a
+  vendor's data semantics against real samples; this adds that the check after shipping is the
+  RATE over everything, not the value on a few.)
 
 ## Data safety
 

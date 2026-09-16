@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 688 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 689 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -192,6 +192,7 @@ apply it, because the body is where the failure it came from is described.
 - L711. A rate's numerator and denominator must cover the same window: a mismatch hides at scale and breaks the moment the denominator is small.
 - L478. A rate compared across groups is only comparable where each group's outcome is DETECTED the same way, or a detection gap reads as poor performance.
 - L479. A line reference in an issue that has DRIFTED is the signal to re-derive the claim around it, never to confirm it.
+- L712. Measure a new derived figure's FILL RATE over the live population; null on every record is a derivation defect a sample check cannot see.
 
 ## Data safety
 
