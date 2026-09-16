@@ -2481,6 +2481,24 @@ for reference; L6 was reviewed and deliberately not adopted.
   system whose gap is in question.)
   SHORT: A rate compared across groups is only comparable where each group's outcome is DETECTED the same way, or a detection gap reads as poor performance.
 
+
+- **L479. A file and line reference in an issue or plan that no longer points at what it
+  claims is the cheapest available signal that the sentence around it is stale, so re-derive
+  that claim from the code rather than using the reference to confirm it.** (overture#3566
+  against overture#3950, caught 2026-09-16. The issue said the Reached Out page's close out
+  handler was `FollowUpsView.swift:374`. The real line was 474. Reading the file at 474 found
+  a `CloseOutMenu` and a `recordOutcome` call, which LOOKED like confirmation, and the fix was
+  wired there. It was the wrong surface: the Reached Out row runs `QueueView.closeOut`, and a
+  third call site sits in `ProspectRowFactory`, so two of three shipped unwired and the p0 the
+  issue was filed for was still live after it was closed. The drift was visible before any
+  code was written and cost nothing to check. What makes it worth its own rule beside L61 is
+  that L61 says re-check a recorded DECISION, which reads as advice, while this names the
+  trigger: the moment a cited line does not hold, every claim in that sentence was written
+  against a different version of the file. Every test passed throughout, because a test that
+  calls the mutation directly hands it the collaborator itself and can never notice a view
+  that does not.)
+  SHORT: A line reference in an issue that has DRIFTED is the signal to re-derive the claim around it, never to confirm it.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
