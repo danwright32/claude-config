@@ -187,7 +187,7 @@ apply it, because the body is where the failure it came from is described.
 - L475. A test that discards a middle step's result reports that step failing as the final behaviour failing; assert each outcome the last line relies on.
 - L699. A residual of outer minus inner span lies on BOTH sides of it, so measure each side from its own boundary before naming a cause.
 - L701. A baseline every machine measures differently is rewritten in full by whoever records it, so the one value a change moved is invisible in review.
-- L708. A fix that RELOCATES what a checker objected to can move it out of reach, which looks identical to compliance, so prove the thing is still checked.
+- L708. When a checker REFUSES something, keep the fix WITHIN its reach: relocating what it objected to turns the complaint green while removing the coverage.
 - L709. Clip an interval at BOTH bounds in one change: the end you are not thinking about ships unclipped and shows only on members near it.
 - L711. A rate's numerator and denominator must cover the same window: a mismatch hides at scale and breaks the moment the denominator is small.
 

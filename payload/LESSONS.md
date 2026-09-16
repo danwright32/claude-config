@@ -2427,7 +2427,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   about the green said any of that: a dark ::before beneath light text would have
   passed identically, and the escape is invisible at the call site, since nobody
   writing a ::before knows they have stepped outside the checker.)
-  SHORT: A fix that RELOCATES what a checker objected to can move it out of reach, which looks identical to compliance, so prove the thing is still checked.
+  SHORT: When a checker REFUSES something, keep the fix WITHIN its reach: relocating what it objected to turns the complaint green while removing the coverage.
 
 - **L709. When code clips an interval to a boundary, clip BOTH ends in the same
   change. Whichever end is in mind gets handled and the other is left open, and
