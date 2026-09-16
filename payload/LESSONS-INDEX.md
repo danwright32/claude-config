@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 683 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 686 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -187,7 +187,9 @@ apply it, because the body is where the failure it came from is described.
 - L475. A test that discards a middle step's result reports that step failing as the final behaviour failing; assert each outcome the last line relies on.
 - L699. A residual of outer minus inner span lies on BOTH sides of it, so measure each side from its own boundary before naming a cause.
 - L701. A baseline every machine measures differently is rewritten in full by whoever records it, so the one value a change moved is invisible in review.
-- L708. A fix that RELOCATES what a checker objected to can move it out of reach, which looks identical to compliance, so prove the thing is still checked.
+- L708. When a checker REFUSES something, keep the fix WITHIN its reach: relocating what it objected to turns the complaint green while removing the coverage.
+- L709. Clip an interval at BOTH bounds in one change: the end you are not thinking about ships unclipped and shows only on members near it.
+- L711. A rate's numerator and denominator must cover the same window: a mismatch hides at scale and breaks the moment the denominator is small.
 
 ## Data safety
 
@@ -235,6 +237,7 @@ apply it, because the body is where the failure it came from is described.
 
 ## Honest failure
 
+- L710. A gap the NEXT occurrence repairs is invisible on every occurrence but the last and reads as working, so check the LAST occurrence directly.
 - L706. A presence guard accepting any non-null value takes a zero as an answer, so an upstream exclusion arriving as zero silently suppresses the fallback.
 - L415. A screen showing a change BEFORE the write lands owes a failure path that reverts it AND says so, or a failed write looks exactly like a slow one.
 - L586. A redirect whose target is ITSELF a redirect drops the query string, destroying any outcome carried in it while both redirects read as correct alone.

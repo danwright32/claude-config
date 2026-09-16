@@ -2427,7 +2427,40 @@ for reference; L6 was reviewed and deliberately not adopted.
   about the green said any of that: a dark ::before beneath light text would have
   passed identically, and the escape is invisible at the call site, since nobody
   writing a ::before knows they have stepped outside the checker.)
-  SHORT: A fix that RELOCATES what a checker objected to can move it out of reach, which looks identical to compliance, so prove the thing is still checked.
+  SHORT: When a checker REFUSES something, keep the fix WITHIN its reach: relocating what it objected to turns the complaint green while removing the coverage.
+
+- **L709. When code clips an interval to a boundary, clip BOTH ends in the same
+  change. Whichever end is in mind gets handled and the other is left open, and
+  the gap is invisible in normal use because it only affects the members sitting
+  near the end nobody thought about.** (PET#1497: the live board counts a rep's
+  days worked as the month's elapsed working days minus their absences, and
+  twenty lines above that it clips those same day sets at the rep's LAST roster
+  day, so somebody who LEAVES mid-month is stopped correctly. The day they
+  ARRIVE is never consulted, so a rep who started today is credited with every
+  elapsed working day of the month. Production per day is 47% of the Power
+  Rankings score and volume per day another 20%, so two thirds of a new hire's
+  score was computed against days they were not employed: one rep reading 0.09
+  units per day was at 1.00 against the single day he had worked, above the
+  company median rather than at 8% of it. It survived because the only people it
+  distorts are the newest, whose low numbers look unremarkable. The correct rule
+  already existed in a shared helper the CLOSED-month writers use, so the two
+  halves of the product measured the same rep differently depending on whether
+  the month had ended.)
+  SHORT: Clip an interval at BOTH bounds in one change: the end you are not thinking about ships unclipped and shows only on members near it.
+
+- **L711. A rate's numerator and denominator must cover the SAME window.
+  Counting today's events over the days completed before today is invisible while
+  the denominator is large and absurd the moment it is small, so state the window
+  once and derive both ends from it.** (PET#1499: the board's unit totals include
+  everything sold today, while its day count covers days ELAPSED, which excludes
+  today. Over a rep with eleven days behind them the mismatch is a rounding
+  error and nobody saw it across 110 reps. For a rep whose first day is today it
+  is the whole measurement: the numerator holds whatever they just sold and the
+  denominator is zero, so production per day and volume per day both read 0.00,
+  which is 67% of the Power Rankings score, and the status tiers hand them NEEDS
+  PUSH on the morning they start. The defect was fully present the whole time and
+  only ever observable at the one sample size nobody tests.)
+  SHORT: A rate's numerator and denominator must cover the same window: a mismatch hides at scale and breaks the moment the denominator is small.
 
 ## Data safety
 
@@ -2941,6 +2974,23 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 
 ## Honest failure
+
+- **L710. A gap that the NEXT occurrence of the same event repairs is invisible on every occurrence
+  but the last, so it reads as working whenever anybody looks.** Name the final occurrence as its own
+  case and check it directly, because the population that suffers the defect is exactly the one nobody
+  observes.
+  SHORT: A gap the NEXT occurrence repairs is invisible on every occurrence but the last and reads as working, so check the LAST occurrence directly.
+  (slate#2476, 2026-09-16. A concurrency rule cancels a superseded CI run, and a cancelled run never
+  reaches its deploy job, so that merge is not deployed by its own run. Main is linear, so the next
+  merge's run deploys the tip and carries the earlier commits with it, which rescues every cancelled
+  run except the LAST of a burst. That one sits merged and undeployed while the pull request reads as
+  merged, the issue reads as closed and the health endpoint is green, because the previous version is
+  serving perfectly well (L4). Measured during a run of nineteen merges: three runs on main were
+  cancelled with deploy absent, and nothing was left behind only because more merges followed. The
+  shape is not specific to CI: it is any catch up mechanism where each run repairs the previous one's
+  gap, such as a retry sweep, a rolling sync or a backfill that resumes from a cursor. Related to L671,
+  which says to decide a concurrency rule per workflow by what the job WRITES, and to L4; neither says
+  that the self repair is what hides the defect.)
 
 - **L706. A presence guard that accepts any non-null value accepts a ZERO, and a measured quantity
   routinely arrives as zero when something upstream excluded part of it or refused to measure at all,
