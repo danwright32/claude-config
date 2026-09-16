@@ -158,6 +158,23 @@ PLUGIN_SKILLS=(agents-sdk cloudflare cloudflare-email-service durable-objects \
   sandbox-sdk turnstile-spin web-perf workers-best-practices wrangler \
   plannotator-compound)
 
+# Top level entries under skills/ that the Claude app itself downloads and maintains on each Mac:
+# skills/synced/<bucket>/ holds the account's built in skills (docx, pptx, pdf and the rest) plus
+# a manifest.json the app rewrites. They are not config, each Mac fetches its own, and the app
+# names the bucket after the account, so carrying them would only ship a second copy for the app
+# to fight over. Seen on Dans-MacBook-Pro 2026-09-16, when a pull announced about 200 of those
+# files as unsent local edits bound for the shared repo. Matched at the TOP of skills/ only: a
+# folder that happens to be called `synced` inside a real skill is ordinary config.
+PLATFORM_SKILL_DIRS=(synced)
+
+# One answer to "does the sync leave this skills/ entry alone entirely", for every reader that
+# walks skills/ by name, so a new kind of unmanaged entry is added once rather than per loop.
+unmanaged_skill_entry(){   # $1 = a top level name under skills/
+  local s
+  for s in "${PLUGIN_SKILLS[@]}" "${PLATFORM_SKILL_DIRS[@]}"; do [ "$1" = "$s" ] && return 0; done
+  return 1
+}
+
 # `audits` is here since claude-config#224. LESSONS.md cites audits/2026-07-27-issue-audit/ and
 # audits/2026-08-29-test-speed-audit/ as the full provenance for two batches of lessons, and the
 # directory was not synced, so on the other Mac those pointers named files that do not exist and a
@@ -1034,7 +1051,7 @@ FRONTMATTER
 # skills for one job and the choice between them is arbitrary. Grouped by description rather than
 # by name, because the names are exactly what differ.
 duplicate_local_skill_jobs(){   # prints "description<TAB>folder folder ..."
-  local dir="$CLAUDE_HOME/skills" e base fm d skip pskill
+  local dir="$CLAUDE_HOME/skills" e base fm d
   [ -d "$dir" ] || return 0
   {
     for e in "$dir"/*; do
@@ -1043,13 +1060,8 @@ duplicate_local_skill_jobs(){   # prints "description<TAB>folder folder ..."
       case "$base" in .*) continue ;; esac
       # A plugin manages these and the sync deliberately never carries them, so naming one here
       # would report a problem about something this tool does not touch, exactly as
-      # unloadable_skill_entries already refuses to. A flag rather than `continue 2`, because this
-      # loop has no outer loop to continue.
-      skip=0
-      for pskill in ${PLUGIN_SKILLS[@]+"${PLUGIN_SKILLS[@]}"}; do
-        [ "$base" = "$pskill" ] && { skip=1; break; }
-      done
-      [ "$skip" = 1 ] && continue
+      # unloadable_skill_entries already refuses to. The Claude app's own downloads likewise.
+      unmanaged_skill_entry "$base" && continue
       [ -f "$e/SKILL.md" ] || continue
       fm="$(skill_frontmatter "$e/SKILL.md")"
       d="$(skill_frontmatter_value description "$fm")"
@@ -1082,9 +1094,9 @@ unloadable_skill_entries(){   # $1 = a skills directory
     [ -e "$e" ] || continue
     base="${e##*/}"
     case "$base" in .*) continue ;; esac
-    # A plugin manages these and the sync deliberately never carries them, so judging them here
-    # would report a problem about something this tool does not touch.
-    for s in "${PLUGIN_SKILLS[@]}"; do [ "$base" = "$s" ] && continue 2; done
+    # A plugin or the Claude app manages these and the sync deliberately never carries them, so
+    # judging them here would report a problem about something this tool does not touch.
+    unmanaged_skill_entry "$base" && continue
     if [ ! -d "$e" ]; then
       printf '%s\ta bare file directly under skills/ is not a skill, so nothing reads it\n' "$base"
       continue
@@ -1154,7 +1166,13 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
   return 0
 }
 
-skill_excludes(){ for s in "${PLUGIN_SKILLS[@]}"; do printf -- "--exclude=%s\n" "$s"; done; }
+# Plugin skill names stay unanchored as they always were; the platform's entries are anchored to the
+# top of skills/ with a leading slash, for the reason given where PLATFORM_SKILL_DIRS is defined.
+skill_excludes(){
+  local s
+  for s in "${PLUGIN_SKILLS[@]}"; do printf -- "--exclude=%s\n" "$s"; done
+  for s in "${PLATFORM_SKILL_DIRS[@]}"; do printf -- "--exclude=/%s\n" "$s"; done
+}
 
 # LC_ALL=C so the substitution is bytewise. A UTF-8 locale makes sed refuse a file holding a byte
 # sequence it cannot decode ("illegal byte sequence"), which would empty the stream rather than
@@ -4077,7 +4095,7 @@ payload_path_applied(){   # $1 = path relative to payload/
     settings.json) return 0 ;;   # never applied wholesale; the hooks block owns it
   esac
   for s in $(skill_excludes); do
-    name="${s#--exclude=}"
+    name="${s#--exclude=}"; name="${name#/}"
     [ -n "$name" ] || continue
     case "$p" in "skills/$name"|"skills/$name"/*) return 0 ;; esac
   done

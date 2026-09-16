@@ -9535,6 +9535,63 @@ out_dsstatus="$(CLAUDE_HOME="$DSH" SYNC_REPO="$DSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY
 check "#49 status reports a duplicate without being asked" \
   "grep -qE 'wrangler.*cloudflare' <<< \"\$out_dsstatus\""
 
+section "== skills the Claude platform downloads into skills/synced never travel =="
+# The Claude app downloads the account's built in skills (docx, pptx, pdf and so on) into
+# skills/synced/<bucket>/ on each Mac by itself, with a manifest.json it maintains. Seen on
+# Dans-MacBook-Pro 2026-09-16: a pull named about 200 of those files as unsent local edits
+# that would go up on the next send. They are the platform's, not config, and each Mac gets
+# its own copy, so the sync must neither carry them, nor delete them, nor report them.
+# Shaped the way the real folder is: a bucket holding a manifest and skills beside it, so the
+# top level entry has no SKILL.md of its own.
+PSK="$WORK/platform-synced-home"; PSKR="$WORK/platform-synced-repo"; PSK2="$WORK/platform-synced-home-2"
+mkdir -p "$PSK/skills/synced/bucket-1" "$PSKR/payload" "$PSK2/skills/synced/bucket-2"
+echo '{"hooks":{}}' > "$PSK/settings.json"; printf '# rules\n' > "$PSK/CLAUDE.md"
+echo '{"hooks":{}}' > "$PSK2/settings.json"
+echo '{"skills":[]}' > "$PSK/skills/synced/bucket-1/manifest.json"
+: > "$PSK/skills/synced/.bucket-1"
+mkskill "$PSK/skills/synced/bucket-1/xlsx/SKILL.md" 'a platform skill'
+mkskill "$PSK/skills/mine/SKILL.md" 'a skill of my own'
+# A folder that merely happens to be CALLED synced, deeper inside a real skill, is ordinary
+# config and must still travel: the exclusion is for the top level entry only.
+mkdir -p "$PSK/skills/mine/synced"; echo 'NESTED' > "$PSK/skills/mine/synced/notes.md"
+out_psk_push="$(CLAUDE_HOME="$PSK" SYNC_REPO="$PSKR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1 || true)"
+dbg "push: $out_psk_push"
+check "platform skills are not carried into the payload" "[ ! -e '$PSKR/payload/skills/synced' ]"
+check "a skill of my own still is"                        "[ -f '$PSKR/payload/skills/mine/SKILL.md' ]"
+check "a nested folder named synced inside it still is"   "[ -f '$PSKR/payload/skills/mine/synced/notes.md' ]"
+check "the push does not report the platform folder as a skill that cannot load" \
+  "out_lacks \"\$out_psk_push\" 'skills/synced[^/]'"
+# The report that surfaced this is the pull's "would have reverted these local edits" line, and
+# it is computed from git history, so it only exists against a real shared repo: a pull with
+# SYNC_NO_GIT prints no such line whatever the code does, and a check on it would pass vacuously
+# (L159). Two clones of one bare repo, and an UNRELATED change arriving, the way it happened.
+PSBARE="$WORK/platform-synced-bare.git"; git init -q --bare -b main "$PSBARE"
+PSA="$WORK/platform-synced-repoA"; git clone -q "$PSBARE" "$PSA" 2>/dev/null
+PSAH="$WORK/platform-synced-homeA"; mkdir -p "$PSAH/hooks"
+echo '{"hooks":{}}' > "$PSAH/settings.json"; echo 'other-v1' > "$PSAH/hooks/other.sh"
+# The shared repo carries skills, as the real one does: with no skills in the payload the pull
+# never compares that folder at all, and the report under test cannot occur.
+mkskill "$PSAH/skills/shared/SKILL.md" 'a skill both Macs share'
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSAH" SYNC_REPO="$PSA" bash "$SCRIPT" sync >/dev/null 2>&1
+PSB="$WORK/platform-synced-repoB"; git clone -q "$PSBARE" "$PSB" 2>/dev/null
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSK2" SYNC_REPO="$PSB" bash "$SCRIPT" pull >/dev/null 2>&1
+# Only now does the platform download its skills onto Mac B, after B last applied.
+echo '{"skills":[]}' > "$PSK2/skills/synced/bucket-2/manifest.json"
+: > "$PSK2/skills/synced/.bucket-2"
+mkskill "$PSK2/skills/synced/bucket-2/pdf/SKILL.md" 'the other Mac platform skill'
+echo 'other-v2' > "$PSAH/hooks/other.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSAH" SYNC_REPO="$PSA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_psk_pull="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSK2" SYNC_REPO="$PSB" bash "$SCRIPT" pull 2>&1 || true)"
+dbg "pull: $out_psk_pull"
+check "the unrelated change reaches Mac B (the pull really applied)" "grep -q other-v2 '$PSK2/hooks/other.sh'"
+check "a pull leaves the other Mac's platform skills in place" "[ -f '$PSK2/skills/synced/bucket-2/pdf/SKILL.md' ]"
+check "a pull does not name them as unsent local edits" "out_lacks \"\$out_psk_pull\" 'synced/'"
+out_psk_status="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSK2" SYNC_REPO="$PSB" bash "$SCRIPT" status 2>&1 || true)"
+dbg "status: $out_psk_status"
+check "status does not offer them as waiting to go up" "out_lacks \"\$out_psk_status\" 'synced/'"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSK2" SYNC_REPO="$PSB" bash "$SCRIPT" send >/dev/null 2>&1
+check "and a send from Mac B does not carry them either" "[ ! -e '$PSB/payload/skills/synced' ]"
+
 section "== assertions that could pass on output the command prints anyway (#55) =="
 # Many checks capture a command's whole output and grep that blob for a phrase. claude-sync's own
 # change report already names every file it applied, so an assertion looking for a filename finds
