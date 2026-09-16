@@ -2411,6 +2411,24 @@ for reference; L6 was reviewed and deliberately not adopted.
   that a reviewer reading the diff cannot take.)
   SHORT: A baseline every machine measures differently is rewritten in full by whoever records it, so the one value a change moved is invisible in review.
 
+- **L708. When a checker REFUSES something, confirm the fix keeps it WITHIN that
+  checker's reach rather than outside it. Relocating what it objected to, onto a
+  pseudo-element, a child element, a generated file or an excluded path, turns
+  the complaint green while removing the coverage, and from the checker's output
+  the two outcomes are indistinguishable.** (PET#1496: the state-contrast sweep
+  refuses any element carrying a background-image, because it cannot reduce a
+  gradient to one colour, and it fails rather than claiming it checked. A striped
+  band for an unmeasurable dimension was therefore refused. Moving the stripes
+  onto a ::before turned the sweep green, not because the text became measurable
+  but because the sweep reads each element's OWN computed style and never looks
+  at pseudo-elements, so the visible paint left its field of view entirely. It
+  was safe there, both colours being light, and it was verified by eye and by a
+  test asserting the band keeps a flat measurable background underneath. Nothing
+  about the green said any of that: a dark ::before beneath light text would have
+  passed identically, and the escape is invisible at the call site, since nobody
+  writing a ::before knows they have stepped outside the checker.)
+  SHORT: A fix that RELOCATES what a checker objected to can move it out of reach, which looks identical to compliance, so prove the thing is still checked.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
