@@ -2979,7 +2979,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   but the last, so it reads as working whenever anybody looks.** Name the final occurrence as its own
   case and check it directly, because the population that suffers the defect is exactly the one nobody
   observes.
-  SHORT: A gap repaired by the next occurrence is invisible except on the LAST one, so check the final occurrence directly, not the steady state.
+  SHORT: A gap the NEXT occurrence repairs is invisible on every occurrence but the last and reads as working, so check the LAST occurrence directly.
   (slate#2476, 2026-09-16. A concurrency rule cancels a superseded CI run, and a cancelled run never
   reaches its deploy job, so that merge is not deployed by its own run. Main is linear, so the next
   merge's run deploys the tip and carries the earlier commits with it, which rescues every cancelled

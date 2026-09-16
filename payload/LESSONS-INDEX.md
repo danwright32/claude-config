@@ -237,7 +237,7 @@ apply it, because the body is where the failure it came from is described.
 
 ## Honest failure
 
-- L710. A gap repaired by the next occurrence is invisible except on the LAST one, so check the final occurrence directly, not the steady state.
+- L710. A gap the NEXT occurrence repairs is invisible on every occurrence but the last and reads as working, so check the LAST occurrence directly.
 - L706. A presence guard accepting any non-null value takes a zero as an answer, so an upstream exclusion arriving as zero silently suppresses the fallback.
 - L415. A screen showing a change BEFORE the write lands owes a failure path that reverts it AND says so, or a failed write looks exactly like a slow one.
 - L586. A redirect whose target is ITSELF a redirect drops the query string, destroying any outcome carried in it while both redirects read as correct alone.
