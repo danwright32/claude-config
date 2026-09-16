@@ -2961,6 +2961,23 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L710. A gap that the NEXT occurrence of the same event repairs is invisible on every occurrence
+  but the last, so it reads as working whenever anybody looks.** Name the final occurrence as its own
+  case and check it directly, because the population that suffers the defect is exactly the one nobody
+  observes.
+  SHORT: A gap repaired by the next occurrence is invisible except on the LAST one, so check the final occurrence directly, not the steady state.
+  (slate#2476, 2026-09-16. A concurrency rule cancels a superseded CI run, and a cancelled run never
+  reaches its deploy job, so that merge is not deployed by its own run. Main is linear, so the next
+  merge's run deploys the tip and carries the earlier commits with it, which rescues every cancelled
+  run except the LAST of a burst. That one sits merged and undeployed while the pull request reads as
+  merged, the issue reads as closed and the health endpoint is green, because the previous version is
+  serving perfectly well (L4). Measured during a run of nineteen merges: three runs on main were
+  cancelled with deploy absent, and nothing was left behind only because more merges followed. The
+  shape is not specific to CI: it is any catch up mechanism where each run repairs the previous one's
+  gap, such as a retry sweep, a rolling sync or a backfill that resumes from a cursor. Related to L671,
+  which says to decide a concurrency rule per workflow by what the job WRITES, and to L4; neither says
+  that the self repair is what hides the defect.)
+
 - **L706. A presence guard that accepts any non-null value accepts a ZERO, and a measured quantity
   routinely arrives as zero when something upstream excluded part of it or refused to measure at all,
   so the short circuit fires and the fallback that would have supplied a real figure never runs.**
