@@ -328,8 +328,11 @@ headings back to state.
   number describing *how it was validated* does not.
 - **Expand jargon, do not delete it.** "Achieve renamed a column" became "Achieve renamed a
   column in their data export".
-- **Do not shorten where the detail is the change.** The first-pay rule and the closed-month
-  attribution items are long because that length is the substance.
+- **Release notes, not paragraphs (Dan, 2026-09-16).** One change per bullet, each bullet
+  short. A PR whose Changelog block holds four facts becomes four bullets, never one
+  paragraph. The first draft that merged 53 changes into long bullets was rejected with
+  "this should read like patch or release notes. keep each bullet point short and sweet";
+  the rewrite that landed had 70 bullets, most under 25 words. Keep the detail, split it.
 
 **Writing rules** (from `~/.claude/CLAUDE.md`, non-negotiable)
 - No em dashes, no en dashes, no dashes as sentence connectors. The `- ` bullet prefix is a
