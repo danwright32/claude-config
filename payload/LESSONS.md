@@ -6784,6 +6784,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   insert by changing the verb alone.)
   SHORT: A PostgREST upsert is an INSERT, so a PARTIAL row hits every NOT NULL constraint and can never upsert onto an existing row. A refresh is an UPDATE.
 
+- **L705. A bulk upsert whose rows carry DIFFERENT key sets writes NULL into every key a row omits
+  but a sibling carries, because the client sends one column list for the whole payload, so a field
+  set on some rows silently erases the stored value on the rest. Give every row in a batch the same
+  keys, or write the sparse field in its own update.** (slate#2381: the hourly Salesforce roster
+  sync batched its user refresh into one supabase-js upsert of up to 200 rows and put
+  `bookable_pending_since` only on rows with a fresh activation flip. postgrest-js defaults
+  `defaultToNull` to true and omits `Prefer: missing=default`, so PostgREST took the union of keys
+  across the payload and wrote NULL for the column on every row that lacked it. Any batch holding one
+  fresh flip therefore cleared the waiting mark on every hire whose activation had been deferred or
+  refused earlier, nothing re-stamped them, and the monitor proposed to watch for people waiting to
+  become bookable would have read the erased mark as nobody waiting. The request was accepted, so
+  unlike L685 nothing failed: the only evidence was a hire who never became bookable.)
+  SHORT: A bulk upsert with rows of DIFFERENT key sets writes NULL into every key a row omits but a sibling carries, so give every row the same keys.
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and

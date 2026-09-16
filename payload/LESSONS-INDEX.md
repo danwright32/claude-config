@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 679 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 680 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -541,6 +541,7 @@ apply it, because the body is where the failure it came from is described.
 - L670. A refusal from an INTERMEDIARY in front of an API
 - L674. A fault found only when live traffic HAPPENS to exercise a path has a detection delay set by that path's rate, and its recovery is silent.
 - L685. A PostgREST upsert is an INSERT, so a PARTIAL row hits every NOT NULL constraint and can never upsert onto an existing row. A refresh is an UPDATE.
+- L705. A bulk upsert with rows of DIFFERENT key sets writes NULL into every key a row omits but a sibling carries, so give every row the same keys.
 
 ## Building with AI
 
