@@ -2448,6 +2448,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   the month had ended.)
   SHORT: Clip an interval at BOTH bounds in one change: the end you are not thinking about ships unclipped and shows only on members near it.
 
+- **L711. A rate's numerator and denominator must cover the SAME window.
+  Counting today's events over the days completed before today is invisible while
+  the denominator is large and absurd the moment it is small, so state the window
+  once and derive both ends from it.** (PET#1499: the board's unit totals include
+  everything sold today, while its day count covers days ELAPSED, which excludes
+  today. Over a rep with eleven days behind them the mismatch is a rounding
+  error and nobody saw it across 110 reps. For a rep whose first day is today it
+  is the whole measurement: the numerator holds whatever they just sold and the
+  denominator is zero, so production per day and volume per day both read 0.00,
+  which is 67% of the Power Rankings score, and the status tiers hand them NEEDS
+  PUSH on the morning they start. The defect was fully present the whole time and
+  only ever observable at the one sample size nobody tests.)
+  SHORT: A rate's numerator and denominator must cover the same window: a mismatch hides at scale and breaks the moment the denominator is small.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
