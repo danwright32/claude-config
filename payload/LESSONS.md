@@ -2516,6 +2516,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   vendor's data semantics against real samples; this adds that the check after shipping is the
   RATE over everything, not the value on a few.)
 
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
