@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 680 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 681 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -234,6 +234,7 @@ apply it, because the body is where the failure it came from is described.
 
 ## Honest failure
 
+- L706. A presence guard accepting any non-null value takes a zero as an answer, so an upstream exclusion arriving as zero silently suppresses the fallback.
 - L415. A screen showing a change BEFORE the write lands owes a failure path that reverts it AND says so, or a failed write looks exactly like a slow one.
 - L586. A redirect whose target is ITSELF a redirect drops the query string, destroying any outcome carried in it while both redirects read as correct alone.
 - L583. A fallback relaxing only ONE dimension of a match does nothing where the shortage is in another, so name which dimension is actually thin first.

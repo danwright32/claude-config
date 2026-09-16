@@ -2924,6 +2924,23 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L706. A presence guard that accepts any non-null value accepts a ZERO, and a measured quantity
+  routinely arrives as zero when something upstream excluded part of it or refused to measure at all,
+  so the short circuit fires and the fallback that would have supplied a real figure never runs.**
+  Treat zero and negative as no usable measurement unless the domain genuinely allows them, and keep a
+  genuine zero distinguishable in the output so the reason is readable afterwards.
+  SHORT: A presence guard accepting any non-null value takes a zero as an answer, so an upstream exclusion arriving as zero silently suppresses the fallback.
+  (bidspoke#1328, 2026-09-15. Main Flow's `pennie_or_eligibility` guarded its short circuit with
+  `value !== null && value !== undefined`, so a zero returned immediately without ever calling
+  Eligibility Scout. Salesforce zeroes `EngineDebt__c` when every creditor on the lead is excluded, so
+  the zero WAS the signal that the backup estimate was needed. Measured over four days, 266 leads
+  arrived with a zero and 18 of those had 10,000 dollars or more of real debt in Salesforce; they took
+  the under-10k fallback and sold for nothing. The first 18.5 hours after the fix sold three of them to
+  Tripoint for 21.01, 27.56 and 30.40. The same guard also accepted NEGATIVE figures, 1 to 8 a day, and
+  routed on them (bidspoke#1359). Related to L67, which is about a placeholder for a missing required
+  value, and to L50, which is about a parsed value feeding a comparison; neither covers a legitimate
+  numeric zero standing in for an absent measurement.)
+
 - **L415. A screen that shows a change BEFORE the write lands owes a failure path that reverts it AND
   says so, because without one a failed write is indistinguishable from a slow one and the revert
   arrives long after the person has looked away.** (overture#3583, 2026-09-06. Striking an email
