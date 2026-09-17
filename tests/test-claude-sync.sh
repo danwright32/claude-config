@@ -5931,6 +5931,71 @@ check "#335 and left the same calls to judge, only without it" \
   "[ \"\$(_gi_lines '$_GIP' | grep -c . || true)\" -eq '$_gi_all' ]"
 check "#335 a commit writing call with no identity is caught" "[ -n \"\$(_gitidentity '$_GIP')\" ]"
 
+section "== a CI verdict names the repository it came from (#418) =="
+# `gh run list` with no --repo answers about whatever repository the reader's shell happens to be
+# in, exits 0, and warns about nothing, so a verdict about another project is indistinguishable
+# from the right one (L58, L179). Four sentences in this tool handed the reader exactly that bare
+# command, and two of them are `status` output, which the per prompt notice prints inside whatever
+# project a session is working in rather than inside a clone of this repo. Measured on 2026-09-17:
+# that same query run in six other checkouts on this Mac returned six other repositories' runs,
+# every one of them with a healthy exit code and no mention of which repo had answered.
+#
+# So the rule is the class rather than those four lines (L30): every place that asks GitHub about a
+# run or a check, and every place that tells somebody else to ask, names the repository the answer
+# will be about, or names the clone to ask it from. This scan reads MESSAGE lines as well as
+# invocations, unlike the #335 one above, because here the advice IS the defect: that sentence is
+# the command somebody runs.
+_cir_re='(gh|"\$gh")[[:space:]]+(run[[:space:]]+list|pr[[:space:]]+checks|api)'
+# What counts as naming it: an explicit --repo, the slug the verdict lookup builds its API path
+# from, or the clone directory to run it in, which is the only thing that can be said about a
+# remote no slug can be derived from (L11: a message may claim only what its check measured).
+_cir_named='--repo|repos/\$slug|\$SYNC_REPO'
+_cir_lines(){   # $1 = a copy of the tool to read
+  # Comments stripped and continuation lines joined, exactly as every other source scan here does
+  # it, so a query split over two lines is judged as the one line it really is.
+  sed 's/#.*//' "$1" \
+    | sed -e :a -e '/\\$/N; s/\\\n//; ta' \
+    | grep -nE "$_cir_re" || true
+}
+_cir_bad(){ _cir_lines "$1" | grep -vE -- "$_cir_named" || true; }
+_cir_all="$(_cir_lines "$SCRIPT" | grep -c . || true)"
+# The floor first: a pattern that matched nothing would report a clean tool for the same reason an
+# empty scan reports a clean tree (L98), and this one is meant to sit at zero findings for ever,
+# which is exactly when a broken scan stops being re-read (L182).
+check "#418 the scan found the tool's CI queries ($_cir_all of them)" \
+  "[ '${_cir_all:-0}' -ge 2 ]"
+_cir_found="$(_cir_bad "$SCRIPT")"
+check "#418 every CI query, and every quoted one, names its repository" \
+  "[ -z \"\$_cir_found\" ] || { printf '%s\n' \"\$_cir_found\" | awk 'NR <= 5' >&2; false; }"
+# And it is watched CATCHING one, on a copy with the repository taken off the hint, or a zero reads
+# as proof the shape cannot occur rather than as a measurement (L1, L182).
+_CIRP="$WORK/ci-repo-name-plant.sh"
+sed 's/--repo %s //' "$SCRIPT" > "$_CIRP"
+# The plant is checked for having CHANGED something, because a substitution that matched nothing
+# leaves the copy identical and the catch below would then be satisfied by the original file (L100).
+check "#418 the plant really took the repository off a query" "! cmp -s '$SCRIPT' '$_CIRP'"
+check "#418 and left the same queries to judge, only without it" \
+  "[ \"\$(_cir_lines '$_CIRP' | grep -c . || true)\" -eq '$_cir_all' ]"
+check "#418 a CI query naming no repository is caught" "[ -n \"\$(_cir_bad '$_CIRP')\" ]"
+
+# The hooks this tool ships are read by the same scan, because the next hand rolled copy of that
+# sentence is as likely to be written in one of them, and the component and the guard that stops
+# the next copy belong in one change (L613).
+_cir_hooks_seen=0; _cir_hooks_bad=""
+for _cir_f in "$(cd "$(dirname "$SCRIPT")" && pwd)"/payload/hooks/*.sh; do
+  [ -f "$_cir_f" ] || continue
+  case "$(basename "$_cir_f")" in test-*) continue ;; esac
+  _cir_hooks_seen=$(( _cir_hooks_seen + 1 ))
+  _cir_h="$(_cir_bad "$_cir_f")"
+  [ -z "$_cir_h" ] || _cir_hooks_bad="$_cir_hooks_bad
+$(basename "$_cir_f"): $_cir_h"
+done
+# The same floor, for the same reason: a glob that matched no files reports every hook clean.
+check "#418 the hook scan really opened the shipped hooks ($_cir_hooks_seen of them)" \
+  "[ '${_cir_hooks_seen:-0}' -ge 5 ]"
+check "#418 no shipped hook asks about a run without naming its repository" \
+  "[ -z \"\$_cir_hooks_bad\" ] || { printf '%s\n' \"\$_cir_hooks_bad\" | awk 'NR <= 5' >&2; false; }"
+
 section "== a Mac that no longer exists does not hold verify hostage (#26) =="
 # The markers are keyed on hostname, which is a MUTABLE string, so renaming or reinstalling
 # a Mac does not move its marker, it mints a second one and abandons the first. Nothing ever
@@ -11096,6 +11161,19 @@ out_rdst="$(CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOTI
 dbg "#336 status on a repo that stays red: $out_rdst"
 check "#336 status says receiving is stuck, naming how many and how long" \
   "line_has \"\$out_rdst\" 'receiving is stuck' 'in a row' 'ago'"
+
+# And the command it hands you names the repository, or it answers about whatever repo the reader
+# happens to be standing in (claude-config#418). status is what the per prompt notice prints inside
+# whatever project a session is working in, so this sentence is read OUTSIDE a clone of this repo
+# far more often than inside one.
+out_rdst_slug="$(SYNC_REPO_SLUG="$CI_SLUG" CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#418 status names the repository the verdict came from" \
+  "line_has \"\$out_rdst_slug\" 'receiving is stuck' 'gh run list --repo $CI_SLUG'"
+# The other half, on the run above, whose fixture remote is a path on disk that no slug can be
+# derived from: it names the clone to ask from rather than handing back the bare command, because a
+# fallback that silently drops the repository is the defect this exists to end (L93).
+check "#418 and with a remote no slug can be derived from, it names the clone to ask from" \
+  "line_has \"\$out_rdst\" 'receiving is stuck' 'cd ' 'gh run list --limit 5'"
 # Past its window it says so in different words, because "it failed this time" and "it has been
 # failing all day" need different actions and one sentence covering both hides whichever it did not
 # name (L11). It still refuses to apply: the remedy is telling somebody, never lowering the gate.
@@ -11103,6 +11181,8 @@ out_rd_old="$(SYNC_CI_RED_ALERT_AFTER=0 ci_tick red failure)"
 dbg "#336 red past its window: $out_rd_old"
 check "#336 a repo red for longer than the window says so in its own words" \
   "case \"\$out_rd_old\" in *'has been red for'*) true ;; *) false ;; esac"
+check "#418 and the failing run it points at is named by repository" \
+  "line_has \"\$out_rd_old\" 'has been red for' 'gh run list --repo $CI_SLUG'"
 # It counts RUNS, and says so. The count is how many automatic ticks found the head red, and
 # several of those are routinely the SAME commit, so the nearest looking helper in this tool renders
 # it as "2 commits" and the sentence then makes a claim that is wrong twice over. Asserted on the
@@ -11182,6 +11262,8 @@ out_op2="$(op_run failure 'second edit')"
 dbg "#340 next run, its own commit red: $out_op2"
 check "#340 the next run says this Mac's own send failed its tests" \
   "line_has \"\$out_op2\" 'this Mac sent' 'FAILED its tests'"
+check "#418 and the run this Mac is pointed at is named by repository" \
+  "line_has \"\$out_op2\" 'FAILED its tests' 'gh run list --repo $CI_SLUG'"
 # The emptiness guard is not decoration: with no sha recorded the pattern below is empty, and an
 # empty pattern matches everything, so this check passed while the feature did not exist (L98).
 check "#340 and names the commit, so it can be looked at" \
@@ -11196,6 +11278,9 @@ out_opst="$(op_status)"
 dbg "#340 status while its own send is red: $out_opst"
 check "#340 while status still carries it, for as long as it stands" \
   "line_has \"\$out_opst\" 'this Mac sent' 'failed its tests'"
+out_opst_slug="$(SYNC_REPO_SLUG="$CI_SLUG" CLAUDE_HOME="$OPH" SYNC_REPO="$OPR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#418 and the command status hands you names that repository" \
+  "line_has \"\$out_opst_slug\" 'this Mac sent' 'gh run list --repo $CI_SLUG'"
 
 # And a green verdict ends it, or the record outlives the problem and every later run reports a
 # repo that was fixed hours ago (L344, L160).

@@ -407,7 +407,7 @@ report_own_push_verdict(){
     green|cancelled) rm -f "$MY_PUSH_FILE" 2>/dev/null || true; return 0 ;;
     red)
       if [ -z "$told" ]; then
-        echo "claude-sync: the commit this Mac sent (${sha:0:8}) FAILED its tests. Until a green commit lands nothing receives config, on this Mac or the other one, and you are the only person who can clear it: look at the run with 'gh run list --limit 5', then fix it or revert it." >&2
+        echo "claude-sync: the commit this Mac sent (${sha:0:8}) FAILED its tests. Until a green commit lands nothing receives config, on this Mac or the other one, and you are the only person who can clear it: look at the run with '$(ci_run_hint)', then fix it or revert it." >&2
         notify "the commit this Mac sent failed its tests"
         told="$now"
       fi
@@ -5519,6 +5519,29 @@ repo_slug(){   # -> owner/name from the origin url, or nothing
   esac
 }
 
+# The command every sentence below hands the reader when it tells them to go and look at a run, in
+# a form that can only answer about THIS clone's repository (claude-config#418).
+#
+# `gh run list` on its own answers about whatever repository the reader's shell happens to be in,
+# exits 0, and warns about nothing, so a verdict about another project reads exactly like the right
+# one (L58, L179). Two of these sentences are `status` output, which the per prompt notice prints
+# inside whatever project a session is working in, so the bare command was read outside a clone of
+# this repo far more often than inside one. Measured on 2026-09-17: run in six other checkouts on
+# this Mac it returned six other repositories' runs, every one of them looking healthy.
+#
+# When no slug can be derived, which is every clone whose origin is not GitHub, it names the
+# directory to run it FROM rather than handing back the bare command: a fallback that silently
+# drops the repository is the defect this exists to end, so what it gets wrong is said out loud
+# (L93), and this is the only claim the tool can make about a remote it cannot name.
+ci_run_hint(){   # -> a command that can only be about this clone's repository
+  local slug
+  if slug="$(repo_slug)" && [ -n "$slug" ]; then
+    printf 'gh run list --repo %s --limit 5' "$slug"
+  else
+    printf 'cd %s && gh run list --limit 5' "$SYNC_REPO"
+  fi
+}
+
 # One of: green red pending cancelled none unreadable. The distinctions matter because each needs a
 # different sentence and a different remedy (L11): pending resolves itself, cancelled never will,
 # and unreadable is about this Mac rather than about the commit.
@@ -5643,7 +5666,7 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
         # RUNS, not commits. The count is how many times an automatic tick found the head red, and
         # several of those are routinely the same commit, so the nearest looking helper renders it
         # as "2 commits" and says something that is not true twice over (L11, L118).
-        echo "claude-sync: and it has been red for $(age_in_words "$rd_age") now, over $rd_n run(s) in a row. Nothing on this Mac receives config until a green commit lands, so this needs fixing rather than waiting: look at the failing run with 'gh run list --limit 5'." >&2
+        echo "claude-sync: and it has been red for $(age_in_words "$rd_age") now, over $rd_n run(s) in a row. Nothing on this Mac receives config until a green commit lands, so this needs fixing rather than waiting: look at the failing run with '$(ci_run_hint)'." >&2
         # Told ONCE, on the transition, not on every automatic tick. A notification repeated every
         # few minutes is what teaches somebody to dismiss the whole channel (L36).
         if [ -z "$rd_told" ]; then
@@ -6950,7 +6973,7 @@ sync_stuck_records(){
           first="$(awk 'NR==1{print $1}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
           case "$first" in ''|*[!0-9]*) first="" ;; esac
           printf 'receiving\t%s\t%s\t%s\n' "$n" "${first:--}" \
-            "receiving is stuck: the shared repo's newest commit has failed its tests $n time(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))") ago. Nothing here receives config until a green commit lands. Look at the failing run: gh run list --limit 5"
+            "receiving is stuck: the shared repo's newest commit has failed its tests $n time(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))") ago. Nothing here receives config until a green commit lands. Look at the failing run: $(ci_run_hint)"
         fi ;;
     esac
   fi
@@ -6976,7 +6999,7 @@ report_my_push(){
   sha="$(awk 'NR==1{print $1}' "$MY_PUSH_FILE" 2>/dev/null)"
   told="$(awk 'NR==1{print $4}' "$MY_PUSH_FILE" 2>/dev/null)"
   [ -n "$told" ] || return 0
-  echo "the commit this Mac sent (${sha:0:8}) failed its tests, so nothing here or on the other Mac receives config until a green commit lands. Look at the run: gh run list --limit 5"
+  echo "the commit this Mac sent (${sha:0:8}) failed its tests, so nothing here or on the other Mac receives config until a green commit lands. Look at the run: $(ci_run_hint)"
   return 0
 }
 
