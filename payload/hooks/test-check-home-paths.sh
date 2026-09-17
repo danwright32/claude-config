@@ -318,6 +318,101 @@ code_missing=$?
   || check "a root that does not exist is refused" "exit=$code_missing out=$out_missing"
 
 # ---------------------------------------------------------------------------
+# Skills the sync never carries are not the sync's to judge (claude-config#415).
+# On 2026-09-17 a login to a second account made the Claude app download its
+# built in skills into skills/synced/<bucket>/, one of which carries example
+# paths under /home, and every hook suite run on that Mac failed on a file no
+# send will ever publish. The entries left out come from ONE list, the one
+# claude-sync itself reads (lib/unmanaged-skills.sh), with the sync's own
+# matching: a plugin skill name is excluded wherever it appears, while the
+# platform's folders are excluded only at the top of skills/, so a folder that
+# merely happens to be called `synced` inside a real skill is still config and
+# is still scanned.
+#
+# The plugin name is taken from that list rather than written here, so the
+# fixture means "a name the sync leaves out" for as long as the list has one
+# (L401), and the check that the list is not empty keeps that from being vacuous.
+# ---------------------------------------------------------------------------
+UNMANAGED_LIB="$DIR/lib/unmanaged-skills.sh"
+PLUGIN_NAME="$(bash -c '. "$1" && printf "%s" "${PLUGIN_SKILLS[0]:-}"' _ "$UNMANAGED_LIB" 2>/dev/null)"
+PLATFORM_NAME="$(bash -c '. "$1" && printf "%s" "${PLATFORM_SKILL_DIRS[0]:-}"' _ "$UNMANAGED_LIB" 2>/dev/null)"
+[ -n "$PLUGIN_NAME" ] && [ -n "$PLATFORM_NAME" ] \
+  && check "#415 the shared list names a plugin skill and a platform folder" ok \
+  || check "#415 the shared list names a plugin skill and a platform folder" "plugin='$PLUGIN_NAME' platform='$PLATFORM_NAME' lib=$UNMANAGED_LIB"
+
+UNM="$(tree unmanaged)"
+mkdir -p "$UNM/skills/$PLATFORM_NAME/bucket-1/web-asset-generator" "$UNM/skills/$PLUGIN_NAME" \
+         "$UNM/skills/demo/$PLUGIN_NAME"
+printf 'python gen.py %s/output all\n' "$BADHOME" > "$UNM/skills/$PLATFORM_NAME/bucket-1/web-asset-generator/SKILL.md"
+printf '{"skills":[]}\n' > "$UNM/skills/$PLATFORM_NAME/bucket-1/manifest.json"
+printf 'bash %s/.claude/skills/x.sh\n' "$BADHOME" > "$UNM/skills/$PLUGIN_NAME/SKILL.md"
+printf 'bash %s/.claude/skills/y.sh\n' "$BADHOME" > "$UNM/skills/demo/$PLUGIN_NAME/notes.md"
+out_unm="$(bash "$CHECK" "$UNM" 2>&1)"
+code_unm=$?
+[ "$code_unm" -eq 0 ] \
+  && check "#415 home paths inside skills the sync never carries are not reported" ok \
+  || check "#415 home paths inside skills the sync never carries are not reported" "exit=$code_unm out=$out_unm"
+
+# The same tree, plus the two places that ARE config: a folder called synced
+# inside a real skill, and the real skill itself. Both must still be reported,
+# and the unmanaged files must still not be, in the same run.
+mkdir -p "$UNM/skills/demo/$PLATFORM_NAME"
+printf 'bash %s/.claude/skills/nested.sh\n' "$BADHOME" > "$UNM/skills/demo/$PLATFORM_NAME/notes.md"
+printf 'bash %s/.claude/skills/own.sh\n' "$BADHOME" > "$UNM/skills/demo/SKILL.md"
+out_unm2="$(bash "$CHECK" "$UNM" 2>&1)"
+code_unm2=$?
+[ "$code_unm2" -eq 1 ] \
+  && check "#415 a tree holding real skills with home paths still fails" ok \
+  || check "#415 a tree holding real skills with home paths still fails" "exit=$code_unm2 out=$out_unm2"
+grep -q "skills/demo/$PLATFORM_NAME/notes.md:" <<< "$out_unm2" \
+  && check "#415 a nested folder named $PLATFORM_NAME inside a real skill is still scanned" ok \
+  || check "#415 a nested folder named $PLATFORM_NAME inside a real skill is still scanned" "out=$out_unm2"
+grep -q "skills/demo/SKILL.md:" <<< "$out_unm2" \
+  && check "#415 the real skill itself is still reported" ok \
+  || check "#415 the real skill itself is still reported" "out=$out_unm2"
+grep -q "skills/$PLATFORM_NAME/bucket-1\|skills/$PLUGIN_NAME/SKILL.md\|skills/demo/$PLUGIN_NAME/" <<< "$out_unm2" \
+  && check "#415 and the unmanaged files are still left out of that same run" "out=$out_unm2" \
+  || check "#415 and the unmanaged files are still left out of that same run" ok
+
+# The list that could not be read. The check runs from a hooks folder with no
+# lib beside it, which is the only way that state occurs on a Mac. Chosen
+# direction: it skips NOTHING, so a guard missing its list can only report too
+# much rather than too little (L42), and it SAYS so, whatever the verdict, since
+# a scan quietly widened reads the same as the normal one (L98).
+NOLIB="$TMPROOT/nolib-hooks"; mkdir -p "$NOLIB"
+cp "$CHECK" "$NOLIB/check-home-paths.sh"
+UNM3="$(tree unmanaged-nolib)"
+mkdir -p "$UNM3/skills/$PLATFORM_NAME/bucket-1/x"
+printf 'python gen.py %s/output all\n' "$BADHOME" > "$UNM3/skills/$PLATFORM_NAME/bucket-1/x/SKILL.md"
+out_nolib="$(bash "$NOLIB/check-home-paths.sh" "$UNM3" 2>&1)"
+code_nolib=$?
+[ "$code_nolib" -eq 1 ] \
+  && check "#415 with no readable list, nothing is skipped and the platform file is reported" ok \
+  || check "#415 with no readable list, nothing is skipped and the platform file is reported" "exit=$code_nolib out=$out_nolib"
+grep -q "unmanaged-skills.sh" <<< "$out_nolib" \
+  && check "#415 and the run names the list it could not read" ok \
+  || check "#415 and the run names the list it could not read" "out=$out_nolib"
+
+rm -rf "$UNM3/skills/$PLATFORM_NAME"
+out_nolib2="$(bash "$NOLIB/check-home-paths.sh" "$UNM3" 2>&1)"
+code_nolib2=$?
+[ "$code_nolib2" -eq 0 ] \
+  && check "#415 a clean tree still passes without the list" ok \
+  || check "#415 a clean tree still passes without the list" "exit=$code_nolib2 out=$out_nolib2"
+grep -q "unmanaged-skills.sh" <<< "$out_nolib2" \
+  && check "#415 but the pass still says the list could not be read" ok \
+  || check "#415 but the pass still says the list could not be read" "out=$out_nolib2"
+
+# A list that is THERE but defines nothing (truncated, or a different file under
+# that name) is the same unreadable state, not an empty list meaning skip nothing
+# quietly.
+mkdir -p "$NOLIB/lib"; printf '# nothing here\n' > "$NOLIB/lib/unmanaged-skills.sh"
+out_badlib="$(bash "$NOLIB/check-home-paths.sh" "$UNM3" 2>&1)"
+grep -q "unmanaged-skills.sh" <<< "$out_badlib" \
+  && check "#415 a list file that defines nothing is reported as unreadable too" ok \
+  || check "#415 a list file that defines nothing is reported as unreadable too" "out=$out_badlib"
+
+# ---------------------------------------------------------------------------
 # The real tree this file lives in, which is the whole point. It runs LAST, so
 # by the time it reports clean the scanner has been watched failing four ways.
 # ---------------------------------------------------------------------------

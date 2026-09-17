@@ -76,15 +76,78 @@ ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # on send and on apply, which is the mechanism this guard exists to cover the
 # gap in rather than to duplicate.
 SYNCED_DIRS=(hooks agents commands skills)
-targets=()
+
+# Inside skills/, only what the sync CARRIES (claude-config#415). The plugin managed skills and the
+# Claude app's own downloads (skills/synced/<bucket>/, fetched per account) never leave a Mac, so a
+# home path inside one is not this guard's to report, and reporting it failed every hook suite run
+# on a Mac the moment a login downloaded a skill with example paths in it (L36).
+#
+# The entries come from lib/unmanaged-skills.sh, the same file claude-sync reads, never a copy of
+# its names here (L41). It is read from beside THIS script, which is ~/.claude/hooks/lib on a Mac,
+# where no repo sits beside the hooks, and payload/hooks/lib in the repo. The matching is read off
+# its skill_excludes lines, so it is the sync's own: `--exclude=NAME` leaves NAME out at any depth
+# under skills/, as rsync does, and `--exclude=/NAME` leaves out only the entry at the top of
+# skills/, so a folder that merely happens to be called synced inside a real skill is still read.
+#
+# If the list cannot be read, NOTHING is left out, and the run says so whatever it concludes. That
+# is the direction that cannot hide a real defect: at worst it reports a file the sync would not
+# have carried, which is the loud failure this change exists to stop, rather than passing over a
+# file it would have (L42). And a scan quietly widened reads exactly like a normal one, so the
+# notice is printed on a pass as well as a failure (L98).
+UNMANAGED_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/unmanaged-skills.sh"
+UNMANAGED_SKILLS_LIB_LOADED=""
+if [ -r "$UNMANAGED_LIB" ]; then
+  # shellcheck source=payload/hooks/lib/unmanaged-skills.sh
+  . "$UNMANAGED_LIB" 2>/dev/null || UNMANAGED_SKILLS_LIB_LOADED=""
+fi
+list_note=""
+skill_anchored=()     # names left out only at the top of skills/
+skill_anywhere=()     # names left out at any depth under skills/
+if [ -n "$UNMANAGED_SKILLS_LIB_LOADED" ] && declare -F skill_excludes >/dev/null; then
+  while IFS= read -r _ex; do
+    _name="${_ex#--exclude=}"
+    case "$_name" in
+      '') ;;
+      /*) skill_anchored+=("${_name#/}") ;;
+      *)  skill_anywhere+=("$_name") ;;
+    esac
+  done < <(skill_excludes)
+fi
+if [ "$((${#skill_anchored[@]} + ${#skill_anywhere[@]}))" -eq 0 ]; then
+  list_note="check-home-paths: could not read the list of skills the sync never carries ($UNMANAGED_LIB), so every skill was scanned, including any the sync would leave behind."
+fi
+
+targets=()        # everything outside skills/, scanned whole
+skill_targets=()  # the top level entries of skills/ the sync carries
 for d in "${SYNCED_DIRS[@]}"; do
-  [ -d "$ROOT/$d" ] && targets+=("$ROOT/$d")
+  [ -d "$ROOT/$d" ] || continue
+  if [ "$d" != skills ]; then targets+=("$ROOT/$d"); continue; fi
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    _base="${e##*/}"
+    _skip=0
+    for _n in ${skill_anchored[@]+"${skill_anchored[@]}"} ${skill_anywhere[@]+"${skill_anywhere[@]}"}; do
+      [ "$_base" = "$_n" ] && { _skip=1; break; }
+    done
+    [ "$_skip" -eq 1 ] || skill_targets+=("$e")
+  done < <(find "$ROOT/skills" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
 done
 while IFS= read -r f; do
   [ -n "$f" ] && targets+=("$f")
 done < <(find "$ROOT" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort)
 
-if [ "${#targets[@]}" -eq 0 ]; then
+# The deeper exclusions, as grep options and as find pruning, so the lines scanned and the files
+# counted describe the same set.
+skill_grep_skip=()
+skill_find_prune=()
+for _n in ${skill_anywhere[@]+"${skill_anywhere[@]}"}; do
+  skill_grep_skip+=("--exclude-dir=$_n" "--exclude=$_n")
+  skill_find_prune+=(-o -name "$_n")
+done
+
+[ -n "$list_note" ] && echo "$list_note" >&2
+
+if [ "$((${#targets[@]} + ${#skill_targets[@]}))" -eq 0 ]; then
   echo "check-home-paths: found nothing to check under $ROOT (no hooks, agents, commands or skills directory, and no rule files). Refusing to report a clean scan of nothing." >&2
   exit 2
 fi
@@ -138,8 +201,13 @@ ANGLE_TOKEN="<""HOME>"
 # file, and no rule can forget to honour it. -I so a binary that happens to hold the bytes is
 # skipped rather than reported as a line nobody can read.
 ALL_PAT="${MACHINE_PATH}|${CS_TOKEN}|${ANGLE_TOKEN}"
-raw_all="$(grep -rInE "${SKIP[@]}" "$ALL_PAT" "${targets[@]}" 2>/dev/null \
-           | grep -v 'claude-sync-allow-home-path' || true)"
+# Two walks rather than one only because the deeper skill exclusions must not reach hooks, agents
+# or commands, where a folder sharing a plugin skill's name is ordinary config.
+raw_all="$(
+  { [ "${#targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" "$ALL_PAT" "${targets[@]}" 2>/dev/null
+    [ "${#skill_targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" ${skill_grep_skip[@]+"${skill_grep_skip[@]}"} \
+      "$ALL_PAT" "${skill_targets[@]}" 2>/dev/null
+  } | grep -v 'claude-sync-allow-home-path' || true)"
 
 # Is the tree being scanned this machine's own config directory? Compared as resolved physical
 # paths, because /tmp and /private/tmp are the same directory here and a string comparison would
@@ -235,8 +303,17 @@ hits="${hits%$'\n'}"
 # count files it FOUND something in, and the whole point of this number is to notice a scan that
 # read nothing at all. A clean tree matches nothing, which is indistinguishable from a scanner
 # pointed at the wrong directory unless something counts the files independently (L98).
-scanned="$(find "${targets[@]}" -type f \
-             ! -path '*/.git/*' ! -path '*__pycache__*' ! -name '*.pyc' 2>/dev/null | wc -l | tr -d ' ')"
+scanned="$(
+  { [ "${#targets[@]}" -eq 0 ] || find "${targets[@]}" -type f \
+      ! -path '*/.git/*' ! -path '*__pycache__*' ! -name '*.pyc' 2>/dev/null
+    # The pruned names are matched below the top only (-mindepth 1), mirroring the grep, whose
+    # exclusions were already applied to the top level entries when the targets were chosen.
+    [ "${#skill_targets[@]}" -eq 0 ] || find "${skill_targets[@]}" -mindepth 1 \
+      \( -name .git ${skill_find_prune[@]+"${skill_find_prune[@]}"} \) -prune -o -type f \
+      ! -path '*__pycache__*' ! -name '*.pyc' -print 2>/dev/null
+    # A bare file directly under skills/ is itself a target, and -mindepth 1 would skip it.
+    for _t in ${skill_targets[@]+"${skill_targets[@]}"}; do [ -f "$_t" ] && printf '%s\n' "$_t"; done
+  } | wc -l | tr -d ' ')"
 case "$scanned" in ''|*[!0-9]*) scanned=0 ;; esac
 if [ "$scanned" -eq 0 ]; then
   echo "check-home-paths: the synced directories under $ROOT are all empty, so nothing was read. Refusing to report a clean scan of nothing." >&2
