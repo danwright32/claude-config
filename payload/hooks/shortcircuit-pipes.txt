@@ -67,6 +67,7 @@ payload/hooks/block-red-merge.sh: 0
 payload/hooks/check-home-paths.sh: 0
 payload/hooks/durable-lesson-check.sh: 0
 payload/hooks/lessons-advisory.sh: 0
+payload/hooks/lib/push-scope.sh: 0
 payload/hooks/pr-merge-quiz.sh: 0
 payload/hooks/run-all-tests.sh: 0
 payload/hooks/test-block-red-merge.sh: 0

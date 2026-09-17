@@ -77,7 +77,9 @@ def checkout_dir(project):
     resolved = (out.stdout or "").strip()
     if out.returncode != 0 or not resolved or not os.path.isdir(resolved):
         return project, ""
-    if resolved != project or os.path.isdir(os.path.join(project, ".git")):
+    # exists, never isdir (claude-config#402): in a git worktree .git is a FILE, and the helper this
+    # re-checks tests with -e, so a directory test read every worktree as no checkout at all.
+    if resolved != project or os.path.exists(os.path.join(project, ".git")):
         return resolved, ""
     # It came back unchanged and this directory is not itself a checkout. Two reasons, and they
     # need different words: there is no checkout anywhere, or there is more than one and the

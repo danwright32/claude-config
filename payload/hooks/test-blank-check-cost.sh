@@ -159,9 +159,20 @@ issue_spool_note "$SPOOLDIR" "$(printf ' \n\t ')" tester >/dev/null 2>&1
 # quoting it, and a guard that cannot tell the line describing a thing from the line committing it
 # fails on its own documentation (the same trick check-style-guide.sh needs).
 # ---------------------------------------------------------------------------
-REPO="$(cd "$DIR/../.." && pwd)"
-if [ -d "$REPO/.git" ]; then
-  offenders="$(git -C "$REPO" ls-files -z \
+REPO="$(cd "$DIR/../.." && pwd -P)"
+# Asked of git rather than of the filesystem (claude-config#402). This read `[ -d "$REPO/.git" ]`,
+# and in a git worktree `.git` is a FILE, so every run from a worktree took the branch below and
+# read only payload/hooks: claude-sync was never scanned and a violation CI caught passed locally.
+# The top level has to BE this file's repo, not merely some repository above an installed copy,
+# so it is compared with the directory rather than taken as present.
+REPO_TOP="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$REPO_TOP" ] && REPO_TOP="$(cd "$REPO_TOP" 2>/dev/null && pwd -P || true)"
+if [ -n "$REPO_TOP" ] && [ "$REPO_TOP" = "$REPO" ]; then
+  # Grepped FROM the repository. ls-files prints paths relative to it, and grep resolved them against
+  # whatever directory the suite was started in, so run from anywhere but the root every file was
+  # missing, the error went to /dev/null, and the guard reported a clean tree it had never read
+  # (L98). Found by the worktree fixture below, whose control run passed when it had to fail.
+  offenders="$(cd "$REPO" && git ls-files -z \
       | xargs -0 grep -nE '\[ *-[nz] *"?\$\{[A-Za-z_][A-Za-z_0-9]*//' 2>/dev/null \
       | grep -vE ':[0-9]+: *#' || true)"
 else
@@ -193,6 +204,90 @@ printf '%s\n' 'x=""' "[ -n \"\${x${SS}[[:space:]]/}\" ] && echo hi" > "$PLANT"
 grep -nE '\[ *-[nz] *"?\$\{[A-Za-z_][A-Za-z_0-9]*//' "$PLANT" >/dev/null 2>&1 \
   && check "and the pattern it looks for does match a planted one" ok \
   || check "and the pattern it looks for does match a planted one" "it matched nothing"
+
+# ---------------------------------------------------------------------------
+# The class guard reads the WHOLE repository when run from a worktree (claude-config#402).
+#
+# The repo used to be recognised by a `.git` DIRECTORY above this file. In a git worktree `.git` is
+# a FILE pointing at the real one, so the test was false there, the guard fell through to the
+# installed branch, and it read only payload/hooks. claude-sync was never scanned, so a local run
+# from a worktree passed a violation CI then caught (PR #393). Agents work in worktrees by default,
+# which made the narrower run the ordinary one.
+#
+# Driven end to end: a throwaway repository holding a copy of this suite and a violation planted in
+# claude-sync, and a worktree of it. The same copy is run from both. The run from the main checkout
+# is the CONTROL: it has to fail, or a worktree run that passes would say nothing about worktrees
+# (L159). Nested runs skip this block, or each would build the fixture again.
+# ---------------------------------------------------------------------------
+if [ -z "${BLANK_CHECK_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
+  WT_MAIN="$TMPROOT/wt-main"
+  WT_TREE="$TMPROOT/wt-linked"
+  mkdir -p "$WT_MAIN/payload/hooks/lib"
+  cp "${BASH_SOURCE[0]}" "$WT_MAIN/payload/hooks/test-blank-check-cost.sh"
+  cp "$CHECK" "$WT_MAIN/payload/hooks/check-home-paths.sh"
+  cp "$SPOOL" "$WT_MAIN/payload/hooks/lib/issue-spool.sh"
+  # Assembled, for the reason the planted file above is: written whole it is an occurrence here.
+  printf '%s\n' '#!/usr/bin/env bash' 'y=""' "[ -z \"\${y${SS}[[:space:]]/}\" ] && echo blank" > "$WT_MAIN/claude-sync"
+  git init -q "$WT_MAIN" 2>/dev/null
+  git -C "$WT_MAIN" config user.email t@e 2>/dev/null
+  git -C "$WT_MAIN" config user.name t 2>/dev/null
+  git -C "$WT_MAIN" add . >/dev/null 2>&1
+  git -C "$WT_MAIN" -c commit.gpgsign=false commit -q -m seed >/dev/null 2>&1
+  git -C "$WT_MAIN" worktree add -q --detach "$WT_TREE" >/dev/null 2>&1
+
+  # The fixture has to BE a worktree, or everything below measures an ordinary checkout.
+  [ -f "$WT_TREE/.git" ] && [ -f "$WT_TREE/claude-sync" ] \
+    && check "the worktree fixture really is a worktree, with .git a file" ok \
+    || check "the worktree fixture really is a worktree, with .git a file" "no linked worktree at $WT_TREE"
+
+  wt_main_out="$(BLANK_CHECK_NESTED=1 bash "$WT_MAIN/payload/hooks/test-blank-check-cost.sh" 2>&1)"; wt_main_rc=$?
+  case "$wt_main_rc:$wt_main_out" in
+    0:*) check "run from the main checkout, the guard finds the violation in claude-sync" "it passed" ;;
+    *claude-sync*) check "run from the main checkout, the guard finds the violation in claude-sync" ok ;;
+    *) check "run from the main checkout, the guard finds the violation in claude-sync" "it failed without naming claude-sync: $wt_main_out" ;;
+  esac
+
+  wt_tree_out="$(BLANK_CHECK_NESTED=1 bash "$WT_TREE/payload/hooks/test-blank-check-cost.sh" 2>&1)"; wt_tree_rc=$?
+  case "$wt_tree_rc:$wt_tree_out" in
+    0:*) check "run from a worktree, the guard still reads claude-sync and finds it" "it passed, having read: $wt_tree_out" ;;
+    *claude-sync*) check "run from a worktree, the guard still reads claude-sync and finds it" ok ;;
+    *) check "run from a worktree, the guard still reads claude-sync and finds it" "it failed without naming claude-sync: $wt_tree_out" ;;
+  esac
+  case "$wt_tree_out" in
+    *"no repo above"*) check "and it does not call a worktree an installed copy" "it said: $wt_tree_out" ;;
+    *) check "and it does not call a worktree an installed copy" ok ;;
+  esac
+fi
+
+# The CLASS of #402, across the repository rather than this one file (L30). A search on the day it
+# was fixed found the same directory test in claude-sync's report on other clones, which called a
+# registered worktree gone, and in match-open-issues.py, which refused a worktree as ambiguous. Both
+# now test for existence. A path that CONTINUES past `.git` (`.git/rebase-merge`) is a different
+# question and is not matched: the pattern requires `.git` to end the quoted path.
+# Only readable where the repository is, for the reason the blank test above says so.
+GITDIR_PAT='(\[ *-d|test +-d|isdir\()[^]]{0,80}[/"'"'"']\.git["'"'"')]'
+if [ -n "$REPO_TOP" ] && [ "$REPO_TOP" = "$REPO" ]; then
+  gitdir_offenders="$(cd "$REPO" && git ls-files -z \
+      | xargs -0 grep -nE "$GITDIR_PAT" 2>/dev/null \
+      | grep -vE ':[0-9]+: *#' || true)"
+  case "$gitdir_offenders" in
+    *[![:space:]]*)
+      check "nothing recognises a checkout by a .git DIRECTORY, which a worktree does not have" "still doing it:
+$gitdir_offenders
+  Test with -e (or os.path.exists), or ask git rev-parse --show-toplevel." ;;
+    *) check "nothing recognises a checkout by a .git DIRECTORY, which a worktree does not have" ok ;;
+  esac
+fi
+# Seen to match the shapes it names, and NOT a path continuing past .git, before its silence counts.
+# Assembled, never written whole, or this file would be its own offender.
+GD='-''d'
+printf '%s\n' "[ $GD \"\$R/.git\" ]" "os.path.is""dir(os.path.join(p, \".git\"))" > "$TMPROOT/gitdir-hit.txt"
+printf '%s\n' "[ $GD \"\$R/.git/rebase-merge\" ]" "[ -e \"\$R/.git\" ]" > "$TMPROOT/gitdir-miss.txt"
+gd_hits="$(grep -cE "$GITDIR_PAT" "$TMPROOT/gitdir-hit.txt" 2>/dev/null || true)"
+gd_miss="$(grep -cE "$GITDIR_PAT" "$TMPROOT/gitdir-miss.txt" 2>/dev/null || true)"
+[ "$gd_hits" = 2 ] && [ "$gd_miss" = 0 ] \
+  && check "and that pattern matches a planted directory test and not its neighbours" ok \
+  || check "and that pattern matches a planted directory test and not its neighbours" "matched $gd_hits of 2 planted, and $gd_miss of 2 it must leave"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

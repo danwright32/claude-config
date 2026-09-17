@@ -148,19 +148,26 @@ ps__is_worktree() {
   git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1
 }
 
+# The command is handed to grep as a here-string in the three questions below, never piped from
+# printf (claude-config#403). A quiet grep leaves on its first match, and with the match near the
+# start of a command longer than a pipe buffer (a heredoc commit message) the printf was killed
+# holding the rest. Every hook sourcing this file runs under pipefail, so that death became the
+# answer and a present override or commit read as absent (L183). This file never says pipefail
+# itself, which is how the ratchet for exactly this shape never read it.
+
 # Does the command carry an inline `VAR=1` override, e.g. SKIP_TEST_CHECK=1?
 ps_has_override() {
   # $1 command, $2 variable name
-  printf '%s' "$1" | grep -Eq "(^|[[:space:];&|])$2=1([[:space:]]|$)"
+  grep -Eq "(^|[[:space:];&|])$2=1([[:space:]]|$)" <<< "$1"
 }
 
 ps_commit_in_chain() {
-  printf '%s' "$1" | grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)'
+  grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)' <<< "$1"
 }
 
 ps_add_in_chain() {
-  printf '%s' "$1" | grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' && return 0
-  printf '%s' "$1" | grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a'
+  grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' <<< "$1" && return 0
+  grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a' <<< "$1"
 }
 
 # What the pushed commits are measured against: the branch's upstream if it has

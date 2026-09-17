@@ -15540,7 +15540,7 @@ oc_pull(){
 
 # The fixture is real: B is a clone of the same bare repo A pushes to.
 check "#359 the second clone really is a checkout of the same repo" \
-  "[ -d '$OC_B/.git' ] && [ -n \"\$(git -C '$OC_B' rev-parse HEAD 2>/dev/null)\" ]"
+  "[ -e '$OC_B/.git' ] && [ -n \"\$(git -C '$OC_B' rev-parse HEAD 2>/dev/null)\" ]"
 
 # 1. LEVEL. Nothing is said about it, or every run carries a line about a clone that is fine.
 out_oc0="$(oc_pull)"
@@ -15555,6 +15555,22 @@ CLAUDE_HOME="$OC_HA" SYNC_REPO="$OC_A" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/de
 out_oc1="$(oc_pull)"
 check "#359 a clone that is merely behind is still told how far behind" \
   "grep -qE 'commit\(s\) behind' <<< \"\$out_oc1\""
+
+# 2b. A REGISTERED WORKTREE (claude-config#402). The reporter recognised a checkout by a `.git`
+#     DIRECTORY, and in a git worktree `.git` is a file, so a worktree that had registered itself
+#     was reported as gone and sent its reader to forget a checkout that is sitting right there.
+#     Behind, like the clone above, so the control is the same answer the clone gets (L159).
+OC_WT="$WORK/otherclone-worktree"
+git -C "$OC_B" worktree add -q --detach "$OC_WT" >/dev/null 2>&1
+printf '%s\n%s\n' "$OC_B" "$OC_WT" > "$OC_REG"
+check "#402 the worktree fixture really is a worktree, with .git a file" \
+  "[ -f '$OC_WT/.git' ] && [ -n \"\$(git -C '$OC_WT' rev-parse HEAD 2>/dev/null)\" ]"
+out_oc1w="$(oc_pull)"
+check "#402 a registered worktree is not reported as gone" \
+  "out_lacks \"\$out_oc1w\" 'not there any more'"
+check "#402 and is told how far behind it is, as a clone would be" \
+  "grep -qE 'otherclone-worktree is [0-9]+ commit\(s\) behind' <<< \"\$out_oc1w\""
+printf '%s\n' "$OC_B" > "$OC_REG"
 
 # 3. HOLDING WORK NOBODY PUSHED. The case that was being reported as unanswerable.
 git -C "$OC_B" config user.email t@t.t; git -C "$OC_B" config user.name t

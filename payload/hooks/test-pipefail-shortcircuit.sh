@@ -277,6 +277,56 @@ EOF
   && check "the baseline names files to check ($seen of them)" ok \
   || check "the baseline names files to check ($seen of them)" "only $seen, so this proves almost nothing"
 
+# WHICH FILES RUN UNDER PIPEFAIL (claude-config#403). A file used to be judged only if it held the
+# word itself, and a SOURCED file never does: it runs with whatever options its caller set. So
+# lib/merge-target.sh kept a producer piped into `grep -Eq` for as long as it existed, while
+# block-red-merge.sh and require-changelog-tag.sh sourced it under pipefail and misread a merge
+# followed by another command on most runs (L183). Two rules, because neither alone is exact:
+#
+#   every file under a lib/ directory. Deriving these from source lines was tried first and is NOT
+#   exact: callers name them through variables (`. "$LIB"`, `. "$SPOOL"`, `. "$RATCHET_LIB"`), and
+#   a library runs under whatever its NEXT caller sets, which nothing in the library records. A
+#   file lives in lib/ to be sourced, so the directory is the honest statement of that.
+#
+#   any file a pipefail script names on a `.` or `source` line, resolved against that script's own
+#   directory. That is the shape skills/milestone/catch-all.sh has, sourced as "$HERE/catch-all.sh"
+#   from outside any lib/, which the directory rule alone would leave exempt (L247).
+#
+# A variable leading the path is taken to be the script's own directory (`$HERE`, `$HOOK_DIR`,
+# `$DIR`), which is the convention every source line here follows; a path that is ONLY a variable
+# cannot be resolved from text and is covered by the lib/ rule or not at all.
+sourced_under_pipefail() { # sourced_under_pipefail <newline separated repo relative paths>
+  local rel f arg tail dir
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    case "$rel" in *.sh|claude-sync) ;; *) continue ;; esac
+    f="$ROOT/$rel"
+    [ -f "$f" ] || continue
+    grep -q 'pipefail' "$f" 2>/dev/null || continue
+    while IFS= read -r arg; do
+      case "$arg" in
+        '$'*/*) tail="${arg#*/}" ;;
+        '$'*|/*|'') continue ;;
+        *) tail="$arg" ;;
+      esac
+      dir="${rel%/*}"; [ "$dir" = "$rel" ] && dir=""
+      printf '%s\n' "${dir:+$dir/}$tail"
+    done < <(sed -nE 's/^[[:space:]]*(\.|source)[[:space:]]+"?([^"[:space:];&|]+)"?.*/\2/p' "$f" 2>/dev/null)
+  done <<< "$1"
+}
+TRACKED="$(git -C "$ROOT" ls-files 2>/dev/null || true)"
+SOURCED="$(sourced_under_pipefail "$TRACKED")"
+runs_under_pipefail() { # runs_under_pipefail <repo relative path>  -> 0 when that file does
+  case "$1" in lib/*|*/lib/*) return 0 ;; esac
+  grep -q 'pipefail' "$ROOT/$1" 2>/dev/null && return 0
+  case "
+$SOURCED
+" in *"
+$1
+"*) return 0 ;; esac
+  return 1
+}
+
 # A file the baseline does not mention at all, that has one. This is the case that matters: a new
 # one arriving in a file nobody was watching (L96).
 unlisted=""
@@ -285,7 +335,7 @@ while IFS= read -r rel; do
   case "$rel" in *.sh|claude-sync) ;; *) continue ;; esac
   f="$ROOT/$rel"
   [ -f "$f" ] || continue
-  grep -q 'pipefail' "$f" 2>/dev/null || continue
+  runs_under_pipefail "$rel" || continue
   have="$(count_uncommented "$f")"
   [ "${have:-0}" -gt 0 ] || continue
   case "
@@ -293,7 +343,7 @@ $(ratchet_read_baseline "$(cat "$BASELINE")")" in *"
 $rel "*) ;; *) unlisted="$unlisted  $rel: $have
 " ;; esac
 done <<EOF
-$(git -C "$ROOT" ls-files 2>/dev/null || true)
+$TRACKED
 EOF
 
 # ---------------------------------------------------------------------------
@@ -318,7 +368,7 @@ while IFS= read -r rel; do
   case "$rel" in *.sh|claude-sync) ;; *) continue ;; esac
   f="$ROOT/$rel"
   [ -f "$f" ] || continue
-  grep -q 'pipefail' "$f" 2>/dev/null || continue
+  runs_under_pipefail "$rel" || continue
   have="$(count_uncommented "$f")"
   [ "${have:-0}" -gt 0 ] || continue
   pending="$pending  $rel: $have
@@ -412,6 +462,50 @@ if [ -z "${SHORTCIRCUIT_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
       case "$sc_out" in
         *"NOT YET COUNTED"*) check "and is no longer announced as uncounted" "it is still announced" ;;
         *) check "and is no longer announced as uncounted" ok ;;
+      esac
+
+      # A SOURCED file inherits pipefail from its caller (claude-config#403). A file was judged only
+      # if it held the word itself, so lib/merge-target.sh kept a producer piped into a quiet grep
+      # while every script sourcing it ran under pipefail. Three shapes, each committed, because the
+      # verdict judges what git tracks.
+      git -C "$sc_probe" rm -q fresh.sh >/dev/null 2>&1
+      git -C "$sc_probe" -c commit.gpgsign=false commit -q -m clean >/dev/null 2>&1
+
+      # 1. A library under lib/, with no pipefail of its own and nothing naming it literally.
+      mkdir -p "$sc_probe/hooks/lib"
+      printf '%s\n' '# a library' "sc_has(){ $sc_bad; }" > "$sc_probe/hooks/lib/helper.sh"
+      git -C "$sc_probe" add hooks/lib/helper.sh >/dev/null 2>&1
+      git -C "$sc_probe" -c commit.gpgsign=false commit -q -m lib >/dev/null 2>&1
+      sc_out="$(sc_run)"; sc_rc=$?
+      case "$sc_rc:$sc_out" in
+        0:*) check "#403 a site in a lib/ file with no pipefail of its own is counted" "it passed" ;;
+        *hooks/lib/helper.sh*) check "#403 a site in a lib/ file with no pipefail of its own is counted" ok ;;
+        *) check "#403 a site in a lib/ file with no pipefail of its own is counted" "it failed without naming the file: $sc_out" ;;
+      esac
+      git -C "$sc_probe" rm -q hooks/lib/helper.sh >/dev/null 2>&1
+      git -C "$sc_probe" -c commit.gpgsign=false commit -q -m unlib >/dev/null 2>&1
+
+      # 2. A file OUTSIDE lib/ that a pipefail script sources by name, the shape catch-all.sh has.
+      #    The CONTROL comes first, in the same fixture: the identical file with nothing sourcing it
+      #    is not counted, so the case after it proves the source line and not a rule that counts
+      #    every file (L159).
+      printf '%s\n' '# shared' "sc_has(){ $sc_bad; }" > "$sc_probe/util.sh"
+      git -C "$sc_probe" add util.sh >/dev/null 2>&1
+      git -C "$sc_probe" -c commit.gpgsign=false commit -q -m util >/dev/null 2>&1
+      sc_out="$(sc_run)"; sc_rc=$?
+      [ "$sc_rc" -eq 0 ] \
+        && check "#403 a file nothing sources under pipefail is still not counted" ok \
+        || check "#403 a file nothing sources under pipefail is still not counted" "it failed: $sc_out"
+      # Assembled, so this file holds no source line of its own for the derivation to read.
+      sc_src='sou''rce "$HERE/util.sh"'
+      printf '%s\n' 'set -uo pipefail' 'HERE="$(dirname "$0")"' "$sc_src" > "$sc_probe/caller.sh"
+      git -C "$sc_probe" add caller.sh >/dev/null 2>&1
+      git -C "$sc_probe" -c commit.gpgsign=false commit -q -m caller >/dev/null 2>&1
+      sc_out="$(sc_run)"; sc_rc=$?
+      case "$sc_rc:$sc_out" in
+        0:*) check "#403 the same file, once a pipefail script sources it, is counted" "it passed" ;;
+        *util.sh*) check "#403 the same file, once a pipefail script sources it, is counted" ok ;;
+        *) check "#403 the same file, once a pipefail script sources it, is counted" "it failed without naming the file: $sc_out" ;;
       esac
       rm -rf "$sc_probe" ;;
   esac

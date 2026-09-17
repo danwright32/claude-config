@@ -203,6 +203,34 @@ git init -q "$BR/empty" 2>/dev/null
   && check "ps_base_ref refuses when there is nothing to compare with" "it returned 0" \
   || check "ps_base_ref refuses when there is nothing to compare with" ok
 
+# A LONG COMMAND, read under pipefail (claude-config#403). The four questions below piped the
+# command into a quiet grep, which leaves on its first match. With the match near the start of a
+# command longer than a pipe buffer, the writer was killed holding the rest, and under the pipefail
+# every hook sourcing this library sets, the pipeline reported that death: the override or the
+# commit it had just found read as absent (L183). A heredoc commit message is exactly this shape.
+# This suite runs under pipefail itself, so it asks in the same conditions the hooks do.
+#
+# The CONTROL is the same command short: every answer must be yes there too, so a failure below is
+# the size and not a pattern that never matched (L159).
+LONG_TAIL="$(awk 'BEGIN{for(i=0;i<40000;i++) print "filler line of a long heredoc body " i}')"
+for size in short long; do
+  body=""; [ "$size" = long ] && body="$LONG_TAIL"
+  long_cmd="SKIP_TEST_CHECK=1 git add a.txt && git commit -a -m \"\$(cat <<'EOF'
+subject
+$body
+EOF
+)\" && git push"
+  ps_has_override "$long_cmd" SKIP_TEST_CHECK \
+    && check "a $size command still carries its override" ok \
+    || check "a $size command still carries its override" "read as absent over ${#long_cmd} bytes"
+  ps_commit_in_chain "$long_cmd" \
+    && check "a $size command still has its commit seen" ok \
+    || check "a $size command still has its commit seen" "read as absent over ${#long_cmd} bytes"
+  ps_add_in_chain "$long_cmd" \
+    && check "a $size command still has its add seen" ok \
+    || check "a $size command still has its add seen" "read as absent over ${#long_cmd} bytes"
+done
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
