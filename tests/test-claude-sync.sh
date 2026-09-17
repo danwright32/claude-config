@@ -15848,6 +15848,104 @@ check "#360 the clone catches up once the remote accepts again" \
 check "#360 and it stops saying it has not sent" \
   "out_lacks \"\$out_st3\" 'has not sent' i"
 
+section "== a send holds back a hooks block that runs a hook for tools its header does not declare (claude-config#413) =="
+# Main went red twice on 2026-09-17 (b7190df, 59ab66f) because a send published the Playwright gate
+# in the Edit and Write group, and only CI noticed. A red main stops BOTH Macs receiving, so the
+# fault has to stay on the Mac that made it (L667). The send now asks the same question
+# test-hook-coverage.sh asks, through the same library, and keeps the payload's previous block when
+# the answer is a fault. Driven through a real send, with a control either side.
+unset SYNC_NO_GIT
+HRB="$WORK/hookreg-bare.git"; git init -q --bare "$HRB"
+HR_R="$WORK/hookreg-repo"; git clone -q "$HRB" "$HR_R" 2>/dev/null
+HR_H="$WORK/hookreg-home"; mkdir -p "$HR_H/hooks"
+printf '#!/usr/bin/env bash\n#\n# fencegate.sh\n# Claude Code PreToolUse(Edit|Write) hook: a fixture.\n' > "$HR_H/hooks/fencegate.sh"
+# No header in the declared form, so nothing is asked of where it is registered.
+printf '#!/usr/bin/env bash\n# Claude Code PreToolUse hook: a fixture that declares no tools.\n' > "$HR_H/hooks/plainhook.sh"
+# Commands carry this home's real path, as a live settings.json does, so the merge compares them
+# with the payload's detokenized copies the way it does on a real Mac.
+hr_settings(){ # hr_settings <matcher=command,command> ...  -> one PreToolUse group per argument
+  python3 - "$HR_H/settings.json" "$@" <<'PY_HR'
+import json, sys
+out, specs = sys.argv[1], sys.argv[2:]
+groups = []
+for spec in specs:
+    matcher, cmds = spec.split("=", 1)
+    groups.append({"matcher": matcher,
+                   "hooks": [{"type": "command", "command": c} for c in cmds.split(",")]})
+json.dump({"hooks": {"PreToolUse": groups}}, open(out, "w"), indent=2)
+PY_HR
+}
+hr_push(){ CLAUDE_HOME="$HR_H" SYNC_REPO="$HR_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1; }
+# hr_groups <file> <command> -> the matcher of every PreToolUse group naming it, one per line
+hr_groups(){ jq -r --arg c "$2" '.hooks.PreToolUse[]? | select(any(.hooks[]?; (.command // "") | endswith($c))) | .matcher' "$1" 2>/dev/null; }
+hr_published(){ git -C "$HRB" show HEAD:payload/settings.hooks.json 2>/dev/null > "$WORK/hookreg-published.json"; hr_groups "$WORK/hookreg-published.json" "$1"; }
+
+# 1. CONTROL: the gate where its header says, and the headerless hook under an unrelated matcher.
+hr_settings "Edit|Write=$HR_H/hooks/fencegate.sh" "Bash=$HR_H/hooks/plainhook.sh"
+out_hr1="$(hr_push)"
+dbg "#413 the sound send said: $out_hr1"
+check "#413 a block registering the gate where its header says is published" \
+  "[ \"\$(hr_published hooks/fencegate.sh)\" = 'Edit|Write' ]"
+check "#413 and a hook with no declared tools is published wherever it is registered" \
+  "[ \"\$(hr_published hooks/plainhook.sh)\" = Bash ]"
+check "#413 and the sound send holds nothing back" \
+  "out_lacks \"\$out_hr1\" 'NOT published' i"
+
+# 2. THE INCIDENT: this Mac moves the gate into the Bash group, and changes another hook in the same
+#    send, which must still travel.
+hr_settings "Bash=$HR_H/hooks/fencegate.sh,$HR_H/hooks/plainhook.sh"
+printf '#!/usr/bin/env bash\n# Claude Code PreToolUse hook: a fixture that declares no tools, edited.\n' > "$HR_H/hooks/plainhook.sh"
+out_hr2="$(hr_push)"
+dbg "#413 the moved send said: $out_hr2"
+check "#413 a block running the gate away from its declared tools is not published" \
+  "[ \"\$(hr_published hooks/fencegate.sh)\" = 'Edit|Write' ]"
+check "#413 the payload in the checkout keeps its previous block too" \
+  "[ \"\$(hr_groups '$HR_R/payload/settings.hooks.json' hooks/fencegate.sh)\" = 'Edit|Write' ]"
+check "#413 the message names the hook, the tool it is not run for, and says the block was held back" \
+  "line_has \"\$out_hr2\" 'hooks block' 'NOT published' 'fencegate.sh declares PreToolUse\\(Edit\\|Write\\) and is not run for Edit' 'fencegate.sh .* is also run for Bash'"
+check "#413 and it says where the fix is" \
+  "line_has \"\$out_hr2\" 'fencegate.sh' 'settings.json'"
+check "#413 the other change in the same send still travelled" \
+  "case \"\$(git -C '$HRB' show HEAD:payload/hooks/plainhook.sh)\" in *edited*) true ;; *) false ;; esac"
+
+# 3. REGISTERED WHERE IT BELONGS AND ALSO SOMEWHERE ELSE is a fault too: the header declares
+#    exactly the tools the hook is for, and the incident shape can sit beside a correct group.
+hr_settings "Edit|Write=$HR_H/hooks/fencegate.sh" "Bash=$HR_H/hooks/fencegate.sh,$HR_H/hooks/plainhook.sh"
+out_hr3="$(hr_push)"
+dbg "#413 the doubled send said: $out_hr3"
+check "#413 a block running the gate for an extra tool is not published" \
+  "[ \"\$(hr_published hooks/fencegate.sh)\" = 'Edit|Write' ]"
+check "#413 and the message names the tool it should not run for" \
+  "line_has \"\$out_hr3\" 'NOT published' 'fencegate.sh declares PreToolUse\\(Edit\\|Write\\) and is also run for Bash'"
+
+# 4. THE JUDGE IS THE COPY BEING PUBLISHED. A payload carrying its own library is asked, not the
+#    copy beside the tool, because that is the code CI will run on this commit (L398). A stub that
+#    always objects proves which one answered.
+mkdir -p "$HR_H/hooks/lib"
+printf 'import sys\nprint("STUBJUDGE objects to everything")\nsys.exit(1)\n' > "$HR_H/hooks/lib/hook-registration.py"
+hr_settings "Edit|Write=$HR_H/hooks/fencegate.sh" "Bash=$HR_H/hooks/plainhook.sh,$HR_H/hooks/newhook.sh"
+out_hr4="$(hr_push)"
+check "#413 the library in the payload being published is the one that judges" \
+  "line_has \"\$out_hr4\" 'hooks block' 'STUBJUDGE'"
+check "#413 and its objection holds the block back" \
+  "[ \"\$(hr_published hooks/plainhook.sh)\" = Bash ] && [ -z \"\$(hr_published hooks/newhook.sh)\" ]"
+# A library that cannot answer at all is not a clean block (L98). It holds the block back and says so.
+printf 'import sys\nsys.exit(7)\n' > "$HR_H/hooks/lib/hook-registration.py"
+out_hr5="$(hr_push)"
+check "#413 a library that could not judge the block holds it back and says it could not check" \
+  "line_has \"\$out_hr5\" 'hooks block' 'could not be checked'"
+check "#413 and nothing was published on its silence" \
+  "[ \"\$(hr_published hooks/plainhook.sh)\" = Bash ] && [ -z \"\$(hr_published hooks/newhook.sh)\" ]"
+
+# 5. CONTROL: the fault fixed and the real library back, the block publishes.
+rm -rf "$HR_H/hooks/lib"
+out_hr6="$(hr_push)"
+dbg "#413 the fixed send said: $out_hr6"
+check "#413 once the layout is right the new block is published" \
+  "[ \"\$(hr_published hooks/newhook.sh)\" = Bash ]"
+check "#413 and nothing is said about holding it back" \
+  "out_lacks \"\$out_hr6\" 'hooks block' i"
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

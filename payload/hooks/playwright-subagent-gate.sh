@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
 # playwright-subagent-gate.sh
-# Claude Code PreToolUse hook on the Playwright MCP tools: refuse a call made from a SUBAGENT
-# (claude-config#384).
+# Claude Code PreToolUse(mcp__playwright__.*|mcp__plugin_playwright_playwright__.*) hook: refuse a
+# call to the Playwright MCP tools made from a SUBAGENT (claude-config#384). The tools in that line
+# are where the settings must register this hook and nowhere else, and both test-hook-coverage.sh
+# and a send check it (claude-config#413).
 #
 # The Playwright MCP server is ONE browser for the whole session, shared by the main thread and every
 # agent it dispatches. On 2026-09-14 five research agents ran in parallel in the Child project and
