@@ -259,10 +259,19 @@ MTEOF
 # The cheap substring test comes first, so an ordinary command (which is every
 # command in every session, since both blocking gates ask this before anything
 # else) is answered by one glob and no subshell.
+#
+# The heads are CAPTURED and then searched, never piped into the search. A quiet
+# grep leaves on its first match, so a merge with commands after it killed the
+# writer still holding their heads, and under the pipefail both gates run with
+# that death made the answer "not a merge": `<merge> && echo merged` walked past
+# both gates on most runs (found testing #382, L183).
 mt_is_pr_merge() {  # $1 = command
   case "$1" in *merge*) ;; *) return 1 ;; esac
-  mt_command_heads "$1" \
-    | grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'
+  local heads
+  heads="$(mt_command_heads "$1")"
+  grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' <<MTEOF
+$heads
+MTEOF
 }
 
 # True when a segment causes a merge by any route: the direct command, a repo's

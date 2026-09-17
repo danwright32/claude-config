@@ -166,10 +166,50 @@ fi
 number=$(printf '%s' "$rollup" | jq -r '.number // "?"')
 
 # CheckRun entries report .conclusion; older StatusContext entries report .state.
-verdicts=$(printf '%s' "$rollup" | jq -r '[.statusCheckRollup[]? | {
-  name: (.name // .context // "check"),
-  result: ((.conclusion // .state // "") | ascii_upcase)
-}]')
+#
+# ONE VERDICT PER CHECK, taken from its NEWEST run (#382). The rollup is about the head commit, but
+# it lists every run of a check on that commit, a superseded one included: on ovation PR 312 a
+# description check failed, the description was edited, the check passed on the same head, and this
+# gate refused the merge on the old failure, so the only way through was pushing a commit nobody
+# needed (L179).
+#
+# "Newest" is decided by startedAt, never by position in the array. The array is not in run order:
+# on ovation 305, 310 and 311 (read 2026-09-17) it listed the newer run first as often as last.
+# startedAt is what gh reports for both kinds of entry, and it is written as UTC seconds with a
+# trailing Z, a form in which comparing the strings compares the instants. A value in any other form
+# (fractional seconds would sort wrongly as text) is treated as undated rather than compared.
+#
+# A check is one workflow's job of one name, or one status context. Two workflows can each carry a
+# job called `test`, and a pass in one must not answer for a failure in the other.
+#
+# Every way this ordering can be wrong fails CLOSED:
+#   1. A run that has not finished makes the whole check pending, whatever its date. A queued run has
+#      no start time, and gh writes that as the zero time, which would sort OLDEST and let the pass
+#      before it answer for a run nobody has seen finish.
+#   2. A check with more than one run where any run is undated cannot be put in order, so every run
+#      counts, which is what this gate did before.
+#   3. Runs tied on the newest start time all count, so a failure started in the same second as a
+#      pass is not hidden by it.
+verdicts=$(printf '%s' "$rollup" | jq -r '
+  def dated: (. // "") as $t
+    | if ($t | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+         and ($t | startswith("0001-") | not)
+      then $t else null end;
+  [.statusCheckRollup[]? | {
+    key: [(.__typename // ""), (.workflowName // ""), (.name // .context // "check")],
+    name: (.name // .context // "check"),
+    result: ((.conclusion // .state // "") | ascii_upcase),
+    started: ((.startedAt // .createdAt) | dated)
+  } | .finished = (.result | IN("", "PENDING", "EXPECTED") | not)]
+  | group_by(.key)
+  | map(
+      if length == 1 then .
+      elif any(.[]; .finished | not) then [first(.[] | select(.finished | not))]
+      elif any(.[]; .started == null) then .
+      else (map(.started) | max) as $newest | map(select(.started == $newest))
+      end)
+  | flatten
+  | map({name, result})')
 
 total=$(printf '%s' "$verdicts" | jq 'length')
 
@@ -237,12 +277,83 @@ head_sha=$(printf '%s' "$rollup" | jq -r '.headRefOid // ""' 2>/dev/null)
 # by the remedy it names (L11, L109).
 [ -z "$head_sha" ] && deny "PR #$number reads green, but gh did not report its head commit, so this merge cannot be pinned to the commit those checks were actually run for. A rollup is about the pull request, not about a commit, and it is read a moment before the merge: without the pin, a push landing in between is merged unjudged and looks identical afterwards. Check which commit is at the head and that its checks are the green ones, then merge with ALLOW_UNPINNED_MERGE=1 <the same command>."
 
-pinned_sha=$(printf '%s' "$command" \
+# Where the gh invocation's OWN words are in the command, as "start end" character offsets (#382).
+#
+# The pin has to be read from, and suggested into, exactly that stretch. The whole line used to
+# serve for both, and they failed together: a piped merge was told to run
+# `gh pr merge 305 --squash 2>&1 | cat --match-head-commit <sha>`, which hands the flag to cat, and
+# the reading below then found the flag in that line and let the unpinned merge through with
+# nothing saying so. Fixing only the suggestion would leave the next hand written copy of the same
+# mistake accepted.
+#
+# The invocation ends at the first unquoted pipe, `&`, `;`, redirection, parenthesis or newline, and
+# a file descriptor number written against its redirection (the 2 of `2>&1`) belongs to the
+# redirection. Quotes are tracked, so a `--body` holding a pipe or a semicolon does not end it.
+#
+# Its one blind spot, stated rather than hidden: a heredoc body is scanned as if it were commands, so
+# a body line that itself begins `gh pr merge` would be taken for the invocation. The matcher that
+# decided this is a merge strips bodies first, and in that shape the pin is read from the body line,
+# finds nothing, and refuses, so the blind spot can only refuse a merge, never let one through.
+merge_invocation_bounds() {  # $1 = command ; prints "start end", or fails when there is none
+  local cmd="$1" n=${#1} i=0 c="" quote="" start=0 end seg
+  local head='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*([^[:space:]]*/)?gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'
+  local fd='[[:space:]]([0-9]+)$'
+  while [ "$i" -le "$n" ]; do
+    c="${cmd:$i:1}"   # empty at i == n, so the end of the command closes the last invocation
+    if [ -n "$quote" ]; then
+      if [ "$c" = "\\" ] && [ "$quote" = '"' ]; then i=$((i + 2)); continue; fi
+      [ "$c" = "$quote" ] && quote=""
+      i=$((i + 1)); continue
+    fi
+    case "$c" in
+      "\\") i=$((i + 2)); continue ;;
+      "'"|'"') quote="$c" ;;
+      ""|"|"|"&"|";"|">"|"<"|"("|")"|$'\n')
+        seg="${cmd:$start:$((i - start))}"
+        if [[ "$seg" =~ $head ]]; then
+          end=$i
+          if [ "$c" = ">" ] || [ "$c" = "<" ]; then
+            [[ "$seg" =~ $fd ]] && end=$((end - ${#BASH_REMATCH[1]}))
+          fi
+          while [ "$end" -gt "$start" ]; do
+            case "${cmd:$((end - 1)):1}" in
+              " "|$'\t') end=$((end - 1)) ;;
+              *) break ;;
+            esac
+          done
+          printf '%s %s' "$start" "$end"
+          return 0
+        fi
+        start=$((i + 1))
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
+bounds=$(merge_invocation_bounds "$command") || bounds=""
+invocation=""
+if [ -n "$bounds" ]; then
+  inv_start=${bounds% *}
+  inv_end=${bounds#* }
+  invocation="${command:$inv_start:$((inv_end - inv_start))}"
+fi
+
+pinned_sha=$(printf '%s' "$invocation" \
   | grep -oE '\-\-match-head-commit[[:space:]=]+[0-9a-fA-F]+' \
   | grep -oE '[0-9a-fA-F]+$' | awk 'NR <= 1')
 
 if [ -z "$pinned_sha" ]; then
-  deny "PR #$number is green at $head_sha, but the merge does not pin that commit. The rollup just read is about the pull request, not about a commit, so a push landing between this reading and the merge would be merged unjudged and would look identical afterwards. Run: $command --match-head-commit $head_sha . GitHub refuses the merge if the head has moved. Deliberate override: ALLOW_UNPINNED_MERGE=1 <the same command>."
+  # The flag goes on the gh invocation itself, before any pipe, redirection or later command, so the
+  # command handed back is the one that actually pins. Where the invocation could not be found, say
+  # where the flag belongs rather than guess at a line that could hand it to something else.
+  if [ -n "$bounds" ]; then
+    suggestion="Run: ${command:0:$inv_end} --match-head-commit $head_sha${command:$inv_end} ."
+  else
+    suggestion="Add --match-head-commit $head_sha to the gh pr merge invocation itself, before any pipe, redirection or following command."
+  fi
+  deny "PR #$number is green at $head_sha, but the merge does not pin that commit. The rollup just read is about the pull request, not about a commit, so a push landing between this reading and the merge would be merged unjudged and would look identical afterwards. $suggestion GitHub refuses the merge if the head has moved. A flag after a pipe or in a later command pins nothing, so it does not count. Deliberate override: ALLOW_UNPINNED_MERGE=1 <the same command>."
 fi
 
 # Pinned to something else is worse than unpinned, not better: it hands GitHub a commit nothing
