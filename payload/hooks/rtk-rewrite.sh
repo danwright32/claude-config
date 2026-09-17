@@ -41,6 +41,29 @@ fi
 # rtk rewrite exits 1 when there's no rewrite: hook passes through silently.
 REWRITTEN=$(rtk rewrite "$CMD" 2>/dev/null) || exit 0
 
+# Every refusal below is judged against EVERY rtk invocation in the rewritten command, never only
+# its first word (claude-config#399).
+#
+# rtk rewrites each part of a compound command separately, so `cd x && diff a b` comes back as
+# `cd x && rtk diff a b`. The refusals used to read the first word of the rewrite, which there is
+# `cd`, so none of them ever saw the `rtk diff`. On 2026-09-17 exactly that shape, `cd ... && git
+# show ... > f; diff <(sed ...) ~/.claude/CLAUDE.md | head -20; git log ...`, printed
+# "[ok] Files are identical" for two files cmp said differ at line 99, with the diff refusal below
+# already installed. The blind spot was shared by every refusal, the `rtk read` and test summariser
+# ones included, so the fix is here where they are all applied and not in any one of them (L30).
+#
+# The scan errs toward refusing. Shell punctuation and quotes become word breaks and every word
+# that is exactly `rtk` counts as an invocation, so a quoted argument spelling out `rtk diff` also
+# refuses. That costs a token saving on a rare command and cannot cost a verdict. A refused
+# destination anywhere refuses the WHOLE rewrite, and the command runs exactly as written: putting
+# back just the one part would mean editing a shell command by matching text, which is its own
+# way of running something nobody wrote (L266). Compound commands with no refused destination in
+# them are still rewritten, so git, gh and the rest keep saving tokens.
+rtk_help_text="$(rtk --help 2>/dev/null)"
+
+rtk_refused_destination() { # rtk_refused_destination <subcommand> <first argument>  -> 0 to refuse
+local rtk_dest_sub="$1" rtk_dest_verb="$2"
+
 # NEVER rewrite a command into `rtk read` (downbeat#254).
 #
 # `rtk read` STRIPS COMMENT LINES and renumbers what remains from 1. Measured
@@ -59,9 +82,7 @@ REWRITTEN=$(rtk rewrite "$CMD" 2>/dev/null) || exit 0
 #
 # Everything else still goes through rtk, which is the point: git, gh and the
 # rest keep saving tokens. Only file reads pass through untouched.
-case "$REWRITTEN" in
-  "rtk read "*) exit 0 ;;
-esac
+if [ "$rtk_dest_sub" = "read" ]; then return 0; fi
 
 # NEVER rewrite a TEST RUN into an rtk summariser (claude-config#259).
 #
@@ -82,18 +103,16 @@ esac
 #
 # Refused by DESTINATION, like `rtk read` above, and for the same reason: whatever produced it,
 # the summariser is the thing that corrupts the output.
-rtk_dest_sub="${REWRITTEN#rtk }"; rtk_dest_verb="${rtk_dest_sub#* }"
-rtk_dest_sub="${rtk_dest_sub%% *}"; rtk_dest_verb="${rtk_dest_verb%% *}"
 
 # The `test` VERB, wherever it appears as the first argument. rtk's help describes `cargo`, `go`,
 # `dotnet` and `npm` as compact output for those tools generally, so the subcommand alone cannot
 # tell `cargo test` from `cargo build`, and only the verb makes it a verdict.
-if [ "$rtk_dest_verb" = "test" ]; then exit 0; fi
+if [ "$rtk_dest_verb" = "test" ]; then return 0; fi
 
 # The floor: summarisers whose whole job is a test verdict. Held in code AND checked by the
 # derivation below, so neither is the only guard (L96).
 case " test playwright pytest vitest " in
-  *" $rtk_dest_sub "*) exit 0 ;;
+  *" $rtk_dest_sub "*) return 0 ;;
 esac
 
 # And derived from rtk's OWN subcommand list, so a summariser this hook has never heard of is
@@ -105,11 +124,11 @@ esac
 # it also catches `dotnet` (its description lists build/test/restore/format) and `verify` (it runs
 # TOML filter inline tests), neither of which is purely a test verdict. Both simply run unfiltered,
 # which loses some token saving and cannot lose a result, and neither is used by any project here.
-if rtk --help 2>/dev/null | awk -v want="$rtk_dest_sub" '
+if [ -n "$rtk_dest_sub" ] && printf '%s\n' "$rtk_help_text" | awk -v want="$rtk_dest_sub" '
      $1 == want && tolower($0) ~ /test/ { found = 1 }
      END { exit found ? 0 : 1 }
    '; then
-  exit 0
+  return 0
 fi
 
 # NEVER rewrite into a destination MEASURED to report a different verdict than the tool it
@@ -146,9 +165,25 @@ fi
 # dirty tree gave 1 through both the real git and rtk), so it is untouched here and
 # `git diff --quiet` goes on answering. So do `rtk ls`, `rtk git status` and `rtk git log`, all
 # measured to agree in both directions.
+#
+# `cmp` needs no refusal because rtk 0.31.0 does not rewrite it at all, so it always runs raw; the
+# exit fidelity check probes it for the day that changes (claude-config#399).
 case " diff find " in
-  *" $rtk_dest_sub "*) exit 0 ;;
+  *" $rtk_dest_sub "*) return 0 ;;
 esac
+
+return 1
+}
+
+# Every word that is exactly `rtk`, with the two words after it, one invocation per line. Read
+# through a here string rather than a pipe, so a refusal exits the hook and not a subshell.
+rtk_invocations="$(printf '%s\n' "$REWRITTEN" | tr ';&|()`<>{}"'"'" '            ' | awk '
+  { for (i = 1; i <= NF; i++) if ($i == "rtk") print $(i + 1) " " $(i + 2) }
+')"
+while read -r rtk_dest_sub rtk_dest_verb; do
+  [ -n "$rtk_dest_sub" ] || continue
+  if rtk_refused_destination "$rtk_dest_sub" "$rtk_dest_verb"; then exit 0; fi
+done <<< "$rtk_invocations"
 
 # No change: nothing to do.
 if [ "$CMD" = "$REWRITTEN" ]; then

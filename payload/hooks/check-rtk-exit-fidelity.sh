@@ -112,6 +112,16 @@ fi
 PROBES=(
   "diff-differs|diff|plain|fail|diff a.txt b.txt"
   "diff-same|diff|plain|pass|diff a.txt same.txt"
+  # The same comparison as the SECOND part of a compound command (claude-config#399). The hook's
+  # refusals once read only the first word of a rewrite, so `cd x && diff a b` became
+  # `cd x && rtk diff a b` with the diff refusal installed, and a real session was told two
+  # differing files were identical. A probe at the start of a command cannot see that.
+  "diff-after-and|diff|plain|fail|cd . && diff a.txt b.txt"
+  "diff-after-semicolon|diff|plain|fail|true; diff a.txt b.txt"
+  # cmp, the tool a person reaches for when diff's answer is in doubt (claude-config#399). rtk
+  # 0.31.0 does not rewrite it, so it reports as contained today; it is here for the day it does.
+  "cmp-differs|cmp|plain|fail|cmp a.txt b.txt"
+  "cmp-same|cmp|plain|pass|cmp a.txt same.txt"
   "find-missing-path|find|plain|fail|find ./no-such-dir"
   "find-present-path|find|plain|pass|find . -name a.txt"
   "ls-missing-path|ls|plain|fail|ls ./no-such-dir"
@@ -193,11 +203,13 @@ for entry in "${PROBES[@]}"; do
   fi
   # Run the substitution through the SAME rtk this script was pointed at, never whichever one is
   # first on PATH, or the reading would be about a different binary than the one named.
+  # A compound substitution names rtk again past its first word, so the named binary's directory
+  # also goes first on PATH for the run, where those later invocations look it up.
   case "$sub" in
     "rtk "*) sub_cmd="\"$RTK_BIN\" ${sub#rtk }" ;;
     *)       sub_cmd="$sub" ;;
   esac
-  ( cd "$WORK/$dir" && eval "$sub_cmd" ) >/dev/null 2>&1; got=$?
+  ( cd "$WORK/$dir" && PATH="$(dirname "$RTK_BIN"):$PATH" && eval "$sub_cmd" ) >/dev/null 2>&1; got=$?
   compared=$((compared + 1))
   if exits_differ "$real" "$got"; then
     mismatched+=("$id: \`$cmd\` exits $real but the hook substitutes \`$sub\` which exits $got")

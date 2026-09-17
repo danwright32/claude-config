@@ -275,6 +275,90 @@ out_318="$(hook 'git diff --quiet')"
   && check "#318 and rtk git diff, which does carry its exit code, is still rewritten" ok \
   || check "#318 and rtk git diff, which does carry its exit code, is still rewritten" "out=$out_318"
 
+# ---------------------------------------------------------------------------
+# A refused destination ANYWHERE in the command, not only at its start (claude-config#399).
+#
+# On 2026-09-17, with every refusal above already shipped and installed, a diff still went through
+# rtk and printed "[ok] Files are identical" for two files cmp said differ at line 99. The command
+# was `cd ~/claude-config-sync && git show ... > f; diff <(sed ...) ~/.claude/CLAUDE.md | head -20;
+# git log ...`, and rtk rewrote it to `cd ... && rtk git show ...; rtk diff <(sed ...) ... | head
+# -20; rtk git log ...`. The refusals read only the FIRST word of the rewritten command, which was
+# `cd`, so none of them ever saw the `rtk diff` in the middle. Every refusal had the same blind
+# spot, so every shape below is checked for each of them, not only for diff (L30).
+# ---------------------------------------------------------------------------
+check "#399 an rtk diff after cd && is refused" \
+  "$(refused_to_rewrite 'cd /repo && rtk git show origin/main:f > f.md; rtk diff <(sed "s#a#b#g" f.md) g | cat; rtk git log --oneline -3')"
+check "#399 an rtk diff after a semicolon is refused" "$(refused_to_rewrite 'rtk ls; rtk diff a b')"
+check "#399 an rtk diff behind an environment assignment is refused" "$(refused_to_rewrite 'LC_ALL=C rtk diff a b')"
+check "#399 an rtk diff inside a subshell is refused" "$(refused_to_rewrite '(cd /repo && rtk diff a b)')"
+check "#399 an rtk diff inside a command substitution is refused" "$(refused_to_rewrite 'echo "$(rtk diff a b)"')"
+check "#399 an rtk diff after || is refused" "$(refused_to_rewrite 'false || rtk diff a b')"
+check "#399 an rtk read after && is refused" "$(refused_to_rewrite 'cd /repo && rtk read Thing.swift')"
+check "#399 an rtk find after && is refused" "$(refused_to_rewrite 'cd /repo && rtk find ./no-such-dir')"
+check "#399 a test summariser after && is refused" "$(refused_to_rewrite 'cd /repo && rtk pytest -q')"
+check "#399 a test verb after && is refused" "$(refused_to_rewrite 'cd /repo && rtk cargo test')"
+check "#399 a derived test summariser after && is refused" "$(refused_to_rewrite 'cd /repo && rtk newrunner --all')"
+check "#399 a refused destination after a newline is refused" "$(refused_to_rewrite "$(printf 'rtk git status\nrtk diff a b')")"
+
+# The control: the same compound shapes with no refused destination in them are still rewritten,
+# or every refusal above is satisfied by a hook that stopped rewriting compound commands (L159).
+printf 'cd /repo && rtk git status; rtk git log --oneline -3 | cat\n' > "$TMPROOT/rewrite"
+out_399="$(hook 'cd /repo && git status; git log --oneline -3 | cat')"
+[ "$(printf '%s' "$out_399" | rewritten_to)" = "cd /repo && rtk git status; rtk git log --oneline -3 | cat" ] \
+  && check "#399 a compound command with no refused destination is still rewritten" ok \
+  || check "#399 a compound command with no refused destination is still rewritten" "out=$out_399"
+# And a word merely CONTAINING rtk, or the text rtk diff inside a quoted argument that is not a
+# command, does not make the scan refuse on a false match of the bare word.
+printf 'rtk git commit -m artifact-diff\n' > "$TMPROOT/rewrite"
+out_399b="$(hook 'git commit -m artifact-diff')"
+[ -n "$out_399b" ] \
+  && check "#399 a word that merely contains rtk is not read as an rtk invocation" ok \
+  || check "#399 a word that merely contains rtk is not read as an rtk invocation" "it refused"
+
+# ---------------------------------------------------------------------------
+# End to end against the REAL rtk (claude-config#399). Everything above uses a stub, which proves
+# the hook's logic and nothing about what actually runs. So this drives the exact shape that fooled
+# a session through the real hook and the real rtk, RUNS whatever the hook lets through, and asserts
+# the verdict: diff's exit code 1, and no claim that the files are identical.
+#
+# The fixture is two files differing only in whitespace. Measured against rtk 0.31.0 on 2026-09-17,
+# deterministic across repeats: `rtk diff` printed "[ok] Files are identical" and exited 0 for a
+# whitespace only difference, for a trailing space, for a single replaced line, and for the real
+# case of one long markdown line cut in half, while cmp reported each pair different. The earlier
+# report (#318) called the false "identical" intermittent; on these fixtures it is not.
+#
+# The control comes first: the fixture is shown to fool rtk directly, so a green below means the
+# hook kept the comparison away from rtk and not that this rtk happens to get this pair right
+# (L159). CI has no rtk, so there this says so and measures nothing, the same way
+# test-check-rtk-exit-fidelity.sh does (L11).
+# ---------------------------------------------------------------------------
+if ! command -v rtk >/dev/null 2>&1; then
+  echo "note: rtk is not installed on this Mac, so the #399 end to end comparison did not run. Everything above used stubs."
+else
+  FX399="$TMPROOT/fx399"; mkdir -p "$FX399"
+  printf 'first line\nsecond  line with two spaces\nthird line\n' > "$FX399/a.md"
+  printf 'first line\nsecond line with two spaces\nthird line\n' > "$FX399/b.md"
+  if cmp -s "$FX399/a.md" "$FX399/b.md"; then
+    check "#399 the fixture pair really differs" "cmp reads them as identical"
+  else
+    rtk_direct="$(cd "$FX399" && rtk diff a.md b.md 2>&1)"
+    if ! grep -q 'Files are identical' <<< "$rtk_direct"; then
+      echo "note: this rtk ($(rtk --version 2>/dev/null)) no longer calls the #399 fixture identical, so the end to end check below proves less than it did. Output was: $rtk_direct"
+    fi
+    cmd399="cd '$FX399' && diff <(sed -n '1,\$p' a.md) b.md"
+    payload "$cmd399"
+    sub399="$(bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+    ran399="${sub399:-$cmd399}"
+    out399="$(bash -c "$ran399" 2>&1)"; rc399=$?
+    [ "$rc399" -eq 1 ] \
+      && check "#399 the diff that actually runs keeps diff's exit code 1 for differing files" ok \
+      || check "#399 the diff that actually runs keeps diff's exit code 1 for differing files" "ran [$ran399], exited $rc399: $out399"
+    grep -q 'Files are identical' <<< "$out399" \
+      && check "#399 and does not report the differing files as identical" "ran [$ran399]: $out399" \
+      || check "#399 and does not report the differing files as identical" ok
+  fi
+fi
+
 # ---- rtk's integrity baseline still describes the hook beside it (claude-config#259 follow-up) ----
 # rtk keeps a sha256 of this hook in .rtk-hook.sha256 and REFUSES TO RUN AT ALL when the two
 # disagree: no rewriting, no token saving, and a tamper banner on every command. #259 edited the
