@@ -131,7 +131,7 @@ examined="$(grep -i '^tools examined:' <<< "$out" || true)"
 [ -n "$examined" ] \
   && check "the run says which tools its probes examined" ok \
   || check "the run says which tools its probes examined" "no 'tools examined' line in: $out"
-for t in diff find ls git grep curl gh; do
+for t in diff cmp find ls git grep curl gh; do
   grep -q " $t\( \|$\)" <<< "$examined" \
     && check "the probe set reaches $t, whose exit code carries a verdict" ok \
     || check "the probe set reaches $t, whose exit code carries a verdict" "examined=[$examined]"
