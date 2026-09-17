@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 690 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 689 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -174,7 +174,6 @@ apply it, because the body is where the failure it came from is described.
 - L451. A rendered page measurement reads the DOCUMENT MODE too, and a file with no doctype is in quirks mode, so any HTML to be measured must declare one.
 - L684. A `for...of` over a STRING iterates its CHARACTERS and type checks silently, so a collection built by join or split runs the loop once per letter.
 - L686. A read only PREVIEW of a gate must run every predicate the gate runs, derived from it, or its all clear is a prediction about a subset.
-- L687. A check reading a tree a build writes into has a different verdict before and after a build, and CI only ever sees one of the two states.
 - L461. A check reading a tree a build writes into has a different verdict before and after a build, and CI only ever sees one of the two states.
 - L455. Two parameters of the same type are transposable, so a reversed call silently asks a different question: make them distinguishable at the call site.
 - L456. A guard enumerating its subjects from what version control TRACKS cannot see the file being written, which is the one it exists to judge.

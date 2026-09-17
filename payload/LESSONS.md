@@ -2205,22 +2205,6 @@ for reference; L6 was reviewed and deliberately not adopted.
   was fixed, which is why one run of the preview could never have seen both.)
   SHORT: A read only PREVIEW of a gate must run every predicate the gate runs, derived from it, or its all clear is a prediction about a subset.
 
-- **L687. A check that reads a tree a build writes into has TWO verdicts, one before a
-  build and one after, and CI almost never builds before checking, so the state it never
-  sees is the one nothing guards.** Exclude build output by naming your own sources, and
-  where a check legitimately reads a build product, run it in BOTH states before trusting
-  either. The failure is quiet in the worst direction: the automated run stays green while
-  every person who has built recently meets the failure, and what that costs is the check
-  itself, because somebody who meets fifteen thousand problems once stops running it.
-  (paperboi#236, 2026-09-11: `pnpm lint` was clean in CI, which never builds, and reported
-  about 15,000 problems in `.next` and `.open-next` on any machine that had run
-  `pnpm cf:build`, 2,323 of them errors, none in a file anybody wrote. The same afternoon
-  and the same repo, `tsconfig.worker.json` suppressed an import of the generated bundle
-  that errors as TS2307 when absent and TS7016 when present, so the suppression was only
-  ever proved in the unbuilt state CI runs; both states had to be checked by hand, and
-  paperboi#239 exists to check the built one on every push)
-  SHORT: A check reading a tree a build writes into has a different verdict before and after a build, and CI only ever sees one of the two states.
-
 - **L461. A check that reads a tree a build writes into has TWO verdicts, one before a
   build and one after, and CI almost never builds before checking, so the state it never
   sees is the one nothing guards.** Exclude build output by naming your own sources, and
@@ -2236,7 +2220,6 @@ for reference; L6 was reviewed and deliberately not adopted.
   ever proved in the unbuilt state CI runs; both states had to be checked by hand, and
   paperboi#239 exists to check the built one on every push)
   SHORT: A check reading a tree a build writes into has a different verdict before and after a build, and CI only ever sees one of the two states.
-  SHORT: A rendered page measurement reads the DOCUMENT MODE too, and a file with no doctype is in quirks mode, so any HTML to be measured must declare one.
 
 
 
