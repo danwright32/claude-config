@@ -14864,6 +14864,83 @@ check "#300 an entry this Mac deliberately removed is still removed" \
 check "#300 and the one it kept is untouched" \
   "sh_registers '$SHB_R/payload/settings.hooks.json' 'hooks/yankee.sh'"
 
+section "== a merged registration keeps the matcher group it was declared in (claude-config#409) =="
+# merge_hook_blocks kept a registration one side had not seen, which is right, but appended it to
+# the event's FIRST group whatever matcher it came from. On 2026-09-17 a sync from a Mac that had
+# not applied the Playwright gate moved it from its mcp__playwright__ group into the Bash group, so
+# the gate stopped firing for Playwright calls, and the same merge had already folded the Edit and
+# Write groups into Bash on 2026-09-11 (#400). The #300 section above uses ONE matcher throughout,
+# where the first group is always the right one, so it could not see this (L483).
+#
+# Both directions share the merge, so both are driven: the send, which is the incident, and the
+# apply, where this Mac's own unsent registration is the secondary side.
+unset SYNC_NO_GIT
+MGB="$WORK/matchgroup-bare.git"; git init -q --bare "$MGB"
+MGA_R="$WORK/matchgroup-repoA"; git clone -q "$MGB" "$MGA_R" 2>/dev/null
+MGA_H="$WORK/matchgroup-homeA"; mkdir -p "$MGA_H/hooks"
+MGB_R="$WORK/matchgroup-repoB"
+MGB_H="$WORK/matchgroup-homeB"; mkdir -p "$MGB_H/hooks"
+
+mg_settings(){ # mg_settings <home> <matcher=command,command> ...  -> one PreToolUse group per argument
+  local home="$1"; shift
+  python3 - "$home/settings.json" "$@" <<'PY_MG'
+import json, sys
+out, specs = sys.argv[1], sys.argv[2:]
+groups = []
+for spec in specs:
+    matcher, cmds = spec.split("=", 1)
+    groups.append({"matcher": matcher,
+                   "hooks": [{"type": "command", "command": c} for c in cmds.split(",")]})
+json.dump({"hooks": {"PreToolUse": groups}}, open(out, "w"), indent=2)
+PY_MG
+}
+# mg_group_of <settings-or-fragment file> <command> -> the matcher of every group naming it, one per line
+mg_group_of(){
+  jq -r --arg c "$2" '.hooks.PreToolUse[]? | select(any(.hooks[]?; (.command // "") | endswith($c))) | .matcher // "<none>"' "$1" 2>/dev/null
+}
+mg_sync(){ CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1; }
+
+# A publishes the base: one Bash hook.
+mg_settings "$MGA_H" "Bash=__CLAUDE_HOME__/hooks/bashgate.sh"
+printf '#!/usr/bin/env bash\n' > "$MGA_H/hooks/bashgate.sh"
+mg_sync "$MGA_H" "$MGA_R"
+git clone -q "$MGB" "$MGB_R" 2>/dev/null
+CLAUDE_HOME="$MGB_H" SYNC_REPO="$MGB_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#409 B starts from the published base" \
+  "[ \"\$(mg_group_of '$MGB_H/settings.json' 'hooks/bashgate.sh')\" = Bash ]"
+
+# A registers a gate under a DIFFERENT matcher and publishes it. B has not applied it.
+mg_settings "$MGA_H" "Bash=__CLAUDE_HOME__/hooks/bashgate.sh" "mcp__playwright__.*=__CLAUDE_HOME__/hooks/pwgate.sh"
+printf '#!/usr/bin/env bash\n' > "$MGA_H/hooks/pwgate.sh"
+mg_sync "$MGA_H" "$MGA_R"
+MGB_BRANCH="$(git -C "$MGB_R" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+git -C "$MGB_R" pull -q --ff-only origin "$MGB_BRANCH" 2>/dev/null
+check "#409 B's payload holds the gate in its own group before B reconciles" \
+  "[ \"\$(mg_group_of '$MGB_R/payload/settings.hooks.json' 'hooks/pwgate.sh')\" = 'mcp__playwright__.*' ]"
+
+# B reconciles: the send half merges B's config (primary, no gate) with the payload (secondary).
+mg_sync "$MGB_H" "$MGB_R"
+check "#409 the send keeps the gate in its own matcher group, and only there" \
+  "[ \"\$(mg_group_of '$MGB_R/payload/settings.hooks.json' 'hooks/pwgate.sh')\" = 'mcp__playwright__.*' ]"
+check "#409 and the Bash group still holds only its own hook" \
+  "[ \"\$(jq -c '[.hooks.PreToolUse[] | select(.matcher == \"Bash\") | .hooks[].command]' '$MGB_R/payload/settings.hooks.json')\" = '[\"__CLAUDE_HOME__/hooks/bashgate.sh\"]' ]"
+
+# The apply direction. B now has both; B registers its OWN gate under a third matcher and does not
+# send it, then pulls something new from A. What arrives is primary and B's unsent gate is secondary.
+CLAUDE_HOME="$MGB_H" SYNC_REPO="$MGB_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+jq '.hooks.PreToolUse += [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "'"$MGB_H"'/hooks/editgate.sh"}]}]' \
+  "$MGB_H/settings.json" > "$MGB_H/settings.json.new" && mv "$MGB_H/settings.json.new" "$MGB_H/settings.json"
+printf '#!/usr/bin/env bash\n' > "$MGA_H/hooks/extra.sh"
+mg_settings "$MGA_H" "Bash=__CLAUDE_HOME__/hooks/bashgate.sh,__CLAUDE_HOME__/hooks/extra.sh" "mcp__playwright__.*=__CLAUDE_HOME__/hooks/pwgate.sh"
+mg_sync "$MGA_H" "$MGA_R"
+CLAUDE_HOME="$MGB_H" SYNC_REPO="$MGB_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#409 the apply really brought the new registration in" \
+  "[ \"\$(mg_group_of '$MGB_H/settings.json' 'hooks/extra.sh')\" = Bash ]"
+check "#409 the apply keeps this Mac's unsent gate in its own matcher group, and only there" \
+  "[ \"\$(mg_group_of '$MGB_H/settings.json' 'hooks/editgate.sh')\" = 'Edit|Write' ]"
+check "#409 and the arriving gate is still in its own group on this Mac" \
+  "[ \"\$(mg_group_of '$MGB_H/settings.json' 'hooks/pwgate.sh')\" = 'mcp__playwright__.*' ]"
+
 section "== a fixed failure can be cleared, by the command the message names (claude-config#305) =="
 # record_hook_suite_result is written by hook_suite_verdict and by nothing else, and that runs only
 # when an apply actually wrote a file under hooks/. So the record is refreshed by an INCOMING

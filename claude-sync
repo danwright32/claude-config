@@ -2602,6 +2602,15 @@ next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whol
 #
 # Sharing the DATA while copying the code that applies it is not consolidation (L370), so this is
 # the code, and both callers pass their own three arguments to it.
+#
+# A KEPT ENTRY GOES BACK INTO THE GROUP IT WAS DECLARED IN (claude-config#409). A group's matcher
+# decides which tools its hooks fire for, so the scope is part of the registration, not a detail of
+# where it sits. This used to append every kept entry to the event's FIRST group, whatever matcher
+# it came from: on 2026-09-17 a sync from a Mac that had not applied the Playwright gate moved it
+# into the Bash group, where it never fires for a Playwright call, and on 2026-09-11 the same merge
+# had folded the Edit and Write groups into Bash (#400). So each kept entry carries its group's
+# SHAPE, meaning every field of the group except its hooks, and lands in the first primary group
+# of that same shape, or in a new group of that shape when primary has none (L483).
 merge_hook_blocks(){   # $1 primary  $2 secondary  $3 base  -> the merged hooks object, or nothing
   jq -cn --argjson pri "$1" --argjson sec "$2" --argjson bas "$3" '
     def cmds($h): [ $h | to_entries[] | .value[]? | .hooks[]? | .command ];
@@ -2609,13 +2618,17 @@ merge_hook_blocks(){   # $1 primary  $2 secondary  $3 base  -> the merged hooks 
     | cmds($bas) as $basC
     | [ ($sec | to_entries[])
         | .key as $k
-        | [ .value[]? | .hooks[]? | select( ([.command] - $priC - $basC) | length > 0 ) ]
-        | select(length > 0) | {key: $k, keep: .} ] as $keeps
+        | .value[]?
+        | del(.hooks) as $shape
+        | [ .hooks[]? | select( ([.command] - $priC - $basC) | length > 0 ) ]
+        | select(length > 0) | {key: $k, shape: $shape, keep: .} ] as $keeps
     | reduce $keeps[] as $e ($pri;
-          if ((.[$e.key] // []) | length) > 0
-            then .[$e.key] = (.[$e.key] | (.[0].hooks = ((.[0].hooks // []) + $e.keep)))
-            else .[$e.key] = [ {hooks: $e.keep} ]
-          end)
+          (.[$e.key] // []) as $groups
+          | ($groups | map(del(.hooks)) | index($e.shape)) as $at
+          | .[$e.key] = (if $at == null
+                           then $groups + [ $e.shape + {hooks: $e.keep} ]
+                           else $groups | (.[$at].hooks = ((.[$at].hooks // []) + $e.keep))
+                         end))
   ' 2>/dev/null
 }
 
