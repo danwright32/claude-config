@@ -79,7 +79,12 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh"
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__playwright__.*|mcp__plugin_playwright_playwright__.*",
+        "hooks": [
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/playwright-subagent-gate.sh",
@@ -168,6 +173,11 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/sync-stuck-notice.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/project-list-nudge.sh",
             "timeout": 5
           },
@@ -180,11 +190,6 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/free-space-nudge.sh",
             "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/sync-stuck-notice.sh",
-            "timeout": 5
           }
         ]
       }
