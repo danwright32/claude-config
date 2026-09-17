@@ -5253,7 +5253,14 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   # pull announced the same unverified gap on every single run and never closed it. This clone IS
   # the repository those hooks came from and it is on this same Mac, so the runner can re-run them
   # from it and report a real pass or fail instead.
-  SYNC_NO_HOOK_TESTS=1 RUN_ALL_TESTS_CHECKOUT="$SYNC_REPO" bash "$runner" > "$out" 2>&1 &
+  #
+  # And WITHOUT the variables a re-exec exports for itself (claude-config#411). They describe THIS
+  # run, and every suite the runner starts would otherwise read them as describing its own: a
+  # fixture clone's `claude-sync stuck` read this Mac's real record through SYNC_REPO, and a held
+  # lock check saw this run's SYNC_LOCK, so two suites failed after every pull and passed on their
+  # own (L439, L169). The checkout is still handed over, by the one variable meant for it.
+  env -u SYNC_REEXECED -u SYNC_PULL_BASE -u SYNC_REPO -u SYNC_LOCK \
+    SYNC_NO_HOOK_TESTS=1 RUN_ALL_TESTS_CHECKOUT="$SYNC_REPO" bash "$runner" > "$out" 2>&1 &
   pid=$!
   started="$(date +%s)"
   while kill -0 "$pid" 2>/dev/null; do

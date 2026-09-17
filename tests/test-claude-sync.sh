@@ -14399,6 +14399,34 @@ check "#237 the pull tells the runner which checkout to re-run from" \
 # never launched it at all (L100).
 check "#237 and the runner was actually launched" "[ -f '$CKR_SEEN' ]"
 
+section "== the runner a pull starts does not inherit the re-exec's own variables (claude-config#411) =="
+# A pull re-execs claude-sync with SYNC_REEXECED, SYNC_PULL_BASE, SYNC_REPO and SYNC_LOCK exported,
+# and the hook suite it then starts inherited all four. Two suites failed after every pull on
+# 2026-09-17 while passing on their own: a fixture clone's `claude-sync stuck` read the REAL clone's
+# record through the inherited SYNC_REPO, and a held lock check saw the inherited SYNC_LOCK (L439).
+# So the variables are exported here BEFORE the pull, which is the state the runner is started in,
+# and the stub reports what it can see.
+IEV_HOME="$WORK/inheritenv-home"; mkdir -p "$IEV_HOME/hooks"
+echo '{"hooks":{}}' > "$IEV_HOME/settings.json"
+IEV_REPO="$WORK/inheritenv-repo"; mkdir -p "$IEV_REPO/payload/hooks"
+IEV_SEEN="$WORK/inheritenv-seen"
+{ printf '#!/usr/bin/env bash\n'
+  printf 'for v in SYNC_REEXECED SYNC_PULL_BASE SYNC_REPO SYNC_LOCK; do\n'
+  printf '  if [ -n "${!v+set}" ]; then printf "%%s " "$v"; fi\n'
+  printf 'done > "%s"\n' "$IEV_SEEN"
+  printf 'echo "ALL 1 SUITES PASSED"\n'
+  printf 'exit 0\n'; } > "$IEV_REPO/payload/hooks/run-all-tests.sh"
+chmod +x "$IEV_REPO/payload/hooks/run-all-tests.sh"
+printf '# marker\n' > "$IEV_REPO/payload/hooks/iev-marker.sh"
+CLAUDE_HOME="$IEV_HOME" SYNC_REPO="$IEV_REPO" SYNC_NO_GIT=1 \
+  SYNC_REEXECED=1 SYNC_PULL_BASE=0000000 SYNC_LOCK="$WORK/inheritenv.lock" \
+  bash "$SCRIPT" pull >/dev/null 2>&1
+iev_seen="$(cat "$IEV_SEEN" 2>/dev/null || printf '<runner never ran>')"
+dbg "#411 the runner could see: ${iev_seen:-<none of them>}"
+# Launched at all, or the check below is satisfied by a pull that never started the runner (L100).
+check "#411 the pull really launched the runner" "[ -f '$IEV_SEEN' ]"
+check "#411 and the runner sees none of the re-exec's variables" "[ -z \"\$iev_seen\" ]"
+
 section "== status says which automatic jobs this Mac runs, and which of them is gated (#280) =="
 # claude-config#221 gates the automatic receive on CI, and the answer to "is THIS Mac gated" was a
 # plist somebody had to read by hand. Two Macs could sit in different states with nothing able to
