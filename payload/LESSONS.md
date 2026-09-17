@@ -20,7 +20,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   because 6 seconds for two configurations was implausible, which is not a method. The same shape
   makes a cache warm, a table populated, a migration already applied or a file already downloaded
   when the next step believes it is starting clean)
-  SHORT: A command that errored still ran what came before it, so re-establish a timing's cold state rather than assume the failure undid the work.
+  SHORT: A command that failed partway still ran everything before the failure, so re-establish the cold state a timing depends on before measuring.
 
 
 - **L467. A guard that a required call is PRESENT cannot see a SECOND one, so where that call
