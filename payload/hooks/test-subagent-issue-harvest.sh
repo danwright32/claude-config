@@ -2101,6 +2101,229 @@ case "$gone_rec" in
   *)                                     check "#294 a record carries the project key resolved when it was written" "record=$gone_rec" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A clear files only what the review that wrote it had READ (claude-config#381).
+# ---------------------------------------------------------------------------
+# Seen in an Ovation session on 2026-09-14. A review rendered 4 findings out of a pending file
+# holding 326 records. While its picker was open three more subagents finished and the harvest
+# appended their findings to that same file. The clear line the review had written then filed 179
+# records, and the later agents' findings were never shown to anybody: they were recovered only
+# from those agents' final reports.
+#
+# Rename then drain protects a record appended DURING the clear. Nothing protected one appended
+# during the minutes a picker is open, because the clear line named files, and a file is a place
+# records keep arriving in (L285). So the render now writes down WHICH records it read, and the
+# clear files only those, leaving anything later pending for the next review.
+#
+# Driven through the real hook, because the render and the command it writes are the two halves
+# that must agree, and a test that built the command by hand would be a second derivation (L70).
+r381_render() { # r381_render -> prints the findings file the hook wrote, or nothing
+  local out
+  out="$(CLAUDE_PROJECT_DIR="$CLEARK/proj" bash -c 'printf "%s" "$1" | bash "$2" 2>/dev/null' _ "$ck_payload" "$REVIEW")"
+  printf '%s' "$out" | python3 -c '
+import json, re, sys
+try:
+    reason = json.loads(sys.stdin.read()).get("reason") or ""
+except Exception:
+    reason = ""
+m = re.search(r"waiting in (\S+?)\. They", reason)
+print(m.group(1) if m else "")
+'
+}
+r381_cmd_of() { grep 'issue-spool.sh' "$1" 2>/dev/null | tail -1 | sed 's/^ *//'; }
+
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "a finding the review rendered before its picker opened" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+r381_file="$(r381_render)"
+r381_cmd="$(r381_cmd_of "$r381_file")"
+[ -n "$r381_file" ] && [ -f "$r381_file" ] && [ -n "$r381_cmd" ] \
+  && check "#381 the review rendered a findings file with a clear line" ok \
+  || check "#381 the review rendered a findings file with a clear line" "file=${r381_file:-<none>} cmd=${r381_cmd:-<none>}"
+
+# THE LATE ARRIVAL: the same session, the same key, after the render and before the clear. That is
+# exactly the Ovation shape, and it is what makes this hard, because nothing about the record
+# itself says it was not shown.
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "a finding harvested while the picker was open" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+# Preconditions, in the same fixture, or everything below is satisfied by a record that never
+# reached the key the review read, or by one the review did show (L159).
+r381_pre="$(bash "$SPOOL_LIB" raw "$CLEARK/proj" "$CLEAR_TRANSCRIPT" 2>/dev/null)"
+contains "while the picker was open" "$r381_pre" \
+  && check "#381 the late finding is pending under the key the review read" ok \
+  || check "#381 the late finding is pending under the key the review read" "pending=${r381_pre:0:300}"
+contains "while the picker was open" "$(cat "$r381_file" 2>/dev/null)" \
+  && check "#381 and the review really never showed it" "the findings file carries it" \
+  || check "#381 and the review really never showed it" ok
+
+r381_said="$(eval "$r381_cmd" 2>&1)"
+r381_rc=$?
+r381_arch="$(bash "$SPOOL_LIB" archive "$CLEARK/proj" "$CLEAR_TRANSCRIPT" 2>/dev/null)"
+r381_left="$(bash "$SPOOL_LIB" raw "$CLEARK/proj" "$CLEAR_TRANSCRIPT" 2>/dev/null)"
+[ "$r381_rc" -eq 0 ] \
+  && check "#381 the rendered clear line succeeds" ok \
+  || check "#381 the rendered clear line succeeds" "exit $r381_rc said=${r381_said:0:400}"
+contains "before its picker opened" "$r381_arch" \
+  && check "#381 it files the finding the review showed" ok \
+  || check "#381 it files the finding the review showed" "archive=${r381_arch:0:300} said=${r381_said:0:300}"
+contains "while the picker was open" "$r381_arch" \
+  && check "#381 and does NOT file the one harvested after the render" "it was filed unread" \
+  || check "#381 and does NOT file the one harvested after the render" ok
+contains "while the picker was open" "$r381_left" \
+  && check "#381 which is still pending for the next review" ok \
+  || check "#381 which is still pending for the next review" "pending=${r381_left:0:300}"
+# It SAYS so, with a count, because a clear that left something behind and one that filed
+# everything must not read alike, and the one it left is the fact that explains the next review.
+case "$r381_said" in
+  *"left 1 record(s)"*"after the review"*) check "#381 and the clear says it left one for the next review" ok ;;
+  *) check "#381 and the clear says it left one for the next review" "said=${r381_said:0:500}" ;;
+esac
+# And it does not tell the reader the command was given the wrong key, which is the advice for a
+# different fault and would send them to re-run the line they just ran (L111).
+contains "run the line the findings file names" "$r381_said" \
+  && check "#381 and does not blame the key" "said=${r381_said:0:500}" \
+  || check "#381 and does not blame the key" ok
+# The NEXT review shows the late finding, which is the whole point of leaving it.
+r381_next="$(bash "$SPOOL_LIB" pending "$CLEARK/proj" "$CLEAR_TRANSCRIPT" 2>/dev/null)"
+contains "while the picker was open" "$r381_next" \
+  && check "#381 and the next review shows it" ok \
+  || check "#381 and the next review shows it" "pending=${r381_next:0:300}"
+
+# --- the stamp cannot be read: NOTHING is filed ---------------------------------------------------
+# Falling back to filing every record would be the defect itself, so a missing or damaged record of
+# what was read is a refusal, loud, with the findings left to come back (L173, L320).
+R381_A="$TMPROOT/r381-a.jsonl"; : > "$R381_A"
+R381_B="$TMPROOT/r381-b.jsonl"; : > "$R381_B"
+R381_M="$TMPROOT/r381.manifest"
+# The third damage keeps a good header over a body that cannot be decoded, so it gets past the
+# header check and fails INSIDE the split, which is the other place a fallback could file everything.
+for r381_damage in missing garbage undecodable; do
+  reset_spool
+  mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+  rm -f "$R381_M"
+  bash "$SPOOL_LIB" note "$REPO" "a finding whose stamp is $r381_damage" tester "$R381_A" >/dev/null 2>&1
+  bash "$SPOOL_LIB" pending "$REPO" "$R381_A" "$R381_M" >/dev/null 2>&1
+  [ -s "$R381_M" ] \
+    && check "#381 ($r381_damage) the render wrote its stamp to begin with" ok \
+    || check "#381 ($r381_damage) the render wrote its stamp to begin with" "nothing at $R381_M"
+  case "$r381_damage" in
+    missing) rm -f "$R381_M" ;;
+    garbage) printf 'not a stamp\n' > "$R381_M" ;;
+    undecodable) printf '\xff\xfe\x00 not text\n' >> "$R381_M" ;;
+  esac
+  r381_bad="$(bash "$SPOOL_LIB" clear "$REPO" "$R381_A" "$R381_M" 2>&1)"
+  r381_bad_rc=$?
+  [ "$r381_bad_rc" -ne 0 ] \
+    && check "#381 ($r381_damage) a clear whose stamp cannot be read fails" ok \
+    || check "#381 ($r381_damage) a clear whose stamp cannot be read fails" "exit 0, said=${r381_bad:0:300}"
+  contains "NOTHING was filed" "$r381_bad" \
+    && check "#381 ($r381_damage) and says nothing was filed" ok \
+    || check "#381 ($r381_damage) and says nothing was filed" "said=${r381_bad:0:300}"
+  contains "whose stamp is $r381_damage" "$(bash "$SPOOL_LIB" archive "$REPO" "$R381_A" 2>/dev/null)" \
+    && check "#381 ($r381_damage) and really filed nothing" "the finding was archived" \
+    || check "#381 ($r381_damage) and really filed nothing" ok
+  contains "whose stamp is $r381_damage" "$(bash "$SPOOL_LIB" raw "$REPO" "$R381_A" 2>/dev/null)" \
+    && check "#381 ($r381_damage) and the finding is still pending" ok \
+    || check "#381 ($r381_damage) and the finding is still pending" "it is gone from the spool"
+done
+
+# --- another session's record: seen if it was rendered, untouched if it arrived later -----------
+# A clear marks the other session's records it had to leave as SEEN by this one (#322), so they are
+# not shown here again. A record that arrived after the render was never shown, so marking it would
+# hide a finding from this session that it has never seen, which is this issue in a different coat.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$REPO" "session A's own rendered finding" tester "$R381_A" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "session B's finding that A's review rendered" tester "$R381_B" >/dev/null 2>&1
+bash "$SPOOL_LIB" pending "$REPO" "$R381_A" "$R381_M" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "session B's finding that arrived after A's render" tester "$R381_B" >/dev/null 2>&1
+bash "$SPOOL_LIB" clear "$REPO" "$R381_A" "$R381_M" >/dev/null 2>&1
+r381_again="$(bash "$SPOOL_LIB" pending "$REPO" "$R381_A" 2>/dev/null)"
+contains "arrived after A's render" "$r381_again" \
+  && check "#381 another session's late finding is still shown to this session" ok \
+  || check "#381 another session's late finding is still shown to this session" "pending=${r381_again:0:400}"
+# The control in the same fixture: the one A's review did render is still settled for A (L159).
+contains "that A's review rendered" "$r381_again" \
+  && check "#381 while the one it rendered is still marked seen" "it came back: ${r381_again:0:400}" \
+  || check "#381 while the one it rendered is still marked seen" ok
+r381_bown="$(bash "$SPOOL_LIB" pending "$REPO" "$R381_B" 2>/dev/null)"
+case "$r381_bown" in
+  *"that A's review rendered"*"arrived after A's render"*) check "#381 and both are still B's to settle" ok ;;
+  *) check "#381 and both are still B's to settle" "pending=${r381_bown:0:400}" ;;
+esac
+
+# --- already filed between render and clear --------------------------------------------------------
+# Another clear got there first. What was read is gone, what arrived since stays, and that is not a
+# failure (L11): exit 0, and no claim that the command was given the wrong key.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$REPO" "a finding somebody else filed first" tester "$R381_A" >/dev/null 2>&1
+bash "$SPOOL_LIB" pending "$REPO" "$R381_A" "$R381_M" >/dev/null 2>&1
+bash "$SPOOL_LIB" clear "$REPO" "$R381_A" >/dev/null 2>&1
+bash "$SPOOL_LIB" note "$REPO" "a finding that came after both" tester "$R381_A" >/dev/null 2>&1
+r381_twice="$(bash "$SPOOL_LIB" clear "$REPO" "$R381_A" "$R381_M" 2>&1)"
+r381_twice_rc=$?
+[ "$r381_twice_rc" -eq 0 ] \
+  && check "#381 a clear whose records were already filed is not a failure" ok \
+  || check "#381 a clear whose records were already filed is not a failure" "exit $r381_twice_rc said=${r381_twice:0:300}"
+contains "came after both" "$(bash "$SPOOL_LIB" raw "$REPO" "$R381_A" 2>/dev/null)" \
+  && check "#381 and the later finding is still pending" ok \
+  || check "#381 and the later finding is still pending" "said=${r381_twice:0:300}"
+contains "run the line the findings file names" "$r381_twice" \
+  && check "#381 and it does not blame the key" "said=${r381_twice:0:400}" \
+  || check "#381 and it does not blame the key" ok
+
+# --- the pending file is renamed away mid clear -----------------------------------------------------
+# The seam rename then drain was tested with still holds with a stamp: an append during the clear
+# lands in a fresh file and is neither filed nor lost, while the rendered record is filed.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$REPO" "a finding rendered before a mid clear append" tester "$R381_A" >/dev/null 2>&1
+bash "$SPOOL_LIB" pending "$REPO" "$R381_A" "$R381_M" >/dev/null 2>&1
+CLAUDE_ISSUE_SPOOL_MIDCLEAR="bash '$SPOOL_LIB' note '$REPO' 'arrived during the stamped clear' tester '$R381_A' >/dev/null 2>&1" \
+  bash "$SPOOL_LIB" clear "$REPO" "$R381_A" "$R381_M" >/dev/null 2>&1
+contains "arrived during the stamped clear" "$(bash "$SPOOL_LIB" raw "$REPO" "$R381_A" 2>/dev/null)" \
+  && check "#381 a record appended during a stamped clear survives it" ok \
+  || check "#381 a record appended during a stamped clear survives it" "it is gone"
+r381_mid_arch="$(bash "$SPOOL_LIB" archive "$REPO" "$R381_A" 2>/dev/null)"
+contains "before a mid clear append" "$r381_mid_arch" \
+  && check "#381 and the rendered one is filed" ok \
+  || check "#381 and the rendered one is filed" "archive=${r381_mid_arch:0:300}"
+
+# --- nothing shown, no stamp -----------------------------------------------------------------------
+# A stamp is only written for a render that showed something, since only such a render gets a clear
+# line; one left behind by an empty read would be a record of nothing.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+rm -f "$R381_M"
+bash "$SPOOL_LIB" pending "$REPO" "$R381_A" "$R381_M" >/dev/null 2>&1
+[ -e "$R381_M" ] \
+  && check "#381 an empty render writes no stamp" "found $R381_M" \
+  || check "#381 an empty render writes no stamp" ok
+
+# --- the hook cannot put its stamp in place: it writes no clear line --------------------------------
+# A clear line without a stamp would be the old command that files everything, so the hook says the
+# findings cannot be filed from this review instead, and they come back at the next one. Forced by
+# putting a directory where the stamp has to go.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+bash "$SPOOL_LIB" note "$CLEARK/agentdir" "a finding whose review could not stamp it" tester "$CLEAR_TRANSCRIPT" >/dev/null 2>&1
+r381_hash="$(printf '%s' "$CLEARK/proj" | shasum | cut -c1-12)"
+r381_blocker="${TMPDIR%/}/claude-issue-findings-${r381_hash}.clear-session.manifest"
+rm -f "$r381_blocker"; mkdir -p "$r381_blocker"
+r381_nofile="$(r381_render)"
+r381_nocmd="$(r381_cmd_of "$r381_nofile")"
+rm -rf "$r381_blocker"
+[ -n "$r381_nofile" ] && [ -f "$r381_nofile" ] \
+  && check "#381 the review still delivers its findings when the stamp cannot be placed" ok \
+  || check "#381 the review still delivers its findings when the stamp cannot be placed" "no findings file"
+case "$r381_nocmd" in
+  *" clear "*) check "#381 and writes no clear line that would file without a stamp" "line=$r381_nocmd" ;;
+  *)           check "#381 and writes no clear line that would file without a stamp" ok ;;
+esac
+contains "cannot be filed from this review" "$(cat "$r381_nofile" 2>/dev/null)" \
+  && check "#381 and says why there is nothing to run" ok \
+  || check "#381 and says why there is nothing to run" "file=$(tail -3 "$r381_nofile" 2>/dev/null)"
+
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

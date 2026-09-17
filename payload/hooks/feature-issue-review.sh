@@ -50,8 +50,16 @@ SPOOL_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/issue-spool.sh"
 # and the review would simply stop happening, with nothing anywhere to say why.
 pending=""
 urgent="no"
+# WHICH RECORDS THIS RENDER READ go to a stamp file, written by the same read that produces
+# `pending` (claude-config#381). The clear line written below names it, and files only those records,
+# so anything a finishing agent appends while the picker is open stays pending for the next review.
+# It starts in a throwaway file and is moved into place only when a clear line is actually written,
+# because this hook can still exit on its cooldown after rendering, and a stamp left where a clear
+# line points would describe a render nobody was shown.
+render_stamp="$(mktemp "${TMPDIR:-/tmp}/claude-issue-stamp.XXXXXX" 2>/dev/null)" || render_stamp=""
+trap 'rm -f ${render_stamp:+"$render_stamp"}' EXIT
 if [ -f "$SPOOL_LIB" ]; then
-  pending=$(bash "$SPOOL_LIB" pending "$proj" "$transcript" 2>/dev/null) || pending=""
+  pending=$(bash "$SPOOL_LIB" pending "$proj" "$transcript" "$render_stamp" 2>/dev/null) || pending=""
   # Only a real FINDING earns the cooldown bypass. A harvest that FAILED is
   # reported whenever the review next speaks, but does not itself make it speak:
   # a recurring failure keeps the spool permanently non-empty, which would fire
@@ -154,9 +162,26 @@ if [ -n "$pending" ]; then
   # (L70, L285), and it is the same drift this design already recorded once, on the writing side.
   #
   # Quoted with %q, so a path holding a space is still one argument when the line is run verbatim.
+  #
+  # AND THE STAMP, as its third argument (claude-config#381). Named per SESSION, not per project like
+  # the findings file: two sessions in one project each have a picker open at times, and one render
+  # overwriting the other's stamp would hand the first clear a record of records it never showed.
+  #
+  # When the stamp cannot be put in place there is deliberately NO clear line. A line without one is
+  # the old command, which files every record under the key including any harvested while the picker
+  # is open, so the honest answer is that these cannot be filed from this review and will come back
+  # at the next one (L173, L11).
   if [ -n "$findings_file" ]; then
-    printf '\nTO FILE THESE, run this line exactly as it stands:\n  bash %q clear %q %q\n' \
-      "$SELF_DIR/lib/issue-spool.sh" "$proj" "$transcript" >> "$findings_file" 2>/dev/null || true
+    stamp_file="${findings_file%.txt}.$(basename "$transcript" .jsonl).manifest"
+    if [ -n "$render_stamp" ] && [ -s "$render_stamp" ] \
+        && mv -f "$render_stamp" "$stamp_file" 2>/dev/null && [ -f "$stamp_file" ]; then
+      render_stamp=""
+      printf '\nTO FILE THESE, run this line exactly as it stands:\n  bash %q clear %q %q %q\n' \
+        "$SELF_DIR/lib/issue-spool.sh" "$proj" "$transcript" "$stamp_file" >> "$findings_file" 2>/dev/null || true
+    else
+      printf '\nTHESE cannot be filed from this review: the record of which spool records it read could not be written, and filing without it would also file anything harvested while the picker is open. There is nothing to run; they stay pending and come back at the next review.\n' \
+        >> "$findings_file" 2>/dev/null || true
+    fi
   fi
 fi
 

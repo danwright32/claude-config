@@ -79,6 +79,9 @@ needs=(
   "SECOND PASS"                              # the reflection folds in here
   "TO FILE THESE"                            # the clear command the render wrote (#287)
   "Run that line, verbatim"                  # and it is run as it stands, not reconstructed
+  "do NOT drop any of its arguments"         # its last one is the stamp of what was read (#381)
+  "THESE cannot be filed from this review"   # a render with no stamp has nothing to run (#381)
+  "harvested after the review was rendered"  # and a clear that left late arrivals needs nothing (#381)
 )
 # --- and the wording it must NOT carry any more ---------------------------
 # The rule that ad hoc filing may never open a milestone was REVERSED on 2026-09-02,
