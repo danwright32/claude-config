@@ -532,6 +532,212 @@ esac
 rm -rf "$dir"
 unset GH_CALL_LOG
 
+echo "block-red-merge: each check is judged by its NEWEST run on the head commit (#382)"
+
+# The rollup lists EVERY run of a check on the head commit, not only the latest. On ovation PR 312
+# "Closing keywords GitHub reads" failed on the original description and passed once it was edited,
+# both on one head, and the gate refused the merge as not green, so the only way through was a new
+# commit. A superseded run is not the verdict on that commit (L179).
+#
+# The shape is the real one: gh reports __typename, workflowName, name, status, conclusion and
+# startedAt on a check run. Each pair below is written in BOTH orders, because on real pull requests
+# (ovation 305, 310, 311, read 2026-09-17) the array put the newer run first as often as last, so a
+# gate reading position would pass one order and fail the other.
+#
+# A refusal alone proves nothing here: a fixture gh cannot parse is refused too, as "gh returned
+# nothing", which happened twice while these were written (L140). So each red case asserts the
+# refusal is the green gate's own.
+refused_red() { denied "$1" && holds "$1" "is not green: "; }
+T1='2026-09-14T17:20:00Z'
+T2='2026-09-14T17:28:36Z'
+run_json() {  # $1 = workflow, $2 = name, $3 = status, $4 = conclusion, $5 = startedAt
+  printf '{"__typename":"CheckRun","workflowName":"%s","name":"%s","status":"%s","conclusion":"%s","startedAt":"%s"}' \
+    "$1" "$2" "$3" "$4" "$5"
+}
+rollup_of() {  # the runs, as arguments ; prints a rollup for PR 7 at HEAD_SHA
+  local IFS=,
+  printf '{"number":7,"statusCheckRollup":[%s],"headRefOid":"%s"}' "$*" "$HEAD_SHA"
+}
+SUITE_GREEN=$(run_json CI suite COMPLETED SUCCESS "$T1")
+KW_OLD_FAIL=$(run_json "Pull request description" "Closing keywords GitHub reads" COMPLETED FAILURE "$T1")
+KW_NEW_PASS=$(run_json "Pull request description" "Closing keywords GitHub reads" COMPLETED SUCCESS "$T2")
+KW_OLD_PASS=$(run_json "Pull request description" "Closing keywords GitHub reads" COMPLETED SUCCESS "$T1")
+KW_NEW_FAIL=$(run_json "Pull request description" "Closing keywords GitHub reads" COMPLETED FAILURE "$T2")
+
+# 1. A failed run superseded by a pass on the same head is green, whichever order gh lists them in.
+for order in "$KW_OLD_FAIL,$KW_NEW_PASS" "$KW_NEW_PASS,$KW_OLD_FAIL"; do
+  dir=$(make_repo without-tool "$(rollup_of "$SUITE_GREEN" "$order")")
+  out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+  if denied "$out"; then
+    fail "a failed run superseded by a passing run of the same check was counted against the merge: $out"
+  else pass; fi
+  rm -rf "$dir"
+done
+
+# 2. The positive control in the same shape: a pass superseded by a FAILURE is red, in both orders,
+#    and in the green gate's own words. Without this, the case above is satisfied by a gate that
+#    stopped reading failures at all (L159).
+for order in "$KW_OLD_PASS,$KW_NEW_FAIL" "$KW_NEW_FAIL,$KW_OLD_PASS"; do
+  dir=$(make_repo without-tool "$(rollup_of "$SUITE_GREEN" "$order")")
+  out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+  if refused_red "$out"; then pass; else
+    fail "a check whose NEWEST run failed was allowed because an older run had passed: $out"
+  fi
+  if holds "$out" "Closing keywords GitHub reads=FAILURE"; then pass; else
+    fail "the refusal does not name the check whose newest run failed: $out"
+  fi
+  rm -rf "$dir"
+done
+
+# 3. The newest run still going is not green, even over an older pass. It has a start time, so it
+#    sorts newest.
+dir=$(make_repo without-tool "$(rollup_of "$SUITE_GREEN" "$KW_OLD_PASS" \
+  "$(run_json "Pull request description" "Closing keywords GitHub reads" IN_PROGRESS "" "$T2")")")
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+if refused_red "$out"; then pass; else
+  fail "a check whose newest run is still in progress was read as green from an older pass: $out"
+fi
+if holds "$out" "Closing keywords GitHub reads=PENDING"; then pass; else
+  fail "the refusal does not say the newest run is pending: $out"
+fi
+rm -rf "$dir"
+
+# 4. A QUEUED run has not started, and gh writes its missing start time as the zero time, which
+#    sorts OLDEST. Ordered naively, the older pass would answer for a run nobody has seen finish.
+dir=$(make_repo without-tool "$(rollup_of "$SUITE_GREEN" "$KW_OLD_PASS" \
+  "$(run_json "Pull request description" "Closing keywords GitHub reads" QUEUED "" "0001-01-01T00:00:00Z")")")
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+if refused_red "$out"; then pass; else
+  fail "a queued rerun with no start time was outranked by an older pass: $out"
+fi
+rm -rf "$dir"
+
+# 5. Two workflows can each carry a job of the same name. Those are two checks, not two runs of one,
+#    so a newer pass in one workflow must not answer for a failure in the other.
+dir=$(make_repo without-tool "$(rollup_of \
+  "$(run_json lint test COMPLETED FAILURE "$T1")" "$(run_json unit test COMPLETED SUCCESS "$T2")")")
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+if refused_red "$out"; then pass; else
+  fail "a failing job was hidden by a newer job of the same name in a DIFFERENT workflow: $out"
+fi
+rm -rf "$dir"
+
+# 6. Runs that cannot be put in order say nothing about which is newest, so every run counts, as it
+#    did before. A superseding pass nobody can date is not allowed to clear a failure.
+dir=$(make_repo without-tool "$(rollup_of \
+  '{"name":"tests","conclusion":"FAILURE"}' '{"name":"tests","conclusion":"SUCCESS"}')")
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+if refused_red "$out"; then pass; else
+  fail "an undated pass was taken as superseding an undated failure: $out"
+fi
+rm -rf "$dir"
+#    And where only SOME runs are dated. Picking the newest of the dated ones would hide the undated
+#    failure, which is the case the rule above exists for: when both are undated, taking every run
+#    tied on "no date" happens to give the same answer, so that pair alone could not see it removed.
+dated_pass=$(printf '{"name":"tests","conclusion":"SUCCESS","startedAt":"%s"}' "$T2")
+dir=$(make_repo without-tool "$(rollup_of '{"name":"tests","conclusion":"FAILURE"}' "$dated_pass")")
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+if refused_red "$out"; then pass; else
+  fail "a dated pass was taken as superseding a failure nobody could date: $out"
+fi
+# Refused by the GREEN gate, not by a fixture gh could not parse, which is also a refusal (L140).
+if holds "$out" "tests=FAILURE"; then pass; else
+  fail "the undated failure was not the reason for the refusal: $out"
+fi
+rm -rf "$dir"
+
+#    The zero time is gh's spelling of "no start time", so it is undated too, not the oldest date
+#    there is. A finished failure carrying it must not be outranked by a dated pass.
+zero_fail=$(run_json CI suite COMPLETED FAILURE "0001-01-01T00:00:00Z")
+dir=$(make_repo without-tool "$(rollup_of "$zero_fail" "$(run_json CI suite COMPLETED SUCCESS "$T2")")")
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+if refused_red "$out"; then pass; else
+  fail "a failure whose start time was gh's zero time was treated as the oldest run: $out"
+fi
+rm -rf "$dir"
+
+#    Two runs started in the same second cannot be told apart by their start, so both count, in
+#    both orders, and a failure is never hidden behind a pass that merely sorted after it.
+for order in "$(run_json CI suite COMPLETED FAILURE "$T2"),$(run_json CI suite COMPLETED SUCCESS "$T2")" \
+             "$(run_json CI suite COMPLETED SUCCESS "$T2"),$(run_json CI suite COMPLETED FAILURE "$T2")"; do
+  dir=$(make_repo without-tool "$(rollup_of "$order")")
+  out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+  if refused_red "$out"; then pass; else
+    fail "a failure started in the same second as a pass was hidden by it: $out"
+  fi
+  rm -rf "$dir"
+done
+
+# 6b. A run still going counts whenever it started. One that started BEFORE a pass finished is not
+#     superseded by it (two events can each start a run of one check on one head, and the newest
+#     start is not proof the older run will pass), so the check stays pending until it ends.
+dir=$(make_repo without-tool "$(rollup_of \
+  "$(run_json CI suite IN_PROGRESS "" "$T1")" "$(run_json CI suite COMPLETED SUCCESS "$T2")")")
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+if refused_red "$out"; then pass; else
+  fail "a run still in progress was hidden by a pass that started after it: $out"
+fi
+rm -rf "$dir"
+
+# 7. A commit status (the older API) carries context and state, and gh dates it too. Its newest
+#    report is the verdict in the same way.
+#    The runs are built in variables first: escaped quotes inside a command substitution nested in
+#    another one are parsed differently by different bash versions, and the fixture arrived as JSON
+#    that would not parse, which the gate correctly refused for a reason unrelated to this case.
+legacy_old=$(printf '{"__typename":"StatusContext","context":"ci/legacy","state":"FAILURE","startedAt":"%s"}' "$T1")
+legacy_new=$(printf '{"__typename":"StatusContext","context":"ci/legacy","state":"SUCCESS","startedAt":"%s"}' "$T2")
+dir=$(make_repo without-tool "$(rollup_of "$legacy_old" "$legacy_new")")
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")
+if denied "$out"; then
+  fail "a commit status whose newest report passed was refused on an older one: $out"
+else pass; fi
+rm -rf "$dir"
+
+echo "block-red-merge: the pin goes on the gh invocation, not after a pipe (#382)"
+
+# The refusal used to build its suggestion as the whole command plus the flag, so a piped merge came
+# back as `... 2>&1 | cat --match-head-commit <sha>`. Run as printed, the flag went to cat, the merge
+# was not pinned, and the gate's own reading of the pin accepted it, so nothing said so.
+reason_of() {  # $1 = hook output ; prints the refusal text with JSON escaping undone
+  printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null
+}
+dir=$(make_repo without-tool "$GREEN")
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  given="${line%% => *}"
+  expected="${line#* => }"
+  expected="${expected//SHA/$HEAD_SHA}"
+  out=$(reason_of "$(run_hook "$dir" "$given")")
+  if holds "$out" "Run: $expected . "; then pass; else
+    fail "the pinned suggestion for [$given] is not [$expected]: $out"
+  fi
+done <<'CASES'
+gh pr merge 7 --squash --delete-branch 2>&1 | cat => gh pr merge 7 --squash --delete-branch --match-head-commit SHA 2>&1 | cat
+gh pr merge 7 --squash && echo merged => gh pr merge 7 --squash --match-head-commit SHA && echo merged
+gh pr merge 7 --squash; echo done => gh pr merge 7 --squash --match-head-commit SHA; echo done
+echo start && gh pr merge 7 --squash | tail -1 => echo start && gh pr merge 7 --squash --match-head-commit SHA | tail -1
+gh pr merge 7 --squash => gh pr merge 7 --squash --match-head-commit SHA
+gh pr merge 7 --squash --body "a | b; c" | cat => gh pr merge 7 --squash --body "a | b; c" --match-head-commit SHA | cat
+CASES
+
+# And the suggestion's own mistake is refused when somebody runs it: a pin after the pipe is handed
+# to cat, so the merge is unpinned, and the gate reading the flag anywhere in the line is what let
+# that through in silence. The pin counts only on the gh invocation itself.
+out=$(run_hook "$dir" "gh pr merge 7 --squash 2>&1 | cat --match-head-commit $HEAD_SHA")
+if denied "$out"; then pass; else
+  fail "a pin handed to the command after the pipe was accepted as pinning the merge: $out"
+fi
+out=$(run_hook "$dir" "gh pr merge 7 --squash && echo --match-head-commit $HEAD_SHA")
+if denied "$out"; then pass; else
+  fail "a pin written into a later command was accepted as pinning the merge: $out"
+fi
+# The control: the same pipe with the pin where it belongs still merges (L159).
+out=$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA 2>&1 | cat")
+if denied "$out"; then
+  fail "a piped merge pinned on the gh invocation was refused: $out"
+else pass; fi
+rm -rf "$dir"
+
 # A command that merely TALKS about merging is not a merge. This gate is a PreToolUse
 # DENY, so a false positive refuses the WHOLE command and nothing in it runs: on
 # 2026-09-10 a heredoc writing an issue body about merge tooling was refused with a

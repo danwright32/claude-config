@@ -37,6 +37,21 @@ if mt_is_pr_merge "cd /tmp && $MERGE 7"; then pass; else fail "a merge behind a 
 if mt_is_pr_merge "gh pr view 7"; then fail "gh pr view was read as a merge"; else pass; fi
 if mt_is_pr_merge ""; then fail "an empty command was read as a merge"; else pass; fi
 
+# A merge FOLLOWED by other commands is still a merge. The matcher piped the segment heads into
+# `grep -q`, which leaves on the first match, so the writer still holding the later segments died of
+# SIGPIPE and, under the pipefail every gate runs with, the whole answer became "not a merge" and
+# both gates stepped aside (L183). Found 2026-09-17 while testing #382: `<merge> && echo merged` was
+# let through by block-red-merge.sh on most runs. Many trailing segments make the writer reliably
+# still busy when the reader leaves, so this fails every time rather than some of the time.
+trailing=""
+for _ in $(seq 1 400); do trailing="$trailing && echo x"; done
+if mt_is_pr_merge "$MERGE 7 --squash$trailing"; then pass; else
+  fail "a merge followed by other commands was not recognised, so every gate stepped aside"
+fi
+if mt_is_pr_merge "$MERGE 7 --squash && echo merged"; then pass; else
+  fail "a merge followed by one echo was not recognised"
+fi
+
 echo "merge-target: a command, not its payload (claude-config#349)"
 
 # The matcher used to test the whole command string for the phrase, with no command
