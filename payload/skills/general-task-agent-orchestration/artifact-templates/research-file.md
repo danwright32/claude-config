@@ -65,7 +65,7 @@ Based on research, the recommended approach for this domain is:
 
 | Tool/Service | Surface | Purpose | Setup Required | Agent Can Self-Configure? |
 |-------------|---------|---------|----------------|---------------------------|
-| <Tool> | <Surface> | <Why needed> | <API key / config> | Yes (Playwright/Peekaboo) / No (user) |
+| <Tool> | <Surface> | <Why needed> | <API key / config> | Yes (Claude in Chrome/Peekaboo) / No (user) |
 
 ### Verification Strategy
 
@@ -80,7 +80,7 @@ Based on research, the recommended approach for this domain is:
 | Action | Who | How | Status |
 |--------|-----|-----|--------|
 | <Get API key> | User | <Instructions> | Pending |
-| <Configure webhook> | Agent (Playwright) | <Steps> | Pending |
+| <Configure webhook> | Agent (Claude in Chrome) | <Steps> | Pending |
 ```
 
 ---
@@ -92,5 +92,5 @@ Based on research, the recommended approach for this domain is:
 - **Distinguish facts from opinions** - clearly label recommendations vs findings
 - **Second wave focuses on execution** - how to accomplish it, not what to accomplish
 - **Include verification angles** - how to confirm deliverables are correct on each surface
-- **Flag human-required actions** - what can the agent do via Playwright/Peekaboo vs what truly needs the user
+- **Flag human-required actions** - what can the agent do via Claude in Chrome/Peekaboo vs what truly needs the user
 - **Tag target surfaces** - note which execution surfaces this research domain touches

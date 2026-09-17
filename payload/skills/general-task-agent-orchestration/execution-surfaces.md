@@ -8,22 +8,23 @@ This document defines the six execution surfaces available to orchestration agen
 
 ### 1. Browser (Web)
 
-**Primary Tool:** Playwright MCP
+**Primary Tool:** WebFetch (reading) and Claude in Chrome (interaction)
 **Use For:** Web applications, online dashboards, SaaS platforms, web-based forms, content management systems, social media platforms, cloud consoles
 
-**Key Operations:**
-- `browser_navigate` - Open URLs
-- `browser_click` - Click elements
-- `browser_fill_form` - Fill input fields
-- `browser_snapshot` - Capture page state (accessibility tree)
-- `browser_take_screenshot` - Visual capture for evidence
-- `browser_evaluate` - Run JavaScript for complex interactions
-- `browser_file_upload` - Upload files to web forms
-- `browser_select_option` - Dropdown selections
-- `browser_press_key` - Keyboard actions
-- `browser_wait_for` - Wait for elements/conditions
+**Not Playwright MCP:** Execution agents are subagents, and Playwright MCP is one browser shared by the whole session, so a parallel agent can navigate the page another is reading; a hook refuses every Playwright call from a subagent. Browser work that truly needs Playwright stays in the main session.
 
-**Verification Method:** `browser_snapshot` + content assertion. Take a snapshot, check for expected elements/text. Screenshot for visual evidence.
+**Key Operations:**
+- `WebFetch` - Read a public page's content when no login or interaction is needed
+- `tabs_create_mcp` - Open a tab of your own first, and pass its tab id on every later call
+- `navigate` - Open URLs in that tab
+- `find` / `read_page` - Locate elements (accessibility tree)
+- `computer` - Click, type, press keys, scroll, wait, screenshot
+- `form_input` - Fill input fields and dropdown selections
+- `get_page_text` - Read the rendered page text
+- `javascript_tool` - Run JavaScript for complex interactions
+- `file_upload` - Upload files to web forms
+
+**Verification Method:** `read_page` or `get_page_text` + content assertion. Read the page back, check for expected elements/text. Screenshot with `computer` for visual evidence.
 
 ---
 
@@ -71,11 +72,11 @@ This document defines the six execution surfaces available to orchestration agen
 
 ### 4. Communication
 
-**Primary Tool:** Playwright MCP (web-based) or Peekaboo CLI (native Mail, Messages)
+**Primary Tool:** Claude in Chrome (web-based) or Peekaboo CLI (native Mail, Messages)
 **Use For:** Sending emails, Slack messages, Discord messages, SMS, notifications, social media posts
 
 **Key Operations:**
-- Web-based: Playwright to navigate to platform, compose, send
+- Web-based: Claude in Chrome to navigate to platform, compose, send
 - Native: Peekaboo to control Mail.app, Messages.app, etc.
 - API-based: curl/MCP for services with APIs (Slack API, SendGrid, etc.)
 
@@ -85,11 +86,11 @@ This document defines the six execution surfaces available to orchestration agen
 
 ### 5. Calendar
 
-**Primary Tool:** Playwright MCP (Google Calendar, web) or Peekaboo CLI (Apple Calendar)
+**Primary Tool:** Claude in Chrome (Google Calendar, web) or Peekaboo CLI (Apple Calendar)
 **Use For:** Scheduling events, setting reminders, managing time blocks, coordinating meetings
 
 **Key Operations:**
-- Web: Playwright to navigate calendar, create/edit events
+- Web: Claude in Chrome to navigate calendar, create/edit events
 - Native: Peekaboo to control Calendar.app
 - API: Google Calendar API, Apple EventKit via shortcuts
 
@@ -172,7 +173,7 @@ When a task involves multiple possible surfaces, prefer this priority:
 1. **API/MCP** - Most reliable, most verifiable, fastest
 2. **Files** - Direct, deterministic, easy to verify
 3. **Code** - Scriptable, repeatable
-4. **Browser (Web)** - When no API exists, use Playwright
+4. **Browser (Web)** - When no API exists, use WebFetch to read and Claude in Chrome to interact
 5. **Native macOS** - When task requires desktop apps, use Peekaboo
 6. **Communication** - Use API when available, fall back to browser/native
 7. **Calendar** - Use API when available, fall back to browser/native

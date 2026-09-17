@@ -26,7 +26,7 @@ These are OUT of scope. Do NOT execute:
 
 | Tool | Surface | Purpose |
 |------|---------|---------|
-| Playwright MCP | Browser (Web) | Web automation, platform interaction, web verification |
+| WebFetch / Claude in Chrome | Browser (Web) | Web reading, platform interaction, web verification |
 | Peekaboo CLI | Native macOS | Desktop app automation, native verification |
 | Bash / Read / Write | Files | File creation, scripts, data processing |
 | curl / MCP tools | APIs | External service integration |
@@ -50,7 +50,7 @@ All skills at `.claude/skills/`. Agents MUST read relevant skills before startin
 
 | Server/Tool | Surface | Use For | Key Operations |
 |-------------|---------|---------|----------------|
-| **Playwright MCP** | Browser | Web platform interaction, verification | navigate, click, fill, upload, screenshot, snapshot |
+| **Claude in Chrome** | Browser | Web platform interaction, verification, in a tab the agent creates | tabs_create_mcp, navigate, find, computer, form_input, file_upload, read_page |
 | **Peekaboo CLI** | Native | Desktop app automation, native verification | see, click, type, press, menu, open |
 | <Tool> | <Surface> | <Purpose> | <Key operations> |
 | ... | ... | ... | ... |
@@ -61,13 +61,15 @@ All skills at `.claude/skills/`. Agents MUST read relevant skills before startin
 
 | Surface | Tool | Verification Method |
 |---------|------|-------------------|
-| Browser (Web) | Playwright | `browser_snapshot` + content assertion, screenshot for evidence |
+| Browser (Web) | WebFetch / Claude in Chrome | `read_page` or `get_page_text` + content assertion, screenshot for evidence |
 | Native macOS | Peekaboo | `peekaboo see --app` + element check |
 | Files | Read / Bash | Read back + structure/content validation |
-| Communication | Playwright / Peekaboo | Confirm delivery in sent folder or via API |
-| Calendar | Playwright / Peekaboo | Read events back + confirm details |
+| Communication | Claude in Chrome / Peekaboo | Confirm delivery in sent folder or via API |
+| Calendar | Claude in Chrome / Peekaboo | Read events back + confirm details |
 | APIs/MCPs | curl / MCP | Follow-up API call + response validation |
 | Code | Bash | Exit code + output validation |
+
+Tasks do not use Playwright MCP. Execution agents are subagents, and Playwright MCP is one browser shared by the whole session, so a parallel agent can navigate the page another is reading; a hook refuses every Playwright call from a subagent. Browser work that truly needs Playwright stays in the main session.
 
 ---
 
