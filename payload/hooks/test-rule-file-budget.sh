@@ -81,21 +81,33 @@ WARN_LIMIT=150000
 
 # The ceiling this suite actually enforces per file, set below WARN_LIMIT so the suite is what
 # reports the crossing rather than a banner somebody happens to have on screen (L429).
-BUDGET=120000
+#
+# Raised from 120,000 on 2026-09-17 (claude-config#390), deliberately, as that issue's own parked
+# note allowed. Measured the same day: the index was 99,116 and had grown from 92,464 on
+# 2026-09-11, about 1,100 characters a day, which put 120,000 roughly nineteen days out. The only
+# lever with a large saving is loading lessons by relevance, which risks a rule not arriving when
+# it applies, and that redesign is tracked on its own. 140,000 is a CHOSEN number, not a measured
+# one: as high as the gap below still allows. At the measured rate it is about five weeks out.
+BUDGET=140000
+
+# The least room between the budget and the warning. The budget exists so a push is refused while
+# there is still time to act, before any banner appears; at the growth rate measured above, 10,000
+# characters is about nine days. Chosen, and pinned so the next raise cannot quietly close the gap.
+MIN_WARN_GAP=10000
 
 # The longest line the generated lessons index may render, counted as it appears in the file,
 # "- L429. " prefix included. A rule longer than this carries a SHORT: line in LESSONS.md.
 ENTRY_CAP=160
 
 # Recorded sizes, re-measured 2026-09-10 with `wc -c` on the payload copies, after the lessons
-# index moved to short forms. Re-measure with:
+# index moved to short forms. LESSONS-INDEX.md re-measured 2026-09-17 alongside the budget raise. Re-measure with:
 #   wc -c payload/CLAUDE.md payload/RTK.md payload/LESSONS-INDEX.md
 # Raise a number here only when the growth is understood and wanted.
 recorded_size() {  # $1 = payload relative path
   case "$1" in
     CLAUDE.md)         printf '40335' ;;
     RTK.md)            printf '966' ;;
-    LESSONS-INDEX.md)  printf '90664' ;;
+    LESSONS-INDEX.md)  printf '99116' ;;
     *)                 printf '' ;;
   esac
 }
@@ -232,6 +244,9 @@ if over_ratchet 100000 100000; then bad "a file that had not grown at all was re
 # warning banner first appeared for it.
 if [ "$BUDGET" -lt "$WARN_LIMIT" ]; then ok; else
   bad "the budget is not below the warning threshold, so the banner reaches Dan before this suite ever refuses a push"
+fi
+if [ $(( WARN_LIMIT - BUDGET )) -ge "$MIN_WARN_GAP" ]; then ok; else
+  bad "the budget sits within $MIN_WARN_GAP characters of the warning threshold, which leaves too few days between a refused push and the banner to act on either"
 fi
 if [ 150830 -gt "$BUDGET" ]; then ok; else
   bad "the index size that actually produced the platform warning, 150830, sits inside the budget, so the budget cannot be what catches it"
