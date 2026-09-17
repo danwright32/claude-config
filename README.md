@@ -280,6 +280,15 @@ whatever shape it is in, so even with the refusal overridden it cannot be handed
 generated index is exempt, since its own form is `- Lnnn.` and it is a rendering rather than a place
 lessons live.
 
+`check-lessons` also refuses three faults in what the index would show. A lesson's `SHORT:` line whose
+significant words are mostly absent from its own rule (under 0.40 of them, a floor measured against
+the real file) has drifted, and every session would read it in place of the rule (#369, #389). The
+same rule stored under two numbers, compared by its words so a re-wrap is still the same rule,
+renders into the index twice (#392). And an entry holding more than one `SHORT:` line leaves which
+one the index shows to chance (#392). Each refusal names the lesson numbers. All of these, like the
+faults above, come from one list that `check-lessons`, the send, and the hook that runs the moment a
+lesson is written all walk, so none of them can disagree about what a fault is.
+
 A Mac claims its band the first time it asks for a number: the first Mac gets 1 to 500, the next 501
 to 1000, and so on. The claim is one file per Mac under `lesson-bands/` in the repo, committed so the
 other Mac can see it, and one file per writer means a claim can never produce a merge conflict. Two

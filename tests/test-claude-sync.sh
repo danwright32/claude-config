@@ -4232,13 +4232,14 @@ check "cap: and it says what to write, not merely that something is wrong" \
 check "cap: while everything else still publishes" "[ -f '$LCAP/payload/hooks/keep-syncing.sh' ]"
 
 # The same lesson goes out once it carries a short form, and the index renders that rather than the
-# rule. Without this the check could be one that never lets anything through (L159).
-printf '# Lessons\n\n## Proof over green\n\n- **L1. short enough to render inside the cap.** body\n- **L2. %s** body\n  SHORT: A long rule keeps its full text and the index renders a short form.\n' "$_lcap_long" > "$LCAPH/LESSONS.md"
+# rule. Without this the check could be one that never lets anything through (L159). The short form
+# is written in the rule's own words, because one that is not is refused as drifted (#389).
+printf '# Lessons\n\n## Proof over green\n\n- **L1. short enough to render inside the cap.** body\n- **L2. %s** body\n  SHORT: A rule long enough to pass the fixture cap, rendered short.\n' "$_lcap_long" > "$LCAPH/LESSONS.md"
 _lcap push >/dev/null 2>&1
 check "cap: the same lesson publishes once it carries a short form" \
   "grep -q 'hardcoded 160 lets it by' '$LCAP/payload/LESSONS.md'"
 check "cap: and the index renders the short form, not the rule" \
-  "grep -q '^- L2. A long rule keeps its full text' '$LCAP/payload/LESSONS-INDEX.md'"
+  "grep -q '^- L2. A rule long enough to pass the fixture cap, rendered short' '$LCAP/payload/LESSONS-INDEX.md'"
 
 # A SHORT line that is ITSELF over the cap is the same fault. Without this the check is satisfied
 # by writing any short form at all, which passes while protecting nothing.
@@ -4292,6 +4293,12 @@ _clk_write(){   # _clk_write <kind>
     orphaned)  printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\nthis paragraph belongs to no lesson at all.\n' > "$CLKH/LESSONS.md" ;;
     duplicate) printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\n- **L1. claimed twice.** body\n' > "$CLKH/LESSONS.md" ;;
     overcap)   printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\n- **L2. %s** body\n' "$_clk_long" > "$CLKH/LESSONS.md" ;;
+    # Two short forms SWAPPED between their lessons: well formed, short enough, and meaning the
+    # wrong thing (claude-config#389).
+    drift)     printf '# Lessons\n\n## Proof over green\n\n- **L1. A guard is only real once it has been seen to fail against a deliberate defect.** body\n  SHORT: A scheduled job reporting success on nothing found cannot be trusted.\n- **L2. A scheduled job that reports success when it found nothing is indistinguishable from one that saw every item pass.** body\n  SHORT: A guard is only real once seen to fail.\n' > "$CLKH/LESSONS.md" ;;
+    # One rule under two numbers, and one entry holding two SHORT lines (claude-config#392).
+    repeated)  printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\n- **L2. sound.** body\n' > "$CLKH/LESSONS.md" ;;
+    twoshort)  printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule about proving.** body\n  SHORT: a sound rule about proving.\n  SHORT: a sound rule.\n' > "$CLKH/LESSONS.md" ;;
     *) return 1 ;;
   esac
 }
@@ -4332,6 +4339,42 @@ check "#373 the over-cap refusal names the lesson" \
   "case \"\$_clk_cap\" in *L2*) true ;; *) false ;; esac"
 check "#373 and says what to write, not merely that something is wrong" \
   "case \"\$_clk_cap\" in *'SHORT:'*) true ;; *) false ;; esac"
+
+# ---- one lesson stored twice, and one entry with two SHORT lines (claude-config#392) ----
+# On 2026-09-17 LESSONS.md held both while check-lessons said the numbering was sound. L687 was a
+# byte for byte copy of L461, so one lesson rendered into the index twice, and the L461 entry
+# carried a second SHORT line belonging to L451, so which text the index showed for it depended on
+# which line the generator happened to take. Found only by an ad hoc scan, never by a check.
+#
+# The refusal has to NAME the numbers: "a lesson is stored twice" sends somebody searching a file of
+# seven hundred entries for the pair.
+_clk_write repeated
+_clk_rep="$(_clk check-lessons)"
+check "#392 one rule stored under two numbers names both of them" \
+  "case \"\$_clk_rep\" in *'L1 and L2'*) true ;; *) false ;; esac"
+# The id is what a citation pins, so it is the thing a reader will go and search for.
+check "#392 and names the id the two copies share" \
+  "[[ \"\$_clk_rep\" =~ id\ [0-9a-f]{10} ]]"
+# RE-WRAPPED is still the same rule, because the id is the words and the line width is not (L278).
+# And a group of THREE names all three, not the first pair it happened to meet.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one rule about\n  proving things.** body\n- **L2. a different rule.** body\n- **L3. one rule about proving things.** body\n- **L4. one rule about proving   things.** body\n' > "$CLKH/LESSONS.md"
+_clk_rep3="$(_clk lesson-faults)"
+check "#392 a rule stored three times, one of them re-wrapped, names all three" \
+  "case \"\$_clk_rep3\" in *'L1, L3 and L4'*) true ;; *) false ;; esac"
+check "#392 and the lesson that differs is not named among them" \
+  "case \"\$_clk_rep3\" in *L2*) false ;; *) true ;; esac"
+
+_clk_write twoshort
+_clk_two="$(_clk check-lessons)"
+check "#392 an entry holding two SHORT lines is named, with how many it holds" \
+  "case \"\$_clk_two\" in *'L1 holds 2 SHORT lines'*) true ;; *) false ;; esac"
+# The control in the same shape: two neighbouring entries with ONE short form each. The scan for an
+# entry's SHORT lines stops where the next entry begins, and if it did not, this is the file it
+# would refuse (L159, L104).
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule about proving.** body\n  SHORT: a sound rule about proving.\n- **L2. another sound rule about testing.** body\n  SHORT: another sound rule about testing.\n' > "$CLKH/LESSONS.md"
+_clk_one="$(_clk lesson-faults)"; _clk_one_rc=$?
+check "#392 neighbouring entries with one SHORT line each are not refused" \
+  "[ '$_clk_one_rc' -eq 0 ] && [ -z \"\$(printf '%s' \"\$_clk_one\" | tr -d '[:space:]')\" ]"
 
 # All faults in ONE run, never as an else-if. A file routinely commits two at once, and dying at
 # the first sends somebody back for a second run to discover the second, which is exactly how the
@@ -10521,67 +10564,51 @@ section "== a short form still means what its rule means (claude-config#369) =="
 # The pairs come from claude-sync's own extraction, the same one the index is rendered from, so
 # this cannot agree with the generator only until one of them is refined (L370).
 #
-# THE MEASURE is how much of the short form's significant vocabulary appears in its rule. That
-# direction, not the reverse: a short form is a compression, so nearly all of its words should be
-# in the rule, while most of the rule's words are legitimately absent from it.
-_sf_score="$WORK/shortform-score.py"
-cat > "$_sf_score" <<'PYEOF'
-import re, sys
-# Words too common to carry meaning, and too short to be one. The list is deliberately small: a
-# large one starts deciding the answer rather than measuring it.
-STOP = set("""the a an and or but of to in on for with that this it is are was were be been as by
-at from into over under not no any every each which who whom whose what when where why how its
-their they them there here than then so such can cannot must may might will would shall should do
-does did done have has had you your we our one two both all only ever never else same other
-another about after before again against because while during through""".split())
-def sig(t):
-    return {w for w in re.findall(r"[a-z0-9]+", t.lower()) if len(w) >= 4 and w not in STOP}
-floor = float(sys.argv[1])
-bad = []
-orphans = []
-n = 0
-for line in sys.stdin:
-    parts = line.rstrip("\n").split("\t")
-    if parts[0] == "ORPHAN" and len(parts) >= 3:
-        orphans.append("line %s: %s" % (parts[1], parts[2][:60])); continue
-    if parts[0] != "PAIR" or len(parts) < 4: continue
-    num, rule, short = parts[1], parts[2], parts[3]
-    ss = sig(short)
-    if not ss:
-        bad.append("%s: its short form carries no significant word at all" % num); continue
-    n += 1
-    score = len(sig(rule) & ss) / len(ss)
-    if score < floor:
-        bad.append("%s: %.2f of its short form's vocabulary is in its rule, under the %.2f floor (%s)"
-                   % (num, score, floor, short[:60]))
-for o in orphans:
-    print("ORPHAN %s" % o)
-for b in bad:
-    print("DRIFT %s" % b)
-print("MEASURED %d" % n)
-PYEOF
-# The FLOOR, measured rather than chosen (L172). On 2026-09-11, over the 480 short forms in this
-# repo: the weakest genuine pairing scored 0.438, the median 0.923, and the first percentile 0.583.
-# Against 4,000 randomly MISMATCHED pairings from the same file the median was 0.000, the 99th
-# percentile 0.200 and the highest 0.444. So 0.40 sits below every genuine pairing and above all
-# but a handful in ten thousand mismatches. Re-measure before moving it, by scoring the file both
-# ways, never by picking a number that makes today's file pass.
-_sf_floor=0.40
-
-_sf_pairs="$(CLAUDE_HOME="$(dirname "$SCRIPT")/payload" bash "$SCRIPT" lesson-short-forms 2>/dev/null)"
+# THE MEASURE, and its floor, live in claude-sync (short_form_drift_report), not here. This section
+# used to hold its own copy of the scorer, which meant a drifted short form was found only by the
+# CI run after the push: on 2026-09-17 L480's scored 0.38 against the 0.40 floor and turned main
+# red, which stops both Macs receiving config (claude-config#389). It is now one of the faults
+# `lesson-faults` reports, so the hook that runs the moment a lesson is written, the send gate and
+# this section all ask ONE predicate, and this section drives that predicate rather than a copy of
+# it (L370, L686).
+_sf_real="$(dirname "$SCRIPT")/payload"
+_sf_pairs="$(CLAUDE_HOME="$_sf_real" bash "$SCRIPT" lesson-short-forms 2>/dev/null)"
 _sf_n="$(printf '%s\n' "$_sf_pairs" | awk -F'\t' '$1 == "PAIR" { n++ } END { print n + 0 }')"
 # A scan that found nothing passes every assertion below at once and reads exactly like a file
-# whose every short form is sound (L98).
+# whose every short form is sound (L98). These are the pairs the predicate reads.
 check "#369 the real lessons file yields short forms to measure" "[ \"\${_sf_n:-0}\" -gt 100 ]"
-_sf_out="$(printf '%s\n' "$_sf_pairs" | python3 "$_sf_score" "$_sf_floor")"
-dbg "#369 drift report: $_sf_out"
-check "#369 no short form has drifted from the rule it stands for" \
-  "case \"\$_sf_out\" in *DRIFT*) false ;; *) true ;; esac"
-check "#369 and no SHORT line belongs to no entry at all" \
-  "case \"\$_sf_out\" in *ORPHAN*) false ;; *) true ;; esac"
+_sf_out="$(CLAUDE_HOME="$_sf_real" SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson-faults 2>&1)"; _sf_rc=$?
+dbg "#369 lesson-faults on the real file: $_sf_out"
+check "#369 no short form in the real file has drifted from the rule it stands for" \
+  "case \"\$_sf_out\" in *floor*) false ;; *) true ;; esac"
+# Every fault, not only drift: the real file is what the send publishes, and #392's two checks were
+# written against a file that had already been cleaned by hand, so it has to pass them too.
+check "#389 #392 the real lessons file carries none of the faults that hold it back" "[ '$_sf_rc' -eq 0 ]"
 
-# ---- and it can actually fail ----
-# A guard that has only ever been run against passing input has not been shown to work (L1, L159).
+# ---- and it can actually fail, on the REAL file ----
+# A predicate that passes the real file might be measuring nothing there (L98, L159). One short form
+# in a COPY of it is replaced with words no rule contains, so the score is zero by construction
+# rather than by the luck of which two short forms a swap happened to pair.
+_sf_big="$WORK/shortform-realcopy"; mkdir -p "$_sf_big"
+cp "$_sf_real/LESSONS.md" "$_sf_big/LESSONS.md"
+# Read to the end rather than with an early exit: a consumer that stops reading kills its producer
+# under pipefail (L183).
+_sf_victim="$(printf '%s\n' "$_sf_pairs" | awk -F'\t' '$1 == "PAIR" && v == "" { v = $2 } END { print v }')"
+python3 - "$_sf_big/LESSONS.md" <<'REPLEOF'
+import sys
+p = sys.argv[1]
+lines = open(p).read().split("\n")
+i = next(i for i, l in enumerate(lines) if l.strip().startswith("SHORT:"))
+indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+lines[i] = indent + "SHORT: Zebras quietly juggle marmalade beneath violet lanterns."
+open(p, "w").write("\n".join(lines))
+REPLEOF
+_sf_big_out="$(CLAUDE_HOME="$_sf_big" SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson-faults 2>&1)"
+dbg "#369 real copy with one short form replaced: $_sf_big_out"
+check "#369 a drifted short form in a copy of the real file is refused, naming its lesson" \
+  "[ -n '$_sf_victim' ] && case \"\$_sf_big_out\" in *\"$_sf_victim \"*floor*) true ;; *) false ;; esac"
+
+# ---- and on a fixture small enough to read ----
 # The fixture SWAPS two short forms between lessons, which is the exact fault: each entry is still
 # well formed, each short form is still a real sentence, and every length check still passes.
 _sf_fix="$WORK/shortform-fixture"; mkdir -p "$_sf_fix"
@@ -10597,12 +10624,11 @@ cat > "$_sf_fix/LESSONS.md" <<'LEOF'
   one that saw every item pass, so it must say which of the two happened.**
   SHORT: A scheduled job reporting success on nothing found cannot be told from one that saw every item pass.
 LEOF
-_sf_good="$(bash "$SCRIPT" lesson-short-forms "$_sf_fix/LESSONS.md" 2>/dev/null)"
-_sf_good_out="$(printf '%s\n' "$_sf_good" | python3 "$_sf_score" "$_sf_floor")"
+_sf_good="$(CLAUDE_HOME="$_sf_fix" SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson-faults 2>&1)"; _sf_good_rc=$?
 check "#369 the fixture's own short forms pass before anything is swapped" \
-  "case \"\$_sf_good_out\" in *DRIFT*) false ;; *) true ;; esac"
-check "#369 and the fixture really produced two pairs to judge" \
-  "case \"\$_sf_good_out\" in *'MEASURED 2'*) true ;; *) false ;; esac"
+  "[ '$_sf_good_rc' -eq 0 ] && [ -z \"\$(printf '%s' \"\$_sf_good\" | tr -d '[:space:]')\" ]"
+check "#369 and the fixture really holds two short forms to judge" \
+  "[ \"\$(bash '$SCRIPT' lesson-short-forms '$_sf_fix/LESSONS.md' 2>/dev/null | grep -c '^PAIR')\" = 2 ]"
 
 # Now swap them. Nothing about either entry is malformed; only the meaning has moved.
 python3 - "$_sf_fix/LESSONS.md" <<'SWAPEOF'
@@ -10613,25 +10639,33 @@ idx = [i for i, l in enumerate(lines) if l.strip().startswith("SHORT:")]
 lines[idx[0]], lines[idx[1]] = lines[idx[1]], lines[idx[0]]
 open(p, "w").write("\n".join(lines))
 SWAPEOF
-_sf_swapped="$(bash "$SCRIPT" lesson-short-forms "$_sf_fix/LESSONS.md" 2>/dev/null | python3 "$_sf_score" "$_sf_floor")"
+_sf_swapped="$(CLAUDE_HOME="$_sf_fix" SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson-faults 2>&1)"; _sf_swapped_rc=$?
 dbg "#369 swapped report: $_sf_swapped"
 check "#369 a short form swapped between two lessons is caught" \
-  "case \"\$_sf_swapped\" in *DRIFT*) true ;; *) false ;; esac"
+  "[ '$_sf_swapped_rc' -ne 0 ] && case \"\$_sf_swapped\" in *floor*) true ;; *) false ;; esac"
 check "#369 and BOTH of them are named, not just the first" \
-  "line_has \"\$(printf '%s' \"\$_sf_swapped\" | tr '\n' ' ')\" 'L1' 'L2'"
+  "case \"\$_sf_swapped\" in *'L1 '*'L2 '*) true ;; *) false ;; esac"
+
+# The other outcome the predicate enumerates: a short form with no significant word in it at all
+# has nothing to compare, and must be refused rather than divided by zero or passed (L151).
+printf '# Lessons\n\n## Proof over green\n\n- **L1. A guard is only real once it has been seen to fail.** body\n  SHORT: It is so.\n' > "$_sf_fix/LESSONS.md"
+_sf_empty="$(CLAUDE_HOME="$_sf_fix" SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson-faults 2>&1)"
+check "#369 a short form carrying no significant word is refused, not passed" \
+  "case \"\$_sf_empty\" in *'L1 '*'no significant word'*) true ;; *) false ;; esac"
 
 # A SHORT: line belonging to no entry renders nowhere, so it reads as a short form somebody wrote
-# while being a line nothing anywhere consults (L46). It must fail loudly rather than be skipped.
+# while being a line nothing anywhere consults (L46). The extraction reports it rather than
+# skipping it.
 printf '# Lessons\n\n## Proof over green\n\nSHORT: a short form under no entry at all\n\n- **L1. A rule.**\n  SHORT: A rule.\n' > "$_sf_fix/LESSONS.md"
-_sf_orph="$(bash "$SCRIPT" lesson-short-forms "$_sf_fix/LESSONS.md" 2>/dev/null | python3 "$_sf_score" "$_sf_floor")"
+_sf_orph="$(bash "$SCRIPT" lesson-short-forms "$_sf_fix/LESSONS.md" 2>/dev/null)"
 # And a file it cannot read is refused rather than answered for by the default one (L320).
 _sf_missing="$(bash "$SCRIPT" lesson-short-forms "$_sf_fix/no-such-file.md" 2>&1 || true)"
 check "#369 a file it cannot read is refused, not answered for by this Mac's own" \
   "case \"\$_sf_missing\" in *'not a file'*) true ;; *) false ;; esac"
 check "#369 a SHORT line belonging to no entry is reported" \
-  "case \"\$_sf_orph\" in *ORPHAN*) true ;; *) false ;; esac"
+  "awk -F'\t' '\$1 == \"ORPHAN\" { f = 1 } END { exit !f }' <<< \"\$_sf_orph\""
 check "#369 and the report names the line it is on" \
-  "case \"\$_sf_orph\" in *'line 5'*) true ;; *) false ;; esac"
+  "awk -F'\t' '\$1 == \"ORPHAN\" && \$2 == 5 { f = 1 } END { exit !f }' <<< \"\$_sf_orph\""
 
 section "== a lesson keeps an identity a renumber cannot move (claude-config#199) =="
 # Both Macs mint numbers from their own band and a collision still happened on 2026-08-29: each had

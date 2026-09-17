@@ -108,6 +108,25 @@ printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- 
 out="$(run_hook Edit "$HOME_FIX/LESSONS.md")"
 says "a duplicate number is refused" "$out" "used 2 times"
 
+# A short form that has drifted from its rule (claude-config#389). On 2026-09-17 L480's scored 0.38
+# against the 0.40 floor, and the only thing that measured it was the CI run after the push, which
+# turned main red and stopped both Macs receiving config. The fixture SWAPS two short forms, so
+# every entry is still well formed and every rendered line still fits: only the meaning moved.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. A guard is only real once it has been seen to fail against a deliberate defect.** body\n  SHORT: A scheduled job reporting success on nothing found cannot be trusted.\n- **L2. A scheduled job that reports success when it found nothing is indistinguishable from one that saw every item pass.** body\n  SHORT: A guard is only real once seen to fail.\n' > "$HOME_FIX/LESSONS.md"
+out="$(run_hook Edit "$HOME_FIX/LESSONS.md")"
+says "a short form drifted from its rule is refused when it is written" "$out" '"decision":"block"'
+says "and the refusal names the floor it fell under" "$out" "floor"
+says "and names the lesson" "$out" "L2"
+
+# The same lesson stored twice, and an entry carrying a second SHORT line (claude-config#392). Both
+# sat in the real file on 2026-09-17 while check-lessons called the numbering sound.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- **L2. a rule that fits.** body\n' > "$HOME_FIX/LESSONS.md"
+out="$(run_hook Edit "$HOME_FIX/LESSONS.md")"
+says "the same rule stored under two numbers is refused" "$out" "L1 and L2"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n  SHORT: a rule that fits.\n  SHORT: a rule.\n' > "$HOME_FIX/LESSONS.md"
+out="$(run_hook Edit "$HOME_FIX/LESSONS.md")"
+says "an entry carrying two SHORT lines is refused" "$out" "2 SHORT lines"
+
 # And it says so ONLY into the session. The tool notifies the desktop on a non interactive failure,
 # which is right for the background sync job and wrong here: it reaches somebody who is already
 # looking at the answer, and a test run of this suite put real notifications on the real screen
