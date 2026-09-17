@@ -265,7 +265,7 @@ fi
 # now test for existence. A path that CONTINUES past `.git` (`.git/rebase-merge`) is a different
 # question and is not matched: the pattern requires `.git` to end the quoted path.
 # Only readable where the repository is, for the reason the blank test above says so.
-GITDIR_PAT='(\[ *-d|test +-d|isdir\()[^]]{0,80}[/"'"'"']\.git["'"'"')]'
+GITDIR_PAT='(\[ *(! *)?-d|test +(! +)?-d|isdir\()[^]]{0,80}[/"'"'"']\.git["'"'"')]'
 if [ -n "$REPO_TOP" ] && [ "$REPO_TOP" = "$REPO" ]; then
   gitdir_offenders="$(cd "$REPO" && git ls-files -z \
       | xargs -0 grep -nE "$GITDIR_PAT" 2>/dev/null \
@@ -281,13 +281,17 @@ fi
 # Seen to match the shapes it names, and NOT a path continuing past .git, before its silence counts.
 # Assembled, never written whole, or this file would be its own offender.
 GD='-''d'
-printf '%s\n' "[ $GD \"\$R/.git\" ]" "os.path.is""dir(os.path.join(p, \".git\"))" > "$TMPROOT/gitdir-hit.txt"
+# The NEGATED forms are planted too: the claude-sync site read `[ ! -d "$d/.git" ]`, and the first
+# version of this pattern allowed nothing between the bracket and the flag, so it passed with that
+# site put back. Found by tools/prove-it-fails.sh, not by reading.
+printf '%s\n' "[ $GD \"\$R/.git\" ]" "os.path.is""dir(os.path.join(p, \".git\"))" \
+  "if [ ! $GD \"\$d/.git\" ]; then" "test ! $GD \"\$R/.git\" || exit 0" > "$TMPROOT/gitdir-hit.txt"
 printf '%s\n' "[ $GD \"\$R/.git/rebase-merge\" ]" "[ -e \"\$R/.git\" ]" > "$TMPROOT/gitdir-miss.txt"
 gd_hits="$(grep -cE "$GITDIR_PAT" "$TMPROOT/gitdir-hit.txt" 2>/dev/null || true)"
 gd_miss="$(grep -cE "$GITDIR_PAT" "$TMPROOT/gitdir-miss.txt" 2>/dev/null || true)"
-[ "$gd_hits" = 2 ] && [ "$gd_miss" = 0 ] \
+[ "$gd_hits" = 4 ] && [ "$gd_miss" = 0 ] \
   && check "and that pattern matches a planted directory test and not its neighbours" ok \
-  || check "and that pattern matches a planted directory test and not its neighbours" "matched $gd_hits of 2 planted, and $gd_miss of 2 it must leave"
+  || check "and that pattern matches a planted directory test and not its neighbours" "matched $gd_hits of 4 planted, and $gd_miss of 2 it must leave"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
