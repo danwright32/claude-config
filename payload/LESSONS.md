@@ -2529,6 +2529,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   vendor's data semantics against real samples; this adds that the check after shipping is the
   RATE over everything, not the value on a few.)
 
+- **L714. A disposable local database standing in for a hosted one must reproduce that
+  platform's DEFAULT GRANTS before anything is created, or a permission check run against it
+  passes on the exact mistake it exists to catch.** A plain Postgres grants EXECUTE on a new
+  function only through PUBLIC, while Supabase ALSO grants it directly to anon and
+  authenticated through default privileges, so a function revoked from public alone reads as
+  locked locally and stays callable anonymously in production. Read the real platform's
+  `pg_default_acl` (or its equivalent) and set the same defaults in the throwaway database, so
+  the rig's permission model is the product's rather than the engine's.
+  SHORT: A throwaway local database must reproduce the hosted platform's DEFAULT GRANTS, or a permission check passes on the mistake it exists to catch.
+  (PET#1469, 2026-09-17: the leave functions' privilege case passed with the anon revoke
+  deliberately removed, because the schema build used a bare postgres:16 container. With
+  `alter default privileges in schema public grant all on functions to anon, authenticated,
+  service_role` applied first, confirmed against production's pg_default_acl, the same
+  mutation failed with "anon on reps_leave_remove(text,text): expected false, got true".
+  Related to L124 and L541 on platform grants, and to L472 on a rig that measures itself.)
+
 
 ## Data safety
 
