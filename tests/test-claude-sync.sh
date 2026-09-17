@@ -9592,6 +9592,46 @@ check "status does not offer them as waiting to go up" "out_lacks \"\$out_psk_st
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSK2" SYNC_REPO="$PSB" bash "$SCRIPT" send >/dev/null 2>&1
 check "and a send from Mac B does not carry them either" "[ ! -e '$PSB/payload/skills/synced' ]"
 
+section "== a pull never promises to send local files a send will refuse (#388) =="
+# The pull's "would have reverted these local edits" line says they go up on the next send. For a
+# file inside a skills entry that cannot load that is false: the send refuses the whole entry
+# (refuse_unloadable_skills), so the person was told the work was on its way when nothing would
+# ever carry it. The apply must still leave those files alone, which it did; only the promise was
+# wrong. Built against a real shared repo for the reason the platform section above gives: the
+# line is computed from git history and does not exist under SYNC_NO_GIT (L159).
+UPBARE="$WORK/unloadpromise-bare.git"; git init -q --bare -b main "$UPBARE"
+UPA="$WORK/unloadpromise-repoA"; git clone -q "$UPBARE" "$UPA" 2>/dev/null
+UPAH="$WORK/unloadpromise-homeA"; mkdir -p "$UPAH/hooks"
+echo '{"hooks":{}}' > "$UPAH/settings.json"; echo 'other-v1' > "$UPAH/hooks/other.sh"
+mkskill "$UPAH/skills/shared/SKILL.md" 'a skill both Macs share'
+echo 'orig-script' > "$UPAH/skills/shared/run.py"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPAH" SYNC_REPO="$UPA" bash "$SCRIPT" sync >/dev/null 2>&1
+UPB="$WORK/unloadpromise-repoB"; git clone -q "$UPBARE" "$UPB" 2>/dev/null
+UPBH="$WORK/unloadpromise-homeB"; mkdir -p "$UPBH"; echo '{"hooks":{}}' > "$UPBH/settings.json"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$SCRIPT" pull >/dev/null 2>&1
+# After B last applied: a half-built skill with no SKILL.md, and a real edit to a skill that loads.
+# The loadable edit is the control, so the fix cannot pass by silencing the promise for everyone.
+mkdir -p "$UPBH/skills/halfbuilt"; echo 'draft notes' > "$UPBH/skills/halfbuilt/notes.md"
+echo 'MY-LOCAL-FIX' > "$UPBH/skills/shared/run.py"
+echo 'other-v2' > "$UPAH/hooks/other.sh"
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPAH" SYNC_REPO="$UPA" bash "$SCRIPT" sync >/dev/null 2>&1
+out_up="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$SCRIPT" pull 2>&1 || true)"
+dbg "pull with an unloadable local skill: $out_up"
+check "#388 the unrelated change reaches Mac B (the pull really applied)" "grep -q other-v2 '$UPBH/hooks/other.sh'"
+check "#388 the half-built skill's files are still kept"  "grep -q 'draft notes' '$UPBH/skills/halfbuilt/notes.md'"
+check "#388 a loadable skill's local edit is still kept"   "grep -q MY-LOCAL-FIX '$UPBH/skills/shared/run.py'"
+check "#388 a loadable skill's local edit is still promised to the next send" \
+  "line_has \"\$out_up\" 'go up on the next send' 'skills/shared/run\.py'"
+check "#388 the unloadable entry is not promised to the next send" \
+  "! line_has \"\$out_up\" 'go up on the next send' 'halfbuilt'"
+check "#388 the unloadable entry is named as NOT going up, with the reason" \
+  "line_has \"\$out_up\" 'skills/halfbuilt' 'send will NOT carry' 'SKILL\.md'"
+# The claim itself, checked against what a send actually does, so the new sentence is not merely a
+# different promise nobody measured.
+SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$SCRIPT" send >/dev/null 2>&1
+check "#388 the next send does carry the loadable edit" "grep -q MY-LOCAL-FIX '$UPB/payload/skills/shared/run.py'"
+check "#388 and does not carry the unloadable entry"    "[ ! -e '$UPB/payload/skills/halfbuilt' ]"
+
 section "== assertions that could pass on output the command prints anyway (#55) =="
 # Many checks capture a command's whole output and grep that blob for a phrase. claude-sync's own
 # change report already names every file it applied, so an assertion looking for a filename finds
