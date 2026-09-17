@@ -4232,13 +4232,14 @@ check "cap: and it says what to write, not merely that something is wrong" \
 check "cap: while everything else still publishes" "[ -f '$LCAP/payload/hooks/keep-syncing.sh' ]"
 
 # The same lesson goes out once it carries a short form, and the index renders that rather than the
-# rule. Without this the check could be one that never lets anything through (L159).
-printf '# Lessons\n\n## Proof over green\n\n- **L1. short enough to render inside the cap.** body\n- **L2. %s** body\n  SHORT: A long rule keeps its full text and the index renders a short form.\n' "$_lcap_long" > "$LCAPH/LESSONS.md"
+# rule. Without this the check could be one that never lets anything through (L159). The short form
+# is written in the rule's own words, because one that is not is refused as drifted (#389).
+printf '# Lessons\n\n## Proof over green\n\n- **L1. short enough to render inside the cap.** body\n- **L2. %s** body\n  SHORT: A rule long enough to pass the fixture cap, rendered short.\n' "$_lcap_long" > "$LCAPH/LESSONS.md"
 _lcap push >/dev/null 2>&1
 check "cap: the same lesson publishes once it carries a short form" \
   "grep -q 'hardcoded 160 lets it by' '$LCAP/payload/LESSONS.md'"
 check "cap: and the index renders the short form, not the rule" \
-  "grep -q '^- L2. A long rule keeps its full text' '$LCAP/payload/LESSONS-INDEX.md'"
+  "grep -q '^- L2. A rule long enough to pass the fixture cap, rendered short' '$LCAP/payload/LESSONS-INDEX.md'"
 
 # A SHORT line that is ITSELF over the cap is the same fault. Without this the check is satisfied
 # by writing any short form at all, which passes while protecting nothing.
