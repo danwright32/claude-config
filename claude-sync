@@ -2855,7 +2855,7 @@ AHEAD
     while IFS="$(printf '\t')" read -r _ue _ur; do
       [ -n "${_ue:-}" ] || continue
       local _files; _files="$(printf '%s' "$unsendable" | awk -v p="skills/$_ue" '$0 == p || index($0, p "/") == 1' | tr '\n' ' ')"
-      [ -n "${_files// /}" ] || continue
+      is_blank "$_files" && continue
       echo "claude-sync: this apply left these local files under skills/$_ue alone, but a send will NOT carry them, because $_ur, and a send refuses a skills entry that cannot load. Make it a loadable skill (a SKILL.md with a name and description in its frontmatter) and the next send carries it: ${_files% }" >&2
     done <<UNLOADABLE
 $unloadable_here
