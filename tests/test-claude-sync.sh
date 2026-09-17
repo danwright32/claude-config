@@ -9635,6 +9635,45 @@ check "status does not offer them as waiting to go up" "out_lacks \"\$out_psk_st
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSK2" SYNC_REPO="$PSB" bash "$SCRIPT" send >/dev/null 2>&1
 check "and a send from Mac B does not carry them either" "[ ! -e '$PSB/payload/skills/synced' ]"
 
+section "== the list of skills the sync leaves alone is one file, and a send stops without it (#415) =="
+# PLUGIN_SKILLS and PLATFORM_SKILL_DIRS moved into payload/hooks/lib/unmanaged-skills.sh so that
+# check-home-paths.sh leaves out exactly what the sync leaves out. The tool reads the copy in its
+# OWN checkout. Without it, going on with no exclusions would send every plugin skill and every
+# downloaded skill into the shared repo, so the run must stop instead, and say which file it could
+# not read (L42, L11). Driven from a copy of the tool, which is the only way that state occurs.
+ULREPO="$(cd "$(dirname "$SCRIPT")" && pwd)"
+ULC="$WORK/unmanaged-list-clone"; mkdir -p "$ULC/payload"
+cp "$SCRIPT" "$ULC/claude-sync"
+ULH="$WORK/unmanaged-list-home"; mkdir -p "$ULH/skills/synced/bucket-1"
+echo '{"hooks":{}}' > "$ULH/settings.json"; printf '# rules\n' > "$ULH/CLAUDE.md"
+mkskill "$ULH/skills/mine/SKILL.md" 'a skill of my own'
+mkskill "$ULH/skills/synced/bucket-1/pdf/SKILL.md" 'a platform skill'
+ULR="$WORK/unmanaged-list-repo"; mkdir -p "$ULR/payload"
+if out_ul="$(CLAUDE_HOME="$ULH" SYNC_REPO="$ULR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$ULC/claude-sync" push 2>&1)"; then rc_ul=0; else rc_ul=$?; fi
+dbg "push with no list: $out_ul"
+check "#415 a push with no readable list fails" "[ '$rc_ul' -ne 0 ]"
+check "#415 and names the list it could not read" \
+  "line_has \"\$out_ul\" 'cannot read the list of skills' 'unmanaged-skills\.sh'"
+check "#415 and carries no skills at all, the platform's least of all" \
+  "[ ! -e '$ULR/payload/skills' ]"
+# The control: the same copy with the list beside it sends, so the refusal above is about the list
+# and not about something else this copy lacks.
+mkdir -p "$ULC/payload/hooks/lib"
+cp "$ULREPO/payload/hooks/lib/unmanaged-skills.sh" "$ULC/payload/hooks/lib/unmanaged-skills.sh"
+if out_ul2="$(CLAUDE_HOME="$ULH" SYNC_REPO="$ULR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$ULC/claude-sync" push 2>&1)"; then rc_ul2=0; else rc_ul2=$?; fi
+dbg "push with the list: $out_ul2"
+check "#415 with the list beside it the same copy sends" "[ '$rc_ul2' -eq 0 ]"
+check "#415 a skill of my own is carried"       "[ -f '$ULR/payload/skills/mine/SKILL.md' ]"
+check "#415 and the platform's still is not"     "[ ! -e '$ULR/payload/skills/synced' ]"
+# A home with no skills anywhere does not need the list, and several sections run a copy of the tool
+# with no payload beside it for reasons of their own, so the stop is only where skills are in play.
+ULH2="$WORK/unmanaged-list-home-noskills"; mkdir -p "$ULH2"; echo '{"hooks":{}}' > "$ULH2/settings.json"
+ULC2="$WORK/unmanaged-list-clone-2"; mkdir -p "$ULC2"; cp "$SCRIPT" "$ULC2/claude-sync"
+if out_ul3="$(CLAUDE_HOME="$ULH2" SYNC_REPO="$WORK/unmanaged-list-repo-2" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$ULC2/claude-sync" status 2>&1)"; then rc_ul3=0; else rc_ul3=$?; fi
+dbg "status with no list and no skills: $out_ul3"
+check "#415 with no skills anywhere, a missing list does not stop the run" \
+  "out_lacks \"\$out_ul3\" 'cannot read the list of skills'"
+
 section "== a pull never promises to send local files a send will refuse (#388) =="
 # The pull's "would have reverted these local edits" line says they go up on the next send. For a
 # file inside a skills entry that cannot load that is false: the send refuses the whole entry

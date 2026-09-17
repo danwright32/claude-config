@@ -152,29 +152,39 @@ STATE_DIR="$SYNC_REPO/state"   # what each Mac has applied, published so verify 
 LESSON_BANDS_DIR="$SYNC_REPO/lesson-bands"
 LESSON_BAND=""   # this Mac's band, once resolved (see lesson_band_locked)
 
-# Skills that the plugins install & manage — excluded so the repo stays clean
-# and plugin updates don't create churn. Edit this list if you install one of
-# these standalone and want it synced.
-PLUGIN_SKILLS=(agents-sdk cloudflare cloudflare-email-service durable-objects \
-  sandbox-sdk turnstile-spin web-perf workers-best-practices wrangler \
-  plannotator-compound)
-
-# Top level entries under skills/ that the Claude app itself downloads and maintains on each Mac:
-# skills/synced/<bucket>/ holds the account's built in skills (docx, pptx, pdf and the rest) plus
-# a manifest.json the app rewrites. They are not config, each Mac fetches its own, and the app
-# names the bucket after the account, so carrying them would only ship a second copy for the app
-# to fight over. Seen on Dans-MacBook-Pro 2026-09-16, when a pull announced about 200 of those
-# files as unsent local edits bound for the shared repo. Matched at the TOP of skills/ only: a
-# folder that happens to be called `synced` inside a real skill is ordinary config.
-PLATFORM_SKILL_DIRS=(synced)
-
-# One answer to "does the sync leave this skills/ entry alone entirely", for every reader that
-# walks skills/ by name, so a new kind of unmanaged entry is added once rather than per loop.
-unmanaged_skill_entry(){   # $1 = a top level name under skills/
-  local s
-  for s in "${PLUGIN_SKILLS[@]}" "${PLATFORM_SKILL_DIRS[@]}"; do [ "$1" = "$s" ] && return 0; done
-  return 1
-}
+# The skills/ entries the sync never carries (PLUGIN_SKILLS, the plugin managed skills, and
+# PLATFORM_SKILL_DIRS, the Claude app's own downloads), with unmanaged_skill_entry and the rsync
+# excludes from skill_excludes that leave them out (claude-config#415). They live in ONE file,
+# because check-home-paths.sh has to leave out exactly the same entries and runs from the live
+# config with no repo beside it (L41). Read from THIS checkout's payload only, never the copy
+# installed under CLAUDE_HOME: the checkout is what defines what a send carries, and an older list
+# installed there would silently change it.
+#
+# If it cannot be read, the run STOPS rather than going on with no exclusions, which would send
+# every plugin skill and every downloaded skill into the shared repo (L42). It stops only when
+# skills are in play, because several suites deliberately run a copy of this tool with no payload
+# beside it and no skills anywhere, and nothing such a run does reads the list. The stand ins
+# below cover a skills folder that appears during the run (a pull bringing one in): the excludes
+# stand in excludes everything before it stops, and the entry test stops at the first entry, so a
+# caller that runs either in a subshell, where the exit cannot end the run, still carries and
+# judges nothing rather than everything.
+UNMANAGED_SKILLS_LIB="$SYNC_SELF_PAYLOAD/hooks/lib/unmanaged-skills.sh"
+UNMANAGED_SKILLS_LIB_LOADED=""
+if [ -r "$UNMANAGED_SKILLS_LIB" ]; then
+  # shellcheck source=payload/hooks/lib/unmanaged-skills.sh
+  . "$UNMANAGED_SKILLS_LIB" || UNMANAGED_SKILLS_LIB_LOADED=""
+fi
+if [ -z "$UNMANAGED_SKILLS_LIB_LOADED" ]; then
+  unmanaged_skill_list_unreadable(){
+    echo "claude-sync: cannot read the list of skills the sync leaves alone ($UNMANAGED_SKILLS_LIB), so nothing under skills/ can be sent, applied or compared safely, and this run stopped. The file ships with this checkout: restore it with git checkout -- payload/hooks/lib/unmanaged-skills.sh and run again." >&2
+  }
+  unmanaged_skill_entry(){ unmanaged_skill_list_unreadable; exit 1; }
+  skill_excludes(){ printf -- '--exclude=*\n'; unmanaged_skill_list_unreadable; exit 1; }
+  if [ -d "$CLAUDE_HOME/skills" ] || [ -d "$PAYLOAD/skills" ]; then
+    unmanaged_skill_list_unreadable
+    exit 1
+  fi
+fi
 
 # `audits` is here since claude-config#224. LESSONS.md cites audits/2026-07-27-issue-audit/ and
 # audits/2026-08-29-test-speed-audit/ as the full provenance for two batches of lessons, and the
@@ -1165,14 +1175,6 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
   printf '%s' "$named" >&2
   notify "skills that cannot load were not $2"
   return 0
-}
-
-# Plugin skill names stay unanchored as they always were; the platform's entries are anchored to the
-# top of skills/ with a leading slash, for the reason given where PLATFORM_SKILL_DIRS is defined.
-skill_excludes(){
-  local s
-  for s in "${PLUGIN_SKILLS[@]}"; do printf -- "--exclude=%s\n" "$s"; done
-  for s in "${PLATFORM_SKILL_DIRS[@]}"; do printf -- "--exclude=/%s\n" "$s"; done
 }
 
 # LC_ALL=C so the substitution is bytewise. A UTF-8 locale makes sed refuse a file holding a byte

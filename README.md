@@ -43,10 +43,11 @@ pieces in those files. The same guard refuses it anywhere it is not standing in 
 Memory store, session history, caches, the rest of `settings.json` (model / effort / plugins),
 and the local permission list (`settings.local.json`). A `pull` cannot overwrite any of these.
 
-Plugin-managed skills are excluded so plugin updates don't cause churn:
-`agents-sdk, cloudflare, cloudflare-email-service, durable-objects, sandbox-sdk,
-turnstile-spin, web-perf, workers-best-practices, wrangler, plannotator-compound`
-(edit `PLUGIN_SKILLS` in `claude-sync` to change this).
+Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
+`skills/synced/`, where the Claude app downloads each account's built in skills. Both lists live
+in `payload/hooks/lib/unmanaged-skills.sh` (`PLUGIN_SKILLS` and `PLATFORM_SKILL_DIRS`), which
+`claude-sync` and `hooks/check-home-paths.sh` both read, so the check never judges a skill the
+sync does not send. Edit that file to change them.
 
 ## Use
 
