@@ -79,7 +79,12 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh"
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__playwright__.*|mcp__plugin_playwright_playwright__.*",
+        "hooks": [
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/playwright-subagent-gate.sh",
