@@ -25,10 +25,15 @@
 #   issue-spool.sh append       <dir> <json>   append one record; non-zero if refused
 #   issue-spool.sh note <dir> <text> [who]     record a finding directly, no model call
 #   issue-spool.sh raw          <dir>          the pending records, verbatim
-#   issue-spool.sh pending      <dir>          what a person should read; exit 1 if nothing
+#   issue-spool.sh pending <dir> [transcript] [stamp-out]
+#                                              what a person should read; exit 1 if nothing.
+#                                              With stamp-out, also records WHICH records were
+#                                              read, for the clear that follows (#381)
 #   issue-spool.sh has-findings <dir>          exit 0 only if a real finding is pending
 #   issue-spool.sh archive      <dir>          everything already filed
-#   issue-spool.sh clear        <dir>          move pending into the archive
+#   issue-spool.sh clear <dir> [transcript] [stamp]
+#                                              move pending into the archive; with a stamp,
+#                                              only the records that render read
 #   issue-spool.sh file-errors  <dir>          file ONLY the harvest failures
 #                                              that were shown, once reported
 #   issue-spool.sh file-muted   <dir>          file the held-back failures, once
@@ -205,22 +210,76 @@ issue_spool_archive_for_key() { printf '%s/%s.filed.jsonl' "$(issue_spool_root)"
 # A FILE rather than a variable, and that is not a style choice: every caller here takes the tmp
 # path through `$(...)`, which is a subshell, so a global set in this function is discarded on the
 # way out. The first version did exactly that and the source line silently never appeared.
+#
+# And a "<tmp>.ranges" file, one "<key> <lines>" per spool file read, in the order they were
+# concatenated, so a reader can say which KEY each collected line came from (claude-config#381). The
+# stamp a render writes is per key, because a clear drains one key at a time.
+#
+# Each file is SNAPSHOT before anything is counted or copied. Counting the live file and copying it
+# are two reads, and a record a finishing agent appends between them makes the count and the lines
+# disagree, which would shift every key after it in the ranges by one line.
 issue_spool_collect() { # collect <dir> [session-transcript]
-  local tmp key file n
+  local tmp key file n lines
   tmp="$(mktemp "${TMPDIR:-/tmp}/claude-spool-read.XXXXXX")" || return 1
   : > "$tmp.sources"
+  : > "$tmp.ranges"
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     file="$(issue_spool_path_for_key "$key")"
-    if [ -s "$file" ] && cat "$file" >> "$tmp" 2>/dev/null; then
-      n="$(grep -c . "$file" 2>/dev/null || true)"
-      printf '%s (%s records)\n' "$(basename "$file")" "${n:-0}" >> "$tmp.sources"
-    fi
+    [ -s "$file" ] || continue
+    cat "$file" > "$tmp.snap" 2>/dev/null || continue
+    [ -s "$tmp.snap" ] || continue
+    # A last line with no newline would fuse with the next file's first line once concatenated.
+    [ -n "$(tail -c 1 "$tmp.snap")" ] && printf '\n' >> "$tmp.snap"
+    cat "$tmp.snap" >> "$tmp" 2>/dev/null || continue
+    n="$(grep -c . "$tmp.snap" 2>/dev/null || true)"
+    lines="$(wc -l < "$tmp.snap" | tr -d ' ')"
+    printf '%s (%s records)\n' "$(basename "$file")" "${n:-0}" >> "$tmp.sources"
+    printf '%s %s\n' "$key" "${lines:-0}" >> "$tmp.ranges"
   done <<COLLECT_KEYS
 $(issue_spool_read_keys "${1:-$PWD}" "${2:-}")
 COLLECT_KEYS
+  rm -f "$tmp.snap"
   printf '%s' "$tmp"
 }
+
+# Removes everything issue_spool_collect made. One definition, because the collect grew a third
+# sidecar and four callers each listing the files by hand is how one of them keeps leaking it.
+issue_spool_collect_done() { rm -f "$1" "$1.sources" "$1.ranges" "$1.snap"; }
+
+# WHAT A RENDER READ, written down so the clear that follows files exactly that (claude-config#381).
+#
+# Seen in an Ovation session on 2026-09-14: a review rendered 4 findings from a pending file of 326
+# records, three more subagents finished while its picker was open and the harvest appended their
+# findings to the same file, and the clear line the review had written filed 179 records. The later
+# findings were never shown to anybody. The clear line named FILES, and a file is somewhere records
+# go on arriving for the whole time a picker is open; rename then drain only protects the instant
+# of the clear itself (L285).
+#
+# So the render records every record it read, per key, and the clear files only those. A byte offset
+# or a line number would not survive: `file-errors` runs straight after every render and rewrites the
+# file without the failures it just reported, a clear rewrites other sessions' records to mark them
+# seen, and compaction rewrites the whole file. What survives all three is the record's CONTENT, so
+# that is what is recorded, as a digest of its canonical JSON with the one field those rewrites add
+# (`seen_by`) left out. A line that is not JSON is recorded as its text.
+#
+# Kept as ONE piece of Python that both halves run, because a render and a clear computing the
+# identity separately agree only for as long as nobody edits one of them (L70, L26).
+ISSUE_SPOOL_STAMP_HEADER="issue-spool stamp v1"
+ISSUE_SPOOL_IDENTITY_PY='
+import hashlib as _hashlib, json as _json
+
+def record_identity(line):
+    line = line.strip()
+    try:
+        rec = _json.loads(line)
+    except Exception:
+        rec = None
+    if isinstance(rec, dict):
+        rec = {k: v for k, v in rec.items() if k != "seen_by"}
+        line = _json.dumps(rec, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return _hashlib.sha1(line.encode("utf-8", "replace")).hexdigest()
+'
 
 issue_spool_read_keys() { # read-keys <dir> [session-transcript]
   local primary legacy
@@ -526,10 +585,14 @@ print(json.dumps({
 # there is nothing to act on. Everything else is printed and says which it is: a
 # harvest that could not run is not a project with no findings, and neither is a
 # reply nobody could parse.
-issue_spool_pending() { # pending <dir> [session-transcript] -> exit 1 when there is nothing to show
-  local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
-  if [ ! -s "$file" ]; then rm -f "$file" "$file.sources"; return 1; fi
-  CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" \
+issue_spool_pending() { # pending <dir> [session-transcript] [stamp-out] -> exit 1 when there is nothing to show
+  local file rc stamp="${3:-}"; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
+  # A stamp from an earlier render is never left standing beside this one: it would describe
+  # records this render may not have read.
+  [ -n "$stamp" ] && rm -f "$stamp" 2>/dev/null
+  if [ ! -s "$file" ]; then issue_spool_collect_done "$file"; return 1; fi
+  CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" CLAUDE_SPOOL_STAMP_OUT="$stamp" \
+    CLAUDE_SPOOL_STAMP_HEADER="$ISSUE_SPOOL_STAMP_HEADER" CLAUDE_SPOOL_IDENTITY_PY="$ISSUE_SPOOL_IDENTITY_PY" \
     CLAUDE_SPOOL_READER_SESSION="$(issue_spool_session_id "${2:-}")" python3 - "$file" "${1:-}" <<'PY'
 import datetime, json, os, re, sys
 
@@ -768,6 +831,38 @@ if corrupt:
     print("UNREADABLE SPOOL RECORDS: %d line(s) in the spool are not valid records and were "
           "skipped. Something wrote to it that should not have." % corrupt)
 
+# THE STAMP (claude-config#381): every record this render READ, not only the ones it printed, per
+# key. Records past the budget and failures held back were read too, and a clear has always filed
+# those along with the rest; what it must not file is anything that was not in the spool at all when
+# this ran. Written only when something was shown, because only then does a clear line exist.
+#
+# A stamp that cannot be written is REMOVED rather than left partial, and the render goes on: losing
+# the stamp costs this review its clear line, and losing the review over it would cost far more.
+STAMP = os.environ.get("CLAUDE_SPOOL_STAMP_OUT") or ""
+if STAMP and shown:
+    try:
+        exec(os.environ["CLAUDE_SPOOL_IDENTITY_PY"])
+        ranges = []
+        for rl in open(sys.argv[1] + ".ranges", encoding="utf-8"):
+            parts = rl.split()
+            if len(parts) == 2:
+                ranges.append((parts[0], int(parts[1])))
+        with open(sys.argv[1], encoding="utf-8", errors="replace") as src, \
+             open(STAMP, "w", encoding="utf-8") as out:
+            out.write(os.environ["CLAUDE_SPOOL_STAMP_HEADER"] + "\n")
+            for key, n in ranges:
+                for _ in range(n):
+                    rline = src.readline()
+                    if rline.strip():
+                        out.write("%s %s\n" % (key, record_identity(rline)))
+    except Exception as exc:
+        try:
+            os.remove(STAMP)
+        except OSError:
+            pass
+        sys.stderr.write("issue-spool: could not write the record of what this review read (%s): %s\n"
+                         % (STAMP, exc))
+
 sys.exit(0 if shown else 1)
 PY
   rc=$?
@@ -778,7 +873,7 @@ PY
     printf 'SPOOL SOURCE: %s, under %s. A clear files exactly these, and says how many it filed; if this list comes back after one, that is the fact to report.\n' \
       "$(tr '\n' ';' < "$file.sources" | sed 's/;$//; s/;/, /g')" "$(issue_spool_root)"
   fi
-  rm -f "$file" "$file.sources"
+  issue_spool_collect_done "$file"
   return $rc
 }
 
@@ -840,7 +935,7 @@ issue_spool_reach_report() { # reach-report -> 0 when every pending key is reach
 # and interrupting every turn over it would train the review to be ignored.
 issue_spool_has_findings() { # has-findings <dir> [session-transcript] -> exit 0 when a finding is pending
   local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
-  if [ ! -s "$file" ]; then rm -f "$file" "$file.sources"; return 1; fi
+  if [ ! -s "$file" ]; then issue_spool_collect_done "$file"; return 1; fi
   python3 - "$file" <<'PY_HF'
 import json, sys
 for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
@@ -856,7 +951,7 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
 sys.exit(1)
 PY_HF
   rc=$?
-  rm -f "$file" "$file.sources"
+  issue_spool_collect_done "$file"
   return $rc
 }
 
@@ -870,7 +965,7 @@ PY_HF
 # "stopped" rather than printing a reassuring zero (L98).
 issue_spool_muted_summary() { # muted-summary <dir> [session-transcript] -> exit 1 when nothing is held back
   local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
-  if [ ! -s "$file" ]; then rm -f "$file" "$file.sources"; return 1; fi
+  if [ ! -s "$file" ]; then issue_spool_collect_done "$file"; return 1; fi
   CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" <<'PY_MUTED'
 import json, os, sys
 
@@ -920,7 +1015,7 @@ print("HARVEST UNREADABLE, since %s: %s. This is a periodic count, not a new pro
 sys.exit(0)
 PY_MUTED
   rc=$?
-  rm -f "$file" "$file.sources"
+  issue_spool_collect_done "$file"
   return $rc
 }
 
@@ -936,21 +1031,44 @@ PY_MUTED
 # after a picker, so the call site is a person reading a terminal. When the same findings then
 # came back at the next review there was no way to tell a clear that had missed them from a
 # harvest that had written them again.
-issue_spool_clear() { # clear <dir> [session-transcript] -> file the pending records
-  local key rc=0 total=0 left_total=0 n nleft pair keys=""
+#
+# WITH A STAMP it files only the records the render that wrote the stamp had read
+# (claude-config#381), and everything that arrived since stays pending for the next review. A stamp
+# that is named and cannot be read is a REFUSAL, and nothing at all is filed: falling back to filing
+# the whole key is precisely the defect the stamp exists to stop, so it must not be one of the ways
+# this can fail (L173, L320). The findings then come back at the next review, which is the safe
+# direction and writes a fresh stamp.
+#
+# Without a stamp it files every record of this session's under the keys, as it always has. That is
+# the form a hand run clear takes, and it is the form every clear line took before #381; a findings
+# file rendered by the older hook still carries one.
+issue_spool_clear() { # clear <dir> [session-transcript] [stamp] -> file the pending records
+  local key rc=0 total=0 left_total=0 later_total=0 n nleft nlater pair keys="" stamp="${3:-}"
+  if [ -n "$stamp" ]; then
+    if [ ! -r "$stamp" ] || [ "$(head -n 1 "$stamp" 2>/dev/null)" != "$ISSUE_SPOOL_STAMP_HEADER" ]; then
+      echo "issue-spool: could not read $stamp, the record of which spool records the review that wrote this command had read, so NOTHING was filed. Filing without it would also file anything harvested after that review, unread (claude-config#381). The findings stay pending and come back at the next review, which writes a fresh record." >&2
+      return 1
+    fi
+  fi
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     keys="${keys:+$keys, }$key"
-    if pair="$(issue_spool_clear_key "$key" "$(issue_spool_session_id "${2:-}")")"; then
-      n="${pair%% *}"; nleft="${pair##* }"
+    if pair="$(issue_spool_clear_key "$key" "$(issue_spool_session_id "${2:-}")" "$stamp")"; then
+      read -r n nleft nlater <<CLEAR_PAIR
+$pair
+CLEAR_PAIR
       [ -n "$n" ] && [ "$n" -gt 0 ] 2>/dev/null && total=$(( total + n ))
       [ -n "$nleft" ] && [ "$nleft" -gt 0 ] 2>/dev/null && left_total=$(( left_total + nleft ))
+      [ -n "$nlater" ] && [ "$nlater" -gt 0 ] 2>/dev/null && later_total=$(( later_total + nlater ))
     else
       # The counts still matter on a failure: the records this could not file are named by the
-      # message clear_key already printed, and the ones it LEFT for other sessions are a separate
-      # fact that a failure elsewhere does not make untrue.
-      pair="${pair:-0 0}"; nleft="${pair##* }"
+      # message clear_key already printed, and the ones it LEFT for other sessions, or for the next
+      # review, are separate facts that a failure elsewhere does not make untrue.
+      read -r n nleft nlater <<CLEAR_PAIR
+${pair:-0 0 0}
+CLEAR_PAIR
       [ -n "$nleft" ] && [ "$nleft" -gt 0 ] 2>/dev/null && left_total=$(( left_total + nleft ))
+      [ -n "$nlater" ] && [ "$nlater" -gt 0 ] 2>/dev/null && later_total=$(( later_total + nlater ))
       rc=1
     fi
   done <<CLEAR_KEYS
@@ -969,7 +1087,20 @@ CLEAR_KEYS
   if [ "$left_total" -gt 0 ]; then
     echo "issue-spool: left $left_total record(s) that belong to other sessions working in this project. A clear files only the calling session's, so these are not yours to settle: they stay for those sessions' own reviews. They are now marked as seen by this session, so they will not be shown here again."
   fi
-  if [ "$total" -eq 0 ] && [ "$rc" -eq 0 ] && [ "$left_total" -gt 0 ]; then
+  # WHAT ARRIVED AFTER THE RENDER (claude-config#381). Said with a count, because a clear that left
+  # records behind and one that filed everything must not read alike, and these are exactly the
+  # records the next review will show; without the sentence that review reads as the clear having
+  # failed. They are NOT marked seen, whoever owns them: nobody has seen them.
+  if [ "$later_total" -gt 0 ]; then
+    echo "issue-spool: left $later_total record(s) that were harvested after the review that wrote this command was rendered. That review never showed them, so they stay pending, unmarked, for the next one."
+  fi
+  if [ "$total" -eq 0 ] && [ "$rc" -eq 0 ] && [ "$later_total" -gt 0 ]; then
+    # Neither the empty key message nor #322's fits: the key is not empty, and not everything under
+    # it is somebody else's. What is true is that nothing the review read was still here for this
+    # session to file, most often because an earlier clear already filed it, and that the rest is
+    # waiting for a review that has not happened yet. Nothing needs running (L111).
+    echo "issue-spool: nothing that review read was still pending for this session to file under the key(s) this project reads (${keys:-none}), so nothing was filed; an earlier clear most likely filed it already. What is under those key(s) now is described above and needs nothing run."
+  elif [ "$total" -eq 0 ] && [ "$rc" -eq 0 ] && [ "$left_total" -gt 0 ]; then
     # DISTINCT from "nothing was pending" (claude-config#322). Both used to read identically, and
     # the second told the reader to run the line the findings file names, which is exactly the line
     # they had just run: a remedy that cannot change the state it names (L11, L111). Everything
@@ -1009,11 +1140,13 @@ CLEAR_KEYS
 # files nothing and a clear that files nothing because everything under this key belongs to another
 # session had the same answer, and the advice given for the second was to run the command that had
 # just been run (claude-config#322).
-issue_spool_clear_key() { # clear-key <key> [session id]
-  local file archive staged count mine others sid="${2:-}" left=0
+# And a THIRD, "<left because they arrived after the render>", which is only ever non-zero when a
+# stamp was given (claude-config#381).
+issue_spool_clear_key() { # clear-key <key> [session id] [stamp]
+  local file archive staged count mine others sid="${2:-}" stamp="${3:-}" left=0 later=0 counts
   file="$(issue_spool_path_for_key "$1")"
   archive="$(issue_spool_archive_for_key "$1")"
-  [ -s "$file" ] || { printf '0 0'; return 0; }
+  [ -s "$file" ] || { printf '0 0 0'; return 0; }
   mkdir -p "$(issue_spool_root)" 2>/dev/null || return 1
   staged="${file}.filing.$$"
   mv "$file" "$staged" 2>/dev/null || return 1
@@ -1027,12 +1160,35 @@ issue_spool_clear_key() { # clear-key <key> [session id]
   # that has not happened yet, and filing it destroys work nobody has seen. A record naming NO
   # session cannot be attributed, so it is filed by whoever clears first, which is what every
   # record did before this existed.
-  if [ -n "$sid" ]; then
+  #
+  # And by the STAMP, first (claude-config#381). A record the render never read is put back exactly
+  # as it is, whoever owns it: not filed, and not marked seen either, because marking another
+  # session's unseen record as seen here would hide it from this session's next review, which is the
+  # same loss by a quieter route. Matched as a MULTISET, so two identical records of which the render
+  # read one file one and leave the other.
+  #
+  # If this split cannot run at all, nothing is filed from this key WHEN a stamp was given: the
+  # unsplit fallback below files everything, which is the defect itself (L173).
+  if [ -n "$sid" ] || [ -n "$stamp" ]; then
     mine="${file}.mine.$$"; others="${file}.others.$$"
-    CLAUDE_SPOOL_SESSION="$sid" python3 -c '
-import datetime, json, os, sys
-sid = os.environ["CLAUDE_SPOOL_SESSION"]
+    if ! counts="$(CLAUDE_SPOOL_SESSION="$sid" CLAUDE_SPOOL_STAMP="$stamp" CLAUDE_SPOOL_KEY="$1" \
+        CLAUDE_SPOOL_IDENTITY_PY="$ISSUE_SPOOL_IDENTITY_PY" python3 -c '
+import collections, datetime, json, os, sys
+sid = os.environ.get("CLAUDE_SPOOL_SESSION") or ""
+stamp = os.environ.get("CLAUDE_SPOOL_STAMP") or ""
+key = os.environ.get("CLAUDE_SPOOL_KEY") or ""
 src, mine, others = sys.argv[1], sys.argv[2], sys.argv[3]
+read = None
+if stamp:
+    exec(os.environ["CLAUDE_SPOOL_IDENTITY_PY"])
+    read = collections.Counter()
+    with open(stamp, encoding="utf-8") as sf:
+        next(sf)
+        for sl in sf:
+            parts = sl.split()
+            if len(parts) == 2 and parts[0] == key:
+                read[parts[1]] += 1
+later = 0
 # OWNERSHIP EXPIRES (claude-config#326), on the same window and by the same reading as the render,
 # or a record would be shown to this reader as theirs to file and then put back by the clear that
 # follows, which is a worse loop than the one #322 removed (L70).
@@ -1052,6 +1208,14 @@ with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", e
     for line in fh:
         if not line.strip():
             continue
+        if read is not None:
+            ident = record_identity(line)
+            if read[ident] > 0:
+                read[ident] -= 1
+            else:
+                o.write(line if line.endswith("\n") else line + "\n")
+                later += 1
+                continue
         try:
             rec = json.loads(line)
             s = rec.get("session") if isinstance(rec, dict) else None
@@ -1060,7 +1224,7 @@ with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", e
             # ever, because nothing can ever claim it and the reader already reports it (L11).
             s = None
             rec = None
-        if s and s != sid and not unclaimed(rec.get("ts", "") if isinstance(rec, dict) else ""):
+        if sid and s and s != sid and not unclaimed(rec.get("ts", "") if isinstance(rec, dict) else ""):
             # MARKED AS SEEN BY THIS SESSION (claude-config#322), and nothing else about it is
             # touched: not filed, not moved, still owned by the session that produced it, still
             # offered to that session'"'"'s own review. What stops is being handed the same
@@ -1078,13 +1242,32 @@ with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", e
                 o.write(line)
         else:
             m.write(line)
-' "$staged" "$mine" "$others" 2>/dev/null || { mine=""; others=""; }
+print(later)
+' "$staged" "$mine" "$others" 2>/dev/null)"; then
+      rm -f "$mine" "$others" 2>/dev/null
+      mine=""; others=""
+      if [ -n "$stamp" ]; then
+        # Put back, appended rather than moved over, for the same reason as below.
+        if cat "$staged" >> "$file" 2>/dev/null; then
+          rm -f "$staged"
+          echo "issue-spool: could not match $(basename "$file") against the record of what the review read, so NOTHING was filed from it and its records are still pending." >&2
+        else
+          echo "issue-spool: could not match $(basename "$file") against the record of what the review read, so NOTHING was filed from it, and its records could not be put back either: they are in $staged. Move that file back by hand." >&2
+        fi
+        printf '0 0 0'
+        return 1
+      fi
+    fi
     if [ -n "$mine" ] && [ -f "$mine" ]; then
+      later="${counts:-0}"
+      case "$later" in ''|*[!0-9]*) later=0 ;; esac
       # Appended, never written over: a record that arrived while this was going created a NEW
       # pending file, and replacing it would destroy exactly what the rename was protecting.
       if [ -s "$others" ]; then
         left="$(grep -c . "$others" 2>/dev/null || true)"
         case "$left" in ''|*[!0-9]*) left=0 ;; esac
+        left=$(( left - later ))
+        [ "$left" -ge 0 ] || left=0
         cat "$others" >> "$file" 2>/dev/null || true
       fi
       rm -f "$others" 2>/dev/null || true
@@ -1096,7 +1279,7 @@ with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", e
   case "$count" in ''|*[!0-9]*) count=0 ;; esac
   if [ "$count" -eq 0 ]; then
     rm -f "$staged" 2>/dev/null || true
-    printf '0 %s' "$left"
+    printf '0 %s %s' "$left" "$later"
     return 0
   fi
 
@@ -1108,12 +1291,12 @@ with open(src, encoding="utf-8", errors="replace") as fh,      open(mine, "w", e
     # drain that failed in silence is how an archive stops being written to without anybody
     # noticing, which is half of what claude-config#260 reported (L98, L11).
     echo "issue-spool: could NOT append $count record(s) to $(basename "$archive"). They are not lost: they are in $staged, and nothing has been added to the archive. Move that file by hand once you know why." >&2
-    printf '0 %s' "$left"
+    printf '0 %s %s' "$left" "$later"
     return 1
   fi
 
   issue_spool_cap_archive "$archive"
-  printf '%s %s' "$count" "$left"
+  printf '%s %s %s' "$count" "$left" "$later"
   return 0
 }
 
@@ -1274,11 +1457,11 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     archive-path) issue_spool_archive_path "${1:-$PWD}" "${2:-}" ;;
     append)       issue_spool_append "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     note)         issue_spool_note "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
-    raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; rm -f "$f" "$f.sources"; exit 0 ;;
-    pending)      issue_spool_pending "${1:-$PWD}" "${2:-}" ;;
+    raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; issue_spool_collect_done "$f"; exit 0 ;;
+    pending)      issue_spool_pending "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     has-findings) issue_spool_has_findings "${1:-$PWD}" "${2:-}" ;;
     archive)      f="$(issue_spool_archive_path "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
-    clear)        issue_spool_clear "${1:-$PWD}" "${2:-}" ;;
+    clear)        issue_spool_clear "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     file-errors)  issue_spool_file_errors "${1:-$PWD}" "${2:-}" ;;
     file-muted)   issue_spool_file_muted "${1:-$PWD}" "${2:-}" ;;
     muted-summary) issue_spool_muted_summary "${1:-$PWD}" "${2:-}" ;;
