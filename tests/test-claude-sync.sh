@@ -4354,7 +4354,7 @@ check "#392 one rule stored under two numbers names both of them" \
   "case \"\$_clk_rep\" in *'L1 and L2'*) true ;; *) false ;; esac"
 # The id is what a citation pins, so it is the thing a reader will go and search for.
 check "#392 and names the id the two copies share" \
-  "printf '%s' \"\$_clk_rep\" | grep -qE 'id [0-9a-f]{10}'"
+  "[[ \"\$_clk_rep\" =~ id\ [0-9a-f]{10} ]]"
 # RE-WRAPPED is still the same rule, because the id is the words and the line width is not (L278).
 # And a group of THREE names all three, not the first pair it happened to meet.
 printf '# Lessons\n\n## Proof over green\n\n- **L1. one rule about\n  proving things.** body\n- **L2. a different rule.** body\n- **L3. one rule about proving things.** body\n- **L4. one rule about proving   things.** body\n' > "$CLKH/LESSONS.md"
