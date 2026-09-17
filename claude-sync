@@ -2718,6 +2718,59 @@ refuse_resurrected_deletions(){
   return 0
 }
 
+# WHERE A HOOKS BLOCK RUNS EACH HOOK, judged before it is published (claude-config#413).
+#
+# On 2026-09-17 two sends in a row (b7190df, 59ab66f) published the Playwright gate in the Edit and
+# Write group. CI was the first thing to notice, and a red main stops BOTH Macs receiving, so a
+# fault one Mac made became everybody's. The refusal belongs at the first step that can answer it,
+# which is here, on the Mac that made it (L667).
+#
+# The question is test-hook-coverage.sh's, asked through the SAME file,
+# hooks/lib/hook-registration.py, never a copy of it (L41, L370): a hook whose header says
+# `Claude Code <Event>(<tools>) hook` must be registered for exactly those tools. A hook with no
+# such line is not judged, by that file, for both callers.
+#
+# WHICH COPY OF THE LIBRARY. The one in the payload this send is about to publish, when it has one,
+# because that is the code CI will run against this very commit, so the send refuses exactly what
+# CI would (L398). The hook scripts judged are the payload's too, for the same reason: they were
+# mirrored in a moment ago and are what the other Mac will receive. When the payload carries no
+# library (a fixture home, or a config from before this shipped) the copy beside this tool answers
+# instead, which in the real clone is the same file. When neither can answer the block is held
+# back and says so, because a block nobody checked is exactly what turned main red (L42, L98).
+#
+# Prints nothing when the block may be published, and otherwise the reason, written to follow
+# "because" in the caller's sentence.
+hook_block_registration_faults(){   # $1 = the merged hooks object -> empty, or why it must wait
+  local lib="$PAYLOAD/hooks/lib/hook-registration.py" view out rc
+  [ -f "$lib" ] || lib="$SYNC_SELF_PAYLOAD/hooks/lib/hook-registration.py"
+  if [ ! -f "$lib" ]; then
+    printf 'it could not be checked: hooks/lib/hook-registration.py is in neither %s nor %s, so nothing could say whether each hook is registered where its header says. Reinstall claude-sync from its repo, and the block publishes on the next send.' "$PAYLOAD/hooks/lib" "$SYNC_SELF_PAYLOAD/hooks/lib"
+    return 0
+  fi
+  if ! view="$(scratch_file 2>/dev/null)"; then
+    printf 'it could not be checked: no scratch file could be made to hold it for %s. The block publishes on the next send that can check it.' "$lib"
+    return 0
+  fi
+  # Under set -e an assignment carries its command's status, so each is caught rather than
+  # allowed to end the send before the verdict is read (L612). A block jq could not write is
+  # judged unreadable by the library, which lands in "could not be checked" below.
+  printf '%s' "$1" | jq '{hooks: .}' > "$view" 2>/dev/null || true
+  rc=0
+  out="$(python3 "$lib" "$view" "$PAYLOAD/hooks" 2>&1)" || rc=$?
+  rm -f "$view" 2>/dev/null || true
+  case "$rc" in
+    0) return 0 ;;
+    1)
+      if ! is_blank "$out"; then
+        printf "a hook would be run for tools its own header does not declare, and CI would fail on it and stop both Macs receiving config: %s. Fix the hooks section of %s on this Mac so each hook sits only in the matcher group its header names, and the block publishes on the next send. Everything else was sent normally." \
+          "$(printf '%s\n' "$out" | grep -v '^$' | tr '\n' ';' | sed 's/;$//; s/;/; /g')" "$CLAUDE_HOME/settings.json"
+        return 0
+      fi ;;
+  esac
+  printf 'it could not be checked: %s exited %s%s, and a block nobody checked is not sent. Everything else was sent normally.' \
+    "$lib" "$rc" "$(is_blank "$out" || printf ' saying %s' "$(printf '%s' "$out" | tr '\n' ' ')")"
+}
+
 stage_local_to_payload(){
   [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
   mkdir -p "$PAYLOAD"
@@ -2763,7 +2816,17 @@ PROT
       fi
       _sh_base="$(last_applied_hook_block)"
       _sh_merged="$(merge_hook_blocks "$_sh_local" "$_sh_pay" "$_sh_base")"
-      if [ -n "$_sh_merged" ]; then
+      local _sh_verdict=""
+      [ -n "$_sh_merged" ] && _sh_verdict="$(hook_block_registration_faults "$_sh_merged")"
+      if [ -n "$_sh_verdict" ]; then
+        # Held back, like the merge failure below: only this block waits, and everything else in
+        # the send still travels (claude-config#413).
+        echo "claude-sync: the hooks block was NOT published and the repo keeps the copy it had, because $_sh_verdict" >&2
+        case "$_sh_verdict" in
+          "it could not be checked"*) notify "held back the hooks block: it could not be checked" ;;
+          *) notify "held back the hooks block: a hook is registered for tools its header does not declare" ;;
+        esac
+      elif [ -n "$_sh_merged" ]; then
         printf '%s' "$_sh_merged" | jq '{hooks: .}' | tok > "$PAYLOAD/settings.hooks.json"
       else
         echo "claude-sync: the hooks block could not be merged for publishing, so the repo keeps the copy it had and this Mac's hook changes have NOT been sent. Check $CLAUDE_HOME/settings.json and the payload's settings.hooks.json with jq." >&2

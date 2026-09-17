@@ -200,56 +200,16 @@ esac
 #              one of those tools under that event. The header is the hook's own statement of
 #              where it belongs, so the settings are compared against it rather than a second
 #              list written here (L41).
+#   EXTRA      such a hook is ALSO run for a tool its header does not declare (claude-config#413).
+#              The 2026-09-17 incident put the Playwright gate in the Edit and Write group, and a
+#              copy there beside a correct group would have passed UNWIRED alone.
 # ---------------------------------------------------------------------------
+# The question itself lives in lib/hook-registration.py (claude-config#413), because claude-sync's
+# send asks it too, before publishing a hooks block, and one rule in two copies drifts (L41, L370).
+# It exits 0 when it judged the file clean, 1 when it printed faults, and anything else when it
+# could not judge at all.
 registration_faults(){ # registration_faults <settings file> <hooks dir> -> one fault per line
-  python3 - "$1" "$2" <<'PY'
-import glob, json, os, re, sys
-settings, hooks_dir = sys.argv[1], sys.argv[2]
-events = json.load(open(settings)).get("hooks", {})
-
-def names(cmd):
-    return {os.path.basename(t) for t in cmd.split()}
-
-seen = {}
-runs = {}  # (event, hook basename) -> matchers
-for event, groups in events.items():
-    for g in groups:
-        matcher = g.get("matcher", "")
-        for h in g.get("hooks", []):
-            cmd = h.get("command", "")
-            key = (event, matcher, cmd, h.get("if", ""))
-            seen[key] = seen.get(key, 0) + 1
-            for n in names(cmd):
-                runs.setdefault((event, n), []).append(matcher)
-for (event, matcher, cmd, cond), n in sorted(seen.items()):
-    if n > 1:
-        print(f"DUPLICATE {event} matcher={matcher!r} {cmd}{' if=' + cond if cond else ''} is registered {n} times")
-
-def matches(matcher, tool):
-    if matcher in ("", "*"):
-        return True
-    # A matcher that is not a valid pattern is its own fault, never scored as a match or a miss (L11).
-    try:
-        return re.fullmatch(matcher, tool) is not None
-    except re.error as e:
-        print(f"BAD MATCHER {matcher!r} is not a valid pattern ({e}), so what it runs for was not judged")
-        return True
-
-header = re.compile(r"Claude Code (PreToolUse|PostToolUse)\(([^)]*)\) hook")
-for path in sorted(glob.glob(os.path.join(hooks_dir, "*.sh")) + glob.glob(os.path.join(hooks_dir, "*.py"))):
-    base = os.path.basename(path)
-    if base.startswith("test-"):
-        continue
-    with open(path, errors="replace") as f:
-        head = "".join(f.readline() for _ in range(8))
-    m = header.search(head)
-    if not m:
-        continue
-    event = m.group(1)
-    for tool in m.group(2).split("|"):
-        if not any(matches(mt, tool) for mt in runs.get((event, base), [])):
-            print(f"UNWIRED {base} declares {event}({m.group(2)}) and is not run for {tool}")
-PY
+  python3 "$DIR/lib/hook-registration.py" "$1" "$2"
 }
 
 REG="$TMPROOT/registration"; mkdir -p "$REG/hooks"
@@ -273,7 +233,7 @@ cat > "$REG/sound.json" <<'JSON'
     {"type": "command", "command": "__CLAUDE_HOME__/hooks/quiet.sh", "if": "Bash(git *)"},
     {"type": "command", "command": "__CLAUDE_HOME__/hooks/quiet.sh", "if": "Bash(gh *)"}
   ]},
-  {"matcher": "Edit|Write", "hooks": [
+  {"matcher": "Edit", "hooks": [
     {"type": "command", "command": "__CLAUDE_HOME__/hooks/gate.sh"}
   ]}
 ]}}
@@ -301,9 +261,54 @@ case "$broken" in
   *) check "#400 a matcher that is not a valid pattern is reported as such, not judged" "it answered: [$broken]" ;;
 esac
 sound="$(registration_faults "$REG/sound.json" "$REG/hooks" 2>&1)"
-[ -z "$sound" ] \
+sound_rc=$?
+[ -z "$sound" ] && [ "$sound_rc" -eq 0 ] \
   && check "#400 a settings file registering each hook once, where it belongs, reports nothing" ok \
-  || check "#400 a settings file registering each hook once, where it belongs, reports nothing" "it answered: [$sound]"
+  || check "#400 a settings file registering each hook once, where it belongs, reports nothing" "it answered: [$sound], exit $sound_rc"
+
+# EXTRA (claude-config#413). A hook declaring a PATTERN, as the Playwright gate does, is judged by
+# the same line: registered under that pattern is right, and the same group widened to Edit, or a
+# second registration under the other tool event, is not.
+printf '#!/usr/bin/env bash\n#\n# pwfix.sh\n# Claude Code PreToolUse(mcp__pw__.*|mcp__other_pw__.*) hook: a fixture.\n' > "$REG/hooks/pwfix.sh"
+cat > "$REG/extra.json" <<'JSON'
+{"hooks": {"PreToolUse": [
+  {"matcher": "Bash", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/gate.sh"}]},
+  {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/gate.sh"}]},
+  {"matcher": "mcp__pw__.*|mcp__other_pw__.*|Edit", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/pwfix.sh"}]}
+ ],
+ "PostToolUse": [
+  {"matcher": "Bash", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/gate.sh"}]}
+]}}
+JSON
+extra="$(registration_faults "$REG/extra.json" "$REG/hooks" 2>&1)"
+extra_rc=$?
+case "$extra" in
+  *"EXTRA gate.sh declares PreToolUse(Bash|Edit) and is also run for Write"*)
+    check "#413 a hook also run for a tool its header does not declare is reported" ok ;;
+  *) check "#413 a hook also run for a tool its header does not declare is reported" "it answered: [$extra]" ;;
+esac
+case "$extra" in
+  *"EXTRA gate.sh declares PreToolUse(Bash|Edit) and is also run under PostToolUse for Bash"*)
+    check "#413 a hook also run under the other tool event is reported" ok ;;
+  *) check "#413 a hook also run under the other tool event is reported" "it answered: [$extra]" ;;
+esac
+case "$extra" in
+  *"EXTRA pwfix.sh declares PreToolUse(mcp__pw__.*|mcp__other_pw__.*) and is also run for Edit"*)
+    check "#413 a hook declaring a pattern, widened to another tool, is reported" ok ;;
+  *) check "#413 a hook declaring a pattern, widened to another tool, is reported" "it answered: [$extra]" ;;
+esac
+case "$extra" in
+  *"UNWIRED pwfix"*|*"for mcp__"*) check "#413 and the patterns it does declare are not reported" "it answered: [$extra]" ;;
+  *) check "#413 and the patterns it does declare are not reported" ok ;;
+esac
+[ "$extra_rc" -eq 1 ] \
+  && check "#413 faults are answered with exit 1, so a caller can tell them from a clean file" ok \
+  || check "#413 faults are answered with exit 1, so a caller can tell them from a clean file" "exit $extra_rc"
+registration_faults "$REG/missing.json" "$REG/hooks" >/dev/null 2>&1
+missing_rc=$?
+[ "$missing_rc" -ne 0 ] && [ "$missing_rc" -ne 1 ] \
+  && check "#413 a settings file that cannot be read is neither clean nor faulty" ok \
+  || check "#413 a settings file that cannot be read is neither clean nor faulty" "exit $missing_rc"
 
 # The real settings: the payload copy inside the checkout, the installed copy once deployed.
 SETTINGS=""
@@ -311,13 +316,17 @@ if [ -f "$DIR/../settings.hooks.json" ]; then SETTINGS="$DIR/../settings.hooks.j
 elif [ -f "$DIR/../settings.json" ]; then SETTINGS="$DIR/../settings.json"; fi
 if [ -z "$SETTINGS" ]; then
   check "the settings file registering the hooks could be read" "neither settings.hooks.json nor settings.json is in $(cd "$DIR/.." && pwd), so no registration was checked"
-elif ! real_faults="$(registration_faults "$SETTINGS" "$DIR" 2>&1)"; then
-  check "the settings file registering the hooks could be read" "$(basename "$SETTINGS") could not be parsed: $real_faults"
 else
-  [ -z "$real_faults" ] \
-    && check "every hook is registered once per event and matcher, for every tool its header declares" ok \
-    || check "every hook is registered once per event and matcher, for every tool its header declares" "$(basename "$SETTINGS") says:
+  real_faults="$(registration_faults "$SETTINGS" "$DIR" 2>&1)"
+  real_rc=$?
+  if [ "$real_rc" -ne 0 ] && [ "$real_rc" -ne 1 ]; then
+    check "the settings file registering the hooks could be read" "$(basename "$SETTINGS") could not be judged (exit $real_rc): $real_faults"
+  elif [ "$real_rc" -eq 0 ]; then
+    check "every hook is registered once per event and matcher, for exactly the tools its header declares" ok
+  else
+    check "every hook is registered once per event and matcher, for exactly the tools its header declares" "$(basename "$SETTINGS") says:
 $(printf '%s\n' "$real_faults" | sed 's/^/    /')"
+  fi
 fi
 
 echo "test-hook-coverage: $n_now hook(s) named by no suite, baseline says $n_base."
