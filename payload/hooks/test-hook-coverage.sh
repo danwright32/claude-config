@@ -228,10 +228,12 @@ for (event, matcher, cmd, cond), n in sorted(seen.items()):
 def matches(matcher, tool):
     if matcher in ("", "*"):
         return True
+    # A matcher that is not a valid pattern is its own fault, never scored as a match or a miss (L11).
     try:
         return re.fullmatch(matcher, tool) is not None
-    except re.error:
-        return matcher == tool
+    except re.error as e:
+        print(f"BAD MATCHER {matcher!r} is not a valid pattern ({e}), so what it runs for was not judged")
+        return True
 
 header = re.compile(r"Claude Code (PreToolUse|PostToolUse)\(([^)]*)\) hook")
 for path in sorted(glob.glob(os.path.join(hooks_dir, "*.sh")) + glob.glob(os.path.join(hooks_dir, "*.py"))):
@@ -290,6 +292,13 @@ esac
 case "$folded" in
   *quiet.sh*) check "#400 one hook scoped by two different ifs is not a duplicate" "it answered: [$folded]" ;;
   *) check "#400 one hook scoped by two different ifs is not a duplicate" ok ;;
+esac
+printf '{"hooks": {"PreToolUse": [{"matcher": "Edit(", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/gate.sh"}]}]}}\n' > "$REG/broken.json"
+broken="$(registration_faults "$REG/broken.json" "$REG/hooks" 2>&1)"
+case "$broken" in
+  *"BAD MATCHER 'Edit(' is not a valid pattern"*)
+    check "#400 a matcher that is not a valid pattern is reported as such, not judged" ok ;;
+  *) check "#400 a matcher that is not a valid pattern is reported as such, not judged" "it answered: [$broken]" ;;
 esac
 sound="$(registration_faults "$REG/sound.json" "$REG/hooks" 2>&1)"
 [ -z "$sound" ] \
