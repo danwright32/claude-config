@@ -14051,7 +14051,7 @@ dbg "#420 watcher whose file has not moved: $out_ws_ok"
 check "#420 a watcher running the file on disk sends normally" \
   "[ \"\$(grep -c . '$WS_HITS' 2>/dev/null || true)\" = '1' ]"
 check "#420 and says nothing about being stale" \
-  "! grep -q 'loaded a different claude-sync' <<< \"\$out_ws_ok\""
+  "! grep -q 'this daemon is older than the claude-sync on disk' <<< \"\$out_ws_ok\""
 
 # THE DEFECT. The file is REPLACED rather than appended to, because that is how it really moves: a
 # pull writes a new file and renames it over the old one, so the running process keeps reading its
@@ -14086,6 +14086,20 @@ check "#420 and it names the version it loaded and the one on disk, each in its 
 # send (L98, L622).
 check "#420 the watch log carries its own outcome for it" \
   "grep -q 'claude-sync watch: NOT sent, this daemon is older than the claude-sync on disk' <<< \"\$out_ws\""
+# The positive first, in this same fixture, or the absence below is a needle that
+# appears nowhere and passes however the wording moves (L159, and the absence needle
+# scan is what caught exactly that here). A tick that really had nothing to send is
+# what the refusal must not be mistaken for, so it is the one to establish.
+cat > "$WS_FS" <<'FSEOF'
+#!/usr/bin/env bash
+echo one
+FSEOF
+chmod +x "$WS_FS"
+out_ws_none="$(SYNC_FSWATCH="$WS_FS" SYNC_WATCH_SEND="printf 'SEND-OUTCOME nothing\n'" \
+  CLAUDE_HOME="$WS_HOME" SYNC_REPO="$WORK/watch-stale-repo-unused" SYNC_NO_NOTIFY=1 \
+  bash "$WS_SELF" watch 2>&1 || true)"
+check "#420 a tick with nothing to send is logged as exactly that" \
+  "grep -q 'watch: nothing to send' <<< \"\$out_ws_none\""
 check "#420 and never reports it as nothing to send" \
   "! grep -q 'watch: nothing to send' <<< \"\$out_ws\""
 
