@@ -7,6 +7,22 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L480. A command that FAILED PARTWAY still ran everything before the point it failed, so any
+  measurement taken afterwards inherits that work rather than starting from the state you think it
+  did.** An error reads as "nothing happened", and the work already done is invisible in exactly the
+  direction that flatters the next reading. Re-establish the cold state a timing depends on, or take
+  the measurement in a rig that cannot have been touched. (ovation#371: timing a cold build of both
+  configurations in a fresh worktree. The first attempt errored with `read-only variable: status`, a
+  zsh fault in the timing wrapper and nothing to do with the build, but `bash scripts/build-products.sh`
+  sits BEFORE that line and had already run to completion. The repeat read 6 seconds against a warm
+  cache. The true cold figure, taken after deleting the derived data root, was 30 seconds, five times
+  larger, and 6 seconds would have been reported as the cost the issue was arguing about. Caught only
+  because 6 seconds for two configurations was implausible, which is not a method. The same shape
+  makes a cache warm, a table populated, a migration already applied or a file already downloaded
+  when the next step believes it is starting clean)
+  SHORT: A command that errored still ran what came before it, so re-establish a timing's cold state rather than assume the failure undid the work.
+
+
 - **L467. A guard that a required call is PRESENT cannot see a SECOND one, so where that call
   increments a counter or emits an event, assert it happens EXACTLY once.** Two changes can each add it
   correctly and the overcount then reads as real activity rather than as a fault. (overture#3836:
