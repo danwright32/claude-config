@@ -7989,6 +7989,28 @@ watch_already_running(){   # -> prints the live watcher's pid, or nothing
   return 1
 }
 
+# THE COPY OF claude-sync THIS PROCESS IS RUNNING (claude-config#420).
+#
+# do_watch runs watch_tick as a FUNCTION inside one long lived bash process, so every send the
+# watcher makes executes whatever that process parsed when it started, however far the file on disk
+# has moved since. A guard shipped into the script is inert in that process until it restarts, and
+# nothing said so: the log records what each tick DID and never which version did it, so every line
+# a day old daemon writes reads exactly like a current one (L400, L175).
+#
+# A CONTENT hash rather than an mtime, because a checkout can restore an older mtime and a rewrite
+# with identical content moves it while changing nothing that matters (L40).
+WATCH_LOADED_DIGEST=""
+script_digest(){   # -> a content hash of the claude-sync file this process was started from
+  local self out
+  # BASH_SOURCE[0] inside a function is the file the function was DEFINED in, which is this script
+  # however it was invoked. SYNC_SELF is the seam, for a fixture that has to name a copy.
+  self="${SYNC_SELF:-${BASH_SOURCE[0]}}"
+  [ -f "$self" ] || return 1
+  out="$({ shasum -a 256 "$self" 2>/dev/null || sha256sum "$self" 2>/dev/null; } | awk 'NR==1{print $1}')"
+  case "$out" in ''|*[!0-9a-f]*) return 1 ;; esac
+  printf '%s' "$out"
+}
+
 do_watch(){
   local fs="${SYNC_FSWATCH:-fswatch}"
   command -v "$fs" >/dev/null 2>&1 || \
@@ -7998,6 +8020,15 @@ do_watch(){
     die "a claude-sync watcher is already running on this Mac (process $live), and several watchers all react to the same edit. Nothing was started. End that one first if you meant to replace it: kill $live"
   fi
   printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE" 2>/dev/null || true
+  # Recorded HERE rather than at the top of the file, because it is a fact about this long lived
+  # loop and nothing else: every other entry point is a fresh process that exits in seconds.
+  WATCH_LOADED_DIGEST="$(script_digest || true)"
+  if [ -z "$WATCH_LOADED_DIGEST" ]; then
+    # Said out loud. A watcher that cannot record what it loaded cannot notice being left behind,
+    # and silence about that is indistinguishable from a watcher that is checking and finding
+    # nothing wrong (L98).
+    echo "claude-sync: could not read which claude-sync this watcher loaded, so it cannot notice being left behind by a later one. Every send below runs whatever this process parsed at startup." >&2
+  fi
   # Removed on the way out however this ends, so the next watcher is not refused by a record of
   # one that has gone. Only OUR own record: a file another live watcher wrote must survive us.
   trap 'if [ "$(head -1 "$SYNC_WATCH_PID_FILE" 2>/dev/null || true)" = "$$" ]; then rm -f "$SYNC_WATCH_PID_FILE"; fi' EXIT
@@ -8053,6 +8084,16 @@ do_watch(){
           # refused it (claude-config#327).
           *"SEND-OUTCOME ci-unreadable-expired"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: applied WITHOUT a CI verdict, because none could be read for long enough that none is coming" ;;
           *"SEND-OUTCOME ci-unreadable"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, could not read whether the shared repo's head passed its tests" ;;
+          # The two versions travel INTO the log, not just the fact that they differ. Every other
+          # arm here can be acted on from the summary alone; this one cannot, because which way
+          # round the divergence is and how far apart they are is the whole of what a person does
+          # next (L11, L80). watch_tick's own sentence is what carries them, and the loop otherwise
+          # keeps $out to itself, so it is folded onto this line rather than left unread.
+          *"SEND-OUTCOME stale-daemon"*)
+            stale_said="${out//SEND-OUTCOME stale-daemon/}"
+            stale_said="${stale_said//$'\n'/ }"
+            while [ "${stale_said# }" != "$stale_said" ]; do stale_said="${stale_said# }"; done
+            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT sent, this daemon is older than the claude-sync on disk. $stale_said" ;;
           # A send that exited 0 and said nothing about what it did. Recorded as unknown rather
           # than as success: that is the state this whole line exists to stop being invisible
           # (L98), and it is what a version too old to print the marker looks like.
@@ -8083,6 +8124,23 @@ do_watch(){
 # fswatch. SYNC_IN_WATCH is what tells do_send this is the automatic send rather than a person
 # asking for one, which is the only send a hold stops.
 watch_tick(){
+  local now_digest
+  # Refuses the SEND, and only on a difference it could actually READ. A hash that cannot be taken,
+  # because the file is mid rename or has been moved, is not a divergence, and refusing on it would
+  # stop this Mac publishing over the ordinary race that every legitimate update passes through.
+  # This says only what it measured (L11).
+  #
+  # It does NOT restart the daemon. Refusing and saying so is the part that cannot be wrong, and a
+  # process that replaces itself while holding the loop is a separate decision. Recovery is the
+  # daily timer, which is a fresh process that pulls and restarts the daemon, or any pull by hand.
+  if [ -n "${WATCH_LOADED_DIGEST:-}" ] && now_digest="$(script_digest)" \
+     && [ "$now_digest" != "$WATCH_LOADED_DIGEST" ]; then
+    SYNC_IN_WATCH=1 send_outcome stale-daemon
+    # Written to be read APPENDED to the loop's own summary line, which is the only place it ever
+    # goes, so it repeats neither the refusal nor the name of the tool (L605).
+    echo "It loaded ${WATCH_LOADED_DIGEST:0:12} and the file on disk is now ${now_digest:0:12}, so a send would run logic that may be missing guards shipped since it started. It picks the newer one up when the daemon restarts: claude-sync install-autosync, or any claude-sync pull that updates the script." >&2
+    return 0
+  fi
   if [ -n "${SYNC_WATCH_SEND:-}" ]; then
     bash -c "$SYNC_WATCH_SEND"
     return $?
