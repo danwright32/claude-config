@@ -58,11 +58,11 @@ Which surfaces will this project touch? (Best guess - refined in Discovery)
 
 | Surface | How Used | Primary Tool |
 |---------|----------|-------------|
-| Browser (Web) | <If applicable> | Playwright MCP |
+| Browser (Web) | <If applicable> | WebFetch / Claude in Chrome |
 | Native macOS | <If applicable> | Peekaboo CLI |
 | Files | <If applicable> | Bash / Read / Write |
-| Communication | <If applicable> | Playwright / Peekaboo |
-| Calendar | <If applicable> | Playwright / Peekaboo |
+| Communication | <If applicable> | Claude in Chrome / Peekaboo |
+| Calendar | <If applicable> | Claude in Chrome / Peekaboo |
 | APIs/MCPs | <If applicable> | MCP tools / curl |
 | Code | <If applicable> | Bash |
 

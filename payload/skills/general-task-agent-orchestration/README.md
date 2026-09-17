@@ -22,15 +22,13 @@ Works for **any complex task**:
 
 Install Claude Code if you haven't: https://docs.anthropic.com/en/docs/claude-code
 
-### 2. Playwright MCP (Web Browser Automation)
+### 2. Claude in Chrome (Web Browser Automation)
 
-Add the Playwright MCP server to Claude Code:
+Install the Claude in Chrome extension and connect it to Claude Code. Agents read pages with WebFetch and interact with web apps through Claude in Chrome, each in a tab it creates.
 
-```bash
-claude mcp add playwright -- npx @anthropic-ai/playwright-mcp@latest
-```
+Verify it works by asking Claude Code to open a new tab and navigate to any website.
 
-Verify it works by asking Claude Code to navigate to any website.
+Agents do not use Playwright MCP. Execution agents are subagents, and Playwright MCP is one browser shared by the whole session, so a parallel agent can navigate the page another is reading; a hook refuses every Playwright call from a subagent. Browser work that truly needs Playwright stays in the main session.
 
 ### 3. Peekaboo CLI (macOS Native UI Automation)
 
@@ -89,7 +87,7 @@ Claude should activate the skill and begin the 12-phase workflow.
 
 | Phase | Name | What Happens |
 |-------|------|-------------|
-| 0 | Setup | Verify Playwright + Peekaboo, create orchestration folder |
+| 0 | Setup | Verify Claude in Chrome + Peekaboo, create orchestration folder |
 | 1 | Brain Dump to Project Brief | Synthesize user input into structured brief |
 | 2 | First Research Wave | Parallel subagents research each domain |
 | 3 | Discovery | Comprehensive Q&A with user, category-specific questions |
@@ -109,11 +107,11 @@ The key differentiator - agents don't just write files, they operate across six 
 
 | Surface | Tool | What It Covers |
 |---------|------|---------------|
-| Browser (Web) | Playwright MCP | Web apps, dashboards, SaaS platforms |
+| Browser (Web) | WebFetch / Claude in Chrome | Web apps, dashboards, SaaS platforms |
 | Native macOS | Peekaboo CLI | Desktop apps (Keynote, Calendar, Mail, any app) |
 | Files | Bash / Read / Write | Documents, configs, data, scripts |
-| Communication | Playwright / Peekaboo | Email, messaging, notifications |
-| Calendar | Playwright / Peekaboo | Scheduling, events, time blocks |
+| Communication | Claude in Chrome / Peekaboo | Email, messaging, notifications |
+| Calendar | Claude in Chrome / Peekaboo | Scheduling, events, time blocks |
 | APIs/MCPs | MCP tools / curl | External services, integrations |
 
 ## Verification Loop
@@ -168,19 +166,13 @@ If not found, reinstall or add to PATH manually.
 
 Grant Screen Recording permission to your terminal app in System Settings > Privacy & Security > Screen Recording. Restart the terminal after granting.
 
-### "Playwright MCP not available"
+### "Claude in Chrome not available"
 
-Verify the MCP server is configured:
+Check the extension is installed and enabled in Chrome, then run `/chrome` in Claude Code to reconnect it.
 
-```bash
-claude mcp list
-```
+### "Playwright refused for a subagent"
 
-If Playwright isn't listed, re-add it:
-
-```bash
-claude mcp add playwright -- npx @anthropic-ai/playwright-mcp@latest
-```
+That refusal is deliberate. Move the step to Claude in Chrome in the agent's own tab, or to WebFetch if it only reads, or run it in the main session.
 
 ---
 

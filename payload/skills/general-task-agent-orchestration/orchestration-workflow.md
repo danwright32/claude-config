@@ -9,7 +9,7 @@
 **Actor:** Main agent
 
 1. Verify hard prerequisites:
-   - **Playwright MCP** is available (test with a simple `browser_navigate`)
+   - **Claude in Chrome** is connected (test by opening a tab with `tabs_create_mcp` and calling `navigate`)
    - **Peekaboo CLI** is installed (test with `peekaboo list apps`)
    - If either fails, stop and inform the user. Do not proceed without both.
 2. Create orchestration folder: `.claude/orchestration-<auto-slug>/` where slug is auto-generated from the project idea (e.g., `orchestration-course-launch`, `orchestration-hiring-campaign`)
@@ -158,7 +158,7 @@ Now that the user's clarifications exist in DISCOVERY.md, deploy a second wave o
 1. Main agent identifies new research domains needed post-discovery. This wave focuses on:
    - **Execution-focused research** - how to accomplish what was decided, filtered by DISCOVERY.md
    - **Tool and surface research** - what tools, MCP servers, CLIs, native apps are needed for each execution surface
-   - **Human action research** - what accounts, credentials, configurations need to be set up (the agent will do these via Playwright/Peekaboo where possible)
+   - **Human action research** - what accounts, credentials, configurations need to be set up (the agent will do these via Claude in Chrome/Peekaboo where possible)
    - **Verification strategy research** - how to verify each deliverable on its target surface
    - **Distribution research** - how to deliver/publish each output to its destination
 
@@ -192,7 +192,7 @@ Follow template: ~/.claude/skills/general-task-agent-orchestration/artifact-temp
 
 **Actor:** Main agent (with user providing credentials when needed)
 
-**This phase is MANDATORY.** The agent must actually configure every tool and verify access to every execution surface - not just list what's needed. The agent autonomously completes all setup steps via Playwright (web) and Peekaboo (native apps), only asking the user for credentials it cannot obtain on its own.
+**This phase is MANDATORY.** The agent must actually configure every tool and verify access to every execution surface - not just list what's needed. The agent autonomously completes all setup steps via Claude in Chrome (web) and Peekaboo (native apps), only asking the user for credentials it cannot obtain on its own.
 
 ### 5a. Tool and Surface Inventory
 
@@ -204,7 +204,7 @@ Follow template: ~/.claude/skills/general-task-agent-orchestration/artifact-temp
    | **MCP servers** | Any new MCP servers to install and configure |
    | **API keys** | Every external API that needs a key/token |
    | **Accounts** | Services where accounts need to be created or accessed |
-   | **Browser sessions** | Web platforms requiring login (via Playwright) |
+   | **Browser sessions** | Web platforms requiring login (via Claude in Chrome) |
    | **Native app access** | macOS apps to configure (via Peekaboo) |
    | **CLI tools** | Any CLI tools to install (npm, pip, brew, etc.) |
    | **Environment variables** | Every .env variable or config the project needs |
@@ -213,7 +213,7 @@ Follow template: ~/.claude/skills/general-task-agent-orchestration/artifact-temp
 
 3. For each item, classify the setup action:
    - **Agent can do autonomously** - install via CLI, generate config files, etc.
-   - **Agent can do via Playwright** - configure in web dashboards
+   - **Agent can do via Claude in Chrome** - configure in web dashboards
    - **Agent can do via Peekaboo** - configure in native macOS apps
    - **Requires user credentials** - user must provide login credentials
    - **User must do manually** - truly cannot be automated (e.g., phone verification, payment)
@@ -232,7 +232,7 @@ The agent MUST execute these steps, not just document them:
 
 1. **Install MCP servers** - Run install commands, verify they respond
 2. **Install CLI tools** - Run install commands, verify with `--version`
-3. **Configure web platforms** - Navigate to dashboards via Playwright, configure settings, generate keys
+3. **Configure web platforms** - Navigate to dashboards via Claude in Chrome, configure settings, generate keys
 4. **Configure native apps** - Open and set up macOS apps via Peekaboo as needed
 5. **Create .env file** - Write all API keys, tokens, and configuration
 6. **Create config files** - Generate any configuration files needed
@@ -245,7 +245,7 @@ After each tool/surface is configured, immediately test it:
 - Make a test API call with each API key
 - Verify each MCP server responds
 - Verify each CLI tool runs
-- Verify Playwright can navigate to each web platform
+- Verify Claude in Chrome can navigate to each web platform
 - Verify Peekaboo can see each native app
 - Verify each file path is accessible
 
@@ -267,11 +267,11 @@ For EACH item in the inventory, perform the appropriate verification:
 
 | Surface/Tool | Verification Method |
 |--------------|-------------------|
-| **Playwright MCP** | Navigate to a target URL, take snapshot, verify content |
+| **Claude in Chrome** | Open a tab, navigate to a target URL, read the page, verify content |
 | **Peekaboo CLI** | `peekaboo see --app "<App>" --json`, verify element tree returned |
 | **API key** | Make a real API call (not just auth check), verify response data |
 | **CLI tool** | Run `--version` or `--help`, verify expected output |
-| **Browser session** | Navigate to authenticated page via Playwright, verify logged-in state |
+| **Browser session** | Navigate to authenticated page via Claude in Chrome, verify logged-in state |
 | **Native app** | Open app via Peekaboo, verify app responds and shows expected state |
 | **File system** | Verify all required directories exist and are writable |
 | **Config file** | Parse the config, verify all required keys are present and valid |
@@ -285,7 +285,7 @@ Create a verification report at `.claude/orchestration-<slug>/reports/surface-ve
 ```
 | Tool/Surface | Type | Status | Test Performed | Notes |
 |-------------|------|--------|---------------|-------|
-| Playwright MCP | MCP | PASS | Navigated to target URL | - |
+| Claude in Chrome | MCP | PASS | Navigated to target URL | - |
 | Peekaboo CLI | CLI | PASS | Listed running apps | - |
 | Google Calendar | Web Platform | PASS | Read today's events | - |
 | Keynote | Native App | PASS | Opened and captured state | - |
@@ -316,11 +316,11 @@ The main agent MUST create skills for ALL of the following categories. This is n
 | Category | What to Create | Example |
 |----------|---------------|---------|
 | **Each external tool/service** | One skill per external service | `google-calendar-automation`, `mailchimp-campaigns`, `notion-workspace` |
-| **Each MCP server** | One skill per MCP server used | `playwright-browser-automation`, `notion-mcp` |
+| **Each MCP server** | One skill per MCP server used | `chrome-browser-automation`, `notion-mcp` |
 | **Each native app workflow** | One skill per native app used significantly | `keynote-presentation-creation`, `apple-calendar-management` |
 | **Each external data source** | One skill per data source | `rss-feed-collection`, `market-research-sources` |
 | **Each research domain** | One skill per major research area | `curriculum-design-patterns`, `content-distribution-strategy` |
-| **Each verification strategy** | One skill per unique verification approach | `browser-verification-playwright`, `native-app-verification-peekaboo` |
+| **Each verification strategy** | One skill per unique verification approach | `browser-verification-chrome`, `native-app-verification-peekaboo` |
 | **Each distribution channel** | One skill per delivery platform | `youtube-publishing`, `email-newsletter-distribution` |
 | **Project architecture** | One skill documenting the overall project structure | `course-launch-architecture` (or project-specific equivalent) |
 

@@ -28,7 +28,7 @@ DISCOVERY.md overrides everything. If a research file, skill, or this document c
 
 | Tool | Surface | Purpose |
 |------|---------|---------|
-| Playwright MCP | Browser (Web) | Web automation + verification |
+| WebFetch / Claude in Chrome | Browser (Web) | Web reading, automation + verification |
 | Peekaboo CLI | Native macOS | Desktop app automation + verification |
 | <Tool> | <Surface> | <Purpose> |
 | ... | ... | ... |
@@ -37,11 +37,11 @@ DISCOVERY.md overrides everything. If a research file, skill, or this document c
 
 | Surface | Primary Tool | Verification Method |
 |---------|-------------|-------------------|
-| Browser (Web) | Playwright MCP | `browser_snapshot` + content check |
+| Browser (Web) | WebFetch / Claude in Chrome | `read_page` or `get_page_text` + content check |
 | Native macOS | Peekaboo CLI | `peekaboo see` + element check |
 | Files | Bash / Read / Write | Read back + validate |
-| Communication | Playwright / Peekaboo / API | Delivery confirmation |
-| Calendar | Playwright / Peekaboo / API | Read events back |
+| Communication | Claude in Chrome / Peekaboo / API | Delivery confirmation |
+| Calendar | Claude in Chrome / Peekaboo / API | Read events back |
 | APIs/MCPs | MCP tools / curl | Follow-up call + response check |
 | Code | Bash | Exit code + output check |
 
@@ -67,7 +67,7 @@ Agents MUST read relevant skill files before starting a task.
 
 | Server | Surface | Purpose |
 |--------|---------|---------|
-| Playwright | Browser | Web automation + verification |
+| Claude in Chrome | Browser | Web automation + verification, in a tab the agent creates |
 | <Server> | <Surface> | <Purpose> |
 | ... | ... | ... |
 
@@ -79,7 +79,8 @@ If you are a subagent spawned to execute a task:
 3. Read ALL skills listed in your task's Skills field
 4. Check PROGRESS.md for current state before starting
 5. Run the verification loop for every action (Execute -> Verify -> Retry -> Escalate)
-6. Record verification evidence in PROGRESS.md when done
+6. Do browser work with WebFetch or Claude in Chrome in a tab you create, never Playwright MCP, which is one browser shared by the whole session and refused for subagents
+7. Record verification evidence in PROGRESS.md when done
 ```
 
 ---

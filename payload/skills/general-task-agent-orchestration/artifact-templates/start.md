@@ -15,7 +15,7 @@ When `/start` is invoked, this orchestrator manages sequential execution of all 
 
 1. **Read PROGRESS.md** - Determine current state: which tasks are complete, which phase is active
 2. **Read PHASES.md** at `.claude/orchestration-<slug>/PHASES.md` - Load the full action plan
-3. **Verify surfaces** - Quick check that Playwright MCP and Peekaboo CLI are still accessible
+3. **Verify surfaces** - Quick check that Claude in Chrome and Peekaboo CLI are still accessible
 4. **Identify next task** - Find the lowest-numbered pending task whose dependencies are all met
 5. **Execute the task** - Spawn a subagent (see below)
 6. **After task completes** - Verify PROGRESS.md was updated and verification evidence recorded, then repeat from step 4
@@ -48,12 +48,12 @@ Read your full task specification at: .claude/orchestration-<slug>/tasks/phase-N
 
 ### Phase 2: Execute
 - Perform each action on its tagged surface using the appropriate tool:
-  - [browser] -> Playwright MCP (navigate, click, fill, snapshot, screenshot)
+  - [browser] -> WebFetch to read; Claude in Chrome in a tab you create to interact (tabs_create_mcp, navigate, find, computer, form_input, read_page)
   - [native] -> Peekaboo CLI (see, click, type, press, menu, open)
   - [file] -> Read / Write / Edit / Bash
   - [api] -> MCP tools / curl
-  - [comm] -> Playwright (web) or Peekaboo (native) or API
-  - [calendar] -> Playwright (web) or Peekaboo (native) or API
+  - [comm] -> Claude in Chrome (web) or Peekaboo (native) or API
+  - [calendar] -> Claude in Chrome (web) or Peekaboo (native) or API
   - [code] -> Bash
 
 ### Phase 3: Verify (MANDATORY)
@@ -61,7 +61,7 @@ For EACH action, run the verification loop:
 
 1. **Execute** the action
 2. **Verify** using the surface-specific method:
-   - [browser]: `browser_snapshot` + content check, screenshot for evidence
+   - [browser]: `read_page` or `get_page_text` + content check, screenshot for evidence
    - [native]: `peekaboo see --app` + element/content check
    - [file]: Read back + validate structure/content
    - [api]: Follow-up API call + response validation
@@ -83,10 +83,12 @@ For EACH action, run the verification loop:
 
 ## Available Tools
 
-### Playwright MCP (Browser/Web)
-- browser_navigate, browser_click, browser_fill_form, browser_snapshot
-- browser_take_screenshot, browser_evaluate, browser_file_upload
-- browser_select_option, browser_press_key, browser_wait_for
+### WebFetch and Claude in Chrome (Browser/Web)
+- WebFetch to read a page that needs no login or interaction
+- tabs_create_mcp first, then pass that tab id to every call: navigate, find, read_page
+- computer (click, type, key, scroll, screenshot), form_input, get_page_text
+- javascript_tool, file_upload
+- Never Playwright MCP: it is one browser shared by the whole session, so a parallel agent can navigate the page you are reading, and a hook refuses it for every subagent
 
 ### Peekaboo CLI (Native macOS)
 - peekaboo see, peekaboo click, peekaboo type, peekaboo hotkey

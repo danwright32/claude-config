@@ -72,7 +72,7 @@ Use this template when creating the progress tracker (Phase 12). This file enabl
 
 | Tool/Surface | Type | Status | Notes |
 |-------------|------|--------|-------|
-| Playwright MCP | MCP | <verified/pending> | |
+| Claude in Chrome | MCP | <verified/pending> | |
 | Peekaboo CLI | CLI | <verified/pending> | |
 | <Tool> | <Type> | pending | <Setup required> |
 | ... | | | |

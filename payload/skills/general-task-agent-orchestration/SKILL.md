@@ -1,6 +1,6 @@
 ---
 name: general-task-agent-orchestration
-description: Universal agent orchestration framework for any complex multi-step project. Use when coordinating course creation, hiring campaigns, event planning, research projects, operations setup, content pipelines, or any task spanning multiple execution surfaces (browser, native apps, files, APIs, communication, calendar). 12-phase workflow from brain dump to fully verified, delivered output. Requires Peekaboo CLI and Playwright MCP.
+description: Universal agent orchestration framework for any complex multi-step project. Use when coordinating course creation, hiring campaigns, event planning, research projects, operations setup, content pipelines, or any task spanning multiple execution surfaces (browser, native apps, files, APIs, communication, calendar). 12-phase workflow from brain dump to fully verified, delivered output. Requires Peekaboo CLI and the Claude in Chrome extension.
 ---
 
 # General Task Agent Orchestration
@@ -17,19 +17,21 @@ A universal framework for autonomous execution of any complex multi-step project
 ## Hard Prerequisites
 
 - **Peekaboo CLI** must be installed (`peekaboo` command available) - macOS native UI automation
-- **Playwright MCP** must be available - web browser automation
+- **Claude in Chrome** must be connected - web browser automation for agents (WebFetch covers reading pages)
 - User must be able to provide brain dump or project brief
 
 ## Six Execution Surfaces
 
 | Surface | Primary Tool | When Used |
 |---------|-------------|-----------|
-| Browser (Web) | Playwright MCP | Web apps, dashboards, online platforms |
+| Browser (Web) | WebFetch (read) / Claude in Chrome (interact) | Web apps, dashboards, online platforms |
 | Native macOS Apps | Peekaboo CLI | Desktop apps (Keynote, Pages, Calendar, Mail, etc.) |
 | Files | Bash / Read / Write | Documents, configs, data files, exports |
-| Communication | Playwright or Peekaboo | Email, messaging, notifications |
-| Calendar | Playwright or Peekaboo | Scheduling, event management |
+| Communication | Claude in Chrome or Peekaboo | Email, messaging, notifications |
+| Calendar | Claude in Chrome or Peekaboo | Scheduling, event management |
 | APIs/MCPs | MCP tools / curl | External service integrations |
+
+Agents do not use Playwright MCP. Execution agents are subagents, and Playwright MCP is one browser shared by the whole session, so a parallel agent can navigate the page another is reading; a hook refuses every Playwright call from a subagent. Browser work that truly needs Playwright stays in the main session.
 
 ## Core Files
 
@@ -54,7 +56,7 @@ A universal framework for autonomous execution of any complex multi-step project
 4. **Six execution surfaces** - browser, native apps, files, communication, calendar, APIs
 5. **Execute-Verify loop** - every action is verified on its target surface before moving on
 6. **Tool-aware** - researches and configures MCP servers, CLIs, external services
-7. **Agent-autonomous** - agents do "human steps" via Playwright and Peekaboo, only truly manual steps require user
+7. **Agent-autonomous** - agents do "human steps" via Claude in Chrome and Peekaboo, only truly manual steps require user
 8. **Generalizable** - works for any project type (content, courses, operations, events, hiring, research)
 9. **Discovery completeness** - self-audits discovery questions before proceeding; asks "could an agent execute this without guessing?"
 10. **Mandatory surface setup** - agent autonomously configures all tools and verifies access to every required surface
