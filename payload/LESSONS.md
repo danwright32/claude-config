@@ -8801,6 +8801,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   earlier and 65 s the day before, on the same roster shape. The judge's cron half accepted it because
   it was under the limit.)
   SHORT: A loop bounded only by wall time does unbounded work when I/O is fast, so bound each tick by a count too, and read a stubbed run as the compute ceiling.
+- **L715. A long running process (a watcher, a daemon, a worker loop) executes the copy of its
+  script it PARSED when it started, so a fix or a guard you ship into that script is inert until
+  that process restarts, and nothing reports a process running an older copy than the file on
+  disk.** Record what the running process loaded, as a content hash rather than an mtime, and have
+  each turn of its loop compare that record against the file, refusing to act on a divergence
+  rather than merely noting it. Distinct from L423, where the INSTALLED definition is the stale
+  copy and the source is current: here the file on disk is current too and only the running
+  process's memory is old, so every check that reads the disk agrees the fix has shipped.
+  (claude-config#420, 2026-09-17: a send guard that refuses to publish a hooks block routing a hook
+  away from the tools its own header declares merged at 12:39:31. At 13:40:19 the watcher on that
+  same Mac published exactly such a block and turned main red for the fourth time, which stops both
+  Macs receiving config. That watcher process had started at 15:24:22 the previous day, so the
+  guard function did not exist in it; run by hand against the same block, the library it calls
+  reported all six faults and exited 1. The sync log holds three restarted the watch daemon lines
+  from earlier days, and every line written since read exactly like a current one.)
+  SHORT: A long running process runs the code it parsed at START, so a guard shipped into its script is inert until it restarts, and nothing says so.
 
 
 ## Test speed

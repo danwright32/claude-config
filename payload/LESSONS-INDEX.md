@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 696 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 697 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -697,6 +697,7 @@ apply it, because the body is where the failure it came from is described.
 - L473. A trap on INT or TERM that only cleans up lets the script carry on, so end it with an exit, or stopping needs a kill that skips the cleanup.
 - L476. A pull request reported as CONFLICTING has no workflow run scheduled at all, so read mergeable before investigating checks that never appear.
 - L704. A loop bounded only by wall time does unbounded work when I/O is fast, so bound each tick by a count too, and read a stubbed run as the compute ceiling.
+- L715. A long running process runs the code it parsed at START, so a guard shipped into its script is inert until it restarts, and nothing says so.
 
 ## Test speed
 
