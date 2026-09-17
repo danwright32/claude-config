@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 690 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 695 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -331,6 +331,7 @@ apply it, because the body is where the failure it came from is described.
 
 ## State and identity
 
+- L483. A merge keeping an entry one side lacks must reinsert it under the scope it was declared in, never the first container, where it applies to others.
 - L339. A generator seeding from system entropy when given no seed differs on every run, so any comparison measures the seed and any cache keyed on it is wrong.
 - L602. A bound applied to ONE derived value (a clip to an active window, a cap, a cutoff) must be applied to every SIBLING derived from the same input
 - L14. Derived state re-derives on every input that feeds it, and every action updates every surface showing what it changed.
@@ -428,9 +429,12 @@ apply it, because the body is where the failure it came from is described.
 - L669. Lengthening an expiry, TTL or retention window silently removes the ceiling it was placing on every OTHER staleness that window happened to bound
 - L697. A robots Disallow and a noindex header cancel out: a disallowed page is never fetched, so allow the crawl and serve noindex to keep it out of search.
 - L702. A SQL allow list returning NULL for an unlisted kind makes `if not (x = any(allowed))` skip and permit everything, so give the CASE an else that raises.
+- L482. A privacy guard scoped to personal identity exempts everything else the dataset discloses, so define what makes it sensitive before scoping the guard.
+- L484. Before a privacy sweep swaps a real name for an invented one, check whether code matches on or writes it; if so, exempt it instead.
 
 ## UX completeness
 
+- L485. A minimum size is measured from the content's TALLEST state, usually the one carrying warnings, or it clips exactly when something is wrong.
 - L659. Copy on a surface reachable by more than one route must be true on EVERY route, especially a sentence naming WHO decided something.
 - L651. A control navigating to a route whose guard REDIRECTS an unpermitted viewer is a silent no-op for them, so gate it on the same predicate the guard uses.
 - L341. A curve assembled from piecewise segments must be checked for continuity of its RATE OF CHANGE, not only its value; the step in the rate is what shows.
@@ -620,6 +624,7 @@ apply it, because the body is where the failure it came from is described.
 - L631. Resolving a conflict by splicing both sides can drop the delimiter that closed the block, so check the file's STRUCTURE, not just that markers are gone.
 - L655. Finding the right shared place to PUT new logic is not the same as checking whether it already EXISTS, and doing the first well hides the second.
 - L683. A change that redefines the UNIT a number counts re-aims every consumer, so enumerate the readers from where the value is PUBLISHED, not from the issue.
+- L481. A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
 

@@ -4203,6 +4203,19 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## State and identity
 
+- **L483. A merge that KEEPS an entry because one side lacks it must carry the scope that entry
+  was declared under (its matcher, section or parent) and reinsert it there**, because appending
+  it to the first container of the right kind re-scopes it silently: the entry is present, every
+  presence check passes, and it now applies to something else. A fixture with only one scope
+  cannot see this, since the first container is then always the right one.
+  (claude-config#409, 2026-09-17: the three way merge of the hooks block in claude-sync kept a
+  registration the other Mac had not seen yet, but appended it to the event's FIRST group. A sync
+  from a Mac that had not applied the Playwright gate moved it from its mcp__playwright__ group
+  into the Bash group, so the gate stopped firing for the calls it exists to refuse and main went
+  red. The same merge had collapsed the Edit and Write groups into Bash six days earlier, which
+  was found only as a duplicate registration (#400). Its test used a single matcher throughout.)
+  SHORT: A merge keeping an entry one side lacks must reinsert it under the scope it was declared in, never the first container, where it applies to others.
+
 - **L339. A generator that seeds from system entropy when no seed is supplied produces a
   different artifact on every run, so any comparison between two versions of it measures the
   seed rather than the change, and any cache keyed on its inputs is silently wrong.** Persist
@@ -5456,8 +5469,56 @@ for reference; L6 was reviewed and deliberately not adopted.
   surface sent a way for that kind yet, so the hole was opened by the migration that added the
   kind and would have been found by the first screen built on it.)
   SHORT: A SQL allow list returning NULL for an unlisted kind makes `if not (x = any(allowed))` skip and permit everything, so give the CASE an else that raises.
+- **L482. A privacy guard is built around one notion of what is sensitive, almost always a
+  person's identity, so everything ELSE the same dataset discloses (which customers you have,
+  what you are working on, and when) is exempt by construction while the guard stays green.
+  Write down what makes the dataset sensitive before scoping the guard, and check the artifact
+  that STATES the rule against it too, because a document carrying the rule reads as complying
+  with it.** Distinct from L230, where the identity is right and the container is wrong, and
+  from L653, where the field is wrong: here the DEFINITION of sensitive is too narrow, so no
+  amount of widening the fields reaches it.
+  (overture#3958, 2026-09-17. The plan document for a milestone opens by stating its own rule,
+  that rows are named by primary key and status only, never by show title, never by venue,
+  because the store it measures is Dan's live prospect roster. The same document then names a
+  real show by title on four lines, with its status, the date its pitch was sent and the date it
+  collides on, and was pushed to a repository gh reports as PUBLIC. Neither the reality check
+  nor the lessons audit caught it, though both read that document and it carries the rule they
+  were checking against. Both shipped privacy guards were looking elsewhere by construction:
+  check-test-identity-provenance.sh reads identities carried by a reserved domain address and by
+  a URL host, and TestDataEmailDomainGuardTests judges an address by its domain, so a show title
+  is neither. The provenance baseline held 291 entries and this one was not among them,
+  correctly. What leaks is not a person, it is the pipeline: which shows are being pitched and
+  when, which is the commercially sensitive content of the whole dataset.)
+  SHORT: A privacy guard scoped to personal identity exempts everything else the dataset discloses, so define what makes it sensitive before scoping the guard.
+
+- **L484. Before a privacy sweep replaces a real name with an invented one, classify each occurrence
+  as scenery or as a value code MATCHES ON or WRITES INTO DATA, because swapping a load bearing literal
+  silently changes what the product does while every privacy guard goes green.** Scenery (a fixture
+  label, a doc comment) takes an invented name; a literal a migration looks rows up by, or inserts,
+  needs an exemption with its reason instead. Distinct from L230, where the sweep changed too little:
+  here it changed too much.
+  (downbeat#504. Commit 04d6bba replaced the two real venue names in a launch migration that INSERTS
+  those venues with a photo ID behaviour, so a fresh install now gains two venues that do not exist and
+  the real ones never get the behaviour. Every identity guard passed, and the same file was later
+  exempted by path for exactly this reason, #296, without anyone restoring the names.)
+  SHORT: Before a privacy sweep swaps a real name for an invented one, check whether code matches on or writes it; if so, exempt it instead.
 
 ## UX completeness
+
+- **L485. A container's minimum size is measured from the TALLEST state its content can
+  reach, which is usually the one carrying warnings or errors rather than the filled one.** A size
+  chosen against the ordinary state opens clipped exactly when something is wrong, and what falls
+  below the fold is the explanation. (ovation#391: the Settings window's minimum height was 360 and
+  the invoices pane wants 527 at its tallest, which is all three boxes EMPTY, because two of them
+  then carry a line reading "No invoice can be sent while this is empty" that the filled pane does
+  not. Empty is what a fresh Mac shows. So the window opened scrolling, and the part below the fold
+  was the reason sending was refused. The fix measures the pane and refuses a window shorter than it
+  plus the chrome, rather than pinning the number that happened to look right, because a field added
+  later is exactly when the scrolling comes back and nobody re-measures then. The same shape is any
+  form with inline validation: it is taller when invalid, and invalid is not the state it was laid
+  out against)
+  SHORT: A minimum size is measured from the content's TALLEST state, usually the one carrying warnings, or it clips exactly when something is wrong.
+
 
 - **L659. Copy on a surface reachable by more than one route must be true on EVERY route, and the
   sentence most likely to be false is the one naming WHO decided something (the range you chose,
@@ -7797,6 +7858,25 @@ for reference; L6 was reviewed and deliberately not adopted.
   guards calibrated against a quantity, and a guard at least fails loudly when it can no longer
   reach its threshold; a published value simply goes on being read. slate#2231)
   SHORT: A change that redefines the UNIT a number counts re-aims every consumer, so enumerate the readers from where the value is PUBLISHED, not from the issue.
+- **L481. A plan whose own reality check or lessons audit is left unresolved is still read as
+  THE plan by whoever implements it, because the phase issues name it as the plan, so file the
+  correction as a gating issue in the same action that files the phases.** A planner that
+  bounds its correction loop returns the document carrying its remaining problems, and the
+  header saying so is read once while the phase text is read throughout the build. The phases
+  are what get picked up off a backlog months later, each one saying read that document as the
+  plan, and nothing in them repeats the warning. Overture's per-night decisions plan was
+  returned on 2026-08-30 with 9 reality check claims broken and 9 lessons violations standing,
+  and every one of the 9 violations already carried its own written fix, sitting in an appendix
+  the implementer meets only after building from the phase text above it. The sibling milestone
+  planned eleven days later did file that gate (overture#3772, correcting a Phase 2 plan wrong
+  in 7 named places), which is the evidence that the practice exists and is not systematic: it
+  happened where somebody remembered, which is L27 exactly. The stale half compounds on its own,
+  because such a plan measures a live store on one day and is built from weeks later: this one
+  set its own first rule as re-measure every number on the day it is written and violated that
+  rule within one day, and by the time it was picked up the store had moved from 1,141 rows to
+  1,257 with roughly 100 issues merged over the line references.
+  (overture#3957 against overture#3324 to #3327, caught 2026-09-17)
+  SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
 
