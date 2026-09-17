@@ -412,6 +412,20 @@ case "$mo_ambig" in
   *"more than one checkout"*) check "#346 and says which fault stopped it looking" ok ;;
   *) check "#346 and says which fault stopped it looking" "out=$mo_ambig" ;;
 esac
+# The same two children under a project that IS a checkout, as a git WORKTREE, where `.git` is a
+# file (claude-config#402). The helper's rule is that the directory itself wins whatever its children
+# look like, and it tests for `.git` with `-e`. The matcher re-checked with a DIRECTORY test, so a
+# worktree read as no checkout at all and was refused as ambiguous, the two halves of one rule
+# disagreeing about the case agents work in by default (L263).
+WTP_ROOT="$(mktemp -d "$WORK/worktree.XXXXXX")"
+mkdir -p "$WTP_ROOT/alpha/.git" "$WTP_ROOT/beta/.git"
+printf 'gitdir: /somewhere/else/.git/worktrees/x\n' > "$WTP_ROOT/.git"
+mo_wtp="$(printf '%s\n' 'FINDING (a, b): widget/cache.py keeps a stale entry after a rename' \
+  | PATH="$WORK/bin-pet:$PATH" python3 "$MATCHER" "$WTP_ROOT" 2>/dev/null)"
+case "$mo_wtp" in
+  *"already #412"*) check "#402 a project that is itself a worktree is matched, not refused as ambiguous" ok ;;
+  *) check "#402 a project that is itself a worktree is matched, not refused as ambiguous" "out=$mo_wtp" ;;
+esac
 
 # The control. Resolving must find a checkout, never invent one: a directory with no repo anywhere
 # still fails open and still SAYS so, or the case above would be satisfied by a matcher that had

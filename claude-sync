@@ -4473,7 +4473,7 @@ sync_rebase_state(){   # -> none | concludable | conflict
 recover_unfinished_rebase(){
   local state paths err
   have_git || return 0
-  [ -d "$SYNC_REPO/.git" ] || [ -f "$SYNC_REPO/.git" ] || return 0
+  [ -e "$SYNC_REPO/.git" ] || return 0
   state="$(sync_rebase_state)"
   case "$state" in
     none) return 0 ;;
@@ -6961,7 +6961,9 @@ report_other_clones_position(){
     # (claude-config#295). Skipped silently: there is nothing a reader could do about it and saying
     # so on every run is the noise this removes.
     is_under_temp_dir "$d" && continue
-    if [ ! -d "$d/.git" ]; then
+    # `-e`, never `-d` (claude-config#402): in a git worktree `.git` is a FILE naming the real one,
+    # so a directory test reported every registered worktree as gone.
+    if [ ! -e "$d/.git" ]; then
       echo "claude-sync: the clone recorded at $d is not there any more, so how far behind it is cannot be answered. If it has gone for good: claude-sync forget-clone $d" >&2
       said=1; continue
     fi
