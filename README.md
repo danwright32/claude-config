@@ -290,6 +290,11 @@ send it and a pull does not write it onto this Mac. The run names each one and s
 skipping it quietly, because an entry that cannot load is indistinguishable from one that works
 until somebody tries to invoke it.
 
+A pull still leaves this Mac's own files under such an entry alone, but it does not list them with
+the local edits that "go up on the next send", because the send refuses them. They get their own
+line saying a send will not carry them and why, so a half-built skill is never reported as on its
+way to the other Mac.
+
 Measured against the real config on 2026-08-17, this refuses exactly four entries (two directories
 holding no `SKILL.md` and two loose markdown files) and every one of the 43 real skills passes.
 

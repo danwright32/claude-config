@@ -2822,11 +2822,48 @@ $keep
 KEEP
     rsync -aic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
   done
-  # Reported from $ahead, not $keep: a merged rule file is held back too, but it
+  # Reported from $ahead (split in two below), not $keep: a merged rule file is held back too, but it
   # already had its own clearer "these were MERGED" line and listing it again here
   # would read as two different things happening to the same file.
-  if ! is_blank "$ahead"; then
-    local keeplist; keeplist="$(printf '%s' "$ahead" | tr '\n' ' ')"
+  # A kept file inside a skills entry that cannot load is NOT going up on the next send: the send
+  # judges this Mac's skills folder with refuse_unloadable_skills and declines the whole entry.
+  # Promising it anyway told the person their work was on its way when nothing would ever carry it
+  # (claude-config#388). Two ways to stop that: drop those paths from locally_ahead_paths, or say
+  # something different about them. Dropping them is wrong twice over. $keep is built from that
+  # list, so the apply would stop holding those files back, and a person with a half-built skill
+  # would learn nothing at all about why it never reaches the other Mac. So they stay in $keep,
+  # still left alone exactly as before, and are split out of the report here into their own
+  # sentence, per entry with the reason the send will give, because "kept and will go up" and
+  # "kept and will not go up" are different outcomes and a shared sentence can be true of only one
+  # (L11). Judged against THIS Mac's skills folder, the same directory the send judges.
+  local unsendable="" sendable="" _ap _ue _ur _hit
+  local unloadable_here; unloadable_here="$(unloadable_skill_entries "$CLAUDE_HOME/skills")"
+  while IFS= read -r _ap; do
+    [ -n "$_ap" ] || continue
+    _hit=""
+    while IFS="$(printf '\t')" read -r _ue _ur; do
+      [ -n "${_ue:-}" ] || continue
+      case "$_ap" in "skills/$_ue"|"skills/$_ue"/*) _hit=1; break ;; esac
+    done <<UNLOADABLE
+$unloadable_here
+UNLOADABLE
+    if [ -n "$_hit" ]; then unsendable+="$_ap"$'\n'; else sendable+="$_ap"$'\n'; fi
+  done <<AHEAD
+$ahead
+AHEAD
+  if ! is_blank "$unsendable"; then
+    while IFS="$(printf '\t')" read -r _ue _ur; do
+      [ -n "${_ue:-}" ] || continue
+      local _files; _files="$(printf '%s' "$unsendable" | awk -v p="skills/$_ue" '$0 == p || index($0, p "/") == 1' | tr '\n' ' ')"
+      [ -n "${_files// /}" ] || continue
+      echo "claude-sync: this apply left these local files under skills/$_ue alone, but a send will NOT carry them, because $_ur, and a send refuses a skills entry that cannot load. Make it a loadable skill (a SKILL.md with a name and description in its frontmatter) and the next send carries it: ${_files% }" >&2
+    done <<UNLOADABLE
+$unloadable_here
+UNLOADABLE
+    notify "kept local files a send will refuse: skills that cannot load"
+  fi
+  if ! is_blank "$sendable"; then
+    local keeplist; keeplist="$(printf '%s' "$sendable" | tr '\n' ' ')"
     # What this measured, not more. The old wording read as the COMPLETE set of what is waiting
     # to be sent, and it is narrower by construction: it is the paths THIS APPLY would otherwise
     # have reverted, which excludes anything the repo also changed (those are conflicts, handled
