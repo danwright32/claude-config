@@ -183,6 +183,134 @@ $(printf '%s\n' "$closed" | sed 's/^/    /')
   *) check "the baseline has been tightened as suites were written" ok ;;
 esac
 
+# ---------------------------------------------------------------------------
+# How the hooks are REGISTERED, not only whether a suite names them (claude-config#400).
+#
+# A sync on 2026-09-11 (e702974) folded the Edit|Write groups into the Bash groups beside them. The
+# result was payload-write-gate.sh listed twice under PreToolUse Bash, so it ran twice on every
+# Bash call, and registered for NO edit tool at all, so the gate written to refuse an Edit or Write
+# the watcher would revert stopped seeing Edit and Write. lesson-entry-check.sh, whose header says
+# PostToolUse(Edit|Write|MultiEdit), was moved under Bash the same way. Every suite stayed green,
+# because each one runs its hook directly and none asks what the settings file does with it (L3).
+#
+# Two questions, one pass over the settings:
+#   DUPLICATE  one command registered twice under the same event and matcher. The key includes the
+#              entry's `if`, because the same hook scoped to two different commands is deliberate.
+#   UNWIRED    a hook whose header declares `Claude Code <Event>(<tools>) hook` is not run for
+#              one of those tools under that event. The header is the hook's own statement of
+#              where it belongs, so the settings are compared against it rather than a second
+#              list written here (L41).
+# ---------------------------------------------------------------------------
+registration_faults(){ # registration_faults <settings file> <hooks dir> -> one fault per line
+  python3 - "$1" "$2" <<'PY'
+import glob, json, os, re, sys
+settings, hooks_dir = sys.argv[1], sys.argv[2]
+events = json.load(open(settings)).get("hooks", {})
+
+def names(cmd):
+    return {os.path.basename(t) for t in cmd.split()}
+
+seen = {}
+runs = {}  # (event, hook basename) -> matchers
+for event, groups in events.items():
+    for g in groups:
+        matcher = g.get("matcher", "")
+        for h in g.get("hooks", []):
+            cmd = h.get("command", "")
+            key = (event, matcher, cmd, h.get("if", ""))
+            seen[key] = seen.get(key, 0) + 1
+            for n in names(cmd):
+                runs.setdefault((event, n), []).append(matcher)
+for (event, matcher, cmd, cond), n in sorted(seen.items()):
+    if n > 1:
+        print(f"DUPLICATE {event} matcher={matcher!r} {cmd}{' if=' + cond if cond else ''} is registered {n} times")
+
+def matches(matcher, tool):
+    if matcher in ("", "*"):
+        return True
+    try:
+        return re.fullmatch(matcher, tool) is not None
+    except re.error:
+        return matcher == tool
+
+header = re.compile(r"Claude Code (PreToolUse|PostToolUse)\(([^)]*)\) hook")
+for path in sorted(glob.glob(os.path.join(hooks_dir, "*.sh")) + glob.glob(os.path.join(hooks_dir, "*.py"))):
+    base = os.path.basename(path)
+    if base.startswith("test-"):
+        continue
+    with open(path, errors="replace") as f:
+        head = "".join(f.readline() for _ in range(8))
+    m = header.search(head)
+    if not m:
+        continue
+    event = m.group(1)
+    for tool in m.group(2).split("|"):
+        if not any(matches(mt, tool) for mt in runs.get((event, base), [])):
+            print(f"UNWIRED {base} declares {event}({m.group(2)}) and is not run for {tool}")
+PY
+}
+
+REG="$TMPROOT/registration"; mkdir -p "$REG/hooks"
+printf '#!/usr/bin/env bash\n#\n# gate.sh\n# Claude Code PreToolUse(Bash|Edit) hook: a fixture.\n' > "$REG/hooks/gate.sh"
+printf '#!/usr/bin/env bash\n# Claude Code PreToolUse hook: declares no tools, so nothing is asked of it.\n' > "$REG/hooks/quiet.sh"
+# The shape e702974 left behind: the gate twice under Bash and nowhere under Edit.
+cat > "$REG/folded.json" <<'JSON'
+{"hooks": {"PreToolUse": [
+  {"matcher": "Bash", "hooks": [
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/gate.sh"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/quiet.sh", "if": "Bash(git *)"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/quiet.sh", "if": "Bash(gh *)"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/gate.sh"}
+  ]}
+]}}
+JSON
+cat > "$REG/sound.json" <<'JSON'
+{"hooks": {"PreToolUse": [
+  {"matcher": "Bash", "hooks": [
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/gate.sh"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/quiet.sh", "if": "Bash(git *)"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/quiet.sh", "if": "Bash(gh *)"}
+  ]},
+  {"matcher": "Edit|Write", "hooks": [
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/gate.sh"}
+  ]}
+]}}
+JSON
+folded="$(registration_faults "$REG/folded.json" "$REG/hooks" 2>&1)"
+case "$folded" in
+  *"DUPLICATE PreToolUse matcher='Bash' __CLAUDE_HOME__/hooks/gate.sh is registered 2 times"*)
+    check "#400 a command registered twice under one event and matcher is reported" ok ;;
+  *) check "#400 a command registered twice under one event and matcher is reported" "it answered: [$folded]" ;;
+esac
+case "$folded" in
+  *"UNWIRED gate.sh declares PreToolUse(Bash|Edit) and is not run for Edit"*)
+    check "#400 a hook not run for a tool its header declares is reported" ok ;;
+  *) check "#400 a hook not run for a tool its header declares is reported" "it answered: [$folded]" ;;
+esac
+case "$folded" in
+  *quiet.sh*) check "#400 one hook scoped by two different ifs is not a duplicate" "it answered: [$folded]" ;;
+  *) check "#400 one hook scoped by two different ifs is not a duplicate" ok ;;
+esac
+sound="$(registration_faults "$REG/sound.json" "$REG/hooks" 2>&1)"
+[ -z "$sound" ] \
+  && check "#400 a settings file registering each hook once, where it belongs, reports nothing" ok \
+  || check "#400 a settings file registering each hook once, where it belongs, reports nothing" "it answered: [$sound]"
+
+# The real settings: the payload copy inside the checkout, the installed copy once deployed.
+SETTINGS=""
+if [ -f "$DIR/../settings.hooks.json" ]; then SETTINGS="$DIR/../settings.hooks.json"
+elif [ -f "$DIR/../settings.json" ]; then SETTINGS="$DIR/../settings.json"; fi
+if [ -z "$SETTINGS" ]; then
+  check "the settings file registering the hooks could be read" "neither settings.hooks.json nor settings.json is in $(cd "$DIR/.." && pwd), so no registration was checked"
+elif ! real_faults="$(registration_faults "$SETTINGS" "$DIR" 2>&1)"; then
+  check "the settings file registering the hooks could be read" "$(basename "$SETTINGS") could not be parsed: $real_faults"
+else
+  [ -z "$real_faults" ] \
+    && check "every hook is registered once per event and matcher, for every tool its header declares" ok \
+    || check "every hook is registered once per event and matcher, for every tool its header declares" "$(basename "$SETTINGS") says:
+$(printf '%s\n' "$real_faults" | sed 's/^/    /')"
+fi
+
 echo "test-hook-coverage: $n_now hook(s) named by no suite, baseline says $n_base."
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

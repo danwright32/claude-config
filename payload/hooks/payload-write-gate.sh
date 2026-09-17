@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # payload-write-gate.sh
-# Claude Code PreToolUse hook: refuse a write under a development checkout's payload/ while the
-# watch daemon could revert it, rather than warning about it on the next prompt
-# (claude-config#367).
+# Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|NotebookEdit) hook: refuse a write under a
+# development checkout's payload/ while the watch daemon could revert it, rather than warning about
+# it on the next prompt (claude-config#367).
 #
 # payload-revert-warning.sh already says the right thing: edits to payload/ in a development
 # checkout are mirrored over by the watch daemon running from another clone. But it is a
