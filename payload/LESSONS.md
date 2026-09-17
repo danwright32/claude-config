@@ -7,6 +7,20 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L713. A determinism check that runs the same thing twice in quick succession cannot see a
+  dependence on a slowly moving input such as the clock or the date, because that input does not
+  change between the two runs.** Prove independence by MOVING the input or by reading the source,
+  never by repeating. (slate#2502: the booker and the alert copy previews each proved determinism by
+  rendering twice and comparing, the alert one going as far as a cache busting re import so the second
+  render was genuinely independent. Both read clean over `dayWord` in the reminder copy, which decided
+  "today" against "tomorrow" from `DateTime.now()`. Its test pinned the other end of that comparison,
+  so the suite passed on the day it merged and went red at midnight with nobody touching the code,
+  skipping main's deploy and leaving a monitoring floor merged and not live. The fix that works is a
+  STATIC read of the builders. The same blind repeat passes a snapshot test, a cache key check and an
+  idempotency key that secretly read the date)
+  SHORT: A determinism check that repeats a run back to back cannot see a dependence on the clock, so move the input or read the source instead.
+
+
 - **L480. A command that FAILED PARTWAY still ran everything before the point it failed, so any
   measurement taken afterwards inherits that work rather than starting from the state you think it
   did.** An error reads as "nothing happened", and the work already done is invisible in exactly the

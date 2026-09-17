@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 689 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 690 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -11,6 +11,7 @@ apply it, because the body is where the failure it came from is described.
 
 ## Proof over green
 
+- L713. A determinism check that repeats a run back to back cannot see a dependence on the clock, so move the input or read the source instead.
 - L480. A command that failed partway still ran everything before the failure, so re-establish the cold state a timing depends on before measuring.
 - L467. A presence guard on a call that increments a counter is blind to a second one, so assert exactly once: an overcount reads as real activity.
 - L466. A count of events inside a measured window cannot apportion it, so record each occurrence's duration beside the count or no share can be claimed.
