@@ -160,30 +160,36 @@ LESSON_BAND=""   # this Mac's band, once resolved (see lesson_band_locked)
 # installed under CLAUDE_HOME: the checkout is what defines what a send carries, and an older list
 # installed there would silently change it.
 #
-# If it cannot be read, the run STOPS rather than going on with no exclusions, which would send
-# every plugin skill and every downloaded skill into the shared repo (L42). It stops only when
-# skills are in play, because several suites deliberately run a copy of this tool with no payload
-# beside it and no skills anywhere, and nothing such a run does reads the list. The stand ins
-# below cover a skills folder that appears during the run (a pull bringing one in): the excludes
-# stand in excludes everything before it stops, and the entry test stops at the first entry, so a
-# caller that runs either in a subshell, where the exit cannot end the run, still carries and
-# judges nothing rather than everything.
+# If it cannot be read, a run that would read it STOPS rather than going on with no exclusions,
+# which would send every plugin skill and every downloaded skill into the shared repo (L42).
+# require_unmanaged_skill_list is that stop. It is asked where every run that touches skills/
+# passes: with_lock, the one path every mutating run takes, and do_status, the read only one. It
+# stops only when skills are in play, and not at load, because commands like install-schedule and
+# lesson never read the list, and several suites run a copy of this tool with no payload beside it.
+#
+# The stand ins below are for a caller that reaches the list anyway (a pull that brings the first
+# skills folder in, a new reader nobody guarded). The excludes stand in excludes everything before
+# it stops, and the entry test stops at the first entry, so a caller that runs either in a
+# subshell, where the exit cannot end the run, still carries and judges nothing rather than
+# everything, and the message says why.
 UNMANAGED_SKILLS_LIB="$SYNC_SELF_PAYLOAD/hooks/lib/unmanaged-skills.sh"
 UNMANAGED_SKILLS_LIB_LOADED=""
 if [ -r "$UNMANAGED_SKILLS_LIB" ]; then
   # shellcheck source=payload/hooks/lib/unmanaged-skills.sh
   . "$UNMANAGED_SKILLS_LIB" || UNMANAGED_SKILLS_LIB_LOADED=""
 fi
+unmanaged_skill_list_unreadable(){   # $1 = what happened because of it
+  echo "claude-sync: cannot read the list of skills the sync leaves alone ($UNMANAGED_SKILLS_LIB), so nothing under skills/ can be sent, applied or compared safely, and $1. The file ships with this checkout: restore it with git checkout -- payload/hooks/lib/unmanaged-skills.sh and run again." >&2
+}
+require_unmanaged_skill_list(){
+  [ -n "$UNMANAGED_SKILLS_LIB_LOADED" ] && return 0
+  [ -d "$CLAUDE_HOME/skills" ] || [ -d "$PAYLOAD/skills" ] || return 0
+  unmanaged_skill_list_unreadable "this run stopped"
+  exit 1
+}
 if [ -z "$UNMANAGED_SKILLS_LIB_LOADED" ]; then
-  unmanaged_skill_list_unreadable(){
-    echo "claude-sync: cannot read the list of skills the sync leaves alone ($UNMANAGED_SKILLS_LIB), so nothing under skills/ can be sent, applied or compared safely, and this run stopped. The file ships with this checkout: restore it with git checkout -- payload/hooks/lib/unmanaged-skills.sh and run again." >&2
-  }
-  unmanaged_skill_entry(){ unmanaged_skill_list_unreadable; exit 1; }
-  skill_excludes(){ printf -- '--exclude=*\n'; unmanaged_skill_list_unreadable; exit 1; }
-  if [ -d "$CLAUDE_HOME/skills" ] || [ -d "$PAYLOAD/skills" ]; then
-    unmanaged_skill_list_unreadable
-    exit 1
-  fi
+  unmanaged_skill_entry(){ unmanaged_skill_list_unreadable "no skills entry was judged"; exit 1; }
+  skill_excludes(){ printf -- '--exclude=*\n'; unmanaged_skill_list_unreadable "every skills entry was left out of this step"; exit 1; }
 fi
 
 # `audits` is here since claude-config#224. LESSONS.md cites audits/2026-07-27-issue-audit/ and
@@ -843,6 +849,8 @@ with_lock(){   # $@ = the command to run while holding the lock
   # Re-entrant within one run: do_send falls through to do_sync, and a second acquire
   # there would deadlock against this run's own lock.
   if [ "${LOCK_HELD:-0}" = 1 ]; then "$@"; return $?; fi
+  # Before the lock, so a run that cannot read the skills list stops holding nothing (#415).
+  require_unmanaged_skill_list
   acquire_lock || die "another claude-sync run is already running and still holds $SYNC_LOCK, so this one stopped instead of working on the same files at the same time. Nothing was changed. Run 'claude-sync status' to see where things stand."
   LOCK_HELD=1
   # Here rather than in each command, and here rather than in a read-only one: a clone that has
@@ -7325,6 +7333,8 @@ record_payload_path(){   # $1 = tag, $2 = the record's text
 do_status(){
   local line tag text rel
   local DRIFT_EXPANSIONS=0 SUPERSEDED_FILES=0
+  # Status compares skills/ too, and takes no lock, so it asks for the list itself (#415).
+  require_unmanaged_skill_list
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
   report_superseded_snapshot
   report_dropped_snapshots

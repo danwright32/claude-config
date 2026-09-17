@@ -2229,6 +2229,13 @@ mkskill(){   # $1 = path to a SKILL.md  $2 = body line
   mkdir -p "$dir"
   printf -- '---\nname: %s\ndescription: a fixture skill for the suite\n---\n%s\n' "$(basename "$dir")" "$2" > "$1"
 }
+# A clone whose copy of the tool is RUN on a config holding skills needs what a real checkout
+# always carries beside the tool: the list of skills the sync leaves alone (#415). Without it such
+# a run stops, correctly, so a fixture modelling a real clone seeds it.
+seed_unmanaged_list(){   # $1 = a clone directory holding a copied claude-sync
+  mkdir -p "$1/payload/hooks/lib"
+  cp "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$1/payload/hooks/lib/unmanaged-skills.sh"
+}
 # SUITE_DEBUG=1 prints tool output a scenario would otherwise throw away. It exists because a
 # failure that only happens on a machine you cannot run has to be MEASURED there, and a check
 # reports which assertion failed while saying nothing about what the tool actually did. Two wrong
@@ -2836,7 +2843,7 @@ section "== pull/sync auto-restarts the watch daemon when claude-sync itself cha
 # automatically, not rely on a manual launchctl step on each Mac (issue #5).
 RSBARE="$WORK/rsbare.git"; git init -q --bare -b main "$RSBARE"
 RSA="$WORK/rsrepoA"; git clone -q "$RSBARE" "$RSA"
-cp "$SCRIPT" "$RSA/claude-sync"
+cp "$SCRIPT" "$RSA/claude-sync"; seed_unmanaged_list "$RSA"
 mkdir -p "$RSA/payload/hooks"; echo '#!/bin/sh' > "$RSA/payload/hooks/dummy.sh"   # non-empty payload, or apply dies with "no payload in repo"
 git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$RSA" push -q -u origin main
 
@@ -3985,7 +3992,7 @@ check "#15 and names the number involved"      "grep -q 'L5 used 2 times' <<< \"
 # surface at apply time too, since by then it is already in the file.
 LNM="$WORK/lnmbare.git"; git init -q --bare -b main "$LNM"
 LNMA="$WORK/lnmA"; git clone -q "$LNM" "$LNMA" 2>/dev/null
-cp "$SCRIPT" "$LNMA/claude-sync"
+cp "$SCRIPT" "$LNMA/claude-sync"; seed_unmanaged_list "$LNMA"
 mkdir -p "$LNMA/payload/hooks"; echo '#!/bin/sh' > "$LNMA/payload/hooks/x.sh"
 # A skill, so the scan below is exercised against a nested path and not only against the
 # flat mirror dirs. skills/ is synced alongside hooks, agents and commands.
@@ -9673,6 +9680,17 @@ if out_ul3="$(CLAUDE_HOME="$ULH2" SYNC_REPO="$WORK/unmanaged-list-repo-2" SYNC_N
 dbg "status with no list and no skills: $out_ul3"
 check "#415 with no skills anywhere, a missing list does not stop the run" \
   "out_lacks \"\$out_ul3\" 'cannot read the list of skills'"
+# And a command that never reads the list is not stopped by it even where skills are present.
+rm -rf "$ULC/payload/hooks"
+if out_ul4="$(CLAUDE_HOME="$ULH" SYNC_REPO="$ULR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$ULC/claude-sync" help 2>&1)"; then rc_ul4=0; else rc_ul4=$?; fi
+dbg "help with no list and skills present: $out_ul4"
+check "#415 a command that never reads the list still runs without it" \
+  "[ '$rc_ul4' -eq 0 ] && out_lacks \"\$out_ul4\" 'cannot read the list of skills'"
+# Status reads skills/ with no lock taken, so it stops on its own account.
+if out_ul5="$(CLAUDE_HOME="$ULH" SYNC_REPO="$ULR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$ULC/claude-sync" status 2>&1)"; then rc_ul5=0; else rc_ul5=$?; fi
+dbg "status with no list and skills present: $out_ul5"
+check "#415 status with skills present and no list stops and says why" \
+  "[ '$rc_ul5' -ne 0 ] && line_has \"\$out_ul5\" 'cannot read the list of skills' 'unmanaged-skills\.sh'"
 
 section "== a pull never promises to send local files a send will refuse (#388) =="
 # The pull's "would have reverted these local edits" line says they go up on the next send. For a
