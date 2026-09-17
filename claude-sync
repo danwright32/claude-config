@@ -12,6 +12,7 @@
 #   claude-sync sync              # two-way: send local changes, then receive remote
 #   claude-sync watch             # foreground: sync on every change (needs fswatch)
 #   claude-sync status            # show what differs, no changes
+#   claude-sync stuck             # whether sending or receiving is stuck, lock free, one record per line
 #   claude-sync recheck           # run the hook suite and record what it said, so a fixed failure stops being reported
 #   claude-sync forget-clone DIR  # drop one checkout from the register, when it has gone for good
 #   claude-sync hold 30 "why"     # stop the watcher committing for a while, so you can commit
@@ -6605,28 +6606,74 @@ report_ci_unreadable(){
   fi
 }
 
-report_behind_skips(){
+# WHETHER THIS CLONE'S SYNC IS STUCK, in either direction, as records rather than as prose
+# (claude-config#391). ONE predicate with two readers: `status` prints the sentence, and the per
+# prompt hook sync-stuck-notice.sh runs `claude-sync stuck` and decides when a person has to hear
+# it. On 2026-09-17 a Mac skipped 57 sends and refused 52 receives over 11 hours and only status
+# knew, which nobody runs without a reason. A second copy of this inside the hook would be two
+# answers to one question, each reading as correct on its own (L41, L370).
+#
+# One line per condition, tab separated: kind, count, first, sentence.
+#   sending      sends are being skipped because this clone is behind (claude-config#323)
+#   receiving    the shared repo's newest commit keeps failing its tests (claude-config#336)
+#   sending-unreadable, receiving-unreadable
+#                the record is THERE and its count will not parse, so whether anything is stuck
+#                cannot be answered from it. Said rather than read as zero: a record nobody can
+#                read and a sync with nothing wrong must not arrive as the same silence (L98, L11).
+#                Count and first are `-`.
+# A stuck record whose START will not parse carries `-` as its first. Its sentence then says "just
+# now", which is what status has always said, and a reader applying a threshold to first has to
+# treat that as unmeasured rather than as young (L50).
+#
+# A field with no value is `-`, never empty. Tab is whitespace to `read`, so two tabs in a row are
+# read as one and every later field shifts left: the sentence of an unreadable record arrived in the
+# count and was dropped, the first time this was run.
+#
+# The sentences are what a person reads and the fields are what code reads. Nothing parses the
+# prose.
+sync_stuck_records(){
   local n first now
-  n="$(behind_skips_count)"
-  [ "$n" -gt 0 ] 2>/dev/null || return 0
   now="$(date +%s)"
-  first="$(behind_skips_since || printf '%s' "$now")"
-  echo "sending is stuck: skipped $n send(s) in a row, the first $(age_in_words "$(( now - first ))") ago, because this Mac is behind the shared repo and the reconcile each one tried did not clear it. Run 'claude-sync pull' and read what it says."
+  if [ -f "$BEHIND_SKIPS_FILE" ]; then
+    n="$(awk 'NR==1{print $1}' "$BEHIND_SKIPS_FILE" 2>/dev/null)"
+    case "$n" in
+      ''|*[!0-9]*)
+        printf 'sending-unreadable\t-\t-\t%s\n' "the record of skipped sends at $BEHIND_SKIPS_FILE could not be read, so whether sends are being skipped cannot be told from it. The next send that is skipped or gets through replaces it; if this keeps being said, run 'claude-sync pull' from $SYNC_REPO and read what it says." ;;
+      *)
+        if [ "$n" -gt 0 ] 2>/dev/null; then
+          first="$(behind_skips_since || true)"
+          printf 'sending\t%s\t%s\t%s\n' "$n" "${first:--}" \
+            "sending is stuck: skipped $n send(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))") ago, because this Mac is behind the shared repo and the reconcile each one tried did not clear it. Run 'claude-sync pull' and read what it says."
+        fi ;;
+    esac
+  fi
+  # What a shared repo that stays red is doing to this Mac (claude-config#336). The gate says it on
+  # the run that refused, which reaches the watcher log and nothing else, and status said nothing at
+  # all while every Mac sat not receiving for seven hours.
+  if [ -f "$CI_RED_SINCE_FILE" ]; then
+    n="$(awk 'NR==1{print $2}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
+    case "$n" in
+      ''|*[!0-9]*)
+        printf 'receiving-unreadable\t-\t-\t%s\n' "the record of failed test verdicts at $CI_RED_SINCE_FILE could not be read, so whether config is being refused here cannot be told from it. The next automatic pull that reads a verdict replaces it; if this keeps being said, run 'claude-sync pull' from $SYNC_REPO and read what it says." ;;
+      *)
+        if [ "$n" -gt 0 ] 2>/dev/null; then
+          first="$(awk 'NR==1{print $1}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
+          case "$first" in ''|*[!0-9]*) first="" ;; esac
+          printf 'receiving\t%s\t%s\t%s\n' "$n" "${first:--}" \
+            "receiving is stuck: the shared repo's newest commit has failed its tests $n time(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))") ago. Nothing here receives config until a green commit lands. Look at the failing run: gh run list --limit 5"
+        fi ;;
+    esac
+  fi
+  return 0
 }
 
-# What a shared repo that stays red is doing to this Mac (claude-config#336). The gate says it on
-# the run that refused, which reaches the watcher log and nothing else; this is the surface built to
-# answer the question, and it said nothing at all while every Mac sat not receiving for seven hours.
-report_red_skips(){
-  local n first now
-  [ -f "$CI_RED_SINCE_FILE" ] || return 0
-  n="$(awk 'NR==1{print $2}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  [ "$n" -gt 0 ] || return 0
-  now="$(date +%s)"
-  first="$(awk 'NR==1{print $1}' "$CI_RED_SINCE_FILE" 2>/dev/null)"
-  case "$first" in ''|*[!0-9]*) first="$now" ;; esac
-  echo "receiving is stuck: the shared repo's newest commit has failed its tests $n time(s) in a row, the first $(age_in_words "$(( now - first ))") ago. Nothing here receives config until a green commit lands. Look at the failing run: gh run list --limit 5"
+report_sync_stuck(){
+  local kind count first sentence
+  while IFS=$'\t' read -r kind count first sentence; do
+    [ -n "${sentence:-}" ] && echo "$sentence"
+  done <<STUCKEOF
+$(sync_stuck_records)
+STUCKEOF
   return 0
 }
 
@@ -7057,8 +7104,7 @@ payload/$rel
   report_conflict_copies
   report_blocked_clone
   report_ci_unreadable
-  report_behind_skips
-  report_red_skips
+  report_sync_stuck
   report_my_push
   report_watcher_hold
   report_automatic_jobs
@@ -7958,6 +8004,11 @@ case "$cmd" in
     else
       lesson_short_form_pairs "$CLAUDE_HOME/$LESSONS_FILE"
     fi ;;
+  # Read only, LOCK FREE, and silent when nothing is stuck: whether this clone's sync is stuck, as
+  # the tab separated records sync_stuck_records describes (claude-config#391). What the per prompt
+  # notice runs on every prompt, so it must never wait on the lock the watcher is holding (L110),
+  # and it reads two small files rather than asking the network anything.
+  stuck) sync_stuck_records ;;
   lesson-faults)
     faults="$(lesson_publish_faults "$CLAUDE_HOME")"
     if ! is_blank "$faults"; then die "$faults"; fi
@@ -7988,5 +8039,5 @@ case "$cmd" in
   help|-h|--help) awk 'NR > 1 { if ($0 ~ /^# *Env overrides/) exit; buf[n++] = $0 }
                         END { while (n > 0 && buf[n-1] == "#") n--; for (i = 0; i < n; i++) print buf[i] }' \
                     "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-short-forms, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-short-forms, stuck, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
 esac

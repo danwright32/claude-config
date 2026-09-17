@@ -10992,6 +10992,25 @@ check "#336 a verdict that is not red clears the clock" \
 out_rdst2="$(CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
 check "#336 and status stops saying receiving is stuck" \
   "! grep -q 'receiving is stuck' <<< \"\$out_rdst2\""
+# A record that is THERE and cannot be read is not a repo that is green (claude-config#391). status
+# used to read an unparseable count as zero and say nothing, which is the silence a healthy sync
+# gives, while the per prompt notice built on the same predicate says it could not tell (L98, L11).
+# Driven on the same repo, whose clock the green verdict above has just cleared, so the silence
+# before the damage is established in this fixture first (L159).
+printf 'not a record\n' > "$(ci_repo red)/.ci-red-since"
+out_rdst3="$(CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#391 status with an unreadable red record: $out_rdst3"
+check "#391 status says a red record it cannot read could not be read, naming it" \
+  "line_has \"\$out_rdst3\" 'could not be read' '.ci-red-since'"
+check "#391 and does not call that receiving stuck, which it never measured" \
+  "! grep -q 'receiving is stuck' <<< \"\$out_rdst3\""
+out_rdstk="$(CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" stuck 2>&1 || true)"
+check "#391 claude-sync stuck reports it as its own kind, for the per prompt notice" \
+  "grep -q '^receiving-unreadable	' <<< \"\$out_rdstk\""
+rm -f "$(ci_repo red)/.ci-red-since"
+out_rdstk2="$(CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" stuck 2>&1 || true)"
+check "#391 and says nothing at all once there is no record" \
+  "[ -z \"\$out_rdstk2\" ]"
 
 section "== the Mac that SENT a commit learns when its tests failed (#340) =="
 # needs: only a commit CI has passed is applied automatically

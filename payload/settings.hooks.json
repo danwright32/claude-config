@@ -153,6 +153,11 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/sync-stuck-notice.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/project-list-nudge.sh",
             "timeout": 5
           },
