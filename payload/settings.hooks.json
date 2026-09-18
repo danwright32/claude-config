@@ -29,6 +29,36 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-duplication.sh",
+            "timeout": 60,
+            "statusMessage": "Checking pushed changes for new duplicated code"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-public-assets.sh",
+            "timeout": 30,
+            "statusMessage": "Checking pushed assets are referenced and images are within the size cap"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-deferrals.sh",
+            "timeout": 30,
+            "statusMessage": "Checking pushed changes for a deferral with no issue number"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-doc-issue-refs.sh",
+            "timeout": 60,
+            "statusMessage": "Checking the pushed docs' issue references against GitHub"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-bundle-budget.sh",
+            "timeout": 30,
+            "statusMessage": "Weighing the client bundle against its recorded budget"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/lessons-advisory.sh",
             "timeout": 30,
             "statusMessage": "Checking pushed changes against the recorded lessons"
@@ -108,6 +138,12 @@
             "command": "__CLAUDE_HOME__/hooks/pr-merge-quiz.sh",
             "timeout": 15,
             "statusMessage": "Checking for a merged PR to quiz on"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/ai-review-on-push.sh",
+            "timeout": 15,
+            "statusMessage": "Starting the advisory review of the pushed diff"
           }
         ]
       },
@@ -117,6 +153,11 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/lesson-entry-check.sh"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/deferral-edit-check.sh",
+            "timeout": 10
           }
         ]
       }
@@ -194,6 +235,11 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/stale-worktree-nudge.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/ai-review-nudge.sh",
             "timeout": 5
           }
         ]

@@ -1,0 +1,26 @@
+# Deferral phrases: one per line, a reason after the `#`. Read by lib/deferrals.py, which is the
+# ONE detector behind check-deferrals.sh (push time) and deferral-edit-check.sh (edit time), so a
+# phrase added here reaches both hooks with nothing else to change (claude-config#430).
+#
+# A phrase is matched case insensitively, on word boundaries, and ONLY inside a comment or a
+# documentation line. It is a finding when no issue reference (`#NNNN`, or a GitHub issue URL)
+# sits on that line or within two lines either side of it.
+#
+# Every phrase was measured against the whole of Slate's main checkout on 2026-09-18 before it
+# was kept, and the phrases that fired mostly on true sentences were DROPPED. The counts, the
+# dropped phrases and the reasons live in the header of check-deferrals.sh; re-measure before
+# adding one back (L147, L172). A phrase not in this comment was kept at zero hits on that tree.
+TODO                # the universal marker for work left undone
+FIXME               # the same, for a known defect
+for now             # "good enough for now" is a deferral by definition (5 of 7 Slate hits genuine)
+separate effort     # the wording of the CSP deferral in Slate's security-headers.ts (slate#2564)
+deferred to         # "deferred to Task 6", "deferred to the plan": names where the work went
+deferred until      # names when it is meant to come back
+deferred pending    # "deferred pending a 200 agent soak": names what it waits on
+defer this          # names the act itself
+follow up           # a follow up nobody scheduled is a deferral
+follow-up           # the hyphenated spelling of the same
+future work         # names the act itself
+someday             # a deferral with no date, which is the worst kind
+when we have time   # a deferral with no date
+punt                # the colloquial form

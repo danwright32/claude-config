@@ -265,6 +265,40 @@ the sync lock held throughout. Any hook edit changes the digest and retires ever
 remembered verdict can never outlive a change to what it judged, and the send says how many verdicts
 it reused rather than saving the time silently.
 
+## Hygiene guards on every push
+
+Six guards fire on every `git push` in every project, with nothing to remember to run and no per
+repo opt in file (Dan, 2026-09-18: "I don't want a new skill that I have to remember to run").
+They came out of the dev team's 2026-09-18 review of Slate: ten confirmed findings, and every one
+was a rule that already existed in prose with nothing checking it (L27), a known gap written in a
+comment or a doc and never filed, a class fix that missed a sibling, or a doc claim that had gone
+false. Each guard works out the repo's shape for itself and, where a repo lacks that shape, prints
+ONE line saying it skipped and why, never nothing (L98). Existing problems never fail a push: each
+guard judges what the push ADDS against its merge-base, so no guard needs a state file except the
+bundle budget, which cannot avoid one. The thresholds were measured against Slate's real tree and
+its last 40 real pushes, and each hook's header records the numbers and the cases it deliberately
+does not catch.
+
+| Hook | What fails a push | Escape hatch, one command only, explained first |
+| --- | --- | --- |
+| `check-duplication.sh` | A new copy of a long line (100 characters or more, `${...}` blanked) or a two line block (160 characters or more) under the source roots. Tests and fixtures are not judged. Slate: 6 of the last 40 real pushes would have been refused, each for a genuine copy. | `SKIP_DUPLICATION_CHECK=1` |
+| `check-public-assets.sh` | An asset under `public/`, `static/` or `assets/` that this push added or orphaned and nothing references; a raster image added or changed over 250 KB. Names browsers fetch by convention are exempt; `.claude/hygiene-allow.txt` in the project holds the rest, one path and a reason per line. | `SKIP_ASSET_CHECK=1` |
+| `check-deferrals.sh` | An added comment or doc line that defers work ("for now", "separate effort", "deferred to", "follow up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines. `deferral-edit-check.sh` says the same thing at the moment the text is written. | `SKIP_DEFERRAL_CHECK=1` |
+| `check-doc-issue-refs.sh` | A touched doc whose sentence claims an issue is still pending ("#N is the issue for", "once #N lands") when GitHub says that issue is closed or that pull merged. Anchored to the reference and blind to past tense, because 96 percent of the issues Slate's docs cite are closed. Fails open out loud without `gh`. | `SKIP_DOC_REFS_CHECK=1` |
+| `check-bundle-budget.sh` | The gzipped client bundle (Next `.next/static/chunks`, Vite `dist/assets`) grew past both 3 percent and 10 KB over the recorded total, when the build output is newer than the commit. A stale or absent build is said and not judged. | `ACCEPT_BUNDLE_GROWTH=1` records the new total; `SKIP_BUNDLE_BUDGET_CHECK=1` |
+| `ai-review-on-push.sh` | Nothing. It is advisory: after a successful push it hands the diff, plus the full text of the changed files, to `claude -p` in a detached process and returns at once; `ai-review-nudge.sh` prints the answer on a later prompt, once per session. It exists for the class no scan can see, a sibling left unchanged. | `SKIP_AI_REVIEW_CHECK=1` |
+
+What each one measured, and what it does not catch, is in the hook's own header. Two worth knowing
+without opening them. The duplication guard does not catch a copied two line block under 160
+characters (Slate's day header cell is 131), because the setting that would catch it refuses one
+real push in four, which is the setting nobody reads by the second week (L36). The deferral list
+lost "later", "not yet" and "eventually" to measurement: 419 hits across Slate and not one a
+deferral.
+
+The AI review runs on the developer's own Claude subscription, so it costs usage allowance rather
+than money. Its cap on what it sends (300 KB) skipped none of Slate's last 200 pushes; its
+deadline is 240 seconds and a real review measured 130 to 193 seconds with `sonnet`.
+
 ## Lesson numbers
 
 Each Mac mints lesson numbers from a band it owns, so two lessons written between syncs can never
