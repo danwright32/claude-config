@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 697 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 698 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -283,6 +283,7 @@ apply it, because the body is where the failure it came from is described.
 - L122. A permission check written as equality against ONE rank excludes every rank ABOVE it, so the most privileged person is the one refused.
 - L125. A function answering WHEN something comes due must not fold in whether it is due YET, or a future moment is indistinguishable from no moment at all.
 - L139. A minimum volume floor that stops a RATE being noisy also silences SATURATION: a proportion cannot tell one bad in two from twelve bad in twelve.
+- L716. A rate RANKED against peers needs a minimum denominator, below which it is unmeasured, or the thinnest samples top and tail the board.
 - L148. A control whose failure reason goes only to a surface that dies with the attempt leaves pressing it again as the only diagnosis available.
 - L158. When a failure's text can come from a launcher or child, taking whichever is non empty hands diagnosis to the launcher, which speaks when nothing ran.
 - L160. A condition is OVER only after a re-arm window of health, never the first good sample, and its duration is measured to the last observed failure.

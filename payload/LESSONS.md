@@ -3531,6 +3531,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   all, which Dan spotted immediately on reading the shipped behaviour)
   SHORT: A minimum volume floor that stops a RATE being noisy also silences SATURATION: a proportion cannot tell one bad in two from twelve bad in twelve.
 
+- **L716. A rate that is RANKED against peers needs a minimum denominator before it counts as
+  measured, because the smallest samples land at the extremes by arithmetic alone.** Below the
+  minimum, treat the rate as not yet measured (the same state as no data), never as a real value,
+  and measure the real distribution of denominators before choosing the cutoff. The inverse of L139:
+  there a floor discarded the clearest evidence; here the absence of one lets the thinnest evidence
+  win the board.
+  (project-enrollment-tracker#1524: a new rep whose only leads arrived on the last day of the six week
+  window converted 2 of 5, ranked first of 106 on conversion against reps with a median of 205
+  qualified leads, and topped Power Rankings; two reps with 0 of 1 sat at the bottom. The director
+  spotted it on the live board.)
+  SHORT: A rate RANKED against peers needs a minimum denominator, below which it is unmeasured, or the thinnest samples top and tail the board.
+
 - **L148. A durable control whose failure reason is written only to a surface that dies with the
   attempt (a terminal window that closes, a process's stderr, a toast) leaves the person facing the
   same control, the same unchanged condition, and no way to learn why it did nothing, so pressing it
