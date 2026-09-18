@@ -100,15 +100,37 @@ JSON
 # One repo-wide read, so each issue carries the milestone the script partitions on.
 # 241, 242, 243, 244 and 240 are loose (the pen). 900 and 901 sit in real milestones,
 # which is where a duplicate hides and where the old pen-only read could not look.
+# Bodies, because a title is written before the work is understood and is the one part
+# of an issue that routinely does not name the subject (claude-config#424). 902 is the
+# case: its title shares NOT ONE word with the idea below, and its body is about
+# exactly that work. Every other body here is written to share little with it, so the
+# spread the bar is computed from is a real one rather than a single pair.
 cat >"$TMP/issues.json" <<'JSON'
 [
-  { "number": 241, "title": "Give the subagent findings spool a way to drain", "milestone": { "title": "Ungrouped" } },
-  { "number": 242, "title": "Report whether a spooled finding is reachable by any review", "milestone": { "title": "Ungrouped" } },
-  { "number": 243, "title": "Warn when a stale deploy alert fires twice", "milestone": { "title": "Ungrouped" } },
-  { "number": 244, "title": "Match a spooled finding against open issues before offering it", "milestone": { "title": "Ungrouped" } },
-  { "number": 240, "title": "Give claude-sync a way to clean up old backups", "milestone": { "title": "Ungrouped" } },
-  { "number": 900, "title": "Mark and expire the stale findings in the subagent spool", "milestone": { "title": "One store, one truth" } },
-  { "number": 901, "title": "Rewrite the onboarding tour copy", "milestone": { "title": "Onboarding revamp" } }
+  { "number": 241, "title": "Give the subagent findings spool a way to drain",
+    "body": "The spool fills and nothing takes records out of it. A drain has to run on a schedule and report how many it removed.",
+    "milestone": { "title": "Ungrouped" } },
+  { "number": 242, "title": "Report whether a spooled finding is reachable by any review",
+    "body": "A finding nobody can reach is indistinguishable from one nobody filed. Say which review would show each record.",
+    "milestone": { "title": "Ungrouped" } },
+  { "number": 243, "title": "Warn when a stale deploy alert fires twice",
+    "body": "A deploy alert repeats on every poll once it has gone stale, and the repetition teaches people to dismiss the channel.",
+    "milestone": { "title": "Ungrouped" } },
+  { "number": 244, "title": "Match a spooled finding against open issues before offering it",
+    "body": "Offering a finding that is already tracked wastes the only attention this queue gets. Compare before offering.",
+    "milestone": { "title": "Ungrouped" } },
+  { "number": 240, "title": "Give claude-sync a way to clean up old backups",
+    "body": "Backup copies accumulate beside their files for ever. Remove the ones past three months and say how many went.",
+    "milestone": { "title": "Ungrouped" } },
+  { "number": 900, "title": "Mark and expire the stale findings in the subagent spool",
+    "body": "A record whose owning session is plainly not coming back should expire rather than sit unowned for ever.",
+    "milestone": { "title": "One store, one truth" } },
+  { "number": 901, "title": "Rewrite the onboarding tour copy",
+    "body": "The tour explains the interface rather than the domain, and it reads as though written for somebody who built it.",
+    "milestone": { "title": "Onboarding revamp" } },
+  { "number": 902, "title": "Refuse to send from a watch daemon older than the script on disk",
+    "body": "The watcher keeps publishing a collapsed hooks block, which turns the shared repo red and stops both Macs receiving config. The guard that would have refused that block was never loaded by the running daemon, so the collapsed block goes up and turns the build red again.",
+    "milestone": { "title": "One store, one truth" } }
 ]
 JSON
 
@@ -230,6 +252,49 @@ check_not "an unrelated issue elsewhere is not called a duplicate" "#901" "$norm
 # A loose issue is a SIBLING, never also a duplicate risk: one number, one meaning.
 check_not "a holding pen issue is not double counted as a duplicate" "#241" "$dup_lines"
 
+# --- a duplicate whose TITLE says nothing (claude-config#424) --------------
+# Both lists above are computed from TITLES alone, and a title is the one part of an
+# issue written before the work is understood. On 2026-09-17 that let #421 be filed
+# over #420: the same root cause, established in #420s body, and their titles share
+# the single word "send", so it was listed as a weak sibling and dismissed as one.
+#
+# Measured over the 120 issues in this repo on 2026-09-17, a raw count of shared words
+# over bodies separates NOTHING: the median unrelated pair already shares 13, and the
+# known duplicate shares 40, which is only the 99th percentile. So the signal is the
+# PROPORTION shared (intersection over union), and the bar is computed from the spread
+# of this ideas own row rather than from a constant, because a constant is exactly what
+# claude-config#265 showed cannot travel between repos, each of which has its own
+# generic vocabulary. At median plus three standard deviations it reported 1.14 rows
+# per idea, was silent for 31 of the 120, and still caught every one of the four known
+# related pairs (421 to 420, 394 to 390, 413 to 409, 340 to 336). At 3.5 it lost 421.
+run acme/widgets --like "Stop one Mac publishing a collapsed hooks block that turns the shared repo red"
+close_lines=""
+while IFS= read -r line; do
+  case "$line" in "CLOSE-MATCH "*) close_lines="$close_lines$line"$'\n' ;; esac
+done <<<"$OUT"
+# The read has to ASK for the bodies, or every line below is scored on titles again
+# while reading exactly as though it were not (L3).
+check "the issue read asks for the body, not only the title" "body" "$(cat "$GH_CALLS")"
+check "an issue whose body is about this work is reported" "CLOSE-MATCH" "$OUT"
+check "and it is the one whose title shares nothing with the idea" "#902" "$close_lines"
+# Against the CLOSE-MATCH lines only. #902 sits in a milestone named on an
+# OPEN-MILESTONE line, so a check over the whole output could not fail (L159).
+check "the close match says where it already sits" "[in: One store, one truth]" "$close_lines"
+# The shared words are shown because this RANKS and rules on nothing: the reader has to
+# be able to dismiss a coincidence, and a bare score cannot be argued with
+# (claude-config#265).
+check "and shows what it shares, so a coincidence can be dismissed" "[shares: " "$close_lines"
+check "the close match count is stated on its own" "CLOSE-MATCH-COUNT 1" "$OUT"
+check_not "an unrelated issue elsewhere is not a close match" "#901" "$close_lines"
+check_not "and neither is an unrelated loose one" "#243" "$close_lines"
+
+# THE OTHER ANSWER, or a check that only ever fires is indistinguishable from one that
+# fires on everything (L159, L104). An idea sharing nothing with this backlog has to
+# come back with none, and say so rather than printing nothing at all (L98).
+run acme/widgets --like "Choose a typeface for the printed quarterly accounts booklet"
+check "an idea with nothing like it reports no close match" "CLOSE-MATCH-COUNT 0" "$OUT"
+check_not "and lists none" "CLOSE-MATCH " "$OUT"
+
 # Tracker vocabulary is generic in EVERY repo, so two of it is still a coincidence.
 # Measured 2026-09-02 on this repo: an idea titled "Group the open issues already
 # sitting in the Ungrouped holding pen" drew two siblings at two shared words, and
@@ -267,8 +332,14 @@ check "the strongest match is ranked first" "#241" "$top"
 calls="$(cat "$GH_CALLS")"
 check_not "the read is NOT narrowed to the holding pen, which is what hid a duplicate" \
   "--milestone" "$calls"
+# Each field asserted on its own rather than as one pinned list, because adding a field
+# is a normal change and a pinned list turns it into a failure about the wrong thing
+# (L103). What has to hold is that BOTH are asked for: the milestone tells loose work
+# from filed work, and the body is where a subject that the title never names lives.
 check "it asks for each issue's milestone, so it can tell loose work from filed work" \
-  "number,title,milestone" "$calls"
+  "milestone" "${calls#*--json}"
+check "and for each body, which is where a title that names nothing is caught" \
+  "body" "${calls#*--json}"
 limit=""
 [[ "$calls" =~ --limit[[:space:]]+([0-9]+) ]] && limit="${BASH_REMATCH[1]}"
 if [[ -n "$limit" && "$limit" -ge 100 ]]; then ok; else
@@ -304,6 +375,30 @@ GH_ISSUES="$TMP/issues-empty.json" run acme/widgets --like "Onboarding revamp co
 GH_ISSUES="$TMP/issues.json"
 check "an empty pen still reports its count explicitly" "CANDIDATE-COUNT 0 shown" "$OUT"
 check_eq "milestones present but no siblings is still a successful read" 0 "$RC"
+
+# --- nothing found, and nothing found EXCEPT a close match -----------------
+# The early refusal says the repo has no feature milestone and nothing in the pen
+# shares words with this idea, and it exits before the report. It had no test at all
+# in either direction, and a close match is precisely a reason the idea may already be
+# filed, so refusing over it would be false in the case that matters most (L11).
+cat >"$TMP/milestones-pen-only.json" <<'JSON'
+[
+  { "number": 2, "title": "Ungrouped", "state": "open",
+    "description": "Standalone bugs and chores that belong to no feature." }
+]
+JSON
+GH_MILESTONES="$TMP/milestones-pen-only.json"
+run acme/widgets --like "Choose a typeface for the printed quarterly accounts booklet"
+check "with no feature milestone and nothing alike, it says so" "NO-CANDIDATES" "$OUT"
+check_eq "and exits 1, so a caller can branch on it" 1 "$RC"
+# The other answer, which is the branch this needed adding: same repo, same absence of
+# milestones and of any shared title word, and an idea whose subject is sitting in a
+# body. Refusing here would hide the one line worth reading.
+run acme/widgets --like "Stop one Mac publishing a collapsed hooks block that turns the shared repo red"
+check_not "a close match is never refused as nothing found" "NO-CANDIDATES" "$OUT"
+check "and it is reported" "CLOSE-MATCH" "$OUT"
+check_eq "and that is a successful read" 0 "$RC"
+GH_MILESTONES="$TMP/milestones.json"
 
 # --- the read FAILING is not the same as finding nothing ------------------
 # Both halves can fail, and each has to say which one did, or the message for one
