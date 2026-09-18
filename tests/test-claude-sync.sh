@@ -14013,6 +14013,97 @@ check "#262 and it is reported in its own words, not as an expiry" \
   "case \"\$out_262u\" in *'could not be read'*) true ;; *) false ;; esac"
 
 
+section "== a watch daemon older than the claude-sync on disk refuses to send (#420) =="
+# `do_watch` runs `watch_tick` as a FUNCTION inside one long lived bash process, so every send the
+# watcher makes executes the copy of claude-sync that process parsed when it started, whatever the
+# clone holds now. A guard shipped into the script is inert in that process until it restarts, and
+# nothing said so: the log records what each tick DID and never which version did it, so every line
+# a stale daemon writes reads exactly like a current one (L400, L175).
+#
+# Measured, on 2026-09-17: the #413 send guard merged at 12:39:31, and at 13:40:19 the watcher on
+# Dans-MacBook-Pro, running since 15:24:22 the previous day, published a collapsed hooks block and
+# turned main red for the fourth time, which stops BOTH Macs receiving config. Run by hand against
+# that same block the guard reported all six faults and exited 1. The guard was correct and absent.
+#
+# So the daemon records the script it loaded, as a content hash rather than an mtime (L40), and
+# every tick compares that record against the file on disk.
+WS="$WORK/watch-stale"; mkdir -p "$WS"
+WS_HOME="$WS/home"; mkdir -p "$WS_HOME/hooks"
+WS_HITS="$WS/hits"
+# A COPY of the tool, run as itself, because what is under test is a property of the file the
+# running process was started from. Driving the suite's own $SCRIPT would make the fixture rewrite
+# the tool this whole file is testing.
+WS_SELF="$WS/claude-sync"; cp "$SCRIPT" "$WS_SELF"; chmod +x "$WS_SELF"
+WS_FS="$WS/fake-fswatch"
+
+# THE POSITIVE CONTROL FIRST, or a fixture where nothing could have sent is indistinguishable from
+# the guard working (L159). Same copy, same loop, nothing touching the file.
+cat > "$WS_FS" <<'FSEOF'
+#!/usr/bin/env bash
+echo one
+FSEOF
+chmod +x "$WS_FS"
+: > "$WS_HITS"
+out_ws_ok="$(SYNC_FSWATCH="$WS_FS" SYNC_WATCH_SEND="printf 'x\n' >> '$WS_HITS'" \
+  CLAUDE_HOME="$WS_HOME" SYNC_REPO="$WORK/watch-stale-repo-unused" SYNC_NO_NOTIFY=1 \
+  bash "$WS_SELF" watch 2>&1 || true)"
+dbg "#420 watcher whose file has not moved: $out_ws_ok"
+check "#420 a watcher running the file on disk sends normally" \
+  "[ \"\$(grep -c . '$WS_HITS' 2>/dev/null || true)\" = '1' ]"
+check "#420 and says nothing about being stale" \
+  "! grep -q 'this daemon is older than the claude-sync on disk' <<< \"\$out_ws_ok\""
+
+# THE DEFECT. The file is REPLACED rather than appended to, because that is how it really moves: a
+# pull writes a new file and renames it over the old one, so the running process keeps reading its
+# original inode and carries on with no error of any kind. Appending would edit the very bytes the
+# running bash is still reading, which is a different fault and not this one.
+cat > "$WS_FS" <<FSEOF
+#!/usr/bin/env bash
+cp "$WS_SELF" "$WS/replacement"
+printf '\n# a later version of the tool\n' >> "$WS/replacement"
+mv "$WS/replacement" "$WS_SELF"
+echo one
+FSEOF
+chmod +x "$WS_FS"
+: > "$WS_HITS"
+out_ws="$(SYNC_FSWATCH="$WS_FS" SYNC_WATCH_SEND="printf 'x\n' >> '$WS_HITS'" \
+  CLAUDE_HOME="$WS_HOME" SYNC_REPO="$WORK/watch-stale-repo-unused" SYNC_NO_NOTIFY=1 \
+  bash "$WS_SELF" watch 2>&1 || true)"
+dbg "#420 watcher whose file moved under it: $out_ws"
+# The fixture is checked for having actually moved the file, because a replacement that did not
+# happen leaves the copies identical and the refusal below would then be satisfied by a tick that
+# had nothing to refuse (L100).
+check "#420 the fixture really replaced the tool under the running daemon" \
+  "! cmp -s '$SCRIPT' '$WS_SELF'"
+check "#420 a daemon older than the file on disk sends nothing" \
+  "[ \"\$(grep -c . '$WS_HITS' 2>/dev/null || true)\" = '0' ]"
+# Naming BOTH versions is the whole point: "something is stale" cannot be acted on, and the two
+# hashes are what say which way round it is (L11).
+check "#420 and it names the version it loaded and the one on disk, each in its own place" \
+  "line_has \"\$out_ws\" 'It loaded [0-9a-f]{12}' 'on disk is now [0-9a-f]{12}'"
+# A refusal that looked like an ordinary quiet tick would be the defect again in another form: the
+# log has to carry its own outcome, or a daemon that stopped sending reads like one with nothing to
+# send (L98, L622).
+check "#420 the watch log carries its own outcome for it" \
+  "grep -q 'claude-sync watch: NOT sent, this daemon is older than the claude-sync on disk' <<< \"\$out_ws\""
+# The positive first, in this same fixture, or the absence below is a needle that
+# appears nowhere and passes however the wording moves (L159, and the absence needle
+# scan is what caught exactly that here). A tick that really had nothing to send is
+# what the refusal must not be mistaken for, so it is the one to establish.
+cat > "$WS_FS" <<'FSEOF'
+#!/usr/bin/env bash
+echo one
+FSEOF
+chmod +x "$WS_FS"
+out_ws_none="$(SYNC_FSWATCH="$WS_FS" SYNC_WATCH_SEND="printf 'SEND-OUTCOME nothing\n'" \
+  CLAUDE_HOME="$WS_HOME" SYNC_REPO="$WORK/watch-stale-repo-unused" SYNC_NO_NOTIFY=1 \
+  bash "$WS_SELF" watch 2>&1 || true)"
+check "#420 a tick with nothing to send is logged as exactly that" \
+  "grep -q 'watch: nothing to send' <<< \"\$out_ws_none\""
+check "#420 and never reports it as nothing to send" \
+  "! grep -q 'watch: nothing to send' <<< \"\$out_ws\""
+
+
 section "== the index generator, against the wrap shapes it actually meets (#192, #194, #195) =="
 # LESSONS-INDEX.md is imported by CLAUDE.md into every session in every project, and the generator
 # that writes it had no test of its own. #192's word-gluing defect was found by reading the awk by
