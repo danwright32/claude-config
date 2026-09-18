@@ -188,7 +188,7 @@ fi
 # sat in a real milestone. It was filed as a duplicate (#264) and closed the same
 # hour. A duplicate is exactly what a pre-filing check exists to catch.
 issues_raw="$(gh issue list --repo "$repo" --state open \
-  --limit "$limit" --json number,title,milestone 2>"$gh_err")"
+  --limit "$limit" --json number,title,body,milestone 2>"$gh_err")"
 if [[ $? -ne 0 ]]; then
   # A repo with no pen yet is not a failure, it is a pen holding nothing. Anything
   # else is, and it says which half failed so the right one gets investigated.
@@ -342,6 +342,56 @@ scored.sort(key=lambda r: (-r[0], -r[1]))
 # string, so one would close the string and leave the file unparseable.)
 candidates = scored
 
+# WHAT THE TITLES CANNOT SEE (claude-config#424).
+#
+# Both lists above are computed from TITLES, and a title is the one part of an issue
+# written before the work is understood. On 2026-09-17 that let #421 be filed over
+# #420: one root cause, established in the body of #420, and two titles sharing the
+# single word "send", so #420 was shown as a weak sibling and dismissed as one.
+#
+# THE MEASURE IS COVERAGE OF THE IDEA, and picking it took two wrong ones first, both
+# ruled out by measurement rather than by argument (120 issues in this repo, 2026-09-17).
+#
+# A raw COUNT of shared words separates nothing: the median unrelated pair already
+# shares 13 words and the known duplicate shares 40, the 99th percentile.
+#
+# The proportion shared, intersection over union, separates well between two ISSUES,
+# and not at all in the shape this actually runs in. An idea is a sentence and an issue
+# is a page, so the union is the page: the live run that reproduced the #421 filing
+# scored a perfect containment at 0.063 and the true duplicate at 0.023, and the rule
+# built on it reported nothing. That is a rig measuring a different load than the one
+# that ships (L472).
+#
+# What is left is the fraction of the ideas OWN words the issue covers, which does not
+# care how long the issue is. On that live run: 1.000 for the issue about this very
+# change, 0.667 for the duplicate, 0.167 and 0.000 for the two unrelated ones.
+#
+# The floor is 0.5, half the ideas distinct words, and no more than CLOSE_MAX rows are
+# shown. Over the 120 issues that catches the 421 to 420 pair at 0.667, 394 to 390 at
+# 0.800 and 340 to 336 at 0.500. It does not catch 413 to 409 at 0.222, and those two
+# are siblings rather than duplicates, so #409 shows up on the shortlist above instead.
+#
+# It RANKS and rules on nothing, exactly like that shortlist: the shared words are
+# printed so a coincidence can be dismissed by reading it, and no count derived here
+# feeds the 2 or more rule (claude-config#265).
+CLOSE_FLOOR = 0.5
+CLOSE_MAX = 3
+# Below this an idea has too few distinct words for a fraction of them to mean
+# anything: at two words every issue holding either one covers half the idea.
+CLOSE_MIN_IDEA = 3
+
+close = []
+if len(target) >= CLOSE_MIN_IDEA:
+    for it in valid:
+        other = words(it["title"]) | words(it.get("body") or "")
+        shared = target & other
+        covered = len(shared) / float(len(target))
+        if covered >= CLOSE_FLOOR:
+            close.append((covered, it.get("number", 0), it["title"],
+                          milestone_of(it) or catch_all, sorted(shared)))
+    close.sort(key=lambda r: (-r[0], -r[1]))
+    close = close[:CLOSE_MAX]
+
 # Announced BEFORE anything derived from the read, so a reader who stops at the first
 # line still learns the answer rests on a subset. A count landing exactly on the limit
 # warns when nothing was actually lost, which is the safe direction: a needless warning
@@ -360,12 +410,16 @@ for score, num, title, ms, shared in dups[:show_max]:
           % (score, num, title, ms, ", ".join(shared)))
 if len(dups) > show_max:
     print("DUPLICATE-TRUNCATED %d of %d shown" % (show_max, len(dups)))
+for prop, num, title, ms, shared in close:
+    print("CLOSE-MATCH %.3f #%s %s [in: %s] [shares: %s]"
+          % (prop, num, title, ms, ", ".join(shared)))
 # How many were SHOWN, which is not how many are related. Named so that nothing can
 # read it as the second: the count the "2 or more issues" rule consumes is one the
 # reader states after reading the titles, and passes to ensure-milestone.sh itself.
 print("CANDIDATE-COUNT %d shown, which is NOT a count of related issues: read the "
       "titles and decide" % len(candidates))
 print("DUPLICATE-COUNT %d" % len(dups))
+print("CLOSE-MATCH-COUNT %d" % len(close))
 ' "$like" "$CATCH_ALL" "$show_max" "$limit" 2>"$gh_err")"
 irc=$?
 if [[ $irc -ne 0 ]]; then
@@ -376,11 +430,15 @@ fi
 # --- report ---------------------------------------------------------------
 milestone_count="$(printf '%s\n' "$milestones_out" | awk '/^MILESTONE-COUNT /{print $2}')"
 candidate_count="$(printf '%s\n' "$siblings_out" | awk '/^CANDIDATE-COUNT /{print $2}')"
+# Read for the refusal below as well as for the report. A close match is a reason this
+# idea may already be filed, so an exit saying nothing shares words with it would be
+# false in exactly the case that matters most (L11, claude-config#424).
+close_count="$(printf '%s\n' "$siblings_out" | awk '/^CLOSE-MATCH-COUNT /{print $2}')"
 
 # Every candidate is REPORTED, whatever it scored. The caller may recognise a relation
 # the word overlap cannot see, and it may reject one the overlap liked; both are its
 # job rather than this script's (claude-config#265).
-if [[ "${milestone_count:-0}" -eq 0 && "${candidate_count:-0}" -eq 0 ]]; then
+if [[ "${milestone_count:-0}" -eq 0 && "${candidate_count:-0}" -eq 0 && "${close_count:-0}" -eq 0 ]]; then
   echo "NO-CANDIDATES $repo has no open milestone other than \"$CATCH_ALL\", and nothing in the pen shares words with this idea."
   exit 1
 fi

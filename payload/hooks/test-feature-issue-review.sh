@@ -60,6 +60,7 @@ needs=(
   "milestone-candidates.sh"         # the backlog is READ before a milestone is chosen
   "READ THE TITLES"                 # the score ranks the shortlist, the reader decides (#265)
   "DUPLICATE-RISK"                  # an idea that already exists is not filed again
+  "CLOSE-MATCH"                     # and one whose title shares nothing still has to be read
   "CHECK THOSE BEFORE FILING"       # which only works if the lines are actually read
   "2 OR MORE issues would go into it at once"  # the bar for opening a new milestone
   "--create-approved"               # which only happens after Dan selects it
