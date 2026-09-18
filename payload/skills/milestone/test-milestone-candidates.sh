@@ -376,6 +376,54 @@ GH_ISSUES="$TMP/issues.json"
 check "an empty pen still reports its count explicitly" "CANDIDATE-COUNT 0 shown" "$OUT"
 check_eq "milestones present but no siblings is still a successful read" 0 "$RC"
 
+# --- a match made only of words the repo uses everywhere (claude-config#434) -
+# The plain fraction shipped in #424 counted every shared word the same, so an idea made partly of
+# the backlog's own common vocabulary matched anything holding those words. Measured against
+# Overtures 400 open issues: "Fix the crash when exporting a shoot with no images" drew three rows
+# on nothing but "export" and "shoot". A word is weighted by how RARE it is here instead, which is
+# the only form of this that travels to a repo with its own generic words (claude-config#265).
+#
+# The fixture is the shape that separates the two: an idea of four words, two the backlog uses
+# everywhere and two it has never seen, and an issue sharing ONLY the common pair. Half the words
+# either way, so the plain fraction reports it and the weighting does not. An idea made entirely of
+# common words would score 1.0 under both, which is why the fixture is a mix rather than the
+# obvious all-common one.
+cat >"$TMP/issues-generic.json" <<'JSON'
+[
+  { "number": 910, "title": "Tidy the shoot exporter logs",
+    "body": "Exporting a shoot writes a log nobody reads. The export step should say what it wrote.",
+    "milestone": { "title": "Ungrouped" } },
+  { "number": 911, "title": "Handle the kerfuffle during an abseil",
+    "body": "A kerfuffle raised mid abseil is swallowed. Report the kerfuffle and stop the abseil.",
+    "milestone": { "title": "Ungrouped" } },
+  { "number": 912, "title": "Name the shoot in the export filename",
+    "body": "Exporting a shoot produces export-1.zip whatever the shoot was called.",
+    "milestone": { "title": "Ungrouped" } },
+  { "number": 913, "title": "Retry a shoot export that timed out",
+    "body": "A shoot export that times out is not retried, so the export is simply missing.",
+    "milestone": { "title": "Ungrouped" } },
+  { "number": 914, "title": "Show export progress while a shoot uploads",
+    "body": "Exporting a large shoot shows nothing at all until the export finishes.",
+    "milestone": { "title": "Ungrouped" } },
+  { "number": 915, "title": "Warn before an export overwrites a shoot folder",
+    "body": "Exporting into a folder that already holds a shoot overwrites it with no warning.",
+    "milestone": { "title": "Ungrouped" } }
+]
+JSON
+GH_ISSUES="$TMP/issues-generic.json"
+run acme/widgets --like "Fix the kerfuffle when exporting a shoot with abseil"
+close_generic=""
+while IFS= read -r line; do
+  case "$line" in "CLOSE-MATCH "*) close_generic="$close_generic$line"$'\n' ;; esac
+done <<<"$OUT"
+check_not "an issue sharing only the backlog's common words is not a close match" "#910" "$close_generic"
+check_not "and neither are the others that share the same two" "#913" "$close_generic"
+# The control, and it is what stops this being satisfied by a weighting that suppresses everything
+# (L159, L104): the SAME run, the same floor, an issue sharing the two words this backlog has never
+# seen anywhere else.
+check "while an issue sharing the rare words still is" "#911" "$close_generic"
+GH_ISSUES="$TMP/issues.json"
+
 # --- nothing found, and nothing found EXCEPT a close match -----------------
 # The early refusal says the repo has no feature milestone and nothing in the pen
 # shares words with this idea, and it exits before the report. It had no test at all
