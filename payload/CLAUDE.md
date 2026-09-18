@@ -150,6 +150,8 @@ Paths use a tilde, never a real home directory: the sync rewrites this file for 
 
 On Daniels-MacBook-Pro-2:
 - `~/Non-icloudDocuments/Apps/Overture`: moved here 2026-09-08, from `Photography Assets/Dan Wright Photography/Marketing/Outreach/`, after that checkout was deleted while the disk was full and the repo was re-cloned. It no longer lives anywhere surprising.
+- `~/Non-icloudDocuments/Apps/Ovation`: the invoicing app. Absent from this list until 2026-09-17, so the check that reports a moved project did not cover it while it was the project being worked in.
+- `~/Non-icloudDocuments/Apps/backstage`: the shared Swift packages Ovation, Overture and Downbeat all consume, starting with Google sign in and Gmail sending. Public while building, for the Actions minutes, and private after.
 - `~/Non-icloudDocuments/Apps/Downbeat`
 - `~/Non-icloudDocuments/Apps/NurseDex`
 - `~/Non-icloudDocuments/Apps/PostRoll`
