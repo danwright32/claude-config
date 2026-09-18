@@ -92,7 +92,7 @@ check "and says it could not measure, rather than reporting a number it does not
 # every arithmetic test error, which bash reads as false, so the check falls through to "there is
 # room" on a disk with 1 GB left: silently landing on the permissive side is exactly the failure
 # L50 describes, and nothing anywhere would have said so.
-for bad_setting in FREE_SPACE_FLOOR_GB FREE_SPACE_HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS; do
+for bad_setting in FREE_SPACE_FLOOR_GB FREE_SPACE_HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS FREE_SPACE_RECOVERY_GB; do
   S_BAD="$TMPROOT/state-bad-$bad_setting"; mkdir -p "$S_BAD"
   bad_msg="$(env "$bad_setting=abc" FREE_SPACE_BYTES="$((1 * GB))" FREE_SPACE_NOW="$T0" \
     FREE_SPACE_STATE_DIR="$S_BAD" FREE_SPACE_PATH=/fixture bash "$CHECK" 2>&1)"; bad_rc=$?
@@ -101,6 +101,64 @@ for bad_setting in FREE_SPACE_FLOOR_GB FREE_SPACE_HORIZON_HOURS FREE_SPACE_MIN_S
   check "and the refusal names which setting it was, so it can be fixed" \
     "$(grep -q "$bad_setting" <<< "$bad_msg" && echo ok || echo "said: $bad_msg")"
 done
+
+# ---- a SAWTOOTH IS NOT A FALL (claude-config#436) ----
+# The readings between the ends were being kept and then ignored: the rate came from the oldest and
+# the newest alone, so any two points could set the verdict however the disk behaved in between.
+#
+# This is the real shape, measured on 2026-09-18: an Xcode test build takes tens of GB and gives
+# every one of them back when it finishes. Across a morning that draws a sawtooth, and a sawtooth's
+# endpoints can be given any slope you like by choosing when to look. Three notices went out that
+# day, at 23, 135 and 163 GB an hour, while the disk sat comfortably above the floor and the last
+# reading before each was HIGHER than an earlier one.
+#
+# A rate is a claim about a trend, and a series that recovers has no trend to state. So the answer
+# is the one this file already uses for a span too short to mean anything: say how much is left,
+# and say nothing about where it is going (L36, L656, L216).
+S_SAW="$TMPROOT/state-sawtooth"; mkdir -p "$S_SAW"
+saw() {
+  FREE_SPACE_BYTES="$1" FREE_SPACE_NOW="$2" FREE_SPACE_STATE_DIR="$S_SAW" \
+    FREE_SPACE_PATH=/fixture bash "$CHECK" 2>&1
+}
+saw "$((150 * GB))" "$((T0 - 3600))"  > /dev/null
+saw "$((35 * GB))"  "$((T0 - 2400))"  > /dev/null
+saw "$((150 * GB))" "$((T0 - 1200))"  > /dev/null
+saw_msg="$(saw "$((86 * GB))" "$T0")"; saw_rc=$?
+check "a disk that recovered inside the window states no rate" \
+  "$(grep -qi 'per hour' <<< "$saw_msg" && echo "said: $saw_msg" || echo ok)"
+check "and does not call it falling fast, because there is no trend to be fast" \
+  "$([ "$saw_rc" -ne 4 ] && echo ok || echo "exit $saw_rc, said: $saw_msg")"
+
+# THE POSITIVE CONTROL, and it has to be here or the case above is satisfied by a check that simply
+# stopped reporting rates at all (L159). Same span, same endpoints, no recovery in between.
+S_MONO="$TMPROOT/state-monotonic"; mkdir -p "$S_MONO"
+mono() {
+  FREE_SPACE_BYTES="$1" FREE_SPACE_NOW="$2" FREE_SPACE_STATE_DIR="$S_MONO" \
+    FREE_SPACE_PATH=/fixture bash "$CHECK" 2>&1
+}
+mono "$((150 * GB))" "$((T0 - 3600))" > /dev/null
+mono "$((128 * GB))" "$((T0 - 2400))" > /dev/null
+mono "$((107 * GB))" "$((T0 - 1200))" > /dev/null
+mono_msg="$(mono "$((86 * GB))" "$T0")"; mono_rc=$?
+check "a fall that never recovered still states its rate" \
+  "$(grep -qi 'per hour' <<< "$mono_msg" && echo ok || echo "said: $mono_msg")"
+check "and still fires when zero is inside the horizon" \
+  "$([ "$mono_rc" -eq 4 ] && echo ok || echo "exit $mono_rc, said: $mono_msg")"
+
+# A RECOVERY OF A FEW BYTES IS NOISE, NOT A RECOVERY. Every write and delete on a live machine
+# jitters the reading, so a rule that refused on any increase at all would refuse always, which is
+# the same as deleting the feature (L104: check what it must PRESERVE, not only what it must catch).
+S_JIT="$TMPROOT/state-jitter"; mkdir -p "$S_JIT"
+jit() {
+  FREE_SPACE_BYTES="$1" FREE_SPACE_NOW="$2" FREE_SPACE_STATE_DIR="$S_JIT" \
+    FREE_SPACE_PATH=/fixture bash "$CHECK" 2>&1
+}
+jit "$((150 * GB))" "$((T0 - 3600))" > /dev/null
+jit "$((128 * GB))" "$((T0 - 2400))" > /dev/null
+jit "$(((107 * GB) + 200 * 1024 * 1024))" "$((T0 - 1200))" > /dev/null
+jit_msg="$(jit "$((86 * GB))" "$T0")"
+check "a fall that jittered up by a fraction of a GB still states its rate" \
+  "$(grep -qi 'per hour' <<< "$jit_msg" && echo ok || echo "said: $jit_msg")"
 
 # ---- falling fast, while still above the floor ----
 # 240 GB now, 300 GB three hours ago: 20 GB an hour, so zero is twelve hours out. That is outside

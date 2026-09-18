@@ -42,6 +42,7 @@
 #   FREE_SPACE_HORIZON_HOURS  reaching zero within this many hours is "falling fast" (default 6)
 #   FREE_SPACE_MIN_SPAN_MIN   no rate is reported from a span shorter than this (default 10)
 #   FREE_SPACE_WINDOW_HOURS   readings older than this are pruned and never used (default 6)
+#   FREE_SPACE_RECOVERY_GB    a rise larger than this means the disk recovered, so no rate
 #   FREE_SPACE_STATE_DIR      where the readings are kept
 set -uo pipefail
 
@@ -57,6 +58,10 @@ FLOOR_GB="${FREE_SPACE_FLOOR_GB:-20}"
 HORIZON_HOURS="${FREE_SPACE_HORIZON_HOURS:-6}"
 MIN_SPAN_MIN="${FREE_SPACE_MIN_SPAN_MIN:-10}"
 WINDOW_HOURS="${FREE_SPACE_WINDOW_HOURS:-6}"
+# A reading higher than an earlier one by MORE than this is a recovery rather than jitter.
+# Every write and delete on a live machine moves the number a little, so a rule that refused
+# on any increase at all would refuse always, which is the same as deleting the warning.
+RECOVERY_GB="${FREE_SPACE_RECOVERY_GB:-1}"
 STATE_DIR="${FREE_SPACE_STATE_DIR:-${TMPDIR:-/tmp}/claude-free-space}"
 
 cannot(){   # $1 = what could not be done
@@ -71,7 +76,7 @@ is_number(){ case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 # is room" on a disk with 1 GB left. A value parsed from input that feeds a comparison directly
 # lands on the permissive side when it is bad, and nothing says so. Refused here instead, by name,
 # because a message that does not say which of the four is wrong cannot be acted on (L11, L80).
-for _setting in FREE_SPACE_FLOOR_GB:"$FLOOR_GB" FREE_SPACE_HORIZON_HOURS:"$HORIZON_HOURS"                 FREE_SPACE_MIN_SPAN_MIN:"$MIN_SPAN_MIN" FREE_SPACE_WINDOW_HOURS:"$WINDOW_HOURS"; do
+for _setting in FREE_SPACE_FLOOR_GB:"$FLOOR_GB" FREE_SPACE_HORIZON_HOURS:"$HORIZON_HOURS"                 FREE_SPACE_MIN_SPAN_MIN:"$MIN_SPAN_MIN" FREE_SPACE_WINDOW_HOURS:"$WINDOW_HOURS" FREE_SPACE_RECOVERY_GB:"$RECOVERY_GB"; do
   is_number "${_setting#*:}" || cannot "${_setting%%:*} is set to '${_setting#*:}', which is not a number"
 done
 
@@ -123,10 +128,37 @@ tmp="$STATE.$$"
 { printf '%s' "$kept"; printf '%s %s\n' "$now" "$free_bytes"; } > "$tmp" 2>/dev/null \
   && mv -f "$tmp" "$STATE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
 
+# ---------- did it ever go back up? ----------
+# A SAWTOOTH IS NOT A FALL (claude-config#436). The rate used to come from the oldest reading and
+# the newest, and every reading in between was kept and then ignored, so two points set the verdict
+# however the disk behaved between them.
+#
+# That is not a rare shape, it is the ordinary one: an Xcode test build takes tens of GB and gives
+# every one of them back when it finishes. Measured on 2026-09-18, three notices went out in a
+# morning claiming 23, 135 and 163 GB an hour while the disk sat far above the floor the whole time.
+#
+# A rate is a claim about a TREND, and a series that recovered has no trend to state. So a recovery
+# refuses the rate, which is the answer this file already gives for a span too short to mean
+# anything: say how much is left, and say nothing about where it is going (L36, L656, L216).
+#
+# Sorted by time rather than trusted to be in order: the file is appended to, but a clock that
+# moved or a run with a pinned time can put a line out of sequence, and comparing unsorted readings
+# would invent a recovery that never happened.
+recovered=0
+_prev_b=""
+while IFS=' ' read -r _t _b; do
+  is_number "${_t:-}" || continue
+  is_number "${_b:-}" || continue
+  if [ -n "$_prev_b" ] && [ $((_b - _prev_b)) -gt $((RECOVERY_GB * GIB)) ]; then recovered=1; fi
+  _prev_b="$_b"
+done <<EOF
+$(printf '%s%s %s\n' "$kept" "$now" "$free_bytes" | sort -n -k1,1)
+EOF
+
 # ---------- the rate, when there is one worth stating ----------
 rate_clause=""
 falling_fast=0
-if [ -n "$oldest_t" ]; then
+if [ -n "$oldest_t" ] && [ "$recovered" -eq 0 ]; then
   span=$((now - oldest_t))
   fall=$((oldest_b - free_bytes))
   if [ "$span" -ge $((MIN_SPAN_MIN * 60)) ] && [ "$fall" -gt 0 ]; then
