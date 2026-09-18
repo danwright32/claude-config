@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 701 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 702 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -436,6 +436,7 @@ apply it, because the body is where the failure it came from is described.
 - L702. A SQL allow list returning NULL for an unlisted kind makes `if not (x = any(allowed))` skip and permit everything, so give the CASE an else that raises.
 - L482. A privacy guard scoped to personal identity exempts everything else the dataset discloses, so define what makes it sensitive before scoping the guard.
 - L484. Before a privacy sweep swaps a real name for an invented one, check whether code matches on or writes it; if so, exempt it instead.
+- L489. A guard walking the WORKING TREE cannot see history, so a deleted secret stays readable while it reports clean: scan every object reachable from every ref.
 
 ## UX completeness
 
