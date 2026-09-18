@@ -5580,6 +5580,25 @@ for reference; L6 was reviewed and deliberately not adopted.
   exempted by path for exactly this reason, #296, without anyone restoring the names.)
   SHORT: Before a privacy sweep swaps a real name for an invented one, check whether code matches on or writes it; if so, exempt it instead.
 
+- **L489. A guard that walks the WORKING TREE cannot see what the repository's
+  HISTORY holds, so a secret or a real identity that was committed and later deleted stays
+  readable to anyone who clones it, while the guard reports clean.** Scan every object
+  reachable from every ref with the SAME predicate the tree guard uses, so the two cannot
+  disagree about what counts, and write the remedy as ROTATING the value rather than
+  rewriting the commit, because anything that has been public is compromised whatever
+  happens to the commit afterwards. The trap is that the tidy-up is what creates the blind
+  spot: the moment somebody notices the mistake and deletes the file, the guard starts
+  passing, so the repository looks safest exactly when a real credential has been exposed
+  and nobody has rotated it. Deleting a secret from a public repository does not remove it
+  from forks, caches or anything that already cloned it, and going private later does not
+  either.
+  (backstage#11, measured 2026-09-17: backstage is public and its whole subject is a Google
+  OAuth client, and its guard walks the directory only. Ovation's identity guard, which
+  exists because that repository's subject matter is real clients and venues, was checked
+  the same day and has no history scan either: zero references to rev-list, cat-file or
+  --all. Both were written carefully, and both read only what is there now.)
+  SHORT: A guard walking the WORKING TREE cannot see history, so a deleted secret stays readable while it reports clean: scan every reachable object.
+
 ## UX completeness
 
 - **L485. A container's minimum size is measured from the TALLEST state its content can
