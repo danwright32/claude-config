@@ -374,18 +374,53 @@ candidates = scored
 # It RANKS and rules on nothing, exactly like that shortlist: the shared words are
 # printed so a coincidence can be dismissed by reading it, and no count derived here
 # feeds the 2 or more rule (claude-config#265).
+# THE SHARED WORDS ARE WEIGHTED BY HOW RARE THEY ARE IN THIS BACKLOG (claude-config#434).
+#
+# Counting them equally was measured failing the same day the plain fraction shipped. Against
+# Overtures 400 open issues every idea drew two or three rows and not one was a duplicate: "Fix the
+# crash when exporting a shoot with no images" matched three issues on nothing but "export" and
+# "shoot", which name most of that repo. Rows that are never duplicates, on every review, are how a
+# surface stops being read (L36, L269), and it is claude-config#265 over again, because no constant
+# floor can know which words are generic HERE.
+#
+# So a words weight is log(N / (1 + issues holding it)), computed from the issues themselves. A
+# word in most of the backlog is worth almost nothing and a word in two is worth a lot, and nothing
+# has to be listed by hand: the repo says which of its own words are generic by how often it uses
+# them. That is the part a constant cannot do, and it is why the STOP list above stays small.
+#
+# Measured both ways on a FIXED corpus rather than against the live backlog, which is the trap this
+# went through first: run minutes apart against open issues, both formulas found nothing, because
+# four issues had been closed in between and the known duplicate was one of them (L487). On a fixed
+# 120 issue snapshot both find the 421 to 420 pair, weighted scoring it 0.557 against the 0.5
+# floor, and on Overture the three noisy ideas drop to 1, 0 and 3 rows.
 CLOSE_FLOOR = 0.5
 CLOSE_MAX = 3
-# Below this an idea has too few distinct words for a fraction of them to mean
-# anything: at two words every issue holding either one covers half the idea.
+# Below this an idea has too few distinct words for a fraction of them to mean anything: at two
+# words every issue holding either one covers half the idea.
 CLOSE_MIN_IDEA = 3
 
+import math
+
 close = []
-if len(target) >= CLOSE_MIN_IDEA:
-    for it in valid:
-        other = words(it["title"]) | words(it.get("body") or "")
+if len(target) >= CLOSE_MIN_IDEA and valid:
+    doc_words = [words(it["title"]) | words(it.get("body") or "") for it in valid]
+    n_docs = len(doc_words)
+    df = {}
+    for dw in doc_words:
+        for w in dw:
+            df[w] = df.get(w, 0) + 1
+
+    def weight(w):
+        # Never zero and never negative, so a word in EVERY issue still counts for a little and the
+        # total below can never be zero to divide by (L50).
+        return math.log(float(n_docs) / (1.0 + df.get(w, 0))) + 1.0
+
+    total = sum(weight(w) for w in target)
+    for it, other in zip(valid, doc_words):
         shared = target & other
-        covered = len(shared) / float(len(target))
+        if not shared:
+            continue
+        covered = sum(weight(w) for w in shared) / total if total > 0 else 0.0
         if covered >= CLOSE_FLOOR:
             close.append((covered, it.get("number", 0), it["title"],
                           milestone_of(it) or catch_all, sorted(shared)))
