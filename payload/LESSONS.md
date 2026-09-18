@@ -2545,6 +2545,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   mutation failed with "anon on reps_leave_remove(text,text): expected false, got true".
   Related to L124 and L541 on platform grants, and to L472 on a rig that measures itself.)
 
+- **L487. Two implementations compared against a LIVE store are compared against two different
+  populations, because the store moves between the runs, so what you measure is everything that
+  changed in it as well as the change you made. Take ONE fixed snapshot and run both halves against
+  that, and treat any comparison whose halves were read at different moments as unmeasured.** The
+  failure is not a wrong number, it is a confident and symmetric one: both halves read the same, so
+  it looks like a controlled result rather than a broken rig, and the natural reading is that the
+  new version does nothing.
+  SHORT: Comparing two implementations against a live store measures the population change too, so snapshot the data once and run both halves against that.
+  (claude-config#434, 2026-09-18: a plain word overlap and a rarity weighted one were run minutes
+  apart against the repo's OPEN issues to see which found a known duplicate. Both returned nothing,
+  which read as the weighting having broken the feature, and it was reverted. Four issues had been
+  closed between the two runs, the known duplicate among them, so neither version was ever shown
+  the pair. Re-run against a fixed 120 issue snapshot, both found it and the weighting scored it
+  0.557 against a floor of 0.5, so the revert was undone.)
+
 
 ## Data safety
 
@@ -4228,6 +4243,40 @@ for reference; L6 was reviewed and deliberately not adopted.
   degraded the same day, 119 and 198 failed leads, so whichever paged first would have
   silenced the other for half an hour with nothing recording that it had.)
   SHORT: A cooldown keyed COARSER than the subject its message names lets one subject's incident silence the others, behind a first page that looks correct.
+
+- **L486. On macOS the system bash is 3.2, where expanding an EMPTY array as
+  `"${arr[@]}"` under `set -u` is an unbound variable ERROR, so the script dies at that
+  line and a completely healthy run reports as a failure with no verdict printed at
+  all.** Guard every such expansion with a length check first, or build the list as a
+  string rather than an array. The trap is that the expansion is correct in bash 4 and
+  later, correct on every Linux runner, and correct on macOS the moment the array has one
+  element, so it passes every case anybody thinks to try and fails only on the empty one,
+  which is the healthy case. It fails LOUDLY in the sense that it exits non zero and
+  SILENTLY in the sense that the message names a variable rather than the condition, so it
+  reads as a bug in the thing under test rather than in the reporting around it.
+  (backstage#1, 2026-09-17: a shell test runner's `for suite in "${NOT_RUN[@]}"` cleanup
+  loop, reached only when nothing failed to run. Three assertions failed, including "a tree
+  whose suites all pass is accepted", which got exit 1 and no output; the actual message was
+  `line 57: NOT_RUN[@]: unbound variable`. The same pattern ships in shell across ovation,
+  overture and downbeat.)
+  SHORT: Under set -u macOS bash 3.2 errors on expanding an EMPTY array, so length check first, or a healthy run dies with no verdict.
+
+- **L488. A shell script that sources a library with `.` and does not run `set -e`
+  CARRIES ON when that file is missing, because the dot command only writes to stderr and
+  returns non zero, so every rule the missing file defined is silently absent while the
+  script runs to its own summary and exits 0.** Guard each source site with an existence
+  check that refuses, with its own exit code, naming the file that was missing. The trap is
+  that the summary is not a lie: it truthfully reports what the surviving code measured,
+  and a count that is zero because the function computing it does not exist is
+  indistinguishable from a count that is zero because there was nothing to find. It is the
+  same fault as a guard reporting success over an empty scan (L98), except that here the
+  guard was WRITTEN to catch exactly that and is carrying it itself.
+  (ovation#399, found 2026-09-17 by porting `check-ci-workflow.sh` into a repository where
+  its two libraries were briefly absent: bash printed "No such file or directory" twice and
+  "command not found" once, and the check then reported examining one workflow and holding
+  0 check scripts against the inventory, exit 0. In the origin the libraries are present, so
+  it had never fired and nothing would have reported it until the day it mattered.)
+  SHORT: A script SOURCING a library without set -e carries on when the file is MISSING, so guard the source site to refuse, or it summarises and exits 0.
 
 ## State and identity
 
