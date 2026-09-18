@@ -109,6 +109,18 @@ still=0
 for d in landed open dirty nonum; do [ -d "$REPO/.claude/worktrees/agent-$d" ] && still=$((still + 1)); done
 check_eq "it removes nothing, including the one it called stale" 4 "$still"
 
+# --- a number that is a PREFIX of a closed one is not closed ---------------
+# The closed list is matched line by line, and the cheap ways of doing that (a substring search, a
+# grep with no anchors) would read issue 41 as closed because 415 is. Nothing but a fixture holding
+# both can tell the two apart, and the claim otherwise lives in a comment, which enforces nothing
+# (L407).
+G -C "$REPO" worktree add -q -b "fix/41-prefix" "$REPO/.claude/worktrees/agent-prefix" >/dev/null 2>&1
+run "$REPO"
+check "an issue number that is only a prefix of a closed one is kept" "keeping agent-prefix" "$OUT"
+check "and says that issue is not closed" "issue #41 is not closed" "$OUT"
+check_not "and is never called stale" "STALE agent-prefix" "$OUT"
+G -C "$REPO" worktree remove --force "$REPO/.claude/worktrees/agent-prefix" >/dev/null 2>&1
+
 # --- GitHub unreadable is not a clean tree ---------------------------------
 # The same repository, the same four worktrees, and the one thing changed is that the answer cannot
 # be had. Reporting them as fine here is the failure this exit code exists to prevent (L98, L42).

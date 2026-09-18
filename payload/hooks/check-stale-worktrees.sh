@@ -112,10 +112,19 @@ for i in "${!paths[@]}"; do
     echo "  keeping $(basename "$p") [$b]: its branch names no issue, so whether the work landed cannot be read from here"
     continue
   fi
-  if ! printf '%s\n' "$closed" | grep -qx "$n"; then
-    echo "  keeping $(basename "$p") [$b]: issue #$n is not closed"
-    continue
-  fi
+  # Matched with `case` over a variable rather than `printf | grep -qx`. Under pipefail the -q
+  # consumer exits on its first match, the producer dies of SIGPIPE, and the pipeline's status
+  # becomes that death: a CLOSED issue would then read as not closed, silently, and only once the
+  # list is long enough for printf to still be writing (L183). The newlines around both sides are
+  # what make it an exact line match rather than a substring one, so 41 does not match 415.
+  case "
+$closed
+" in
+    *"
+$n
+"*) : ;;
+    *) echo "  keeping $(basename "$p") [$b]: issue #$n is not closed"; continue ;;
+  esac
   stale=$((stale + 1))
   echo "  STALE $(basename "$p") [$b]: issue #$n is closed and nothing is uncommitted"
   echo "    git -C $top worktree remove $p"
