@@ -332,15 +332,56 @@ if scope == "PATHS":
 #                   HEAD (exactly what this push added), then the fork point from the remote's
 #                   default branch (a first push of a branch), and only then the plain push answer.
 #
+# ps_merge_base and ps_pending_base both read the merge base through ps__base_merge_base, so a branch
+# rebased onto a newer main and force pushed is judged from where it now leaves main, never from its
+# pre rebase upstream tip (claude-config#456). ps_pushed_base already reaches the same answer: after
+# a force push the reflog's previous tip is not an ancestor, so it falls to the default branch.
+#
 # Each prints a commit and returns 0, or prints nothing and returns 1 when there is no range at all
 # (no commits, or nothing earlier than HEAD to start from). A caller getting nothing decides for
 # itself what that means, and must say so rather than read it as a clean result (L98).
 
+# The merge base of the base ref with HEAD, corrected for a REWRITTEN branch (claude-config#456).
+# After a rebase onto a newer main, the upstream still names the pre rebase tip, which is no longer
+# an ancestor of HEAD, and its merge base is the OLD fork point: every commit main gained since was
+# judged as part of the push. So when the base is not an ancestor of HEAD, the merge base with the
+# remote's default branch is taken too, and the NEWER of the two wins. The newer one, rather than
+# always the default branch's: a branch that diverged because somebody else pushed to it was not
+# rebased, and its upstream merge base is still the closer, correct start. Prints nothing when
+# there is no base or no merge base; what a merge base at HEAD means is left to each entry point.
+ps__base_merge_base() {   # $1 = the base ref
+  local base="${1:-}" mb="" def cand
+  [ -n "$base" ] || return 0
+  git rev-parse --verify --quiet "$base" >/dev/null 2>&1 || return 0
+  mb="$(git merge-base "$base" HEAD 2>/dev/null)"
+  if [ -n "$mb" ] && ! git merge-base --is-ancestor "$base" HEAD 2>/dev/null; then
+    def="$(ps__default_ref)"
+    if [ -n "$def" ]; then
+      cand="$(git merge-base "$def" HEAD 2>/dev/null)"
+      if [ -n "$cand" ] && [ "$cand" != "$mb" ] && git merge-base --is-ancestor "$mb" "$cand" 2>/dev/null; then
+        mb="$cand"
+      fi
+    fi
+  fi
+  printf '%s' "$mb"
+}
+
+# The remote's default branch as a remote tracking ref: what origin/HEAD names, then the usual
+# names. Remote refs only, never a local branch, because the question is where the branch leaves
+# what the remote holds.
+ps__default_ref() {
+  local def c
+  def="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
+  if [ -n "$def" ]; then printf '%s' "$def"; return 0; fi
+  for c in origin/main origin/master; do
+    if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+
 ps_merge_base() {   # $1 = the base ref, usually from ps_base_ref
   local base="${1:-}" mb=""
-  if [ -n "$base" ] && git rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
-    mb="$(git merge-base "$base" HEAD 2>/dev/null)"
-  fi
+  mb="$(ps__base_merge_base "$base")"
   if [ -z "$mb" ] || [ "$mb" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
     mb="$(git rev-parse --verify --quiet HEAD~1 2>/dev/null)"
   fi
@@ -353,7 +394,7 @@ ps_pending_base() {   # $1 = the base ref, usually from ps_base_ref
   head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)" || return 1
   [ -n "$head" ] || return 1
   if [ -n "$base" ] && git rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
-    mb="$(git merge-base "$base" HEAD 2>/dev/null)"
+    mb="$(ps__base_merge_base "$base")"
     full="$(git rev-parse --symbolic-full-name "$base" 2>/dev/null)"
     case "$full" in
       refs/remotes/*)
@@ -364,19 +405,14 @@ ps_pending_base() {   # $1 = the base ref, usually from ps_base_ref
 }
 
 ps_pushed_base() {
-  local head prev def c cand
+  local head prev def cand
   head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)" || return 1
   [ -n "$head" ] || return 1
   prev="$(git rev-parse --verify --quiet '@{u}@{1}' 2>/dev/null)"
   if [ -n "$prev" ] && [ "$prev" != "$head" ] && git merge-base --is-ancestor "$prev" HEAD 2>/dev/null; then
     printf '%s' "$prev"; return 0
   fi
-  def="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
-  if [ -z "$def" ]; then
-    for c in origin/main origin/master; do
-      if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then def="$c"; break; fi
-    done
-  fi
+  def="$(ps__default_ref)"
   if [ -n "$def" ]; then
     cand="$(git merge-base "$def" HEAD 2>/dev/null)"
     if [ -n "$cand" ] && [ "$cand" != "$head" ]; then printf '%s' "$cand"; return 0; fi

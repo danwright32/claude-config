@@ -407,6 +407,64 @@ case "$own_pushed" in
   *) check "#441 no hook keeps its own post push range" ok ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A branch REBASED onto a newer main and force pushed (claude-config#456). Its upstream still names
+# the pre rebase tip, which is no longer an ancestor of HEAD, so the merge base with it is the OLD
+# fork point and every commit main gained since was judged as part of this push: the deferral gate
+# refused a force push over lines another pull request had already merged (L11). When the upstream
+# tip is not an ancestor of HEAD, the range starts where the branch now leaves the default branch.
+# ---------------------------------------------------------------------------
+git init -q --bare "$MB/rb.git" 2>/dev/null
+git init -q -b main "$MB/rb" 2>/dev/null
+mb_commit "$MB/rb" base
+( cd "$MB/rb" && git remote add origin "$MB/rb.git" && git push -q -u origin main \
+    && git checkout -q -b feat && printf 'f\n' > g && git add g && gc commit -qm feat1 \
+    && git push -q -u origin feat \
+    && git checkout -q main ) >/dev/null 2>&1
+mb_commit "$MB/rb" main2; mb_commit "$MB/rb" main3
+( cd "$MB/rb" && git push -q origin main && git checkout -q feat && git rebase -q main ) >/dev/null 2>&1
+new_main="$(sha_of "$MB/rb" main)"
+old_fork="$(sha_of "$MB/rb" main~2)"
+# The fixture is what it claims: the upstream is behind a rewrite, not simply behind (L159).
+if git -C "$MB/rb" merge-base --is-ancestor origin/feat HEAD 2>/dev/null; then
+  check "#456 fixture: the upstream tip is no longer an ancestor of HEAD" "it still is"
+else
+  check "#456 fixture: the upstream tip is no longer an ancestor of HEAD" ok
+fi
+got="$( cd "$MB/rb" && ps_merge_base "$(ps_base_ref)" )"
+[ -n "$got" ] && [ "$got" = "$new_main" ] \
+  && check "#456 a rebased branch's plain push is measured from the new main, not the old fork" ok \
+  || check "#456 a rebased branch's plain push is measured from the new main, not the old fork" "got=$got want=$new_main (old fork $old_fork)"
+got="$( cd "$MB/rb" && ps_pending_base "$(ps_base_ref)" )"
+[ -n "$got" ] && [ "$got" = "$new_main" ] \
+  && check "#456 a rebased branch's commit then push is measured from the new main" ok \
+  || check "#456 a rebased branch's commit then push is measured from the new main" "got=$got want=$new_main"
+# After the force push itself, the post push helper reads the whole branch against the new main.
+( cd "$MB/rb" && git push -q --force origin feat ) >/dev/null 2>&1
+got="$( cd "$MB/rb" && ps_pushed_base )"
+[ -n "$got" ] && [ "$got" = "$new_main" ] \
+  && check "#456 after the force push the range starts at the new main" ok \
+  || check "#456 after the force push the range starts at the new main" "got=$got want=$new_main"
+
+# The control that keeps the fix narrow: a branch that DIVERGED from its upstream without being
+# rebased (someone else pushed to it) is not a rewrite onto main. The newer of the two merge bases
+# wins, so the range stays on the branch rather than widening back to where it left main.
+git init -q --bare "$MB/dv.git" 2>/dev/null
+git init -q -b main "$MB/dv" 2>/dev/null
+mb_commit "$MB/dv" base
+( cd "$MB/dv" && git remote add origin "$MB/dv.git" && git push -q -u origin main \
+    && git checkout -q -b feat && printf 'a\n' > g && git add g && gc commit -qm f1 \
+    && git push -q -u origin feat \
+    && git clone -q "$MB/dv.git" "$MB/dv2" && cd "$MB/dv2" && git checkout -q feat \
+    && printf 'other\n' > h && git add h && gc commit -qm theirs && git push -q origin feat \
+    && cd "$MB/dv" && git fetch -q origin \
+    && printf 'b\n' >> g && git add g && gc commit -qm mine ) >/dev/null 2>&1
+shared="$(sha_of "$MB/dv" HEAD~1)"
+got="$( cd "$MB/dv" && ps_merge_base "$(ps_base_ref)" )"
+[ -n "$got" ] && [ "$got" = "$shared" ] \
+  && check "#456 control: a diverged but unrebased branch keeps the upstream merge base" ok \
+  || check "#456 control: a diverged but unrebased branch keeps the upstream merge base" "got=$got want=$shared"
+
 # A repository with no commits has no range at all: every entry point answers nothing and says so
 # with its status, rather than printing something a caller would diff against.
 git init -q "$MB/none" 2>/dev/null
