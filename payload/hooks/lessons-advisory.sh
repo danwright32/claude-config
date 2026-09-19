@@ -137,7 +137,14 @@ fi
 # It matches the index by its whole family of names rather than by the one it has today, because
 # the index is being split into one file per section (claude-config#473) and the skip has to cover
 # LESSONS-INDEX-<section>.md the moment those files land, not one push later.
-RULE_TEXT_PATH_RE='(^|/)(LESSONS\.md|LESSONS-INDEX[^/]*\.md)$'
+# The literal dots are written as bracket expressions rather than as backslash escapes. This value
+# is handed to awk through -v, which processes escape sequences in it, and the two awks differ:
+# the one the Mac ships takes an unknown escape silently while gawk WARNS on stderr, so on Linux
+# every run of this hook wrote `awk: warning: escape sequence ...` into its own stderr (L434). It
+# was invisible while every path here exited 0, because Claude Code discards a PreToolUse hook's
+# stderr on exit 0; the stand down below speaks on exit 1, which is where it surfaced. A bracket
+# expression means the same thing to awk and to grep -E with no backslash for either to read.
+RULE_TEXT_PATH_RE='(^|/)(LESSONS[.]md|LESSONS-INDEX[^/]*[.]md)$'
 
 # path<TAB>added-line, one per added line. A rule text file is dropped at its header, so none of
 # its lines reach the triggers below.

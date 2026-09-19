@@ -495,6 +495,21 @@ REPO_ROOT="$(cd "$(dirname "$HOOK")/../.." && pwd)"
 SYNC_TOOL="$REPO_ROOT/claude-sync"
 # shellcheck disable=SC1090
 eval "$(sed -n '/^RULE_TEXT_PATH_RE=/p' "$HOOK")"
+# This value is handed to awk through -v, which processes escape sequences in it, and the two awks
+# disagree about an unknown one: the Mac's takes it silently, gawk warns on stderr (L434). That
+# warning went into the hook's OWN stderr on every Linux run and was invisible while every path
+# exited 0, because Claude Code discards a PreToolUse hook's stderr then. It surfaced only once the
+# stand down for a missing python3 started speaking on exit 1 (claude-config#486), in CI, as a
+# suite failure whose message was the warning itself.
+#
+# The rule is asserted rather than the symptom, because the symptom needs gawk to show itself and
+# this suite runs on both (L376): a bracket expression means the same thing to awk and to grep -E,
+# and neither has a backslash to read.
+case "${RULE_TEXT_PATH_RE:-}" in
+  *\\*) FAIL=$((FAIL+1)); echo "FAIL: RULE_TEXT_PATH_RE carries a backslash escape, which gawk warns about when awk -v processes it: $RULE_TEXT_PATH_RE" ;;
+  *) PASS=$((PASS+1)); echo "PASS: RULE_TEXT_PATH_RE carries no backslash escape for awk -v to read" ;;
+esac
+
 if [ -z "${RULE_TEXT_PATH_RE:-}" ]; then
   FAIL=$((FAIL+1)); echo "FAIL: the hook holds no RULE_TEXT_PATH_RE, so nothing decides which files are rule text"
 elif [ ! -f "$SYNC_TOOL" ] || [ ! -d "$REPO_ROOT/payload" ]; then
