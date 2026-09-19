@@ -7771,7 +7771,14 @@ scratch_total_kb(){   # reads paths on stdin
   # reported from whatever it could read. Under `pipefail` an unguarded pipeline would take the
   # whole command down over scratch that has already gone, which is the one outcome nobody needs
   # reporting.
-  printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 du -sk 2>/dev/null | awk '{s+=$1} END{print s+0}' || echo 0
+  #
+  # The tolerance sits on the `du` side of the pipe and nowhere else, so awk is the ONE thing that
+  # prints (claude-config#445). It used to be a trailing `|| echo 0` on the whole pipeline, and
+  # `du` exits non zero whenever any entry under a path cannot be read, not only when the path has
+  # gone: `pipefail` then failed the pipeline AFTER awk had printed the sum, and the fallback
+  # printed a second total beneath it. The caller got "1480852", a newline, "0", which broke the
+  # integer test in scratch_human_size and went out in the message as the size (L11, L183).
+  { printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 du -sk 2>/dev/null || true; } | awk '{s+=$1} END{print s+0}'
 }
 
 # Reported in the unit that says something. 92 abandoned apply logs really do come to under a
