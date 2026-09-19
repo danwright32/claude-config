@@ -316,6 +316,70 @@ eq "$(mt_repo_flag "echo \"$MERGE https://github.com/a/b/pull/9\"")" "" "a link 
 # A host other than github.com is kept whole, so it can never compare equal to a github remote.
 eq "$(mt_repo_flag "$MERGE https://git.example.com/a/b/pull/9")" "git.example.com/a/b" "another host is kept whole"
 
+echo "merge-target: the reader those two answers need (#475)"
+
+# mt__merge_selector reads the merge's own arguments with python3, where mt_pr_number used to fall
+# back to grep. On a machine with no python3 the number and the repository BOTH come back empty,
+# and every gate then refuses while describing a pull request it could not find rather than a
+# reader that is not installed: two causes with one message, and the remedy it names cannot clear
+# it (L11, claude-config#475).
+#
+# The tools the library needs are linked into a bare directory, so nothing else on this machine's
+# PATH can answer for python3. Same shape as the no claude case in test-ai-review-on-push.sh.
+nopy_root=$(mktemp -d)
+NOPY="$nopy_root/bin"; mkdir -p "$NOPY"
+for t in bash sh git grep sed awk tr cat cut head dirname basename env uname mkdir mv rm; do
+  p="$(command -v "$t" 2>/dev/null)"; [ -n "$p" ] && ln -s "$p" "$NOPY/$t" 2>/dev/null
+done
+# The fixture's own premise, asserted rather than assumed: a bare directory that still reaches a
+# python3 would make every case below pass for the wrong reason (L159).
+if PATH="$NOPY" "$NOPY/bash" -c 'command -v python3 >/dev/null 2>&1'; then
+  fail "the bare directory still reaches a python3, so nothing here measures its absence"
+else pass; fi
+
+nopy() {  # $1 = a library function, $2.. = its arguments, run with no python3 on PATH
+  PATH="$NOPY" "$NOPY/bash" -c '. "$1"; shift; "$@"' _ "$HOOK_DIR/lib/merge-target.sh" "$@" 2>&1
+}
+
+# The fault itself, stated rather than reasoned about: without python3 the shared reader answers
+# nothing at all, so a named pull request and a named repository are both invisible.
+eq "$(nopy mt__merge_selector "$MERGE 26 --repo danwright32/backstage --squash")" "" \
+  "with no python3 the shared reader answers nothing"
+eq "$(nopy mt_pr_number "$MERGE 26 --squash")" "" "so the number the command names is invisible"
+eq "$(nopy mt_repo_flag "$MERGE 26 --repo danwright32/backstage --squash")" "" \
+  "and so is the repository it names"
+
+# Which is why the gates ask this, and say it by name.
+if nopy mt_reader_missing >/dev/null 2>&1; then pass; else
+  fail "with no python3 on PATH the library does not report its reader as missing"; fi
+if mt_reader_missing; then
+  fail "python3 is on PATH in this suite and the library still reports its reader as missing"
+else pass; fi
+
+# The sentence every gate says it with, one vocabulary rather than one wording per gate (L613).
+# It has to NAME the interpreter, or it is the message this issue exists to replace.
+reader_why="$(mt_reader_absent_why)"
+case "$reader_why" in
+  *python3*) pass ;;
+  *) fail "the sentence about the absent reader does not name it: $reader_why" ;;
+esac
+# And name a remedy that changes the state somebody is stuck in (L111): installing the reader,
+# never naming a repository, which was never the fault here.
+case "$reader_why" in
+  *"on PATH"*) pass ;;
+  *) fail "the sentence about the absent reader names no remedy: $reader_why" ;;
+esac
+
+# A wrapper route reads its number with the SHELL, so python3's absence changes nothing there and
+# no gate has cause to refuse it. Without this the refusal above would be about a reader that run
+# never needed (L324).
+eq "$(nopy mt_pr_number "npm run merge -- 680")" "680" "a wrapper still names its number with no python3"
+if nopy mt_is_pr_merge "npm run merge -- 680"; then
+  fail "a wrapper route was read as the direct merge, which is what the refusal keys on"
+else pass; fi
+
+rm -rf "$nopy_root"
+
 echo "merge-target: where a gate looked for the pull request (#470)"
 
 # One vocabulary for every gate that has to say where it looked, so a pull request looked for in

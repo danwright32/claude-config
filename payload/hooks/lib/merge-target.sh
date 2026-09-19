@@ -420,6 +420,9 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
 # The spellings gh accepts for one repository (owner/name, github.com/owner/name, a URL, a
 # trailing .git) come back as one. A host other than github.com is kept whole, so it can never
 # compare equal to a github.com remote and is refused downstream rather than read as one.
+#
+# IT NEEDS python3, and mt_reader_missing below is how a gate says so. See that comment before
+# reaching for a fallback reader.
 mt__merge_selector() {  # $1 = command
   MT_CMD="$(mt_strip_heredocs "$1")" python3 -c '
 import os, re, shlex
@@ -500,6 +503,36 @@ mt_repo_flag() {  # $1 = command ; prints owner/name, or nothing
   local sel
   sel="$(mt__merge_selector "$1")"
   printf '%s' "${sel%%$'\t'*}"
+}
+
+# WHETHER the reader above is installed at all, and what to say when it is not (claude-config#475).
+#
+# mt_pr_number used to fall back to grep, so the number survived a machine with no python3. It no
+# longer does: with the interpreter absent the selector answers nothing, and the number and the
+# repository go with it. Every gate still fails closed, but it refuses while describing a pull
+# request it could not find rather than a reader that is not installed. Two causes with one
+# message, and the remedy it offers (name the repository, check the pull request) cannot clear
+# this one (L11, L111).
+#
+# NO SECOND READER, deliberately. A grep shaped fallback reads `--match-head-commit <sha>` or
+# `--body 42` as the thing being merged, and a gate that reads the WRONG pull request is worse
+# than one that reads none (L75): it is the exact mistake these gates exist to stop. It would also
+# be a second implementation of one rule, running on almost no machine, which is where two readers
+# drift with nothing reporting it (L370, L535). So the gates refuse BY NAME instead, which is
+# never more permissive than what they do today.
+#
+# Asked only where the reading is load bearing, which is the direct `gh pr merge`: a wrapper route
+# names its number as a positional argument, read by the shell in mt_pr_number, and names no
+# repository at all, so python3's absence takes nothing from it and a refusal there would be about
+# a reader that run never used (L54, L324).
+mt_reader_missing() {  # true when the reader mt__merge_selector needs is not installed
+  ! command -v python3 >/dev/null 2>&1
+}
+
+# The sentence every gate says it with, in the gates' shared vocabulary rather than one wording
+# per gate (L613). Each gate adds what its own refusal is about.
+mt_reader_absent_why() {
+  printf 'python3 is not on PATH, and lib/merge-target.sh reads the merge'\''s own arguments with it: which pull request this command names, and which repository it names with --repo, -R or a pull request link. Without that reading a named pull request is invisible, so this gate would answer about whatever pull request gh resolves from the current branch instead. Put python3 on PATH and run the merge again.'
 }
 
 # WHERE a gate looked for the pull request, and WHY it looked there, as one vocabulary for

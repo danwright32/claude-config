@@ -261,6 +261,18 @@ quiz_is_owed() {
   QUIZ_VERDICT="no-jq"
   command -v jq >/dev/null 2>&1 || return 0
 
+  # The third tool, and the one this hook never named (claude-config#475). The shared library
+  # reads which pull request and which repository the merge names with python3, and without it
+  # both come back empty: the label was then read from whatever pull request gh resolves from the
+  # current branch, so a quiet record there silenced the quiz for a merge nobody identified. Its
+  # own verdict name, because one name covering two causes cannot tell them apart (L11). Only the
+  # direct form needs the reader: a wrapper names its number as a positional argument the shell
+  # reads, and names no repository at all.
+  if mt_is_pr_merge "$cmd" && mt_reader_missing; then
+    QUIZ_VERDICT="no-python3"
+    return 0
+  fi
+
   QUIZ_VERDICT="no-repo"
   # WHICH repository, resolved the way gh resolves it: the merge's own --repo, -R or pull
   # request link first, then the directory the merge runs in (claude-config#463, #470). This

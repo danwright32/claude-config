@@ -60,6 +60,14 @@ esac
 
 command -v gh >/dev/null 2>&1 || deny "Cannot verify CI: gh is not on PATH. Merging blind is what this gate exists to stop."
 
+# The other tool this gate cannot work without, named the same way (claude-config#475). The shared
+# library reads which pull request and which repository the merge names with python3, and without
+# it both come back empty: this gate then asked gh about whatever pull request the current branch
+# resolves to, and a green answer there merged THIS one unjudged. The not found refusal further
+# down would have described a pull request nobody could find, which is a true sentence about a
+# different fault and sends somebody to name a repository that was never the problem (L11).
+mt_reader_missing && deny "Refusing to merge: $(mt_reader_absent_why) Verifying one pull request's checks and merging another is the mistake this gate exists to stop."
+
 # The PR number if the command names one; otherwise gh resolves it from the
 # current branch, which is also what the merge itself would do.
 pr=$(mt_pr_number "$command")

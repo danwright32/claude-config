@@ -464,6 +464,64 @@ if denied "$out"; then pass; else fail "an untagged PR given as a link merged: $
 rm -rf "$dir"
 unset FIXTURE GH_CALL_LOG
 
+echo "changelog record: the reader the shared library needs (#475)"
+
+# Which pull request and which repository the merge names are read with python3 in
+# lib/merge-target.sh. Where that reader is absent both come back empty, so this gate read the
+# record of whatever pull request the current branch resolves to. It has to refuse, and name the
+# reader: "no pull request was found" is a true sentence about a different fault whose remedy,
+# naming a repository, cannot clear this one (L11).
+nopython_bin() {  # $1 = a fixture dir holding bin/gh ; prints a bin directory with no python3
+  local out="$1/nopython" t p
+  mkdir -p "$out"
+  for t in bash sh git jq node grep sed awk tr cat cut head sort dirname basename env uname mkdir mv rm; do
+    p="$(command -v "$t" 2>/dev/null)"
+    [ -n "$p" ] && [ "$p" != "$1/bin/$t" ] && ln -s "$p" "$out/$t" 2>/dev/null
+  done
+  ln -s "$1/bin/gh" "$out/gh" 2>/dev/null
+  printf '%s' "$out"
+}
+
+run_hook_nopython() {  # $1 = repo dir, $2 = command ; the hook run with no python3 on PATH
+  local nopy; nopy="$(nopython_bin "$1")"
+  printf '{"tool_input":{"command":%s},"cwd":%s}' \
+    "$(printf '%s' "$2" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+    "$(printf '%s' "$1/repo" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+    | ( cd "$1/repo" \
+        && PATH="$nopy" \
+           FAKE_PR_JSON="$1/pr.json" \
+           CHANGELOG_REGISTRY="$(cat "$1/registry-path")" \
+           bash "$HOOK" )
+}
+
+# TAGGED, deliberately: the record that MERGES when the command can be read, so a refusal here is
+# the missing reader's doing rather than a fixture that refuses everything (L159).
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+if PATH="$(nopython_bin "$dir")" bash -c 'command -v python3 >/dev/null 2>&1'; then
+  fail "the bare directory still reaches a python3, so this case measures nothing"
+else pass; fi
+out=$(run_hook_nopython "$dir" "$MERGE 7 --repo acme/widget --squash")
+if denied "$out"; then pass; else
+  fail "with no python3 the gate read a record it could not attribute to this pull request: $out"; fi
+if says "$out" "python3"; then pass; else
+  fail "the refusal does not name the reader that is missing: $out"; fi
+if says "$out" "was found in"; then
+  fail "the missing reader was reported as the pull request not existing: $out"; else pass; fi
+# The control: the same record and the same command with python3 on PATH merges.
+if denied "$(run_hook "$dir" "$MERGE 7 --repo acme/widget --squash")"; then
+  fail "the control case refused a tagged merge, so the case above proves nothing"
+else pass; fi
+rm -rf "$dir"
+
+# A wrapper route reads its number with the SHELL and names no repository at all, so python3's
+# absence takes nothing away from it and there is nothing to refuse. A guard that refused here
+# would be refusing over a reader that route never used (L324, L54).
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+out=$(run_hook_nopython "$dir" "npm run merge -- 7")
+if denied "$out"; then
+  fail "a wrapper merge was refused over a reader it never needed: $out"; else pass; fi
+rm -rf "$dir"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
