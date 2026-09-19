@@ -54,10 +54,11 @@ run() { # run <file> <host>
 }
 
 mkdir -p "$TMPROOT/here/AppOne" "$TMPROOT/here/AppTwo"
-# Each fixture project carries its own instructions file, because the check asks two questions of
-# every entry and a test about the PATH must not fail for the other reason.
-: > "$TMPROOT/here/AppOne/CLAUDE.md"
-: > "$TMPROOT/here/AppTwo/CLAUDE.md"
+# Each fixture project carries its own instructions file, WITH CONTENT IN IT, because the check
+# asks three questions of every entry and a test about the PATH must not fail for either of the
+# others. An empty file was enough here until claude-config#496 made emptiness its own finding.
+printf '# fixture instructions\n' > "$TMPROOT/here/AppOne/CLAUDE.md"
+printf '# fixture instructions\n' > "$TMPROOT/here/AppTwo/CLAUDE.md"
 
 GOOD="$(mkfile good.md "## Projects
 
@@ -155,7 +156,7 @@ out_missing="$(PROJECT_LIST_FILE="$TMPROOT/not-here.md" PROJECT_LIST_HOST=MacOne
 # HOME is SET here rather than read, so the assertion is about the expansion and not about what the
 # real home directory happens to contain on the machine running this (L411, L504).
 mkdir -p "$TMPROOT/fakehome"
-: > "$TMPROOT/fakehome/CLAUDE.md"
+printf '# fixture instructions\n' > "$TMPROOT/fakehome/CLAUDE.md"
 TILDE="$(mkfile tilde.md "## Projects
 
 On MacOne:
@@ -187,8 +188,8 @@ out_tilde_lit="$(HOME="$TMPROOT/nowhere-at-all" PROJECT_LIST_FILE="$TILDE" PROJE
 # CLAUDE.md, and it is correctly provided for.
 # ---------------------------------------------------------------------------
 mkdir -p "$TMPROOT/here/WithClaude" "$TMPROOT/here/WithAgents" "$TMPROOT/here/Bare"
-: > "$TMPROOT/here/WithClaude/CLAUDE.md"
-: > "$TMPROOT/here/WithAgents/AGENTS.md"
+printf '# fixture instructions\n' > "$TMPROOT/here/WithClaude/CLAUDE.md"
+printf '# fixture instructions\n' > "$TMPROOT/here/WithAgents/AGENTS.md"
 
 NOFILE="$(mkfile nofile.md "## Projects
 
@@ -345,6 +346,182 @@ out_gitbare="$(run "$GITBARE" MacOne)"; code_gitbare=$?
 [ "$code_gitbare" -eq 3 ] \
   && check "a git repository whose default branch has no file either is still the bare case" ok \
   || check "a git repository whose default branch has no file either is still the bare case" "exit=$code_gitbare out=$out_gitbare"
+
+# ---------------------------------------------------------------------------
+# An instructions file that EXISTS but supplies nothing (claude-config#496). The check counted a
+# project as provided for when the file was there and read nothing inside it, which is the same
+# shape as the fault it was written for: a guard confirming a MARKER rather than the thing the
+# marker stands for reads as protection and supplies none.
+#
+# Two ways a present file supplies nothing. It can be empty, and it can be nothing but an import of
+# a file that is no longer beside it: Overture's CLAUDE.md is a single @AGENTS.md line, so renaming
+# that sibling would leave the check reporting Overture as provided for while a session there
+# started with none of it.
+#
+# The predicate is that EVERY instructions file the project has is faulty, not that one of them is.
+# What is being asked is whether the project supplies instructions at all, and a full AGENTS.md
+# beside an empty CLAUDE.md does. The cost of the other reading is a notice that speaks in every
+# session about something harmless, which is how a notice gets skimmed. What this does NOT catch is
+# a dangling import in one of two files where the other is sound (L93): no listed project has two
+# today, and Overture, the only one with an import, has exactly one file carrying it.
+# ---------------------------------------------------------------------------
+mkdir -p "$TMPROOT/here/EmptyFile"
+printf '   \n\n\t\n' > "$TMPROOT/here/EmptyFile/CLAUDE.md"
+
+EMPTYFILE="$(mkfile emptyfile.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/EmptyFile\`
+
+## Writing Style")"
+out_ef="$(run "$EMPTYFILE" MacOne)"; code_ef=$?
+[ "$code_ef" -eq 4 ] \
+  && check "an instructions file holding only whitespace is refused" ok \
+  || check "an instructions file holding only whitespace is refused" "exit=$code_ef out=$out_ef"
+[ "$code_ef" != "$code_nofile" ] && [ "$code_ef" != "$code_pre" ] \
+  && check "and does not share an exit code with the absent file cases" ok \
+  || check "and does not share an exit code with the absent file cases" "empty=$code_ef bare=$code_nofile predates=$code_pre"
+grep -qi 'empty' <<< "$out_ef" \
+  && check "and says the file is empty rather than that it is missing" ok \
+  || check "and says the file is empty rather than that it is missing" "out=$out_ef"
+
+# The real Overture shape, which must PASS: a CLAUDE.md that is one import line, resolving to the
+# sibling beside it. A check that refused this would refuse a project that is correctly provided
+# for, and an over match reads as the guard working (L104).
+mkdir -p "$TMPROOT/here/ImportsOk"
+printf '@AGENTS.md\n' > "$TMPROOT/here/ImportsOk/CLAUDE.md"
+printf '# the real instructions\n' > "$TMPROOT/here/ImportsOk/AGENTS.md"
+
+IMPORTSOK="$(mkfile importsok.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/ImportsOk\`
+
+## Writing Style")"
+out_iok="$(run "$IMPORTSOK" MacOne)"; code_iok=$?
+[ "$code_iok" -eq 0 ] \
+  && check "a file that is one import resolving to a sibling passes" ok \
+  || check "a file that is one import resolving to a sibling passes" "exit=$code_iok out=$out_iok"
+
+# The same file with the sibling renamed away, which is the failure the issue was written from.
+mkdir -p "$TMPROOT/here/ImportsNowhere"
+printf '@AGENTS.md\n' > "$TMPROOT/here/ImportsNowhere/CLAUDE.md"
+
+IMPORTSBAD="$(mkfile importsbad.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/ImportsNowhere\`
+
+## Writing Style")"
+out_ibad="$(run "$IMPORTSBAD" MacOne)"; code_ibad=$?
+[ "$code_ibad" -eq 4 ] \
+  && check "an import pointing at nothing is refused" ok \
+  || check "an import pointing at nothing is refused" "exit=$code_ibad out=$out_ibad"
+grep -q 'AGENTS.md' <<< "$out_ibad" \
+  && check "and names the import it could not resolve" ok \
+  || check "and names the import it could not resolve" "out=$out_ibad"
+
+# An import into a subdirectory, resolved relative to the FILE and not to the working directory,
+# which is the playeditapp shape: its CLAUDE.md imports @PlayedIt/CLAUDE.md.
+mkdir -p "$TMPROOT/here/NestedImport/Inner"
+printf 'some prose\n\n@Inner/CLAUDE.md\n' > "$TMPROOT/here/NestedImport/CLAUDE.md"
+printf '# inner\n' > "$TMPROOT/here/NestedImport/Inner/CLAUDE.md"
+
+NESTED="$(mkfile nested.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/NestedImport\`
+
+## Writing Style")"
+out_nested="$(cd "$TMPROOT" && run "$NESTED" MacOne)"; code_nested=$?
+[ "$code_nested" -eq 0 ] \
+  && check "an import into a subdirectory is resolved against the file, not the working directory" ok \
+  || check "an import into a subdirectory is resolved against the file, not the working directory" "exit=$code_nested out=$out_nested"
+
+# The control this rule was MEASURED against, and the reason it matches only a line that STARTS
+# with the sigil. Across the eight instructions files the real list names on 2026-09-19, a rule
+# matching the sigil anywhere would have accused Downbeat of importing @Query, @Suite and @Test
+# (Swift attributes) and NurseDex of importing @vercel/otel (a package name), every one of them
+# inside backticks or ordinary prose, and none of them an import. A guard is tested against what it
+# must PRESERVE, not only what it must catch (L104).
+mkdir -p "$TMPROOT/here/ProseWithSigils"
+cat > "$TMPROOT/here/ProseWithSigils/CLAUDE.md" <<'PROSE'
+# real instructions
+
+- The renderer only runs in views that already have @Query for ProjectTemplates.
+- Use Swift Testing: `import Testing`, `@Suite`, `@Test`, `#expect`. Not XCTest.
+- Add OpenTelemetry via `@vercel/otel` on Node.
+- Ask someone@example.invalid if this is unclear.
+PROSE
+
+PROSEF="$(mkfile prose.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/ProseWithSigils\`
+
+## Writing Style")"
+out_prose="$(run "$PROSEF" MacOne)"; code_prose=$?
+[ "$code_prose" -eq 0 ] \
+  && check "a sigil inside prose or backticks is not read as an import" ok \
+  || check "a sigil inside prose or backticks is not read as an import" "exit=$code_prose out=$out_prose"
+
+# A fenced code block showing what an import LOOKS like is documentation, not an import, and the
+# file it names need not exist. This is the shape the payload's own README and skills use.
+mkdir -p "$TMPROOT/here/FencedExample"
+cat > "$TMPROOT/here/FencedExample/CLAUDE.md" <<'FENCED'
+# real instructions
+
+To pull in a shared file, write:
+
+```
+@some/file/that/is/not/here.md
+```
+
+That is all.
+FENCED
+
+FENCEDF="$(mkfile fenced.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/FencedExample\`
+
+## Writing Style")"
+out_fenced="$(run "$FENCEDF" MacOne)"; code_fenced=$?
+[ "$code_fenced" -eq 0 ] \
+  && check "an import shown inside a fenced code block is an example, not an import" ok \
+  || check "an import shown inside a fenced code block is an example, not an import" "exit=$code_fenced out=$out_fenced"
+
+# A full AGENTS.md beside an empty CLAUDE.md: the project DOES supply instructions, so it passes.
+# This is the predicate stated out loud, because the other reading would speak in every session
+# about a harmless stub.
+mkdir -p "$TMPROOT/here/OneOfTwoIsReal"
+: > "$TMPROOT/here/OneOfTwoIsReal/CLAUDE.md"
+printf '# the real instructions\n' > "$TMPROOT/here/OneOfTwoIsReal/AGENTS.md"
+
+ONEOFTWO="$(mkfile oneoftwo.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/OneOfTwoIsReal\`
+
+## Writing Style")"
+out_oot="$(run "$ONEOFTWO" MacOne)"; code_oot=$?
+[ "$code_oot" -eq 0 ] \
+  && check "a project supplying instructions in one of its two files passes" ok \
+  || check "a project supplying instructions in one of its two files passes" "exit=$code_oot out=$out_oot"
+
+# And the ordering, pinned: a project with NO file anywhere outranks one whose file is empty. Both
+# are true of the list, and the reader is sent to the more complete fault first.
+ORDER="$(mkfile order.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/EmptyFile\`
+- \`$TMPROOT/here/Bare\`
+
+## Writing Style")"
+out_order="$(run "$ORDER" MacOne)"; code_order=$?
+[ "$code_order" -eq 3 ] \
+  && check "a project with no file anywhere outranks one whose file is empty" ok \
+  || check "a project with no file anywhere outranks one whose file is empty" "exit=$code_order out=$out_order"
 
 # ---------------------------------------------------------------------------
 # The real file, last, by which point the checker has been watched failing several ways. On this

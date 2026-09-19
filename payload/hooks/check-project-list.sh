@@ -41,6 +41,11 @@
 #          code because it is a separate fault with a separate remedy (L11): the entry is right and
 #          the repository is not provided for. A missing path outranks it, because what a directory
 #          contains is not a question worth answering when the directory is not there.
+# Exit 4 = every instructions file a listed project has supplies nothing: it is empty, or its only
+#          content is an import of a file that is no longer beside it (claude-config#496). Its own
+#          code, because the file is THERE and the message has to name what it found rather than
+#          say it is absent. A project with no file at all outranks it, being the more complete
+#          fault of the two.
 # Exit 5 = a listed project has no instructions file in its WORKING TREE, but its repository's
 #          default branch has one, so this checkout is standing on a branch created before the file
 #          landed (claude-config#495). Its own code and its own sentence, because the remedy is to
@@ -161,8 +166,57 @@ instructions_on_default_branch() { # <dir> -> a sentence naming both branches, o
   return 0
 }
 
+# Whether one instructions file actually supplies instructions, rather than merely existing
+# (claude-config#496). Counting the file as enough was the same shape as the fault this checker was
+# written for: confirming a MARKER rather than the thing the marker stands for.
+#
+# An import is a line whose FIRST non whitespace character is the sigil, outside a fenced code
+# block. Matching the sigil anywhere in a line was measured against the eight instructions files the
+# real list names on 2026-09-19 and would have accused Downbeat of importing @Query, @Suite and
+# @Test (Swift attributes) and NurseDex of importing @vercel/otel (a package name), every one inside
+# backticks or ordinary prose. An email address would go the same way. A false refusal here speaks
+# in every session in that project, which is how a notice stops being read, so the narrow rule is
+# the right one and the two real imports in the list (Overture and playeditapp) both sit at the
+# start of their line.
+instructions_file_fault() { # <file> -> why it supplies nothing, or nothing at all
+  local f="$1" dir body line target resolved fenced=0
+  dir="$(dirname "$f")"
+  body="$(cat "$f" 2>/dev/null)"
+  case "$body" in
+    *[![:space:]]*) ;;
+    *) printf '%s is empty' "$(basename "$f")"; return 0 ;;
+  esac
+  while IFS= read -r line; do
+    case "$line" in
+      '```'*|'~~~'*) fenced=$((1 - fenced)); continue ;;
+    esac
+    [ "$fenced" -eq 0 ] || continue
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in
+      '@'*) ;;
+      *) continue ;;
+    esac
+    target="${line#@}"
+    target="${target%%[[:space:]]*}"
+    [ -n "$target" ] || continue
+    case "$target" in
+      '~/'*) resolved="$HOME/${target#\~/}" ;;
+      /*)    resolved="$target" ;;
+      *)     resolved="$dir/$target" ;;
+    esac
+    if [ ! -e "$resolved" ]; then
+      printf '%s imports %s, which is not there' "$(basename "$f")" "$target"
+      return 0
+    fi
+  done <<EOF
+$body
+EOF
+  return 0
+}
+
 missing=""
 bare=""
+hollow=""
 predates=""
 n=0
 while IFS= read -r p; do
@@ -187,6 +241,25 @@ while IFS= read -r p; do
       bare="$bare  $p
 "
     fi
+  else
+    # A project is provided for when ANY of its instructions files supplies something, because what
+    # is being asked is whether the project supplies instructions at all: a full AGENTS.md beside an
+    # empty CLAUDE.md does. The stricter reading would speak in every session about a harmless stub,
+    # and what it buys is a dangling import in one of two files where the other is sound (L93). No
+    # listed project has two files today, and Overture, the only one carrying an import, has exactly
+    # one file that carries it.
+    sound=0
+    reasons=""
+    for f in CLAUDE.md AGENTS.md; do
+      [ -f "$full/$f" ] || continue
+      r="$(instructions_file_fault "$full/$f")"
+      if [ -z "$r" ]; then sound=1; break; fi
+      if [ -n "$reasons" ]; then reasons="$reasons and $r"; else reasons="$r"; fi
+    done
+    if [ "$sound" -eq 0 ]; then
+      hollow="$hollow  $p ($reasons)
+"
+    fi
   fi
 done <<EOF
 $mine
@@ -206,6 +279,14 @@ case "$bare" in
     printf '%s' "$bare" >&2
     echo "Claude Code looks for a project's instructions by walking UP from the directory it starts in, so the fallback is silent and can be another project's file entirely. Write one at the root of each, or take the entry out of the list." >&2
     exit 3 ;;
+esac
+
+case "$hollow" in
+  *[![:space:]]*)
+    echo "check-project-list: these projects are listed under $HOST and every instructions file they carry supplies nothing, so a session started in one of them loads a file with no content in it:" >&2
+    printf '%s' "$hollow" >&2
+    echo "A file that is empty, or whose only content is an import of a file no longer beside it, still stops Claude Code looking any further, so the project ends up with neither its own instructions nor anything else. Fill it, restore what it imports, or take the entry out of the list." >&2
+    exit 4 ;;
 esac
 
 case "$predates" in
