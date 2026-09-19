@@ -39,20 +39,47 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
 
 payload="$(cat 2>/dev/null || true)"
-parsed="$(ps_parse_payload "$payload" segmented 2>/dev/null)" || exit 0
+parsed="$(ps_parse_payload "$payload" segmented 2>/dev/null)" || parsed=""
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
-[ -n "$cmd" ] || exit 0
 [ -n "$cwd" ] || cwd="$PWD"
 
-ps_has_override "$cmd" SKIP_ADD_SCOPE_CHECK && exit 0
-
-# Does any git add in the command take more than the paths it names (`-A`, `--all`, `.`, `:/`, `*`
-# or `-u`)? Asked of the shared parser, which reads each segment's leading tokens, so an echo or a
-# commit message that merely mentions one cannot fire this. This hook kept a detector of its own
-# beside that parser, and the copy had already drifted: it never saw an add inside a subshell
-# (claude-config#457, L613). A `git add` naming nothing stages nothing, so it is not this shape.
-ps_add_takes_all "$cmd" || exit 0
+# THE READERS THIS GATE SEES THROUGH, asked before their answers are believed (claude-config#480,
+# L490). ps__read_adds reads what the add takes with python3, and ps_add_takes_all compares its
+# answer against the literal "yes": a missing interpreter produced no answer at all, which compared
+# as NO, so this gate exited 0 on every unscoped add on such a machine with nothing said. An absent
+# reader is the one failure indistinguishable from a clean run (L42, L98). The transcript this gate
+# tells one session's work from another's by is read with python3 as well, so nothing is left that
+# could judge the add either way.
+#
+# Whether to refuse is decided further down, beside the transcript refusal, so it fires only on a
+# tree that actually holds changes an add could sweep up, which is the state this gate exists for.
+# A command with no add in it is never asked, because an absent reader takes nothing from it (L54).
+unreadable_add=0
+if [ -z "$cmd" ]; then
+  # Nothing read the payload at all. An empty command with a reader present is simply a tool call
+  # with no command in it, and there is nothing to judge; with NO reader it is this gate's own
+  # blindness, and the raw payload text is enough to say whether an add could be in there.
+  ps_reader_missing jq python3 || exit 0
+  case "$payload" in *SKIP_ADD_SCOPE_CHECK=1*) exit 0 ;; esac
+  case "$payload" in
+    *"git add"*) unreadable_add=1 ;;
+    *) exit 0 ;;
+  esac
+else
+  ps_has_override "$cmd" SKIP_ADD_SCOPE_CHECK && exit 0
+  if ps_add_scope_unreadable "$cmd"; then
+    unreadable_add=1
+  else
+    # Does any git add in the command take more than the paths it names (`-A`, `--all`, `.`, `:/`,
+    # `*` or `-u`)? Asked of the shared parser, which reads each segment's leading tokens, so an
+    # echo or a commit message that merely mentions one cannot fire this. This hook kept a detector
+    # of its own beside that parser, and the copy had already drifted: it never saw an add inside a
+    # subshell (claude-config#457, L613). A `git add` naming nothing stages nothing, so it is not
+    # this shape.
+    ps_add_takes_all "$cmd" || exit 0
+  fi
+fi
 
 repo="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo" ] || exit 0
@@ -61,6 +88,22 @@ repo="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 # both halves are checked, because staging a rename touches both.
 changed="$(git -C "$repo" status --porcelain 2>/dev/null | sed -E 's/^.{3}//; s/^.* -> //' | sed 's/^"//; s/"$//' || true)"
 [ -n "$changed" ] || exit 0
+
+if [ "$unreadable_add" -eq 1 ]; then
+  cat >&2 <<MSG
+claude-sync: REFUSED a 'git add' in $repo.
+
+$(ps_reader_absent_why "python3 is not on PATH" "check-add-scope.sh reads what a git add takes with it, through lib/push-scope.sh, and reads this session's own transcript with it too, so with python3 absent nothing here can tell an unscoped add from a scoped one, or this session's changes from another session's." "python3")
+
+Stage the paths you actually changed, by name:
+
+  git -C $repo add <path> [<path> ...]
+
+The changes currently in the tree:
+$(printf '%s\n' "$changed" | sed 's/^/  /')
+MSG
+  exit 2
+fi
 
 transcript="$(printf '%s' "$payload" | python3 -c '
 import json, sys

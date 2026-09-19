@@ -525,14 +525,21 @@ mt_repo_flag() {  # $1 = command ; prints owner/name, or nothing
 # names its number as a positional argument, read by the shell in mt_pr_number, and names no
 # repository at all, so python3's absence takes nothing from it and a refusal there would be about
 # a reader that run never used (L54, L324).
+#
+# This predicate and its sentence are ps_reader_missing and ps_reader_absent_why in push-scope.sh,
+# with the interpreter and the clause filled in: the same question is asked of a payload reader in
+# three other gates, and the day there were two wordings of it was the day one of them drifted
+# (claude-config#480, L613).
 mt_reader_missing() {  # true when the reader mt__merge_selector needs is not installed
-  ! command -v python3 >/dev/null 2>&1
+  ps_reader_missing python3
 }
 
 # The sentence every gate says it with, in the gates' shared vocabulary rather than one wording
 # per gate (L613). Each gate adds what its own refusal is about.
 mt_reader_absent_why() {
-  printf 'python3 is not on PATH, and lib/merge-target.sh reads the merge'\''s own arguments with it: which pull request this command names, and which repository it names with --repo, -R or a pull request link. Without that reading a named pull request is invisible, so this gate would answer about whatever pull request gh resolves from the current branch instead. Put python3 on PATH and run the merge again.'
+  ps_reader_absent_why 'python3 is not on PATH' \
+    'lib/merge-target.sh reads the merge'\''s own arguments with it: which pull request this command names, and which repository it names with --repo, -R or a pull request link, and without that reading this gate would answer about whatever pull request gh resolves from the current branch instead.' \
+    'python3'
 }
 
 # WHERE a gate looked for the pull request, and WHY it looked there, as one vocabulary for

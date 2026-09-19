@@ -199,6 +199,59 @@ allowed "a write outside payload is allowed even from inside the checkout"
 runbash "SKIP_PAYLOAD_WRITE_CHECK=1 cp /tmp/x $FIX/dev/payload/LESSONS.md" "$FIX/dev"
 allowed "the documented override lets one command through"
 
+echo "payload write gate: the reader it sees the tool call through (claude-config#480)"
+
+# This gate reads which TOOL is being called and which FILES it would write with python3. With none
+# installed the tool name came back as a dash, the case below it matched nothing, and every write
+# under payload/ was allowed with nothing said: an absent reader is the one failure indistinguishable
+# from a clean run (L490, L42, L98).
+NOPY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/payload-write-gate-nopy.XXXXXXXX")"
+NOPY="$NOPY_ROOT/bin"; mkdir -p "$NOPY"
+for tool in bash sh grep sed awk tr cat cut head sort dirname basename env uname mkdir mv rm ps date; do
+  toolpath="$(command -v "$tool" 2>/dev/null)"
+  [ -n "$toolpath" ] && ln -s "$toolpath" "$NOPY/$tool" 2>/dev/null
+done
+# The fixture's own premise, asserted rather than assumed: a bare directory that still reaches a
+# python3 would make every case below pass for the wrong reason (L159).
+if PATH="$NOPY" "$NOPY/bash" -c 'command -v python3 >/dev/null 2>&1'; then
+  check "the bare directory really reaches no python3" "it found one, so nothing below measures its absence"
+else check "the bare directory really reaches no python3" ok; fi
+
+# RUN FROM the directory, not merely told about it in the payload: with no python3 the gate cannot
+# read the payload's cwd, and the session's own working directory is what Claude Code starts a hook
+# in, so that is what it has left to ask about.
+edit_nopy(){ # edit_nopy <file path> <cwd>
+  OUT="$(printf '{"tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"%s"}}' "$2" "$1" \
+    | ( cd "$2" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1 ))"; RC=$?
+}
+
+rm -f "$HOLD"
+edit_nopy "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "with no python3 a payload write is refused rather than allowed in silence"
+says "and the refusal names the reader that is missing" "python3"
+
+# Only the state that loses work, exactly as with a reader present. A write that names nothing
+# under payload/ is not this gate's business whatever is missing from PATH (L54, L324).
+edit_nopy "$FIX/dev/tests/a.sh" "$FIX/dev"
+allowed "a write outside payload is not refused over a reader it never needed"
+
+# A hold is what a hold is for, and it is read with no python3 at all, so it still clears this.
+printf '%s\n' "$(( $(date +%s) + 3600 ))" > "$HOLD"
+edit_nopy "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+allowed "a hold in force still lets the write through with no python3"
+rm -f "$HOLD"
+
+# And the clone the watcher itself runs from is not at risk, so it is not refused either.
+edit_nopy "$FIX/src/payload/LESSONS.md" "$FIX/src"
+allowed "the clone the watcher runs from is not refused over the missing reader"
+
+# The control: the same write with python3 present and no watcher to revert it is allowed, so the
+# refusal above is the reader's absence rather than a fixture that refuses everything (L159).
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev" "$NOPIDF"
+allowed "the control allows the same write when nothing could revert it"
+
+rm -rf "$NOPY_ROOT"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

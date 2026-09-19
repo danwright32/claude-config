@@ -48,7 +48,48 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
 
 payload=$(cat)
-command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)
+
+REGISTRY="${CHANGELOG_REGISTRY:-$HOME/.claude/skills/pennie-dev-update/repos.json}"
+
+# What this gate REFUSES with when a tool it reads through is not installed. On stderr with exit 2
+# rather than through deny() below, because deny() builds its JSON with jq and jq is one of the
+# tools that can be missing.
+refuse_no_reader() {  # $1 = the absence clause, $2 = what it costs, $3 = what to install
+  echo "Cannot tell whether this repo needs a changelog record: $(ps_reader_absent_why "$1" "$2" "$3") Losing this change from the next manager update is what this gate exists to stop. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>." >&2
+  exit 2
+}
+
+# THE PAYLOAD'S OWN READER, asked before the payload is read (claude-config#480, L490).
+#
+# The command was parsed straight out of the JSON with a bare jq, ABOVE the `command -v jq` further
+# down. With no jq it came back EMPTY, mt_runs_merge answered no, and this gate exited 0 on every
+# merge with nothing said, never reaching the check that would have named jq: an absent reader is
+# the one failure that looks exactly like a clean run (L42, L98).
+#
+# Read through ps_parse_payload, the shared reader, which takes jq OR python3, so the commoner
+# absence costs this gate nothing at all.
+#
+# With NEITHER installed nothing here can tell a merge from an `ls`, so what is refused is narrowed
+# to a payload that could hold one at all, by the same substring the matcher uses as its own first
+# filter. Refusing every Bash command would be a gate nobody keeps (L36, L54). The registry stand
+# down is asked FIRST and needs no reader: on a machine with no dev update tooling there is no rule
+# here to refuse over, and a refusal about a reader would be a refusal about a rule that does not
+# apply (L324).
+if ps_reader_missing jq python3; then
+  [ -f "$REGISTRY" ] || exit 0
+  case "$payload" in
+    *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;;
+    *merge*)
+      refuse_no_reader "neither jq nor python3 is on PATH" \
+        "require-changelog-tag.sh reads this command out of the hook payload, which is JSON, with one of them, so with neither installed it cannot tell whether this command merges a pull request at all, let alone which one." \
+        "jq or python3" ;;
+  esac
+  exit 0
+fi
+
+parsed=$(ps_parse_payload "$payload" raw) || parsed=""
+command="${parsed%%$'\x1f'*}"
+cwd="${parsed#*$'\x1f'}"
 
 # Any route to a merge, not only the direct command (claude-config#351).
 #
@@ -79,15 +120,22 @@ case "$command" in
   *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;;
 esac
 
-REGISTRY="${CHANGELOG_REGISTRY:-$HOME/.claude/skills/pennie-dev-update/repos.json}"
-
 # No registry at all: the dev update tooling is not installed on this machine, so
 # there is no update for a record to feed and nothing to enforce. This is the one
 # absence that is a genuine stand down rather than a blind spot.
 [ -f "$REGISTRY" ] || exit 0
 
+# node reads the changelog entry itself, so with it absent there is no rule this machine can
+# apply at all, and nothing a person here could do about it (L324).
 command -v node >/dev/null 2>&1 || exit 0
-command -v jq >/dev/null 2>&1 || exit 0
+
+# jq alone, with python3 present: the command above WAS readable, so this is known to be a merge,
+# and everything left is jq's. The record arrives from gh as JSON, the scope answer is JSON, and
+# deny() builds its own refusal with jq. A gate that cannot read any of that has to say so rather
+# than fall through the reading and find nothing to complain about (claude-config#480, L490).
+ps_reader_missing jq && refuse_no_reader "jq is not on PATH" \
+  "require-changelog-tag.sh reads gh's answer about this pull request with it, and the record it is looking for is inside that answer, so with jq absent nothing here can tell a tagged pull request from an untagged one." \
+  "jq"
 
 # The reader the shared library needs for a direct merge's own arguments (claude-config#475).
 # Without python3 the pull request and the repository this command names both come back empty, so
@@ -103,8 +151,6 @@ command -v jq >/dev/null 2>&1 || exit 0
 if mt_is_pr_merge "$command" && mt_reader_missing; then
   deny "Cannot tell whether this repo needs a changelog record: $(mt_reader_absent_why) Reading another pull request's record while merging this one would lose this change from the next manager update. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
-
-cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)
 
 # WHICH repository, resolved the way gh itself resolves it: the merge's own --repo, -R or pull
 # request link first, then the directory the merge runs in (claude-config#463, #470).
