@@ -194,10 +194,13 @@ sendout="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$FHOME" SYNC_REPO="$FREPO
 send_nums="$(printf '%s\n' "$sendout" | grep -o 'L90[0-9]' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 want "the send names both over-cap lessons and neither of the others" "L902 L903" "$send_nums"
 
-# Side two: the shared predicate, run over the index the tool just generated.
-IDX="$FREPO/payload/LESSONS-INDEX.md"
-check "the send generated an index to measure" "$([ -s "$IDX" ] && echo ok || echo "no index at $IDX")"
-pred_nums="$(scan "$CAP" 0 < "$IDX" | awk '/^OVER /{print $2}' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+# Side two: the shared predicate, run over the index the tool just generated. The index is one
+# file per section of LESSONS.md (claude-config#473), so the predicate reads their union, exactly
+# as the budget hook does.
+IDXFILES=()
+for _ix in "$FREPO"/payload/LESSONS-INDEX-*.md; do [ -f "$_ix" ] && IDXFILES+=("$_ix"); done
+check "the send generated an index to measure" "$([ "${#IDXFILES[@]}" -gt 0 ] && echo ok || echo "no index file in $FREPO/payload")"
+pred_nums="$(cat "${IDXFILES[@]}" | scan "$CAP" 0 | awk '/^OVER /{print $2}' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 want "the shared predicate names the same two" "$send_nums" "$pred_nums"
 
 # Side three: the budget hook, run against a payload holding that same index. Its own output is a
@@ -205,8 +208,9 @@ want "the shared predicate names the same two" "$send_nums" "$pred_nums"
 # of entries would be applying a different rule whatever it called them.
 BP="$WORK/budgetpayload"; mkdir -p "$BP/hooks/lib"
 cp "$LIB" "$BP/hooks/lib/lesson-index-cap.sh"
-cp "$IDX" "$BP/LESSONS-INDEX.md"
-printf '# rules\n@LESSONS-INDEX.md\n' > "$BP/CLAUDE.md"
+cp "${IDXFILES[@]}" "$BP/"
+: > "$BP/CLAUDE.md"
+for _ix in "${IDXFILES[@]}"; do printf '@%s\n' "$(basename "$_ix")" >> "$BP/CLAUDE.md"; done
 cp "$BUDGET" "$BP/hooks/test-rule-file-budget.sh"
 plant_deadline_lib "$BP/hooks"
 budgetout="$(bash "$BP/hooks/test-rule-file-budget.sh" 2>&1 || true)"

@@ -1,0 +1,76 @@
+# Lessons index: Cross-system reliability (generated, do not edit)
+
+One SHORTENED line per lesson: the condition and the instruction, routinely dropping the
+clause saying what the failure looks like. Read the whole entry before a rule decides
+anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
+which is NOT loaded into the session.
+
+- L405. A check deciding whether anything is NEW must compare what the artifact MEANS, not its serialized form, which carries provenance that changes each run.
+- L403. An automated flow that PUSHES a branch and OPENS a pull request must use ONE credential for both, or the platform suppresses the checks it triggers.
+- L393. An automated job creating a NAMED outside thing collides with its OWN previous output for as long as that output sits unconsumed.
+- L365. A retry must read what the refusal says about when it could succeed: a backoff in seconds cannot outlast a limit measured in hours.
+- L276. A CI job is priced in the runner's multiplier times its rounded-up minutes, and that price is set before the job is added.
+- L525. A retry wrapper re-runs its whole body, so an action inside it that TOGGLES state is inverted by the second attempt while the loop reports success.
+- L512. A process that advances strictly forward and never revisits needs a targeted redo path built in from the start wherever completeness matters downstream.
+- L240. A background job killed in the same breath it is started can outlive the kill, and a wait on it then blocks for that job's whole lifetime.
+- L321. The pid a shell records for a background job names the WRAPPER, not the work, so start it under job control and signal its process GROUP.
+- L235. A background process inherits the stdout it was started with, so one still running holds a capture or a runner's pipe open after its parent exits.
+- L234. A runner finding inputs by a default recursive glob also collects every nested checkout, so name the directories your own sources live in.
+- L208. A substitution applied across a whole set of files cannot tell a line that MEANS the placeholder from one that means a value.
+- L245. A script finding other scripts by a marker phrase matches ITSELF, because it has to name the marker, and executing the matches recurses without bound.
+- L197. A function that returns whether it CLAIMED something (a lock, a slot, a run) is only a guard where the caller checks the answer
+- L33. Make the pair of a database write and an external side effect crash-safe.
+- L34. Verify domain and vendor data semantics against real samples before building on them.
+- L35. Classify errors once, explicitly.
+- L36. An alert that cries wolf gets ignored.
+- L635. Measuring how often an alert FIRES says nothing about whether its findings can be ACTED on
+- L37. History is stamped at write time.
+- L38. Deletes, renames, and state exits enumerate every derived resource.
+- L39. One timezone, one date helper.
+- L51. A time based threshold is only as timely as the schedule that evaluates it.
+- L66. When several records collapse onto one shared external identifier, decide for EACH fact whether it belongs to the group or to one member.
+- L73. Independent steps sharing one handler each need their own failure boundary.
+- L74. A deadline, age or due date computed from the current clock at read time can never age, because every evaluation moves it forward with the clock.
+- L114. A tool that creates a throwaway workspace must also remove what that workspace caused to be created OUTSIDE it.
+- L226. A timer built by ADDING UP its own sleeps measures iterations, not elapsed time
+- L227. A limit cannot be raised on its own
+- L519. A repair, backfill or catch-up tool must not take the same exclusion lock as the live job it repairs
+- L366. A lock must be released as soon as the writes it protects are done
+- L371. A gate added to a shared delivery path refuses the WHOLE payload, so a failure in one item stops every unrelated thing travelling with it
+- L255. A consumer that gates on an exact SET of accepted format versions turns the producer's next additive bump into a total outage of itself
+- L258. A consumer that acknowledges work by DELETING the record makes an absent record mean both "consumed successfully" and "never written"
+- L259. An escape hatch that switches a gate OFF is inherited by every process that command starts, including the gate's OWN self-test
+- L522. A budget calibrated for ONE execution context is wrong when the same code is reached from another, because the platform ceiling differs.
+- L527. A retry that CHANGES the request on an assumed cause must confirm that cause from the actual error before altering anything.
+- L533. A job on a sparse schedule whose only remedy is running it again needs an automatic re-attempt in the same period, or one failure costs the interval.
+- L369. A lock serialising heavy work must be scoped to the RESOURCE it protects, never the project that created it, since another project cannot take it.
+- L372. A script that changes its own working directory must capture its own location BEFORE the cd, or a path re-derived from its name resolves elsewhere.
+- L386. A scheduled job's DECLARED time is not when it runs, so two scheduled jobs must never be ordered by clock arithmetic between their crons.
+- L379. Doing by hand what a tool normally does omits the tool's OTHER writes, most often the record some monitor reads.
+- L390. In a two way sync, a file REGENERATED from one side gets none of the protection the mirrored files beside it get.
+- L625. A two way mirror transmits what EXISTS and cannot transmit a REMOVAL, so a replica that has not received a deletion restores the deleted item.
+- L409. Two primitives giving the same visible exclusion differ in what happens when their HOLDER DIES, so swapping one for the other ships a regression.
+- L600. A lock guarding a job the platform RETRIES must let the retry recognise its dead predecessor, which arrives seconds later with the same event identity.
+- L617. An operation keeping progress in on disk resumable state leaves it behind when killed, and the leftover reads as HEALTHY to every content check.
+- L618. A one time import between two systems that both stay live is a snapshot, so the check proving they still agree ships in the same change.
+- L620. When replicating a system's behaviour, enumerate its inputs from what it ACTUALLY consults, never from the upstream source they should come from.
+- L423. Configuration INSTALLED into the platform is a COPY, so changing its definition changes nothing until each machine re-runs the installer.
+- L434. A backslash escape inside a pattern handed to grep or sed reads differently under BSD and GNU tools, and neither errors, so the pattern stops matching.
+- L435. A tool that writes commits of its own must pass its OWN identity on every git call: a machine may have none and git REFUSES rather than defaulting.
+- L441. A flock on a plain file descriptor is inherited by every process started while it is held, so open it close on exec and make the wait NAME its holder.
+- L444. A guard identifying its leftovers by matching text against a MACHINE WIDE namespace claims work it never started, so assert against the pid it created.
+- L640. A migration applied before the code that needs it deploys must leave the DEPLOYED code working, because the two are live together during the deploy.
+- L642. In a SQUASH MERGE repo no merged branch is ever an ancestor of main, so every local way of asking whether a branch shipped reports it as UNMERGED.
+- L668. A tool locating a resource by assuming its invocation directory IS that resource is inert in every project whose checkout sits below that directory.
+- L448. Putting a SECOND rule behind an EXISTING override, skip flag or suppression token silently widens every use of that token
+- L453. The operation that REGENERATES a shared artifact is usually outside the locking every reader takes, so put the writer under the same lock and refuse.
+- L689. Monitor a deadline by the GAP between promised and actual completion, never only whether the work happened: a late job passes an absence check.
+- L690. A running total built with `x += await f()` loses every concurrent addition but the last, so sum where the concurrency is owned.
+- L693. A unique constraint on one BOUND of an interval cannot prevent overlap: a grid finer than the duration makes adjacent values distinct and overlapping.
+- L468. A closing keyword works only before #N or owner/repo#N; a short prefix like repo#N leaves the issue open, so write Closes #N and confirm it closed.
+- L469. A manual check saying "open the app" tests whichever same-named copy macOS picks; open it by path, and confirm from that copy's data before recording.
+- L470. A process crash is attributed by the runner to whatever item was current, so confirm the named item's body really ran before investigating it.
+- L473. A trap on INT or TERM that only cleans up lets the script carry on, so end it with an exit, or stopping needs a kill that skips the cleanup.
+- L476. A pull request reported as CONFLICTING has no workflow run scheduled at all, so read mergeable before investigating checks that never appear.
+- L704. A loop bounded only by wall time does unbounded work when I/O is fast, so bound each tick by a count too, and read a stubbed run as the compute ceiling.
+- L715. A long running process runs the code it parsed at START, so a guard shipped into its script is inert until it restarts, and nothing says so.

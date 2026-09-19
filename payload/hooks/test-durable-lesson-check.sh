@@ -122,7 +122,7 @@ else
 fi
 
 # THE SHORT FORM. A lesson's rule sentence runs long because it carries the condition that makes
-# it apply, and LESSONS-INDEX.md renders one line per lesson into every session in every project,
+# it apply, and the lessons index renders one line per lesson into every session in every project,
 # where the platform warns past 150,000 characters (L429). About three quarters of the existing
 # rules are too long for the cap, so a lesson written without a short form is the normal case, not
 # the edge one. This instruction is the only thing that puts one there at the moment of writing;

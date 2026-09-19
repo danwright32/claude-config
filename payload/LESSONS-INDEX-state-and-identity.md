@@ -1,0 +1,76 @@
+# Lessons index: State and identity (generated, do not edit)
+
+One SHORTENED line per lesson: the condition and the instruction, routinely dropping the
+clause saying what the failure looks like. Read the whole entry before a rule decides
+anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
+which is NOT loaded into the session.
+
+- L483. A merge keeping an entry one side lacks must reinsert it under the scope it was declared in, never the first container, where it applies to others.
+- L339. A generator seeding from system entropy when given no seed differs on every run, so any comparison measures the seed and any cache keyed on it is wrong.
+- L602. A bound applied to ONE derived value (a clip to an active window, a cap, a cutoff) must be applied to every SIBLING derived from the same input
+- L14. Derived state re-derives on every input that feeds it, and every action updates every surface showing what it changed.
+- L15. Key everything on stable identifiers.
+- L421. A write that SKIPS because its destination exists must verify what is there, or a damaged or foreign file is adopted as this write's own result.
+- L145. Changing a record's identity IN PLACE can land on an identity another record already holds, so check the destination is free before writing it.
+- L153. A path built from a home directory plus a literal folder name records where something happened to be, so it points at nothing the first time it moves.
+- L16. A count and the rows it promises come from one shared predicate
+- L17. Long-running work belongs to an owner that outlives the screen that started it
+- L342. Share a predicate only where both call sites ask the SAME question.
+- L55. A reader whose correctness depends on which code path produced the state it reads breaks silently when a second path starts producing that state.
+- L59. Bookkeeping state like a scroll position or a hover must not live on the component deriving expensive data, or every write pays the derivation again.
+- L60. A one-shot trigger must carry an event with its own identity, never the destination value, or a repeat request for the same target is silently dropped.
+- L83. A fact that could sit at either of two levels must have ONE declared home, and every writer and reader must use it.
+- L86. A short lived component registering into a longer lived shared host must own a private instance or deregister on teardown; such hosts outlive it.
+- L89. When two controls write the same stored field, their option lists are one vocabulary and must be reconciled against each other, not a third reference.
+- L91. A user action's visible response must not wait on a derivation whose cost scales with the whole collection rather than with what changed.
+- L275. An image drawn small must be DECODED small: the renderer decodes the whole source file, and the platform drops that texture on leaving the foreground.
+- L131. A map keyed by a value the real data repeats keeps the LAST writer and discards the rest, invisibly, on the very screen meant to report them.
+- L162. A completion flag written only by actions INSIDE your product is permanently wrong for anyone doing the work in the tool it really lives in.
+- L163. When the model has no field for a fact, never express it by NEGATING a neighbouring one, which is still read as its own fact everywhere else.
+- L166. An action carrying out a decision must be addressed by every attribute the decision was made over, or it silently acts on records that were excluded.
+- L169. A variable recording that a step ALREADY HAPPENED is inherited by every process it starts, which reads it as true of itself and skips work it never did.
+- L454. A local copy of something that lives elsewhere is named after what it mirrors, so state what a report was read against and check it against the source.
+- L175. A value read once at startup is only true at startup, and when it describes something OUTSIDE the program nothing inside prompts a re-read.
+- L176. A field name asserting a ROLE or DIRECTION must be checked against the code that RENDERS it, or a backwards name recruits every future writer.
+- L185. A statement that NORMALIZES a value on the way in must group or deduplicate by the NORMALIZED form, or two spellings survive and collide on one key.
+- L641. A dedup stamp NARROWER than what its message CLAIMS lets a changed claim hash identically, so the guard stays silent while the message goes stale.
+- L186. A durable record that exists to stop an action repeating is only as durable as its KEY.
+- L192. A value INFERRED from content, a name pulled from a caption or a type read off a filename, must never be presented as the recorded fact it stands for.
+- L200. A record that EXCLUDES something because another record covers it must re-check that other record at read time, or deleting it leaves a gap nobody sees.
+- L507. A category defined as a REMAINDER records no members, so it can never be enumerated or audited; record its members when it is computed.
+- L509. A shared value consumers EXTEND must not set anything a consumer legitimately overrides, or a merge order invisible at the call site decides the winner.
+- L204. When a change removes an invariant other code relied on, search for the invariant itself rather than reasoning about the feature; it lives in comments.
+- L510. Code recomputing part of an object must override fields on a COPY, never rebuild from the fields it knows, or every field added later is dropped.
+- L318. A setting that acts as a DEFAULT is usually read at USE time by every item that never overrode it, so changing the setting silently rewrites all of them
+- L317. A type whose two halves of a round trip are maintained differently, one generated and one hand written, silently drops every field added afterwards.
+- L521. A lookup that requires exactly one match must treat MANY matches as its own refusal, never as absence
+- L326. A chain of fallback matchers gives no redundancy when every arm reads a field from the SAME upstream payload
+- L261. Several behaviours a design treats as ONE condition, this run is not real or this tenant is internal, must all read ONE predicate.
+- L327. When a record's identifier is minted from whichever route it carries, any sort breaking ties on it orders by which KIND of route the record has.
+- L332. A repair wired to STARTUP is blind to everything the running system writes after it, so the state a person actually works in is the unrepaired one.
+- L334. A deduplication breaking a tie by AGE keeps the copy holding the STALEST picture of the outside world, because age is what gave it time to go stale.
+- L335. A deduplication deleting the copy whose identity the UPSTREAM publishes gets it back next sync, so the merge repeats and destroys the fresher row.
+- L343. A collection read from a store carries no order unless the read declares one, so a list rendered straight from a query is in whatever order came back.
+- L349. Render a mutating action's result from the value it RETURNED, never a re-fetch, which races the write and shows nothing when it loses.
+- L358. A unique user count from client side analytics counts identities it ISSUED, and any isolated storage turns one person into several, always inflating.
+- L359. A URL carrying a freshly minted credential is a NEW cache key on every render, so every cache downstream misses forever while returning correct bytes.
+- L368. A one-shot observer that records itself as FIRED before confirming its work succeeded turns a transient failure into permanent loss.
+- L544. A value and the flag describing how it was obtained are ONE fact and must be one discriminated value, never two pieces of state beside each other.
+- L594. A control holding several values in ONE text box is edited a fragment at a time, and deleting one leaves a value well formed under another reading.
+- L555. Matching a query against several fields CONCATENATED into one string makes the separator matchable, so a query can match text that exists in no record.
+- L384. A field stamped on UPDATE and not on INSERT leaves every fresh record without it, so stamp it where the record is CONSTRUCTED and measure against age.
+- L563. A sync refreshing only the records its upstream QUERY returned freezes every record that query stopped matching, and frozen looks freshly confirmed.
+- L565. A key recomputed from a record's own data is only as durable as what the recomputation CONSULTS, and a temporary working directory is removed by design.
+- L576. A stamp recording WHEN something was first seen must key on the identity that DISAPPEARS when it is replaced, never on its descriptive attributes.
+- L389. A writer that only fills records going FORWARD never reaches anything that existed when it shipped, so consumers run correctly over an empty set.
+- L580. Editing by DELETING and RECREATING discards the run history, metrics and audit trail with it, so use an in place alter where the platform offers one.
+- L402. A control that EDITS a value must write the exact field the consuming path READS, or an edit over a shared default is discarded for every override.
+- L419. A sort whose primary key TIES across most real inputs is actually ordered by its tie-break, so a meaningless tie-break becomes the order people see.
+- L432. A default RE-DERIVED from a sibling field whenever that field changes hides itself, and only the constant DIFFERENCE between the two reveals it.
+- L636. When an automation creates a record only a person can advance, record that it is WAITING and why, or the queue awaiting a human is invisible.
+- L637. A wildcard resolved when a definition is CREATED rather than read reads as everything always, and is actually everything once.
+- L646. A control that seeds its own state from a prop and writes shared state from a MOUNT EFFECT reverts the person's change every time its container remounts
+- L650. A mapping that MERGES several values onto one label is correct only while they still mean the same thing, and no per row test can see the fault.
+- L661. A manual override the product offers must write every field the automated path writes for that state, because gates downstream read the richer record.
+- L692. A rule specific to ONE consumer must live in that consumer's own field, never in a zeroed shared quantity every other reader silently acts on.
+- L700. Excluding somebody from a ranking must remove them from the COHORT, never only blank their row, or every other member's percentile moves.

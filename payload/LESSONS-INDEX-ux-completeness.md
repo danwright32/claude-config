@@ -1,0 +1,98 @@
+# Lessons index: UX completeness (generated, do not edit)
+
+One SHORTENED line per lesson: the condition and the instruction, routinely dropping the
+clause saying what the failure looks like. Read the whole entry before a rule decides
+anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
+which is NOT loaded into the session.
+
+- L485. A minimum size is measured from the content's TALLEST state, usually the one carrying warnings, or it clips exactly when something is wrong.
+- L659. Copy on a surface reachable by more than one route must be true on EVERY route, especially a sentence naming WHO decided something.
+- L651. A control navigating to a route whose guard REDIRECTS an unpermitted viewer is a silent no-op for them, so gate it on the same predicate the guard uses.
+- L341. A curve assembled from piecewise segments must be checked for continuity of its RATE OF CHANGE, not only its value; the step in the rate is what shows.
+- L20. Accessibility is part of building each control.
+- L560. An ARIA role that names a STRUCTURE (menu, tablist, list, radiogroup, table) is a promise about the element's CHILDREN
+- L149. A colour token clearing the level for an icon or border does not clear it for TEXT, which needs 4.5:1 against an interface component's 3:1.
+- L21. Read every new user-facing sentence cold, rendered, in the state that produces it.
+- L118. One word must name one unit across the product, and a qualifier is not enough to separate two: each sentence reads right and only the pair is wrong.
+- L22. Walk the whole flow as the user before calling it done.
+- L44. A request to stop, cancel, or undo gets its own acknowledged state the instant it is accepted, distinct from both running and stopped.
+- L45. When filtered views are the only way to reach records, the filters must cover the whole state space between them.
+- L49. A control must look like a control at rest, not only on hover and not only in a tooltip.
+- L54. A guard may refuse only what the system genuinely cannot do; when the work is possible, confirm it instead of blocking it.
+- L64. What a person reviews must be exactly what ships, WHO it goes to included, so anything the system composes or chooses belongs in the review.
+- L69. A preview or approval surface must render the content on both light and dark backgrounds.
+- L76. A region that clips its content must show, at rest and with no interaction, that content continues past the edge, and stop showing it at the end.
+- L79. A notice placed in a container the platform may collapse or truncate is not shipped until it has been seen at the window size the person actually uses.
+- L566. An element positioned absolutely inside a scrolling container is CLIPPED by it, and overflow on ONE axis makes the other clip too.
+- L189. A persistent surface pinned over the edge of a scrolling region must RESERVE space inside it, or the last item is permanently unreachable.
+- L80. When a message names a specific record, source or item so the person can act on it, the surface showing it must carry that action.
+- L97. An undo whose input is the very thing the action removed from the screen is not an undo, because the action destroys the only key to its own reversal.
+- L99. A client side input mask must never be stricter than the validator that accepts the value, or the form refuses input by a rule nothing states.
+- L150. A writer accepting a value on its own terms must accept only what its READER can consume, so validate against the reader's own predicate.
+- L111. A message telling someone HOW to recover must name an action that changes the state they are stuck in, so trace the step against the stored state first.
+- L399. An instruction to a person must be written in the vocabulary of the place they will act, never in the terms of the constraint that motivated it.
+- L112. An alert's urgency is set by what the reader must DO and how soon, never by whether something is broken.
+- L113. A lookup keyed by a vocabulary needs its completeness enforced by types or a test, because a missing key takes the default and looks deliberate.
+- L126. An action offered only on a transient surface cannot serve a condition that PERSISTS, so every encounter after the first finds the fault and no remedy.
+- L180. A confirmation's consequence sentence must be derived from the state it is about to change, or it reads the same taking one row or a subtree of ten.
+- L187. A control gated on a collection holding MORE THAN ONE member is absent in the commonest case, which is one member.
+- L568. Replacing a native form control drops submission by name, keyboard operation, type ahead, screen reader semantics, and freedom from being clipped.
+- L596. A custom control inside a form INHERITS the platform's form behaviours, so every key it handles must decide whether that key still reaches the form.
+- L508. A control rendering a value the BROWSER validates shows NOTHING when handed one it rejects, so the message and the empty control contradict each other.
+- L207. A constraint imposed by the surface your output is DISPLAYED on leaves no trace in the artifact or any check, so it is only found on a real device.
+- L221. A limit calibrated against the DEVICE somebody owns is looser than the same device turned down, so calibrate against its most constrained SETTING.
+- L569. A surface token is one half of a pair with the surface BEHIND it, so checking only what sits ON it says nothing about whether the surface is visible.
+- L213. A colour token meaningful only as a PAIR must be overridden as a pair, or a call site swapping one keeps the other and the content becomes invisible.
+- L231. A container's background stops being the background once something painting its OWN is placed inside, so every call site can be right and still differ.
+- L232. A minimum reserved for one part of a shared space is SUBTRACTED from whatever shares it, so check it for being too LARGE as much as too small.
+- L238. A modal driven by a single flag on shared state is presented once per SURFACE, so a second window puts up a second copy and dismissing one leaves it.
+- L242. A surface that shows only ONE thing at a time ignores every request past the first, so conditions attached to it can vanish with nothing said.
+- L243. A surface presented from a boolean saying SOMETHING is showing cannot notice WHICH thing changed, so replacing one modal with another leaves the first.
+- L269. A finding the system cannot verify was acted on must carry its own resolve and dismiss controls, or it stands after the work and teaches people to skim.
+- L272. A check that can DERIVE the value it demands must APPLY it, not report it, or the panel fills with handed back work and the real findings are skimmed.
+- L526. A store collecting items for a PERSON to act on is only as useful as the rate they can be taken out of it, so size the drain against the rate it fills.
+- L279. A record's usefulness depending on a COMBINATION of optional inputs is stated nowhere, so name it on the form and label the partly filled state.
+- L287. A notice computed over a WIDER scope than the screen it sits on inherits that screen's scope, so state the scope inside the message.
+- L330. An acknowledgement a person gives must be consulted by EVERY rule raising that question, or a second rule asks on with nothing able to satisfy it.
+- L545. A set of values whose meaning is their ORDER is broken by changing ONE member for an unrelated reason, so assert the ordering itself, not each value.
+- L546. A screen no navigation links to works perfectly for whoever built it, and is invisible to every test, review and build until somebody needs it.
+- L619. Every destination a navigation OFFERS must be asserted to resolve to a real screen, enumerated from the navigation rather than from the list of screens.
+- L547. A control whose work is pure computation over data the page holds must not be routed through a server round trip, which re-runs every unrelated read.
+- L549. A row aligned on its children's EDGES aligns the containers, so a column carrying a hint or an error pushes its control silently out of line.
+- L553. A column's header alignment and its cells' alignment are ONE fact set at two declaration sites, so they diverge while each site reads as correct alone.
+- L558. A mark drawn BESIDE a caption of the same fact is decoration, so a spec asking for BOTH ships the duplication as a requirement.
+- L577. A request to remove ON SCREEN text can be removing a control's only accessible name, or the target of an aria-describedby, and both failures are silent.
+- L578. A list of RECORDS laid out as flow rows has no columns: each field's position is set by the width of what precedes it, which a fixture keeps uniform.
+- L579. An explanation added because ONE record was confusing attaches to the record TEMPLATE, so it becomes a wall of identical text at the real count.
+- L587. A key and the THING it describes are two consumers of one style record, so a field only ONE reads makes the key describe a treatment the thing lacks.
+- L590. A display gated on a derived identifier being PRESENT hides it on the record where the input is still choosing it, and shows it where it cannot change.
+- L591. Vertically centring text centres its LINE BOX, which reserves descender space an all-caps label never uses, so the capitals sit visibly high.
+- L597. When markup carries BOTH outcomes of a choice a script will make, the default must be the one correct if that script never runs.
+- L408. A control acting on the TOP of a shared stack is redirected to an unrelated entry by any action that records nothing, so either all record or it blocks.
+- L410. An automatic pass beside a manual control hides every case the control's gate cannot express, so compare the two predicates before removing the pass.
+- L604. Explain the DOMAIN, never the interface: a sentence saying what a field holds is deleted on sight, while the domain term beside it goes unexplained.
+- L605. A component correct in isolation names and explains itself, so a page COMPOSED of them states every fact twice, and only the composition shows it.
+- L606. UI ships unseen by two routes, a two row fixture and a green suite, and each reads as having looked.
+- L607. The native control and the framework's default surface are what SHIP when nothing replaces them, and they read as the OS pasted into the product.
+- L608. A server action returning void and revalidating has told the person nothing, and a refusal it computed has nowhere to land.
+- L609. Ordering a screen by the shape of the DATA puts what the reader scans for wherever it falls, and gives the commonest value the heaviest treatment.
+- L610. Collapsing content behind a disclosure, or rendering nothing on the healthy day, both hide the thing the page exists to show.
+- L611. A free text box for a value whose valid set exists as a constant offers every typo as an option, and the only symptom is a pool one person shorter.
+- L613. A shared component made to end N copies converts the one site in front of you and leaves the rest, with the superseded thing arguing for itself.
+- L424. An action taken from ONE row whose write reaches a whole population must say whether THAT row changed, or a truthful count reads as success on it.
+- L623. A banner announcing a DANGEROUS mode must use a treatment found nowhere else, because one built from the ordinary palette reads as chrome.
+- L626. A rule that conditionally OMITS a label does not remove the SPACE it occupied, so the surface shows a gap that reads as a layout fault.
+- L627. A transient indicator INSIDE a row takes its width from the flow, so feedback for the thing clicked is delivered by making its neighbours jump.
+- L628. An incidental dismissal must not share a handler with an explicit Cancel: dismissing a surface is not a decision to discard what is in it.
+- L634. A heading separated from its content by WEIGHT alone reads as an emphasised sentence, and each element's own classes look reasonable in isolation.
+- L639. A compensating offset applied to a CONTAINER aligns whichever child comes FIRST, so it stops holding when a component may lead with an icon or badge.
+- L426. An item held on screen past its own removal must be reinserted at its OWN position, or anything anchored to it follows it to the end.
+- L648. When a quantity can be wrong in two directions and one hides content, never aim for the exact value: bias hard toward the harmless side and say why.
+- L652. A picker that cannot display the stored value SUBMITS its fallback instead, so the next save overwrites a real value with a plausible one.
+- L663. An input that REWRITES its own value as the person types moves the caret to the END unless it is put back, so nothing mid-string can be corrected.
+- L666. Building a replacement for a live system gets parity checks about the DATA and none about the SCREEN, so whatever the incumbent accumulated is dropped.
+- L676. A control that carries somebody ONWARD from a screen where the system has already identified them must carry that identification with it
+- L677. A step removed from a flow takes with it every capability that only that step offered
+- L678. A warning is read by its PRESENCE, so a surface that never got one is indistinguishable from a surface with nothing to warn about.
+- L680. A message written about a MOMENT must be driven by the ACTION that produced it, never by a stored status.
+- L449. Automating a task changes what every counter of it MEANS, from work waiting to a fact about the data, and nothing re-examines the counter.

@@ -1182,7 +1182,38 @@ fi
 # Named from an explicit template, and not `mktemp -t`: the name is what lets an abandoned copy be
 # attributed to this tool and reclaimed later (#36), and `-t` also means different things to BSD
 # and GNU mktemp, which matters the moment this runs anywhere but a Mac.
-SUITE_SECTION_MARK="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-section.XXXXXXXX")"
+#
+# ---- IN SHARD MODE THE MARK BELONGS TO THE PARENT (claude-config#473) ----
+# The watchdog above is armed HERE, before the run has decided whether to fan out into shards, and
+# a parent that fans out never reaches a section itself: it spawns its shards and waits. So its
+# mark never moved, the stall half measured nothing, and SUITE_STALL_TIMEOUT stopped meaning "no
+# progress" and quietly became a wall clock cap on the WHOLE run, far below the SUITE_TIMEOUT it is
+# supposed to sit under. Measured on CI on 2026-09-19, where the two are 480 and 960: main ran the
+# suite in 470s and survived by ten seconds, and a branch adding one section ran 482s and was
+# killed with "no progress for 480s, still inside section: <no section reached>". That reads as a
+# hang and was a run working normally the whole time, and it would have refused every future
+# section anybody added (L400: a guard's name is not a statement of its coverage).
+#
+# So the parent hands its mark DOWN and the shards write to that file. Progress by any shard is
+# progress of the run, which is exactly what the parent's watchdog is asking about, and each shard
+# still watches the same file for its own stall. The fan-out asserts afterwards that the mark
+# really did move, because a wiring that silently stopped passing it would put the cap straight
+# back with nothing saying so (L557).
+#
+# CONSUMED HERE AND NOT PASSED ON. It arrives in the ENVIRONMENT, and bash hands an inherited
+# variable to everything this run starts, so without this every nested run a shard makes would
+# also report into its parent's mark and read its siblings' sections back out of it (L169). The
+# #152 fixture, which hangs a nested run deliberately and reads the section named in the timeout,
+# got another shard's section name and failed. So it is read once and removed from the
+# environment; only the fan-out puts it back, for the shards it starts itself.
+SUITE_SECTION_MARK="${SUITE_SECTION_MARK_SHARED:-}"
+unset SUITE_SECTION_MARK_SHARED 2>/dev/null || true
+if [ -n "$SUITE_SECTION_MARK" ]; then
+  SUITE_SECTION_MARK_OWNED=""
+else
+  SUITE_SECTION_MARK="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-section.XXXXXXXX")"
+  SUITE_SECTION_MARK_OWNED=1
+fi
 if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
   _suite_pid=$$
   # A watchdog must not share the abort-on-error behaviour of the work it watches, or an
@@ -1405,7 +1436,10 @@ suite_cleanup(){
   # is the whole point, because the re-executed copy and the shards are what go on running as
   # orphans and go on holding the lock.
   suite_kill_tree "$$"
-  [ -n "${SUITE_SECTION_MARK:-}" ] && rm -f "$SUITE_SECTION_MARK"
+  # Only the run that CREATED it, for the same reason the registry below is: a shard handed its
+  # parent's mark would otherwise delete the file its parent and its sibling shards are still
+  # reporting progress into, and the parent's watchdog would then see a run that had stopped.
+  [ -n "${SUITE_SECTION_MARK_OWNED:-}" ] && [ -n "${SUITE_SECTION_MARK:-}" ] && rm -f "$SUITE_SECTION_MARK"
   # Only a run that actually TOOK the lock releases it, or a run that refused would delete the
   # lock belonging to the run it just refused for.
   [ -n "${SUITE_LOCK_HELD:-}" ] && rm -rf "$SUITE_LOCK"
@@ -1957,7 +1991,7 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   _fan_pids=""
   _fan_i=1
   while [ "$_fan_i" -le "$SUITE_JOBS" ]; do
-    SUITE_SHARD="$_fan_i/$SUITE_JOBS" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_DEPTH"       SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF"       bash "$SCRIPT_SELF" > "$_fan_dir/$_fan_i.out" 2>&1 &
+    SUITE_SHARD="$_fan_i/$SUITE_JOBS" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_DEPTH"       SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" SUITE_SECTION_MARK_SHARED="$SUITE_SECTION_MARK"       bash "$SCRIPT_SELF" > "$_fan_dir/$_fan_i.out" 2>&1 &
     _fan_pids="$_fan_pids $!"
     _fan_i=$((_fan_i + 1))
   done
@@ -1975,6 +2009,17 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
     [ "$_fan_prc" -eq 0 ] || _fan_rc=1
     _fan_i=$(( _fan_i + 1 ))
   done
+  # DID THE SHARDS REPORT THEIR PROGRESS INTO THIS RUN'S MARK (claude-config#473)? The parent's
+  # stall watchdog reads that file and nothing else, so if the wiring above stops passing it down,
+  # the watchdog goes back to measuring nothing and becomes a silent wall clock cap on the whole
+  # run. Read AFTER the shards, where the file is guaranteed to have been written by a healthy run
+  # and a check on it can only fail for the reason it names (L557, L1).
+  if [ -s "$SUITE_SECTION_MARK" ]; then
+    echo "  the shards reported progress into this run's section mark, so its stall deadline measured the run"
+  else
+    echo "FAIL: the shards never wrote this run's section mark ($SUITE_SECTION_MARK), so the parent's stall deadline measured nothing and SUITE_STALL_TIMEOUT=$SUITE_STALL_TIMEOUT was acting as a wall clock cap on the whole run rather than as a hang detector." >&2
+    _fan_rc=1
+  fi
 
   _fan_pass=0; _fan_fail=0; _fan_missing=""
   _fan_i=1
@@ -4263,7 +4308,7 @@ _lcap push >/dev/null 2>&1
 check "cap: the same lesson publishes once it carries a short form" \
   "grep -q 'hardcoded 160 lets it by' '$LCAP/payload/LESSONS.md'"
 check "cap: and the index renders the short form, not the rule" \
-  "grep -q '^- L2. A rule long enough to pass the fixture cap, rendered short' '$LCAP/payload/LESSONS-INDEX.md'"
+  "grep -q '^- L2. A rule long enough to pass the fixture cap, rendered short' '$LCAP/payload/LESSONS-INDEX-proof-over-green.md'"
 
 # A SHORT line that is ITSELF over the cap is the same fault. Without this the check is satisfied
 # by writing any short form at all, which passes while protecting nothing.
@@ -6992,11 +7037,27 @@ case "$_rg_nested" in ''|*[!0-9]*) _rg_nested=0 ;; esac
 : > "$_rg_file"
 # One shard of ninety-nine, so it carries about one section: this is asking whether a shard
 # REGISTERS, not what a shard costs, and a shard of one is the whole suite.
-SUITE_RUN_REGISTRY="$_rg_file" SUITE_SHARD="1/99" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SUITE_NO_LOCK=1 bash "$SCRIPT_SELF" >/dev/null 2>&1
+# The same run answers a second question for free (claude-config#473): a shard handed its
+# parent's section mark must write ITS progress into that file rather than minting one of its
+# own, because the parent fans out and never reaches a section, so that file is the only thing
+# its stall deadline can read. Handed a path that does not exist yet, so a shard that ignored it
+# would leave nothing behind and this could not pass by accident.
+_rg_mark="$WORK/shared-section-mark"
+rm -f "$_rg_mark"
+SUITE_RUN_REGISTRY="$_rg_file" SUITE_SECTION_MARK_SHARED="$_rg_mark" SUITE_SHARD="1/99" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SUITE_NO_LOCK=1 bash "$SCRIPT_SELF" >/dev/null 2>&1
 _rg_shard="$(grep -c . "$_rg_file" 2>/dev/null || true)"
 case "$_rg_shard" in ''|*[!0-9]*) _rg_shard=0 ;; esac
 check "#170 a shard registers itself, because it outlives a killed parent ($_rg_shard)" \
   "[ '${_rg_shard:-0}' -ge 1 ]"
+check "#473 a shard reports its progress into the mark its parent handed it" \
+  "[ -s '$_rg_mark' ]"
+check "#473 and what it wrote there is a section name, not an empty file" \
+  "grep -q '==' '$_rg_mark'"
+# And it does not DELETE its parent's mark on the way out: a shard that finished early would
+# otherwise take away the file its siblings are still reporting into, and the parent's watchdog
+# would read a run that had stopped (L5).
+check "#473 and it leaves the mark behind for its siblings and its parent" \
+  "[ -f '$_rg_mark' ]"
 check "#170 and a nested run does not, because it is reached through one ($_rg_nested)" \
   "[ '${_rg_nested:-0}' -eq 0 ]"
 
@@ -10549,25 +10610,27 @@ cat > "$LXH/LESSONS.md" <<'LESSONSEOF'
 LESSONSEOF
 out_lx="$(CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
 dbg "push with lessons: $out_lx"
-check "#63 the index is written where the session loads it" "[ -f '$LXH/LESSONS-INDEX.md' ]"
-check "#63 and it travels to the other Mac"                 "[ -f '$LXR/payload/LESSONS-INDEX.md' ]"
-check "#63 every lesson has a line"        "[ \"\$(grep -c '^- L[0-9]' '$LXH/LESSONS-INDEX.md')\" = '3' ]"
-check "#63 a rule that wraps is kept whole" "grep -q 'L2. A rule that wraps onto a second line is still one rule, so the whole sentence belongs in the index.' '$LXH/LESSONS-INDEX.md'"
-check "#63 the sections are kept"           "grep -q 'Data safety' '$LXH/LESSONS-INDEX.md'"
-check "#63 the bodies are left out"         "! grep -q 'Write to temp and rename' '$LXH/LESSONS-INDEX.md'"
-check "#63 and so is the provenance"        "! grep -q 'someproject#13' '$LXH/LESSONS-INDEX.md'"
-check "#63 the index says where the full text is" "grep -qi 'LESSONS.md' '$LXH/LESSONS-INDEX.md'"
+check "#63 the index is written where the session loads it" \
+  "[ -f '$LXH/LESSONS-INDEX-proof-over-green.md' ] && [ -f '$LXH/LESSONS-INDEX-data-safety.md' ]"
+check "#63 and it travels to the other Mac" \
+  "[ -f '$LXR/payload/LESSONS-INDEX-proof-over-green.md' ] && [ -f '$LXR/payload/LESSONS-INDEX-data-safety.md' ]"
+check "#63 every lesson has a line"        "[ \"\$(cat $LXH/LESSONS-INDEX-*.md | grep -c '^- L[0-9]')\" = '3' ]"
+check "#63 a rule that wraps is kept whole" "grep -q 'L2. A rule that wraps onto a second line is still one rule, so the whole sentence belongs in the index.' $LXH/LESSONS-INDEX-*.md"
+check "#63 the sections are kept"           "grep -q 'Data safety' $LXH/LESSONS-INDEX-*.md"
+check "#63 the bodies are left out"         "! grep -q 'Write to temp and rename' $LXH/LESSONS-INDEX-*.md"
+check "#63 and so is the provenance"        "! grep -q 'someproject#13' $LXH/LESSONS-INDEX-*.md"
+check "#63 the index says where the full text is" "grep -qi 'LESSONS.md' $LXH/LESSONS-INDEX-*.md"
 # The whole file still syncs, even though CLAUDE.md no longer imports it. Losing that would be the
 # worst outcome of this change: the index would be the only copy anywhere.
 check "#63 the full lessons file still travels" "[ -f '$LXR/payload/LESSONS.md' ]"
 check "#63 and the payload copy is the whole thing" "grep -q 'Write to temp and rename' '$LXR/payload/LESSONS.md'"
 # Derived means derived: a hand-edited index is replaced, not trusted, and a new lesson appears
 # without anybody touching the index.
-printf 'this line was typed into the index by hand\n' >> "$LXH/LESSONS-INDEX.md"
+printf 'this line was typed into the index by hand\n' >> "$LXH/LESSONS-INDEX-data-safety.md"
 printf -- '- **L4. A late lesson still reaches the index.** body\n  (someproject#14)\n' >> "$LXH/LESSONS.md"
 CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
-check "#63 a hand edit to the index is overwritten"  "! grep -q 'typed into the index by hand' '$LXH/LESSONS-INDEX.md'"
-check "#63 a new lesson appears without touching it" "grep -q 'L4. A late lesson still reaches the index.' '$LXH/LESSONS-INDEX.md'"
+check "#63 a hand edit to the index is overwritten"  "! grep -q 'typed into the index by hand' $LXH/LESSONS-INDEX-*.md"
+check "#63 a new lesson appears without touching it" "grep -q 'L4. A late lesson still reaches the index.' $LXH/LESSONS-INDEX-*.md"
 
 # A LONG RULE CARRIES A SHORT FORM, AND THE INDEX IS GENERATED FROM THAT.
 #
@@ -10584,17 +10647,17 @@ check "#63 a new lesson appears without touching it" "grep -q 'L4. A late lesson
 printf -- '- **L5. A rule sentence written at full length carries every condition that makes it apply, which is why it runs long, and shortening it in place would destroy the very thing a reader needs.** The body says more.\n  SHORT: A long rule keeps its full text in LESSONS.md and renders a short form in the index.\n  (someproject#15)\n' >> "$LXH/LESSONS.md"
 CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
 check "#354 the index renders the short form when one is given" \
-  "grep -q '^- L5. A long rule keeps its full text in LESSONS.md and renders a short form in the index.$' '$LXH/LESSONS-INDEX.md'"
+  "grep -q '^- L5. A long rule keeps its full text in LESSONS.md and renders a short form in the index.$' $LXH/LESSONS-INDEX-*.md"
 check "#354 the long rule sentence does not reach the index" \
-  "! grep -q 'destroy the very thing a reader needs' '$LXH/LESSONS-INDEX.md'"
+  "! grep -q 'destroy the very thing a reader needs' $LXH/LESSONS-INDEX-*.md"
 check "#354 while the full rule is untouched in the lessons file" \
   "grep -q 'destroy the very thing a reader needs' '$LXH/LESSONS.md'"
 check "#354 the SHORT marker is not itself rendered" \
-  "! grep -q 'SHORT:' '$LXH/LESSONS-INDEX.md'"
+  "! grep -q 'SHORT:' $LXH/LESSONS-INDEX-*.md"
 check "#354 a lesson with no short form still renders its full rule" \
-  "grep -q '^- L3. Never destroy good state before its replacement exists.$' '$LXH/LESSONS-INDEX.md'"
+  "grep -q '^- L3. Never destroy good state before its replacement exists.$' $LXH/LESSONS-INDEX-*.md"
 check "#354 the short form does not leak into the neighbouring entry" \
-  "! grep -q 'L4.*renders a short form' '$LXH/LESSONS-INDEX.md'"
+  "! grep -q 'L4.*renders a short form' $LXH/LESSONS-INDEX-*.md"
 # A LESSON WRITTEN WHILE THE SEND CANNOT GO OUT still reaches the index (claude-config#320).
 #
 # The index was derived only from stage_local_to_payload, which do_send reaches only after two
@@ -10631,13 +10694,13 @@ dbg "send while behind: $out_ix"
 check "#320 the send really did stop at the behind gate, so this is the case that was broken" \
   "grep -q 'this edit was not sent' <<< \"\$out_ix\""
 check "#320 a lesson written while the send cannot go out still reaches the index" \
-  "grep -q 'L2. A lesson written while this Mac was behind still reaches the index.' '$IXHA/LESSONS-INDEX.md'"
+  "grep -q 'L2. A lesson written while this Mac was behind still reaches the index.' $IXHA/LESSONS-INDEX-*.md"
 
 # A no-op run must not rewrite it: CLAUDE.md and its imports are watched, and rewriting one on
 # every sync re-triggers the watcher for ever.
-lx_sum_before="$(cksum < "$LXH/LESSONS-INDEX.md")"
+lx_sum_before="$(cat "$LXH"/LESSONS-INDEX-*.md | cksum)"
 CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
-check "#63 a second send leaves the index alone" "[ \"\$(cksum < '$LXH/LESSONS-INDEX.md')\" = \"\$lx_sum_before\" ]"
+check "#63 a second send leaves the index alone" "[ \"\$(cat $LXH/LESSONS-INDEX-*.md | cksum)\" = \"\$lx_sum_before\" ]"
 # Reading one in full, which is what the index sends you to.
 out_lxl="$(CLAUDE_HOME="$LXH" SYNC_REPO="$LXR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" lesson L3 2>&1)"
 dbg "lesson L3: $out_lxl"
@@ -10826,28 +10889,27 @@ echo '{"hooks":{}}' > "$IXHA/settings.json"
 printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$IXHA/CLAUDE.md"
 printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body one\n- **L2. two.** body two\n' > "$IXHA/LESSONS.md"
 CLAUDE_HOME="$IXHA" SYNC_REPO="$IXRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
-check "#83 the index is generated and published" "[ -s '$IXRA/payload/LESSONS-INDEX.md' ]"
+check "#83 the index is generated and published" "[ -s '$IXRA/payload/LESSONS-INDEX-proof-over-green.md' ]"
 
 IXRB="$WORK/index-repoB"; git clone -q "$IXB" "$IXRB" 2>/dev/null
 IXHB="$WORK/index-homeB"; mkdir -p "$IXHB"
 echo '{"hooks":{}}' > "$IXHB/settings.json"
 CLAUDE_HOME="$IXHB" SYNC_REPO="$IXRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#83 the other Mac receives lessons and index" \
-  "grep -q 'L1. one' '$IXHB/LESSONS.md' && grep -q 'L1. one' '$IXHB/LESSONS-INDEX.md'"
+  "grep -q 'L1. one' '$IXHB/LESSONS.md' && grep -q 'L1. one' $IXHB/LESSONS-INDEX-*.md"
 
 # This Mac writes a lesson it has not sent. The apply regenerates the index from the LOCAL
 # lessons file, so from here on this Mac's index legitimately differs from the repo's, which is
 # the state the false alarm was made of.
-# TWO of them, and one on the other side, so the generated header counts differ: 4 here, 3 there,
-# 2 in the copy both were generated from. That header is a single line both sides rewrite, which
-# is what makes the index unmergeable while the lessons underneath it merge perfectly well. With
-# one lesson each the counts match, the header merges, and the false alarm never fires: the first
-# version of this fixture made exactly that mistake and passed against the unfixed script (L1).
+# TWO of them, and one on the other side, all in the SAME section, so both Macs change the same
+# generated file and the two copies of it genuinely differ. That is what the false alarm was made
+# of. Entries in different sections would now land in different files and never meet, so the alarm
+# would never fire and this fixture would pass against the unfixed script (L1, L159).
 printf -- '- **L3. three.** written only on Mac B\n' >> "$IXHB/LESSONS.md"
 printf -- '- **L5. five.** also written only on Mac B\n' >> "$IXHB/LESSONS.md"
 CLAUDE_HOME="$IXHB" SYNC_REPO="$IXRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#83 this Mac's index carries its own unsent lessons" \
-  "grep -q 'L3. three' '$IXHB/LESSONS-INDEX.md' && grep -q 'L5. five' '$IXHB/LESSONS-INDEX.md'"
+  "grep -q 'L3. three' $IXHB/LESSONS-INDEX-*.md && grep -q 'L5. five' $IXHB/LESSONS-INDEX-*.md"
 
 # The other Mac adds a different lesson, so the lessons themselves merge cleanly and the two
 # generated indexes are simply two correct renderings of two different inputs.
@@ -10862,28 +10924,28 @@ check "#83 the lessons themselves merged" \
 check "#83 the index is not reported as an unmergeable clash" \
   "! line_has \"\$out_ix\" 'could NOT be merged' 'LESSONS-INDEX\.md'"
 check "#83 and no set-aside copy of it is left behind" \
-  "! ls '$IXHB'/LESSONS-INDEX.md.conflict-* >/dev/null 2>&1"
+  "! ls '$IXHB'/LESSONS-INDEX-*.md.conflict-* >/dev/null 2>&1"
 # What replaces the conflict is the regeneration that was always going to happen: the index on
 # disk describes the MERGED lessons file, both sides included, with a header count that matches.
 check "#83 the regenerated index carries both sides" \
-  "grep -q 'L3. three' '$IXHB/LESSONS-INDEX.md' && grep -q 'L4. four' '$IXHB/LESSONS-INDEX.md'"
+  "grep -q 'L3. three' $IXHB/LESSONS-INDEX-*.md && grep -q 'L4. four' $IXHB/LESSONS-INDEX-*.md"
 # `grep -c` prints 0 AND fails when it counts nothing, so `|| echo 0` runs too and the value is
 # two lines (claude-config#172).
-ix_count="$(grep -c '^- L[0-9]' "$IXHB/LESSONS-INDEX.md" 2>/dev/null || true)"
+ix_count="$(cat "$IXHB"/LESSONS-INDEX-*.md 2>/dev/null | grep -c '^- L[0-9]' || true)"
 case "$ix_count" in ''|*[!0-9]*) ix_count=0 ;; esac
-ix_header="$(grep -oE '[0-9]+ lessons' "$IXHB/LESSONS-INDEX.md" 2>/dev/null | grep -oE '[0-9]+' | awk 'NR <= 1')"
+ix_dup="$(cat "$IXHB"/LESSONS-INDEX-*.md 2>/dev/null | grep -oE '^- L[0-9]+\.' | sort | uniq -d | tr '\n' ' ')"
 ix_real="$(grep -c '^- \*\*L[0-9]' "$IXHB/LESSONS.md" 2>/dev/null || true)"
 case "$ix_real" in ''|*[!0-9]*) ix_real=0 ;; esac
-dbg "index entries=$ix_count header=$ix_header lessons=$ix_real"
-# The header count is the line that was UNIQUE to the preserved copy in the real incident, so it
-# is the one worth asserting: stale there, correct here, and derived from the merged file.
+dbg "index entries=$ix_count repeated=$ix_dup lessons=$ix_real"
+# The union of the generated files is the index, so that is what is counted: a per file count
+# would agree with itself while a lesson was lost between two of them (claude-config#473).
 check "#83 every merged lesson has an index line" "[ \"\$ix_count\" = \"\$ix_real\" ] && [ \"\$ix_real\" = '5' ]"
-check "#83 and the header count matches the merged file" "[ \"\$ix_header\" = \"\$ix_real\" ]"
+check "#83 and none of them is rendered twice" "[ -z \"\$ix_dup\" ]"
 
 # The exclusion is for the DERIVED file only. A rule file that genuinely clashes must still be
 # preserved and still be reported, or this fix has quietly turned conflict detection off (L129).
 printf 'rtk from A\n' > "$IXHA/RTK.md"
-printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n@RTK.md\n' > "$IXHA/CLAUDE.md"
+printf '# rules\n@LESSONS.md\n@RTK.md\n' > "$IXHA/CLAUDE.md"
 CLAUDE_HOME="$IXHA" SYNC_REPO="$IXRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 CLAUDE_HOME="$IXHB" SYNC_REPO="$IXRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 printf 'rtk rewritten on B\n' > "$IXHB/RTK.md"
@@ -11631,9 +11693,9 @@ check "#200 the merged lessons carry both Macs' entries" \
   "grep -q 'L4. four' '$TSHB/LESSONS.md' && grep -q 'L3. three' '$TSHB/LESSONS.md'"
 # And the index is REGENERATED from what the merge produced, not carried over from either side.
 check "#200 and the index carries both Macs' entries too" \
-  "grep -q 'L4. four' '$TSHB/LESSONS-INDEX.md' && grep -q 'L3. three' '$TSHB/LESSONS-INDEX.md'"
+  "grep -q 'L4. four' $TSHB/LESSONS-INDEX-*.md && grep -q 'L3. three' $TSHB/LESSONS-INDEX-*.md"
 check "#200 and the index that was published matches" \
-  "grep -q 'L4. four' '$TSRB/payload/LESSONS-INDEX.md' && grep -q 'L3. three' '$TSRB/payload/LESSONS-INDEX.md'"
+  "grep -q 'L4. four' $TSRB/payload/LESSONS-INDEX-*.md && grep -q 'L3. three' $TSRB/payload/LESSONS-INDEX-*.md"
 check "#200 and nothing was left holding conflict markers" \
   "! grep -rq '<<<<<<<' '$TSRB/payload' 2>/dev/null"
 
@@ -14488,8 +14550,11 @@ continuation line.** Its body.
   (someproject#5)
 LWEOF
 CLAUDE_HOME="$LWH" SYNC_REPO="$LWR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
-LWI="$LWH/LESSONS-INDEX.md"
-dbg "#194 generated index: $(cat "$LWI" 2>/dev/null)"
+# One file per section now (claude-config#473), so the two sections of this fixture are two
+# files, and every check names the one whose section the entry is in.
+LWI="$LWH/LESSONS-INDEX-proof-over-green.md"
+LWD="$LWH/LESSONS-INDEX-data-safety.md"
+dbg "#194 generated index: $(cat "$LWH"/LESSONS-INDEX-*.md 2>/dev/null)"
 check "#194 a one line rule is carried whole" \
   "grep -qF -- '- L1. A one line rule.' '$LWI'"
 check "#194 an indented wrap joins with exactly one space" \
@@ -14501,10 +14566,12 @@ check "#192 an UNINDENTED wrap joins with a space rather than gluing the words" 
 check "#192 and the glued form is not what it wrote" \
   "! grep -qF -- 'unindentedcontinuation' '$LWI'"
 check "#194 every entry gets a line, including the one after an unclosed marker" \
-  "[ \"\$(grep -c '^- L[0-9]' '$LWI')\" = '5' ]"
-check "#194 the section headings are carried" \
-  "grep -q '^## Data safety' '$LWI'"
-check "#194 and the bodies are not" "! grep -q 'Its body' '$LWI'"
+  "[ \"\$(cat $LWH/LESSONS-INDEX-*.md | grep -c '^- L[0-9]')\" = '5' ]"
+check "#194 each section becomes its own file, named for the section" \
+  "grep -q '^# Lessons index: Data safety' '$LWD'"
+check "#194 and the entries land in the file for their own section" \
+  "grep -q '^- L5\.' '$LWD' && ! grep -q '^- L5\.' '$LWI'"
+check "#194 and the bodies are not" "! grep -q 'Its body' $LWH/LESSONS-INDEX-*.md"
 
 # ---- the index and the lessons file are checked against each other (#195) ----
 # Every failure path in write_lesson_index returns 0 silently, so a generation that failed or
@@ -14515,12 +14582,12 @@ check "#194 and the bodies are not" "! grep -q 'Its body' '$LWI'"
 printf -- '- **L6. A lesson the index has never been told about.** body\n  (someproject#6)\n' >> "$LWH/LESSONS.md"
 # The index is made unwritable, so the rewrite CANNOT land and the disagreement is real rather
 # than staged by editing the index into a shape the generator would never produce.
-chmod 444 "$LWI"
+chmod 444 "$LWD"
 out_lw195="$(CLAUDE_HOME="$LWH" SYNC_REPO="$LWR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1 || true)"
-chmod 644 "$LWI"
+chmod 644 "$LWD"
 dbg "#195 push with an unwritable index: $out_lw195"
 check "#195 an index that does not match its lessons file is reported" \
-  "case \"\$out_lw195\" in *LESSONS-INDEX*) true ;; *) false ;; esac"
+  "case \"\$out_lw195\" in *'lessons index files'*) true ;; *) false ;; esac"
 # It has to name the numbers, or the reader is told the two disagree and has to diff them by hand
 # to learn which lesson is missing (L11, L80).
 check "#195 and it names the lesson the index is missing" \
@@ -14533,7 +14600,7 @@ dbg "#195 push once the index can be written: $out_lw195b"
 check "#195 a matching pair is silent" \
   "case \"\$out_lw195b\" in *'does not match'*|*'disagree'*) false ;; *) true ;; esac"
 check "#195 and the missing lesson is in the index now" \
-  "grep -qF -- '- L6. A lesson the index has never been told about.' '$LWI'"
+  "grep -qF -- '- L6. A lesson the index has never been told about.' '$LWD'"
 
 
 section "== an unreadable lesson entry is reported where it IS, not where it came from (#248, #249) =="
@@ -14862,7 +14929,7 @@ check "#238 a derived index that differs is not named as an unsent edit" \
   "! line_has \"\$out_238i\" 'would have reverted' 'LESSONS-INDEX'"
 # And it was REBUILT rather than left, which is the other half of why naming it would be wrong.
 check "#238 and it was regenerated from the lessons file instead" \
-  "! grep -q 'a line only this Mac has' '$UPHB/LESSONS-INDEX.md'"
+  "! grep -q 'a line only this Mac has' $UPHB/LESSONS-INDEX-*.md"
 # The control, in the same fixture: a real local edit IS still named, or this would have been
 # fixed by making the message unable to say anything (L159).
 printf '# rules edited here\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$UPHB/CLAUDE.md"
@@ -15128,7 +15195,24 @@ DRA="$WORK/derived-repoA"; git clone -q "$DRB" "$DRA" 2>/dev/null
 DRHA="$WORK/derived-homeA"; mkdir -p "$DRHA"
 echo '{"hooks":{}}' > "$DRHA/settings.json"
 printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$DRHA/CLAUDE.md"
-printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body one\n\n## Data safety\n\n- **L2. two.** body two\n' > "$DRHA/LESSONS.md"
+# Entries with long bodies. Two entries whose rule lines are nine lines apart in LESSONS.md and
+# one line apart in the rendered index, so a refinement to each merges cleanly in the source and
+# conflicts in the file generated from it. That is the shape the real failure had: the derived
+# file is the ONLY conflicted path (claude-config#473 removed the header count that used to
+# guarantee it, so the fixture has to produce the overlap itself).
+python3 - "$DRHA/LESSONS.md" <<'DR_FIXTURE'
+import sys
+out = ["# Lessons\n"]
+for sec, pairs in (("Proof over green", ((1, "one"), (2, "two"))),
+                   ("Data safety", ((10, "ten"), (11, "eleven")))):
+    out.append("\n## %s\n\n" % sec)
+    for n, word in pairs:
+        out.append("- **L%d. %s.** body %s\n" % (n, word, word))
+        for k in range(8):
+            out.append("  padding line %d for L%d so the hunks stay apart.\n" % (k, n))
+        out.append("\n")
+open(sys.argv[1], "w").write("".join(out))
+DR_FIXTURE
 drsync(){ # drsync <home> <repo> [extra env assignments...]
   local h="$1" r="$2"; shift 2
   env SYNC_DERIVED_MERGE_RULE=0 CLAUDE_HOME="$h" SYNC_REPO="$r" SYNC_NO_NOTIFY=1 "$@" \
@@ -15145,21 +15229,31 @@ check "#282 both Macs start from the same published lessons" \
 # The rule really is off on this clone, or the conflict below never happens and every check here
 # passes while measuring the case #200 already covers (L159).
 check "#282 the seam really did leave the merge rule off" \
-  "! grep -q 'LESSONS-INDEX.md merge=ours' '$DRRB/.git/info/attributes' 2>/dev/null"
+  "! grep -q 'merge=ours' '$DRRB/.git/info/attributes' 2>/dev/null"
 
-# Different sections, so LESSONS.md merges cleanly and the INDEX is the only conflicted path, which
-# is the shape the real failure had. Different COUNTS on the two sides, so the generated header
-# line differs: with one each the counts match and no conflict fires at all.
+# Each Mac refines a DIFFERENT entry's rule sentence, in each of the two sections. Far apart in
+# LESSONS.md, so it merges cleanly; adjacent in each generated file, so BOTH of them come back
+# conflicted and the only conflicted paths are derived ones. That pair is the hazard the recovery
+# had to survive the split into one file per section: it used to rebuild ONE file and then stage
+# every conflicted path, so a conflicted SIBLING would have been committed carrying its conflict
+# markers into a file that loads into every session in every project (claude-config#473).
 python3 - "$DRHA/LESSONS.md" <<'DRA_PY'
 import sys
 p = sys.argv[1]
-t = open(p).read().replace("- **L1. one.** body one\n",
-                           "- **L1. one.** body one\n- **L4. four.** written only on Mac A\n")
+t = open(p).read()
+t = t.replace("- **L1. one.**", "- **L1. one, refined on Mac A.**")
+t = t.replace("- **L10. ten.**", "- **L10. ten, refined on Mac A.**")
 open(p, "w").write(t)
 DRA_PY
 drsync "$DRHA" "$DRA" >/dev/null 2>&1
-printf -- '- **L3. three.** written only on Mac B\n' >> "$DRHB/LESSONS.md"
-printf -- '- **L5. five.** also written only on Mac B\n' >> "$DRHB/LESSONS.md"
+python3 - "$DRHB/LESSONS.md" <<'DRB_PY'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+t = t.replace("- **L2. two.**", "- **L2. two, refined on Mac B.**")
+t = t.replace("- **L11. eleven.**", "- **L11. eleven, refined on Mac B.**")
+open(p, "w").write(t)
+DRB_PY
 out_dr="$(drsync "$DRHB" "$DRRB")"; dr_rc=$?
 dbg "#282 two sided sync with the merge rule off said: $out_dr"
 check "#282 the sync completes rather than dying on the derived index" "[ '$dr_rc' -eq 0 ]"
@@ -15167,17 +15261,60 @@ check "#282 and it does not tell Dan to reconcile by hand" \
   "! grep -q \"reconcile by hand\" <<< \"\$out_dr\""
 # The positive control: the lessons really did come together, so the checks above are about the
 # recovery rather than about a sync that quietly did nothing (L159, L100).
-check "#282 the merged lessons carry both Macs' entries" \
-  "grep -q 'L4. four' '$DRHB/LESSONS.md' && grep -q 'L3. three' '$DRHB/LESSONS.md'"
+check "#282 the merged lessons carry both Macs' refinements" \
+  "grep -q 'one, refined on Mac A' '$DRHB/LESSONS.md' && grep -q 'two, refined on Mac B' '$DRHB/LESSONS.md'"
 # And the index is REGENERATED from what the merge produced, never one side's copy kept whole.
 check "#282 and the index is rebuilt from the merged lessons" \
-  "grep -q 'L4. four' '$DRHB/LESSONS-INDEX.md' && grep -q 'L3. three' '$DRHB/LESSONS-INDEX.md'"
+  "grep -q 'one, refined on Mac A' '$DRHB/LESSONS-INDEX-proof-over-green.md' && grep -q 'two, refined on Mac B' '$DRHB/LESSONS-INDEX-proof-over-green.md'"
 check "#282 and no conflict marker survives in the index" \
-  "! grep -q '<<<<<<<' '$DRHB/LESSONS-INDEX.md'"
+  "! grep -q '<<<<<<<' '$DRHB/LESSONS-INDEX-proof-over-green.md'"
 # It SAYS it recovered. A rebase that stopped and was continued is worth one line: silence would
 # make a run that recovered indistinguishable from one that never conflicted (L11, L98).
-check "#282 and it says which derived file it rebuilt" \
-  "line_has \"\$out_dr\" 'regenerated' 'LESSONS-INDEX.md'"
+check "#282 and it says it rebuilt the generated files" \
+  "line_has \"\$out_dr\" 'generated lessons index file' 'regenerated'"
+
+# ---- THE SIBLING, AND THE MARKERS (claude-config#473) ----
+# Not one conflict marker reaches a file a session loads, in the working tree or in what was
+# committed, and BOTH conflicted files were rebuilt rather than the first one.
+dr_markers(){ grep -l '^<<<<<<<' "$1"/LESSONS-INDEX-*.md 2>/dev/null | tr '\n' ' '; }
+check "#473 no section file in the live config carries a conflict marker" \
+  "[ -z \"\$(dr_markers '$DRHB')\" ]"
+check "#473 and none was committed into the payload either" \
+  "[ -z \"\$(dr_markers '$DRRB/payload')\" ]"
+dr_committed="$(git -C "$DRRB" show "HEAD:payload/LESSONS-INDEX-data-safety.md" 2>/dev/null || true)"
+check "#473 the committed sibling is the rebuilt rendering, not the conflicted one" \
+  "! grep -q '^<<<<<<<' <<< \"\$dr_committed\" && grep -q 'eleven, refined on Mac B' <<< \"\$dr_committed\""
+check "#473 and the sibling in the live config carries both Macs' work" \
+  "grep -q 'ten, refined on Mac A' '$DRHB/LESSONS-INDEX-data-safety.md' && grep -q 'eleven, refined on Mac B' '$DRHB/LESSONS-INDEX-data-safety.md'"
+# THE UNION, after a merge: every lesson exactly once across the files, none lost between two
+# sections and none rendered into both.
+dr_union(){ cat "$1"/LESSONS-INDEX-*.md 2>/dev/null | grep -oE '^- L[0-9]+\.' | grep -oE '[0-9]+' | sort -n; }
+check "#473 the merged union is every lesson exactly once" \
+  "[ -z \"\$(dr_union '$DRHB' | uniq -d)\" ] && [ \"\$(dr_union '$DRHB' | wc -l | tr -d ' ')\" = '4' ]"
+
+# ---- AND A RENAMED SECTION LEAVES NOTHING BEHIND, ON EITHER MAC ----
+# The generator removes it in the tree it writes, so the payload carries the deletion up; on the
+# receiving Mac nothing copies a deletion, because the apply only ever writes files. What removes
+# it there is that Mac's own generator, running over the lessons file it has just received.
+check "#473 the other Mac starts out holding the file the old section name produced" \
+  "[ -f '$DRHB/LESSONS-INDEX-data-safety.md' ] && grep -q '^@LESSONS-INDEX-data-safety\.md\$' '$DRHB/CLAUDE.md'"
+python3 - "$DRHA/LESSONS.md" <<'DR_RENAME'
+import sys
+p = sys.argv[1]; t = open(p).read()
+assert "## Data safety" in t
+open(p, "w").write(t.replace("## Data safety", "## Keeping data"))
+DR_RENAME
+drsync "$DRHA" "$DRA" >/dev/null 2>&1
+out_drr="$(drsync "$DRHB" "$DRRB")"
+dbg "#473 the sync after the rename said: $out_drr"
+check "#473 the renamed section arrives as its own file there" \
+  "[ -f '$DRHB/LESSONS-INDEX-keeping-data.md' ] && grep -q '^- L10\.' '$DRHB/LESSONS-INDEX-keeping-data.md'"
+check "#473 and the file the old name produced is gone on both sides" \
+  "[ ! -f '$DRHB/LESSONS-INDEX-data-safety.md' ] && [ ! -f '$DRRB/payload/LESSONS-INDEX-data-safety.md' ]"
+check "#473 and nothing there still imports it" \
+  "! grep -q 'LESSONS-INDEX-data-safety' '$DRHB/CLAUDE.md'"
+check "#473 the union after the rename is still every lesson exactly once" \
+  "[ -z \"\$(dr_union '$DRHB' | uniq -d)\" ] && [ \"\$(dr_union '$DRHB' | wc -l | tr -d ' ')\" = '4' ]"
 
 # THE STAND DOWN IS NO BROADER THAN THE REASON (L324). A conflict in a file nobody generates is
 # still a conflict, and continuing through it would commit whichever side git happened to leave.
@@ -15187,9 +15324,9 @@ mkdir -p "$DRHC"; echo '{"hooks":{}}' > "$DRHC/settings.json"
 env SYNC_DERIVED_MERGE_RULE=0 CLAUDE_HOME="$DRHC" SYNC_REPO="$DRRC" SYNC_NO_NOTIFY=1 \
   bash "$SCRIPT" pull >/dev/null 2>&1
 printf 'A rules from Mac A\n' > "$DRHA/CLAUDE.md.notes"
-printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\nA side says this\n' > "$DRHA/CLAUDE.md"
+printf '# rules\n@LESSONS.md\nA side says this\n' > "$DRHA/CLAUDE.md"
 drsync "$DRHA" "$DRA" >/dev/null 2>&1
-printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\nC side says something else entirely\n' > "$DRHC/CLAUDE.md"
+printf '# rules\n@LESSONS.md\nC side says something else entirely\n' > "$DRHC/CLAUDE.md"
 out_drc="$(drsync "$DRHC" "$DRRC")"; drc_rc=$?
 dbg "#282 a real content conflict said: $out_drc"
 check "#282 a conflict in a file nobody generates still stops" \
@@ -15869,14 +16006,14 @@ check "#315 and its short form travels with it" \
 check "#315 and the short form is there exactly once, not once per merge" \
   "[ \"\$(grep -c 'SHORT: A long rule keeps its full text' '$UNHB/LESSONS.md')\" = '1' ]"
 check "#315 and the index on the other Mac renders the short form, not the rule" \
-  "grep -q '^- L6. A long rule keeps its full text' '$UNHB/LESSONS-INDEX.md'"
+  "grep -q '^- L6. A long rule keeps its full text' $UNHB/LESSONS-INDEX-*.md"
 
 check "#315 each entry is present exactly once" \
   "[ \"\$(grep -c 'L4. four' '$UNHB/LESSONS.md')\" = 1 ] && [ \"\$(grep -c 'L5. five' '$UNHB/LESSONS.md')\" = 1 ]"
 check "#315 no conflict marker survives in the lessons file" \
   "! grep -q '^<<<<<<< ' '$UNHB/LESSONS.md'"
 check "#315 the index is regenerated from the combined lessons" \
-  "grep -q 'L4. four' '$UNHB/LESSONS-INDEX.md' && grep -q 'L5. five' '$UNHB/LESSONS-INDEX.md'"
+  "grep -q 'L4. four' $UNHB/LESSONS-INDEX-*.md && grep -q 'L5. five' $UNHB/LESSONS-INDEX-*.md"
 # PUBLISHED, not merely local. The whole failure this section is about is a merge that was true of
 # the live copy and never reached the repo (claude-config#312).
 check "#315 and the combined file reached the repo" \
@@ -15891,7 +16028,7 @@ check "#315 and it says it combined the two sides" \
 check "#315 no merge rule is written for the lessons file" \
   "! grep -q 'payload/LESSONS.md merge=' '$UNRB/.git/info/attributes' 2>/dev/null"
 check "#315 while the index's own rule really is there" \
-  "grep -q 'payload/LESSONS-INDEX.md merge=ours' '$UNRB/.git/info/attributes'"
+  "grep -q 'payload/LESSONS-INDEX\*.md merge=ours' '$UNRB/.git/info/attributes'"
 
 # ---- and again with the DERIVED index's own merge rule off ----
 # That rule is what normally stops the index conflicting, so turning it off makes both files
@@ -15993,7 +16130,7 @@ check "#312 and so does the copy committed in the repo" \
 # The index travels in the SAME commit. It used to sit in three states at once, so the index the
 # other Mac loads named a shorter list than the file beside it.
 check "#312 the published index lists the merged entry too" \
-  "grep -q 'L5. five' '$MPRB/payload/LESSONS-INDEX.md'"
+  "grep -q 'L5. five' $MPRB/payload/LESSONS-INDEX-*.md"
 check "#312 the index and the lessons file were committed together" \
   "[ -z \"\$(git -C '$MPRB' status --porcelain -- payload)\" ]"
 # And it reached the SHARED repo, not just this clone: the other Mac reads that one. Read into a
@@ -16524,6 +16661,109 @@ check "#413 once the layout is right the new block is published" \
   "[ \"\$(hr_published hooks/newhook.sh)\" = Bash ]"
 check "#413 and nothing is said about holding it back" \
   "out_lacks \"\$out_hr6\" 'hooks block' i"
+
+
+section "== the lessons index is one file per section, and every one of them loads (claude-config#473) =="
+# LESSONS-INDEX.md reached 100,899 characters over 702 lessons and grew about 1,130 a day, so it
+# was about a month from the 140,000 byte budget in hooks/test-rule-file-budget.sh and not long
+# after that from the platform's own 150,000 character banner. Both limits are PER FILE, so the
+# index is rendered as one file per section of LESSONS.md, each imported by CLAUDE.md, and every
+# lesson still loads into every session. Nothing here saves tokens; it removes the deadline
+# without any rule stopping arriving.
+SPH="$WORK/splitindex-home"; SPR="$WORK/splitindex-repo"
+mkdir -p "$SPH" "$SPR/payload"
+echo '{"hooks":{}}' > "$SPH/settings.json"
+printf '# rules\n@LESSONS-INDEX.md\n' > "$SPH/CLAUDE.md"
+cat > "$SPH/LESSONS.md" <<'SPLESSONS'
+# Build-time lessons
+
+## Proof over green
+
+- **L1. A guard is only real once it has been seen to fail.** Mocked guards sit green.
+  (someproject#11)
+
+## Data safety
+
+- **L2. Never destroy good state before its replacement exists.** Write to temp and rename.
+  (someproject#12)
+
+## Cross-system reliability
+
+- **L3. One timezone, one date helper.** Two of either is a bug nobody can see.
+  (someproject#13)
+SPLESSONS
+out_sp="$(CLAUDE_HOME="$SPH" SYNC_REPO="$SPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+dbg "#473 the first push said: $out_sp"
+
+# ONE FILE PER SECTION, in the place a session loads it and in the payload that travels.
+check "#473 a section becomes a file where the session loads it" \
+  "[ -f '$SPH/LESSONS-INDEX-proof-over-green.md' ] && [ -f '$SPH/LESSONS-INDEX-data-safety.md' ] && [ -f '$SPH/LESSONS-INDEX-cross-system-reliability.md' ]"
+check "#473 and every one of them travels to the other Mac" \
+  "[ -f '$SPR/payload/LESSONS-INDEX-proof-over-green.md' ] && [ -f '$SPR/payload/LESSONS-INDEX-data-safety.md' ] && [ -f '$SPR/payload/LESSONS-INDEX-cross-system-reliability.md' ]"
+# The one file that used to hold everything is gone, on both sides: kept, it would be a second
+# copy of every rule that nothing imports, so nothing keeps it current on the other Mac.
+check "#473 the single index file is not left behind" \
+  "[ ! -f '$SPH/LESSONS-INDEX.md' ] && [ ! -f '$SPR/payload/LESSONS-INDEX.md' ]"
+
+# A file that nothing imports does not travel and does not load, so the imports are DERIVED from
+# the sections rather than maintained by hand beside them (L41), and the retired import goes with
+# the retired file or every session dies on a dangling reference.
+check "#473 CLAUDE.md imports every generated file" \
+  "grep -q '^@LESSONS-INDEX-proof-over-green\.md\$' '$SPH/CLAUDE.md' && grep -q '^@LESSONS-INDEX-data-safety\.md\$' '$SPH/CLAUDE.md' && grep -q '^@LESSONS-INDEX-cross-system-reliability\.md\$' '$SPH/CLAUDE.md'"
+check "#473 and no longer imports the file that was retired" \
+  "! grep -q '^@LESSONS-INDEX\.md\$' '$SPH/CLAUDE.md'"
+check "#473 the imports reached the payload too" \
+  "grep -q '^@LESSONS-INDEX-data-safety\.md\$' '$SPR/payload/CLAUDE.md'"
+
+# THE UNION IS THE INDEX. Every lesson number in LESSONS.md appears exactly once across the
+# generated files: none lost between sections, none rendered into two of them.
+sp_union(){ cat "$1"/LESSONS-INDEX-*.md 2>/dev/null | grep -oE '^- L[0-9]+\.' | grep -oE '[0-9]+' | sort -n; }
+check "#473 the union holds every lesson in the file" \
+  "[ \"\$(sp_union '$SPH' | tr '\n' ' ')\" = '1 2 3 ' ]"
+check "#473 and holds each of them exactly once" \
+  "[ -z \"\$(sp_union '$SPH' | uniq -d)\" ]"
+check "#473 each file carries only its own section" \
+  "grep -q '^- L2\.' '$SPH/LESSONS-INDEX-data-safety.md' && ! grep -q '^- L1\.' '$SPH/LESSONS-INDEX-data-safety.md'"
+check "#473 and names the section it renders" \
+  "grep -q 'Data safety' '$SPH/LESSONS-INDEX-data-safety.md'"
+check "#473 the bodies and the provenance are still left out" \
+  "! grep -q 'Write to temp and rename' '$SPH/LESSONS-INDEX-data-safety.md' && ! grep -q 'someproject#12' '$SPH/LESSONS-INDEX-data-safety.md'"
+# Derived means derived, per file: a hand edit is overwritten rather than trusted.
+printf 'this line was typed into a section file by hand\n' >> "$SPH/LESSONS-INDEX-data-safety.md"
+CLAUDE_HOME="$SPH" SYNC_REPO="$SPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+check "#473 a hand edit to a section file is overwritten" \
+  "! grep -q 'typed into a section file by hand' '$SPH/LESSONS-INDEX-data-safety.md'"
+
+# A SECTION RENAMED LEAVES NOTHING BEHIND. A stale file still imported is a second, frozen copy of
+# rules that have moved; a stale file no longer imported is dead weight in the payload for ever.
+python3 - "$SPH/LESSONS.md" <<'SP_RENAME'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+assert "## Data safety" in t
+open(p, "w").write(t.replace("## Data safety", "## Data care"))
+SP_RENAME
+out_sp2="$(CLAUDE_HOME="$SPH" SYNC_REPO="$SPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"
+dbg "#473 the push after the rename said: $out_sp2"
+check "#473 the renamed section gets its own file" \
+  "[ -f '$SPH/LESSONS-INDEX-data-care.md' ] && grep -q '^- L2\.' '$SPH/LESSONS-INDEX-data-care.md'"
+check "#473 and the file the old name produced is gone here" \
+  "[ ! -f '$SPH/LESSONS-INDEX-data-safety.md' ]"
+check "#473 the deletion travels rather than sitting in the payload for ever" \
+  "[ ! -f '$SPR/payload/LESSONS-INDEX-data-safety.md' ] && [ -f '$SPR/payload/LESSONS-INDEX-data-care.md' ]"
+check "#473 and CLAUDE.md stops importing what no section produces" \
+  "! grep -q 'LESSONS-INDEX-data-safety' '$SPH/CLAUDE.md' && ! grep -q 'LESSONS-INDEX-data-safety' '$SPR/payload/CLAUDE.md'"
+check "#473 the union is still every lesson exactly once after the rename" \
+  "[ \"\$(sp_union '$SPH' | tr '\n' ' ')\" = '1 2 3 ' ] && [ -z \"\$(sp_union '$SPH' | uniq -d)\" ]"
+
+# TWO SECTIONS WHOSE NAMES REDUCE TO ONE FILE NAME. Truncating on the second would silently drop
+# the first section's lessons out of every session, and the file would still look correct.
+printf '\n## data CARE\n\n- **L4. A second spelling of one section name is still lessons.** body\n' >> "$SPH/LESSONS.md"
+CLAUDE_HOME="$SPH" SYNC_REPO="$SPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+check "#473 two spellings of one section name keep both sets of lessons" \
+  "grep -q '^- L2\.' '$SPH/LESSONS-INDEX-data-care.md' && grep -q '^- L4\.' '$SPH/LESSONS-INDEX-data-care.md'"
+check "#473 and the union still holds each lesson exactly once" \
+  "[ \"\$(sp_union '$SPH' | tr '\n' ' ')\" = '1 2 3 4 ' ] && [ -z \"\$(sp_union '$SPH' | uniq -d)\" ]"
 
 suite_profile
 echo ""

@@ -22,5 +22,5 @@
 # stdout on exit 0 is appended to the prompt context.
 
 cat <<'EOF2'
-[Test-first policy] Code changes use TDD: invoke `superpowers:test-driven-development` and write the failing test before the implementation. Before writing any new test, read the "## Test speed" section of LESSONS-INDEX.md (already loaded) and apply it: wait on conditions rather than fixed times, inject every sleep and clock, set every seam or name why it stays real, compute a shared derivation once per suite. No-op for read-only, research, planning, or non-code prompts.
+[Test-first policy] Code changes use TDD: invoke `superpowers:test-driven-development` and write the failing test before the implementation. Before writing any new test, read LESSONS-INDEX-test-speed.md (already loaded) and apply it: wait on conditions rather than fixed times, inject every sleep and clock, set every seam or name why it stays real, compute a shared derivation once per suite. No-op for read-only, research, planning, or non-code prompts.
 EOF2

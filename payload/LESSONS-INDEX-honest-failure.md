@@ -1,0 +1,98 @@
+# Lessons index: Honest failure (generated, do not edit)
+
+One SHORTENED line per lesson: the condition and the instruction, routinely dropping the
+clause saying what the failure looks like. Read the whole entry before a rule decides
+anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
+which is NOT loaded into the session.
+
+- L490. A gate parsing input through an external interpreter must refuse by name when it is missing: an empty parse reads as nothing to refuse.
+- L710. A gap the NEXT occurrence repairs is invisible on every occurrence but the last and reads as working, so check the LAST occurrence directly.
+- L706. A presence guard accepting any non-null value takes a zero as an answer, so an upstream exclusion arriving as zero silently suppresses the fallback.
+- L415. A screen showing a change BEFORE the write lands owes a failure path that reverts it AND says so, or a failed write looks exactly like a slow one.
+- L586. A redirect whose target is ITSELF a redirect drops the query string, destroying any outcome carried in it while both redirects read as correct alone.
+- L583. A fallback relaxing only ONE dimension of a match does nothing where the shortage is in another, so name which dimension is actually thin first.
+- L529. An audit entry must record the old and new values, not merely which thing changed, or it can never answer what the state was at a given moment.
+- L283. A guard asserting a rewrite does not CONTAIN something is satisfied by one that DELETED it, so check for a reference's LOSS as well as its presence.
+- L515. Cleanup placed in a `finally` is only reached by the paths that THROW
+- L514. A signal that records THAT something ran must be written on every exit path, in a `finally`, never only on the success path
+- L184. Judge a command by its EXIT CODE, never a line of its output: a tool's final line is often a different measurement, and the more reassuring one.
+- L404. A tool put on the path IN PLACE of another must be proved to reproduce the original's EXIT CODE on a case that genuinely FAILS.
+- L406. A REMEDY a failure message tells somebody to RUN is executed by nothing until the moment it is needed, so a test must run it and assert what it produces
+- L10. An error state and an empty state are different screens.
+- L199. A marker meant to be READ BY CODE (a prefix, an error code, a sentinel) must reach its reader unwrapped
+- L11. Distinct causes get distinct messages, and a message may claim only what its check actually measured.
+- L319. A marker proving a run is in a SPECIAL mode must come from whatever ESTABLISHES the mode, or its absence means both not in it and in it and silent.
+- L12. Show success only after the write commits, and report what verifiably happened.
+- L13. Background jobs and webhooks alert on failure and on the absence of an expected run.
+- L53. Two independent checks must never share one status field.
+- L90. A counter or category whose only input is a value nothing in the system ever writes reports ZERO, and zero is indistinguishable from a true measurement.
+- L47. A batch that partly fails must record the attempt on the items it failed, not only on the ones it completed.
+- L67. A placeholder shown for a missing required value is a DETECTION that it is absent, so it must block the action it appears in, never merely label it.
+- L138. A templating layer renders a MISSING setting as EMPTY rather than absent, so every null fallback absence check accepts it and the default never applies.
+- L229. Literal text handed to an interpolating evaluator can lose a sigil prefixed span silently, so the tool acts on text nobody wrote.
+- L230. Redaction that changes the CONTAINER while leaving the identity inside anonymises nothing, and a guard written the same way passes every real person.
+- L152. Surfaces report what is still OUTSTANDING, so an operation that RESOLVES everything silences them all and the most complete success says least.
+- L50. A value parsed from storage or input must never feed a comparison directly.
+- L71. A watchdog's own liveness must never depend on the health of what it watches
+- L77. An error deliberately classified as EXPECTED (a lost race, a declined payment, a rejected duplicate, a taken slot) must still be counted against a RATE.
+- L94. A payload assembled in two places has nowhere its completeness can be seen, so a field missing from both halves is invisible to a reader of either.
+- L78. A report of what changed must be assembled from the finished state, never from one of the code paths that change it.
+- L106. A liveness signal on a timer proves only its EMITTER is alive, so a live signal over dead work is indistinguishable from a healthy run.
+- L108. A check validating a value's PREFIX but not its completeness accepts a truncated paste, and its silence reads as confirmation the whole value is good.
+- L109. A refusal only an action can speak, while the same predicate disables that action, is never spoken, leaving a dead control and no reason.
+- L110. A wait with no deadline cannot fail, only hang, which is worse: indistinguishable from slowness and still holding whatever it acquired.
+- L236. A platform call that may need the PERSON to authorize it must never run on the thread that would draw the question, or the whole app disappears.
+- L241. Work that BLOCKS must never run on a bounded shared worker pool: it does not grow, and a few blocked items starve every other concurrent task.
+- L121. A self heal step deciding from a RECORDED success marker cannot see the artifact was since deleted, so it suppresses its own repair permanently.
+- L122. A permission check written as equality against ONE rank excludes every rank ABOVE it, so the most privileged person is the one refused.
+- L125. A function answering WHEN something comes due must not fold in whether it is due YET, or a future moment is indistinguishable from no moment at all.
+- L139. A minimum volume floor that stops a RATE being noisy also silences SATURATION: a proportion cannot tell one bad in two from twelve bad in twelve.
+- L716. A rate RANKED against peers needs a minimum denominator, below which it is unmeasured, or the thinnest samples top and tail the board.
+- L148. A control whose failure reason goes only to a surface that dies with the attempt leaves pressing it again as the only diagnosis available.
+- L158. When a failure's text can come from a launcher or child, taking whichever is non empty hands diagnosis to the launcher, which speaks when nothing ran.
+- L160. A condition is OVER only after a re-arm window of health, never the first good sample, and its duration is measured to the last observed failure.
+- L164. Failure recording INSIDE the program a launcher starts cannot record the launcher's own failures, which then look like the control never being pressed.
+- L505. A value resolving to undefined is DROPPED from a serialized payload, so a wrong field reference looks exactly like a field nobody meant to send.
+- L218. A policy with a fallback chain treats an OMITTED rule as a NEIGHBOURING one, not as no rule, silently applying a restriction written for other content.
+- L516. A repair that BACKFILLS a field writes the value the work would have had if nothing went wrong, erasing the evidence of the delay it repaired.
+- L520. A failure message built only from a response BODY says nothing for a HEAD or a 204, and the empty payload reads as no information, not as a diagnosis.
+- L523. A suppression set by hand (a mute, a snooze, a maintenance window, a disabled check) must carry an EXPIRY and be listed somewhere visible.
+- L251. A substitution can only rewrite text that is PRESENT, so one also supplying a separator inserts nothing where the input lacks it and the pieces fuse.
+- L264. A durable record that exists only because a CALLER redirects the tool's output belongs to that caller, not the tool
+- L282. Seeded or fixture data setting a STATUS field must satisfy every record that status implies, or the app's own checks correctly call the rows corrupt.
+- L325. A measurement reported by PRINTING reaches its reader only while that stdout does, so moving the work to a worker or job silently removes it.
+- L337. Making a reader that returned a benign default THROW re-audits every caller: the same refusal right behind an error screen strands a control mid-action.
+- L344. A counter that ACCUSES past a threshold has no upper bound, so an input that merely stopped MATCHING reads as more certain the more broken the match is.
+- L530. A surface whose content is derived by JOINING two or more reads must gate its could-not-measure state on EVERY one of them.
+- L531. A validator on the path an input is ASSUMED to arrive by is absent on every other path, and its message names an origin it never measured.
+- L351. A reporter folding a failure into one summary row keeps only the FIRST line, losing the files, counts and remedy written beneath it.
+- L357. A counter that renders its number on a screen is not a detector, because detection requires something that speaks on its own when the number is wrong.
+- L532. A form that falls back to a DEFAULT when nothing is stored cannot show that a save failed
+- L536. A language or API that silently yields NOTHING for a construct it does not support makes the FIX indistinguishable from the BUG
+- L550. A component omitting a state on an assumption about ALL its callers holds only while that assumption does, and nothing enforces it.
+- L589. A relative time must name what it is relative TO, and which anchor it used where that can move, or a truthful history reads as corrupt.
+- L593. Write an audit record at the LOWEST layer every invocation path shares, usually the store itself, never in the API route or the UI handler.
+- L612. Under set -e an assignment from a command substitution carries its exit status, so a capture then classify step dies before any branch below it runs.
+- L622. A state meaning NEVER RECORDED, separated from failure only in WORDING while taking the same action, is not separated at all.
+- L427. A probe posted on a fixed interval that does not wait for the previous one to return records one event per interval that a single outage lasts
+- L431. A guard that skips expensive work when its inputs are unchanged saves nothing unless computing its KEY is cheaper than the work
+- L440. A message softened so it stops claiming something the check did not measure must then STATE what the check DID measure
+- L629. A number printed BESIDE a finding is read as evidence for that finding, so it must be computed on the same key and the same population
+- L632. A step whose only job is to REPORT a problem must never fail the stage that follows: an undelivered message says nothing about the work being safe.
+- L633. An aggregate over rows hidden by row level security returns a confident zero rather than refusing, so an unpermitted reader gets a plausible number.
+- L445. A failing assertion renders its operands, so comparing against a LARGE value buries the message explaining what went wrong.
+- L647. A Suspense or error boundary ABOVE existing code turns a throw beneath it from a status code into a 200 with a fallback, so the route reads healthier.
+- L654. A monitor judging an outcome over ALL runs cannot see a fallback path: it is rare by construction, so its collapse to zero moves the rate by nothing.
+- L664. When a submission is redirected onto an existing record, decide what happens to every field just entered, or a discarded correction reads as saved.
+- L665. A refusal cleared only by re-running a process with a moving window becomes permanent once the refused item falls outside that window.
+- L679. A consequence sentence ENUMERATING what an action touches is a second copy of its list, so it stays true and goes incomplete the day the action grows.
+- L688. Validate every required field when building a typed object from env or JSON: the type is erased, so a missing one fails far away.
+- L691. A tool printing a secret MASKS it by default, keeping its prefix and length, so it passes every completeness check and fails only at use.
+- L457. A marker stamped inside one phase cannot see the phase before it, so its zero reads as the operation never running: stamp at the entry point instead.
+- L465. A durable write gated on a bounded collection having GROWN stops for ever once it is full, and the silent store reads as a quiet period.
+- L695. An alert judged by one aggregate over a fixed trailing window cannot stand down until the window clears, so decide recovery on recent samples instead.
+- L696. A predicate about the newest bucket of a time series judges an incomplete period, so an event that has not arrived yet reads as one that never will.
+- L703. Copy shipped with one phase of a staged feature must describe only what that phase does, or it is false to every reader until the last phase lands.
+- L707. A cooldown keyed COARSER than the subject its message names lets one subject's incident silence the others, behind a first page that looks correct.
+- L486. Under set -u macOS bash 3.2 errors on expanding an EMPTY array, so length check first, or a healthy run dies with no verdict.
+- L488. A script SOURCING a library without set -e carries on when the file is MISSING, so guard the source site to refuse, or it summarises and exits 0.

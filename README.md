@@ -153,7 +153,7 @@ Losing it costs one repeated notice.
 
 ## Lessons: an index in context, the full text on demand
 
-`CLAUDE.md` imports `LESSONS-INDEX.md`, one line per lesson (the rule, without its body or
+`CLAUDE.md` imports the lessons index, one line per lesson (the rule, without its body or
 provenance). `LESSONS.md` still syncs and still holds everything; it is simply not loaded into every
 session. Measured on the real file: 117,050 bytes down to 33,549, with all 180 lessons present.
 
@@ -161,9 +161,17 @@ Read one in full with `./claude-sync lesson L174`, or open the entry in `~/.clau
 body is where the failure behind the rule is described, so read it whenever a rule is about to
 decide something.
 
-The index is generated from `LESSONS.md` on every send and every apply, never maintained beside it.
-A hand edit to it is overwritten on the next run, which is the point: a list kept by hand next to
-the thing it mirrors drifts, and the drift is silent.
+The index is ONE FILE PER SECTION of `LESSONS.md`, named `LESSONS-INDEX-<section>.md`, and CLAUDE.md
+imports every one of them between two markers it also generates. Both limits on a file loaded into
+every session are per file (the 140,000 byte budget in `hooks/test-rule-file-budget.sh` and the
+platform's own banner at 150,000 characters), and the single file was 100,899 characters on
+2026-09-19 and growing about 1,130 a day. Splitting removes that deadline and loses no rule: every
+file still loads. It saves no tokens, which is the point.
+
+The files are generated from `LESSONS.md` on every send and every apply, never maintained beside it.
+A hand edit to one is overwritten on the next run, and a file whose section has been renamed or
+removed is deleted, which is the point: a list kept by hand next to the thing it mirrors drifts, and
+the drift is silent.
 
 ## When a merge cannot be done
 
