@@ -12,10 +12,15 @@
 # three fixture suites looping `sleep 3600` at 0 percent CPU for as long as anybody let them, the
 # shape of the 559 process pile found that afternoon.
 #
-# Sourced, then armed once, near the top of the suite:
+# Sourced, then armed once, near the top of the suite. Every suite the runner runs does this, and
+# test-suite-deadline.sh fails on one that does not (claude-config#465):
 #
-#   . "$DIR/lib/suite-deadline.sh"
-#   suite_deadline_arm <default seconds> || exit $?
+#   . "$DIR/lib/suite-deadline.sh" || { ...refuse to run unbounded... }
+#   suite_deadline_arm || exit $?
+#
+# With no argument the suite takes SUITE_WALL_DEFAULT, ONE number for every suite, derived in
+# DESIGN.md's measured numbers table from the slowest suite that takes it. A suite passes a number
+# of its own only when it is measured to need a different one, and that number gets its own row.
 #
 # Arming starts a watchdog, OUTSIDE the suite's process tree, that does two things and exits by
 # itself once the suite has gone however it went.
@@ -47,7 +52,8 @@
 # Environment, each read once and then removed, because it describes THIS run and a suite started
 # by this one would otherwise read an injected start as its own (L169):
 #   SUITE_WALL_TIMEOUT   seconds before the suite is stopped. 0 turns the watchdog off entirely.
-#                        Defaults to the number the suite passes, which DESIGN.md records and derives.
+#                        Defaults to the number the suite passes, or SUITE_WALL_DEFAULT when it
+#                        passes none; DESIGN.md records and derives both.
 #   SUITE_WALL_POLL      how often the watchdog looks (default 2, the same granularity as the sync
 #                        suite's SUITE_POLL_INTERVAL).
 #   SUITE_WALL_STARTED   the epoch second the clock is counted from. A seam, so a test can put a
@@ -55,6 +61,10 @@
 #   SUITE_WALL_PIDFILE   where the watchdog writes its own pid. A seam, so a test can prove it left.
 
 _suite_deadline_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The one limit every suite takes unless it passes its own (claude-config#465). Its derivation is
+# the DESIGN.md row; test-suite-deadline.sh reads it from this line, so keep it on one line. Not
+# read from the environment: SUITE_WALL_TIMEOUT is the one override, for one run.
+SUITE_WALL_DEFAULT=1200
 
 _suite_deadline_expired(){
   # Printed on stdout, where the runner collects a suite's FAIL lines, so the reason reaches the
@@ -68,8 +78,8 @@ _suite_deadline_expired(){
   exit 124
 }
 
-suite_deadline_arm(){   # $1 = the suite's own default limit, in seconds
-  local limit="${SUITE_WALL_TIMEOUT-$1}" poll="${SUITE_WALL_POLL:-2}" started="${SUITE_WALL_STARTED:-}"
+suite_deadline_arm(){   # [$1] = the suite's own limit in seconds, when it is not SUITE_WALL_DEFAULT
+  local limit="${SUITE_WALL_TIMEOUT-${1:-$SUITE_WALL_DEFAULT}}" poll="${SUITE_WALL_POLL:-2}" started="${SUITE_WALL_STARTED:-}"
   local pidfile="${SUITE_WALL_PIDFILE:-}"
   unset SUITE_WALL_TIMEOUT SUITE_WALL_POLL SUITE_WALL_STARTED SUITE_WALL_PIDFILE
   _suite_deadline_label="$(basename "$0")"

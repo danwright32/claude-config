@@ -18,6 +18,14 @@
 # others is the instance, not the class (L30).
 set -uo pipefail
 
+# Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+suite_deadline_arm || exit $?
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK="$DIR/check-home-paths.sh"
 SPOOL="$DIR/lib/issue-spool.sh"
@@ -226,6 +234,10 @@ if [ -z "${BLANK_CHECK_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
   cp "${BASH_SOURCE[0]}" "$WT_MAIN/payload/hooks/test-blank-check-cost.sh"
   cp "$CHECK" "$WT_MAIN/payload/hooks/check-home-paths.sh"
   cp "$SPOOL" "$WT_MAIN/payload/hooks/lib/issue-spool.sh"
+  # The copy of this suite arms its own deadline like every suite does (claude-config#465), and it
+  # refuses to run without the helper, so the fixture carries the helper as well as the file.
+  cp "$DIR/lib/suite-deadline.sh" "$WT_MAIN/payload/hooks/lib/suite-deadline.sh"
+  cp "$DIR/lib/kill-tree.sh" "$WT_MAIN/payload/hooks/lib/kill-tree.sh"
   # Assembled, for the reason the planted file above is: written whole it is an occurrence here.
   printf '%s\n' '#!/usr/bin/env bash' 'y=""' "[ -z \"\${y${SS}[[:space:]]/}\" ] && echo blank" > "$WT_MAIN/claude-sync"
   git init -q "$WT_MAIN" 2>/dev/null

@@ -1162,6 +1162,23 @@ if [ "$SUITE_TIMEOUT" -eq 0 ] && [ "$SUITE_STALL_TIMEOUT" -eq 0 ]; then
   echo "test suite: SUITE_TIMEOUT and SUITE_STALL_TIMEOUT are both 0, so this run would have no bound of any kind. A wait with no deadline cannot fail, it can only hang, and a hang reads as an ordinary slow run (L110). Set at least one." >&2
   exit 4
 fi
+# The deadline every suite arms (claude-config#465), which here adds the half the watchdog below
+# lacks: whatever this run started is stopped once it has gone, however it went. Its limit is this
+# suite's own SUITE_TIMEOUT plus a margin, never the shared default, which a healthy run on a loaded
+# Mac outlasts (1943s, 2026-08-22). The margin keeps the watchdog below, which names the section,
+# the one that speaks at the ceiling; DESIGN.md derives it. SUITE_TIMEOUT=0 turns both off.
+# Found beside $SCRIPT rather than beside this file: a filtered run executes an extracted copy of
+# this file from a temp directory, where a path relative to it points at nothing (#27).
+. "$(dirname "$SCRIPT")/payload/hooks/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+if [ "$SUITE_TIMEOUT" -gt 0 ]; then
+  suite_deadline_arm "$(( SUITE_TIMEOUT + 60 ))" || exit $?
+else
+  suite_deadline_arm 0 || exit $?
+fi
 # Named from an explicit template, and not `mktemp -t`: the name is what lets an abandoned copy be
 # attributed to this tool and reclaimed later (#36), and `-t` also means different things to BSD
 # and GNU mktemp, which matters the moment this runs anywhere but a Mac.

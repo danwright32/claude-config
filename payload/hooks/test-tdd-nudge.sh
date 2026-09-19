@@ -9,6 +9,14 @@
 
 set -uo pipefail
 
+# Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+suite_deadline_arm || exit $?
+
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tdd-nudge.sh"
 # The REPO's lessons file, not the deployed copy under the config directory. This read
 # `$HOME/.claude/LESSONS.md`, which is where the sync PUTS this file, and a CI runner has no

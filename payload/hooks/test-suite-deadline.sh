@@ -13,6 +13,14 @@
 # small suites built here, with the deadline's clock INJECTED rather than waited out (L524).
 set -uo pipefail
 
+# Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+suite_deadline_arm || exit $?
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$DIR/lib/suite-deadline.sh"
 
@@ -235,6 +243,98 @@ case "$pe_out" in
   clean*) check "#444 the injected start and pidfile are not passed on to what the suite runs" ok ;;
   *) check "#444 the injected start and pidfile are not passed on to what the suite runs" "out=$pe_out" ;;
 esac
+
+# ---------------------------------------------------------------------------
+# A suite that names no limit takes the one shared default (claude-config#465).
+# ---------------------------------------------------------------------------
+# Read from the helper rather than written here as a literal, so the day the default moves this
+# still means what it says (L401).
+SHARED_DEFAULT="$(sed -n 's/^SUITE_WALL_DEFAULT=\([0-9][0-9]*\)$/\1/p' "$LIB")"
+case "$SHARED_DEFAULT" in
+  ''|*[!0-9]*) check "#465 the helper declares one shared default limit" "read '$SHARED_DEFAULT' from $LIB" ;;
+  *) check "#465 the helper declares one shared default limit" ok ;;
+esac
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'set -u\n'
+  printf '. "%s"\n' "$LIB"
+  printf 'suite_deadline_arm || exit $?\n'
+  printf 'out="$(bash %q %q)"\n' "$HOLDER" "$TMPROOT/default.child"
+  printf 'echo finished\n'
+} > "$TMPROOT/default.sh"
+# Started past the shared default, so a suite that silently took some other limit (or none, which
+# is what an unset argument under `set -u` used to give) either runs on or names a different one.
+SUITE_WALL_STARTED=$(( now - ${SHARED_DEFAULT:-0} - 5 )) SUITE_WALL_POLL=0.05 \
+  bash "$TMPROOT/default.sh" > "$TMPROOT/default.out" 2>&1 &
+df=$!
+ALL_PIDS="$ALL_PIDS $df"
+wait_file "$TMPROOT/default.child" && ALL_PIDS="$ALL_PIDS $(cat "$TMPROOT/default.child")"
+if wait_gone "$df"; then wait "$df"; df_rc=$?; else df_rc="still running"; fi
+case "$df_rc:$(cat "$TMPROOT/default.out")" in
+  "124:"*"wall clock of ${SHARED_DEFAULT}s"*) check "#465 a suite arming with no limit is held to the shared default" ok ;;
+  *) check "#465 a suite arming with no limit is held to the shared default" "exit=$df_rc out=$(cat "$TMPROOT/default.out")" ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Every suite arms it, and one that does not fails here (claude-config#465).
+# ---------------------------------------------------------------------------
+# #444 armed only the suite it reproduced, so the other suites went on having no wall clock when
+# run directly, and nothing required one: a behaviour each suite must opt into is a convention
+# until something fails on the one that does not (L621, L613).
+#
+# A suite arms when it SOURCES the helper and CALLS suite_deadline_arm, each on a line of its own
+# that is code rather than a comment, so a suite that only talks about the deadline, as this file
+# does in its fixtures' text, does not answer for one that has it (L135, L178).
+arms_deadline(){   # arms_deadline <suite file> -> 0 when it sources the helper and arms it
+  grep -Eq '^[[:space:]]*(\.|source)[[:space:]]+[^#]*suite-deadline\.sh' "$1" 2>/dev/null || return 1
+  grep -Eq '^[[:space:]]*suite_deadline_arm([[:space:]]|$)' "$1" 2>/dev/null || return 1
+  return 0
+}
+# Seen to fail before it is trusted (L1): each way of not arming is refused, and the real shape
+# passes. Without the pass, a predicate refusing everything would satisfy the refusals.
+printf '#!/usr/bin/env bash\necho no deadline here\n' > "$TMPROOT/probe-none.sh"
+printf '#!/usr/bin/env bash\n# . lib/suite-deadline.sh\n# suite_deadline_arm\n' > "$TMPROOT/probe-comment.sh"
+printf '#!/usr/bin/env bash\n. "$DIR/lib/suite-deadline.sh" || exit 1\n' > "$TMPROOT/probe-sourced-only.sh"
+printf '#!/usr/bin/env bash\nsuite_deadline_arm || exit $?\n' > "$TMPROOT/probe-armed-only.sh"
+printf '#!/usr/bin/env bash\n. "$DIR/lib/suite-deadline.sh" || exit 1\nsuite_deadline_arm || exit $?\n' > "$TMPROOT/probe-armed.sh"
+probe_bad=""
+for p in none comment sourced-only armed-only; do
+  arms_deadline "$TMPROOT/probe-$p.sh" && probe_bad="$probe_bad $p"
+done
+[ -z "$probe_bad" ] \
+  && check "#465 the scan refuses a suite that does not arm, or only mentions it, or does half" ok \
+  || check "#465 the scan refuses a suite that does not arm, or only mentions it, or does half" "it accepted:$probe_bad"
+arms_deadline "$TMPROOT/probe-armed.sh" \
+  && check "#465 and accepts one that sources the helper and arms it" ok \
+  || check "#465 and accepts one that sources the helper and arms it" "it refused the armed probe"
+
+# The suites are the ones the RUNNER runs, asked of the runner itself, so the scan and the runner
+# cannot disagree about what a suite is (L41, L247).
+scan_dirs="$(HOOK_TESTS_LIST_ONLY=1 bash "$DIR/run-all-tests.sh" 2>/dev/null)"
+scanned=0
+unarmed=""
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  for s in "$d"/test-*.sh; do
+    [ -f "$s" ] || continue
+    scanned=$((scanned + 1))
+    arms_deadline "$s" || unarmed="$unarmed  $s
+"
+  done
+done <<EOF
+$scan_dirs
+EOF
+# Read as a count before it is read as a verdict: a scan that found nothing to scan passes every
+# suite it never looked at (L98, L288).
+[ "$scanned" -gt 0 ] \
+  && check "#465 the scan read the suites the runner runs ($scanned of them)" ok \
+  || check "#465 the scan read the suites the runner runs ($scanned of them)" "the runner listed: ${scan_dirs:-nothing}"
+if [ -z "$unarmed" ]; then
+  check "#465 every suite arms its own deadline" ok
+else
+  check "#465 every suite arms its own deadline" "these do not source lib/suite-deadline.sh and call suite_deadline_arm, so run directly they have no wall clock and nothing stops what they start:
+$unarmed"
+fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
