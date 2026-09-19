@@ -256,7 +256,15 @@ rule a rule file with a duplicate lesson number already gets.
 
 The held-back edit is untouched in `~/.claude` and goes out on the next send once the suite passes.
 `SYNC_NO_SEND_TESTS=1` skips the gate for one run. `SYNC_SEND_TESTS_TIMEOUT` (default `600` seconds)
-bounds how long it waits for a suite before calling it failed and naming it as still running.
+bounds how long it waits for a suite before stopping it, holding back the hooks it covers, and saying
+it did not finish in time rather than that it failed.
+
+A suite stopped at either deadline (this one or `SYNC_HOOK_TESTS_TIMEOUT`) is stopped with everything
+it started: it is paused, its whole process tree is killed, and only then is it asked to end, so its
+own cleanup runs. A suite still there after `SYNC_SUITE_STOP_GRACE` (default `10` seconds) is killed
+outright. A plain signal to the suite is not enough: bash holds it while the suite is blocked in a
+command substitution, so the wait after it used to last as long as whatever was blocking, with the
+sync lock held (#464).
 
 A verdict is remembered in `.send-suite-verdicts` against a digest of the whole staged hook set, and
 reused while that digest is unchanged. That is a bound on cost, not a shortcut: the watcher fires a
