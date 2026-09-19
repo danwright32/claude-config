@@ -1,0 +1,2 @@
+Dan does not want the post merge PR quiz in claude-config (claude-config#438).
+Read by payload/hooks/pr-merge-quiz.sh: its presence at the repo root skips the quiz on every merge here, with a one line notice. Delete this file to have merges quizzed again.

@@ -51,6 +51,8 @@
 #     session-reflection.sh.)
 #   - SKIP_PR_QUIZ=1 as an inline prefix on the command: documented override, same style as
 #     SKIP_TEST_CHECK / SKIP_STYLE_CHECK / SKIP_CLOSING_CHECK.
+#   - A checked in .no-pr-quiz at the root of the repo being merged in: that repo has opted out
+#     for good. Skipped with a one line notice, never silently (claude-config#438).
 #
 # Fails QUIET: any parse error exits 0 with no output, so a hiccup never produces a spurious quiz.
 
@@ -95,6 +97,41 @@ fi
 # shellcheck source=lib/merge-target.sh
 . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
 mt_runs_merge "$cmd" || exit 0
+
+# A REPOSITORY CAN OPT OUT, by checking in a marker file at its root (claude-config#438).
+#
+# Dan asked for no quiz in claude-config, and that decision lived only in a session memory:
+# the hook fired on every merge there and the skip was re-decided by judgement each time, five
+# times in one session on 2026-09-18. A rule only a memory carries is enforced by nothing, and
+# a skip Dan reads five times for a reason that never changes is the one he stops reading, which
+# costs the "quiz me anyway" this hook depends on (L57, L36).
+#
+# The shape is the one lib/merge-target.sh already uses to learn a repo carries its own merge
+# tool: a repo relative path whose presence is the declaration, checked in, so the decision
+# lives in the repo it is about and travels with every clone and worktree of it.
+#
+# Resolved from the repo the merge RUNS in (a leading cd wins, then the session cwd walked up
+# to its checkout root), the same resolution the label gate below uses, so a merge from a
+# subdirectory still finds it and a cd into another repo is judged as that repo.
+#
+# Checked before the label gate and recorded nowhere in its verdict store: an opted out merge
+# is not a quiz the label failed to silence, and counting it there would ring the notice that
+# says the gate never works (#354).
+#
+# Announced, never silent. A skip nobody sees reads exactly like a hook that never fired (L98),
+# so it says so in one line straight to Dan, through systemMessage rather than a block, because
+# there is nothing for Claude to decide and a block would spend a turn relaying a fixed fact.
+QUIZ_OPT_OUT_MARKER=".no-pr-quiz"
+quiz_repo="$(mt_checkout_dir "$(mt_repo_dir "$cmd" "$cwd")")"
+if [ -n "$quiz_repo" ] && [ -f "$quiz_repo/$QUIZ_OPT_OUT_MARKER" ]; then
+  msg="PR quiz skipped: $(basename "$quiz_repo") has opted out with $QUIZ_OPT_OUT_MARKER at its root. Delete that file to have merges here quizzed again."
+  if command -v jq >/dev/null 2>&1; then
+    jq -nc --arg m "$msg" '{systemMessage: $m}'
+  else
+    printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  fi
+  exit 0
+fi
 
 # WHAT THE GATE DECIDED, kept so a gate that never fires is visible (claude-config#354).
 #

@@ -349,6 +349,75 @@ chmod 700 "$FIXTURE/readonly"
 forget_verdicts
 no_record
 
+# --- A repository can opt out by checking in a marker (claude-config#438) ---
+#
+# Dan asked for no quiz in claude-config, and that lived only in a session memory, so the
+# hook fired on every merge there and the skip was re-decided by judgement each time. The
+# marker is a file at the checkout root, the same shape as the repo relative paths
+# lib/merge-target.sh reads to learn a repo carries its own merge tool.
+#
+# Every case uses a VISIBLE record, the strongest form: the one record that would
+# otherwise always quiz, so a skip here can only be the marker's doing (L159).
+opted_out_line() {  # $1 = command, $2 = session cwd ; prints the hook's whole output
+  python3 -c '
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1]}, "cwd": sys.argv[2]}))
+' "$1" "$2" | ( cd "$2" && env "PATH=$FIXTURE/bin:$PATH" "$HOOK" ) 2>/dev/null
+}
+
+record '[{"name":"changelog/visible"}]'
+printf 'Dan does not want the quiz here.\n' > "$FIXTURE/repo/.no-pr-quiz"
+run "an opted out repo does not quiz"   skip "$MERGE_CMD 42"
+
+# It SAYS it skipped, in one line, and says why: a silent skip reads exactly like a hook
+# that never fired (L98).
+out="$(opted_out_line "$MERGE_CMD 42" "$FIXTURE/repo")"
+msg="$(printf '%s' "$out" | jq -r '.systemMessage // ""' 2>/dev/null)"
+if holds "$msg" "opted out" && holds "$msg" ".no-pr-quiz"; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: the opt out skip does not say so and name the marker (got: $out)"; fi
+if [ "$(printf '%s\n' "$msg" | wc -l | tr -d ' ')" = "1" ] && [ -n "$msg" ]; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: the opt out notice is not exactly one line (got: $msg)"; fi
+
+# An opted out merge is not a quiz the label gate failed to silence, so it must not count
+# toward the notice that says the gate never works (#354).
+saw fired_since_quiet 0 "an opted out merge"
+saw visible 0 "an opted out merge"
+
+# From a subdirectory of the checkout: the marker belongs to the repo, not the cwd.
+mkdir -p "$FIXTURE/repo/sub/dir"
+out="$(opted_out_line "$MERGE_CMD 42" "$FIXTURE/repo/sub/dir")"
+if holds "$out" '"block"'; then
+  fail=$((fail+1)); echo "FAIL: a merge from a subdirectory of an opted out repo quizzed"
+else pass=$((pass+1)); fi
+
+# The repo the merge RUNS in decides, not the session cwd: a leading cd into a repo
+# without the marker still quizzes from inside one that has it.
+mkdir -p "$FIXTURE/other"
+( cd "$FIXTURE/other" && git init -q && git remote add origin "https://github.com/acme/widget.git" )
+out="$(opted_out_line "cd $FIXTURE/other && $MERGE_CMD 42" "$FIXTURE/repo")"
+if holds "$out" '"block"'; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: a cd into a repo without the marker was treated as opted out"; fi
+
+# The control: the same record with the marker gone quizzes, so the skips above are the
+# marker and not a fixture that never fires.
+rm -f "$FIXTURE/repo/.no-pr-quiz"
+run "the same repo without the marker"  fire "$MERGE_CMD 42"
+
+# And this repository is opted out, which is the decision #438 exists to record. Only
+# measurable where the suite runs from the claude-config checkout; the synced copy under
+# ~/.claude/hooks has no repo root above it, so there it says UNMEASURED rather than
+# passing or failing on a question it cannot answer (L411).
+own_root="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$own_root" ] && [ -f "$own_root/payload/hooks/pr-merge-quiz.sh" ]; then
+  if [ -f "$own_root/.no-pr-quiz" ]; then pass=$((pass+1)); else
+    fail=$((fail+1)); echo "FAIL: claude-config does not carry .no-pr-quiz at its root"; fi
+else
+  echo "UNMEASURED: not running from the claude-config checkout, so its own opt out was not checked"
+fi
+
+forget_verdicts
+no_record
+
 # --- Failure path: a broken or empty payload must fail QUIET, never fire or crash ---
 raw() {
   local desc="$1" want="$2" rawpayload="$3"
