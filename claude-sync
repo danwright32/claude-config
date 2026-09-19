@@ -7764,14 +7764,28 @@ scratch_leftovers(){   # $1 = "force" to read the old flat location whatever the
   return 0
 }
 
-scratch_total_kb(){   # reads paths on stdin
+# One size per path, "kb<TAB>path", from ONE `du` over the lot rather than one per item: `du -sk`
+# prints a line for each operand it is handed. What reap-scratch reports is the size of what it
+# actually REMOVED, so it needs the sizes item by item and not only their sum (claude-config#445).
+scratch_sizes_kb(){   # reads paths on stdin
   local list; list="$(cat)"
-  [ -n "$list" ] || { echo 0; return 0; }
+  [ -n "$list" ] || return 0
   # `du` is allowed to fail on a path that vanished between the listing and here, and the total is
   # reported from whatever it could read. Under `pipefail` an unguarded pipeline would take the
   # whole command down over scratch that has already gone, which is the one outcome nobody needs
   # reporting.
-  printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 du -sk 2>/dev/null | awk '{s+=$1} END{print s+0}' || echo 0
+  #
+  # The tolerance sits on the `du` side of the pipe and nowhere else, so awk is the ONE thing that
+  # prints (claude-config#445). It used to be a trailing `|| echo 0` on the whole pipeline, and
+  # `du` exits non zero whenever any entry under a path cannot be read, not only when the path has
+  # gone: `pipefail` then failed the pipeline AFTER awk had printed the sum, and the fallback
+  # printed a second total beneath it. The caller got "1480852", a newline, "0", which broke the
+  # integer test in scratch_human_size and went out in the message as the size (L11, L183).
+  { printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 du -sk 2>/dev/null || true; }
+}
+
+scratch_total_kb(){   # reads paths on stdin
+  scratch_sizes_kb | awk -F'\t' '{s+=$1} END{print s+0}'
 }
 
 # Reported in the unit that says something. 92 abandoned apply logs really do come to under a
@@ -7814,7 +7828,7 @@ scratch_run_summary(){   # $1 = the leftover paths, one per line
 }
 
 do_reap_scratch(){
-  local list n kb p removed=0
+  local list n kb sizes results removed kept k
   # `force`, always. This is the command somebody is TOLD to run, and it is the one way back to
   # the old flat location that does not wait for an interval to come round.
   list="$(scratch_leftovers force)"
@@ -7831,29 +7845,57 @@ do_reap_scratch(){
     echo "claude-sync: no abandoned scratch to reclaim in $(scratch_home) or beside it in $SYNC_SCRATCH_ROOT (nothing in either, older than ${SYNC_SCRATCH_MAX_AGE}s, carries a name this tool owns)."
     return 0
   fi
-  kb="$(printf '%s\n' "$list" | scratch_total_kb)"
-  removed="$(printf '%s\n' "$list" | remove_scratch_paths)"
+  # Sized BEFORE the delete, because afterwards there is nothing left to measure, and summed only
+  # over the items the delete really took. Sizing the whole list reported "reclaimed 1 ... holding
+  # 3 MB" over a 2 MB item that was still sitting there, which is a number this never reclaimed
+  # (claude-config#445, L11).
+  sizes="$(printf '%s\n' "$list" | scratch_sizes_kb)"
+  results="$(printf '%s\n' "$list" | remove_scratch_paths)"
+  removed="$(printf '%s\n' "$results" | grep -c '^removed' || true)"
+  kb="$( { printf '%s\n' "$sizes" | awk '{ print "S\t" $0 }'; printf '%s\n' "$results"; } \
+    | awk -F'\t' '$1 == "S" { sz[$3] = $2; next } $1 == "removed" { s += sz[$2] } END { print s + 0 }')"
   echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT."
+  # An item the delete could not take is named, with the reason, rather than left to a bare `rm`
+  # complaint on stderr: the whole point of a reap is what is left afterwards, and an item nobody
+  # is told about is one nobody unblocks (L47, L148). Capped, because a thousand identical lines
+  # bury the one that differs.
+  kept="$(printf '%s\n' "$results" | grep '^kept' || true)"
+  if [ -n "$kept" ]; then
+    k="$(printf '%s\n' "$kept" | grep -c . || true)"
+    echo "claude-sync: could not remove $k of $n abandoned scratch item(s). Each stays until whatever blocks the delete is fixed, and the next reap tries it again:"
+    printf '%s\n' "$kept" | awk -F'\t' -v cap=20 'NR <= cap { printf "  could not remove %s: %s\n", $2, $3 } END { if (NR > cap) printf "  and %d more\n", NR - cap }'
+  fi
   return 0
 }
 
 # The delete itself, written ONCE and used by the command somebody types and by the automatic sweep
 # alike. Two copies of an `rm -rf` guarded by a pattern would be two chances for the pattern to
 # drift, and only one of them would be the one anybody re-read (L370).
-remove_scratch_paths(){   # reads paths on stdin -> prints how many it removed
-  local p removed=0
+#
+# One line per path it was allowed to delete: "removed<TAB>path", or "kept<TAB>path<TAB>reason" when
+# `rm` could not take it (a directory holding an entry this user cannot read is the one seen). Per
+# item rather than a count, so a caller can say WHICH were left and size only what went
+# (claude-config#445).
+remove_scratch_paths(){   # reads paths on stdin
+  local p err
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     # Judged again, independently, immediately before the delete. The list was built from the
     # names above and this asks the question a second way, because everything after it is an
     # `rm -rf` on a path assembled from the environment (L5).
     case "$p" in
-      "${SYNC_SCRATCH_ROOT%/}/$SYNC_SCRATCH_DIRNAME"/claude-sync-*) rm -rf "$p" && removed=$((removed + 1)) ;;
-      "${SYNC_SCRATCH_ROOT%/}"/claude-sync-*) rm -rf "$p" && removed=$((removed + 1)) ;;
-      *) echo "claude-sync: refusing to remove '$p', which is not scratch this tool owns." >&2 ;;
+      "${SYNC_SCRATCH_ROOT%/}/$SYNC_SCRATCH_DIRNAME"/claude-sync-*|"${SYNC_SCRATCH_ROOT%/}"/claude-sync-*) ;;
+      *) echo "claude-sync: refusing to remove '$p', which is not scratch this tool owns." >&2; continue ;;
     esac
+    # Inside an `if`, so a failed delete is an answer rather than the end of the run under `set -e`
+    # (L612). The first line of what `rm` said is kept as the reason; the rest repeats it per entry.
+    if err="$(rm -rf "$p" 2>&1)"; then
+      printf 'removed\t%s\n' "$p"
+    else
+      err="${err%%$'\n'*}"
+      printf 'kept\t%s\t%s\n' "$p" "${err:-rm failed and said nothing}"
+    fi
   done
-  printf '%s' "$removed"
   return 0
 }
 
@@ -7883,7 +7925,7 @@ reap_scratch_if_due(){
   # machine re-reads the directory on every single run for ever (L98).
   : > "$stamp" 2>/dev/null || true
   is_blank "$list" && return 0
-  n="$(printf '%s\n' "$list" | remove_scratch_paths)"
+  n="$(printf '%s\n' "$list" | remove_scratch_paths | grep -c '^removed' || true)"
   case "${n:-0}" in ''|*[!0-9]*) n=0 ;; esac
   [ "$n" -gt 0 ] || return 0
   # Said out loud. A sweep that reclaimed a pile and one that ran and found nothing are different

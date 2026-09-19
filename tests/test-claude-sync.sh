@@ -7599,6 +7599,56 @@ check "#36 an unreadable age is refused, not guessed" "[ '$_scr_junk_rc' -ne 0 ]
 check "#36 and the refusal names the value"          "grep -q 'SYNC_SCRATCH_MAX_AGE=.soon. is not a whole number' <<< \"\$_scr_junk\""
 check "#36 and it removed nothing on the way out"    "[ -d '$_SCR/claude-sync-suite-work.OFFTEST' ]"
 
+# ---- a size `du` could only partly read is still ONE number (claude-config#445) ----------------
+# On 2026-09-18 a reap of 1,139 items printed "holding 1480852", a newline, then "0 KB", and bash
+# said `[: 1480852\n0: integer expression expected`. The cause was not two roots concatenated, as
+# the issue guessed: `du` exits non zero when ANY entry under a path cannot be read, `pipefail`
+# carries that past the awk that had already printed the sum, and a trailing `|| echo 0` then
+# printed a SECOND total. A scratch directory holding one unreadable entry is enough, and a suite
+# run killed mid test leaves exactly that. Both roots are planted at once, as the issue asked, so
+# the total really is summed across the two (L11: the message may only claim what it measured).
+_SCRU="$WORK/scratch-unreadable"; mkdir -p "$_SCRU/claude-sync"
+mkdir -p "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA/locked"
+# Something INSIDE the locked directory, because GNU rm removes an EMPTY unreadable directory
+# without reading it and BSD rm does not: the first CI run on Linux reclaimed the whole item and
+# the checks below had no refusal to see. With an entry it cannot list, neither can delete it.
+: > "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA/locked/entry"
+dd if=/dev/zero of="$_SCRU/claude-sync/claude-sync-suite-work.UNREADA/filler" bs=1048576 count=2 2>/dev/null
+chmod 000 "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA/locked"
+_scr_age "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA"
+mkdir -p "$_SCRU/claude-sync-suite-work.FLATAAA"
+dd if=/dev/zero of="$_SCRU/claude-sync-suite-work.FLATAAA/filler" bs=1048576 count=1 2>/dev/null
+_scr_age "$_SCRU/claude-sync-suite-work.FLATAAA"
+# The control, in the same fixture: `du` really does fail on it here. Run as root it would not,
+# and every check below would then pass on a fixture that never produced the fault (L159).
+_scru_du_rc=0; du -sk "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA" >/dev/null 2>&1 || _scru_du_rc=$?
+check "#445 the control: du cannot fully read the planted directory" "[ '$_scru_du_rc' -ne 0 ]"
+_scru_st="$(SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$_SCRU" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#445 status sizes both roots as ONE number" \
+  "grep -qE '2 abandoned, holding [0-9]+ MB under ' <<< \"\$_scru_st\""
+check "#445 and no integer comparison choked on it" \
+  "! grep -q 'integer expression expected' <<< \"\$_scru_st\""
+_scru_out="$(SYNC_SCRATCH_ROOT="$_SCRU" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"
+check "#445 reap-scratch reports the total as ONE number on one line" \
+  "grep -qE 'holding [0-9]+ MB under ' <<< \"\$_scru_out\""
+check "#445 and reap-scratch's own comparison did not choke either" \
+  "! grep -q 'integer expression expected' <<< \"\$_scru_out\""
+# The directory holding the unreadable entry cannot be removed either, and the reap used to size
+# the whole LIST before removing anything, so it said "reclaimed 1 ... holding 3 MB" while the
+# 2 MB item sat there untouched, named only by a bare `rm` complaint (L11, L47). The size is now
+# of what was actually removed, and the item left behind is named with the reason.
+check "#445 the control: the item rm cannot delete is still there" \
+  "[ -d '$_SCRU/claude-sync/claude-sync-suite-work.UNREADA' ]"
+check "#445 the reap counts only what it removed" "grep -q 'reclaimed 1 abandoned' <<< \"\$_scru_out\""
+check "#445 and sizes only what it removed, leaving out the 2 MB it could not" \
+  "grep -q 'holding 1 MB under ' <<< \"\$_scru_out\""
+check "#445 and names the item it could not remove" \
+  "grep -qE 'could not remove .*claude-sync-suite-work\.UNREADA' <<< \"\$_scru_out\""
+check "#445 and says how many it could not remove" \
+  "grep -q 'could not remove 1 of ' <<< \"\$_scru_out\""
+# Put back so the workspace can be removed at the end of the run.
+chmod 755 "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA/locked" 2>/dev/null || true
+
 # A young path matching the LAST name the reaper looks for. This is not a corner: the last name is
 # the suite's own section mark, and a run always has a live one, so this is the state EVERY call
 # made during a suite run is in. The tool runs under `set -e`, so the sweep ending on a false age
