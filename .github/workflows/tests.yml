@@ -56,6 +56,27 @@ jobs:
     # refusal is FOR is still wanted, so the suite's runtime is tracked as its own issue rather
     # than being made invisible by the raise.
     #
+    # THAT ISSUE WAS claude-config#492, and what it found is worth keeping here beside the numbers
+    # it is about. Measured 2026-09-19: two full local runs within one percent of each other gave
+    # 597s of processor time against 199s of wall clock across four shards, so the suite is bound
+    # by its own work and not by waiting on the machine. This runner has two cores, which the step below prints rather
+    # than asserts, and 597s of work on two cores has a floor near 300s of wall clock before this
+    # runner's slower cores are counted. So raising HOOK_TESTS_BUDGET to buy more shards cannot
+    # help, and neither can splitting the suite in two: on a two core runner the only thing that
+    # moves the wall clock is less work, or a bigger runner, which costs money on a private
+    # repository (L308 asks for the lever you did not pull to be named, and that is it).
+    #
+    # No hotspot was found to remove, on the same date. git barely appears in a sampled profile, the
+    # seventeen sections that re-run the suite already scope their nested runs to one section or
+    # nine, and each claude-sync invocation costs about 23ms, nearly all of it bash parsing a 9000
+    # line script. The remaining 70% is spread across 150 sections at about 3.5s each, so bringing
+    # the total down means making most of them cheaper rather than fixing a few.
+    #
+    # What DID ship is the thing that was missing: the section time is now totalled undivided and
+    # held to a budget (SUITE_WORK_BUDGET_PCT, in the suite). The wall clock guard could not see
+    # this growth because sharding divides wall clock, which is how 463s of section time on
+    # 2026-08-29 became 759s on 2026-09-19 with nothing saying so.
+    #
     # The ceiling must be at least twice the stall bound, which is its own separate requirement:
     # #112 refuses a ceiling under twice the stall, because a ceiling that close fires FIRST and
     # every real hang is then reported as a run that merely went on too long, which sends the

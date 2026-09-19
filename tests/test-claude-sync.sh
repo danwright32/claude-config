@@ -300,6 +300,13 @@ suite_profile(){
     [ -n "$_pt" ] || continue
     printf '  %ds %s\n' "$((10#$_pd))" "$_pt"
   done
+  # The TOTAL, machine readable, so a parent putting shards back together can add them up
+  # (claude-config#492). Emitted only when there is a profile to total: a run that timed nothing
+  # says nothing rather than reporting a total of zero, which would clear every budget there is
+  # while meaning the opposite (L90, L98).
+  printf 'SUITE-WORK seconds=%s sections=%s\n' \
+    "$(printf '%s' "$_SEC_PROFILE" | awk -F'\t' '{ s += $1 + 0 } END { print s + 0 }')" \
+    "$(printf '%s' "$_SEC_PROFILE" | awk 'NF { n++ } END { print n + 0 }')"
   return 0
 }
 
@@ -1975,6 +1982,89 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
   return 0
 }
 
+# HOW MUCH WORK this run is, against a budget that scales with the ceiling it was given
+# (claude-config#492).
+#
+# The report above measures WALL CLOCK, because that is what runs out against the deadline. That is
+# the right quantity for the deadline and the wrong one for growth: the fan-out divides wall clock
+# by the shard count, so sections added show up at a half or a quarter of their real size and the
+# number that actually grows is hidden by the mechanism that makes the run fast. These are two
+# different quantities and neither supersedes the other, which is worth saying because a threshold
+# added beside an existing one otherwise leaves readers of the old one answering a question it no
+# longer covers (L428).
+#
+# MEASURED 2026-09-19. Two full local runs within one percent of each other, 199.9s and 197.9s of
+# wall clock against 597s of processor time across four shards on a twelve core Mac: the suite is
+# bound by its own work, not by waiting. The CI runner has TWO cores, read from the runner rather
+# than assumed, which puts a floor near 300s of wall clock on 597s of work before CI's slower cores
+# are counted. So raising the shard count cannot help, and that is recorded here so the next person
+# reads it instead of spending an afternoon rediscovering it (L308).
+#
+# The section time is what grew: 463s on 2026-08-29, 759s on 2026-09-19, up 64% in three weeks with
+# only a sharding-diluted wall clock guard watching. This is what closes that.
+#
+# A FRACTION OF THE CEILING rather than a number of seconds, so a slower machine given a larger
+# SUITE_TIMEOUT is not judged against a threshold calibrated on a fast one (L376). At CI's ceiling
+# of 1800 the budget is 1260s against a measured 980s, which is room for 28% more work, and it
+# speaks well before the wall clock guard, which needs 1800s of section time to reach its 900s.
+SUITE_WORK_BUDGET_PCT="${SUITE_WORK_BUDGET_PCT:-70}"
+# Every shard's SUITE-WORK line, added up. Prints NOTHING when any shard did not emit one, so a
+# shard that died takes the total with it rather than quietly shrinking it (claude-config#492).
+fan_work_over_dir(){   # $1 = the shard output directory   $2 = how many shards to expect
+  local _fw_i=1 _fw_l _fw_n _fw_sum=0
+  while [ "$_fw_i" -le "$2" ]; do
+    _fw_l="$(awk '/^SUITE-WORK /{print; exit}' "$1/$_fw_i.out" 2>/dev/null)"
+    [ -n "$_fw_l" ] || return 0
+    _fw_n="${_fw_l#*seconds=}"; _fw_n="${_fw_n%% *}"
+    case "$_fw_n" in ''|*[!0-9]*) return 0 ;; esac
+    _fw_sum=$(( _fw_sum + _fw_n ))
+    _fw_i=$(( _fw_i + 1 ))
+  done
+  printf '%s' "$_fw_sum"
+  return 0
+}
+
+suite_work_report(){   # $1 = section seconds  $2 = the ceiling  $3 = processor seconds, or empty
+  local work="$1" ceiling="$2" cpu="${3-}" budget
+  case "$ceiling" in ''|*[!0-9]*) return 0 ;; esac
+  # A ceiling of zero turns the deadline off, and it turns this off with it rather than refusing
+  # every run against a budget of nothing.
+  [ "$ceiling" -gt 0 ] || return 0
+  case "$SUITE_WORK_BUDGET_PCT" in ''|*[!0-9]*) return 0 ;; esac
+  # A total that came back EMPTY has measured nothing, and nothing must never be read as a figure
+  # of zero: zero clears every budget there is, so a broken reader would be indistinguishable from
+  # a suite that costs nothing at all (L90, L98). The same rule the processor time reader follows,
+  # and said out loud for the same reason.
+  case "$work" in
+    ''|*[!0-9]*)
+      echo "test suite: the section times for this run could not be totalled, so how much work it is was NOT checked against its budget. The run itself is unaffected." >&2
+      return 0 ;;
+  esac
+  budget=$(( ceiling * SUITE_WORK_BUDGET_PCT / 100 ))
+  [ "$work" -gt "$budget" ] || return 0
+  # Section times are WALL CLOCK per section, so they inflate when something else is using the
+  # machine: measured 2026-09-19, the same tree gave 759s idle and 892s with a profile running
+  # beside it, an 18% swing with nothing changed in it. Failing on that would be reporting the
+  # machine, and "find what got
+  # slower" is not an action anybody can take on it (L112, L11). So the processor time decides
+  # WHICH of the two is happening, the same separation the wall clock guard above makes, and the
+  # two are worded differently so a reader can tell them apart.
+  case "$cpu" in
+    ''|*[!0-9]*)
+      echo "test suite: this run's sections cost ${work}s between them, past their ${budget}s budget, but the processor time could not be read, so whether that is the suite having grown or the machine being busy is NOT known. Not treated as a failure." >&2
+      return 0 ;;
+  esac
+  if [ $(( cpu * 2 )) -lt "$work" ]; then
+    echo "test suite: note, this run's sections cost ${work}s between them, past their ${budget}s budget, but only ${cpu}s of that was the suite's own processor time, so the machine was busy with something else rather than the suite having grown. Not treated as a failure." >&2
+    return 0
+  fi
+  # PREFIXED "FAIL:" because that prefix is read by code, not decoration (L199): run-all-tests.sh
+  # prints only the lines matching FAIL or not ok, so a refusal without it exits non-zero with its
+  # cause nowhere in the log. That cost three CI cycles for the guard above on 2026-09-19.
+  echo "FAIL: test suite: this run's sections cost ${work}s of section time between them, against a budget of ${budget}s (${SUITE_WORK_BUDGET_PCT}% of the ${ceiling}s ceiling), and ${cpu}s of that was the suite's own processor time, so it has grown rather than waited on a busy machine. Sharding divides the wall clock and hides this, so it is measured undivided. Find what was added and make it cheaper, share a fixture with the section beside it, or raise SUITE_WORK_BUDGET_PCT deliberately and say why." >&2
+  return 1
+}
+
 suite_cpu_read(){   # sets SUITE_CPU_SECONDS to whole seconds, or to nothing
   local _cs_f _cs_a _cs_b _cs_x _cs_n _cs_tot=0 _cs_any=0
   SUITE_CPU_SECONDS=""
@@ -2062,6 +2152,9 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   # And how their checks divide up, so every section is counted once (#146). Read here, from the
   # same directory, before it goes.
   _fan_tot="$(fan_totals_over_dir "$_fan_dir" "$SUITE_JOBS")"; _fan_tot_rc=$?
+  # The shards' section time, summed, and read here for the same reason as everything else in this
+  # block: the directory goes away on the next line.
+  _fan_work="$(fan_work_over_dir "$_fan_dir" "$SUITE_JOBS")"
   rm -rf "$_fan_dir"
   echo ""
   if [ -n "$_fan_missing" ]; then
@@ -2097,6 +2190,11 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   _fan_elapsed=$SECONDS
   suite_cpu_read; _fan_cpu="$SUITE_CPU_SECONDS"
   suite_headroom_report "$_fan_elapsed" "$_fan_cpu" "$SUITE_TIMEOUT" || _fan_rc=1
+  # And how much WORK the shards did between them, which is the quantity the line above divides by
+  # the shard count and therefore cannot see grow (claude-config#492). A shard that emitted no
+  # SUITE-WORK line makes the whole total unreadable rather than smaller: adding in a silent shard
+  # as a zero would report a suite that had shrunk by however much that shard cost (L90, L98).
+  suite_work_report "$_fan_work" "$SUITE_TIMEOUT" "$_fan_cpu" || _fan_rc=1
   # The headline: every section once (#146). The sum of the shards' own totals is still worked out
   # above, and it is used here as a SECOND reading of the same run: the raw sum has to be the
   # headline plus everything that was run over again. The two are arrived at differently, one from
@@ -14158,6 +14256,120 @@ if [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
 else
   check "#152 the stall bound was deliberately disabled for this run" "[ '$SUITE_STALL_TIMEOUT' -eq 0 ]"
 fi
+
+section "== how much WORK this run is, against a budget that scales with its ceiling (claude-config#492) =="
+# The headroom report beside this one measures WALL CLOCK, because that is what runs out against
+# the deadline. That is the right quantity for the deadline and the wrong one for growth: the
+# fan-out divides wall clock by the shard count, so adding sections shows up at a quarter or a half
+# of its real size, and the number that actually grows is hidden by the mechanism that makes the
+# run fast. The two are different quantities and both are worth having; this one must not be read
+# as a second opinion on the deadline (L428).
+#
+# WHAT WAS MEASURED, 2026-09-19, and why this exists at all. Two readings of a full local run,
+# within one percent of each other: 199.9s and 197.9s of wall clock, against 597s of processor
+# time across four shards on a twelve core Mac. So the suite is bound by its own work and not by
+# waiting. CI has TWO cores, read from the runner rather than assumed, which puts a floor near 300s
+# of wall clock on 597s of work before CI's slower cores are counted: more shards cannot help, and
+# nobody should spend another afternoon discovering that (L308).
+#
+# The section time itself: 463s on 2026-08-29, 759s on 2026-09-19. It grew 64% in three weeks and
+# the only thing watching was a wall clock guard that sharding had diluted. That is what this
+# closes.
+#
+# The budget is a FRACTION OF THE CEILING that machine is given rather than a number of seconds, so
+# a slower machine with a larger SUITE_TIMEOUT is not judged against a threshold calibrated on a
+# fast one (L376). At the CI ceiling of 1800 the budget is 1260s against a measured 980s, which is
+# room for 28% more work before it speaks, and it speaks well before the wall clock guard, which
+# needs 1800s of section time to reach its 900s of wall.
+#
+# Its own fixture: sections are dealt to parallel workers by measured time, so one that reads a
+# neighbour's variable passes until the day the deal changes.
+_wb(){ suite_work_report "$1" "$2" "${3-2000}" 2>&1; }
+
+# Under budget says NOTHING. A report printed on every run is one nobody reads (L36), and this one
+# has to stay quiet on the ordinary day or it stops being a signal.
+_wb_quiet="$(_wb 500 3600)"; _wb_quiet_rc=$?
+check "#492 a run inside its work budget says nothing" "[ -z \"\$_wb_quiet\" ]"
+check "#492 and does not fail"                        "[ '$_wb_quiet_rc' -eq 0 ]"
+
+# Over budget FAILS, and the prefix is load bearing: run-all-tests.sh prints only the lines of a
+# suite's output matching FAIL or not ok, so a refusal without it exits non-zero with no cause
+# anywhere in the log. That cost three CI cycles on 2026-09-19 for the guard beside this one, and
+# the lesson is not learned twice by writing it again (L199).
+_wb_over="$(_wb 3000 3600)"; _wb_over_rc=$?
+check "#492 a run past its work budget fails"    "[ '$_wb_over_rc' -eq 1 ]"
+check "#492 and says so where the runner prints it" "case \"\$_wb_over\" in FAIL:*) true ;; *) false ;; esac"
+check "#492 and names what it measured and what it is allowed" \
+  "line_has \"\$_wb_over\" '3000' '2520'"
+# A remedy that names an action which changes the state the reader is stuck in (L111). "It got
+# slower" is not one.
+check "#492 and names something to do about it" \
+  "case \"\$_wb_over\" in *SUITE_WORK_BUDGET_PCT*) true ;; *) false ;; esac"
+
+# THE BUDGET SCALES WITH THE CEILING. The same amount of work is fine under a big ceiling and
+# refused under a small one, which is what stops this being a number calibrated on one machine and
+# wrong on every other (L376).
+_wb_small="$(_wb 1000 1200)"; _wb_small_rc=$?
+check "#492 the same work is refused under a smaller ceiling" "[ '$_wb_small_rc' -eq 1 ]"
+_wb_big="$(_wb 1000 7200)"; _wb_big_rc=$?
+check "#492 and accepted under a larger one"                  "[ '$_wb_big_rc' -eq 0 ]"
+
+# The percentage is a knob, and setting it is what a deliberate change to the budget looks like.
+_wb_pct="$(SUITE_WORK_BUDGET_PCT=10 _wb 500 3600)"; _wb_pct_rc=$?
+check "#492 the fraction can be set, and a tighter one refuses work that passed before" \
+  "[ '$_wb_pct_rc' -eq 1 ]"
+
+# A sum it could NOT read must never be treated as zero: zero clears every budget there is, so a
+# broken reader would be indistinguishable from a suite that costs nothing (L90, L98). Said out
+# loud, the same rule the processor time reader beside it follows.
+_wb_blank="$(_wb '' 3600)"; _wb_blank_rc=$?
+check "#492 an unreadable work total is not read as zero"  "[ -n \"\$_wb_blank\" ]"
+check "#492 and it says the budget was not checked"        "[ '$_wb_blank_rc' -eq 0 ]"
+check "#492 and it does not claim a clean result"          "case \"\$_wb_blank\" in FAIL:*) false ;; *) true ;; esac"
+# A ceiling of zero turns the deadline off, and it has to turn this off with it rather than
+# refusing every run against a budget of nothing.
+_wb_off="$(_wb 5000 0)"; _wb_off_rc=$?
+check "#492 a ceiling of zero turns the budget off too" "[ '$_wb_off_rc' -eq 0 ] && [ -z \"\$_wb_off\" ]"
+
+# A BUSY MACHINE MUST NOT READ AS A SUITE THAT GREW. Section times are wall clock, so they inflate
+# when something else is using the machine: measured 2026-09-19, the same tree gave 759s of section
+# time on an idle Mac and 892s while a profile ran beside it, an 18% swing with nothing changed in
+# it. A budget
+# that fired on that would be reporting the machine, and "find what got slower" is not an action
+# anybody can take on it (L112, L11). So the processor time decides WHICH of the two is happening,
+# exactly as it does for the wall clock guard beside this one, and the two are worded differently
+# so a reader can tell which they are looking at.
+_wb_busy="$(_wb 3000 3600 100)"; _wb_busy_rc=$?
+check "#492 work that the processor time says was not the suite's own does not fail" \
+  "[ '$_wb_busy_rc' -eq 0 ]"
+check "#492 but it is still said out loud"      "[ -n \"\$_wb_busy\" ]"
+check "#492 and it is not dressed as a failure" "case \"\$_wb_busy\" in FAIL:*) false ;; *) true ;; esac"
+check "#492 and it names the machine rather than the suite" \
+  "case \"\$_wb_busy\" in *busy*) true ;; *) false ;; esac"
+# And the positive control in the SAME shape, or the check above is satisfied by a fixture in which
+# nothing could have failed anyway (L159): the same work, with the processor time saying it really
+# was the suite's own, still fails.
+_wb_own="$(_wb 3000 3600 2000)"; _wb_own_rc=$?
+check "#492 the same work with the processor time behind it still fails" "[ '$_wb_own_rc' -eq 1 ]"
+# An unreadable processor time must not silently turn the budget off, and must not fail either: it
+# reports that it could not tell the two apart (L98).
+_wb_nocpu="$(_wb 3000 3600 '')"; _wb_nocpu_rc=$?
+check "#492 an unreadable processor time is said, not assumed" "[ -n \"\$_wb_nocpu\" ]"
+check "#492 and it does not fail on a reading it could not attribute" "[ '$_wb_nocpu_rc' -eq 0 ]"
+
+# BUILT IS NOT WIRED (L3). The function above is only worth having if a real run actually emits a
+# total for it to judge, so a filtered run is driven and its machine readable line read back.
+_wb_run="$(SECTION_UNTIL=push SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+_wb_line="$(printf '%s\n' "$_wb_run" | awk '/^SUITE-WORK /{print; exit}')"
+check "#492 a real run emits a machine readable work total" "[ -n \"\$_wb_line\" ]"
+check "#492 and it carries both the seconds and the section count" \
+  "line_has \"\$_wb_line\" 'seconds=[0-9]+' 'sections=[0-9]+'"
+# And that the number is a MEASUREMENT rather than a zero that would satisfy every check above
+# without anything having been timed (L98).
+_wb_secs="${_wb_line#*seconds=}"; _wb_secs="${_wb_secs%% *}"
+case "$_wb_secs" in ''|*[!0-9]*) _wb_secs=-1 ;; esac
+check "#492 and the section count it reports is real" \
+  "[ \"\$_wb_secs\" -ge 0 ]"
 
 section "== the end-of-run headroom report, watched saying each thing it can say (#167) =="
 # #161 changed what the end of a full run judges: the ceiling bounds WALL CLOCK, so that is what
