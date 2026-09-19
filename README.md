@@ -739,9 +739,17 @@ cannot disagree, and the notice names the same `kill -9` line (or sends you to s
 longer than fifty pids). It is said once per stretch in each session, and a stretch ends only after
 `SYNC_SUITE_PILE_REARM` (default `600`) seconds of no pile, so suites flickering across the breadth
 limit are one notice. It reads the process table and nothing else, and says nothing on any error.
-Measured 2026-09-19 on this Mac: about 58ms per prompt. A suite that arms `hooks/lib/suite-deadline.sh`, as `test-run-all-tests.sh` does,
-bounds its own wall clock however it was started, and whatever it started is killed if it is
-stopped from outside.
+Measured 2026-09-19 on this Mac: about 58ms per prompt.
+
+Every suite in this repo arms `hooks/lib/suite-deadline.sh`, so it bounds its own wall clock however
+it was started, and whatever it started is killed if it is stopped from outside. The limit is
+`SUITE_WALL_DEFAULT`, one number for every suite, derived and dated in DESIGN.md's measured numbers
+table from the slowest suite that takes it, and overridden for one run by `SUITE_WALL_TIMEOUT`,
+which set to 0 turns the deadline off. `tests/test-claude-sync.sh` is the one suite with a limit of
+its own, its `SUITE_TIMEOUT` plus a margin, because a healthy run of it on a loaded Mac outlasts the
+shared default. A suite that does not arm it is a failure in `test-suite-deadline.sh`, which scans
+the suites the runner runs, so the next suite added cannot quietly have no bound
+(claude-config#465).
 
 ## Branches and agent worktrees that already shipped
 

@@ -18,6 +18,14 @@
 # can only confirm that lookup is self consistent.
 set -uo pipefail
 
+# Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+suite_deadline_arm || exit $?
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAYLOAD_DIR="$(cd "$DIR/.." && pwd)"
 REPO="$(cd "$PAYLOAD_DIR/.." && pwd)"
@@ -52,6 +60,13 @@ check() { # check <description> <result>   ("ok" passes, anything else is the fa
 }
 want() { # want <description> <expected> <actual>
   if [ "$2" = "$3" ]; then check "$1" ok; else check "$1" "wanted '$2', got '$3'"; fi
+}
+# A copy of a suite arms its own deadline like the original does, and refuses to run without the
+# helper (claude-config#465), so every fixture holding a copy carries the helper beside it.
+plant_deadline_lib() {   # plant_deadline_lib <the fixture's hooks directory>
+  mkdir -p "$1/lib"
+  cp "$DIR/lib/suite-deadline.sh" "$1/lib/suite-deadline.sh"
+  cp "$DIR/lib/kill-tree.sh" "$1/lib/kill-tree.sh"
 }
 
 [ -f "$LIB" ] || { echo "FAIL: no shared predicate at $LIB, so the rule is still written twice"; echo "passed: 0, failed: 1"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
@@ -141,6 +156,7 @@ want "claude-sync holds no second length-against-the-cap test" "" "$stray"
 # would read exactly like a run that found nothing over the cap (L98).
 NOLIB="$WORK/nolib"; mkdir -p "$NOLIB/hooks/lib"
 cp "$BUDGET" "$NOLIB/hooks/test-rule-file-budget.sh"
+plant_deadline_lib "$NOLIB/hooks"
 out="$(bash "$NOLIB/hooks/test-rule-file-budget.sh" 2>&1 || true)"
 # Matched with `case` over a variable, never piped into `grep -q`: under pipefail a short
 # circuiting consumer kills its producer and the pipeline reports a failure that never happened
@@ -164,6 +180,7 @@ mkdir -p "$FHOME/hooks" "$FREPO/payload"
 echo '{"hooks":{}}' > "$FHOME/settings.json"
 printf '# rules\n@LESSONS-INDEX.md\n' > "$FHOME/CLAUDE.md"
 cp "$BUDGET" "$FHOME/hooks/test-rule-file-budget.sh"
+plant_deadline_lib "$FHOME/hooks"
 {
   printf '# Lessons\n\n## Proof over green\n\n'
   printf -- '- **L901. short enough to render inside the cap.** body\n'
@@ -191,6 +208,7 @@ cp "$LIB" "$BP/hooks/lib/lesson-index-cap.sh"
 cp "$IDX" "$BP/LESSONS-INDEX.md"
 printf '# rules\n@LESSONS-INDEX.md\n' > "$BP/CLAUDE.md"
 cp "$BUDGET" "$BP/hooks/test-rule-file-budget.sh"
+plant_deadline_lib "$BP/hooks"
 budgetout="$(bash "$BP/hooks/test-rule-file-budget.sh" 2>&1 || true)"
 budget_over="$(printf '%s\n' "$budgetout" | sed -n 's/^FAIL: \([0-9]*\) of \([0-9]*\) lessons render an index line longer.*/\1/p')"
 budget_entries="$(printf '%s\n' "$budgetout" | sed -n 's/^FAIL: \([0-9]*\) of \([0-9]*\) lessons render an index line longer.*/\2/p')"

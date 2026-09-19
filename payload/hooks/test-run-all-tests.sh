@@ -31,7 +31,7 @@ if [ ! -f "$DIR/lib/suite-deadline.sh" ]; then
   exit 1
 fi
 . "$DIR/lib/suite-deadline.sh"
-suite_deadline_arm 1200 || exit $?
+suite_deadline_arm || exit $?
 
 pass=0
 fail=0
