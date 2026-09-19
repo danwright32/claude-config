@@ -297,7 +297,8 @@ deferral.
 
 The AI review runs on the developer's own Claude subscription, so it costs usage allowance rather
 than money. Its cap on what it sends (300 KB) skipped none of Slate's last 200 pushes; its
-deadline is 240 seconds and a real review measured 130 to 193 seconds with `sonnet`.
+deadline is 240 seconds and a real review measured 130 to 193 seconds with `sonnet` on
+2026-09-18.
 
 ## Lesson numbers
 

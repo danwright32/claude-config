@@ -27,8 +27,9 @@ want_has(){ case "$3" in *"$2"*) ok ;; *) bad "$1: expected to contain [$2], got
 want_lacks(){ case "$3" in *"$2"*) bad "$1: must not contain [$2], got: $3" ;; *) ok ;; esac; }
 
 # ---------------------------------------------------------------------------------------------
-# The review's real lines, lifted from Slate main fc7397d7. Long enough to clear the 100 character
-# line floor on their own; the block fixture clears the 160 character window floor.
+# The review's real lines, lifted from Slate main fc7397d7. Each is long enough on its own to clear
+# the detector's single line floor (100 characters, a value the code sets, not measured); the block
+# fixture clears the two line window floor (160 characters, likewise set).
 # ---------------------------------------------------------------------------------------------
 BOOKER_A='className={`inline-flex min-h-12 items-center justify-center rounded-lg border px-5 text-sm font-semibold disabled:opacity-60 ${c.toggleBorder} ${c.body} ${c.navHover}`}'
 # The same class string with a DIFFERENT variable appended: the blanked interpolation is what

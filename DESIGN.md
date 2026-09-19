@@ -788,7 +788,7 @@ the margin cannot creep the budget up one push at a time.
 
 ### The advisory review is detached, and reads whole files
 
-A review through `claude -p` measured 130 to 193 seconds. Run inside the push hook that is a two
+A review through `claude -p` measured 130 to 193 seconds on 2026-09-18. Run inside the push hook that is a two
 to three minute wait on every push, which is the wait Dan refused; run as a blocking gate it
 teaches people to set the skip variable. So the PostToolUse hook writes a pending marker, starts
 the runner in its own process group and returns; a UserPromptSubmit hook prints the finished

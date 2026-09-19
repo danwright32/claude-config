@@ -43,8 +43,8 @@ mk_repo(){
   printf '%s' "$root/work"
 }
 
-# Write a chunk of $3 incompressible bytes at $1/$2, stamped $4 seconds AFTER (or, negative,
-# before) HEAD's commit time, so freshness never depends on how fast this suite runs.
+# Write a chunk of $3 incompressible bytes at $1/$2, with its mtime set $4 ahead of (or, when
+# negative, behind) HEAD's commit time, in whole seconds, so freshness never depends on how fast this suite runs.
 chunk(){  # repo relpath bytes offset
   local repo="$1" rel="$2" bytes="$3" offset="$4" head_time
   head_time="$(git -C "$repo" log -1 --format=%ct)"
