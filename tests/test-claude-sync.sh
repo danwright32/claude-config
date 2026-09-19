@@ -7627,8 +7627,21 @@ check "#445 and no integer comparison choked on it" \
 _scru_out="$(SYNC_SCRATCH_ROOT="$_SCRU" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"
 check "#445 reap-scratch reports the total as ONE number on one line" \
   "grep -qE 'holding [0-9]+ MB under ' <<< \"\$_scru_out\""
-check "#445 and no integer comparison choked on it" \
+check "#445 and reap-scratch's own comparison did not choke either" \
   "! grep -q 'integer expression expected' <<< \"\$_scru_out\""
+# The directory holding the unreadable entry cannot be removed either, and the reap used to size
+# the whole LIST before removing anything, so it said "reclaimed 1 ... holding 3 MB" while the
+# 2 MB item sat there untouched, named only by a bare `rm` complaint (L11, L47). The size is now
+# of what was actually removed, and the item left behind is named with the reason.
+check "#445 the control: the item rm cannot delete is still there" \
+  "[ -d '$_SCRU/claude-sync/claude-sync-suite-work.UNREADA' ]"
+check "#445 the reap counts only what it removed" "grep -q 'reclaimed 1 abandoned' <<< \"\$_scru_out\""
+check "#445 and sizes only what it removed, leaving out the 2 MB it could not" \
+  "grep -q 'holding 1 MB under ' <<< \"\$_scru_out\""
+check "#445 and names the item it could not remove" \
+  "grep -qE 'could not remove .*claude-sync-suite-work\.UNREADA' <<< \"\$_scru_out\""
+check "#445 and says how many it could not remove" \
+  "grep -q 'could not remove 1 of ' <<< \"\$_scru_out\""
 # Put back so the workspace can be removed at the end of the run.
 chmod 755 "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA/locked" 2>/dev/null || true
 
