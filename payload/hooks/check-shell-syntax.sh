@@ -73,7 +73,15 @@ while IFS= read -r f; do
   case "$f" in
     *.sh) ;;
     *)
-      head -n 1 "$f" 2>/dev/null | grep -qE '^#!.*(\bbash\b|/bin/sh|\bsh\b)' || continue ;;
+      # Read into a variable and matched with `case`, never piped into a short circuiting consumer:
+      # under pipefail a `grep -q` that exits on its first match kills the producer feeding it, and
+      # the pipeline then reports a failure that never happened (L183). test-pipefail-shortcircuit.sh
+      # is the guard that catches this shape, and it caught this line.
+      _first="$(head -n 1 "$f" 2>/dev/null || true)"
+      case "$_first" in
+        '#!'*bash*|'#!'*/sh|'#!'*/sh\ *|'#!'*env\ sh) ;;
+        *) continue ;;
+      esac ;;
   esac
   n=$((n + 1))
   if ! out="$(bash -n "$f" 2>&1)"; then

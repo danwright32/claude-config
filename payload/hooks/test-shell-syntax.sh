@@ -173,7 +173,10 @@ out_real="$(bash "$CHECK" "$ROOT" 2>&1)"; code_real=$?
   || check "every shell file in this repository parses" "exit=$code_real out=$out_real"
 # And that it actually found them. A sweep reporting a handful when the repository holds well over
 # a hundred has lost its way to most of the tree and would still be green (L98).
-real_n="$(grep -oE '[0-9]+' <<< "$out_real" | head -1)"
+# Taken by parameter expansion rather than a pipeline, for the reason the guard beside this one
+# states: a short circuiting consumer under pipefail kills its producer (L183).
+real_n="${out_real#*check-shell-syntax: }"
+real_n="${real_n%% *}"
 case "$real_n" in ''|*[!0-9]*) real_n=0 ;; esac
 [ "$real_n" -gt 100 ] \
   && check "and it reached the whole tree rather than a corner of it" ok \
