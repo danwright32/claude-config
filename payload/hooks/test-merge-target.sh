@@ -287,6 +287,44 @@ eq "$(mt_repo_flag "gh pr view 26 --repo someone/else && $MERGE 26 -R danwright3
 eq "$(mt_repo_flag "$MERGE 26 --squash")" "" "no flag answers empty"
 eq "$(mt_repo_flag "echo \"$MERGE 26 --repo a/b\"")" "" "a merge quoted inside an echo names no repository"
 
+echo "merge-target: a pull request given as a link (#470)"
+
+# gh accepts the pull request as a URL, and takes BOTH the repository and the number from it.
+# Measured 2026-09-19: gh pr view https://github.com/cli/cli/pull/1 --repo danwright32/claude-config
+# answered about cli/cli#1, so the link wins over the flag rather than the other way round. A gate
+# reading only a bare number saw neither, asked gh about the session's folder and refused a pull
+# request that was there all along (claude-config#470).
+eq "$(mt_pr_number "$MERGE https://github.com/danwright32/backstage/pull/26 --squash")" "26" "a link names its number"
+eq "$(mt_repo_flag "$MERGE https://github.com/danwright32/backstage/pull/26 --squash")" "danwright32/backstage" "a link names its repository"
+# A link copied from a pull request's own tabs carries a path after the number.
+eq "$(mt_pr_number "$MERGE https://github.com/danwright32/backstage/pull/26/files")" "26" "a link with a trailing path names its number"
+eq "$(mt_repo_flag "$MERGE https://github.com/danwright32/backstage/pull/26/files")" "danwright32/backstage" "a link with a trailing path names its repository"
+eq "$(mt_pr_number "$MERGE https://github.com/danwright32/backstage/pull/26/")" "26" "a trailing slash names its number"
+# The link wins over a --repo beside it, because that is what gh does with the two together.
+eq "$(mt_repo_flag "$MERGE https://github.com/danwright32/backstage/pull/26 --repo someone/else")" "danwright32/backstage" "a link beats a --repo beside it"
+# And a link is still a command, not a payload: one quoted inside an echo names nothing.
+eq "$(mt_pr_number "echo \"$MERGE https://github.com/a/b/pull/9\"")" "" "a link quoted inside an echo names no number"
+eq "$(mt_repo_flag "echo \"$MERGE https://github.com/a/b/pull/9\"")" "" "a link quoted inside an echo names no repository"
+# A host other than github.com is kept whole, so it can never compare equal to a github remote.
+eq "$(mt_repo_flag "$MERGE https://git.example.com/a/b/pull/9")" "git.example.com/a/b" "another host is kept whole"
+
+echo "merge-target: where a gate looked for the pull request (#470)"
+
+# One vocabulary for every gate that has to say where it looked, so a pull request looked for in
+# the wrong repository reads the same whichever gate reports it (L11, L605). block-red-merge.sh
+# wrote these sentences inline; a second gate needing them is a second copy that drifts (L613).
+eq "$(mt_searched_repo "other/repo" "acme/widget" "/tmp/x")" "other/repo" "the command's own repository is what was searched"
+eq "$(mt_searched_repo "" "acme/widget" "/tmp/x")" "acme/widget" "with no repository named, the directory's"
+eq "$(mt_searched_repo "" "" "/tmp/x")" "the repository gh resolves from /tmp/x" "with neither, gh's own resolution"
+if [ -n "$(mt_searched_why "other/repo" "acme/widget" "/tmp/x")" ]; then pass; else
+  fail "the reason the named repository was searched is empty"; fi
+case "$(mt_searched_why "" "acme/widget" "/tmp/x")" in
+  *"/tmp/x"*) pass ;;
+  *) fail "the reason the directory's repository was searched does not name the directory" ;;
+esac
+eq "$(mt_pr_label "26")" "pull request #26" "a numbered pull request"
+eq "$(mt_pr_label "")" "pull request for the current branch" "no number named"
+
 echo "merge-target: the checkout under a project directory (#344)"
 
 # The walk that finds a checkout from a directory is the SAME question the issue

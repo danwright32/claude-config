@@ -11,8 +11,12 @@
 #   mt_runs_merge    does it cause one by any route, a repo's own tool included
 #   MT_MERGE_TOOLS   the one declaration of those tools, and the helpers
 #                      mt_pinned_tool / mt_pinned_how that read it
-#   mt_repo_flag     the repository the merge names with --repo or -R, which
-#                      gh takes before anything about the directory
+#   mt_repo_flag     the repository the merge names with --repo, -R or a pull
+#                      request link, which gh takes before anything about the
+#                      directory
+#   mt_searched_repo / mt_searched_why / mt_pr_label
+#                    what a gate says about where it looked and what it looked
+#                      for, in one vocabulary rather than one per gate
 #   mt_repo_dir      which directory the merge will run in, which is not
 #                      necessarily the session cwd
 #   mt_checkout_dir  the checkout a directory belongs to, which is the part of
@@ -312,9 +316,8 @@ mt_runs_merge() {  # $1 = command
 mt_pr_number() {  # $1 = command
   local direct seg first second third rest prev tok target
   local -a MT_TOKENS
-  direct="$(mt_strip_heredocs "$1" \
-    | grep -oE 'gh pr me''rge[[:space:]]+(--[^[:space:]]+[[:space:]]+)*([0-9]+)' \
-    | grep -oE '[0-9]+$' | awk 'NR <= 1')"
+  direct="$(mt__merge_selector "$1")"
+  direct="${direct#*$'\t'}"
   [ -n "$direct" ] && { printf '%s' "$direct"; return; }
 
   # A wrapper takes the number as its FIRST POSITIONAL argument, and reading it beats
@@ -393,39 +396,53 @@ mt_repo_dir() {  # $1 = command, $2 = session cwd
   mt_checkout_dir "$d"
 }
 
-# The repository the merge NAMES, from the gh merge invocation's own --repo or -R,
-# as owner/name; empty when it names none (claude-config#463).
+# WHICH pull request, and in WHICH repository, the gh merge invocation itself names. One
+# reading, because gh takes both from that one command and a gate that reads either without
+# the other asks one repository about another repository's pull request (claude-config#470).
 #
-# gh takes the repository from this flag before anything about the directory it
-# runs in, so a gate asking gh about the directory is asking about a different
-# repository whenever the two differ. Measured 2026-09-19 merging
-# danwright32/backstage#26 from an Ovation session: refused as "gh returned
-# nothing", because Ovation has no pull request 26.
+# Prints "<repository>\t<number>", either side empty when the command does not name it.
 #
-# Only the flag on the merge itself counts: a `gh pr view --repo x` earlier in the
-# same command is about that view. Read with a shell tokenizer, in command
-# position only, so a merge quoted inside an echo names nothing, and the walk
-# stops at the first token it cannot read, as ps_cd_target's does.
+# gh takes the repository from --repo or -R before anything about the directory it runs in,
+# so a gate asking gh about the directory is asking about a different repository whenever the
+# two differ. Measured 2026-09-19 merging danwright32/backstage#26 from an Ovation session:
+# refused as "gh returned nothing", because Ovation has no pull request 26.
 #
-# The spellings gh accepts for one repository (owner/name, github.com/owner/name,
-# a URL, a trailing .git) come back as one. A host other than github.com is kept
-# whole, so it can never compare equal to a github.com remote and is refused
-# downstream rather than read as one.
-mt_repo_flag() {  # $1 = command ; prints owner/name, or nothing
-  MT_CMD="$1" python3 -c '
+# A pull request given as a LINK names both, and the link wins over a --repo beside it, which
+# is what gh does with the two together: measured 2026-09-19, gh pr view with the cli/cli
+# link and --repo danwright32/claude-config answered about cli/cli.
+#
+# Only the merge's own arguments count: a `gh pr view --repo x` earlier in the same command is
+# about that view. Read with a shell tokenizer, in command position only, so a merge quoted
+# inside an echo names nothing, and the walk stops at the first token it cannot read, as
+# ps_cd_target's does. Heredoc bodies are removed first, so prose about merging names nothing
+# and a real merge written after a heredoc is still read (L673).
+#
+# The spellings gh accepts for one repository (owner/name, github.com/owner/name, a URL, a
+# trailing .git) come back as one. A host other than github.com is kept whole, so it can never
+# compare equal to a github.com remote and is refused downstream rather than read as one.
+mt__merge_selector() {  # $1 = command
+  MT_CMD="$(mt_strip_heredocs "$1")" python3 -c '
 import os, re, shlex
-lex = shlex.shlex(os.environ.get("MT_CMD", ""), posix=True, punctuation_chars=True)
+cmd = os.environ.get("MT_CMD", "")
+# A newline starts a new command the way a semicolon does, and a backslash before one does not.
+# shlex reads both as ordinary whitespace, so they are rewritten before it sees them.
+cmd = cmd.replace("\\\n", " ").replace("\n", " ; ")
+lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
 lex.whitespace_split = True
 OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
 ENDERS = OPENERS | {")", "}"}
 ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# The flags gh pr merge takes a VALUE for. A value is neither a flag nor the pull request, so
+# without this list a commit sha or a message would be read as the thing being merged.
+VALUED = {"--repo", "-R", "--body", "-b", "--body-file", "-F", "--subject", "-t",
+          "--match-head-commit", "--author-email", "-A"}
+LINK = re.compile(r"^(?:[a-z]+://)?([^/\s]+[.][^/\s]+)/([^/\s]+)/([^/\s]+)/pull/([0-9]+)(?:[/?#].*)?$")
 def norm(v):
     v = re.sub(r"^[a-z]+://", "", v.strip())
     v = re.sub(r"[.]git$", "", v.rstrip("/"))
     if v.lower().startswith("github.com/"):
         v = v[len("github.com/"):]
-    print(v, end="")
-    raise SystemExit
+    return v
 toks = []
 while True:
     try:
@@ -435,6 +452,7 @@ while True:
     if t is None or t == lex.eof:
         break
     toks.append(t)
+repo, link_repo, number = "", "", ""
 at_start, i, n = True, 0, len(toks)
 while i < n:
     t = toks[i]
@@ -446,16 +464,68 @@ while i < n:
         while j < n and toks[j] not in ENDERS:
             a = toks[j]
             if a in ("--repo", "-R") and j + 1 < n and toks[j + 1] not in ENDERS:
-                norm(toks[j + 1])
+                repo = repo or norm(toks[j + 1])
+                j += 2
+                continue
             if a.startswith("--repo="):
-                norm(a[len("--repo="):])
-            if a.startswith("-R") and len(a) > 2:
-                norm(a[2:])
+                repo = repo or norm(a[len("--repo="):])
+            elif a.startswith("-R") and len(a) > 2:
+                repo = repo or norm(a[2:])
+            elif a in VALUED:
+                j += 2
+                continue
+            elif a.startswith("-"):
+                pass
+            else:
+                m = LINK.match(a)
+                if m and not link_repo:
+                    host, owner, name = m.group(1), m.group(2), re.sub(r"[.]git$", "", m.group(3))
+                    link_repo = owner + "/" + name
+                    if host.lower() != "github.com":
+                        link_repo = host + "/" + link_repo
+                    number = number or m.group(4)
+                elif a.isdigit() and not number:
+                    number = a
             j += 1
-        raise SystemExit
+        break
     at_start = t in OPENERS
     i += 1
+print((link_repo or repo) + "\t" + number, end="")
 ' 2>/dev/null
+}
+
+# The repository the merge NAMES, as owner/name; empty when it names none (claude-config#463,
+# #470). The flag or the link, read by mt__merge_selector above, which holds the reasoning.
+mt_repo_flag() {  # $1 = command ; prints owner/name, or nothing
+  local sel
+  sel="$(mt__merge_selector "$1")"
+  printf '%s' "${sel%%$'\t'*}"
+}
+
+# WHERE a gate looked for the pull request, and WHY it looked there, as one vocabulary for
+# every gate that has to report finding nothing (L11, L605). Written inline in
+# block-red-merge.sh first; a second gate needing the same sentence is a second copy that
+# drifts, with each suite passing its own (L613, L370).
+mt_searched_repo() {  # $1 = the repository the command names, $2 = the directory's slug, $3 = the directory
+  if [ -n "$1" ]; then printf '%s' "$1"
+  elif [ -n "$2" ]; then printf '%s' "$2"
+  else printf 'the repository gh resolves from %s' "$3"
+  fi
+}
+
+mt_searched_why() {  # the same arguments
+  if [ -n "$1" ]; then printf 'the command names it'
+  elif [ -n "$2" ]; then printf 'that is the repository of %s, where this merge runs' "$3"
+  else printf 'that is where this merge runs'
+  fi
+}
+
+# What to call the pull request in a message: no number named means gh resolves it from the
+# current branch, which is a different thing to say than a number nobody could find.
+mt_pr_label() {  # $1 = pr number or empty
+  if [ -n "$1" ]; then printf 'pull request #%s' "$1"
+  else printf 'pull request for the current branch'
+  fi
 }
 
 # The checkout a directory belongs to: the directory itself, else the first

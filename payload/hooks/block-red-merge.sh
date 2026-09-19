@@ -171,16 +171,12 @@ fi
 remote_slug="${repo_flag:-$local_slug}"
 
 # What the refusals below name as the place that was searched, and why it was that place, so a
-# pull request looked for in the wrong repository is visible as such (claude-config#463).
-if [ -n "$repo_flag" ]; then
-  searched="$repo_flag"; searched_why="the command names it with --repo"
-elif [ -n "$remote_slug" ]; then
-  searched="$remote_slug"; searched_why="that is the repository of $PWD, where this merge runs"
-else
-  searched="the repository gh resolves from $PWD"; searched_why="that is where this merge runs"
-fi
-pr_label="pull request #$pr"
-[ -n "$pr" ] || pr_label="pull request for the current branch"
+# pull request looked for in the wrong repository is visible as such (claude-config#463). The
+# sentences are the library's, shared with the changelog gate, which has the same thing to say
+# and would otherwise say it differently (claude-config#470, L613).
+searched="$(mt_searched_repo "$repo_flag" "$remote_slug" "$PWD")"
+searched_why="$(mt_searched_why "$repo_flag" "$remote_slug" "$PWD")"
+pr_label="$(mt_pr_label "$pr")"
 
 # headRefOid comes from the SAME call as the verdict, deliberately: the commit the merge is
 # pinned to has to be the commit these checks were read for, and a second lookup could answer

@@ -318,6 +318,144 @@ out=$(run_hook "$dir" "venv/bin/python tools/wait_for_checks.py 7 --merge")
 if denied "$out"; then fail "a correctly tagged PR was blocked on the wrapper route: $out"; else pass; fi
 rm -rf "$dir"
 
+echo "changelog record: the repository the merge names, not the session's folder (#470)"
+
+# The gate asked gh about the folder the session sits in whatever the merge named, so a merge
+# carrying --repo, or a pull request given as a link, was answered about a repository holding no
+# such pull request: the record was read from the wrong place, or not at all, and the refusal was
+# the generic "gh returned nothing" that sends somebody to the override (L11, L36). block-red-merge
+# was taught to resolve this in claude-config#463; this gate and the quiz were not.
+#
+# The fake gh resolves a repository the way the real one does: --repo or -R first, then the remote
+# of the directory it runs in. It answers a pull request only for a repository with a file under
+# prs/, and gh's own not found otherwise.
+make_repo_pair() {  # $1 = registry json ; prints a fixture dir holding repo/ and other/
+  local dir; dir=$(mktemp -d)
+  mkdir -p "$dir/repo" "$dir/other" "$dir/bin" "$dir/prs"
+  ( cd "$dir/repo" && git init -q && git remote add origin "https://github.com/acme/widget.git" )
+  ( cd "$dir/other" && git init -q && git remote add origin "https://github.com/other/repo.git" )
+  printf '%s' "$1" > "$dir/repos.json"
+  printf '%s' "$dir/repos.json" > "$dir/registry-path"
+  : > "$dir/pr.json"
+  cat > "$dir/bin/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALL_LOG"
+repo="" prev=""
+for a in "$@"; do
+  case "$prev" in --repo|-R) repo="$a" ;; esac
+  case "$a" in --repo=*) repo="${a#--repo=}" ;; esac
+  prev="$a"
+done
+[ -n "$repo" ] || repo=$(git config --get remote.origin.url 2>/dev/null | sed -E 's#^https://github.com/##; s#[.]git$##')
+case "$*" in
+  *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
+  *"auth token -u "*) printf 'tok\n' ;;
+  *"pr view"*)
+    f="$FIXTURE/prs/$(printf '%s' "$repo" | tr / _)"
+    if [ -f "$f" ]; then cat "$f"; exit 0; fi
+    echo "GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)" >&2
+    exit 1 ;;
+esac
+SH
+  chmod +x "$dir/bin/gh"
+  printf '%s' "$dir"
+}
+
+pair() {  # $1 = registry json ; sets dir, FIXTURE and GH_CALL_LOG
+  dir=$(make_repo_pair "$1")
+  FIXTURE="$dir"; GH_CALL_LOG="$dir/gh-calls.log"; export FIXTURE GH_CALL_LOG; : > "$GH_CALL_LOG"
+}
+asked_about() {  # $1 = a literal the gh call log must hold
+  case "$(cat "$GH_CALL_LOG")" in *"$1"*) return 0 ;; *) return 1 ;; esac
+}
+
+REG_ALL='{"repos":[{"name":"PET","repo":"acme/widget","changelogFrom":"2026-01-01"},
+  {"name":"Other","repo":"other/repo","changelogFrom":"2026-01-01"},
+  {"name":"Nowhere","repo":"nobody/there","changelogFrom":"2026-01-01"}]}'
+REG_OTHER_ONLY='{"repos":[{"name":"Other","repo":"other/repo","changelogFrom":"2026-01-01"}]}'
+REG_WIDGET_ONLY='{"repos":[{"name":"PET","repo":"acme/widget","changelogFrom":"2026-01-01"}]}'
+TAGGED_OTHER='{"number":7,"url":"https://github.com/other/repo/pull/7","author":{"login":"dwright-pennie"},"labels":[{"name":"changelog/visible"}],"body":"prose\n\n## Changelog\nThe board now says when Achieve is behind."}'
+UNTAGGED_OTHER='{"number":7,"url":"https://github.com/other/repo/pull/7","author":{"login":"dwright-pennie"},"labels":[{"name":"priority-p2"}],"body":"prose only"}'
+
+# The issue's own case: --repo names a repository other than the folder, and the record is read
+# from THAT repository. The folder's own pull request is untagged, so a gate still asking about the
+# folder refuses this merge.
+for form in "--repo other/repo" "-R other/repo" "--repo=other/repo"; do
+  pair "$REG_ALL"
+  printf '%s' "$TAGGED_OTHER" > "$dir/prs/other_repo"
+  printf '%s' "$UNTAGGED" > "$dir/prs/acme_widget"
+  out=$(run_hook "$dir" "$MERGE 7 $form --squash")
+  if denied "$out"; then fail "a tagged PR named by [$form] was refused: $out"; else pass; fi
+  if asked_about "pr view 7 --repo other/repo"; then pass; else
+    fail "[$form] did not make the gate ask gh about other/repo: $(cat "$GH_CALL_LOG")"
+  fi
+  rm -rf "$dir"
+done
+
+# Never loosened: an untagged pull request in the named repository is still refused, and the
+# refusal is the record's own, not a failure to find the pull request.
+pair "$REG_ALL"
+printf '%s' "$UNTAGGED_OTHER" > "$dir/prs/other_repo"
+printf '%s' "$TAGGED" > "$dir/prs/acme_widget"
+out=$(run_hook "$dir" "$MERGE 7 --repo other/repo --squash")
+if denied "$out"; then pass; else fail "an untagged PR named by --repo merged: $out"; fi
+if says "$out" "changelog/visible"; then pass; else
+  fail "the refusal for a named repository does not name the labels to choose from: $out"; fi
+rm -rf "$dir"
+
+# Scope follows the repository the merge is about, not the folder. A repository gated by the
+# registry is gated however the merge names it.
+pair "$REG_OTHER_ONLY"
+printf '%s' "$UNTAGGED_OTHER" > "$dir/prs/other_repo"
+printf '%s' "$TAGGED" > "$dir/prs/acme_widget"
+out=$(run_hook "$dir" "$MERGE 7 --repo other/repo --squash")
+if denied "$out"; then pass; else
+  fail "a gated repository named by --repo was read as out of scope, because the folder's repository is not listed: $out"; fi
+rm -rf "$dir"
+
+# And the other direction, so the case above is not satisfied by a gate that stopped reading the
+# registry at all (L159): a repository nobody listed still merges freely from a folder that IS
+# listed.
+pair "$REG_WIDGET_ONLY"
+printf '%s' "$UNTAGGED_OTHER" > "$dir/prs/other_repo"
+printf '%s' "$UNTAGGED" > "$dir/prs/acme_widget"
+out=$(run_hook "$dir" "$MERGE 7 --repo other/repo --squash")
+if denied "$out"; then
+  fail "a repository nobody gated was gated because the session's folder is listed: $out"; else pass; fi
+rm -rf "$dir"
+
+# NOT FOUND is its own refusal, naming the repository that was searched, rather than the generic
+# sentence about gh returning nothing, which is a different fault with a different remedy (L11).
+pair "$REG_ALL"
+printf '%s' "$TAGGED_OTHER" > "$dir/prs/other_repo"
+out=$(run_hook "$dir" "$MERGE 7 --repo nobody/there --squash")
+if denied "$out"; then pass; else fail "a pull request that does not exist merged: $out"; fi
+if says "$out" "no pull request #7 was found in nobody/there"; then pass; else
+  fail "the not found refusal does not say so, naming the repository searched: $out"; fi
+if says "$out" "returned nothing"; then
+  fail "the not found refusal reads as gh having failed to answer: $out"; else pass; fi
+rm -rf "$dir"
+
+# A pull request given as a link names both the repository and the number, which is what gh does
+# with it, so the record is read from there too.
+pair "$REG_ALL"
+printf '%s' "$TAGGED_OTHER" > "$dir/prs/other_repo"
+printf '%s' "$UNTAGGED" > "$dir/prs/acme_widget"
+out=$(run_hook "$dir" "$MERGE https://github.com/other/repo/pull/7 --squash")
+if denied "$out"; then fail "a tagged PR given as a link was refused: $out"; else pass; fi
+if asked_about "pr view 7 --repo other/repo"; then pass; else
+  fail "a link did not make the gate ask gh about other/repo pull request 7: $(cat "$GH_CALL_LOG")"; fi
+rm -rf "$dir"
+
+# And the link route is not a way past the record either.
+pair "$REG_ALL"
+printf '%s' "$UNTAGGED_OTHER" > "$dir/prs/other_repo"
+printf '%s' "$TAGGED" > "$dir/prs/acme_widget"
+out=$(run_hook "$dir" "$MERGE https://github.com/other/repo/pull/7 --squash")
+if denied "$out"; then pass; else fail "an untagged PR given as a link merged: $out"; fi
+rm -rf "$dir"
+unset FIXTURE GH_CALL_LOG
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
