@@ -23,6 +23,9 @@
 # untouched. That file is the registry the update itself already reads, so Slate
 # is added in one place rather than two.
 #
+# WHICH repo that is comes from the merge, resolved the way gh resolves it: its own --repo, -R
+# or pull request link first, then the directory it runs in (claude-config#470).
+#
 # Fails CLOSED where it can tell there is a problem, and stands down where it
 # genuinely has nothing to say. The three are deliberately different answers: a
 # missing registry means the update tooling is not installed here, an unreadable
@@ -87,9 +90,20 @@ command -v node >/dev/null 2>&1 || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
 cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)
+
+# WHICH repository, resolved the way gh itself resolves it: the merge's own --repo, -R or pull
+# request link first, then the directory the merge runs in (claude-config#463, #470).
+#
+# This gate asked gh about the session's folder whatever the merge named, exactly as
+# block-red-merge.sh did before #463. A merge carrying --repo from another project was answered
+# about a repository with no such pull request, so the record was refused as "gh returned
+# nothing", and the registry was read for the folder's repository rather than the one being
+# merged, which decides whether this gate applies at all.
+repo_flag="$(mt_repo_flag "$command")"
 cd "$(mt_repo_dir "$command" "$cwd")" 2>/dev/null || true
 
-slug=$(mt_remote_slug)
+local_slug=$(mt_remote_slug)
+slug="${repo_flag:-$local_slug}"
 
 # Is this repo gated, and does the registry even parse? A registry that exists
 # and cannot be read is NOT an opt out: it means the gate cannot tell, and
@@ -137,15 +151,28 @@ in_scope=$(printf '%s' "$scope" | jq -r '.inScope // false')
 
 pr=$(mt_pr_number "$command")
 
-envelope=$(mt_pr_view "$pr" "number,url,author,labels,body" "$slug")
+# The repository is passed to gh the same way the merge names it, so the question is about the
+# pull request being merged rather than about the folder the session sits in.
+envelope=$(mt_pr_view "$pr" "number,url,author,labels,body" "$slug" "$repo_flag")
 found=$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)
 
 if [ "$found" != "true" ]; then
+  searched="$(mt_searched_repo "$repo_flag" "$local_slug" "$PWD")"
+  searched_why="$(mt_searched_why "$repo_flag" "$local_slug" "$PWD")"
+  pr_label="$(mt_pr_label "$pr")"
   wrong=$(printf '%s' "$envelope" | jq -r '.wrongRepo // ""' 2>/dev/null)
   if [ -n "$wrong" ]; then
     deny "Refusing to merge: the only answer gh gave was about $wrong, not about $slug. Reading one pull request's changelog record while merging a different one records the wrong thing about both. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
   fi
-  deny "Cannot read this pull request's changelog record (gh pr view returned nothing under any logged-in account), so whether a manager would notice this change would go unrecorded. Check the pull request, then re-run with ALLOW_UNTAGGED_MERGE=1 if the record is genuinely there."
+  # NOT FOUND is not "the record could not be read" (L11). Every account answered that there is no
+  # such pull request there, so the fault is where it was looked for and the remedy is naming the
+  # right repository, not the override: offering the override for a pull request whose record is
+  # sitting in another repository teaches reaching for it (L36, claude-config#470).
+  if [ "$(printf '%s' "$envelope" | jq -r '.notFound // false' 2>/dev/null)" = "true" ]; then
+    deny "Refusing to merge: no $pr_label was found in $searched under any logged-in account, so there is no changelog record here to read. It was looked for there because $searched_why. If it lives in another repository, name that repository with --repo owner/name on the merge, or cd into its checkout before the merge."
+  fi
+  gh_error=$(printf '%s' "$envelope" | jq -r '.error // ""' 2>/dev/null)
+  deny "Cannot read this pull request's changelog record (gh pr view returned nothing for the $pr_label in $searched under any logged-in account${gh_error:+, $gh_error}), so whether a manager would notice this change would go unrecorded. Check the pull request, then re-run with ALLOW_UNTAGGED_MERGE=1 if the record is genuinely there."
 fi
 
 view=$(printf '%s' "$envelope" | jq -c '.view')

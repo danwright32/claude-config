@@ -529,6 +529,105 @@ absent "drops the old skip message"        'Nothing substantive shipped'
 absent "drops the old narrow skip list"    'only comments, docs, formatting'
 absent "drops the inconsequential test"    'If the change is inconsequential'
 
+# --- The label is read from the repository the merge is about (claude-config#470) ---
+#
+# The label gate asked gh about the folder the session sits in whatever the merge named, so a
+# merge carrying --repo, or a pull request given as a link, had its record read from another
+# repository entirely: the quiz was decided by a stranger's pull request, or by gh answering
+# nothing at all. block-red-merge.sh was taught to resolve this in claude-config#463.
+#
+# Its own fixture, with two repositories and a gh that resolves one the way the real one does:
+# --repo or -R first, then the remote of the directory it runs in. It answers a pull request only
+# for a repository with a file under prs/, and gh's own not found otherwise.
+PAIR="$(mktemp -d)"
+mkdir -p "$PAIR/repo" "$PAIR/other" "$PAIR/bin" "$PAIR/prs"
+( cd "$PAIR/repo" && git init -q && git remote add origin "https://github.com/acme/widget.git" )
+( cd "$PAIR/other" && git init -q && git remote add origin "https://github.com/other/repo.git" )
+cat > "$PAIR/bin/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALL_LOG"
+repo="" prev=""
+for a in "$@"; do
+  case "$prev" in --repo|-R) repo="$a" ;; esac
+  case "$a" in --repo=*) repo="${a#--repo=}" ;; esac
+  prev="$a"
+done
+[ -n "$repo" ] || repo=$(git config --get remote.origin.url 2>/dev/null | sed -E 's#^https://github.com/##; s#[.]git$##')
+case "$*" in
+  *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
+  *"auth token -u "*) printf 'tok\n' ;;
+  *"pr view"*)
+    f="$GH_FIXTURE/prs/$(printf '%s' "$repo" | tr / _)"
+    if [ -f "$f" ]; then cat "$f"; exit 0; fi
+    echo "GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)" >&2
+    exit 1 ;;
+esac
+SH
+chmod +x "$PAIR/bin/gh"
+export GH_FIXTURE="$PAIR"
+export GH_CALL_LOG="$PAIR/gh-calls.log"
+
+pair_record() {  # $1 = owner/name, $2 = a JSON labels array
+  printf '{"number":7,"url":"https://github.com/%s/pull/7","labels":%s}' "$1" "$2" \
+    > "$PAIR/prs/$(printf '%s' "$1" | tr / _)"
+}
+pair_run() {  # $1 = description, $2 = fire | skip, $3 = command
+  local out fired
+  : > "$GH_CALL_LOG"
+  out="$(python3 -c '
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1]}, "cwd": sys.argv[2]}))
+' "$3" "$PAIR/repo" | ( cd "$PAIR/repo" && env "PATH=$PAIR/bin:$PATH" "$HOOK" ) 2>/dev/null)"
+  # Matched with the shell's own builtin, WITHOUT a pipe: a producer piped into a quiet grep
+  # can report a failure that never happened (L183), which is what the ratchet watches for.
+  if holds "$out" '"decision":"block"' || holds "$out" '"decision": "block"'; then
+    fired="fire"
+  else
+    fired="skip"
+  fi
+  if [ "$fired" = "$2" ]; then pass=$((pass+1)); else
+    fail=$((fail+1)); echo "FAIL: $1 (wanted $2, got $fired)"; fi
+}
+pair_asked_about() {  # $1 = a literal the gh call log must hold
+  case "$(cat "$GH_CALL_LOG")" in *"$1"*) return 0 ;; *) return 1 ;; esac
+}
+
+# The record that would silence the quiz lives in the NAMED repository, and the folder's own
+# pull request carries the one that would fire, so only reading the named repository can skip.
+forget_verdicts
+pair_record other/repo '[{"name":"changelog/none"}]'
+pair_record acme/widget '[{"name":"changelog/visible"}]'
+for form in "--repo other/repo" "-R other/repo" "--repo=other/repo"; do
+  pair_run "a quiet record in the repository [$form] names" skip "$MERGE_CMD 7 $form --squash"
+  if pair_asked_about "pr view 7 --repo other/repo"; then pass=$((pass+1)); else
+    fail=$((fail+1)); echo "FAIL: [$form] did not make the quiz ask gh about other/repo: $(cat "$GH_CALL_LOG")"; fi
+done
+
+# Never loosened: the same route with a VISIBLE record still quizzes, so the skips above are the
+# record's doing rather than a reading that fails open on every named repository (L159).
+pair_record other/repo '[{"name":"changelog/visible"}]'
+pair_record acme/widget '[{"name":"changelog/none"}]'
+pair_run "a visible record in the named repository" fire "$MERGE_CMD 7 --repo other/repo --squash"
+
+# A pull request given as a link names both the repository and the number, which is what gh does
+# with it.
+pair_record other/repo '[{"name":"changelog/none"}]'
+pair_record acme/widget '[{"name":"changelog/visible"}]'
+pair_run "a quiet record reached by a link" skip "$MERGE_CMD https://github.com/other/repo/pull/7 --squash"
+if pair_asked_about "pr view 7 --repo other/repo"; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: a link did not make the quiz ask gh about other/repo pull request 7: $(cat "$GH_CALL_LOG")"; fi
+
+# A pull request that is not there is its own verdict, not "gh answered nothing": one means the
+# repository was wrong, the other that gh is not answering at all, and they need different
+# remedies (L11). Firing either way, because this gate fails open on every route.
+forget_verdicts
+pair_run "a pull request that is not there still quizzes" fire "$MERGE_CMD 7 --repo nobody/there --squash"
+saw not-found 1 "a pull request that is not there"
+saw no-answer 0 "a pull request that is not there"
+forget_verdicts
+rm -rf "$PAIR"
+unset GH_FIXTURE GH_CALL_LOG
+
 rm -rf "$FIXTURE"
 
 echo

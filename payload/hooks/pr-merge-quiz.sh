@@ -262,18 +262,28 @@ quiz_is_owed() {
   command -v jq >/dev/null 2>&1 || return 0
 
   QUIZ_VERDICT="no-repo"
+  # WHICH repository, resolved the way gh resolves it: the merge's own --repo, -R or pull
+  # request link first, then the directory the merge runs in (claude-config#463, #470). This
+  # read asked gh about the session's folder whatever the merge named, so a merge from another
+  # project had its label read from a stranger's pull request, or from nothing at all.
+  local repo_flag
+  repo_flag="$(mt_repo_flag "$cmd")"
   cd "$(mt_repo_dir "$cmd" "$cwd")" 2>/dev/null || return 0
 
   local slug pr envelope labels
-  slug="$(mt_remote_slug)"
+  slug="${repo_flag:-$(mt_remote_slug)}"
   pr="$(mt_pr_number "$cmd")"
-  envelope="$(mt_pr_view "$pr" "number,url,labels" "$slug")"
+  envelope="$(mt_pr_view "$pr" "number,url,labels" "$slug" "$repo_flag")"
   if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" != "true" ]; then
-    # An answer about ANOTHER repo is not this pull request's record, and it is a
-    # different fault from gh saying nothing: one means the wrong repository was
-    # resolved, the other that gh is not answering at all (L11).
+    # Three different faults, three names. An answer about ANOTHER repo means the wrong
+    # repository was resolved; a not found means the pull request is not in the repository
+    # that was searched, which is a question about the command rather than about gh; and no
+    # answer at all means gh is not answering. One name for all three would be a number that
+    # cannot tell them apart (L11).
     if [ -n "$(printf '%s' "$envelope" | jq -r '.wrongRepo // ""' 2>/dev/null)" ]; then
       QUIZ_VERDICT="wrong-repo"
+    elif [ "$(printf '%s' "$envelope" | jq -r '.notFound // false' 2>/dev/null)" = "true" ]; then
+      QUIZ_VERDICT="not-found"
     else
       QUIZ_VERDICT="no-answer"
     fi
