@@ -298,7 +298,9 @@ deferral.
 The AI review runs on the developer's own Claude subscription, so it costs usage allowance rather
 than money. Its cap on what it sends (300 KB) skipped none of Slate's last 200 pushes; its
 deadline is 240 seconds and a real review measured 130 to 193 seconds with `sonnet` on
-2026-09-18.
+2026-09-18. It runs only on the computers `AI_REVIEW_HOSTS` names, which by default is the work Mac
+(`Dans-MacBook-Pro`), because Dan wants it there and not on the personal Mac; every other computer
+says in one line that it skipped. Set `AI_REVIEW_HOSTS='*'` to run it everywhere.
 
 ## Lesson numbers
 

@@ -40,6 +40,11 @@ check_not(){ if [[ "$3" != *"$2"* ]]; then ok; else bad "$1"; echo "  must not c
 # ---------------------------------------------------------------------------
 export AI_REVIEW_STATE_DIR="$WORKDIR/state"
 export CLAUDECODE=1
+# The review runs only on the computers AI_REVIEW_HOSTS names, and this suite runs on whichever
+# machine it is given, so every check below judges as a named host the list allows. The host gate
+# itself is exercised on its own in section 3.
+export AI_REVIEW_HOST="review-host"
+export AI_REVIEW_HOSTS="review-host"
 
 # ---------------------------------------------------------------------------
 # The fake claude. Arguments are recorded separated by the record separator so a prompt spanning
@@ -279,6 +284,24 @@ fire_push "SKIP_AI_REVIEW_CHECK=1 git push" 0
 check "the escape hatch skips and names itself" "SKIP_AI_REVIEW_CHECK=1" "$OUT"
 check "and tells the reader to explain to Dan" "Tell Dan" "$OUT"
 check_eq "and none of those started anything" 2 "$(calls)"
+
+# The host gate (Dan, 2026-09-18: the review should run on the work computer, not the personal
+# one). A host the list does not name is skipped out loud and starts nothing.
+OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | AI_REVIEW_HOST="other-mac" bash "$PUSH_HOOK" 2>&1)"; RC=$?
+check "a computer the list does not name is skipped and says so" "skipped: this computer (other-mac) is not one AI_REVIEW_HOSTS names" "$OUT"
+check_eq "and exits 0" 0 "$RC"
+# With no list set, the default names the work Mac only. Each allowed case below reaches the
+# already-reviewed skip, which sits after the host gate, so passing the gate is proved without
+# starting a review.
+OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | env -u AI_REVIEW_HOSTS AI_REVIEW_HOST="Daniels-MacBook-Pro-2" bash "$PUSH_HOOK" 2>&1)"
+check "by default the personal Mac is skipped" "is not one AI_REVIEW_HOSTS names" "$OUT"
+OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | env -u AI_REVIEW_HOSTS AI_REVIEW_HOST="Dans-MacBook-Pro" bash "$PUSH_HOOK" 2>&1)"
+check "by default the work Mac passes the gate" "already been reviewed" "$OUT"
+OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | env -u AI_REVIEW_HOSTS AI_REVIEW_HOST="Dans-MacBook-Pro.local" bash "$PUSH_HOOK" 2>&1)"
+check "a trailing .local on the hostname is ignored" "already been reviewed" "$OUT"
+OUT="$(payload "git push -u origin fix/typed-error" 0 "$REPO" s1 | AI_REVIEW_HOSTS="*" AI_REVIEW_HOST="other-mac" bash "$PUSH_HOOK" 2>&1)"
+check "a list of * runs on every computer" "already been reviewed" "$OUT"
+check_eq "and none of the host cases started anything" 2 "$(calls)"
 
 # ===========================================================================
 # 4. The deadline: a review that does not return is recorded as unfinished, and the fake is killed.

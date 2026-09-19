@@ -34,6 +34,7 @@
 #     when the payload cannot say, the review goes ahead;
 #   - `claude` is not on PATH;
 #   - CLAUDE_DETACHED_RUN is set (a headless run has nobody to read the review);
+#   - this computer is not one AI_REVIEW_HOSTS names (default: the work Mac, Dans-MacBook-Pro);
 #   - SKIP_AI_REVIEW_CHECK=1 was put on the push command;
 #   - the diff is empty (no code files changed), or over the size cap.
 #
@@ -98,6 +99,25 @@ say() { printf 'ai-review: %s\n' "$1"; exit 0; }
 if ps_has_override "$cmd" SKIP_AI_REVIEW_CHECK; then
   say "skipped: SKIP_AI_REVIEW_CHECK=1 was set on the push. Tell Dan why the review was skipped; never skip it silently."
 fi
+
+# Which computers review at all. This hook syncs to both of Dan's Macs, and he wants the review on
+# the work computer only (2026-09-18), so the list names that one and every other skips out loud.
+# The short name, because `hostname` answers with a trailing .local here (the same reading
+# check-project-list.sh makes). AI_REVIEW_HOSTS is space separated; `*` means every computer.
+# AI_REVIEW_HOST judges as a named machine instead of this one, for the suite.
+review_hosts="${AI_REVIEW_HOSTS-Dans-MacBook-Pro}"
+this_host="${AI_REVIEW_HOST:-$(hostname 2>/dev/null)}"
+this_host="${this_host%.local}"
+# Matched as text, never looped over unquoted: an unquoted `*` expands to the files in the working
+# directory, so the one value meaning everywhere would match nowhere.
+host_allowed=0
+padded=" $(printf '%s' "$review_hosts" | tr -s '[:space:]' ' ') "
+case "$padded" in *" * "*) host_allowed=1 ;; esac
+if [ -n "$this_host" ]; then
+  case "$padded" in *" $this_host "*) host_allowed=1 ;; esac
+fi
+[ "$host_allowed" -eq 1 ] \
+  || say "skipped: this computer (${this_host:-unknown}) is not one AI_REVIEW_HOSTS names (${review_hosts:-none}), so no review runs here."
 
 # Did the push succeed? The payload says so through tool_response.exit_code. A push that was
 # refused sent nothing, so there is nothing to review; a payload with no exit code is read as
