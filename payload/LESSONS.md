@@ -2560,6 +2560,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   the pair. Re-run against a fixed 120 issue snapshot, both found it and the weighting scored it
   0.557 against a floor of 0.5, so the revert was undone.)
 
+- **L491. A pattern short enough to occur BY CHANCE in random bytes fires inside generated or
+  binary content, so a scanner that deliberately reads build output must judge such a match by
+  whether the FILE is text, and not by the match alone.** Every other rule beside it may carry a
+  distinctive prefix and a long run, which noise cannot produce, so only the loose one misbehaves
+  and nothing in the design draws attention to it. The symptom is not a wrong verdict but an
+  INTERMITTENT one: the content is regenerated on every build, so the same unchanged tree is
+  refused and then accepted, which is the shape of gate people learn to override.
+  SHORT: A short pattern occurs by chance in binary content, so a scanner reading build output refuses healthy runs at random as that output is regenerated.
+  (backstage#36, 2026-09-19: the pre push secrets guard refused a green push on two `mailbox`
+  findings in a 133,872 byte Swift compiler `.priors` file that is 62% printable. Both matches were
+  6 characters, a one character local part and a four character domain. Deleting the build cache
+  and pushing again passed, and the tree had not changed. The guard reads build output on purpose,
+  because a secret can reach a build product by routes the source never shows, and the three
+  credential rules beside the mailbox one each need a documented prefix plus twenty or more
+  characters, so none of them had ever fired on noise.)
+
 
 ## Data safety
 
@@ -4291,6 +4307,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   0 check scripts against the inventory, exit 0. In the origin the libraries are present, so
   it had never fired and nothing would have reported it until the day it mattered.)
   SHORT: A script SOURCING a library without set -e carries on when the file is MISSING, so guard the source site to refuse, or it summarises and exits 0.
+- **L492. A report that ENRICHES each finding before printing any of them loses the ENTIRE
+  report when the enrichment runs out of time, and that enrichment is costliest on exactly the run
+  with the most findings, so print what was found first and treat every lookup that decorates it as
+  skippable.** The cost is invisible while there is nothing to report, which is every run until the
+  one that matters, and the failure it produces is a timeout rather than a list, so the run that
+  found the most says the least.
+  SHORT: Print findings before enriching them: an enrichment per finding is costliest on the worst run and takes the whole report with it when it times out.
+  (backstage#42, 2026-09-19: scripts/check-secrets-history.sh places each finding in a commit with
+  `git log --all --find-object`, a full walk of every commit, once per finding, and does it inside
+  the loop that prints them. A clean run asks nothing, so the cost had never been paid. The job
+  carries a 15 minute timeout, and a run finding many secrets would spend it placing blobs and be
+  killed holding a list it had already computed.)
+
 
 ## State and identity
 
@@ -8912,6 +8941,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   from earlier days, and every line written since read exactly like a current one.)
   SHORT: A long running process runs the code it parsed at START, so a guard shipped into its script is inert until it restarts, and nothing says so.
 
+- **L493. A file that is COPIED somewhere else in order to run (a hook installed into a config
+  directory, a script shipped into a bin, a template rendered into a project) sits at a DIFFERENT
+  DEPTH there, so any path it derives by counting a fixed number of directories upwards resolves to
+  something else entirely, and the thing it lands on is routinely a home directory.** Locate the
+  tree by searching upward for its own marker and refuse when there is none, and give anything that
+  then WALKS that tree a bound, because the wrong answer here is not merely wrong, it is unbounded.
+  Distinct from L668, whose remedy is the same but whose condition names the directory the tool was
+  INVOKED in, so it does not fire on a fixed upward count, and whose failure is a capability going
+  quietly missing rather than a run that does enormous work and looks busy while it does it.
+  (claude-config#503, 2026-09-19: test-shell-syntax.sh derived the tree to parse as "$DIR/../..",
+  which is the repository root from payload/hooks and the HOME DIRECTORY from the installed copy in
+  ~/.claude/hooks. The first claude-sync pull that installed it spent twenty two minutes walking
+  every file under ~ before it was stopped by hand. Eight sibling suites use the same expression
+  and every one of them checks the result holds claude-sync and payload/ before using it, so the
+  convention was already right and was enforced by nothing.)
+  SHORT: A file installed at another depth resolves a fixed upward path elsewhere, often the home directory, so find its tree by marker and bound any walk.
 
 ## Test speed
 

@@ -96,3 +96,4 @@ which is NOT loaded into the session.
 - L707. A cooldown keyed COARSER than the subject its message names lets one subject's incident silence the others, behind a first page that looks correct.
 - L486. Under set -u macOS bash 3.2 errors on expanding an EMPTY array, so length check first, or a healthy run dies with no verdict.
 - L488. A script SOURCING a library without set -e carries on when the file is MISSING, so guard the source site to refuse, or it summarises and exits 0.
+- L492. Print findings before enriching them: an enrichment per finding is costliest on the worst run and takes the whole report with it when it times out.

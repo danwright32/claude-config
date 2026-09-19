@@ -190,3 +190,4 @@ which is NOT loaded into the session.
 - L712. Measure a new derived figure's FILL RATE over the live population; null on every record is a derivation defect a sample check cannot see.
 - L714. A throwaway local database must reproduce the hosted platform's DEFAULT GRANTS, or a permission check passes on the mistake it exists to catch.
 - L487. Comparing two implementations against a live store measures the population change too, so snapshot the data once and run both halves against that.
+- L491. A short pattern occurs by chance in binary content, so a scanner reading build output refuses healthy runs at random as that output is regenerated.

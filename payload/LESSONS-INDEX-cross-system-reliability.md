@@ -74,3 +74,4 @@ which is NOT loaded into the session.
 - L476. A pull request reported as CONFLICTING has no workflow run scheduled at all, so read mergeable before investigating checks that never appear.
 - L704. A loop bounded only by wall time does unbounded work when I/O is fast, so bound each tick by a count too, and read a stubbed run as the compute ceiling.
 - L715. A long running process runs the code it parsed at START, so a guard shipped into its script is inert until it restarts, and nothing says so.
+- L493. A file installed at another depth resolves a fixed upward path elsewhere, often the home directory, so find its tree by marker and bound any walk.
