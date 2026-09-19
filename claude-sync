@@ -7568,6 +7568,36 @@ case "$SYNC_REAP_INTERVAL" in
     exit 2 ;;
 esac
 
+# How long each `du` sizing abandoned scratch may run before it is stopped (claude-config#444). On
+# 2026-09-18 four of them were found measuring the scratch of a 559 process suite pile, 23 to 51
+# minutes old, their `status` long gone: status itself had been killed after two minutes, and the
+# `du` it had started went on reading a tree the pile was still filling. The bound is an alarm set
+# before `du` starts, so it holds whether or not whatever started it is still alive, and a size that
+# was cut short is reported as unmeasured rather than as the part that was read (L11). 0 turns the
+# bound off; anything that is not a whole number is refused (L50). The number is derived in
+# DESIGN.md's measured numbers table.
+SYNC_SCRATCH_DU_TIMEOUT="${SYNC_SCRATCH_DU_TIMEOUT:-30}"
+case "$SYNC_SCRATCH_DU_TIMEOUT" in
+  ''|*[!0-9]*)
+    echo "claude-sync: SYNC_SCRATCH_DU_TIMEOUT='$SYNC_SCRATCH_DU_TIMEOUT' is not a whole number of seconds. Refusing to run rather than sizing scratch for a time nobody can read. Set it to 0 to let du run unbounded." >&2
+    exit 2 ;;
+esac
+
+# When this repo's test suites count as left running (claude-config#444), for `status`. On
+# 2026-09-18 559 suite processes had run for up to seven hours at zero CPU and nothing said so. Two
+# signals, because a pile has two shapes. Age: no suite may run longer than the slowest one's own
+# ceiling, the sync suite's SUITE_TIMEOUT, so anything older than that is waiting on something that
+# will not come. And breadth: more suites started independently than a whole run of the runner ever
+# has going at once, which is how a pile looks before any of it is old. Both are derived in
+# DESIGN.md's measured numbers table, and both are refused when unreadable (L50).
+SYNC_SUITE_MAX_AGE="${SYNC_SUITE_MAX_AGE:-3600}"
+SYNC_SUITE_MAX_ROOTS="${SYNC_SUITE_MAX_ROOTS:-8}"
+case "$SYNC_SUITE_MAX_AGE$SYNC_SUITE_MAX_ROOTS" in
+  *[!0-9]*)
+    echo "claude-sync: SYNC_SUITE_MAX_AGE='$SYNC_SUITE_MAX_AGE' and SYNC_SUITE_MAX_ROOTS='$SYNC_SUITE_MAX_ROOTS' must both be whole numbers. Refusing to run rather than judging leftover test runs by a limit nobody can read." >&2
+    exit 2 ;;
+esac
+
 # Where new scratch goes. Derived from SYNC_SCRATCH_ROOT rather than read from TMPDIR a second
 # time, so there is ONE answer to where scratch lives and a test can point every part of this at a
 # throwaway root (L2).
@@ -7781,11 +7811,29 @@ scratch_sizes_kb(){   # reads paths on stdin
   # gone: `pipefail` then failed the pipeline AFTER awk had printed the sum, and the fallback
   # printed a second total beneath it. The caller got "1480852", a newline, "0", which broke the
   # integer test in scratch_human_size and went out in the message as the size (L11, L183).
-  { printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 du -sk 2>/dev/null || true; }
+  #
+  # Each `du` carries its own alarm (claude-config#444), set in a forked child immediately before it
+  # becomes `du`, so the bound holds even when whatever started it has been killed, which is exactly
+  # how the four found on 2026-09-18 had been running for up to 51 minutes. The parent waits and, if
+  # the alarm is what ended it, prints the line `TIMEOUT`, so no caller can report the part that was
+  # read as the whole (L11). Read from how the child died rather than from xargs's status: GNU xargs
+  # exits 125 for a command killed by a signal and the BSD xargs on this Mac exits 1, which is also
+  # what an unreadable entry gives, so that status cannot tell the two apart.
+  { printf '%s\n' "$list" | tr '\n' '\0' \
+      | xargs -0 perl -e '
+          my $t = shift @ARGV;
+          my $pid = fork();
+          exit 127 unless defined $pid;
+          if ($pid == 0) { alarm $t if $t > 0; exec @ARGV or exit 127; }
+          waitpid($pid, 0);
+          if (($? & 127) == 14) { print "TIMEOUT\n"; exit 0; }
+          exit($? >> 8);' "$SYNC_SCRATCH_DU_TIMEOUT" du -sk 2>/dev/null || true; }
 }
 
+# The sum, or `?` when any `du` was stopped by its alarm, because a total missing a part is a
+# number this never measured.
 scratch_total_kb(){   # reads paths on stdin
-  scratch_sizes_kb | awk -F'\t' '{s+=$1} END{print s+0}'
+  scratch_sizes_kb | awk -F'\t' '$1 == "TIMEOUT" { cut = 1; next } { s += $1 } END { if (cut) print "?"; else print s + 0 }'
 }
 
 # Reported in the unit that says something. 92 abandoned apply logs really do come to under a
@@ -7803,7 +7851,11 @@ report_scratch_leftovers(){
   [ "${n:-0}" -gt 0 ] || return 0
   kb="$(printf '%s\n' "$list" | scratch_total_kb)"
   echo "--- scratch the tool left behind ---"
-  echo "  $n abandoned, holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT, each older than ${SYNC_SCRATCH_MAX_AGE}s."
+  if [ "$kb" = "?" ]; then
+    echo "  $n abandoned under $SYNC_SCRATCH_ROOT, each older than ${SYNC_SCRATCH_MAX_AGE}s. How much they hold is not known: sizing them did not finish within ${SYNC_SCRATCH_DU_TIMEOUT}s (SYNC_SCRATCH_DU_TIMEOUT), which usually means something is still writing into them."
+  else
+    echo "  $n abandoned, holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT, each older than ${SYNC_SCRATCH_MAX_AGE}s."
+  fi
   echo "  Every one belongs to a run that was killed before it could clean up after itself. A mutating run reclaims them on its own every $(duration_in_words "$SYNC_REAP_INTERVAL"); to take them now: claude-sync reap-scratch"
   # WHAT THOSE RUNS WERE DOING (claude-config#314). A count says the temp folder is filling up; the
   # commands say which part of the tool is being killed, and only one of those can be acted on
@@ -7854,7 +7906,16 @@ do_reap_scratch(){
   removed="$(printf '%s\n' "$results" | grep -c '^removed' || true)"
   kb="$( { printf '%s\n' "$sizes" | awk '{ print "S\t" $0 }'; printf '%s\n' "$results"; } \
     | awk -F'\t' '$1 == "S" { sz[$3] = $2; next } $1 == "removed" { s += sz[$2] } END { print s + 0 }')"
-  echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT."
+  # A sizing cut short by its alarm (claude-config#444) leaves some removed items unmeasured, so the
+  # figure is a floor and says so rather than reading as the whole (L11).
+  case "
+$sizes
+" in
+    *"
+TIMEOUT
+"*) echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding at least $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT. Sizing them did not finish within ${SYNC_SCRATCH_DU_TIMEOUT}s (SYNC_SCRATCH_DU_TIMEOUT), so the rest went unmeasured." ;;
+    *) echo "claude-sync: reclaimed $removed abandoned scratch item(s) holding $(scratch_human_size "$kb") under $SYNC_SCRATCH_ROOT." ;;
+  esac
   # An item the delete could not take is named, with the reason, rather than left to a bare `rm`
   # complaint on stderr: the whole point of a reap is what is left afterwards, and an item nobody
   # is told about is one nobody unblocks (L47, L148). Capped, because a thousand identical lines
@@ -7945,6 +8006,79 @@ report_stray_processes(){
   # that limit exists to stop, so seeing it here means the limit has been removed or bypassed.
   report_process_family "tests/test-claude-sync.sh" "test runs" 1 1 \
     "A run nested deeper than one is a run that spawned a run that spawned a run. It multiplies one process at a time, so it presents as slowness rather than as a failure."
+  report_suite_pile
+}
+
+# EVERY suite of this repo left running, not only the sync suite (claude-config#444). On 2026-09-18
+# 559 of them had run for up to seven hours at zero CPU on a Mac six agents were working on, 152 of
+# them copies of test-run-all-tests.sh, and the family above could not see one: it watches a single
+# file by name. A machine at load 272 slows every session on it, and nothing had said so.
+#
+# A suite process is a `test-*.sh` or the runner, run from anywhere this repo's scripts live: a
+# checkout or worktree (whose path holds `claude-config`), the installed hooks, or the named scratch
+# the suites build their fixtures in. It speaks on either of two shapes, each derived in DESIGN.md:
+# any one of them older than SYNC_SUITE_MAX_AGE, and more of them started independently than
+# SYNC_SUITE_MAX_ROOTS. It names what to kill by pid. A TERM is not enough here, and that was
+# measured on 2026-09-18: a suite with an EXIT trap blocked on a child holds a TERM until the child
+# ends, which for a pile is never.
+report_suite_pile(){
+  local out summary
+  out="$(sync_process_list | awk -v maxage="$SYNC_SUITE_MAX_AGE" -v maxroots="$SYNC_SUITE_MAX_ROOTS" '
+    function secs(et,   d, n, p, s) {
+      d = 0
+      if (index(et, "-") > 0) { d = substr(et, 1, index(et, "-") - 1); et = substr(et, index(et, "-") + 1) }
+      n = split(et, p, ":"); s = 0
+      if (n == 3) s = p[1] * 3600 + p[2] * 60 + p[3]
+      else if (n == 2) s = p[1] * 60 + p[2]
+      else s = p[1] + 0
+      return d * 86400 + s
+    }
+    {
+      p = $1; pp = $2; et = $3; cmd = ""
+      for (i = 4; i <= NF; i++) cmd = cmd (i > 4 ? " " : "") $i
+      parent[p] = pp
+      if (cmd ~ /(\/test-[A-Za-z0-9_.-]+\.sh|\/run-all-tests\.sh)( |$)/ \
+          && (cmd ~ /claude-config/ || cmd ~ /\/\.claude\/hooks\// || cmd ~ /\/claude-sync-work\./)) {
+        suite[p] = 1; age[p] = et; keep[p] = cmd
+      }
+    }
+    END {
+      n = 0; roots = 0; old = 0; oldest = -1; kill = ""
+      for (p in suite) {
+        n++
+        if (!(parent[p] in suite)) { roots++; root[p] = 1 }
+        s = secs(age[p])
+        if (s >= maxage) { old++; kill = kill " " p; if (s > oldest) { oldest = s; oldest_et = age[p] } }
+      }
+      if (n == 0 || (old == 0 && roots <= maxroots)) exit
+      printf "SUMMARY %d %d %d %s\n", n, roots, old, (old > 0 ? oldest_et : "-")
+      shown = 0
+      for (p in root) {
+        if (shown < 20) printf "  pid %s, running %s: %s\n", p, age[p], substr(keep[p], 1, 160)
+        shown++
+      }
+      if (shown > 20) printf "  and %d more started independently\n", shown - 20
+      if (old > 0) printf "KILL%s\n", kill
+    }' )"
+  [ -n "$out" ] || return 0
+  summary="$(printf '%s\n' "$out" | grep '^SUMMARY ' || true)"
+  echo "--- test suites left running ---"
+  printf '%s\n' "$out" | grep -v '^SUMMARY \|^KILL' || true
+  printf '%s\n' "$summary" | awk -v maxage="$SYNC_SUITE_MAX_AGE" -v maxroots="$SYNC_SUITE_MAX_ROOTS" '{
+    printf "  %d suite process(es) from this repo, %d started independently (a whole run of the runner is one, and never has more than %d suites going at once).\n", $2, $3, maxroots
+    if ($4 > 0) printf "  %d of them older than %ds, the longest any suite may run, the oldest running %s. Those are waiting on something that will not come.\n", $4, maxage, $5
+  }'
+  echo "  Each one takes a share of this Mac from every other session on it, and a pile presents as slowness rather than as a failure."
+  # Matched with `case` rather than a piped quiet grep, which leaves on its first match and under
+  # pipefail can fail the producer it left behind (L183).
+  case "
+$out" in
+    *"
+KILL "*)
+      echo "  To stop the ones past that age (a plain kill is held by a suite blocked on a child, so this is -9):"
+      echo "    kill -9$(printf '%s\n' "$out" | sed -n 's/^KILL//p')" ;;
+  esac
+  return 0
 }
 
 # RUN THE HOOK SUITE AND RECORD WHAT IT SAID (claude-config#305).

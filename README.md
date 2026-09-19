@@ -714,10 +714,20 @@ reads it every time whatever the interval says.
 | `SYNC_SCRATCH_NOTE` | `1` | Whether a run writes the note naming what it was doing beside its scratch. `0` turns it off. |
 | `SYNC_SCRATCH_NOTE_ECHO` | `0` | `1` prints the note's path and content to stderr as it is written. It exists so the writer can be watched working: without it the only observable trace is a note a killed run left behind, which a test has to plant by hand, so the whole thing could be inert and every check would still pass. |
 | `SYNC_SCRATCH_LEGACY_EVERY` | `86400` | Seconds between reads of the old flat location in the temp root. Reading it is what costs six figures of directory entries, so it is not done on every call. The cost is stated: something left there can go unreported for up to this long, though `reap-scratch` always reads it. `0` reads it every call, and a value that is not a whole number is refused. |
+| `SYNC_SCRATCH_DU_TIMEOUT` | `30` | Seconds each `du` sizing abandoned scratch may run before it is stopped, and the size reported as not known rather than as the part that was read. The alarm is set on `du` itself, so it holds even when the `status` that started it has been killed. `0` lets `du` run unbounded, and a value that is not a whole number is refused. |
 
 `claude-sync status` also reports watcher processes and test runs the tool left behind, counting
 how many started independently and how deeply they are nested. It stays silent for one watcher
 and one run, which is what a healthy machine looks like.
+
+It reports this repo's test suites too, any `test-*.sh` or the runner, whether run from a checkout,
+the installed hooks or the scratch the suites build their fixtures in (claude-config#444). It speaks
+when one has been running longer than `SYNC_SUITE_MAX_AGE` (default `3600`, the longest any suite
+may run) and then names every such process in one `kill -9` line, or when more than
+`SYNC_SUITE_MAX_ROOTS` (default `8`) were started independently, since a whole run of the runner
+counts as one. A suite that arms `hooks/lib/suite-deadline.sh`, as `test-run-all-tests.sh` does,
+bounds its own wall clock however it was started, and whatever it started is killed if it is
+stopped from outside.
 
 ## Branches and agent worktrees that already shipped
 

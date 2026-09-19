@@ -104,6 +104,26 @@ at six never fired once.
 of four is one independent run nested three deep, which is unmistakable, where a count of four is
 unremarkable.
 
+### A suite killing its own children from a TERM handler
+
+Considered for #444 and rejected on a measurement. The pile of 2026-09-18 was reproduced the same
+day: test-run-all-tests.sh stopped by a TERM to its own pid, which is what a caller's deadline
+sends, left its runner and three fixture suites looping `sleep 3600` at zero CPU. The runner already
+answers the same gap with a TERM handler, so the obvious fix was one in the suite too.
+
+It does not work for a suite, and the reason is not obvious. The runner is sitting in `wait` when
+the signal comes, which a trapped signal interrupts. A suite is sitting in a command substitution,
+which it does not: bash holds the signal until the command returns. Measured while building the fix:
+with a TERM trap, and equally with only the EXIT trap every suite here already has for its scratch,
+the suite went on running with its child for as long as the child lived. So the handler would have
+turned a suite that dies and orphans its children into one that ignores the signal outright.
+
+What replaced it lives outside the suite: `lib/suite-deadline.sh` starts a watchdog that remembers
+what the suite has started and kills whatever of it outlives the suite, and that stops the suite at
+its own deadline by killing the tree under the blocked command, which is the only thing that
+releases it. The fixtures that could hang for ever now hang only while the suite that made them is
+alive. Both halves were watched failing before they passed.
+
 ### Reporting any nesting at all as a problem
 
 The first version of that report flagged every healthy machine, because one watcher is a launcher
@@ -487,6 +507,10 @@ that is added both fail until this table is updated.
 | 2 seconds | `SUITE_POLL_INTERVAL=2` | How finely the suite's watchdog notices a run has stopped, and how long the SUITE_SLOW_IN seam pauses in a section | One number rather than two, because these only mean anything relative to each other: the pause exists to keep a run moving faster than the watchdog can call it stopped, and they were two constants three hundred lines apart. Neither deadline is affected, both being read off a clock, so what this sets is the smallest stall the suite can STAGE. Unchanged from the constants it replaces, so a production run polls exactly as it did. The three sections that prove the deadlines set it to a tenth and scale their bounds with it, which took #152 from 35 to 13 seconds of section time measured 2026-08-30, proved by #152 | 2026-08-30 |
 | 0.1 seconds | `SYNC_POLL_INTERVAL=0.1` | How finely claude-sync notices that the hook suite runner it started has ended, and that a held sync lock has been released | Beside a hook suite measured between 220 and 441 seconds, the difference between this and the two seconds it replaces is invisible, and the granularity was never load bearing. It is the whole cost in the test suite, where real pulls run against a stub runner that returns in milliseconds: measured 2026-08-30, a pull noticed such a runner 306ms after it finished against 4,203ms at a four second poll. No deadline moves with it, both being measured against the clock, which had to be made true of the lock's own ceiling in the same change because that one was counting turns of its loop, proved by #205 | 2026-08-30 |
 | 1 nested run | `SUITE_MAX_DEPTH=1` | The suite's own depth allowance | Every place the suite spawns itself is one level down and nothing in it legitimately needs a run nested two deep, proved by #34 | 2026-08-17 |
+| 20 minutes | `suite_deadline_arm 1200` in test-run-all-tests.sh, overridden by `SUITE_WALL_TIMEOUT` | That suite, started directly or by the runner, is stopped as hung, and everything it started is killed | Measured 2026-09-18 on this Mac: 89 seconds alone at load 6, and 70 to 76 seconds with three copies at once at load 25. The worst slowdown on record is 5.6x, the sync suite's 348 seconds idle against 1943 at load 160 to 188 on 2026-08-22, which would put this suite near 500 seconds, so the limit is 13x its idle time and 2.4x that worst case. Before this it had no bound at all, and 152 copies of it were found at zero CPU the day it was measured, the oldest seven hours old, proved by #444 | 2026-09-18 |
+| 30 seconds | `SYNC_SCRATCH_DU_TIMEOUT=30` | A `du` sizing abandoned scratch is stopped and the size is reported as not known | Measured 2026-09-18 on this Mac: one `du` over 792 flat scratch items holding 950 MB in 12,124 entries took 0.2 seconds, so this is 150x that, and the 1,139 items and 1.4 GB the pile left would be under a second at the same rate. A `du` still going at 30 seconds is reading a tree something is writing, and the four found that day had run 23 to 51 minutes, proved by #444 | 2026-09-18 |
+| 1 hour | `SYNC_SUITE_MAX_AGE=3600` | `status` reports a suite process of this repo as left running, and names it for `kill -9` | Equal to `SUITE_TIMEOUT`, the ceiling of the slowest suite there is, which is the longest any suite is allowed to run at all. The slowest real run on record is that suite's 1943 seconds at load 160 to 188 on 2026-08-22, so a healthy run never reaches it. The pile of 2026-09-18 had 354 processes past 40 minutes and one at seven hours, proved by #444 | 2026-09-18 |
+| 8 runs | `SYNC_SUITE_MAX_ROOTS=8` | `status` reports this repo's suites as a pile when more than this many were started independently | The runner's own ceiling on what one whole run has in flight, `HOOK_TESTS_BUDGET`, which is the cores capped at 8. A whole run of the runner is ONE independent start, since everything under it is nested. Measured 2026-09-18: three suites started directly at once read as three, so this leaves room for a few agents each running a suite or two, proved by #444 | 2026-09-18 |
 | 2 processes | not a setting | One healthy watcher | Observed directly as a launcher with one child (pid 13658 with 13702), proved by #33 | 2026-08-17 |
 
 The two suite figures above were 123 seconds and "roughly 7x" for eleven days, written down

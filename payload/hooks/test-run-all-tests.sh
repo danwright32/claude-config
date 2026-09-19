@@ -19,6 +19,20 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER="$DIR/run-all-tests.sh"
 
+# Its own wall clock, however it was started (claude-config#444). Agents run this file directly, with
+# no runner above it, and the runner has no deadline of its own either, so before this a run that
+# waited without end held everything it had started for as long as the Mac stayed up: 152 copies
+# of this file were found at 0 percent CPU on 2026-09-18, the oldest seven hours old. The limit is
+# derived in DESIGN.md's measured numbers table. Refused rather than skipped when the helper is
+# missing, because a suite that quietly runs unbounded is the state this exists to end (L488).
+if [ ! -f "$DIR/lib/suite-deadline.sh" ]; then
+  echo "FAIL: test-run-all-tests: no helper at $DIR/lib/suite-deadline.sh, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+fi
+. "$DIR/lib/suite-deadline.sh"
+suite_deadline_arm 1200 || exit $?
+
 pass=0
 fail=0
 check() { # check <description> <result>   ("ok" passes, anything else is the failure text)
@@ -1118,19 +1132,59 @@ esac
 # behind was every one of them, each still holding whatever lock its own suite takes and all of them
 # competing for the machine. That is the same gap claude-config#163 closed one level down, and the runner is the
 # thing a person actually interrupts.
-mk_hanging_suite() { # mk_hanging_suite <dir> <name>
+#
+# The hang is held for as long as THIS suite is alive and not a moment longer (claude-config#444).
+# It was `while :; do sleep 3600 & wait; done`, which never ends at all, so the only thing that ever
+# stopped these fixtures was this suite surviving to kill them. Reproduced 2026-09-18: this suite
+# stopped by TERM at the #171 control below left the three of them looping, orphaned, at 0 percent
+# CPU, with the runner that had started them orphaned beside them and waiting on them for ever. Bounding the fixture by its
+# owner rather than by a time keeps it hanging for exactly as long as any check here needs it to,
+# with no number to be wrong. The owner is a parameter so the bound itself can be checked below.
+hang_while_owner() { # hang_while_owner <owner pid>   -> the line that hangs, for a fixture
+  # A durable CHILD it is waiting on, not a foreground sleep: bash defers a trapped signal until the
+  # foreground command finishes, so a suite stalled inside a long sleep could not run any handler of
+  # its own, and the child is what makes an orphan observable after the parent has gone.
+  printf 'while kill -0 %s 2>/dev/null; do bash -c %s & wait "$!" || true; done\n' \
+    "$1" "'while kill -0 $1 2>/dev/null; do sleep 1; done'"
+}
+mk_hanging_suite() { # mk_hanging_suite <dir> <name> [owner pid, default this suite]
   mkdir -p "$1"
   {
     printf '#!/usr/bin/env bash\n'
     printf 'echo $$ > "$(dirname "$0")/%s.pid"\n' "$2"
-    # Blocked on a child it is WAITING for, not sitting in a foreground sleep. Bash defers a
-    # trapped signal until the foreground command finishes, so a suite stalled inside a long sleep
-    # could not run any handler of its own, and the durable child is what makes an orphan
-    # observable after the parent has gone.
-    printf 'while :; do sleep 3600 & wait "$!" || true; done\n'
+    hang_while_owner "${3:-$$}"
   } > "$1/test-$2.sh"
   chmod +x "$1/test-$2.sh"
 }
+
+# The bound, seen working rather than assumed: a hanging fixture whose owner has gone ends by itself,
+# and so does the child it was waiting on. The owner is a stand in started here, so this can end it
+# without ending the suite. Without this, a fixture that ignored its owner would pass every check
+# below, because each of them kills the fixture itself (L1).
+OWN="$TMPROOT/dir-owned"
+sleep 600 &
+own_pid=$!
+mk_hanging_suite "$OWN" owned "$own_pid"
+bash "$OWN/test-owned.sh" &
+owned_pid=$!
+n=0; owned_kid=""
+while [ "$n" -lt 300 ] && [ -z "$owned_kid" ]; do
+  owned_kid="$(pgrep -P "$owned_pid" 2>/dev/null | awk 'NR <= 1')"
+  [ -n "$owned_kid" ] || { sleep 0.1; n=$((n + 1)); }
+done
+kill "$own_pid" 2>/dev/null; wait "$own_pid" 2>/dev/null
+n=0
+while [ "$n" -lt 100 ] && { kill -0 "$owned_pid" 2>/dev/null || { [ -n "$owned_kid" ] && kill -0 "$owned_kid" 2>/dev/null; }; }; do
+  sleep 0.1; n=$((n + 1))
+done
+if [ -z "$owned_kid" ]; then
+  check "#444 a hanging fixture had a child to leave behind" "no child appeared, so the check below measures nothing"
+elif kill -0 "$owned_pid" 2>/dev/null || kill -0 "$owned_kid" 2>/dev/null; then
+  check "#444 a hanging fixture ends by itself once the suite that made it has gone" "fixture $owned_pid or its child $owned_kid is still running 10s after its owner ended"
+else
+  check "#444 a hanging fixture ends by itself once the suite that made it has gone" ok
+fi
+kill -9 "$owned_pid" "$owned_kid" 2>/dev/null; wait "$owned_pid" 2>/dev/null
 # SEVERAL of them, not one (claude-config#171). Running many at once is the runner's whole shape,
 # and leaving all of them behind is what made this worth closing. With a single suite in flight, a
 # cleanup that reaped only the most recently launched child, or stopped at the first one it found,
@@ -2125,7 +2179,9 @@ mkdir -p "$HG"
 HG_MARKER="$TMPROOT/hang-marker"
 {
   printf '#!/usr/bin/env bash\n'
-  printf 'if [ -e "%s" ]; then while :; do sleep 3600 & wait "$!" || true; done; fi\n' "$HG_MARKER"
+  printf 'if [ -e "%s" ]; then\n' "$HG_MARKER"
+  hang_while_owner "$$"
+  printf 'fi\n'
   printf 'touch "%s"\n' "$HG_MARKER"
   printf 'echo "FAIL: it failed, and it will hang if run again"\n'
   printf 'echo "SUITE-RESULT passed=0 failed=1"\n'
