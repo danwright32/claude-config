@@ -25,12 +25,36 @@
 # On a finding: exit 2 with the finding on stderr and what to do, which PostToolUse feeds back to
 # the model. Fails QUIET (exit 0, nothing said) on a payload it cannot read, because this runs on
 # every edit in every project and has nothing to say about a tool call it cannot see.
+#
+# ONE exception, and it speaks ONCE (claude-config#486). A payload it cannot read is a property of
+# that one tool call, and the next call can differ. python3 not being installed is a property of
+# the MACHINE: it silences this hook on every edit from then on, which is the same quiet as a file
+# with nothing wrong in it (L98). So the first edit after that is met with one notice naming the
+# interpreter, and a marker stops it being repeated on the hundreds of edits after it, which is
+# the one thing that would get this hook switched off (L36). It is a notice and not a refusal
+# because there is nothing here to refuse: PostToolUse runs after the write, and the push gate
+# check-deferrals.sh is what refuses the same line with the same reason.
 
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DETECTOR="$HOOK_DIR/lib/deferrals.py"
 [ -f "$DETECTOR" ] || exit 0
+
+if ! command -v python3 >/dev/null 2>&1; then
+  # The marker lives in TMPDIR, so it lasts as long as the machine's temporary space does and the
+  # notice comes back if python3 is still missing after a restart. A failure to write it leaves
+  # the notice speaking every time, which is noisy in the right direction rather than silent.
+  said="${TMPDIR:-/tmp}/claude-deferral-edit-check-no-python3"
+  [ -f "$said" ] && exit 0
+  : > "$said" 2>/dev/null || true
+  {
+    echo "DEFERRAL CHECK DID NOT RUN: python3 is not on PATH, and deferral-edit-check.sh runs its detector, lib/deferrals.py, under it. Nothing has judged this edit, or any edit in this session, for a line that puts work off with no issue number beside it."
+    echo "This is said once rather than on every edit. Until python3 is installed, check any such line by hand: a deferral needs its issue as #NNNN on the line or within two lines of it."
+    echo "The push gate check-deferrals.sh refuses the same line at push time, and it refuses by name for the same missing interpreter."
+  } >&2
+  exit 2
+fi
 
 payload="$(cat 2>/dev/null || true)"
 [ -n "$payload" ] || exit 0

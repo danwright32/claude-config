@@ -33,6 +33,7 @@
 #   - the push did not succeed (tool_response.exit_code non-zero, or the command was interrupted);
 #     when the payload cannot say, the review goes ahead;
 #   - `claude` is not on PATH;
+#   - python3 is not on PATH, which is what the background reviewer runs under;
 #   - CLAUDE_DETACHED_RUN is set (a headless run has nobody to read the review);
 #   - this computer is not one AI_REVIEW_HOSTS names (default: the work Mac, Dans-MacBook-Pro);
 #   - SKIP_AI_REVIEW_CHECK=1 was put on the push command;
@@ -136,6 +137,13 @@ esac
 [ "$push_interrupted" = "true" ] && say "skipped: the push command was interrupted, so there is nothing to review."
 
 command -v claude >/dev/null 2>&1 || say "skipped: no 'claude' command is on PATH, so no review can run. Install the Claude Code CLI to turn this on."
+
+# The runner this hook starts, lib/ai-review-run.py, is a python3 program (claude-config#486). With
+# no python3 the `nohup python3 ...` below died the instant it started and the line straight after
+# it said the review had started in the background: a claim about something that never ran, and the
+# nudge then waited for findings that were never coming (L12, L11, L98). Asked here, beside the
+# other tool this hook cannot work without, so nothing is written and nothing is claimed.
+command -v python3 >/dev/null 2>&1 || say "skipped: python3 is not on PATH, and the reviewer this hook starts (lib/ai-review-run.py) runs under it, so no review can run. Install python3 to turn this back on."
 
 repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0

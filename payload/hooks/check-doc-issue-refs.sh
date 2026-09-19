@@ -66,6 +66,32 @@ SCANNER="$HOOK_DIR/lib/doc-issue-refs.py"
 
 payload="$(cat)"
 
+# THE DETECTOR'S OWN READER, asked before anything is measured (claude-config#486, L490).
+#
+# lib/doc-issue-refs.py, which finds the sentences claiming an issue is still pending, runs under
+# python3, and nothing here asked whether python3 was installed. Without it the candidate list came
+# back empty, the emptiness test exited 0, and not one reference in any doc was ever checked
+# against GitHub: every push passed, with nothing said (L42, L98). Two more readings below (the
+# origin URL and the verdicts) are python3 too, so there is nothing left to fall back on.
+#
+# Asked above the payload read, because python3 is also one of the two tools ps_parse_payload
+# reads with: with neither jq nor python3 the parse below exits 0 first and this question would
+# never be reached (L135, L667). Narrowed by a cheap substring on the raw payload, since nothing
+# here can tell a push from an `ls` when the payload is unreadable (L36, L54), and the override is
+# read the same way so the refusal is never a dead end (L109).
+if ps_reader_missing python3; then
+  case "$payload" in
+    *SKIP_DOC_REFS_CHECK=1*) exit 0 ;;
+    *push*)
+      echo "PUSH BLOCKED: $(ps_detector_absent_why "python3 is not on PATH" \
+        "check-doc-issue-refs.sh runs its scanner, lib/doc-issue-refs.py, under it to find the sentences in this push's docs that claim an issue is still pending, so with python3 absent nothing here reads the docs at all." \
+        "python3")" >&2
+      echo "OVERRIDE, this one push: SKIP_DOC_REFS_CHECK=1 <your original git push command>" >&2
+      exit 2 ;;
+  esac
+  exit 0
+fi
+
 parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"

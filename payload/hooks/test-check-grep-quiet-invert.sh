@@ -148,6 +148,61 @@ if [ "$got" = "2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a
 got="$(hook_rc "$R/work" "git push")"
 if [ "$got" = "0" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a line already on the remote is not judged again (exit $got)"; fi
 
+# --- the detector's own reader (claude-config#486) -----------------------------
+# The scan is python3 and nothing asked whether it was installed. Without it the scan returned an
+# empty string, the findings test found none, and the gate exited 0 on every push (L490, L42, L98).
+. "$DIR/lib/no-python-path.sh"
+NOPY_ROOT="$WORKDIR/nopy"
+NOPY="$NOPY_ROOT/bin"
+# jq linked in: the payload stays legible, so the ONLY thing missing is the detector's interpreter.
+npp_build_bin "$NOPY" jq
+if npp_reaches_python3 "$NOPY"; then
+  fail=$((fail+1)); echo "FAIL: the bare directory really reaches no python3 (it found one, so nothing below measures its absence)"
+else pass=$((pass+1)); fi
+
+nopy_run() {  # nopy_run <cwd> <command> -> sets NOPY_RC and NOPY_MSG
+  local p
+  p="$(HK_CMD="$2" HK_CWD="$1" python3 -c 'import json,os,sys
+sys.stdout.write(json.dumps({"tool_name":"Bash","tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
+  NOPY_MSG="$(printf '%s' "$p" | ( cd "$1" && env PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1 >/dev/null ))"; NOPY_RC=$?
+}
+nopy_want() {  # nopy_want <expected rc> <description>
+  if [ "$NOPY_RC" = "$1" ]; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: $2 (expected exit $1, got $NOPY_RC)"; fi
+}
+
+# A CLEAN repository on purpose: nothing here can tell clean from offending, so the refusal has to
+# come from the detector being absent rather than from anything it found (L11).
+C="$WORKDIR/clean"
+"${G[@]}" init -q --bare "$C/origin.git" 2>/dev/null
+"${G[@]}" init -q -b main "$C/work" 2>/dev/null
+(
+  cd "$C/work" || exit 1
+  echo baseline > README.md && "${G[@]}" add README.md && "${G[@]}" commit -qm init
+  "${G[@]}" remote add origin "$C/origin.git" && "${G[@]}" push -qu origin main
+  echo ordinary > plain.txt && "${G[@]}" add plain.txt && "${G[@]}" commit -qm plain
+) >/dev/null 2>&1
+
+nopy_run "$C/work" "git push"
+nopy_want 2 "with no python3 the push is refused rather than read as clean"
+case "$NOPY_MSG" in
+  *python3*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: the refusal does not name the reader that is missing, said: $NOPY_MSG" ;;
+esac
+
+# A command the missing detector takes nothing from is not refused (L54, L324).
+nopy_run "$C/work" "git status"
+nopy_want 0 "a command that is not a push is not refused over a detector it never needed"
+
+# The documented override still clears it (L109).
+nopy_run "$C/work" "SKIP_GREP_QV_CHECK=1 git push"
+nopy_want 0 "the visible override still clears the missing detector refusal"
+
+# The control: the SAME clean push with python3 present is allowed, so the refusal above is the
+# detector's absence and not a fixture that refuses everything (L159).
+got="$(hook_rc "$C/work" "git push")"
+if [ "$got" = "0" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the control still allows the same clean push with python3 present (exit $got)"; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then
   echo "test-check-grep-quiet-invert: ALL PASSED ($pass checks)"

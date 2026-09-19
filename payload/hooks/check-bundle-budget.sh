@@ -58,12 +58,42 @@
 #
 # Fails OPEN on anything it cannot read (no repo, no origin remote, no HEAD, the measurer refusing
 # its arguments), and says so in one line.
+#
+# ONE exception, and it is a refusal: python3 not being installed at all (claude-config#486). Every
+# other stand down above is a property of THIS push, which the next one can differ on. A missing
+# interpreter is a property of the machine, so it silences this gate on every push until somebody
+# installs one, and nothing records that a push went unweighed. So it is refused by name (L490).
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
 
 payload="$(cat)"
+
+# THE MEASURER'S OWN READER, asked before anything is measured (claude-config#486, L490).
+#
+# lib/bundle-budget.py runs under python3, and with no python3 the call came back with the shell's
+# own "command not found" and exit 127, which landed in the catch all branch: one line on stdout
+# and exit 0. The bundle was never weighed and nothing was recorded, on every push, on that
+# machine, and a push that was never judged looked exactly like one that passed (L42, L98).
+#
+# Asked above the payload read, because python3 is also one of the two tools ps_parse_payload
+# reads with: with neither jq nor python3 the parse below exits 0 first and this question would
+# never be reached (L135, L667). Narrowed by a cheap substring on the raw payload, since nothing
+# here can tell a push from an `ls` when the payload is unreadable (L36, L54), and the override is
+# read the same way so the refusal is never a dead end (L109).
+if ps_reader_missing python3; then
+  case "$payload" in
+    *SKIP_BUNDLE_BUDGET_CHECK=1*) exit 0 ;;
+    *push*)
+      echo "PUSH BLOCKED: $(ps_detector_absent_why "python3 is not on PATH" \
+        "check-bundle-budget.sh runs its measurer, lib/bundle-budget.py, under it to weigh this repository's built client bundle against its recorded total, so with python3 absent nothing here weighs anything." \
+        "python3")" >&2
+      echo "OVERRIDE, this one push, recording nothing: SKIP_BUNDLE_BUDGET_CHECK=1 <your original git push command>" >&2
+      exit 2 ;;
+  esac
+  exit 0
+fi
 
 parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
 cmd="${parsed%%$'\x1f'*}"

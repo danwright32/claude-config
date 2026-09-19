@@ -40,6 +40,36 @@ CLONE_REGISTRY="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
 
 payload="$(cat 2>/dev/null || true)"
 
+# THE READER THIS WHOLE CHECK RUNS THROUGH, asked first (claude-config#486, L490).
+#
+# Both halves of this hook are python3: the file the tool call wrote is read out of the payload
+# with it, and the answer is emitted as JSON by it. With no python3 the target came back empty and
+# the hook exited 0 in silence, so a lesson written into LESSONS.md was never checked. That is the
+# same quiet as a lesson with nothing wrong in it, and that quiet is the whole reason this file
+# exists: it is what let two malformed entries sit for days holding the lessons file back (L98).
+#
+# It speaks on stderr with exit 2 rather than through block(), because block() builds its JSON
+# with the interpreter that is missing. PostToolUse feeds a non zero exit's stderr back to the
+# model, which is the same place a block reason lands.
+#
+# Narrowed on the RAW payload, since nothing here can read which file was written: it must mention
+# both the config root and the lessons file by name. That is strictly narrower than the real
+# predicate (a path reaching the same file through a symlink does not match, and stays silent as
+# it did before), and it never speaks about a project's own notes named LESSONS.md, which this
+# hook is not about (L54, L324).
+if ! command -v python3 >/dev/null 2>&1; then
+  case "$payload" in
+    *"$CLAUDE_HOME"*LESSONS.md*|*LESSONS.md*"$CLAUDE_HOME"*)
+      {
+        echo "LESSON CHECK DID NOT RUN: python3 is not on PATH, and lesson-entry-check.sh reads the written file out of the tool payload with it and runs claude-sync lesson-faults over the entry. Nothing has judged the lesson just written into $CLAUDE_HOME/LESSONS.md."
+        echo "Until python3 is installed, a malformed or over length entry is invisible: absent from LESSONS-INDEX.md (which loads into every session in every project), unreadable by 'claude-sync lesson', uncounted by the duplicate check and by the number minter, and it holds the WHOLE lessons file back from the next send, so every lesson written after it is stuck too."
+        echo "Check the entry by hand now, or install python3 and confirm with: claude-sync lesson-faults"
+      } >&2
+      exit 2 ;;
+  esac
+  exit 0
+fi
+
 # The file this tool call wrote. A payload that names none is nothing to do with a lessons file, so
 # there is nothing to check and nothing to say. That is not the same as a check that ran and found
 # nothing, and the difference only matters once a file IS named, which is where the reporting below

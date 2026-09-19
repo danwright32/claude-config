@@ -425,6 +425,43 @@ R="$(mk_repo "$GH_URL")"; commit_file "$R" node_modules/pkg/README.md "$PENDING_
 run_hook "$BIN" "$R" "git push"
 want_code 0 "a README under node_modules is not a doc of this repo"
 
+# --- the detector's own reader (claude-config#486) -----------------------------
+#
+# lib/doc-issue-refs.py, which finds the candidate sentences, runs under python3, and nothing
+# asked whether python3 was installed. Without it the candidate file came back empty, the
+# emptiness test exited 0, and no issue reference in any doc was ever checked against GitHub: a
+# machine with no python3 passed every push, with nothing said (L490, L42, L98).
+. "$DIR/lib/no-python-path.sh"
+NOPY_ROOT="$WORKDIR/nopy"
+NOPY="$NOPY_ROOT/bin"
+# jq linked in: the payload stays legible, so the only thing missing is the detector's interpreter.
+npp_build_bin "$NOPY" jq
+if npp_reaches_python3 "$NOPY"; then
+  bad "the bare directory really reaches no python3: it found one, so nothing below measures its absence"
+else ok; fi
+
+# A doc naming an OPEN issue, on purpose: with no detector nothing can tell a stale claim from a
+# live one, so the refusal comes from the absence rather than from a finding (L11).
+BIN="$(mk_bin)"; set_state "$BIN" 1041 OPEN "Add privacy policy links to the booker"
+R="$(mk_repo "$GH_URL")"; commit_file "$R" docs/pii.md "$PENDING_DOC"
+run_hook "" "$R" "git push" "$BIN:$NOPY"
+want_code 2 "with no python3 the push is refused rather than passed with no doc read at all"
+want_says "python3" "and the refusal names the reader that is missing"
+[ "$(calls "$BIN")" = "0" ] && ok || bad "the refusal asked gh nothing, since nothing was found to ask about, got $(calls "$BIN") call(s)"
+
+# A command the missing detector takes nothing from is not refused (L54, L324).
+run_hook "" "$R" "git status" "$BIN:$NOPY"
+want_code 0 "a command that is not a push is not refused over a detector it never needed"
+
+# The documented override still clears it (L109).
+run_hook "" "$R" "SKIP_DOC_REFS_CHECK=1 git push" "$BIN:$NOPY"
+want_code 0 "the visible override still clears the missing detector refusal"
+
+# The control, the same push with python3 present: allowed, because the issue really is open. So
+# the refusal above is the detector's absence and not a fixture that refuses everything (L159).
+run_hook "$BIN" "$R" "git push"
+want_code 0 "the control still allows the same push with python3 present"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

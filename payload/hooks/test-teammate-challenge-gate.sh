@@ -106,6 +106,56 @@ python3 -c 'import json,sys; print(json.dumps({"agent_id": "../../.." + sys.argv
   && check "and such a teammate is still only nudged once" ok \
   || check "and such a teammate is still only nudged once" "it nudged again, so the marker never stuck"
 
+# ---------------------------------------------------------------------------
+# The reader the identifier comes out of (claude-config#486).
+#
+# The payload is read with python3. Without it the identifier came back empty, which took the same
+# path as a payload naming no teammate: exit 0, nothing said, every teammate idling unchallenged
+# for ever, and indistinguishable from a hook that had simply already nudged them (L490, L98).
+#
+# It still cannot nudge PER TEAMMATE, because there is no identifier to key a marker on and one
+# that fired every time would be the idle loop this hook is built to avoid. So it says it ONCE,
+# keyed on a marker of its own, carrying the challenge itself so the substance is not lost either.
+# ---------------------------------------------------------------------------
+. "$DIR/lib/no-python-path.sh"
+NOPY="$TMPROOT/nopy/bin"
+npp_build_bin "$NOPY"
+if npp_reaches_python3 "$NOPY"; then
+  check "the bare directory really reaches no python3" "it found one, so nothing below measures its absence"
+else check "the bare directory really reaches no python3" ok; fi
+
+NOPY_TMP="$TMPROOT/nopytmp"; mkdir -p "$NOPY_TMP"
+run_nopy() { env PATH="$NOPY" TMPDIR="$NOPY_TMP" "$NOPY/bash" "$H" 2>"$TMPROOT/err"; }
+
+printf '{"agent_id":"plan-redteam-9"}' | run_nopy; code_nopy1=$?
+[ "$code_nopy1" -eq 2 ] \
+  && check "with no python3 the first idle is still held back rather than passing in silence" ok \
+  || check "with no python3 the first idle is still held back rather than passing in silence" "exit=$code_nopy1"
+msg="$(errtext)"
+case "$msg" in
+  *python3*) check "and the message names the reader that is missing" ok ;;
+  *) check "and the message names the reader that is missing" "msg=$msg" ;;
+esac
+case "$msg" in
+  *disagree*) check "and still carries the challenge it exists to make" ok ;;
+  *) check "and still carries the challenge it exists to make" "msg=$msg" ;;
+esac
+
+printf '{"agent_id":"plan-security-9"}' | run_nopy; code_nopy2=$?
+[ "$code_nopy2" -eq 0 ] \
+  && check "and a second teammate idling is not held back, so this can never loop" ok \
+  || check "and a second teammate idling is not held back, so this can never loop" "exit=$code_nopy2, which is an idle loop"
+[ -z "$(errtext)" ] \
+  && check "and nothing is said the second time" ok \
+  || check "and nothing is said the second time" "it said: $(errtext)"
+
+# The control: with python3 present a fresh teammate is still nudged per teammate, so the once
+# only behaviour above belongs to the missing reader and not to a hook that stopped nudging (L159).
+printf '{"agent_id":"plan-data-9"}' | run; code_ctrl=$?
+[ "$code_ctrl" -eq 2 ] \
+  && check "the control still nudges a fresh teammate with python3 present" ok \
+  || check "the control still nudges a fresh teammate with python3 present" "exit=$code_ctrl"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

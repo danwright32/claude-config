@@ -448,6 +448,44 @@ R3_HEAD="$(G3 rev-parse --short HEAD)"
 fire_push "git push" 0 "$R3"
 check "a three commit push is reviewed from the upstream's previous tip" "($R3_BEFORE..$R3_HEAD," "$OUT"
 
+# ===========================================================================
+# 6. The reader the background reviewer runs under.
+# ===========================================================================
+# LAST in the suite on purpose: the control below starts a real review, and several cases above
+# assert an ABSOLUTE count of how many the fake `claude` has been asked for.
+# No python3 on PATH (claude-config#486). The runner this hook starts, lib/ai-review-run.py, is a
+# python3 program. With no python3 the `nohup python3 ...` died at once and the line straight after
+# it said the review had started in the background, which is a claim about something that never
+# ran (L12, L11). The fake `claude` IS linked in, so what is missing is only the interpreter.
+. "$DIR/lib/no-python-path.sh"
+NOPY="$WORKDIR/nopy/bin"
+npp_build_bin "$NOPY" jq
+ln -s "$FAKEBIN/claude" "$NOPY/claude" 2>/dev/null
+if npp_reaches_python3 "$NOPY"; then
+  bad "the bare directory really reaches no python3: it found one, so nothing below measures its absence"
+else ok; fi
+G checkout -q main
+G checkout -q -b fix/nopy
+printf 'export const nopy = 1;\n' > "$REPO/src/nopy.ts"
+G add src/nopy.ts; G commit -q -m nopy
+G push -q -u origin fix/nopy 2>/dev/null
+before_nopy="$(calls)"
+OUT="$(payload "git push -u origin fix/nopy" 0 "$REPO" s1 | env PATH="$NOPY" "$NOPY/bash" "$PUSH_HOOK" 2>&1)"; RC=$?
+check "with no python3 the skip names the reader that is missing" "python3" "$OUT"
+check_not "and never claims a review started" "started in the background" "$OUT"
+check_eq "and exits 0, because this hook never blocks a push" 0 "$RC"
+check_eq "and starts nothing" "$before_nopy" "$(calls)"
+# The control: the same push with python3 present really does start one, so the case above is the
+# interpreter's absence and not a branch that skips everything (L159).
+SHA_NOPY="$(G rev-parse HEAD)"
+fire_push "git push -u origin fix/nopy" 0
+check "the control still starts a review for the same push with python3 present" "started in the background" "$OUT"
+# Waited for, so the review this suite started is finished before the scratch directory it writes
+# into is removed. A detached child still writing while its parent's trap deletes the tree leaves
+# both the directory and the process behind (claude-config#465).
+wait_for_final "$SHA_NOPY" 20 && ok || bad "and that control review finishes"
+
+
 echo
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

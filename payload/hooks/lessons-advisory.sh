@@ -45,7 +45,12 @@
 # Fails QUIET: it is an advisor, so a broken advisor should add nothing rather
 # than nag. The one thing it will not do quietly is lose a lesson: an id that no
 # longer resolves, or a lessons file it cannot read, is reported in the advisory
-# itself rather than dropped.
+# itself rather than dropped. Nor will it quietly lose the WHOLE advisory: the
+# emit at the bottom is python3, and with no python3 every lesson this matched
+# was found and then thrown away, on a push that then looked exactly like one
+# with nothing to say (claude-config#486, L98). It stays advisory, so that is
+# said on stderr with exit 1, the non blocking error, and only on a push that
+# actually had advice waiting.
 
 set -uo pipefail
 
@@ -132,7 +137,14 @@ fi
 # It matches the index by its whole family of names rather than by the one it has today, because
 # the index is being split into one file per section (claude-config#473) and the skip has to cover
 # LESSONS-INDEX-<section>.md the moment those files land, not one push later.
-RULE_TEXT_PATH_RE='(^|/)(LESSONS\.md|LESSONS-INDEX[^/]*\.md)$'
+# The literal dots are written as bracket expressions rather than as backslash escapes. This value
+# is handed to awk through -v, which processes escape sequences in it, and the two awks differ:
+# the one the Mac ships takes an unknown escape silently while gawk WARNS on stderr, so on Linux
+# every run of this hook wrote `awk: warning: escape sequence ...` into its own stderr (L434). It
+# was invisible while every path here exited 0, because Claude Code discards a PreToolUse hook's
+# stderr on exit 0; the stand down below speaks on exit 1, which is where it surfaced. A bracket
+# expression means the same thing to awk and to grep -E with no backslash for either to read.
+RULE_TEXT_PATH_RE='(^|/)(LESSONS[.]md|LESSONS-INDEX[^/]*[.]md)$'
 
 # path<TAB>added-line, one per added line. A rule text file is dropped at its header, so none of
 # its lines reach the triggers below.
@@ -359,6 +371,31 @@ Before pushing, check each one against what you actually changed. Where it
 applies and the code does not honour it, fix it and push the fix in the same
 breath. Where it does not apply, say so in one line and carry on. Do not
 silently ignore one."
+
+# THE EMITTER'S OWN READER, asked here rather than at the top (claude-config#486, L490).
+#
+# Everything above this line is shell, so the matching still happens on a machine with no python3;
+# what cannot happen is the delivery, because additionalContext travels as JSON and python3 is what
+# builds it. Without it the whole advisory was dropped and the hook exited 0, which is the same
+# silence this hook uses to mean "no pattern matched" (L98, L622).
+#
+# It is asked HERE, past every silent path above, so nothing is said on a push that had no advice
+# to lose: an advisory that spoke on every push on such a machine would be the one that gets turned
+# off (L36, L324).
+#
+# Exit 1 rather than 2: this hook decides nothing and must not start refusing pushes now. Claude
+# Code discards a PreToolUse hook's stderr on exit 0, and exit 1 is the non blocking error the
+# push hooks in this repo already use to reach a reader without stopping anything.
+if ps_reader_missing python3; then
+  {
+    echo "LESSONS ADVISORY NOT DELIVERED: python3 is not on PATH, and this hook hands its advice over as JSON built with it. The push is going ahead unadvised."
+    echo "It had something specific to say about this push. Rather than lose it, here it is as plain text:"
+    echo ""
+    printf '%s\n' "$context"
+  } >&2
+  printf '%s' "$now" > "$stamp" 2>/dev/null
+  exit 1
+fi
 
 printf '%s' "$context" | python3 -c '
 import sys, json

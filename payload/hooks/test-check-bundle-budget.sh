@@ -265,6 +265,51 @@ want_says "could not be read" "an unreadable record is reported"
 want_says "$f" "by path"
 want_silent_on "first measurement" "and is not silently replaced"
 
+# --- the measurer's own reader (claude-config#486) -----------------------------
+#
+# lib/bundle-budget.py runs under python3 and nothing asked whether python3 was installed. Without
+# it the call failed with the shell's own "command not found", which landed in the catch all
+# branch: one line on stdout and exit 0, so the bundle was never weighed and nothing recorded, on
+# every push, on that machine (L490, L42, L98).
+. "$DIR/lib/no-python-path.sh"
+NOPY_ROOT="$WORKDIR/nopy"
+NOPY="$NOPY_ROOT/bin"
+# jq linked in: the payload stays legible, so the only thing missing is the measurer's interpreter.
+npp_build_bin "$NOPY" jq
+if npp_reaches_python3 "$NOPY"; then
+  bad "the bare directory really reaches no python3: it found one, so nothing below measures its absence"
+else ok; fi
+
+run_hook_nopy(){  # cwd command
+  local p
+  p="$(HK_CMD="$2" HK_CWD="$1" python3 -c 'import json,os,sys
+sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
+  OUT="$(printf '%s' "$p" | ( cd "$1" && env BUNDLE_BUDGET_STATE_DIR="$STATE" PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>"$WORKDIR/err" ))"; RC=$?
+  ERR="$(cat "$WORKDIR/err")"
+}
+
+# A repository whose bundle is WELL under any budget, on purpose: with no measurer nothing can
+# tell a bundle that grew from one that did not, so the refusal comes from the absence rather
+# than from a measurement (L11).
+W="$(mk_repo "$WORKDIR/nopy-repo")"
+chunk "$W" ".next/static/chunks/main.js" 1000 60
+run_hook_nopy "$W" "git push"
+want_rc 2 "with no python3 the push is refused rather than passed with the bundle never weighed"
+want_says "python3" "and the refusal names the measurer's reader that is missing"
+
+# A command the missing measurer takes nothing from is not refused (L54, L324).
+run_hook_nopy "$W" "git status"
+want_rc 0 "a command that is not a push is not refused over a reader it never needed"
+
+# The documented override still clears it (L109).
+run_hook_nopy "$W" "SKIP_BUNDLE_BUDGET_CHECK=1 git push"
+want_rc 0 "the visible override still clears the missing measurer refusal"
+
+# The control, the same push with python3 present: allowed, and it records a first measurement. So
+# the refusal above is the reader's absence and not a fixture that refuses everything (L159).
+run_hook "$W" "git push"
+want_rc 0 "the control still allows the same push with python3 present"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

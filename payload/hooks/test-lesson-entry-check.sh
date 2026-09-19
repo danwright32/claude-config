@@ -253,6 +253,40 @@ case "$out" in *"already running"*) check "and it says nothing about another run
 kill "$holder" 2>/dev/null
 wait "$holder" 2>/dev/null
 
+# --- the reader this whole check runs through (claude-config#486) --------------
+#
+# The file the tool call wrote is read out of the payload with python3, and the answer is emitted
+# as JSON by python3 too. With no python3 the target came back empty, the hook exited 0 in
+# silence, and a lesson written into LESSONS.md was never checked: the same quiet as a lesson with
+# nothing wrong in it, which is the quiet this hook exists to end (L490, L98, L11).
+. "$DIR/lib/no-python-path.sh"
+NOPY_ROOT="$WORK/nopy"
+NOPY="$NOPY_ROOT/bin"
+npp_build_bin "$NOPY" jq
+if npp_reaches_python3 "$NOPY"; then
+  check "the bare directory really reaches no python3" "it found one, so nothing below measures its absence"
+else check "the bare directory really reaches no python3" ok; fi
+
+NOPY_OUT=""; NOPY_RC=0
+nopy_hook() {  # nopy_hook <payload> -> sets NOPY_OUT and NOPY_RC
+  NOPY_OUT="$(printf '%s' "$1" | env PATH="$NOPY" CLAUDE_HOME="$HOME_FIX" \
+      SYNC_CLONE_REGISTRY="$WORK/reg" "$NOPY/bash" "$HOOK" 2>&1)"; NOPY_RC=$?
+}
+
+nopy_hook "$(payload_for Edit "$HOME_FIX/LESSONS.md")"; out="$NOPY_OUT"
+says "with no python3 a write to the lessons file is reported rather than passed in silence" "$out" "python3"
+if [ "$NOPY_RC" = 2 ]; then check "and it is reported in the one way a hook with no python3 can, on stderr with exit 2" ok
+else check "and it is reported in the one way a hook with no python3 can, on stderr with exit 2" "exited $NOPY_RC"; fi
+says "and it says what goes unnoticed when nothing checks the entry" "$out" "LESSONS-INDEX.md"
+
+# A write to something else takes nothing from the missing reader, so there is nothing to report
+# (L54, L324). With no python3 the target cannot be read, so this is narrowed on the raw payload:
+# a payload that never mentions the lessons file cannot be about one.
+nopy_hook "$(payload_for Edit "$WORK/notes.md")"; out="$NOPY_OUT"
+if [ "$NOPY_RC" = 0 ]; then check "a write to an unrelated file is not reported over a reader it never needed" ok
+else check "a write to an unrelated file is not reported over a reader it never needed" "exited $NOPY_RC saying: ${out:0:200}"; fi
+silent "and it says nothing about that write" "$out"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
