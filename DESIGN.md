@@ -436,6 +436,31 @@ The single `LESSONS-INDEX.md` was retired rather than kept beside the sections. 
 been a second copy of every rule that nothing imports, so nothing would have carried it to the other
 Mac or kept it current there, and a stale index reads exactly like a correct one (L98).
 
+### Refusing a lessons file refuses everything rendered from it
+
+Adopted for #483. The publish gate holds `LESSONS.md` back when it carries a duplicate number, an
+entry nothing can read, a line over the index cap or any of the other faults it walks. It used to
+hold back only that file and copy the generated index files beside it, so the payload carried an
+index naming a lesson the payload's own `LESSONS.md` did not hold, and a rendered index line is what
+a session on the other Mac loads as a rule that exists (L46, L11).
+
+The set held back is now the source plus everything rendered from it, assembled in one place and
+read both by the copy loop and by the message that says what waited, so a reader cannot be told
+about a different set from the one held (L679). The generated files are enumerated by name shape
+rather than from the current section list, for the reason the shape rule already gives: a sibling
+from a section this Mac no longer produces is still a rendering of that source. `CLAUDE.md` joins
+them only when its generated list of imports would disagree with the index files the payload holds,
+which is written as the condition rather than as a broader "a lessons fault holds `CLAUDE.md` too"
+(L615): a name the payload has no file for makes the other Mac's pull refuse outright, and a file
+the list stops naming stops loading there while its lessons are still in that Mac's `LESSONS.md`.
+The sweep that removes a payload file this Mac no longer produces is skipped on the same run,
+because deleting a sibling while the payload keeps a `LESSONS.md` that still has that section is the
+same partial state read the other way round.
+
+The staleness hold back counts as well as the gate. This Mac can be holding an unsent lesson while
+the repo has changed `LESSONS.md` since the last apply, and then the source is left alone as stale
+while the index rendered from it, unsent lesson and all, would be copied over the repo's.
+
 ### Handing the freed budget to the last suite still running
 
 Rejected for #147, which is what the issue proposed. A full run measured 84 seconds on an idle Mac

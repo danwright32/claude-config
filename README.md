@@ -343,6 +343,12 @@ one the index shows to chance (#392). Each refusal names the lesson numbers. All
 faults above, come from one list that `check-lessons`, the send, and the hook that runs the moment a
 lesson is written all walk, so none of them can disagree about what a fault is.
 
+A lessons file held back takes everything rendered from it with it: every `LESSONS-INDEX-<section>.md`
+beside it, and `CLAUDE.md` when its generated list of imports would name one of them (#483). The
+refusal lists every file that waited. Publishing an index without its source would put a rule in
+front of every session on the other Mac that its own `LESSONS.md` does not hold, and a rendered index
+line is indistinguishable from a rule that exists.
+
 A Mac claims its band the first time it asks for a number: the first Mac gets 1 to 500, the next 501
 to 1000, and so on. The claim is one file per Mac under `lesson-bands/` in the repo, committed so the
 other Mac can see it, and one file per writer means a claim can never produce a merge conflict. Two
