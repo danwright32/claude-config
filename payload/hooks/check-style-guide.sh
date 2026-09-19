@@ -119,58 +119,23 @@ scope_unknown=0
 if [ "$commit_in_chain" -eq 1 ]; then
   pending_diff="$(git diff --cached -- . "${EXCLUDES[@]}" 2>/dev/null)"
 
-  # What the commit will take beyond the index, from the one parser every push hook shares
-  # (claude-config#442). A second copy of it lived in another hook and the two would drift.
-  add_scope="$(ps_add_scope "$cmd")"
-  add_kind="${add_scope%%$'\n'*}"
-
-  case "$add_kind" in
-    INDEX) : ;;
-    TRACKED)
+  # What the commit will take beyond the index, from the one reader every push hook shares
+  # (claude-config#442, #457). This hook turned the add's scope into files itself, and so did two
+  # others, each its own way; one of them read the whole working tree (L613).
+  pending_list="$(ps_pending_files "$cmd")"
+  # WIDENED: the add could not be read (or names a path that is not there), so the list is the
+  # whole working tree, and the refusal says so (L98, L11).
+  [ "${pending_list%%$'\n'*}" = "WIDENED" ] && scope_unknown=1
+  top="$(git rev-parse --show-toplevel 2>/dev/null)"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if git -C "$top" ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
       pending_diff="${pending_diff}
-$(git diff HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
-      # Paths an add names beside a `commit -a` follow the word, and one of them may be untracked
-      # (claude-config#457): -a never takes an untracked file, the add does.
-      while IFS= read -r pth; do
-        [ -n "$pth" ] || continue
-        while IFS= read -r u; do
-          [ -n "$u" ] || continue
-          pending_diff="${pending_diff}$(new_file_block "$u")"
-        done < <(git ls-files --others --exclude-standard -- "$pth" 2>/dev/null)
-      done < <(printf '%s\n' "$add_scope" | tail -n +2)
-      ;;
-    ALL|UNKNOWN)
-      [ "$add_kind" = "UNKNOWN" ] && scope_unknown=1
-      pending_diff="${pending_diff}
-$(git diff HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
-      while IFS= read -r u; do
-        [ -n "$u" ] || continue
-        pending_diff="${pending_diff}$(new_file_block "$u")"
-      done < <(git ls-files --others --exclude-standard 2>/dev/null)
-      ;;
-    PATHS)
-      while IFS= read -r pth; do
-        [ -n "$pth" ] || continue
-        # A path that is not there cannot be read, and narrowing to nothing on a path
-        # nobody can resolve would report a clean run it never measured (L98, L11).
-        if [ ! -e "$pth" ]; then scope_unknown=1; continue; fi
-        pending_diff="${pending_diff}
-$(git diff HEAD -- "$pth" "${EXCLUDES[@]}" 2>/dev/null)"
-        while IFS= read -r u; do
-          [ -n "$u" ] || continue
-          pending_diff="${pending_diff}$(new_file_block "$u")"
-        done < <(git ls-files --others --exclude-standard -- "$pth" 2>/dev/null)
-      done < <(printf '%s\n' "$add_scope" | tail -n +2)
-      if [ "$scope_unknown" -eq 1 ]; then
-        pending_diff="${pending_diff}
-$(git diff HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
-        while IFS= read -r u; do
-          [ -n "$u" ] || continue
-          pending_diff="${pending_diff}$(new_file_block "$u")"
-        done < <(git ls-files --others --exclude-standard 2>/dev/null)
-      fi
-      ;;
-  esac
+$(git -C "$top" diff HEAD -- "$f" "${EXCLUDES[@]}" 2>/dev/null || git -C "$top" diff -- "$f" "${EXCLUDES[@]}" 2>/dev/null)"
+    else
+      pending_diff="${pending_diff}$(cd "$top" && new_file_block "$f")"
+    fi
+  done < <(printf '%s\n' "$pending_list" | tail -n +2)
 fi
 
 [ -n "$committed_diff$pending_diff" ] || exit 0

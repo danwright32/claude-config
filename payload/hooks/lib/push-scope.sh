@@ -7,11 +7,13 @@
 #   ps_is_git_push: is this command actually a push (leading tokens, not a
 #                      substring, so an `echo "git push"` cannot trigger a hook)
 #   ps_repo_dir: which repository the push is about
-#   ps_commit_in_chain / ps_add_in_chain: does the same command commit/stage
-#                      before pushing? PreToolUse runs BEFORE the command, so a
-#                      `git add … && git commit … && git push` has nothing in
-#                      history yet and the pending work must be folded in.
-#   ps_add_scope: what that pending commit will take beyond the index
+#   ps_commit_in_chain: does the same command commit before pushing? PreToolUse
+#                      runs BEFORE the command, so a `git add … && git commit … &&
+#                      git push` has nothing in history yet and the pending work
+#                      must be folded in.
+#   ps_add_scope / ps_pending_files: what that pending commit will take beyond
+#                      the index, as a scope word or as the files themselves
+#   ps_add_takes_all: does a git add in the command take more than it names
 #   ps_base_ref: the ref a push is judged against
 #   ps_merge_base / ps_pending_base / ps_pushed_base: where the range starts, one
 #                      per situation a push hook meets (the contract is above them)
@@ -226,13 +228,10 @@ ps_commit_in_chain() {
   grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)' <<< "$1"
 }
 
-ps_add_in_chain() {
-  ps__git_add_in_chain "$1" && return 0
-  ps__commit_stages_all "$1"
-}
-
-# The two halves of ps_add_in_chain, named, because ps_add_scope has to tell them apart: an add
-# names what it stages, a `commit -a` stages every tracked change and names nothing.
+# Does the command stage with a git add, and does its commit stage for itself with -a? Two
+# questions, because ps_add_scope has to tell them apart: an add names what it stages, a
+# `commit -a` stages every tracked change and names nothing. The first is a cheap filter only;
+# ps__read_adds decides what an add really is.
 ps__git_add_in_chain() {
   grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' <<< "$1"
 }
@@ -255,9 +254,11 @@ ps__commit_stages_all() {
 #          could not be read, or it names nothing), or NONE (no add at all)
 #   takes  prints yes when any add takes more than the paths it names (ALL or TRACKED), else no
 ps__read_adds() {   # $1 = command  $2 = scope | takes
-  PS_CMD="$1" PS_MODE="${2:-scope}" python3 -c '
-import os, re, shlex
-cmd = os.environ.get("PS_CMD", "")
+  # The command goes in on stdin, never in the environment: a heredoc commit message can pass the
+  # platform's limit on argument and environment size, and python then never starts at all.
+  printf '%s' "$1" | PS_MODE="${2:-scope}" python3 -c '
+import os, re, shlex, sys
+cmd = sys.stdin.read()
 mode = os.environ.get("PS_MODE", "scope")
 EVERYTHING = {"-A", "--all", "--no-ignore-removal", ".", "./", ":/", "*"}
 TRACKED_ONLY = {"-u", "--update"}

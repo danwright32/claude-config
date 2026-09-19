@@ -226,9 +226,10 @@ EOF
   ps_commit_in_chain "$long_cmd" \
     && check "a $size command still has its commit seen" ok \
     || check "a $size command still has its commit seen" "read as absent over ${#long_cmd} bytes"
-  ps_add_in_chain "$long_cmd" \
-    && check "a $size command still has its add seen" ok \
-    || check "a $size command still has its add seen" "read as absent over ${#long_cmd} bytes"
+  got_scope="$(ps_add_scope "$long_cmd" | awk 'NR == 1')"
+  [ "$got_scope" = "TRACKED" ] \
+    && check "a $size command still has its add and its -a seen" ok \
+    || check "a $size command still has its add and its -a seen" "scope [$got_scope] over ${#long_cmd} bytes"
 done
 
 # ---------------------------------------------------------------------------
