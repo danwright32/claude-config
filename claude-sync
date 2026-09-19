@@ -73,6 +73,15 @@ if [ -f "$SYNC_COMMANDS_LIB" ]; then
   # shellcheck source=payload/hooks/lib/sync-commands.sh
   . "$SYNC_COMMANDS_LIB"
 fi
+# Whether this repo's test suites have piled up (claude-config#444, #466): the one rule both
+# `status` and the per prompt notice ask, so the two cannot disagree. Resolved the same way as the
+# two above. Missing, `status` says it could not check rather than reporting nothing (L98).
+SUITE_PILE_LIB="$SYNC_SELF_PAYLOAD/hooks/lib/suite-pile.sh"
+[ -f "$SUITE_PILE_LIB" ] || SUITE_PILE_LIB="$CLAUDE_HOME/hooks/lib/suite-pile.sh"
+if [ -f "$SUITE_PILE_LIB" ]; then
+  # shellcheck source=payload/hooks/lib/suite-pile.sh
+  . "$SUITE_PILE_LIB"
+fi
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
 MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
@@ -7528,9 +7537,11 @@ payload/$rel
 # The process table, behind one seam so a test never reads or reports what happens to be running
 # on the real machine (L2). SYNC_PS_FIXTURE holds the same four fields in the same order.
 sync_process_list(){
-  if [ -n "${SYNC_PS_FIXTURE:-}" ]; then cat "$SYNC_PS_FIXTURE" 2>/dev/null || true
-  else ps -eo pid=,ppid=,etime=,command= 2>/dev/null || true
-  fi
+  if declare -F suite_pile_table >/dev/null; then suite_pile_table || true; return 0; fi
+  # Without the library there is no way to read the table, and an empty answer would read as a
+  # quiet machine, so it says which file is missing rather than reporting nothing (L98, L215).
+  echo "claude-sync: hooks/lib/suite-pile.sh is missing, so the process table could not be read and nothing below is a statement about what is running." >&2
+  return 0
 }
 
 # Processes this tool left behind (#33). Nothing watched for these: seventeen suite processes were
@@ -7676,16 +7687,11 @@ case "$SYNC_SCRATCH_DU_TIMEOUT" in
     exit 2 ;;
 esac
 
-# When this repo's test suites count as left running (claude-config#444), for `status`. On
-# 2026-09-18 559 suite processes had run for up to seven hours at zero CPU and nothing said so. Two
-# signals, because a pile has two shapes. Age: no suite may run longer than the slowest one's own
-# ceiling, the sync suite's SUITE_TIMEOUT, so anything older than that is waiting on something that
-# will not come. And breadth: more suites started independently than a whole run of the runner ever
-# has going at once, which is how a pile looks before any of it is old. Both are derived in
-# DESIGN.md's measured numbers table, and both are refused when unreadable (L50).
-SYNC_SUITE_MAX_AGE="${SYNC_SUITE_MAX_AGE:-3600}"
-SYNC_SUITE_MAX_ROOTS="${SYNC_SUITE_MAX_ROOTS:-8}"
-case "$SYNC_SUITE_MAX_AGE$SYNC_SUITE_MAX_ROOTS" in
+# When this repo's test suites count as left running (claude-config#444), for `status`. The two
+# limits and their defaults live in hooks/lib/suite-pile.sh, beside the rule that reads them,
+# because the per prompt notice asks the same question (claude-config#466). Refused here when
+# unreadable (L50), since status is a command somebody chose to run and can be told why.
+case "${SYNC_SUITE_MAX_AGE:-}${SYNC_SUITE_MAX_ROOTS:-}" in
   *[!0-9]*)
     echo "claude-sync: SYNC_SUITE_MAX_AGE='$SYNC_SUITE_MAX_AGE' and SYNC_SUITE_MAX_ROOTS='$SYNC_SUITE_MAX_ROOTS' must both be whole numbers. Refusing to run rather than judging leftover test runs by a limit nobody can read." >&2
     exit 2 ;;
@@ -8107,70 +8113,34 @@ report_stray_processes(){
 # them copies of test-run-all-tests.sh, and the family above could not see one: it watches a single
 # file by name. A machine at load 272 slows every session on it, and nothing had said so.
 #
-# A suite process is a `test-*.sh` or the runner, run from anywhere this repo's scripts live: a
-# checkout or worktree (whose path holds `claude-config`), the installed hooks, or the named scratch
-# the suites build their fixtures in. It speaks on either of two shapes, each derived in DESIGN.md:
-# any one of them older than SYNC_SUITE_MAX_AGE, and more of them started independently than
-# SYNC_SUITE_MAX_ROOTS. It names what to kill by pid. A TERM is not enough here, and that was
-# measured on 2026-09-18: a suite with an EXIT trap blocked on a child holds a TERM until the child
-# ends, which for a pile is never.
+# What counts as a pile, and its wording, are hooks/lib/suite-pile.sh, which the per prompt notice
+# (hooks/suite-pile-notice.sh, claude-config#466) calls too, so the two cannot disagree about the
+# same machine (L41, L370). This function only lays the answer out for status.
 report_suite_pile(){
-  local out summary
-  out="$(sync_process_list | awk -v maxage="$SYNC_SUITE_MAX_AGE" -v maxroots="$SYNC_SUITE_MAX_ROOTS" '
-    function secs(et,   d, n, p, s) {
-      d = 0
-      if (index(et, "-") > 0) { d = substr(et, 1, index(et, "-") - 1); et = substr(et, index(et, "-") + 1) }
-      n = split(et, p, ":"); s = 0
-      if (n == 3) s = p[1] * 3600 + p[2] * 60 + p[3]
-      else if (n == 2) s = p[1] * 60 + p[2]
-      else s = p[1] + 0
-      return d * 86400 + s
-    }
-    {
-      p = $1; pp = $2; et = $3; cmd = ""
-      for (i = 4; i <= NF; i++) cmd = cmd (i > 4 ? " " : "") $i
-      parent[p] = pp
-      if (cmd ~ /(\/test-[A-Za-z0-9_.-]+\.sh|\/run-all-tests\.sh)( |$)/ \
-          && (cmd ~ /claude-config/ || cmd ~ /\/\.claude\/hooks\// || cmd ~ /\/claude-sync-work\./)) {
-        suite[p] = 1; age[p] = et; keep[p] = cmd
-      }
-    }
-    END {
-      n = 0; roots = 0; old = 0; oldest = -1; kill = ""
-      for (p in suite) {
-        n++
-        if (!(parent[p] in suite)) { roots++; root[p] = 1 }
-        s = secs(age[p])
-        if (s >= maxage) { old++; kill = kill " " p; if (s > oldest) { oldest = s; oldest_et = age[p] } }
-      }
-      if (n == 0 || (old == 0 && roots <= maxroots)) exit
-      printf "SUMMARY %d %d %d %s\n", n, roots, old, (old > 0 ? oldest_et : "-")
-      shown = 0
-      for (p in root) {
-        if (shown < 20) printf "  pid %s, running %s: %s\n", p, age[p], substr(keep[p], 1, 160)
-        shown++
-      }
-      if (shown > 20) printf "  and %d more started independently\n", shown - 20
-      if (old > 0) printf "KILL%s\n", kill
-    }' )"
+  local out root pid et cmd kill
+  if ! declare -F suite_pile_scan >/dev/null; then
+    echo "--- test suites left running ---"
+    echo "  Could not be checked: hooks/lib/suite-pile.sh is in neither $SYNC_SELF_PAYLOAD/hooks/lib nor $CLAUDE_HOME/hooks/lib, so nothing here can say whether this repo's suites have piled up. Reinstall claude-sync from its repo."
+    return 0
+  fi
+  out="$(sync_process_list | suite_pile_scan "$SYNC_SUITE_MAX_AGE" "$SYNC_SUITE_MAX_ROOTS")"
   [ -n "$out" ] || return 0
-  summary="$(printf '%s\n' "$out" | grep '^SUMMARY ' || true)"
   echo "--- test suites left running ---"
-  printf '%s\n' "$out" | grep -v '^SUMMARY \|^KILL' || true
-  printf '%s\n' "$summary" | awk -v maxage="$SYNC_SUITE_MAX_AGE" -v maxroots="$SYNC_SUITE_MAX_ROOTS" '{
-    printf "  %d suite process(es) from this repo, %d started independently (a whole run of the runner is one, and never has more than %d suites going at once).\n", $2, $3, maxroots
-    if ($4 > 0) printf "  %d of them older than %ds, the longest any suite may run, the oldest running %s. Those are waiting on something that will not come.\n", $4, maxage, $5
-  }'
+  while IFS= read -r root; do
+    case "$root" in
+      "ROOT "*)
+        root="${root#ROOT }"; pid="${root%% *}"; root="${root#* }"; et="${root%% *}"; cmd="${root#* }"
+        echo "  pid $pid, running $et: $cmd" ;;
+      "MORE "*) echo "  and ${root#MORE } more started independently" ;;
+    esac
+  done <<< "$out"
+  printf '%s\n' "$out" | suite_pile_summary "$SYNC_SUITE_MAX_AGE" "$SYNC_SUITE_MAX_ROOTS" | sed 's/^/  /'
   echo "  Each one takes a share of this Mac from every other session on it, and a pile presents as slowness rather than as a failure."
-  # Matched with `case` rather than a piped quiet grep, which leaves on its first match and under
-  # pipefail can fail the producer it left behind (L183).
-  case "
-$out" in
-    *"
-KILL "*)
-      echo "  To stop the ones past that age (a plain kill is held by a suite blocked on a child, so this is -9):"
-      echo "    kill -9$(printf '%s\n' "$out" | sed -n 's/^KILL//p')" ;;
-  esac
+  kill="$(printf '%s\n' "$out" | suite_pile_kill_pids)"
+  if [ -n "$kill" ]; then
+    echo "  To stop the ones past that age (a plain kill is held by a suite blocked on a child, so this is -9):"
+    echo "    kill -9 $kill"
+  fi
   return 0
 }
 

@@ -7045,7 +7045,7 @@ _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
   "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher processes\|test runs'"
 
-section "== status speaks about a pile of suites, and a scratch size that cannot finish (#444) =="
+section "== status speaks about a pile of suites, and a scratch size that cannot finish (#444, #466) =="
 # On 2026-09-18 559 of this repo's suite processes had run for up to seven hours at zero CPU on a
 # Mac six agents were working on, 152 of them copies of test-run-all-tests.sh. The machine sat at
 # load 272 and every session on it was slow, and nothing said so: the #33 report watches only the
@@ -7056,9 +7056,12 @@ section "== status speaks about a pile of suites, and a scratch size that cannot
 _pile_status(){ SYNC_PS_FIXTURE="$1" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1; }
 # The ages are DERIVED from the default the tool ships, never written as literals at its edge, so
 # the day the default moves these fixtures still mean what they say (L401, L130). Asserted where it
-# is read, because a pattern that stopped matching would make every fixture read as young.
-_pile_max="$(sed -n 's/^SYNC_SUITE_MAX_AGE="\${SYNC_SUITE_MAX_AGE:-\([0-9][0-9]*\)}"$/\1/p' "$SCRIPT")"
-_pile_roots="$(sed -n 's/^SYNC_SUITE_MAX_ROOTS="\${SYNC_SUITE_MAX_ROOTS:-\([0-9][0-9]*\)}"$/\1/p' "$SCRIPT")"
+# is read, because a pattern that stopped matching would make every fixture read as young. They
+# live in hooks/lib/suite-pile.sh beside the rule that reads them, which the per prompt notice
+# shares (#466).
+_pile_lib="$(dirname "$SCRIPT")/payload/hooks/lib/suite-pile.sh"
+_pile_max="$(sed -n 's/^SYNC_SUITE_MAX_AGE="\${SYNC_SUITE_MAX_AGE:-\([0-9][0-9]*\)}"$/\1/p' "$_pile_lib")"
+_pile_roots="$(sed -n 's/^SYNC_SUITE_MAX_ROOTS="\${SYNC_SUITE_MAX_ROOTS:-\([0-9][0-9]*\)}"$/\1/p' "$_pile_lib")"
 check "#444 the shipped age and breadth limits can be read" \
   "case '$_pile_max$_pile_roots' in ''|*[!0-9]*) false ;; *) [ '$_pile_max' -gt 0 ] && [ '$_pile_roots' -gt 0 ] ;; esac"
 _pile_et(){ printf '%02d:%02d:%02d' $(( $1 / 3600 )) $(( $1 % 3600 / 60 )) $(( $1 % 60 )); }
@@ -7124,6 +7127,31 @@ check "#444 and none of them is named for killing, since none is past the age li
   "! grep -qE '^ +kill -9' <<< \"\$_pile_w\""
 _pile_e="$(_pile_status "$WORK/pile-edge")"
 check "#444 exactly the limit is not reported" "! grep -q 'test suites left running' <<< \"\$_pile_e\""
+
+# The per prompt notice asks the same library, so on the same tables it speaks exactly where status
+# does, once per session (#466). Its own suite, hooks/test-suite-pile-notice.sh, covers the stretch
+# and every fault; this is the check that the two readers of one rule still agree from status's side.
+_pile_hook="$(dirname "$SCRIPT")/payload/hooks/suite-pile-notice.sh"
+_pile_notice(){ printf '{"session_id":"%s"}' "$2" | SYNC_PS_FIXTURE="$1" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/pile-notice" \
+  CLAUDE_SUITE_PILE_NOW=1800000000 bash "$_pile_hook" 2>/dev/null; }
+_pn_old="$(_pile_notice "$WORK/pile-old" s1)"
+_pn_again="$(_pile_notice "$WORK/pile-old" s1)"
+_pn_edge="$(_pile_notice "$WORK/pile-edge" s2)"
+check "#466 the prompt notice speaks on the pile status reports, naming the same kill line" \
+  "[ \"\$(grep -oE 'kill -9( [0-9]+)+' <<< \"\$_pn_old\" | tr ' ' '\\n' | grep -cxE '700|701|702')\" -eq 3 ]"
+check "#466 and not on the next prompt of the same session" "[ -z \"\$_pn_again\" ]"
+check "#466 and not on the table status is silent about" "[ -z \"\$_pn_edge\" ]"
+
+# A copy of the tool with the library beside neither itself nor the config says so, in both places
+# it would otherwise read the process table: nothing running and nothing readable are different
+# answers, and the silent one reads as a quiet machine (L98, L215).
+_pile_nolib="$WORK/nolib"; mkdir -p "$_pile_nolib/home/.claude" "$_pile_nolib/repo"
+cp "$SCRIPT" "$_pile_nolib/claude-sync"
+_pile_nl="$(CLAUDE_HOME="$_pile_nolib/home/.claude" SYNC_REPO="$_pile_nolib/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$_pile_nolib/claude-sync" status 2>&1)"
+check "#466 a tool with no suite-pile library says the pile could not be checked" \
+  "grep -q 'Could not be checked: hooks/lib/suite-pile.sh' <<< \"\$_pile_nl\""
+check "#466 and says the process table could not be read rather than reporting nothing running" \
+  "grep -q 'the process table could not be read' <<< \"\$_pile_nl\""
 
 # An unreadable limit is refused rather than guessed at (L50).
 _pile_bad="$(SYNC_SUITE_MAX_AGE=soon SYNC_PS_FIXTURE="$WORK/pile-old" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; _pile_bad_rc=$?
@@ -7523,8 +7551,10 @@ check "#41 the heading scan really read the headings" "[ \"\$_sec_seen\" -ge 40 
 # row in this table states what its number is derived FROM, so a row for that one would have to
 # invent a derivation. It is tracked separately as its own README accuracy question rather than
 # being quietly exempt.
+# The suite pile library is read too: its two limits are status's thresholds, moved there so the
+# per prompt notice could share them (#466), and leaving it out would exempt them.
 _thresholds(){
-  sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" \
+  sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" "$(dirname "$SCRIPT")/payload/hooks/lib/suite-pile.sh" \
     | grep -ohE '\$\{(SYNC|SUITE)_[A-Z_]*(MAX_AGE|TIMEOUT|MAX_DEPTH|RETIRE_AFTER|POLL_INTERVAL)[A-Z_]*:-[0-9]+(\.[0-9]+)?\}' \
     | sed 's/^\${//; s/}$//; s/:-/ /' | sort -u
 }
@@ -10284,10 +10314,19 @@ check "#73 and leaves a name the code really uses alone" \
 # set, and treating it as prose would report every one of them as invented.
 _repo_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
 _readme="$_repo_root/README.md"; _wf="$_repo_root/.github/workflows/tests.yml"
+# The hooks and their libraries count as code too: a SUITE_* knob the README documents can be
+# implemented in one of them rather than in the tool (SYNC_SUITE_PILE_REARM, #466, is), and reading
+# only the tool would report it as a name nobody implemented. Enumerated from the directories rather
+# than named one at a time, so the next such knob needs no edit here (L96).
+_code_files=("$SCRIPT_SELF" "$SCRIPT" "$_wf")
+for _cf in "$_repo_root"/payload/hooks/*.sh "$_repo_root"/payload/hooks/lib/*.sh; do
+  [ -f "$_cf" ] && _code_files+=("$_cf")
+done
 # Or the comparison silently has nothing on one side and passes by reading nothing (L98).
 check "#73 the files this scan reads are all present" \
   "[ -f '$_readme' ] && [ -f '$_wf' ] && [ -f \"\$SCRIPT_SELF\" ] && [ -f \"\$SCRIPT\" ]"
-set_missing="$(comm -23 <(mentioned_settings "$SCRIPT_SELF" "$_readme") <(used_settings "$SCRIPT_SELF" "$SCRIPT" "$_wf"))"
+check "#73 and the hooks it reads as code were found" "[ \"\${#_code_files[@]}\" -gt 20 ]"
+set_missing="$(comm -23 <(mentioned_settings "$SCRIPT_SELF" "$_readme") <(used_settings "${_code_files[@]}"))"
 if [ -n "$set_missing" ]; then
   echo "  (#73 settings named in a comment or the README but never referenced by code:)"
   printf '%s\n' "$set_missing" | sed 's/^/    /'
