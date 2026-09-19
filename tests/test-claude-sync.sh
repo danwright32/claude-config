@@ -2024,6 +2024,24 @@ fan_work_over_dir(){   # $1 = the shard output directory   $2 = how many shards 
   return 0
 }
 
+# The section time, and the budget it was judged against, as a phrase for the headline the run
+# already prints. The GUARD above stays quiet when it is happy, which is what a guard should do;
+# this is the REPORT, and it is separate because a number nobody can see cannot tell a guard that
+# measured and passed from one that measured nothing (L98, L557). Measured on CI 2026-09-19: the
+# shards' own SUITE-WORK lines never reach the job log, because run-all-tests.sh prints only lines
+# matching FAIL or not ok.
+fan_work_note(){   # $1 = section seconds or empty   $2 = the ceiling
+  local work="$1" ceiling="$2"
+  case "$ceiling" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$ceiling" -gt 0 ] || return 0
+  case "$SUITE_WORK_BUDGET_PCT" in ''|*[!0-9]*) return 0 ;; esac
+  case "$work" in
+    ''|*[!0-9]*) printf '; section time could not be totalled, so its budget was not checked' ;;
+    *) printf '; %ss of section time against a %ss budget' "$work" "$(( ceiling * SUITE_WORK_BUDGET_PCT / 100 ))" ;;
+  esac
+  return 0
+}
+
 suite_work_report(){   # $1 = section seconds  $2 = the ceiling  $3 = processor seconds, or empty
   local work="$1" ceiling="$2" cpu="${3-}" budget
   case "$ceiling" in ''|*[!0-9]*) return 0 ;; esac
@@ -2201,7 +2219,7 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   # each shard's result line and one from its buckets, so an identity that fails means the shards
   # are contradicting themselves and neither number can be trusted (L70 is about the opposite
   # case, two sides of one lookup; these really are two lookups).
-  _fan_note="$SUITE_JOBS shards in ${_fan_elapsed}s"
+  _fan_note="$SUITE_JOBS shards in ${_fan_elapsed}s$(fan_work_note "$_fan_work" "$SUITE_TIMEOUT")"
   if [ "$_fan_tot_rc" -eq 0 ] && [ -z "$_fan_missing" ]; then
     _fan_hp="$(printf '%s' "$_fan_tot" | awk '{print $1}')"
     _fan_hf="$(printf '%s' "$_fan_tot" | awk '{print $2}')"
@@ -14356,6 +14374,22 @@ check "#492 the same work with the processor time behind it still fails" "[ '$_w
 _wb_nocpu="$(_wb 3000 3600 '')"; _wb_nocpu_rc=$?
 check "#492 an unreadable processor time is said, not assumed" "[ -n \"\$_wb_nocpu\" ]"
 check "#492 and it does not fail on a reading it could not attribute" "[ '$_wb_nocpu_rc' -eq 0 ]"
+
+# THE NUMBER HAS TO BE VISIBLE, or nobody can tell a guard that measured and passed from one that
+# measured nothing and passed (L98, L557). Measured on CI on 2026-09-19: the sharded run's own
+# SUITE-WORK lines never reach the job log, because run-all-tests.sh prints only the lines matching
+# FAIL or not ok, so the budget could have been silently totalling nothing on every run and the log
+# would read exactly the same. The guard stays silent when it is happy, which is right for a guard;
+# the NUMBER goes on the headline the run already prints every time, which is a report.
+_wn_ok="$(fan_work_note 892 3600)"
+check "#492 the headline carries the section time and the budget it was judged against" \
+  "line_has \"\$_wn_ok\" '892' '2520'"
+_wn_none="$(fan_work_note '' 3600)"
+check "#492 and says so when it could not be totalled, rather than leaving the number out" \
+  "case \"\$_wn_none\" in *totalled*) true ;; *) false ;; esac"
+check "#492 and those two are not the same sentence" "[ \"\$_wn_ok\" != \"\$_wn_none\" ]"
+_wn_off="$(fan_work_note 892 0)"
+check "#492 and it says nothing at all when the budget is turned off" "[ -z \"\$_wn_off\" ]"
 
 # BUILT IS NOT WIRED (L3). The function above is only worth having if a real run actually emits a
 # total for it to judge, so a filtered run is driven and its machine readable line read back.
