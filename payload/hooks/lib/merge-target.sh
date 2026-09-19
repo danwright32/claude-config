@@ -11,6 +11,8 @@
 #   mt_runs_merge    does it cause one by any route, a repo's own tool included
 #   MT_MERGE_TOOLS   the one declaration of those tools, and the helpers
 #                      mt_pinned_tool / mt_pinned_how that read it
+#   mt_repo_flag     the repository the merge names with --repo or -R, which
+#                      gh takes before anything about the directory
 #   mt_repo_dir      which directory the merge will run in, which is not
 #                      necessarily the session cwd
 #   mt_checkout_dir  the checkout a directory belongs to, which is the part of
@@ -24,6 +26,10 @@
 #   mt_pr_view       the pull request's fields, from whichever logged-in
 #                      account can actually see the repo, proved to be about
 #                      the repo the remote names
+#   mt_remote_path   whether a repository on GitHub holds a path, for a merge
+#                      naming a repository that is not the checkout it runs in
+#   mt_pinned_tool_remote
+#                    the same question as mt_pinned_tool, asked of GitHub
 #
 # Every one of these was learned the hard way by block-red-merge.sh and is
 # commented there with the incident that produced it. They are here rather than
@@ -58,6 +64,14 @@
 # written correctly in pr-merge-quiz.sh, a hook that only ADVISES, while the
 # blocking gates shared the wrong one; it lives here now and that hook calls it,
 # so the two cannot drift (claude-config#349).
+
+# The reading of a `cd` in a command lives in lib/push-scope.sh (ps_cd_target), written for the
+# push gates and already right about subshells, quoted strings and a cd that does not lead the
+# command. This file had a second reader of its own that saw only a LEADING cd, so a merge written
+# after an assignment was judged in the session's folder (claude-config#463). One reader, not two
+# (L613, L370).
+# shellcheck source=push-scope.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/push-scope.sh"
 
 # THE ONE DECLARATION of a repo's own merge tool. Every question anybody asks about
 # these tools is answered from here.
@@ -352,23 +366,96 @@ MTEOF
 # all. That produced a false block on a green pull request the first time this
 # ran.
 #
-# Order: an explicit `cd` at the head of the command wins, because that is where
-# the merge itself will run. Otherwise the session cwd, then walk up for a repo,
+# Order: a `cd` in command position wins, because that is where the merge itself
+# will run: at the head, after an assignment, or inside a subshell, as
+# ps_cd_target reads it. This used to honour only a LEADING cd, so
+# `H=$(...) ; cd <repo> && <merge>` was judged in the session's folder
+# (claude-config#463). A relative cd is relative to the session cwd, where the
+# command runs, not to wherever the hook process stands. A cd to a directory that
+# does not exist is ignored. Otherwise the session cwd, then walk up for a repo,
 # then look one level down.
+#
+# This answers WHERE the merge runs. WHICH repository it is about can still be
+# named with --repo, which gh honours first: that is mt_repo_flag's question.
 mt_repo_dir() {  # $1 = command, $2 = session cwd
   local command="$1" d="$2" from_cd=""
+  [ -n "$d" ] && [ -d "$d" ] || d=$PWD
 
-  # Bash's own regex, not sed: macOS sed is BRE and treats \+ as a literal plus,
-  # so a sed version of this silently matched nothing and every merge was blocked.
-  if [[ "$command" =~ ^[[:space:]]*cd[[:space:]]+(\"[^\"]+\"|\'[^\']+\'|[^[:space:]\&\|\;]+) ]]; then
-    from_cd="${BASH_REMATCH[1]}"
-    from_cd="${from_cd%\"}"; from_cd="${from_cd#\"}"
-    from_cd="${from_cd%\'}"; from_cd="${from_cd#\'}"
-  fi
+  from_cd="$(ps_cd_target "$command")"
+  case "$from_cd" in
+    "~") from_cd="$HOME" ;;
+    "~/"*) from_cd="$HOME/${from_cd#"~/"}" ;;
+    ""|/*) ;;
+    *) from_cd="$d/$from_cd" ;;
+  esac
   if [ -n "$from_cd" ] && [ -d "$from_cd" ]; then printf '%s' "$from_cd"; return; fi
 
-  [ -n "$d" ] && [ -d "$d" ] || d=$PWD
   mt_checkout_dir "$d"
+}
+
+# The repository the merge NAMES, from the gh merge invocation's own --repo or -R,
+# as owner/name; empty when it names none (claude-config#463).
+#
+# gh takes the repository from this flag before anything about the directory it
+# runs in, so a gate asking gh about the directory is asking about a different
+# repository whenever the two differ. Measured 2026-09-19 merging
+# danwright32/backstage#26 from an Ovation session: refused as "gh returned
+# nothing", because Ovation has no pull request 26.
+#
+# Only the flag on the merge itself counts: a `gh pr view --repo x` earlier in the
+# same command is about that view. Read with a shell tokenizer, in command
+# position only, so a merge quoted inside an echo names nothing, and the walk
+# stops at the first token it cannot read, as ps_cd_target's does.
+#
+# The spellings gh accepts for one repository (owner/name, github.com/owner/name,
+# a URL, a trailing .git) come back as one. A host other than github.com is kept
+# whole, so it can never compare equal to a github.com remote and is refused
+# downstream rather than read as one.
+mt_repo_flag() {  # $1 = command ; prints owner/name, or nothing
+  MT_CMD="$1" python3 -c '
+import os, re, shlex
+lex = shlex.shlex(os.environ.get("MT_CMD", ""), posix=True, punctuation_chars=True)
+lex.whitespace_split = True
+OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
+ENDERS = OPENERS | {")", "}"}
+ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+def norm(v):
+    v = re.sub(r"^[a-z]+://", "", v.strip())
+    v = re.sub(r"[.]git$", "", v.rstrip("/"))
+    if v.lower().startswith("github.com/"):
+        v = v[len("github.com/"):]
+    print(v, end="")
+    raise SystemExit
+toks = []
+while True:
+    try:
+        t = lex.get_token()
+    except ValueError:
+        break
+    if t is None or t == lex.eof:
+        break
+    toks.append(t)
+at_start, i, n = True, 0, len(toks)
+while i < n:
+    t = toks[i]
+    if at_start and ASSIGN.match(t):
+        i += 1
+        continue
+    if at_start and t.split("/")[-1] == "gh" and toks[i + 1:i + 3] == ["pr", "merge"]:
+        j = i + 3
+        while j < n and toks[j] not in ENDERS:
+            a = toks[j]
+            if a in ("--repo", "-R") and j + 1 < n and toks[j + 1] not in ENDERS:
+                norm(toks[j + 1])
+            if a.startswith("--repo="):
+                norm(a[len("--repo="):])
+            if a.startswith("-R") and len(a) > 2:
+                norm(a[2:])
+            j += 1
+        raise SystemExit
+    at_start = t in OPENERS
+    i += 1
+' 2>/dev/null
 }
 
 # The checkout a directory belongs to: the directory itself, else the first
@@ -447,8 +534,11 @@ mt_usable_answer() {  # $1 = json, $2 = remote slug
   [ -n "$2" ] || return 0
   local url; url=$(printf '%s' "$1" | jq -r '.url // ""' 2>/dev/null)
   [ -n "$url" ] || return 0
+  # GitHub names are case insensitive, and a slug typed with --repo keeps whatever case it was
+  # typed in while gh answers with the canonical one, so both sides are compared in lower case.
+  url=$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]')
   case "$url" in
-    "https://github.com/$2/pull/"*) return 0 ;;
+    "https://github.com/$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')/pull/"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -478,40 +568,107 @@ mt_usable_answer() {  # $1 = json, $2 = remote slug
 #
 # wrongRepo lets a caller tell "gh said nothing" from "gh answered about
 # something else" and refuse each in its own words.
-mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote slug
-  local pr="$1" fields="$2" slug="$3" answer candidate account token wrong=""
+#
+# And "gh said nothing" is itself two causes (claude-config#463). notFound is true
+# when every attempt was answered with gh's own not found (no such pull request,
+# no such repository, a 404): the pull request is not there to judge. Anything
+# else, a network or auth failure, leaves notFound false and puts gh's first
+# line in `error`, because that is "could not confirm", a different fault with a
+# different remedy (L11). A found answer carries `account`, empty for the active
+# one, so a caller that must ask GitHub more about the same repository asks as
+# the account that could see it.
+#
+# $4 is the repository the merge names with --repo, passed to gh the same way,
+# so the question is about the repository the merge is about.
+mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote slug, $4 = --repo value or empty
+  local pr="$1" fields="$2" slug="$3" repo="${4:-}" answer account token wrong="" errf err
+  local notfound=0 other=""
+  local -a args=(pr view)
+  [ -n "$pr" ] && args+=("$pr")
+  [ -n "$repo" ] && args+=(--repo "$repo")
+  args+=(--json "$fields")
+  errf=$(mktemp "${TMPDIR:-/tmp}/mt-pr-view.XXXXXX" 2>/dev/null) || errf=""
 
-  if [ -n "$pr" ]; then
-    answer=$(gh pr view "$pr" --json "$fields" 2>/dev/null)
-  else
-    answer=$(gh pr view --json "$fields" 2>/dev/null)
-  fi
-  if mt_usable_answer "$answer" "$slug"; then
-    printf '%s' "$answer" | jq -c '{found: true, view: .}'
-    return 0
-  fi
-
-  [ -n "$answer" ] && wrong=$(printf '%s' "$answer" | jq -r '.url // ""' 2>/dev/null)
-
-  for account in $(gh auth status 2>/dev/null \
+  # The empty first entry is the ACTIVE account, asked with no token of our own.
+  for account in "" $(gh auth status 2>/dev/null \
       | grep -oE 'account [A-Za-z0-9_.-]+' | awk '{print $2}' | sort -u); do
-    token=$(gh auth token -u "$account" 2>/dev/null) || continue
-    [ -n "$token" ] || continue
-    if [ -n "$pr" ]; then
-      candidate=$(GH_TOKEN="$token" gh pr view "$pr" --json "$fields" 2>/dev/null)
+    if [ -z "$account" ]; then
+      answer=$(gh "${args[@]}" 2>"${errf:-/dev/null}")
     else
-      candidate=$(GH_TOKEN="$token" gh pr view --json "$fields" 2>/dev/null)
+      token=$(gh auth token -u "$account" 2>/dev/null) || continue
+      [ -n "$token" ] || continue
+      answer=$(GH_TOKEN="$token" gh "${args[@]}" 2>"${errf:-/dev/null}")
     fi
-    if mt_usable_answer "$candidate" "$slug"; then
-      printf '%s' "$candidate" | jq -c '{found: true, view: .}'
+    if mt_usable_answer "$answer" "$slug"; then
+      [ -n "$errf" ] && rm -f "$errf"
+      printf '%s' "$answer" | jq -c --arg account "$account" '{found: true, view: ., account: $account}'
       return 0
     fi
-    if [ -n "$candidate" ] && [ -z "$wrong" ]; then
-      wrong=$(printf '%s' "$candidate" | jq -r '.url // ""' 2>/dev/null)
+    if [ -n "$answer" ]; then
+      [ -z "$wrong" ] && wrong=$(printf '%s' "$answer" | jq -r '.url // ""' 2>/dev/null)
+      continue
     fi
+    err=""
+    [ -n "$errf" ] && err=$(awk 'NF { print; exit }' "$errf")
+    case "$err" in
+      *"Could not resolve to a PullRequest"*|*"Could not resolve to a Repository"*|*"no pull requests found"*|*"HTTP 404"*)
+        notfound=1 ;;
+      *) [ -z "$other" ] && other="${err:-gh printed nothing}" ;;
+    esac
   done
+  [ -n "$errf" ] && rm -f "$errf"
 
-  jq -nc --arg wrong "$wrong" '{found: false, wrongRepo: $wrong}'
+  local nf=false
+  [ "$notfound" = 1 ] && [ -z "$other" ] && [ -z "$wrong" ] && nf=true
+  jq -nc --arg wrong "$wrong" --argjson nf "$nf" --arg error "$other" \
+    '{found: false, wrongRepo: $wrong, notFound: $nf, error: $error}'
+  return 1
+}
+
+# Does a repository on GitHub hold this path? Prints present, absent or unknown.
+#
+# For a merge that names, with --repo, a repository other than the checkout it
+# runs in: the folder's own files say nothing about that repository, so what the
+# gate would read from disk (a merge tool, a workflow) has to be read from GitHub
+# instead (claude-config#463). Asked as the account that could see the pull
+# request. Only gh's own 404 is absent; any other failure is unknown, and a
+# caller must refuse on unknown rather than read it as absent (L42).
+mt_remote_path() {  # $1 = owner/name, $2 = a repo relative path, $3 = account or empty for the active one
+  local slug="$1" path="$2" account="${3:-}" token="" errf err rc
+  errf=$(mktemp "${TMPDIR:-/tmp}/mt-remote-path.XXXXXX" 2>/dev/null) || { printf 'unknown'; return 0; }
+  if [ -n "$account" ]; then
+    token=$(gh auth token -u "$account" 2>/dev/null) || token=""
+    if [ -z "$token" ]; then rm -f "$errf"; printf 'unknown'; return 0; fi
+    GH_TOKEN="$token" gh api "repos/$slug/contents/$path" >/dev/null 2>"$errf"; rc=$?
+  else
+    gh api "repos/$slug/contents/$path" >/dev/null 2>"$errf"; rc=$?
+  fi
+  err=$(cat "$errf"); rm -f "$errf"
+  if [ "$rc" = 0 ]; then printf 'present'; return 0; fi
+  case "$err" in
+    *"HTTP 404"*) printf 'absent' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+# mt_pinned_tool, asked of a repository on GitHub rather than a directory on disk.
+# Prints the tool's path and returns 0 when the repository carries one, returns 1
+# when it carries none, and prints the path it could not read and returns 2 when
+# it cannot tell. Reads MT_MERGE_TOOLS, so there is still one declaration (L41).
+mt_pinned_tool_remote() {  # $1 = owner/name, $2 = account or empty
+  local row path kind rest state
+  for row in "${MT_MERGE_TOOLS[@]}"; do
+    path="${row%%|*}"
+    rest="${row#*|}"; rest="${rest#*|}"
+    kind="${rest%%|*}"
+    [ "$kind" = "pinned" ] || continue
+    state="$(mt_remote_path "$1" "$path" "${2:-}")"
+    case "$state" in
+      present) printf '%s' "$path"; return 0 ;;
+      absent) ;;
+      *) printf '%s' "$path"; return 2 ;;
+    esac
+  done
   return 1
 }
 

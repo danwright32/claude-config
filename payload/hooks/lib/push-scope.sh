@@ -7,6 +7,8 @@
 #   ps_is_git_push: is this command actually a push (leading tokens, not a
 #                      substring, so an `echo "git push"` cannot trigger a hook)
 #   ps_repo_dir: which repository the push is about
+#   ps_cd_target: the directory a `cd` in command position moves to, which the
+#                      merge gates read too (lib/merge-target.sh, claude-config#463)
 #   ps_commit_in_chain: does the same command commit before pushing? PreToolUse
 #                      runs BEFORE the command, so a `git add … && git commit … &&
 #                      git push` has nothing in history yet and the pending work
@@ -164,7 +166,7 @@ ps_repo_dir() {
   # whitespace or a separator before it, so the subshell form fell through to the SESSION's
   # directory and a gate judged, and refused, a repository the command never touched
   # (claude-config#439, L11).
-  cand="$(ps__cd_target "$cmd")"
+  cand="$(ps_cd_target "$cmd")"
   if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi
 
   if [ -n "$cwd" ] && ps__is_worktree "$cwd"; then printf '%s' "$cwd"; return 0; fi
@@ -186,7 +188,7 @@ ps__is_worktree() {
 # tokenizing the whole command up front. A heredoc commit message with an apostrophe in its body is
 # the commonest push there is, and its unbalanced quote fails a whole command read, while the cd it
 # needs sits before the heredoc and has already been read by then.
-ps__cd_target() {   # $1 = command; prints the path, or nothing
+ps_cd_target() {   # $1 = command; prints the path, or nothing
   PS_CMD="$1" python3 -c '
 import os, shlex
 lex = shlex.shlex(os.environ.get("PS_CMD", ""), posix=True, punctuation_chars=True)

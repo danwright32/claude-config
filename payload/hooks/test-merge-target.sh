@@ -255,6 +255,38 @@ eq "$(mt_repo_dir "cd \"$root/plain\" && $MERGE 7" "$root/parent")" "$root/plain
 # the gate in the wrong place and it would answer about the wrong repo.
 eq "$(mt_repo_dir "cd $root/nope && $MERGE 7" "$root/plain")" "$root/plain" "cd to a missing directory is ignored"
 
+# A cd that does not LEAD the command still decides where the merge runs (claude-config#463). The
+# gate used to honour only a leading cd, so a merge written after an assignment was judged in the
+# session's own folder, found no such pull request there, and was refused. The cd is read by the
+# push library's reader (ps_cd_target), not a second parser here (L613).
+eq "$(mt_repo_dir "H=\$(gh pr view 7 --json url) ; cd $root/plain && $MERGE 7" "$root/parent")" "$root/plain" "a cd after an assignment wins"
+eq "$(mt_repo_dir "(cd $root/plain && $MERGE 7)" "$root/parent")" "$root/plain" "a cd inside a subshell wins"
+# A relative cd is relative to the session's directory, which is where the command runs, not to
+# wherever the hook process happens to be standing.
+eq "$(cd / && mt_repo_dir "cd ../plain && $MERGE 7" "$root/deep")" "$root/deep/../plain" "a relative cd resolves against the session cwd"
+# Words inside a quoted string are not a cd.
+eq "$(mt_repo_dir "echo \"cd $root/plain\" && $MERGE 7" "$root/deep/a/b")" "$root/deep" "a quoted cd is not a cd"
+
+echo "merge-target: the repository a merge names with --repo (#463)"
+
+# gh takes the repository from --repo or -R before anything about the directory, so a gate that
+# asks gh about the directory instead is asking about a different repository whenever the two
+# differ (claude-config#463, measured merging danwright32/backstage#26 from an Ovation session).
+eq "$(mt_repo_flag "$MERGE 26 --repo danwright32/backstage --squash")" "danwright32/backstage" "--repo x/y"
+eq "$(mt_repo_flag "$MERGE 26 --repo=danwright32/backstage --squash")" "danwright32/backstage" "--repo=x/y"
+eq "$(mt_repo_flag "$MERGE 26 -R danwright32/backstage")" "danwright32/backstage" "-R x/y"
+eq "$(mt_repo_flag "$MERGE 26 -Rdanwright32/backstage")" "danwright32/backstage" "-Rx/y"
+eq "$(mt_repo_flag "$MERGE 26 --repo \"danwright32/backstage\"")" "danwright32/backstage" "a quoted value"
+# The forms gh also accepts for the same repository are one repository, not three.
+eq "$(mt_repo_flag "$MERGE 26 --repo github.com/danwright32/backstage")" "danwright32/backstage" "a host prefix"
+eq "$(mt_repo_flag "$MERGE 26 --repo https://github.com/danwright32/backstage.git")" "danwright32/backstage" "a URL"
+# Only the MERGE's own flag counts: a --repo on an earlier gh pr view is about that view.
+eq "$(mt_repo_flag "H=\$(gh pr view 26 --repo someone/else) ; $MERGE 26 --squash")" "" "another command's --repo is not the merge's"
+eq "$(mt_repo_flag "gh pr view 26 --repo someone/else && $MERGE 26 -R danwright32/backstage")" "danwright32/backstage" "the merge's own -R after another command's --repo"
+# And none at all is empty, so the caller falls back to the directory.
+eq "$(mt_repo_flag "$MERGE 26 --squash")" "" "no flag answers empty"
+eq "$(mt_repo_flag "echo \"$MERGE 26 --repo a/b\"")" "" "a merge quoted inside an echo names no repository"
+
 echo "merge-target: the checkout under a project directory (#344)"
 
 # The walk that finds a checkout from a directory is the SAME question the issue
