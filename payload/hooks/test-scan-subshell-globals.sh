@@ -151,7 +151,44 @@ check "a run that found no sources refuses rather than passing" "$([ "$RC" -eq 2
 OUT="$(python3 "$SCAN" --root "$FIX" --baseline "$FIX/no-such-baseline.txt" 2>&1)"; RC=$?
 check "a missing baseline refuses rather than treating every finding as new" "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC")"
 
+echo "scan subshell globals: one verdict whatever --root names (claude-config#443)"
+
+# #443 was reported as this scan being red on one Mac and green in CI. It was not the Mac: the
+# report ran it with `--root payload`, the suite runs it with `--root .`, and the findings were
+# keyed relative to whatever --root named while the baseline is written relative to the checkout.
+# So the SAME tree gave two verdicts: every recorded file read as newly grown under one spelling
+# of its path and as stale under the other. Reproduced identically on python 3.9, 3.11 and 3.14.
+# A mini checkout, marked by `.git` the way a real one is, with a finding in each of two folders.
+MINI="$FIX/mini"; mkdir -p "$MINI/.git" "$MINI/sub" "$MINI/other"
+cat > "$MINI/sub/a.sh" <<'EOF'
+ANSWER=""
+read_cap(){
+  ANSWER="x"
+  printf 'y'
+}
+cap="$(read_cap)"
+EOF
+cp "$MINI/sub/a.sh" "$MINI/other/b.sh"
+printf 'sub/a.sh: 1\nother/b.sh: 1\n' > "$MINI/baseline.txt"
+OUT="$(python3 "$SCAN" --root "$MINI" --baseline "$MINI/baseline.txt" 2>&1)"; RC=$?
+check "the whole checkout agrees with its baseline" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+OUT="$(python3 "$SCAN" --root "$MINI/sub" --baseline "$MINI/baseline.txt" 2>&1)"; RC=$?
+check "and so does one folder of it, scanned alone" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "and it names the finding by its path in the checkout" "$OUT" "sub/a.sh:2"
+# The entry for the folder it did NOT read was not measured, so it may be neither passed nor
+# called stale; it is said out loud as not judged (L11).
+says "and says which baseline entry it did not judge" "$OUT" "not judged: other/b.sh"
+# Scoping must not swallow the finding it exists for: the folder scanned alone still fails when
+# its own file grows past the baseline.
+printf 'sub/a.sh: 0\nother/b.sh: 1\n' > "$MINI/baseline.txt"
+OUT="$(python3 "$SCAN" --root "$MINI/sub" --baseline "$MINI/baseline.txt" 2>&1)"; RC=$?
+check "a folder scanned alone still fails on its own growth" "$([ "$RC" -eq 1 ] && echo ok || echo "exit $RC: $OUT")"
+
 echo "scan subshell globals: and the real tree it ships to guard"
+
+# The exact command #443 reported, against the real tree.
+OUT="$(cd "$REPO" && python3 "$SCAN" --root payload --baseline payload/hooks/subshell-globals.txt 2>&1)"; RC=$?
+check "the real tree scanned as payload/ alone agrees with the baseline" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
 
 OUT="$(cd "$REPO" && python3 "$SCAN" --root . 2>&1)"; RC=$?
 check "the real tree agrees with its own baseline" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"

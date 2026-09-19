@@ -107,6 +107,10 @@ def main():
     baseline_path = args.baseline or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "absence-needles.txt")
 
+    # Paths are keyed from the checkout, never from --root, so one tree gives one verdict
+    # whichever folder of it was named (claude-config#443).
+    keyed_from = ratchet.anchor(root)
+
     files = []
     for base, dirs, names in os.walk(root):
         dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "__pycache__")]
@@ -129,7 +133,7 @@ def main():
         j, found = scan_file(f)
         judged += j
         if found:
-            rel = os.path.relpath(f, root)
+            rel = os.path.relpath(f, keyed_from).replace(os.sep, "/")
             now[rel] = len(found)
             detail[rel] = found
 
@@ -151,6 +155,11 @@ def main():
             else:
                 print("  %s:%d  ! grep -q '%s'" % (rel, n, needle))
 
+    base, outside = ratchet.within(base, root, keyed_from)
+    if outside:
+        print("%s: %d baseline entr%s outside %s, so not judged: %s"
+              % ("scan-absence-needles", len(outside), "y lies" if len(outside) == 1 else "ies lie",
+                 root, ", ".join(outside)))
     grown, stale = ratchet.verdict(base, now)
 
     rc = 0
