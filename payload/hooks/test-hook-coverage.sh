@@ -337,6 +337,128 @@ $(printf '%s\n' "$real_faults" | sed 's/^/    /')"
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# What the hooks PRINT, judged against the shapes Claude Code accepts (claude-config#478).
+#
+# post-compact.sh printed a hookSpecificOutput block naming no event, so the platform refused the
+# whole payload and the project rules it exists to restore never reached a compacted session. Its
+# own suite passed throughout: it read the words in the output and nothing compared the output
+# against what the platform takes (L3). The same object is copied from hook to hook, so the
+# question is asked of every hook here, in lib/hook-output.py, which also serves the suites that
+# judge one hook's real stdout (L41, L613).
+# ---------------------------------------------------------------------------
+output_faults(){ # output_faults <settings file> <hooks dir> -> one fault per line
+  python3 "$DIR/lib/hook-output.py" "$1" "$2"
+}
+
+OUT="$TMPROOT/output"; mkdir -p "$OUT/hooks"
+printf '#!/usr/bin/env bash\nprintf %s\n' "'{\"hookSpecificOutput\": {\"additionalContext\": \"x\"}}'" > "$OUT/hooks/nameless.sh"
+printf '#!/usr/bin/env bash\nprintf %s\n' "'{\"hookSpecificOutput\": {\"hookEventName\": \"PostCompact\", \"additionalContext\": \"x\"}}'" > "$OUT/hooks/stranger.sh"
+printf '#!/usr/bin/env bash\nprintf %s\n' "'{\"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"permissionDecision\": \"deny\"}}'" > "$OUT/hooks/wrongfield.sh"
+printf '#!/usr/bin/env bash\nprintf %s\n' "'{\"hookSpecificOutput\": {\"hookEventName\": \"UserPromptSubmit\", \"additionalContext\": \"x\"}}'" > "$OUT/hooks/misplaced.sh"
+printf '#!/usr/bin/env bash\nprintf %s\n' "'{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"additionalContext\": \"x\"}}'" > "$OUT/hooks/sound.sh"
+# A nested object's own keys belong to a different shape: judging them at the top level would
+# report this correct hook, which is how a guard trained on one example accuses the rest (L104).
+printf '#!/usr/bin/env bash\nprintf %s\n' "'{\"hookSpecificOutput\": {\"hookEventName\": \"PermissionRequest\", \"decision\": {\"behavior\": \"allow\"}}}'" > "$OUT/hooks/nested.sh"
+# The settings name the caller, and the caller runs the helper: gh_issue_scan.py is reached that
+# way in the real tree, so a resolver stopping at the settings would call it unregistered (L96).
+printf '#!/usr/bin/env bash\npython3 "$HERE/helper.py"\n' > "$OUT/hooks/caller.sh"
+printf '#!/usr/bin/env python3\nprint({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "x"}})\n' > "$OUT/hooks/helper.py"
+cat > "$OUT/settings.json" <<'JSON'
+{"hooks": {"PreToolUse": [
+  {"matcher": "Bash", "hooks": [
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/nameless.sh"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/stranger.sh"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/misplaced.sh"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/sound.sh"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/caller.sh"}
+  ]}
+],
+ "SessionStart": [
+  {"matcher": "compact", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/wrongfield.sh"}]}
+],
+ "PermissionRequest": [
+  {"hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/nested.sh"}]}
+]}}
+JSON
+printed="$(output_faults "$OUT/settings.json" "$OUT/hooks" 2>&1)"
+printed_rc=$?
+case "$printed" in
+  *"NO EVENT NAME nameless.sh"*) check "#478 a hook printing hookSpecificOutput with no hookEventName is reported" ok ;;
+  *) check "#478 a hook printing hookSpecificOutput with no hookEventName is reported" "it answered: [$printed]" ;;
+esac
+case "$printed" in
+  *"UNKNOWN EVENT stranger.sh names PostCompact"*) check "#478 an event the platform takes no hookSpecificOutput from is reported" ok ;;
+  *) check "#478 an event the platform takes no hookSpecificOutput from is reported" "it answered: [$printed]" ;;
+esac
+case "$printed" in
+  *"WRONG CHANNEL wrongfield.sh names SessionStart and carries permissionDecision"*) check "#478 a field the named event does not take is reported" ok ;;
+  *) check "#478 a field the named event does not take is reported" "it answered: [$printed]" ;;
+esac
+case "$printed" in
+  *"MISREGISTERED misplaced.sh names UserPromptSubmit and the settings run it under PreToolUse"*) check "#478 a hook naming one event and registered under another is reported" ok ;;
+  *) check "#478 a hook naming one event and registered under another is reported" "it answered: [$printed]" ;;
+esac
+# The half that says the scan can also stay quiet. A guard reported as catching everything has not
+# been shown to distinguish anything (L104, L1).
+case "$printed" in
+  *sound.sh*) check "#478 a hook whose output matches where it is registered is not reported" "it answered: [$printed]" ;;
+  *) check "#478 a hook whose output matches where it is registered is not reported" ok ;;
+esac
+case "$printed" in
+  *nested.sh*) check "#478 the keys of a nested object are not judged as the block's own" "it answered: [$printed]" ;;
+  *) check "#478 the keys of a nested object are not judged as the block's own" ok ;;
+esac
+case "$printed" in
+  *helper.py*) check "#478 a hook reached through the hook the settings name is not called unregistered" "it answered: [$printed]" ;;
+  *) check "#478 a hook reached through the hook the settings name is not called unregistered" ok ;;
+esac
+[ "$printed_rc" -eq 1 ] \
+  && check "#478 faults are answered with exit 1" ok \
+  || check "#478 faults are answered with exit 1" "exit $printed_rc"
+# A tree with nothing to judge is not a clean tree, and a caller has to be able to tell them
+# apart, or a scan that read nothing reports every hook sound (L98).
+EMPTY="$TMPROOT/output-empty"; mkdir -p "$EMPTY/hooks"
+printf '#!/usr/bin/env bash\necho nothing to say\n' > "$EMPTY/hooks/quiet.sh"
+cp "$OUT/settings.json" "$EMPTY/settings.json"
+output_faults "$EMPTY/settings.json" "$EMPTY/hooks" >/dev/null 2>&1
+empty_rc=$?
+[ "$empty_rc" -ne 0 ] && [ "$empty_rc" -ne 1 ] \
+  && check "#478 a tree where nothing prints a payload is neither clean nor faulty" ok \
+  || check "#478 a tree where nothing prints a payload is neither clean nor faulty" "exit $empty_rc"
+
+# The same table, asked of ONE hook's real stdout, which is how each hook's own suite checks the
+# answer it just produced.
+judged="$(printf '%s' '{"hookSpecificOutput": {"additionalContext": "x"}}' | python3 "$DIR/lib/hook-output.py" --payload 2>&1)"
+judged_rc=$?
+case "$judged" in
+  *'missing required field "hookEventName"'*) check "#478 one payload with no event name is refused, in the platform's own words" ok ;;
+  *) check "#478 one payload with no event name is refused, in the platform's own words" "it answered: [$judged] exit $judged_rc" ;;
+esac
+printf '%s' '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "x"}}' | python3 "$DIR/lib/hook-output.py" --payload >/dev/null 2>&1
+good_rc=$?
+[ "$good_rc" -eq 0 ] \
+  && check "#478 a payload the platform accepts is answered with exit 0" ok \
+  || check "#478 a payload the platform accepts is answered with exit 0" "exit $good_rc"
+printf '' | python3 "$DIR/lib/hook-output.py" --payload >/dev/null 2>&1
+nothing_rc=$?
+[ "$nothing_rc" -ne 0 ] && [ "$nothing_rc" -ne 1 ] \
+  && check "#478 an empty payload is neither accepted nor refused" ok \
+  || check "#478 an empty payload is neither accepted nor refused" "exit $nothing_rc"
+
+# The real tree.
+if [ -n "$SETTINGS" ]; then
+  real_printed="$(output_faults "$SETTINGS" "$DIR" 2>&1)"
+  real_printed_rc=$?
+  if [ "$real_printed_rc" -ne 0 ] && [ "$real_printed_rc" -ne 1 ]; then
+    check "every hook prints a payload Claude Code accepts, for the event it is registered under" "the tree could not be judged (exit $real_printed_rc): $real_printed"
+  elif [ "$real_printed_rc" -eq 0 ]; then
+    check "every hook prints a payload Claude Code accepts, for the event it is registered under" ok
+  else
+    check "every hook prints a payload Claude Code accepts, for the event it is registered under" "$(printf '%s\n' "$real_printed" | sed 's/^/    /')"
+  fi
+fi
+
 echo "test-hook-coverage: $n_now hook(s) named by no suite, baseline says $n_base."
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
