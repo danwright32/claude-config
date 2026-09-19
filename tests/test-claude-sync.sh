@@ -1962,7 +1962,13 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
   esac
   [ "$ceiling" -lt $(( elapsed * 2 )) ] || return 0
   if [ $(( cpu * 2 )) -ge "$elapsed" ]; then
-    echo "test suite: this run took ${elapsed}s of wall clock against a ${ceiling}s deadline, which is less than twice it, and ${cpu}s of that was the suite's own work. It has grown into its own deadline rather than waited on a busy machine. Raise SUITE_TIMEOUT, or find what got slower." >&2
+    # PREFIXED "FAIL:", because that prefix is a marker read by code rather than decoration
+    # (L199). run-all-tests.sh prints only the lines of a suite's output matching `^ *(FAIL|not
+    # ok)`, so this refusal, which is the whole reason the run exits non-zero, reached nobody: the
+    # job log showed the suite reporting "2043 passed, 0 failed" and exiting 1 with no cause
+    # anywhere in it. That cost three CI cycles on 2026-09-19 before the reason was found by
+    # calling this function by hand (claude-config#473).
+    echo "FAIL: test suite: this run took ${elapsed}s of wall clock against a ${ceiling}s deadline, which is less than twice it, and ${cpu}s of that was the suite's own work. It has grown into its own deadline rather than waited on a busy machine. Raise SUITE_TIMEOUT, or find what got slower." >&2
     return 1
   fi
   echo "test suite: note, this run took ${elapsed}s of wall clock against a ${ceiling}s deadline, but only ${cpu}s of processor time, so the machine was busy with something else rather than the suite having grown. Not treated as a failure." >&2
@@ -13935,6 +13941,15 @@ check "#167 and says so in different words from the note" \
   "! case \"\$_hd_grown\" in *'note,'*) true ;; *) false ;; esac"
 check "#167 and names both figures and the ceiling" \
   "line_has \"\$_hd_grown\" '1943' '1500' '3600'"
+# AND THE REFUSAL REACHES THE READER (claude-config#473). run-all-tests.sh prints only the lines of
+# a suite's output matching `^ *(FAIL|not ok)`, so a refusal worded any other way is the reason a
+# run exited non-zero and appears nowhere: the job log showed "2043 passed, 0 failed" beside an
+# exit code of 1 and nothing else. The note arm must NOT carry it, because that arm is not a
+# failure and a reporter that showed it would be reporting a passing run as broken (L11).
+check "#167 a refusal is prefixed so the runner's own reporter shows it" \
+  "case \"\$_hd_grown\" in 'FAIL:'*) true ;; *) false ;; esac"
+check "#167 and the note that is not a failure is not prefixed" \
+  "case \"\$_hd_load\" in 'FAIL:'*) false ;; *) true ;; esac"
 # The two arms are told apart by ONE thing, so it is asked at the boundary rather than only where
 # the answer is obvious: at exactly half the wall clock the run's own work is what filled it.
 _hd_rc 1943 971 3600; _hd_edge_lo=$?
