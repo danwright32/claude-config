@@ -137,28 +137,57 @@ tmp="$STATE.$$"
 # every one of them back when it finishes. Measured on 2026-09-18, three notices went out in a
 # morning claiming 23, 135 and 163 GB an hour while the disk sat far above the floor the whole time.
 #
-# A rate is a claim about a TREND, and a series that recovered has no trend to state. So a recovery
-# refuses the rate, which is the answer this file already gives for a span too short to mean
-# anything: say how much is left, and say nothing about where it is going (L36, L656, L216).
+# A rate is a claim about a TREND, and a series that recovered has no trend BEFORE the recovery.
+# So the trend is measured only from the readings SINCE the last recovery.
+#
+# NOT "refuse once it has ever recovered", which was the first version of this fix and was wrong in
+# the costly direction: a recovery is exactly what a finishing build looks like, so a genuine fill
+# starting afterwards, a backup say, went unreported for up to the whole window. That is the failure
+# this warning exists to prevent, and it is the shape L695 names: stand down on recent samples, never
+# on an aggregate that cannot let go of an old event.
+#
+# AFTER A RECOVERY, TWO READINGS ARE NOT ENOUGH. The machine has just shown it gives space back, and
+# two points after a recovery are one tooth of the same sawtooth: the 150 then 86 in the fixture is
+# a build taking its space again, not a trend. So a segment that follows a recovery needs at least
+# three readings falling together before it is believed (L656: several samples, never one pair).
+# A series that has NOT recovered keeps the two reading rate it always had, because nothing has
+# shown that machine is oscillating.
 #
 # Sorted by time rather than trusted to be in order: the file is appended to, but a clock that
 # moved or a run with a pinned time can put a line out of sequence, and comparing unsorted readings
 # would invent a recovery that never happened.
 recovered=0
+seg_t=""; seg_b=""; seg_n=0
 _prev_b=""
 while IFS=' ' read -r _t _b; do
   is_number "${_t:-}" || continue
   is_number "${_b:-}" || continue
-  if [ -n "$_prev_b" ] && [ $((_b - _prev_b)) -gt $((RECOVERY_GB * GIB)) ]; then recovered=1; fi
+  if [ -n "$_prev_b" ] && [ $((_b - _prev_b)) -gt $((RECOVERY_GB * GIB)) ]; then
+    recovered=1; seg_t="$_t"; seg_b="$_b"; seg_n=1
+  elif [ -z "$seg_t" ]; then
+    seg_t="$_t"; seg_b="$_b"; seg_n=1
+  else
+    seg_n=$((seg_n + 1))
+  fi
   _prev_b="$_b"
 done <<EOF
 $(printf '%s%s %s\n' "$kept" "$now" "$free_bytes" | sort -n -k1,1)
 EOF
 
+# The other end of the span is the start of the current segment: the oldest reading when nothing
+# recovered, the reading the disk recovered TO when something did.
+if [ "$recovered" -eq 1 ] && [ "$seg_n" -lt 3 ]; then
+  oldest_t=""
+elif [ -n "$seg_t" ] && [ "$seg_t" -lt "$now" ]; then
+  oldest_t="$seg_t"; oldest_b="$seg_b"
+else
+  oldest_t=""
+fi
+
 # ---------- the rate, when there is one worth stating ----------
 rate_clause=""
 falling_fast=0
-if [ -n "$oldest_t" ] && [ "$recovered" -eq 0 ]; then
+if [ -n "$oldest_t" ]; then
   span=$((now - oldest_t))
   fall=$((oldest_b - free_bytes))
   if [ "$span" -ge $((MIN_SPAN_MIN * 60)) ] && [ "$fall" -gt 0 ]; then

@@ -145,6 +145,30 @@ check "a fall that never recovered still states its rate" \
 check "and still fires when zero is inside the horizon" \
   "$([ "$mono_rc" -eq 4 ] && echo ok || echo "exit $mono_rc, said: $mono_msg")"
 
+# A RECOVERY MUST NOT SILENCE THE WARNING FOR THE REST OF THE WINDOW. The first version of this
+# fix refused any rate once the series had ever gone back up, which is exactly the moment a build
+# finishes. A genuine fill that began afterwards, a backup say, then went unreported for up to the
+# whole six hour window, which is the failure the warning exists to prevent (L695: decide from
+# recent samples, never an aggregate that cannot stand down). So the trend is measured from the
+# readings SINCE the last recovery, and here that trend is real, sustained and fast.
+S_AFTER="$TMPROOT/state-fall-after-build"; mkdir -p "$S_AFTER"
+after() {
+  FREE_SPACE_BYTES="$1" FREE_SPACE_NOW="$2" FREE_SPACE_STATE_DIR="$S_AFTER" \
+    FREE_SPACE_PATH=/fixture bash "$CHECK" 2>&1
+}
+after "$((150 * GB))" "$((T0 - 5400))" > /dev/null
+after "$((35 * GB))"  "$((T0 - 4800))" > /dev/null
+after "$((150 * GB))" "$((T0 - 4200))" > /dev/null
+after "$((120 * GB))" "$((T0 - 2800))" > /dev/null
+after "$((90 * GB))"  "$((T0 - 1400))" > /dev/null
+after_msg="$(after "$((60 * GB))" "$T0")"; after_rc=$?
+check "a real fall that starts after a build recovered still states its rate" \
+  "$(grep -qi 'per hour' <<< "$after_msg" && echo ok || echo "said: $after_msg")"
+check "and still fires, because zero is inside the horizon" \
+  "$([ "$after_rc" -eq 4 ] && echo ok || echo "exit $after_rc, said: $after_msg")"
+check "and measures from the recovery, not from before it" \
+  "$(grep -qi 'over the last 1 hour' <<< "$after_msg" && echo ok || echo "said: $after_msg")"
+
 # A RECOVERY OF A FEW BYTES IS NOISE, NOT A RECOVERY. Every write and delete on a live machine
 # jitters the reading, so a rule that refused on any increase at all would refuse always, which is
 # the same as deleting the feature (L104: check what it must PRESERVE, not only what it must catch).
