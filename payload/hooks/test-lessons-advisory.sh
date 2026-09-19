@@ -396,6 +396,30 @@ else
   FAIL=$((FAIL+1)); echo "FAIL: the trigger tables are not one length (IDS WHAT RE1 RE2 PATH FN = $trig_lengths). An entry added to some of them silently attaches every later trigger to the wrong lesson."
 fi
 
+# --- claude-config#457 item 3: a commit then push, on the shared helpers -------
+# A command that commits before it pushes, on a branch level with its upstream: the plain push
+# range (HEAD~1) re-read the last commit already on the remote, and advised about it again.
+R=$(make_repo pendingbase 'try { x() } catch (e) { return [] }' src/g.ts)
+git -C "$R" push -q origin main
+printf 'export const clean = 1;\n' > "$R/src/clean.ts"
+out=$(run_hook "git add src/clean.ts && git commit -qm clean && git push" "$R")
+assert_silent "a commit then push does not re-advise on the commit already on the remote" "$out"
+
+# The pending commit is what the add names. An UNTRACKED file the add names was never read (the
+# hook read only tracked changes for any add), so a trigger in a new file went unmentioned.
+R=$(make_repo pendingnew 'export const base = 1;' src/h.ts)
+git -C "$R" push -q origin main
+printf 'try { x() } catch (e) { return [] }\n' > "$R/src/new.ts"
+out=$(run_hook "git add src/new.ts && git commit -qm new && git push" "$R")
+assert_contains "a trigger in a new file the add names is advised on" 'additionalContext' "$out"
+# And a stranger nobody named stays out of it.
+R=$(make_repo pendingstranger 'export const base = 1;' src/i.ts)
+git -C "$R" push -q origin main
+printf 'try { x() } catch (e) { return [] }\n' > "$R/src/stranger.ts"
+printf 'export const mine = 1;\n' > "$R/src/mine.ts"
+out=$(run_hook "git add src/mine.ts && git commit -qm mine && git push" "$R")
+assert_silent "a trigger in an untracked file the add does not name is not advised on" "$out"
+
 echo "passed: $PASS, failed: $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

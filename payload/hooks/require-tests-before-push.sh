@@ -99,52 +99,60 @@ base="$(ps_base_ref)"
 # pending commit is not in history yet. Fold in staged / unstaged / untracked
 # changes so a test added in the same breath is counted.
 commit_in_chain=0
-add_in_chain=0
 ps_commit_in_chain "$cmd" && commit_in_chain=1
-ps_add_in_chain "$cmd" && add_in_chain=1
 
-if [ -n "$base" ] && git rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
-  mb="$(git merge-base "$base" HEAD 2>/dev/null)"
-else
-  mb="$(git rev-parse --verify --quiet HEAD~1 2>/dev/null)"
+# Where the committed range starts, from the shared contract in lib/push-scope.sh, which also
+# judges a rebased branch from where it now leaves main (claude-config#456, #457). This gate kept
+# its own merge base code, which missed that correction.
+#
+# ps_pending_base for a plain push too, deliberately: against a REMOTE base a merge base at HEAD
+# means the push carries no commit, and that empty range is this gate's answer whether or not the
+# command commits first. The plain push helper would re-read the last commit already on the remote
+# and bill the judge for it. Against a LOCAL base it gives the plain push answer.
+#
+# Except the case #736 records: no upstream, and the base fell back to a local branch that IS the
+# current commit. The last commit is then not a measurement of what this push adds, so no committed
+# range is read, and an empty file list below says the gate is blind rather than judging a guess.
+mb=""
+base_is_head=0
+if [ -z "$upstream" ] && [ -n "$base" ]; then
+  case "$(git rev-parse --symbolic-full-name "$base" 2>/dev/null)" in
+    refs/remotes/*) : ;;
+    *) [ "$(git rev-parse --verify --quiet "$base" 2>/dev/null)" = "$(git rev-parse --verify --quiet HEAD 2>/dev/null)" ] && base_is_head=1 ;;
+  esac
 fi
+[ "$base_is_head" -eq 1 ] || mb="$(ps_pending_base "$base")"
 
 committed=""
 [ -n "$mb" ] && committed="$(git diff --name-only --diff-filter=ACMR "$mb" HEAD 2>/dev/null)"
 
+# The PENDING files, when this command commits before it pushes: the index, plus what the shared
+# reader says the commit takes beyond it (claude-config#457). Only what the commit will carry: a
+# test left on disk, untracked or tracked but not named, never reaches the commit, so counting it
+# let a change ship with its test left behind. This gate had its own sed parser for the add, which
+# also counted every unstaged tracked change for any add at all.
 pending=""
+pending_widened=0
 if [ "$commit_in_chain" -eq 1 ]; then
   pending="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
-  if [ "$add_in_chain" -eq 1 ]; then
+  pending_list="$(ps_pending_files "$cmd")"
+  [ "${pending_list%%$'\n'*}" = "WIDENED" ] && pending_widened=1
+  top="$(git rev-parse --show-toplevel 2>/dev/null)"
+  while IFS= read -r f; do
+    # A deletion takes nothing a test could be counted from; ACMR above drops them the same way.
+    [ -n "$f" ] && [ -e "$top/$f" ] || continue
     pending="$pending
-$(git diff --name-only --diff-filter=ACMR 2>/dev/null)"
-    # Untracked files count ONLY if the `git add` in THIS command will actually
-    # stage them. Counting every untracked file (the old behavior) let a stray
-    # untracked test that isn't being added satisfy the gate yet never reach the
-    # commit -- so a change could ship with its test left only on disk.
-    add_args="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[&|;[:space:]])git[[:space:]]+add[[:space:]]+([^&|;]*).*@\2@p' | awk 'NR <= 1')"
-    add_all=0
-    for a in $add_args; do
-      case "$a" in -A|--all|.) add_all=1; break ;; esac
-    done
-    if [ "$add_all" -eq 1 ]; then
-      pending="$pending
-$(git ls-files --others --exclude-standard 2>/dev/null)"
-    else
-      while IFS= read -r u; do
-        [ -z "$u" ] && continue
-        for a in $add_args; do
-          case "$a" in -*) continue ;; esac
-          ad="${a%/}"
-          if [ "$u" = "$ad" ]; then pending="$pending
-$u"; break; fi
-          case "$u" in "$ad"/*) pending="$pending
-$u"; break ;; esac
-        done
-      done < <(git ls-files --others --exclude-standard 2>/dev/null)
-    fi
-  fi
+$f"
+  done < <(printf '%s\n' "$pending_list" | tail -n +2)
 fi
+# When the add could not be read, every change in the working tree was counted, and a refusal has
+# to say its file list came from that wider reading rather than from what the commit will carry.
+widened_note() {
+  [ "$pending_widened" -eq 1 ] || return 0
+  echo "Note: the git add in this command could not be read, so every change in the"
+  echo "working tree was counted as part of the commit it is about to make."
+  echo ""
+}
 
 files="$(printf '%s\n%s\n' "$committed" "$pending" | sed '/^$/d' | sort -u)"
 # An empty file list has two very different causes, and only one is benign.
@@ -349,6 +357,7 @@ DOCS_ONLY_EOF
     printf '%s' "$source_list"
     echo ""
     echo "Add a test for each distinct change, then push again."
+    widened_note
     echo "OVERRIDE: if a test genuinely does not apply (docs / config / copy only,"
     echo "or a refactor already covered by existing tests), or the gate missed a"
     echo "test that IS in this push (false positive), re-run with:"
@@ -519,6 +528,7 @@ case "$verdict" in
       printf '%s\n' "$verdict" | sed '1d'
       echo ""
       echo "Add a test for each, then push again."
+      widened_note
       echo "OVERRIDE: if the gate is wrong (the change is genuinely test-exempt,"
       echo "or an existing test already covers it), re-run with:"
       echo "    SKIP_TEST_CHECK=1 <your original git push command>"

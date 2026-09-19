@@ -413,6 +413,30 @@ W="$(mk_repo_no_upstream)"
 run_hook "$W" "git add . && git commit -m 'x' && git push"
 want_code 2 "no upstream but chain staged the work: still BLOCKS on a missing test"
 
+# --- claude-config#457 item 1: the shared range and add helpers -------------
+# A test file that is tracked and modified but NOT named by the add stays on disk: the commit does
+# not carry it. The gate's own sed parser counted every unstaged tracked change for any add, so a
+# test left out of the commit satisfied the gate for the source that went in.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib tests && printf 'const a = 1;\n' > lib/a.js \
+    && printf 'test("a", () => {});\n' > tests/a.test.js \
+    && git add lib/a.js tests/a.test.js && git commit -qm base && git push -q \
+    && printf 'const a = 2;\n' > lib/a.js && printf 'test("a2", () => {});\n' > tests/a.test.js ) >/dev/null 2>&1
+run_hook "$W" "git add lib/a.js && git commit -m 'x' && git push"
+want_code 2 "an add naming only the source does not count the test it leaves behind"
+# The control in the same repository: name the test too and it is counted.
+STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' \
+  run_hook "$W" "git add lib/a.js tests/a.test.js && git commit -m 'x' && git push"
+want_code 0 "and naming the test as well counts it"
+
+# A push level with its upstream after several commits carries nothing, and must not re-judge the
+# last commit already on the remote (and bill the judge for it).
+W="$(mk_repo)"; seed_source_only "$W"
+( cd "$W" && git push -q ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 0 "a push level with its upstream does not re-judge the last pushed commit"
+want_silent "a push level with its upstream does not re-judge the last pushed commit"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

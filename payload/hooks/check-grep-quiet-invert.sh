@@ -39,7 +39,15 @@ repo="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo" ] || exit 0
 cd "$repo" 2>/dev/null || exit 0
 
-mb="$(ps_merge_base)"
+# Where the range starts, from the shared contract. This asked ps_merge_base with no base at all,
+# which always lands on HEAD~1, so a push of several commits was judged on its last one only
+# (claude-config#457). A command that commits first has its own entry point.
+base="$(ps_base_ref || true)"
+if ps_commit_in_chain "$cmd"; then
+  mb="$(ps_pending_base "$base")"
+else
+  mb="$(ps_merge_base "$base")"
+fi
 diff=""
 [ -n "$mb" ] && diff="$(git diff "$mb" HEAD 2>/dev/null)"
 diff="${diff}

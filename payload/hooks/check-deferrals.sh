@@ -140,47 +140,24 @@ untracked_block() {  # $1 = an untracked path; a real unified diff against nothi
 }
 if [ "$commit_in_chain" -eq 1 ]; then
   pending_diff="$(git diff --cached "${CTX[@]}" -- . "${EXCLUDES[@]}" 2>/dev/null)"
-  # What the commit will take beyond the index, from the one parser every push hook shares
-  # (claude-config#442). This hook held a second copy of check-style-guide.sh's, and two copies of
-  # one rule drift silently, one gate reading pending work one way and its sibling another (L370).
-  add_scope="$(ps_add_scope "$cmd")"
-  add_kind="${add_scope%%$'\n'*}"
-  case "$add_kind" in
-    INDEX) : ;;
-    TRACKED)
+  # What the commit will take beyond the index, from the one reader every push hook shares
+  # (claude-config#442, #457). This hook turned the add's scope into files itself, and so did two
+  # others, each its own way; one of them read the whole working tree (L370, L613).
+  pending_list="$(ps_pending_files "$cmd")"
+  # WIDENED: the add could not be read (or names a path that is not there), so the list is the
+  # whole working tree, and the refusal says so (L98, L11).
+  [ "${pending_list%%$'\n'*}" = "WIDENED" ] && scope_unknown=1
+  top="$(git rev-parse --show-toplevel 2>/dev/null)"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if git -C "$top" ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
       pending_diff="${pending_diff}
-$(git diff "${CTX[@]}" HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)" ;;
-    ALL|UNKNOWN)
-      [ "$add_kind" = "UNKNOWN" ] && scope_unknown=1
+$(git -C "$top" diff "${CTX[@]}" HEAD -- "$f" "${EXCLUDES[@]}" 2>/dev/null || git -C "$top" diff "${CTX[@]}" -- "$f" "${EXCLUDES[@]}" 2>/dev/null)"
+    else
       pending_diff="${pending_diff}
-$(git diff "${CTX[@]}" HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
-      while IFS= read -r u; do
-        [ -n "$u" ] || continue
-        pending_diff="${pending_diff}
-$(untracked_block "$u")"
-      done < <(git ls-files --others --exclude-standard 2>/dev/null) ;;
-    PATHS)
-      while IFS= read -r pth; do
-        [ -n "$pth" ] || continue
-        if [ ! -e "$pth" ]; then scope_unknown=1; continue; fi
-        pending_diff="${pending_diff}
-$(git diff "${CTX[@]}" HEAD -- "$pth" "${EXCLUDES[@]}" 2>/dev/null)"
-        while IFS= read -r u; do
-          [ -n "$u" ] || continue
-          pending_diff="${pending_diff}
-$(untracked_block "$u")"
-        done < <(git ls-files --others --exclude-standard -- "$pth" 2>/dev/null)
-      done < <(printf '%s\n' "$add_scope" | tail -n +2)
-      if [ "$scope_unknown" -eq 1 ]; then
-        pending_diff="${pending_diff}
-$(git diff "${CTX[@]}" HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
-        while IFS= read -r u; do
-          [ -n "$u" ] || continue
-          pending_diff="${pending_diff}
-$(untracked_block "$u")"
-        done < <(git ls-files --others --exclude-standard 2>/dev/null)
-      fi ;;
-  esac
+$(cd "$top" && untracked_block "$f")"
+    fi
+  done < <(printf '%s\n' "$pending_list" | tail -n +2)
 fi
 
 if [ -z "$committed_diff$pending_diff" ]; then

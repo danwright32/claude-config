@@ -58,9 +58,10 @@
 # three runs on 2026-09-18, all within 0.01s of each other. Suggested hook timeout: 60s.
 #
 # What is read on the pushed side: the COMMITS (HEAD) for a plain push. When the same command
-# commits before it pushes, nothing is in history yet, so the working tree of the source roots is
-# read instead (tracked files plus untracked ones git does not ignore) and the refusal SAYS so,
-# because a line from a file that commit will not carry may then be named (L11, claude-config#350).
+# commits before it pushes, nothing is in history yet, so what that commit will carry is read
+# instead: the index, plus the files ps_pending_files says its git add (or commit -a) takes
+# (claude-config#457). Only when the add cannot be read is the whole working tree read, and the
+# refusal SAYS so, because a line from a file that commit will not carry may then be named (L11).
 #
 # Override: SKIP_DUPLICATION_CHECK=1 git push ...   Explain why to the user first, in plain
 # language, same as the test gate. Never skip silently. The skip prints one line either way.
@@ -98,7 +99,7 @@ repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || skip "no git work tree could be found
 cd "$repo_dir" 2>/dev/null || skip "could not enter $repo_dir, so nothing was compared."
 
 # Does this same command commit before it pushes? Then nothing is in history yet and the pushed
-# side has to be read from the working tree (claude-config#350).
+# side has to be built from what that commit will carry (claude-config#350, #457).
 from_worktree=0
 ps_commit_in_chain "$cmd" && from_worktree=1
 
@@ -144,16 +145,30 @@ if [ -n "$base_roots" ]; then
 fi
 
 # The pushed tree.
-pushed_dir="$WORK/head"
-compare_args=()
+pending_widened=0
 if [ "$from_worktree" -eq 1 ]; then
-  pushed_dir="$repo_dir"
+  # What the commit this command is about to make will carry: the index, then each file the shared
+  # reader says the commit takes beyond it (claude-config#457). This read the whole working tree of
+  # the source roots, so a copy in a file the add never named, another session's untracked work
+  # included, was blamed on this commit (claude-config#350).
+  top="$(git rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$top" ] || skip "the repository root could not be found, so nothing was compared."
   # shellcheck disable=SC2086
-  {
-    git ls-files -- $head_roots 2>/dev/null
-    git ls-files --others --exclude-standard -- $head_roots 2>/dev/null
-  } | awk 'NF && !seen[$0]++' > "$WORK/pushed-files"
-  compare_args=(--pushed-files-from "$WORK/pushed-files")
+  if ! ( cd "$top" && git ls-files -z -- $head_roots | git checkout-index -z -f --stdin --prefix="$WORK/head/" ) 2>/dev/null; then
+    skip "the index could not be read, so nothing was compared."
+  fi
+  pending_list="$(ps_pending_files "$cmd")"
+  [ "${pending_list%%$'\n'*}" = "WIDENED" ] && pending_widened=1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    # Only the source roots are compared, on both sides.
+    printf '%s\n' "$head_roots" | awk -v r="${f%%/*}" '$0 == r { found = 1 } END { exit !found }' || continue
+    if [ -f "$top/$f" ]; then
+      mkdir -p "$WORK/head/$(dirname "$f")" && cp -P "$top/$f" "$WORK/head/$f" 2>/dev/null
+    else
+      rm -f "$WORK/head/$f"
+    fi
+  done < <(printf '%s\n' "$pending_list" | tail -n +2)
 else
   # shellcheck disable=SC2086
   if ! git archive HEAD $head_roots 2>/dev/null | tar -x -C "$WORK/head" 2>/dev/null; then
@@ -161,7 +176,7 @@ else
   fi
 fi
 
-report="$(python3 "$DETECTOR" compare "$WORK/base" "$pushed_dir" "${compare_args[@]}" 2>"$WORK/err")"
+report="$(python3 "$DETECTOR" compare "$WORK/base" "$WORK/head" 2>"$WORK/err")"
 rc=$?
 summary="$(printf '%s\n' "$report" | awk 'NR == 1')"
 body="$(printf '%s\n' "$report" | awk 'NR > 1')"
@@ -190,11 +205,15 @@ fi
   echo "Compared against $base_label, in $(printf '%s' "$head_roots" | tr '\n' ' ' | sed 's/ *$//' | sed 's/ /, /g'):"
   printf '%s\n' "$body"
   echo ""
-  if [ "$from_worktree" -eq 1 ]; then
-    echo "Read from the working tree, because this command commits before it pushes and"
-    echo "nothing is in history yet. A line above may belong to a file this commit will not"
-    echo "carry. To judge the commits only, run the commit and the push as"
-    echo "two separate commands: a push on its own judges the commits only."
+  if [ "$pending_widened" -eq 1 ]; then
+    echo "The git add in this command could not be read, so the whole working tree was"
+    echo "read, and a line above may belong to a file this commit will not carry. To judge"
+    echo "the commits only, run the commit and the push as two separate commands: a push"
+    echo "on its own judges the commits only."
+    echo ""
+  elif [ "$from_worktree" -eq 1 ]; then
+    echo "Read from what the commit will carry, because this command commits before it"
+    echo "pushes and nothing is in history yet: the index, plus what its git add names."
     echo ""
   fi
   echo "Move the copied code into one shared function, component or constant and call it"

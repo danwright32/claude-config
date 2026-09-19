@@ -111,6 +111,35 @@ done
 want_clean "ugrep named directly is out of scope" "$hdr
 +some_cmd | ugrep $QV 'pat'"
 
+# --- the whole hook, over a MULTI COMMIT push (claude-config#457 item 2) -------------
+# The hook asked ps_merge_base with no base, which always lands on HEAD~1, so a push of three
+# commits was judged on its last one only and a line added in the first went out unread.
+G=(git -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+R="$WORKDIR/multi"
+"${G[@]}" init -q --bare "$R/origin.git" 2>/dev/null
+"${G[@]}" init -q -b main "$R/work" 2>/dev/null
+(
+  cd "$R/work" || exit 1
+  echo baseline > README.md && "${G[@]}" add README.md && "${G[@]}" commit -qm init
+  "${G[@]}" remote add origin "$R/origin.git" && "${G[@]}" push -qu origin main
+  printf '%s\n' "some_cmd | grep $QV 'pat'" > first.sh && "${G[@]}" add first.sh && "${G[@]}" commit -qm first
+  echo two > two.txt && "${G[@]}" add two.txt && "${G[@]}" commit -qm two
+  echo three > three.txt && "${G[@]}" add three.txt && "${G[@]}" commit -qm three
+) >/dev/null 2>&1
+hook_rc() {  # hook_rc <cwd> <command> -> the hook's exit code
+  local rc=0
+  HK_CMD="$2" HK_CWD="$1" python3 -c 'import json,os,sys
+sys.stdout.write(json.dumps({"tool_name":"Bash","tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))' \
+    | bash "$HOOK" >/dev/null 2>&1 || rc=$?
+  printf '%s' "$rc"
+}
+got="$(hook_rc "$R/work" "git push")"
+if [ "$got" = "2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a three commit push is judged on its first commit too (exit $got)"; fi
+# The control: once that commit is on the remote, the same push has nothing of it to answer for.
+( cd "$R/work" && "${G[@]}" push -q origin main && echo four > four.txt && "${G[@]}" add four.txt && "${G[@]}" commit -qm four ) >/dev/null 2>&1
+got="$(hook_rc "$R/work" "git push")"
+if [ "$got" = "0" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a line already on the remote is not judged again (exit $got)"; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then
   echo "test-check-grep-quiet-invert: ALL PASSED ($pass checks)"

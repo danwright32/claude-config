@@ -226,9 +226,10 @@ EOF
   ps_commit_in_chain "$long_cmd" \
     && check "a $size command still has its commit seen" ok \
     || check "a $size command still has its commit seen" "read as absent over ${#long_cmd} bytes"
-  ps_add_in_chain "$long_cmd" \
-    && check "a $size command still has its add seen" ok \
-    || check "a $size command still has its add seen" "read as absent over ${#long_cmd} bytes"
+  got_scope="$(ps_add_scope "$long_cmd" | awk 'NR == 1')"
+  [ "$got_scope" = "TRACKED" ] \
+    && check "a $size command still has its add and its -a seen" ok \
+    || check "a $size command still has its add and its -a seen" "scope [$got_scope] over ${#long_cmd} bytes"
 done
 
 # ---------------------------------------------------------------------------
@@ -407,6 +408,69 @@ case "$own_pushed" in
   *) check "#441 no hook keeps its own post push range" ok ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A branch REBASED onto a newer main and force pushed (claude-config#456). Its upstream still names
+# the pre rebase tip, which is no longer an ancestor of HEAD, so the merge base with it is the OLD
+# fork point and every commit main gained since was judged as part of this push: the deferral gate
+# refused a force push over lines another pull request had already merged (L11). When the upstream
+# tip is not an ancestor of HEAD, the range starts where the branch now leaves the default branch.
+# ---------------------------------------------------------------------------
+git init -q --bare "$MB/rb.git" 2>/dev/null
+git init -q -b main "$MB/rb" 2>/dev/null
+mb_commit "$MB/rb" base
+( cd "$MB/rb" && git remote add origin "$MB/rb.git" && git push -q -u origin main \
+    && git checkout -q -b feat && printf 'f\n' > g && git add g && gc commit -qm feat1 \
+    && git push -q -u origin feat \
+    && git checkout -q main ) >/dev/null 2>&1
+mb_commit "$MB/rb" main2; mb_commit "$MB/rb" main3
+# The rebase commits, so it needs an identity: a runner with none stops it halfway, HEAD detached
+# at main, and the cases below would measure that instead.
+( cd "$MB/rb" && git push -q origin main && git checkout -q feat && gc rebase -q main ) >/dev/null 2>&1
+new_main="$(sha_of "$MB/rb" main)"
+old_fork="$(sha_of "$MB/rb" main~2)"
+[ "$(sha_of "$MB/rb" HEAD~1)" = "$new_main" ] && [ "$(git -C "$MB/rb" symbolic-ref --quiet --short HEAD 2>/dev/null)" = "feat" ] \
+  && check "#456 fixture: the branch really was rebased onto the new main" ok \
+  || check "#456 fixture: the branch really was rebased onto the new main" "HEAD~1=$(sha_of "$MB/rb" HEAD~1) new main=$new_main"
+# The fixture is what it claims: the upstream is behind a rewrite, not simply behind (L159).
+if git -C "$MB/rb" merge-base --is-ancestor origin/feat HEAD 2>/dev/null; then
+  check "#456 fixture: the upstream tip is no longer an ancestor of HEAD" "it still is"
+else
+  check "#456 fixture: the upstream tip is no longer an ancestor of HEAD" ok
+fi
+got="$( cd "$MB/rb" && ps_merge_base "$(ps_base_ref)" )"
+[ -n "$got" ] && [ "$got" = "$new_main" ] \
+  && check "#456 a rebased branch's plain push is measured from the new main, not the old fork" ok \
+  || check "#456 a rebased branch's plain push is measured from the new main, not the old fork" "got=$got want=$new_main (old fork $old_fork)"
+got="$( cd "$MB/rb" && ps_pending_base "$(ps_base_ref)" )"
+[ -n "$got" ] && [ "$got" = "$new_main" ] \
+  && check "#456 a rebased branch's commit then push is measured from the new main" ok \
+  || check "#456 a rebased branch's commit then push is measured from the new main" "got=$got want=$new_main"
+# After the force push itself, the post push helper reads the whole branch against the new main.
+( cd "$MB/rb" && git push -q --force origin feat ) >/dev/null 2>&1
+got="$( cd "$MB/rb" && ps_pushed_base )"
+[ -n "$got" ] && [ "$got" = "$new_main" ] \
+  && check "#456 after the force push the range starts at the new main" ok \
+  || check "#456 after the force push the range starts at the new main" "got=$got want=$new_main"
+
+# The control that keeps the fix narrow: a branch that DIVERGED from its upstream without being
+# rebased (someone else pushed to it) is not a rewrite onto main. The newer of the two merge bases
+# wins, so the range stays on the branch rather than widening back to where it left main.
+git init -q --bare "$MB/dv.git" 2>/dev/null
+git init -q -b main "$MB/dv" 2>/dev/null
+mb_commit "$MB/dv" base
+( cd "$MB/dv" && git remote add origin "$MB/dv.git" && git push -q -u origin main \
+    && git checkout -q -b feat && printf 'a\n' > g && git add g && gc commit -qm f1 \
+    && git push -q -u origin feat \
+    && git clone -q "$MB/dv.git" "$MB/dv2" && cd "$MB/dv2" && git checkout -q feat \
+    && printf 'other\n' > h && git add h && gc commit -qm theirs && git push -q origin feat \
+    && cd "$MB/dv" && git fetch -q origin \
+    && printf 'b\n' >> g && git add g && gc commit -qm mine ) >/dev/null 2>&1
+shared="$(sha_of "$MB/dv" HEAD~1)"
+got="$( cd "$MB/dv" && ps_merge_base "$(ps_base_ref)" )"
+[ -n "$got" ] && [ "$got" = "$shared" ] \
+  && check "#456 control: a diverged but unrebased branch keeps the upstream merge base" ok \
+  || check "#456 control: a diverged but unrebased branch keeps the upstream merge base" "got=$got want=$shared"
+
 # A repository with no commits has no range at all: every entry point answers nothing and says so
 # with its status, rather than printing something a caller would diff against.
 git init -q "$MB/none" 2>/dev/null
@@ -449,6 +513,102 @@ want_scope "git add --verbose && git commit -qm x && git push" "UNKNOWN" \
   "#442 an add that names nothing is UNKNOWN"
 want_scope "rtk git -C /tmp/x add app/copy.ts && git commit -qm x && git push" "PATHS|app/copy.ts" \
   "#442 an rtk rewritten add with -C is still read"
+# An add naming paths AND a commit that stages for itself with -a (claude-config#457 item 4). The
+# commit takes every tracked change as well as the named paths, and reporting only the paths left
+# a tracked edit nobody named unread by every gate. TRACKED, with the named paths after it, because
+# a named path may be untracked and -a alone never takes one.
+want_scope "git add new.ts && git commit -qam x && git push" "TRACKED|new.ts" \
+  "#457 an add naming a path beside commit -a takes tracked changes AND the path"
+want_scope "git add a.ts b.ts && git commit -a -m x && git push" "TRACKED|a.ts|b.ts" \
+  "#457 the same with a separate -a flag and several paths"
+want_scope "git add -u sub && git commit -qm x && git push" "TRACKED" \
+  "#457 control: an add -u with a path and no commit -a names no untracked path"
+want_scope "git add -A && git commit -qam x && git push" "ALL" \
+  "#457 control: an add taking everything stays ALL beside commit -a"
+
+# The commonest commit there is: a heredoc message whose body has an apostrophe. The whole command
+# was tokenised at once, the unbalanced quote failed it, and the add's scope came back UNKNOWN, so
+# every gate widened to the whole working tree on exactly this shape (claude-config#457). Each
+# segment is tokenised on its own now, and a body line that is not a git add is not read as one.
+want_scope "git add a.ts && git commit -q -F - <<'MSG'; it isn't balanced; MSG; git push" "PATHS|a.ts" \
+  "#457 an add before a heredoc body with an apostrophe still names its path"
+want_scope "git add \"a b.ts\" && git commit -qm x && git push" "PATHS|a b.ts" \
+  "#457 a quoted path with a space is still one path"
+want_scope "echo git add -A && git commit -qm x && git push" "INDEX" \
+  "#457 an add named only as an argument is not an add"
+want_scope "git commit -qm \"fix git add handling\" && git push" "INDEX" \
+  "#457 an add named inside a commit message is not an add"
+
+# ---------------------------------------------------------------------------
+# ps_add_takes_all: does a git add in this command take more than the paths it names (claude-config
+# #457 item 6)? check-add-scope.sh answered it with its own detector beside the shared parser; it is
+# a different question from ps_add_scope's (a commit -a is not an add), so it is its own entry point
+# over the same parser rather than a second parser (L342).
+# ---------------------------------------------------------------------------
+want_takes() { # want_takes <command> <yes|no> <description>
+  local got=no
+  ps_add_takes_all "$1" && got=yes
+  [ "$got" = "$2" ] && check "$3" ok || check "$3" "answered $got"
+}
+want_takes "git add -A" yes "#457 git add -A takes everything"
+want_takes "git add ." yes "#457 git add . takes everything"
+want_takes "git add --all" yes "#457 git add --all takes everything"
+want_takes "git add -u" yes "#457 git add -u takes every tracked change"
+want_takes "git add :/" yes "#457 git add :/ takes everything"
+want_takes "FOO=1 git add ." yes "#457 an inline variable before the add is skipped"
+want_takes "(cd /tmp/x && git add -A)" yes "#457 an add inside a subshell is read"
+want_takes "rtk git -C /tmp/x add -A" yes "#457 an rtk rewritten add with -C is read"
+want_takes "git add -A && git commit -q -F - <<'MSG'; it isn't balanced; MSG" yes \
+  "#457 an add taking everything before a heredoc with an apostrophe is still seen"
+want_takes "git add mine.txt" no "#457 an add naming a file is scoped"
+want_takes "git add -- mine.txt other.txt" no "#457 an add naming files after -- is scoped"
+want_takes "git add --help" no "#457 an add naming nothing stages nothing"
+want_takes "echo 'remember to git add -A next time'" no "#457 an add inside an echo is not an add"
+want_takes "git commit -m 'git add -A was wrong here'" no "#457 an add inside a message is not an add"
+want_takes "git commit -qam x" no "#457 a commit -a is not an add"
+want_takes "git status" no "#457 an unrelated command is not an add"
+
+# ---------------------------------------------------------------------------
+# ps_pending_files: the working tree files a commit in this command takes BEYOND the index, as one
+# list the hooks read rather than each turning ps_add_scope into files its own way (claude-config
+# #457 items 1, 3, 5). First line EXACT, or WIDENED when the add could not be accounted for and the
+# whole working tree was listed instead, which the caller must say (L98).
+# ---------------------------------------------------------------------------
+PF="$MB/pf"
+git init -q -b main "$PF" 2>/dev/null
+( cd "$PF" && printf 'a\n' > tracked.txt && mkdir -p sub && printf 's\n' > sub/t.txt \
+    && git add tracked.txt sub/t.txt && gc commit -qm seed \
+    && printf 'changed\n' >> tracked.txt && printf 'new\n' > named.txt && printf 'stranger\n' > stranger.txt \
+    && printf 'n\n' > sub/new.txt ) >/dev/null 2>&1
+want_pending() { # want_pending <command> <expected, sorted, | joined> <description>
+  local got
+  got="$( cd "$PF" && ps_pending_files "$1" | { IFS= read -r v; printf '%s\n' "$v"; sort; } | tr '\n' '|' | sed 's/|$//' )"
+  [ "$got" = "$2" ] && check "$3" ok || check "$3" "got [$got]"
+}
+want_pending "git commit -qm x && git push" "EXACT" \
+  "#457 a bare commit takes nothing beyond the index"
+want_pending "git add named.txt && git commit -qm x && git push" "EXACT|named.txt" \
+  "#457 an add naming an untracked file takes that file only"
+want_pending "git add tracked.txt && git commit -qm x && git push" "EXACT|tracked.txt" \
+  "#457 an add naming a tracked file takes that file only"
+want_pending "git add sub && git commit -qm x && git push" "EXACT|sub/new.txt" \
+  "#457 an add naming a directory takes what changed under it"
+want_pending "git commit -qam x && git push" "EXACT|tracked.txt" \
+  "#457 a commit -a takes tracked changes and no untracked file"
+want_pending "git add named.txt && git commit -qam x && git push" "EXACT|named.txt|tracked.txt" \
+  "#457 an add beside commit -a takes the named file and the tracked changes"
+want_pending "git add -A && git commit -qm x && git push" "EXACT|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#457 git add -A takes every change"
+want_pending "git add \"named.txt && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#457 an add nobody can read widens to the whole tree and says so"
+want_pending "git add gone.txt && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#457 an add naming a path that is not there widens and says so"
+# Paths come back relative to the repository root wherever the command runs, so a hook that went
+# into a subdirectory reads the same list.
+got="$( cd "$PF/sub" && ps_pending_files "git add new.txt && git commit -qm x" | tr '\n' '|' | sed 's/|$//' )"
+[ "$got" = "EXACT|sub/new.txt" ] \
+  && check "#457 a pending file named from a subdirectory comes back relative to the root" ok \
+  || check "#457 a pending file named from a subdirectory comes back relative to the root" "got [$got]"
 
 # And no hook keeps its own copy of the parser. Derived from the hooks on disk, not from a list of
 # the two that had one, so a third copy is caught the day it is written (L96, L613).
@@ -458,6 +618,30 @@ own_add_parsers="$(grep -l 'toks\[j\] != "add"' "$DIR"/*.sh 2>/dev/null | tr '\n
 case "$own_add_parsers" in
   *[![:space:]]*) check "#442 no hook keeps its own git add scope parser" "still in: $own_add_parsers" ;;
   *) check "#442 no hook keeps its own git add scope parser" ok ;;
+esac
+# The other shape a private add reader takes is a regular expression for the add itself (the test
+# gate's sed parser, check-add-scope.sh's detector). The needle is assembled so this line does not
+# match itself (L245); the library is the one file allowed to hold it.
+add_re=':space:]]'; add_re="${add_re}+add"
+own_add_res="$(grep -lF "$add_re" "$DIR"/*.sh 2>/dev/null | grep -v '/test-' | tr '\n' ' ')"
+case "$own_add_res" in
+  *[![:space:]]*) check "#457 no hook keeps its own git add pattern" "still in: $own_add_res" ;;
+  *) check "#457 no hook keeps its own git add pattern" ok ;;
+esac
+
+# No hook works out a push's range itself (claude-config#457): a merge base computed outside the
+# library misses every correction made inside it, the rebase one (#456) included (L613).
+mb_cmd='git merge'; mb_cmd="${mb_cmd}-base"
+own_mbs="$(grep -lE "^[^#]*${mb_cmd}" "$DIR"/*.sh 2>/dev/null | grep -v '/test-' | tr '\n' ' ')"
+case "$own_mbs" in
+  *[![:space:]]*) check "#457 no hook computes its own merge base" "still in: $own_mbs" ;;
+  *) check "#457 no hook computes its own merge base" ok ;;
+esac
+# And none asks for a range with no base at all, which always lands on HEAD~1 (item 2).
+no_base="$(grep -lE '^[^#]*ps_(merge|pending)_base[[:space:]]*\)' "$DIR"/*.sh 2>/dev/null | grep -v '/test-' | tr '\n' ' ')"
+case "$no_base" in
+  *[![:space:]]*) check "#457 no hook asks for a range without a base" "still in: $no_base" ;;
+  *) check "#457 no hook asks for a range without a base" ok ;;
 esac
 
 rm -rf "$RD" "$MB"

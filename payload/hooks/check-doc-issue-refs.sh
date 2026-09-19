@@ -101,7 +101,15 @@ is_doc_path() {  # $1 = a repo-relative path
 }
 
 base="$(ps_base_ref || true)"
-mb="$(ps_merge_base "$base")"
+commit_in_chain=0
+ps_commit_in_chain "$cmd" && commit_in_chain=1
+# Where the range starts, from the shared contract: a command that commits first answers for its
+# own commit, not for the last one already on the remote (claude-config#441, #457).
+if [ "$commit_in_chain" -eq 1 ]; then
+  mb="$(ps_pending_base "$base")"
+else
+  mb="$(ps_merge_base "$base")"
+fi
 # A repo with a single commit has no HEAD~1 either; judge against the empty tree so the
 # push's whole content is read rather than nothing.
 [ -n "$mb" ] || mb="$(git hash-object -t tree /dev/null 2>/dev/null)"
@@ -110,13 +118,17 @@ mb="$(ps_merge_base "$base")"
 # this command commits before it pushes, the working tree paths that commit would take.
 committed_paths=""
 [ -n "$mb" ] && committed_paths="$(git diff --name-only --diff-filter=AMR "$mb" HEAD 2>/dev/null)"
+# The pending side is the index plus what the shared reader says the commit takes beyond it
+# (claude-config#457). Any add made this read every untracked file, so another session's untracked
+# doc was judged as this commit's.
 pending_paths=""
-if ps_commit_in_chain "$cmd"; then
-  pending_paths="$(git diff --name-only --diff-filter=AMR HEAD 2>/dev/null; git diff --cached --name-only --diff-filter=AMR 2>/dev/null)"
-  if ps_add_in_chain "$cmd"; then
-    pending_paths="${pending_paths}
-$(git ls-files --others --exclude-standard 2>/dev/null)"
-  fi
+pending_widened=0
+if [ "$commit_in_chain" -eq 1 ]; then
+  pending_paths="$(git diff --cached --name-only --diff-filter=AMR 2>/dev/null)"
+  pending_list="$(ps_pending_files "$cmd")"
+  [ "${pending_list%%$'\n'*}" = "WIDENED" ] && pending_widened=1
+  pending_paths="${pending_paths}
+$(printf '%s\n' "$pending_list" | tail -n +2)"
 fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-doc-refs.XXXXXXXX")" || exit 0
@@ -310,6 +322,10 @@ fi
   echo "there is one), then push again."
   echo ""
   echo "Read $doc_count doc file(s) this push carries and asked GitHub about $(( n_ids - capped )) issue(s) named in pending sentences."
+  if [ "$pending_widened" -eq 1 ]; then
+    echo "The git add in this command could not be read, so every doc in the working tree was"
+    echo "read as part of the commit it is about to make."
+  fi
   if [ "$n_unreach" -gt 0 ]; then
     echo "gh could not answer for $n_unreach other issue(s), so those claims were not judged either way."
   fi

@@ -373,6 +373,19 @@ run_hook "$BIN" "$R" "git add docs/pii.md && git commit -qm pii && git push"
 want_code 2 "a pending doc that this command is about to commit is judged"
 run_hook "$BIN" "$R" "git push"
 want_code 0 "a push on its own judges the commits only, never the working tree"
+# Only what the commit will carry (claude-config#457). Any add made this hook read EVERY untracked
+# file, so another session's untracked doc was judged as this commit's.
+( cd "$R" && printf '%s\n' "Unrelated." > docs/mine.md ) >/dev/null 2>&1
+run_hook "$BIN" "$R" "git add docs/mine.md && git commit -qm mine && git push"
+want_code 0 "an untracked doc the add does not name is not judged"
+# And a commit then push on a branch level with its upstream answers for its own commit, not for
+# the last one already on the remote (the plain push range re-read it).
+BIN="$(mk_bin)"; set_state "$BIN" 1041 CLOSED "x"
+R="$(mk_repo "$GH_URL")"; commit_file "$R" docs/pii.md "$PENDING_DOC"
+( cd "$R" && git remote set-url origin "$(dirname "$R")/origin.git" && git push -q origin main \
+    && git remote set-url origin "$GH_URL" && printf '%s\n' "Unrelated." > docs/mine.md ) >/dev/null 2>&1
+run_hook "$BIN" "$R" "git add docs/mine.md && git commit -qm mine && git push"
+want_code 0 "a commit then push does not answer for a doc already on the remote"
 
 # --- the session's cwd is not the repo -------------------------------------------------------
 BIN="$(mk_bin)"; set_state "$BIN" 1041 CLOSED "x"

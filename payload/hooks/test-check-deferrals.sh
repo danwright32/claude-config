@@ -303,6 +303,45 @@ want_rc 0 "push hook: a commit then push does not answer for a deferral already 
 run_push "$W" "cd $W && git add c.ts && git commit -qm c && git push"
 want_rc 2 "push hook: and the same shape still judges the commit it is about to make"
 
+# An add naming a path beside a commit -a takes both (claude-config#457 item 4): the tracked edit
+# -a commits, and the untracked file the add names.
+W="$(mk_repo p15)"
+commit_file "$W" src/a.ts $'export const a = 1;\n'
+( cd "$W" && "${G[@]}" push -q origin main && printf '%s' $'// TODO tracked edit nobody named\n' >> src/a.ts \
+    && printf '%s' $'export const n = 1;\n' > n.ts ) >/dev/null 2>&1
+run_push "$W" "cd $W && git add n.ts && git commit -qam n && git push"
+want_rc 2 "push hook: an add beside commit -a judges the tracked edit -a takes"
+W="$(mk_repo p16)"
+( cd "$W" && printf '%s' $'// TODO in the named new file\n' > n.ts ) >/dev/null 2>&1
+run_push "$W" "cd $W && git add n.ts && git commit -qam n && git push"
+want_rc 2 "push hook: an add beside commit -a judges the untracked file it names"
+
+# A branch REBASED onto a newer main and force pushed (claude-config#456). Its upstream still named
+# the pre rebase tip, so the range began at the old fork point and a deferral that another pull
+# request had already merged into main was blamed on this push, which is how the hook refused a
+# force push over two lines nobody on the branch wrote (L11).
+W="$(mk_repo p14)"
+(
+  cd "$W" || exit 1
+  "${G[@]}" checkout -q -b feat
+  printf '%s' $'export const f = 1;\n' > f.ts && "${G[@]}" add f.ts && "${G[@]}" commit -qm f
+  "${G[@]}" push -qu origin feat
+  "${G[@]}" checkout -q main
+) >/dev/null 2>&1
+commit_file "$W" src/merged.ts $'// TODO already merged by someone else\n'
+(
+  cd "$W" || exit 1
+  "${G[@]}" push -q origin main
+  "${G[@]}" checkout -q feat
+  "${G[@]}" rebase -q main
+) >/dev/null 2>&1
+run_push "$W" "cd $W && git push --force-with-lease"
+want_rc 0 "push hook: a rebased branch's force push does not answer for main's deferral (#456)"
+( cd "$W" && printf '%s' $'// TODO this branch adds\n' > mine.ts && "${G[@]}" add mine.ts && "${G[@]}" commit -qm mine ) >/dev/null 2>&1
+run_push "$W" "cd $W && git push --force-with-lease"
+want_rc 2 "push hook: and the same rebased branch still answers for its own deferral"
+case "$MSG" in *merged.ts*) check "push hook: the rebased branch's refusal names only its own line" "it named main's merged.ts" ;; *) check "push hook: the rebased branch's refusal names only its own line" ok ;; esac
+
 # The guard's own files and the config repo's suites never block a push of themselves.
 W="$(mk_repo p10)"
 commit_file "$W" payload/hooks/test-something.sh $'# TODO fixture text for a suite\n'

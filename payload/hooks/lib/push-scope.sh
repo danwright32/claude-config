@@ -7,11 +7,13 @@
 #   ps_is_git_push: is this command actually a push (leading tokens, not a
 #                      substring, so an `echo "git push"` cannot trigger a hook)
 #   ps_repo_dir: which repository the push is about
-#   ps_commit_in_chain / ps_add_in_chain: does the same command commit/stage
-#                      before pushing? PreToolUse runs BEFORE the command, so a
-#                      `git add … && git commit … && git push` has nothing in
-#                      history yet and the pending work must be folded in.
-#   ps_add_scope: what that pending commit will take beyond the index
+#   ps_commit_in_chain: does the same command commit before pushing? PreToolUse
+#                      runs BEFORE the command, so a `git add … && git commit … &&
+#                      git push` has nothing in history yet and the pending work
+#                      must be folded in.
+#   ps_add_scope / ps_pending_files: what that pending commit will take beyond
+#                      the index, as a scope word or as the files themselves
+#   ps_add_takes_all: does a git add in the command take more than it names
 #   ps_base_ref: the ref a push is judged against
 #   ps_merge_base / ps_pending_base / ps_pushed_base: where the range starts, one
 #                      per situation a push hook meets (the contract is above them)
@@ -226,18 +228,101 @@ ps_commit_in_chain() {
   grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)' <<< "$1"
 }
 
-ps_add_in_chain() {
-  ps__git_add_in_chain "$1" && return 0
-  ps__commit_stages_all "$1"
-}
-
-# The two halves of ps_add_in_chain, named, because ps_add_scope has to tell them apart: an add
-# names what it stages, a `commit -a` stages every tracked change and names nothing.
+# Does the command stage with a git add, and does its commit stage for itself with -a? Two
+# questions, because ps_add_scope has to tell them apart: an add names what it stages, a
+# `commit -a` stages every tracked change and names nothing. The first is a cheap filter only;
+# ps__read_adds decides what an add really is.
 ps__git_add_in_chain() {
   grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' <<< "$1"
 }
 ps__commit_stages_all() {
   grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a' <<< "$1"
+}
+
+# What the git adds in a command stage, read before any of it runs. The one parser behind
+# ps_add_scope and ps_add_takes_all (claude-config#442, #457); no hook keeps its own.
+#
+# Each shell segment is tokenised on its own, split where ps_is_git_push splits them. The whole
+# command used to be tokenised at once, so the commonest commit there is, a heredoc message whose
+# body holds an apostrophe, failed the read and every gate widened to the whole working tree. Now a
+# segment that cannot be tokenised only matters when it is itself a git add, and a git add counts
+# only in COMMAND position (after a subshell or brace opener and any inline variables), so an add
+# named inside an echo or a message is not one.
+#
+# $2 is the question:
+#   scope  prints ALL, TRACKED, PATHS then the paths one per line, UNKNOWN (an add was seen but
+#          could not be read, or it names nothing), or NONE (no add at all)
+#   takes  prints yes when any add takes more than the paths it names (ALL or TRACKED), else no
+ps__read_adds() {   # $1 = command  $2 = scope | takes
+  # The command goes in on stdin, never in the environment: a heredoc commit message can pass the
+  # platform's limit on argument and environment size, and python then never starts at all.
+  printf '%s' "$1" | PS_MODE="${2:-scope}" python3 -c '
+import os, re, shlex, sys
+cmd = sys.stdin.read()
+mode = os.environ.get("PS_MODE", "scope")
+EVERYTHING = {"-A", "--all", "--no-ignore-removal", ".", "./", ":/", "*"}
+TRACKED_ONLY = {"-u", "--update"}
+ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+REDIRECT = re.compile(r"\d*(>>?|<<?)&?")
+saw_add, takes_all, tracked, unreadable, paths = False, False, False, False, []
+for seg in re.split(r"&&|\|\||;|\||\n", cmd):
+    try:
+        toks, readable = shlex.split(seg, posix=True), True
+    except ValueError:
+        toks, readable = seg.split(), False
+    i = 0
+    while i < len(toks):
+        t = toks[i].lstrip("({")
+        if t == "" or ASSIGN.match(t):
+            i += 1
+            continue
+        toks[i] = t
+        break
+    if i < len(toks) and toks[i].split("/")[-1] == "rtk":
+        i += 1
+    if i >= len(toks) or toks[i].split("/")[-1] != "git":
+        continue
+    j = i + 1
+    while j < len(toks) and toks[j].startswith("-"):
+        j += 2 if toks[j] in ("-C", "-c") else 1
+    if j >= len(toks) or toks[j] != "add":
+        continue
+    saw_add = True
+    if not readable:
+        unreadable = True
+    skip = False
+    for a in toks[j + 1:]:
+        if skip:
+            skip = False
+            continue
+        a = a.rstrip(")}")
+        m = REDIRECT.match(a)
+        if m:
+            skip = m.end() == len(a)
+            continue
+        if a in EVERYTHING:
+            takes_all = True
+        elif a in TRACKED_ONLY:
+            tracked = True
+        elif a and not a.startswith("-") and readable:
+            paths.append(a)
+if mode == "takes":
+    print("yes" if (takes_all or tracked) else "no")
+elif not saw_add:
+    print("NONE")
+elif takes_all:
+    print("ALL")
+elif unreadable:
+    print("UNKNOWN")
+elif tracked:
+    print("TRACKED")
+elif paths:
+    print("PATHS")
+    for p in paths:
+        print(p)
+else:
+    print("UNKNOWN")
+' 2>/dev/null
 }
 
 # What the commit in a chained `… git commit … && git push` will take BEYOND what is already in the
@@ -249,64 +334,92 @@ ps__commit_stages_all() {
 #
 # Prints a scope word on the first line and, for PATHS, one path per line after it:
 #   INDEX    no add and no -a: the commit takes the index and nothing else
-#   TRACKED  `git add -u`, or a `commit -a` with no add: every tracked change
+#   TRACKED  `git add -u`, or a `commit -a`: every tracked change. When an add also names paths
+#            beside a `commit -a`, they follow one per line, and the caller reads them too,
+#            because a named path may be untracked and -a alone never takes one.
 #   ALL      `git add -A`, `.`, `:/` or `*`: every change, untracked files included
 #   PATHS    the paths the add names, exactly as written, for the caller to resolve
-#   UNKNOWN  an add this cannot account for (it names nothing, or the command cannot be tokenised)
+#   UNKNOWN  an add this cannot account for (it names nothing, or it cannot be tokenised)
 # UNKNOWN is an answer, not a failure: the caller must widen to the whole working tree AND say so,
 # because a reading quietly narrowed to nothing reports a clean push it never measured (L98).
 #
 # Only meaningful for a command that commits; a caller asks ps_commit_in_chain first.
 ps_add_scope() {   # $1 = command
-  local out
+  local out=""
+  # The pattern is a cheap filter only: the parser decides, so an add named inside a message
+  # (`git commit -m "fix git add"`) is not taken for one.
   if ps__git_add_in_chain "$1"; then
-    out="$(PS_CMD="$1" python3 -c '
-import os, shlex
-try:
-    toks = shlex.split(os.environ.get("PS_CMD", ""), posix=True)
-except ValueError:
-    print("UNKNOWN"); raise SystemExit
-SEP = {"&&", "||", ";", "|", "&"}
-EVERYTHING = {"-A", "--all", "--no-ignore-removal"}
-TRACKED_ONLY = {"-u", "--update"}
-scope, paths, i = "PATHS", [], 0
-while i < len(toks):
-    if toks[i] == "rtk" or toks[i].split("/")[-1] != "git":
-        i += 1
-        continue
-    j = i + 1
-    while j < len(toks) and toks[j].startswith("-"):
-        j += 2 if toks[j] in ("-C", "-c") else 1
-    if j >= len(toks) or toks[j] != "add":
-        i = j + 1
-        continue
-    k = j + 1
-    while k < len(toks) and toks[k] not in SEP:
-        a = toks[k]
-        if a in EVERYTHING or a in (".", "./", ":/", "*"):
-            scope = "ALL"
-        elif a in TRACKED_ONLY:
-            if scope == "PATHS":
-                scope = "TRACKED"
-        elif not a.startswith("-"):
-            paths.append(a)
-        k += 1
-    i = k
-if scope == "PATHS" and not paths:
-    scope = "UNKNOWN"
-print(scope)
-if scope == "PATHS":
-    for p in paths:
-        print(p)
-' 2>/dev/null)"
+    out="$(ps__read_adds "$1" scope)"
     # No answer at all (python missing or dead) is the same as an add nobody can account for.
     [ -n "$out" ] || out="UNKNOWN"
-    printf '%s\n' "$out"
-  elif ps__commit_stages_all "$1"; then
-    printf 'TRACKED\n'
-  else
-    printf 'INDEX\n'
   fi
+  case "$out" in
+    ''|NONE)
+      if ps__commit_stages_all "$1"; then printf 'TRACKED\n'; else printf 'INDEX\n'; fi
+      return 0 ;;
+    # An add naming paths beside a `commit -a`: the commit takes every tracked change too, so
+    # reporting the paths alone left a tracked edit nobody named unread (claude-config#457).
+    PATHS*) ps__commit_stages_all "$1" && out="TRACKED${out#PATHS}" ;;
+  esac
+  printf '%s\n' "$out"
+}
+
+# Does a git add in this command take more than the paths it names: `-A`, `--all`, `.`, `:/`, `*`
+# or `-u` (claude-config#457 item 6)? check-add-scope.sh answered this with a detector of its own.
+# It is a different question from ps_add_scope's, because a `commit -a` is not an add and an add
+# that names paths is scoped whatever the commit does, so it is its own entry point over the same
+# parser rather than a second parser (L342). Returns 0 for yes.
+ps_add_takes_all() {   # $1 = command
+  ps__git_add_in_chain "$1" || return 1
+  [ "$(ps__read_adds "$1" takes)" = "yes" ]
+}
+
+# The working tree files the commit in this command takes BEYOND the index, from ps_add_scope, as
+# one list (claude-config#457). Three hooks each turned the scope into files their own way, and one
+# read the whole working tree for every commit then push, which is how another session's untracked
+# files came to be judged as this push's work (claude-config#350).
+#
+# Run inside the repository. The first line is a verdict:
+#   EXACT    the list is what the commit will take
+#   WIDENED  the add could not be accounted for (UNKNOWN, or a named path that is not there), so
+#            the whole working tree was listed instead. The caller must say so (L98, L11).
+# Then one path per line, relative to the repository root wherever the command runs: tracked files
+# changed against the index (a deletion included, so a caller checks the file exists) and untracked
+# files. Nothing for a command with no commit's worth of extra work (INDEX).
+ps_pending_files() {   # $1 = command
+  local scope kind pth verdict=EXACT
+  scope="$(ps_add_scope "$1")"
+  kind="${scope%%$'\n'*}"
+  case "$kind" in
+    UNKNOWN) verdict=WIDENED ;;
+    PATHS)
+      while IFS= read -r pth; do
+        [ -n "$pth" ] || continue
+        [ -e "$pth" ] || { verdict=WIDENED; break; }
+      done < <(printf '%s\n' "$scope" | tail -n +2) ;;
+  esac
+  printf '%s\n' "$verdict"
+  {
+    if [ "$verdict" = WIDENED ] || [ "$kind" = ALL ]; then
+      git diff --name-only 2>/dev/null
+      git ls-files --others --exclude-standard --full-name -- ':/' 2>/dev/null
+    else
+      case "$kind" in
+        TRACKED)
+          git diff --name-only 2>/dev/null
+          while IFS= read -r pth; do
+            [ -n "$pth" ] || continue
+            git ls-files --others --exclude-standard --full-name -- "$pth" 2>/dev/null
+          done < <(printf '%s\n' "$scope" | tail -n +2) ;;
+        PATHS)
+          while IFS= read -r pth; do
+            [ -n "$pth" ] || continue
+            git diff --name-only -- "$pth" 2>/dev/null
+            git ls-files --others --exclude-standard --full-name -- "$pth" 2>/dev/null
+          done < <(printf '%s\n' "$scope" | tail -n +2) ;;
+      esac
+    fi
+  } | awk 'NF && !seen[$0]++'
 }
 
 # ---- where a push's range starts: the contract (claude-config#441) ----
@@ -332,15 +445,56 @@ if scope == "PATHS":
 #                   HEAD (exactly what this push added), then the fork point from the remote's
 #                   default branch (a first push of a branch), and only then the plain push answer.
 #
+# ps_merge_base and ps_pending_base both read the merge base through ps__base_merge_base, so a branch
+# rebased onto a newer main and force pushed is judged from where it now leaves main, never from its
+# pre rebase upstream tip (claude-config#456). ps_pushed_base already reaches the same answer: after
+# a force push the reflog's previous tip is not an ancestor, so it falls to the default branch.
+#
 # Each prints a commit and returns 0, or prints nothing and returns 1 when there is no range at all
 # (no commits, or nothing earlier than HEAD to start from). A caller getting nothing decides for
 # itself what that means, and must say so rather than read it as a clean result (L98).
 
+# The merge base of the base ref with HEAD, corrected for a REWRITTEN branch (claude-config#456).
+# After a rebase onto a newer main, the upstream still names the pre rebase tip, which is no longer
+# an ancestor of HEAD, and its merge base is the OLD fork point: every commit main gained since was
+# judged as part of the push. So when the base is not an ancestor of HEAD, the merge base with the
+# remote's default branch is taken too, and the NEWER of the two wins. The newer one, rather than
+# always the default branch's: a branch that diverged because somebody else pushed to it was not
+# rebased, and its upstream merge base is still the closer, correct start. Prints nothing when
+# there is no base or no merge base; what a merge base at HEAD means is left to each entry point.
+ps__base_merge_base() {   # $1 = the base ref
+  local base="${1:-}" mb="" def cand
+  [ -n "$base" ] || return 0
+  git rev-parse --verify --quiet "$base" >/dev/null 2>&1 || return 0
+  mb="$(git merge-base "$base" HEAD 2>/dev/null)"
+  if [ -n "$mb" ] && ! git merge-base --is-ancestor "$base" HEAD 2>/dev/null; then
+    def="$(ps__default_ref)"
+    if [ -n "$def" ]; then
+      cand="$(git merge-base "$def" HEAD 2>/dev/null)"
+      if [ -n "$cand" ] && [ "$cand" != "$mb" ] && git merge-base --is-ancestor "$mb" "$cand" 2>/dev/null; then
+        mb="$cand"
+      fi
+    fi
+  fi
+  printf '%s' "$mb"
+}
+
+# The remote's default branch as a remote tracking ref: what origin/HEAD names, then the usual
+# names. Remote refs only, never a local branch, because the question is where the branch leaves
+# what the remote holds.
+ps__default_ref() {
+  local def c
+  def="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
+  if [ -n "$def" ]; then printf '%s' "$def"; return 0; fi
+  for c in origin/main origin/master; do
+    if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+
 ps_merge_base() {   # $1 = the base ref, usually from ps_base_ref
   local base="${1:-}" mb=""
-  if [ -n "$base" ] && git rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
-    mb="$(git merge-base "$base" HEAD 2>/dev/null)"
-  fi
+  mb="$(ps__base_merge_base "$base")"
   if [ -z "$mb" ] || [ "$mb" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
     mb="$(git rev-parse --verify --quiet HEAD~1 2>/dev/null)"
   fi
@@ -353,7 +507,7 @@ ps_pending_base() {   # $1 = the base ref, usually from ps_base_ref
   head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)" || return 1
   [ -n "$head" ] || return 1
   if [ -n "$base" ] && git rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
-    mb="$(git merge-base "$base" HEAD 2>/dev/null)"
+    mb="$(ps__base_merge_base "$base")"
     full="$(git rev-parse --symbolic-full-name "$base" 2>/dev/null)"
     case "$full" in
       refs/remotes/*)
@@ -364,19 +518,14 @@ ps_pending_base() {   # $1 = the base ref, usually from ps_base_ref
 }
 
 ps_pushed_base() {
-  local head prev def c cand
+  local head prev def cand
   head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)" || return 1
   [ -n "$head" ] || return 1
   prev="$(git rev-parse --verify --quiet '@{u}@{1}' 2>/dev/null)"
   if [ -n "$prev" ] && [ "$prev" != "$head" ] && git merge-base --is-ancestor "$prev" HEAD 2>/dev/null; then
     printf '%s' "$prev"; return 0
   fi
-  def="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
-  if [ -z "$def" ]; then
-    for c in origin/main origin/master; do
-      if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then def="$c"; break; fi
-    done
-  fi
+  def="$(ps__default_ref)"
   if [ -n "$def" ]; then
     cand="$(git merge-base "$def" HEAD 2>/dev/null)"
     if [ -n "$cand" ] && [ "$cand" != "$head" ]; then printf '%s' "$cand"; return 0; fi
