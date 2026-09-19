@@ -89,6 +89,21 @@ REGISTRY="${CHANGELOG_REGISTRY:-$HOME/.claude/skills/pennie-dev-update/repos.jso
 command -v node >/dev/null 2>&1 || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
+# The reader the shared library needs for a direct merge's own arguments (claude-config#475).
+# Without python3 the pull request and the repository this command names both come back empty, so
+# this gate read the record of whatever pull request gh resolves from the current branch, in
+# whatever repository this folder belongs to. It refuses by name rather than letting that arrive
+# as "no pull request was found", which is a true sentence about a different fault and sends
+# somebody to name a repository that was never the problem (L11).
+#
+# Below the registry check deliberately: on a machine with no dev update tooling this gate has
+# nothing to enforce and stands down, and a refusal about a reader would be a refusal about a rule
+# that does not apply here. Only the direct form, because a wrapper names its number as a
+# positional argument the shell reads and names no repository at all.
+if mt_is_pr_merge "$command" && mt_reader_missing; then
+  deny "Cannot tell whether this repo needs a changelog record: $(mt_reader_absent_why) Reading another pull request's record while merging this one would lose this change from the next manager update. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+fi
+
 cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)
 
 # WHICH repository, resolved the way gh itself resolves it: the merge's own --repo, -R or pull

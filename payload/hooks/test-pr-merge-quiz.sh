@@ -248,6 +248,28 @@ NODE_DIR="$(dirname "$(command -v node)")"
 record '[{"name":"changelog/none"}]'
 run "gh not on PATH quizzes"            fire 'gh pr merge 42' "PATH=$NODE_DIR:/usr/bin:/bin"
 run "node not on PATH quizzes"          fire 'gh pr merge 42' "PATH=$FIXTURE/bin:/usr/bin:/bin"
+
+# The third tool, and the one this hook never named: lib/merge-target.sh reads WHICH pull request
+# and WHICH repository the merge names with python3 (claude-config#475). Without it both come back
+# empty, so the label is read from whatever pull request the current branch resolves to, and the
+# quiet record above silences the quiz for a merge nobody identified. Its own verdict name,
+# because one name covering two causes cannot tell them apart (L11).
+#
+# /usr/bin holds a python3, so this one needs a bare directory rather than a trimmed PATH: the
+# tools the hook needs, its fake gh included, and nothing else.
+NOPY="$FIXTURE/nopython"; mkdir -p "$NOPY"
+for t in bash sh git jq node grep sed awk tr cat cut head sort dirname basename env uname mkdir mv rm; do
+  p="$(command -v "$t" 2>/dev/null)"
+  [ -n "$p" ] && [ "$p" != "$FIXTURE/bin/$t" ] && ln -s "$p" "$NOPY/$t" 2>/dev/null
+done
+ln -s "$FIXTURE/bin/gh" "$NOPY/gh" 2>/dev/null
+if PATH="$NOPY" bash -c 'command -v python3 >/dev/null 2>&1'; then
+  fail=$((fail+1)); echo "FAIL: the bare directory still reaches a python3, so this case measures nothing"
+else pass=$((pass+1)); fi
+forget_verdicts
+run "python3 not on PATH quizzes"       fire 'gh pr merge 42' "PATH=$NOPY"
+saw no-python3 1 "a merge whose own arguments could not be read"
+forget_verdicts
 # The control, on the SAME record with both tools present: it DOES silence the quiz, so
 # the two above are not passing because this fixture never skips at all (L159).
 run "the same record with both tools"   skip 'gh pr merge 42'

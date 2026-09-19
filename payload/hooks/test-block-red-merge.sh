@@ -954,6 +954,53 @@ fi
 rm -rf "$dir"
 unset FIXTURE GH_CALL_LOG
 
+echo "block-red-merge: the reader the shared library needs (#475)"
+
+# Which pull request and which repository the merge names are read with python3 in
+# lib/merge-target.sh. Where that reader is absent BOTH come back empty, so this gate asked gh
+# about whatever pull request the current branch resolves to and merged this one on that answer.
+# It has to refuse, and refuse BY NAME: "no pull request was found" is a true sentence about a
+# different fault, and it sends somebody to name a repository that was never the problem (L11).
+#
+# The tools the hook needs, its fake gh included, are linked into a bare directory so nothing
+# else on this machine's PATH can answer for python3.
+nopython_bin() {  # $1 = a fixture dir holding bin/gh ; prints a bin directory with no python3
+  local out="$1/nopython" t p
+  mkdir -p "$out"
+  for t in bash sh git jq grep sed awk tr cat cut head sort dirname basename env uname mkdir mv rm; do
+    p="$(command -v "$t" 2>/dev/null)"
+    [ -n "$p" ] && [ "$p" != "$1/bin/$t" ] && ln -s "$p" "$out/$t" 2>/dev/null
+  done
+  ln -s "$1/bin/gh" "$out/gh" 2>/dev/null
+  printf '%s' "$out"
+}
+
+# GREEN, deliberately: the strong form. This is the fixture the gate LETS THROUGH when it can
+# read the command, so a refusal here can only be the missing reader's doing (L159).
+dir=$(make_repo without-tool "$GREEN")
+nopy="$(nopython_bin "$dir")"
+if PATH="$nopy" bash -c 'command -v python3 >/dev/null 2>&1'; then
+  fail "the bare directory still reaches a python3, so this case measures nothing"
+else pass; fi
+out=$(printf '{"tool_input":{"command":%s},"cwd":%s}' \
+  "$(printf '%s' "gh pr merge 7 --squash --match-head-commit $HEAD_SHA" \
+     | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+  "$(printf '%s' "$dir/repo" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+  | (cd "$dir/repo" && PATH="$nopy" bash "$HOOK"))
+if denied "$out"; then pass; else
+  fail "with no python3 the gate merged a pull request it could not identify: $out"; fi
+if says "$out" "python3"; then pass; else
+  fail "the refusal does not name the reader that is missing: $out"; fi
+# And it must not read as a pull request nobody could find, which is the message this replaces.
+if says "$out" "was found in"; then
+  fail "the missing reader was reported as the pull request not existing: $out"; else pass; fi
+# The control, same fixture and same command with python3 on PATH: it merges. So the refusal
+# above is the reader's absence rather than a fixture that refuses everything (L159).
+if denied "$(run_hook "$dir" "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")"; then
+  fail "the control case refused a green pinned merge, so the case above proves nothing"
+else pass; fi
+rm -rf "$dir"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
