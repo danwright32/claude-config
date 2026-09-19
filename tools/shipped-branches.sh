@@ -8,12 +8,22 @@
 # unfinished work sits in that list looking exactly like the ones that shipped months ago, so
 # nobody can find it and nobody dares delete anything either.
 #
-# Two signals, and they are not equally strong, so the report says which one it used:
+# Three signals, read in this order, and they are not equally strong, so the report says which one
+# it used:
 #
 #   ancestor   the branch tip really is reachable from the default branch. That is PROOF.
+#   merged     GitHub reports a merged pull request from the branch whose head is the branch tip or
+#                holds it (claude-config#459). That is PROOF too, and it catches a branch whose
+#                title was reworded at merge, which the subject guess misses. A merge of an EARLIER
+#                commit proves nothing about work pushed to the same name since, and is said so.
 #   subject    a commit on the default branch carries one of the branch's own commit subjects,
 #                which is what a squash merge leaves behind. That is a GUESS, and a good one:
 #                five out of five sampled by hand on 2026-09-10 matched this way.
+#
+# GitHub is read through lib/pull-requests.sh, the one reading shipped-worktrees.sh uses. When it
+# cannot be read this does not refuse, because it changes nothing: it says so once, stops asking
+# (each further call would pay the same offline timeout), and falls back to the subject guess on
+# every row, labelled "GitHub not read". Unreadable is never reported as unmerged (L98).
 #
 # UNMATCHED means LOOK AT THIS. It never means delete it. A branch whose title was reworded when
 # it merged is a false negative, and acting on a false negative destroys the one branch in the
@@ -40,10 +50,14 @@ git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 \
 
 # The default branch, from the one rule shipped-worktrees.sh uses too. A missing library is a
 # refusal, never a run that carries on without it (L488).
-lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/default-branch.sh"
-[ -f "$lib" ] || fail "its library is missing: $lib"
+libdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+for lib in default-branch.sh pull-requests.sh; do
+  [ -f "$libdir/$lib" ] || fail "its library is missing: $libdir/$lib"
+done
 # shellcheck source=lib/default-branch.sh
-. "$lib"
+. "$libdir/default-branch.sh"
+# shellcheck source=lib/pull-requests.sh
+. "$libdir/pull-requests.sh"
 default="$(default_branch "$repo")" \
   || fail "cannot work out which branch things merge into ($default is not a ref here)"
 
@@ -94,26 +108,58 @@ git -C "$repo" log --format='%H %s' "$default" > "$subjects" 2>/dev/null
 shipped=0
 unmatched=0
 gone_count=0
-printf 'shipped-branches: %s, judged against %s\n' "$repo" "$default"
-if [ "$remote_read" = 1 ]; then
-  printf '  branches read from the remote itself.\n\n'
-else
-  printf '  the remote could not be read, so this is what this clone remembered at its last fetch\n'
-  printf '  and a branch deleted on the server since then still appears below. Refresh it with:\n'
-  printf '  git -C %s fetch --prune\n\n' "$repo"
-fi
+rows=()
+row() {  # row <verdict> <branch> <detail>
+  rows+=("$(printf '  %-9s  %-46s %s' "$1" "$2" "$3")")
+}
+
+# GitHub is asked until it first fails, then not again: every later call would pay the same
+# offline timeout to say the same thing.
+gh_readable=1
+gh_said=""
 
 while IFS= read -r branch; do
   [ -n "$branch" ] || continue
   tip="$(git -C "$repo" rev-parse --verify --quiet "$branch" 2>/dev/null || true)"
   if [ -z "$tip" ]; then
-    printf '  UNMATCHED  %-46s (its tip could not be read)\n' "$branch"
+    row UNMATCHED "$branch" "(its tip could not be read)"
     unmatched=$((unmatched + 1)); continue
   fi
 
   if git -C "$repo" merge-base --is-ancestor "$tip" "$default" 2>/dev/null; then
-    printf '  SHIPPED    %-46s ancestor of %s\n' "$branch" "$default"
+    row SHIPPED "$branch" "ancestor of $default"
     shipped=$((shipped + 1)); continue
+  fi
+
+  # MERGED, from GitHub. A merge proves the head it recorded shipped, so it proves this branch
+  # only when the tip is that head or inside it. stdin is closed because this loop reads its
+  # branches from it and nothing gh runs may eat them.
+  pr_note="GitHub not read"
+  if [ "$gh_readable" = 1 ]; then
+    if prs="$(pull_requests "$repo" "${branch#origin/}" </dev/null)"; then
+      proven=""
+      earlier=""
+      while read -r state number oid; do
+        [ "${state:-}" = MERGED ] || continue
+        if [ "${oid:-}" = "$tip" ] || { [ -n "${oid:-}" ] \
+            && git -C "$repo" merge-base --is-ancestor "$tip" "$oid" 2>/dev/null; }; then
+          proven="$number"; break
+        fi
+        earlier="${earlier:+$earlier, }#$number"
+      done <<< "$prs"
+      open="$(awk '$1 == "OPEN" { printf "%s#%s", (n++ ? ", " : ""), $2 }' <<< "$prs")"
+      if [ -n "$proven" ]; then
+        row SHIPPED "$branch" "pull request #$proven merged$([ -z "$open" ] || printf ' (%s still open)' "$open")"
+        shipped=$((shipped + 1)); continue
+      fi
+      if [ -n "$earlier" ]; then pr_note="pull request $earlier merged an earlier commit than its tip"
+      elif [ -n "$open" ]; then pr_note="pull request $open still open"
+      else pr_note="no merged pull request"
+      fi
+    else
+      gh_readable=0
+      gh_said="$prs"
+    fi
   fi
 
   hit=""
@@ -126,15 +172,35 @@ $(git -C "$repo" log --format='%s' --max-count="$SUBJECT_SCAN_DEPTH" "$default..
 EOF
 
   if [ -n "$hit" ]; then
-    printf '  SHIPPED    %-46s subject match: %s\n' "$branch" "${hit:0:72}"
+    row SHIPPED "$branch" "subject match, a guess ($pr_note): ${hit:0:72}"
     shipped=$((shipped + 1))
   else
-    printf '  UNMATCHED  %-46s nothing on %s carries any of its subjects\n' "$branch" "$default"
+    row UNMATCHED "$branch" "nothing on $default carries any of its subjects ($pr_note)"
     unmatched=$((unmatched + 1))
   fi
 done <<EOF
 $branches
 EOF
+
+# The header is written after the rows are judged, because whether GitHub could be read is only
+# known once it has been asked, and that belongs above the rows it qualifies.
+printf 'shipped-branches: %s, judged against %s\n' "$repo" "$default"
+printf '  merged means GitHub reports a merged pull request from the branch, read with gh.\n'
+if [ "$remote_read" = 1 ]; then
+  printf '  branches read from the remote itself.\n'
+else
+  printf '  the remote could not be read, so this is what this clone remembered at its last fetch\n'
+  printf '  and a branch deleted on the server since then still appears below. Refresh it with:\n'
+  printf '  git -C %s fetch --prune\n' "$repo"
+fi
+if [ "$gh_readable" = 0 ]; then
+  printf '  GitHub could not be read, so no row below rests on a pull request: a row marked\n'
+  printf '  "GitHub not read" fell back to the subject guess, and is neither merged nor unmerged.\n'
+  printf '  gh said:\n'
+  printf '%s\n' "$gh_said" | sed 's/^/    /'
+fi
+printf '\n'
+[ "${#rows[@]}" -eq 0 ] || printf '%s\n' "${rows[@]}"
 
 while IFS= read -r stale; do
   [ -n "$stale" ] || continue
