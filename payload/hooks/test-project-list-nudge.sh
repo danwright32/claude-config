@@ -43,6 +43,13 @@ trap 'rm -rf "$TMPROOT"' EXIT
 
 STATE="$TMPROOT/state"
 mkdir -p "$STATE" "$TMPROOT/here/AppOne" "$TMPROOT/here/AppTwo"
+# Each present project carries its own instructions file, with content in it. This suite is
+# about WHEN the nudge speaks, so a fixture project has to be clean on every question the
+# checker asks or the quiet case is not quiet. Two of those questions arrived after this suite
+# was written: claude-config#469 made a project with no instructions file a finding, and
+# claude-config#496 made one whose file supplies nothing a finding of its own.
+printf '# fixture instructions\n' > "$TMPROOT/here/AppOne/CLAUDE.md"
+printf '# fixture instructions\n' > "$TMPROOT/here/AppTwo/CLAUDE.md"
 
 mklist() { # mklist <name> <body>  -> prints the path
   local f="$TMPROOT/$1"

@@ -37,10 +37,21 @@
 #          Refusing rather than passing, because reading nothing and finding nothing wrong are
 #          indistinguishable otherwise (L98).
 # Exit 3 = every listed path is there, but at least one of those projects carries neither a
-#          CLAUDE.md nor an AGENTS.md of its own. A separate code because it is a separate fault
-#          with a separate remedy (L11): the entry is right and the repository is not provided for.
-#          A missing path outranks it, because what a directory contains is not a question worth
-#          answering when the directory is not there.
+#          CLAUDE.md nor an AGENTS.md of its own, on this branch or on the default one. A separate
+#          code because it is a separate fault with a separate remedy (L11): the entry is right and
+#          the repository is not provided for. A missing path outranks it, because what a directory
+#          contains is not a question worth answering when the directory is not there.
+# Exit 4 = every instructions file a listed project has supplies nothing: it is empty, or its only
+#          content is an import of a file that is no longer beside it (claude-config#496). Its own
+#          code, because the file is THERE and the message has to name what it found rather than
+#          say it is absent. A project with no file at all outranks it, being the more complete
+#          fault of the two.
+# Exit 5 = a listed project has no instructions file in its WORKING TREE, but its repository's
+#          default branch has one, so this checkout is standing on a branch created before the file
+#          landed (claude-config#495). Its own code and its own sentence, because the remedy is to
+#          merge and the exit 3 sentence sends the reader to write a file that already exists, which
+#          is an instruction that cannot change the state they are stuck in (L111). Measured on
+#          2026-09-19: PostRoll was reported bare while its CLAUDE.md sat on origin/main.
 #
 # Environment:
 #   PROJECT_LIST_FILE   read this file instead of the synced CLAUDE.md
@@ -120,8 +131,93 @@ case "$mine" in
     exit 0 ;;
 esac
 
+# A project whose working tree carries no instructions file may still have one on the branch the
+# repository actually develops on, which is the common case on a Mac where sessions work in feature
+# branches. That is a different fault from a project that has never had a file, and it has a
+# different remedy, so it is asked here rather than assumed either way.
+#
+# Two routes to the default branch, because a repository may have a remote or not, and the real
+# case uses the first: refs/remotes/origin/HEAD when there is an origin, and a local main or master
+# when there is not. Nothing here touches the network: symbolic-ref, rev-parse and cat-file all read
+# what is already on disk, so a project with no connectivity answers as fast as one with it.
+#
+# It runs only for a project already found to be bare, so the ordinary healthy run pays nothing.
+# Every git call is guarded: a directory that is not a repository at all answers nothing, which
+# leaves the plain bare case, and that is the answer for a checkout with no default branch too.
+instructions_on_default_branch() { # <dir> -> a sentence naming both branches, or nothing
+  local d="$1" default="" here="" cand="" f=""
+  git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  default="$(git -C "$d" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
+  if [ -z "$default" ]; then
+    for cand in origin/main origin/master main master; do
+      if git -C "$d" rev-parse --verify --quiet "$cand" >/dev/null 2>&1; then default="$cand"; break; fi
+    done
+  fi
+  [ -n "$default" ] || return 0
+  for f in CLAUDE.md AGENTS.md; do
+    if git -C "$d" cat-file -e "$default:$f" 2>/dev/null; then
+      here="$(git -C "$d" branch --show-current 2>/dev/null)"
+      [ -n "$here" ] || here="$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+      [ -n "$here" ] || here="a detached HEAD"
+      printf '%s is on %s, this checkout is on %s' "$f" "$default" "$here"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# Whether one instructions file actually supplies instructions, rather than merely existing
+# (claude-config#496). Counting the file as enough was the same shape as the fault this checker was
+# written for: confirming a MARKER rather than the thing the marker stands for.
+#
+# An import is a line whose FIRST non whitespace character is the sigil, outside a fenced code
+# block. Matching the sigil anywhere in a line was measured against the eight instructions files the
+# real list names on 2026-09-19 and would have accused Downbeat of importing @Query, @Suite and
+# @Test (Swift attributes) and NurseDex of importing @vercel/otel (a package name), every one inside
+# backticks or ordinary prose. An email address would go the same way. A false refusal here speaks
+# in every session in that project, which is how a notice stops being read, so the narrow rule is
+# the right one and the two real imports in the list (Overture and playeditapp) both sit at the
+# start of their line.
+instructions_file_fault() { # <file> -> why it supplies nothing, or nothing at all
+  local f="$1" dir body line target resolved fenced=0
+  dir="$(dirname "$f")"
+  body="$(cat "$f" 2>/dev/null)"
+  case "$body" in
+    *[![:space:]]*) ;;
+    *) printf '%s is empty' "$(basename "$f")"; return 0 ;;
+  esac
+  while IFS= read -r line; do
+    case "$line" in
+      '```'*|'~~~'*) fenced=$((1 - fenced)); continue ;;
+    esac
+    [ "$fenced" -eq 0 ] || continue
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in
+      '@'*) ;;
+      *) continue ;;
+    esac
+    target="${line#@}"
+    target="${target%%[[:space:]]*}"
+    [ -n "$target" ] || continue
+    case "$target" in
+      '~/'*) resolved="$HOME/${target#\~/}" ;;
+      /*)    resolved="$target" ;;
+      *)     resolved="$dir/$target" ;;
+    esac
+    if [ ! -e "$resolved" ]; then
+      printf '%s imports %s, which is not there' "$(basename "$f")" "$target"
+      return 0
+    fi
+  done <<EOF
+$body
+EOF
+  return 0
+}
+
 missing=""
 bare=""
+hollow=""
+predates=""
 n=0
 while IFS= read -r p; do
   [ -n "$p" ] || continue
@@ -137,8 +233,33 @@ while IFS= read -r p; do
     missing="$missing  $p
 "
   elif [ ! -f "$full/CLAUDE.md" ] && [ ! -f "$full/AGENTS.md" ]; then
-    bare="$bare  $p
+    elsewhere="$(instructions_on_default_branch "$full")"
+    if [ -n "$elsewhere" ]; then
+      predates="$predates  $p ($elsewhere)
 "
+    else
+      bare="$bare  $p
+"
+    fi
+  else
+    # A project is provided for when ANY of its instructions files supplies something, because what
+    # is being asked is whether the project supplies instructions at all: a full AGENTS.md beside an
+    # empty CLAUDE.md does. The stricter reading would speak in every session about a harmless stub,
+    # and what it buys is a dangling import in one of two files where the other is sound (L93). No
+    # listed project has two files today, and Overture, the only one carrying an import, has exactly
+    # one file that carries it.
+    sound=0
+    reasons=""
+    for f in CLAUDE.md AGENTS.md; do
+      [ -f "$full/$f" ] || continue
+      r="$(instructions_file_fault "$full/$f")"
+      if [ -z "$r" ]; then sound=1; break; fi
+      if [ -n "$reasons" ]; then reasons="$reasons and $r"; else reasons="$r"; fi
+    done
+    if [ "$sound" -eq 0 ]; then
+      hollow="$hollow  $p ($reasons)
+"
+    fi
   fi
 done <<EOF
 $mine
@@ -158,6 +279,22 @@ case "$bare" in
     printf '%s' "$bare" >&2
     echo "Claude Code looks for a project's instructions by walking UP from the directory it starts in, so the fallback is silent and can be another project's file entirely. Write one at the root of each, or take the entry out of the list." >&2
     exit 3 ;;
+esac
+
+case "$hollow" in
+  *[![:space:]]*)
+    echo "check-project-list: these projects are listed under $HOST and every instructions file they carry supplies nothing, so a session started in one of them loads a file with no content in it:" >&2
+    printf '%s' "$hollow" >&2
+    echo "A file that is empty, or whose only content is an import of a file no longer beside it, still stops Claude Code looking any further, so the project ends up with neither its own instructions nor anything else. Fill it, restore what it imports, or take the entry out of the list." >&2
+    exit 4 ;;
+esac
+
+case "$predates" in
+  *[![:space:]]*)
+    echo "check-project-list: these projects have no instructions file in their working tree, but their repository's default branch has one, so this checkout is standing on a branch created before the file landed:" >&2
+    printf '%s' "$predates" >&2
+    echo "Merge that branch in, or switch to it. This is said separately from a project that has no file anywhere because writing one here would add a second copy of a file that already exists." >&2
+    exit 5 ;;
 esac
 
 echo "check-project-list: $n project(s) listed under $HOST, all present, each carrying its own instructions file."
