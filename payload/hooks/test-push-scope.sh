@@ -685,6 +685,21 @@ case "$why" in *"Install jq"*) check "the shared sentence names the remedy" ok ;
 case "$why" in *"nothing to refuse"*) check "the shared sentence says what the silence looks like" ok ;;
   *) check "the shared sentence says what the silence looks like" "said: $why" ;; esac
 
+# The DETECTOR's sentence (claude-config#486): the payload was legible and what could not run is
+# the gate's own rule. A separate sentence rather than a reworded copy, because the two describe
+# different failures and a message may claim only what its check measured (L11).
+dwhy="$(ps_detector_absent_why "python3 is not on PATH" "this gate scans the diff with it." "python3")"
+case "$dwhy" in *python3*) check "the detector sentence names the reader" ok ;;
+  *) check "the detector sentence names the reader" "said: $dwhy" ;; esac
+case "$dwhy" in *"Install python3"*) check "the detector sentence names the remedy" ok ;;
+  *) check "the detector sentence names the remedy" "said: $dwhy" ;; esac
+case "$dwhy" in *"finding nothing"*) check "the detector sentence says what the silence looks like" ok ;;
+  *) check "the detector sentence says what the silence looks like" "said: $dwhy" ;; esac
+# And it does NOT say the payload was empty, which is the other sentence's claim and would send a
+# reader to look at the wrong thing (L11, L440).
+case "$dwhy" in *"empty payload"*) check "the detector sentence does not claim the payload was empty" "said: $dwhy" ;;
+  *) check "the detector sentence does not claim the payload was empty" ok ;; esac
+
 # ps__read_adds is python3 only, and ps_add_takes_all compares its answer against "yes", so a
 # missing interpreter answered NO: check-add-scope.sh then allowed every unscoped add on the
 # machine. The library has to be able to tell the gate that the reading did not happen, which is a

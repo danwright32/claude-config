@@ -325,6 +325,62 @@ W="$(mk_style_repo "$BAD")"
 run_style_hook "$E2E" "cd $W && git add README.md && git commit -qm more && git push"
 want_style_code 0 "a commit then push does not answer for a commit already on the remote"
 
+# --- the detector's own reader (claude-config#486) -----------------------------
+#
+# The scan above is python3, and nothing asked whether python3 was installed. On a machine without
+# it the scan returned an empty string, both findings were empty, and the gate exited 0: every
+# push read as style clean, with nothing said. That is the one failure indistinguishable from a
+# clean run (L490, L42, L98).
+. "$DIR/lib/no-python-path.sh"
+NOPY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/check-style-guide-nopy.XXXXXXXX")"
+NOPY="$NOPY_ROOT/bin"
+# jq is linked in: it reads the payload, so the command stays legible and the ONLY thing missing
+# is the detector's own interpreter, which is the machine this issue is about.
+npp_build_bin "$NOPY" jq
+# The fixture's own premise, asserted rather than assumed. A directory that still reached a python3
+# would make every case below pass for the wrong reason (L70, L159).
+if npp_reaches_python3 "$NOPY"; then
+  fail=$((fail+1)); echo "FAIL: the bare directory really reaches no python3 (it found one, so nothing below measures its absence)"
+else pass=$((pass+1)); fi
+
+run_style_nopy() {  # $1 cwd, $2 command
+  local p
+  p="$(HK_CMD="$2" HK_CWD="$1" python3 -c 'import json,os,sys
+sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
+  STYLE_MSG="$(printf '%s' "$p" | ( cd "$1" && env PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1 >/dev/null ))"; STYLE_CODE=$?
+}
+
+W="$(mk_style_repo "$BAD")"
+run_style_nopy "$W" "git push"
+want_style_code 2 "with no python3 the push is refused rather than read as style clean"
+want_says "python3" "and the refusal names the reader that is missing"
+
+# A push of CLEAN copy is refused too, and that is the point: nothing here can tell the two apart,
+# so the gate says it could not look rather than reporting on a reading it never took (L11).
+W="$(mk_style_repo "$CLEAN")"
+run_style_nopy "$W" "git push"
+want_style_code 2 "with no python3 even a clean push is refused, because nothing could judge it"
+
+# A command that takes nothing from the missing detector is not refused. Without this the gate
+# would be refusing commands it was never about (L54, L324).
+W="$(mk_style_repo "$CLEAN")"
+run_style_nopy "$W" "git status"
+want_style_code 0 "a command that is not a push is not refused over a detector it never needed"
+
+# The documented override still clears it, or the refusal is a dead end nothing in the session can
+# answer (L109).
+W="$(mk_style_repo "$BAD")"
+run_style_nopy "$W" "SKIP_STYLE_CHECK=1 git push"
+want_style_code 0 "the visible override still clears the missing detector refusal"
+
+# The control, the same clean push with python3 present: allowed. So the refusals above are the
+# detector's absence rather than a fixture that refuses everything (L159).
+W="$(mk_style_repo "$CLEAN")"
+run_style_hook "$W" "git push"
+want_style_code 0 "the control still allows a clean push with python3 present"
+
+rm -rf "$NOPY_ROOT"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

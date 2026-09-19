@@ -476,6 +476,68 @@ want_rc 0 "edit hook: an empty payload is allowed"
 run_edit '{"tool_name":"Edit","tool_input":{"file_path":"'"$E/w.ts"'","new_string":7}}'
 want_rc 0 "edit hook: a new_string that is not text is allowed"
 
+# --- the detector's own reader (claude-config#486) -----------------------------
+#
+# Both hooks run lib/deferrals.py through python3, and neither asked whether python3 was
+# installed. The push hook reported "the detector could not run", on stderr, with exit 0, which
+# Claude Code discards entirely: the notice reached nobody and every push went out unjudged. The
+# edit hook said nothing at all, so every edit in every project went unchecked (L490, L42, L98).
+. "$DIR/lib/no-python-path.sh"
+NOPY_ROOT="$WORK/nopy"
+NOPY="$NOPY_ROOT/bin"
+# jq linked in: the payload stays legible, so the only thing missing is the detector's interpreter.
+npp_build_bin "$NOPY" jq
+if npp_reaches_python3 "$NOPY"; then
+  check "the bare directory really reaches no python3" "it found one, so nothing below measures its absence"
+else check "the bare directory really reaches no python3" ok; fi
+
+run_push_nopy() {  # run_push_nopy <cwd> <command> -> RC, MSG
+  local p
+  p="$(HK_CMD="$2" HK_CWD="$1" python3 -c 'import json,os,sys
+sys.stdout.write(json.dumps({"tool_name":"Bash","tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
+  MSG="$(printf '%s' "$p" | ( cd "$1" && env PATH="$NOPY" "$NOPY/bash" "$PUSH_HOOK" 2>&1 >/dev/null ))"; RC=$?
+}
+
+# A repository with NOTHING to find in it, on purpose: with no detector nothing can tell the two
+# apart, so the refusal has to come from the absence rather than from a finding (L11).
+W="$(mk_repo nopy1)"
+commit_file "$W" src/ok.ts $'export const a = 1;\n// the cap is 7 because the soak said so\n'
+run_push_nopy "$W" "git push"
+want_rc 2 "push hook: with no python3 the push is refused rather than judged by a detector that never ran"
+want_says "python3" "push hook: and the refusal names the reader that is missing"
+# A command the missing detector takes nothing from is not refused (L54, L324).
+run_push_nopy "$W" "git status"
+want_rc 0 "push hook: a command that is not a push is not refused over a detector it never needed"
+# The documented override still clears it (L109).
+run_push_nopy "$W" "SKIP_DEFERRAL_CHECK=1 git push"
+want_rc 0 "push hook: the visible override still clears the missing detector refusal"
+# The control, the same push with python3 present: allowed, so the refusal above is the detector's
+# absence and not a fixture that refuses everything (L159).
+run_push "$W" "git push"
+want_rc 0 "push hook: the control still allows the same clean push with python3 present"
+
+# The EDIT hook is a different decision. It runs on every Edit and Write in every project, so a
+# refusal per edit would be the same sentence hundreds of times about a machine state that does
+# not change between them (L36). It says it ONCE, keyed on a marker, and the push gate above is
+# what refuses. Silence was still wrong: a check that did not run and a file with nothing wrong in
+# it arrived as the same quiet (L98).
+NOPY_STATE="$WORK/nopy-edit-state"; mkdir -p "$NOPY_STATE"
+run_edit_nopy() {  # run_edit_nopy <json payload> -> RC, MSG
+  MSG="$(printf '%s' "$1" | env PATH="$NOPY" TMPDIR="$NOPY_STATE" "$NOPY/bash" "$EDIT_HOOK" 2>&1 >/dev/null)"; RC=$?
+}
+run_edit_nopy "$(edit_payload Write "$E/w.ts" $'export const a = 1;\n// good enough for now\n')"
+want_rc 2 "edit hook: with no python3 the first edit says the check did not run"
+want_says "python3" "edit hook: and names the reader that is missing"
+want_says "check-deferrals.sh" "edit hook: and names the push gate that still refuses the same line"
+run_edit_nopy "$(edit_payload Write "$E/w.ts" $'export const a = 1;\n// good enough for now\n')"
+want_rc 0 "edit hook: the second edit says nothing, so this is one notice rather than one per edit"
+want_silent "edit hook: and the second edit really is silent"
+# The control: the same payload with python3 present is refused for its real finding, so the
+# notice above is the detector's absence and not a hook that objects to everything (L159).
+run_edit "$(edit_payload Write "$E/w.ts" $'export const a = 1;\n// good enough for now\n')"
+want_rc 2 "edit hook: the control still refuses the same deferral with python3 present"
+want_says "DEFERRAL WITHOUT AN ISSUE" "edit hook: and for the finding rather than for the reader"
+
 # The header line the registration check reads (lib/hook-registration.py compares settings against
 # it), asserted so a rename of the event or tools cannot leave the settings pointing at nothing.
 grep -q '^# Claude Code PreToolUse(Bash) hook' "$PUSH_HOOK" && check "push hook declares itself a PreToolUse(Bash) hook" ok || check "push hook declares itself a PreToolUse(Bash) hook" "header line missing"

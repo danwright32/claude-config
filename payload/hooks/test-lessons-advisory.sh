@@ -539,6 +539,69 @@ for n in payload/CLAUDE.md payload/hooks/lessons-advisory.sh README.md src/lesso
   fi
 done
 
+# --- the reader that DELIVERS the advice (claude-config#486) -------------------
+#
+# The advice is handed over as JSON built by python3. With no python3 the emit produced nothing
+# and the hook exited 0: every lesson this hook had matched was found and then thrown away, and a
+# push with advice waiting for it looked exactly like a push with nothing to say (L98).
+#
+# This one stays ADVISORY. It is not a gate, it decides nothing, and its own header records why
+# (a gate here produces rework at the moment the pressure to skip is highest). So it says the
+# advice could not be delivered, on stderr with exit 1, which is the non blocking error the push
+# hooks in this repo already use to reach a reader without stopping anything.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/no-python-path.sh"
+NOPY_ROOT="$WORK/nopy"
+NOPY="$NOPY_ROOT/bin"
+# jq linked in: the payload stays legible, so the only thing missing is the emitter's interpreter.
+npp_build_bin "$NOPY" jq
+if npp_reaches_python3 "$NOPY"; then
+  FAIL=$((FAIL+1)); echo "FAIL: the bare directory really reaches no python3 (it found one, so nothing below measures its absence)"
+else PASS=$((PASS+1)); fi
+
+NOPY_ERR=""; NOPY_OUT=""; NOPY_RC=0
+run_nopy() {  # $1 command, $2 cwd
+  local p; p="$(payload "$1" "$2")"
+  NOPY_ERR="$(printf '%s' "$p" | ( cd "$2" && env -u CLAUDE_DETACHED_RUN TMPDIR="$WORK/nopytmp" \
+      PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1 >/dev/null ))"; NOPY_RC=$?
+}
+mkdir -p "$WORK/nopytmp"
+
+# A push that DOES match a trigger, so there is advice to lose. The control below proves the same
+# push is advised on with python3 present, which is what makes the loss measurable (L159).
+R=$(make_repo nopyswallow 'try {
+  await send()
+} catch (e) {
+  return []
+}' src/send.ts)
+run_nopy "git push" "$R"
+case "$NOPY_ERR" in
+  *python3*) PASS=$((PASS+1)) ;;
+  *) FAIL=$((FAIL+1)); echo "FAIL: with no python3 the advisory says the advice could not be delivered and names the reader, said: [$NOPY_ERR]" ;;
+esac
+if [ "$NOPY_RC" = 1 ]; then PASS=$((PASS+1));
+else FAIL=$((FAIL+1)); echo "FAIL: the advisory says it on the non blocking exit 1 rather than blocking or vanishing (exited $NOPY_RC)"; fi
+
+# It stays an advisory: it never refuses, and it never decides the permission.
+if [ "$NOPY_RC" != 2 ]; then PASS=$((PASS+1));
+else FAIL=$((FAIL+1)); echo "FAIL: the advisory must not turn into a gate when its reader is missing"; fi
+
+# A push with NOTHING matched stays silent: there was no advice to lose, so there is nothing to
+# report, and an advisory that spoke here would speak on every push on such a machine (L36, L324).
+R=$(make_repo nopyquiet 'Some prose about the feature.' docs/notes.md)
+run_nopy "git push" "$R"
+if [ -z "$NOPY_ERR" ]; then PASS=$((PASS+1));
+else FAIL=$((FAIL+1)); echo "FAIL: a push with nothing matched stays silent even with no python3, said: [$NOPY_ERR]"; fi
+
+# The control: the same triggering push with python3 present still delivers its advice as JSON.
+R=$(make_repo nopycontrol 'try {
+  await send()
+} catch (e) {
+  return []
+}' src/send.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "the control still delivers the advice with python3 present" 'additionalContext' "$out"
+
 echo "passed: $PASS, failed: $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

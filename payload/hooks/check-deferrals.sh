@@ -62,8 +62,15 @@
 # language, why the line is not a deferral or why it genuinely cannot carry an issue yet; never
 # skip silently.
 #
-# Fails OPEN on anything it cannot read (no repo, no detector, no phrase list), and SAYS SO in
+# Fails OPEN on anything it cannot read (no repo, no detector file, no phrase list), and SAYS SO in
 # one line on stderr, because a silent skip is indistinguishable from a pass (L98).
+#
+# ONE exception, and it is a refusal: python3 not being installed at all (claude-config#486). Every
+# other skip above is a property of THIS push that the next one can differ on, and the line saying
+# so is read by somebody watching the transcript. A missing interpreter is a property of the
+# MACHINE, so it silences this gate on every push until it is installed, and the line saying so
+# never arrives: Claude Code discards a PreToolUse hook's stderr on exit 0. So that one is refused
+# by name rather than skipped (L490).
 
 set -uo pipefail
 
@@ -73,6 +80,31 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DETECTOR="$HOOK_DIR/lib/deferrals.py"
 
 payload="$(cat)"
+
+# THE DETECTOR'S OWN READER, asked before anything is measured (claude-config#486, L490).
+#
+# lib/deferrals.py runs under python3, and with no python3 the capture below held the shell's own
+# "command not found" and the hook took its skip path: a line on stderr and exit 0. Claude Code
+# discards a PreToolUse hook's stderr on exit 0, so that line reached nobody and every push on
+# such a machine went out unjudged, looking exactly like a clean one (L42, L98).
+#
+# Asked above the payload read, because python3 is also one of the two tools ps_parse_payload
+# reads with: with neither jq nor python3 the parse below exits 0 first and this question would
+# never be reached (L135, L667). Narrowed by a cheap substring on the raw payload, since nothing
+# here can tell a push from an `ls` when the payload is unreadable (L36, L54), and the override is
+# read the same way so the refusal is never a dead end (L109).
+if ps_reader_missing python3; then
+  case "$payload" in
+    *SKIP_DEFERRAL_CHECK=1*) exit 0 ;;
+    *push*)
+      echo "PUSH BLOCKED: $(ps_detector_absent_why "python3 is not on PATH" \
+        "check-deferrals.sh runs its detector, lib/deferrals.py, under it to find a line that puts work off with no issue number beside it, so with python3 absent nothing here reads the diff at all." \
+        "python3")" >&2
+      echo "OVERRIDE, this one push: SKIP_DEFERRAL_CHECK=1 <your original git push command>" >&2
+      exit 2 ;;
+  esac
+  exit 0
+fi
 
 parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
 cmd="${parsed%%$'\x1f'*}"

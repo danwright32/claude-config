@@ -206,6 +206,39 @@ out="$(PATH="$BARE" RTK_FIDELITY_RTK="$BIN/rtk" RTK_FIDELITY_HOOK="$BIN/hook.sh"
   || check "a run that could compare nothing exits 2, not 0" "rc=$rc out=$out"
 
 # ---------------------------------------------------------------------------
+# No python3 (claude-config#486). Asking the hook what it substitutes is python3 on both sides:
+# building the payload and reading the answer. Without it every probe came back as "the hook
+# passes this through", which is reported as CONTAINED, and containment reads as protection. The
+# zero comparisons check above would still have exited 2, but it blames the probes rather than
+# the interpreter, and a message may claim only what its check measured (L11).
+# ---------------------------------------------------------------------------
+. "$DIR/lib/no-python-path.sh"
+NOPY="$TMPROOT/nopy/bin"
+npp_build_bin "$NOPY"
+ln -sf "$BIN/rtk" "$NOPY/rtk"
+if npp_reaches_python3 "$NOPY"; then
+  check "the bare directory really reaches no python3" "it found one, so the case below measures nothing"
+else check "the bare directory really reaches no python3" ok; fi
+# Everything else a probe compares against IS present here, so the only thing missing is the
+# interpreter: without that, this would be the no tools case above under another name (L159).
+for needed in diff git grep; do
+  PATH="$NOPY" "$NOPY/bash" -c "command -v $needed >/dev/null 2>&1" \
+    && check "and it still reaches $needed, so the probes have something to compare against" ok \
+    || check "and it still reaches $needed, so the probes have something to compare against" "missing"
+done
+out="$(PATH="$NOPY" RTK_FIDELITY_RTK="$BIN/rtk" RTK_FIDELITY_HOOK="$BIN/hook.sh" "$NOPY/bash" "$S" 2>&1)"; rc=$?
+[ "$rc" -eq 2 ] && check "with no python3 the check refuses rather than reporting every probe contained" ok \
+  || check "with no python3 the check refuses rather than reporting every probe contained" "rc=$rc out=$out"
+case "$out" in
+  *python3*) check "and it names the reader that is missing" ok ;;
+  *) check "and it names the reader that is missing" "out=$out" ;;
+esac
+case "$out" in
+  *contained*) check "and it does not report anything as contained, which would read as protection" "out=$out" ;;
+  *) check "and it does not report anything as contained, which would read as protection" ok ;;
+esac
+
+# ---------------------------------------------------------------------------
 # And the real thing. Everything above drives the script through stubs, which proves its logic and
 # nothing about the binary actually installed here, and the binary is the entire subject (L52, L3).
 # So the last case RUNS it, against the real rtk and the real hook. The three outcomes get three

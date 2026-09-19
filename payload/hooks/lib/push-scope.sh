@@ -106,6 +106,27 @@ ps_reader_absent_why() {
     "$1" "$2" "$3"
 }
 
+# The same absence one step further in: the payload WAS legible, and what cannot run is the gate's
+# own DETECTOR (claude-config#486).
+#
+# Ten gates ran their detector through python3 and never asked whether it was installed. The
+# detector produced nothing, every one of them tested that nothing for findings, found none, and
+# exited 0. check-style-guide.sh is the plainest: its scan of the diff returned an empty string, so
+# on a machine with no python3 every push read as style clean, with nothing said.
+#
+# A separate sentence from ps_reader_absent_why rather than a reworded copy of it, because the two
+# describe different failures and a message may claim only what its check measured (L11). That one
+# is about a payload nothing could read, so the gate cannot tell WHICH command it is looking at.
+# This one is about a command the gate read correctly and then could not judge.
+#
+# $1 = the absence, as a clause: "python3 is not on PATH"
+# $2 = what this gate detects with it, and what goes missing without it, ending in a full stop
+# $3 = what to install
+ps_detector_absent_why() {
+  printf '%s, and %s A detector that cannot run finds nothing, and finding nothing is exactly what a clean run looks like, so allowing this would be the gate passing whatever it exists to catch rather than saying it could not look (L490, L98). Install %s and run the command again.' \
+    "$1" "$2" "$3"
+}
+
 # True when the command stages with a `git add` and NOTHING here can read what that add takes.
 #
 # ps__read_adds below is python3 only, and ps_add_takes_all compares its answer against the literal

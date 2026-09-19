@@ -60,6 +60,16 @@ if [ ! -f "$HOOK" ]; then
   echo "check-rtk-exit-fidelity: the rewrite hook is not at [$HOOK], so what actually gets substituted could not be asked. Nothing was measured." >&2
   exit 2
 fi
+# What the hook substitutes is asked by handing it a payload and reading its answer, and both of
+# those are python3 (claude-config#486). Without it every probe below would come back as "the hook
+# passes this through", which reads as CONTAINED: the one answer that looks like protection and
+# means nothing was compared. The zero comparisons check at the bottom would still catch it, but it
+# would blame the probes rather than the interpreter, and a message may claim only what its check
+# measured (L11). So it is named here, above the first use (L667).
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "check-rtk-exit-fidelity: python3 is not on PATH, and both halves of asking the hook what it substitutes (building the payload, reading the answer) run under it. Nothing was compared, so this run says nothing about whether a substitute lies. Install python3 and run it again." >&2
+  exit 2
+fi
 
 # The gh probe below is local: outside a git repository gh fails on the missing repo before it
 # ever reaches the network. GH_REPO would defeat that by naming a repo for it, turning a probe into

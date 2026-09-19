@@ -33,6 +33,36 @@ payload="$(cat)"
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+
+# THE DETECTOR'S OWN READER, asked before anything is measured (claude-config#486, L490).
+#
+# The negation detector below is python3 and nothing here asked whether python3 was installed.
+# Without it the findings came back empty, the emptiness test passed, and this gate exited 0 on
+# exactly the phrasing it exists to stop, with nothing said. A detector that cannot run finds
+# nothing, and finding nothing is exactly what a clean run looks like (L42, L98).
+#
+# Asked above the payload read, because python3 is also one of the two tools ps_parse_payload
+# reads with: with neither jq nor python3 the parse below exits 0 first and this question would
+# never be reached (L135, L667).
+#
+# Narrowed, on the raw payload, to the three commands that can link an issue at all, since the
+# refusal must not reach a command this hook was never about (L36, L54). A substring rather than
+# the leading token test used below, because with no reader there are no tokens: it can only ever
+# be too broad here, never too narrow. The override is read the same way (L109).
+if ps_reader_missing python3; then
+  case "$payload" in
+    *SKIP_CLOSING_CHECK=1*) exit 0 ;;
+    *"pr create"*|*"pr edit"*|*"git commit"*)
+      echo "BLOCKED: $(ps_detector_absent_why "python3 is not on PATH" \
+        "check-closing-keyword.sh reads this text with it, looking for a negated closing keyword beside an issue reference, so with python3 absent nothing here reads the text at all." \
+        "python3")" >&2
+      echo "A sentence like \"does not close #897\" closes the issue on merge regardless of the negation, which is why this is a gate rather than a note." >&2
+      echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2
+      exit 2 ;;
+  esac
+  exit 0
+fi
+
 parsed="$(ps_parse_payload "$payload" raw)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 [ -n "$cmd" ] || exit 0

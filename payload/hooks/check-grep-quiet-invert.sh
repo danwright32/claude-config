@@ -27,6 +27,32 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
 
 payload="$(cat)"
+
+# THE DETECTOR'S OWN READER, asked before anything is measured (claude-config#486, L490).
+#
+# The scan below is python3 and nothing here asked whether python3 was installed. Without it the
+# scan returned an empty string, the findings test found none, and this gate exited 0: on such a
+# machine every push passed unread, with nothing said. A detector that cannot run finds nothing,
+# and finding nothing is exactly what a clean run looks like (L42, L98).
+#
+# Asked above the payload read, because python3 is also one of the two tools ps_parse_payload
+# reads with: on a machine with neither jq nor python3 the parse below exits 0 first and this
+# question would never be reached (L135, L667). Narrowed by a cheap substring on the raw payload,
+# since nothing here can tell a push from an `ls` when the payload is unreadable (L36, L54), and
+# the override is read the same way so the refusal is never a dead end (L109).
+if ps_reader_missing python3; then
+  case "$payload" in
+    *SKIP_GREP_QV_CHECK=1*) exit 0 ;;
+    *push*)
+      echo "PUSH BLOCKED: $(ps_detector_absent_why "python3 is not on PATH" \
+        "check-grep-quiet-invert.sh reads the lines this push adds with it, looking for a grep that is both quiet and inverted, so with python3 absent nothing here reads the diff at all." \
+        "python3")" >&2
+      echo "OVERRIDE, this one command: SKIP_GREP_QV_CHECK=1 <your original git push command>" >&2
+      exit 2 ;;
+  esac
+  exit 0
+fi
+
 parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
