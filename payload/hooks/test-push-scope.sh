@@ -654,6 +654,72 @@ esac
 
 rm -rf "$RD" "$MB"
 
+echo "push-scope: the reader a gate cannot work without (claude-config#480)"
+
+# A gate handed a payload nothing on the machine can read is handed an EMPTY command, and every
+# question it then asks of an empty command answers that there is nothing here to refuse. So it
+# exits 0 on exactly the command it exists to stop, with nothing said, which is the one failure
+# indistinguishable from a clean run (L490, L42, L98).
+#
+# The question and the sentence live here, once, so no gate writes a second wording of either
+# (L613). lib/merge-target.sh's mt_reader_missing is this predicate with python3 filled in.
+
+# ANY ONE of the named tools is enough, because ps_parse_payload reads the payload with jq OR with
+# python3: a machine holding either can still read a payload, and a gate that refused on jq alone
+# would refuse on every Mac in this house.
+if ps_reader_missing claude-config-no-such-tool-4d1; then check "a tool that is not installed reads as missing" ok
+else check "a tool that is not installed reads as missing" "ps_reader_missing said it was there"; fi
+if ps_reader_missing bash; then check "a tool that IS installed does not read as missing" "ps_reader_missing said bash was absent"
+else check "a tool that IS installed does not read as missing" ok; fi
+if ps_reader_missing claude-config-no-such-tool-4d1 bash; then
+  check "one reader present is enough for both" "ps_reader_missing refused a pair holding bash"
+else check "one reader present is enough for both" ok; fi
+
+# The sentence has to NAME the reader and name a remedy that changes the state somebody is stuck
+# in (L111), or it is the silence this issue exists to replace.
+why="$(ps_reader_absent_why "jq is not on PATH" "this gate reads the command out of the payload with it." "jq")"
+case "$why" in *jq*) check "the shared sentence names the reader" ok ;;
+  *) check "the shared sentence names the reader" "said: $why" ;; esac
+case "$why" in *"Install jq"*) check "the shared sentence names the remedy" ok ;;
+  *) check "the shared sentence names the remedy" "said: $why" ;; esac
+case "$why" in *"nothing to refuse"*) check "the shared sentence says what the silence looks like" ok ;;
+  *) check "the shared sentence says what the silence looks like" "said: $why" ;; esac
+
+# ps__read_adds is python3 only, and ps_add_takes_all compares its answer against "yes", so a
+# missing interpreter answered NO: check-add-scope.sh then allowed every unscoped add on the
+# machine. The library has to be able to tell the gate that the reading did not happen, which is a
+# different answer from "this add names its paths".
+NOPY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-nopy.XXXXXXXX")"
+NOPY="$NOPY_ROOT/bin"; mkdir -p "$NOPY"
+for t in bash sh git grep sed awk tr cat cut head sort dirname basename env uname mkdir mv rm shasum wc tail printf; do
+  p="$(command -v "$t" 2>/dev/null)"; [ -n "$p" ] && ln -s "$p" "$NOPY/$t" 2>/dev/null
+done
+# The fixture's own premise, asserted rather than assumed: a bare directory that still reaches a
+# python3 would make every case below pass for the wrong reason (L159).
+if PATH="$NOPY" "$NOPY/bash" -c 'command -v python3 >/dev/null 2>&1'; then
+  check "the bare directory really reaches no python3" "it found one, so nothing below measures its absence"
+else check "the bare directory really reaches no python3" ok; fi
+
+nopy_lib() {  # nopy_lib <function> <args...> ; the library function with no python3 on PATH
+  PATH="$NOPY" "$NOPY/bash" -c '. "$1"; shift; "$@"' _ "$LIB" "$@" 2>&1
+}
+
+if nopy_lib ps_add_scope_unreadable "git add -A && git commit -m x && git push" >/dev/null 2>&1; then
+  check "an add nothing can read is reported as unread" ok
+else check "an add nothing can read is reported as unread" "the library said the add had been read"; fi
+# The control on the same question with python3 present: the reading happens, so there is nothing
+# to report and the gate goes on to judge the add itself (L159).
+if ps_add_scope_unreadable "git add -A && git commit -m x && git push"; then
+  check "with python3 present the add is read" "the library still said it could not read the add"
+else check "with python3 present the add is read" ok; fi
+# And a command with no add at all is not something an absent reader takes anything away from, so
+# it is not reported however bare the PATH is (L54, L324).
+if nopy_lib ps_add_scope_unreadable "git push" >/dev/null 2>&1; then
+  check "a command with no add is not blamed on the missing reader" "it was reported anyway"
+else check "a command with no add is not blamed on the missing reader" ok; fi
+
+rm -rf "$NOPY_ROOT"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

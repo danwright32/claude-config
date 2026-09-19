@@ -75,6 +75,49 @@ sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 ' 2>/dev/null
 }
 
+# WHETHER the machine holds a reader at all, and the sentence a gate refuses with when it does not
+# (claude-config#480, L490).
+#
+# A gate handed a payload nothing can read is handed an EMPTY command, and every question it then
+# asks of an empty command answers that there is nothing here to refuse. So it exits 0 on exactly
+# the command it exists to stop, with nothing said, which is the one failure indistinguishable from
+# a clean run (L42, L98). Three did it: block-red-merge.sh parsed the payload with jq one line
+# above the check that names gh, check-add-scope.sh read what a `git add` takes with python3, and
+# payload-write-gate.sh read the tool name and the cwd with python3.
+#
+# ANY ONE of the named tools is enough, because ps_parse_payload above reads a payload with jq or
+# with python3: a machine holding either can still read one, and a gate refusing on jq's absence
+# alone would refuse on a machine that was never in trouble (L54).
+#
+# One predicate and one sentence for every gate, rather than a check and a wording per hook: the
+# sentence is the same sentence, and a second copy of it is a second thing to keep true (L613).
+# lib/merge-target.sh's mt_reader_missing is this predicate with python3 already filled in.
+ps_reader_missing() {   # $1.. = the tools, ANY ONE of which can do the reading
+  local t
+  for t in "$@"; do command -v "$t" >/dev/null 2>&1 && return 1; done
+  return 0
+}
+
+# $1 = the absence, as a clause: "jq is not on PATH"
+# $2 = what this gate reads with it, and what goes missing without it, ending in a full stop
+# $3 = what to install
+ps_reader_absent_why() {
+  printf '%s, and %s An absent reader hands this gate an empty payload, and every question it asks of an empty payload answers that there is nothing to refuse, so allowing this would be the gate passing exactly what it exists to stop rather than saying it could not look (L490). Install %s and run the command again.' \
+    "$1" "$2" "$3"
+}
+
+# True when the command stages with a `git add` and NOTHING here can read what that add takes.
+#
+# ps__read_adds below is python3 only, and ps_add_takes_all compares its answer against the literal
+# "yes": a missing interpreter produced no answer at all, which compared as NO, so check-add-scope.sh
+# allowed every unscoped add on such a machine (claude-config#480 item 2). A reading that did not
+# happen is a different answer from "this add names its paths", and only the gate can say which of
+# the two it is looking at, so the library reports it rather than guessing a direction (L50).
+ps_add_scope_unreadable() {   # $1 = command
+  ps__git_add_in_chain "$1" || return 1
+  ps_reader_missing python3
+}
+
 ps_is_git_push() {
   local cmd="$1" seg
   while IFS= read -r seg; do

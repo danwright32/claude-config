@@ -37,6 +37,47 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 payload="$(cat 2>/dev/null || true)"
 
+# THE READER THIS GATE SEES THE TOOL CALL THROUGH, asked before its answer is believed
+# (claude-config#480, L490).
+#
+# Which tool is being called and which files it would write are both read with python3 below. With
+# none installed the tool name came back as a dash, the case over it matched nothing, and every
+# write under payload/ was allowed with nothing said: an absent reader is the one failure that
+# looks exactly like a clean run (L42, L98), and what it was allowing is the loss of a day's work.
+#
+# What is refused is narrowed to what could be a payload write at all, by the raw payload text,
+# because nothing here can read the path out of it: a gate that refused every Edit and every Bash
+# call on such a machine is one nobody keeps (L36, L54). The three questions that decide whether
+# anything is at risk (is there a watcher, does it run from HERE, is a hold in force) are pure
+# shell in lib/sync-clone.sh, so they are asked here exactly as they are below, and a machine where
+# nothing could revert the write is not refused.
+if ps_reader_missing python3; then
+  case "$payload" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *payload/*) ;; *) exit 0 ;; esac
+  unreadable_root="$(sc_clone_root_of "$PWD" 2>/dev/null || true)"
+  unreadable_watcher="$(sc_watcher_cmd || true)"
+  [ -n "$unreadable_watcher" ] || exit 0
+  if [ -n "$unreadable_root" ]; then
+    sc_is_this_clone "$unreadable_root" "$unreadable_watcher" && exit 0
+  fi
+  sc_hold_live && exit 0
+  cat >&2 <<MSG
+claude-sync: REFUSED a write that may be under a development checkout's payload/.
+
+$(ps_reader_absent_why "python3 is not on PATH" "payload-write-gate.sh reads which tool is being called and which files it would write with it, so with python3 absent it cannot tell a write under payload/ from any other write, and a watch daemon is live on this Mac running from another clone." "python3")
+
+A watch daemon mirrors ~/.claude up over payload/ and pushes, so an edit made to payload/ in a development checkout is not merged with the config, it is overwritten by it, silently and with no conflict to notice. On 2026-09-03 it reverted 84 files of a day's work in one commit.
+
+Two ways on, and the first needs nothing:
+
+  1. Edit ~/.claude directly. That is the copy the daemon mirrors FROM, so nothing can revert it.
+  2. Take a hold first, then edit here:
+
+     claude-sync hold 120 "why you are editing the checkout"
+MSG
+  exit 2
+fi
+
 read -r tool cwd <<EOF
 $(printf '%s' "$payload" | python3 -c '
 import json, sys

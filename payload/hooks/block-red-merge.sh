@@ -37,7 +37,43 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
 
 payload=$(cat)
-command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)
+
+# What this gate REFUSES with when a tool it reads through is not installed. On stderr with exit 2
+# rather than through deny() below, because deny() builds its JSON with jq and jq is one of the
+# tools that can be missing.
+refuse_no_reader() {  # $1 = the absence clause, $2 = what it costs, $3 = what to install
+  echo "Refusing to merge: $(ps_reader_absent_why "$1" "$2" "$3") Merging a pull request whose checks nothing has read is the mistake this gate exists to stop." >&2
+  exit 2
+}
+
+# THE PAYLOAD'S OWN READER, asked before the payload is read (claude-config#480, L490).
+#
+# The command was parsed straight out of the JSON with a bare jq, one line above the `command -v
+# gh` that names gh. With no jq the command came back EMPTY, mt_is_pr_merge answered no, and this
+# gate exited 0 on every merge with nothing said: an absent reader is the one failure that looks
+# exactly like a clean run (L42, L98).
+#
+# Read through ps_parse_payload, the shared reader, which takes jq OR python3. A machine holding
+# either can still read a payload, so the commoner absence costs this gate nothing.
+#
+# With NEITHER installed nothing here can tell a merge from an `ls`, so what is refused is narrowed
+# by the same cheap substring mt_is_pr_merge uses as its own first filter: a payload with no
+# "merge" anywhere in it cannot be one. Refusing every Bash command instead would be a gate nobody
+# keeps, and the override habit it teaches protects nothing at all (L36, L54).
+if ps_reader_missing jq python3; then
+  case "$payload" in
+    *ALLOW_RED_MERGE=1*) exit 0 ;;
+    *merge*)
+      refuse_no_reader "neither jq nor python3 is on PATH" \
+        "block-red-merge.sh reads this command out of the hook payload, which is JSON, with one of them, so with neither installed it cannot tell whether this command merges a pull request at all, let alone which one." \
+        "jq or python3" ;;
+  esac
+  exit 0
+fi
+
+parsed=$(ps_parse_payload "$payload" raw) || parsed=""
+command="${parsed%%$'\x1f'*}"
+cwd="${parsed#*$'\x1f'}"
 
 # Not a merge: stay out of the way.
 mt_is_pr_merge "$command" || exit 0
@@ -60,6 +96,15 @@ esac
 
 command -v gh >/dev/null 2>&1 || deny "Cannot verify CI: gh is not on PATH. Merging blind is what this gate exists to stop."
 
+# jq alone, with python3 present: the command above WAS readable, so this is known to be a merge,
+# and everything left to do is jq's. gh's answer about the checks arrives as JSON and is read with
+# jq all the way down, and deny() builds its own refusal with jq too. A gate that cannot tell a
+# green rollup from a red one has to say so rather than fall through the reading and find nothing
+# to complain about (claude-config#480, L490).
+ps_reader_missing jq && refuse_no_reader "jq is not on PATH" \
+  "block-red-merge.sh reads gh's answer about this pull request's checks with it, every field of it, so with jq absent nothing here can tell a green rollup from a red one." \
+  "jq"
+
 # The other tool this gate cannot work without, named the same way (claude-config#475). The shared
 # library reads which pull request and which repository the merge names with python3, and without
 # it both come back empty: this gate then asked gh about whatever pull request the current branch
@@ -71,8 +116,6 @@ mt_reader_missing && deny "Refusing to merge: $(mt_reader_absent_why) Verifying 
 # The PR number if the command names one; otherwise gh resolves it from the
 # current branch, which is also what the merge itself would do.
 pr=$(mt_pr_number "$command")
-
-cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)
 
 # WHICH repository, resolved the way gh itself resolves it (claude-config#463): the merge's own
 # --repo or -R first, then a cd in the command (anywhere the shared reader finds one, not only at

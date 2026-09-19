@@ -522,6 +522,101 @@ if denied "$out"; then
   fail "a wrapper merge was refused over a reader it never needed: $out"; else pass; fi
 rm -rf "$dir"
 
+echo "changelog record: the reader the PAYLOAD needs (#480)"
+
+# The command this gate judges is read out of the hook payload, which is JSON, and that read used
+# to be a bare jq sitting ABOVE the `command -v jq` further down. With no jq the command came back
+# EMPTY, mt_runs_merge answered no, and the gate exited 0 on every merge with nothing said, never
+# reaching the check that would have named jq. An absent reader is the one failure indistinguishable
+# from a clean run (L490, L42, L98).
+bin_without() {  # $1 = a fixture dir holding bin/gh, $2.. = the tools to leave OUT
+  local out="$1/without-$2" t p drop
+  mkdir -p "$out"
+  for t in bash sh git jq node python3 grep sed awk tr cat cut head sort dirname basename env uname mkdir mv rm; do
+    drop=0
+    for p in "${@:2}"; do [ "$t" = "$p" ] && drop=1; done
+    [ "$drop" = 1 ] && continue
+    p="$(command -v "$t" 2>/dev/null)"
+    [ -n "$p" ] && [ "$p" != "$1/bin/$t" ] && ln -s "$p" "$out/$t" 2>/dev/null
+  done
+  ln -s "$1/bin/gh" "$out/gh" 2>/dev/null
+  printf '%s' "$out"
+}
+
+NOREAD_OUT=""; NOREAD_RC=0
+run_hook_on() {  # $1 = repo dir, $2 = bin dir, $3 = command ; stdout and stderr together, with rc
+  NOREAD_OUT="$(printf '{"tool_input":{"command":%s},"cwd":%s}' \
+    "$(printf '%s' "$3" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+    "$(printf '%s' "$1/repo" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+    | ( cd "$1/repo" \
+        && PATH="$2" \
+           FAKE_PR_JSON="$1/pr.json" \
+           CHANGELOG_REGISTRY="$(cat "$1/registry-path")" \
+           bash "$HOOK" 2>&1 ))"
+  NOREAD_RC=$?
+}
+
+# TAGGED, deliberately: the record that MERGES when the command can be read, so a refusal here is
+# the missing reader's doing rather than a fixture that refuses everything (L159).
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+noread="$(bin_without "$dir" jq python3)"
+if PATH="$noread" bash -c 'command -v jq >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1'; then
+  fail "the bare directory still reaches a jq or a python3, so these cases measure nothing"
+else pass; fi
+
+run_hook_on "$dir" "$noread" "$MERGE 7 --repo acme/widget --squash"
+if [ "$NOREAD_RC" -eq 2 ]; then pass; else
+  fail "with no payload reader at all the gate allowed the merge (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+if says "$NOREAD_OUT" "jq"; then pass; else
+  fail "the refusal does not name jq, one of the two readers that is missing: $NOREAD_OUT"; fi
+if says "$NOREAD_OUT" "python3"; then pass; else
+  fail "the refusal does not name python3, the other reader it would have taken: $NOREAD_OUT"; fi
+
+# An ordinary command is not refused, however bare the PATH is: a gate that stopped every Bash call
+# on such a machine is one nobody keeps (L36, L54).
+run_hook_on "$dir" "$noread" "ls -la"
+if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
+  fail "an ordinary command was refused because the payload could not be read (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+
+# The documented override still clears it, read off the payload text because the command itself
+# cannot be parsed here. A refusal nothing in the session can clear is a dead end (L109).
+run_hook_on "$dir" "$noread" "ALLOW_UNTAGGED_MERGE=1 $MERGE 7 --repo acme/widget --squash"
+if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
+  fail "the visible override did not clear the unreadable payload refusal (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+
+# jq alone missing, python3 present: the command IS readable, so the gate knows this is a merge,
+# and it must still refuse, because the record it is looking for arrives inside gh's JSON answer
+# and nothing left on the machine can read one. This is the half a python3 shaped fix would leave
+# passing silently.
+nojq="$(bin_without "$dir" jq)"
+if PATH="$nojq" bash -c 'command -v jq >/dev/null 2>&1'; then
+  fail "the bare directory still reaches a jq, so this case measures nothing"
+else pass; fi
+if PATH="$nojq" bash -c 'command -v python3 >/dev/null 2>&1'; then pass; else
+  fail "the bare directory has no python3 either, so this case cannot separate the two"; fi
+run_hook_on "$dir" "$nojq" "$MERGE 7 --repo acme/widget --squash"
+if [ "$NOREAD_RC" -eq 2 ]; then pass; else
+  fail "with no jq the gate allowed the merge (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+if says "$NOREAD_OUT" "jq"; then pass; else
+  fail "the refusal does not name jq: $NOREAD_OUT"; fi
+# The control, same fixture and same command with both readers present: it merges, so every
+# refusal above is the reader's absence rather than a fixture that refuses everything (L159).
+if denied "$(run_hook "$dir" "$MERGE 7 --repo acme/widget --squash")"; then
+  fail "the control case refused a tagged merge, so the cases above prove nothing"
+else pass; fi
+rm -rf "$dir"
+
+# And the one absence that is a genuine stand down stays one: with no registry there is no dev
+# update for a record to feed, so there is no rule here to refuse over, whatever is missing
+# from PATH (L324).
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+printf '%s' "$dir/no-such-registry.json" > "$dir/registry-path"
+noread="$(bin_without "$dir" jq python3)"
+run_hook_on "$dir" "$noread" "$MERGE 7 --repo acme/widget --squash"
+if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
+  fail "a machine with no dev update tooling was refused over a rule that does not apply there (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+rm -rf "$dir"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

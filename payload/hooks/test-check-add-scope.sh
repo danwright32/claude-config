@@ -186,6 +186,89 @@ EOF"
 run "git add -A"
 allowed "a transcript rewritten shorter is re-read from the start, not resumed mid line"
 
+echo "check add scope: the reader that says what an add takes (claude-config#480)"
+
+# ps__read_adds in lib/push-scope.sh reads what a `git add` takes with python3, and ps_add_takes_all
+# compared its answer against the literal "yes". With no python3 there was no answer at all, which
+# compared as NO, so this gate exited 0 on every unscoped add on such a machine with nothing said:
+# an absent reader is the one failure indistinguishable from a clean run (L490, L42, L98). The
+# transcript this gate tells the session's work from a stranger's by is read with python3 too, so
+# nothing is left that could judge the add.
+NOPY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/check-add-scope-nopy.XXXXXXXX")"
+NOPY="$NOPY_ROOT/bin"; mkdir -p "$NOPY"
+for tool in bash sh git grep sed awk tr cat cut head sort dirname basename env uname mkdir mv rm shasum wc tail; do
+  toolpath="$(command -v "$tool" 2>/dev/null)"
+  [ -n "$toolpath" ] && ln -s "$toolpath" "$NOPY/$tool" 2>/dev/null
+done
+# The fixture's own premise, asserted rather than assumed: a bare directory that still reaches a
+# python3 would make every case below pass for the wrong reason (L159).
+if PATH="$NOPY" "$NOPY/bash" -c 'command -v python3 >/dev/null 2>&1'; then
+  check "the bare directory really reaches no python3" "it found one, so nothing below measures its absence"
+else check "the bare directory really reaches no python3" ok; fi
+
+# The SAME directory with jq linked in beside it. jq reads the payload, so the command is legible
+# and only the add's own reader is gone, which is the machine this issue is actually about. Its
+# twin above, with jq missing too, is the harder case where nothing read the payload either.
+WITHJQ="$NOPY_ROOT/withjq"; mkdir -p "$WITHJQ"
+for tool in bash sh git grep sed awk tr cat cut head sort dirname basename env uname mkdir mv rm shasum wc tail jq; do
+  toolpath="$(command -v "$tool" 2>/dev/null)"
+  [ -n "$toolpath" ] && ln -s "$toolpath" "$WITHJQ/$tool" 2>/dev/null
+done
+if PATH="$WITHJQ" "$WITHJQ/bash" -c 'command -v python3 >/dev/null 2>&1'; then
+  check "the jq only directory reaches no python3" "it found one, so nothing below measures its absence"
+else check "the jq only directory reaches no python3" ok; fi
+if PATH="$WITHJQ" "$WITHJQ/bash" -c 'command -v jq >/dev/null 2>&1'; then
+  check "the jq only directory really does reach jq" ok
+else check "the jq only directory really does reach jq" "there is no jq in it, so it is the same case as the other one"; fi
+
+# RUN FROM the repository, not merely naming it in the payload. Where nothing can read the payload
+# at all the gate cannot read its cwd either, and the session's own working directory is what
+# Claude Code starts a hook in, so that is what it has left to ask about. A run from anywhere else
+# would be judging whichever checkout this suite happens to sit in, and would pass or fail with
+# that checkout's state rather than with the fixture's (L2, L411).
+run_nopy(){ # run_nopy <command> [bin dir, default the one with no python3 and no jq]
+  OUT="$(python3 -c '
+import json, sys
+d = {"tool_name": "Bash", "cwd": sys.argv[2], "tool_input": {"command": sys.argv[1]},
+     "transcript_path": sys.argv[3]}
+print(json.dumps(d))
+' "$1" "$REPO" "$TR" | ( cd "$REPO" && env CLAUDE_ADD_SCOPE_STATE_DIR="$STATE" PATH="${2:-$NOPY}" "${2:-$NOPY}/bash" "$HOOK" 2>&1 ))"; RC=$?
+}
+
+fresh_cache
+run_nopy "git add -A" "$WITHJQ"
+refused "with jq but no python3 an unscoped add is refused rather than allowed in silence"
+says "and that refusal names the reader that is missing" "python3"
+fresh_cache
+run_nopy "git add mine.txt" "$WITHJQ"
+refused "and an add nobody can read the scope of is refused whatever it names"
+
+fresh_cache
+run_nopy "git add -A"
+refused "with no reader at all the add is refused too, rather than passing unseen"
+says "and the refusal names the reader that is missing" "python3"
+
+# A command with no `git add` in it takes nothing from the missing reader, so there is nothing to
+# refuse over. Without this the gate would be refusing commands it was never about (L54, L324).
+fresh_cache
+run_nopy "git status"
+allowed "a command with no add is not refused over a reader it never needed"
+
+# The documented override still clears it, or the refusal is a dead end nothing in the session can
+# answer (L109).
+fresh_cache
+run_nopy "SKIP_ADD_SCOPE_CHECK=1 git add -A"
+allowed "the visible override still clears the missing reader refusal"
+
+# The control, the same command on the same tree with python3 on PATH: allowed, because by now the
+# transcript mentions every change in it. So the refusal above is the reader's absence rather than
+# a fixture that refuses everything (L159).
+fresh_cache
+run "git add -A"
+allowed "the control still allows the same unscoped add with python3 present"
+
+rm -rf "$NOPY_ROOT"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
