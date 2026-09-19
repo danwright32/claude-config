@@ -110,10 +110,13 @@ print("\n".join(seen))
 #
 # A Stop or SubagentStop hook is deliberately NOT one of these, and the reason is the exclusion
 # rather than a list of files (L362): its turn's work is already done and its decision:block is a
-# continuation instruction to Claude, so it refuses nothing. Three of them (session-reflection.sh,
-# feature-issue-review.sh, checkpoint-save.sh) do go quiet with no python3, which loses a
-# reflection, a review and a memory write; that is a real fault and a smaller one, filed as
-# claude-config#490 rather than folded in here, where it would blur what this scan means.
+# continuation instruction to Claude, so it refuses nothing. Going quiet there loses a nudge, not
+# a gate, which is a real fault and a smaller one with a different message and a different shape:
+# it must be said ONCE, because a Stop hook that blocks on every turn is worse than one that is
+# quiet. That was claude-config#490 and it is done, in lib/stop-hook-python-notice.sh, covered by
+# test-stop-hooks.sh. Stop stays out of this list rather than joining it now that it is handled,
+# because what this scan means is the standing between an action and its effect, and widening it
+# to cover a different fault would leave the name describing neither.
 GATE_EVENTS="PreToolUse PostToolUse TeammateIdle"
 
 # The events a settings file registers one hook on, one per line, or nothing when it names it on
