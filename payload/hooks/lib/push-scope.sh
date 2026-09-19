@@ -2,15 +2,22 @@
 #
 # push-scope.sh: shared helpers for hooks that act on a `git push`.
 #
-# Sourced, never executed. Holds the three things every push hook has to work
-# out for itself, so they exist once rather than once per hook:
+# Sourced, never executed. Holds the things every push hook has to work out for
+# itself, so they exist once rather than once per hook:
 #   ps_is_git_push: is this command actually a push (leading tokens, not a
 #                      substring, so an `echo "git push"` cannot trigger a hook)
+#   ps_repo_dir: which repository the push is about
 #   ps_commit_in_chain / ps_add_in_chain: does the same command commit/stage
 #                      before pushing? PreToolUse runs BEFORE the command, so a
 #                      `git add … && git commit … && git push` has nothing in
 #                      history yet and the pending work must be folded in.
-#   ps_base_ref / ps_merge_base: what the pushed commits are measured against.
+#   ps_add_scope: what that pending commit will take beyond the index
+#   ps_base_ref: the ref a push is judged against
+#   ps_merge_base / ps_pending_base / ps_pushed_base: where the range starts, one
+#                      per situation a push hook meets (the contract is above them)
+#
+# Each function is defined exactly once. test-push-scope.sh fails on a second
+# definition, because bash keeps the last one without a word (claude-config#440).
 #
 # Every function is pure: it reads its arguments and echoes or returns, touching
 # no globals, so a caller can use one without inheriting the others.
@@ -80,9 +87,25 @@ ps__segment_is_push() {
   read -r -a tok <<< "$seg"
   local i=0 n=${#tok[@]} t
 
-  # Leading environment assignments: SKIP_TEST_CHECK=1 git push
+  # A subshell or group opening the segment, `(git push)` or `( cd x && git push )`, is
+  # not part of the command (claude-config#439): an opener glued to the first word is
+  # peeled off it, one standing alone is skipped. Then leading environment assignments,
+  # SKIP_TEST_CHECK=1 git push, which can follow an opener.
+  local first=1
   while [ "$i" -lt "$n" ]; do
-    case "${tok[$i]}" in
+    t="${tok[$i]}"
+    if [ "$first" -eq 1 ]; then
+      while :; do
+        case "$t" in
+          \(*|\{*) t="${t#?}" ;;
+          *) break ;;
+        esac
+      done
+      tok[$i]="$t"
+      first=0
+    fi
+    case "$t" in
+      '') i=$((i+1)) ;;
       [A-Za-z_]*=*) i=$((i+1)) ;;
       *) break ;;
     esac
@@ -111,7 +134,8 @@ ps__segment_is_push() {
         i=$((i+2)) ;;
       -*) i=$((i+1)) ;;
       [A-Za-z_]*=*) i=$((i+1)) ;;
-      push) return 0 ;;
+      # `(cd x && git push)` leaves `push)` as the last word of its segment.
+      push|push\)*|push\}*) return 0 ;;
       *) return 1 ;;   # some other subcommand
     esac
   done
@@ -133,10 +157,12 @@ ps_repo_dir() {
   cand="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[[:space:];&|])(rtk[[:space:]]+)?git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*@\3@p' | awk 'NR <= 1')"
   if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi
 
-  # `cd <path> && … git push`
-  cand="$(printf '%s' "$cmd" | sed -nE 's@(^|[[:space:];&|])cd[[:space:]]+([^[:space:]&|;]+).*@\2@p' | awk 'NR <= 1')"
-  cand="${cand%\"}"; cand="${cand#\"}"
-  cand="${cand%\'}"; cand="${cand#\'}"
+  # `cd <path> && … git push`, and the same cd inside a subshell, a brace group or a command
+  # substitution: `(cd <path> && git push)`. The cd used to be found by a pattern wanting
+  # whitespace or a separator before it, so the subshell form fell through to the SESSION's
+  # directory and a gate judged, and refused, a repository the command never touched
+  # (claude-config#439, L11).
+  cand="$(ps__cd_target "$cmd")"
   if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi
 
   if [ -n "$cwd" ] && ps__is_worktree "$cwd"; then printf '%s' "$cwd"; return 0; fi
@@ -146,6 +172,41 @@ ps_repo_dir() {
 ps__is_worktree() {
   [ -d "$1" ] || return 1
   git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+# The argument of the first `cd` in COMMAND position: the start of the command, or straight after
+# a separator, an opening parenthesis (a subshell or `$(`), or an opening brace. Read with a shell
+# tokenizer rather than a pattern, because a pattern cannot tell `(cd x && git push)` from the same
+# words inside a quoted string, and the tokenizer can: `echo "(cd x)"` is one argument to echo, not
+# a cd. It also reads a quoted path with a space in it whole.
+#
+# Tokens are taken one at a time and the walk stops at the first one it cannot read, rather than
+# tokenizing the whole command up front. A heredoc commit message with an apostrophe in its body is
+# the commonest push there is, and its unbalanced quote fails a whole command read, while the cd it
+# needs sits before the heredoc and has already been read by then.
+ps__cd_target() {   # $1 = command; prints the path, or nothing
+  PS_CMD="$1" python3 -c '
+import os, shlex
+lex = shlex.shlex(os.environ.get("PS_CMD", ""), posix=True, punctuation_chars=True)
+lex.whitespace_split = True
+OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
+at_start, want_arg = True, False
+while True:
+    try:
+        tok = lex.get_token()
+    except ValueError:
+        break
+    if tok is None or tok == lex.eof:
+        break
+    if want_arg:
+        if tok not in OPENERS and tok not in (")", "}"):
+            print(tok, end="")
+        break
+    if at_start and tok == "cd":
+        want_arg = True
+        continue
+    at_start = tok in OPENERS
+' 2>/dev/null
 }
 
 # The command is handed to grep as a here-string in the three questions below, never piped from
@@ -166,34 +227,116 @@ ps_commit_in_chain() {
 }
 
 ps_add_in_chain() {
-  grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' <<< "$1" && return 0
+  ps__git_add_in_chain "$1" && return 0
+  ps__commit_stages_all "$1"
+}
+
+# The two halves of ps_add_in_chain, named, because ps_add_scope has to tell them apart: an add
+# names what it stages, a `commit -a` stages every tracked change and names nothing.
+ps__git_add_in_chain() {
+  grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' <<< "$1"
+}
+ps__commit_stages_all() {
   grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a' <<< "$1"
 }
 
-# What the pushed commits are measured against: the branch's upstream if it has
-# one, else the remote's default branch, else a local main/master.
-ps_base_ref() {
-  local base
-  base="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
-  if [ -n "$base" ]; then printf '%s' "$base"; return 0; fi
-  base="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
-  if [ -n "$base" ]; then printf '%s' "$base"; return 0; fi
-  local c
-  for c in origin/main origin/master main master; do
-    if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
-  done
-  return 1
+# What the commit in a chained `… git commit … && git push` will take BEYOND what is already in the
+# index, read from the command before any of it runs (claude-config#442). This lived as inline
+# python in check-style-guide.sh (written for claude-config#350) and again in a second push hook
+# that needed the same reading of pending work; two copies of one rule drift, and the drift is
+# silent in the worst direction, one gate reading a push's pending work one way and its sibling
+# another (L370, L613).
+#
+# Prints a scope word on the first line and, for PATHS, one path per line after it:
+#   INDEX    no add and no -a: the commit takes the index and nothing else
+#   TRACKED  `git add -u`, or a `commit -a` with no add: every tracked change
+#   ALL      `git add -A`, `.`, `:/` or `*`: every change, untracked files included
+#   PATHS    the paths the add names, exactly as written, for the caller to resolve
+#   UNKNOWN  an add this cannot account for (it names nothing, or the command cannot be tokenised)
+# UNKNOWN is an answer, not a failure: the caller must widen to the whole working tree AND say so,
+# because a reading quietly narrowed to nothing reports a clean push it never measured (L98).
+#
+# Only meaningful for a command that commits; a caller asks ps_commit_in_chain first.
+ps_add_scope() {   # $1 = command
+  local out
+  if ps__git_add_in_chain "$1"; then
+    out="$(PS_CMD="$1" python3 -c '
+import os, shlex
+try:
+    toks = shlex.split(os.environ.get("PS_CMD", ""), posix=True)
+except ValueError:
+    print("UNKNOWN"); raise SystemExit
+SEP = {"&&", "||", ";", "|", "&"}
+EVERYTHING = {"-A", "--all", "--no-ignore-removal"}
+TRACKED_ONLY = {"-u", "--update"}
+scope, paths, i = "PATHS", [], 0
+while i < len(toks):
+    if toks[i] == "rtk" or toks[i].split("/")[-1] != "git":
+        i += 1
+        continue
+    j = i + 1
+    while j < len(toks) and toks[j].startswith("-"):
+        j += 2 if toks[j] in ("-C", "-c") else 1
+    if j >= len(toks) or toks[j] != "add":
+        i = j + 1
+        continue
+    k = j + 1
+    while k < len(toks) and toks[k] not in SEP:
+        a = toks[k]
+        if a in EVERYTHING or a in (".", "./", ":/", "*"):
+            scope = "ALL"
+        elif a in TRACKED_ONLY:
+            if scope == "PATHS":
+                scope = "TRACKED"
+        elif not a.startswith("-"):
+            paths.append(a)
+        k += 1
+    i = k
+if scope == "PATHS" and not paths:
+    scope = "UNKNOWN"
+print(scope)
+if scope == "PATHS":
+    for p in paths:
+        print(p)
+' 2>/dev/null)"
+    # No answer at all (python missing or dead) is the same as an add nobody can account for.
+    [ -n "$out" ] || out="UNKNOWN"
+    printf '%s\n' "$out"
+  elif ps__commit_stages_all "$1"; then
+    printf 'TRACKED\n'
+  else
+    printf 'INDEX\n'
+  fi
 }
 
-# The commit the pushed range starts from. Falls back to HEAD~1 so a repo with
-# no resolvable base still yields the most recent change rather than nothing.
+# ---- where a push's range starts: the contract (claude-config#441) ----
+# A push hook meets three situations, and each needs a different answer when the merge base with the
+# base ref comes back as HEAD itself. One helper with one fallback served the first and was wrong
+# for the other two, so each has its own entry point, and a caller picks the one for its situation:
 #
-# The second fallback matters as much as the first: with no upstream, ps_base_ref
-# walks down to a local `main`, which on an unpushed branch IS the current branch,
-# so the merge-base comes back as HEAD and the range is empty. A caller cannot
-# tell that empty range from "this push adds nothing", so it would read a scan of
-# zero commits as a clean result. Drop to HEAD~1 instead and scan the real change.
-ps_merge_base() {
+#   ps_merge_base   A PLAIN push, read before it runs (PreToolUse). A merge base at HEAD means the
+#                   base fell through to a local branch that IS the current one (no upstream), so
+#                   the most recent change is read instead of an empty range. What it gets wrong:
+#                   on a branch whose real upstream is already HEAD, a push that carries nothing
+#                   re-reads the last commit, which is already on the remote.
+#   ps_pending_base A command that COMMITS before it pushes, read before it runs. The pending commit
+#                   is not in history yet and is the change, so when the base is a REMOTE ref and
+#                   the merge base is HEAD, the range starts at HEAD and the caller adds the pending
+#                   work. HEAD~1 there blamed the push for the last commit already on the remote,
+#                   and in a one commit repository did not exist, so the gate skipped. Against a
+#                   LOCAL base a merge base at HEAD says nothing about what the remote holds, so it
+#                   gives the plain push answer and reads one commit more, the safe side for a gate.
+#   ps_pushed_base  AFTER the push (PostToolUse). The upstream now IS HEAD, so the merge base is HEAD
+#                   and the plain push answer read one commit however many the push carried. It
+#                   takes the upstream's previous tip from its reflog when that is an ancestor of
+#                   HEAD (exactly what this push added), then the fork point from the remote's
+#                   default branch (a first push of a branch), and only then the plain push answer.
+#
+# Each prints a commit and returns 0, or prints nothing and returns 1 when there is no range at all
+# (no commits, or nothing earlier than HEAD to start from). A caller getting nothing decides for
+# itself what that means, and must say so rather than read it as a clean result (L98).
+
+ps_merge_base() {   # $1 = the base ref, usually from ps_base_ref
   local base="${1:-}" mb=""
   if [ -n "$base" ] && git rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
     mb="$(git merge-base "$base" HEAD 2>/dev/null)"
@@ -201,7 +344,44 @@ ps_merge_base() {
   if [ -z "$mb" ] || [ "$mb" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
     mb="$(git rev-parse --verify --quiet HEAD~1 2>/dev/null)"
   fi
+  [ -n "$mb" ] || return 1
   printf '%s' "$mb"
+}
+
+ps_pending_base() {   # $1 = the base ref, usually from ps_base_ref
+  local base="${1:-}" head mb full
+  head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)" || return 1
+  [ -n "$head" ] || return 1
+  if [ -n "$base" ] && git rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
+    mb="$(git merge-base "$base" HEAD 2>/dev/null)"
+    full="$(git rev-parse --symbolic-full-name "$base" 2>/dev/null)"
+    case "$full" in
+      refs/remotes/*)
+        if [ "$mb" = "$head" ]; then printf '%s' "$head"; return 0; fi ;;
+    esac
+  fi
+  ps_merge_base "$base"
+}
+
+ps_pushed_base() {
+  local head prev def c cand
+  head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)" || return 1
+  [ -n "$head" ] || return 1
+  prev="$(git rev-parse --verify --quiet '@{u}@{1}' 2>/dev/null)"
+  if [ -n "$prev" ] && [ "$prev" != "$head" ] && git merge-base --is-ancestor "$prev" HEAD 2>/dev/null; then
+    printf '%s' "$prev"; return 0
+  fi
+  def="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
+  if [ -z "$def" ]; then
+    for c in origin/main origin/master; do
+      if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then def="$c"; break; fi
+    done
+  fi
+  if [ -n "$def" ]; then
+    cand="$(git merge-base "$def" HEAD 2>/dev/null)"
+    if [ -n "$cand" ] && [ "$cand" != "$head" ]; then printf '%s' "$cand"; return 0; fi
+  fi
+  ps_merge_base "$(ps_base_ref)"
 }
 
 # The ref a push should be judged AGAINST (claude-config#339). The upstream if there is one, then
