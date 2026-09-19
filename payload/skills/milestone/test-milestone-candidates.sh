@@ -424,6 +424,54 @@ check_not "and neither are the others that share the same two" "#913" "$close_ge
 check "while an issue sharing the rare words still is" "#911" "$close_generic"
 GH_ISSUES="$TMP/issues.json"
 
+# --- a FIXED snapshot, never the live backlog (claude-config#437) ----------
+# Every comparison of two scoring rules made against the live open issues has measured the
+# population change as well as the rule: minutes apart, four issues closed and the known duplicate
+# was one of them (L487). So the scorer reads a snapshot file when asked, and asking for one must
+# not reach GitHub at all, or the snapshot is decoration on a live read (L2).
+FIX="$DIR/fixtures"
+run acme/widgets --snapshot "$FIX/claude-config-open-2026-09-18-plus-420.json" \
+  --like "Stop one Mac re-sending a flattened hooks registration that turns main red"
+check_eq "a snapshot read never calls gh" "" "$(cat "$GH_CALLS")"
+check "and says it is a snapshot, so nobody reads it as the live backlog" "SNAPSHOT " "$OUT"
+check_not "and never claims the repo has no milestones, which it did not read" "no open milestone" "$OUT"
+run acme/widgets --snapshot "$TMP/no-such-snapshot.json" --like "anything at all"
+check_eq "a snapshot that is not there is a read failure, not an empty backlog" 6 "$RC"
+run acme/widgets --snapshot "$TMP/garbage.json" --like "anything at all"
+check_eq "and so is one that does not parse" 6 "$RC"
+
+# --- the close match on a backlog of several hundred (claude-config#437) ---
+# The fixtures are the real open issues of both repos, snapshotted 2026-09-18, with every issue cut
+# down to only the words the ideas below use. The score reads nothing else (a words weight is its
+# rarity among the ideas OWN words, and the count of issues), so the cut changes no score: that was
+# checked row for row against the full snapshot when they were made, and it keeps a real backlogs
+# prose out of this repo (L48, L155).
+#
+# THE POSITIVE CONTROL FIRST (L159). The case this whole line exists for, #421 filed over #420, has
+# to be found on both claude-config snapshots: the open backlog on 2026-09-18 with #420 put back
+# (both are closed now), and the 120 issues filed before #421, where the words are counted over a
+# realistic population and #420 sits closest to the floor.
+for snap in claude-config-open-2026-09-18-plus-420 claude-config-120-before-421; do
+  run acme/widgets --snapshot "$FIX/$snap.json" \
+    --like "Stop one Mac re-sending a flattened hooks registration that turns main red"
+  close_421=""
+  while IFS= read -r line; do
+    case "$line" in "CLOSE-MATCH "*) close_421="$close_421$line"$'\n' ;; esac
+  done <<<"$OUT"
+  check "#420 is still a close match for #421 on $snap" "#420 " "$close_421"
+done
+
+# THE THREE NEGATIVES. Ideas with no duplicate anywhere in Overture, measured 2026-09-18 on 499
+# open issues. Under the weighted sum alone they drew 1, 0 and 13 rows (3 shown): a pair of rare
+# words carried the first, and four words that are common HERE carried the third.
+for idea in \
+  "Add a keyboard shortcut for marking a contact as replied" \
+  "Fix the crash when exporting a shoot with no images" \
+  "Speed up the contact list when a venue has many shows"; do
+  run acme/widgets --snapshot "$FIX/overture-open-2026-09-18.json" --like "$idea"
+  check "no close match for \"$idea\" in Overture" "CLOSE-MATCH-COUNT 0" "$OUT"
+done
+
 # --- nothing found, and nothing found EXCEPT a close match -----------------
 # The early refusal says the repo has no feature milestone and nothing in the pen
 # shares words with this idea, and it exits before the report. It had no test at all

@@ -19,6 +19,8 @@
 #
 # Usage:
 #   milestone-candidates.sh <owner/name> --like "<the idea's title>"
+#   milestone-candidates.sh <owner/name> --like "<idea>" --snapshot <issues.json>
+#       scores against a saved issue list and reads nothing from GitHub, for measuring
 #
 # Output (first token is the line's kind, so a reader can branch):
 #   OPEN-MILESTONE #<num> <title>            an open milestone, the catch-all excluded
@@ -78,11 +80,18 @@ like=""
 # trusted (L24, L227).
 limit=1000
 show_max=12
+# --snapshot <file> reads the issues from a saved `gh issue list --json number,title,body,milestone`
+# and touches GitHub not at all. It exists to MEASURE: two scoring rules compared against the live
+# backlog minutes apart also measure whatever was closed in between, and on 2026-09-18 that was the
+# known duplicate itself, so a working rule read as a broken one (L487, claude-config#437). The
+# milestone list is not read in this mode and the output says so.
+snapshot=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --like) like="${2:-}"; shift 2 ;;
     --limit) limit="${2:-}"; shift 2 ;;
     --show) show_max="${2:-}"; shift 2 ;;
+    --snapshot) snapshot="${2:-}"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -93,8 +102,12 @@ if [[ -z "$like" ]]; then
   exit 2
 fi
 
-if ! command -v gh >/dev/null 2>&1; then
+if [[ -z "$snapshot" ]] && ! command -v gh >/dev/null 2>&1; then
   echo "Cannot read $repo: gh is not on PATH. Reporting nothing rather than an empty backlog." >&2
+  exit 6
+fi
+if [[ -n "$snapshot" && ! -r "$snapshot" ]]; then
+  echo "Could not read the SNAPSHOT $snapshot: there is no readable file there. Reporting nothing rather than an empty backlog." >&2
   exit 6
 fi
 
@@ -104,10 +117,14 @@ trap 'rm -f "$gh_err"' EXIT
 # --- the open milestones --------------------------------------------------
 # Paginated, because GitHub answers 30 by default and a repo with a long milestone
 # history would look like it has nothing to match against.
-milestones_raw="$(gh api --paginate "repos/$repo/milestones?state=open&per_page=100" 2>"$gh_err")"
-if [[ $? -ne 0 ]]; then
-  echo "Could not read the MILESTONE LIST for $repo: $(tr '\n' ' ' <"$gh_err")" >&2
-  exit 6
+if [[ -n "$snapshot" ]]; then
+  milestones_raw='[]'
+else
+  milestones_raw="$(gh api --paginate "repos/$repo/milestones?state=open&per_page=100" 2>"$gh_err")"
+  if [[ $? -ne 0 ]]; then
+    echo "Could not read the MILESTONE LIST for $repo: $(tr '\n' ' ' <"$gh_err")" >&2
+    exit 6
+  fi
 fi
 
 milestones_out="$(printf '%s' "$milestones_raw" | python3 -c '
@@ -187,9 +204,10 @@ fi
 # seven weak matches, and the issue for the same work was in neither list because it
 # sat in a real milestone. It was filed as a duplicate (#264) and closed the same
 # hour. A duplicate is exactly what a pre-filing check exists to catch.
-issues_raw="$(gh issue list --repo "$repo" --state open \
-  --limit "$limit" --json number,title,body,milestone 2>"$gh_err")"
-if [[ $? -ne 0 ]]; then
+if [[ -n "$snapshot" ]]; then
+  issues_raw="$(cat "$snapshot")"
+elif ! issues_raw="$(gh issue list --repo "$repo" --state open \
+  --limit "$limit" --json number,title,body,milestone 2>"$gh_err")"; then
   # A repo with no pen yet is not a failure, it is a pen holding nothing. Anything
   # else is, and it says which half failed so the right one gets investigated.
   if grep -qi 'no milestone\|not found\|could not find' "$gh_err"; then
@@ -393,6 +411,40 @@ candidates = scored
 # four issues had been closed in between and the known duplicate was one of them (L487). On a fixed
 # 120 issue snapshot both find the 421 to 420 pair, weighted scoring it 0.557 against the 0.5
 # floor, and on Overture the three noisy ideas drop to 1, 0 and 3 rows.
+#
+# AND TWO MORE CONDITIONS BESIDE THE WEIGHTED SUM (claude-config#437), neither with a constant of its
+# own. A row now has to clear all three:
+#
+#   weighted  the rarity weighted share of the idea covered, at least CLOSE_FLOOR, as before
+#   plain     the plain share of the ideas distinct words covered, at least the SAME floor
+#   rarest    it holds the ideas rarest word, of those the backlog holds at all (any of a tie)
+#
+# Each guards the others failure. The weighted sum alone let a pair of rare words carry a five word
+# idea ("keyboard shortcut" matched an issue about Cmd+Z), which plain refuses; and it let four words
+# that are merely common HERE carry a six word one ("contact, list, many, show"), which rarest refuses,
+# because an issue about this idea would hold the word that makes it this idea and not another.
+#
+# Measured 2026-09-18 on FIXED snapshots through --snapshot (L487): Overture, 499 open issues, and
+# three of claude-config, since that repo closes issues so fast its open backlog is tiny. Negatives
+# must show 0 rows, the positive must still show #420. Margin is the deciding condition.
+#
+#   case                              weighted  plain  rarest held word   rows before  after  margin
+#   keyboard shortcut ... replied     0.530     0.400  shortcut (2), held 1            0      plain 0.100 under
+#   crash exporting a shoot ...       0.449     0.500  image (4), not      0            0      weighted 0.051 under, rarest
+#   contact list ... many shows       0.534     0.667  speed (3), not      13, 3 shown  0      rarest alone
+#   421 to 420, open when 421 filed   0.515     0.667  held (1 of 2)       1            1      weighted 0.015 over
+#   421 to 420, open now plus 420     0.543     0.667  held (2 of 10)      2            2      weighted 0.043 over
+#   421 to 420, 120 filed before 421  0.526     0.667  held (5 of 120)     4, 3 shown   3      weighted 0.026 over
+#
+# The two directions the issue named were measured first and each failed a case. Requiring the
+# rarest SHARED word to sit in at most K issues needs a K, picked by eye between 5 and 63, and still
+# passed the keyboard row, whose shared words are both rare. Capping rows by how far each stands
+# above the next kept that row too, and lost #420 on two of the three claude-config snapshots,
+# because #413 and #300 share exactly its words and tie with it.
+#
+# What this does NOT fix, measured the same day: an idea made only of words common here has a common
+# rarest word too, so it stays loud. Every Overture title run as an idea drew 2.20 rows before and
+# 1.68 after, and "Show the venue contact on every pitch row" drew 52 before and 42 after.
 CLOSE_FLOOR = 0.5
 CLOSE_MAX = 3
 # Below this an idea has too few distinct words for a fraction of them to mean anything: at two
@@ -416,12 +468,16 @@ if len(target) >= CLOSE_MIN_IDEA and valid:
         return math.log(float(n_docs) / (1.0 + df.get(w, 0))) + 1.0
 
     total = sum(weight(w) for w in target)
+    held = [w for w in target if df.get(w, 0) > 0]
+    rarest_df = min(df[w] for w in held) if held else 0
+    rarest = {w for w in held if df[w] == rarest_df}
     for it, other in zip(valid, doc_words):
         shared = target & other
         if not shared:
             continue
         covered = sum(weight(w) for w in shared) / total if total > 0 else 0.0
-        if covered >= CLOSE_FLOOR:
+        plain = len(shared) / float(len(target))
+        if covered >= CLOSE_FLOOR and plain >= CLOSE_FLOOR and (shared & rarest):
             close.append((covered, it.get("number", 0), it["title"],
                           milestone_of(it) or catch_all, sorted(shared)))
     close.sort(key=lambda r: (-r[0], -r[1]))
@@ -458,7 +514,11 @@ print("CLOSE-MATCH-COUNT %d" % len(close))
 ' "$like" "$CATCH_ALL" "$show_max" "$limit" 2>"$gh_err")"
 irc=$?
 if [[ $irc -ne 0 ]]; then
-  echo "Could not read the HOLDING PEN \"$CATCH_ALL\" in $repo: $(tr '\n' ' ' <"$gh_err")" >&2
+  if [[ -n "$snapshot" ]]; then
+    echo "Could not read the SNAPSHOT $snapshot: $(tr '\n' ' ' <"$gh_err")" >&2
+  else
+    echo "Could not read the HOLDING PEN \"$CATCH_ALL\" in $repo: $(tr '\n' ' ' <"$gh_err")" >&2
+  fi
   exit 6
 fi
 
@@ -473,8 +533,16 @@ close_count="$(printf '%s\n' "$siblings_out" | awk '/^CLOSE-MATCH-COUNT /{print 
 # Every candidate is REPORTED, whatever it scored. The caller may recognise a relation
 # the word overlap cannot see, and it may reject one the overlap liked; both are its
 # job rather than this script's (claude-config#265).
+# First, so that no line below can be read as being about the live backlog.
+if [[ -n "$snapshot" ]]; then
+  echo "SNAPSHOT $snapshot: every line below is about the issues in this file, and the milestone list was not read."
+fi
 if [[ "${milestone_count:-0}" -eq 0 && "${candidate_count:-0}" -eq 0 && "${close_count:-0}" -eq 0 ]]; then
-  echo "NO-CANDIDATES $repo has no open milestone other than \"$CATCH_ALL\", and nothing in the pen shares words with this idea."
+  if [[ -n "$snapshot" ]]; then
+    echo "NO-CANDIDATES nothing in the snapshot shares words with this idea."
+  else
+    echo "NO-CANDIDATES $repo has no open milestone other than \"$CATCH_ALL\", and nothing in the pen shares words with this idea."
+  fi
   exit 1
 fi
 
