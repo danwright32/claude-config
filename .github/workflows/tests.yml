@@ -42,22 +42,34 @@ jobs:
     # the check named below is what holds them in order now.
     #
     # So the suite's deadlines are set HERE, for this runner, rather than inherited from a Mac's
-    # defaults, and they are ordered with room between them. All three numbers are SET below and in
-    # the job, not measured: a stall is noticed at eight minutes, the absolute ceiling is sixteen,
-    # and the platform's backstop is twenty. The suite's whole run on this runner was measured at
-    # roughly 200 seconds on 2026-08-30, so the stall bound is more than twice the entire run and
-    # many times the longest single section.
+    # defaults, and they are ordered with room between them: a stall is noticed at eight minutes,
+    # the absolute ceiling is thirty, and the platform's backstop is forty.
     #
-    # The ceiling is exactly twice the stall bound, which is its own separate requirement: #112
-    # refuses a ceiling under twice the stall, because a ceiling that close fires FIRST and every
-    # real hang is then reported as a run that merely went on too long, which sends the reader to
-    # raise a limit rather than to find the hang (L11). The first version of these values had a
-    # 900s ceiling over a 600s stall and CI caught it on the next push.
+    # RAISED 2026-09-19 (claude-config#473), from a 960s ceiling under a 20 minute backstop, and
+    # this time against a measurement rather than a choice. The sentence above used to say the
+    # whole run measured "roughly 200 seconds on 2026-08-30", and that number had gone stale in the
+    # reassuring direction: on 2026-09-19 the sync suite measured 470s on main and 485s on a branch
+    # adding one section. The suite refuses a run whose wall clock is more than HALF the ceiling
+    # when its own processor time is what filled it, so a 960s ceiling put that refusal at 480s and
+    # main was about ten seconds from red with nobody having changed anything. 1800 is roughly 3.7x
+    # the measured 485s, which puts the refusal back at 900s, about 1.9x the real run. What that
+    # refusal is FOR is still wanted, so the suite's runtime is tracked as its own issue rather
+    # than being made invisible by the raise.
+    #
+    # The ceiling must be at least twice the stall bound, which is its own separate requirement:
+    # #112 refuses a ceiling under twice the stall, because a ceiling that close fires FIRST and
+    # every real hang is then reported as a run that merely went on too long, which sends the
+    # reader to raise a limit rather than to find the hang (L11). The first version of these values
+    # had a 900s ceiling over a 600s stall and CI caught it on the next push; 960 over 480 sat
+    # exactly on that floor, and 1800 over 480 leaves 840 seconds of room.
     #
     # A check in the suite now holds this ordering for every job in every workflow file, so a
     # second workflow cannot arrive without a timeout and none of these three numbers can cross
-    # over without something saying so.
-    timeout-minutes: 20
+    # over without something saying so. That check is also why the backstop moved: it requires the
+    # job's timeout to EXCEED the suite's own ceiling, so a thirty minute ceiling cannot sit under
+    # a twenty minute backstop. Forty minutes is above it with room for the other eighty two suites
+    # to finish afterwards, against a job that measured about fourteen minutes on 2026-09-19.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -151,10 +163,18 @@ jobs:
         env:
           SUITE_DEBUG: 1
           # Below the job's own backstop, and in order, so the suite is always the thing that
-          # reports a hang and always gets to name the section (claude-config#210). Set here, not
-          # measured; a check in the suite holds the ordering.
+          # reports a hang and always gets to name the section (claude-config#210). A check in the
+          # suite holds the ordering; the reasoning for both numbers is on timeout-minutes above.
+          #
+          # The stall bound is UNCHANGED at 480 and is still the right number: it is what catches a
+          # hang, and the slowest single section measured 11 seconds on a Mac on 2026-09-19, so it
+          # is many times the longest section rather than anything near the whole run. Until #473
+          # it was also doing a second job nobody had asked it to do, because the parent of a
+          # sharded run never reaches a section itself, so its mark never moved and this number was
+          # silently capping the WHOLE run at eight minutes. With that fixed it bounds only what it
+          # names.
           SUITE_STALL_TIMEOUT: 480
-          SUITE_TIMEOUT: 960
+          SUITE_TIMEOUT: 1800
           # This runner has two cores, and the budget in #136 is granted to the suites running at
           # once, so the default here is one process each and the sync suite stops sharding: its
           # fan-out, and #137's check that the shards covered every section between them, would
