@@ -7142,6 +7142,17 @@ check "#466 the prompt notice speaks on the pile status reports, naming the same
 check "#466 and not on the next prompt of the same session" "[ -z \"\$_pn_again\" ]"
 check "#466 and not on the table status is silent about" "[ -z \"\$_pn_edge\" ]"
 
+# A copy of the tool with the library beside neither itself nor the config says so, in both places
+# it would otherwise read the process table: nothing running and nothing readable are different
+# answers, and the silent one reads as a quiet machine (L98, L215).
+_pile_nolib="$WORK/nolib"; mkdir -p "$_pile_nolib/home/.claude" "$_pile_nolib/repo"
+cp "$SCRIPT" "$_pile_nolib/claude-sync"
+_pile_nl="$(CLAUDE_HOME="$_pile_nolib/home/.claude" SYNC_REPO="$_pile_nolib/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$_pile_nolib/claude-sync" status 2>&1)"
+check "#466 a tool with no suite-pile library says the pile could not be checked" \
+  "grep -q 'Could not be checked: hooks/lib/suite-pile.sh' <<< \"\$_pile_nl\""
+check "#466 and says the process table could not be read rather than reporting nothing running" \
+  "grep -q 'the process table could not be read' <<< \"\$_pile_nl\""
+
 # An unreadable limit is refused rather than guessed at (L50).
 _pile_bad="$(SYNC_SUITE_MAX_AGE=soon SYNC_PS_FIXTURE="$WORK/pile-old" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; _pile_bad_rc=$?
 check "#444 an unreadable age limit is refused" "[ '$_pile_bad_rc' -ne 0 ] && grep -q \"SYNC_SUITE_MAX_AGE='soon'\" <<< \"\$_pile_bad\""

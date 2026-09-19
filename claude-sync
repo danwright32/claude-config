@@ -7537,9 +7537,11 @@ payload/$rel
 # The process table, behind one seam so a test never reads or reports what happens to be running
 # on the real machine (L2). SYNC_PS_FIXTURE holds the same four fields in the same order.
 sync_process_list(){
-  if [ -n "${SYNC_PS_FIXTURE:-}" ]; then cat "$SYNC_PS_FIXTURE" 2>/dev/null || true
-  else ps -eo pid=,ppid=,etime=,command= 2>/dev/null || true
-  fi
+  if declare -F suite_pile_table >/dev/null; then suite_pile_table || true; return 0; fi
+  # Without the library there is no way to read the table, and an empty answer would read as a
+  # quiet machine, so it says which file is missing rather than reporting nothing (L98, L215).
+  echo "claude-sync: hooks/lib/suite-pile.sh is missing, so the process table could not be read and nothing below is a statement about what is running." >&2
+  return 0
 }
 
 # Processes this tool left behind (#33). Nothing watched for these: seventeen suite processes were
