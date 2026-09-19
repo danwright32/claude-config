@@ -97,9 +97,17 @@ repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || skip "no git work tree was named by t
 cd "$repo_dir" 2>/dev/null || skip "could not enter $repo_dir, so nothing was judged."
 
 base="$(ps_base_ref || true)"
-mb="$(ps_merge_base "$base")"
 commit_in_chain=0
 ps_commit_in_chain "$cmd" && commit_in_chain=1
+# Where the committed range starts, from the shared contract (claude-config#441). A command that
+# commits before it pushes has its own entry point: the pending commit is the change, so on a branch
+# already level with its upstream the range starts at HEAD, where the plain push answer (HEAD~1)
+# blamed this push for the last commit already on the remote.
+if [ "$commit_in_chain" -eq 1 ]; then
+  mb="$(ps_pending_base "$base")"
+else
+  mb="$(ps_merge_base "$base")"
+fi
 
 # Two lines of context is what the detector's window needs; three is git's default and is kept.
 CTX=(-U3)
@@ -132,48 +140,10 @@ untracked_block() {  # $1 = an untracked path; a real unified diff against nothi
 }
 if [ "$commit_in_chain" -eq 1 ]; then
   pending_diff="$(git diff --cached "${CTX[@]}" -- . "${EXCLUDES[@]}" 2>/dev/null)"
-  add_scope="INDEX"
-  if grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' <<< "$cmd"; then
-    add_scope="$(HK_CMD="$cmd" python3 -c '
-import os, shlex
-# What the `git add` invocations name: ALL, TRACKED, PATHS (one per line after), or UNKNOWN.
-# UNKNOWN is an answer, not a failure: the caller widens to the whole tree AND says so, because a
-# reading quietly narrowed to nothing would report a clean push it never measured (L98).
-try:
-    toks = shlex.split(os.environ["HK_CMD"], posix=True)
-except ValueError:
-    print("UNKNOWN"); raise SystemExit
-SEP = {"&&", "||", ";", "|", "&"}
-scope, paths, i = "PATHS", [], 0
-while i < len(toks):
-    if toks[i] == "rtk" or toks[i].split("/")[-1] != "git":
-        i += 1; continue
-    j = i + 1
-    while j < len(toks) and toks[j].startswith("-"):
-        j += 2 if toks[j] in ("-C", "-c") else 1
-    if j >= len(toks) or toks[j] != "add":
-        i = j + 1; continue
-    k = j + 1
-    while k < len(toks) and toks[k] not in SEP:
-        a = toks[k]
-        if a in ("-A", "--all", "--no-ignore-removal") or a in (".", "./", ":/", "*"):
-            scope = "ALL"
-        elif a in ("-u", "--update"):
-            if scope == "PATHS": scope = "TRACKED"
-        elif not a.startswith("-"):
-            paths.append(a)
-        k += 1
-    i = k
-if scope == "PATHS" and not paths:
-    scope = "UNKNOWN"
-print(scope)
-if scope == "PATHS":
-    for p in paths: print(p)
-' 2>/dev/null)"
-    [ -n "$add_scope" ] || add_scope="UNKNOWN"
-  elif grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a' <<< "$cmd"; then
-    add_scope="TRACKED"
-  fi
+  # What the commit will take beyond the index, from the one parser every push hook shares
+  # (claude-config#442). This hook held a second copy of check-style-guide.sh's, and two copies of
+  # one rule drift silently, one gate reading pending work one way and its sibling another (L370).
+  add_scope="$(ps_add_scope "$cmd")"
   add_kind="${add_scope%%$'\n'*}"
   case "$add_kind" in
     INDEX) : ;;

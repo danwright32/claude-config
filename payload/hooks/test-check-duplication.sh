@@ -255,6 +255,23 @@ want_has "and says the commit would add it, not the push" "the commit this comma
 want_has "and says the reading came from the working tree" "Read from the working tree" "$HOOK_ERR"
 want_has "and how to settle it" "two separate commands" "$HOOK_ERR"
 
+# 7b. Commit and push in one command on a branch with NO remote ref at all (claude-config#441). The
+#     base falls to the local main, which is the branch itself, so a merge base at HEAD says nothing
+#     about what the remote holds: the last commit has never been pushed and is part of this push.
+#     This hook read HEAD as the base there, so a copy that commit added was never compared.
+W="$WORKDIR/repo-localbase"
+mkdir -p "$W"
+(
+  cd "$W" && "${G[@]}" init -q -b main . && mkdir -p src
+  printf '%s\n' 'export const clean = 1;' > src/clean.ts
+  "${G[@]}" add -A && "${G[@]}" commit -qm base
+  printf '%s\n' "$BOOKER_A" > src/a.tsx && printf '%s\n' "$BOOKER_B" > src/b.tsx
+  "${G[@]}" add -A && "${G[@]}" commit -qm copy
+  printf '%s\n' 'export const other = 2;' > src/c.ts
+) >/dev/null 2>&1
+run_hook "$W" "cd $W && git add src/c.ts && git commit -qm c && git push -u origin main"
+want_eq "commit and push with no remote ref still compares the unpushed last commit" 2 "$HOOK_RC"
+
 # 8. The first push that CREATES the source root has an empty base, so a copy in it is new.
 W="$(mk_repo firstroot README.md 'readme first' src/a.tsx "$BOOKER_A" src/b.tsx "$BOOKER_B")"
 run_hook "$W" "git push"

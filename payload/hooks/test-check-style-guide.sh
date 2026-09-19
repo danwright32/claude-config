@@ -261,6 +261,48 @@ want_silent_on "this push introduces" "a pending finding must not claim the push
 want_says "about to make" "a pending finding names the commit it read"
 want_says "not been committed yet" "a pending finding says what it measured"
 
+# --- the range, and the repo, from the shared helpers (claude-config#439, #441) ---
+#
+# A push written inside a subshell names its repo in the cd inside the parentheses. The helper
+# wanted whitespace or a separator before the cd, so this fell through to the session directory
+# and, from a directory that is not a repository, was waved through unchecked.
+W="$(mk_style_repo "$BAD")"
+run_style_hook "$E2E" "(cd $W && git push)"
+want_style_code 2 "a push inside a subshell is checked in the repo its cd names"
+
+# A plain push with NO upstream: the base falls through to the local main, which is the branch
+# being pushed, so the merge base is HEAD. This hook kept its own copy of the range and read that
+# as an empty range, so the commit carrying the character was never read and the push passed.
+mk_unpushed_repo() {  # $1 = content committed in the last commit; no remote at all
+  local root; root="$(mktemp -d)"
+  git init -q -b main "$root/work"
+  (
+    cd "$root/work" || exit 1
+    git config user.email t@t.t; git config user.name t
+    echo baseline > README.md
+    git add README.md; git commit -qm init
+    mkdir -p app
+    printf '%s\n' "$1" > app/copy.ts
+    git add app/copy.ts; git commit -qm copy
+  ) >/dev/null 2>&1
+  printf '%s' "$root/work"
+}
+W="$(mk_unpushed_repo "$BAD")"
+run_style_hook "$E2E" "cd $W && git push -u origin main"
+want_style_code 2 "a push with no upstream reads its most recent commit"
+W="$(mk_unpushed_repo "$CLEAN")"
+run_style_hook "$E2E" "cd $W && git push -u origin main"
+want_style_code 0 "and the same push of clean copy is allowed"
+
+# A command that commits before it pushes, on a branch already level with its upstream: the
+# pending commit is the change, and the commit already on the remote is not this push's to answer
+# for. The forbidden character sits only in that pushed commit.
+W="$(mk_style_repo "$BAD")"
+( cd "$W" && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf 'more\n' >> README.md ) >/dev/null 2>&1
+run_style_hook "$E2E" "cd $W && git add README.md && git commit -qm more && git push"
+want_style_code 0 "a commit then push does not answer for a commit already on the remote"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

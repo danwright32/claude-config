@@ -231,6 +231,237 @@ EOF
     || check "a $size command still has its add seen" "read as absent over ${#long_cmd} bytes"
 done
 
+# ---------------------------------------------------------------------------
+# Every ps_ function is defined exactly once (claude-config#440). ps_base_ref was written twice and
+# bash kept the second, so the first and its comment read as live while nothing ran them, and the
+# next edit to one would not have reached the other (L29, L30). Derived from the file, so a
+# function added later is covered without anybody listing it (L96).
+# ---------------------------------------------------------------------------
+dup_defs="$(grep -Eo '^ps_[A-Za-z0-9_]+\(\)' "$LIB" | sort | uniq -d | tr '\n' ' ')"
+def_count="$(grep -Ec '^ps_[A-Za-z0-9_]+\(\)' "$LIB")"
+[ "${def_count:-0}" -ge 8 ] \
+  && check "the define once check can see the library's functions" ok \
+  || check "the define once check can see the library's functions" "found only $def_count definitions"
+case "$dup_defs" in
+  *[![:space:]]*) check "#440 every ps_ function is defined exactly once" "defined more than once: $dup_defs" ;;
+  *) check "#440 every ps_ function is defined exactly once" ok ;;
+esac
+
+# ---------------------------------------------------------------------------
+# ps_repo_dir reads a cd written inside a subshell or a group (claude-config#439). Its pattern
+# wanted whitespace or a separator before the cd, so `(cd repo && git push)` fell through to the
+# SESSION's directory and the gate judged, and refused, a repository the command never touched
+# (L11). Each case sets the session directory to a DIFFERENT real repository, so a fall through is
+# visible as the wrong answer rather than as no answer.
+# ---------------------------------------------------------------------------
+RD="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-repodir.XXXXXXXX")"
+case "${RD%/}" in ''|/|"${HOME%/}") echo "refusing: throwaway came back as '$RD'" >&2; exit 2 ;; esac
+git init -q "$RD/target" 2>/dev/null
+git init -q "$RD/session" 2>/dev/null
+mkdir -p "$RD/with space"
+git init -q "$RD/with space/repo" 2>/dev/null
+T="$RD/target"; S="$RD/session"
+
+want_repo() { # want_repo <command> <expected dir> <description>
+  local got
+  got="$(ps_repo_dir "$1" "$S" || true)"
+  [ "$got" = "$2" ] && check "$3" ok || check "$3" "resolved to [$got]"
+}
+want_repo "cd $T && git push" "$T" \
+  "#439 control: a plain cd before the push is still read"
+want_repo "(cd $T && git push)" "$T" \
+  "#439 a cd inside a subshell names the repo"
+want_repo "( cd $T && git push )" "$T" \
+  "#439 a subshell with spaces inside its parentheses names the repo"
+want_repo "{ cd $T; git push; }" "$T" \
+  "#439 a cd inside a brace group names the repo"
+want_repo "out=\$(cd $T && git push 2>&1); echo \"\$out\"" "$T" \
+  "#439 a cd inside a command substitution names the repo"
+want_repo "echo \"(cd $T && git push)\" && git push" "$S" \
+  "#439 a subshell cd written inside a quoted string is not a cd"
+want_repo "git commit -m 'then cd $T' && git push" "$S" \
+  "#439 a cd written inside a single quoted message is not a cd"
+want_repo "cd \"$RD/with space/repo\" && git push" "$RD/with space/repo" \
+  "#439 a quoted path with a space in it is read whole"
+# The commonest shape of all: a heredoc commit message whose body has an apostrophe in it, which
+# leaves an unbalanced quote for any tokenizer that reads to the end (segmented, as a hook sees it).
+want_repo "cd $T && git commit -q -F - <<'MSG'; it isn't balanced; MSG; git push" "$T" \
+  "#439 a cd before a heredoc body with an apostrophe is still read"
+want_repo "git push" "$S" \
+  "#439 with no cd at all the session directory is used"
+
+# Finding the repo is only half of it: the same subshell has to be seen as a push at all, or every
+# gate exits before it asks which repo. Its segment ends `git push)`, whose subcommand read as
+# `push)`, so the push was invisible, which is indistinguishable from a push judged clean (L98).
+want_push "(cd /tmp/x && git push)" \
+  "#439 a push inside a subshell is seen"
+want_push "( cd /tmp/x && git push )" \
+  "#439 a push inside a spaced subshell is seen"
+want_push "{ cd /tmp/x; git push; }" \
+  "#439 a push inside a brace group is seen"
+want_push "(git push origin main)" \
+  "#439 a subshell that is only a push is seen"
+want_push "(SKIP_X=1 git push)" \
+  "#439 a subshell push with an inline variable is seen"
+want_notpush "git commit -m \"(git push later)\"" \
+  "#439 a parenthesised push inside a message is still not a push"
+want_notpush "(cd /tmp/x && git status)" \
+  "#439 a subshell with no push in it is not a push"
+
+# ---------------------------------------------------------------------------
+# Where a push's range starts, in the three situations a push hook meets (claude-config#441).
+# ps_merge_base alone dropped to HEAD~1 whenever the merge base was HEAD, which is right for a plain
+# push with no upstream and wrong for the other two, and two hooks had each worked around it
+# privately. Each situation is built for real below and asked of the helper written for it.
+# ---------------------------------------------------------------------------
+MB="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-mergebase.XXXXXXXX")"
+case "${MB%/}" in ''|/|"${HOME%/}") echo "refusing: throwaway came back as '$MB'" >&2; exit 2 ;; esac
+gc() { git -c user.email=p@l -c user.name=p "$@"; }
+mb_commit() { # mb_commit <repo> <message>
+  ( cd "$1" && printf '%s\n' "$2" >> f && git add f && gc commit -qm "$2" ) >/dev/null 2>&1
+}
+sha_of() { git -C "$1" rev-parse --verify --quiet "$2" 2>/dev/null; }
+
+# 1. A PLAIN push with no upstream: the base falls to the local branch, which IS HEAD, so the
+#    committed range is the most recent change (the case the HEAD~1 fallback was written for).
+git init -q -b main "$MB/plain" 2>/dev/null
+mb_commit "$MB/plain" one; mb_commit "$MB/plain" two
+got="$( cd "$MB/plain" && ps_merge_base "$(ps_base_ref)" )"
+[ "$got" = "$(sha_of "$MB/plain" HEAD~1)" ] \
+  && check "#441 a plain push with no upstream is measured from HEAD~1" ok \
+  || check "#441 a plain push with no upstream is measured from HEAD~1" "got=$got"
+
+# 2. A command that COMMITS before it pushes, on a branch whose upstream is already HEAD. The
+#    pending commit is the change, so the base is HEAD; HEAD~1 would blame this push for the last
+#    commit already on the remote.
+git init -q --bare "$MB/remote.git" 2>/dev/null
+git init -q -b main "$MB/pend" 2>/dev/null
+mb_commit "$MB/pend" one; mb_commit "$MB/pend" two
+( cd "$MB/pend" && git remote add origin "$MB/remote.git" && git push -q -u origin main ) >/dev/null 2>&1
+got="$( cd "$MB/pend" && ps_pending_base "$(ps_base_ref)" )"
+[ -n "$got" ] && [ "$got" = "$(sha_of "$MB/pend" HEAD)" ] \
+  && check "#441 a commit then push on a pushed branch is measured from HEAD" ok \
+  || check "#441 a commit then push on a pushed branch is measured from HEAD" "got=$got"
+# The same helper on unpushed commits still returns the fork point, not HEAD.
+mb_commit "$MB/pend" three
+got="$( cd "$MB/pend" && ps_pending_base "$(ps_base_ref)" )"
+[ -n "$got" ] && [ "$got" = "$(sha_of "$MB/pend" HEAD~1)" ] \
+  && check "#441 a commit then push with unpushed work is measured from the upstream" ok \
+  || check "#441 a commit then push with unpushed work is measured from the upstream" "got=$got"
+
+# A ONE commit repository, pushed: HEAD~1 does not exist, so the old fallback returned nothing and
+# the gate skipped the very commit this command was about to make.
+git init -q --bare "$MB/one.git" 2>/dev/null
+git init -q -b main "$MB/one" 2>/dev/null
+mb_commit "$MB/one" only
+( cd "$MB/one" && git remote add origin "$MB/one.git" && git push -q -u origin main ) >/dev/null 2>&1
+got="$( cd "$MB/one" && ps_pending_base "$(ps_base_ref)" )"
+[ -n "$got" ] && [ "$got" = "$(sha_of "$MB/one" HEAD)" ] \
+  && check "#441 a commit then push in a one commit repo is measured from HEAD" ok \
+  || check "#441 a commit then push in a one commit repo is measured from HEAD" "got=[$got]"
+
+# But when the base is only a LOCAL branch name, a merge base at HEAD says nothing about what the
+# remote holds, so the pending helper keeps the plain push answer and reads the last commit too.
+# Reading one commit more is the safe side for a gate; reading one fewer ships it unjudged (L93).
+got="$( cd "$MB/plain" && ps_pending_base "$(ps_base_ref)" )"
+[ "$got" = "$(sha_of "$MB/plain" HEAD~1)" ] \
+  && check "#441 a commit then push against a local base keeps the plain push answer" ok \
+  || check "#441 a commit then push against a local base keeps the plain push answer" "got=$got"
+
+# 3. AFTER the push (a PostToolUse hook). The upstream is now HEAD, so the merge base is HEAD and
+#    the old fallback reviewed one commit however many the push carried.
+git init -q --bare "$MB/post.git" 2>/dev/null
+git init -q -b main "$MB/post" 2>/dev/null
+mb_commit "$MB/post" one
+( cd "$MB/post" && git remote add origin "$MB/post.git" && git push -q -u origin main ) >/dev/null 2>&1
+before="$(sha_of "$MB/post" HEAD)"
+mb_commit "$MB/post" two; mb_commit "$MB/post" three; mb_commit "$MB/post" four
+( cd "$MB/post" && git push -q ) >/dev/null 2>&1
+got="$( cd "$MB/post" && ps_pushed_base )"
+[ -n "$got" ] && [ "$got" = "$before" ] \
+  && check "#441 after a three commit push the range starts at the upstream's previous tip" ok \
+  || check "#441 after a three commit push the range starts at the upstream's previous tip" "got=$got want=$before"
+# The control: this is exactly the situation where the plain push answer is one commit short.
+got_plain="$( cd "$MB/post" && ps_merge_base "$(ps_base_ref)" )"
+[ "$got_plain" != "$before" ] \
+  && check "#441 control: the plain push answer really is short after a push" ok \
+  || check "#441 control: the plain push answer really is short after a push" "it already matched"
+
+# A FIRST push of a feature branch has no previous upstream tip, so the whole branch is measured
+# against the remote's default branch.
+( cd "$MB/post" && git checkout -q -b feat && printf 'x\n' > g && git add g && gc commit -qm g1 \
+    && printf 'y\n' >> g && git add g && gc commit -qm g2 && git push -q -u origin feat ) >/dev/null 2>&1
+got="$( cd "$MB/post" && ps_pushed_base )"
+[ -n "$got" ] && [ "$got" = "$(sha_of "$MB/post" main)" ] \
+  && check "#441 after a first push of a branch the range starts where it left main" ok \
+  || check "#441 after a first push of a branch the range starts where it left main" "got=$got"
+
+# And no hook keeps its own copy of the post push rule. ai-review-on-push.sh wrote the three steps
+# out itself because the library had no entry point for them; a second copy of "what did this push
+# add" drifts invisibly (L613). The reflog selector is what every copy has to read, so it is the
+# needle, assembled here so this line does not match itself (L245).
+reflog_sel='@{u}'; reflog_sel="${reflog_sel}@{1}"
+own_pushed="$(grep -lF "$reflog_sel" "$DIR"/*.sh 2>/dev/null | grep -v '/test-' | tr '\n' ' ')"
+case "$own_pushed" in
+  *[![:space:]]*) check "#441 no hook keeps its own post push range" "still in: $own_pushed" ;;
+  *) check "#441 no hook keeps its own post push range" ok ;;
+esac
+
+# A repository with no commits has no range at all: every entry point answers nothing and says so
+# with its status, rather than printing something a caller would diff against.
+git init -q "$MB/none" 2>/dev/null
+for fn in ps_merge_base ps_pending_base ps_pushed_base; do
+  out="$( cd "$MB/none" && "$fn" "" 2>/dev/null )"; rc=$?
+  [ -z "$out" ] && [ "$rc" -ne 0 ] \
+    && check "#441 $fn refuses in a repository with no commits" ok \
+    || check "#441 $fn refuses in a repository with no commits" "rc=$rc out=[$out]"
+done
+
+# ---------------------------------------------------------------------------
+# ps_add_scope: what the commit in a chained command will take beyond the index
+# (claude-config#442). It lived as inline python in two hooks; the cases are the ones
+# test-check-style-guide.sh drives end to end, asked here of the one parser directly.
+# ---------------------------------------------------------------------------
+want_scope() { # want_scope <command> <expected output, lines joined by |> <description>
+  local got
+  got="$(ps_add_scope "$1" | tr '\n' '|' | sed 's/|$//')"
+  [ "$got" = "$2" ] && check "$3" ok || check "$3" "got [$got]"
+}
+want_scope "git add app/copy.ts && git commit -qm copy && git push" "PATHS|app/copy.ts" \
+  "#442 an add naming one file takes that path"
+want_scope "git add a.ts b/c.ts && git commit -qm x && git push" "PATHS|a.ts|b/c.ts" \
+  "#442 an add naming several files takes each"
+want_scope "git add -A && git commit -qm copy && git push" "ALL" \
+  "#442 git add -A takes everything"
+want_scope "git add . && git commit -qm copy && git push" "ALL" \
+  "#442 git add . takes everything"
+want_scope "git add -u && git commit -qm copy && git push" "TRACKED" \
+  "#442 git add -u takes tracked changes"
+want_scope "git commit -qam copy && git push" "TRACKED" \
+  "#442 commit -a with no add takes tracked changes"
+want_scope "git commit -qm copy && git push" "INDEX" \
+  "#442 a bare commit takes only the index"
+want_scope "git add does-not-exist.txt && git commit -qm copy && git push" "PATHS|does-not-exist.txt" \
+  "#442 a named path is reported as named, for the caller to resolve"
+want_scope "git add \"app/copy.ts && git commit -qm copy && git push" "UNKNOWN" \
+  "#442 a command that cannot be tokenised is UNKNOWN, never narrowed to nothing"
+want_scope "git add --verbose && git commit -qm x && git push" "UNKNOWN" \
+  "#442 an add that names nothing is UNKNOWN"
+want_scope "rtk git -C /tmp/x add app/copy.ts && git commit -qm x && git push" "PATHS|app/copy.ts" \
+  "#442 an rtk rewritten add with -C is still read"
+
+# And no hook keeps its own copy of the parser. Derived from the hooks on disk, not from a list of
+# the two that had one, so a third copy is caught the day it is written (L96, L613).
+# The pattern is written with its brackets escaped, so the line holding it does not match itself
+# (L245): the text on disk here is not the text the pattern finds.
+own_add_parsers="$(grep -l 'toks\[j\] != "add"' "$DIR"/*.sh 2>/dev/null | tr '\n' ' ')"
+case "$own_add_parsers" in
+  *[![:space:]]*) check "#442 no hook keeps its own git add scope parser" "still in: $own_add_parsers" ;;
+  *) check "#442 no hook keeps its own git add scope parser" ok ;;
+esac
+
+rm -rf "$RD" "$MB"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

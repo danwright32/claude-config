@@ -61,16 +61,17 @@ cd "$repo_dir" 2>/dev/null || exit 0
 base="$(ps_base_ref || true)"
 
 commit_in_chain=0
-add_in_chain=0
-commit_all=0
-printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)' && commit_in_chain=1
-printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' && add_in_chain=1
-printf '%s' "$cmd" | grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a' && commit_all=1
+ps_commit_in_chain "$cmd" && commit_in_chain=1
 
-if [ -n "$base" ] && git rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
-  mb="$(git merge-base "$base" HEAD 2>/dev/null)"
+# Where the committed range starts is the shared contract too (claude-config#441). This hook kept
+# its own copy, which read a merge base at HEAD as an empty range: on a push with no upstream the
+# base is the local main, which IS the branch being pushed, so the commit carrying the character was
+# never read and the push passed. A command that commits first has its own entry point, because
+# there the pending commit is the change and the last pushed commit is not this push's to answer for.
+if [ "$commit_in_chain" -eq 1 ]; then
+  mb="$(ps_pending_base "$base")"
 else
-  mb="$(git rev-parse --verify --quiet HEAD~1 2>/dev/null)"
+  mb="$(ps_merge_base "$base")"
 fi
 
 EXCLUDES=(':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.snap'
@@ -118,83 +119,19 @@ scope_unknown=0
 if [ "$commit_in_chain" -eq 1 ]; then
   pending_diff="$(git diff --cached -- . "${EXCLUDES[@]}" 2>/dev/null)"
 
-  add_scope="ALL"
-  if [ "$add_in_chain" -eq 1 ]; then
-    add_scope="$(HK_CMD="$cmd" python3 -c '
-import os, shlex, sys
+  # What the commit will take beyond the index, from the one parser every push hook shares
+  # (claude-config#442). A second copy of it lived in another hook and the two would drift.
+  add_scope="$(ps_add_scope "$cmd")"
+  add_kind="${add_scope%%$'\n'*}"
 
-# What the `git add` invocations in this command actually name. Prints a scope word on
-# the first line and, for PATHS, one path per line after it.
-#
-# UNKNOWN is a real answer, not a failure: it means the caller must fall back to the
-# whole working tree AND say so, because a reading that quietly narrows to nothing would
-# let a forbidden character through while reporting a clean run (L98).
-try:
-    toks = shlex.split(os.environ["HK_CMD"], posix=True)
-except ValueError:
-    print("UNKNOWN"); raise SystemExit
-
-SEP = {"&&", "||", ";", "|", "&"}
-EVERYTHING = {"-A", "--all", "--no-ignore-removal"}
-TRACKED_ONLY = {"-u", "--update"}
-paths = []
-scope = "PATHS"
-i = 0
-while i < len(toks):
-    if toks[i] == "rtk":
-        i += 1
-        continue
-    if toks[i].split("/")[-1] != "git":
-        i += 1
-        continue
-    j = i + 1
-    while j < len(toks) and toks[j].startswith("-"):
-        j += 2 if toks[j] in ("-C", "-c") else 1
-    if j >= len(toks) or toks[j] != "add":
-        i = j + 1
-        continue
-    k = j + 1
-    while k < len(toks) and toks[k] not in SEP:
-        a = toks[k]
-        if a in EVERYTHING:
-            scope = "ALL"
-        elif a in TRACKED_ONLY:
-            if scope == "PATHS":
-                scope = "TRACKED"
-        elif a.startswith("-"):
-            pass
-        elif a in (".", "./", ":/", "*"):
-            scope = "ALL"
-        else:
-            paths.append(a)
-        k += 1
-    i = k
-
-if scope == "PATHS" and not paths:
-    # An add that named nothing is an add nobody can account for.
-    scope = "UNKNOWN"
-print(scope)
-if scope == "PATHS":
-    for pth in paths:
-        print(pth)
-' 2>/dev/null)"
-    [ -n "$add_scope" ] || add_scope="UNKNOWN"
-  elif [ "$commit_all" -eq 1 ]; then
-    add_scope="TRACKED"
-  else
-    # A commit with no add and no -a takes exactly what is already in the index, which
-    # `git diff --cached` above has already read.
-    add_scope="INDEX"
-  fi
-
-  case "$(printf '%s' "$add_scope" | head -1)" in
+  case "$add_kind" in
     INDEX) : ;;
     TRACKED)
       pending_diff="${pending_diff}
 $(git diff HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
       ;;
     ALL|UNKNOWN)
-      [ "$(printf '%s' "$add_scope" | head -1)" = "UNKNOWN" ] && scope_unknown=1
+      [ "$add_kind" = "UNKNOWN" ] && scope_unknown=1
       pending_diff="${pending_diff}
 $(git diff HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
       while IFS= read -r u; do

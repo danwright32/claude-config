@@ -112,16 +112,17 @@ if [ "$from_worktree" -eq 1 ]; then
 fi
 [ -n "$head_roots" ] || skip "$(basename "$repo_dir") has none of the source roots this reads ($root_names)."
 
-# What the push is measured against, from the shared helpers (claude-config#339).
+# What the push is measured against, from the shared helpers (claude-config#339). Where the range
+# starts is the shared contract too (claude-config#441): a command that commits first has its own
+# entry point, because its pending commit is the change and the last commit already on the remote
+# is not this push's to answer for. This hook kept a private version of that rule, which also took
+# HEAD as the base when the base was only the local branch itself, so an unpushed last commit was
+# never compared.
 base="$(ps_base_ref || true)"
-mb="$(ps_merge_base "$base")"
-if [ "$from_worktree" -eq 1 ] && [ -n "$base" ] \
-   && [ "$(git merge-base "$base" HEAD 2>/dev/null)" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
-  # Nothing is committed beyond the base yet, so the pending commit's base IS HEAD. The shared
-  # helper drops to HEAD~1 there, which is right for a plain push (an empty range would otherwise
-  # read as "nothing to judge") and wrong here: HEAD~1 would blame this push for the last commit
-  # already on the remote, and in a one commit repo it does not exist at all.
-  mb="$(git rev-parse HEAD 2>/dev/null)"
+if [ "$from_worktree" -eq 1 ]; then
+  mb="$(ps_pending_base "$base")"
+else
+  mb="$(ps_merge_base "$base")"
 fi
 [ -n "$mb" ] || skip "no base commit could be worked out for this push (no upstream, no origin/main, no previous commit), so nothing was compared."
 
