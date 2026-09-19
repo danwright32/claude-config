@@ -423,9 +423,14 @@ mb_commit "$MB/rb" base
     && git push -q -u origin feat \
     && git checkout -q main ) >/dev/null 2>&1
 mb_commit "$MB/rb" main2; mb_commit "$MB/rb" main3
-( cd "$MB/rb" && git push -q origin main && git checkout -q feat && git rebase -q main ) >/dev/null 2>&1
+# The rebase commits, so it needs an identity: a runner with none stops it halfway, HEAD detached
+# at main, and the cases below would measure that instead.
+( cd "$MB/rb" && git push -q origin main && git checkout -q feat && gc rebase -q main ) >/dev/null 2>&1
 new_main="$(sha_of "$MB/rb" main)"
 old_fork="$(sha_of "$MB/rb" main~2)"
+[ "$(sha_of "$MB/rb" HEAD~1)" = "$new_main" ] && [ "$(git -C "$MB/rb" symbolic-ref --quiet --short HEAD 2>/dev/null)" = "feat" ] \
+  && check "#456 fixture: the branch really was rebased onto the new main" ok \
+  || check "#456 fixture: the branch really was rebased onto the new main" "HEAD~1=$(sha_of "$MB/rb" HEAD~1) new main=$new_main"
 # The fixture is what it claims: the upstream is behind a rewrite, not simply behind (L159).
 if git -C "$MB/rb" merge-base --is-ancestor origin/feat HEAD 2>/dev/null; then
   check "#456 fixture: the upstream tip is no longer an ancestor of HEAD" "it still is"
