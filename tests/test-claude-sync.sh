@@ -2030,6 +2030,12 @@ fan_work_over_dir(){   # $1 = the shard output directory   $2 = how many shards 
 # measured and passed from one that measured nothing (L98, L557). Measured on CI 2026-09-19: the
 # shards' own SUITE-WORK lines never reach the job log, because run-all-tests.sh prints only lines
 # matching FAIL or not ok.
+#
+# AND THAT FILTER APPLIES TO THIS LINE TOO, which is worth saying rather than leaving somebody to
+# find it: on CI this headline is not printed either, so the NUMBER is visible to whoever runs the
+# suite directly and not in the job log. What IS enforced on CI is the refusal, which carries the
+# FAIL: prefix and therefore does get through. Making the number itself reach the job log means
+# changing run-all-tests.sh, which every suite shares, and that was not done here (L308).
 fan_work_note(){   # $1 = section seconds or empty   $2 = the ceiling
   local work="$1" ceiling="$2"
   case "$ceiling" in ''|*[!0-9]*) return 0 ;; esac
