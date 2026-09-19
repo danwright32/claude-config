@@ -7045,6 +7045,121 @@ _ps_none="$(_status_with "$WORK/ps-none")"
 check "#33 nothing running is reported as nothing" \
   "! printf '%s' \"\$_ps_none\" | grep -qi 'left running\|watcher processes\|test runs'"
 
+section "== status speaks about a pile of suites, and a scratch size that cannot finish (#444) =="
+# On 2026-09-18 559 of this repo's suite processes had run for up to seven hours at zero CPU on a
+# Mac six agents were working on, 152 of them copies of test-run-all-tests.sh. The machine sat at
+# load 272 and every session on it was slow, and nothing said so: the #33 report watches only the
+# sync suite by name. `status` itself could not finish inside two minutes, and four `du` processes it
+# had started over the pile's scratch were found 23 to 51 minutes old with their parent gone.
+#
+# Through the same process seam as #33, so nothing here reads or reports the real machine (L2).
+_pile_status(){ SYNC_PS_FIXTURE="$1" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1; }
+# The ages are DERIVED from the default the tool ships, never written as literals at its edge, so
+# the day the default moves these fixtures still mean what they say (L401, L130). Asserted where it
+# is read, because a pattern that stopped matching would make every fixture read as young.
+_pile_max="$(sed -n 's/^SYNC_SUITE_MAX_AGE="\${SYNC_SUITE_MAX_AGE:-\([0-9][0-9]*\)}"$/\1/p' "$SCRIPT")"
+_pile_roots="$(sed -n 's/^SYNC_SUITE_MAX_ROOTS="\${SYNC_SUITE_MAX_ROOTS:-\([0-9][0-9]*\)}"$/\1/p' "$SCRIPT")"
+check "#444 the shipped age and breadth limits can be read" \
+  "case '$_pile_max$_pile_roots' in ''|*[!0-9]*) false ;; *) [ '$_pile_max' -gt 0 ] && [ '$_pile_roots' -gt 0 ] ;; esac"
+_pile_et(){ printf '%02d:%02d:%02d' $(( $1 / 3600 )) $(( $1 % 3600 / 60 )) $(( $1 % 60 )); }
+_pile_old="$(_pile_et $(( ${_pile_max:-3600} * 2 )))"
+_pile_young="00:00:04"
+_WT="/Users/x/Apps/claude-config/.claude/worktrees/agent-1/payload/hooks"
+_FX="/var/folders/T/claude-sync-work.runner-test.AAAA/dir-killed"
+
+# One whole run of the runner, young, with its suites and their fixtures under it, beside another
+# project's suite that is old. This is an ordinary busy afternoon and must be silent, or the line
+# stops being read before a real pile ever shows up (L36).
+{
+  printf '  900     1 %s /bin/bash %s/run-all-tests.sh\n' "$_pile_young" "$_WT"
+  printf '  901   900 %s /bin/bash %s/run-all-tests.sh\n' "$_pile_young" "$_WT"
+  printf '  902   901 %s bash %s/test-run-all-tests.sh\n' "$_pile_young" "$_WT"
+  printf '  903   902 %s bash %s/run-all-tests.sh %s\n' "$_pile_young" "$_WT" "$_FX"
+  printf '  904   903 %s bash %s/test-one.sh\n' "$_pile_young" "$_FX"
+  printf '  905     1 %s bash /Users/x/.overture-verify-worktree/scripts/test-all.sh\n' "$_pile_old"
+} > "$WORK/pile-healthy"
+_pile_ok="$(_pile_status "$WORK/pile-healthy")"
+check "#444 one young run of the runner, and another project's old suite, are not reported" \
+  "! grep -q 'test suites left running' <<< \"\$_pile_ok\""
+
+# A root past the age limit, with the runner and fixture suites it is still waiting on: the shape
+# found on 2026-09-18. One young suite sits beside it and must not be named for killing.
+{
+  printf '  700     1 %s bash %s/test-run-all-tests.sh\n' "$_pile_old" "$_WT"
+  printf '  701   700 %s bash %s/run-all-tests.sh %s\n' "$_pile_old" "$_WT" "$_FX"
+  printf '  702   701 %s bash %s/test-one.sh\n' "$_pile_old" "$_FX"
+  printf '  703     1 %s bash %s/test-kill-tree.sh\n' "$_pile_young" "$_WT"
+} > "$WORK/pile-old"
+_pile_o="$(_pile_status "$WORK/pile-old")"
+check "#444 a suite older than any suite may run is reported" "grep -q 'test suites left running' <<< \"\$_pile_o\""
+check "#444 and the count says how many were past the limit, and how old the oldest is" \
+  "grep -qF '3 of them older than ${_pile_max}s, the longest any suite may run, the oldest running $_pile_old' <<< \"\$_pile_o\""
+check "#444 and it names the command that stops every one past the limit" \
+  "[ \"\$(grep -E '^ +kill -9( [0-9]+)+\$' <<< \"\$_pile_o\" | tr ' ' '\\n' | grep -cxE '700|701|702')\" -eq 3 ]"
+check "#444 and never the young suite beside them" \
+  "[ \"\$(grep -E '^ +kill -9' <<< \"\$_pile_o\" | tr ' ' '\\n' | grep -cx 703)\" -eq 0 ]"
+check "#444 and the root is listed with its age and command" \
+  "grep -qF \"pid 700, running $_pile_old: bash $_WT/test-run-all-tests.sh\" <<< \"\$_pile_o\""
+
+# Past a day, ps writes an age with a day count in front, and a parser that read only hours, minutes
+# and seconds would call a suite that old a young one (L50).
+printf '  710     1 1-02:03:04 bash %s/test-run-all-tests.sh\n' "$_WT" > "$WORK/pile-days"
+_pile_d="$(_pile_status "$WORK/pile-days")"
+check "#444 an age written in days is read as days" "grep -q 'the oldest running 1-02:03:04' <<< \"\$_pile_d\""
+
+# Breadth before age: more suites started independently than one whole run ever has going, all of
+# them young. This is how a pile looks in its first hour. The count one past the limit speaks, and
+# the count AT the limit is the control that stays silent (L159).
+: > "$WORK/pile-wide"; : > "$WORK/pile-edge"
+_pi=1
+while [ "$_pi" -le $(( ${_pile_roots:-8} + 1 )) ]; do
+  printf '  %d     1 %s bash %s/test-%d.sh\n' $(( 600 + _pi )) "$_pile_young" "$_WT" "$_pi" >> "$WORK/pile-wide"
+  [ "$_pi" -le "${_pile_roots:-8}" ] && printf '  %d     1 %s bash %s/test-%d.sh\n' $(( 600 + _pi )) "$_pile_young" "$_WT" "$_pi" >> "$WORK/pile-edge"
+  _pi=$(( _pi + 1 ))
+done
+_pile_w="$(_pile_status "$WORK/pile-wide")"
+check "#444 more independent suites than one run keeps going at once are reported" \
+  "grep -qF '$(( ${_pile_roots:-8} + 1 )) started independently' <<< \"\$_pile_w\""
+check "#444 and none of them is named for killing, since none is past the age limit" \
+  "! grep -qE '^ +kill -9' <<< \"\$_pile_w\""
+_pile_e="$(_pile_status "$WORK/pile-edge")"
+check "#444 exactly the limit is not reported" "! grep -q 'test suites left running' <<< \"\$_pile_e\""
+
+# An unreadable limit is refused rather than guessed at (L50).
+_pile_bad="$(SYNC_SUITE_MAX_AGE=soon SYNC_PS_FIXTURE="$WORK/pile-old" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; _pile_bad_rc=$?
+check "#444 an unreadable age limit is refused" "[ '$_pile_bad_rc' -ne 0 ] && grep -q \"SYNC_SUITE_MAX_AGE='soon'\" <<< \"\$_pile_bad\""
+
+# ---- a `du` over scratch is bounded, and a size it could not finish says so -----------------------
+# A `du` standing in for one reading a tree that is still being written: it records its pid and then
+# never finishes. The bound is an alarm the real command carries, so this checks the process is gone
+# afterwards as well as what was reported, because a `du` outliving the status that started it is
+# exactly what was found (L63).
+_DUB="$WORK/du-bound"; mkdir -p "$_DUB/bin" "$_DUB/root"
+{
+  printf '#!/bin/sh\n'
+  printf 'echo $$ >> "%s/du.pids"\n' "$_DUB"
+  printf 'exec sleep 300\n'
+} > "$_DUB/bin/du"
+chmod +x "$_DUB/bin/du"
+mkdir -p "$_DUB/root/claude-sync-suite-work.DUSLOW1"
+scratch_age_out "$_DUB/root/claude-sync-suite-work.DUSLOW1"
+_dub_st="$(PATH="$_DUB/bin:$PATH" SYNC_SCRATCH_DU_TIMEOUT=1 SYNC_SCRATCH_LEGACY_EVERY=0 SYNC_SCRATCH_ROOT="$_DUB/root" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+check "#444 the control: the stand in du really was the one run" "[ -s '$_DUB/du.pids' ]"
+check "#444 a size that did not finish in time is reported as not known, not as a number" \
+  "grep -qE '1 abandoned under .*du-bound/root, each older than [0-9]+s\\. How much they hold is not known: sizing them did not finish within 1s \\(SYNC_SCRATCH_DU_TIMEOUT\\)' <<< \"\$_dub_st\""
+check "#444 and no integer comparison choked on the missing size" \
+  "! grep -q 'integer expression expected' <<< \"\$_dub_st\""
+_dub_alive=""
+for _dp in $(cat "$_DUB/du.pids" 2>/dev/null); do kill -0 "$_dp" 2>/dev/null && _dub_alive="$_dub_alive $_dp"; done
+check "#444 and the du it started is gone, not left reading" "[ -z '$_dub_alive' ]"
+for _dp in $_dub_alive; do kill -9 "$_dp" 2>/dev/null; done
+_dub_reap="$(PATH="$_DUB/bin:$PATH" SYNC_SCRATCH_DU_TIMEOUT=1 SYNC_SCRATCH_ROOT="$_DUB/root" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"
+check "#444 reap-scratch still reclaims, and calls a cut short size a floor" \
+  "grep -qF 'reclaimed 1 abandoned scratch item(s) holding at least' <<< \"\$_dub_reap\" && [ ! -e '$_DUB/root/claude-sync-suite-work.DUSLOW1' ]"
+_dub_bad="$(SYNC_SCRATCH_DU_TIMEOUT=soon SYNC_SCRATCH_ROOT="$_DUB/root" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" reap-scratch 2>&1)"; _dub_bad_rc=$?
+check "#444 an unreadable du bound is refused" "[ '$_dub_bad_rc' -ne 0 ] && grep -q \"SYNC_SCRATCH_DU_TIMEOUT='soon'\" <<< \"\$_dub_bad\""
+for _dp in $(cat "$_DUB/du.pids" 2>/dev/null); do kill -9 "$_dp" 2>/dev/null; done
+
 section "== a sync works where git has no identity of its own (#52) =="
 # The tool passes its own name and address to the two commits it makes, so it does not depend on
 # whoever's machine it is running on. It then left the rebase inside `pull --rebase` to find one
