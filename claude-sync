@@ -103,6 +103,21 @@ case "$SYNC_POLL_INTERVAL" in
     echo "claude-sync: SYNC_POLL_INTERVAL='$SYNC_POLL_INTERVAL' is not a number of seconds, so the default of 0.1 is being used instead. No deadline is affected: they are all measured against the clock." >&2
     SYNC_POLL_INTERVAL=0.1 ;;
 esac
+# How long a suite stopped at its deadline is given to run its own EXIT trap once everything it
+# started has been killed, before it is killed outright too (claude-config#464). DESIGN.md records
+# the number and what it was measured against.
+SYNC_SUITE_STOP_GRACE="${SYNC_SUITE_STOP_GRACE:-10}"
+case "$SYNC_SUITE_STOP_GRACE" in
+  ''|*[!0-9]*)
+    # Said, not swallowed, and never read as zero or as for ever: this decides how long a run
+    # holding the sync lock waits on a suite it has already given up on (L50, L320).
+    echo "claude-sync: SYNC_SUITE_STOP_GRACE='$SYNC_SUITE_STOP_GRACE' is not a whole number of seconds, so the default of 10 is being used instead." >&2
+    SYNC_SUITE_STOP_GRACE=10 ;;
+esac
+# The one tree kill (claude-config#169), from this tool's own checkout first and the live config
+# second, for the same reason as the libraries above.
+KILL_TREE_LIB="$SYNC_SELF_PAYLOAD/hooks/lib/kill-tree.sh"
+[ -f "$KILL_TREE_LIB" ] || KILL_TREE_LIB="$CLAUDE_HOME/hooks/lib/kill-tree.sh"
 LAST_SUCCESS_FILE="$SYNC_REPO/.last-success"   # last time the shared repo was reachable (#22)
 # When config last actually MOVED, in either direction (#75). Distinct from .last-success, which
 # only says the repo was reachable: a Mac can reach GitHub every hour for weeks while nothing
@@ -5289,6 +5304,64 @@ hook_suite_coverage(){   # $1 = the file holding the runner's output -> "<ran>\t
   return 0
 }
 
+# Stop a suite this run started in the background and has given up waiting for, together with
+# everything it started, and come back within a bound (claude-config#464). ONE implementation for
+# both callers, the pull's runner and the send gate, which each had their own TERM and bare wait.
+#
+# A TERM to the suite alone is not a stop, measured 2026-09-18 while fixing #444 and again on
+# 2026-09-19 for this: bash holds a TERM while the suite is blocked in a command substitution, and
+# every suite has an EXIT trap, so the wait after it lasted as long as the blocked child did, with
+# the sync lock held throughout (L110). And a suite that did die on it orphaned everything it had
+# started, which is how #444's pile of 559 processes formed.
+#
+# So this is the order lib/suite-deadline.sh uses: the suite is STOPPED so it cannot start a
+# replacement for what is killed under it (#174), its tree is killed, which is what releases the
+# blocked command, and only then is it asked to end, so its own EXIT trap runs and removes its
+# scratch. A suite still there after SYNC_SUITE_STOP_GRACE is stopped, has its tree killed again
+# (its trap may have started something) and is killed outright.
+#
+# Returns 0 once the suite has gone. Returns 1, having said so, when it could not be seen to go
+# even after KILL, rather than waiting on it without end.
+stop_suite_tree(){   # $1 = pid of the suite
+  local pid="$1" t0 n stat
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -f "$KILL_TREE_LIB" ]; then
+    kill -STOP "$pid" 2>/dev/null
+    bash "$KILL_TREE_LIB" "$pid" 2>/dev/null
+    kill -TERM "$pid" 2>/dev/null
+    kill -CONT "$pid" 2>/dev/null
+    t0="$(date +%s)"
+    while kill -0 "$pid" 2>/dev/null; do
+      stat="$(ps -o stat= -p "$pid" 2>/dev/null)"
+      case "$stat" in Z*|'') break ;; esac
+      [ "$(( $(date +%s) - t0 ))" -ge "$SYNC_SUITE_STOP_GRACE" ] && break
+      sleep "$SYNC_POLL_INTERVAL"
+    done
+    stat="$(ps -o stat= -p "$pid" 2>/dev/null)"
+    case "$stat" in
+      Z*|'') ;;
+      *) kill -STOP "$pid" 2>/dev/null
+         bash "$KILL_TREE_LIB" "$pid" 2>/dev/null
+         kill -KILL "$pid" 2>/dev/null ;;
+    esac
+  else
+    # Said rather than passed over: without the tree kill the suite can only be killed alone, and
+    # what it started may be left running (L11).
+    echo "claude-sync: kill-tree.sh is in neither $SYNC_SELF_PAYLOAD/hooks/lib nor $CLAUDE_HOME/hooks/lib, so suite $pid was killed alone and anything it started may still be running. Reinstall claude-sync from its repo." >&2
+    kill -KILL "$pid" 2>/dev/null
+  fi
+  # Bounded, and only then reaped. A KILLed process ends at once unless the kernel is holding it,
+  # and a bare wait on one it is holding is the unbounded wait this exists to remove.
+  n=0
+  while [ "$n" -lt 50 ]; do
+    stat="$(ps -o stat= -p "$pid" 2>/dev/null)"
+    case "$stat" in Z*|'') wait "$pid" 2>/dev/null; return 0 ;; esac
+    sleep "$SYNC_POLL_INTERVAL"; n=$(( n + 1 ))
+  done
+  echo "claude-sync: suite $pid was killed but had still not ended, so this run went on without waiting for it." >&2
+  return 1
+}
+
 hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
   local runner out pid started now limit rc=0 killed=0 ran='?' notrun='?' took='?' nrnames='?'
   [ "${SYNC_NO_HOOK_TESTS:-0}" = "1" ] && return 0
@@ -5342,12 +5415,15 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
     now="$(date +%s)"
     if [ "$limit" -gt 0 ] && [ "$(( now - started ))" -ge "$limit" ]; then
       killed=1
-      kill -TERM "$pid" 2>/dev/null || true
       break
     fi
     sleep "$SYNC_POLL_INTERVAL"
   done
-  wait "$pid" 2>/dev/null || rc=$?
+  if [ "$killed" -eq 1 ]; then
+    stop_suite_tree "$pid" || true
+  else
+    wait "$pid" 2>/dev/null || rc=$?
+  fi
   # How long it actually took (claude-config#218). Measured from THIS process's clock, which
   # already holds `started` for the deadline, rather than read out of the runner's printed report.
   # The runner prints a per suite profile and no total, and a measurement that reaches its reader
@@ -5955,7 +6031,7 @@ send_hooks_digest(){
   case "$d" in ''|*[!0-9a-f]*) printf '' ;; *) printf '%s' "$d" ;; esac
 }
 
-send_verdict_recall(){   # $1 = suite basename  $2 = digest -> prints pass|fail, or nothing
+send_verdict_recall(){   # $1 = suite basename  $2 = digest -> prints pass|fail|timeout, or nothing
   [ -n "$2" ] || return 0
   [ -f "$SEND_VERDICTS_FILE" ] || return 0
   awk -v s="$1" -v d="$2" '$1 == d && $2 == s { print $3 }' "$SEND_VERDICTS_FILE" 2>/dev/null | tail -1
@@ -5993,7 +6069,7 @@ send_hold_back_path(){   # $1 = path relative to the repo
 
 send_hook_tests(){
   local f base suite out pairs rc=0 ran=0 reused=0 uncovered="" limit pid started now killed
-  local digest verdict failed_suites="" files p
+  local digest verdict failed_suites="" timed_out_suites="" files p why
   case "${SYNC_NO_SEND_TESTS:-0}${SYNC_NO_HOOK_TESTS:-0}" in *1*) return 0 ;; esac
 
   # What this send is about to publish. `add -A` first, so the comparison is against the index the
@@ -6061,27 +6137,35 @@ COVERS
         now="$(date +%s)"
         if [ "$(( now - started ))" -ge "$limit" ]; then
           killed=1
-          kill -TERM "$pid" 2>/dev/null || true
           break
         fi
         sleep "$SYNC_POLL_INTERVAL"
       done
       if [ "$killed" -eq 1 ]; then
-        wait "$pid" 2>/dev/null || true
-        verdict=fail
+        # The whole tree, and a bounded wait after it (claude-config#464), recorded as its own
+        # verdict so the report can say it was stopped rather than that it failed (L11).
+        stop_suite_tree "$pid" || true
+        verdict=timeout
       elif wait "$pid" 2>/dev/null; then
         verdict=pass
       else
         verdict=fail
       fi
       [ "$out" = "/dev/null" ] || rm -f "$out" 2>/dev/null || true
-      # A killed run is recorded as a failure like any other, and deliberately so: what the
-      # remembered verdict has to survive is a change to the inputs, and a deadline that fired
-      # once will fire again on the same bytes on the same machine.
+      # A stopped run is remembered and holds its hooks back like a failure, and deliberately so:
+      # what the remembered verdict has to survive is a change to the inputs, and a deadline that
+      # fired once will fire again on the same bytes on the same machine. It keeps its own word
+      # so a reused verdict still says why (#464).
       send_verdict_record "$(basename "$suite")" "$digest" "$verdict"
     fi
-    [ "$verdict" = fail ] && failed_suites="$failed_suites$suite
+    case "$verdict" in
+      fail) failed_suites="$failed_suites$suite
+" ;;
+      timeout) failed_suites="$failed_suites$suite
 "
+               timed_out_suites="$timed_out_suites$suite
+" ;;
+    esac
   done < <(awk -F'\t' '$1=="C"{print $2}' "$pairs" 2>/dev/null | sort -u)
 
   if [ -n "$uncovered" ]; then
@@ -6104,9 +6188,18 @@ $files
 HELD
       # The suite AND the files it cost a trip, on ONE line. A sentence naming the suite and a
       # different sentence naming the file cannot answer between them about which hook is waiting
-      # (L178, L80).
-      echo "claude-sync: NOT publishing $(printf '%s' "$files" | sed 's|^payload/hooks/||' | tr '\n' ' ')because $(basename "$suite") fails here, so nothing verified them. Everything else in this send went out normally. Run it to see why: bash $CLAUDE_HOME/hooks/$(basename "$suite"). The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
-      notify "held back $(printf '%s' "$files" | sed 's|^payload/hooks/||' | tr '\n' ' '): $(basename "$suite") fails here"
+      # (L178, L80). A suite stopped at its deadline says so in its own words: the remedy for one
+      # that hung is not the remedy for one that is red (L11, #464).
+      why="$(basename "$suite") fails here"
+      # Whole lines, so a suite whose path ends another's cannot answer for it.
+      case "
+$timed_out_suites" in
+        *"
+$suite
+"*) why="$(basename "$suite") did not finish within SYNC_SEND_TESTS_TIMEOUT (${limit}s) here and was stopped with everything it had started" ;;
+      esac
+      echo "claude-sync: NOT publishing $(printf '%s\n' "$files" | sed 's|^payload/hooks/||' | tr '\n' ' ')because $why, so nothing verified them. Everything else in this send went out normally. Run it to see why: bash $CLAUDE_HOME/hooks/$(basename "$suite"). The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
+      notify "held back $(printf '%s' "$files" | sed 's|^payload/hooks/||' | tr '\n' ' '): $why"
     done <<FAILED
 $failed_suites
 FAILED

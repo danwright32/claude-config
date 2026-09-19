@@ -14050,6 +14050,131 @@ check "#269 and the repo is not left holding a staged copy of it" \
 SYNC_NO_SEND_TESTS=1
 
 
+section "== a suite past its deadline is stopped with everything it started, within a bound (#464) =="
+# The send gate stopped a suite past SYNC_SEND_TESTS_TIMEOUT with a TERM to its pid and then a
+# bare wait on it, and the pull's runner the same way past SYNC_HOOK_TESTS_TIMEOUT. Measured
+# 2026-09-18 while fixing #444: bash holds a trapped TERM while the suite is blocked in a command
+# substitution, and every suite has an EXIT trap, so that wait lasted as long as the blocked child,
+# holding the sync lock the whole time (L110). A suite that did die on the TERM orphaned what it had
+# started, which is how #444's pile formed.
+#
+# The fixture is that exact shape: an EXIT trap, blocked in a command substitution whose child has a
+# child of its own, each writing its pid down so the check can ask whether it is still running. The
+# child sleeps 40s, so the defect this guards against costs the send 40s and the bound below is
+# less than half of that.
+unset SYNC_NO_SEND_TESTS
+DLB="$WORK/deadline-bare.git"; git init -q --bare "$DLB"
+DLR="$WORK/deadline-repo"; git clone -q "$DLB" "$DLR"
+DLH="$WORK/deadline-home"; mkdir -p "$DLH/hooks"
+DLP="$WORK/deadline-pids"; mkdir -p "$DLP"
+echo '{"hooks":{}}' > "$DLH/settings.json"
+printf '# rules\n' > "$DLH/CLAUDE.md"
+printf '#!/usr/bin/env bash\necho stuck\n' > "$DLH/hooks/stuck.sh"
+dl_ms(){ perl -MTime::HiRes -e 'printf "%.0f", Time::HiRes::time()*1000'; }
+# A body blocked in a command substitution, written with the EXIT trap given. The pids go to
+# $DLP/<label>.child and .grandchild.
+dl_blocked_body(){   # $1 = label  $2 = the EXIT trap's command
+  printf 'trap %q EXIT\n' "$2"
+  printf 'v="$(bash -c %q)"\n' "echo \$\$ > '$DLP/$1.child'; sleep 40 & echo \$! > '$DLP/$1.grandchild'; wait"
+  printf 'echo "SUITE-RESULT passed=1 failed=0"\n'
+}
+dl_write_suite(){   # $1 = label  $2 = the EXIT trap's command
+  { printf '#!/usr/bin/env bash\n# covers stuck.sh\n'; dl_blocked_body "$1" "$2"; } > "$DLH/hooks/test-stuck.sh"
+}
+# Running means alive under that pid AND still the command it was, so a pid the system has handed
+# to something else since cannot answer for it (L157).
+dl_running(){   # $1 = pid file  $2 = text its command line carries
+  local p
+  p="$(cat "$1" 2>/dev/null)"
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  case "$(ps -o command= -p "$p" 2>/dev/null)" in *"$2"*) return 0 ;; *) return 1 ;; esac
+}
+dl_reap(){   # the fixture's own leftovers, whatever the checks said, so a red run leaves nothing
+  local f p
+  for f in "$DLP"/*.child "$DLP"/*.grandchild "$DLP"/*.trapchild; do
+    p="$(cat "$f" 2>/dev/null)"
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    case "$(ps -o command= -p "$p" 2>/dev/null)" in *'sleep 40'*|*'bash -c'*) kill -9 "$p" 2>/dev/null ;; esac
+  done
+  return 0
+}
+
+dl_write_suite send "touch '$DLP/send.trap-ran'"
+dl_t0="$(dl_ms)"
+out_464a="$(CLAUDE_HOME="$DLH" SYNC_REPO="$DLR" SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
+  SYNC_SEND_TESTS_TIMEOUT=1 bash "$SCRIPT" send 2>&1)"
+dl_held=$(( $(dl_ms) - dl_t0 ))
+dbg "#464 send against a suite blocked in a command substitution, 1s deadline, took ${dl_held}ms: $out_464a"
+# Recorded before anything is judged: a check that runs after its own subject has had time to exit
+# by itself cannot tell stopped from finished (L239).
+dl_child_up=0; dl_running "$DLP/send.child" 'bash -c' && dl_child_up=1
+dl_gc_up=0; dl_running "$DLP/send.grandchild" 'sleep 40' && dl_gc_up=1
+dl_reap
+check "#464 the fixture really started its child and grandchild (else the checks below prove nothing)" \
+  "[ -s '$DLP/send.child' ] && [ -s '$DLP/send.grandchild' ]"
+check "#464 a send returns within the bound when a suite is blocked past its deadline (${dl_held}ms, bound 20000ms)" \
+  "[ '$dl_held' -le 20000 ]"
+check "#464 and the suite's child is not left running" "[ '$dl_child_up' -eq 0 ]"
+check "#464 and nor is the child's own child" "[ '$dl_gc_up' -eq 0 ]"
+# Its tree killed first and THEN asked to stop, so its EXIT trap runs, which is where a real suite
+# removes its scratch.
+check "#464 and the suite's EXIT trap ran, so its own cleanup happened" "[ -f '$DLP/send.trap-ran' ]"
+# Timed out is its own cause with its own words, never folded into "fails here": the remedy for a
+# suite that hung is not the remedy for one that is red (L11). Suite, hook and deadline on ONE line.
+check "#464 the send says the suite was stopped at its deadline, naming it, its hook and the deadline" \
+  "line_has \"\$out_464a\" 'test-stuck\\.sh' '[ ]stuck\\.sh' 'SYNC_SEND_TESTS_TIMEOUT' '1s'"
+check "#464 and does not call a stopped suite a failing one" \
+  "! line_has \"\$out_464a\" 'test-stuck\\.sh' 'fails here'"
+check "#464 and the hook it covers is held back" "[ ! -e '$DLR/payload/hooks/stuck.sh' ]"
+
+# The second stage. A suite whose EXIT trap itself blocks does not end on the TERM, so after the
+# grace it is stopped outright, and the trap's own child goes with it.
+dl_write_suite trap "sleep 40 & echo \$! > '$DLP/trap.trapchild'; wait"
+dl_t0="$(dl_ms)"
+out_464b="$(CLAUDE_HOME="$DLH" SYNC_REPO="$DLR" SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
+  SYNC_SEND_TESTS_TIMEOUT=1 SYNC_SUITE_STOP_GRACE=1 bash "$SCRIPT" send 2>&1)"
+dl_held=$(( $(dl_ms) - dl_t0 ))
+dbg "#464 send against a suite whose EXIT trap blocks, 1s grace, took ${dl_held}ms: $out_464b"
+dl_tc_up=0; dl_running "$DLP/trap.trapchild" 'sleep 40' && dl_tc_up=1
+dl_child_up=0; dl_running "$DLP/trap.child" 'bash -c' && dl_child_up=1
+dl_reap
+check "#464 the blocking trap really started its child (else the check below proves nothing)" \
+  "[ -s '$DLP/trap.trapchild' ]"
+check "#464 a suite whose EXIT trap blocks is still stopped within the bound (${dl_held}ms, bound 20000ms)" \
+  "[ '$dl_held' -le 20000 ]"
+check "#464 and neither the blocked child nor the trap's child is left running" \
+  "[ '$dl_tc_up' -eq 0 ] && [ '$dl_child_up' -eq 0 ]"
+check "#464 and that suite too is reported as stopped at its deadline" \
+  "line_has \"\$out_464b\" 'test-stuck\\.sh' 'SYNC_SEND_TESTS_TIMEOUT'"
+# A grace nobody can read is refused as a number, never taken as zero or as for ever (L50).
+check "#464 an unreadable grace falls back to the default and says so" \
+  "line_has \"\$(CLAUDE_HOME='$DLH' SYNC_REPO='$DLR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_SUITE_STOP_GRACE=soon bash '$SCRIPT' status 2>&1)\" 'SYNC_SUITE_STOP_GRACE' 'soon'"
+
+# The pull's runner is the other caller of the same stop, so the same fixture proves it there.
+DLPH="$WORK/deadline-pull-home"; mkdir -p "$DLPH/hooks"
+echo '{"hooks":{}}' > "$DLPH/settings.json"
+DLPR="$WORK/deadline-pull-repo"; mkdir -p "$DLPR/payload/hooks"
+printf '# marker\n' > "$DLPR/payload/hooks/dl-marker.sh"
+{ printf '#!/usr/bin/env bash\n'; dl_blocked_body pull "touch '$DLP/pull.trap-ran'"; } > "$DLPR/payload/hooks/run-all-tests.sh"
+dl_t0="$(dl_ms)"
+out_464c="$(CLAUDE_HOME="$DLPH" SYNC_REPO="$DLPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
+  SYNC_HOOK_TESTS_TIMEOUT=1 bash "$SCRIPT" pull 2>&1)"
+dl_held=$(( $(dl_ms) - dl_t0 ))
+dbg "#464 pull against a runner blocked in a command substitution, 1s deadline, took ${dl_held}ms: $out_464c"
+dl_child_up=0; dl_running "$DLP/pull.child" 'bash -c' && dl_child_up=1
+dl_gc_up=0; dl_running "$DLP/pull.grandchild" 'sleep 40' && dl_gc_up=1
+dl_reap
+check "#464 the pull's runner really started its child (else the checks below prove nothing)" \
+  "[ -s '$DLP/pull.child' ] && [ -s '$DLP/pull.grandchild' ]"
+check "#464 a pull returns within the bound when its runner is blocked past the deadline (${dl_held}ms, bound 20000ms)" \
+  "[ '$dl_held' -le 20000 ]"
+check "#464 and nothing the runner started is left running" \
+  "[ '$dl_child_up' -eq 0 ] && [ '$dl_gc_up' -eq 0 ]"
+check "#464 and the pull still reports the runner as stopped at its deadline" \
+  "line_has \"\$out_464c\" 'could NOT be completed here' 'still running after 1s'"
+SYNC_NO_SEND_TESTS=1
+
+
 section "== a burst of edits is one send, and a session can hold the watcher off (#262) =="
 # Two costs with one cause: the watcher commits and pushes on every fswatch event. It takes the
 # commit message out of a session's hands (twice on 2026-09-02 a change was written up with its
