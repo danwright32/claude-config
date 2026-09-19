@@ -75,20 +75,37 @@ now="$(date +%s)"
 # Added lines only. Matching the whole file would re-raise the same lesson on
 # every push that happens to touch a file where the pattern already lived, which
 # is the fastest way to teach someone to ignore this hook.
-base="$(ps_base_ref)"
-mb="$(ps_merge_base "$base")"
+# Where the range starts and what a pending commit takes both come from the shared helpers
+# (claude-config#457). This hook used the plain push range for a command that commits first, so it
+# re-read the last commit already on the remote, and read every tracked change for any add while
+# never reading an untracked file the add named.
+base="$(ps_base_ref || true)"
+commit_in_chain=0
+ps_commit_in_chain "$cmd" && commit_in_chain=1
+if [ "$commit_in_chain" -eq 1 ]; then
+  mb="$(ps_pending_base "$base")"
+else
+  mb="$(ps_merge_base "$base")"
+fi
 
 diff_opts=(--unified=0 --src-prefix=a/ --dst-prefix=b/ --diff-filter=ACMR)
 
 raw=""
+pending_widened=0
 [ -n "$mb" ] && raw="$(git diff "${diff_opts[@]}" "$mb" HEAD 2>/dev/null)"
-if ps_commit_in_chain "$cmd"; then
+if [ "$commit_in_chain" -eq 1 ]; then
   raw="$raw
 $(git diff "${diff_opts[@]}" --cached 2>/dev/null)"
-  if ps_add_in_chain "$cmd"; then
+  pending_list="$(ps_pending_files "$cmd")"
+  [ "${pending_list%%$'\n'*}" = "WIDENED" ] && pending_widened=1
+  while IFS= read -r f; do
+    [ -n "$f" ] && [ -f "$repo_root/$f" ] || continue
+    one="$(git -C "$repo_root" diff "${diff_opts[@]}" -- "$f" 2>/dev/null)"
+    # Nothing against the index means the file is untracked: read it whole, as a new file.
+    [ -n "$one" ] || one="$(git -C "$repo_root" diff --no-index "${diff_opts[@]}" /dev/null "$f" 2>/dev/null)"
     raw="$raw
-$(git diff "${diff_opts[@]}" 2>/dev/null)"
-  fi
+$one"
+  done < <(printf '%s\n' "$pending_list" | tail -n +2)
 fi
 [ -n "$(printf '%s' "$raw" | tr -d '[:space:]')" ] || exit 0
 
@@ -295,13 +312,19 @@ $body"
   done <<< "$ids"
 fi
 
+widened_line=""
+[ "$pending_widened" -eq 1 ] && widened_line="
+
+(The git add in this command could not be read, so every change in the working tree was
+scanned as part of the commit it is about to make.)"
+
 context="LESSONS CHECK (advisory, from a pattern scan of the lines this push ADDS)
 
 This is a partial pattern check, not a full audit: it can only see the patterns
 it was taught, and most of the recorded lessons are about design, which no
 pattern match can see. It never means the push is clean.
 
-What was spotted:${findings}
+What was spotted:${findings}${widened_line}
 
 The lessons that apply:
 ${lesson_text}
