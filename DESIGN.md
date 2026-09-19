@@ -843,6 +843,75 @@ after a response. The doc reference guard anchors every phrase to the issue numb
 past tense verb, because a first draft matching the phrase anywhere in the sentence named 50
 issues of which 44 were closed and about 10 were genuine pending claims.
 
+## What native path scoped rules do at user level
+
+Measured on 2026-09-19 against Claude Code 2.1.278, because #394 wanted instructions that load only
+when they are relevant, and the hook that would have delivered them is capped at 10,000 characters
+(`PJr=1e4` in the binary), past which the output is written to a file and replaced by a preview.
+Claude Code ships the same idea natively: a markdown file under `~/.claude/rules/` carrying a
+`paths:` frontmatter list loads only when Claude reads a file matching one of its globs. The open
+question was whether that holds for USER level rules rather than a project's own `.claude/rules/`,
+since the documentation puts user level rules and path scoped rules in separate subsections and
+never says the first is subject to the second. #474 answered it.
+
+The method was two instruments, so that neither the model's judgment nor the transcript alone had to
+carry a result. Throwaway rules went in `~/.claude/rules/`, each asking for a distinct token in the
+reply, and headless `claude -p` sessions read fixture files in a scratch directory. The
+`InstructionsLoaded` hook, configured through a `--settings` file so nothing permanent changed,
+fires with a `load_reason` of `path_glob_match` and names the rule file, which is a signal no model
+can refuse; the session transcript under `~/.claude/projects/` stores the injected text verbatim,
+which is how the delivered size was read. The rules were deleted and the directory removed after.
+
+**Path scoped rules are honoured at user level.** Reading the matching fixture logged
+`path_glob_match` on the canary in `~/.claude/rules/` and the reply carried its token. Reading only
+a non matching fixture in the same project logged nothing, so the negative control separates the
+rule firing from the rule merely existing.
+
+**Patterns resolve against the project root, anchored, and an absolute path matches nothing.** A
+pattern of `src/api/**/*.ts` fired on `src/api/service.ts` and did not fire on
+`deep/src/api/nested.ts`, so it is anchored at the root rather than matched as a suffix anywhere in
+the tree. A rule whose `paths:` entry was the fixture's full absolute path never fired at all, while
+a `**/*.ts` rule fired on that same file in the same session, which is the control that makes the
+absolute result a fact about the pattern and not about the file. The consequence for user level
+rules is the useful one: a rule in `~/.claude/rules/` cannot be scoped to one project by path,
+because the only patterns that work are repo relative and therefore mean the same shape of file in
+every project on the machine.
+
+**A rule reaches a subagent, triggered by the subagent's own read.** The parent was told to read
+nothing and to delegate; the subagent read the matching file, the hook logged `path_glob_match`, the
+subagent's own sidechain transcript under `<session>/subagents/` holds the injected reminder, and
+the subagent's report back carried both tokens. This is the one that was least predictable from the
+documentation, which describes what a subagent inherits at startup and says nothing about a rule
+armed by a read inside it.
+
+**A rule does not survive compaction, and re-arms on the next matching read.** After a manual
+`/compact` of a session that had loaded the rule, a turn that read no file logged no rule load and
+carried no token, even though the model still recalled from the summary which file it had read. The
+next turn in the same session re-read the matching file, and the rule loaded again. So the rule is
+attached to the read, not to the session, which is the behaviour wanted here: nothing has to be
+re-injected after a compaction, it comes back by itself the next time it is relevant.
+
+**There is no truncation at the hook's cap.** A canary rule of 169,464 bytes, 900 filler lines
+long, arrived whole on 2026-09-19: the transcript holds a single reminder of 169,533 characters,
+every filler line present, and the instruction written at the very end of the file intact and
+quoted back by the model. The 10,000 character cap that governs hook output does not apply to
+rules. The documented limits are different and much higher: a file over 4 MiB is skipped, and the
+guidance to stay under 200 lines is about adherence and context cost rather than a cut.
+
+Two cautions came out of it that the documentation does not mention. The rule arrives mid session as
+a `<system-reminder>` reading `Contents of <path>:` followed by the body with the frontmatter
+stripped, attached to the Read result; because it appears without warning and claims to be file
+contents, a rule asking for something arbitrary can be read as a prompt injection and refused, which
+happened in two of the runs and not in the others. A rule whose instructions are ordinary domain
+guidance does not invite that, but the arrival of a rule is reliable in a way that compliance with
+it is not. And the `InstructionsLoaded` hook is the only honest way to tell the two apart, because a
+reply missing the token cannot distinguish a rule that never loaded from one that loaded and was
+disregarded.
+
+The lessons sections are therefore a candidate for this, with the caveat above about scope: a rule
+keyed on `**/*.tsx` loads the UI lessons in every project, which is what is wanted, and a rule
+cannot be narrowed to one checkout.
+
 ## Things known to be wrong and left that way
 
 Markers are keyed on hostname, which is a mutable string. Renaming or reinstalling a Mac abandons
