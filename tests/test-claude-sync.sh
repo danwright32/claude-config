@@ -10303,10 +10303,19 @@ check "#73 and leaves a name the code really uses alone" \
 # set, and treating it as prose would report every one of them as invented.
 _repo_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
 _readme="$_repo_root/README.md"; _wf="$_repo_root/.github/workflows/tests.yml"
+# The hooks and their libraries count as code too: a SUITE_* knob the README documents can be
+# implemented in one of them rather than in the tool (SYNC_SUITE_PILE_REARM, #466, is), and reading
+# only the tool would report it as a name nobody implemented. Enumerated from the directories rather
+# than named one at a time, so the next such knob needs no edit here (L96).
+_code_files=("$SCRIPT_SELF" "$SCRIPT" "$_wf")
+for _cf in "$_repo_root"/payload/hooks/*.sh "$_repo_root"/payload/hooks/lib/*.sh; do
+  [ -f "$_cf" ] && _code_files+=("$_cf")
+done
 # Or the comparison silently has nothing on one side and passes by reading nothing (L98).
 check "#73 the files this scan reads are all present" \
   "[ -f '$_readme' ] && [ -f '$_wf' ] && [ -f \"\$SCRIPT_SELF\" ] && [ -f \"\$SCRIPT\" ]"
-set_missing="$(comm -23 <(mentioned_settings "$SCRIPT_SELF" "$_readme") <(used_settings "$SCRIPT_SELF" "$SCRIPT" "$_wf"))"
+check "#73 and the hooks it reads as code were found" "[ \"\${#_code_files[@]}\" -gt 20 ]"
+set_missing="$(comm -23 <(mentioned_settings "$SCRIPT_SELF" "$_readme") <(used_settings "${_code_files[@]}"))"
 if [ -n "$set_missing" ]; then
   echo "  (#73 settings named in a comment or the README but never referenced by code:)"
   printf '%s\n' "$set_missing" | sed 's/^/    /'
