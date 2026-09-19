@@ -197,9 +197,14 @@ want "the send names both over-cap lessons and neither of the others" "L902 L903
 # Side two: the shared predicate, run over the index the tool just generated. The index is one
 # file per section of LESSONS.md (claude-config#473), so the predicate reads their union, exactly
 # as the budget hook does.
+#
+# Read from the CONFIG tree rather than the payload (claude-config#483). This fixture is a lessons
+# file the send REFUSES, and a refused source takes every file rendered from it with it, so nothing
+# generated reaches the payload at all. The generator still writes them beside the lessons file
+# here, which is the index this fixture is about: the one rendered from those three entries.
 IDXFILES=()
-for _ix in "$FREPO"/payload/LESSONS-INDEX-*.md; do [ -f "$_ix" ] && IDXFILES+=("$_ix"); done
-check "the send generated an index to measure" "$([ "${#IDXFILES[@]}" -gt 0 ] && echo ok || echo "no index file in $FREPO/payload")"
+for _ix in "$FHOME"/LESSONS-INDEX-*.md; do [ -f "$_ix" ] && IDXFILES+=("$_ix"); done
+check "the send generated an index to measure" "$([ "${#IDXFILES[@]}" -gt 0 ] && echo ok || echo "no index file in $FHOME")"
 pred_nums="$(cat "${IDXFILES[@]}" | scan "$CAP" 0 | awk '/^OVER /{print $2}' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 want "the shared predicate names the same two" "$send_nums" "$pred_nums"
 
