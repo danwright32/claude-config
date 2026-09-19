@@ -54,6 +54,10 @@ run() { # run <file> <host>
 }
 
 mkdir -p "$TMPROOT/here/AppOne" "$TMPROOT/here/AppTwo"
+# Each fixture project carries its own instructions file, because the check asks two questions of
+# every entry and a test about the PATH must not fail for the other reason.
+: > "$TMPROOT/here/AppOne/CLAUDE.md"
+: > "$TMPROOT/here/AppTwo/CLAUDE.md"
 
 GOOD="$(mkfile good.md "## Projects
 
@@ -148,25 +152,118 @@ out_missing="$(PROJECT_LIST_FILE="$TMPROOT/not-here.md" PROJECT_LIST_HOST=MacOne
 # A tilde is how these paths are written, because a real home directory in a synced file is wrong
 # on every other Mac and is refused by check-home-paths.sh. So it has to be expanded.
 # ---------------------------------------------------------------------------
+# HOME is SET here rather than read, so the assertion is about the expansion and not about what the
+# real home directory happens to contain on the machine running this (L411, L504).
+mkdir -p "$TMPROOT/fakehome"
+: > "$TMPROOT/fakehome/CLAUDE.md"
 TILDE="$(mkfile tilde.md "## Projects
 
 On MacOne:
-- \`~\`: the home directory itself, which certainly exists
+- \`~\`: the home directory, which this test supplies
 
 ## Writing Style")"
-out_tilde="$(run "$TILDE" MacOne)"; code_tilde=$?
+out_tilde="$(HOME="$TMPROOT/fakehome" PROJECT_LIST_FILE="$TILDE" PROJECT_LIST_HOST=MacOne bash "$CHECK" 2>&1)"; code_tilde=$?
 [ "$code_tilde" -eq 0 ] \
   && check "a path written with a tilde is expanded, not taken literally" ok \
   || check "a path written with a tilde is expanded, not taken literally" "exit=$code_tilde out=$out_tilde"
 
+# And the failure it guards against, watched: with the tilde unexpanded there is no such directory,
+# which is the missing path outcome rather than this one.
+out_tilde_lit="$(HOME="$TMPROOT/nowhere-at-all" PROJECT_LIST_FILE="$TILDE" PROJECT_LIST_HOST=MacOne bash "$CHECK" 2>&1)"; code_tilde_lit=$?
+[ "$code_tilde_lit" -eq 1 ] \
+  && check "and a tilde pointing nowhere is reported as a missing path" ok \
+  || check "and a tilde pointing nowhere is reported as a missing path" "exit=$code_tilde_lit out=$out_tilde_lit"
+
 # ---------------------------------------------------------------------------
-# The real file, last, by which point the checker has been watched failing five ways. On this Mac
-# it names real projects; on the CI runner it names neither Mac and says so.
+# A listed project carrying no instructions file of its own. The Projects section exists so that a
+# session started in one of these repositories reads that repository's own context, and a project
+# with neither CLAUDE.md nor AGENTS.md gets whatever sits ABOVE it instead: on 2026-09-19 that was
+# a stray Vercel best practices file in the home directory, loaded as project instructions into a
+# Swift app and a bash tool. The path being present says nothing about that, so it is its own
+# question with its own exit code (L11).
+#
+# AGENTS.md counts, because the predicate has to be the one Claude Code itself uses when it decides
+# what to load, not a stricter one of our own (L144). NurseDex carries an AGENTS.md and no
+# CLAUDE.md, and it is correctly provided for.
+# ---------------------------------------------------------------------------
+mkdir -p "$TMPROOT/here/WithClaude" "$TMPROOT/here/WithAgents" "$TMPROOT/here/Bare"
+: > "$TMPROOT/here/WithClaude/CLAUDE.md"
+: > "$TMPROOT/here/WithAgents/AGENTS.md"
+
+NOFILE="$(mkfile nofile.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/WithClaude\`
+- \`$TMPROOT/here/Bare\`
+
+## Writing Style")"
+out_nofile="$(run "$NOFILE" MacOne)"; code_nofile=$?
+[ "$code_nofile" -eq 3 ] \
+  && check "a listed project with no instructions file of its own is reported" ok \
+  || check "a listed project with no instructions file of its own is reported" "exit=$code_nofile out=$out_nofile"
+grep -q 'Bare' <<< "$out_nofile" \
+  && check "and names the one that carries nothing" ok \
+  || check "and names the one that carries nothing" "out=$out_nofile"
+grep -q 'WithClaude' <<< "$out_nofile" \
+  && check "and does not accuse the one that carries a CLAUDE.md" "it named WithClaude too" \
+  || check "and does not accuse the one that carries a CLAUDE.md" ok
+
+AGENTSOK="$(mkfile agentsok.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/WithAgents\`
+
+## Writing Style")"
+out_agents="$(run "$AGENTSOK" MacOne)"; code_agents=$?
+[ "$code_agents" -eq 0 ] \
+  && check "an AGENTS.md is a project's own instructions too, which is what Claude Code loads" ok \
+  || check "an AGENTS.md is a project's own instructions too, which is what Claude Code loads" "exit=$code_agents out=$out_agents"
+
+# A path that is not there and a path with no instructions file, in one list. The missing path wins
+# and says so: there is no useful answer to "what does that directory contain" when the directory
+# is not there, and reporting the weaker fault would send somebody looking for the wrong thing.
+BOTH="$(mkfile both.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/Bare\`
+- \`$TMPROOT/here/Vanished\`
+
+## Writing Style")"
+out_both="$(run "$BOTH" MacOne)"; code_both=$?
+[ "$code_both" -eq 1 ] \
+  && check "a missing path outranks a missing instructions file" ok \
+  || check "a missing path outranks a missing instructions file" "exit=$code_both out=$out_both"
+grep -q 'Vanished' <<< "$out_both" \
+  && check "and the message is the one about the path" ok \
+  || check "and the message is the one about the path" "out=$out_both"
+
+[ "$code_nofile" != "$code_bad" ] \
+  && check "the two faults do not share an exit code" ok \
+  || check "the two faults do not share an exit code" "both exited $code_bad"
+
+# ---------------------------------------------------------------------------
+# The real file, last, by which point the checker has been watched failing several ways. On this
+# Mac it names real projects; on the CI runner it names neither Mac and says so.
+#
+# The PATH half is asserted here, because the list controls it: an entry naming somewhere that is
+# not on this machine is always wrong, and nothing outside this repository can make it right.
+#
+# The INSTRUCTIONS half deliberately is NOT asserted here, and that is not a softening. A checkout
+# standing on a branch created before its CLAUDE.md landed genuinely has no file on disk, which is
+# a true finding about that checkout and a false one about the project, and it is not fixable from
+# here: the branch belongs to whoever is working in it. A red here would be indistinguishable from
+# a real defect (L411) and would block every unrelated push in this repository for as long as it
+# lasted (L538). The live state is reported where it can be acted on instead, by
+# project-list-nudge.sh, once per session. What the checker DOES with a bare project is proven
+# above, on fixtures this suite controls.
 # ---------------------------------------------------------------------------
 out_real="$(bash "$CHECK" 2>&1)"; code_real=$?
-[ "$code_real" -eq 0 ] \
-  && check "the real project list is correct for this machine" ok \
-  || check "the real project list is correct for this machine" "exit=$code_real out=$out_real"
+[ "$code_real" -ne 1 ] \
+  && check "every project the real list names for this machine is on it" ok \
+  || check "every project the real list names for this machine is on it" "exit=$code_real out=$out_real"
+[ "$code_real" -ne 2 ] \
+  && check "and the real list could be read at all" ok \
+  || check "and the real list could be read at all" "exit=$code_real out=$out_real"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

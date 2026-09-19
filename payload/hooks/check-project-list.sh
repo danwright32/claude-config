@@ -14,14 +14,33 @@
 # of the repos here are the ones being worked on. So it stays hand written and is CHECKED instead,
 # which is the next best thing and costs one stat per entry.
 #
+# It also checks that each listed project carries its OWN instructions file (claude-config#469).
+# Claude Code looks for one starting at the project directory and walking UP, so a project without
+# one is not merely uninformed: it is handed whatever file happens to sit above it. On 2026-09-19
+# that was a Vercel best practices AGENTS.md in the home directory, loaded as "project
+# instructions" into a Swift app, an iOS app and a bash tool, none of which has ever touched
+# Vercel. The synced CLAUDE.md asserted that every listed project had its own file, and six of them
+# never had. A claim in a file that loads into every session is believed without re-checking
+# (L244), so it is checked here rather than asserted there.
+#
+# CLAUDE.md or AGENTS.md, because that is the predicate Claude Code itself uses when it decides
+# what to load, and a guard must ask the question the thing it guards asks (L144). NurseDex carries
+# an AGENTS.md and no CLAUDE.md and is correctly provided for.
+#
 # Run:  bash ~/.claude/hooks/check-project-list.sh
 #
-# Exit 0 = every path listed for this machine is there, or the list names no block for this
-#          machine at all, which is said out loud rather than passed over.
+# Exit 0 = every path listed for this machine is there and each one carries its own instructions
+#          file, or the list names no block for this machine at all, which is said out loud rather
+#          than passed over.
 # Exit 1 = at least one listed path is missing.
 # Exit 2 = the file, the section, or the machine blocks are absent, so nothing could be checked.
 #          Refusing rather than passing, because reading nothing and finding nothing wrong are
 #          indistinguishable otherwise (L98).
+# Exit 3 = every listed path is there, but at least one of those projects carries neither a
+#          CLAUDE.md nor an AGENTS.md of its own. A separate code because it is a separate fault
+#          with a separate remedy (L11): the entry is right and the repository is not provided for.
+#          A missing path outranks it, because what a directory contains is not a question worth
+#          answering when the directory is not there.
 #
 # Environment:
 #   PROJECT_LIST_FILE   read this file instead of the synced CLAUDE.md
@@ -102,6 +121,7 @@ case "$mine" in
 esac
 
 missing=""
+bare=""
 n=0
 while IFS= read -r p; do
   [ -n "$p" ] || continue
@@ -113,8 +133,13 @@ while IFS= read -r p; do
     '~/'*) full="$HOME/${p#\~/}" ;;
     *) full="$p" ;;
   esac
-  [ -e "$full" ] || missing="$missing  $p
+  if [ ! -e "$full" ]; then
+    missing="$missing  $p
 "
+  elif [ ! -f "$full/CLAUDE.md" ] && [ ! -f "$full/AGENTS.md" ]; then
+    bare="$bare  $p
+"
+  fi
 done <<EOF
 $mine
 EOF
@@ -127,5 +152,13 @@ case "$missing" in
     exit 1 ;;
 esac
 
-echo "check-project-list: $n project(s) listed under $HOST, all present."
+case "$bare" in
+  *[![:space:]]*)
+    echo "check-project-list: these projects are listed under $HOST but carry neither a CLAUDE.md nor an AGENTS.md of their own, so a session started in one of them is handed whatever instructions sit ABOVE it instead:" >&2
+    printf '%s' "$bare" >&2
+    echo "Claude Code looks for a project's instructions by walking UP from the directory it starts in, so the fallback is silent and can be another project's file entirely. Write one at the root of each, or take the entry out of the list." >&2
+    exit 3 ;;
+esac
+
+echo "check-project-list: $n project(s) listed under $HOST, all present, each carrying its own instructions file."
 exit 0

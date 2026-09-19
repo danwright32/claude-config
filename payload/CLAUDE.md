@@ -157,11 +157,13 @@ Global hooks and skills in `~/.claude` fire in every project:
 
 ## Projects
 
-Active projects, each with its own CLAUDE.md holding the stack details. Grouped by which Mac holds
-the checkout, because this file is shared between both and a path that is right on one is wrong on
-the other. `hooks/check-project-list.sh` reads this section and fails when a path listed under the
-machine it is running on is not there, so a project that moves is reported rather than found by
-searching. It checks only the block for the machine it runs on, so each Mac confirms its own half.
+Active projects, each carrying its own CLAUDE.md at its root, or an AGENTS.md where that is what
+the repository already uses, so a session started there reads that project's own context instead of
+whatever instructions happen to sit above it. Grouped by which Mac holds the checkout, because this
+file is shared between both and a path that is right on one is wrong on the other.
+`hooks/check-project-list.sh` reads this section and fails on both halves of that: when a path
+listed under the machine it is running on is not there, and when a listed project carries neither
+file. It checks only the block for the machine it runs on, so each Mac confirms its own half.
 
 Paths use a tilde, never a real home directory: the sync rewrites this file for every Mac and
 `check-home-paths.sh` refuses an absolute one.
