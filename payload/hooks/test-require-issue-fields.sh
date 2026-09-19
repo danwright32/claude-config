@@ -268,7 +268,13 @@ if [ -f "$HOME/.claude/settings.json" ]; then
 hooks_registered="$(python3 -c "
 import json
 d = json.load(open('$HOME/.claude/settings.json'))
-n = [h['command'] for e in d['hooks']['PreToolUse'] for h in e['hooks'] if 'issue' in h['command']]
+import os, re
+# The issue gate and the three it replaced, by FILE NAME. A substring like 'issue' also matches
+# every unrelated hook that merely has the word in its name (check-doc-issue-refs.sh arrived with
+# #446 and turned this red on every Mac with a config installed, L178).
+gate = re.compile(r'^require-(issue-fields|(milestone|priority|category)-on-issue)\\.sh$')
+n = [h['command'] for e in d['hooks']['PreToolUse'] for h in e['hooks']
+     if gate.match(os.path.basename(h['command'].split()[-1].strip('\"\\'')))]
 print(len(n)); print(n[0] if n else '')
 " 2>/dev/null)"
 if [[ "$(printf '%s' "$hooks_registered" | awk 'NR <= 1')" = "1" ]]; then pass=$((pass + 1)); else
