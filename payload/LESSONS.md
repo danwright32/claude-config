@@ -3074,6 +3074,20 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L490. A guard that parses its input through an external interpreter (jq, python, awk) must
+  assert that interpreter is present before parsing, and refuse by name when it is not.** An absent
+  parser hands back EMPTY input, and every predicate over empty input reads as nothing to refuse, so
+  the guard allows everything and says nothing at all.
+  SHORT: A gate parsing input through an external interpreter must refuse by name when it is missing: an empty parse reads as nothing to refuse.
+  (claude-config#480, 2026-09-19. Three gates in the config had it. block-red-merge.sh read its
+  payload with jq one line ABOVE the check that gh exists, so with no jq the command string was
+  empty, the is-this-a-merge predicate answered false, and the gate exited 0 on every merge.
+  check-add-scope.sh and payload-write-gate.sh did the same with python3: every push passed the add
+  scope gate, and every write under payload/ was allowed, in both cases with no message. The sibling
+  hook require-issue-fields.sh shows the shape that works: it reads the interpreter's exit code and
+  prints GATE DID NOT RUN with the stderr, so a missing reader is named. Found while fixing #475,
+  which is the same class with the opposite outcome, a misleading refusal rather than a silent pass)
+
 - **L710. A gap that the NEXT occurrence of the same event repairs is invisible on every occurrence
   but the last, so it reads as working whenever anybody looks.** Name the final occurrence as its own
   case and check it directly, because the population that suffers the defect is exactly the one nobody
