@@ -240,6 +240,90 @@ ps__commit_stages_all() {
   grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a' <<< "$1"
 }
 
+# What the git adds in a command stage, read before any of it runs. The one parser behind
+# ps_add_scope and ps_add_takes_all (claude-config#442, #457); no hook keeps its own.
+#
+# Each shell segment is tokenised on its own, split where ps_is_git_push splits them. The whole
+# command used to be tokenised at once, so the commonest commit there is, a heredoc message whose
+# body holds an apostrophe, failed the read and every gate widened to the whole working tree. Now a
+# segment that cannot be tokenised only matters when it is itself a git add, and a git add counts
+# only in COMMAND position (after a subshell or brace opener and any inline variables), so an add
+# named inside an echo or a message is not one.
+#
+# $2 is the question:
+#   scope  prints ALL, TRACKED, PATHS then the paths one per line, UNKNOWN (an add was seen but
+#          could not be read, or it names nothing), or NONE (no add at all)
+#   takes  prints yes when any add takes more than the paths it names (ALL or TRACKED), else no
+ps__read_adds() {   # $1 = command  $2 = scope | takes
+  PS_CMD="$1" PS_MODE="${2:-scope}" python3 -c '
+import os, re, shlex
+cmd = os.environ.get("PS_CMD", "")
+mode = os.environ.get("PS_MODE", "scope")
+EVERYTHING = {"-A", "--all", "--no-ignore-removal", ".", "./", ":/", "*"}
+TRACKED_ONLY = {"-u", "--update"}
+ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+REDIRECT = re.compile(r"\d*(>>?|<<?)&?")
+saw_add, takes_all, tracked, unreadable, paths = False, False, False, False, []
+for seg in re.split(r"&&|\|\||;|\||\n", cmd):
+    try:
+        toks, readable = shlex.split(seg, posix=True), True
+    except ValueError:
+        toks, readable = seg.split(), False
+    i = 0
+    while i < len(toks):
+        t = toks[i].lstrip("({")
+        if t == "" or ASSIGN.match(t):
+            i += 1
+            continue
+        toks[i] = t
+        break
+    if i < len(toks) and toks[i].split("/")[-1] == "rtk":
+        i += 1
+    if i >= len(toks) or toks[i].split("/")[-1] != "git":
+        continue
+    j = i + 1
+    while j < len(toks) and toks[j].startswith("-"):
+        j += 2 if toks[j] in ("-C", "-c") else 1
+    if j >= len(toks) or toks[j] != "add":
+        continue
+    saw_add = True
+    if not readable:
+        unreadable = True
+    skip = False
+    for a in toks[j + 1:]:
+        if skip:
+            skip = False
+            continue
+        a = a.rstrip(")}")
+        m = REDIRECT.match(a)
+        if m:
+            skip = m.end() == len(a)
+            continue
+        if a in EVERYTHING:
+            takes_all = True
+        elif a in TRACKED_ONLY:
+            tracked = True
+        elif a and not a.startswith("-") and readable:
+            paths.append(a)
+if mode == "takes":
+    print("yes" if (takes_all or tracked) else "no")
+elif not saw_add:
+    print("NONE")
+elif takes_all:
+    print("ALL")
+elif unreadable:
+    print("UNKNOWN")
+elif tracked:
+    print("TRACKED")
+elif paths:
+    print("PATHS")
+    for p in paths:
+        print(p)
+else:
+    print("UNKNOWN")
+' 2>/dev/null
+}
+
 # What the commit in a chained `… git commit … && git push` will take BEYOND what is already in the
 # index, read from the command before any of it runs (claude-config#442). This lived as inline
 # python in check-style-guide.sh (written for claude-config#350) and again in a second push hook
@@ -254,66 +338,87 @@ ps__commit_stages_all() {
 #            because a named path may be untracked and -a alone never takes one.
 #   ALL      `git add -A`, `.`, `:/` or `*`: every change, untracked files included
 #   PATHS    the paths the add names, exactly as written, for the caller to resolve
-#   UNKNOWN  an add this cannot account for (it names nothing, or the command cannot be tokenised)
+#   UNKNOWN  an add this cannot account for (it names nothing, or it cannot be tokenised)
 # UNKNOWN is an answer, not a failure: the caller must widen to the whole working tree AND say so,
 # because a reading quietly narrowed to nothing reports a clean push it never measured (L98).
 #
 # Only meaningful for a command that commits; a caller asks ps_commit_in_chain first.
 ps_add_scope() {   # $1 = command
-  local out
+  local out=""
+  # The pattern is a cheap filter only: the parser decides, so an add named inside a message
+  # (`git commit -m "fix git add"`) is not taken for one.
   if ps__git_add_in_chain "$1"; then
-    out="$(PS_CMD="$1" python3 -c '
-import os, shlex
-try:
-    toks = shlex.split(os.environ.get("PS_CMD", ""), posix=True)
-except ValueError:
-    print("UNKNOWN"); raise SystemExit
-SEP = {"&&", "||", ";", "|", "&"}
-EVERYTHING = {"-A", "--all", "--no-ignore-removal"}
-TRACKED_ONLY = {"-u", "--update"}
-scope, paths, i = "PATHS", [], 0
-while i < len(toks):
-    if toks[i] == "rtk" or toks[i].split("/")[-1] != "git":
-        i += 1
-        continue
-    j = i + 1
-    while j < len(toks) and toks[j].startswith("-"):
-        j += 2 if toks[j] in ("-C", "-c") else 1
-    if j >= len(toks) or toks[j] != "add":
-        i = j + 1
-        continue
-    k = j + 1
-    while k < len(toks) and toks[k] not in SEP:
-        a = toks[k]
-        if a in EVERYTHING or a in (".", "./", ":/", "*"):
-            scope = "ALL"
-        elif a in TRACKED_ONLY:
-            if scope == "PATHS":
-                scope = "TRACKED"
-        elif not a.startswith("-"):
-            paths.append(a)
-        k += 1
-    i = k
-if scope == "PATHS" and not paths:
-    scope = "UNKNOWN"
-print(scope)
-if scope == "PATHS":
-    for p in paths:
-        print(p)
-' 2>/dev/null)"
+    out="$(ps__read_adds "$1" scope)"
     # No answer at all (python missing or dead) is the same as an add nobody can account for.
     [ -n "$out" ] || out="UNKNOWN"
+  fi
+  case "$out" in
+    ''|NONE)
+      if ps__commit_stages_all "$1"; then printf 'TRACKED\n'; else printf 'INDEX\n'; fi
+      return 0 ;;
     # An add naming paths beside a `commit -a`: the commit takes every tracked change too, so
     # reporting the paths alone left a tracked edit nobody named unread (claude-config#457).
-    case "$out" in
-      PATHS*) ps__commit_stages_all "$1" && out="TRACKED${out#PATHS}" ;;
-    esac
-    printf '%s\n' "$out"
-  elif ps__commit_stages_all "$1"; then
-    printf 'TRACKED\n'
-  else
-    printf 'INDEX\n'
-  fi
+    PATHS*) ps__commit_stages_all "$1" && out="TRACKED${out#PATHS}" ;;
+  esac
+  printf '%s\n' "$out"
+}
+
+# Does a git add in this command take more than the paths it names: `-A`, `--all`, `.`, `:/`, `*`
+# or `-u` (claude-config#457 item 6)? check-add-scope.sh answered this with a detector of its own.
+# It is a different question from ps_add_scope's, because a `commit -a` is not an add and an add
+# that names paths is scoped whatever the commit does, so it is its own entry point over the same
+# parser rather than a second parser (L342). Returns 0 for yes.
+ps_add_takes_all() {   # $1 = command
+  ps__git_add_in_chain "$1" || return 1
+  [ "$(ps__read_adds "$1" takes)" = "yes" ]
+}
+
+# The working tree files the commit in this command takes BEYOND the index, from ps_add_scope, as
+# one list (claude-config#457). Three hooks each turned the scope into files their own way, and one
+# read the whole working tree for every commit then push, which is how another session's untracked
+# files came to be judged as this push's work (claude-config#350).
+#
+# Run inside the repository. The first line is a verdict:
+#   EXACT    the list is what the commit will take
+#   WIDENED  the add could not be accounted for (UNKNOWN, or a named path that is not there), so
+#            the whole working tree was listed instead. The caller must say so (L98, L11).
+# Then one path per line, relative to the repository root wherever the command runs: tracked files
+# changed against the index (a deletion included, so a caller checks the file exists) and untracked
+# files. Nothing for a command with no commit's worth of extra work (INDEX).
+ps_pending_files() {   # $1 = command
+  local scope kind pth verdict=EXACT
+  scope="$(ps_add_scope "$1")"
+  kind="${scope%%$'\n'*}"
+  case "$kind" in
+    UNKNOWN) verdict=WIDENED ;;
+    PATHS)
+      while IFS= read -r pth; do
+        [ -n "$pth" ] || continue
+        [ -e "$pth" ] || { verdict=WIDENED; break; }
+      done < <(printf '%s\n' "$scope" | tail -n +2) ;;
+  esac
+  printf '%s\n' "$verdict"
+  {
+    if [ "$verdict" = WIDENED ] || [ "$kind" = ALL ]; then
+      git diff --name-only 2>/dev/null
+      git ls-files --others --exclude-standard --full-name -- ':/' 2>/dev/null
+    else
+      case "$kind" in
+        TRACKED)
+          git diff --name-only 2>/dev/null
+          while IFS= read -r pth; do
+            [ -n "$pth" ] || continue
+            git ls-files --others --exclude-standard --full-name -- "$pth" 2>/dev/null
+          done < <(printf '%s\n' "$scope" | tail -n +2) ;;
+        PATHS)
+          while IFS= read -r pth; do
+            [ -n "$pth" ] || continue
+            git diff --name-only -- "$pth" 2>/dev/null
+            git ls-files --others --exclude-standard --full-name -- "$pth" 2>/dev/null
+          done < <(printf '%s\n' "$scope" | tail -n +2) ;;
+      esac
+    fi
+  } | awk 'NF && !seen[$0]++'
 }
 
 # ---- where a push's range starts: the contract (claude-config#441) ----

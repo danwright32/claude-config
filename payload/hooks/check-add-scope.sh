@@ -47,32 +47,12 @@ cwd="${parsed#*$'\x1f'}"
 
 ps_has_override "$cmd" SKIP_ADD_SCOPE_CHECK && exit 0
 
-# Does any SEGMENT run an unscoped `git add`? Judged on the leading tokens of each segment, never
-# as a substring of the whole command, so an echo or a commit message that merely mentions one
-# cannot fire this (the discipline every gate here follows).
-unscoped=0
-while IFS= read -r seg; do
-  stripped="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//')"
-  case "$stripped" in
-    git\ *|rtk\ git\ *|*/git\ *) ;;
-    *) continue ;;
-  esac
-  # `git [-C dir] [-c k=v] add …`
-  # Counted rather than piped into `grep -q`: under pipefail a short circuiting consumer kills its
-  # producer and the pipeline reports a failure that never happened (L183).
-  matched="$(printf '%s' "$stripped" | grep -cE '(^|/)(rtk[[:space:]]+)?git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' 2>/dev/null)"
-  case "$matched" in ''|0) continue ;; esac
-  args="${stripped#*add}"
-  # A pathspec of `.`, `-A`, `--all`, `-u` with no path, or `:/` takes whatever is in the tree.
-  # `--` before a path list is the scoped form and is what this asks for.
-  case " $args " in
-    *" -A "*|*" --all "*|*" . "*|*" :/ "*|*" -u "*) unscoped=1; break ;;
-  esac
-  # `git add` with no pathspec at all stages nothing, so it is not the shape being guarded.
-done <<SEGMENTS
-$(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;)/\n/g')
-SEGMENTS
-[ "$unscoped" -eq 1 ] || exit 0
+# Does any git add in the command take more than the paths it names (`-A`, `--all`, `.`, `:/`, `*`
+# or `-u`)? Asked of the shared parser, which reads each segment's leading tokens, so an echo or a
+# commit message that merely mentions one cannot fire this. This hook kept a detector of its own
+# beside that parser, and the copy had already drifted: it never saw an add inside a subshell
+# (claude-config#457, L613). A `git add` naming nothing stages nothing, so it is not this shape.
+ps_add_takes_all "$cmd" || exit 0
 
 repo="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo" ] || exit 0

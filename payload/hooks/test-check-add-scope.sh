@@ -119,6 +119,17 @@ run "git add --all"
 refused "and so is --all"
 run "git add -u"
 refused "and so is -u, which stages every tracked change"
+# The shapes the shared parser has to keep reading once this hook asks it rather than its own
+# detector (claude-config#457 item 6): a heredoc commit whose body carries an apostrophe, and an
+# add inside a subshell.
+run "git add -A && git commit -q -F - <<'MSG'
+it isn't balanced
+MSG"
+refused "an unscoped add before a heredoc with an apostrophe is still refused"
+run "(cd $REPO && git add .)"
+refused "an unscoped add inside a subshell is refused"
+run "git add :/"
+refused "and so is :/, which is the whole tree from anywhere"
 
 # The scoped form is the whole point: it must go through even with a foreign change present.
 run "git add mine.txt"

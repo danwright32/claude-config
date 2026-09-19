@@ -520,6 +520,90 @@ want_scope "git add -u sub && git commit -qm x && git push" "TRACKED" \
 want_scope "git add -A && git commit -qam x && git push" "ALL" \
   "#457 control: an add taking everything stays ALL beside commit -a"
 
+# The commonest commit there is: a heredoc message whose body has an apostrophe. The whole command
+# was tokenised at once, the unbalanced quote failed it, and the add's scope came back UNKNOWN, so
+# every gate widened to the whole working tree on exactly this shape (claude-config#457). Each
+# segment is tokenised on its own now, and a body line that is not a git add is not read as one.
+want_scope "git add a.ts && git commit -q -F - <<'MSG'; it isn't balanced; MSG; git push" "PATHS|a.ts" \
+  "#457 an add before a heredoc body with an apostrophe still names its path"
+want_scope "git add \"a b.ts\" && git commit -qm x && git push" "PATHS|a b.ts" \
+  "#457 a quoted path with a space is still one path"
+want_scope "echo git add -A && git commit -qm x && git push" "INDEX" \
+  "#457 an add named only as an argument is not an add"
+want_scope "git commit -qm \"fix git add handling\" && git push" "INDEX" \
+  "#457 an add named inside a commit message is not an add"
+
+# ---------------------------------------------------------------------------
+# ps_add_takes_all: does a git add in this command take more than the paths it names (claude-config
+# #457 item 6)? check-add-scope.sh answered it with its own detector beside the shared parser; it is
+# a different question from ps_add_scope's (a commit -a is not an add), so it is its own entry point
+# over the same parser rather than a second parser (L342).
+# ---------------------------------------------------------------------------
+want_takes() { # want_takes <command> <yes|no> <description>
+  local got=no
+  ps_add_takes_all "$1" && got=yes
+  [ "$got" = "$2" ] && check "$3" ok || check "$3" "answered $got"
+}
+want_takes "git add -A" yes "#457 git add -A takes everything"
+want_takes "git add ." yes "#457 git add . takes everything"
+want_takes "git add --all" yes "#457 git add --all takes everything"
+want_takes "git add -u" yes "#457 git add -u takes every tracked change"
+want_takes "git add :/" yes "#457 git add :/ takes everything"
+want_takes "FOO=1 git add ." yes "#457 an inline variable before the add is skipped"
+want_takes "(cd /tmp/x && git add -A)" yes "#457 an add inside a subshell is read"
+want_takes "rtk git -C /tmp/x add -A" yes "#457 an rtk rewritten add with -C is read"
+want_takes "git add -A && git commit -q -F - <<'MSG'; it isn't balanced; MSG" yes \
+  "#457 an add taking everything before a heredoc with an apostrophe is still seen"
+want_takes "git add mine.txt" no "#457 an add naming a file is scoped"
+want_takes "git add -- mine.txt other.txt" no "#457 an add naming files after -- is scoped"
+want_takes "git add --help" no "#457 an add naming nothing stages nothing"
+want_takes "echo 'remember to git add -A next time'" no "#457 an add inside an echo is not an add"
+want_takes "git commit -m 'git add -A was wrong here'" no "#457 an add inside a message is not an add"
+want_takes "git commit -qam x" no "#457 a commit -a is not an add"
+want_takes "git status" no "#457 an unrelated command is not an add"
+
+# ---------------------------------------------------------------------------
+# ps_pending_files: the working tree files a commit in this command takes BEYOND the index, as one
+# list the hooks read rather than each turning ps_add_scope into files its own way (claude-config
+# #457 items 1, 3, 5). First line EXACT, or WIDENED when the add could not be accounted for and the
+# whole working tree was listed instead, which the caller must say (L98).
+# ---------------------------------------------------------------------------
+PF="$MB/pf"
+git init -q -b main "$PF" 2>/dev/null
+( cd "$PF" && printf 'a\n' > tracked.txt && mkdir -p sub && printf 's\n' > sub/t.txt \
+    && git add tracked.txt sub/t.txt && gc commit -qm seed \
+    && printf 'changed\n' >> tracked.txt && printf 'new\n' > named.txt && printf 'stranger\n' > stranger.txt \
+    && printf 'n\n' > sub/new.txt ) >/dev/null 2>&1
+want_pending() { # want_pending <command> <expected, sorted, | joined> <description>
+  local got
+  got="$( cd "$PF" && ps_pending_files "$1" | { IFS= read -r v; printf '%s\n' "$v"; sort; } | tr '\n' '|' | sed 's/|$//' )"
+  [ "$got" = "$2" ] && check "$3" ok || check "$3" "got [$got]"
+}
+want_pending "git commit -qm x && git push" "EXACT" \
+  "#457 a bare commit takes nothing beyond the index"
+want_pending "git add named.txt && git commit -qm x && git push" "EXACT|named.txt" \
+  "#457 an add naming an untracked file takes that file only"
+want_pending "git add tracked.txt && git commit -qm x && git push" "EXACT|tracked.txt" \
+  "#457 an add naming a tracked file takes that file only"
+want_pending "git add sub && git commit -qm x && git push" "EXACT|sub/new.txt" \
+  "#457 an add naming a directory takes what changed under it"
+want_pending "git commit -qam x && git push" "EXACT|tracked.txt" \
+  "#457 a commit -a takes tracked changes and no untracked file"
+want_pending "git add named.txt && git commit -qam x && git push" "EXACT|named.txt|tracked.txt" \
+  "#457 an add beside commit -a takes the named file and the tracked changes"
+want_pending "git add -A && git commit -qm x && git push" "EXACT|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#457 git add -A takes every change"
+want_pending "git add \"named.txt && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#457 an add nobody can read widens to the whole tree and says so"
+want_pending "git add gone.txt && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#457 an add naming a path that is not there widens and says so"
+# Paths come back relative to the repository root wherever the command runs, so a hook that went
+# into a subdirectory reads the same list.
+got="$( cd "$PF/sub" && ps_pending_files "git add new.txt && git commit -qm x" | tr '\n' '|' | sed 's/|$//' )"
+[ "$got" = "EXACT|sub/new.txt" ] \
+  && check "#457 a pending file named from a subdirectory comes back relative to the root" ok \
+  || check "#457 a pending file named from a subdirectory comes back relative to the root" "got [$got]"
+
 # And no hook keeps its own copy of the parser. Derived from the hooks on disk, not from a list of
 # the two that had one, so a third copy is caught the day it is written (L96, L613).
 # The pattern is written with its brackets escaped, so the line holding it does not match itself
@@ -528,6 +612,30 @@ own_add_parsers="$(grep -l 'toks\[j\] != "add"' "$DIR"/*.sh 2>/dev/null | tr '\n
 case "$own_add_parsers" in
   *[![:space:]]*) check "#442 no hook keeps its own git add scope parser" "still in: $own_add_parsers" ;;
   *) check "#442 no hook keeps its own git add scope parser" ok ;;
+esac
+# The other shape a private add reader takes is a regular expression for the add itself (the test
+# gate's sed parser, check-add-scope.sh's detector). The needle is assembled so this line does not
+# match itself (L245); the library is the one file allowed to hold it.
+add_re=':space:]]'; add_re="${add_re}+add"
+own_add_res="$(grep -lF "$add_re" "$DIR"/*.sh 2>/dev/null | grep -v '/test-' | tr '\n' ' ')"
+case "$own_add_res" in
+  *[![:space:]]*) check "#457 no hook keeps its own git add pattern" "still in: $own_add_res" ;;
+  *) check "#457 no hook keeps its own git add pattern" ok ;;
+esac
+
+# No hook works out a push's range itself (claude-config#457): a merge base computed outside the
+# library misses every correction made inside it, the rebase one (#456) included (L613).
+mb_cmd='git merge'; mb_cmd="${mb_cmd}-base"
+own_mbs="$(grep -lE "^[^#]*${mb_cmd}" "$DIR"/*.sh 2>/dev/null | grep -v '/test-' | tr '\n' ' ')"
+case "$own_mbs" in
+  *[![:space:]]*) check "#457 no hook computes its own merge base" "still in: $own_mbs" ;;
+  *) check "#457 no hook computes its own merge base" ok ;;
+esac
+# And none asks for a range with no base at all, which always lands on HEAD~1 (item 2).
+no_base="$(grep -lE '^[^#]*ps_(merge|pending)_base[[:space:]]*\)' "$DIR"/*.sh 2>/dev/null | grep -v '/test-' | tr '\n' ' ')"
+case "$no_base" in
+  *[![:space:]]*) check "#457 no hook asks for a range without a base" "still in: $no_base" ;;
+  *) check "#457 no hook asks for a range without a base" ok ;;
 esac
 
 rm -rf "$RD" "$MB"
