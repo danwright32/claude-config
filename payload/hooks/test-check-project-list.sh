@@ -242,6 +242,111 @@ grep -q 'Vanished' <<< "$out_both" \
   || check "the two faults do not share an exit code" "both exited $code_bad"
 
 # ---------------------------------------------------------------------------
+# A checkout with no instructions file in its working tree, whose repository's DEFAULT branch
+# carries one. This is the common case on a Mac where sessions work in feature branches, and it is
+# not the same fault as a project that has never had a file: the remedy is to merge, not to write
+# one. Sending the reader to write a file that already exists is a notice naming an action that
+# does not change the state they are stuck in (L111), and this one speaks in every session until it
+# is cleared, which is exactly the kind that gets skimmed.
+#
+# Measured on 2026-09-19: PostRoll was reported bare while its CLAUDE.md sat on origin/main,
+# because the checkout was standing on another session own branch.
+#
+# Both routes to the default branch are exercised, because the real case uses the first and a
+# fixture with no remote uses the second: origin/HEAD when the repository has a remote, and a local
+# main or master when it does not.
+# ---------------------------------------------------------------------------
+git_fixture() { # git_fixture <dir> <file-on-default-branch>  -> a repo whose checkout lacks it
+  local d="$TMPROOT/here/$1" f="$2"
+  mkdir -p "$d"
+  git -C "$d" init -q -b main >/dev/null 2>&1 || return 1
+  git -C "$d" config user.email tests@example.invalid
+  git -C "$d" config user.name "project list tests"
+  printf '# instructions\n' > "$d/$f"
+  git -C "$d" add "$f" >/dev/null 2>&1
+  git -C "$d" commit -qm "add $f" >/dev/null 2>&1 || return 1
+  git -C "$d" checkout -q -b older-work >/dev/null 2>&1 || return 1
+  git -C "$d" rm -q "$f" >/dev/null 2>&1 || return 1
+  git -C "$d" commit -qm "a branch that predates $f" >/dev/null 2>&1 || return 1
+  [ -f "$d/$f" ] && return 1
+  return 0
+}
+
+git_fixture OnMainOnly CLAUDE.md \
+  && check "the fixture for a branch predating its instructions file could be built" ok \
+  || check "the fixture for a branch predating its instructions file could be built" "git refused"
+
+PREDATES="$(mkfile predates.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/OnMainOnly\`
+
+## Writing Style")"
+out_pre="$(run "$PREDATES" MacOne)"; code_pre=$?
+[ "$code_pre" -eq 5 ] \
+  && check "a checkout whose default branch has the file is its own outcome" ok \
+  || check "a checkout whose default branch has the file is its own outcome" "exit=$code_pre out=$out_pre"
+[ "$code_pre" != "$code_nofile" ] \
+  && check "and does not share an exit code with a project that has no file anywhere" ok \
+  || check "and does not share an exit code with a project that has no file anywhere" "both exited $code_pre"
+grep -q 'main' <<< "$out_pre" \
+  && check "and names the branch the file is on" ok \
+  || check "and names the branch the file is on" "out=$out_pre"
+grep -q 'older-work' <<< "$out_pre" \
+  && check "and names the branch the checkout is standing on" ok \
+  || check "and names the branch the checkout is standing on" "out=$out_pre"
+grep -qi 'write one at the root' <<< "$out_pre" \
+  && check "and does not send the reader to write a file that already exists" "it told them to write one" \
+  || check "and does not send the reader to write a file that already exists" ok
+
+# The same question asked through a remote, which is the route the real case takes: PostRoll has an
+# origin and its default branch is named by refs/remotes/origin/HEAD. The ref is made locally
+# rather than by cloning, so the fixture costs no network and no second copy of the tree (L299).
+git_fixture ViaOrigin AGENTS.md \
+  && check "the fixture for a default branch reached through origin could be built" ok \
+  || check "the fixture for a default branch reached through origin could be built" "git refused"
+git -C "$TMPROOT/here/ViaOrigin" update-ref refs/remotes/origin/main refs/heads/main 2>/dev/null
+git -C "$TMPROOT/here/ViaOrigin" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main 2>/dev/null
+git -C "$TMPROOT/here/ViaOrigin" branch -q -D main 2>/dev/null
+
+VIAORIGIN="$(mkfile viaorigin.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/ViaOrigin\`
+
+## Writing Style")"
+out_origin="$(run "$VIAORIGIN" MacOne)"; code_origin=$?
+[ "$code_origin" -eq 5 ] \
+  && check "the default branch is found through origin/HEAD when there is a remote" ok \
+  || check "the default branch is found through origin/HEAD when there is a remote" "exit=$code_origin out=$out_origin"
+grep -q 'AGENTS.md' <<< "$out_origin" \
+  && check "and an AGENTS.md on the default branch counts the same as a CLAUDE.md" ok \
+  || check "and an AGENTS.md on the default branch counts the same as a CLAUDE.md" "out=$out_origin"
+
+# The control that keeps the new branch from swallowing the old one: a git repository whose default
+# branch has no instructions file either is still the plain bare case, and must still say so. A
+# check that answered "it is on another branch" for every git repository would be satisfied by
+# nothing (L159).
+mkdir -p "$TMPROOT/here/GitButBare"
+git -C "$TMPROOT/here/GitButBare" init -q -b main >/dev/null 2>&1
+git -C "$TMPROOT/here/GitButBare" config user.email tests@example.invalid
+git -C "$TMPROOT/here/GitButBare" config user.name "project list tests"
+printf 'nothing to do with instructions\n' > "$TMPROOT/here/GitButBare/README.md"
+git -C "$TMPROOT/here/GitButBare" add README.md >/dev/null 2>&1
+git -C "$TMPROOT/here/GitButBare" commit -qm "a repository with no instructions file at all" >/dev/null 2>&1
+
+GITBARE="$(mkfile gitbare.md "## Projects
+
+On MacOne:
+- \`$TMPROOT/here/GitButBare\`
+
+## Writing Style")"
+out_gitbare="$(run "$GITBARE" MacOne)"; code_gitbare=$?
+[ "$code_gitbare" -eq 3 ] \
+  && check "a git repository whose default branch has no file either is still the bare case" ok \
+  || check "a git repository whose default branch has no file either is still the bare case" "exit=$code_gitbare out=$out_gitbare"
+
+# ---------------------------------------------------------------------------
 # The real file, last, by which point the checker has been watched failing several ways. On this
 # Mac it names real projects; on the CI runner it names neither Mac and says so.
 #

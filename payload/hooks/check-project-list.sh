@@ -37,10 +37,16 @@
 #          Refusing rather than passing, because reading nothing and finding nothing wrong are
 #          indistinguishable otherwise (L98).
 # Exit 3 = every listed path is there, but at least one of those projects carries neither a
-#          CLAUDE.md nor an AGENTS.md of its own. A separate code because it is a separate fault
-#          with a separate remedy (L11): the entry is right and the repository is not provided for.
-#          A missing path outranks it, because what a directory contains is not a question worth
-#          answering when the directory is not there.
+#          CLAUDE.md nor an AGENTS.md of its own, on this branch or on the default one. A separate
+#          code because it is a separate fault with a separate remedy (L11): the entry is right and
+#          the repository is not provided for. A missing path outranks it, because what a directory
+#          contains is not a question worth answering when the directory is not there.
+# Exit 5 = a listed project has no instructions file in its WORKING TREE, but its repository's
+#          default branch has one, so this checkout is standing on a branch created before the file
+#          landed (claude-config#495). Its own code and its own sentence, because the remedy is to
+#          merge and the exit 3 sentence sends the reader to write a file that already exists, which
+#          is an instruction that cannot change the state they are stuck in (L111). Measured on
+#          2026-09-19: PostRoll was reported bare while its CLAUDE.md sat on origin/main.
 #
 # Environment:
 #   PROJECT_LIST_FILE   read this file instead of the synced CLAUDE.md
@@ -120,8 +126,44 @@ case "$mine" in
     exit 0 ;;
 esac
 
+# A project whose working tree carries no instructions file may still have one on the branch the
+# repository actually develops on, which is the common case on a Mac where sessions work in feature
+# branches. That is a different fault from a project that has never had a file, and it has a
+# different remedy, so it is asked here rather than assumed either way.
+#
+# Two routes to the default branch, because a repository may have a remote or not, and the real
+# case uses the first: refs/remotes/origin/HEAD when there is an origin, and a local main or master
+# when there is not. Nothing here touches the network: symbolic-ref, rev-parse and cat-file all read
+# what is already on disk, so a project with no connectivity answers as fast as one with it.
+#
+# It runs only for a project already found to be bare, so the ordinary healthy run pays nothing.
+# Every git call is guarded: a directory that is not a repository at all answers nothing, which
+# leaves the plain bare case, and that is the answer for a checkout with no default branch too.
+instructions_on_default_branch() { # <dir> -> a sentence naming both branches, or nothing
+  local d="$1" default="" here="" cand="" f=""
+  git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  default="$(git -C "$d" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
+  if [ -z "$default" ]; then
+    for cand in origin/main origin/master main master; do
+      if git -C "$d" rev-parse --verify --quiet "$cand" >/dev/null 2>&1; then default="$cand"; break; fi
+    done
+  fi
+  [ -n "$default" ] || return 0
+  for f in CLAUDE.md AGENTS.md; do
+    if git -C "$d" cat-file -e "$default:$f" 2>/dev/null; then
+      here="$(git -C "$d" branch --show-current 2>/dev/null)"
+      [ -n "$here" ] || here="$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+      [ -n "$here" ] || here="a detached HEAD"
+      printf '%s is on %s, this checkout is on %s' "$f" "$default" "$here"
+      return 0
+    fi
+  done
+  return 0
+}
+
 missing=""
 bare=""
+predates=""
 n=0
 while IFS= read -r p; do
   [ -n "$p" ] || continue
@@ -137,8 +179,14 @@ while IFS= read -r p; do
     missing="$missing  $p
 "
   elif [ ! -f "$full/CLAUDE.md" ] && [ ! -f "$full/AGENTS.md" ]; then
-    bare="$bare  $p
+    elsewhere="$(instructions_on_default_branch "$full")"
+    if [ -n "$elsewhere" ]; then
+      predates="$predates  $p ($elsewhere)
 "
+    else
+      bare="$bare  $p
+"
+    fi
   fi
 done <<EOF
 $mine
@@ -158,6 +206,14 @@ case "$bare" in
     printf '%s' "$bare" >&2
     echo "Claude Code looks for a project's instructions by walking UP from the directory it starts in, so the fallback is silent and can be another project's file entirely. Write one at the root of each, or take the entry out of the list." >&2
     exit 3 ;;
+esac
+
+case "$predates" in
+  *[![:space:]]*)
+    echo "check-project-list: these projects have no instructions file in their working tree, but their repository's default branch has one, so this checkout is standing on a branch created before the file landed:" >&2
+    printf '%s' "$predates" >&2
+    echo "Merge that branch in, or switch to it. This is said separately from a project that has no file anywhere because writing one here would add a second copy of a file that already exists." >&2
+    exit 5 ;;
 esac
 
 echo "check-project-list: $n project(s) listed under $HOST, all present, each carrying its own instructions file."
