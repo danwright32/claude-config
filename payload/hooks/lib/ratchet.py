@@ -16,8 +16,9 @@ language can call the other's reader without paying a process per run. Twin impl
 languages consume one shared committed fixture (L26): `ratchet-cases.tsv`, which both are driven
 against, so they cannot agree on the day they are written and nowhere after it.
 """
+import os
 
-BASELINE_SHAPE = "<path>: <count>, one per line, with # comments and blank lines ignored"
+BASELINE_SHAPE ="<path>: <count>, one per line, with # comments and blank lines ignored"
 
 
 def read_baseline(text):
@@ -64,3 +65,40 @@ def label(grown, stale):
     if stale:
         return "stale"
     return "ok"
+
+
+def anchor(root):
+    """The directory a baseline's paths are written relative to, for a scan of `root`.
+
+    The nearest ancestor of `root`, itself included, holding a `.git` entry (a directory in a clone,
+    a file in a worktree), and `root` itself when there is none, which is every throwaway fixture.
+    Findings used to be keyed relative to --root while the baselines are written relative to the
+    checkout, so one tree gave two verdicts: `--root .` passed and `--root payload` failed, with
+    every recorded file reading as newly grown under one spelling of its path and stale under the
+    other (claude-config#443). Keyed from here, any --root inside the checkout names a file the
+    same way. Python only, with no twin in ratchet.sh: the shell consumer scans no tree (L26
+    covers the rule both apply, and this is not part of it).
+    """
+    d = os.path.abspath(root)
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return d
+        up = os.path.dirname(d)
+        if up == d:
+            return os.path.abspath(root)
+        d = up
+
+
+def within(recorded, root, base):
+    """-> (judged, outside): the baseline split by whether its path lies under the scanned `root`.
+
+    `base` is what `anchor` returned. An entry for a file the scan never read was not measured, so
+    it may be neither passed nor called stale (L11); the caller says it was not judged instead.
+    """
+    prefix = os.path.relpath(os.path.abspath(root), base)
+    if prefix == ".":
+        return dict(recorded), []
+    prefix = prefix.replace(os.sep, "/") + "/"
+    judged = {p: c for p, c in recorded.items() if p.startswith(prefix)}
+    outside = sorted(p for p in recorded if not p.startswith(prefix))
+    return judged, outside

@@ -132,6 +132,16 @@ check "the real tree agrees with its own baseline" "$([ "$RC" -eq 0 ] && echo ok
 # A scan that judged nothing would agree with any baseline at all (L98).
 _judged="$(printf '%s\n' "$OUT" | sed -n 's/^scan-absence-needles: \([0-9]*\) absence assertion.*/\1/p')"
 check "and it really judged the repo's assertions, rather than none" "$([ "${_judged:-0}" -gt 50 ] && echo ok || echo "judged ${_judged:-0}")"
+# One tree, one verdict, whichever folder of it --root names (claude-config#443). Findings were
+# keyed relative to --root while the baseline is written relative to the checkout, so the sibling
+# scan went red on `--root payload` over a tree `--root .` passed. This one shared the keying.
+OUT="$(cd "$REPO" && python3 "$SCAN" --root payload 2>&1)"; RC=$?
+check "the real tree scanned as payload/ alone agrees with the baseline" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+# The entry for tests/, which that scan never read, is said to be not judged rather than stale.
+case "$OUT" in
+  *"not judged: tests/test-claude-sync.sh"*) check "and it names the entry it did not judge" ok ;;
+  *) check "and it names the entry it did not judge" "did not say it: $OUT" ;;
+esac
 
 echo
 echo "passed: $pass, failed: $fail"
