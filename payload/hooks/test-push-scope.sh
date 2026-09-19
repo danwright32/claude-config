@@ -242,9 +242,10 @@ def_count="$(grep -Ec '^ps_[A-Za-z0-9_]+\(\)' "$LIB")"
 [ "${def_count:-0}" -ge 8 ] \
   && check "the define once check can see the library's functions" ok \
   || check "the define once check can see the library's functions" "found only $def_count definitions"
-[ -z "${dup_defs// /}" ] \
-  && check "#440 every ps_ function is defined exactly once" ok \
-  || check "#440 every ps_ function is defined exactly once" "defined more than once: $dup_defs"
+case "$dup_defs" in
+  *[![:space:]]*) check "#440 every ps_ function is defined exactly once" "defined more than once: $dup_defs" ;;
+  *) check "#440 every ps_ function is defined exactly once" ok ;;
+esac
 
 # ---------------------------------------------------------------------------
 # ps_repo_dir reads a cd written inside a subshell or a group (claude-config#439). Its pattern
@@ -395,6 +396,17 @@ got="$( cd "$MB/post" && ps_pushed_base )"
   && check "#441 after a first push of a branch the range starts where it left main" ok \
   || check "#441 after a first push of a branch the range starts where it left main" "got=$got"
 
+# And no hook keeps its own copy of the post push rule. ai-review-on-push.sh wrote the three steps
+# out itself because the library had no entry point for them; a second copy of "what did this push
+# add" drifts invisibly (L613). The reflog selector is what every copy has to read, so it is the
+# needle, assembled here so this line does not match itself (L245).
+reflog_sel='@{u}'; reflog_sel="${reflog_sel}@{1}"
+own_pushed="$(grep -lF "$reflog_sel" "$DIR"/*.sh 2>/dev/null | grep -v '/test-' | tr '\n' ' ')"
+case "$own_pushed" in
+  *[![:space:]]*) check "#441 no hook keeps its own post push range" "still in: $own_pushed" ;;
+  *) check "#441 no hook keeps its own post push range" ok ;;
+esac
+
 # A repository with no commits has no range at all: every entry point answers nothing and says so
 # with its status, rather than printing something a caller would diff against.
 git init -q "$MB/none" 2>/dev/null
@@ -443,9 +455,10 @@ want_scope "rtk git -C /tmp/x add app/copy.ts && git commit -qm x && git push" "
 # The pattern is written with its brackets escaped, so the line holding it does not match itself
 # (L245): the text on disk here is not the text the pattern finds.
 own_add_parsers="$(grep -l 'toks\[j\] != "add"' "$DIR"/*.sh 2>/dev/null | tr '\n' ' ')"
-[ -z "${own_add_parsers// /}" ] \
-  && check "#442 no hook keeps its own git add scope parser" ok \
-  || check "#442 no hook keeps its own git add scope parser" "still in: $own_add_parsers"
+case "$own_add_parsers" in
+  *[![:space:]]*) check "#442 no hook keeps its own git add scope parser" "still in: $own_add_parsers" ;;
+  *) check "#442 no hook keeps its own git add scope parser" ok ;;
+esac
 
 rm -rf "$RD" "$MB"
 

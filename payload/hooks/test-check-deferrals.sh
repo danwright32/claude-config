@@ -291,6 +291,18 @@ want_says "stranger.ts:1: TODO:" "push hook: git add -A takes the stranger, so i
 run_push "$W" "cd $W && git commit -qm cap && git push"
 want_rc 2 "push hook: content already in the index is judged by a bare commit and push"
 
+# A command that commits before it pushes, on a branch already level with its upstream, answers for
+# the commit it is about to make and not for the one already on the remote (claude-config#441). The
+# shared range helper dropped to HEAD~1 here, so the TODO already pushed was blamed on this push.
+W="$(mk_repo p13)"
+commit_file "$W" src/a.ts $'// TODO wire the retry\n'
+( cd "$W" && "${G[@]}" push -q origin main && printf '%s' $'export const b = 2;\n' > b.ts ) >/dev/null 2>&1
+run_push "$W" "cd $W && git add b.ts && git commit -qm b && git push"
+want_rc 0 "push hook: a commit then push does not answer for a deferral already on the remote"
+( cd "$W" && printf '%s' $'// TODO a new one\n' > c.ts ) >/dev/null 2>&1
+run_push "$W" "cd $W && git add c.ts && git commit -qm c && git push"
+want_rc 2 "push hook: and the same shape still judges the commit it is about to make"
+
 # The guard's own files and the config repo's suites never block a push of themselves.
 W="$(mk_repo p10)"
 commit_file "$W" payload/hooks/test-something.sh $'# TODO fixture text for a suite\n'

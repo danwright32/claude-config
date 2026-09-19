@@ -19,14 +19,14 @@
 # write the pending marker, start the runner.
 #
 # WHAT IS REVIEWED. The diff of code files only (ts, tsx, js, jsx, py, sh, sql) over the range the
-# push added. That range is NOT what ps_base_ref gives a PreToolUse hook: after the push the branch's
-# upstream IS its HEAD, so the shared merge-base falls through to HEAD~1 and a three commit push
-# would be reviewed one commit short. So the base is chosen in this order, each step only when the
-# one before it cannot answer:
-#   1. the upstream's previous tip (`@{u}@{1}`), when it is an ancestor of HEAD: exactly what this
-#      push added, on a branch pushed before;
+# push added. That range is NOT what a PreToolUse hook reads: after the push the branch's upstream
+# IS its HEAD, so the plain push answer (ps_merge_base) falls through to HEAD~1 and a three commit
+# push would be reviewed one commit short. So the base comes from ps_pushed_base in lib/push-scope.sh,
+# which tries, each step only when the one before it cannot answer:
+#   1. the upstream's previous tip, from its reflog, when it is an ancestor of HEAD: exactly what
+#      this push added, on a branch pushed before;
 #   2. the merge-base with the remote's default branch: the whole branch, on a first push;
-#   3. ps_merge_base over ps_base_ref, the shared fallback, which lands on HEAD~1.
+#   3. ps_merge_base over ps_base_ref, the plain push answer, which lands on HEAD~1.
 #
 # SKIPS, each said out loud in one line, because a silent skip is indistinguishable from a review
 # that found nothing (L98):
@@ -144,31 +144,10 @@ cd "$repo_dir" 2>/dev/null || exit 0
 head_sha="$(git rev-parse HEAD 2>/dev/null)"
 [ -n "$head_sha" ] || say "skipped: could not read HEAD in $repo_dir."
 
-# The base, in the order the header gives. Step 1: the upstream's tip before this push.
-mb=""
-prev_tip="$(git rev-parse --verify --quiet '@{u}@{1}' 2>/dev/null || true)"
-if [ -n "$prev_tip" ] && [ "$prev_tip" != "$head_sha" ] \
-   && git merge-base --is-ancestor "$prev_tip" HEAD 2>/dev/null; then
-  mb="$prev_tip"
-fi
-# Step 2: the whole branch against the remote's default branch.
-if [ -z "$mb" ]; then
-  default_ref="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
-  if [ -z "$default_ref" ]; then
-    for c in origin/main origin/master; do
-      if git rev-parse --verify --quiet "$c" >/dev/null 2>&1; then default_ref="$c"; break; fi
-    done
-  fi
-  if [ -n "$default_ref" ]; then
-    cand="$(git merge-base "$default_ref" HEAD 2>/dev/null || true)"
-    [ -n "$cand" ] && [ "$cand" != "$head_sha" ] && mb="$cand"
-  fi
-fi
-# Step 3: the shared fallback.
-if [ -z "$mb" ]; then
-  base="$(ps_base_ref || true)"
-  mb="$(ps_merge_base "$base")"
-fi
+# The base, in the order the header gives, from the shared post push entry point
+# (claude-config#441). This hook wrote the three steps out itself while the library had only the
+# plain push answer; a second copy of "what did this push add" drifts invisibly (L613).
+mb="$(ps_pushed_base || true)"
 [ -n "$mb" ] || say "skipped: could not work out what this push added (no base commit to compare against)."
 
 short_mb="$(git rev-parse --short "$mb" 2>/dev/null || printf '%s' "$mb")"

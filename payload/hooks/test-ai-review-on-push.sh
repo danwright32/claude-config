@@ -420,6 +420,26 @@ print("nudge cost with nothing to show over 20 runs: median %.1f ms, max %.1f ms
 EOF
 [ $? -eq 0 ] && ok || bad "the nudge stayed silent across 20 quiet prompts"
 
+# ===========================================================================
+# 7. A push of THREE commits is reviewed from the upstream's previous tip, not one commit short
+# (claude-config#441). After a push the upstream is HEAD, so the plain push answer lands on HEAD~1;
+# the range comes from ps_pushed_base in the shared library. Its own repository, so nothing above
+# is disturbed.
+# ===========================================================================
+R3_ORIGIN="$WORKDIR/r3.git"; git init -q --bare "$R3_ORIGIN"
+R3="$WORKDIR/r3"; git init -q "$R3"
+G3(){ git -C "$R3" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+G3 symbolic-ref HEAD refs/heads/main
+mkdir -p "$R3/src"; printf 'export const a = 0;\n' > "$R3/src/a.ts"
+G3 add src/a.ts; G3 commit -q -m seed
+G3 remote add origin "$R3_ORIGIN"; G3 push -q -u origin main 2>/dev/null
+R3_BEFORE="$(G3 rev-parse --short HEAD)"
+for n in 1 2 3; do printf 'export const a%s = %s;\n' "$n" "$n" >> "$R3/src/a.ts"; G3 add src/a.ts; G3 commit -q -m "c$n"; done
+G3 push -q 2>/dev/null
+R3_HEAD="$(G3 rev-parse --short HEAD)"
+fire_push "git push" 0 "$R3"
+check "a three commit push is reviewed from the upstream's previous tip" "($R3_BEFORE..$R3_HEAD," "$OUT"
+
 echo
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
