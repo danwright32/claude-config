@@ -153,6 +153,9 @@ q_took=$(( $(date +%s) - q_start ))
 [ "$q_took" -lt 30 ] \
   && check "#444 and a caller capturing its output is not held open by the watchdog" ok \
   || check "#444 and a caller capturing its output is not held open by the watchdog" "the capture took ${q_took}s"
+# Waited for rather than read at once: the watchdog is started in the background, and a suite with
+# nothing to do can be gone before it has written its pidfile. Seen once on the Linux runner.
+wait_file "$TMPROOT/quick.wd" || true
 q_wd="$(cat "$TMPROOT/quick.wd" 2>/dev/null || true)"
 case "$q_wd" in
   ''|*[!0-9]*) check "#444 the quick suite armed a watchdog at all" "pidfile held '$q_wd'" ;;
