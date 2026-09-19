@@ -2,7 +2,7 @@
 """Duplicated code in a source tree, and what a push ADDS to it (claude-config#428).
 
     duplication.py scan <tree> [--files-from FILE]
-    duplication.py compare <base tree> <pushed tree> [--pushed-files-from FILE]
+    duplication.py compare <base tree> <pushed tree>
 
 `scan` prints every duplicate group in one tree as JSON, for measuring and for the suite. `compare`
 prints the groups the PUSHED tree has that the BASE tree does not, in the words a person reads, and
@@ -378,15 +378,12 @@ def main(argv):
             print("duplication.py compare <base tree> <pushed tree>", file=sys.stderr)
             return 2
         base, pushed = argv[2], argv[3]
-        pushed_from = None
-        if "--pushed-files-from" in argv:
-            pushed_from = _open_list(argv[argv.index("--pushed-files-from") + 1])
         for t in (base, pushed):
             if not os.path.isdir(t):
                 print("duplication.py: no such tree: %r" % t, file=sys.stderr)
                 return 2
         base_occ, _ = scan_tree(base)
-        pushed_occ, files_read = scan_tree(pushed, pushed_from)
+        pushed_occ, files_read = scan_tree(pushed)
         found = findings(base_occ, pushed_occ)
         print("files=%d roots=%s groups=%d new=%d" % (
             files_read, ",".join(present_roots(pushed)) or "-", len(groups(pushed_occ)), len(found)))

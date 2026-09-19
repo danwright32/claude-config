@@ -243,16 +243,45 @@ want_eq "silently" "" "$HOOK_OUT$HOOK_ERR"
 run_hook "$W" "echo 'git push'"
 want_eq "a command that only mentions a push is ignored" 0 "$HOOK_RC"
 
-# 7. Commit and push in one command: nothing is in history yet, so the working tree is read, and
-#    the refusal says so. A plain push on the same repo judges the commits only.
+# 7. Commit and push in one command: nothing is in history yet, so what the commit will carry is
+#    read (the index, plus what the add names), and the refusal says so. A plain push on the same
+#    repo judges the commits only.
 W="$(mk_repo pending src/clean.ts 'export const clean = 1;')"
 ( cd "$W" && printf '%s\n' "$BOOKER_A" > src/a.tsx && printf '%s\n' "$BOOKER_B" > src/b.tsx )
 run_hook "$W" "git push"
 want_eq "a push on its own ignores uncommitted copies" 0 "$HOOK_RC"
 run_hook "$W" "cd $W && git add src && git commit -qm copy && git push"
-want_eq "commit and push in one command reads the working tree" 2 "$HOOK_RC"
+want_eq "commit and push in one command reads what the commit will carry" 2 "$HOOK_RC"
 want_has "and says the commit would add it, not the push" "the commit this command is about to make" "$HOOK_ERR"
-want_has "and says the reading came from the working tree" "Read from the working tree" "$HOOK_ERR"
+want_has "and says what the reading came from" "what the commit will carry" "$HOOK_ERR"
+want_lacks "and does not claim a working tree reading it did not take" "Read from the working tree" "$HOOK_ERR"
+
+# 7a. Only what the commit will carry (claude-config#457 item 5). This hook read the WHOLE working
+#     tree of its source roots for every commit then push, so a copy sitting in files the add never
+#     named, another session's untracked work included, was blamed on this commit (#350).
+W="$(mk_repo stranger src/clean.ts 'export const clean = 1;')"
+( cd "$W" && printf '%s\n' "$BOOKER_A" > src/a.tsx && printf '%s\n' "$BOOKER_B" > src/b.tsx \
+    && printf '%s\n' 'export const mine = 2;' > src/mine.ts )
+run_hook "$W" "cd $W && git add src/mine.ts && git commit -qm mine && git push"
+want_eq "untracked copies the add does not name are not this commit's" 0 "$HOOK_RC"
+#     The control in the same repository: an add naming both copies carries the pair.
+run_hook "$W" "cd $W && git add src/a.tsx src/b.tsx && git commit -qm pair && git push"
+want_eq "and naming both copies is judged" 2 "$HOOK_RC"
+#     A tracked file edited into a copy but not named stays behind the same way.
+W="$(mk_repo trackedleft src/a.tsx "$BOOKER_A" src/clean.ts 'export const clean = 1;')"
+( cd "$W" && "${G[@]}" push -q origin main && printf '%s\n' "$BOOKER_B" > src/clean.ts \
+    && printf '%s\n' 'export const mine = 2;' > src/mine.ts ) >/dev/null 2>&1
+run_hook "$W" "cd $W && git add src/mine.ts && git commit -qm mine && git push"
+want_eq "a tracked edit the add does not name is not this commit's" 0 "$HOOK_RC"
+run_hook "$W" "cd $W && git commit -qam all && git push"
+want_eq "and a commit -a, which takes it, is judged" 2 "$HOOK_RC"
+
+# 7c. An add nobody can read widens to the whole working tree, and the refusal says so.
+W="$(mk_repo widened src/clean.ts 'export const clean = 1;')"
+( cd "$W" && printf '%s\n' "$BOOKER_A" > src/a.tsx && printf '%s\n' "$BOOKER_B" > src/b.tsx )
+run_hook "$W" "cd $W && git add \"src/a.tsx && git commit -qm x && git push"
+want_eq "an add that cannot be read is judged on the whole working tree" 2 "$HOOK_RC"
+want_has "and says the add could not be read" "could not be read" "$HOOK_ERR"
 want_has "and how to settle it" "two separate commands" "$HOOK_ERR"
 
 # 7b. Commit and push in one command on a branch with NO remote ref at all (claude-config#441). The
