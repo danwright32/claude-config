@@ -38,12 +38,13 @@ repo="${1:-$PWD}"
 git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 \
   || fail "$repo is not a git checkout, so there are no branches here to judge"
 
-# The default branch, from the remote's own HEAD where it says, and from the checkout's current
-# branch only as a fallback. Named rather than assumed, because judging against the wrong branch
-# reports every branch as unshipped and reads exactly like a repo full of abandoned work.
-default="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-[ -n "$default" ] || default="origin/$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-git -C "$repo" rev-parse --verify --quiet "$default" >/dev/null 2>&1 \
+# The default branch, from the one rule shipped-worktrees.sh uses too. A missing library is a
+# refusal, never a run that carries on without it (L488).
+lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/default-branch.sh"
+[ -f "$lib" ] || fail "its library is missing: $lib"
+# shellcheck source=lib/default-branch.sh
+. "$lib"
+default="$(default_branch "$repo")" \
   || fail "cannot work out which branch things merge into ($default is not a ref here)"
 
 # WHICH BRANCHES EXIST, asked of the remote rather than of this clone's memory of it.

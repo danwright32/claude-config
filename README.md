@@ -719,6 +719,36 @@ reads it every time whatever the interval says.
 how many started independently and how deeply they are nested. It stays silent for one watcher
 and one run, which is what a healthy machine looks like.
 
+## Branches and agent worktrees that already shipped
+
+This repo squashes on merge, so a merged branch is never an ancestor of main and every local way of
+asking reports every branch as unmerged (L642). Two tools in `tools/` answer the question instead.
+Both take a checkout as their argument and default to the current directory.
+
+`tools/shipped-branches.sh` lists the remote branches and says which have shipped, by ancestry
+(proof) or by a squash commit on main carrying one of the branch's subjects (a guess). It changes
+nothing, so a guess is allowed.
+
+`tools/shipped-worktrees.sh` lists the agent worktrees under `.claude/worktrees/` and marks each one
+REMOVABLE or KEEP, naming every reason it keeps one. REMOVABLE needs all of: GitHub (read with `gh`)
+reports a merged pull request from its branch and none still open; no uncommitted or untracked
+files; no commit that is not on main, on the remote branch, or at the head the merged pull request
+recorded; not locked (Claude Code locks the worktree of a running agent); and no running process
+has its current directory inside it. It reports and changes nothing unless given `--remove`, which
+removes each REMOVABLE worktree with an unforced `git worktree remove`, deletes its local branch,
+and names each removal. It never touches a remote branch or the primary checkout. When `gh` cannot
+be read it refuses the whole run with exit 3 rather than treating unreadable as either answer.
+
+```
+bash tools/shipped-worktrees.sh ~/Non-icloudDocuments/Apps/claude-config
+bash tools/shipped-worktrees.sh --remove ~/Non-icloudDocuments/Apps/claude-config
+```
+
+It is a sibling of `shipped-branches.sh` rather than a mode of it because it deletes things and so
+may not act on a guess, and it is not a `claude-sync` command because it is about any git checkout
+rather than the synced config. Which branch counts as main is one rule both read, in
+`tools/lib/default-branch.sh`.
+
 ## Local state (per Mac, never synced)
 
 Thirteen things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
