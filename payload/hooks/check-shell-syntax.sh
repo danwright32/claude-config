@@ -55,6 +55,17 @@ if [ ! -d "$ROOT" ]; then
   echo "check-shell-syntax: '$ROOT' is not a directory, so no shell file could be parsed. Refusing rather than falling back to somewhere else, which would look exactly like having run on the one you named." >&2
   exit 2
 fi
+# A HOME DIRECTORY IS NOT A TREE THIS CAN PARSE, and this is not hypothetical. The suite beside this
+# one used to derive its root by counting two directories upwards, which is the repository root from
+# payload/hooks and the HOME DIRECTORY from the installed copy in ~/.claude/hooks. On 2026-09-19 the
+# first pull that installed it spent twenty two minutes walking every file under ~ before it was
+# stopped. The cost of walking a home directory is unbounded and nothing here can bound it, so it is
+# refused by name rather than attempted (L24): a guard should refuse what it cannot do in a bounded
+# way rather than start and hope.
+if [ -n "${HOME:-}" ] && [ "${ROOT%/}" = "${HOME%/}" ]; then
+  echo "check-shell-syntax: '$ROOT' is the home directory, not a source tree, so it was NOT parsed. Walking it costs whatever happens to be in it, which nothing here can bound. Name the checkout to parse, or run this from inside one." >&2
+  exit 2
+fi
 
 # A nested checkout is a second copy of the same tree, so a default recursive walk parses every
 # file once per worktree and can report a failure that belongs to somebody else's branch (L234).
