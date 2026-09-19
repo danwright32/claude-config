@@ -163,10 +163,32 @@ grep -q "$BASH_VERSION" <<< "$out_ok" \
   || check "and which bash parsed them, because the catch depends on it" "out=$out_ok"
 
 # ---------------------------------------------------------------------------
+# A ROOT THAT IS SOMEBODY'S HOME DIRECTORY IS REFUSED, and this is not hypothetical. The line below
+# used to derive the tree as "$DIR/../..", which is the repository root when this suite runs from
+# payload/hooks and is the HOME DIRECTORY when it runs from the installed copy in ~/.claude/hooks.
+# On 2026-09-19 that shipped, and the first pull that installed it spent twenty two minutes walking
+# every file under ~ before it was stopped. It is L668's shape: a tool that works out where it is
+# by counting directories upwards is wrong the moment it is installed somewhere else.
+#
+# So the checker refuses that root by name rather than trusting its caller, because the cost of
+# being wrong is unbounded and a guard should refuse what it cannot do in a bounded way (L24).
+out_home="$(bash "$CHECK" "$HOME" 2>&1)"; code_home=$?
+[ "$code_home" -ne 0 ]   && check "a root that is the home directory is refused rather than walked" ok   || check "a root that is the home directory is refused rather than walked" "exit=$code_home out=$out_home"
+grep -qi 'home directory' <<< "$out_home"   && check "and it says that is what it refused" ok   || check "and it says that is what it refused" "out=$out_home"
+
+# ---------------------------------------------------------------------------
 # The real repository, last. This is the assertion that keeps working after the fixtures above
 # have proved the guard can fail.
+#
+# The tree comes from GIT rather than from counting directories upwards, so the installed copy,
+# which sits in no repository, reports that it had nothing to measure instead of walking whatever
+# happens to be above it (L411, L668).
 # ---------------------------------------------------------------------------
-ROOT="$(cd "$DIR/../.." && pwd)"
+ROOT="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$ROOT" ]; then
+  echo "note: this copy of the suite is not inside a git checkout, so there is no repository to parse and that case is reported as UNMEASURED rather than passed."
+  check "the real tree case could not be measured from this copy" ok
+else
 out_real="$(bash "$CHECK" "$ROOT" 2>&1)"; code_real=$?
 [ "$code_real" -eq 0 ] \
   && check "every shell file in this repository parses" ok \
@@ -181,6 +203,7 @@ case "$real_n" in ''|*[!0-9]*) real_n=0 ;; esac
 [ "$real_n" -gt 100 ] \
   && check "and it reached the whole tree rather than a corner of it" ok \
   || check "and it reached the whole tree rather than a corner of it" "it parsed only $real_n file(s): $out_real"
+fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
