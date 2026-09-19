@@ -149,7 +149,9 @@ SQUATTER=$!
 # (L159). lsof reports the resolved path, which is why WORK was resolved above.
 seen=""
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if lsof -a -p "$SQUATTER" -d cwd -Fn 2>/dev/null | grep -q "^n$WT/inuse/deeper$"; then seen=1; break; fi
+  # Read in full, then matched: grep -q on a pipe under pipefail kills lsof mid write (L183).
+  cwd_now="$(lsof -a -p "$SQUATTER" -d cwd -Fn 2>/dev/null || true)"
+  if grep -qx "n$WT/inuse/deeper" <<< "$cwd_now"; then seen=1; break; fi
   perl -e 'select(undef, undef, undef, 0.1)'
 done
 if [ -n "$seen" ]; then ok; else bad "the fixture process never stood in the inuse worktree"; fi
