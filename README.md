@@ -733,7 +733,13 @@ the installed hooks or the scratch the suites build their fixtures in (claude-co
 when one has been running longer than `SYNC_SUITE_MAX_AGE` (default `3600`, the longest any suite
 may run) and then names every such process in one `kill -9` line, or when more than
 `SYNC_SUITE_MAX_ROOTS` (default `8`) were started independently, since a whole run of the runner
-counts as one. A suite that arms `hooks/lib/suite-deadline.sh`, as `test-run-all-tests.sh` does,
+counts as one. Nobody runs status while a pile is slowing them down, so `hooks/suite-pile-notice.sh`
+says the same thing on a prompt (claude-config#466): both call `hooks/lib/suite-pile.sh`, so they
+cannot disagree, and the notice names the same `kill -9` line (or sends you to status when it is
+longer than fifty pids). It is said once per stretch in each session, and a stretch ends only after
+`SYNC_SUITE_PILE_REARM` (default `600`) seconds of no pile, so suites flickering across the breadth
+limit are one notice. It reads the process table and nothing else, and says nothing on any error.
+Measured 2026-09-19 on this Mac: about 58ms per prompt. A suite that arms `hooks/lib/suite-deadline.sh`, as `test-run-all-tests.sh` does,
 bounds its own wall clock however it was started, and whatever it started is killed if it is
 stopped from outside.
 

@@ -234,6 +234,11 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/suite-pile-notice.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/stale-worktree-nudge.sh",
             "timeout": 5
           },
