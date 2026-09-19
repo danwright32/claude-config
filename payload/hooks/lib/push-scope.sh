@@ -249,7 +249,9 @@ ps__commit_stages_all() {
 #
 # Prints a scope word on the first line and, for PATHS, one path per line after it:
 #   INDEX    no add and no -a: the commit takes the index and nothing else
-#   TRACKED  `git add -u`, or a `commit -a` with no add: every tracked change
+#   TRACKED  `git add -u`, or a `commit -a`: every tracked change. When an add also names paths
+#            beside a `commit -a`, they follow one per line, and the caller reads them too,
+#            because a named path may be untracked and -a alone never takes one.
 #   ALL      `git add -A`, `.`, `:/` or `*`: every change, untracked files included
 #   PATHS    the paths the add names, exactly as written, for the caller to resolve
 #   UNKNOWN  an add this cannot account for (it names nothing, or the command cannot be tokenised)
@@ -301,6 +303,11 @@ if scope == "PATHS":
 ' 2>/dev/null)"
     # No answer at all (python missing or dead) is the same as an add nobody can account for.
     [ -n "$out" ] || out="UNKNOWN"
+    # An add naming paths beside a `commit -a`: the commit takes every tracked change too, so
+    # reporting the paths alone left a tracked edit nobody named unread (claude-config#457).
+    case "$out" in
+      PATHS*) ps__commit_stages_all "$1" && out="TRACKED${out#PATHS}" ;;
+    esac
     printf '%s\n' "$out"
   elif ps__commit_stages_all "$1"; then
     printf 'TRACKED\n'

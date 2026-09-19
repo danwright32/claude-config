@@ -129,6 +129,15 @@ if [ "$commit_in_chain" -eq 1 ]; then
     TRACKED)
       pending_diff="${pending_diff}
 $(git diff HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
+      # Paths an add names beside a `commit -a` follow the word, and one of them may be untracked
+      # (claude-config#457): -a never takes an untracked file, the add does.
+      while IFS= read -r pth; do
+        [ -n "$pth" ] || continue
+        while IFS= read -r u; do
+          [ -n "$u" ] || continue
+          pending_diff="${pending_diff}$(new_file_block "$u")"
+        done < <(git ls-files --others --exclude-standard -- "$pth" 2>/dev/null)
+      done < <(printf '%s\n' "$add_scope" | tail -n +2)
       ;;
     ALL|UNKNOWN)
       [ "$add_kind" = "UNKNOWN" ] && scope_unknown=1

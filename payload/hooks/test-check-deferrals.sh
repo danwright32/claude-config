@@ -303,6 +303,19 @@ want_rc 0 "push hook: a commit then push does not answer for a deferral already 
 run_push "$W" "cd $W && git add c.ts && git commit -qm c && git push"
 want_rc 2 "push hook: and the same shape still judges the commit it is about to make"
 
+# An add naming a path beside a commit -a takes both (claude-config#457 item 4): the tracked edit
+# -a commits, and the untracked file the add names.
+W="$(mk_repo p15)"
+commit_file "$W" src/a.ts $'export const a = 1;\n'
+( cd "$W" && "${G[@]}" push -q origin main && printf '%s' $'// TODO tracked edit nobody named\n' >> src/a.ts \
+    && printf '%s' $'export const n = 1;\n' > n.ts ) >/dev/null 2>&1
+run_push "$W" "cd $W && git add n.ts && git commit -qam n && git push"
+want_rc 2 "push hook: an add beside commit -a judges the tracked edit -a takes"
+W="$(mk_repo p16)"
+( cd "$W" && printf '%s' $'// TODO in the named new file\n' > n.ts ) >/dev/null 2>&1
+run_push "$W" "cd $W && git add n.ts && git commit -qam n && git push"
+want_rc 2 "push hook: an add beside commit -a judges the untracked file it names"
+
 # A branch REBASED onto a newer main and force pushed (claude-config#456). Its upstream still named
 # the pre rebase tip, so the range began at the old fork point and a deferral that another pull
 # request had already merged into main was blamed on this push, which is how the hook refused a

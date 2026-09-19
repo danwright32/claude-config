@@ -507,6 +507,18 @@ want_scope "git add --verbose && git commit -qm x && git push" "UNKNOWN" \
   "#442 an add that names nothing is UNKNOWN"
 want_scope "rtk git -C /tmp/x add app/copy.ts && git commit -qm x && git push" "PATHS|app/copy.ts" \
   "#442 an rtk rewritten add with -C is still read"
+# An add naming paths AND a commit that stages for itself with -a (claude-config#457 item 4). The
+# commit takes every tracked change as well as the named paths, and reporting only the paths left
+# a tracked edit nobody named unread by every gate. TRACKED, with the named paths after it, because
+# a named path may be untracked and -a alone never takes one.
+want_scope "git add new.ts && git commit -qam x && git push" "TRACKED|new.ts" \
+  "#457 an add naming a path beside commit -a takes tracked changes AND the path"
+want_scope "git add a.ts b.ts && git commit -a -m x && git push" "TRACKED|a.ts|b.ts" \
+  "#457 the same with a separate -a flag and several paths"
+want_scope "git add -u sub && git commit -qm x && git push" "TRACKED" \
+  "#457 control: an add -u with a path and no commit -a names no untracked path"
+want_scope "git add -A && git commit -qam x && git push" "ALL" \
+  "#457 control: an add taking everything stays ALL beside commit -a"
 
 # And no hook keeps its own copy of the parser. Derived from the hooks on disk, not from a list of
 # the two that had one, so a third copy is caught the day it is written (L96, L613).

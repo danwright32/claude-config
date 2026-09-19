@@ -206,6 +206,20 @@ W="$(mk_pending_repo "$CLEAN" "$CLEAN" "$BAD")"
 run_style_hook "$E2E" "cd $W && git commit -qam copy && git push"
 want_style_code 2 "commit -a stages the tracked change, so it is judged"
 
+# 5b. An add naming a path AND a commit -a take BOTH (claude-config#457 item 4). The shared
+#     parser reported only the named path, so the tracked edit -a also commits went unread.
+W="$(mk_pending_repo "$CLEAN" "$CLEAN" "$BAD")"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qam copy && git push"
+want_style_code 2 "an add beside commit -a still judges the tracked change -a takes"
+#     And the untracked path the add names is read as well, not dropped for the tracked reading.
+W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qam copy && git push"
+want_style_code 2 "an add beside commit -a still judges the untracked file it names"
+#     The stranger nobody named stays out of it.
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qam copy && git push"
+want_style_code 0 "an add beside commit -a does not take an untracked file nobody named"
+
 # 6. Content already in the INDEX is carried by a bare commit with no add at all.
 W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
 ( cd "$W" && git add app/copy.ts ) >/dev/null 2>&1
