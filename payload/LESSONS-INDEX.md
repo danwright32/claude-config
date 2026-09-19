@@ -2,7 +2,7 @@
 
 One line per lesson: a SHORTENED form of the rule, carrying its condition and its
 instruction, and routinely dropping the clause that says what the failure looks like.
-Generated from LESSONS.md, which is NOT loaded into the session. 705 lessons.
+Generated from LESSONS.md, which is NOT loaded into the session. 702 lessons.
 
 To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or
 read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about
@@ -196,7 +196,6 @@ apply it, because the body is where the failure it came from is described.
 - L712. Measure a new derived figure's FILL RATE over the live population; null on every record is a derivation defect a sample check cannot see.
 - L714. A throwaway local database must reproduce the hosted platform's DEFAULT GRANTS, or a permission check passes on the mistake it exists to catch.
 - L487. Comparing two implementations against a live store measures the population change too, so snapshot the data once and run both halves against that.
-- L718. A view given its state as a prop is proved by tests that supply it, never by a caller doing so, so assert the production call site can reach each state.
 
 ## Data safety
 
@@ -241,7 +240,6 @@ apply it, because the body is where the failure it came from is described.
 - L667. Put a refusal at the first step that can answer it: added to a LATE step it makes the rare leftover happen on every ordinary refused attempt.
 - L474. Opening a live SQLite store read only still rewrites its shm file beside it, so a guard must read a copy of the store, wal and shm instead.
 - L698. A build that bakes env files into the artifact ships every local env file, so prove a throwaway deploy holds NO production credential by reading it.
-- L719. Whatever structurally stops the TESTS touching production must also stop the DEV SERVER, whose only symptom for pointing at it is that everything works.
 
 ## Honest failure
 
@@ -533,7 +531,6 @@ apply it, because the body is where the failure it came from is described.
 - L678. A warning is read by its PRESENCE, so a surface that never got one is indistinguishable from a surface with nothing to warn about.
 - L680. A message written about a MOMENT must be driven by the ACTION that produced it, never by a stored status.
 - L449. Automating a task changes what every counter of it MEANS, from work waiting to a fact about the data, and nothing re-examines the counter.
-- L717. A screen refreshed only on SUCCESS contradicts its own message on a timeout or a stale view, so decide per outcome whether to re-read.
 
 ## External systems
 
