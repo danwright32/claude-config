@@ -7609,6 +7609,10 @@ check "#36 and it removed nothing on the way out"    "[ -d '$_SCR/claude-sync-su
 # the total really is summed across the two (L11: the message may only claim what it measured).
 _SCRU="$WORK/scratch-unreadable"; mkdir -p "$_SCRU/claude-sync"
 mkdir -p "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA/locked"
+# Something INSIDE the locked directory, because GNU rm removes an EMPTY unreadable directory
+# without reading it and BSD rm does not: the first CI run on Linux reclaimed the whole item and
+# the checks below had no refusal to see. With an entry it cannot list, neither can delete it.
+: > "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA/locked/entry"
 dd if=/dev/zero of="$_SCRU/claude-sync/claude-sync-suite-work.UNREADA/filler" bs=1048576 count=2 2>/dev/null
 chmod 000 "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA/locked"
 _scr_age "$_SCRU/claude-sync/claude-sync-suite-work.UNREADA"
