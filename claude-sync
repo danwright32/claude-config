@@ -1864,6 +1864,54 @@ lesson_index_files_present(){   # $1 = tree
   return 0
 }
 
+# The generated index files a tree's CLAUDE.md IMPORTS, one per line. Recognised by the same shape
+# every other reader here uses, so the imports and the files on disk cannot be judged by two
+# different ideas of what is derived (L41).
+lesson_index_imports_in(){   # $1 = tree
+  local imp
+  while IFS= read -r imp; do
+    if is_derived_rule_file "$imp"; then printf '%s\n' "$imp"; fi
+  done < <(imports_in_file "$1/CLAUDE.md")
+  return 0
+}
+
+# Would publishing THIS Mac's CLAUDE.md leave its list of imports disagreeing with the index files
+# the payload holds? Asked only when the lessons file is staying behind, and then the payload's
+# index files are staying exactly as they are, so what it holds now is what it will hold.
+#
+# CLAUDE.md's import block is itself generated from the lessons file (ensure_lesson_index_imports),
+# so it is one more thing rendered from a source that is not travelling (claude-config#483). Both
+# directions of a disagreement do harm: a name the payload has no file for makes the other Mac's
+# pull refuse outright (#7), and a file the list stops naming stops loading into any session there
+# while the lessons it renders are still in that Mac's LESSONS.md.
+#
+# Asked rather than assumed, so a CLAUDE.md edit still travels in the ordinary case: a duplicate
+# number or an over-cap line changes no section, the two lists agree, and the file publishes as
+# usual. The condition is written as the reason for holding it back rather than the broader "a
+# lessons fault holds CLAUDE.md too", which is what keeps that true (L615).
+lesson_imports_would_disagree(){
+  local want have
+  [ -f "$CLAUDE_HOME/CLAUDE.md" ] || return 1
+  want="$(lesson_index_imports_in "$CLAUDE_HOME" | sort)"
+  have="$(lesson_index_files_present "$PAYLOAD" | sort)"
+  if [ "$want" = "$have" ]; then return 1; fi
+  return 0
+}
+
+# EVERYTHING THIS SEND MUST HOLD BACK BECAUSE THE LESSONS FILE ITSELF IS STAYING BEHIND
+# (claude-config#483). Asked in one place, and read by the copy loop and by the message that names
+# what waited, so a reader cannot be told about a different set from the one held (L679).
+#
+# The index files come from lesson_index_files_present rather than the list the generator just
+# wrote, for the reason is_derived_rule_file gives: a sibling from a section this Mac no longer
+# produces is still a rendering of that source, and it is exactly the one a list of current
+# sections would miss and copy.
+files_rendered_from_lessons(){   # -> one name per line, or nothing
+  lesson_index_files_present "$CLAUDE_HOME"
+  if lesson_imports_would_disagree; then printf '%s\n' "CLAUDE.md"; fi
+  return 0
+}
+
 # EVERY index line a lessons file renders, across every section, as one stream. Nothing writes
 # this to a file any more: it is what the entry cap is measured over, so the cap sees exactly the
 # lines the section files carry rather than a second rendering written beside them (L370).
@@ -3042,6 +3090,18 @@ hook_block_registration_faults(){   # $1 = the merged hooks object -> empty, or 
     "$lib" "$rc" "$(is_blank "$out" || printf ' saying %s' "$(printf '%s' "$out" | tr '\n' ' ')")"
 }
 
+# The two list helpers the hold back set below is assembled and spoken with. Both are awk rather
+# than a grep pipeline, because a grep that matches nothing takes the whole command substitution
+# down under this file's pipefail and an empty list is an ordinary input here (L612, L183).
+union_lines(){   # $1.. = newline separated lists -> their union, one per line, in the order given
+  printf '%s\n' "$@" | awk 'NF && !seen[$0]++'
+  return 0
+}
+comma_list(){    # $1 = a newline separated list -> "first.md, second.md, third.md"
+  printf '%s\n' "$1" | awk 'NF { out = out ? out ", " $0 : $0 } END { printf "%s", out }'
+  return 0
+}
+
 stage_local_to_payload(){
   [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
   mkdir -p "$PAYLOAD"
@@ -3104,6 +3164,13 @@ PROT
       fi
     fi
   fi
+  # Regenerated here rather than trusted, so the copy that travels always matches the lessons file
+  # sitting beside it, whatever anybody has typed into it (#63).
+  #
+  # BEFORE THE GATE BELOW SPEAKS, not after it (claude-config#483). That gate names the files it is
+  # holding back, and the generated ones it holds are the ones this call has just written: a list
+  # assembled before the generator ran would name the sections of the run before this one (L679).
+  write_lesson_index "$CLAUDE_HOME"
   # A rule file whose lesson numbers have collided is held back rather than
   # published, so the broken numbering does not spread to the other Mac. Only that
   # file waits: failing the whole send would stop hooks and skills moving between
@@ -3114,10 +3181,24 @@ PROT
   # can read is exactly the entry whose number gets claimed twice), they need different fixes
   # (L11), and dying at the first sends somebody back for a second run to discover the second.
   #
-  # Only the FILES at fault wait. Failing the whole send would stop hooks and skills moving between
-  # Macs, which is the more expensive failure and the wedge this tool has already been bitten by
-  # twice.
-  local dupfiles="" faultlines="" kind
+  # Only the FILES at fault wait, AND EVERYTHING RENDERED FROM THEM (claude-config#483). Failing the
+  # whole send would stop hooks and skills moving between Macs, which is the more expensive failure
+  # and the wedge this tool has already been bitten by twice. Publishing the generated index beside
+  # a source that stayed behind is the other extreme and was the state until #483: the index then
+  # carries a lesson the published LESSONS.md does not, and a rendered index line is what a session
+  # on the other Mac loads as a rule that exists (L46, L11).
+  #
+  # heldfiles is EVERY top level file this send leaves behind, and heldsrc only the sources at
+  # fault. The first is what the copy loop reads and what the message enumerates; the second is
+  # what the notification has room for.
+  local heldfiles="" heldsrc="" rendered="" faultlines="" kind lessons_held=0 withheld="" withnote=""
+  # THE OTHER WAY THE SOURCE STAYS BEHIND, and it produces the same partial state: this Mac has an
+  # unsent lesson while the repo has changed LESSONS.md since our last apply, so the source is left
+  # alone as stale and the index rendered from it, unsent lesson and all, would be copied over the
+  # repo's (claude-config#483).
+  case "
+$protected" in *"
+$LESSONS_FILE"*) lessons_held=1 ;; esac
   if [ "${SYNC_SKIP_LESSON_CHECK:-0}" != "1" ]; then
     # A cap that cannot be read is not a clean file, and saying nothing about it would leave that
     # whole check inert while reading as active (L98, L557).
@@ -3128,22 +3209,36 @@ PROT
     for kind in $LESSON_PUBLISH_FAULT_KINDS; do
       faultlines="$(lesson_fault_lines "$kind" "$CLAUDE_HOME")"
       is_blank "$faultlines" && continue
-      dupfiles="$(printf '%s\n%s\n' "$dupfiles" "$(printf '%s\n' "$faultlines" | cut -d: -f1)" | grep -v '^$' | sort -u)"
-      echo "claude-sync: NOT publishing $(printf '%s' "$dupfiles" | tr '\n' ' ')because $(lesson_fault_cause "$kind"): $(printf '%s' "$faultlines" | tr '\n' ';' | sed 's/;$//'). $(lesson_fault_remedy "$kind") and it publishes on the next send. Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
-      notify "held back $(printf '%s' "$dupfiles" | tr '\n' ' '): $(lesson_fault_notice "$kind")"
+      heldsrc="$(printf '%s\n%s\n' "$heldsrc" "$(printf '%s\n' "$faultlines" | cut -d: -f1)" | grep -v '^$' | sort -u)"
+      case "
+$heldsrc" in *"
+$LESSONS_FILE"*) lessons_held=1 ;; esac
+      if [ "$lessons_held" -eq 1 ]; then
+        rendered="$(files_rendered_from_lessons)"
+        withheld=" The other files named are generated from it (the index files a session loads, and CLAUDE.md when its generated list of imports would name one this send is not sending), so they wait with it and the repo keeps the matching set it already holds: an index published without its source tells the other Mac about a lesson its copy of $LESSONS_FILE does not hold."
+        withnote=" and what is rendered from it"
+      fi
+      heldfiles="$(union_lines "$heldsrc" "$rendered")"
+      echo "claude-sync: NOT publishing $(comma_list "$heldfiles") because $(lesson_fault_cause "$kind"): $(printf '%s' "$faultlines" | tr '\n' ';' | sed 's/;$//'). $(lesson_fault_remedy "$kind") and it publishes on the next send.${withheld} Everything else synced normally. Override with SYNC_SKIP_LESSON_CHECK=1." >&2
+      notify "held back $(comma_list "$heldsrc")${withnote}: $(lesson_fault_notice "$kind")"
     done
   fi
-  # Regenerated here rather than trusted, so the copy that travels always matches the lessons file
-  # sitting beside it, whatever anybody has typed into it (#63).
-  write_lesson_index "$CLAUDE_HOME"
+  # Assembled once more, so the set is complete on the paths that print nothing: the lessons file
+  # held back as stale reports no fault, and a path this Mac has not applied yet is held back in
+  # silence today, so holding what is rendered from it is the same decision rather than a new one
+  # to announce.
+  if [ "$lessons_held" -eq 1 ]; then
+    rendered="$(files_rendered_from_lessons)"
+    heldfiles="$(union_lines "$heldsrc" "$rendered")"
+  fi
   # top-level rule files, derived from CLAUDE.md's own imports, copied verbatim
   for f in $(top_files_in "$CLAUDE_HOME"); do
     case "
 $protected" in *"
 $f"*) continue ;; esac      # stale here; leave the repo's newer copy alone
     case "
-$dupfiles" in *"
-$f"*) continue ;; esac      # numbering collision here; do not spread it
+$heldfiles" in *"
+$f"*) continue ;; esac      # this send is not publishing it, or anything rendered from it
     [ -f "$CLAUDE_HOME/$f" ] && cp "$CLAUDE_HOME/$f" "$PAYLOAD/$f"
   done
   # A GENERATED FILE THIS MAC NO LONGER PRODUCES IS REMOVED FROM THE PAYLOAD TOO (claude-config#473).
@@ -3155,8 +3250,14 @@ $f"*) continue ;; esac      # numbering collision here; do not spread it
   #
   # Nothing is swept when this Mac has no lessons file: the generator returned early, so there is
   # no authoritative set to mirror and an empty reading would delete the whole index (L211).
+  #
+  # AND NOTHING IS SWEPT WHILE THE SOURCE ITSELF IS HELD BACK (claude-config#483). This sweep
+  # mirrors this Mac's section list into the payload, and while the payload keeps a LESSONS.md this
+  # Mac is not replacing, deleting a file that lessons file still has a section for is the same
+  # partial state read the other way round: the rules of that section would stop reaching any
+  # session on the other Mac.
   local pf
-  if [ -f "$CLAUDE_HOME/$LESSONS_FILE" ]; then
+  if [ -f "$CLAUDE_HOME/$LESSONS_FILE" ] && [ "$lessons_held" -eq 0 ]; then
     while IFS= read -r pf; do
       [ -n "$pf" ] || continue
       [ -f "$CLAUDE_HOME/$pf" ] && continue

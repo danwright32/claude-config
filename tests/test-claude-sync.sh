@@ -4505,6 +4505,139 @@ for _clk_kind in $_clk_kinds; do
     "case \"\$_clk_c\" in *\"\$(printf '%s' \"\$_clk_f\" | sed 's/^claude-sync: //')\"*) true ;; *) false ;; esac"
 done
 
+section "== nothing rendered from a lessons file publishes without it (#483) =="
+# claude-config#483. The publish gate holds LESSONS.md back when it carries a duplicate number, an
+# entry nothing can read, a line over the index cap or any of the other faults it walks, and the
+# send used to copy the GENERATED index files beside it anyway, because the held back list named
+# only the source. The published index then carried a lesson the published LESSONS.md did not
+# hold, and on the other Mac a rendered index line is indistinguishable from a rule that exists
+# (L46, L11).
+#
+# So the hold back is all or nothing: the source, every file rendered from it, and CLAUDE.md's
+# generated list of imports whenever publishing that list would point a session on the other Mac
+# at an index file this send is not sending.
+#
+# Its own fixture: sections are dealt to parallel workers by measured time, so two that sit next to
+# each other in this file routinely run in different processes, and one that reads a neighbour's
+# variable passes until the day the deal changes.
+HB="$WORK/hbrepo"; mkdir -p "$HB/payload"
+HBH="$WORK/hbhome"; mkdir -p "$HBH/hooks"
+echo '{"hooks":{}}' > "$HBH/settings.json"
+echo '#!/bin/sh' > "$HBH/hooks/keep-syncing.sh"
+printf '# rules\n@LESSONS-INDEX.md\n' > "$HBH/CLAUDE.md"
+# Deliberately not the real cap, for the reason the cap section gives: a fixture carrying 160 would
+# pass just as well against a tool that hardcoded 160 (L70).
+printf 'ENTRY_CAP=80\n' > "$HBH/hooks/test-rule-file-budget.sh"
+_hb(){ SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HBH" SYNC_REPO="$HB" bash "$SCRIPT" "$@" 2>&1; }
+_hb_long="A rule long enough to render past the fixture cap of eighty characters but well inside the real one."
+
+# The lessons file this Mac can publish, and the one it cannot. Both carry a SECOND section, so a
+# send that lets the generated files through leaves a whole sibling index file in the payload that
+# the payload's own LESSONS.md has no section for: the harm is visible as a file, not only as a
+# line inside one.
+_hb_sound(){ printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule about proving.** body\n' > "$HBH/LESSONS.md"; }
+_hb_write(){   # _hb_write <kind>: that fault and only that fault, plus an unpublished second section
+  local fault
+  case "$1" in
+    malformed) fault='- L2. an entry with the bold left off.' ;;
+    orphaned)  fault='this paragraph belongs to no lesson at all.' ;;
+    duplicate) fault='- **L1. claimed twice.** body' ;;
+    overcap)   fault="- **L2. $_hb_long** body" ;;
+    # A short form that means another lesson: well formed, short enough, and drifted (#389).
+    drift)     fault='- **L2. A scheduled job that reports success when it found nothing is indistinguishable from one that saw every item pass.** body
+  SHORT: A guard is only real once it has been seen to fail.' ;;
+    repeated)  fault='- **L2. a sound rule about proving.** body' ;;
+    twoshort)  fault='- **L2. another sound rule about testing.** body
+  SHORT: another sound rule about testing.
+  SHORT: another sound rule.' ;;
+    *) return 1 ;;
+  esac
+  printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule about proving.** body\n%s\n\n## Data safety\n\n- **L9. a rule that rides on the second section.** body\n' "$fault" > "$HBH/LESSONS.md"
+}
+
+# Does the published CLAUDE.md import an index file the payload does not hold? That is the state
+# that makes the other Mac's pull refuse outright, so holding the index back has to hold the list
+# of imports back with it whenever the two would disagree (#7).
+_hb_imports_resolve(){
+  local imp
+  while IFS= read -r imp; do
+    case "$imp" in LESSONS-INDEX*) [ -f "$HB/payload/$imp" ] || return 1 ;; esac
+  done < <(sed -n 's/^@//p' "$HB/payload/CLAUDE.md")
+  return 0
+}
+
+# The control FIRST, in the shape every faulty case below uses: a sound file publishes the source,
+# the file rendered from its second section, and the import that loads it. A gate that never lets
+# anything through protects nothing and no per kind check below could tell (L159).
+_hb_sound
+_hb push >/dev/null 2>&1
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule about proving.** body\n\n## Data safety\n\n- **L9. a rule that rides on the second section.** body\n' > "$HBH/LESSONS.md"
+_hb_ok="$(_hb push)"
+check "#483 the control: a sound lessons file publishes" \
+  "grep -q 'rides on the second section' '$HB/payload/LESSONS.md'"
+check "#483 the control: and the index file rendered from its new section publishes with it" \
+  "grep -q 'rides on the second section' '$HB/payload/LESSONS-INDEX-data-safety.md'"
+check "#483 the control: and CLAUDE.md publishes the import that loads it" \
+  "grep -q '^@LESSONS-INDEX-data-safety.md$' '$HB/payload/CLAUDE.md'"
+check "#483 the control: and nothing is reported as held back" \
+  "case \"\$_hb_ok\" in *'NOT publishing'*) false ;; *) true ;; esac"
+
+# The kinds are read out of the TOOL, never listed here, so a fault added to the gate with no
+# fixture here fails this section rather than quietly going untested (L41, L96).
+_hb_kinds="$(sed -n 's/^LESSON_PUBLISH_FAULT_KINDS="\(.*\)"$/\1/p' "$SCRIPT")"
+check "#483 the tool names the faults that hold a lessons file back, in one place" \
+  "[ -n \"\$_hb_kinds\" ]"
+for _hb_kind in $_hb_kinds; do
+  # Back to a payload that holds a publishable pair, so each kind is judged on its own send.
+  _hb_sound; _hb push >/dev/null 2>&1
+  if ! _hb_write "$_hb_kind"; then
+    check "#483 fault kind '$_hb_kind' has a fixture in this section" "false  # add one to _hb_write above"
+    continue
+  fi
+  check "#483 fault kind '$_hb_kind' has a fixture in this section" "true"
+  _hb_out="$(_hb push)"
+  check "#483 '$_hb_kind': the lessons file is held back" \
+    "! grep -q 'rides on the second section' '$HB/payload/LESSONS.md'"
+  check "#483 '$_hb_kind': and no file rendered from it reaches the payload" \
+    "[ ! -f '$HB/payload/LESSONS-INDEX-data-safety.md' ]"
+  check "#483 '$_hb_kind': so nothing in the payload names a lesson the payload's own copy lacks" \
+    "! grep -rq 'rides on the second section' '$HB/payload'"
+  check "#483 '$_hb_kind': and the published imports all resolve to a file the payload holds" \
+    "_hb_imports_resolve"
+  check "#483 '$_hb_kind': the refusal names the index file held back beside the source" \
+    "line_has \"\$_hb_out\" 'NOT publishing' 'LESSONS-INDEX-proof-over-green\.md'"
+  check "#483 '$_hb_kind': and says which fault of the source is holding them" \
+    "line_has \"\$_hb_out\" 'LESSONS\.md' 'publishes on the next send'"
+  # The fault adds a whole section, so this Mac's generated imports name a file the payload will
+  # not hold. Publishing that list alone is what makes the other Mac's pull refuse outright (#7).
+  check "#483 '$_hb_kind': and CLAUDE.md waits too, rather than naming a file the payload lacks" \
+    "line_has \"\$_hb_out\" 'NOT publishing' 'CLAUDE\.md' && ! grep -q 'LESSONS-INDEX-data-safety' '$HB/payload/CLAUDE.md'"
+  check "#483 '$_hb_kind': while everything else still publishes" \
+    "[ -f '$HB/payload/hooks/keep-syncing.sh' ]"
+done
+
+# CLAUDE.md is held by its OWN condition, not by the fault: a fault that changes no section leaves
+# its generated imports agreeing with the payload, and a hand edit elsewhere in the file still
+# travels while the lessons file waits. Without this the rule could be the broader one and every
+# check above would pass just the same (L104, L615).
+_hb_sound; _hb push >/dev/null 2>&1
+printf '# rules\n@LESSONS-INDEX.md\na hand written rule that has nothing to do with lessons\n' > "$HBH/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule about proving.** body\n- **L1. claimed twice.** body\n' > "$HBH/LESSONS.md"
+_hb_same="$(_hb push)"
+check "#483 a fault that changes no section still publishes a hand edit to CLAUDE.md" \
+  "grep -q 'nothing to do with lessons' '$HB/payload/CLAUDE.md'"
+check "#483 and that same send still holds the lessons file back" \
+  "line_has \"\$_hb_same\" 'NOT publishing' 'LESSONS\.md'"
+
+# And the whole set goes out together once the fault is fixed, so the hold back is a wait and not a
+# wall: without this every check above would pass against a tool that published nothing at all.
+_hb_sound
+_hb push >/dev/null 2>&1
+check "#483 the source publishes again once the fault is gone" \
+  "grep -q 'a sound rule about proving' '$HB/payload/LESSONS.md'"
+check "#483 and so does the file rendered from it" \
+  "grep -q 'a sound rule about proving' '$HB/payload/LESSONS-INDEX-proof-over-green.md'"
+
 section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
 # needs: #15: duplicate lesson numbers must not be published or go unnoticed
 # The settled rule (see the 2026-08-05 note above): the published copy keeps the
