@@ -4505,6 +4505,129 @@ for _clk_kind in $_clk_kinds; do
     "case \"\$_clk_c\" in *\"\$(printf '%s' \"\$_clk_f\" | sed 's/^claude-sync: //')\"*) true ;; *) false ;; esac"
 done
 
+section "== a repeated index number names the file that actually holds it twice (claude-config#494) =="
+# verify_lesson_index blamed the GENERATOR for a fault that is in LESSONS.md. On a push of a
+# lessons file carrying a duplicate number it said the generated index files did not match the
+# LESSONS.md beside them, printed "Rendered into more than one file at once: L1", and offered that
+# the files may not be writable. The index was correct: it had rendered, faithfully, the duplicate
+# the source holds. So the remedy it named was the wrong thing to go and check, and it printed
+# right beside the publish gate's own accurate refusal for the same file (L11: a message may claim
+# only what its check measured; L111: a remedy must name an action that changes the state the
+# reader is stuck in).
+#
+# The union check can see the repeat and cannot, on its own, see WHY, so it now asks the source.
+# The discriminator is the SAME predicate the publish gate uses for its accurate refusal, rather
+# than a second reading of the same question beside it (L41, L70, L370).
+#
+# Driven through a read only command rather than a sync, so the whole section costs no git repo and
+# no sync cycle. The union check had no test at all before this, because nothing could reach it
+# without one (claude-config#492 is about exactly that cost).
+#
+# Its own fixture: sections are dealt to parallel workers by measured time, so one that reads a
+# neighbour's variable passes until the day the deal changes.
+LIX="$WORK/lixrepo"; mkdir -p "$LIX/payload"
+LIXH="$WORK/lixhome"; mkdir -p "$LIXH/hooks"
+echo '{"hooks":{}}' > "$LIXH/settings.json"
+echo '#!/bin/sh' > "$LIXH/hooks/keep-syncing.sh"
+printf '# rules\n@LESSONS-INDEX-alpha.md\n@LESSONS-INDEX-beta.md\n' > "$LIXH/CLAUDE.md"
+_lix(){ SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LIXH" SYNC_REPO="$LIX" bash "$SCRIPT" "$@" 2>&1; }
+# The real header, so the files are recognised as derived by the same predicate the tool uses.
+_lix_idx(){   # _lix_idx <slug> <title> <body line>..
+  local slug="$1" title="$2"; shift 2
+  {
+    printf '# Lessons index: %s (generated, do not edit)\n\n' "$title"
+    printf 'One SHORTENED line per lesson.\n\n'
+    printf '%s\n' "$@"
+  } > "$LIXH/LESSONS-INDEX-$slug.md"
+}
+_lix_clean(){ rm -f "$LIXH"/LESSONS-INDEX-*.md; }
+
+# The control first. A tree whose files agree with their source says NOTHING and exits 0, because
+# a check that speaks on every run is one nobody reads, and because every assertion below would be
+# satisfied by a check that simply always complains (L159).
+_lix_clean
+printf '# Lessons\n\n## Alpha\n\n- **L1. one.** body\n\n## Beta\n\n- **L2. two.** body\n' > "$LIXH/LESSONS.md"
+_lix_idx alpha Alpha '- L1. one.'
+_lix_idx beta  Beta  '- L2. two.'
+out_lix_ok="$(_lix lesson-index-faults)"; rc_lix_ok=$?
+dbg "#494 sound tree: rc=$rc_lix_ok out=$out_lix_ok"
+check "#494 an index that agrees with its source exits 0" "[ \"\$rc_lix_ok\" -eq 0 ]"
+check "#494 and says nothing at all" "[ -z \"\$out_lix_ok\" ]"
+
+# THE SOURCE CAUSE. LESSONS.md itself holds L1 twice, in two sections, so the generator renders it
+# into two files and is right to. The line numbers below are fixed by this fixture: the two entries
+# sit at lines 5 and 9.
+_lix_clean
+printf '# Lessons\n\n## Alpha\n\n- **L1. one.** body\n\n## Beta\n\n- **L1. claimed a second time.** body\n' > "$LIXH/LESSONS.md"
+_lix_idx alpha Alpha '- L1. one.'
+_lix_idx beta  Beta  '- L1. claimed a second time.'
+out_lix_src="$(_lix lesson-index-faults)"; rc_lix_src=$?
+dbg "#494 duplicate in the source: rc=$rc_lix_src out=$out_lix_src"
+check "#494 a number the source holds twice is still a failure" "[ \"\$rc_lix_src\" -ne 0 ]"
+check "#494 and it says the index is a faithful rendering of the source" \
+  "case \"\$out_lix_src\" in *faithful*) true ;; *) false ;; esac"
+check "#494 and it names the number and both lines in LESSONS.md" \
+  "case \"\$out_lix_src\" in *'L1 (lines 5, 9)'*) true ;; *) false ;; esac"
+# The wrong remedy, watched for by name. This is the sentence the issue was written about: it sent
+# the reader to check whether the generated files were writable, which is not the state they are
+# stuck in.
+check "#494 and it does not send the reader to check whether the files are writable" \
+  "case \"\$out_lix_src\" in *writable*) false ;; *) true ;; esac"
+check "#494 and it names the remedy that does change the state: renumbering" \
+  "case \"\$out_lix_src\" in *next-lesson*) true ;; *) false ;; esac"
+
+# THE RENDERING CAUSE, unchanged. LESSONS.md holds L1 once; a file left behind by a rename still
+# carries it, so the union really does disagree with its source. This is the case the original
+# message was written for, and it must keep its original remedy.
+_lix_clean
+printf '# Lessons\n\n## Alpha\n\n- **L1. one.** body\n' > "$LIXH/LESSONS.md"
+_lix_idx alpha Alpha '- L1. one.'
+_lix_idx stale Stale '- L1. one.'
+out_lix_stale="$(_lix lesson-index-faults)"; rc_lix_stale=$?
+dbg "#494 stale file: rc=$rc_lix_stale out=$out_lix_stale"
+check "#494 a number only the FILES repeat is still reported" "[ \"\$rc_lix_stale\" -ne 0 ]"
+check "#494 and that case keeps the remedy about a stale or unwritable file" \
+  "case \"\$out_lix_stale\" in *writable*) true ;; *) false ;; esac"
+check "#494 and it does not claim the source holds it twice" \
+  "case \"\$out_lix_stale\" in *faithful*) false ;; *) true ;; esac"
+# Distinct causes, distinct messages (L11). Two outcomes separated only in wording while taking the
+# same action are one outcome, so the pair is compared directly.
+check "#494 the two causes do not say the same thing" \
+  "[ \"\$out_lix_src\" != \"\$out_lix_stale\" ]"
+
+# BOTH AT ONCE, which is what proves the attribution is per NUMBER and not one switch over the
+# whole message. L1 is duplicated in the source; L2 is rendered by a file the source no longer has
+# a section for. Every repeated number has to land in exactly one of the two buckets (L517).
+_lix_clean
+printf '# Lessons\n\n## Alpha\n\n- **L1. one.** body\n- **L2. two.** body\n\n## Beta\n\n- **L1. claimed a second time.** body\n' > "$LIXH/LESSONS.md"
+_lix_idx alpha Alpha '- L1. one.' '- L2. two.'
+_lix_idx beta  Beta  '- L1. claimed a second time.'
+_lix_idx stale Stale '- L2. two.'
+out_lix_both="$(_lix lesson-index-faults)"; rc_lix_both=$?
+dbg "#494 both causes at once: rc=$rc_lix_both out=$out_lix_both"
+check "#494 a tree carrying both causes is reported" "[ \"\$rc_lix_both\" -ne 0 ]"
+# Asserted on the two sentences by name rather than on the words appearing somewhere in one
+# message, because both sentences are in one line and "L2 somewhere before the word faithful" is
+# true however the numbers are attributed. This fixture puts the two L1 entries at lines 5 and 10.
+check "#494 and L1 is attributed to the source, with its lines" \
+  "case \"\$out_lix_both\" in *'the fault is in the source rather than in the generated files: L1 (lines 5, 10).'*) true ;; *) false ;; esac"
+check "#494 and L2 is attributed to the files" \
+  "case \"\$out_lix_both\" in *'Rendered into more than one file at once: L2.'*) true ;; *) false ;; esac"
+check "#494 and the files sentence does not also accuse L1" \
+  "case \"\$out_lix_both\" in *'more than one file at once: L1'*) false ;; *) true ;; esac"
+check "#494 and both sentences are present, so neither fault is lost behind the other" \
+  "case \"\$out_lix_both\" in *faithful*) true ;; *) false ;; esac"
+check "#494 and the writable remedy is back, because a file really is stale this time" \
+  "case \"\$out_lix_both\" in *writable*) true ;; *) false ;; esac"
+
+# The command itself is the read only preview of a check that otherwise runs only inside a write,
+# so it must change nothing. Measured rather than asserted: the tree is hashed either side of it.
+_lix_before="$(cd "$LIXH" && ls -1 | sort | while IFS= read -r f; do [ -f "$f" ] && printf '%s %s\n' "$f" "$(wc -c < "$f" | tr -d ' ')"; done)"
+_lix lesson-index-faults >/dev/null 2>&1
+_lix_after="$(cd "$LIXH" && ls -1 | sort | while IFS= read -r f; do [ -f "$f" ] && printf '%s %s\n' "$f" "$(wc -c < "$f" | tr -d ' ')"; done)"
+check "#494 asking the question changes nothing in the tree" "[ \"\$_lix_before\" = \"\$_lix_after\" ]"
+
+
 section "== nothing rendered from a lessons file publishes without it (#483) =="
 # claude-config#483. The publish gate holds LESSONS.md back when it carries a duplicate number, an
 # entry nothing can read, a line over the index cap or any of the other faults it walks, and the

@@ -21,6 +21,7 @@
 #   claude-sync next-lesson       # the next free lesson number, so none is picked by eye
 #   claude-sync check-lessons     # fail if anything would stop the lessons file publishing
 #   claude-sync lesson-faults     # the same faults, lock free and silent when there are none
+#   claude-sync lesson-index-faults # read-only: do the generated index files match LESSONS.md
 #   claude-sync lesson-short-forms [FILE] # every short form beside the rule it stands for
 #   claude-sync lesson L174       # one lesson in full, with its provenance
 #   claude-sync cite-scan L2      # which synced files cite that lesson number
@@ -2121,6 +2122,25 @@ lesson_index_union_faults(){   # $1 = tree holding LESSONS.md and the generated 
   return 0
 }
 
+# WHICH LINES of a lessons file declare a given number, and only when it declares it MORE THAN
+# ONCE (claude-config#494). This is what separates the two causes a repeated index number can have:
+# the source holding the number twice, which the generated files then render faithfully, from a
+# generated file that disagrees with a source holding it once.
+#
+# The shape of a declaration is DERIVED from LESSON_DECL_RE rather than written out again, so this
+# and the publish gate's own duplicate check cannot come to two ideas of what declares a number
+# (L41, L370). The trailing dot in that pattern is what keeps L1 from matching L12.
+lesson_source_duplicate_lines(){   # $1 = lessons file, $2 = the bare number -> "5, 9" or nothing
+  local re lines n
+  re="${LESSON_DECL_RE/\[0-9\]+/$2}"
+  lines="$(grep -nE "$re" "$1" 2>/dev/null | cut -d: -f1 || true)"
+  n="$(printf '%s' "$lines" | grep -c '[0-9]' || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  [ "$n" -ge 2 ] || return 0
+  printf '%s' "$lines" | paste -sd, - | sed 's/,/, /g'
+  return 0
+}
+
 # Do the generated files and the lessons file beside them actually agree? Every failure path in
 # write_lesson_index returns 0 in silence, so a generation that failed, truncated, or could not
 # write left whatever stale index was already on disk and every session went on loading it. A
@@ -2130,7 +2150,7 @@ lesson_index_union_faults(){   # $1 = tree holding LESSONS.md and the generated 
 # the writer cannot see an index that was right when written and has gone stale since (L225).
 # Silent when they agree: a warning printed on every run is one nobody reads (L36).
 verify_lesson_index(){   # $1 = tree holding LESSONS.md and the generated files
-  local src="$1/$LESSONS_FILE" faults kind nums detail=""
+  local src="$1/$LESSONS_FILE" faults kind nums detail="" srcdetail="" num bare lines fromsrc fromfiles
   [ -f "$src" ] || return 0
   faults="$(lesson_index_union_faults "$1")"
   [ -z "$faults" ] && return 0
@@ -2142,12 +2162,43 @@ verify_lesson_index(){   # $1 = tree holding LESSONS.md and the generated files
       NOFILES)  detail+=" There is no generated index file at all, so every session in every project is loading no lessons index." ;;
       MISSING)  detail+=" Rendered into no file, so they are not reaching any session: $nums." ;;
       EXTRA)    detail+=" In a generated file but no longer in LESSONS.md: $nums." ;;
-      REPEATED) detail+=" Rendered into more than one file at once: $nums." ;;
+      # A number in two files at once has two causes and this check, on its own, can see only the
+      # symptom. It used to name one of them, the generator, and offer that the files may not be
+      # writable. On a lessons file carrying a duplicate number that was the wrong thing to send
+      # somebody to look at: the index had rendered, faithfully, what the source holds, and the
+      # message printed right beside the publish gate's own accurate refusal for the same file
+      # (claude-config#494, L11, L111).
+      #
+      # So each number is attributed separately, by asking the SOURCE. Per number rather than one
+      # switch over the whole message, because a tree can carry both at once and either fault
+      # hidden behind the other is a second run to discover it (L517).
+      REPEATED)
+        fromsrc=""; fromfiles=""
+        for num in $nums; do
+          bare="${num#L}"
+          lines="$(lesson_source_duplicate_lines "$src" "$bare")"
+          if [ -n "$lines" ]; then
+            fromsrc="${fromsrc:+$fromsrc }$num (lines $lines)"
+          else
+            fromfiles="${fromfiles:+$fromfiles }$num"
+          fi
+        done
+        [ -n "$fromfiles" ] && detail+=" Rendered into more than one file at once: $fromfiles."
+        [ -n "$fromsrc" ] && srcdetail+=" $LESSONS_FILE itself declares these numbers more than once, so the index is a faithful rendering of the source and the fault is in the source rather than in the generated files: $fromsrc."
+        ;;
     esac
   done <<LESSON_INDEX_FAULTS
 $faults
 LESSON_INDEX_FAULTS
-  echo "claude-sync: the generated lessons index files in $1 do not match the LESSONS.md beside them, so what every session loads is not what the lessons file says.${detail} Nothing was reverted; the next run regenerates them, and if this repeats they are not writable." >&2
+  # Nothing the generated files did wrong. Regenerating cannot change a duplicate in the source, so
+  # the sentence about a stale or unwritable file is not printed at all here: a remedy has to name
+  # an action that changes the state the reader is stuck in (L111).
+  if [ -n "$srcdetail" ] && [ -z "$detail" ]; then
+    echo "claude-sync: a lesson number is rendered into more than one of the generated index files in $1, because the LESSONS.md beside them holds it more than once.${srcdetail} The generated files are correct and regenerating them will not change this. Renumber the later entry: 'claude-sync next-lesson' prints the next free number. The send refuses to publish the same file for the same reason." >&2
+    notify "a lesson number is used twice in LESSONS.md"
+    return 1
+  fi
+  echo "claude-sync: the generated lessons index files in $1 do not match the LESSONS.md beside them, so what every session loads is not what the lessons file says.${detail}${srcdetail} Nothing was reverted; the next run regenerates them, and if this repeats they are not writable." >&2
   notify "the lessons index files disagree with LESSONS.md"
   return 1
 }
@@ -8985,6 +9036,12 @@ case "$cmd" in
     faults="$(lesson_publish_faults "$CLAUDE_HOME")"
     if ! is_blank "$faults"; then die "$faults"; fi
     ;;
+  # Read only: do the generated index files hold every lesson in the LESSONS.md beside them exactly
+  # once. verify_lesson_index otherwise runs only INSIDE a write, so the only way to reach it was to
+  # perform one, which is why it had no test of its own until claude-config#494 (and why a test for
+  # it used to cost a git repository and a sync cycle, which claude-config#492 is about). Silent and
+  # 0 when they agree, because a report printed on every run is one nobody reads (L36).
+  lesson-index-faults) verify_lesson_index "$CLAUDE_HOME" ;;
   check-lessons)
     # EVERY fault that holds a lessons file back, walked from the same list the send walks
     # (claude-config#373). This command is the read only way of asking whether LESSONS.md can
@@ -9011,5 +9068,5 @@ case "$cmd" in
   help|-h|--help) awk 'NR > 1 { if ($0 ~ /^# *Env overrides/) exit; buf[n++] = $0 }
                         END { while (n > 0 && buf[n-1] == "#") n--; for (i = 0; i < n; i++) print buf[i] }' \
                     "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-short-forms, stuck, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-index-faults, lesson-short-forms, stuck, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
 esac
