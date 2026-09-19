@@ -37,6 +37,15 @@ transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/nul
 # this hook for that one conversation only; delete the file to re-enable.
 [ -f "${transcript}.skip-stop-hooks" ] && exit 0
 
+# python3 is what decides whether this turn did real work, so with none this hook has nothing to
+# run at all. Said once rather than swallowed, because silence here is indistinguishable from a
+# turn with nothing to reflect on (claude-config#490, L98).
+_SPN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/stop-hook-python-notice.sh"
+if [ -f "$_SPN" ]; then
+  . "$_SPN"
+  stop_hook_python3_notice "session-reflection.sh"
+fi
+
 # Did the latest turn (since the last genuine user message) use a MUTATING tool
 # (Edit/Write/Bash/Agent/...)? Chat-only and read-only Q&A turns -> skip, so the
 # reflection doesn't crowd out short question turns (shared helper, also used by

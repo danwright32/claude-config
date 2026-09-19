@@ -24,6 +24,16 @@ input=$(cat)
 # (2026-07-16). A detached run must not teach the next session anything.
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 
+# python3 is what decides whether this turn did real work, so with none this hook has nothing to
+# run at all. Said once rather than swallowed, because silence here is indistinguishable from a
+# turn with nothing to reflect on (claude-config#490, L98).
+_SPN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/stop-hook-python-notice.sh"
+if [ -f "$_SPN" ]; then
+  . "$_SPN"
+  stop_hook_python3_notice "checkpoint-save.sh"
+fi
+
+
 CC_HOOK_INPUT="$input" python3 <<'PY'
 import sys, json, os, re
 

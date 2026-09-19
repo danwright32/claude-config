@@ -28,6 +28,16 @@ transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/nul
 # Per-conversation kill switch: `touch <transcript>.skip-stop-hooks` silences
 # this hook for that one conversation only; delete the file to re-enable.
 [ -f "${transcript}.skip-stop-hooks" ] && exit 0
+
+# python3 is what decides whether this turn did real work, so with none this hook has nothing to
+# run at all. Said once rather than swallowed, because silence here is indistinguishable from a
+# turn with nothing worth filing (claude-config#490, L98).
+_SPN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/stop-hook-python-notice.sh"
+if [ -f "$_SPN" ]; then
+  . "$_SPN"
+  stop_hook_python3_notice "feature-issue-review.sh"
+fi
+
 worked=$(python3 "$(dirname "${BASH_SOURCE[0]}")/turn-worked.py" "$transcript" 2>/dev/null)
 [ "$worked" = "yes" ] || exit 0
 
