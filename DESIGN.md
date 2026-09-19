@@ -413,6 +413,29 @@ regenerated on every send and every apply rather than maintained beside the file
 kept by hand next to its source drifts silently (L41). The renumber scan skips it for the same
 reason: a number in a file that is rewritten in the same run is not something to go and check.
 
+### One index file per section rather than one file for all of them
+
+Adopted for #473. Both limits that govern a file loaded into every session are PER FILE: the 140,000
+byte budget in `hooks/test-rule-file-budget.sh` and the platform's own large-memory-files banner at
+150,000 characters. The single index measured 100,899 characters over 702 lessons on 2026-09-19 and
+was growing about 1,130 a day, so it was roughly a month from the budget. Rendering one file per
+section of `LESSONS.md` put the largest at 27,713, a fifth of the budget, and every file is still
+imported by `CLAUDE.md`, so every lesson still loads into every session. It saves no tokens, which
+is the point: the file size problem is separated from the token cost question, which is #474.
+
+Three things this had to get right. The set of files is a LIST that changes whenever a section is
+added, renamed or removed, so `CLAUDE.md` gets its import block generated from the same list rather
+than maintained beside it (a file nothing imports neither loads nor travels, since the synced set is
+derived from those imports). A file whose section has gone is deleted by the generator in the tree
+it writes, and the payload is mirrored against `~/.claude` in the staging, so the deletion travels.
+And whether a path is derived is decided by its NAME SHAPE rather than by the current section list,
+because the file that turns up in a rebase conflict is exactly the sibling no current section
+produces.
+
+The single `LESSONS-INDEX.md` was retired rather than kept beside the sections. Kept, it would have
+been a second copy of every rule that nothing imports, so nothing would have carried it to the other
+Mac or kept it current there, and a stale index reads exactly like a correct one (L98).
+
 ### Handing the freed budget to the last suite still running
 
 Rejected for #147, which is what the issue proposed. A full run measured 84 seconds on an idle Mac
@@ -505,7 +528,7 @@ that is added both fail until this table is updated.
 | --- | --- | --- | --- | --- |
 | 1 hour | `SYNC_LOCK_MAX_AGE=3600` | A lock is broken as stale | Re-checked 2026-08-21: the payload is 4.9MB, a fresh clone from origin takes 1 second and a whole-payload copy under 1, so the original 6 second figure is conservative and this is at least 600x the slowest real run, proved by #29 | 2026-08-21 |
 | 60 days | `SYNC_MAC_RETIRE_AFTER=5184000` | A Mac counts as retired | Re-derived 2026-08-21 by `tools/measure-sync-gaps.sh`: the worst gap either Mac showed in the window is 6.79 days, so 8.8x the longest real absence, and a holiday cannot trip it, proved by #26 | 2026-08-21 |
-| 1 hour | `SUITE_TIMEOUT=3600` | A suite run is killed after this much wall clock however well it is going | No longer the thing that catches a hang, which is why it is generous: SUITE_STALL_TIMEOUT does that. A full single process run measured 348 seconds idle and 1943 at load 160 to 188 on 2026-08-22, so the old 900 would have killed a healthy run on a busy Mac, proved by #152. It is now bounded from below as well, at twice the stall bound, or the stall can never be reached and every real hang is reported as a ceiling overrun instead, which #112 checks | 2026-08-22 |
+| 1 hour on a Mac, 30 minutes on CI | `SUITE_TIMEOUT=3600`, set to 1800 in `.github/workflows/tests.yml` | A suite run is killed after this much wall clock however well it is going | No longer the thing that catches a hang, which is why it is generous: SUITE_STALL_TIMEOUT does that. A full single process run measured 348 seconds idle and 1943 at load 160 to 188 on 2026-08-22, so the old 900 would have killed a healthy run on a busy Mac, proved by #152. It is now bounded from below as well, at twice the stall bound, or the stall can never be reached and every real hang is reported as a ceiling overrun instead, which #112 checks. The RUNNER sets its own, and it was raised from 960 to 1800 on 2026-09-19: the run also fails when its wall clock is more than half the ceiling and its own processor time is what filled it, so 960 put that refusal at 480 seconds, and the sync suite measured 470 on main that day and 485 on a branch adding one section. Main was about ten seconds from red with nothing having changed, and the workflow's own comment still recorded the run as "roughly 200 seconds" from 2026-08-30 (L210, L244). 1800 is roughly 3.7x the measured 485, which puts the refusal back at 900, about 1.9x the real run, and leaves 840 seconds over the 480 second stall bound where 960 sat exactly on its floor. The suite's runtime is tracked as #492 rather than made invisible by the raise, proved by #167 | 2026-09-19 |
 | 20 minutes | `SUITE_STALL_TIMEOUT=1200` | A suite run is killed as hung after this long without reaching a new section | This is what actually catches a hang. Re-measured 2026-08-22 across four loads on this Mac: the slowest single section was 44s idle, 62s with another full run competing, 88s with three of them, and once 208s, so this is at least 5.7x the worst observed and 13x the heaviest load that could be reproduced. It was 600 against a 34 second measurement, and at 3x that floor sat at 624 while the real spread reached 208, so the bound and its floor had met in the middle of the distribution they judge and a busy afternoon turned the run red with nothing wrong (L172). The bound moved rather than the floor, since the floor is the safety margin and the margin was the thing that had gone. Checked against the sections this run ACTUALLY took rather than against this sentence, and every run now PRINTS the margin it achieved so the next shrinkage is seen before it fails, proved by #152 and #179 | 2026-08-22 |
 | 30 minutes | `SUITE_LOCK_MAX_AGE=1800` | A suite lock from another machine is broken | The same runs, so at least 6x the slowest observed, proved by #32 | 2026-08-21 |
 | 4 hours | `SYNC_SCRATCH_MAX_AGE=14400` | Scratch counts as abandoned | 4x the 3600 second suite ceiling, so the longest permitted run is a quarter of the way to being swept, and 2400x the 6 second sync. It was 3600 against a 900 second ceiling, which was the same 4x, and #152 raised the ceiling alone and closed the margin to nothing. The two are now compared against each other by a check rather than by this sentence, proved by #160 | 2026-08-22 |
@@ -696,14 +719,16 @@ first. That is why the merge belongs in the staging rather than in a guard above
 
 ## A conflict in a file this tool GENERATES is not a conflict
 
-`LESSONS-INDEX.md` is derived: it is rebuilt from `LESSONS.md` on every send and every apply, and
-its header carries a lesson count. Both Macs rewrite that one line, so any two sided lesson
-addition makes the generated files differ and git stops, even when the lessons themselves merged
-perfectly well.
+The lessons index is derived: it is rebuilt from `LESSONS.md` on every send and every apply. When it
+was one file its header carried a lesson count, and both Macs rewrote that one line, so any two
+sided lesson addition made the generated files differ and git stopped, even when the lessons
+themselves merged perfectly well. The split into one file per section (claude-config#473) took the
+count away, so a conflict now needs both Macs to have moved the same section, which is an ordinary
+week rather than a certainty.
 
 There are two defences, and the second exists because the first cannot always be in place.
 
-The clone is told never to combine the file, with a `merge=ours` rule written to
+The clone is told never to combine these files, with a `merge=ours` rule written to
 `.git/info/attributes`. That is per clone and never travels, which is deliberate (it is in force on
 the first run on a clone rather than only once a committed file has arrived), and it is also the
 limitation: a clone that has not yet run a version of this tool that writes it does not have it,
@@ -715,6 +740,13 @@ and the rebase continued, and the run says it did that. One conflicted path that
 and none of this happens: continuing then would commit whichever side git happened to leave, so the
 stand down is no broader than its reason (L324). A rebase stopped with no conflicted path at all is
 refused too, because that is not this.
+
+The regeneration rebuilds EVERY generated file, and before anything is staged each conflicted path
+is read for a leftover conflict marker and the whole recovery refuses if one is there. That guard
+is the reason this survived the split into one file per section: the old code regenerated exactly
+one file and then staged every conflicted path, which was safe only while exactly one path was ever
+generated. A second conflicted sibling would have been committed carrying its markers into a file
+that loads into every session in every project.
 
 Measured 2026-09-03: five new lessons here against twenty commits there, `payload/LESSONS.md`
 merged cleanly, `payload/LESSONS-INDEX.md` was the only conflicted path, and the sync died telling

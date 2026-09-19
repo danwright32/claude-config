@@ -2,7 +2,7 @@
 # Tests for the check that runs the moment a lesson is WRITTEN (claude-config#374).
 #
 # A lesson entry written into LESSONS.md in the wrong shape is invisible from the moment it is
-# saved: absent from LESSONS-INDEX.md, which loads into every session in every project, unreadable
+# saved: absent from the generated lessons index, which loads into every session in every project, unreadable
 # by `claude-sync lesson`, uncounted by the duplicate check and by the number minter. Nothing
 # reported it. The only thing that noticed was the next sync, which can be days later, and by then
 # the malformed entry had been holding the ENTIRE lessons file back from publishing, so every

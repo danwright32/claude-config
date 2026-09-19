@@ -657,7 +657,13 @@ if [ "$ran" -gt 0 ]; then
   # each would be just as silent: a suite that sources a library before setting its override binds
   # to the real path, and nothing anywhere would say so.
   #
-  # A LIST, so adding a store is one line rather than a new guard. Compared on content, which is
+  # The generated lessons index is one file per section of LESSONS.md since claude-config#473, so
+# those are ENUMERATED from disk rather than written out here: a list typed in would cover whatever
+# the sections were the day somebody typed it (L41). The retired single name is still listed, so a
+# suite that recreates it is caught as a creation. What the enumeration gives up is a file a suite
+# CREATES under a section name that did not exist when the run started, which nothing here sees.
+#
+# A LIST, so adding a store is one line rather than a new guard. Compared on content, which is
   # what a rule file being damaged actually looks like: a suite that rewrites LESSONS.md with the
   # same number of bytes changes no size at all, and a size-only bracket would report that as
   # clean (L63). Attribution is deliberately NOT attempted here: unlike the spool, nothing else on
@@ -666,6 +672,7 @@ if [ "$ran" -gt 0 ]; then
   _live_stores="${CLAUDE_HOME:-$HOME/.claude}/LESSONS.md
 ${CLAUDE_HOME:-$HOME/.claude}/LESSONS-INDEX.md
 ${CLAUDE_HOME:-$HOME/.claude}/CLAUDE.md
+$(for _lsx in "${CLAUDE_HOME:-$HOME/.claude}"/LESSONS-INDEX-*.md; do [ -f "$_lsx" ] && printf '%s\n' "$_lsx"; done)
 ${CLAUDE_HOME:-$HOME/.claude}/settings.json
 ${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}
 ${SYNC_ZSHRC:-$HOME/.zshrc}

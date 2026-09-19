@@ -1,12 +1,30 @@
 @RTK.md
-@LESSONS-INDEX.md
+<!-- lessons index: generated from LESSONS.md, do not edit between these markers -->
+@LESSONS-INDEX-proof-over-green.md
+@LESSONS-INDEX-data-safety.md
+@LESSONS-INDEX-honest-failure.md
+@LESSONS-INDEX-state-and-identity.md
+@LESSONS-INDEX-security-and-privacy.md
+@LESSONS-INDEX-ux-completeness.md
+@LESSONS-INDEX-external-systems.md
+@LESSONS-INDEX-building-with-ai.md
+@LESSONS-INDEX-codebase-hygiene.md
+@LESSONS-INDEX-cross-system-reliability.md
+@LESSONS-INDEX-test-speed.md
+@LESSONS-INDEX-pipeline-speed.md
+<!-- end lessons index -->
 
-The lessons index above is one line per lesson, and that line is a SHORTENED form of the rule,
-not the rule itself: it carries the condition and the instruction, and routinely drops the clause
-saying what the failure looks like. The full sentence and the evidence live in ~/.claude/LESSONS.md,
+The files above are the lessons index, one per section of LESSONS.md and generated from it, and
+between them they carry one line per lesson. Each line is a SHORTENED form of the rule, not the
+rule itself: it carries the condition and the instruction, and routinely drops the clause saying
+what the failure looks like. The full sentence and the evidence live in ~/.claude/LESSONS.md,
 which is deliberately NOT loaded into the session. So read the whole entry whenever a rule is about
 to decide something, with `~/claude-config-sync/claude-sync lesson L174` or by reading the entry in
 that file. The index line is enough to tell you a rule APPLIES; it is not enough to apply it.
+
+They are split by section because both limits that govern a file loaded into every session, the
+budget in hooks/test-rule-file-budget.sh and the platform's own large-memory-files banner, are per
+file. Every one of them still loads, so no rule is anywhere except in front of you.
 
 ## General Behavior
 

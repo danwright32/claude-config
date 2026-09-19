@@ -42,11 +42,8 @@ check "the hook exits 0" "$status"
 grep -qF 'superpowers:test-driven-development' <<< "$out"
 check "it still names the test-first skill" $?
 
-grep -qF '## Test speed' <<< "$out"
-check "it points a coding turn at the Test speed lessons section" $?
-
-grep -qF 'LESSONS-INDEX.md' <<< "$out"
-check "it names the index the section is read from" $?
+grep -qF 'LESSONS-INDEX-test-speed.md' <<< "$out"
+check "it points a coding turn at the Test speed lessons file" $?
 
 # Whether the file is THERE is asked first, and separately. Without this, an absent file answers
 # the question below in the same word as a renamed section, and the reader is sent to look for a
@@ -55,13 +52,22 @@ check "it names the index the section is read from" $?
 check "the lessons file the pointer is checked against is present at $LESSONS" $?
 
 # The section it names must exist in the lessons file, or the pointer is a dead link that
-# reads as guidance (L41: a list mirroring another source is derived from it, or it drifts).
+# reads as guidance (L41: a list mirroring another source is derived from it, or it drifts). The
+# file name the nudge sends people to is that section's own, derived from the heading by the
+# generator: lowercased with anything that is not a letter or a digit replaced by one hyphen. So
+# the heading is what is checked, and the name is checked against the file the generator wrote.
 if [ -f "$LESSONS" ]; then
   grep -qE '^## Test speed[[:space:]]*$' "$LESSONS"
   check "LESSONS.md actually has a '## Test speed' section" $?
 else
   check "LESSONS.md actually has a '## Test speed' section" 1
 fi
+
+# And the file that section renders into is really there beside the lessons file, or the nudge
+# names an import nothing loads (L98: a pointer at nothing reads exactly like a pointer at
+# something).
+[ -f "$(dirname "$LESSONS")/LESSONS-INDEX-test-speed.md" ]
+check "the Test speed index file the nudge names is beside it" $?
 
 # No dashes as punctuation and no emoji in what every prompt receives (the style rule applies
 # to generated output, and this text lands in every session).

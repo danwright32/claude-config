@@ -1552,7 +1552,7 @@ duplicate_lesson_numbers(){   # $1 = tree to inspect
 }
 
 # ---- a short form that no longer says what its rule says (claude-config#369, #389) ----
-# LESSONS-INDEX.md renders a hand written SHORT: line in place of the rule sentence for most
+# The lessons index renders a hand written SHORT: line in place of the rule sentence for most
 # lessons, so a short form that drifts, or one edited without its rule, is what every session reads
 # in place of the lesson, carrying the rule's authority while meaning something else (L562).
 #
@@ -1808,7 +1808,23 @@ lesson_publish_faults(){   # $1 = tree to inspect -> the sentence, or nothing
 # DERIVED from LESSONS.md on every send and every apply, never maintained beside it: a list kept by
 # hand next to the thing it mirrors drifts the moment one of them is edited, and the drift is
 # silent (L41). A hand edit here is therefore overwritten, which is the point.
-LESSON_INDEX_FILE="LESSONS-INDEX.md"
+#
+# ---- ONE FILE PER SECTION (claude-config#473) ----
+# It was ONE file, LESSONS-INDEX.md, and on 2026-09-19 that file was 100,899 characters over 702
+# lessons, growing about 1,130 a day. The budget in hooks/test-rule-file-budget.sh is 140,000 and
+# the platform's own large-memory-files banner is at 150,000, and BOTH are per file, so the
+# deadline was about a month away. The index is now rendered as one file per section of LESSONS.md,
+# each imported by CLAUDE.md, so every lesson still loads into every session and no file is
+# anywhere near either limit. It saves no tokens, which is the point: it separates the file size
+# problem from the token cost question, which is tracked on its own.
+#
+# The single file was RETIRED rather than kept beside the sections. Kept, it would have been a
+# second copy of every rule that nothing imports, and the synced set is derived from CLAUDE.md's
+# imports (top_files_in), so it would not have travelled and nothing on the other Mac would have
+# kept it current. Its name is still recognised below, because a clone that has not run this
+# version yet still has one to delete.
+LESSON_INDEX_PREFIX="LESSONS-INDEX"
+LESSON_INDEX_RETIRED_FILE="LESSONS-INDEX.md"
 
 # The file the index above is generated FROM. Named here so the merge recovery and the index
 # generator cannot drift into two spellings of one path (L41).
@@ -1818,23 +1834,54 @@ LESSONS_FILE="LESSONS.md"
 # the sites that have to know cannot drift into three different lists (L41). Two copies of a
 # derived file are not two people's work in conflict: they are two correct renderings of two
 # different inputs, and the input is what actually merges.
+#
+# Decided by the NAME SHAPE, never by the list the generator is about to produce. The two answer
+# differently for exactly the file that matters: a section renamed or removed on the other Mac
+# arrives as a sibling no current section produces, and it is that sibling which turns up in a
+# rebase conflict and has to be recognised as derived. A list computed from the current LESSONS.md
+# would call it somebody's hand written rule file and hand it to the operator, or worse, stage it
+# with its conflict markers (L214). So: recognition by shape, generation by list, both anchored on
+# the one prefix above.
 is_derived_rule_file(){   # $1 = path relative to the payload
-  [ "${1:-}" = "$LESSON_INDEX_FILE" ]
+  case "${1:-}" in
+    "$LESSON_INDEX_RETIRED_FILE") return 0 ;;
+    "$LESSON_INDEX_PREFIX"-*.md)  return 0 ;;
+  esac
+  return 1
 }
 
+# Every derived index file PRESENT in a tree, one name per line, whether or not a current section
+# still produces it. The sweep, the staging and the merge recovery all ask this, so none of them
+# can end up walking a different set (L41).
+lesson_index_files_present(){   # $1 = tree
+  local f b
+  for f in "$1/$LESSON_INDEX_PREFIX"*.md; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"
+    is_derived_rule_file "$b" || continue
+    printf '%s\n' "$b"
+  done
+  return 0
+}
+
+# EVERY index line a lessons file renders, across every section, as one stream. Nothing writes
+# this to a file any more: it is what the entry cap is measured over, so the cap sees exactly the
+# lines the section files carry rather than a second rendering written beside them (L370).
 lesson_index_body(){   # $1 = the full lessons file
-  local n
   [ -f "$1" ] || return 0
-  n="$(grep -c '^- \*\*L[0-9]\+\.' "$1" 2>/dev/null || true)"
-  printf '# Lessons index (generated, do not edit)\n\n'
-  printf 'One line per lesson: a SHORTENED form of the rule, carrying its condition and its\n'
-  printf 'instruction, and routinely dropping the clause that says what the failure looks like.\n'
-  printf 'Generated from LESSONS.md, which is NOT loaded into the session. %s lessons.\n\n' "${n:-0}"
-  printf 'To read one in full, with its evidence: `~/claude-config-sync/claude-sync lesson L174`, or\n'
-  printf 'read the entry straight out of ~/.claude/LESSONS.md. Do that whenever a rule below is about\n'
-  printf 'to decide something: a line here is enough to tell you a rule APPLIES, and not enough to\n'
-  printf 'apply it, because the body is where the failure it came from is described.\n'
   lesson_entries_render "$1" index
+  return 0
+}
+
+# The preamble each section file carries. Two lines rather than the eight the single file had: a
+# session loads a dozen of these at once, and a paragraph repeated a dozen times is the same fact
+# stated a dozen times (L605). The whole explanation is in CLAUDE.md, once, beside the imports.
+lesson_index_file_header(){   # $1 = the section title
+  printf '# Lessons index: %s (generated, do not edit)\n\n' "$1"
+  printf 'One SHORTENED line per lesson: the condition and the instruction, routinely dropping the\n'
+  printf 'clause saying what the failure looks like. Read the whole entry before a rule decides\n'
+  printf 'anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,\n'
+  printf 'which is NOT loaded into the session.\n\n'
   return 0
 }
 
@@ -1855,11 +1902,12 @@ lesson_short_form_pairs(){   # $1 = the full lessons file
 # ONE reading of a lessons file, in three shapes. The walk, the wrap joining and the SHORT: scan are
 # the fiddly parts and they are written once: the index, the drift check and the repeated entry
 # check cannot come to different ideas of what a lesson's rule sentence is (L370, L70).
-#   index     the generated index body
+#   index     every index line, across every section, as one stream
+#   split     slug<TAB>section title<TAB>the same index line, for the per section files
 #   pairs     PAIR and ORPHAN lines, as lesson_short_form_pairs describes
 #   entries   ENTRY<TAB>Lnnn<TAB>how many SHORT: lines it holds<TAB>the rule sentence, for EVERY
 #             entry, short form or not (claude-config#392)
-lesson_entries_render(){   # $1 = the full lessons file  $2 = index | pairs | entries
+lesson_entries_render(){   # $1 = the full lessons file  $2 = index | split | pairs | entries
   [ -f "$1" ] || return 0
   # The whole file is read into an array first, rather than walked with getline. getline CONSUMES
   # the line it reads, so a continuation loop had no way to put back a line that turned out to
@@ -1950,6 +1998,21 @@ lesson_entries_render(){   # $1 = the full lessons file  $2 = index | pairs | en
         if (short != "" && match(rule, /^L[0-9]+\./)) {
           rule = substr(rule, 1, RLENGTH) " " short
         }
+        # The per section files are rendered from THIS line, after every transformation above, so
+        # the file a session loads and the line the entry cap measures are the same string (L370).
+        # The slug is what the file is named after: lowercase, anything that is not a letter or a
+        # digit becomes one hyphen. Two section titles can legitimately reduce to one slug, and
+        # they are APPENDED to one file rather than one truncating the other, because a section
+        # whose lessons vanished would read exactly like a section nobody had written yet (L98).
+        if (mode == "split") {
+          slug = tolower(section)
+          gsub(/[^a-z0-9]+/, "-", slug)
+          sub(/^-+/, "", slug); sub(/-+$/, "", slug)
+          title = section
+          if (slug == "") { slug = "unsectioned"; title = "Unsectioned" }
+          printf "%s\t%s\t- %s\n", slug, title, rule
+          continue
+        }
         if (section != lastsec) { printf "\n## %s\n\n", section; lastsec = section }
         printf "- %s\n", rule
       }
@@ -1975,30 +2038,180 @@ lesson_entries_render(){   # $1 = the full lessons file  $2 = index | pairs | en
 # cannot drift into asking two different questions (L107, L41).
 canonical_lesson_numbers(){ grep -hoE '^- \*\*L[0-9]+\.' "$@" 2>/dev/null | grep -oE '[0-9]+' | sort -u -n || true; }
 index_lesson_numbers(){     grep -hoE '^- L[0-9]+\.'      "$@" 2>/dev/null | grep -oE '[0-9]+' | sort -u -n || true; }
+# The same reading WITHOUT the -u, so a number rendered into two section files can be seen. The
+# union of the files is the index, and a number in two of them is a lesson being read twice under
+# two headings while the two counts still agree (L228, L517).
+index_lesson_numbers_all(){ grep -hoE '^- L[0-9]+\.'      "$@" 2>/dev/null | grep -oE '[0-9]+' | sort -n || true; }
 
-# Do the index and the lessons file beside it actually agree? Every failure path in
+# The three things the generated files must satisfy between them, in one place, so the send time
+# check, the apply time check and the publish gate cannot come to three different ideas of what a
+# correct index is (L41, L70):
+#
+#   MISSING    a lesson in LESSONS.md that no file renders. It has stopped arriving.
+#   EXTRA      a number in the files that LESSONS.md no longer holds. A stale file.
+#   REPEATED   a number rendered into two files at once, which a per file count cannot see.
+#
+# Prints one "kind<TAB>Lnnn Lnnn ..." line per fault and nothing at all when they agree, because a
+# report printed on every run is one nobody reads (L36).
+lesson_index_union_faults(){   # $1 = tree holding LESSONS.md and the generated files
+  local src="$1/$LESSONS_FILE" files=() f missing extra repeated
+  [ -f "$src" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    files+=("$1/$f")
+  done < <(lesson_index_files_present "$1")
+  if [ "${#files[@]}" -eq 0 ]; then
+    printf 'NOFILES\t\n'
+    return 0
+  fi
+  missing="$(comm -23 <(canonical_lesson_numbers "$src") <(index_lesson_numbers "${files[@]}") | sed 's/^/L/' | tr '\n' ' ')"
+  extra="$(comm -13 <(canonical_lesson_numbers "$src") <(index_lesson_numbers "${files[@]}") | sed 's/^/L/' | tr '\n' ' ')"
+  repeated="$(index_lesson_numbers_all "${files[@]}" | uniq -d | sed 's/^/L/' | tr '\n' ' ')"
+  [ -n "$missing" ]  && printf 'MISSING\t%s\n'  "${missing% }"
+  [ -n "$extra" ]    && printf 'EXTRA\t%s\n'    "${extra% }"
+  [ -n "$repeated" ] && printf 'REPEATED\t%s\n' "${repeated% }"
+  return 0
+}
+
+# Do the generated files and the lessons file beside them actually agree? Every failure path in
 # write_lesson_index returns 0 in silence, so a generation that failed, truncated, or could not
 # write left whatever stale index was already on disk and every session went on loading it. A
 # stale index and a correct one look identical to a reader (L98).
 #
-# It reads the two FILES rather than checking inside the writer, because a check that lives only
-# in the writer cannot see an index that was right when written and has gone stale since (L225).
+# It reads the FILES rather than checking inside the writer, because a check that lives only in
+# the writer cannot see an index that was right when written and has gone stale since (L225).
 # Silent when they agree: a warning printed on every run is one nobody reads (L36).
-verify_lesson_index(){   # $1 = tree holding LESSONS.md and the index
-  local src="$1/LESSONS.md" idx="$1/$LESSON_INDEX_FILE" missing extra
+verify_lesson_index(){   # $1 = tree holding LESSONS.md and the generated files
+  local src="$1/$LESSONS_FILE" faults kind nums detail=""
   [ -f "$src" ] || return 0
-  if [ ! -f "$idx" ]; then
-    echo "claude-sync: $1/LESSONS.md is here but $LESSON_INDEX_FILE is not, so every session in every project is loading no lessons index at all. Nothing here could write it; check the permissions on $1." >&2
+  faults="$(lesson_index_union_faults "$1")"
+  [ -z "$faults" ] && return 0
+  # Every fault is reported, never as an else-if: a truncated rewrite commits two at once, and
+  # dying at the first sends somebody back for a second run to discover the second (L11).
+  while IFS="$(printf '\t')" read -r kind nums; do
+    [ -n "$kind" ] || continue
+    case "$kind" in
+      NOFILES)  detail+=" There is no generated index file at all, so every session in every project is loading no lessons index." ;;
+      MISSING)  detail+=" Rendered into no file, so they are not reaching any session: $nums." ;;
+      EXTRA)    detail+=" In a generated file but no longer in LESSONS.md: $nums." ;;
+      REPEATED) detail+=" Rendered into more than one file at once: $nums." ;;
+    esac
+  done <<LESSON_INDEX_FAULTS
+$faults
+LESSON_INDEX_FAULTS
+  echo "claude-sync: the generated lessons index files in $1 do not match the LESSONS.md beside them, so what every session loads is not what the lessons file says.${detail} Nothing was reverted; the next run regenerates them, and if this repeats they are not writable." >&2
+  notify "the lessons index files disagree with LESSONS.md"
+  return 1
+}
+
+# ---- the imports, DERIVED from the sections (claude-config#473) ----
+# The synced top level set is derived from CLAUDE.md's own @imports (top_files_in, and DESIGN.md
+# records the trap), and so is what the platform loads. A generated file nothing imports therefore
+# does neither: it does not travel to the other Mac and it does not reach a session. With one file
+# the import was a single hand written line that could not go wrong; with one per section it is a
+# LIST that changes whenever a section is added, renamed or removed, and a list maintained by hand
+# beside the thing it mirrors is the defect this repo keeps finding (L41).
+#
+# So the block is written from the same section list the files are, between markers, and the rest
+# of CLAUDE.md is left exactly as it is. On the first run it REPLACES the retired single import,
+# which is also what stops every session dying on a reference to a file that is no longer there.
+LESSON_INDEX_IMPORT_BEGIN="<!-- lessons index: generated from LESSONS.md, do not edit between these markers -->"
+LESSON_INDEX_IMPORT_END="<!-- end lessons index -->"
+ensure_lesson_index_imports(){   # $1 = tree   $2 = the file names to import, one per line
+  local cm="$1/CLAUDE.md" block out name
+  [ -f "$cm" ] || return 0
+  is_blank "$2" && return 0
+  block="$LESSON_INDEX_IMPORT_BEGIN"
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    block+="
+@$name"
+  done <<LESSON_INDEX_IMPORT_NAMES
+$2
+LESSON_INDEX_IMPORT_NAMES
+  block+="
+$LESSON_INDEX_IMPORT_END"
+  out="$(scratch_file)" || return 0
+  # The block travels in the ENVIRONMENT rather than through `-v`, which cannot carry a newline:
+  # BSD awk refuses the whole program with "newline in string" and the block is silently never
+  # written, which looks exactly like a CLAUDE.md that needed no change (L536).
+  LESSON_INDEX_BLOCK="$block" awk -v b="$LESSON_INDEX_IMPORT_BEGIN" -v e="$LESSON_INDEX_IMPORT_END" \
+      -v retired="@$LESSON_INDEX_RETIRED_FILE" '
+    BEGIN              { blk = ENVIRON["LESSON_INDEX_BLOCK"] }
+    $0 == b            { inblk = 1; if (!done) { print blk; done = 1 } next }
+    $0 == e            { inblk = 0; next }
+    inblk              { next }
+    $0 == retired      { if (!done) { print blk; done = 1 } next }
+                       { print }
+    END                { if (!done) print blk }
+  ' "$cm" > "$out" 2>/dev/null || { rm -f "$out"; return 0; }
+  # Only when it actually differs. CLAUDE.md is a WatchPath, so rewriting it on every run would
+  # re-trigger the watcher for ever.
+  [ -s "$out" ] && ! cmp -s "$out" "$cm" && cat "$out" > "$cm" 2>/dev/null
+  rm -f "$out"
+  return 0
+}
+
+# ---- the generated files themselves ----
+# Writes one file per section beside the lessons file, and REMOVES every derived file no current
+# section produces, in the same pass. A section renamed leaves a file holding the rules as they
+# were under the old name: still imported, it is a second frozen copy of rules that have moved;
+# no longer imported, it is dead weight in the payload for ever.
+#
+# Returns 1 when nothing could be generated, so the callers that must not publish on a failed
+# derivation can tell that apart from a run that wrote everything (L98). Nothing is deleted on
+# that path: a sweep driven by a reading that failed would empty the whole index (L211).
+write_lesson_index_files(){   # $1 = tree holding LESSONS.md  -> prints the names written
+  local src="$1/$LESSONS_FILE" split out name slug title wanted="" b short=0
+  [ -f "$src" ] || return 1
+  split="$(scratch_file)" || return 1
+  lesson_entries_render "$src" split > "$split" 2>/dev/null || { rm -f "$split"; return 1; }
+  [ -s "$split" ] || { rm -f "$split"; return 1; }
+  while IFS="$(printf '\t')" read -r slug title; do
+    [ -n "$slug" ] || continue
+    name="$LESSON_INDEX_PREFIX-$slug.md"
+    out="$(scratch_file)" || { rm -f "$split"; return 1; }
+    {
+      lesson_index_file_header "$title"
+      awk -F'\t' -v s="$slug" '$1 == s { print $3 }' "$split"
+    } > "$out" 2>/dev/null
+    if [ -s "$out" ]; then
+      # Written only when it DIFFERS. CLAUDE.md and everything it imports are watched, so
+      # rewriting one on every run would re-trigger the watcher for ever. A write that fails
+      # leaves the previous file exactly as it was, which verify_lesson_index then reports: a
+      # stale file said out loud is recoverable, and one deleted is not (L5).
+      cmp -s "$out" "$1/$name" || cat "$out" > "$1/$name" 2>/dev/null || true
+      wanted+="$name
+"
+    else
+      # A section that rendered NOTHING is a reading that failed, not a section with no lessons:
+      # every slug in this list came from at least one entry. Recorded, and the sweep and the
+      # imports below are skipped entirely, because both are driven by this list and a short read
+      # would delete the files it failed to render and drop their imports (L211, L215).
+      short=1
+    fi
+    rm -f "$out"
+  done < <(awk -F'\t' '!seen[$1]++ { printf "%s\t%s\n", $1, $2 }' "$split")
+  rm -f "$split"
+  is_blank "$wanted" && return 1
+  if [ "$short" -eq 1 ]; then
+    echo "claude-sync: at least one section of $src rendered no index lines at all, so nothing was swept and the imports in $1/CLAUDE.md were left alone. What is on disk may now be behind the lessons file; the next run regenerates it." >&2
+    printf '%s' "$wanted"
     return 1
   fi
-  missing="$(comm -23 <(canonical_lesson_numbers "$src") <(index_lesson_numbers "$idx") | sed 's/^/L/' | tr '\n' ' ')"
-  extra="$(comm -13 <(canonical_lesson_numbers "$src") <(index_lesson_numbers "$idx") | sed 's/^/L/' | tr '\n' ' ')"
-  [ -z "$missing" ] && [ -z "$extra" ] && return 0
-  # Both faults are reported, never as an else-if: a truncated rewrite commits the two at once,
-  # and dying at the first sends somebody back for a second run to discover the second (L11).
-  echo "claude-sync: $LESSON_INDEX_FILE does not match the LESSONS.md beside it in $1, so the index every session loads is not what the lessons file says.${missing:+ Missing from the index: $missing.}${extra:+ In the index but not in LESSONS.md: $extra.} Nothing was reverted; the next run regenerates it, and if this repeats the index is not writable." >&2
-  notify "$LESSON_INDEX_FILE disagrees with LESSONS.md"
-  return 1
+  # THE SWEEP. Driven by the same list the writes above were, so a file this run produced can
+  # never be the one it deletes.
+  while IFS= read -r b; do
+    [ -n "$b" ] || continue
+    case "
+$wanted" in *"
+$b
+"*) continue ;; esac
+    rm -f "$1/$b" 2>/dev/null || true
+  done < <(lesson_index_files_present "$1")
+  ensure_lesson_index_imports "$1" "$wanted"
+  printf '%s' "$wanted"
+  return 0
 }
 
 # Writes the index beside the lessons file, and ONLY when it differs. CLAUDE.md and everything it
@@ -2045,11 +2258,11 @@ MALFORMED
   # BOTH are reported, never as an else-if: one file routinely commits the two at once, and dying
   # at the first sends somebody back for a second run to discover the second (L11).
   if [ -n "$local_only" ]; then
-    echo "claude-sync: these lesson entries were WRITTEN ON THIS MAC and are not written as '- **Lnnn. ...', so nothing here can read them: not the $LESSON_INDEX_FILE index that loads into every session in every project, not 'claude-sync lesson', not the duplicate check, and not the number minter. $local_only. Rewrite each one to start with '- **L<number>. ' and it becomes visible to all four; until then that file is held back from the next send." >&2
+    echo "claude-sync: these lesson entries were WRITTEN ON THIS MAC and are not written as '- **Lnnn. ...', so nothing here can read them: not the generated lessons index that loads into every session in every project, not 'claude-sync lesson', not the duplicate check, and not the number minter. $local_only. Rewrite each one to start with '- **L<number>. ' and it becomes visible to all four; until then that file is held back from the next send." >&2
     notify "unreadable lesson entry written on this Mac"
   fi
   if [ -n "$arrived" ]; then
-    echo "claude-sync: these lesson entries ARRIVED with the payload and are not written as '- **Lnnn. ...', so nothing here can read them: not the $LESSON_INDEX_FILE index that loads into every session in every project, not 'claude-sync lesson', not the duplicate check, and not the number minter. $arrived. They were written on the other Mac, so the fix belongs there; rewriting them here works too and publishes on the next send." >&2
+    echo "claude-sync: these lesson entries ARRIVED with the payload and are not written as '- **Lnnn. ...', so nothing here can read them: not the generated lessons index that loads into every session in every project, not 'claude-sync lesson', not the duplicate check, and not the number minter. $arrived. They were written on the other Mac, so the fix belongs there; rewriting them here works too and publishes on the next send." >&2
     notify "unreadable lesson entry arrived on this Mac"
   fi
   return 0
@@ -2057,13 +2270,15 @@ MALFORMED
 
 # The derived index must never be COMBINED by git (claude-config#200).
 #
-# LESSONS-INDEX.md is generated from LESSONS.md and regenerated on every send and every apply, and
-# the apply already knows it is derived and skips it. The git layer did not: the file is committed,
-# so git combined it as though somebody maintained it by hand, and any two sided lesson addition
-# stopped the rebase on a content conflict. The header line carries a count that both Macs rewrite,
-# so this is guaranteed rather than occasional, and it landed the operator in a by-hand recovery
-# that means nothing to somebody who does not live in a terminal (2026-08-29, L265 to L269 here
-# against L522 and L523 there).
+# The index files are generated from LESSONS.md and regenerated on every send and every apply, and
+# the apply already knows they are derived and skips them. The git layer did not: they are
+# committed, so git combined them as though somebody maintained them by hand, and any two sided
+# lesson addition stopped the rebase on a content conflict. It was guaranteed rather than
+# occasional back then, because the one file carried a header count both Macs rewrote, and it
+# landed the operator in a by-hand recovery that means nothing to somebody who does not live in a
+# terminal (2026-08-29, L265 to L269 here against L522 and L523 there). That count is gone with the
+# split into one file per section (claude-config#473), so a conflict now needs both Macs to have
+# moved the same section, which is an ordinary week, and the rule stays.
 #
 # Written to .git/info/attributes rather than to a committed .gitattributes, so it is in force on
 # the FIRST run on a clone rather than only once the file has arrived, which is the run where the
@@ -2083,7 +2298,12 @@ ensure_derived_file_merge_rule(){
   git -C "$SYNC_REPO" config merge.ours.driver true >/dev/null 2>&1 || true
   info="$(git -C "$SYNC_REPO" rev-parse --absolute-git-dir 2>/dev/null || printf '%s' "$SYNC_REPO/.git")/info"
   mkdir -p "$info" 2>/dev/null || return 0
-  rule="payload/$LESSON_INDEX_FILE merge=ours"
+  # A PATTERN rather than one path per file. The set of generated files changes whenever a section
+  # is added or renamed, and an attributes file is written once per clone and never revisited, so a
+  # line per name would cover whatever the sections were on the day this clone first ran and leave
+  # every later sibling unprotected, silently (L41, L96). The `*` in a gitattributes pattern does
+  # not cross a `/`, so this names the payload's own generated files and nothing else.
+  rule="payload/$LESSON_INDEX_PREFIX*.md merge=ours"
   [ -f "$info/attributes" ] && grep -qF -- "$rule" "$info/attributes" 2>/dev/null && return 0
   printf '%s\n' "$rule" >> "$info/attributes" 2>/dev/null || true
   return 0
@@ -2252,7 +2472,26 @@ DERIVED_PATHS
     # rebase for about four hours, eight commits behind, unable to send or receive, until somebody
     # ran git add by hand. The two fixes each worked alone and cancelled each other combined, which
     # is why the rule being on is the case that has to be tested.
-    git -C "$SYNC_REPO" add -- "payload/$LESSON_INDEX_FILE" >/dev/null 2>&1 || true
+    #
+    # `-A` and a PATTERN, because the generated set now has one file per section (#473). A name per
+    # file would have to be kept in step with the sections, and a plain `add` cannot stage the
+    # removal of a file whose section has just gone.
+    git -C "$SYNC_REPO" add -A -- "payload/$LESSON_INDEX_PREFIX*.md" >/dev/null 2>&1 || true
+    # NOT ONE MARKER REACHES A FILE A SESSION LOADS (#473). The staging below used to add every
+    # conflicted path after regenerating exactly one file, which was safe only while exactly one
+    # file was generated: a conflicted SIBLING would have been committed carrying its conflict
+    # markers into a file that loads into every session in every project. Regeneration above
+    # rewrites all of them, and this asserts that it did rather than assuming it (L3). A path still
+    # holding a marker refuses the whole recovery, which leaves the rebase for the caller to abort
+    # and the operator to hear about, instead of publishing damage.
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      grep -q '^<<<<<<< ' "$SYNC_REPO/$p" 2>/dev/null || continue
+      echo "claude-sync: $p still holds a conflict marker after the derived files were regenerated, so nothing was staged and the rebase was not continued. That file is one every session loads; it must never be committed in this state." >&2
+      return 1
+    done <<DERIVED_MARKERS
+$paths
+DERIVED_MARKERS
     while IFS= read -r p; do
       [ -n "$p" ] || continue
       git -C "$SYNC_REPO" add -- "$p" >/dev/null 2>&1 || return 1
@@ -2285,7 +2524,7 @@ DERIVED_ADD
   # ran would be a claim about a file git never stopped on, on the very run where the news is that
   # something else did (L11).
   if [ "$derived" -eq 1 ]; then
-    echo "claude-sync: both Macs changed $LESSON_INDEX_FILE, which is generated from LESSONS.md rather than written by hand, so it was regenerated from the merged lessons and the sync carried on. Nothing needs reconciling."
+    echo "claude-sync: both Macs changed a generated lessons index file, which is rendered from LESSONS.md rather than written by hand, so every one of them was regenerated from the merged lessons and the sync carried on. Nothing needs reconciling."
   fi
   return 0
 }
@@ -2294,55 +2533,53 @@ DERIVED_ADD
 # runs MID REBASE where the working tree is a half applied state and the counts are checked once at
 # the end by regenerate_payload_index itself.
 regenerate_payload_index_from_worktree(){
-  local src="$PAYLOAD/LESSONS.md" out
-  [ -f "$src" ] || return 1
-  out="$(scratch_file)"
-  lesson_index_body "$src" > "$out" 2>/dev/null || { rm -f "$out"; return 1; }
-  [ -s "$out" ] || { rm -f "$out"; return 1; }
-  cat "$out" > "$PAYLOAD/$LESSON_INDEX_FILE" 2>/dev/null || { rm -f "$out"; return 1; }
-  rm -f "$out"
+  write_lesson_index_files "$PAYLOAD" >/dev/null || return 1
   return 0
 }
 
 # The index in the REPO, rebuilt from whatever the merge produced (claude-config#200). Both Macs
-# publish this file, and after a rebase the copy sitting in the payload is one side's rendering of
-# a lessons file that no longer exists. Regenerating is the whole point of a derived file.
+# publish these files, and after a rebase the copies sitting in the payload are one side's
+# rendering of a lessons file that no longer exists. Regenerating is the whole point of a derived
+# file.
 regenerate_payload_index(){
-  local src="$PAYLOAD/LESSONS.md" out nl ni
+  local src="$PAYLOAD/$LESSONS_FILE" nl faults kind nums detail=""
   [ -f "$src" ] || return 0
-  out="$(scratch_file)"
-  lesson_index_body "$src" > "$out" 2>/dev/null || { rm -f "$out"; return 0; }
-  [ -s "$out" ] || { rm -f "$out"; return 0; }
-  cmp -s "$out" "$PAYLOAD/$LESSON_INDEX_FILE" || cat "$out" > "$PAYLOAD/$LESSON_INDEX_FILE" 2>/dev/null || true
-  rm -f "$out"
+  write_lesson_index_files "$PAYLOAD" >/dev/null || return 0
   # ASSERTED before it is published, not hoped for. A generator that half ran would otherwise send
-  # the other Mac an index describing a different lessons file, and the index is what every session
-  # in every project actually loads (L98).
+  # the other Mac an index describing a different lessons file, and these are the files every
+  # session in every project actually loads (L98).
+  #
+  # ZERO is refused before anything is compared. A reader that failed returns nothing at all, the
+  # two sides agree about nothing, and the check passes on the permissive side having measured
+  # nothing (L50, L98). A lessons file with no readable entry is not a state to publish for.
   nl="$(lesson_numbers_in "$src" | sort -u | grep -c . || true)"
-  ni="$(lesson_numbers_in "$PAYLOAD/$LESSON_INDEX_FILE" | sort -u | grep -c . || true)"
-  # ZERO is refused before the two are compared. Both counts come from the same reader, so a reader
-  # that failed returns zero on both sides, they agree, and the check passes on the permissive side
-  # having measured nothing (L50, L98). A lessons file with no readable entry is not a state to
-  # publish an index for.
   case "${nl:-}" in ''|*[!0-9]*) nl=0 ;; esac
-  case "${ni:-}" in ''|*[!0-9]*) ni=0 ;; esac
   if [ "$nl" -eq 0 ]; then
-    die "no readable lesson entry was found in $src after the merge, so the index cannot be rebuilt from it and nothing has been published. Look at that file."
+    die "no readable lesson entry was found in $src after the merge, so the lessons index cannot be rebuilt from it and nothing has been published. Look at that file."
   fi
-  if [ "$nl" != "$ni" ]; then
-    die "the lessons index regenerated after the merge lists $ni entries while the LESSONS.md beside it holds $nl. Nothing has been published. Run 'claude-sync status' and look at $PAYLOAD/$LESSON_INDEX_FILE."
-  fi
-  return 0
+  # THE UNION, not a count per file. Every lesson number in LESSONS.md has to appear exactly once
+  # across the generated files: a per file count would agree with itself while a number was lost
+  # between two sections or rendered into both (L228, L517).
+  faults="$(lesson_index_union_faults "$PAYLOAD")"
+  [ -z "$faults" ] && return 0
+  while IFS="$(printf '\t')" read -r kind nums; do
+    [ -n "$kind" ] || continue
+    case "$kind" in
+      NOFILES)  detail+=" The merge left no generated index file at all." ;;
+      MISSING)  detail+=" Rendered into none of them, so they would have stopped reaching every session: $nums." ;;
+      EXTRA)    detail+=" In a generated file but no longer in LESSONS.md: $nums." ;;
+      REPEATED) detail+=" Rendered into more than one file at once: $nums." ;;
+    esac
+  done <<REGEN_FAULTS
+$faults
+REGEN_FAULTS
+  die "the lessons index files regenerated after the merge do not hold every lesson in the LESSONS.md beside them exactly once.${detail} Nothing has been published. Run 'claude-sync status' and look at $PAYLOAD."
 }
 
 write_lesson_index(){   # $1 = tree holding LESSONS.md
-  local src="$1/LESSONS.md" out
+  local src="$1/$LESSONS_FILE"
   [ -f "$src" ] || return 0
-  out="$(scratch_file)"
-  lesson_index_body "$src" > "$out" 2>/dev/null || { rm -f "$out"; return 0; }
-  [ -s "$out" ] || { rm -f "$out"; return 0; }
-  if ! cmp -s "$out" "$1/$LESSON_INDEX_FILE"; then cat "$out" > "$1/$LESSON_INDEX_FILE" 2>/dev/null || true; fi
-  rm -f "$out"
+  write_lesson_index_files "$1" >/dev/null || true
   # Checked against what is actually on disk afterwards, which is the point: every path above
   # returns 0 whether it wrote anything or not, and the write itself can fail (#195).
   verify_lesson_index "$1" || true
@@ -2909,6 +3146,26 @@ $dupfiles" in *"
 $f"*) continue ;; esac      # numbering collision here; do not spread it
     [ -f "$CLAUDE_HOME/$f" ] && cp "$CLAUDE_HOME/$f" "$PAYLOAD/$f"
   done
+  # A GENERATED FILE THIS MAC NO LONGER PRODUCES IS REMOVED FROM THE PAYLOAD TOO (claude-config#473).
+  # The loop above only ever copies, and the directory mirrors below run rsync with --delete while
+  # the top level files reach the payload by a plain copy. So a section renamed here leaves the
+  # file its old name produced committed in the payload for ever, and the deletion never travels.
+  # Judged by what is HERE rather than by re-deriving the section list: this mirrors ~/.claude, and
+  # a path this send deliberately held back is left exactly where it is.
+  #
+  # Nothing is swept when this Mac has no lessons file: the generator returned early, so there is
+  # no authoritative set to mirror and an empty reading would delete the whole index (L211).
+  local pf
+  if [ -f "$CLAUDE_HOME/$LESSONS_FILE" ]; then
+    while IFS= read -r pf; do
+      [ -n "$pf" ] || continue
+      [ -f "$CLAUDE_HOME/$pf" ] && continue
+      case "
+$protected" in *"
+$pf"*) continue ;; esac
+      rm -f "$PAYLOAD/$pf" 2>/dev/null || true
+    done < <(lesson_index_files_present "$PAYLOAD")
+  fi
   # After everything has been mirrored in, and before the scan, so what is scanned and what is
   # committed are the same bytes the other Mac will receive.
   tokenize_payload
@@ -3480,7 +3737,7 @@ $d/$path
   for tf in $(top_files_in "$CLAUDE_HOME"); do
     [ -f "$CLAUDE_HOME/$tf" ] || continue
     [ -f "$PAYLOAD/$tf" ] || continue
-    # A DERIVED file is never locally ahead (claude-config#238). LESSONS-INDEX.md is regenerated
+    # A DERIVED file is never locally ahead (claude-config#238). The lessons index is regenerated
     # from LESSONS.md at the end of every apply and every send, on each Mac independently, so the
     # two copies differ whenever the lessons differ, by construction and with no work at risk.
     # Reported as an unsent local edit it named itself on every pull where lessons had moved: a
@@ -3886,7 +4143,7 @@ LESSON_PIN_FILE="$SYNC_REPO/lesson-citations.tsv"
 cited_lesson_numbers(){   # -> one Lnnn per line, distinct, sorted
   [ -d "$PAYLOAD" ] || return 0
   grep -rhoE '(^|[^A-Za-z0-9])L[0-9]{1,4}([^0-9]|$)' "$PAYLOAD" \
-      --exclude=LESSONS.md --exclude="$LESSON_INDEX_FILE" 2>/dev/null \
+      --exclude="$LESSONS_FILE" --exclude="$LESSON_INDEX_PREFIX*.md" 2>/dev/null \
     | grep -oE 'L[0-9]{1,4}' | sort -u
 }
 
@@ -6380,7 +6637,7 @@ do_send(){
   # after both gates have let it past. On 2026-09-06 Dans-MacBook-Pro had been behind the shared
   # repo for two days, so every watcher fire took the `behind` branch and returned here, and the
   # three sessions that wrote lessons into its LESSONS.md in that window never reached the
-  # derivation. LESSONS-INDEX.md is the file CLAUDE.md imports, so every session on both Macs was
+  # derivation. The lessons index is what CLAUDE.md imports, so every session on both Macs was
   # loading an index missing those lessons, and nothing said so.
   #
   # The index is a purely LOCAL derivation of the LOCAL lessons file, into this Mac's own
