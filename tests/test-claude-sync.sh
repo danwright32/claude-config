@@ -7101,8 +7101,8 @@ check "#444 and never the young suite beside them" \
 check "#444 and the root is listed with its age and command" \
   "grep -qF \"pid 700, running $_pile_old: bash $_WT/test-run-all-tests.sh\" <<< \"\$_pile_o\""
 
-# An age in days is how ps writes anything past 24 hours, and a parser that read only hh:mm:ss would
-# call a two day old suite a young one (L50).
+# Past a day, ps writes an age with a day count in front, and a parser that read only hours, minutes
+# and seconds would call a suite that old a young one (L50).
 printf '  710     1 1-02:03:04 bash %s/test-run-all-tests.sh\n' "$_WT" > "$WORK/pile-days"
 _pile_d="$(_pile_status "$WORK/pile-days")"
 check "#444 an age written in days is read as days" "grep -q 'the oldest running 1-02:03:04' <<< \"\$_pile_d\""
