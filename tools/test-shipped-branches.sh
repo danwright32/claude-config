@@ -7,8 +7,10 @@
 # (L642). At the time of writing there were 48 of them. The cost is not the clutter: a branch
 # holding real unfinished work sits in that list looking exactly like the 47 that shipped.
 #
-# Everything here runs against real git repositories in a temp directory. The tool touches no
-# network and changes nothing, so there is nothing to stub and no clock to inject.
+# Everything here runs against real git repositories in a temp directory. The one outside
+# dependency, GitHub, is a stub `gh` first on PATH that answers from files this test writes and logs
+# every call, so no case here can reach the real GitHub (L2) and a case that passes because the stub
+# was never asked is caught (L143). The tool changes nothing, so there is no clock to inject.
 
 set -uo pipefail
 
@@ -33,6 +35,32 @@ lacks() {  # lacks <description> <literal needle> <text>
 }
 
 git_q() { git -C "$1" "${@:2}" >/dev/null 2>&1; }
+
+# THE STUB GH, the same shape as the one in test-shipped-worktrees.sh. `gh pr list --head <branch>`
+# prints $STUB/<branch>.json, or an empty list when there is none, which is what GitHub says about a
+# branch with no pull request. A file called FAIL makes every call fail the way gh does offline.
+STUB="$WORK/gh-answers"; mkdir -p "$STUB" "$WORK/bin"
+cat > "$WORK/bin/gh" <<'GH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_DIR/calls.log"
+if [ -e "$STUB_DIR/FAIL" ]; then
+  echo "error connecting to api.github.com" >&2
+  exit 1
+fi
+head=""
+while [ $# -gt 0 ]; do
+  case "$1" in --head) head="$2"; shift ;; esac
+  shift
+done
+f="$STUB_DIR/$(printf '%s' "$head" | sed 's#/#__#g').json"
+if [ -f "$f" ]; then cat "$f"; else echo '[]'; fi
+GH
+chmod +x "$WORK/bin/gh"
+export STUB_DIR="$STUB"
+export PATH="$WORK/bin:$PATH"
+answer() {  # answer <branch> <json>
+  printf '%s\n' "$2" > "$STUB/$(printf '%s' "$1" | sed 's#/#__#g').json"
+}
 
 # A repo whose history holds one of each kind: a branch squashed onto main, a branch merged with
 # its commits kept, and a branch nobody has landed.
@@ -168,6 +196,82 @@ says "and it names what it fell back to" "last fetch" "$out_un"
 # It still produces a report rather than refusing, because a stale answer that says it is stale is
 # more use than nothing when somebody is offline.
 says "it still judges what it has" "still-open" "$out_un"
+
+echo "shipped-branches: a merged pull request is proof, read before the subject guess"
+
+# claude-config#459. A subject match is a guess, and it misses a branch whose title was reworded
+# when it merged. GitHub's own record of a merged pull request from the branch is proof, so it is
+# read between ancestry and the subject, through the one gh reading shipped-worktrees.sh uses.
+P="$WORK/pr-work"; cp -R "$R" "$P"
+
+# REWORDED. Its subject is on main nowhere, so only the pull request can say it shipped.
+git_q "$P" checkout -qb reworded-at-merge
+printf 'six\n' > "$P/j.txt"
+git_q "$P" add j.txt; git_q "$P" commit -qm "A title somebody changed at merge"
+git_q "$P" push -q origin reworded-at-merge
+reworded_tip="$(git -C "$P" rev-parse HEAD)"
+answer reworded-at-merge "[{\"number\":7,\"state\":\"MERGED\",\"headRefOid\":\"$reworded_tip\"}]"
+
+# REUSED. A pull request merged from this branch at an EARLIER commit, and then more work was
+# pushed to the same name. The merge proves the old tip shipped, not the new one.
+git_q "$P" checkout -q main
+git_q "$P" checkout -qb reused-name
+printf 'seven\n' > "$P/k.txt"
+git_q "$P" add k.txt; git_q "$P" commit -qm "The part that merged"
+reused_old="$(git -C "$P" rev-parse HEAD)"
+printf 'eight\n' > "$P/k.txt"
+git_q "$P" commit -qam "Work pushed after the merge"
+git_q "$P" push -q origin reused-name
+answer reused-name "[{\"number\":8,\"state\":\"MERGED\",\"headRefOid\":\"$reused_old\"}]"
+
+# OPEN. A pull request still open from the branch is not proof of anything shipping.
+answer still-open '[{"number":9,"state":"OPEN","headRefOid":"0000000000000000000000000000000000000000"}]'
+git_q "$P" checkout -q main
+git_q "$P" fetch -q origin
+
+rm -f "$STUB/calls.log"
+out_pr="$(bash "$TOOL" "$P" 2>&1)"; rc_pr=$?
+if [ "$rc_pr" = 0 ]; then ok; else bad "a run reading gh should exit 0, got $rc_pr"; fi
+row_reworded="$(grep -E '^  (SHIPPED|UNMATCHED) +origin/reworded-at-merge( |$)' <<< "$out_pr" || true)"
+says "a branch reworded at merge is shipped on its merged pull request" "SHIPPED" "$row_reworded"
+says "and the row names the pull request as the proof" "pull request #7 merged" "$row_reworded"
+# gh is asked about the branch by its own name, not the remote tracking name (L143).
+if grep -qF -- "--head reworded-at-merge " "$STUB/calls.log" 2>/dev/null; then ok
+else bad "gh was never asked about reworded-at-merge by its branch name"; fi
+
+row_reused="$(grep -E '^  (SHIPPED|UNMATCHED) +origin/reused-name( |$)' <<< "$out_pr" || true)"
+says "a branch with work pushed after its merge is not proven shipped" "UNMATCHED" "$row_reused"
+says "and the row says the merge was of an earlier commit" "earlier commit" "$row_reused"
+
+row_open="$(grep -E '^  (SHIPPED|UNMATCHED) +origin/still-open( |$)' <<< "$out_pr" || true)"
+says "a branch with only an open pull request is not shipped" "UNMATCHED" "$row_open"
+says "and the row names the open pull request" "#9" "$row_open"
+
+# The subject guess still answers where GitHub has no pull request, and still says it is a guess.
+row_sq="$(grep -E '^  (SHIPPED|UNMATCHED) +origin/squashed-work( |$)' <<< "$out_pr" || true)"
+says "a branch with no pull request still ships on a subject match" "subject match" "$row_sq"
+says "the report says what merged means" "gh" "$(sed -n 1,3p <<< "$out_pr")"
+
+echo "shipped-branches: gh that cannot be read is said, and the guess is labelled as one"
+
+# Unreadable is neither merged nor unmerged (L98). This tool changes nothing, so it may still
+# report, but it must say GitHub was not read and must not dress the fallback up as an answer.
+touch "$STUB/FAIL"
+rm -f "$STUB/calls.log"
+out_ng="$(bash "$TOOL" "$P" 2>&1)"; rc_ng=$?
+rm -f "$STUB/FAIL"
+if [ "$rc_ng" = 0 ]; then ok; else bad "an unreadable gh should still report, exit 0, got $rc_ng"; fi
+says "an unreadable GitHub is said out loud" "GitHub could not be read" "$out_ng"
+says "and it passes on what gh said" "error connecting" "$out_ng"
+row_ng_sq="$(grep -E '^  (SHIPPED|UNMATCHED) +origin/squashed-work( |$)' <<< "$out_ng" || true)"
+says "the subject guess still answers when gh cannot" "subject match" "$row_ng_sq"
+row_ng_rw="$(grep -E '^  (SHIPPED|UNMATCHED) +origin/reworded-at-merge( |$)' <<< "$out_ng" || true)"
+says "a branch gh could have proven falls back to the guess" "UNMATCHED" "$row_ng_rw"
+says "and its row says GitHub was not read, rather than calling it unmerged" "GitHub not read" "$row_ng_rw"
+lacks "unreadable is never reported as no merged pull request" "no merged pull request" "$out_ng"
+# One failure is enough to know: asking again per branch pays an offline timeout each time.
+ng_calls="$( { wc -l < "$STUB/calls.log"; } 2>/dev/null | tr -d ' ')"
+if [ "$ng_calls" = 1 ]; then ok; else bad "gh was asked ${ng_calls:-0} times after it had already failed"; fi
 
 echo "shipped-branches: what it refuses"
 

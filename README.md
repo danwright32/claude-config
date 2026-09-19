@@ -726,8 +726,10 @@ asking reports every branch as unmerged (L642). Two tools in `tools/` answer the
 Both take a checkout as their argument and default to the current directory.
 
 `tools/shipped-branches.sh` lists the remote branches and says which have shipped, by ancestry
-(proof) or by a squash commit on main carrying one of the branch's subjects (a guess). It changes
-nothing, so a guess is allowed.
+(proof), by a merged pull request whose head is the branch tip (proof, read with `gh`), or by a
+squash commit on main carrying one of the branch's subjects (a guess). It changes nothing, so a
+guess is allowed. When `gh` cannot be read it says so above the rows, stops asking, and marks each
+row that fell back to the guess "GitHub not read", never unmerged.
 
 `tools/shipped-worktrees.sh` lists the agent worktrees under `.claude/worktrees/` and marks each one
 REMOVABLE or KEEP, naming every reason it keeps one. REMOVABLE needs all of: GitHub (read with `gh`)
@@ -747,7 +749,8 @@ bash tools/shipped-worktrees.sh --remove ~/Non-icloudDocuments/Apps/claude-confi
 It is a sibling of `shipped-branches.sh` rather than a mode of it because it deletes things and so
 may not act on a guess, and it is not a `claude-sync` command because it is about any git checkout
 rather than the synced config. Which branch counts as main is one rule both read, in
-`tools/lib/default-branch.sh`.
+`tools/lib/default-branch.sh`, and how GitHub's record of a branch's pull requests is read is one
+reading both use, in `tools/lib/pull-requests.sh`.
 
 ## Local state (per Mac, never synced)
 

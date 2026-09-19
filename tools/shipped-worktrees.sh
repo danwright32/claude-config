@@ -11,10 +11,11 @@
 # and they blur which work is still live.
 #
 # It is the sibling of shipped-branches.sh, not a mode of it, because the two are allowed to know
-# different things. shipped-branches.sh ACTS ON NOTHING, so it may guess from a matching commit
-# subject. This one deletes a directory, and a guess is not enough to delete on (L5), so it takes
-# its verdict from GitHub's own record of the pull request and from nothing else. What the two do
-# share, which branch counts as main, lives once in lib/default-branch.sh.
+# different things. shipped-branches.sh ACTS ON NOTHING, so it may fall back to a guess from a
+# matching commit subject. This one deletes a directory, and a guess is not enough to delete on
+# (L5), so it takes its verdict from GitHub's own record of the pull request and from nothing else.
+# What the two share lives once in lib/: which branch counts as main (default-branch.sh) and how
+# that record of pull requests is read (pull-requests.sh).
 #
 # A worktree is REMOVABLE only when every one of these is proven, and KEEP names each that is not:
 #
@@ -66,10 +67,14 @@ git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 \
   || fail "$repo is not a git checkout, so there are no worktrees here to judge"
 command -v jq >/dev/null 2>&1 || fail "it needs jq to read what gh answers, and jq is not installed"
 
-lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/default-branch.sh"
-[ -f "$lib" ] || fail "its library is missing: $lib"
+libdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+for lib in default-branch.sh pull-requests.sh; do
+  [ -f "$libdir/$lib" ] || fail "its library is missing: $libdir/$lib"
+done
 # shellcheck source=lib/default-branch.sh
-. "$lib"
+. "$libdir/default-branch.sh"
+# shellcheck source=lib/pull-requests.sh
+. "$libdir/pull-requests.sh"
 
 refuse_gh() {  # refuse_gh <what gh said>
   printf 'shipped-worktrees: could not read GitHub, so nothing was judged and nothing was removed.\n' >&2
@@ -165,15 +170,10 @@ for ((n = 1; n <= i; n++)); do
     kept=$((kept + 1)); continue
   fi
 
-  # MERGED, from GitHub. --head comes first in the call so a log of it is easy to read.
-  if ! answer="$(cd "$primary" && gh pr list --head "$branch" --state all \
-      --json number,state,headRefOid --limit 100 2>"$scratch/gh.err")"; then
-    refuse_gh "$(cat "$scratch/gh.err")"
-  fi
-  jq -e 'type == "array"' >/dev/null 2>&1 <<< "$answer" \
-    || refuse_gh "an answer about $branch that is not a list of pull requests: ${answer:0:200}"
-  merged="$(jq -r '.[] | select(.state == "MERGED") | "\(.number) \(.headRefOid)"' <<< "$answer")"
-  open="$(jq -r '.[] | select(.state == "OPEN") | "#\(.number)"' <<< "$answer" | paste -sd, - | sed 's/,/, /g')"
+  # MERGED, from GitHub, through the one reading shipped-branches.sh uses too.
+  prs="$(pull_requests "$primary" "$branch")" || refuse_gh "$prs"
+  merged="$(awk '$1 == "MERGED" { print $2, $3 }' <<< "$prs")"
+  open="$(awk '$1 == "OPEN" { printf "%s#%s", (n++ ? ", " : ""), $2 }' <<< "$prs")"
   merged_numbers="$(printf '%s\n' "$merged" | awk 'NF { printf "%s#%s", (n++ ? ", " : ""), $1 }')"
 
   if [ -z "$merged" ]; then
