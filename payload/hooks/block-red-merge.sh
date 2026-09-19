@@ -65,14 +65,22 @@ command -v gh >/dev/null 2>&1 || deny "Cannot verify CI: gh is not on PATH. Merg
 pr=$(mt_pr_number "$command")
 
 cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)
+
+# WHICH repository, resolved the way gh itself resolves it (claude-config#463): the merge's own
+# --repo or -R first, then a cd in the command (anywhere the shared reader finds one, not only at
+# its head), then the working directory. This gate used to ask gh about the session's folder
+# whatever the merge named, so merging danwright32/backstage#26 with --repo from an Ovation session
+# was refused as "gh returned nothing", on a pull request whose checks had both passed.
+repo_flag="$(mt_repo_flag "$command")"
 cd "$(mt_repo_dir "$command" "$cwd")" 2>/dev/null || true
 
 # Landed somewhere that is not a checkout, with MORE THAN ONE below it. The resolver refuses to
 # guess between them (claude-config#346), so say which they were: everything after this would
 # answer about whichever repository gh happened to resolve, and the generic "gh returned nothing"
 # further down is a true sentence about a different fault that sends somebody to check a pull
-# request in the wrong project (L11, L521).
-if [ ! -e ".git" ]; then
+# request in the wrong project (L11, L521). A merge naming its repository with --repo has nothing
+# left to guess, so it is not asked.
+if [ -z "$repo_flag" ] && [ ! -e ".git" ]; then
   ambiguous=$(mt_checkout_candidates "$PWD" | tr '\n' ' ')
   case "$ambiguous" in
     *" "*" "*)
@@ -112,7 +120,18 @@ fi
 #
 # Only where a tool exists, so every other project keeps the old gate rather
 # than being blocked by a rule about a file it does not have.
-pinned_tool="$(mt_pinned_tool "$PWD" || true)"
+#
+# A merge whose --repo names a repository OTHER than this checkout's is judged against that
+# repository's files, not this folder's, which say nothing about it (claude-config#463). That
+# reading needs the account that can see the pull request, so it happens after the lookup below.
+local_slug=$(mt_remote_slug)
+foreign=""
+if [ -n "$repo_flag" ] && \
+   [ "$(printf '%s' "$repo_flag" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$local_slug" | tr '[:upper:]' '[:lower:]')" ]; then
+  foreign=1
+fi
+pinned_tool=""
+[ -z "$foreign" ] && pinned_tool="$(mt_pinned_tool "$PWD" || true)"
 pinned_how=""
 [ -n "$pinned_tool" ] && pinned_how="$(mt_pinned_how "$PWD" "${pr:-}")"
 
@@ -146,22 +165,66 @@ fi
 # only confirm that lookup is self-consistent, never that it is correct (L70).
 # The hook did not verify this before; an answer about a different repo would
 # have been read as this pull request's verdict.
-remote_slug=$(mt_remote_slug)
+#
+# Where the merge names its repository with --repo, THAT is the identity: it comes from the
+# command, not from gh, so the answer is still checked against something gh did not supply.
+remote_slug="${repo_flag:-$local_slug}"
+
+# What the refusals below name as the place that was searched, and why it was that place, so a
+# pull request looked for in the wrong repository is visible as such (claude-config#463).
+if [ -n "$repo_flag" ]; then
+  searched="$repo_flag"; searched_why="the command names it with --repo"
+elif [ -n "$remote_slug" ]; then
+  searched="$remote_slug"; searched_why="that is the repository of $PWD, where this merge runs"
+else
+  searched="the repository gh resolves from $PWD"; searched_why="that is where this merge runs"
+fi
+pr_label="pull request #$pr"
+[ -n "$pr" ] || pr_label="pull request for the current branch"
 
 # headRefOid comes from the SAME call as the verdict, deliberately: the commit the merge is
 # pinned to has to be the commit these checks were read for, and a second lookup could answer
 # about a head that had already moved (L70, #345).
-envelope=$(mt_pr_view "$pr" "number,statusCheckRollup,mergeable,url,headRefOid" "$remote_slug")
+envelope=$(mt_pr_view "$pr" "number,statusCheckRollup,mergeable,url,headRefOid" "$remote_slug" "$repo_flag")
+view_account=""
 if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" = "true" ]; then
   rollup=$(printf '%s' "$envelope" | jq -c '.view')
+  view_account=$(printf '%s' "$envelope" | jq -r '.account // ""' 2>/dev/null)
 else
   rollup=""
   wrong_repo=$(printf '%s' "$envelope" | jq -r '.wrongRepo // ""' 2>/dev/null)
   if [ -n "$wrong_repo" ]; then
     deny "Refusing to merge: the only answer gh gave was about $wrong_repo, not about $remote_slug. Verifying one pull request's checks and merging another is the exact mistake this gate exists to stop. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
   fi
+  # NOT FOUND is not "could not confirm it is green" (L11). Every account answered that there is no
+  # such pull request there, so the fault is where it was looked for, and the remedy is naming the
+  # right repository, never the override: offering the override for a pull request that is green
+  # somewhere else teaches reaching for it (L36).
+  if [ "$(printf '%s' "$envelope" | jq -r '.notFound // false' 2>/dev/null)" = "true" ]; then
+    deny "Refusing to merge: no $pr_label was found in $searched under any logged-in account, so there is nothing here to judge. It was looked for there because $searched_why. If it lives in another repository, name that repository with --repo owner/name on the merge, or cd into its checkout before the merge."
+  fi
 fi
-[ -z "$rollup" ] && deny "Cannot verify CI for this PR (gh pr view returned nothing under any logged-in account). Check the PR manually, then re-run with ALLOW_RED_MERGE=1 if it is genuinely green."
+if [ -z "$rollup" ]; then
+  gh_error=$(printf '%s' "$envelope" | jq -r '.error // ""' 2>/dev/null)
+  deny "Cannot verify CI for this PR: gh pr view failed for the $pr_label in $searched under every logged-in account${gh_error:+ ($gh_error)}. Check the PR manually, then re-run with ALLOW_RED_MERGE=1 if it is genuinely green."
+fi
+
+# The repository the merge names is not this checkout, so its merge tool is read from GitHub. Same
+# rule, same override and same wording as above, with the one difference that the tool has to be
+# run from a checkout of that repository.
+if [ -n "$foreign" ]; then
+  case "$command" in
+    *SKIP_MERGE_TOOL=1*) ;;
+    *)
+      remote_tool="$(mt_pinned_tool_remote "$repo_flag" "$view_account")"; remote_rc=$?
+      if [ "$remote_rc" = 0 ]; then
+        deny "$repo_flag merges through its own commit pinned tool ($remote_tool), not through gh pr merge. From a checkout of $repo_flag, run: $(mt_pinned_how_for "$remote_tool" "${pr:-}") . It judges the checks against the commit at the head and hands GitHub that commit, and it confirms afterwards that the commit landed on the base its checks were run against. A plain merge skips all of that and looks identical afterwards. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>, which skips this rule only: the merge must still pin its commit."
+      elif [ "$remote_rc" = 2 ]; then
+        deny "Refusing to merge: could not tell whether $repo_flag carries its own commit pinned merge tool ($remote_tool), because GitHub did not answer that question. Where one exists it is the only way this gate lets that repository merge, so not knowing is not the same as it being absent. Run the merge from a checkout of $repo_flag, where the file can be read from disk. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>."
+      fi
+      ;;
+  esac
+fi
 
 number=$(printf '%s' "$rollup" | jq -r '.number // "?"')
 
@@ -237,6 +300,22 @@ if [ "$total" = "0" ]; then
   #
   # UNKNOWN is deliberately not treated as either: GitHub answers that while it is still working
   # the mergeability out, so it is evidence of nothing and this question decides instead.
+  #
+  # A repository named with --repo that is not this checkout has its workflows on GitHub, not in
+  # this folder, whose workflows say nothing about it (claude-config#463). With none at all there is
+  # nothing that could be red. With some, whether they run on pull requests cannot be read from
+  # here, so the unexplained absence refuses, as it does below; and not knowing refuses too.
+  if [ -n "$foreign" ]; then
+    case "$(mt_remote_path "$repo_flag" ".github/workflows" "$view_account")" in
+      absent) exit 0 ;;
+      present)
+        deny "PR #$number has NO checks at all, but $repo_flag has workflows (.github/workflows), and from here the gate cannot read whether they run on pull requests, so something may have stopped them being scheduled: a workflow that will not parse, Actions disabled, or a run that never started. Run the merge from a checkout of $repo_flag, where its workflows can be read, or find out which before merging, because an empty check list is indistinguishable from a green one. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+        ;;
+      *)
+        deny "PR #$number has NO checks at all, and GitHub did not answer whether $repo_flag has any workflows, so an empty check list cannot be told from one that was never scheduled. Run the merge from a checkout of $repo_flag, where its workflows can be read. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+        ;;
+    esac
+  fi
   pr_ci=""
   for wf in .github/workflows/*.yml .github/workflows/*.yaml; do
     [ -f "$wf" ] || continue

@@ -793,6 +793,167 @@ else pass; fi
 if grep -q 'mt_pinned_tool' "$(dirname "$HOOK")/block-red-merge.sh"; then pass; else
   fail "the gate does not read the shared tool declaration"; fi
 
+echo "block-red-merge: the repository the merge names, not the session's folder (#463)"
+
+# Measured 2026-09-19 from a session started in Ovation, merging danwright32/backstage#26 with both
+# checks passed: `--repo danwright32/backstage` was refused as "gh pr view returned nothing", and so
+# was a cd written after an assignment, because the gate asked gh about the session's own folder,
+# which has no pull request 26. A refusal on a green pull request that names the override teaches
+# reaching for the override (L36), and "I could not find it" is not "I could not confirm it is
+# green" (L11).
+#
+# The fake gh resolves a repository the way the real one does: --repo or -R first, then the remote
+# of the directory it runs in. It answers a pull request only for a repository with a file under
+# prs/, and a contents probe only for a path under remote/, with a 404 otherwise.
+make_two_repos() {  # prints a fixture dir holding repo/ (acme/widget) and other/ (other/repo)
+  local dir; dir=$(mktemp -d)
+  mkdir -p "$dir/repo" "$dir/other" "$dir/bin" "$dir/prs" "$dir/remote"
+  ( cd "$dir/repo" && git init -q && git remote add origin "https://github.com/acme/widget.git" )
+  ( cd "$dir/other" && git init -q && git remote add origin "https://github.com/other/repo.git" )
+  cat > "$dir/bin/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALL_LOG"
+repo="" prev=""
+for a in "$@"; do
+  case "$prev" in --repo|-R) repo="$a" ;; esac
+  case "$a" in --repo=*) repo="${a#--repo=}" ;; esac
+  prev="$a"
+done
+[ -n "$repo" ] || repo=$(git config --get remote.origin.url 2>/dev/null | sed -E 's#^https://github.com/##; s#[.]git$##')
+case "$*" in
+  *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
+  *"auth token -u "*) printf 'tok\n' ;;
+  *"pr view"*)
+    if [ -n "${GH_OFFLINE:-}" ]; then echo "error connecting to api.github.com" >&2; exit 1; fi
+    f="$FIXTURE/prs/$(printf '%s' "$repo" | tr / _)"
+    if [ -f "$f" ]; then cat "$f"; exit 0; fi
+    echo "GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)" >&2
+    exit 1 ;;
+  "api "*)
+    if [ -n "${GH_API_BROKEN:-}" ]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
+    for a in "$@"; do
+      case "$a" in repos/*)
+        if [ -e "$FIXTURE/remote/$a" ]; then echo '{}'; exit 0; fi
+        echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+      esac
+    done
+    exit 1 ;;
+esac
+SH
+  chmod +x "$dir/bin/gh"
+  printf '%s' "$dir"
+}
+pr_json() {  # $1 = owner/name, $2 = SUCCESS | FAILURE | none
+  if [ "$2" = none ]; then
+    printf '{"number":7,"statusCheckRollup":[],"mergeable":"MERGEABLE","url":"https://github.com/%s/pull/7","headRefOid":"%s"}' "$1" "$HEAD_SHA"
+  else
+    printf '{"number":7,"statusCheckRollup":[{"name":"tests","conclusion":"%s"}],"url":"https://github.com/%s/pull/7","headRefOid":"%s"}' "$2" "$1" "$HEAD_SHA"
+  fi
+}
+two_repos() {  # $1 = other/repo's verdict ; sets dir, FIXTURE and GH_CALL_LOG
+  dir=$(make_two_repos)
+  FIXTURE="$dir"; GH_CALL_LOG="$dir/gh-calls.log"; export FIXTURE GH_CALL_LOG; : > "$GH_CALL_LOG"
+  pr_json other/repo "$1" > "$dir/prs/other_repo"
+}
+asked_about() {  # $1 = a literal the gh call log must hold
+  case "$(cat "$GH_CALL_LOG")" in *"$1"*) return 0 ;; *) return 1 ;; esac
+}
+PIN="--squash --match-head-commit $HEAD_SHA"
+
+# The issue's own case: --repo naming a repository other than the folder the session sits in.
+for form in "--repo other/repo" "-R other/repo" "--repo=other/repo"; do
+  two_repos SUCCESS
+  out=$(run_hook "$dir" "gh pr merge 7 $form $PIN")
+  if denied "$out"; then fail "a green pull request named by [$form] was refused: $out"; else pass; fi
+  # And it was allowed because gh was asked about other/repo, not because something else let it by.
+  if asked_about "pr view 7 --repo other/repo"; then pass; else
+    fail "[$form] did not make the gate ask gh about other/repo: $(cat "$GH_CALL_LOG")"
+  fi
+  rm -rf "$dir"
+done
+
+# Never loosened: a red pull request in the named repository is still refused, in the green gate's
+# own words, so the refusal is about its checks and not about failing to find it.
+two_repos FAILURE
+out=$(run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
+if denied "$out" && holds "$out" "is not green: tests=FAILURE"; then pass; else
+  fail "a red pull request named by --repo was not refused as red: $out"
+fi
+rm -rf "$dir"
+
+# A cd that does not lead the command: after an assignment, and a relative one.
+two_repos SUCCESS
+out=$(run_hook "$dir" "H=\$(echo 7) ; cd $dir/other && gh pr merge 7 $PIN")
+if denied "$out"; then fail "a green merge behind a cd after an assignment was refused: $out"; else pass; fi
+out=$(run_hook "$dir" "cd ../other && gh pr merge 7 $PIN")
+if denied "$out"; then fail "a green merge behind a relative cd was refused: $out"; else pass; fi
+rm -rf "$dir"
+
+# NOT FOUND is its own refusal, naming the repository that was searched, and it is not the "could
+# not confirm it is green" sentence, which sends somebody to the override (L11, L36).
+two_repos SUCCESS
+out=$(run_hook "$dir" "gh pr merge 7 --repo nobody/there $PIN")
+if denied "$out"; then pass; else fail "a pull request that does not exist was allowed to merge: $out"; fi
+if says "$out" "no pull request #7 was found in nobody/there"; then pass; else
+  fail "the not found refusal does not say so, naming the repository searched: $out"
+fi
+if holds "$out" "Cannot verify CI" || holds "$out" "ALLOW_RED_MERGE"; then
+  fail "the not found refusal reads as an unconfirmed verdict or offers the override: $out"
+else pass; fi
+# The same from the folder, with no --repo: it names the folder's repository.
+out=$(run_hook "$dir" "gh pr merge 7 $PIN")
+if denied "$out" && says "$out" "no pull request #7 was found in acme/widget"; then pass; else
+  fail "the not found refusal from the session folder does not name acme/widget: $out"
+fi
+rm -rf "$dir"
+
+# gh FAILING is not gh finding nothing: that stays "could not verify", naming where it looked.
+two_repos SUCCESS
+out=$(GH_OFFLINE=1 run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
+if denied "$out" && holds "$out" "Cannot verify CI" && holds "$out" "other/repo"; then pass; else
+  fail "gh failing to answer was not refused as unverifiable, naming the repository: $out"
+fi
+if says "$out" "was found in"; then fail "a gh failure was reported as the pull request not existing: $out"; else pass; fi
+rm -rf "$dir"
+
+# A repository named by --repo is not the folder the gate stands in, so the folder's files say
+# nothing about it. A merge tool the NAMED repository carries still has to be used, read from that
+# repository, or naming it would be a way round the tool rule.
+two_repos SUCCESS
+mkdir -p "$dir/remote/repos/other/repo/contents/tools"
+: > "$dir/remote/repos/other/repo/contents/tools/wait_for_checks.py"
+out=$(run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
+if denied "$out" && holds "$out" "wait_for_checks.py 7 --merge"; then pass; else
+  fail "a merge named by --repo skipped that repository's own merge tool: $out"
+fi
+rm -rf "$dir"
+# And the folder's OWN tool does not stand in for the named repository's.
+two_repos SUCCESS
+mkdir -p "$dir/repo/tools"; : > "$dir/repo/tools/wait_for_checks.py"
+out=$(run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
+if denied "$out"; then fail "the session folder's merge tool was demanded for another repository: $out"; else pass; fi
+rm -rf "$dir"
+# When the gate cannot tell whether the named repository carries a tool, it refuses in its own words.
+two_repos SUCCESS
+out=$(GH_API_BROKEN=1 run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
+if denied "$out" && says "$out" "could not tell whether other/repo"; then pass; else
+  fail "an unreadable tool probe did not refuse in its own words: $out"
+fi
+rm -rf "$dir"
+
+# No checks at all in the named repository: its workflows are read from it, not from the folder.
+two_repos none
+out=$(run_hook "$dir" "gh pr merge 7 --repo other/repo --squash")
+if denied "$out"; then fail "a named repository with no workflows was blocked for having no checks: $out"; else pass; fi
+mkdir -p "$dir/remote/repos/other/repo/contents/.github"
+: > "$dir/remote/repos/other/repo/contents/.github/workflows"
+out=$(run_hook "$dir" "gh pr merge 7 --repo other/repo --squash")
+if denied "$out" && holds "$out" "other/repo"; then pass; else
+  fail "a named repository that has workflows was merged with no checks: $out"
+fi
+rm -rf "$dir"
+unset FIXTURE GH_CALL_LOG
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
