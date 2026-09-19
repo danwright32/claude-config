@@ -21,6 +21,11 @@
 # it either has something specific to say, or it says nothing at all. Silence
 # from this hook means "no pattern matched", never "this push is lesson clean".
 #
+# It also does not read the files whose CONTENT IS rule text, LESSONS.md and the
+# index generated from it, because those quote the very lessons it matches on
+# (claude-config#484). See RULE_TEXT_PATH_RE below for the set and how it is kept
+# in step with the sync.
+#
 # It also deliberately does NOT emit permissionDecision. Emitting "allow" would
 # auto-approve every push and bypass both the user's confirmation and the other
 # hooks on this matcher.
@@ -109,9 +114,30 @@ $one"
 fi
 [ -n "$(printf '%s' "$raw" | tr -d '[:space:]')" ] || exit 0
 
-# path<TAB>added-line, one per added line.
-added="$(printf '%s\n' "$raw" | awk '
-  /^\+\+\+ /      { f = substr($0, 7); if (f == "/dev/null") f = ""; next }
+# --- Files whose CONTENT IS rule text (claude-config#484) ---------------------
+# LESSONS.md and the index generated from it are rule text: they QUOTE the lessons about background
+# work, destructive operations and retries, so scanning them matches this hook's own patterns
+# against its own subject matter. The claude-config#473 push was reported for all three of those,
+# purely because the generated index says the words, and an advisory that fires on every push
+# touching the lessons is the one that stops being read (L36, L147).
+#
+# The set is named ONCE, here. The sync decides the same question with is_derived_rule_file and the
+# LESSONS_FILE beside it, in claude-sync, and calling that predicate from here is not possible: the
+# config root holds the installed hooks, not the sync tool, so a hook running from the installed
+# copy has no claude-sync to source. What holds the two together instead is a test:
+# test-lessons-advisory.sh reads this constant out of this file, reads the sync's own predicate out
+# of claude-sync, and fails when a name the SYNC calls rule text would still be scanned here
+# (L41, L613).
+#
+# It matches the index by its whole family of names rather than by the one it has today, because
+# the index is being split into one file per section (claude-config#473) and the skip has to cover
+# LESSONS-INDEX-<section>.md the moment those files land, not one push later.
+RULE_TEXT_PATH_RE='(^|/)(LESSONS\.md|LESSONS-INDEX[^/]*\.md)$'
+
+# path<TAB>added-line, one per added line. A rule text file is dropped at its header, so none of
+# its lines reach the triggers below.
+added="$(printf '%s\n' "$raw" | awk -v ruletext="$RULE_TEXT_PATH_RE" '
+  /^\+\+\+ /      { f = substr($0, 7); if (f == "/dev/null" || f ~ ruletext) f = ""; next }
   /^\+\+\+/       { next }
   /^\+/           { if (f != "") print f "\t" substr($0, 2) }
 ')"

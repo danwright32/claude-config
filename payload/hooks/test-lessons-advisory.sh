@@ -428,6 +428,117 @@ printf 'export const mine = 1;\n' > "$R/src/mine.ts"
 out=$(run_hook "git add src/mine.ts && git commit -qm mine && git push" "$R")
 assert_silent "a trigger in an untracked file the add does not name is not advised on" "$out"
 
+# --- claude-config#484: rule text is not code ---------------------------------
+# The advisory matches its patterns against the added lines, so a push that ADDS RULE TEXT fired on
+# its own content. The claude-config#473 push was reported for background work, destructive
+# operations and retry logic purely because the generated index QUOTES lessons on those subjects,
+# and an advisory that fires on a whole class of push is the one that stops being read (L36, L147).
+#
+# The fixture is three REAL lines, copied out of payload/LESSONS-INDEX.md, one for each trigger
+# that fired on that push, rather than a sentence shaped to set them off (L48).
+RULE_TEXT_LINES="- L386. A scheduled job's DECLARED time is not when it runs, so two scheduled jobs must never be ordered by clock arithmetic between their crons.
+- L79. A notice placed in a container the platform may collapse or truncate is not shipped until it has been seen at the window size the person actually uses.
+- L524. Any retry, backoff or poll delay takes an injectable sleep or clock from the day it is written, or every test that crosses it waits for real."
+
+R=$(make_repo lessonsbody "$RULE_TEXT_LINES" payload/LESSONS.md)
+out=$(run_hook "git push" "$R")
+assert_silent "a push adding only LESSONS.md text says nothing" "$out"
+
+R=$(make_repo lessonsindex "$RULE_TEXT_LINES" payload/LESSONS-INDEX.md)
+out=$(run_hook "git push" "$R")
+assert_silent "a push adding only the generated index says nothing" "$out"
+
+# The index is being split into one file per section (claude-config#473), so the skip is written
+# against the whole family of index names and covers those files before they land.
+R=$(make_repo lessonssplit "$RULE_TEXT_LINES" payload/LESSONS-INDEX-data-safety.md)
+out=$(run_hook "git push" "$R")
+assert_silent "a per section index file says nothing either" "$out"
+
+# The installed copy, which is the same content under the config root rather than under payload.
+R=$(make_repo lessonshome "$RULE_TEXT_LINES" LESSONS-INDEX.md)
+out=$(run_hook "git push" "$R")
+assert_silent "the installed copy of the index says nothing either" "$out"
+
+# Ordinary code must not be quieted by the skip, or the noise was bought with silence on the thing
+# this hook exists for (L104: an over match reads as the filter working).
+RETRY_CODE='attempt=0
+while [ "$attempt" -lt 3 ]; do
+  fetch_the_thing && break
+  attempt=$(( attempt + 1 ))
+  sleep $(( 2 ** attempt ))   # exponential backoff
+done'
+R=$(make_repo retryinhook "$RETRY_CODE" payload/hooks/fetch-thing.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "a real retry added to a hook is still advised on" 'L524' "$out"
+assert_contains "and the hook file is named" 'payload/hooks/fetch-thing.sh' "$out"
+
+# Both in one push: the code is advised on, and the lessons file beside it is not named as a place
+# to go and look.
+R=$(make_repo retryandlessons "$RETRY_CODE" payload/hooks/fetch-thing.sh)
+printf '%s\n' "$RULE_TEXT_LINES" > "$R/payload/LESSONS.md"
+git -C "$R" add payload/LESSONS.md && git -C "$R" commit -qm lessons
+out=$(run_hook "git push" "$R")
+assert_contains "a push adding code and lessons together still advises on the code" 'L524' "$out"
+assert_contains "and names the code file" 'payload/hooks/fetch-thing.sh' "$out"
+assert_absent "and does not name the lessons file it also added" 'in: payload/LESSONS.md' "$out"
+
+# ---- the skip and the sync's own derived file list are one set (claude-config#484) ----
+# claude-sync decides the same question with is_derived_rule_file and the LESSONS_FILE beside it,
+# but claude-sync is NOT installed beside these hooks (the config root holds the hooks, not the
+# sync tool), so the hook cannot call that predicate and carries a named constant instead. This is
+# what stops the two drifting (L41, L613): every name the SYNC itself calls rule text must be
+# matched by the hook's constant. The hook is deliberately allowed to be BROADER, because it has
+# to cover the per section index names before claude-config#473 lands.
+#
+# Read out of both files rather than restated here, so this measures what actually ships.
+REPO_ROOT="$(cd "$(dirname "$HOOK")/../.." && pwd)"
+SYNC_TOOL="$REPO_ROOT/claude-sync"
+# shellcheck disable=SC1090
+eval "$(sed -n '/^RULE_TEXT_PATH_RE=/p' "$HOOK")"
+if [ -z "${RULE_TEXT_PATH_RE:-}" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL: the hook holds no RULE_TEXT_PATH_RE, so nothing decides which files are rule text"
+elif [ ! -f "$SYNC_TOOL" ] || [ ! -d "$REPO_ROOT/payload" ]; then
+  # The installed copy has no claude-sync beside it. Said out loud rather than passed, because a
+  # silent skip here reads exactly like agreement (L98).
+  echo "NOTE: $REPO_ROOT is not a checkout of this repo, so the sync's own derived file list could not be compared."
+else
+  sync_rule_text_names="$(
+    # shellcheck disable=SC1090
+    eval "$(sed -n '/^LESSONS_FILE=/p; /^LESSON_INDEX_[A-Za-z_]*=/p; /^is_derived_rule_file(){/,/^}/p' "$SYNC_TOOL")"
+    for n in "${LESSONS_FILE:-}" "${LESSON_INDEX_FILE:-}" "${LESSON_INDEX_RETIRED_FILE:-}" \
+             "${LESSON_INDEX_PREFIX:+${LESSON_INDEX_PREFIX}-data-safety.md}"; do
+      [ -n "$n" ] || continue
+      # Confirmed through the OWN predicate of the sync, never assumed from the name. The lessons
+      # file itself is not derived from anything, so it is the one name taken straight.
+      [ "$n" = "${LESSONS_FILE:-}" ] || is_derived_rule_file "$n" || continue
+      printf '%s\n' "$n"
+    done | sort -u
+  )"
+  sync_name_count="$(printf '%s\n' "$sync_rule_text_names" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [ "${sync_name_count:-0}" -ge 2 ]; then
+    PASS=$((PASS+1)); echo "PASS: the sync names $sync_name_count rule text files of its own"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL: only $sync_name_count rule text names came out of $SYNC_TOOL, so the comparison below proves nothing"
+  fi
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    if grep -Eq -- "$RULE_TEXT_PATH_RE" <<< "payload/$n"; then
+      PASS=$((PASS+1)); echo "PASS: the hook skips $n, which the sync calls rule text"
+    else
+      FAIL=$((FAIL+1)); echo "FAIL: claude-sync calls $n rule text and the advisory would still scan it"
+    fi
+  done <<< "$sync_rule_text_names"
+fi
+# And it is a skip, not a blanket. A constant matching everything would make every case above pass
+# while the hook said nothing about anything (L104).
+for n in payload/CLAUDE.md payload/hooks/lessons-advisory.sh README.md src/lessons.ts; do
+  if grep -Eq -- "${RULE_TEXT_PATH_RE:-^$}" <<< "$n"; then
+    FAIL=$((FAIL+1)); echo "FAIL: the rule text skip swallows $n, which is not rule text"
+  else
+    PASS=$((PASS+1)); echo "PASS: $n is not treated as rule text"
+  fi
+done
+
 echo "passed: $PASS, failed: $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
