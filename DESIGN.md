@@ -769,6 +769,46 @@ The recovery, if it happens again: find the sync commit (`git log --author=claud
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
 `LESSONS.md` and its index, which carry the other Mac's real additions.
 
+## The hygiene guards judge what a push adds, never a stored baseline
+
+Decided 2026-09-18 (#428 to #433), against the shape the issues themselves proposed.
+
+The issues asked for a copy and paste detector (jscpd) with a per repo ratchet baseline. Both were
+dropped. A dependency the guard installs on first run is a network fetch inside a push gate, and a
+baseline is a file inside somebody's project that has to be written, committed and kept, which is
+the "something to remember" Dan ruled out. So every guard but one compares the pushed tree against
+its merge-base and fails only on what the push introduced. The cost is stated in each header: a
+change that edits every copy of an existing duplicate identically reads as new content, and a
+stale doc sentence is only re-judged when its file is touched.
+
+The bundle budget is the exception, because a build output is not in git and has no base to diff
+against. Its record lives under `~/.claude/state/bundle-budget/`, keyed by the remote URL, on the
+Mac that measured it. The record only ever moves down or is explicitly accepted, so growth inside
+the margin cannot creep the budget up one push at a time.
+
+### The advisory review is detached, and reads whole files
+
+A review through `claude -p` measured 130 to 193 seconds on 2026-09-18. Run inside the push hook that is a two
+to three minute wait on every push, which is the wait Dan refused; run as a blocking gate it
+teaches people to set the skip variable. So the PostToolUse hook writes a pending marker, starts
+the runner in its own process group and returns; a UserPromptSubmit hook prints the finished
+review once per session. The first real run answered "No issues found." on a fixture where a
+function's twin had been left unchanged, correctly, because a diff never shows the unchanged
+sibling. The input is now the diff followed by the full text of each changed file while a 300 KB
+budget lasts, and the same fixture is then caught.
+
+### What the thresholds measured
+
+Each is in its hook header with the date; the two that decided a design are here because they cut
+against the issue text. The duplication floor of 160 characters for a block leaves Slate's day
+header cell (131 characters) uncaught, because 130 refuses 10 of the last 40 real pushes and 160
+refuses 4, all genuine. The deferral list dropped "later" (362 hits across Slate, at most two
+deferrals), "not yet" (32, none) and "eventually" (25, none), and narrowed "deferred" to "deferred
+to", "deferred until" and "deferred pending" because Slate uses the bare word for work handed off
+after a response. The doc reference guard anchors every phrase to the issue number and vetoes a
+past tense verb, because a first draft matching the phrase anywhere in the sentence named 50
+issues of which 44 were closed and about 10 were genuine pending claims.
+
 ## Things known to be wrong and left that way
 
 Markers are keyed on hostname, which is a mutable string. Renaming or reinstalling a Mac abandons
