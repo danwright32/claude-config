@@ -113,7 +113,13 @@ def main():
 
     files = []
     for base, dirs, names in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "__pycache__")]
+        # A nested checkout is a SECOND COPY of the same tree, so a default recursive walk counts its
+        # files as though they were this repository's own (L234). Measured 2026-09-19 with two
+        # worktrees open under .claude/worktrees: 166 shell files became 498, every count here
+        # roughly tripled, and this ratchet went red on a tree nobody had changed. That is what
+        # made `claude-sync recheck` record the same installed config as broken from one checkout
+        # and healthy from another (claude-config#504).
+        dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "__pycache__", "worktrees")]
         for nm in names:
             if nm.startswith("test-") and nm.endswith(".sh"):
                 files.append(os.path.join(base, nm))
