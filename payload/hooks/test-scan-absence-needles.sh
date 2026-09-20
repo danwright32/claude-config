@@ -152,6 +152,32 @@ case "$OUT" in
 esac
 
 echo
+# A NESTED CHECKOUT IS A SECOND COPY OF THE SAME TREE (claude-config#504, L234). This walk prunes
+# .git, node_modules and __pycache__ and nothing else, so a worktree under .claude/worktrees is
+# counted as though its files were the repository's own. Measured 2026-09-19 with two worktrees
+# open: 166 shell files became 498, every tree wide count roughly tripled, and both ratchets went
+# red on a tree nobody had changed. That is what made `claude-sync recheck` record this Mac as
+# broken from one checkout and healthy from another, because only one of them had worktrees in it.
+NEST="$FIX/nested"
+mkdir -p "$NEST/payload/hooks" "$NEST/.claude/worktrees/copy/payload/hooks"
+cat > "$NEST/payload/hooks/test-outer.sh" <<'NESTEOF'
+#!/usr/bin/env bash
+out="$(some_command)"
+! grep -q 'a needle that is present here' <<< "$out" && echo ok
+echo 'a needle that is present here'
+NESTEOF
+cp "$NEST/payload/hooks/test-outer.sh" "$NEST/.claude/worktrees/copy/payload/hooks/test-outer.sh"
+nest_out="$(python3 "$SCAN" --root "$NEST" --baseline /dev/null 2>&1 || true)"
+# Parameter expansion, not a pipeline: a short circuiting consumer like `head -1` kills the
+# producer feeding it under pipefail, and the pipeline then reports a failure that never happened
+# (L183). test-pipefail-shortcircuit.sh caught this exact line, and it is the second time today.
+nest_n="${nest_out#*across }"
+nest_n="${nest_n%% *}"
+case "$nest_n" in ''|*[!0-9]*) nest_n=0 ;; esac
+[ "$nest_n" = "1" ] \
+  && check "a nested checkout is not scanned as part of the tree above it" ok \
+  || check "a nested checkout is not scanned as part of the tree above it" "it counted $nest_n file(s), so the copy under .claude/worktrees was counted too: $nest_out"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
