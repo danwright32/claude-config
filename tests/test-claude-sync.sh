@@ -11020,6 +11020,95 @@ check "#69 both zeros are live measurements, not a dead scanner" \
   "[ \"\${weak_pos:-x}\" = '1 1 1' ]"
 rm -f "$WEAKPOS"
 
+section "== a filter this suite passes to itself must not name two sections (claude-config#516) =="
+# A SECTION TITLE IS LOAD-BEARING. `SECTION_ONLY` and `SECTION_UNTIL` resolve a section by
+# case-insensitive substring, and this file passes both to nested copies of ITSELF: the lock
+# sections run `SECTION_UNTIL=push`. On 2026-09-20 a new section titled "a manual push records what
+# it published" made that filter ambiguous, so every nested run refused and exited 2, and 34 checks
+# about locks, process ids and leftover counts went red while naming nothing to do with a title. The
+# control that followed was misleading too: swapping the tool back leaves the test file's own fault
+# in both arms (L1001).
+#
+# The refusal was right and its message was plain. What was missing was anything connecting the two.
+#
+# ONLY the ambiguous case is a fault. A filter that matches NOTHING is sometimes deliberate here:
+# the resolver's own refusal is tested with `SECTION_UNTIL=zzz-no-such-section`, and treating zero
+# as a fault would fail on the test that proves the refusal works (L104).
+#
+# The filters are READ OUT of the file, never listed here, or this reports clean while covering
+# nothing the day somebody adds one (L41, L96). Read only from lines that actually start a nested
+# run of this file, so a filter written inside a fixture for some other test is not judged as if the
+# suite passed it to itself. The matching rule is the resolver's own: fixed string, case
+# insensitive, substring.
+# The pattern is SPLIT, so this line does not itself contain what it looks for. The check beside it
+# reads every line in this file that spawns the suite and requires a depth on it, and a scan that
+# names the spawn pattern in one piece is a line that check has to judge (L245). The suite's own
+# _selfspawn_pat is written the same way for the same reason.
+_sf_spawn_pat="bash \"\$SCRIPT""_SELF\""
+_sf_filters(){   # $1 = suite file -> one literal filter value per line
+  grep -F -- "$_sf_spawn_pat" "$1" 2>/dev/null \
+    | grep -oE "SECTION_(ONLY|UNTIL)=('[^']+'|[A-Za-z0-9_-]+)" \
+    | sed -E "s/^SECTION_(ONLY|UNTIL)=//; s/^'//; s/'\$//" \
+    | grep -v '^\$' \
+    | sort -u
+  return 0
+}
+_sf_titles(){    # $1 = suite file -> one section title per line
+  sed -n 's/^section "== \(.*\) ==".*/\1/p' "$1"
+  return 0
+}
+_sf_report(){    # $1 = suite file -> "filter<TAB>how many sections it names", for any naming two or more
+  local _sf_f _sf_t _sf_n
+  _sf_t="$(_sf_titles "$1")"
+  while IFS= read -r _sf_f; do
+    [ -n "$_sf_f" ] || continue
+    _sf_n="$(printf '%s\n' "$_sf_t" | grep -icF -- "$_sf_f" || true)"
+    case "$_sf_n" in ''|*[!0-9]*) _sf_n=0 ;; esac
+    [ "$_sf_n" -ge 2 ] || continue
+    printf '%s\t%s\n' "$_sf_f" "$_sf_n"
+  done < <(_sf_filters "$1")
+  return 0
+}
+# Proved on a file built to hold one of each, because a scan run only over the real suite reports an
+# empty answer nobody can check, and empty is exactly what a scan that matched nothing looks like
+# (L1, L98).
+# The fixture's spawn lines carry SUITE_DEPTH, although nothing here runs them. The neighbouring
+# #34 check reads every line in this file that spawns the suite and requires one, and a fixture that
+# imitates a spawn line without it is a line that check has to judge. Carrying it makes the fixture
+# the shape of the real thing rather than an exception to the guard beside it.
+SFFIX="$WORK/self-filter-fixture.sh"
+: > "$SFFIX"
+printf 'section "== push =="\n'                                        >> "$SFFIX"
+printf 'section "== a manual push records what it went up =="\n'       >> "$SFFIX"
+printf 'section "== quiet corner =="\n'                                >> "$SFFIX"
+printf 'SUITE_DEPTH=1 SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1\n'   >> "$SFFIX"
+printf "SUITE_DEPTH=1 SECTION_ONLY='quiet corner' bash \"\$SCRIPT_SELF\" 2>&1\n" >> "$SFFIX"
+printf 'SUITE_DEPTH=1 SECTION_UNTIL=zzz-nothing bash "$SCRIPT_SELF" 2>&1\n' >> "$SFFIX"
+printf 'SECTION_ONLY=push somewhere-that-is-not-this-file\n'           >> "$SFFIX"
+sf_fix="$(_sf_report "$SFFIX")"
+dbg "self-filter scan on the fixture: ${sf_fix:-<nothing>}"
+check "#516 the scan names a filter that resolves to two sections" \
+  "line_has \"\$sf_fix\" '^push' '2\$'"
+check "#516 a filter that resolves to exactly one is left alone" \
+  "! grep -q 'quiet corner' <<< \"\$sf_fix\""
+check "#516 and one that deliberately resolves to none is not a fault" \
+  "! grep -q 'zzz-nothing' <<< \"\$sf_fix\""
+# The line that does not start a nested run of this file carries the same word, and the fixture
+# holds it so that the reader is judged on where a filter is USED, not on the string appearing.
+check "#516 the fixture holds a filter that starts no nested run" \
+  "grep -q 'somewhere-that-is-not-this-file' '$SFFIX'"
+sf_lines="$(_sf_filters "$SFFIX")"
+check "#516 and that one is not collected at all" \
+  "[ \"\$(grep -c . <<< \"\$sf_lines\")\" = 3 ]"
+# And the file this actually protects.
+sf_real="$(_sf_report "$SCRIPT_SELF")"
+if [ -n "$sf_real" ]; then
+  echo "  (#516 filters this suite passes to itself that name more than one section:)"
+  printf '%s\n' "$sf_real" | sed 's/^/    /'
+fi
+check "#516 no filter this suite passes to itself names two sections" \
+  "[ -z \"\$sf_real\" ]"
+
 section "== every check names itself uniquely (#70) =="
 # The runner prints the name and the expression on failure, and nothing else, so two checks sharing
 # a name leave the reader searching the file to find out which scenario actually broke. That is the
