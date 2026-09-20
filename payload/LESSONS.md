@@ -1815,6 +1815,31 @@ for reference; L6 was reviewed and deliberately not adopted.
   blind to what the running system writes afterwards; L538 is the consequence, a standing red
   making every other failure unreadable.)
   SHORT: A test asserting an invariant a SCHEDULED repair restores must RUN the repair first and assert what is LEFT, or it reports the interval, not a defect.
+- **L495. When the SUBJECT of a measurement is a repair that runs on a schedule, a snapshot of
+  live state is already DOWNSTREAM of it and can only show what survived, so measure from state
+  captured BEFORE that repair ran and assert the repair did something in the run.** (overture#4048,
+  2026-09-19: a measurement of which copy a same-night merge keeps was written against a clone of
+  the live store and reported "0 duplicates deleted, 0 kept a lower score". Both zeros were
+  worthless: the merge runs at every launch, so the clone held a store already merged and the
+  survivor ladder never executed. Rewritten against the dated backups, each captured at the start
+  of a launch, the same pass reported 1 collapse and 50 deferrals across ten launches, which was
+  the finding. Its own guard missed it too, because the guard asked whether any cluster was SEEN
+  and deferrals satisfied it while never reaching the ladder. 50 test sites in that repository
+  clone the post-repair state. L385 is the opposite case, an invariant a repair RESTORES, which
+  must run the repair first; this is the case where the repair itself is the subject.)
+  SHORT: A measurement whose subject is a scheduled repair must read state from BEFORE it ran, or its zero means only that nothing survived.
+- **L497. A check that detects a hidden dependence by PERTURBING an input must perturb it in BOTH
+  directions, because each direction reveals a different failure and the one you did not run is
+  where the defect that has not fired yet sits.** (overture#4050, 2026-09-20: a fixture aging check
+  existed for exactly the class "a test dated against the live clock changes meaning as time passes
+  it", and worked by shifting every literal date FORWARD three years. A test scouting a show dated
+  2026-09-19 broke at midnight when the clock crossed it; shifted forward that fixture is still in
+  the future, so the verdict never moved and the check stayed quiet. The same experiment run
+  BACKWARD pulls it into the past and changes the verdict at once. Main was red for nobody's change,
+  every push in the repository was blocked, and 28 more dated fixtures sit between that day and a
+  month later. L130 covers the fixture side of this, pinning both ends; nothing covered the
+  instrument side.)
+  SHORT: A probe detecting a dependence by shifting an input must shift it BOTH ways: the untried direction is where the untriggered failure sits.
 
 - **L564. An empty search result proves the SPELLING is absent, never the concept, so a conclusion
   drawn from it may claim only what was actually searched for.** Before treating something as the
@@ -7184,6 +7209,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   become bookable would have read the erased mark as nobody waiting. The request was accepted, so
   unlike L685 nothing failed: the only evidence was a hire who never became bookable.)
   SHORT: A bulk upsert with rows of DIFFERENT key sets writes NULL into every key a row omits but a sibling carries, so give every row the same keys.
+
+- **L496. A dependency's resolved version file that lives inside a GENERATED or ignored directory
+  pins nothing, because the only copy is on the machine that generated it while every other machine
+  resolves afresh. Check where the lockfile LANDS, not that one exists.** (ovation#437, 2026-09-20:
+  `project.yml` asked for ViewInspector `from: "0.10.0"`, any 0.x, and SwiftPM's `Package.resolved`
+  is written inside `Ovation.xcodeproj`, which `.gitignore` excludes because xcodegen generates it.
+  One Mac held a cached pin at 0.10.3 and built fine for months. CI re-resolved from scratch every
+  run, so the day 0.10.4 shipped with a PackageDescription 6.0 manifest every pull request's build
+  died in under thirty seconds, on a package nothing in the diff touched. L25 says pin everything
+  and read as satisfied, because a lockfile DID exist; the question it does not ask is whether the
+  lockfile is somewhere the next machine can read.)
+  SHORT: A lockfile inside a generated or gitignored directory pins nothing, since the only copy is on the machine that made it and CI resolves afresh.
 
 ## Building with AI
 

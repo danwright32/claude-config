@@ -145,6 +145,8 @@ which is NOT loaded into the session.
 - L378. A guard that saves an EXPENSIVE step must run on every entry point reaching it, including the quick path people iterate on, where the mistake is made.
 - L382. A poll repeating an IDENTICAL request can be served one cached answer forever, so make each attempt demand a fresh read and prove the value can change.
 - L385. A test asserting an invariant a SCHEDULED repair restores must RUN the repair first and assert what is LEFT, or it reports the interval, not a defect.
+- L495. A measurement whose subject is a scheduled repair must read state from BEFORE it ran, or its zero means only that nothing survived.
+- L497. A probe detecting a dependence by shifting an input must shift it BOTH ways: the untried direction is where the untriggered failure sits.
 - L564. An empty search result proves the SPELLING is absent, never the concept, so a conclusion drawn from it may claim only what was actually searched for.
 - L391. A cost guard's fixture must record the dimension the COST scales with, often a pairing or a maximum rather than a total, or it exercises another load.
 - L588. Assert a displayed share lies within its own range: a value outside it is the only self-evident proof the two halves measure different things.
