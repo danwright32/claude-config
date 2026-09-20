@@ -4569,6 +4569,20 @@ highest_lesson_in(){   # $@ = files
   printf '%s' "${n:-0}"
 }
 
+# Is this a number a renumber may actually use? (claude-config#513)
+#
+# Its own function so the refusal below can be DRIVEN rather than reasoned about: the only thing
+# that produced an unusable value was a refusal inside the command substitution that computes it,
+# and that refusal is now unreachable from any caller, so nothing could reach this either (L1).
+#
+# What it exists to stop, measured on 2026-09-20: an empty value renumbered an entry to nothing and
+# wrote `- **L. mine.**` into a lessons file, a form no tool here can read, while every message
+# about it read as success (L50, L12).
+usable_lesson_start(){   # $1 = the candidate
+  case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+  return 0
+}
+
 merge_rule_files(){
   local last p local_f tmpb tmpm tmpr reported="" resolved renumbered start fmax collided band
   MERGED_RULE_FILES=""
@@ -4643,15 +4657,14 @@ RENUMBERED
       # success (L50). The collision is left in place instead, which the send's own duplicate check
       # reports and holds the file back for, and this says so rather than leaving it to be found.
       collided=""
-      case "$start" in
-        ''|*[!0-9]*)
-          echo "claude-sync: both Macs had used the same lesson number for different entries, and no next free number could be worked out for this Mac, so NOTHING was renumbered and both entries are still in $p under the same number. The next send holds that file back until it is settled." >&2 ;;
-        *)
-          if [ -n "$band" ]; then fmax="$(highest_lesson_in_band "$band" "$tmpr" "$PAYLOAD/$p")"
-          else fmax="$(highest_lesson_in "$tmpr" "$PAYLOAD/$p")"; fi
-          [ "$((fmax + 1))" -gt "$start" ] && start="$((fmax + 1))"
-          collided="$(renumber_merge_collisions "$tmpr" "$PAYLOAD/$p" "$start")" ;;
-      esac
+      if ! usable_lesson_start "$start"; then
+        echo "claude-sync: both Macs had used the same lesson number for different entries, and no next free number could be worked out for this Mac, so NOTHING was renumbered and both entries are still in $p under the same number. The next send holds that file back until it is settled." >&2
+      else
+        if [ -n "$band" ]; then fmax="$(highest_lesson_in_band "$band" "$tmpr" "$PAYLOAD/$p")"
+        else fmax="$(highest_lesson_in "$tmpr" "$PAYLOAD/$p")"; fi
+        [ "$((fmax + 1))" -gt "$start" ] && start="$((fmax + 1))"
+        collided="$(renumber_merge_collisions "$tmpr" "$PAYLOAD/$p" "$start")"
+      fi
       if [ -n "$collided" ]; then
         echo "claude-sync: both Macs had used the same lesson number for different entries, so this Mac's unsent entry was renumbered to the next free number and the published one keeps the number, which the other Mac may already reference ($p: $(printf '%s' "$collided" | tr '\n' ';' | sed 's/;$//')). The renumbered entry publishes on the next send; your previous copy is beside it as .syncbak." >&2
         notify "$p: renumbered an unsent entry after a number collision"

@@ -10527,6 +10527,63 @@ SYNC_HOSTNAME=MacSea CLAUDE_HOME="$FBH2" SYNC_REPO="$FBC2" SYNC_NO_NOTIFY=1 bash
 check "#512 a pull claims no band for a Mac that has never asked for a number" \
   "[ ! -f '$FBC2/lesson-bands/MacSea' ]"
 
+section "== the refusals that stop a lesson number spilling are driven directly (claude-config#513) =="
+# Two refusals on the minting path could not be reached by any caller, so nothing proved either of
+# them fires. The one inside next_lesson_number stops a number being handed out from OUTSIDE the
+# band it was given, which is the collision the whole band mechanism exists to prevent; every caller
+# now resolves its band through lesson_band_with_room, which rolls a full band over first, so the
+# refusal became a backstop with no route to it. The second is the merge declining to renumber when
+# no number came back, and the only thing that produced an empty number was the first refusal.
+#
+# A guard that has never been seen to fail is not known to work (L1), and both of these sit where
+# being wrong costs a duplicate lesson number across two Macs.
+#
+# So they are driven DIRECTLY: the tool is sourced in a subshell and the functions are called. The
+# command sourced is `help`, which is the one that prints and changes nothing, and the subshell means
+# the tool's own `set -euo pipefail` and any refusal that exits cannot reach the suite. Nothing about
+# the product changed to make this possible, which is the point: a seam that exists only for a test
+# is a second way for the real path to be wrong.
+SPH="$WORK/spill-home"; SPR="$WORK/spill-repo"; mkdir -p "$SPH" "$SPR/payload"
+printf '# rules\n@LESSONS.md\n' > "$SPH/CLAUDE.md"
+printf -- '- **L1000. the last number in this band.** body\n' > "$SPH/LESSONS.md"
+echo '{"hooks":{}}' > "$SPH/settings.json"
+_spill(){   # $* = the call to make with the tool sourced -> its output, its exit code in _spill_rc
+  _spill_rc=0
+  _spill_out="$(bash -c "export CLAUDE_HOME='$SPH' SYNC_REPO='$SPR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1; . '$SCRIPT' help >/dev/null 2>&1; $*" 2>&1)" || _spill_rc=$?
+  return 0
+}
+# The control FIRST: a band with room mints from it. Without this the refusals below are satisfied by
+# a function that refuses everything, which is the same green (L159).
+_spill 'next_lesson_number "$CLAUDE_HOME" 1001'
+check "#513 the control: a band with room mints its next number" \
+  "[ \"\$_spill_rc\" -eq 0 ] && grep -q '^L1001\$' <<< \"\$_spill_out\""
+# The spill refusal itself, driven with a band whose numbers are all used.
+_spill 'next_lesson_number "$CLAUDE_HOME" 501'
+check "#513 a band with no room refuses instead of minting past it" "[ \"\$_spill_rc\" -ne 0 ]"
+check "#513 and the refusal names the band and the number in the way" \
+  "line_has \"\$_spill_out\" '501 to 1000' 'highest in use 1000'"
+check "#513 and it mints nothing at all"  "! grep -qE '^L[0-9]+\$' <<< \"\$_spill_out\""
+check "#513 and it names the call that should have been made instead" \
+  "grep -q 'lesson_band_with_room' <<< \"\$_spill_out\""
+# The second refusal: what the merge does with a number that did not come back as a number. That is
+# what wrote `- **L. mine.**` into a lessons file on 2026-09-20, so it is judged on the same values
+# the substitution above it can really produce: empty, and the bare prefix left by stripping the L.
+_spill 'usable_lesson_start "" && echo USABLE || echo REFUSED'
+check "#513 an empty number is refused as a renumber target" \
+  "grep -q '^REFUSED\$' <<< \"\$_spill_out\""
+_spill 'usable_lesson_start "L" && echo USABLE || echo REFUSED'
+check "#513 so is a value that is not a number at all" \
+  "grep -q '^REFUSED\$' <<< \"\$_spill_out\""
+_spill 'usable_lesson_start "12abc" && echo USABLE || echo REFUSED'
+check "#513 and so is one that only starts like a number" \
+  "grep -q '^REFUSED\$' <<< \"\$_spill_out\""
+_spill 'usable_lesson_start "1001" && echo USABLE || echo REFUSED'
+check "#513 while a real number is accepted, or the merge could never renumber at all" \
+  "grep -q '^USABLE\$' <<< \"\$_spill_out\""
+# And the merge really does ask that question, rather than carrying its own copy of the test (L41).
+check "#513 the merge decides through that one predicate" \
+  "grep -q 'usable_lesson_start' '$SCRIPT'"
+
 section "== a skills entry that cannot load is not carried between Macs (#50) =="
 # payload/skills/humanizer/ and payload/skills/stop-slop/ hold no SKILL.md, so nothing can ever
 # load them, and two loose markdown files sat directly under skills/ where nothing reads them.

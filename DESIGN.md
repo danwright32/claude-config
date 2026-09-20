@@ -49,8 +49,11 @@ differs from `do_send`. That command refuses to send at all while the repo holds
 commits; `push` has no such guard in front of it, so recording unconditionally would tell a clone
 that really is behind that its payload is applied, and the next push would mirror this Mac's older
 copy over the other Mac's newer one. The condition is `payload_fully_applied`, the same question
-the marker's own repair asks, shared rather than written twice. `do_send`'s unconditional record is
-left alone here and tracked as #514.
+the marker's own repair asks, shared rather than written twice. `do_send`'s unconditional record is left
+alone here, and #514 asked whether it is a hazard: it is not, because the behind check in front of
+that command reconciles before the record is ever written, so the claim is true when it is made. A
+file held back for a publish fault is not in that commit at all. The suite pins both, and the
+section goes red if the behind check is ever removed.
 
 ### A send that keeps a file back says so
 
@@ -68,6 +71,23 @@ It does not NOTIFY, and that is deliberate. The watcher sends on every save and 
 until the next pull, so a notification here is one per keystroke for a condition the next pull
 clears. The suite already held that line: the #25 control asserting an ordinary sync fires nothing
 went red the moment this notified, which is the check doing its job.
+
+### Designing the spill state out rather than refusing it
+
+Considered for #513 and not done. Two refusals on the lesson minting path had no caller that could
+reach them: the one that stops a number being handed out from outside its band, and the merge
+declining to renumber when no number came back. Removing the states they guard, by having the
+minting path always resolve its own band, would make both impossible rather than refused.
+
+It is rejected on risk. The merge's band handling is the most delicate code here, and the same
+day's work had already produced a corruption in it: a refusal swallowed by a command substitution
+renumbered an entry to nothing. Keeping a fail closed refusal and proving it fires is the smaller
+claim and the safer one, and it costs nothing that the design would gain.
+
+So they are DRIVEN instead. The suite sources the tool in a subshell and calls the two functions,
+using `help`, the one command that prints and changes nothing. No seam was added to the product to
+make that possible, deliberately: a seam that exists only for a test is a second way for the real
+path to be wrong, and the thing under test would no longer be the thing that ships.
 
 ### Judging a stale lock by whether its process is alive, and nothing else
 
