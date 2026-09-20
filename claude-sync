@@ -3282,6 +3282,34 @@ stage_local_to_payload(){
   # Hold back the paths this Mac has not applied yet, per subtree (rsync excludes
   # are relative to the transfer root, and each mirror below has its own root).
   local protected; protected="$(unapplied_paths)"
+  # AND SAID OUT LOUD, for the ones this Mac actually holds something different for
+  # (claude-config#511). Holding these back is right: the repo's copy is newer and mirroring
+  # upward over it would revert the other Mac. Saying nothing about it is not. The copy loop
+  # below skips them, nothing is staged, and `push` then prints the words it prints when there
+  # was nothing to send at all, so a Mac whose lessons have stopped publishing looks exactly like
+  # a Mac with nothing to publish (L98, L11). Measured on 2026-09-20: three lessons sat unsent
+  # across repeated pushes, each one reporting a clean send.
+  #
+  # Only where this Mac's copy really differs. A path the repo moved that is byte for byte what is
+  # here has nothing of this Mac's waiting behind it, and naming it would put a line on every send
+  # from a Mac that is merely behind, which is the alert nobody reads (L36).
+  local _sw_p _sw_held=""
+  while IFS= read -r _sw_p; do
+    [ -n "$_sw_p" ] || continue
+    [ -e "$CLAUDE_HOME/$_sw_p" ] || continue
+    payload_path_applied "$_sw_p" && continue
+    _sw_held="${_sw_held:+$_sw_held
+}$_sw_p"
+  done <<SWPROT
+$protected
+SWPROT
+  if [ -n "$_sw_held" ]; then
+    echo "claude-sync: NOT publishing $(comma_list "$_sw_held") because the shared repo has changed $([ "$(printf '%s\n' "$_sw_held" | wc -l | tr -d ' ')" = 1 ] && printf 'it' || printf 'them') since this Mac last applied, and mirroring this Mac's copy upward would revert what is there. Nothing here was altered and nothing was lost. Run 'claude-sync pull', which merges the two copies entry by entry, and the next send publishes the result. Everything else synced normally." >&2
+    # SAID, NOT NOTIFIED. The watcher sends on every save, and this state lasts until the next pull,
+    # so a desktop notification here is one per keystroke for a condition the very next pull clears:
+    # the alert that teaches people to dismiss alerts (L36). The suite already holds that line, in
+    # the #25 control asserting an ordinary sync fires nothing, which this broke when it notified.
+  fi
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
     local ex=() p
@@ -4967,6 +4995,20 @@ payload_path_applied(){   # $1 = path relative to payload/
   payload_local_view "$p" | cmp -s - "$CLAUDE_HOME/$p"
 }
 
+# Is every path the repo has changed since this Mac last applied already what this Mac holds?
+#
+# The question both the behind check and the marker below ask, so it is written once: a commit made
+# HERE moves HEAD with no apply step behind it, while its content is applied by construction, and
+# the only way to tell that apart from the other Mac's unapplied work is to compare the bytes.
+payload_fully_applied(){
+  local p
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    payload_path_applied "$p" || return 1
+  done < <(unapplied_paths)
+  return 0
+}
+
 unapplied_remote_changes(){
   have_git || return 1
   local head last branch upstream p
@@ -5005,10 +5047,7 @@ unapplied_remote_changes(){
   # of what the repo actually changed, and repair the marker when they agree so
   # the state cannot persist.
   [ "$head" != "$last" ] || return 1
-  while IFS= read -r p; do
-    [ -n "$p" ] || continue
-    payload_path_applied "$p" || return 0
-  done < <(unapplied_paths)
+  payload_fully_applied || return 0
   printf '%s\n' "$head" > "$LAST_APPLIED_FILE" 2>/dev/null || true
   return 1
 }
@@ -5428,7 +5467,24 @@ do_push(){
     local staged=0
     commit_if_changed && staged=1
     if [ "$staged" -eq 1 ] || unpushed_commits; then
-      git -C "$SYNC_REPO" push && echo "Pushed."
+      # RECORD WHAT WAS PUBLISHED AS APPLIED (claude-config#511). do_send has always done this,
+      # saying in its own comment that a commit made from our own ~/.claude is applied here by
+      # construction. This command did not, and the marker it left behind is what silently stopped
+      # this Mac publishing: every path the push committed then read as changed-by-the-repo and
+      # unapplied, so the NEXT push held those very paths back, and a lesson written in between
+      # made the repair in payload_fully_applied answer no, so the state could never clear itself.
+      # Measured on 2026-09-20: three lessons sat unpublished while every push said the repo was
+      # already up to date.
+      #
+      # Conditional, where do_send's is not, because this command has no behind check in front of
+      # it: a clone holding commits it has not applied would otherwise be told its payload is
+      # applied, and the next push would mirror this Mac's older copy over the other Mac's newer
+      # one (L5). payload_fully_applied is exactly that question, asked after the push so the
+      # commit just made is included in it.
+      if git -C "$SYNC_REPO" push; then
+        echo "Pushed."
+        payload_fully_applied && repo_head > "$LAST_APPLIED_FILE" 2>/dev/null || true
+      fi
     else echo "Nothing changed — repo already up to date."; fi
   fi
 }

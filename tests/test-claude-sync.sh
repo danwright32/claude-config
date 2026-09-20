@@ -3848,6 +3848,13 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCJ" SYNC_REPO="$HCJR" bash "$SCRIPT" sync >/dev/
 # change the hooks CONFIG, so the merged fragment itself changes, then plain push
 printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s/hooks/hcj.sh"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"%s/hooks/hcj.sh"}]}]}}\n' "$HCJ" "$HCJ" > "$HCJ/settings.json"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCJ" SYNC_REPO="$HCJR" bash "$SCRIPT" push >/dev/null 2>&1
+# THE STALE MARKER IS NOW MADE BY HAND, because a plain push no longer leaves one behind
+# (claude-config#511): it records what it published when nothing was kept back, which is what stops
+# this Mac holding its own published paths back on every later push. The state below is still
+# reachable, by a run that dies between the rebase and the apply, and it is the state this section
+# is about, so it is set up rather than waited for. Without this the checks underneath would go on
+# passing for a new reason, which is not the reason they were written for (L472, L143).
+git -C "$HCJR" rev-parse HEAD^ > "$HCJR/.last-applied" 2>/dev/null || true
 check "the hooks fragment really did change" \
   "git -C '$HCJR' diff --name-only \"\$(cat '$HCJR/.last-applied')\" HEAD -- payload | grep -q settings.hooks.json"
 echo 'edit after a hooks change' > "$HCJ/hooks/hcj-after.sh"
@@ -4898,6 +4905,109 @@ check "#483 the source publishes again once the fault is gone" \
   "grep -q 'a sound rule about proving' '$HB/payload/LESSONS.md'"
 check "#483 and so does the file rendered from it" \
   "grep -q 'a sound rule about proving' '$HB/payload/LESSONS-INDEX-proof-over-green.md'"
+
+section "== a manual publish records what went up, and names what it kept back (claude-config#511) =="
+# THE TITLE AVOIDS THE WORD THIS SUITE FILTERS ON. `SECTION_ONLY` and `SECTION_UNTIL` match a
+# section by substring, and the lock sections run nested copies of this file with
+# `SECTION_UNTIL=push`. A title holding that word makes the filter ambiguous, so the nested run
+# refuses and exits 2, and 34 checks about locks fail while naming nothing to do with this one.
+# The refusal is right; the title is what is load-bearing (L305).
+# MEASURED on Daniels-MacBook-Pro-2, 2026-09-20, reproduced twice there and reproduced here from
+# scratch: `claude-sync push` printed "Staged config into ..." and then that nothing had changed and
+# the repo was already up to date, exit 0, while payload/LESSONS.md sat 3,095 bytes behind the local
+# file and three lessons written on that Mac, L498 to L500, were in no copy but its own.
+#
+# THE CAUSE IS A MARKER THIS COMMAND NEVER MOVED. `.last-applied` records the commit whose payload
+# is on this Mac, and everything that publishes upward compares against it to tell "somebody edited
+# a file" from "this Mac is simply behind". do_send stamps it after a successful push, saying in its
+# own comment that a commit made from our own ~/.claude is applied by construction. do_push did not.
+# So the moment a manual push committed, every path in that commit read as changed-by-the-repo and
+# unapplied, the next push held those very paths back, and the repair inside unapplied_remote_changes
+# could not heal it: that repair asks whether each path's bytes are already applied, and a lesson
+# written after the push makes the answer no. Every later push then withheld the file in silence and
+# reported the words of a push with nothing to send (L98). Only a pull, which merges, broke it.
+#
+# Both halves are fixed here, because the silence would still hide a Mac that is genuinely behind.
+HKB="$WORK/holdback-bare.git"; git init -q --bare -b main "$HKB"
+HKA="$WORK/holdbackA"; git clone -q "$HKB" "$HKA" 2>/dev/null
+cp "$SCRIPT" "$HKA/claude-sync"; seed_unmanaged_list "$HKA"
+mkdir -p "$HKA/payload/hooks"
+echo '{"hooks":{}}' > "$HKA/payload/settings.hooks.json"
+printf '# rules\n@LESSONS.md\n' > "$HKA/payload/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body\n' > "$HKA/payload/LESSONS.md"
+git -C "$HKA" checkout -q -b main 2>/dev/null || true
+git -C "$HKA" add -A && git -C "$HKA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$HKA" push -q -u origin main
+HKH="$WORK/holdbackhome"; mkdir -p "$HKH"; echo '{"hooks":{}}' > "$HKH/settings.json"
+HKC="$WORK/holdbackB"; git clone -q "$HKB" "$HKC" 2>/dev/null
+_hk(){ SYNC_HOSTNAME=MacHold SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HKH" SYNC_REPO="$HKC" bash "$HKC/claude-sync" "$@" 2>&1; }
+_hk pull >/dev/null 2>&1
+check "#511 the fixture: this Mac starts level with the repo" \
+  "grep -q 'L1\. one' '$HKH/LESSONS.md'"
+# One lesson written here, one push. This is the state every later send is judged from.
+printf -- '- **L2. written here and pushed.** body\n' >> "$HKH/LESSONS.md"
+out_hk1="$(_hk push)"
+dbg "first push: $out_hk1"
+check "#511 the first push publishes the lesson" \
+  "grep -q 'written here and pushed' '$HKC/payload/LESSONS.md'"
+check "#511 and records what it published as applied" \
+  "[ \"\$(cat '$HKC/.last-applied' 2>/dev/null)\" = \"\$(git -C '$HKC' rev-parse HEAD)\" ]"
+# The second lesson, written after that push. This is what never left the Mac.
+printf -- '- **L3. written after the first push.** body\n' >> "$HKH/LESSONS.md"
+out_hk2="$(_hk push)"
+dbg "second push: $out_hk2"
+check "#511 a second push publishes the lesson written after the first" \
+  "grep -q 'written after the first push' '$HKC/payload/LESSONS.md'"
+hk_bare="$(git -C "$HKB" show HEAD:payload/LESSONS.md 2>/dev/null || true)"
+check "#511 and it really reached the shared repo, not just this clone" \
+  "grep -q 'written after the first push' <<< \"\$hk_bare\""
+check "#511 and nothing is reported as kept back on a send that kept nothing" \
+  "! grep -q 'NOT publishing' <<< \"\$out_hk2\""
+# NOW THE OTHER HALF: a clone that really does hold commits it has not applied. A run that dies
+# between the rebase and the apply leaves exactly this, and the tool's own recovery is written for
+# it, so the fetch here is done with plain git and no apply behind it.
+# The other Mac takes this Mac's two pushes first, or its own push is rejected and the state this
+# section is about never arises (L159: prove the fixture reached the state before asserting on it).
+git -C "$HKA" pull -q --rebase >/dev/null 2>&1
+printf -- '- **L4. published by the other Mac.** body\n' >> "$HKA/payload/LESSONS.md"
+git -C "$HKA" add -A && git -C "$HKA" -c user.name=t -c user.email=t@e commit -q -m "the other Mac adds L4" && git -C "$HKA" push -q
+git -C "$HKC" pull -q --ff-only >/dev/null 2>&1
+hk_head="$(git -C "$HKC" show HEAD:payload/LESSONS.md 2>/dev/null || true)"
+check "#511 the fixture: this clone now holds a commit it has not applied" \
+  "grep -q 'published by the other Mac' <<< \"\$hk_head\""
+printf -- '- **L5. written here while behind.** body\n' >> "$HKH/LESSONS.md"
+hk_marker_before="$(cat "$HKC/.last-applied" 2>/dev/null)"
+out_hk3="$(_hk push)"
+dbg "push while behind: $out_hk3"
+# What it must NOT do is unchanged: the other Mac's copy stands, and this Mac's work stays here.
+check "#511 a push while behind leaves the other Mac's copy alone" \
+  "grep -q 'published by the other Mac' '$HKC/payload/LESSONS.md' && ! grep -q 'written here while behind' '$HKC/payload/LESSONS.md'"
+check "#511 and this Mac's unsent work is untouched" \
+  "grep -q 'written here while behind' '$HKH/LESSONS.md'"
+# What must change: it says so, names the file, and names the one command that settles it.
+check "#511 the push names the file it kept back" \
+  "line_has \"\$out_hk3\" 'LESSONS\.md' 'NOT publishing'"
+check "#511 and says the repo changed it since this Mac last applied" \
+  "grep -qi 'has changed .* since this Mac last applied' <<< \"\$out_hk3\""
+check "#511 and names the command that settles it" \
+  "grep -q 'claude-sync pull' <<< \"\$out_hk3\""
+# And the marker must NOT move while something is genuinely unapplied, or the next push would
+# mirror this Mac's older copy over the other Mac's newer one and destroy it (L5).
+check "#511 a push that kept something back does not claim it applied" \
+  "[ \"\$(cat '$HKC/.last-applied' 2>/dev/null)\" = \"\$hk_marker_before\" ]"
+# A protected file this Mac has NOT changed is not named: there is nothing of this Mac's to
+# publish, so naming it would be noise on every send from a Mac that is merely behind (L36).
+check "#511 a file the repo moved that this Mac has not touched is not named" \
+  "! grep -q 'CLAUDE\.md' <<< \"\$out_hk3\""
+# The pull is the remedy the message names, so it has to be the one that works: after it, the
+# entries are merged and the next push publishes. Without this the message could name anything.
+_hk pull >/dev/null 2>&1
+out_hk4="$(_hk push)"
+check "#511 the remedy works: after a pull the held lesson publishes" \
+  "grep -q 'written here while behind' '$HKC/payload/LESSONS.md'"
+check "#511 and the other Mac's lesson is still there beside it" \
+  "grep -q 'published by the other Mac' '$HKC/payload/LESSONS.md'"
+check "#511 and that push reports nothing kept back" \
+  "! grep -q 'NOT publishing' <<< \"\$out_hk4\""
 
 section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
 # needs: #15: duplicate lesson numbers must not be published or go unnoticed

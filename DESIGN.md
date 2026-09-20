@@ -30,6 +30,45 @@ at each other for ever.
 The marker records the payload tree instead. A marker only commit does not change that tree, so the
 exchange settles after one round and then writes nothing.
 
+### Leaving the applied marker alone on a manual push
+
+Rejected for #511, where it was the defect rather than a choice anybody made. `.last-applied`
+records which commit's payload is on this Mac, and everything that publishes upward compares
+against it to tell an edit somebody made from a Mac that is simply behind. `do_send` has always
+recorded it after a successful push, on the grounds that a commit made from this Mac's own
+`~/.claude` is applied here by construction. `do_push` never did.
+
+So a manual push committed, HEAD moved, the marker stayed where it was, and every path in that
+commit then read as changed by the repo and not applied here. The next push held exactly those
+paths back, and the repair that would have cleared it compares bytes, so a lesson written in
+between made the answer no and the state became permanent. Measured on 2026-09-20: three lessons
+sat unpublished across repeated pushes, each one reporting a clean send.
+
+The record is written after a successful push, and CONDITIONALLY, which is the one place this
+differs from `do_send`. That command refuses to send at all while the repo holds unapplied
+commits; `push` has no such guard in front of it, so recording unconditionally would tell a clone
+that really is behind that its payload is applied, and the next push would mirror this Mac's older
+copy over the other Mac's newer one. The condition is `payload_fully_applied`, the same question
+the marker's own repair asks, shared rather than written twice. `do_send`'s unconditional record is
+left alone here and tracked as #514.
+
+### A send that keeps a file back says so
+
+The staging holds back any path the repo has changed since this Mac last applied, and that is
+right: the repo's copy is newer and mirroring upward over it reverts the other Mac. Until #511 it
+said nothing. The copy loop skipped the path, nothing was staged, and `push` printed the words it
+prints when there was nothing to send, so a Mac whose lessons had stopped publishing looked exactly
+like a Mac with nothing to publish.
+
+It names them now, with the remedy, and only where this Mac's copy really differs: a path the repo
+moved that is byte for byte what is here has nothing waiting behind it, and naming it would put a
+line on every send from a Mac that is merely behind.
+
+It does not NOTIFY, and that is deliberate. The watcher sends on every save and this state lasts
+until the next pull, so a notification here is one per keystroke for a condition the next pull
+clears. The suite already held that line: the #25 control asserting an ordinary sync fires nothing
+went red the moment this notified, which is the check doing its job.
+
 ### Judging a stale lock by whether its process is alive, and nothing else
 
 Shipped in #25, partly reversed two hours later in #29.

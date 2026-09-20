@@ -239,6 +239,20 @@ bounds how long the pull will wait before stopping it and saying nothing was ver
 told `SYNC_NO_HOOK_TESTS=1` in its own environment, because the test suite runs pulls of its own and
 a pull that runs the suite would otherwise recurse without end.
 
+### A send names what it keeps back
+
+A path the shared repo has changed since this Mac last applied is held back from the send, because
+the repo's copy is newer and mirroring this Mac's copy upward would revert the other Mac. The send
+now names those files, says why, and names `claude-sync pull`, which merges the two copies entry by
+entry, as the thing that settles it. Only files this Mac really holds something different for are
+named, so a Mac that is merely behind does not get a line per send, and nothing is notified: the
+watcher sends on every save and the next pull clears the condition.
+
+`claude-sync push` also records what it published, which `send` has always done. Without that, the
+marker stayed at the previous commit, every path the push committed read as unapplied, and the next
+push held those very paths back in silence. Measured on 2026-09-20: three lessons sat unpublished on
+this Mac while every push reported a clean send (#511).
+
 ### Sending checks the hooks it is about to publish
 
 A `send` runs the suites covering the hooks in that send, and holds back the hooks a failing suite
@@ -816,7 +830,7 @@ defined answer for being absent or untrustworthy.
 
 | File | Written by | Read by | Missing or stale |
 | --- | --- | --- | --- |
-| `.last-applied` | every apply | the guard that blocks sending while behind | absent means nothing is protected yet, so sending is allowed |
+| `.last-applied` | every apply, and a `push` or `send` whose payload is fully applied here afterwards | the guard that blocks sending while behind, and the staging that holds back what the repo has changed | absent means nothing is protected yet, so sending is allowed. A `push` records it only when nothing was kept back, because this Mac may hold commits it has not applied and claiming otherwise would let the next send revert the other Mac (#511, #514) |
 | `.last-success` | a successful pull, fetch or push | the outage clock | absent, unparseable, or dated in the FUTURE all mean "no record", which alerts rather than staying quiet |
 | `.last-sent` | a push that went through | `claude-sync status` | absent means nothing has ever gone up from this clone, which is said in those words rather than shown as a date; a value that will not parse is reported as unreadable, never as never |
 | `.last-received` | an apply that wrote at least one file | `claude-sync status` | same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block, since that is regenerated from whatever payload is present, including one this Mac just staged itself |
