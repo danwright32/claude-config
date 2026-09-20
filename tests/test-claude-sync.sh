@@ -12349,17 +12349,42 @@ pi_overhead=$(( pi_slow - 4000 ))
 # one this machine happens to produce today (L1, L101: the branch a fixture never reaches is the
 # one that ships untested).
 pi_within(){   # pi_within <fast> <overhead> <spread> <ceiling> -> 0 when the wait is within bounds
-  local _w=$(( $1 - $2 )) _ceiling="$4"
+  # TWICE the observed spread, because the range of three samples UNDERSTATES the noise it stands
+  # for (claude-config#506). Three draws rarely include both tails of the distribution they came
+  # from, and the overhead subtracted here is a FOURTH measurement, taken on the slow run, whose
+  # own noise is not in that range at all. On 2026-09-19 this turned CI red at 443ms fastest
+  # against a 237ms overhead, so 206 against a ceiling of 200, with a measured spread of 106, and
+  # passed on a re-run with nothing changed. A 6ms margin is not a finding about the code when the
+  # measurement's own observed range is 106ms; it is a reading of what else the machine was doing
+  # (L224), and a flake retried is a cost hidden rather than removed (L293).
+  #
+  # The gross regression this section exists for is still caught: a poll that stopped being
+  # honoured costs seconds, which the "poll interval is honoured" check measures against a 2000ms
+  # margin, nowhere near this noise.
+  local _w=$(( $1 - $2 )) _ceiling="$4" _noise=$(( $3 * 2 ))
   [ "$_w" -ge 0 ] || _w=0
-  [ "$3" -gt "$_ceiling" ] && _ceiling="$3"
+  [ "$_noise" -gt "$_ceiling" ] && _ceiling="$_noise"
   [ "$_w" -le "$_ceiling" ]
 }
 check "#308 the noise aware bound holds a quiet run to the tight claim" \
   "pi_within 300 100 20 200 && ! pi_within 500 100 20 200"
 check "#308 and lets a noisy run through only up to its own measured noise" \
-  "pi_within 550 100 500 200 && ! pi_within 700 100 500 200"
+  "pi_within 550 100 250 200 && ! pi_within 700 100 250 200"
+# THE RANGE OF THREE SAMPLES UNDERSTATES THE NOISE (claude-config#506). On 2026-09-19 this turned
+# CI red at 443ms fastest against a 237ms overhead, so 206 against a ceiling of 200, and passed on
+# a re-run with nothing changed. The spread that run measured was 106ms: a 6ms margin cannot be
+# asserted with a measurement whose own observed range is 106ms, and the true spread is wider than
+# the range of three draws from it. The overhead subtracted is a FOURTH measurement, taken on the
+# slow run, whose noise is not in that range at all. So the allowance is twice the observed spread,
+# and these are the exact numbers from that run (L224, L293, L395).
+check "#506 the run that turned CI red is inside this machine's own noise" \
+  "pi_within 443 237 106 200"
+# And the control, or the line above is satisfied by a bound that accepts anything (L159). A poll
+# that stopped being honoured costs seconds, not milliseconds, and is still refused.
+check "#506 while a runner noticed seconds late is still refused" \
+  "! pi_within 4300 237 106 200"
 pi_claim="within 200ms"
-[ "$pi_spread" -gt 200 ] && pi_claim="within this run's own ${pi_spread}ms of measurement noise, which was wider than 200ms, so the tighter claim was NOT made"
+[ $(( pi_spread * 2 )) -gt 200 ] && pi_claim="within this run's own $(( pi_spread * 2 ))ms of measurement noise (twice a spread of ${pi_spread}ms), which was wider than 200ms, so the tighter claim was NOT made"
 check "#205 and a runner finishing in 50ms is noticed $pi_claim (fastest ${pi_fast}ms, spread ${pi_spread}ms, of which ${pi_overhead}ms is the pull itself)" \
   "pi_within \"\$pi_fast\" \"\$pi_overhead\" \"\$pi_spread\" 200"
 
