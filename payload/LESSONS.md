@@ -7,6 +7,20 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L1001. A control run that swaps back only ONE of the two artifacts a change touched, the code
+  or the tests that travel with it, leaves the other's fault present in BOTH arms**, so a red in
+  both exonerates nothing while reading as proof the change is innocent. Revert every artifact the
+  change touched to the base, or vary only the one under suspicion. (claude-config#516, 2026-09-20:
+  34 checks about locks, process ids and leftover counts failed after a change to lesson numbering.
+  The old tool was run against the new test file, failed the same way, and that was read as the
+  change being cleared. The cause was in the file both arms shared: a new section titled "a manual
+  push records what it published" made the suite's own `SECTION_UNTIL=push` filter ambiguous, so
+  every nested run the lock sections start refused and exited 2. The failures named nothing to do
+  with the title, and the control could not have found it, because it never varied the thing that
+  was wrong)
+  SHORT: A control that swaps back only the code while keeping the new tests cannot exonerate the change: the tests' own fault is in both arms.
+
+
 - **L713. A determinism check that runs the same thing twice in quick succession cannot see a
   dependence on a slowly moving input such as the clock or the date, because that input does not
   change between the two runs.** Prove independence by MOVING the input or by reading the source,
