@@ -248,6 +248,12 @@ entry, as the thing that settles it. Only files this Mac really holds something 
 named, so a Mac that is merely behind does not get a line per send, and nothing is notified: the
 watcher sends on every save and the next pull clears the condition.
 
+`claude-sync status` says the same thing on the surface somebody reads when they suspect something
+is wrong: while this clone holds config it has not applied, it names each file, says the send is
+holding it back, and names the pull that settles it. It says nothing when every path the repo
+changed is already here, which is the ordinary aftermath of this clone's own commits and repairs
+itself on the next send (#515).
+
 `claude-sync push` also records what it published, which `send` has always done. Without that, the
 marker stayed at the previous commit, every path the push committed read as unapplied, and the next
 push held those very paths back in silence. Measured on 2026-09-20: three lessons sat unpublished on

@@ -8048,6 +8048,48 @@ report_superseded_snapshot(){
   echo "The $(commits_in_words "$n") above that this clone has not pushed are superseded, not a divergence: the shared repo already holds exactly what this Mac is running for every file they touch ($files). They are snapshots taken while another checkout was working on the same files, and that checkout's push overtook them. One 'claude-sync sync' drops them and the clone is level; there is nothing here to reconcile by hand."
 }
 
+# WHAT THIS CLONE HOLDS AND HAS NOT APPLIED (claude-config#515).
+#
+# The state that hid claude-config#511 had no symptom of its own. While `.last-applied` is behind
+# HEAD, every path the repo changed since it is held back from every send, and the only visible
+# trace was files that stopped publishing: status listed four of them as differing from the payload
+# and never said why, so it read as ordinary drift. The send names them now, at the moment of the
+# send; this is the same fact on the surface somebody reads when they suspect something is wrong.
+#
+# Only where this Mac's copy DIFFERS. A marker behind HEAD whose paths are all already here is the
+# ordinary aftermath of this clone's own commits, it is repaired by the next send, and saying so
+# would put a paragraph on a healthy day (L36). Asked through payload_path_applied, the same
+# predicate the staging and the behind check use, so the three cannot disagree about what is
+# applied (L41, L70).
+report_unapplied_payload(){
+  have_git || return 0
+  local last head p held=""
+  last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
+  [ -n "$last" ] || return 0
+  head="$(repo_head)"
+  [ -n "$head" ] || return 0
+  [ "$head" != "$last" ] || return 0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    payload_path_applied "$p" && continue
+    held="${held:+$held
+}$p"
+  done < <(unapplied_paths)
+  [ -n "$held" ] || return 0
+  echo "--- config this clone holds and has not applied ---"
+  # ONE LINE PER FILE, each carrying the path AND what is true of it. A list of names under a
+  # heading reads as a list of names: the claim and the thing it is about have to sit together, or
+  # the next reader quotes half of it (L80).
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    echo "  $p: the shared repo changed it and this Mac has not applied it, so every send holds it back"
+  done <<HELD
+$held
+HELD
+  echo "  Nothing is lost on either side: this Mac's copy is untouched and the repo keeps its own. 'claude-sync pull' merges the two copies entry by entry, and the next send publishes the result."
+  return 0
+}
+
 # Which payload relative path a dry run record is about, so the superseded set can be matched
 # against it in one place rather than each reader parsing the line its own way (L41).
 record_payload_path(){   # $1 = tag, $2 = the record's text
@@ -8069,6 +8111,7 @@ do_status(){
   report_superseded_snapshot
   report_dropped_snapshots
   report_sync_times
+  report_unapplied_payload
   echo "--- local config vs repo payload (dry run) ---"
   local RECORDS; RECORDS="$(local_vs_payload_records)"
   while IFS= read -r line; do

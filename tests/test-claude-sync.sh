@@ -5071,6 +5071,59 @@ check "#514 a second send still leaves the other Mac's lesson in place" \
 check "#514 and it still refuses to publish the unreadable entry" \
   "sr_bare4=\"\$(git -C '$SRV' show HEAD:payload/LESSONS.md 2>/dev/null || true)\"; ! grep -q 'bold left off' <<< \"\$sr_bare4\""
 
+section "== status names config this clone holds and has not applied (claude-config#515) =="
+# The state that hid #511 for hours had no symptom of its own. While the marker recording what this
+# Mac applied is behind HEAD, every path the repo changed since it is held back from sends, and the
+# only visible trace was files that stopped publishing. status listed four of them as differing from
+# the payload and never said why, so the state read as ordinary drift.
+#
+# The send says it now, at the moment of the send. status is where somebody looks when they suspect
+# something is wrong, and it was the one report that could see this state and did not mention it.
+#
+# It speaks only where this Mac's copy DIFFERS. A marker behind HEAD whose paths are all already
+# here is the ordinary aftermath of this clone's own commits, it repairs itself on the next send,
+# and reporting it would put a paragraph on a healthy day (L36).
+UAB="$WORK/unapplied-bare.git"; git init -q --bare -b main "$UAB"
+UAA="$WORK/unappliedA"; git clone -q "$UAB" "$UAA" 2>/dev/null
+cp "$SCRIPT" "$UAA/claude-sync"; seed_unmanaged_list "$UAA"
+mkdir -p "$UAA/payload"
+echo '{"hooks":{}}' > "$UAA/payload/settings.hooks.json"
+printf '# rules\n@LESSONS.md\n' > "$UAA/payload/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body\n' > "$UAA/payload/LESSONS.md"
+git -C "$UAA" checkout -q -b main 2>/dev/null || true
+git -C "$UAA" add -A && git -C "$UAA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$UAA" push -q -u origin main
+UAH="$WORK/unappliedhome"; mkdir -p "$UAH"; echo '{"hooks":{}}' > "$UAH/settings.json"
+UAC="$WORK/unappliedB"; git clone -q "$UAB" "$UAC" 2>/dev/null
+_ua(){ SYNC_HOSTNAME=MacUnapplied SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UAH" SYNC_REPO="$UAC" bash "$UAC/claude-sync" "$@" 2>&1; }
+_ua pull >/dev/null 2>&1
+# The control first, so the rule cannot be satisfied by printing this on every run (L159).
+out_ua_level="$(_ua status)"
+check "#515 a clone level with the repo says nothing about unapplied config" \
+  "! grep -qi 'has not applied' <<< \"\$out_ua_level\""
+# Now the state itself: the other Mac publishes, this clone fetches it with plain git and never
+# applies it, which is what a run that dies between the rebase and the apply leaves behind.
+printf -- '- **L2. published by the other Mac.** body\n' >> "$UAA/payload/LESSONS.md"
+git -C "$UAA" add -A && git -C "$UAA" -c user.name=t -c user.email=t@e commit -q -m "other Mac adds L2" && git -C "$UAA" push -q
+git -C "$UAC" pull -q --ff-only >/dev/null 2>&1
+out_ua="$(_ua status)"
+dbg "status while holding an unapplied commit: $out_ua"
+check "#515 status says this clone holds config it has not applied" \
+  "grep -qi 'has not applied' <<< \"\$out_ua\""
+check "#515 and names the file it is about" \
+  "line_has \"\$out_ua\" 'LESSONS\.md' 'not applied'"
+check "#515 and names the command that settles it" \
+  "grep -q 'claude-sync pull' <<< \"\$out_ua\""
+check "#515 status changed nothing while reporting it" \
+  "[ \"\$(cat '$UAC/.last-applied' 2>/dev/null)\" != \"\$(git -C '$UAC' rev-parse HEAD)\" ]"
+# And it stops saying it once the pull has applied the thing, rather than standing until something
+# unrelated clears it (L160).
+_ua pull >/dev/null 2>&1
+out_ua_after="$(_ua status)"
+check "#515 and it stops saying it once the pull has applied that config" \
+  "! grep -qi 'has not applied' <<< \"\$out_ua_after\""
+check "#515 the pull really did apply it, so the silence means something" \
+  "grep -q 'published by the other Mac' '$UAH/LESSONS.md'"
+
 section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
 # needs: #15: duplicate lesson numbers must not be published or go unnoticed
 # The settled rule (see the 2026-08-05 note above): the published copy keeps the
