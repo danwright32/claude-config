@@ -2048,6 +2048,18 @@ fan_work_note(){   # $1 = section seconds or empty   $2 = the ceiling
   return 0
 }
 
+# The same figure in the shape run-all-tests.sh carries through to CI (claude-config#505). The
+# headline this derives from is printed by the suite and dropped by the runner, so without this the
+# budget is invisible on the only machine it was calibrated for. Derived from fan_work_note rather
+# than written out again, so the two can never say different things about one run (L41, L107).
+fan_work_note_line(){   # $1 = section seconds or empty   $2 = the ceiling
+  local phrase
+  phrase="$(fan_work_note "$1" "$2")"
+  [ -n "$phrase" ] || return 0
+  printf 'SUITE-NOTE %s' "${phrase#; }"
+  return 0
+}
+
 suite_work_report(){   # $1 = section seconds  $2 = the ceiling  $3 = processor seconds, or empty
   local work="$1" ceiling="$2" cpu="${3-}" budget
   case "$ceiling" in ''|*[!0-9]*) return 0 ;; esac
@@ -2226,6 +2238,10 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   # are contradicting themselves and neither number can be trusted (L70 is about the opposite
   # case, two sides of one lookup; these really are two lookups).
   _fan_note="$SUITE_JOBS shards in ${_fan_elapsed}s$(fan_work_note "$_fan_work" "$SUITE_TIMEOUT")"
+  # The same figure again, in the shape the runner carries to CI. Printed rather than folded into
+  # the headline because the runner reads it by its own prefix (claude-config#505).
+  _fan_marked="$(fan_work_note_line "$_fan_work" "$SUITE_TIMEOUT")"
+  [ -n "$_fan_marked" ] && printf '%s\n' "$_fan_marked"
   if [ "$_fan_tot_rc" -eq 0 ] && [ -z "$_fan_missing" ]; then
     _fan_hp="$(printf '%s' "$_fan_tot" | awk '{print $1}')"
     _fan_hf="$(printf '%s' "$_fan_tot" | awk '{print $2}')"
@@ -14396,6 +14412,19 @@ check "#492 and says so when it could not be totalled, rather than leaving the n
 check "#492 and those two are not the same sentence" "[ \"\$_wn_ok\" != \"\$_wn_none\" ]"
 _wn_off="$(fan_work_note 892 0)"
 check "#492 and it says nothing at all when the budget is turned off" "[ -z \"\$_wn_off\" ]"
+
+# AND IT HAS TO REACH CI, which the headline does not (claude-config#505). run-all-tests.sh prints
+# only its own per suite summary and, on a failure, the FAIL lines, so the figure on the fan-out's
+# headline is dropped there and the budget could be totalling nothing on every CI run with the job
+# log reading exactly the same. The runner now carries a line a suite MARKS, so the figure is
+# emitted in that shape as well as on the headline.
+_wn_marked="$(fan_work_note 892 3600)"
+check "#505 the work figure is also emitted in the shape the runner carries to CI" \
+  "case \"\$(fan_work_note_line 892 3600)\" in 'SUITE-NOTE '*892*2520*) true ;; *) false ;; esac"
+check "#505 and there is nothing to carry when the budget is off" \
+  "[ -z \"\$(fan_work_note_line 892 0)\" ]"
+check "#505 and the marked line says the same thing as the headline" \
+  "case \"\$(fan_work_note_line 892 3600)\" in *\"\${_wn_marked#; }\"*) true ;; *) false ;; esac"
 
 # BUILT IS NOT WIRED (L3). The function above is only worth having if a real run actually emits a
 # total for it to judge, so a filtered run is driven and its machine readable line read back.

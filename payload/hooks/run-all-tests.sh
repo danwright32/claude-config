@@ -62,6 +62,10 @@ export HOOK_TESTS_RUNNING=1
 
 # How many lines of a failing suite's own output to print. Enough to act on, bounded so one
 # broken suite cannot bury the other verdicts.
+# How many lines a suite may mark with SUITE-NOTE before the report truncates them
+# (claude-config#505). Small on purpose: this is for a measurement worth watching, not a second
+# output channel, and a suite that wants more than a few is telling the reader nothing.
+SUITE_NOTE_MAX="${SUITE_NOTE_MAX:-3}"
 FAIL_DETAIL_MAX="${HOOK_TESTS_FAIL_DETAIL_MAX:-40}"
 # Run a suite that FAILED once more, purely to find out whether it is a flake (claude-config#245).
 # On by default because the cost is paid only by a run that is already red, and off inside the
@@ -1111,6 +1115,26 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       fi
     else
       printf '  ok    %-38s %-26s %s\n' "$name" "$summary" "$dur"
+    fi
+    # A LINE THE SUITE MARKED AS WORTH SEEING (claude-config#505). Everything a suite says is
+    # dropped except its summary and, on a failure, its FAIL lines. That is right for chatter and
+    # wrong for a MEASUREMENT: #492 put the sync suite's section time budget figure on that suite's
+    # own headline, where nothing in CI ever prints it, so the budget could be totalling nothing on
+    # every run and this log would read exactly the same. A guard nobody can watch pass is not
+    # measuring anything as far as a reader can tell (L98, L557).
+    #
+    # Printed whether the suite passed or failed, because a measurement is most worth having on the
+    # run that went wrong. Capped, because a suite that marked everything would flood the report
+    # and the report is the thing this cap exists to keep readable (L36). The cap SAYS when it
+    # bites, so a truncated set cannot read as the whole of it.
+    notes="$(printf '%s\n' "$out" | grep -E '^SUITE-NOTE ' | sed 's/^SUITE-NOTE //' || true)"
+    if [ -n "$notes" ]; then
+      n_notes="$(printf '%s\n' "$notes" | grep -c . || true)"
+      case "$n_notes" in ''|*[!0-9]*) n_notes=0 ;; esac
+      printf '%s\n' "$notes" | awk -v n="$SUITE_NOTE_MAX" 'NR <= n' | sed 's/^/          note: /'
+      if [ "$n_notes" -gt "$SUITE_NOTE_MAX" ]; then
+        printf '          note: ...and %s more line(s) this suite marked, not shown\n' "$(( n_notes - SUITE_NOTE_MAX ))"
+      fi
     fi
     # Fewer checks than last time, said where the verdict is read (claude-config#219). Under both
     # branches, because a suite can lose checks and go red in the same change and the drop is then

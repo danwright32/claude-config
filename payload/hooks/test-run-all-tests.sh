@@ -2214,6 +2214,78 @@ case "$out_fl2" in
   *) [ "$code_fl2" -ne 0 ]        && check "#245 a suite that fails twice is not called a flake" ok        || check "#245 a suite that fails twice is not called a flake" "exit=$code_fl2" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A LINE A PASSING SUITE WANTS THE READER TO SEE (claude-config#505).
+#
+# This runner prints its own one line summary per suite plus, for a failure, the FAIL lines and
+# their indented continuations. Everything else a suite says is dropped. That is right for the
+# chatter and wrong for a MEASUREMENT: claude-config#492 added a budget on the sync suite's total
+# section time and put the figure on that suite's own headline, where CI never sees it, so the
+# budget could be totalling nothing on every run and the job log would read exactly the same. A
+# guard nobody can watch pass is not measuring anything as far as any reader can tell (L98, L557).
+#
+# So a suite may mark ONE kind of line as worth carrying through, and the runner prints it whether
+# the suite passed or failed. It is a general mechanism rather than a special case for one suite,
+# because the next measurement worth seeing should not need the runner changed again (L621).
+NOTE_MARK="SUITE""-NOTE"
+mk_note_suite() { # mk_note_suite <dir> <name> <exit> <note>..
+  local d="$1" n="$2" x="$3"; shift 3
+  mkdir -p "$d"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo "  ok: ordinary chatter nobody needs to see"\n'
+    local one
+    for one in "$@"; do printf 'printf %s\\\\n "%s %s"\n' "'%s'" "$NOTE_MARK" "$one"; done
+    [ "$x" -eq 0 ] || printf 'echo "FAIL: something went wrong"\n'
+    printf 'printf %s\\\\n "%s passed=1 failed=%s"\n' "'%s'" "$MARK" "$x"
+    printf 'exit %s\n' "$x"
+  } > "$d/test-$n.sh"
+  chmod +x "$d/test-$n.sh"
+}
+
+N1="$TMPROOT/dir-note-pass"
+mk_note_suite "$N1" noted 0 "892s of section time against a 2520s budget"
+out_n1="$(bash "$RUNNER" "$N1" 2>&1)"; code_n1=$?
+[ "$code_n1" -eq 0 ] \
+  && check "#505 a suite that marks a line still passes" ok \
+  || check "#505 a suite that marks a line still passes" "exit=$code_n1 out=$out_n1"
+grep -q '892s of section time against a 2520s budget' <<< "$out_n1" \
+  && check "#505 and the marked line reaches the runner's output" ok \
+  || check "#505 and the marked line reaches the runner's output" "out=$out_n1"
+grep -q 'ordinary chatter' <<< "$out_n1" \
+  && check "#505 while the rest of what it said is still dropped" "the chatter came through too: $out_n1" \
+  || check "#505 while the rest of what it said is still dropped" ok
+
+# A suite that marks nothing adds nothing, or the rule is really print everything (L159).
+N2="$TMPROOT/dir-note-none"
+mk_result_suite "$N2" quiet 3 0 0
+out_n2="$(bash "$RUNNER" "$N2" 2>&1)"
+grep -q 'a line that mentions something that passed' <<< "$out_n2" \
+  && check "#505 a suite that marks nothing has nothing extra printed" "its chatter came through: $out_n2" \
+  || check "#505 a suite that marks nothing has nothing extra printed" ok
+
+# And on a FAILING suite, which is when a measurement is most worth having: the note must not be
+# crowded out by the failure detail.
+N3="$TMPROOT/dir-note-fail"
+mk_note_suite "$N3" notedbad 1 "1400s of section time against a 1260s budget"
+out_n3="$(bash "$RUNNER" "$N3" 2>&1)"; code_n3=$?
+[ "$code_n3" -ne 0 ] \
+  && check "#505 a failing suite still fails" ok \
+  || check "#505 a failing suite still fails" "exit=$code_n3"
+grep -q '1400s of section time' <<< "$out_n3" \
+  && check "#505 and its marked line is printed too" ok \
+  || check "#505 and its marked line is printed too" "out=$out_n3"
+
+# A chatty suite must not be able to flood the report by marking everything (L36).
+N4="$TMPROOT/dir-note-many"
+mk_note_suite "$N4" noisy 0 one two three four five six
+out_n4="$(bash "$RUNNER" "$N4" 2>&1)"
+n_shown="$(grep -c 'note: ' <<< "$out_n4" || true)"
+case "$n_shown" in ''|*[!0-9]*) n_shown=0 ;; esac
+[ "$n_shown" -ge 1 ] && [ "$n_shown" -le 4 ] \
+  && check "#505 a suite marking many lines is capped rather than allowed to flood" ok \
+  || check "#505 a suite marking many lines is capped rather than allowed to flood" "it printed $n_shown"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
