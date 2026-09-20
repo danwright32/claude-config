@@ -5009,6 +5009,68 @@ check "#511 and the other Mac's lesson is still there beside it" \
 check "#511 and that push reports nothing kept back" \
   "! grep -q 'NOT publishing' <<< \"\$out_hk4\""
 
+section "== a send never reverts the other Mac over a file it is holding back (claude-config#514) =="
+# The marker that says which commit's payload is on this Mac is recorded by `send` after every
+# successful publish, whether or not that send kept a file back. #514 asked whether that is a lie
+# with consequences: if the record claims a held back path is applied here, the next send mirrors
+# this Mac's older copy upward and the other Mac's work is gone, silently.
+#
+# It is not reachable, and this is the evidence rather than the argument. Two things stop it, and
+# this section exists so that removing either one fails here instead of in somebody's lessons file.
+# The behind check refuses to send while the repo holds an unapplied commit, and reconciles instead,
+# which applies it first. And a path held back by a publish fault is not in the commit at all, so
+# the record says nothing about it either way.
+SRV="$WORK/send-revert-bare.git"; git init -q --bare -b main "$SRV"
+SRA="$WORK/send-revertA"; git clone -q "$SRV" "$SRA" 2>/dev/null
+cp "$SCRIPT" "$SRA/claude-sync"; seed_unmanaged_list "$SRA"
+mkdir -p "$SRA/payload/hooks"
+echo '{"hooks":{}}' > "$SRA/payload/settings.hooks.json"
+printf '# rules\n@LESSONS.md\n' > "$SRA/payload/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body\n' > "$SRA/payload/LESSONS.md"
+git -C "$SRA" checkout -q -b main 2>/dev/null || true
+git -C "$SRA" add -A && git -C "$SRA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$SRA" push -q -u origin main
+SRH="$WORK/send-reverthome"; mkdir -p "$SRH/hooks"; echo '{"hooks":{}}' > "$SRH/settings.json"
+SRB="$WORK/send-revertB"; git clone -q "$SRV" "$SRB" 2>/dev/null
+_sr(){ SYNC_HOSTNAME=MacRevert SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SRH" SYNC_REPO="$SRB" bash "$SRB/claude-sync" "$@" 2>&1; }
+_sr pull >/dev/null 2>&1
+check "#514 the fixture: this Mac starts level with the repo" \
+  "grep -q 'L1\. one' '$SRH/LESSONS.md'"
+# A publish fault on this Mac: an entry with the bold left off, which no tool here can read. That
+# kind is used deliberately rather than a duplicate NUMBER, because the merge settles a duplicate by
+# renumbering it, so the entry publishes under a new number and the file is never held back at all.
+# The first version of this section used one and asserted the text never arrived, which is the merge
+# doing its job read as a defect (L159: prove the fixture reaches the state before judging it).
+printf -- '- L99. an entry with the bold left off.\n' >> "$SRH/LESSONS.md"
+# And the other Mac publishes a real lesson into the file this Mac is holding back.
+printf -- '- **L2. published by the other Mac.** body\n' >> "$SRA/payload/LESSONS.md"
+git -C "$SRA" add -A && git -C "$SRA" -c user.name=t -c user.email=t@e commit -q -m "other Mac adds L2" && git -C "$SRA" push -q
+echo 'echo something to send' > "$SRH/hooks/sr.sh"
+out_sr="$(_sr send)"
+dbg "send with a fault held file while the other Mac published: $out_sr"
+check "#514 the send does hold the faulty lessons file back" \
+  "line_has \"\$out_sr\" 'NOT publishing' 'LESSONS\.md'"
+check "#514 and the other Mac's lesson is still in the shared repo afterwards" \
+  "sr_bare=\"\$(git -C '$SRV' show HEAD:payload/LESSONS.md 2>/dev/null || true)\"; grep -q 'published by the other Mac' <<< \"\$sr_bare\""
+check "#514 and the unreadable entry did not reach it" \
+  "sr_bare2=\"\$(git -C '$SRV' show HEAD:payload/LESSONS.md 2>/dev/null || true)\"; ! grep -q 'bold left off' <<< \"\$sr_bare2\""
+check "#514 while the edit that was fit to send went up" \
+  "[ -f '$SRB/payload/hooks/sr.sh' ]"
+# The record is only allowed to say what is true. Read it the way the tool does: every path the repo
+# changed since the record must be what this Mac holds. Asserted AFTER the send, which is the moment
+# #514 is about.
+sr_unapplied="$(git -C "$SRB" diff --name-only "$(cat "$SRB/.last-applied" 2>/dev/null)" HEAD -- payload 2>/dev/null | sed 's|^payload/||' || true)"
+dbg "paths the record claims are applied but may not be: ${sr_unapplied:-<none>}"
+check "#514 the record claims nothing about a path this Mac has not applied" \
+  "[ -z \"\$sr_unapplied\" ]"
+# A second send must not now revert the other Mac either, which is the harm as #514 described it.
+echo 'echo a second edit' > "$SRH/hooks/sr2.sh"
+out_sr2="$(_sr send)"
+dbg "second send: $out_sr2"
+check "#514 a second send still leaves the other Mac's lesson in place" \
+  "sr_bare3=\"\$(git -C '$SRV' show HEAD:payload/LESSONS.md 2>/dev/null || true)\"; grep -q 'published by the other Mac' <<< \"\$sr_bare3\""
+check "#514 and it still refuses to publish the unreadable entry" \
+  "sr_bare4=\"\$(git -C '$SRV' show HEAD:payload/LESSONS.md 2>/dev/null || true)\"; ! grep -q 'bold left off' <<< \"\$sr_bare4\""
+
 section "== #17: a collision the merge creates is settled by renumbering the unsent entry =="
 # needs: #15: duplicate lesson numbers must not be published or go unnoticed
 # The settled rule (see the 2026-08-05 note above): the published copy keeps the
