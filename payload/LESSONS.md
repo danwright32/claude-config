@@ -4320,6 +4320,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   carries a 15 minute timeout, and a run finding many secrets would spend it placing blobs and be
   killed holding a list it had already computed.)
 
+- **L494. A qualifier attached to a summary of many records (a caveat, a cause, a label, the screen
+  or the item it names) must be derived from the POPULATION, never from its worst or newest member,
+  because an extreme is selected for being atypical, so the qualifier is most likely to be false
+  exactly where the summary carries the most weight.** Nothing catches it, because every part is
+  true of something: the count is a real count, the superlative is a real maximum, and the clause
+  beside them is a faithful reading of that one record. The reader has no way to see that the two
+  halves of one sentence describe different populations, and the clause is the half that tells them
+  what to DO about the number.
+  SHORT: A caveat or label on a many record summary must come from the population, never its worst member, which is atypical by selection.
+  (overture#4043, 2026-09-19: the app's freeze notice read "Overture stopped responding 602 times.
+  The longest was 35.0 seconds. The queue was on screen. This Mac was busy with something else at
+  the time, so it may say more about the machine than about Overture." Both the busy clause and the
+  screen name came from `worst`, the one record with the highest duration. 517 of those 602 stalls
+  were recorded at BASELINE load, so the sentence invited Dan to dismiss a count that was 86% the
+  app's own cost, and the worst record was loaded precisely BECAUSE a loaded machine is what makes
+  a stall the longest one.)
+
 
 ## State and identity
 
