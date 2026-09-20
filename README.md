@@ -353,8 +353,15 @@ A Mac claims its band the first time it asks for a number: the first Mac gets 1 
 to 1000, and so on. The claim is one file per Mac under `lesson-bands/` in the repo, committed so the
 other Mac can see it, and one file per writer means a claim can never produce a merge conflict. Two
 Macs that claim while unable to see each other are settled by name order, the same way on either
-Mac, and the one that moves says so. A band that fills up refuses rather than spilling into the next
-Mac's numbers (`SYNC_LESSON_BAND_SIZE` widens it).
+Mac, and the one that moves says so. A band that fills up rolls over rather than spilling into the
+next Mac's numbers: it claims the next free band, skipping any band that already holds numbers left
+behind by a Mac that moved off it, and says which band it took. The numbers then have a gap in them,
+which costs nothing, and nobody has to do anything.
+
+Raising `SYNC_LESSON_BAND_SIZE` after a band has been claimed is refused rather than applied. The
+size is global and the bands are contiguous, so a bigger size moves each band over the one above it,
+and this Mac would mint numbers the other one has already published. The refusal names the Mac whose
+band is being run into and the size that would fit.
 
 ### A number is a display, an id is the reference
 

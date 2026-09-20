@@ -10107,16 +10107,89 @@ printf -- '- **L501. a second entry under the same number.** body\n' >> "$BDA/LE
 bd_dup_rc=0
 SYNC_HOSTNAME=MacOne SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" check-lessons >/dev/null 2>&1 || bd_dup_rc=$?
 check "#44 a duplicate anywhere in the file is still caught" "[ \"\$bd_dup_rc\" -ne 0 ]"
-# A band that runs out must REFUSE, never spill into the neighbouring Mac's numbers, which is the
-# one failure that would put the collisions back without anything saying so.
+# A band that runs out must never spill into the neighbouring Mac's numbers, which would put the
+# collisions back with nothing saying so. It used to REFUSE and name itself, on the premise recorded
+# in DESIGN.md: "a band 500 wide is far past anything this will hold (174 lessons in five months)".
+# That premise expired inside a month. This Mac claimed band 1 on 2026-08-17 and had used all 500
+# numbers by 2026-09-20, about ten a day, and the refusal then meant NO lesson could be numbered at
+# all until somebody hand edited a file in the sync repo. Dan reversed it on 2026-09-20, so the
+# checks that defended the refusal are replaced rather than adjusted (L430, L252).
+#
+# A full band now ROLLS OVER: it claims the next free band, one past every band anyone holds. That
+# spills into nobody, needs no network, cannot race, and costs only a gap in the numbers, which the
+# design already treats as cosmetic because a lesson number is an identifier, not a position.
 BDC="$WORK/band-homeC"; mkdir -p "$BDC"
 printf '# rules\n@LESSONS.md\n' > "$BDC/CLAUDE.md"
 printf -- '- **L1000. the last one in the band.** body\n' > "$BDC/LESSONS.md"
 printf '501\n' > "$BDR/lesson-bands/MacThree"
 bd_full_rc=0
 out_bdfull="$(SYNC_HOSTNAME=MacThree SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDC" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)" || bd_full_rc=$?
-check "#44 a full band refuses instead of spilling into another Mac's" "[ \"\$bd_full_rc\" -ne 0 ]"
-check "#44 and says which band ran out"                               "grep -q '501' <<< \"\$out_bdfull\""
+dbg "full band: $out_bdfull"
+bdfull_n="$(sed -n 's/^L\([0-9][0-9]*\)$/\1/p' <<< "$out_bdfull" | tail -1)"
+check "#44 a full band mints a number instead of refusing"  "[ \"\$bd_full_rc\" -eq 0 ]"
+check "#44 and the number comes from a fresh band"          "grep -q '^L1001\$' <<< \"\$out_bdfull\""
+check "#44 and never a number inside the band another Mac mints from" \
+  "[ -n \"\$bdfull_n\" ] && [ \"\$bdfull_n\" -gt 1000 ]"
+check "#44 the fresh band is recorded where the other Mac can read it" \
+  "[ \"\$(cat '$BDR/lesson-bands/MacThree' 2>/dev/null)\" = '1001' ]"
+check "#44 and the rollover is reported, not silent" \
+  "grep -qi 'had no number left' <<< \"\$out_bdfull\""
+# Rolling over is a claim like any other: made once. A band that rolled on every call would walk up
+# the bands for ever and make the number nobody can predict.
+out_bdfull2="$(SYNC_HOSTNAME=MacThree SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDC" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
+check "#44 asking again mints from the band it rolled to"   "grep -q '^L1001\$' <<< \"\$out_bdfull2\""
+check "#44 and does not roll a second time"                 "[ \"\$(cat '$BDR/lesson-bands/MacThree' 2>/dev/null)\" = '1001' ]"
+check "#44 and says nothing, because nothing changed"       "! grep -qi 'had no number left' <<< \"\$out_bdfull2\""
+# A band NOBODY claims can still hold numbers: a Mac that moved off a band after a collision leaves
+# its entries behind under those numbers, and they arrive here on the next sync. Rolling into such a
+# band would hand out a number already in use, which is the collision the whole mechanism exists to
+# prevent, so the rollover skips any band that has no room for the next number.
+BDR2="$WORK/band-repo-used"; BDD="$WORK/band-homeD"; mkdir -p "$BDR2/lesson-bands" "$BDD"
+printf '# rules\n@LESSONS.md\n' > "$BDD/CLAUDE.md"
+printf -- '- **L500. the last one in this Mac band.** body\n- **L1000. left behind in the band above.** body\n' > "$BDD/LESSONS.md"
+printf '1\n' > "$BDR2/lesson-bands/MacSix"
+out_bdused="$(SYNC_HOSTNAME=MacSix SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDD" SYNC_REPO="$BDR2" bash "$SCRIPT" next-lesson 2>&1)"
+dbg "rolled past a used band: $out_bdused"
+check "#44 a rollover skips a band that already holds numbers" \
+  "grep -q '^L1001\$' <<< \"\$out_bdused\""
+check "#44 and records the band it actually rolled to"  \
+  "[ \"\$(cat '$BDR2/lesson-bands/MacSix' 2>/dev/null)\" = '1001' ]"
+# Widening SYNC_LESSON_BAND_SIZE was, until 2026-09-20, what the full-band refusal TOLD somebody to
+# do. It is unsafe: the size is global and the bands are contiguous, so widening moves this Mac's
+# band over the one above it, and the collision check only ever compared band STARTS, so nothing
+# refused and the Mac quietly minted numbers the other one had already published. Overlap is now
+# judged on RANGES, and it refuses on BOTH Macs: numbers already minted in the overlap cannot be
+# un-minted, so there is no winner to move (L42).
+BDR3="$WORK/band-repo-wide"; BDE="$WORK/band-homeE"; mkdir -p "$BDR3/lesson-bands" "$BDE"
+printf '# rules\n@LESSONS.md\n' > "$BDE/CLAUDE.md"
+printf -- '- **L1. one.** body\n' > "$BDE/LESSONS.md"
+printf '1\n'   > "$BDR3/lesson-bands/MacSeven"
+printf '501\n' > "$BDR3/lesson-bands/MacEight"
+bd_wide_rc=0
+out_bdwide="$(SYNC_LESSON_BAND_SIZE=1000 SYNC_HOSTNAME=MacSeven SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDE" SYNC_REPO="$BDR3" bash "$SCRIPT" next-lesson 2>&1)" || bd_wide_rc=$?
+dbg "widened band: $out_bdwide"
+check "#44 a widened band that runs into another Mac's refuses" "[ \"\$bd_wide_rc\" -ne 0 ]"
+check "#44 and names the Mac it runs into, with the band it holds" \
+  "line_has \"\$out_bdwide\" 'MacEight' 'starts at 501'"
+check "#44 and mints nothing under the widened size"            "! grep -qE '^L[0-9]+\$' <<< \"\$out_bdwide\""
+bd_wide2_rc=0
+out_bdwide2="$(SYNC_LESSON_BAND_SIZE=1000 SYNC_HOSTNAME=MacEight SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDE" SYNC_REPO="$BDR3" bash "$SCRIPT" next-lesson 2>&1)" || bd_wide2_rc=$?
+check "#44 the Mac on the other side of the overlap refuses too" "[ \"\$bd_wide2_rc\" -ne 0 ]"
+check "#44 and it does not mint either"                          "! grep -qE '^L[0-9]+\$' <<< \"\$out_bdwide2\""
+# The bands as they were claimed are untouched by the refusal: nothing is moved on a widening,
+# because moving cannot recover a number already minted inside the overlap.
+check "#44 neither band is moved by the refusal" \
+  "[ \"\$(cat '$BDR3/lesson-bands/MacSeven')\" = '1' ] && [ \"\$(cat '$BDR3/lesson-bands/MacEight')\" = '501' ]"
+# A size that is not a whole number is refused rather than taken. Bash arithmetic reads a non
+# numeric value as ZERO (L50), and a band zero numbers wide has no room by construction, so the
+# rollover above would walk from band to band for ever, silently, with the run appearing to hang.
+for _bd_bad in abc 0 12.5; do
+  bd_bad_rc=0
+  out_bdbad="$(SYNC_LESSON_BAND_SIZE="$_bd_bad" SYNC_HOSTNAME=MacSeven SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDE" SYNC_REPO="$BDR3" bash "$SCRIPT" next-lesson 2>&1)" || bd_bad_rc=$?
+  check "#44 a band size of '$_bd_bad' is refused, not read as zero" "[ \"\$bd_bad_rc\" -ne 0 ]"
+  check "#44 and the refusal for '$_bd_bad' names the setting"      "grep -q 'SYNC_LESSON_BAND_SIZE' <<< \"\$out_bdbad\""
+  check "#44 and no number is minted under a size of '$_bd_bad'"    "! grep -qE '^L[0-9]+\$' <<< \"\$out_bdbad\""
+done
 # Two Macs that claimed the same band while unable to see each other. There is nobody to arbitrate,
 # so the rule has to give the same answer wherever it runs: the lower name keeps the band. Which
 # Mac that is does not matter; that both agree without talking does.
@@ -10165,6 +10238,70 @@ check "#44 a claim is committed, so it reaches the other Mac" \
   "git -C '$BDG' log --oneline -- lesson-bands | grep -q ."
 check "#44 and the working tree is left clean" \
   "[ -z \"\$(git -C '$BDG' status --porcelain lesson-bands 2>/dev/null)\" ]"
+section "== a full band inside a pull rolls over, instead of renumbering to nothing (claude-config#512) =="
+# The rule file merge asks for a lesson number too: when both Macs used one number for different
+# entries, the pull renumbers the entry that has never left this Mac.
+#
+# MEASURED against the tool as it stood on 2026-09-20, with a full band: the refusal was raised
+# inside a command substitution, so it went to the screen and the substitution came back EMPTY. The
+# comparison below it errored with "integer expression expected", the renumber ran with no number at
+# all, and this Mac's unsent lesson was rewritten to `- **L. mine.**`. That form is one NO tool here
+# can read: invisible to the index every session loads, to `claude-sync lesson`, and to the
+# duplicate check, while holding a number nothing can see. The pull reported success and said
+# "L700 became L" in passing. A refusal swallowed by a substitution is exactly what the comment on
+# lesson_band_locked warns about, one function above the one that did it (L50, L12).
+#
+# So the discriminating assertion here is not that the pull survives, which it always did. It is
+# that the entry comes out with a real number, in the band this Mac rolled on to.
+#
+# The claim a pull must still never make is a FIRST band for a Mac that has never asked for one, and
+# that is untouched below: this rolls a band the Mac already holds, which is a different thing.
+FBB="$WORK/fullband-bare.git"; git init -q --bare -b main "$FBB"
+FBA="$WORK/fullbandA"; git clone -q "$FBB" "$FBA" 2>/dev/null
+cp "$SCRIPT" "$FBA/claude-sync"; seed_unmanaged_list "$FBA"
+mkdir -p "$FBA/payload" "$FBA/lesson-bands"
+echo '{"hooks":{}}' > "$FBA/payload/settings.hooks.json"
+printf '# rules\n@LESSONS.md\n' > "$FBA/payload/CLAUDE.md"
+printf '# Lessons\n\n- **L1. one.** body\n' > "$FBA/payload/LESSONS.md"
+# Mac A holds the band below this Mac's, so the band it can roll on to is 1001, above them both.
+printf '1\n' > "$FBA/lesson-bands/MacAye"
+git -C "$FBA" checkout -q -b main 2>/dev/null || true
+git -C "$FBA" add -A && git -C "$FBA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$FBA" push -q -u origin main
+FBH="$WORK/fullbandhomeB"; mkdir -p "$FBH"; echo '{"hooks":{}}' > "$FBH/settings.json"
+FBBC="$WORK/fullbandB"; git clone -q "$FBB" "$FBBC" 2>/dev/null
+SYNC_HOSTNAME=MacBee CLAUDE_HOME="$FBH" SYNC_REPO="$FBBC" SYNC_NO_NOTIFY=1 bash "$FBBC/claude-sync" pull >/dev/null 2>&1
+printf '501\n' > "$FBBC/lesson-bands/MacBee"
+# This Mac's band is 501 to 1000 and L1000 sits in it, so it has no number left. Its unsent L700
+# collides with the L700 Mac A is about to publish, which is what makes the merge renumber at all.
+printf -- '- **L700. mine.** written on Mac B\n- **L1000. the last number in this Mac band.** body\n' >> "$FBH/LESSONS.md"
+printf -- '- **L700. theirs.** written on Mac A\n' >> "$FBA/payload/LESSONS.md"
+git -C "$FBA" add -A && git -C "$FBA" -c user.name=t -c user.email=t@e commit -q -m "Mac A publishes its L700" && git -C "$FBA" push -q
+fb_rc=0
+out_fb="$(SYNC_HOSTNAME=MacBee SYNC_NO_NOTIFY=1 CLAUDE_HOME="$FBH" SYNC_REPO="$FBBC" bash "$FBBC/claude-sync" pull 2>&1)" || fb_rc=$?
+dbg "pull with a full band: $out_fb"
+check "#512 the pull finishes rather than stopping on a full band" "[ \"\$fb_rc\" -eq 0 ]"
+check "#512 and the arriving entry is applied"        "grep -q '^- \*\*L700\. theirs' '$FBH/LESSONS.md'"
+check "#512 the published entry keeps the number"     "[ \"\$(grep -c '^- \*\*L700\.' '$FBH/LESSONS.md')\" = 1 ]"
+check "#512 this Mac's unsent entry is renumbered into the band it rolled to" \
+  "grep -q '^- \*\*L1001\. mine' '$FBH/LESSONS.md'"
+check "#512 and the rolled band is recorded where the other Mac can read it" \
+  "[ \"\$(cat '$FBBC/lesson-bands/MacBee' 2>/dev/null)\" = '1001' ]"
+check "#512 the rollover is reported inside the pull" "grep -qi 'had no number left' <<< \"\$out_fb\""
+check "#512 no entry is left with an empty number, which no tool here can read" \
+  "! grep -q '^- \*\*L\.' '$FBH/LESSONS.md'"
+check "#512 and the renumber is reported with the number it actually used" \
+  "! grep -q 'became L\.\?\$' <<< \"\$out_fb\""
+check "#512 and the numbering is sound afterwards" \
+  "SYNC_HOSTNAME=MacBee SYNC_NO_GIT=1 CLAUDE_HOME='$FBH' SYNC_REPO='$FBBC' bash '$FBBC/claude-sync' check-lessons >/dev/null 2>&1"
+# A Mac that has never asked for a number still gets no band out of a pull. Claiming one is a
+# decision about numbers nobody has asked for yet, and the merge behaves exactly as it did before
+# bands existed.
+FBH2="$WORK/fullbandhomeC"; mkdir -p "$FBH2"; echo '{"hooks":{}}' > "$FBH2/settings.json"
+FBC2="$WORK/fullbandC"; git clone -q "$FBB" "$FBC2" 2>/dev/null
+SYNC_HOSTNAME=MacSea CLAUDE_HOME="$FBH2" SYNC_REPO="$FBC2" SYNC_NO_NOTIFY=1 bash "$FBC2/claude-sync" pull >/dev/null 2>&1
+check "#512 a pull claims no band for a Mac that has never asked for a number" \
+  "[ ! -f '$FBC2/lesson-bands/MacSea' ]"
+
 section "== a skills entry that cannot load is not carried between Macs (#50) =="
 # payload/skills/humanizer/ and payload/skills/stop-slop/ hold no SKILL.md, so nothing can ever
 # load them, and two loose markdown files sat directly under skills/ where nothing reads them.

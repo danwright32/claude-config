@@ -368,10 +368,44 @@ claim has no timestamp anyone else can trust.
 
 ### Letting a full band spill into the next one
 
-Rejected while building #44. A band 500 wide is far past anything this will hold (174 lessons in
-five months), so the case is remote, and that is exactly why silently spilling would be the worst
-answer: it would put the collisions back with nothing saying so, years after anybody remembers the
-mechanism. A full band refuses and names itself.
+Rejected while building #44 and still rejected. Spilling would put the collisions back with nothing
+saying so, years after anybody remembers the mechanism.
+
+What changed on 2026-09-20 (#512) is what happens instead. The refusal was justified by a premise:
+"a band 500 wide is far past anything this will hold (174 lessons in five months), so the case is
+remote". That premise expired inside a month. This Mac claimed band 1 on 2026-08-17 and had used all
+500 numbers by 2026-09-20, about ten a day, and the refusal then meant no lesson could be numbered at
+all until somebody hand edited a file in the sync repo. A rate measured once is not a rate (L316).
+
+So a full band ROLLS OVER: it claims the next free band and mints from there. That spills into
+nobody, needs no network, cannot race, and is the same claim the mechanism already makes once per
+Mac. It costs a gap in the numbers, which this design already calls cosmetic: a lesson number is an
+identifier, not a position.
+
+The rollover skips any band that has no room, rather than taking the next free one blind. A band
+NOBODY claims can still hold numbers: a Mac that moved off a band after a collision leaves its
+entries behind under those numbers, and they arrive here on the next sync. The walk needs no cap,
+because a band starting above every number in the tree is empty by construction.
+
+The refusal is kept as the backstop, in the one function that hands out a number, and it no longer
+names a person: every caller resolves its band through `lesson_band_with_room`, so reaching it means
+a caller asked with a band it had not checked.
+
+### Widening SYNC_LESSON_BAND_SIZE to make room
+
+Rejected for #512, and now refused by the tool. It was what the old full-band refusal TOLD somebody
+to do, and it was the one remedy that would have caused the collisions the bands exist to prevent.
+
+The size is global and the bands are contiguous, so widening does not extend one band, it moves every
+band over the one above it. With this Mac on 1 and the other on 501, a size of 1000 gives this Mac 1
+to 1000 and the other 501 to 1500: this Mac would then mint L501, a number the other Mac published
+weeks ago. Nothing refused, because the collision check compared band STARTS, and two overlapping
+bands do not start at the same number.
+
+Overlap is now judged on ranges, and it refuses on BOTH Macs rather than moving one. Moving is the
+right settlement for two Macs that claimed the same start, because neither has minted anything the
+other could not also mint. It is the wrong one here: a number already minted inside the overlap
+cannot be un-minted, so the only safe answer is to stop until the size is put back (L42).
 
 ### Carrying plugin enablement in the payload
 
@@ -553,7 +587,7 @@ that is added both fail until this table is updated.
 | --- | --- | --- | --- | --- |
 | 1 hour | `SYNC_LOCK_MAX_AGE=3600` | A lock is broken as stale | Re-checked 2026-08-21: the payload is 4.9MB, a fresh clone from origin takes 1 second and a whole-payload copy under 1, so the original 6 second figure is conservative and this is at least 600x the slowest real run, proved by #29 | 2026-08-21 |
 | 60 days | `SYNC_MAC_RETIRE_AFTER=5184000` | A Mac counts as retired | Re-derived 2026-08-21 by `tools/measure-sync-gaps.sh`: the worst gap either Mac showed in the window is 6.79 days, so 8.8x the longest real absence, and a holiday cannot trip it, proved by #26 | 2026-08-21 |
-| 1 hour on a Mac, 30 minutes on CI | `SUITE_TIMEOUT=3600`, set to 1800 in `.github/workflows/tests.yml` | A suite run is killed after this much wall clock however well it is going | No longer the thing that catches a hang, which is why it is generous: SUITE_STALL_TIMEOUT does that. A full single process run measured 348 seconds idle and 1943 at load 160 to 188 on 2026-08-22, so the old 900 would have killed a healthy run on a busy Mac, proved by #152. It is now bounded from below as well, at twice the stall bound, or the stall can never be reached and every real hang is reported as a ceiling overrun instead, which #112 checks. The RUNNER sets its own, and it was raised from 960 to 1800 on 2026-09-19: the run also fails when its wall clock is more than half the ceiling and its own processor time is what filled it, so 960 put that refusal at 480 seconds, and the sync suite measured 470 on main that day and 485 on a branch adding one section. Main was about ten seconds from red with nothing having changed, and the workflow's own comment still recorded the run as "roughly 200 seconds" from 2026-08-30 (L210, L244). 1800 is roughly 3.7x the measured 485, which puts the refusal back at 900, about 1.9x the real run, and leaves 840 seconds over the 480 second stall bound where 960 sat exactly on its floor. The suite's runtime is tracked as #492 rather than made invisible by the raise, proved by #167 | 2026-09-19 |
+| 1 hour on a Mac, 30 minutes on CI | `SUITE_TIMEOUT=3600`, set to 1800 in `.github/workflows/tests.yml` | A suite run is killed after this much wall clock however well it is going | No longer the thing that catches a hang, which is why it is generous: SUITE_STALL_TIMEOUT does that. A full single process run measured 348 seconds idle and 1943 at load 160 to 188 on 2026-08-22, so the old 900 would have killed a healthy run on a busy Mac, proved by #152. It is now bounded from below as well, at twice the stall bound, or the stall can never be reached and every real hang is reported as a ceiling overrun instead, which #112 checks. The RUNNER sets its own, and it was raised from 960 to 1800 on 2026-09-19: the run also fails when its wall clock is more than half the ceiling and its own processor time is what filled it, so 960 put that refusal at 480 seconds, and the sync suite measured 470 on main that day and 485 on a branch adding one section. Main was about ten seconds from red with nothing having changed, and the workflow's own comment still recorded the run as "roughly 200 seconds" from 2026-08-30 (L210, L244). 1800 is roughly 3.7x the measured 485, which puts the refusal back at 900, about 1.9x the real run, and leaves 840 seconds over the 480 second stall bound where 960 sat exactly on its floor. The raise did not hide that growth: #492 tracked the runtime and closed on 2026-09-19 by adding a section time budget that scales with the ceiling (#501), so the section times are now totalled undivided and held to a fraction of whatever ceiling a machine was given, which speaks long before this wall clock number does. The suite itself is not faster, and the budget is what watches it, proved by #167 | 2026-09-19 |
 | 20 minutes | `SUITE_STALL_TIMEOUT=1200` | A suite run is killed as hung after this long without reaching a new section | This is what actually catches a hang. Re-measured 2026-08-22 across four loads on this Mac: the slowest single section was 44s idle, 62s with another full run competing, 88s with three of them, and once 208s, so this is at least 5.7x the worst observed and 13x the heaviest load that could be reproduced. It was 600 against a 34 second measurement, and at 3x that floor sat at 624 while the real spread reached 208, so the bound and its floor had met in the middle of the distribution they judge and a busy afternoon turned the run red with nothing wrong (L172). The bound moved rather than the floor, since the floor is the safety margin and the margin was the thing that had gone. Checked against the sections this run ACTUALLY took rather than against this sentence, and every run now PRINTS the margin it achieved so the next shrinkage is seen before it fails, proved by #152 and #179 | 2026-08-22 |
 | 30 minutes | `SUITE_LOCK_MAX_AGE=1800` | A suite lock from another machine is broken | The same runs, so at least 6x the slowest observed, proved by #32 | 2026-08-21 |
 | 4 hours | `SYNC_SCRATCH_MAX_AGE=14400` | Scratch counts as abandoned | 4x the 3600 second suite ceiling, so the longest permitted run is a quarter of the way to being swept, and 2400x the 6 second sync. It was 3600 against a 900 second ceiling, which was the same 4x, and #152 raised the ceiling alone and closed the margin to nothing. The two are now compared against each other by a check rather than by this sentence, proved by #160 | 2026-08-22 |

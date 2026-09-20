@@ -2798,6 +2798,14 @@ do_lesson(){   # $1 = a number (L174) or an id, which survives a renumber
 # the first number of its band: one file per writer means two Macs can never edit the same file, so
 # a claim can never produce a merge conflict of its own.
 LESSON_BAND_SIZE="${SYNC_LESSON_BAND_SIZE:-500}"
+# REFUSED rather than taken on trust, because bash arithmetic reads a value that is not a number as
+# ZERO (L50). A size of zero makes every band zero wide, which makes the rollover below unable to
+# find a band with room however far it walks: it would spin for ever with nothing said. A size is
+# also the width of a claim already recorded in lesson-bands, so a nonsense one is not a thing to
+# guess a default for.
+case "$LESSON_BAND_SIZE" in
+  ''|*[!0-9]*|0) die "SYNC_LESSON_BAND_SIZE is set to '$LESSON_BAND_SIZE', which is not a whole number of numbers a band can hold, and bash would read it as zero, making every band empty. NOTHING was done. Unset it to use the default of 500, which is what the bands in $LESSON_BANDS_DIR were claimed under." ;;
+esac
 
 # Every band any Mac has claimed, as "host<TAB>start". A file that does not hold a number is
 # skipped rather than read as zero: a zero would look like a legitimate band below everyone else's
@@ -2852,6 +2860,31 @@ colliding_band_holders(){   # $1 = this Mac's band
   return 0
 }
 
+# Any OTHER Mac whose band RUNS INTO this one without starting at the same number, as
+# "host<TAB>start". Two bands can only overlap that way if the size changed after they were claimed:
+# LESSON_BAND_SIZE is global and the bands are contiguous, so widening moves every band over the one
+# above it. Nothing noticed until 2026-09-20, because the collision check above compares band STARTS
+# only, and widening is what the full band refusal used to tell somebody to do: this Mac would have
+# quietly minted numbers the other one had already published.
+#
+# There is no winner to move here, unlike two Macs that claimed the same start. A number already
+# minted inside the overlap cannot be un-minted, so both Macs refuse until the size is put back
+# (L42: a control that exists to protect somebody fails closed).
+overlapping_band_holders(){   # $1 = this Mac's band
+  local h start me mine gap
+  me="$(sync_hostname)"; mine="$1"
+  while IFS="$(printf '\t')" read -r h start; do
+    [ -n "${h:-}" ] || continue
+    [ "$h" = "$me" ] && continue
+    [ -n "${start:-}" ] || continue
+    [ "$start" = "$mine" ] && continue
+    gap=$(( start > mine ? start - mine : mine - start ))
+    [ "$gap" -lt "$LESSON_BAND_SIZE" ] || continue
+    printf '%s\t%s\n' "$h" "$start"
+  done < <(lesson_bands)
+  return 0
+}
+
 # A band is worth nothing to the other Mac until it can see it, and only a commit carries it. This
 # is one commit per Mac for the life of the repo, not a marker written on every apply, so it cannot
 # start the republishing exchange that the design record rejects markers on the branch for.
@@ -2894,6 +2927,13 @@ lesson_band(){
     notify "lesson band moved to $moved"
     mine="$moved"
   fi
+  local runs_into oh os gap
+  runs_into="$(overlapping_band_holders "$mine" | awk 'NR <= 1')"
+  if [ -n "$runs_into" ]; then
+    IFS="$(printf '\t')" read -r oh os <<< "$runs_into"
+    gap=$(( os > mine ? os - mine : mine - os ))
+    die "this Mac's lesson band ($mine to $((mine + LESSON_BAND_SIZE - 1))) runs into the band $oh mints from, which starts at $os, so a number minted here could be one $oh has already published. NOTHING was minted. The band size is global and the bands are contiguous, so this is what raising SYNC_LESSON_BAND_SIZE after a band was claimed does: the bands here were claimed $gap apart, so set it to $gap or less, or give this Mac a band clear of every other one by editing $LESSON_BANDS_DIR/$host."
+  fi
   LESSON_BAND="$mine"
   return 0
 }
@@ -2907,7 +2947,7 @@ lesson_band(){
 lesson_band_locked(){
   local mine
   mine="$(recorded_lesson_band)"
-  if [ -n "$mine" ] && [ -z "$(colliding_band_holders "$mine")" ]; then LESSON_BAND="$mine"; return 0; fi
+  if [ -n "$mine" ] && [ -z "$(colliding_band_holders "$mine")" ] && [ -z "$(overlapping_band_holders "$mine")" ]; then LESSON_BAND="$mine"; return 0; fi
   with_lock lesson_band
 }
 
@@ -2923,22 +2963,99 @@ highest_lesson_in_band(){   # $1 = band start  $2.. = files
   return 0
 }
 
-next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whole range
-  local f highest=0 n band="${2:-}" files=()
+# The rule files a lesson number can be written in, one path per line. The generated index is
+# skipped: it mirrors the numbers beside it, so including it normally changes nothing, and the one
+# time it differs is the time it is stale, which would let a number no lesson holds any more decide
+# what the next one is. One definition, so nothing that reads numbers out of a tree can end up
+# walking a different set from the rest (L41).
+lesson_files_in(){   # $1 = tree
+  local f
   for f in $(top_files_in "$1"); do
     [ -f "$1/$f" ] || continue
-    # The generated index is skipped here too. It mirrors the numbers beside it, so including it
-    # normally changes nothing, and the one time it differs is the time it is stale, which would
-    # let a number no lesson holds any more decide what the next one is.
     lesson_source_file "$f" || continue
-    files+=("$1/$f")
+    printf '%s\n' "$1/$f"
   done
+  return 0
+}
+
+# Whether band $2 still holds a number that tree $1 has not used.
+lesson_band_has_room(){   # $1 = tree  $2 = band start
+  local f files=() highest
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(lesson_files_in "$1")
+  # Answered before the array is expanded: under set -u, bash 3.2 errors on expanding an EMPTY
+  # array, and a tree with no rule files in it is the fixture every new clone starts from (L486).
+  [ "${#files[@]}" -gt 0 ] || return 0
+  highest="$(highest_lesson_in_band "$2" "${files[@]}")"
+  [ "$((highest + 1))" -le "$(($2 + LESSON_BAND_SIZE - 1))" ]
+}
+
+# The first band at or above the next free one that has room for a number.
+#
+# Not simply the next free band: a band NOBODY claims can still hold numbers. A Mac that moved off a
+# band after a collision leaves its entries behind under those numbers, and they arrive here on the
+# next sync. Rolling into such a band would hand out a number already in use, which is the collision
+# the whole mechanism exists to prevent. The walk needs no cap: a band starting above every number
+# in the tree is empty by construction, so it terminates on that one at the latest.
+free_band_with_room(){   # $1 = tree
+  local cand
+  cand="$(next_free_band)"
+  while ! lesson_band_has_room "$1" "$cand"; do
+    cand=$((cand + LESSON_BAND_SIZE))
+  done
+  printf '%s' "$cand"
+  return 0
+}
+
+# A FULL BAND ROLLS OVER (claude-config#512). It used to refuse and name itself, on the premise
+# recorded in DESIGN.md that "a band 500 wide is far past anything this will hold (174 lessons in
+# five months)". That premise expired inside a month: this Mac claimed band 1 on 2026-08-17 and had
+# used all 500 numbers by 2026-09-20, about ten a day, and the refusal then meant no lesson could be
+# numbered at all until somebody hand edited a file in the sync repo (L316: a recorded decision
+# carries a premise that can expire).
+#
+# Rolling over spills into nobody, needs no network and cannot race, because the fresh band is one
+# past every band anyone holds. What it costs is a gap in the numbers, which the design already
+# treats as cosmetic: a lesson number is an identifier, not a position.
+roll_lesson_band(){   # $1 = tree  $2 = the band that has run out
+  local moved
+  moved="$(free_band_with_room "$1")"
+  # Never downwards and never onto the band it is leaving: either would mean minting inside a range
+  # another Mac may already have published from, which is the one outcome this must not reach (L42).
+  [ "$moved" -gt "$2" ] || die "this Mac's lesson band ($2 to $(($2 + LESSON_BAND_SIZE - 1))) has no number left, and the band to roll on to came back as $moved, which is not above it, so rolling over could take a number another Mac has already used. NOTHING was minted. Check the band files in $LESSON_BANDS_DIR."
+  record_lesson_band "$moved"
+  echo "claude-sync: this Mac's lesson band ($2 to $(($2 + LESSON_BAND_SIZE - 1))) had no number left, so it claimed $moved to $((moved + LESSON_BAND_SIZE - 1)) and mints from there. The numbers now have a gap in them, which costs nothing: a lesson number is an identifier, not a position. Spilling into the band the other Mac mints from is what this avoids." >&2
+  notify "lesson band rolled over to $moved"
+  LESSON_BAND="$moved"
+  return 0
+}
+
+# This Mac's band WITH A NUMBER LEFT IN IT: resolved as always, then rolled over when the tree has
+# filled it. Every path that mints goes through here, and the read-only ones do not, so a pull can
+# still never claim a first band for a Mac that has never asked for a number.
+lesson_band_with_room(){   # $1 = tree
+  lesson_band_locked
+  [ -n "$LESSON_BAND" ] || return 0
+  lesson_band_has_room "$1" "$LESSON_BAND" && return 0
+  with_lock roll_lesson_band "$1" "$LESSON_BAND"
+}
+
+next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whole range
+  local f highest=0 n band="${2:-}" files=()
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(lesson_files_in "$1")
   if [ -n "$band" ] && [ "${#files[@]}" -gt 0 ]; then
     highest="$(highest_lesson_in_band "$band" "${files[@]}")"
     if [ "$((highest + 1))" -gt "$((band + LESSON_BAND_SIZE - 1))" ]; then
       # Spilling into the next band would put the collisions back with nothing saying so, which is
-      # the one failure this whole mechanism exists to prevent.
-      die "this Mac's lesson band ($band to $((band + LESSON_BAND_SIZE - 1))) is full, so there is no number left to mint that another Mac could not also choose. Widen it with SYNC_LESSON_BAND_SIZE, or give this Mac a fresh band by editing lesson-bands/$(sync_hostname) in the sync repo."
+      # the one failure this whole mechanism exists to prevent. This is the BACKSTOP: every caller
+      # resolves its band through lesson_band_with_room, which rolls a full band over before asking
+      # for a number, so reaching here means a caller asked with a band it had not checked. It
+      # refuses rather than spilling, and names the call rather than the person, because nobody
+      # operating the tool can be in this state.
+      #
+      # Widening SYNC_LESSON_BAND_SIZE is deliberately NOT offered any more: the size is global and
+      # the bands are contiguous, so widening moves this Mac's band over the one above it, which is
+      # the collision this refuses to make (claude-config#512).
+      die "a lesson number was asked for with a band that has no room in it ($band to $((band + LESSON_BAND_SIZE - 1)), highest in use $highest), so minting one would take a number from the band another Mac mints from. NOTHING was minted. Resolve the band through lesson_band_with_room, which rolls a full band over to a fresh one."
     fi
     printf 'L%s\n' "$((highest + 1))"
     return 0
@@ -4474,16 +4591,39 @@ RENUMBERED
         echo "claude-sync: both Macs held the same entry under the same number, so the duplicate copy was dropped and one kept ($p: $(printf '%s' "$dropdup" | tr '\n' ';' | sed 's/;$//')). No number changed here and nothing needs chasing: the two copies were byte identical, and your previous copy is beside it as .syncbak." >&2
         notify "$p: dropped a duplicate copy of an entry"
       fi
-      # Read-only here, deliberately: a pull is not where a Mac should be claiming anything, and
-      # a Mac that has never asked for a number has no band yet. With one, the renumbered entry
-      # lands inside this Mac's own band, which is the point; without one this behaves exactly as
-      # it always did.
+      # A Mac that has never asked for a number has no band yet, and a pull is not where one should
+      # be CLAIMED for the first time. With one, the renumbered entry lands inside this Mac's own
+      # band, which is the point; without one this behaves exactly as it always did.
+      #
+      # A band this Mac already holds can still have RUN OUT, and what that used to do, measured on
+      # 2026-09-20, was worse than refusing: the refusal was raised INSIDE the command substitution
+      # below, so it printed and the substitution came back EMPTY, the comparison after it errored
+      # with "integer expression expected", and the renumber ran with no number at all. This Mac's
+      # unsent lesson came out as `- **L. mine.**`, a form no tool here can read, and the pull
+      # reported success, saying "L700 became L" in passing (L50, L12). So a full band rolls over
+      # here exactly as it does when minting (claude-config#512). The lock is already held by this
+      # run, and with_lock is re-entrant within one, so this takes nothing new.
       band="$(recorded_lesson_band)"
+      if [ -n "$band" ] && ! lesson_band_has_room "$CLAUDE_HOME" "$band"; then
+        with_lock roll_lesson_band "$CLAUDE_HOME" "$band"
+        band="$LESSON_BAND"
+      fi
       start="$(next_lesson_number "$CLAUDE_HOME" "$band")"; start="${start#L}"
-      if [ -n "$band" ]; then fmax="$(highest_lesson_in_band "$band" "$tmpr" "$PAYLOAD/$p")"
-      else fmax="$(highest_lesson_in "$tmpr" "$PAYLOAD/$p")"; fi
-      [ "$((fmax + 1))" -gt "$start" ] && start="$((fmax + 1))"
-      collided="$(renumber_merge_collisions "$tmpr" "$PAYLOAD/$p" "$start")"
+      # A number that did not come back AS a number must never reach the renumber. That is what
+      # wrote `- **L. mine.**`: any refusal inside the substitution above leaves this empty, and an
+      # empty value renumbers an entry to nothing while every message about it still reads as
+      # success (L50). The collision is left in place instead, which the send's own duplicate check
+      # reports and holds the file back for, and this says so rather than leaving it to be found.
+      collided=""
+      case "$start" in
+        ''|*[!0-9]*)
+          echo "claude-sync: both Macs had used the same lesson number for different entries, and no next free number could be worked out for this Mac, so NOTHING was renumbered and both entries are still in $p under the same number. The next send holds that file back until it is settled." >&2 ;;
+        *)
+          if [ -n "$band" ]; then fmax="$(highest_lesson_in_band "$band" "$tmpr" "$PAYLOAD/$p")"
+          else fmax="$(highest_lesson_in "$tmpr" "$PAYLOAD/$p")"; fi
+          [ "$((fmax + 1))" -gt "$start" ] && start="$((fmax + 1))"
+          collided="$(renumber_merge_collisions "$tmpr" "$PAYLOAD/$p" "$start")" ;;
+      esac
       if [ -n "$collided" ]; then
         echo "claude-sync: both Macs had used the same lesson number for different entries, so this Mac's unsent entry was renumbered to the next free number and the published one keeps the number, which the other Mac may already reference ($p: $(printf '%s' "$collided" | tr '\n' ';' | sed 's/;$//')). The renumbered entry publishes on the next send; your previous copy is beside it as .syncbak." >&2
         notify "$p: renumbered an unsent entry after a number collision"
@@ -9005,7 +9145,7 @@ case "$cmd" in
   install-autosync) do_install_autosync ;;
   # Read-only about the config: it runs the checks and records what they said, nothing else.
   recheck) do_recheck ;;
-  next-lesson) lesson_band_locked; next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND" ;;
+  next-lesson) lesson_band_with_room "$CLAUDE_HOME"; next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND" ;;
   repo-slug) repo_slug || { echo "claude-sync: origin is not a GitHub remote, so there is no owner and name to derive." >&2; exit 1; } ;;
   cite-scan) do_cite_scan "${2:-}" ;;   # read-only: which synced files cite a lesson number
   cite-pin) do_cite_pin ;;              # record what each cited lesson number names now
@@ -9057,7 +9197,7 @@ case "$cmd" in
     # The same rule check-home-paths follows for its three (claude-config#164, #108).
     lessonfaults="$(lesson_publish_faults "$CLAUDE_HOME")"
     if ! is_blank "$lessonfaults"; then die "$lessonfaults"; fi
-    lesson_band_locked
+    lesson_band_with_room "$CLAUDE_HOME"
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
   # The usage block is DERIVED from where it ends rather than from a line number (claude-config#306).
