@@ -5684,6 +5684,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   --all. Both were written carefully, and both read only what is there now.)
   SHORT: A guard walking the WORKING TREE cannot see history, so a deleted secret stays readable while it reports clean: scan every reachable object.
 
+- **L498. Any error path an unauthenticated request can reach produces volume that
+  SOMEBODY ELSE chooses, so every alert, quota, log budget or on call rotation attached to it
+  can be exhausted by a stranger with one command.** Decide who is allowed to trigger an error
+  before deciding what triggering it costs, and put the refusal where the request can still be
+  told from a real one, which is at the request, not at the reporting end.
+  (nursedexapp/nursedex#1088, 2026-09-20: seven forged multipart POSTs at the homepage from a
+  rented server became seven unhandled 500s, seven Sentry events and a Slack alert at 10:45 PM.
+  Nothing in the path was authenticated, so the rate was the sender's to choose, and the same
+  curl loop would have exhausted a month of Sentry quota.)
+  SHORT: An error path an unauthenticated caller can reach is volume they control, so decide who may trigger an error before deciding what it costs.
+
 ## UX completeness
 
 - **L485. A container's minimum size is measured from the TALLEST state its content can
@@ -6875,6 +6886,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   counts CLIENTS while the other four count invoices.)
   SHORT: Automating a task changes what every counter of it MEANS, from work waiting to a fact about the data, and nothing re-examines the counter.
 
+- **L500. A jump, anchor or deep link that addresses a row by a key lands only on the lists whose
+  rows are IDENTIFIED by that key, so a surface rendering the same records under a different identity
+  (a contact id, a composite, a position) drops every jump in silence while the routing around it
+  reads as correct.** Derive the target identity where the rows are built, and prove the jump lands
+  on every list the target can sit on.
+  (overture#4062, 2026-09-20: an OmniFocus follow-up link carried the show's natural key. The routing
+  was right, the app came forward and the queue switched to the Reached out stage, and then all three
+  of the mechanisms meant to land the jump missed at once, because that stage identifies its rows by
+  the contact instead of the show, groups them by reach-out date instead of performance date, and
+  wraps them in a row type that never reads the jump highlight. The jump worked on every other stage
+  and in the Archive, so the defect was invisible except on the one stage every follow-up task points
+  at.)
+  SHORT: A jump addressing a row by a key is dropped by any list whose rows carry a DIFFERENT identity, so prove it lands on every list the target can be on.
+
 ## External systems
 
 - **L477. A browser error reporter captures every uncaught error on the page, including ones
@@ -7221,6 +7246,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   and read as satisfied, because a lockfile DID exist; the question it does not ask is whether the
   lockfile is somewhere the next machine can read.)
   SHORT: A lockfile inside a generated or gitignored directory pins nothing, since the only copy is on the machine that made it and CI resolves afresh.
+
+
+- **L499. A framework's error message names the case its author had in mind, not the
+  condition the code actually tests, so the message routinely describes a rarer cause than the
+  one in front of you.** Read the throw site before believing it, and before treating the volume
+  as evidence of the thing it names, because a message blaming something you cannot reproduce
+  sends you hunting for a problem that was never there.
+  (nursedexapp/nursedex#1088, 2026-09-20: "Failed to find Server Action. This request might be
+  from an older or newer deployment." Skew protection was on and the release was current. In
+  next 16.3.4, areAllActionIdsValid returns hasAtLeastOneAction, false when the body carries no
+  action field at all, so ANY multipart POST to ANY page route raises it with nothing stale.)
+  SHORT: A framework's error message names the case its author imagined, not the condition it tests, so read the throw site before believing it.
 
 ## Building with AI
 

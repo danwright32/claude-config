@@ -34,3 +34,4 @@ which is NOT loaded into the session.
 - L685. A PostgREST upsert is an INSERT, so a PARTIAL row hits every NOT NULL constraint and can never upsert onto an existing row. A refresh is an UPDATE.
 - L705. A bulk upsert with rows of DIFFERENT key sets writes NULL into every key a row omits but a sibling carries, so give every row the same keys.
 - L496. A lockfile inside a generated or gitignored directory pins nothing, since the only copy is on the machine that made it and CI resolves afresh.
+- L499. A framework's error message names the case its author imagined, not the condition it tests, so read the throw site before believing it.

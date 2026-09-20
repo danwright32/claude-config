@@ -34,3 +34,4 @@ which is NOT loaded into the session.
 - L482. A privacy guard scoped to personal identity exempts everything else the dataset discloses, so define what makes it sensitive before scoping the guard.
 - L484. Before a privacy sweep swaps a real name for an invented one, check whether code matches on or writes it; if so, exempt it instead.
 - L489. A guard walking the WORKING TREE cannot see history, so a deleted secret stays readable while it reports clean: scan every reachable object.
+- L498. An error path an unauthenticated caller can reach is volume they control, so decide who may trigger an error before deciding what it costs.

@@ -96,3 +96,4 @@ which is NOT loaded into the session.
 - L678. A warning is read by its PRESENCE, so a surface that never got one is indistinguishable from a surface with nothing to warn about.
 - L680. A message written about a MOMENT must be driven by the ACTION that produced it, never by a stored status.
 - L449. Automating a task changes what every counter of it MEANS, from work waiting to a fact about the data, and nothing re-examines the counter.
+- L500. A jump addressing a row by a key is dropped by any list whose rows carry a DIFFERENT identity, so prove it lands on every list the target can be on.
