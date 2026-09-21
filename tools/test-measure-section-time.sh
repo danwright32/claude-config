@@ -40,10 +40,29 @@ mk_suite(){          # $1 = name   $2 = section seconds   $3 = budget it claims 
   local p="$TMPROOT/$1.sh"
   cat > "$p" <<EOF
 #!/usr/bin/env bash
-echo "4 shards in 200s; ${2}s of section time against a ${3}s budget"
 echo "SUITE-NOTE ${2}s of section time against a ${3}s budget"
-echo "PASS=1 FAIL=0"
+echo "PASS=1 FAIL=0 (4 shards in 200s; ${2}s of section time against a ${3}s budget; every section counted once)"
 exit $4
+EOF
+  chmod +x "$p"; printf '%s' "$p"
+}
+
+# A stand in for the suite whose SHARD COUNT changes between calls, so the refusal below can be
+# driven. The suite counts its prelude once per shard, so two totals taken at different shard
+# counts are measurements of different things.
+mk_shifting_suite(){   # $1 = name, then the shard counts, one per call
+  local p="$TMPROOT/$1.sh" log="$TMPROOT/$1.calls" vals="$TMPROOT/$1.shards"
+  shift
+  printf '%s\n' "$@" > "$vals"
+  cat > "$p" <<EOF
+#!/usr/bin/env bash
+n=\$(wc -l < "$log" 2>/dev/null || echo 0)
+n=\$(( n + 1 ))
+echo "call" >> "$log"
+j=\$(awk -v want="\$n" 'NR == want { print; found = 1 } END { if (!found) print last } { last = \$0 }' "$vals")
+echo "SUITE-NOTE 900s of section time against a 2520s budget"
+echo "PASS=1 FAIL=0 (\$j shards in 200s; 900s of section time against a 2520s budget; every section counted once)"
+exit 0
 EOF
   chmod +x "$p"; printf '%s' "$p"
 }
@@ -327,6 +346,35 @@ cred(){ bash "$M" --credible "$1" "$2" "$3" 2>&1; }
 [ "$(cred 3 8 0.2)" = "credible" ] \
   && check "and a snapshot holding almost no processes is refused" "it was accepted" \
   || check "and a snapshot holding almost no processes is refused" ok
+
+# --- the shard count is part of what a reading MEANS, because the suite runs its prelude once in
+#     each shard and counts every one of them in the total. Two readings taken at different shard
+#     counts are two different quantities, and comparing them is the mistake the issue is about.
+S_SILENT_OK="$TMPROOT/noshards.sh"
+printf '#!/usr/bin/env bash\necho "SUITE-NOTE 900s of section time against a 2520s budget"\nexit 0\n' > "$S_SILENT_OK"
+chmod +x "$S_SILENT_OK"
+S_SH="$(mk_shifting_suite steady 4 4 4)"
+A_SH="$(mk_ambient shards 40)"
+o16="$(run_m MEASURE_RUNS=3 MEASURE_SUITE_CMD="bash $S_SH" MEASURE_AMBIENT_CMD="$A_SH" bash "$M" 2>&1)"; c16=$?
+[ "$c16" -eq 0 ] && check "a steady shard count measures cleanly" ok \
+                 || check "a steady shard count measures cleanly" "exit=$c16 out=$o16"
+grep -qE '4 shards' <<< "$o16" \
+  && check "and the reading says how many shards produced it" ok \
+  || check "and the reading says how many shards produced it" "out=$o16"
+
+S_SH2="$(mk_shifting_suite shifting 4 2 4)"
+A_SH2="$(mk_ambient shards2 40)"
+o17="$(run_m MEASURE_RUNS=3 MEASURE_SUITE_CMD="bash $S_SH2" MEASURE_AMBIENT_CMD="$A_SH2" bash "$M" 2>&1)"; c17=$?
+[ "$c17" -ne 0 ] && check "an arm whose shard count changed is refused" ok \
+                 || check "an arm whose shard count changed is refused" "exit=$c17 out=$o17"
+grep -qi 'shard' <<< "$o17" \
+  && check "and the refusal names what changed" ok \
+  || check "and the refusal names what changed" "out=$o17"
+
+# --- a run in a single process prints no shard headline at all, and that is not a disagreement.
+o18="$(run_m MEASURE_RUNS=2 MEASURE_SUITE_CMD="bash $S_SILENT_OK" MEASURE_AMBIENT_CMD="$A_SH" bash "$M" 2>&1)"; c18=$?
+[ "$c18" -eq 0 ] && check "a run that names no shard count is still a reading" ok \
+                 || check "a run that names no shard count is still a reading" "exit=$c18 out=$o18"
 
 # --- knobs that decide what runs are refused rather than guessed at.
 o10="$(run_m MEASURE_RUNS=zero MEASURE_SUITE_CMD="bash $S_OK" MEASURE_AMBIENT_CMD="$A_OK" bash "$M" 2>&1)"; c10=$?

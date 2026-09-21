@@ -247,6 +247,7 @@ start_load
 
 # --- the runs.
 SECS=""      # the section time each run reported
+SHARDS=""    # how many shards produced them, which has to be the same for every run in an arm
 REFUSAL=""
 i=1
 while [ "$i" -le "$RUNS" ]; do
@@ -289,6 +290,19 @@ while [ "$i" -le "$RUNS" ]; do
     break
   fi
   _sec="${_note%% *}"; _saidbudget="${_note##* }"
+  # How many shards produced that total. The suite runs its PRELUDE once inside each shard and
+  # counts every one of them, so the same tree measured at two shard counts gives two different
+  # totals. A reading is therefore only comparable with another taken at the same count, and an
+  # arm whose count moved partway through is not one arm (L220).
+  _shards="$(sed -n 's/.*(\([0-9][0-9]*\) shards in .*/\1/p' "$_out" | head -1)"
+  if [ -n "$_shards" ]; then
+    if [ -z "$SHARDS" ]; then
+      SHARDS="$_shards"
+    elif [ "$_shards" != "$SHARDS" ]; then
+      REFUSAL="run $i of $RUNS ran $_shards shard(s) while an earlier run in this arm ran $SHARDS. The suite counts its prelude once per shard, so those two totals are measurements of different things and averaging them would report a change nobody made."
+      break
+    fi
+  fi
   # Two readings of one quantity: the budget derived from the suite's constants, and the budget the
   # suite printed for itself. Disagreement means one of them is stale, and neither can be trusted.
   if [ "$_saidbudget" -ne "$BUDGET" ]; then
@@ -298,15 +312,15 @@ while [ "$i" -le "$RUNS" ]; do
   rm -f "$_out"
   SECS="$SECS $_sec"
   if [ "$_an" -gt 0 ]; then
-    say "  run $i: ${_sec}s of section time, ${_elapsed}s wall clock, ambient CPU mean ${_amean}% max ${_amax}% of one core over $_an sample(s)${_abad:+, $_abad unreadable}${_who:+ (busiest: $_who)}"
+    say "  run $i: ${_sec}s of section time over ${_shards:-?} shard(s), ${_elapsed}s wall clock, ambient CPU mean ${_amean}% max ${_amax}% of one core over $_an sample(s)${_abad:+, $_abad unreadable}${_who:+ (busiest: $_who)}"
   else
-    say "  run $i: ${_sec}s of section time, ${_elapsed}s wall clock, ambient CPU unknown: all $_abad sample(s) were unreadable, so this reading carries no account of the machine it was taken on"
+    say "  run $i: ${_sec}s of section time over ${_shards:-?} shard(s), ${_elapsed}s wall clock, ambient CPU unknown: all $_abad sample(s) were unreadable, so this reading carries no account of the machine it was taken on"
   fi
   if [ -n "$RECORD" ]; then
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(hostname -s 2>/dev/null)" "$ARM" "$_sec" "$BUDGET" \
       "$_elapsed" "$( [ "$_an" -gt 0 ] && printf '%s' "$_amean" || printf 'unknown' )" \
-      "$( [ "$_an" -gt 0 ] && printf '%s' "$_amax" || printf 'unknown' )" "$FLOOR" "${_who:-none}" >> "$RECORD" \
+      "$( [ "$_an" -gt 0 ] && printf '%s' "$_amax" || printf 'unknown' )" "$FLOOR" "${_shards:-unknown}" "${_who:-none}" >> "$RECORD" \
       || say "  (warning: could not append to $RECORD, so this reading was printed and not recorded)"
   fi
   i=$(( i + 1 ))
@@ -332,6 +346,11 @@ if [ "$_n" -eq 1 ]; then
 else
   say "measure-section-time: $_n readings on the $ARM arm: median ${_mid}s of section time against a ${BUDGET}s budget, which is ${_pct_used}% of it."
   say "  The spread was ${_lo}s to ${_hi}s, so the margin is $(( BUDGET - _hi ))s at this arm's worst reading."
+fi
+if [ -n "$SHARDS" ]; then
+  say "  Taken at $SHARDS shards, and the prelude is counted once in each of them, so a reading at another shard count is a different quantity."
+else
+  say "  The runs named no shard count, so this total is whatever one process measured."
 fi
 say "  Ambient CPU is reported per run above, and this machine's floor was $FLOOR% of one core. A reading is only comparable with another taken at a similar floor."
 exit 0
