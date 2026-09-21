@@ -149,6 +149,36 @@ o7="$(fire "$R5" "git push")"; c7=$?
   && check "a newly committed scanner is run like any other" ok \
   || check "a newly committed scanner is run like any other" "exit=$c7 out=$o7"
 
+# --- the scanners run AT ONCE, not one after another. Five suites that share nothing are five
+#     lots of wall clock a push waits through for no reason (L302). Measured on this Mac
+#     2026-09-21: 27 seconds in sequence, of which 21 was those five, against 13 run at once.
+#
+#     Proved by RENDEZVOUS rather than by a stopwatch: each of the two fixture scanners raises its
+#     own marker and then waits for the other's. Run at once they both see it and pass; run one
+#     after another the first waits out its bound and fails, so the gate blocks. A timing
+#     assertion here would be a claim about how busy the machine is (L290).
+R6="$(mkrepo concurrent)"
+_rv="$TMPROOT/rendezvous"
+mkdir -p "$_rv"
+for _peer in alpha:beta beta:alpha; do
+  _me="${_peer%%:*}"; _other="${_peer#*:}"
+  cat > "$R6/payload/hooks/test-$_me.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+: > "$_rv/$_me"
+n=0
+while [ ! -e "$_rv/$_other" ] && [ "\$n" -lt 400000 ]; do n=\$(( n + 1 )); done
+[ -e "$_rv/$_other" ] || { echo "FAIL: $_me never saw $_other, so they ran one after another"; exit 1; }
+exit 0
+EOF
+  chmod +x "$R6/payload/hooks/test-$_me.sh"
+done
+commit_all "$R6"
+o8="$(fire "$R6" "git push")"; c8=$?
+[ "$c8" -eq 0 ] \
+  && check "the scanners run at once rather than in sequence" ok \
+  || check "the scanners run at once rather than in sequence" "exit=$c8 out=$o8"
+
 # --- the selection against THIS repository, read rather than assumed. Fixtures can only confirm
 #     the rule as written; what matters is which real suites it picks, and above all that it never
 #     picks the four minute suite as a whole (measured 2026-09-21: the selection below runs in 27
@@ -163,6 +193,9 @@ if [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
   grep -q '^SECTION .*#145' <<< "$_sel" \
     && check "and the section that scans comments for undated numbers is selected" ok \
     || check "and the section that scans comments for undated numbers is selected" "got=$_sel"
+  grep -q "^SUITE .*$(basename "$H")$" <<< "$_sel" \
+    && check "and the suite that drives this gate is not one of its own subjects" "it selected itself: $_sel" \
+    || check "and the suite that drives this gate is not one of its own subjects" ok
   grep -q '^SUITE tests/test-claude-sync.sh$' <<< "$_sel" \
     && check "and the four minute suite is never selected whole" "it would run whole: $_sel" \
     || check "and the four minute suite is never selected whole" ok

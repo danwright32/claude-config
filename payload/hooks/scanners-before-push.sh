@@ -37,8 +37,9 @@
 # green look identical otherwise (L98).
 #
 # MEASURED on this Mac 2026-09-21: the selection is five standalone suites plus one section of the
-# sync suite, and the whole gate takes 27 seconds. Running that sync suite whole instead would be
-# 268 seconds, which is why a suite with sections is run section wise.
+# sync suite. Run one after another the gate took 27 seconds; run at once, which is how it runs,
+# 13. Running that sync suite whole instead would be 268 seconds, which is why a suite with
+# sections is run section wise.
 #
 # Override: SKIP_SCANNERS_CHECK=1 git push ...   Explain why to the user first, never silently.
 
@@ -55,6 +56,20 @@ cwd="${parsed#*$'\x1f'}"
 ps_is_git_push "$cmd" || exit 0
 ps_has_override "$cmd" SKIP_SCANNERS_CHECK && exit 0
 
+# A gate that runs suites cannot run the suite that drives the gate, or it re-enters itself for
+# ever: a script that finds its subjects by a marker matches itself, because it has to name the
+# marker (L245). Measured 2026-09-21: this fanned out to dozens of processes and took the machine
+# to a load average of 135 before it was killed.
+#
+# Bounded by an exported marker rather than by excluding a filename, because the next suite to
+# name the marker will not be that file. Anything started underneath this gate finds it set and
+# refuses, whatever it is.
+if [ -n "${SCANNERS_GATE_RUNNING:-}" ]; then
+  echo "scanners-before-push: already running inside this gate, so this nested push is not gated again." >&2
+  exit 0
+fi
+export SCANNERS_GATE_RUNNING=1
+
 repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
@@ -70,9 +85,13 @@ scanners=""
 while IFS= read -r s; do
   [ -n "$s" ] || continue
   [ -f "$s" ] || continue
-  # The pathspec glob is what distinguishes a suite scanning the TREE from one running git against
-  # a fixture repository it built itself.
   grep -q "ls-files" "$s" 2>/dev/null || continue
+  # A suite that DRIVES this gate is not a subject of it. It matches the marker because its
+  # fixtures have to contain one, and running it re-enters this gate once per fixture. Recognised
+  # by the fact that it names this file, so a second suite written to test this gate later is
+  # excluded on the same ground rather than needing to be remembered (L96). The exported marker
+  # above still bounds anything that re-enters by another route.
+  grep -q "$(basename "${BASH_SOURCE[0]}")" "$s" 2>/dev/null && continue
   scanners="$scanners$s"$'\n'
 done <<EOF
 $suites
@@ -84,39 +103,71 @@ if [ -z "$scanners" ]; then
   exit 0
 fi
 
-# Run one suite, or one suite's scanning sections where it supports being run that way. Prints
-# nothing on success: a gate that is happy should be quiet, and what it covered is printed once at
-# the end instead.
-failed=""
-ran=""
-run_one(){           # $1 = the suite path
-  local s="$1" out rc sec
+# Run one suite, or one suite's scanning sections where it supports being run that way. Each run
+# writes its own output and its own exit code to its own file, because they all run AT ONCE: five
+# suites that share nothing are five lots of wall clock a push waits through for no reason (L302).
+#
+# Prints nothing on success: a gate that is happy should be quiet, and what it covered is printed
+# once at the end instead.
+_sc_work="$(mktemp -d "${TMPDIR:-/tmp}/scanners-before-push.XXXXXXXX")" || exit 0
+trap 'rm -rf "$_sc_work"' EXIT
+_sc_n=0
+
+start_one(){         # $1 = the suite path   $2 = a section, or empty
+  _sc_n=$(( _sc_n + 1 ))
+  local out="$_sc_work/$_sc_n"
+  printf '%s\n%s\n' "$1" "${2:-}" > "$out.what"
+  if [ -n "${2:-}" ]; then
+    ( SECTION_ONLY="$2" bash "$1" > "$out.out" 2>&1; printf '%s' "$?" > "$out.rc" ) &
+  else
+    ( bash "$1" > "$out.out" 2>&1; printf '%s' "$?" > "$out.rc" ) &
+  fi
+  return 0
+}
+
+while IFS= read -r s; do
+  [ -n "$s" ] || continue
   if grep -q 'SECTION_ONLY' "$s" 2>/dev/null; then
     # Only the sections that scan. The heading a scan sits under is read from the file, so a
     # section added later is covered the day it lands.
-    local sections
     sections="$(awk "/^section \"/{sec=\$0} /ls-files '\*/{ if (sec != \"\") print sec }" "$s" 2>/dev/null \
-                | sed 's/^section "//; s/"$//' | sort -u)"
-    [ -n "$sections" ] || return 0
+                | sed "s|^section \"||; s|\"$||" | sort -u)"
+    [ -n "$sections" ] || continue
     while IFS= read -r sec; do
       [ -n "$sec" ] || continue
-      out="$(SECTION_ONLY="$sec" bash "$s" 2>&1)"; rc=$?
-      ran="$ran$s ($sec)"$'\n'
-      [ "$rc" -eq 0 ] || failed="$failed=== $s, section $sec ===
-$(printf '%s\n' "$out" | awk '/^FAIL|^not ok/ { if (n++ < 10) print }')
-"
+      start_one "$s" "$sec"
     done <<SECTIONS
 $sections
 SECTIONS
-    return 0
+  else
+    start_one "$s" ""
   fi
-  out="$(bash "$s" 2>&1)"; rc=$?
-  ran="$ran$s"$'\n'
-  [ "$rc" -eq 0 ] || failed="$failed=== $s ===
-$(printf '%s\n' "$out" | awk '/^FAIL|^not ok/ { if (n++ < 10) print }')
+done <<EOF
+$scanners
+EOF
+
+wait
+
+# Read every result back. A run whose exit code was never written did not finish saying anything,
+# and that is not a pass: it is a scanner whose verdict is missing, which must not read as a clean
+# one (L98).
+failed=""
+ran=0
+_sc_i=1
+while [ "$_sc_i" -le "$_sc_n" ]; do
+  _sc_what="$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
+  ran=$(( ran + 1 ))
+  if [ ! -f "$_sc_work/$_sc_i.rc" ]; then
+    failed="$failed=== $_sc_what ===
+this scanner never reported an exit code, so its verdict is missing rather than clean
 "
-  return 0
-}
+  elif [ "$(cat "$_sc_work/$_sc_i.rc" 2>/dev/null)" != "0" ]; then
+    failed="$failed=== $_sc_what ===
+$(awk '/^FAIL|^not ok/ { if (n++ < 10) print }' "$_sc_work/$_sc_i.out" 2>/dev/null)
+"
+  fi
+  _sc_i=$(( _sc_i + 1 ))
+done
 
 # What it WOULD run, without running any of it.
 if [ "${SCANNERS_LIST:-}" = "1" ]; then
@@ -134,16 +185,9 @@ LIST
   exit 0
 fi
 
-while IFS= read -r s; do
-  [ -n "$s" ] || continue
-  run_one "$s"
-done <<EOF
-$scanners
-EOF
-
 if [ -z "$failed" ]; then
   # What it covered, once, so the coverage of this gate is visible rather than assumed (L400).
-  printf 'scanners-before-push: %s whole tree scan(s) passed before this push.\n' "$(printf '%s' "$ran" | grep -c .)" >&2
+  printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once.\n' "$ran" >&2
   exit 0
 fi
 
