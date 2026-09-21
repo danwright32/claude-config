@@ -297,6 +297,79 @@ o16="$(fire "$R15" "git push")"; c16=$?
 case "$o16" in *"not a number"*) check "a floor that is not a number is said, not read as zero" ok ;;
   *) check "a floor that is not a number is said, not read as zero" "exit=$c16 out=$o16" ;; esac
 
+# --- a scanner whose INPUTS have not changed since it passed is not run again (claude-config#531).
+#     Measured 2026-09-21: the scanners are 15.3 of the 20.1 seconds a push waits, and they re-read
+#     the whole repository on every push even when nothing they read has changed, which is most
+#     pushes. Proved by a scanner that APPENDS a line every time it actually runs, so a skip is a
+#     line that did not appear rather than a message that says one did not (L1).
+SKIPSTATE="$TMPROOT/skip-state"
+fire_skip(){ # $1 = repo  $2 = command
+  printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$2" "$1" \
+    | SCANNERS_STATE_DIR="$SKIPSTATE" bash "$H" 2>&1
+}
+R17="$(mkrepo unchanged)"
+RAN="$TMPROOT/unchanged-ran"
+cat > "$R17/payload/hooks/test-iota.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+echo ran >> "$RAN"
+exit 0
+EOF
+chmod +x "$R17/payload/hooks/test-iota.sh"
+commit_all "$R17"
+o18="$(fire_skip "$R17" "git push")"
+o19="$(fire_skip "$R17" "git push")"
+[ "$(grep -c . "$RAN" 2>/dev/null || echo 0)" = "1" ] \
+  && check "a scanner is not run again when nothing it reads has changed" ok \
+  || check "a scanner is not run again when nothing it reads has changed" "it ran $(grep -c . "$RAN" 2>/dev/null || echo 0) time(s)"
+case "$o19" in
+  *skip*|*"already passed"*) check "and the gate says so rather than reporting a scan it did not make" ok ;;
+  *) check "and the gate says so rather than reporting a scan it did not make" "out=$o19" ;;
+esac
+
+# When EVERY scanner is skipped, nothing was scanned at this moment, and the line must say that
+# rather than "0 scans passed", which reads as a clean run over nothing (L98).
+case "$o19" in
+  *"nothing was scanned"*|*"scanned nothing"*) check "a push where every scanner was skipped says nothing was scanned now" ok ;;
+  *) check "a push where every scanner was skipped says nothing was scanned now" "out=$o19" ;;
+esac
+
+# A COMMIT changes what the scanners read, so they run again.
+printf 'x\n' > "$R17/newfile.sh"; commit_all "$R17"
+o20="$(fire_skip "$R17" "git push")"
+[ "$(grep -c . "$RAN" 2>/dev/null || echo 0)" = "2" ] \
+  && check "a commit makes it run again" ok \
+  || check "a commit makes it run again" "it ran $(grep -c . "$RAN" 2>/dev/null || echo 0) time(s)"
+
+# So does a file that is written and NOT committed, which is the file most likely to be wrong and
+# the one the scanners were taught to read in #522.
+printf 'y\n' > "$R17/draft.sh"
+o21="$(fire_skip "$R17" "git push")"
+[ "$(grep -c . "$RAN" 2>/dev/null || echo 0)" = "3" ] \
+  && check "an uncommitted file makes it run again" ok \
+  || check "an uncommitted file makes it run again" "it ran $(grep -c . "$RAN" 2>/dev/null || echo 0) time(s)"
+
+# A scanner that FAILED is never skipped: only a pass is worth remembering, or a failure would be
+# skipped past on the very next push (L98).
+R18="$(mkrepo failsagain)"
+FRAN="$TMPROOT/fails-ran"
+cat > "$R18/payload/hooks/test-kappa.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+echo ran >> "$FRAN"
+echo "FAIL: kappa says no"
+exit 1
+EOF
+chmod +x "$R18/payload/hooks/test-kappa.sh"
+commit_all "$R18"
+o22="$(fire_skip "$R18" "git push")"
+o23="$(fire_skip "$R18" "git push")"
+[ "$(grep -c . "$FRAN" 2>/dev/null || echo 0)" = "2" ] \
+  && check "a scanner that failed is run again on the next push" ok \
+  || check "a scanner that failed is run again on the next push" "it ran $(grep -c . "$FRAN" 2>/dev/null || echo 0) time(s)"
+case "$o23" in *kappa*) check "and still blocks the push" ok ;;
+  *) check "and still blocks the push" "out=$o23" ;; esac
+
 # --- the selection against THIS repository, read rather than assumed. Fixtures can only confirm
 #     the rule as written; what matters is which real suites it picks, and above all that it never
 #     picks the four minute suite as a whole (measured 2026-09-21: the selection below runs in 27

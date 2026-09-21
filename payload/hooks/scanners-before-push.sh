@@ -204,7 +204,60 @@ _sc_work="$(mktemp -d "${TMPDIR:-/tmp}/scanners-before-push.XXXXXXXX")" || exit 
 trap 'rm -rf "$_sc_work"' EXIT
 _sc_n=0
 
+# SKIPPING A SCANNER WHOSE INPUTS HAVE NOT CHANGED (claude-config#531). Measured 2026-09-21: the
+# scanners are 15.3 of the 20.1 seconds a push waits, every other gate costs 0.3, and they re-read
+# the whole repository on every push even when nothing they read has changed, which is most pushes.
+#
+# THE KEY is what the scanners actually read: the commit tree (which holds every tracked file, the
+# scanners' own source included, so an edited scanner keys differently) plus a digest of the files
+# that are staged or untracked, which #522 taught them to read and which change without a commit.
+# Computing it is two git calls and a hash of a handful of files, far cheaper than the scan it
+# saves, which is the test that decides whether a cache like this is worth having at all (L431).
+#
+# MEASURED on this Mac 2026-09-21: 14.0 seconds cold against 0.6 with every scanner skipped. The
+# saving lands on a REPEAT attempt, a push blocked by another gate and tried again, because a push
+# that follows a fresh commit changes the tree and pays in full.
+#
+# ONLY A PASS IS REMEMBERED. A scanner that failed runs again on the next push, or a failure would
+# be skipped past by the very gate that found it (L98).
+#
+# WHAT IT CANNOT SEE, said plainly: a scanner that reads something OUTSIDE this repository (the
+# installed config, a machine setting, the clock) can change its verdict with the key unchanged, and
+# would be skipped. None of the scanners here does that today. The skip is announced with the number
+# skipped, so a run that scanned nothing never reads as a clean scan of everything.
+_sc_state_dir="${SCANNERS_STATE_DIR:-$HOME/.claude/state/scanners-passed}"
+_sc_key=""
+_sc_tree="$(git rev-parse HEAD^{tree} 2>/dev/null || true)"
+if [ -n "$_sc_tree" ]; then
+  _sc_uncommitted_digest="$( { bash "$REPO_FILES" --uncommitted . 2>/dev/null | while IFS= read -r _u; do
+        [ -n "$_u" ] || continue
+        printf '%s ' "$_u"; shasum -a 256 "$_u" 2>/dev/null | awk '{print $1}'
+      done; } | shasum -a 256 2>/dev/null | awk '{print $1}')"
+  _sc_key="$_sc_tree-${_sc_uncommitted_digest:-none}"
+fi
+_sc_repo_key="$(printf '%s' "$(git remote get-url origin 2>/dev/null || pwd -P)" | shasum -a 256 2>/dev/null | awk '{print $1}')"
+_sc_passed_file="$_sc_state_dir/$_sc_repo_key.txt"
+_sc_skipped=0
+_sc_passed_now=""
+
+_sc_already_passed(){   # $1 = the scanner, $2 = its section or empty -> 0 when this key passed before
+  [ -n "$_sc_key" ] || return 1
+  [ -f "$_sc_passed_file" ] || return 1
+  case "
+$(cat "$_sc_passed_file" 2>/dev/null)
+" in *"
+$_sc_key $1 $2
+"*) return 0 ;; esac
+  return 1
+}
+
 start_one(){         # $1 = the suite path   $2 = a section, or empty
+  if _sc_already_passed "$1" "${2:-}"; then
+    _sc_skipped=$(( _sc_skipped + 1 ))
+    _sc_passed_now="$_sc_passed_now$_sc_key $1 ${2:-}
+"
+    return 0
+  fi
   _sc_n=$(( _sc_n + 1 ))
   local out="$_sc_work/$_sc_n"
   printf '%s\n%s\n' "$1" "${2:-}" > "$out.what"
@@ -245,6 +298,12 @@ _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
   _sc_what="$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
   ran=$(( ran + 1 ))
+  _sc_rc_now="$(cat "$_sc_work/$_sc_i.rc" 2>/dev/null || printf 'missing')"
+  if [ "$_sc_rc_now" = "0" ] && [ -n "$_sc_key" ]; then
+    # Only a PASS is remembered, and it is remembered against the key it passed on.
+    _sc_passed_now="$_sc_passed_now$_sc_key $(head -1 "$_sc_work/$_sc_i.what" 2>/dev/null) $(sed -n 2p "$_sc_work/$_sc_i.what" 2>/dev/null)
+"
+  fi
   if [ ! -f "$_sc_work/$_sc_i.rc" ]; then
     failed="$failed=== $_sc_what ===
 this scanner never reported an exit code, so its verdict is missing rather than clean
@@ -257,9 +316,26 @@ $(awk '/^FAIL|^not ok/ { if (n++ < 10) print }' "$_sc_work/$_sc_i.out" 2>/dev/nu
   _sc_i=$(( _sc_i + 1 ))
 done
 
+# What passed on this key, written only when nothing failed, so a run with a failure in it never
+# lets a sibling be skipped on the strength of a push that was blocked.
+if [ -z "$failed" ] && [ -n "$_sc_key" ] && [ -n "$_sc_passed_now" ]; then
+  if mkdir -p "$_sc_state_dir" 2>/dev/null; then
+    printf '%s' "$_sc_passed_now" > "$_sc_passed_file" 2>/dev/null || true
+  fi
+fi
+
 if [ -z "$failed" ]; then
   # What it covered, once, so the coverage of this gate is visible rather than assumed (L400).
-  printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones%s.\n' "$ran" "${uncommitted_n:-0}" "$_sc_floor_note" >&2
+  if [ "$ran" -eq 0 ] && [ "$_sc_skipped" -gt 0 ]; then
+    # Every scanner was skipped, so nothing was scanned at this moment. Said in those words: a line
+    # reading "0 scans passed" is what a run that scanned nothing and a clean tree have in common
+    # (L98).
+    printf 'scanners-before-push: nothing was scanned for this push. All %s whole tree scan(s) had already passed on exactly this tree and these uncommitted files%s.\n' "$_sc_skipped" "$_sc_floor_note" >&2
+  elif [ "$_sc_skipped" -gt 0 ]; then
+    printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones%s. %s more were skipped, having already passed on exactly this tree and these uncommitted files.\n' "$ran" "${uncommitted_n:-0}" "$_sc_floor_note" "$_sc_skipped" >&2
+  else
+    printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones%s.\n' "$ran" "${uncommitted_n:-0}" "$_sc_floor_note" >&2
+  fi
   exit 0
 fi
 

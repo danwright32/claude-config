@@ -367,6 +367,13 @@ where any speed work belongs (L299). Two things the timing showed that no timeou
   it did not make on either push of 2026-09-21, because the change carried a test. The gate is cheap when the answer is obvious; the
   declared ceiling is for the case where it asks.
 
+A scanner that already passed on exactly this tree and these uncommitted files is not run again
+(#531). Measured on 2026-09-21: 14.0 seconds cold, 0.6 seconds when nothing it reads has changed.
+That saving lands on a REPEAT attempt, a push blocked by another gate and tried again, because a
+push that follows a fresh commit changes the tree and pays in full. Only a pass is remembered, so a
+failure is never skipped past, and the gate says when it scanned nothing rather than reporting zero
+scans as a clean run.
+
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
 
