@@ -2015,9 +2015,13 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 # machine. Every reading below is at FOUR shards, because the prelude runs inside each shard and
 # every copy is counted, so a total at another shard count is a different quantity.
 #
+# Every reading is in tests/section-time-readings.tsv, which grows, and the section below holds
+# this paragraph to it: the figures quoted here are recomputed from that record and compared, so a
+# new reading appended there fails the suite until this is updated to match (#520).
+#
 #   As found, with another project's Xcode suite and a backup client running:
-#     968s, 1139s and 898s. Median 968s, 38% of the budget, at an ambient CPU of 347% to 575% of
-#     one core and a load average reaching 98.
+#     1034s, 968s, 1139s and 898s. Median 968s, 38% of the budget, at an ambient CPU of 347% to
+#     575% of one core and a load average reaching 98.
 #   In a quiet window:
 #     866s, 860s and 846s. Median 860s, 34% of the budget, at an ambient CPU of 202% to 410% and a
 #     load average of 10 to 16.
@@ -14386,6 +14390,66 @@ rm -f "$_HDPOS"
 _hd_prelude_n="$(printf '%s' "$_hd_list" | grep -nF -- "$SUITE_PRELUDE_END" | awk -F: 'NR==1{print $1}')"
 check "#140 the prelude really is the first four sections, as two comments say" \
   "[ \"\${_hd_prelude_n:-0}\" -eq 4 ]"
+
+section "== the budget's prose agrees with the readings it was measured from (#520) =="
+# The margin against the section time budget is recorded as a paragraph above
+# SUITE_WORK_BUDGET_PCT, and a paragraph is exactly the shape this repo has watched go 2.3x stale
+# in nine days with nothing able to tell (#41, L316). The readings it was written from now live
+# beside the suite in a record that grows, and this holds the prose to them: the numbers it quotes
+# are RECOMPUTED here from that record and compared, so a sentence can no longer drift from the
+# data it claims to summarise, and a fresh reading appended to the record fails this until the
+# prose is updated to match.
+_sr_file="$(dirname "$SCRIPT")/tests/section-time-readings.tsv"
+check "#520 the readings the budget's prose came from are recorded" "[ -s '$_sr_file' ]"
+# A record that cannot be read has measured nothing, and nothing must not read as agreement (L98).
+_sr_rows="$(awk -F'\t' 'NR > 1 && $3 != "" { n++ } END { print n + 0 }' "$_sr_file" 2>/dev/null)"
+check "#520 and it holds readings rather than only a header" "[ \"\${_sr_rows:-0}\" -ge 3 ]"
+
+# The prose, read from the file this suite IS. Everything below is derived from these two, never
+# written out again here.
+_sr_prose="$(awk '/^# MEASURED AGAINST THAT BUDGET/{p=1} p{print} p && /^SUITE_WORK_BUDGET_PCT=/{exit}' "$SCRIPT_SELF")"
+check "#520 the prose that quotes those readings is where this expects it" \
+  "[ -n \"\$_sr_prose\" ]"
+
+# Median and extremes per arm, by the same convention the tool that took them uses.
+_sr_stat(){   # $1 = arm  $2 = one of median, lo, hi
+  awk -F'\t' -v arm="$1" -v want="$2" '
+    NR > 1 && $3 == arm { v[++n] = $4 + 0 }
+    END {
+      if (n == 0) { print ""; exit }
+      for (i = 1; i < n; i++) for (j = i + 1; j <= n; j++) if (v[j] < v[i]) { t = v[i]; v[i] = v[j]; v[j] = t }
+      if (want == "lo") print v[1]
+      else if (want == "hi") print v[n]
+      else print v[int((n + 1) / 2)]
+    }' "$_sr_file" 2>/dev/null
+}
+for _sr_arm in as-found quiet; do
+  _sr_med="$(_sr_stat "$_sr_arm" median)"
+  _sr_lo="$(_sr_stat "$_sr_arm" lo)"
+  _sr_hi="$(_sr_stat "$_sr_arm" hi)"
+  check "#520 the record holds readings for the $_sr_arm arm" "[ -n '$_sr_med' ]"
+  # Each number has to appear in the prose. Matched with a non digit either side, so 86 is not
+  # answered by 866 and a figure that merely contains another is not mistaken for it (L178).
+  #
+  # These comparisons run HERE rather than inside an expression the harness evaluates later, so
+  # every variable in them is expanded now. Written with the deferred form's escaping they read
+  # as passing while comparing the literal text of a variable name (measured: six did).
+  for _sr_pair in "median:$_sr_med" "lowest:$_sr_lo" "highest:$_sr_hi"; do
+    _sr_what="${_sr_pair%%:*}"; _sr_num="${_sr_pair#*:}"
+    case "$_sr_prose" in
+      *[!0-9]"${_sr_num}"s*) _sr_hit=yes ;;
+      *) _sr_hit=no ;;
+    esac
+    check "#520 the prose quotes the $_sr_what $_sr_arm reading (${_sr_num}s)" "[ '$_sr_hit' = yes ]"
+  done
+done
+
+# Every reading was judged against the budget this suite actually sets, so a record carrying a
+# reading from another budget is comparing two different things (L220).
+_sr_budget=$(( SUITE_TIMEOUT * SUITE_WORK_BUDGET_PCT / 100 ))
+_sr_other="$(awk -F'\t' -v b="$_sr_budget" 'NR > 1 && $5 != "" && $5 + 0 != b + 0 { print $1; exit }' "$_sr_file" 2>/dev/null)"
+check "#520 every recorded reading was judged against the budget this suite sets" \
+  "[ -z \"\$_sr_other\" ] || { echo \"    a reading taken at \$_sr_other was judged against a different budget than \${_sr_budget}s\" >&2; false; }"
 
 section "== a comment that quotes a measured number says when it was measured (#140, #145) =="
 # Six comments and one CI step quoted how many sections this suite has, and every number was from

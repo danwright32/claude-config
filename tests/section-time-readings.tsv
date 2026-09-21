@@ -1,0 +1,8 @@
+taken_utc	host	arm	section_seconds	budget_seconds	wall_seconds	ambient_mean_pct	ambient_max_pct	floor_pct	shards	load_max	ambient_rise_pct	busiest
+2026-09-21T02:51:41Z	Daniels-MacBook-Pro-2	as-found	1034	2520	272	550	827	675	4	57.16	-125	xctest(100%) bztransmit(94%) xcodebuild(28%) 
+2026-09-21T03:08:10Z	Daniels-MacBook-Pro-2	as-found	968	2520	283	492	1093	134	4	28.14	358	swift-frontend(72%) swift-frontend(72%) Python(72%) 
+2026-09-21T03:13:32Z	Daniels-MacBook-Pro-2	as-found	1139	2520	322	575	1169	134	4	97.71	441	swift-frontend(87%) Python(86%) swift-frontend(84%) 
+2026-09-21T03:17:54Z	Daniels-MacBook-Pro-2	as-found	898	2520	262	347	520	134	4	26.83	213	corespotlightd(89%) bztransmit(87%) Ovation(47%) 
+2026-09-21T03:22:36Z	Daniels-MacBook-Pro-2	quiet	866	2520	232	410	824	254	4	15.9	156	xctest(98%) swift-frontend(96%) corespotlightd(93%) 
+2026-09-21T03:26:28Z	Daniels-MacBook-Pro-2	quiet	860	2520	232	366	511	254	4	11.03	112	corespotlightd(109%) Python(100%) xctest(99%) 
+2026-09-21T03:30:19Z	Daniels-MacBook-Pro-2	quiet	846	2520	231	202	503	254	4	10.04	-52	mds_stores(144%) bztransmit(96%) xcresulttool(62%) 
