@@ -119,6 +119,16 @@
         ]
       },
       {
+        "matcher": "Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/scratchpad-subagent-gate.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "mcp__playwright__.*|mcp__plugin_playwright_playwright__.*",
         "hooks": [
           {
