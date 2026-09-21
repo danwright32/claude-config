@@ -41,8 +41,43 @@
 # (L90, L98). Exit 2 = a knob that decides what runs is not usable.
 set -uo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# --- run from a COPY of this file, so an edit to it cannot change a run already in flight
+# (claude-config#519).
+#
+# Bash reads a script incrementally as it executes it, seeking by byte offset, so a file edited
+# while a long run is executing it is misread from that point on, and the run can still finish and
+# report a result belonging to neither version. This tool runs for tens of minutes and this
+# checkout is shared by two sessions, so that is not a hypothetical: on 2026-09-20 a measurement
+# was thrown away for exactly this.
+#
+# MEASURE_SELF_HOME carries where the real file lives across the exec, because every default here
+# hangs off that directory and BASH_SOURCE after the exec names the copy. MEASURE_SELF_COPY is
+# both the guard against re-execing for ever and the path the copy is removed by.
+if [ -z "${MEASURE_SELF_COPY:-}" ] && [ -z "${MEASURE_NO_SELF_COPY:-}" ]; then
+  _sc_home="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  _sc_copy="$(mktemp "${TMPDIR:-/tmp}/measure-section-time-self.XXXXXXXX")" || {
+    printf 'measure-section-time: could not create a copy of this script to run from, so a run could be changed by an edit to it while it is in flight. Refusing rather than running exposed (claude-config#519).\n' >&2
+    exit 2
+  }
+  cat "${BASH_SOURCE[0]}" > "$_sc_copy" || { rm -f "$_sc_copy"; printf 'measure-section-time: could not write the copy of this script.\n' >&2; exit 2; }
+  MEASURE_SELF_COPY="$_sc_copy" MEASURE_SELF_HOME="$_sc_home" exec bash "$_sc_copy" "$@"
+fi
+
+# The copy goes when this ends, however it ends. Set before anything else can exit, and every
+# later trap on EXIT must call this too: a second trap on a signal REPLACES the first rather than
+# adding to it, which is how 38 copies were left behind on the day this was written.
+self_copy_clean(){ [ -z "${MEASURE_SELF_COPY:-}" ] || rm -f "$MEASURE_SELF_COPY"; }
+trap 'self_copy_clean' EXIT
+
+HERE="${MEASURE_SELF_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 REPO="$(cd "$HERE/.." && pwd)"
+
+# Says which file this process is actually executing, and runs nothing. The only way to see that
+# the copy is real is to ask, since a run that is working looks identical either way (L102).
+if [ "${1:-}" = "--self-path" ]; then
+  printf 'SELF-PATH %s\n' "${MEASURE_SELF_COPY:-${BASH_SOURCE[0]}}"
+  exit 0
+fi
 
 RUNS="${MEASURE_RUNS:-3}"
 LOAD_PROCS="${MEASURE_LOAD_PROCS:-0}"
@@ -177,8 +212,8 @@ stop_load(){
   for p in $LOAD_PIDS; do wait "$p" 2>/dev/null; done
   LOAD_PIDS=""
 }
-trap 'stop_load; exit 130' INT TERM
-trap 'stop_load' EXIT
+trap 'stop_load; self_copy_clean; exit 130' INT TERM
+trap 'stop_load; self_copy_clean' EXIT
 
 start_load(){
   local i=1

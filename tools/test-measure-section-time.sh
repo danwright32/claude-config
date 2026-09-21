@@ -423,6 +423,58 @@ o11="$(MEASURE_SUITE_SOURCE="$TMPROOT/not-there.sh" MEASURE_SLEEP_CMD="$SLEEPER"
 [ "$c11" -eq 2 ] && check "a missing suite source is refused, not defaulted" ok \
                  || check "a missing suite source is refused, not defaulted" "exit=$c11 out=$o11"
 
+# --- a run must be immune to its own source being edited underneath it (claude-config#519).
+#     Bash reads a script incrementally as it executes it, so an edit mid run changes what the
+#     rest of that run does, and the run can still finish and report a number belonging to neither
+#     version. Measured on 2026-09-20: a real measurement had to be thrown away for exactly this.
+#
+#     The mechanism is checked rather than the fault, because producing the fault on demand means
+#     racing a real run. What must hold is that the process is executing a COPY, that the copy is
+#     cleaned up, and that the original location is still known afterwards, since everything this
+#     tool derives by default hangs off where the real file lives.
+# Every seam is set even here, because until --self-path exists this call falls through to a
+# REAL run against the real suite, and a red that takes fifteen minutes is the trap this file's
+# own header warns about (L143, L284). Measured: it did exactly that once.
+#
+# The answer is read from a MARKED line rather than from the last line of output, because a tool
+# that does not understand --self-path prints its ordinary report, whose last line is a sentence
+# that is neither empty nor equal to the source path, and two of these three checks passed on it
+# (L159).
+_sp_out="$(run_m MEASURE_RUNS=1 MEASURE_SUITE_CMD="bash $S_OK" MEASURE_AMBIENT_CMD="$A_OK" \
+           bash "$M" --self-path 2>&1)"
+_sp="$(sed -n 's/^SELF-PATH //p' <<< "$_sp_out")"
+[ -n "$_sp" ] && [ "$_sp" != "$M" ] \
+  && check "a run executes a copy of the tool, not the tool" ok \
+  || check "a run executes a copy of the tool, not the tool" "got=$_sp"
+case "$_sp" in
+  "${TMPDIR:-/tmp}"*|/tmp/*|/var/folders/*) check "and the copy lives in a throwaway directory" ok ;;
+  *) check "and the copy lives in a throwaway directory" "got=$_sp" ;;
+esac
+if [ -n "$_sp" ] && [ ! -e "$_sp" ]; then
+  check "and the copy is removed when the run ends" ok
+else
+  check "and the copy is removed when the run ends" "path=$_sp still there or never reported"
+fi
+
+# --- and a NORMAL run removes it too. The check above exits early, before the tool installs the
+#     trap that stops any load it started, and a second trap on EXIT REPLACES the first rather
+#     than adding to it, so the early exit path is the one place this could pass while every real
+#     run leaked a copy (L165).
+_leak_before="$(ls "${TMPDIR:-/tmp}"/measure-section-time-self.* 2>/dev/null | grep -c . || true)"
+run_m MEASURE_RUNS=1 MEASURE_SUITE_CMD="bash $S_OK" MEASURE_AMBIENT_CMD="$A_OK" bash "$M" >/dev/null 2>&1
+_leak_after="$(ls "${TMPDIR:-/tmp}"/measure-section-time-self.* 2>/dev/null | grep -c . || true)"
+[ "$_leak_after" -le "$_leak_before" ] \
+  && check "an ordinary run leaves no copy of the tool behind" ok \
+  || check "an ordinary run leaves no copy of the tool behind" "before=$_leak_before after=$_leak_after"
+
+# --- and the original directory survives the re-exec, or every default derived from where the
+#     real file sits (the suite it measures, and therefore the budget) resolves somewhere else.
+_bud="$(MEASURE_SLEEP_CMD="$SLEEPER" MEASURE_RUNS=1 MEASURE_AMBIENT_CMD="$A_OK" \
+        MEASURE_SUITE_CMD="bash $S_OK" bash "$M" 2>&1)"
+grep -q '2520' <<< "$_bud" \
+  && check "the budget still derives from the real suite after the re-exec" ok \
+  || check "the budget still derives from the real suite after the re-exec" "out=$_bud"
+
 # --- the record file, which is what makes the premise re-measurable later rather than a dated
 #     sentence somebody has to trust (L316).
 REC="$TMPROOT/readings.tsv"
