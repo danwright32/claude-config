@@ -144,6 +144,56 @@ LIST
   exit 0
 fi
 
+# THE FLOOR on how many scanners this repository expects to select (claude-config#530). The set is
+# derived rather than listed, which is right, and it can shrink to nothing without a word: on
+# 2026-09-21 a conversion moved the scanners off the text the installed gate keyed on, this gate
+# silently stopped selecting two of them, and two defects that both of them catch went to main. A
+# smaller number reads exactly like a healthy one (L98, L182), so the number is compared with one
+# the repository RECORDS, in .claude/scanners-floor.txt.
+#
+# It is a floor, not an equality: adding a scanner must never fail a push. Removing one deliberately
+# means lowering the recorded number in the same change, which is what keeps it a measurement rather
+# than a formality. A repository that records nothing is told what to record and not blocked, since
+# refusing a repo for lacking a file it never had stops work for no reason (L42).
+_sc_selected="$(printf '%s\n' "$scanners" | grep -c . || true)"
+_sc_floor_file="$repo_dir/.claude/scanners-floor.txt"
+_sc_floor=""
+_sc_floor_note=""
+if [ -f "$_sc_floor_file" ]; then
+  # The first line that is neither blank nor a comment, so the file can say what the number is for.
+  _sc_floor="$(awk '/^[[:space:]]*#/ { next } NF { print $1; exit }' "$_sc_floor_file" 2>/dev/null)"
+  case "$_sc_floor" in
+    ''|*[!0-9]*)
+      # Not a number is a refusal to JUDGE, never a silent zero, which would exempt the repository
+      # from the very check it recorded (L257).
+      echo "scanners-before-push: the floor in $_sc_floor_file is '$_sc_floor', which is not a number, so how many scanners this repository expects could not be read. It selected $_sc_selected. Write the expected count there, on its own line." >&2
+      _sc_floor="" ;;
+    *)
+      if [ "$_sc_selected" -lt "$_sc_floor" ]; then
+        {
+          echo "PUSH BLOCKED: this repository selects fewer whole tree scanners than it records."
+          echo ""
+          echo "It selected $_sc_selected and $_sc_floor_file records $_sc_floor. A scanner that stops"
+          echo "being selected is silent: the gate goes on reporting a clean run over a smaller set,"
+          echo "which is how two defects reached main on 2026-09-21 after a change moved two scanners"
+          echo "off the text this gate recognised them by."
+          echo ""
+          echo "What it selected:"
+          printf '%s\n' "$scanners" | sed 's/^/    /'
+          echo ""
+          echo "If a scanner was deliberately removed, lower the number in $_sc_floor_file in the"
+          echo "same change. If not, find which suite stopped being recognised."
+          echo ""
+          echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+        } >&2
+        exit 2
+      fi
+      _sc_floor_note=", meeting the floor of $_sc_floor this repository records" ;;
+  esac
+else
+  _sc_floor_note=", and no floor is recorded, so a scanner dropping out of this selection would be silent (write the expected count to $_sc_floor_file)"
+fi
+
 # Run one suite, or one suite's scanning sections where it supports being run that way. Each run
 # writes its own output and its own exit code to its own file, because they all run AT ONCE: five
 # suites that share nothing are five lots of wall clock a push waits through for no reason (L302).
@@ -209,7 +259,7 @@ done
 
 if [ -z "$failed" ]; then
   # What it covered, once, so the coverage of this gate is visible rather than assumed (L400).
-  printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones.\n' "$ran" "${uncommitted_n:-0}" >&2
+  printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones%s.\n' "$ran" "${uncommitted_n:-0}" "$_sc_floor_note" >&2
   exit 0
 fi
 

@@ -1,0 +1,6 @@
+# How many whole tree scanner suites scanners-before-push.sh expects to select in this repository.
+# It is a FLOOR: adding a scanner never fails a push, and removing one deliberately means lowering
+# this number in the same change. It exists because on 2026-09-21 a conversion moved the scanners
+# off the text the installed gate recognised them by, two of them stopped being selected in
+# silence, and two defects that both of them catch reached main (claude-config#530).
+6

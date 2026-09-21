@@ -237,6 +237,66 @@ o8="$(fire "$R6" "git push")"; c8=$?
   && check "the scanners run at once rather than in sequence" ok \
   || check "the scanners run at once rather than in sequence" "exit=$c8 out=$o8"
 
+# --- the FLOOR on how many scanners the selection holds (claude-config#530). The set is derived,
+#     which is right, and it can shrink to nothing without a word: on 2026-09-21 a conversion moved
+#     the scanners off the text the installed gate keyed on, it silently stopped selecting two of
+#     them, and two defects both of them catch went to main. A smaller number reads exactly like a
+#     healthy one (L98, L182).
+R12="$(mkrepo floorshort)"; add_scanner "$R12" alpha 0; commit_all "$R12"
+mkdir -p "$R12/.claude"; printf '3\n' > "$R12/.claude/scanners-floor.txt"
+git -C "$R12" add -A >/dev/null 2>&1; git -C "$R12" commit -q -m floor >/dev/null 2>&1
+o13="$(fire "$R12" "git push")"; c13=$?
+[ "$c13" -eq 2 ] \
+  && check "a selection below the recorded floor blocks the push" ok \
+  || check "a selection below the recorded floor blocks the push" "exit=$c13 out=$o13"
+case "$o13" in
+  *"1"*"3"*) check "and says what it found against what it expects" ok ;;
+  *) check "and says what it found against what it expects" "out=$o13" ;;
+esac
+case "$o13" in
+  *scanners-floor.txt*) check "and names the file to lower when a scanner is deliberately removed" ok ;;
+  *) check "and names the file to lower when a scanner is deliberately removed" "out=$o13" ;;
+esac
+
+# A selection that MEETS its floor runs as usual, and the pass line says the floor was met, so the
+# number is visible rather than only checked.
+R13="$(mkrepo floorok)"; add_scanner "$R13" alpha 0; add_scanner "$R13" beta2 0; commit_all "$R13"
+mkdir -p "$R13/.claude"; printf '2\n' > "$R13/.claude/scanners-floor.txt"
+git -C "$R13" add -A >/dev/null 2>&1; git -C "$R13" commit -q -m floor >/dev/null 2>&1
+o14="$(fire "$R13" "git push")"; c14=$?
+[ "$c14" -eq 0 ] && check "a selection that meets its floor lets the push through" ok \
+  || check "a selection that meets its floor lets the push through" "exit=$c14 out=$o14"
+case "$o14" in *"floor"*) check "and the pass line says the floor was met" ok ;;
+  *) check "and the pass line says the floor was met" "out=$o14" ;; esac
+
+# A repository with no floor recorded is not blocked, and is told what to record, because a gate
+# that refuses a repo for lacking a file it never had stops work for no reason (L42).
+R14="$(mkrepo floornone)"; add_scanner "$R14" alpha 0; commit_all "$R14"
+o15="$(fire "$R14" "git push")"; c15=$?
+[ "$c15" -eq 0 ] && check "no recorded floor does not block the push" ok \
+  || check "no recorded floor does not block the push" "exit=$c15 out=$o15"
+case "$o15" in *"no floor"*|*"not recorded"*) check "but it says no floor is recorded, and how to record one" ok ;;
+  *) check "but it says no floor is recorded, and how to record one" "out=$o15" ;; esac
+
+# The floor file carries a line saying what the number is for, because a bare number in a file
+# nobody can read is one somebody lowers without knowing what it measured.
+R16="$(mkrepo floorcomment)"; add_scanner "$R16" alpha 0; add_scanner "$R16" beta2 0; commit_all "$R16"
+mkdir -p "$R16/.claude"; printf '# how many whole tree scanners this repo expects\n2\n' > "$R16/.claude/scanners-floor.txt"
+git -C "$R16" add -A >/dev/null 2>&1; git -C "$R16" commit -q -m floor >/dev/null 2>&1
+o17="$(fire "$R16" "git push")"; c17=$?
+[ "$c17" -eq 0 ] && case "$o17" in *"floor of 2"*) true ;; *) false ;; esac \
+  && check "a floor file may explain itself in a comment line" ok \
+  || check "a floor file may explain itself in a comment line" "exit=$c17 out=$o17"
+
+# A floor that is not a number is a refusal to judge rather than a silent zero, which would exempt
+# the repository from the check it recorded (L257).
+R15="$(mkrepo floorjunk)"; add_scanner "$R15" alpha 0; commit_all "$R15"
+mkdir -p "$R15/.claude"; printf 'lots\n' > "$R15/.claude/scanners-floor.txt"
+git -C "$R15" add -A >/dev/null 2>&1; git -C "$R15" commit -q -m floor >/dev/null 2>&1
+o16="$(fire "$R15" "git push")"; c16=$?
+case "$o16" in *"not a number"*) check "a floor that is not a number is said, not read as zero" ok ;;
+  *) check "a floor that is not a number is said, not read as zero" "exit=$c16 out=$o16" ;; esac
+
 # --- the selection against THIS repository, read rather than assumed. Fixtures can only confirm
 #     the rule as written; what matters is which real suites it picks, and above all that it never
 #     picks the four minute suite as a whole (measured 2026-09-21: the selection below runs in 27
