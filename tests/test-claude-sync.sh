@@ -14534,6 +14534,21 @@ SCAWK
 _sc_scan(){   # _sc_scan <file>... -> the undated measurements, one block per line
   for _sc_f in "$@"; do awk -v COUNT="$_SC_MEASURED" -f "$_SC_AWK" "$_sc_f"; done
 }
+# How a `<path>:<line>: text` row is SHOWN, written once for the shell and the markdown report
+# (#525). The path is made relative to the repo and never cut, and only the quoted text is held to
+# a budget, with the cut marked. Cutting the whole row let a long worktree path spend the budget on
+# its own, so the refusal named neither the line nor what it objected to (L11).
+_sc_show(){   # rows on stdin -> indented rows, each keeping its file and line whatever their length
+  awk -v root="${_sc_root:-}/" '{
+    if (root != "/" && index($0, root) == 1) $0 = substr($0, length(root) + 1)
+    if (match($0, /:[0-9]+: /)) {
+      head = substr($0, 1, RSTART + RLENGTH - 1); text = substr($0, RSTART + RLENGTH)
+      if (length(text) > 120) text = substr(text, 1, 120) "..."
+      $0 = head text
+    }
+    print "    " $0
+  }'
+}
 _sc_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
 # Every shell script and workflow the repo TRACKS, asked of git rather than named here. #140 read
 # three files, chosen because they were the three that talked about this suite's sections. That is
@@ -14558,7 +14573,7 @@ _sc_bad="$(printf '%s\n' "$_sc_files" | while IFS= read -r _sc_one; do
 done)"
 if [ -n "$_sc_bad" ]; then
   echo "  (#145 comment blocks quoting a measured number without saying when:)"
-  printf '%s\n' "$_sc_bad" | cut -c1-160 | sed 's/^/    /'
+  printf '%s\n' "$_sc_bad" | _sc_show
   echo "    Either say when it was measured, or say it is not measured if the code sets it."
 fi
 check "#145 no comment quotes a measured number without saying when" "[ -z \"\$_sc_bad\" ]"
@@ -14603,6 +14618,28 @@ done
 # check above passed (L178).
 check "#145 and reports those five and nothing else" \
   "[ \"\$(printf '%s' \"\$_sc_fix\" | grep -c . | tr -d ' ')\" = 5 ]"
+
+# The report has to name the line and quote the text under ANY path, because a refusal that cannot
+# say where it objected sends the reader to reverse engineer it (#525, L11). It used to cut each
+# whole `<path>:<line>: text` row to 160 characters, and from a worktree under a scratch folder the
+# path alone used the budget, so neither the line nor the text survived. The fixture lives under a
+# directory name long enough to spend that whole budget on its own.
+_SCLONG="$WORK/$(printf 'a-worktree-path-long-enough-to-spend-the-whole-budget-%.0s' 1 2 3 4)"
+mkdir -p "$_SCLONG"
+cp "$_SCFIX" "$_SCLONG/fixture.sh"
+_sc_long_shown="$(_sc_scan "$_SCLONG/fixture.sh" | _sc_show)"
+dbg "#525 long path report: $(printf '%s' "$_sc_long_shown" | tr '\n' '|')"
+check "#525 a report under a long path still names the line and quotes the text" \
+  "[ \"\$(printf '%s\n' \"\$_sc_long_shown\" | grep -c ':3: an undated block: the file has 12 sections' | tr -d ' ')\" = 1 ]"
+# And a path inside the repo is shown relative to it, which is the path a reader can open.
+_sc_rel_shown="$(printf '%s\n' "$_sc_root/tests/x.sh:7: some text" | _sc_show)"
+check "#525 a path inside the repo is shown relative to it" \
+  "[ \"\$(printf '%s' \"\$_sc_rel_shown\" | sed 's/^ *//')\" = 'tests/x.sh:7: some text' ]"
+# The TEXT is what gets cut, and it says so, so a long block is not mistaken for a complete one.
+_sc_cut_shown="$(printf 'f.sh:2: %s\n' "$(printf 'word %.0s' $(seq 1 60))" | _sc_show)"
+case "$_sc_cut_shown" in *"f.sh:2: word word"*"...") _sc_cut_ok=1 ;; *) _sc_cut_ok=0 ;; esac
+check "#525 only the quoted text is cut, and the cut is marked" "[ \"\$_sc_cut_ok\" = 1 ]"
+rm -rf "$_SCLONG"
 
 # And on a real file, because a scanner alive on a fixture it was handed can still be blind to the
 # files it actually reads: the zero above is only a measurement if planting one moves it (L182,
@@ -14678,7 +14715,7 @@ _sc_md_bad="$(printf '%s\n' "$_sc_md_files" | while IFS= read -r _sc_md_one; do
 done)"
 if [ -n "$_sc_md_bad" ]; then
   echo "  (#148 markdown blocks quoting a measured number without saying when:)"
-  printf '%s\n' "$_sc_md_bad" | cut -c1-160 | sed 's/^/    /'
+  printf '%s\n' "$_sc_md_bad" | _sc_show
 fi
 check "#148 no document quotes a measured number without saying when" "[ -z \"\$_sc_md_bad\" ]"
 
