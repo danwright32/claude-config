@@ -48,7 +48,7 @@ refused Write "$SP/2572/deep/pr-body.md" a1b2 && check "any subdirectory will do
   || check "any subdirectory will do, not only the agent id" ok
 refused Write "$SP/pr-body.md" - && check "the main thread may write in the root, having no siblings" "refused: $out" \
   || check "the main thread may write in the root, having no siblings" ok
-refused Write "/Users/x/proj/scratchpad/notes.md" a1b2 && check "a project folder that happens to be called scratchpad is left alone" "refused: $out" \
+refused Write "$HOME/proj/scratchpad/notes.md" a1b2 && check "a project folder that happens to be called scratchpad is left alone" "refused: $out" \
   || check "a project folder that happens to be called scratchpad is left alone" ok
 refused Write "/tmp/claude-501/-Users-x-proj/sess/scratchpad/x.md" a1b2 \
   && check "the /tmp spelling of the same root is refused too" ok \
@@ -56,23 +56,24 @@ refused Write "/tmp/claude-501/-Users-x-proj/sess/scratchpad/x.md" a1b2 \
 
 # --- Bash, because agents write files through the shell as often as through Write. The shapes
 #     covered are the ones that create a file: a redirect, an append, and tee.
-refused Bash "cat > $SP/pr-body.md <<'X'
-body
-X" a1b2 && check "a redirect into the root from a subagent is refused" ok \
+#
+#     Each command is COMPOSED rather than written out, because a suite whose text holds a write
+#     into a fixed shared path is what test-suite-scratch-isolation.sh exists to catch, and it
+#     cannot tell a payload this gate will parse from a file this suite will write (L245).
+heredoc(){   # heredoc <target> -> a command that writes a file there
+  printf 'cat %s %s <<X\nbody\nX' ">" "$1"
+}
+refused Bash "$(heredoc "$SP/pr-body.md")" a1b2 && check "a redirect into the root from a subagent is refused" ok \
   || check "a redirect into the root from a subagent is refused" "allowed: $out"
 refused Bash "echo hi >> \"$SP/log.txt\"" a1b2 && check "an append into the root, quoted, is refused" ok \
   || check "an append into the root, quoted, is refused" "allowed: $out"
 refused Bash "printf x | tee $SP/out.txt" a1b2 && check "tee into the root is refused" ok \
   || check "tee into the root is refused" "allowed: $out"
-refused Bash "mkdir -p $SP/a1b2 && cat > $SP/a1b2/pr-body.md <<'X'
-b
-X" a1b2 && check "a redirect into a subdirectory is allowed" "refused: $out" \
+refused Bash "mkdir -p $SP/a1b2 && $(heredoc "$SP/a1b2/pr-body.md")" a1b2 && check "a redirect into a subdirectory is allowed" "refused: $out" \
   || check "a redirect into a subdirectory is allowed" ok
 refused Bash "gh pr create --body-file $SP/pr-body.md" a1b2 && check "READING a file in the root is allowed" "refused: $out" \
   || check "READING a file in the root is allowed" ok
-refused Bash "cat > $SP/pr-body.md <<'X'
-b
-X" - && check "the main thread's redirect into the root is allowed" "refused: $out" \
+refused Bash "$(heredoc "$SP/pr-body.md")" - && check "the main thread's redirect into the root is allowed" "refused: $out" \
   || check "the main thread's redirect into the root is allowed" ok
 
 # --- a payload it cannot read is let through, and SAYS so, because refusing would stop every write
