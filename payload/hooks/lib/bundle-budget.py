@@ -174,6 +174,12 @@ def print_largest(rows):
         print(f"    {fmt(gz):>10}  {rel}")
 
 
+# Exit 4 says the bundle was NOT weighed, as distinct from weighed and found acceptable. Both let
+# a push through, and a caller that cannot tell them apart cannot say how often this guard has ever
+# reached a verdict, which is the whole question in claude-config#526 (L98, L557).
+NOT_WEIGHED = 4
+
+
 def main(argv):
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--repo", required=True)
@@ -202,7 +208,7 @@ def main(argv):
             print(f"bundle-budget: no client build output here ({SUPPORTED_TEXT}), so the bundle "
                   "weight was not measured. Run the build before pushing for this check to mean "
                   "anything.")
-        return 0
+        return NOT_WEIGHED
 
     label, source, rows = hit
     newest = max(os.stat(os.path.join(a.repo, r[2])).st_mtime for r in rows)
@@ -212,7 +218,7 @@ def main(argv):
         print(f"bundle-budget: the {label} build in {source} is stale (built {built}, HEAD "
               f"committed {committed}), so nothing was judged. Rebuild and push again for this "
               "check to mean anything.")
-        return 0
+        return NOT_WEIGHED
 
     total = sum(r[0] for r in rows)
     path = state_path(a.state_dir, a.remote)
@@ -222,7 +228,7 @@ def main(argv):
         print(f"bundle-budget: the recorded budget at {path} could not be read (it needs a "
               f"`total: <bytes>` line), so this push was not judged. Delete that file and the next "
               "push records afresh.")
-        return 0
+        return NOT_WEIGHED
 
     if status == "none":
         write_record(path, a.remote, total, source, "first measurement")

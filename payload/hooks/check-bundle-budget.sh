@@ -52,6 +52,19 @@
 #   weeks of pushes. The Slate main copy handed to this work had no build output, so the numbers
 #   come from the main checkout's build of 2026-09-06 rather than from HEAD.
 #
+# THE POSITIVE CONTROL (claude-config#526). Three days after this shipped, the state directory did
+# not exist on this Mac: the guard had never recorded a total for any repository, and every push
+# printed one of the skip lines above. Driven on 2026-09-21 against NurseDex, a non-Slate Next.js
+# repository here, with a fresh `next build`: the stale-build branch was what had been firing (its
+# .next was from 2026-09-04 against a HEAD of 2026-09-20), and after the build the hook recorded
+# 1,317,537 bytes gzipped from 87 chunks in .next/static/chunks. So the measurer, the freshness
+# test, the remote keying and the record all work end to end on a real repository.
+#
+# That second reading also puts the margins above in perspective: NurseDex is 3.4x Slate's 387,996
+# bytes, so 3% there is 39,526 bytes and a p90 chunk would pass. The margins are unchanged, since
+# two builds are still not a distribution (L147) and this is the second of the two; recalibrating
+# them against several measured builds is claude-config#528.
+#
 # Overrides, each good for ONE push and to be explained to the user first, never silently:
 #   ACCEPT_BUNDLE_GROWTH=1 git push ...      the growth is intended; record the new total and pass
 #   SKIP_BUNDLE_BUDGET_CHECK=1 git push ...  do not judge this push at all, and record nothing
@@ -116,7 +129,7 @@ cd "$repo_dir" 2>/dev/null || exit 0
 # repository with one bundle, and a repository that moves keeps its budget.
 remote="$(git remote get-url origin 2>/dev/null)"
 if [ -z "$remote" ]; then
-  echo "bundle-budget: this repository has no origin remote to key a budget on, so the bundle weight was not judged."
+  echo "bundle-budget: this repository has no origin remote to key a budget on, so the bundle weight was not judged.$(BUNDLE_BUDGET_STATE_DIR="${BUNDLE_BUDGET_STATE_DIR:-}" state_dir="${BUNDLE_BUDGET_STATE_DIR:-$HOME/.claude/state/bundle-budget}"; lifetime_note)"
   exit 0
 fi
 
@@ -129,14 +142,38 @@ esac
 
 state_dir="${BUNDLE_BUDGET_STATE_DIR:-$HOME/.claude/state/bundle-budget}"
 
+# HOW MANY REPOSITORIES THIS GUARD HAS EVER WEIGHED, said on every push it does NOT weigh
+# (claude-config#526). It shipped on 2026-09-18 and for three days the state directory did not
+# exist on this Mac at all: every push had found no build, found a stale one, or never reached the
+# measurer, and each of those printed a skip line indistinguishable from a working guard. A guard
+# that has never once reached a verdict is measuring nothing while reading as installed (L557), and
+# the count is the only thing that makes the zero visible.
+#
+# Not printed when the bundle WAS weighed: that line already says a verdict was reached, and a
+# count repeated on every push is the noise a reader learns to skip (L36).
+lifetime_note(){
+  local n
+  n="$(find "$state_dir" -name '*.txt' -type f 2>/dev/null | grep -c . || true)"
+  case "${n:-0}" in
+    0) printf ' This guard has never weighed any repository, so nothing here has ever been judged.' ;;
+    1) printf ' This guard has weighed 1 repository ever.' ;;
+    *) printf ' This guard has weighed %s repositories ever.' "$n" ;;
+  esac
+}
+
 out="$(python3 "$HOOK_DIR/lib/bundle-budget.py" --repo "$repo_dir" --head-time "$head_time" \
   --remote "$remote" --state-dir "$state_dir" $accept 2>&1)"; rc=$?
 
 case "$rc" in
   0)
-    # A pass, a first record, a skip or a stale build: one line each, on stdout, where a reader
-    # looking at the transcript finds it and the push goes ahead.
+    # A verdict was reached: a pass, a first record, an accepted or a recorded smaller total. One
+    # line, on stdout, where a reader looking at the transcript finds it, and the push goes ahead.
     [ -n "$out" ] && printf '%s\n' "$out"
+    exit 0 ;;
+  4)
+    # Nothing was weighed: no build output, a stale one, or a record that could not be read. The
+    # push goes ahead, and the line carries how many repositories have ever been weighed.
+    printf '%s%s\n' "${out:-bundle-budget: the bundle was not weighed.}" "$(lifetime_note)"
     exit 0 ;;
   2)
     {
@@ -154,6 +191,6 @@ case "$rc" in
     } >&2
     exit 2 ;;
   *)
-    echo "bundle-budget: the measurer could not run (exit $rc), so the bundle was not judged. It said: ${out:-nothing}"
+    echo "bundle-budget: the measurer could not run (exit $rc), so the bundle was not judged. It said: ${out:-nothing}$(lifetime_note)"
     exit 0 ;;
 esac

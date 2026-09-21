@@ -97,6 +97,11 @@ want_rc 0 "no build output lets the push through"
 want_says "no client build output" "no build output says what it could not measure"
 want_says "Run the build before pushing" "and says the build has to have run"
 [ "$(records)" = "0" ] && ok || bad "no build output must record nothing"
+# And it says how many repositories this guard has EVER weighed, because a guard that has never
+# once reached a verdict is measuring nothing while reading as installed (claude-config#526, L557).
+# For three days after it shipped the state directory did not exist on this Mac at all, and every
+# push printed a skip line that nobody reads twice.
+want_says "never weighed any repository" "a skip line says the guard has never weighed anything"
 
 # --- an unrecognised shape is refused by name, not guessed at -----------------------------------
 W="$(mk_repo "$WORKDIR/cra")"
@@ -189,6 +194,25 @@ want_rc 0 "a smaller bundle passes"
 want_says "shrank" "and says it shrank"
 lowered="$(record_total "$W")"
 if [ -n "$lowered" ] && [ "$lowered" -lt "$accepted" ]; then ok; else bad "a shrink must lower the record (was $accepted, now '$lowered')"; fi
+
+# --- the lifetime count, once there is something to count (claude-config#526) --------------------
+# A repository with no build, checked while another repository already has a record: the skip line
+# has to say one has been weighed, not none, or the count would say the same thing for ever and a
+# reader could not tell a guard that works from one that never has.
+W="$(mk_repo "$WORKDIR/counted-a")"
+chunk "$W" .next/static/chunks/a.js 40000 60
+run_hook "$W" "git push"
+want_rc 0 "a repository with a fresh build records"
+_bb_n="$(records)"
+[ "${_bb_n:-0}" -ge 1 ] && ok || bad "the state directory should hold records by now, it holds $_bb_n"
+W="$(mk_repo "$WORKDIR/counted-b")"
+run_hook "$W" "git push"
+want_says "weighed $_bb_n repositor" "a skip line counts the repositories weighed so far"
+want_silent_on "never weighed any" "and does not still say none have been weighed"
+W="$(mk_repo "$WORKDIR/counted-c")"
+chunk "$W" .next/static/chunks/c.js 40000 60
+run_hook "$W" "git push"
+want_silent_on "This guard has weighed" "a line that DID weigh the bundle does not repeat the lifetime count"
 
 # --- a stale build is reported and not judged ---------------------------------------------------
 W="$(mk_repo "$WORKDIR/stale")"
