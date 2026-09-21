@@ -7009,6 +7009,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   to name the right route, and says nothing about which outcomes must re-read at all.)
   SHORT: A screen that refreshes only when an action SUCCEEDS contradicts its message on outcomes where the record may have changed, so decide per outcome.
 
+- **L722. A guard that hides a surface because the person ALREADY completed that action must compare
+  its marker against the CURRENT request, never only against a time window**, because somebody whose
+  situation has changed since is refused the one path that would serve them, and the refusal is
+  indistinguishable from the guard working correctly.
+  (slate#2593, 2026-09-21: trypennie's booking results page calls `useBookingRedirect`, which reads a
+  `booked_time` value out of browser storage and replaces the page with an info screen carrying no
+  calendar whenever anything was booked in the last 14 days. A lead who had booked four minutes
+  earlier re-submitted the form with a higher debt amount, which correctly re-scored them from Very
+  High to Ultra High, and they were moved off the correctly parameterised `xbc=512` page 342 ms after
+  landing on it. They then booked twice through a surface carrying no routing values, and cal.com's
+  catch-all put them with Low tier agents both times. Roughly 20 to 30 sessions a day meet that
+  bounce and it only harms the ones whose situation changed, which is why it read as working.)
+  SHORT: A guard hiding a surface because the person ALREADY did that action must compare its marker against the CURRENT request, never only a time window.
+
 
 
 ## External systems
