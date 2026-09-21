@@ -175,12 +175,22 @@ REPO="$(cd "$DIR/../.." && pwd -P)"
 # so it is compared with the directory rather than taken as present.
 REPO_TOP="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_TOP" ] && REPO_TOP="$(cd "$REPO_TOP" 2>/dev/null && pwd -P || true)"
+# Every file in the repository, committed or not, listed ONCE for both scans below (#522). An empty
+# listing is a scan that read nothing, and nothing must not read as a clean tree (L98): it is what
+# a missing lister produced the first time this was converted, and both scans passed.
+REPO_LIST=""
+if [ -n "$REPO_TOP" ] && [ "$REPO_TOP" = "$REPO" ]; then
+  REPO_LIST="$(bash "$DIR/lib/repo-files.sh" "$REPO" 2>&1)" || REPO_LIST=""
+  [ -n "$REPO_LIST" ] \
+    && check "the repository's files were listed to be read" ok \
+    || check "the repository's files were listed to be read" "lib/repo-files.sh gave nothing for $REPO, so neither scan below read anything"
+fi
 if [ -n "$REPO_TOP" ] && [ "$REPO_TOP" = "$REPO" ]; then
   # Grepped FROM the repository. ls-files prints paths relative to it, and grep resolved them against
   # whatever directory the suite was started in, so run from anywhere but the root every file was
   # missing, the error went to /dev/null, and the guard reported a clean tree it had never read
   # (L98). Found by the worktree fixture below, whose control run passed when it had to fail.
-  offenders="$(cd "$REPO" && git ls-files -z \
+  offenders="$(cd "$REPO" && printf '%s\n' "$REPO_LIST" | tr '\n' '\0' \
       | xargs -0 grep -nE '\[ *-[nz] *"?\$\{[A-Za-z_][A-Za-z_0-9]*//' 2>/dev/null \
       | grep -vE ':[0-9]+: *#' || true)"
 else
@@ -238,6 +248,7 @@ if [ -z "${BLANK_CHECK_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
   # refuses to run without the helper, so the fixture carries the helper as well as the file.
   cp "$DIR/lib/suite-deadline.sh" "$WT_MAIN/payload/hooks/lib/suite-deadline.sh"
   cp "$DIR/lib/kill-tree.sh" "$WT_MAIN/payload/hooks/lib/kill-tree.sh"
+  cp "$DIR/lib/repo-files.sh" "$WT_MAIN/payload/hooks/lib/repo-files.sh"
   # Assembled, for the reason the planted file above is: written whole it is an occurrence here.
   printf '%s\n' '#!/usr/bin/env bash' 'y=""' "[ -z \"\${y${SS}[[:space:]]/}\" ] && echo blank" > "$WT_MAIN/claude-sync"
   git init -q "$WT_MAIN" 2>/dev/null
@@ -279,7 +290,7 @@ fi
 # Only readable where the repository is, for the reason the blank test above says so.
 GITDIR_PAT='(\[ *(! *)?-d|test +(! +)?-d|isdir\()[^]]{0,80}[/"'"'"']\.git["'"'"')]'
 if [ -n "$REPO_TOP" ] && [ "$REPO_TOP" = "$REPO" ]; then
-  gitdir_offenders="$(cd "$REPO" && git ls-files -z \
+  gitdir_offenders="$(cd "$REPO" && printf '%s\n' "$REPO_LIST" | tr '\n' '\0' \
       | xargs -0 grep -nE "$GITDIR_PAT" 2>/dev/null \
       | grep -vE ':[0-9]+: *#' || true)"
   case "$gitdir_offenders" in

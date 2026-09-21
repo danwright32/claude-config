@@ -78,7 +78,7 @@ while IFS= read -r rel; do
   grep -qF "$MARK passed=" "$f" || missing="$missing  $rel
 "
 done <<EOF
-$(git -C "$ROOT" ls-files 2>/dev/null || true)
+$(bash "$DIR/lib/repo-files.sh" "$ROOT" 2>/dev/null || true)
 EOF
 
 [ "$seen" -ge 10 ] \

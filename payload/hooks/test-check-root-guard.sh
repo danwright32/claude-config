@@ -172,7 +172,7 @@ mk test-git-guarded.sh '#!/usr/bin/env bash
 REPO="$(cd "$DIR/../.." && pwd -P)"
 REPO_TOP="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -n "$REPO_TOP" ] && [ "$REPO_TOP" = "$REPO" ]; then
-  offenders="$(cd "$REPO" && git ls-files)"
+  offenders="$(cd "$REPO" && git ls-files)" # tracked-only: the shape test-blank-check-cost.sh had, kept as it was
 else
   offenders="$(grep -rn x "$DIR")"
 fi'

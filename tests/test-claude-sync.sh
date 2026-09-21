@@ -14582,12 +14582,14 @@ _sc_show(){   # rows on stdin -> indented rows, each keeping its file and line w
   }'
 }
 _sc_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
-# Every shell script and workflow the repo TRACKS, asked of git rather than named here. #140 read
+# Every shell script and workflow the repo HOLDS, asked of git rather than named here. #140 read
 # three files, chosen because they were the three that talked about this suite's sections. That is
 # the hand written list this repo keeps removing: a file missing from it is exempt from the very
 # check meant to catch it, and the numbers #145 was opened about were in a fourth file nobody had
 # added (L96, L41).
-_sc_files="$(git -C "$_sc_root" ls-files '*.sh' '*.yml' '*.yaml' 2>/dev/null)"
+# Committed or not (#522): the file just written is the one most likely to carry an undated number,
+# and a scan of tracked files only would speak about it after it was committed rather than before.
+_sc_files="$(bash "$_sc_root/payload/hooks/lib/repo-files.sh" "$_sc_root" '*.sh' '*.yml' '*.yaml' 2>/dev/null)"
 _sc_n_files="$(printf '%s' "$_sc_files" | grep -c . || true)"
 # A scan handed no files reports nothing and reads as a clean tree (L98). The floor is a real
 # count rather than "more than zero", because one file coming back would also read as clean.
@@ -14733,7 +14735,7 @@ _sc_md_scan(){   # _sc_md_scan <file>... -> the undated measurements, one block 
 }
 # Root level markdown, asked of git and filtered by having no directory in its path, so a document
 # added beside README.md is covered on the day it lands and nothing here needs maintaining.
-_sc_md_files="$(git -C "$_sc_root" ls-files '*.md' 2>/dev/null | grep -v /)"
+_sc_md_files="$(bash "$_sc_root/payload/hooks/lib/repo-files.sh" "$_sc_root" '*.md' 2>/dev/null | grep -v /)"
 _sc_md_n="$(printf '%s' "$_sc_md_files" | grep -c . || true)"
 check "#148 the markdown scan has this repo's own documents to read" \
   "[ \"\${_sc_md_n:-0}\" -ge 3 ]"

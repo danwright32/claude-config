@@ -149,6 +149,64 @@ o7="$(fire "$R5" "git push")"; c7=$?
   && check "a newly committed scanner is run like any other" ok \
   || check "a newly committed scanner is run like any other" "exit=$c7 out=$o7"
 
+# --- a scanner that has NOT been committed is run too (claude-config#522). The gate used to pick its
+#     subjects from what git tracks, so a scanner just written was not run until the push after the
+#     one that added it, and a file just written was not read by the scanners that did run (L456).
+R7="$(mkrepo uncommitted)"; add_scanner "$R7" alpha 0; commit_all "$R7"
+add_scanner "$R7" epsilon 1
+o9="$(fire "$R7" "git push")"; c9=$?
+[ "$c9" -eq 2 ] && grep -q 'epsilon' <<< "$o9" \
+  && check "a scanner not yet committed is run like any other" ok \
+  || check "a scanner not yet committed is run like any other" "exit=$c9 out=$o9"
+
+# --- a scanner that lists the repository through lib/repo-files.sh, the one way scanners here do
+#     it now, is recognised as a scanner. Keyed only on the git command, the gate would stop seeing
+#     every suite that was converted.
+R8="$(mkrepo lister)"
+printf '#!/usr/bin/env bash\nbash "$LIB/repo-files.sh" . >/dev/null\necho "scanner zeta ran"\nexit 1\n' > "$R8/payload/hooks/test-zeta.sh"
+commit_all "$R8"
+o10="$(fire "$R8" "git push")"; c10=$?
+[ "$c10" -eq 2 ] && grep -q 'zeta' <<< "$o10" \
+  && check "a scanner that lists through repo-files.sh is recognised" ok \
+  || check "a scanner that lists through repo-files.sh is recognised" "exit=$c10 out=$o10"
+
+# --- and it says how many uncommitted files it read, because none and some are different
+#     situations that a bare pass line would make look the same.
+grep -q '0 uncommitted' <<< "$o1" \
+  && check "a clean tree's pass line says no uncommitted file was read" ok \
+  || check "a clean tree's pass line says no uncommitted file was read" "out=$o1"
+R9="$(mkrepo counted)"; add_scanner "$R9" alpha 0; commit_all "$R9"
+printf 'x\n' > "$R9/draft.sh"; printf 'x\n' > "$R9/draft2.sh"
+o11="$(fire "$R9" "git push")"; c11=$?
+[ "$c11" -eq 0 ] && grep -q '2 uncommitted' <<< "$o11" \
+  && check "and says how many it read when there are some" ok \
+  || check "and says how many it read when there are some" "exit=$c11 out=$o11"
+grep -q '2 uncommitted' <<< "$o9" \
+  && check "and a block says it too, so a draft can be told from committed work" "out=$o9" \
+  || { grep -q '1 uncommitted' <<< "$o9" \
+       && check "and a block says it too, so a draft can be told from committed work" ok \
+       || check "and a block says it too, so a draft can be told from committed work" "out=$o9"; }
+
+# --- a scanner whose COMMENT mentions this gate is still one of its subjects. Only a suite whose
+#     code names the gate drives it; a mention in prose used to drop the scanner silently.
+R11="$(mkrepo mentions)"
+printf '#!/usr/bin/env bash\n# written after %s went in\ngit ls-files >/dev/null\necho "scanner theta ran"\nexit 1\n' "$(basename "$H")" > "$R11/payload/hooks/test-theta.sh"
+commit_all "$R11"
+o12="$(fire "$R11" "git push")"; c12=$?
+[ "$c12" -eq 2 ] && grep -q 'theta' <<< "$o12" \
+  && check "a scanner that only mentions this gate in a comment is still run" ok \
+  || check "a scanner that only mentions this gate in a comment is still run" "exit=$c12 out=$o12"
+
+# --- listing the selection runs NONE of it. It used to be read after every scanner had already
+#     run, so asking what the gate covers cost exactly what the gate costs (L102).
+R10="$(mkrepo listonly)"
+printf '#!/usr/bin/env bash\ngit ls-files >/dev/null\n: > "%s/ran"\nexit 0\n' "$R10" > "$R10/payload/hooks/test-eta.sh"
+commit_all "$R10"
+_l="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"}' "$R10" | SCANNERS_LIST=1 bash "$H" 2>&1)"
+[ ! -e "$R10/ran" ] && grep -q '^SUITE payload/hooks/test-eta.sh$' <<< "$_l" \
+  && check "listing the selection names it without running it" ok \
+  || check "listing the selection names it without running it" "ran=$( [ -e "$R10/ran" ] && echo yes || echo no) out=$_l"
+
 # --- the scanners run AT ONCE, not one after another. Five suites that share nothing are five
 #     lots of wall clock a push waits through for no reason (L302). Measured on this Mac
 #     2026-09-21: 27 seconds in sequence, of which 21 was those five, against 13 run at once.
@@ -190,6 +248,11 @@ if [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
   [ "$(grep -c '^SUITE ' <<< "$_sel")" -ge 5 ] \
     && check "the real repo's standalone scanners are all selected" ok \
     || check "the real repo's standalone scanners are all selected" "got=$_sel"
+  for _want in test-pipefail-shortcircuit.sh test-repo-files.sh; do
+    grep -q "^SUITE payload/hooks/$_want\$" <<< "$_sel" \
+      && check "and $_want is among them" ok \
+      || check "and $_want is among them" "got=$_sel"
+  done
   grep -q '^SECTION .*#145' <<< "$_sel" \
     && check "and the section that scans comments for undated numbers is selected" ok \
     || check "and the section that scans comments for undated numbers is selected" "got=$_sel"

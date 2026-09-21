@@ -77,21 +77,33 @@ cd "$repo_dir" 2>/dev/null || exit 0
 # Not this repository, so there is nothing here this hook knows how to run.
 [ -f payload/hooks/run-all-tests.sh ] || exit 0
 
-# Every tracked suite that reads the repository's own tracked files. Read into a variable rather
-# than piped into a consumer that leaves early, which under pipefail reports a failure that never
-# happened (L183).
-suites="$(git ls-files '*test-*.sh' 2>/dev/null)"
+# Every suite that reads the repository's own files, committed or NOT (claude-config#522). Picked
+# from what git tracks, a scanner just written was not run until the push after the one that added
+# it, and it is the one most likely to be wrong (L456). Read into a variable rather than piped into
+# a consumer that leaves early, which under pipefail reports a failure that never happened (L183).
+#
+# A scanner is recognised by how it lists the repository: through lib/repo-files.sh, the one way
+# the scanners here do it, or by asking git directly, which a scanner elsewhere may still do.
+REPO_FILES="$HOOK_DIR/lib/repo-files.sh"
+SCANS='ls-files|repo-files[.]sh'
+suites="$(bash "$REPO_FILES" . '*test-*.sh' 2>/dev/null)"
+uncommitted_n="$(bash "$REPO_FILES" --uncommitted . 2>/dev/null | grep -c . || true)"
 scanners=""
 while IFS= read -r s; do
   [ -n "$s" ] || continue
   [ -f "$s" ] || continue
-  grep -q "ls-files" "$s" 2>/dev/null || continue
+  grep -qE "$SCANS" "$s" 2>/dev/null || continue
   # A suite that DRIVES this gate is not a subject of it. It matches the marker because its
   # fixtures have to contain one, and running it re-enters this gate once per fixture. Recognised
   # by the fact that it names this file, so a second suite written to test this gate later is
   # excluded on the same ground rather than needing to be remembered (L96). The exported marker
   # above still bounds anything that re-enters by another route.
-  grep -q "$(basename "${BASH_SOURCE[0]}")" "$s" 2>/dev/null && continue
+  #
+  # Only a line of CODE naming it counts. A comment that merely mentions this gate used to drop
+  # its suite from the gate's selection, silently, which is how the pipefail ratchet fell out of it
+  # the day a comment about this file was added there (claude-config#522).
+  _code="$(grep -v '^[[:space:]]*#' "$s" 2>/dev/null)"
+  case "$_code" in *"$(basename "${BASH_SOURCE[0]}")"*) continue ;; esac
   scanners="$scanners$s"$'\n'
 done <<EOF
 $suites
@@ -100,6 +112,30 @@ EOF
 scanners="${scanners%$'\n'}"
 if [ -z "$scanners" ]; then
   echo "scanners-before-push: found no scanner in this repository, which has the marker, so nothing was scanned before this push. That is not a clean run, it is an unmeasured one." >&2
+  exit 0
+fi
+
+# The sections of a suite that scan: those holding a listing asked for by GLOBBED pathspec. The
+# heading a scan sits under is read from the file, so a section added later is covered the day it
+# lands. Written once, for the run and for the list of what would run.
+scanning_sections(){   # $1 = a suite that supports SECTION_ONLY -> its scanning section titles
+  awk -v pat="(ls-files|repo-files[.]sh[^']*) '[*]" '/^section "/ { sec = $0 } $0 ~ pat { if (sec != "") print sec }' "$1" 2>/dev/null \
+    | sed 's|^section "||; s|"$||' | sort -u
+}
+
+# What it WOULD run, without running any of it. This used to be answered after every scanner had
+# already run, so asking what the gate covers cost what the gate costs (L102).
+if [ "${SCANNERS_LIST:-}" = "1" ]; then
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    if grep -q 'SECTION_ONLY' "$s" 2>/dev/null; then
+      scanning_sections "$s" | sed "s|^|SECTION $s |"
+    else
+      printf 'SUITE %s\n' "$s"
+    fi
+  done <<LIST
+$scanners
+LIST
   exit 0
 fi
 
@@ -128,10 +164,7 @@ start_one(){         # $1 = the suite path   $2 = a section, or empty
 while IFS= read -r s; do
   [ -n "$s" ] || continue
   if grep -q 'SECTION_ONLY' "$s" 2>/dev/null; then
-    # Only the sections that scan. The heading a scan sits under is read from the file, so a
-    # section added later is covered the day it lands.
-    sections="$(awk "/^section \"/{sec=\$0} /ls-files '\*/{ if (sec != \"\") print sec }" "$s" 2>/dev/null \
-                | sed "s|^section \"||; s|\"$||" | sort -u)"
+    sections="$(scanning_sections "$s")"
     [ -n "$sections" ] || continue
     while IFS= read -r sec; do
       [ -n "$sec" ] || continue
@@ -169,25 +202,9 @@ $(awk '/^FAIL|^not ok/ { if (n++ < 10) print }' "$_sc_work/$_sc_i.out" 2>/dev/nu
   _sc_i=$(( _sc_i + 1 ))
 done
 
-# What it WOULD run, without running any of it.
-if [ "${SCANNERS_LIST:-}" = "1" ]; then
-  while IFS= read -r s; do
-    [ -n "$s" ] || continue
-    if grep -q 'SECTION_ONLY' "$s" 2>/dev/null; then
-      awk "/^section \"/{sec=\$0} /ls-files '\*/{ if (sec != \"\") print sec }" "$s" 2>/dev/null \
-        | sed "s|^section \"|SECTION $s |; s|\"$||" | sort -u
-    else
-      printf 'SUITE %s\n' "$s"
-    fi
-  done <<LIST
-$scanners
-LIST
-  exit 0
-fi
-
 if [ -z "$failed" ]; then
   # What it covered, once, so the coverage of this gate is visible rather than assumed (L400).
-  printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once.\n' "$ran" >&2
+  printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones.\n' "$ran" "${uncommitted_n:-0}" >&2
   exit 0
 fi
 
@@ -200,6 +217,11 @@ fi
   echo "red twice, both of them caught in seconds by a scanner nobody had run."
   echo ""
   printf '%s' "$failed"
+  # Uncommitted files are read too (claude-config#522), and a failure in one is a draft rather than
+  # anything this push carries, so the count is said where the verdict is.
+  echo "These scans read ${uncommitted_n:-0} uncommitted file(s) as well as the committed ones. A failure"
+  echo "in one of those is about a file this push does not carry: commit it fixed, or move it aside."
+  echo ""
   echo "Reproduce any of them directly:"
   echo "    bash <the suite named above>"
   echo ""

@@ -277,7 +277,7 @@ while IFS= read -r rel; do
 $(printf '%s\n' "$hits" | sed 's/^/    /')
 "
 done <<EOF
-$(git -C "$ROOT" ls-files 2>/dev/null || true)
+$(bash "$DIR/lib/repo-files.sh" "$ROOT" 2>/dev/null || true)
 EOF
 
 # A count that could only ever be zero is not a measurement, so the reading is asserted (L98).

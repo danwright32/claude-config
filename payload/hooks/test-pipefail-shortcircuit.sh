@@ -322,8 +322,24 @@ sourced_under_pipefail() { # sourced_under_pipefail <newline separated repo rela
     done < <(sed -nE 's/^[[:space:]]*(\.|source)[[:space:]]+"?([^"[:space:];&|]+)"?.*/\2/p' "$f" 2>/dev/null)
   done <<< "$1"
 }
-TRACKED="$(git -C "$ROOT" ls-files 2>/dev/null || true)"
-SOURCED="$(sourced_under_pipefail "$TRACKED")"
+# Everything this ratchet reads, committed or not, through the one lister every scanner here uses
+# (claude-config#522). An uncommitted file is the one most likely to be wrong, and a ratchet that
+# can only see it once it is committed speaks after the moment anybody would act (L456).
+FILES="$(bash "$DIR/lib/repo-files.sh" "$ROOT" 2>/dev/null || true)"
+UNCOMMITTED="$(bash "$DIR/lib/repo-files.sh" --uncommitted "$ROOT" 2>/dev/null || true)"
+# A listing that came back empty read nothing, and every check below would pass over it (L98).
+[ -n "$FILES" ] \
+  && check "the files to judge were listed" ok \
+  || check "the files to judge were listed" "lib/repo-files.sh gave nothing for $ROOT, so nothing below was read"
+SOURCED="$(sourced_under_pipefail "$FILES")"
+uncommitted_mark(){ # uncommitted_mark <repo relative path> -> " (not committed yet)" or nothing
+  case "
+$UNCOMMITTED
+" in *"
+$1
+"*) printf ' (not committed yet)' ;; esac
+  return 0
+}
 runs_under_pipefail() { # runs_under_pipefail <repo relative path>  -> 0 when that file does
   case "$1" in lib/*|*/lib/*) return 0 ;; esac
   grep -q 'pipefail' "$ROOT/$1" 2>/dev/null && return 0
@@ -348,48 +364,23 @@ while IFS= read -r rel; do
   [ "${have:-0}" -gt 0 ] || continue
   case "
 $(ratchet_read_baseline "$(cat "$BASELINE")")" in *"
-$rel "*) ;; *) unlisted="$unlisted  $rel: $have
+$rel "*) ;; *) unlisted="$unlisted  $rel: $have$(uncommitted_mark "$rel")
 " ;; esac
 done <<EOF
-$TRACKED
+$FILES
 EOF
 
 # ---------------------------------------------------------------------------
-# THE FILE BEING WRITTEN RIGHT NOW (claude-config#376).
+# THE FILE BEING WRITTEN RIGHT NOW (claude-config#376, claude-config#522).
 #
-# Everything above enumerates from `git ls-files`, which lists TRACKED files, so a suite that has
-# not been committed yet is invisible to it. Measured 2026-09-11, twice in one session: two new
-# suites were written with real sites in them, this ratchet was run before committing and said
-# nothing both times, and CI went red on the commit that added each of them. The guard was right
-# about the violations and simply could not see them at the moment anybody would have acted on
-# them (L376's own case, and the reason L456 exists).
-#
-# Reported as a NOTICE and deliberately NOT counted in the verdict. Counting them would make this
-# suite's pass or fail depend on uncommitted local state, so a draft nobody intends to commit would
-# fail it while CI, which sees only what was committed, passed: local and CI would then disagree in
-# the other direction, which is the same defect facing the other way (L376). What the notice gives
-# is the information at the moment it can be acted on, and it says outright that these WILL count
-# once committed, so the silence that produced the incident is gone without the verdict moving.
-pending=""
-while IFS= read -r rel; do
-  [ -n "$rel" ] || continue
-  case "$rel" in *.sh|claude-sync) ;; *) continue ;; esac
-  f="$ROOT/$rel"
-  [ -f "$f" ] || continue
-  runs_under_pipefail "$rel" || continue
-  have="$(count_uncommented "$f")"
-  [ "${have:-0}" -gt 0 ] || continue
-  pending="$pending  $rel: $have
-"
-done <<EOF
-$(git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null || true)
-EOF
-case "$pending" in
-  *[![:space:]]*)
-    echo "test-pipefail-shortcircuit: NOT YET COUNTED, because these are not committed, and this suite judges what git tracks so that its verdict matches CI's. They WILL be counted the moment they are, and the verdict below does not include them:"
-    printf '%s' "$pending"
-    echo "  Read the producer into a variable and match with \`case\`, or write it to a file and let grep read that." ;;
-esac
+# This used to report an uncommitted file's sites as a NOTICE and leave them out of the verdict, so
+# that a local run could never fail where CI, which sees only commits, passed. #522 reversed that,
+# and the reason is which way each choice lets local and CI disagree. Left out of the verdict, the
+# local run is LAXER than CI: the ratchet passed while scanners-before-push.sh was untracked and
+# failed the moment it was committed, which is the silence #376 was opened about with a notice in
+# place of the silence. Counted, the local run is STRICTER than CI, and the only cost is a draft
+# nobody meant to commit failing by name, marked above as not committed yet, where it can be seen.
+# ---------------------------------------------------------------------------
 
 case "$grew$unlisted" in
   *[![:space:]]*)
@@ -406,13 +397,13 @@ $shrank$gone  Lower the recorded number, so what is left keeps meaning something
 esac
 
 # ---------------------------------------------------------------------------
-# The notice above, driven end to end against a throwaway repository (claude-config#376).
+# Uncommitted files, driven end to end against a throwaway repository (claude-config#376, #522).
 # ---------------------------------------------------------------------------
-# A guard seen only against passing input has not been shown to work (L1), and this one has three
-# outcomes that have to stay apart: a site in an UNCOMMITTED file is reported and NOT counted, the
-# same site once COMMITTED is counted and fails, and a clean untracked file says nothing at all.
-# Run as a nested copy of this very file against its own fixture, so what is proved is the code
-# that ships rather than a restatement of it (L52).
+# A guard seen only against passing input has not been shown to work (L1), and three outcomes have
+# to stay apart: a clean untracked file passes, a site in an UNCOMMITTED file is counted, fails and
+# is named as not committed yet, and the same site once COMMITTED still fails. Run as a nested
+# copy of this very file against its own fixture, so what is proved is the code that ships rather
+# than a restatement of it (L52).
 if [ -z "${SHORTCIRCUIT_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
   sc_probe="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.shortcircuit.XXXXXXXX")" || sc_probe=""
   case "${sc_probe%/}" in
@@ -434,33 +425,31 @@ if [ -z "${SHORTCIRCUIT_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
       git -C "$sc_probe" -c commit.gpgsign=false commit -q -m seed >/dev/null 2>&1
       sc_run(){ SHORTCIRCUIT_NESTED=1 SHORTCIRCUIT_ROOT="$sc_probe" SHORTCIRCUIT_BASELINE="$sc_probe/base.txt" bash "${BASH_SOURCE[0]}" 2>&1; }
 
-      # A clean untracked file says nothing: a notice on every run is the noise this exists to
-      # prevent (L36).
+      # A clean untracked file passes: reading it must not be mistaken for finding something.
       printf 'set -uo pipefail\necho clean\n' > "$sc_probe/fresh.sh"
       sc_out="$(sc_run)"; sc_rc=$?
-      case "$sc_out" in
-        *"NOT YET COUNTED"*) check "a clean uncommitted file is not announced" "it was announced" ;;
-        *) check "a clean uncommitted file is not announced" ok ;;
-      esac
+      [ "$sc_rc" -eq 0 ] \
+        && check "a clean uncommitted file passes" ok \
+        || check "a clean uncommitted file passes" "the run failed ($sc_rc): $sc_out"
 
-      # A site in an uncommitted file IS announced, and does NOT move the verdict.
+      # A site in an uncommitted file is COUNTED and fails, named as not committed yet so a draft
+      # can be told from committed work at a glance.
       # ASSEMBLED, never written out: spelled literally this line would itself hold the shape this
       # suite counts, and the file would report ITSELF for ever, which is the guard working
       # correctly and is why every other pattern here is assembled too (L245).
       sc_bad='printf %s "$x" | gr'"ep -q needle"
       printf 'set -uo pipefail\n%s\n' "$sc_bad" > "$sc_probe/fresh.sh"
       sc_out="$(sc_run)"; sc_rc=$?
+      [ "$sc_rc" -ne 0 ] \
+        && check "a site in an uncommitted file is counted and fails" ok \
+        || check "a site in an uncommitted file is counted and fails" "it passed: $sc_out"
       case "$sc_out" in
-        *"NOT YET COUNTED"*fresh.sh*) check "a site in an uncommitted file is announced" ok ;;
-        *) check "a site in an uncommitted file is announced" "it was not: $sc_out" ;;
+        *"fresh.sh: 1 (not committed yet)"*) check "and names the file as not committed yet" ok ;;
+        *) check "and names the file as not committed yet" "it did not: $sc_out" ;;
       esac
-      [ "$sc_rc" -eq 0 ] \
-        && check "and it does not move the verdict, which judges what git tracks" ok \
-        || check "and it does not move the verdict, which judges what git tracks" "the run failed ($sc_rc)"
 
-      # THE POSITIVE CONTROL, in the same fixture: the identical file, once committed, IS counted
-      # and DOES fail. Without it the two checks above would pass against a scan that found nothing
-      # anywhere (L159).
+      # THE SAME FILE, COMMITTED, still fails and is no longer called uncommitted, so the label
+      # describes the file rather than being printed on every row (L159).
       git -C "$sc_probe" add fresh.sh >/dev/null 2>&1
       git -C "$sc_probe" -c commit.gpgsign=false commit -q -m add >/dev/null 2>&1
       sc_out="$(sc_run)"; sc_rc=$?
@@ -468,8 +457,8 @@ if [ -z "${SHORTCIRCUIT_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
         && check "the same file, once committed, is counted and fails" ok \
         || check "the same file, once committed, is counted and fails" "it still passed"
       case "$sc_out" in
-        *"NOT YET COUNTED"*) check "and is no longer announced as uncounted" "it is still announced" ;;
-        *) check "and is no longer announced as uncounted" ok ;;
+        *"not committed yet"*) check "and is no longer called uncommitted" "it still is: $sc_out" ;;
+        *) check "and is no longer called uncommitted" ok ;;
       esac
 
       # A SOURCED file inherits pipefail from its caller (claude-config#403). A file was judged only
