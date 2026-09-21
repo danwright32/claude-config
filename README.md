@@ -486,6 +486,30 @@ It answers with three states and an exit code for each: PROVED (0), NOT PROVED (
 leaves the check passing for the reason it always did and that reads exactly like a check which
 cannot discriminate.
 
+### Measuring the section time budget's margin
+
+The sync suite fails a run whose sections add up past a fraction of the ceiling (#492). The margin
+against that budget is a MEASUREMENT, and for a while it was not one: two readings taken hours
+apart on 2026-09-20, 963s and 1847s against a 2520s budget, were read as the suite having grown.
+Section time is wall clock per section, so it inflates on a busy machine, and neither reading
+recorded what else was on the machine, so neither could be re-read afterwards (#517).
+
+```bash
+MEASURE_RUNS=3 MEASURE_WAIT_SECONDS=3600 bash tools/measure-section-time.sh
+```
+
+It takes several readings, because one per arm cannot be told from noise, and it records ambient
+CPU beside each number rather than leaving that to be argued about later. `MEASURE_WAIT_SECONDS`
+makes it wait for a quiet window first, judged against the floor THIS machine sits at rather than a
+fixed bar, since a Mac running a backup, a sync daemon and two editors never reaches a fixed one.
+`MEASURE_LOAD_PROCS=12` runs the other arm, under a load it starts and stops itself, so the two
+arms differ in one known thing. `MEASURE_RECORD=<file>` appends a row per reading.
+
+It refuses rather than reporting a flattering number: a run that failed, a run that emitted no
+total, and a machine that never settled are all UNMEASURED, because a total of zero would clear
+every budget there is.
+
+
 The suites run several at a time, since they are independent. Measured on this Mac on 2026-08-21 over the hook
 suites: 128 seconds one at a time, 29 seconds in parallel, with byte identical reports.
 
