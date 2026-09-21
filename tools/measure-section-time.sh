@@ -32,6 +32,7 @@
 #   MEASURE_SUITE_CMD        the command that produces one reading (default: the sync suite)
 #   MEASURE_SUITE_SOURCE     the file the budget is derived from (default: the sync suite's source)
 #   MEASURE_AMBIENT_CMD      prints ambient CPU, in percent of one core (default: a ps sum)
+#   MEASURE_LOADAVG_CMD      prints the one minute load average (default: sysctl vm.loadavg)
 #   MEASURE_SLEEP_CMD        the sleep (default: sleep). A seam, so the tests pay no wall clock.
 #
 # Exit 0 = measured. Exit 1 = REFUSED: a run that failed, a run that emitted no total, a machine
@@ -64,29 +65,24 @@ die2(){ printf 'measure-section-time: %s\n' "$*" >&2; exit 2; }
 # machine was at its busiest (L215, L98). Measured on this Mac on 2026-09-20, under a four shard
 # suite run: consecutive ps snapshots totalled 830%, then 7.9%, then 830% again.
 #
-# Judged against the KERNEL's own load average, which is a different source from ps rather than a
-# second look at the same one, because a check drawn from the source it is checking can only ever
-# confirm that source is self consistent (L70, L345).
+# Fewer than fifty processes is not a Mac, it is a snapshot that was cut short. A floor about the
+# operating system rather than about how busy this machine happens to be, so it needs no
+# calibrating per machine (L376).
 #
-# Exposed as an argument because the fault cannot be produced on demand from a real machine, so
-# the only way this rule is ever seen to work is by being driven directly.
-credible(){          # $1 = rows in the snapshot   $2 = its total %CPU   $3 = the 1 minute load
-  awk -v rows="$1" -v total="$2" -v load1="$3" '
-    BEGIN {
-      # Fewer than fifty processes is not a Mac, it is a snapshot that was cut short. A floor about
-      # the operating system, not about how busy this machine happens to be, so it does not need
-      # calibrating per machine (L376).
-      if (rows + 0 < 50) { print "not credible"; exit }
-      # The kernel says this many hundredths of a core are runnable. Below two cores of load there
-      # is nothing to contradict, because a quiet machine legitimately totals almost nothing.
-      want = load1 * 100
-      if (want >= 200 && (total + 0) * 4 < want) { print "not credible"; exit }
-      print "credible"
-    }'
+# A second rule was tried here and removed the same evening: it refused a snapshot whose total
+# contradicted the kernel's load average. The load average counts processes blocked on disk, which
+# use no CPU, so on 2026-09-20 at load 90, with four backup and indexing daemons reading the disk,
+# it refused all six calibration samples and the tool measured nothing. The load average is
+# recorded beside each reading now instead, where it says the thing ambient CPU cannot.
+#
+# Exposed as an argument because a cut short snapshot cannot be produced on demand from a real
+# machine, so the only way this rule is ever seen to work is by being driven directly.
+credible(){          # $1 = rows in the snapshot
+  awk -v rows="$1" 'BEGIN { print (rows + 0 < 50) ? "not credible" : "credible" }'
 }
 if [ "${1:-}" = "--credible" ]; then
-  [ "$#" -eq 4 ] || die2 "--credible takes three numbers: rows, total percent, one minute load average."
-  credible "$2" "$3" "$4"
+  [ "$#" -eq 2 ] || die2 "--credible takes one number: how many rows the ps snapshot held."
+  credible "$2"
   exit 0
 fi
 
@@ -104,16 +100,25 @@ done
 # load this tool started are not counted as ambient. Those are recorded separately, by name.
 PGID="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
 default_ambient(){
-  local snap rows total amb load1
+  local snap rows amb
   snap="$(ps -A -o pgid=,%cpu= 2>/dev/null)"
   rows="$(printf '%s\n' "$snap" | grep -c . || true)"
-  total="$(printf '%s\n' "$snap" | awk '{ s += $2 + 0 } END { printf "%.1f", s + 0 }')"
   amb="$(printf '%s\n' "$snap" | awk -v mine="${PGID:-0}" '$1 + 0 != mine + 0 { s += $2 + 0 } END { printf "%d", s + 0 }')"
-  # The kernel's own figure, read from a different place than ps looks.
-  load1="$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{ print $1 + 0 }')"
-  [ -n "$load1" ] || load1=0
-  [ "$(credible "$rows" "$total" "$load1")" = "credible" ] || return 0
+  [ "$(credible "$rows")" = "credible" ] || return 0
   printf '%s\n' "$amb"
+}
+
+# The kernel's own one minute load average, which counts processes waiting on the disk as well as
+# processes wanting the processor. A reading taken while four daemons are reading the disk shows an
+# honest, modest ambient CPU and a load average in the nineties, and only the second one says why
+# the suite took twice as long (L356).
+LOADAVG_CMD="${MEASURE_LOADAVG_CMD:-}"
+read_loadavg(){
+  local v
+  if [ -n "$LOADAVG_CMD" ]; then v="$($LOADAVG_CMD 2>/dev/null)"
+  else v="$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{ print $1 + 0 }')"; fi
+  case "$v" in ''|*[!0-9.]*) return 0 ;; esac
+  printf '%s' "$v"
 }
 AMBIENT_CMD="${MEASURE_AMBIENT_CMD:-}"
 read_ambient(){
@@ -255,16 +260,22 @@ while [ "$i" -le "$RUNS" ]; do
   _t0=$SECONDS
   $SUITE_CMD > "$_out" 2>&1 &
   _pid=$!
-  _amax=0; _asum=0; _an=0; _abad=0; _s=0
+  _amax=0; _asum=0; _an=0; _abad=0; _s=0; _lmax=0
   # The first sample is taken straight away rather than after a wait, so a run always carries at
   # least one reading of the conditions it was taken under. A short run would otherwise finish
   # before the first sample and report a number with nothing beside it.
   _sample_ambient(){
-    local v; v="$(read_ambient)"
+    local v l
+    v="$(read_ambient)"
     case "$v" in
       ''|*[!0-9]*) _abad=$(( _abad + 1 )) ;;
       *) _an=$(( _an + 1 )); _asum=$(( _asum + v )); [ "$v" -gt "$_amax" ] && _amax="$v" ;;
     esac
+    l="$(read_loadavg)"
+    [ -n "$l" ] || return 0
+    # Compared as a decimal, which the shell cannot do, so awk decides.
+    [ "$(awk -v a="$l" -v b="$_lmax" 'BEGIN { print (a + 0 > b + 0) ? "y" : "n" }')" = "y" ] && _lmax="$l"
+    return 0
   }
   _sample_ambient
   while kill -0 "$_pid" 2>/dev/null; do
@@ -312,15 +323,15 @@ while [ "$i" -le "$RUNS" ]; do
   rm -f "$_out"
   SECS="$SECS $_sec"
   if [ "$_an" -gt 0 ]; then
-    say "  run $i: ${_sec}s of section time over ${_shards:-?} shard(s), ${_elapsed}s wall clock, ambient CPU mean ${_amean}% max ${_amax}% of one core over $_an sample(s)${_abad:+, $_abad unreadable}${_who:+ (busiest: $_who)}"
+    say "  run $i: ${_sec}s of section time over ${_shards:-?} shard(s), ${_elapsed}s wall clock, ambient CPU mean ${_amean}% max ${_amax}% of one core over $_an sample(s)${_abad:+, $_abad unreadable}, load average up to ${_lmax}${_who:+ (busiest: $_who)}"
   else
     say "  run $i: ${_sec}s of section time over ${_shards:-?} shard(s), ${_elapsed}s wall clock, ambient CPU unknown: all $_abad sample(s) were unreadable, so this reading carries no account of the machine it was taken on"
   fi
   if [ -n "$RECORD" ]; then
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(hostname -s 2>/dev/null)" "$ARM" "$_sec" "$BUDGET" \
       "$_elapsed" "$( [ "$_an" -gt 0 ] && printf '%s' "$_amean" || printf 'unknown' )" \
-      "$( [ "$_an" -gt 0 ] && printf '%s' "$_amax" || printf 'unknown' )" "$FLOOR" "${_shards:-unknown}" "${_who:-none}" >> "$RECORD" \
+      "$( [ "$_an" -gt 0 ] && printf '%s' "$_amax" || printf 'unknown' )" "$FLOOR" "${_shards:-unknown}" "$_lmax" "${_who:-none}" >> "$RECORD" \
       || say "  (warning: could not append to $RECORD, so this reading was printed and not recorded)"
   fi
   i=$(( i + 1 ))

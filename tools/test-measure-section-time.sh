@@ -2,10 +2,10 @@
 # Tests for measure-section-time.sh, which takes the sync suite's section time reading together
 # with the machine state it was taken under (claude-config#517).
 #
-# The issue this belongs to exists because two readings hours apart, 963s and 1847s against a 2520s
-# budget, were compared as though they were a measurement. They were not: section time is wall
-# clock per section, so it inflates on a busy machine, and another project's harness was running
-# during the later one. So the checks below care about the ways a reading lies about the machine it
+# The issue this belongs to exists because two readings taken hours apart on 2026-09-20, 963s and
+# 1847s against a 2520s budget, were compared as though they were a measurement. They were not:
+# section time is wall clock per section, so it inflates on a busy machine, and another project's
+# harness was running during the later one. So the checks below care about the ways a reading lies about the machine it
 # was taken on, rather than about arithmetic.
 #
 # Every seam the tool has is stubbed here, and each stub asserts it was REACHED, because a seam the
@@ -330,22 +330,38 @@ case "$_top" in
 esac
 
 # --- the credibility test the DEFAULT reader applies to its own ps snapshot, driven directly,
-#     because the thing it guards against cannot be produced on demand from a real machine.
-#     A snapshot claiming near nothing is running while the kernel's own load average says
-#     otherwise is a failed read, and a failed read must never be reported as a quiet machine.
-cred(){ bash "$M" --credible "$1" "$2" "$3" 2>&1; }
-[ "$(cred 1034 830 8.2)" = "credible" ] \
-  && check "an ordinary snapshot under load is credible" ok \
-  || check "an ordinary snapshot under load is credible" "got=$(cred 1034 830 8.2)"
-[ "$(cred 1034 12 0.4)" = "credible" ] \
-  && check "and a genuinely quiet machine is credible too" ok \
-  || check "and a genuinely quiet machine is credible too" "got=$(cred 1034 12 0.4)"
-[ "$(cred 1034 8 8.2)" = "credible" ] \
-  && check "a snapshot contradicting the kernel's load average is refused" "it was accepted" \
-  || check "a snapshot contradicting the kernel's load average is refused" ok
-[ "$(cred 3 8 0.2)" = "credible" ] \
+#     because a cut short snapshot cannot be produced on demand from a real machine.
+#
+#     There WAS a second rule here, refusing a snapshot whose total contradicted the kernel's load
+#     average. It is gone rather than adjusted, because it was wrong rather than badly tuned
+#     (L252, L430). Measured on this Mac on 2026-09-20 at load 90: the load average counts
+#     processes blocked on disk, which use no CPU at all, so a machine with four backup and
+#     indexing daemons reading the disk sits at load 90 with a perfectly honest ps total of a few
+#     hundred percent. The rule refused every one of six calibration samples and the tool measured
+#     nothing, which is the failure it existed to prevent, pointed the other way. The load average
+#     is now RECORDED beside each reading instead, where it says something ambient CPU cannot: that
+#     the machine was under I/O pressure.
+cred(){ bash "$M" --credible "$1" 2>&1; }
+[ "$(cred 1034)" = "credible" ] \
+  && check "an ordinary snapshot is credible" ok \
+  || check "an ordinary snapshot is credible" "got=$(cred 1034)"
+[ "$(cred 3)" = "credible" ] \
   && check "and a snapshot holding almost no processes is refused" "it was accepted" \
   || check "and a snapshot holding almost no processes is refused" ok
+
+# --- the load average is recorded beside the reading, because ambient CPU cannot see a machine
+#     that is busy waiting on its disk, and that is the state this one was in when it was written.
+A_LA="$(mk_ambient loadavg 40)"
+LA="$TMPROOT/loadavg.sh"
+printf '#!/usr/bin/env bash\necho 7.5\n' > "$LA"; chmod +x "$LA"
+o19="$(run_m MEASURE_RUNS=1 MEASURE_SUITE_CMD="bash $S_OK" MEASURE_AMBIENT_CMD="$A_LA" \
+       MEASURE_LOADAVG_CMD="$LA" bash "$M" 2>&1)"
+grep -q '7.5' <<< "$o19" \
+  && check "the load average is recorded beside the reading" ok \
+  || check "the load average is recorded beside the reading" "out=$o19"
+grep -qi 'load' <<< "$o19" \
+  && check "and it is named as a load average, not a bare number" ok \
+  || check "and it is named as a load average, not a bare number" "out=$o19"
 
 # --- the shard count is part of what a reading MEANS, because the suite runs its prelude once in
 #     each shard and counts every one of them in the total. Two readings taken at different shard
