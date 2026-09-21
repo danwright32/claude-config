@@ -95,6 +95,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/scanners-before-push.sh",
+            "timeout": 180,
+            "statusMessage": "Running the scanners that read the whole repository"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh"
           },
           {
