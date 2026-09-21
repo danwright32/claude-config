@@ -2616,6 +2616,38 @@ for reference; L6 was reviewed and deliberately not adopted.
   characters, so none of them had ever fired on noise.)
 
 
+- **L718. A pure view given its state as a prop is proved by the tests that supply that prop, and
+  by nothing at all about whether any caller ever supplies it**, so assert against the PRODUCTION
+  call site that each state is reachable: a caller passing a constant empty value leaves every
+  branch unreachable while every test stays green. The convention itself is right, and it moves the
+  whole question of whether the state arrives into the one file nothing tests.
+  (Try-Pennie/PaperBoi#389, 2026-09-18: the mark paid door returned an ActionOutcome for all seven
+  cases, the view drew a sentence for each, and the page passed `outcome={null}` on every render
+  because React discards a form action's return value unless `useActionState` holds it, and there
+  was no `useActionState` anywhere in the app. A refusal, a stale view, a bad date, a deadline and
+  a database failure all produced the same silent re-render. Every one of those sentences had a
+  passing unit test, and the whole path had shipped one issue earlier as the thing that would end
+  actions telling a person nothing.)
+  SHORT: A view given its state as a prop is proved by tests that supply it, never by a caller doing so, so assert the production call site can reach each state.
+
+- **L721. A monitor whose job is to catch a gate deciding WRONGLY must not reach its verdict
+  through that gate's own predicate**, because sharing it guarantees the two agree and thereby
+  makes every blind spot in it invisible to both, so the monitor cannot see the one failure it was
+  built for. Sharing a predicate is the right instinct where the question is the same for both
+  callers (L16), and it is the wrong one here, where the monitor's question is precisely whether
+  the gate's answer was correct. Give the monitor a reading the gate never consults, even a coarse
+  one, and reconcile the two.
+  (Try-Pennie/bidspoke#1420, 2026-09-21: the worker deploy gate hashed `dist/index.js` to decide
+  whether anything needed shipping. `wrangler.toml` vars, crons, limits and bindings are applied BY
+  the deploy and appear nowhere in that bundle, so #1404 turning the reachability probe's alerts on
+  left the bundle byte identical, Deploy Worker was skipped, Deploy reported success, and an hour
+  later the probe was still logging `mode=observe`. Deploy Drift exists to notice exactly that, ran
+  47 minutes after the merge, and reported success: `drift-artifact-verdict.sh` asks
+  `worker-artifact-decision.sh`, deliberately and with a comment saying why, so that the two can
+  never disagree about what "the worker changed" means. The design note was right about consistency
+  and it is what made the failure silent on both sides.)
+  SHORT: A monitor built to catch a gate deciding wrongly must not use that gate's own predicate, or the predicate's blind spot is invisible to both.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -3126,6 +3158,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   is what made the runbook's claim look confirmed.)
   SHORT: A build that bakes env files into the artifact ships every local env file, so prove a throwaway deploy holds NO production credential by reading it.
 
+
+- **L719. Whatever structurally stops the TESTS touching production must also stop the DEV
+  SERVER**, because the app somebody runs by hand carries no such guard and its symptom for being
+  pointed at production is that everything works: the wrong target announces itself only as an auth
+  failure that reads as a broken sign in, so the natural next step is to sign in properly, and then
+  it writes. An env file repointed at the hosted project for one task stays repointed for every
+  other, and nothing is keyed to notice.
+  (Try-Pennie/PaperBoi#391, 2026-09-18: the suite refuses to start unless SUPABASE_URL is loopback,
+  and `pnpm dev:up` starts a local Supabase, applies the migrations, loads a fixture and prints a
+  session. The only way to then run the app was `pnpm --filter web dev`, which reads
+  `apps/web/.env.local`, holding the HOSTED project's URL since the deploy verification work. Every
+  signed in page redirected to /login, purely because @supabase/ssr names the session cookie after
+  the Supabase host; nothing said the app was talking to production, and the first press of Mark
+  paid would have written there.)
+  SHORT: Whatever structurally stops the TESTS touching production must also stop the DEV SERVER, whose only symptom for pointing at it is that everything works.
 
 ## Honest failure
 
@@ -4376,6 +4423,27 @@ for reference; L6 was reviewed and deliberately not adopted.
   app's own cost, and the worst record was loaded precisely BECAUSE a loaded machine is what makes
   a stall the longest one.)
 
+
+- **L720. User-facing copy explaining how a number is DERIVED must name the field the code
+  actually keys on, and be tested against that rule rather than for its own wording, because a
+  derivation that picks its population by one date and judges the outcome by a neighbouring one
+  reads just as plausibly with either, so the wrong field is only ever caught by a reader who
+  already knows the answer.** The tell is a sentence that is true of the metric beside it: the
+  numerator's field described under the denominator's label, or a growth clause naming the event
+  that creates the record rather than the event that assigns it to the period. It survives review
+  because every word is a real field doing a real job somewhere in the same calculation, and it
+  survives the suite because copy tests assert a phrase is PRESENT, never that its claim matches
+  the rule (L703, L347). The cheapest catch is reading every label on one screen together: the
+  contradiction sits between two columns, not inside either.
+  SHORT: Copy explaining a derived number must name the field the code KEYS on, since a neighbouring date reads just as plausibly and passes every review.
+  (project-enrollment-tracker#1530, 2026-09-21: the commission board's Top-out Units column
+  explained itself as "enrollments whose first payment date falls in this month", while the cohort
+  is keyed on Original_Scheduled_First_Draft_Date__c and the payment date decides only whether a
+  deal cleared. Its second sentence, "counts up through the month as enrollments land", named
+  enrollment rather than scheduling, which is exactly why three deals sold on 29 July appeared in
+  a rep's August total. The Booked Ahead tooltip four columns right in the SAME header row stated
+  the rule correctly, and the contradiction went unread for three months until a manager asked why
+  a July sale counted in August.)
 
 ## State and identity
 
@@ -6928,6 +6996,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   and in the Archive, so the defect was invisible except on the one stage every follow-up task points
   at.)
   SHORT: A jump addressing a row by a key is dropped by any list whose rows carry a DIFFERENT identity, so prove it lands on every list the target can be on.
+
+- **L717. A screen that refreshes itself only when an action SUCCEEDS contradicts its own message on
+  every other outcome where the record may have changed**, so decide per outcome whether to re-read:
+  a timeout must, because unknown is the whole content of its message, and a stale view must, because
+  the record demonstrably moved. A refusal or an invalid input changed nothing and needs no re-read.
+  (Try-Pennie/PaperBoi#384, 2026-09-18: the mark paid door called `revalidatePath` only on `applied`,
+  so a timed out press showed "it may still have gone through" beside an invoice still reading Unpaid,
+  and a stale view carried the fresh record in its outcome while the fields around it stayed on the
+  version that had just been refused. Two of the seven outcomes shipped a screen stating one thing in
+  its copy and another in its fields. L608 requires the action to RETURN an outcome and the revalidate
+  to name the right route, and says nothing about which outcomes must re-read at all.)
+  SHORT: A screen that refreshes only when an action SUCCEEDS contradicts its message on outcomes where the record may have changed, so decide per outcome.
+
+
 
 ## External systems
 

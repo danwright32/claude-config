@@ -194,3 +194,5 @@ which is NOT loaded into the session.
 - L714. A throwaway local database must reproduce the hosted platform's DEFAULT GRANTS, or a permission check passes on the mistake it exists to catch.
 - L487. Comparing two implementations against a live store measures the population change too, so snapshot the data once and run both halves against that.
 - L491. A short pattern occurs by chance in binary content, so a scanner reading build output refuses healthy runs at random as that output is regenerated.
+- L718. A view given its state as a prop is proved by tests that supply it, never by a caller doing so, so assert the production call site can reach each state.
+- L721. A monitor built to catch a gate deciding wrongly must not use that gate's own predicate, or the predicate's blind spot is invisible to both.
