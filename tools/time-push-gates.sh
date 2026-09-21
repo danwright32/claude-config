@@ -17,8 +17,8 @@
 #
 # Each gate is bounded by the timeout the settings declare for it, killed at that bound and
 # REPORTED as killed rather than as a duration: a run that hit its ceiling is not a measurement of
-# what it costs (L11). A gate with no declared timeout gets the platform's own default, 60 seconds,
-# which is written down here as the assumption it is.
+# what it costs (L11). A gate with no declared timeout is shown as "-" and bounded by the
+# platform's own default, 60 seconds, which is written down here as the assumption it is.
 #
 # It runs the REAL gates against a REAL repository, so it costs what a push costs, model call and
 # containers included, and anything a gate writes (a record, a state file) is written.
@@ -68,7 +68,10 @@ for group in (d.get("hooks", {}) or {}).get("PreToolUse", []) or []:
             globs = [re.escape(p[5:-1]).replace(r"\*", ".*") for p in pats if p.startswith("Bash(") and p.endswith(")")]
             if globs and not any(re.match(g + r"$", cmd) for g in globs):
                 continue
-        print("%s\t%s" % (h.get("timeout", ""), path))
+        # "-" rather than an empty field for a hook with no declared timeout: a tab is IFS
+        # whitespace, so read in the shell below collapses a leading empty field and the gate
+        # would vanish from the table entirely (claude-config#523, measured on rtk-rewrite.sh).
+        print("%s\t%s" % (h.get("timeout", "") or "-", path))
 PY
 )"
 case "$gates" in
@@ -92,7 +95,7 @@ total=0
 while IFS="$(printf '\t')" read -r declared hook; do
   [ -n "$hook" ] || continue
   name="${hook##*/}"
-  bound="${declared:-$DEFAULT_TIMEOUT}"
+  bound="$declared"
   case "$bound" in ''|*[!0-9]*) bound="$DEFAULT_TIMEOUT" ;; esac
   start="$(python3 -c 'import time; print(time.time())')"
   # Run it in the background and wait on the CONDITION, so a gate that hangs is killed at its own
@@ -118,7 +121,7 @@ while IFS="$(printf '\t')" read -r declared hook; do
   if [ -n "$killed" ]; then
     printf '%7s  %4s  %8s  %s (KILLED: timed out at its declared bound, so this is not a measurement of what it costs)\n' "$secs" "-" "$bound" "$name"
   else
-    printf '%7s  %4s  %8s  %s\n' "$secs" "$rc" "$bound" "$name"
+    printf '%7s  %4s  %8s  %s\n' "$secs" "$rc" "$declared" "$name"
   fi
   rm -f "$work/rc" "$work/out"
 done <<EOF

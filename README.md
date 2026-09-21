@@ -338,6 +338,38 @@ deadline is 240 seconds and a real review measured 130 to 193 seconds with `sonn
 (`Dans-MacBook-Pro`), because Dan wants it there and not on the personal Mac; every other computer
 says in one line that it skipped. Set `AI_REVIEW_HOSTS='*'` to run it everywhere.
 
+### What a push actually waits on
+
+Seventeen PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+which the settings SET and are not measurements of anything. A declared timeout is evidence of what
+somebody feared, not of what a gate costs, so they were timed:
+
+```bash
+bash tools/time-push-gates.sh --repo <checkout>
+```
+
+Measured on this Mac on 2026-09-21, driving each installed gate with the payload Claude Code sends
+for `git push`, against a checkout one commit ahead of `origin/main`:
+
+| What the push carries | Total before git runs | Where it goes |
+| --- | --- | --- |
+| A commit touching no test section | 20.1 seconds | `scanners-before-push.sh` 15.3, every other gate 0.3 each (2026-09-21) |
+| A commit touching a test section | 26.0 seconds | `scanners-before-push.sh` 18.3, `linux-sections-before-push.sh` 1.5, the rest 0.3 each (2026-09-21) |
+
+So the whole-tree scanner gate is three quarters of the wait and everything else is noise, which is
+where any speed work belongs (L299). Two things the timing showed that no timeout could:
+
+- `linux-sections-before-push.sh` returned in 1.5 seconds on 2026-09-21 having judged nothing,
+  because docker is installed on this Mac and its daemon is not running. It said nothing at all, so a push nobody had
+  checked on Linux read exactly like one that passed. It now repeats the audit's UNMEASURED notice
+  (#523), and the audit's closing line no longer claims that sections it never judged passed.
+- `require-tests-before-push.sh` declares 120 seconds, a number the settings set, for a model call
+  it did not make on either push of 2026-09-21, because the change carried a test. The gate is cheap when the answer is obvious; the
+  declared ceiling is for the case where it asks.
+
+The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
+checkout costs nothing until it is installed (L423).
+
 ## Lesson numbers
 
 Each Mac mints lesson numbers from a band it owns, so two lessons written between syncs can never

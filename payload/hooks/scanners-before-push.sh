@@ -36,10 +36,15 @@
 # scanners is reported rather than passed silently, because reading nothing and reading everything
 # green look identical otherwise (L98).
 #
-# MEASURED on this Mac 2026-09-21: the selection is five standalone suites plus one section of the
+# MEASURED on this Mac 2026-09-21: the selection was five standalone suites plus one section of the
 # sync suite. Run one after another the gate took 27 seconds; run at once, which is how it runs,
 # 13. Running that sync suite whole instead would be 268 seconds, which is why a suite with
 # sections is run section wise.
+#
+# Re-measured the same day, after claude-config#522 added the uncommitted files and a sixth
+# scanner: 15.3 seconds on a push touching no test section and 18.3 on one that does. Every other
+# gate a push waits on costs 0.3 seconds, so this gate is three quarters of the whole wait, which
+# is 20 to 26 seconds (claude-config#523, and the table in README.md).
 #
 # Override: SKIP_SCANNERS_CHECK=1 git push ...   Explain why to the user first, never silently.
 

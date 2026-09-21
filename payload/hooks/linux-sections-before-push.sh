@@ -50,7 +50,24 @@ out="$(AUDIT_ON_LINUX=1 bash tests/audit-changed-sections.sh "$base" 2>&1)"; rc=
 
 # 0 is a pass or an honest nothing-to-do, and 2 is the audit refusing to answer, which is its own
 # problem and not evidence about this push. Only 1 means a section ran on Linux and failed.
-[ "$rc" -eq 1 ] || exit 0
+#
+# An exit 0 that says UNMEASURED is neither: the runner could not run, so nothing about this push
+# was judged on Linux. That must be SAID. Measured on 2026-09-21 while timing what a push waits on
+# (claude-config#523): docker is installed on this Mac and its daemon is not running, so this gate
+# returned in 1.5 seconds, silently, on every push, and a push nobody had checked on Linux read
+# exactly like one that passed (L98, L557). The push is still not blocked on a question this
+# machine cannot ask.
+if [ "$rc" -ne 1 ]; then
+  case "$out" in
+    *UNMEASURED*)
+      {
+        echo "linux-sections-before-push: nothing in this push was judged on Linux, and that is not a pass."
+        printf '%s\n' "$out"
+        echo "CI will still ask the question. To ask it here, start Docker Desktop and push again."
+      } >&2 ;;
+  esac
+  exit 0
+fi
 
 {
   echo "PUSH BLOCKED: a test section this change touches FAILS on Linux."

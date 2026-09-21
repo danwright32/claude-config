@@ -151,6 +151,15 @@ case "$unmeasured" in *[![:space:]]*)
   echo "That is UNMEASURED, not a pass. The push is not blocked on a question this machine cannot ask; CI will still ask it." >&2 ;;
 esac
 
+# The closing line is derived from what actually ran, never from the count of sections looked at
+# (claude-config#523). It used to say every changed section "ran on its own and passed" even when
+# the notice directly above said the Linux runner could not run and named them as UNMEASURED, and
+# the last line is the one a reader keeps (L11, L440).
+_un_n="$(printf '%s' "$unmeasured" | grep -c . || true)"
 echo ""
-echo "audit-changed-sections: audited $n section(s) changed against $BASE${AUDIT_ON_LINUX:+, on Linux}, and each one ran on its own and passed."
+if [ "${_un_n:-0}" -gt 0 ]; then
+  echo "audit-changed-sections: of $n section(s) changed against $BASE${AUDIT_ON_LINUX:+, on Linux}, $(( n - _un_n )) ran on their own and passed and ${_un_n} were not judged at all (listed above). That is UNMEASURED, not a pass."
+else
+  echo "audit-changed-sections: audited $n section(s) changed against $BASE${AUDIT_ON_LINUX:+, on Linux}, and each one ran on its own and passed."
+fi
 exit 0

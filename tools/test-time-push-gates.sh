@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Tests for time-push-gates.sh, which times every gate a `git push` waits on (claude-config#523).
 #
-# Four hooks declare timeouts of 30, 120, 180 and 300 seconds and only one of them had ever been
-# measured, so the real cost of pushing was a sum of guesses. A gate's own guards are an untimed
+# Four hooks declare timeouts of 30, 120, 180 and 300 seconds, which the settings SET and are not
+# measurements of anything, and only one gate had ever been timed, so the real cost of pushing was
+# a sum of guesses. A gate's own guards are an untimed
 # pipeline (L300), and a declared timeout is evidence of what somebody feared, not of what it costs.
 set -uo pipefail
 
@@ -25,6 +26,7 @@ mk(){ printf '#!/usr/bin/env bash\ncat >/dev/null\n%s\n' "$2" > "$HOME_DIR/hooks
 mk quick.sh 'exit 0'
 mk speaks.sh 'echo "a line"; exit 0'
 mk slow.sh 'sleep 30; exit 0'
+mk untimed.sh 'exit 0'   # no declared timeout: bash read drops a leading empty field on a tab
 mk writes.sh 'exit 0'
 cat > "$HOME_DIR/settings.json" <<'JSON'
 {
@@ -35,7 +37,8 @@ cat > "$HOME_DIR/settings.json" <<'JSON'
         "hooks": [
           { "type": "command", "command": "__CLAUDE_HOME__/hooks/quick.sh", "timeout": 30 },
           { "type": "command", "command": "__CLAUDE_HOME__/hooks/speaks.sh", "timeout": 60 },
-          { "type": "command", "command": "__CLAUDE_HOME__/hooks/slow.sh", "timeout": 1 }
+          { "type": "command", "command": "__CLAUDE_HOME__/hooks/slow.sh", "timeout": 1 },
+          { "type": "command", "command": "__CLAUDE_HOME__/hooks/untimed.sh" }
         ]
       },
       {
@@ -49,7 +52,10 @@ JSON
 
 out="$(GATE_TIMING_HOME="$HOME_DIR" bash "$T" --repo "$TMPROOT" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && check "it runs and reports" ok || check "it runs and reports" "rc=$rc out=$out"
-for want in quick.sh speaks.sh slow.sh; do
+# untimed.sh is in this list deliberately: a gate declaring no timeout was dropped from the table
+# entirely, because a tab is IFS whitespace and bash's read collapses the leading empty field, so
+# the real rtk-rewrite.sh was never timed and nothing said so (L98).
+for want in quick.sh speaks.sh slow.sh untimed.sh; do
   case "$out" in *"$want"*) check "it times $want" ok ;; *) check "it times $want" "out=$out" ;; esac
 done
 case "$out" in

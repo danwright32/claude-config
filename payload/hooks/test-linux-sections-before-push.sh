@@ -83,6 +83,28 @@ case "$o1" in *'LISTED alpha'*) check "and carries what the audit reported" ok ;
 case "$o1" in *'AUDIT_ON_LINUX=1'*) check "and it really asked for the Linux run" ok ;;
               *) check "and it really asked for the Linux run" "out=$o1" ;; esac
 
+# --- the Linux runner could not run at all: the push goes through, and the hook SAYS so. Measured
+#     on 2026-09-21 while timing what a push waits on (claude-config#523): docker is installed on
+#     this Mac and its daemon is not running, so this gate returned in 1.5 seconds having judged
+#     nothing, in complete silence, and a push nobody checked on Linux looked exactly like one that
+#     passed (L98, L557).
+R7="$(mkrepo unmeasured 0)"
+cat > "$R7/tests/audit-changed-sections.sh" <<'AUDIT'
+#!/usr/bin/env bash
+echo "audit-changed-sections: these changed sections were NOT judged, because the Linux runner could not run here:" >&2
+echo "  == LISTED alpha ==" >&2
+echo "That is UNMEASURED, not a pass." >&2
+exit 0
+AUDIT
+chmod +x "$R7/tests/audit-changed-sections.sh"
+run "$R7" 'git push'; o7="$OUT"
+[ "$RC" -eq 0 ] && check "a Linux run that could not happen does not block the push" ok \
+                || check "a Linux run that could not happen does not block the push" "rc=$RC out=$o7"
+case "$o7" in *UNMEASURED*) check "but the hook repeats that nothing was judged on Linux" ok ;;
+              *) check "but the hook repeats that nothing was judged on Linux" "it said: [$o7]" ;; esac
+case "$o7" in *'LISTED alpha'*) check "and names the sections nothing judged" ok ;;
+              *) check "and names the sections nothing judged" "it said: [$o7]" ;; esac
+
 # --- everything it must NOT block on.
 R2="$(mkrepo passes 0)"
 run "$R2" 'git push'; o2="$OUT"

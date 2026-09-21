@@ -207,6 +207,17 @@ grep -q 'UNMEASURED' <<< "$o9" \
 grep -q 'LISTED alpha' <<< "$o9" \
   && check "and names the section nothing judged" ok \
   || check "and names the section nothing judged" "out=$o9"
+# And the closing summary must not then say every changed section ran and passed, which is what it
+# said while the section above was never judged at all (claude-config#523). A last line that
+# contradicts the notice above it is the line a reader keeps (L11, L440).
+case "$o9" in
+  *"and each one ran on its own and passed"*) check "the summary does not claim an unmeasured section passed" "it said they all passed: $o9" ;;
+  *) check "the summary does not claim an unmeasured section passed" ok ;;
+esac
+case "$o9" in
+  *"1 of them"*|*"1 unmeasured"*|*"not judged"*) check "and the summary counts what was not judged" ok ;;
+  *) check "and the summary counts what was not judged" "out=$o9" ;;
+esac
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
