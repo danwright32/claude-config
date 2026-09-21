@@ -62,6 +62,10 @@ AUDIT
 # unbound RC rather than reporting a wrong one, which is the better of the two ways to be wrong.
 OUTFILE="$TMPROOT/.hook-out"
 RC=0
+# Every run keeps the gate's stand down record inside the throwaway directory. Without this the
+# fixture repositories wrote into ~/.claude/state/linux-sections, the record a real push reads, and
+# five fixture repos appeared in it (L2: a test must be structurally unable to touch live state).
+export LINUX_SECTIONS_STATE_DIR="${LINUX_SECTIONS_STATE_DIR:-$TMPROOT/linux-state-default}"
 run(){   # $1 = repo   $2 = the command the payload carries   -> fills $OUT and $RC
   printf '{"tool_name":"Bash","tool_input":{"command":%s},"cwd":%s}' \
     "$(printf '%s' "$2" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
@@ -104,6 +108,72 @@ case "$o7" in *UNMEASURED*) check "but the hook repeats that nothing was judged 
               *) check "but the hook repeats that nothing was judged on Linux" "it said: [$o7]" ;; esac
 case "$o7" in *'LISTED alpha'*) check "and names the sections nothing judged" ok ;;
               *) check "and names the sections nothing judged" "it said: [$o7]" ;; esac
+
+# --- the RECORD of how often Linux actually judged a push (claude-config#529). A gate that stands
+#     down on most pushes is close to not being there, and the difference is invisible unless it is
+#     counted: this one stood down on every push on this Mac between 2026-09-07 and 2026-09-21 and
+#     nothing anywhere knew (L557).
+STATE="$TMPROOT/linux-state"
+runrec(){ LINUX_SECTIONS_STATE_DIR="$STATE" run "$1" "$2"; }   # a record of its own, so the counts here are only this block's
+R8="$(mkrepo counted 0)"
+cat > "$R8/tests/audit-changed-sections.sh" <<'AUDIT'
+#!/usr/bin/env bash
+echo "audit-changed-sections: these changed sections were NOT judged, because the Linux runner could not run here:" >&2
+echo "  == LISTED alpha ==" >&2
+echo "That is UNMEASURED, not a pass." >&2
+exit 0
+AUDIT
+chmod +x "$R8/tests/audit-changed-sections.sh"
+runrec "$R8" 'git push'; o8="$OUT"
+runrec "$R8" 'git push'; o8b="$OUT"
+case "$o8b" in *"judged 0 of the 2"*) check "it counts the pushes Linux did not judge, and says so" ok ;;
+  *) check "it counts the pushes Linux did not judge, and says so" "it said: [$o8b]" ;; esac
+
+# A push Linux DID judge is counted as judged, and the count is per repository.
+R9="$(mkrepo countedok 0)"
+cat > "$R9/tests/audit-changed-sections.sh" <<'AUDIT'
+#!/usr/bin/env bash
+echo "audit-changed-sections: audited 1 section(s) changed against ${1:-}, on Linux, and each one ran on its own and passed."
+exit 0
+AUDIT
+chmod +x "$R9/tests/audit-changed-sections.sh"
+runrec "$R9" 'git push'
+cat > "$R9/tests/audit-changed-sections.sh" <<'AUDIT'
+#!/usr/bin/env bash
+echo "audit-changed-sections: these changed sections were NOT judged, because the Linux runner could not run here:" >&2
+echo "That is UNMEASURED, not a pass." >&2
+exit 0
+AUDIT
+chmod +x "$R9/tests/audit-changed-sections.sh"
+runrec "$R9" 'git push'; o9b="$OUT"
+case "$o9b" in *"judged 1 of the 2"*) check "and a push it did judge counts as judged" ok ;;
+  *) check "and a push it did judge counts as judged" "it said: [$o9b]" ;; esac
+[ "$(find "$STATE" -name '*.txt' -type f 2>/dev/null | grep -c . || true)" -ge 2 ] \
+  && check "and each repository has its own record" ok \
+  || check "and each repository has its own record" "records: $(ls "$STATE" 2>/dev/null | tr '\n' ' ')"
+
+# A push with nothing to judge (no section changed) is NOT a stand down, or the count would say
+# the gate is failing on every push that touches no test.
+R10="$(mkrepo nothingtodo 0)"
+cat > "$R10/tests/audit-changed-sections.sh" <<'AUDIT'
+#!/usr/bin/env bash
+echo "audit-changed-sections: tests/test-claude-sync.sh is unchanged against ${1:-}, so no section needed running on its own. The full suite still runs."
+exit 0
+AUDIT
+chmod +x "$R10/tests/audit-changed-sections.sh"
+runrec "$R10" 'git push'; o10="$OUT"
+[ -z "$o10" ] && check "a push with no section to judge says nothing and counts nothing" ok \
+  || check "a push with no section to judge says nothing and counts nothing" "it said: [$o10]"
+
+# A state directory it cannot write is not a reason to stop a push, and it says so rather than
+# going quiet about its own bookkeeping (L42, L98).
+R11="$(mkrepo unwritable 0)"
+cp "$R8/tests/audit-changed-sections.sh" "$R11/tests/audit-changed-sections.sh"
+LINUX_SECTIONS_STATE_DIR="/dev/null/nope" run "$R11" 'git push'; o11="$OUT"
+[ "$RC" -eq 0 ] && check "a record it cannot write does not block the push" ok \
+  || check "a record it cannot write does not block the push" "rc=$RC out=$o11"
+case "$o11" in *UNMEASURED*) check "and the stand down is still reported" ok ;;
+  *) check "and the stand down is still reported" "it said: [$o11]" ;; esac
 
 # --- everything it must NOT block on.
 R2="$(mkrepo passes 0)"
