@@ -2007,6 +2007,31 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 # SUITE_TIMEOUT is not judged against a threshold calibrated on a fast one (L376). At CI's ceiling
 # of 1800 the budget is 1260s against a measured 980s, which is room for 28% more work, and it
 # speaks well before the wall clock guard, which needs 1800s of section time to reach its 900s.
+#
+# MEASURED AGAINST THAT BUDGET 2026-09-20, with tools/measure-section-time.sh, which takes several
+# readings and records the machine state beside each one (claude-config#517). The two figures that
+# issue was filed about, 963s and 1847s, were never a comparison: neither recorded what else was
+# running, and section time is wall clock per section, so it inflates with everything else on the
+# machine. Every reading below is at FOUR shards, because the prelude runs inside each shard and
+# every copy is counted, so a total at another shard count is a different quantity.
+#
+#   As found, with another project's Xcode suite and a backup client running:
+#     968s, 1139s and 898s. Median 968s, 38% of the budget, at an ambient CPU of 347% to 575% of
+#     one core and a load average reaching 98.
+#   In a quiet window:
+#     866s, 860s and 846s. Median 860s, 34% of the budget, at an ambient CPU of 202% to 410% and a
+#     load average of 10 to 16.
+#
+# So the suite's own share is 860s and the margin at the worst of those six readings is 1381s. The
+# 1847s does not reproduce: the busiest reading taken here, at a load average of 98, reached 1139s.
+# Load is the larger share, as #517 suspected, and it shows in the SPREAD more than in the median,
+# 20s across the quiet arm against 241s across the busy one. So the lever #492 named, sharing
+# fixtures between sections that build the same shape, is not needed at 34% of budget, and the
+# coupling it would create is not worth buying at this margin.
+#
+# A reading under a load this tool STARTS rather than one it found is MEASURE_LOAD_PROCS, and it
+# was not taken. Named here rather than left to be rediscovered (L308): the two arms above already
+# differ by roughly 2x in ambient CPU, which asks the same question of a real machine.
 SUITE_WORK_BUDGET_PCT="${SUITE_WORK_BUDGET_PCT:-70}"
 # Every shard's SUITE-WORK line, added up. Prints NOTHING when any shard did not emit one, so a
 # shard that died takes the total with it rather than quietly shrinking it (claude-config#492).
