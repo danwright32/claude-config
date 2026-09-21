@@ -7,6 +7,14 @@
 # pipeline (L300), and a declared timeout is evidence of what somebody feared, not of what it costs.
 set -uo pipefail
 
+# Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../payload/hooks/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+suite_deadline_arm || exit $?
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="$DIR/time-push-gates.sh"
 pass=0; fail=0
