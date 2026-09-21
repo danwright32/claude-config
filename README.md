@@ -510,6 +510,25 @@ things: on 2026-09-20 this Mac sat at load 90 with an honest ambient CPU of a fe
 the difference being four backup and indexing daemons all waiting on the disk. Only the load
 average showed why the suite took twice as long that evening.
 
+The readings themselves live in `tests/section-time-readings.tsv`, and a section of the sync suite
+recomputes the median, lowest and highest per arm from that file and requires the paragraph above
+`SUITE_WORK_BUDGET_PCT` to quote them, so the prose cannot drift from the data. The record's
+columns are named by the tool that writes them (`tools/measure-section-time.sh --columns`) and read
+back by NAME, so adding a column cannot silently re-aim the reader (#524).
+
+A fresh reading is taken once a month, at 02:00 on the 1st, waiting for a quiet window:
+
+```bash
+bash tools/install-section-time-schedule.sh          # and --remove to take it off
+```
+
+The job runs `tools/take-section-time-reading.sh`, which holds a lock so two readings never measure
+each other, logs to `~/.claude-section-time.log`, and refuses rather than recording a number taken
+on a busy machine. It appends to the record and commits nothing: a fresh reading makes the suite
+fail until the paragraph is updated to match, which is the drift being caught rather than sitting
+(#520). Monthly rather than weekly is Dan's call, taken on 2026-09-21, because each reading is a
+suite run on a Mac somebody uses.
+
 It refuses rather than reporting a flattering number: a run that failed, a run that emitted no
 total, a machine that never settled, and an arm whose shard count moved partway are all
 UNMEASURED, because a total of zero would clear every budget there is. The shard count is part of
