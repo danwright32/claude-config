@@ -505,9 +505,16 @@ fixed bar, since a Mac running a backup, a sync daemon and two editors never rea
 `MEASURE_LOAD_PROCS=12` runs the other arm, under a load it starts and stops itself, so the two
 arms differ in one known thing. `MEASURE_RECORD=<file>` appends a row per reading.
 
+Each reading carries the load average as well as the ambient CPU, because the two say different
+things: on 2026-09-20 this Mac sat at load 90 with an honest ambient CPU of a few hundred percent,
+the difference being four backup and indexing daemons all waiting on the disk. Only the load
+average showed why the suite took twice as long that evening.
+
 It refuses rather than reporting a flattering number: a run that failed, a run that emitted no
-total, and a machine that never settled are all UNMEASURED, because a total of zero would clear
-every budget there is.
+total, a machine that never settled, and an arm whose shard count moved partway are all
+UNMEASURED, because a total of zero would clear every budget there is. The shard count is part of
+it because the suite runs its prelude inside every shard and counts each copy, so a total taken at
+four shards is not the same quantity as one taken at two.
 
 
 The suites run several at a time, since they are independent. Measured on this Mac on 2026-08-21 over the hook

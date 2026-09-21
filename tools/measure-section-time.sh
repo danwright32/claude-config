@@ -33,6 +33,7 @@
 #   MEASURE_SUITE_SOURCE     the file the budget is derived from (default: the sync suite's source)
 #   MEASURE_AMBIENT_CMD      prints ambient CPU, in percent of one core (default: a ps sum)
 #   MEASURE_LOADAVG_CMD      prints the one minute load average (default: sysctl vm.loadavg)
+#   MEASURE_TOP_CMD          prints the busiest processes (default: the same ps snapshot, sorted)
 #   MEASURE_SLEEP_CMD        the sleep (default: sleep). A seam, so the tests pay no wall clock.
 #
 # Exit 0 = measured. Exit 1 = REFUSED: a run that failed, a run that emitted no total, a machine
@@ -145,19 +146,21 @@ top_from(){          # $1 = the pgid to leave out, then ps output on stdin
       n = split(line, p, "/")
       printf "%.0f\t%s\n", $2, p[n]
     }' \
-    | sort -rn | head -3 | awk -F'\t' '{ gsub(/ /, "_", $2); printf "%s(%s%%) ", $2, $1 }'
+    | sort -rn | awk -F'\t' 'NR <= 3 { gsub(/ /, "_", $2); printf "%s(%s%%) ", $2, $1 }'
 }
 if [ "${1:-}" = "--top" ]; then
   top_from "${2:-0}"
   exit 0
 fi
+TOP_CMD="${MEASURE_TOP_CMD:-}"
 top_ambient(){
+  if [ -n "$TOP_CMD" ]; then $TOP_CMD 2>/dev/null | cut -c1-160; return 0; fi
   ps -A -o pgid=,%cpu=,comm= 2>/dev/null | top_from "${PGID:-0}" | cut -c1-160
 }
 
 # --- the budget, derived from the suite's own two constants and never written out again here.
-_to="$(sed -n 's/^SUITE_TIMEOUT="\${SUITE_TIMEOUT:-\([0-9][0-9]*\)}"$/\1/p' "$SUITE_SOURCE" | head -1)"
-_pct="$(sed -n 's/^SUITE_WORK_BUDGET_PCT="\${SUITE_WORK_BUDGET_PCT:-\([0-9][0-9]*\)}"$/\1/p' "$SUITE_SOURCE" | head -1)"
+_to="$(sed -n 's/^SUITE_TIMEOUT="\${SUITE_TIMEOUT:-\([0-9][0-9]*\)}"$/\1/p' "$SUITE_SOURCE")"; _to="${_to%%$'\n'*}"
+_pct="$(sed -n 's/^SUITE_WORK_BUDGET_PCT="\${SUITE_WORK_BUDGET_PCT:-\([0-9][0-9]*\)}"$/\1/p' "$SUITE_SOURCE")"; _pct="${_pct%%$'\n'*}"
 case "${_to:-}${_pct:-}" in
   ''|*[!0-9]*) die2 "could not read SUITE_TIMEOUT and SUITE_WORK_BUDGET_PCT out of $SUITE_SOURCE, so the budget would have to be a second copy of numbers that live there. Refusing." ;;
 esac
@@ -260,7 +263,7 @@ while [ "$i" -le "$RUNS" ]; do
   _t0=$SECONDS
   $SUITE_CMD > "$_out" 2>&1 &
   _pid=$!
-  _amax=0; _asum=0; _an=0; _abad=0; _s=0; _lmax=0
+  _amax=0; _asum=0; _an=0; _abad=0; _s=0; _lmax=0; _who=""
   # The first sample is taken straight away rather than after a wait, so a run always carries at
   # least one reading of the conditions it was taken under. A short run would otherwise finish
   # before the first sample and report a number with nothing beside it.
@@ -269,7 +272,11 @@ while [ "$i" -le "$RUNS" ]; do
     v="$(read_ambient)"
     case "$v" in
       ''|*[!0-9]*) _abad=$(( _abad + 1 )) ;;
-      *) _an=$(( _an + 1 )); _asum=$(( _asum + v )); [ "$v" -gt "$_amax" ] && _amax="$v" ;;
+      # Read at the PEAK, not after the run. Taken once at the end it named whatever happened to be
+      # running a second after the reading, which is a different question from what the reading was
+      # taken alongside, and reads as an answer to the second one.
+      *) _an=$(( _an + 1 )); _asum=$(( _asum + v ))
+         if [ "$v" -gt "$_amax" ]; then _amax="$v"; _who="$(top_ambient)"; fi ;;
     esac
     l="$(read_loadavg)"
     [ -n "$l" ] || return 0
@@ -288,14 +295,13 @@ while [ "$i" -le "$RUNS" ]; do
   wait "$_pid"; _rc=$?
   _elapsed=$(( SECONDS - _t0 ))
   _amean=0; [ "$_an" -gt 0 ] && _amean=$(( _asum / _an ))
-  _who="$(top_ambient)"
 
   if [ "$_rc" -ne 0 ]; then
     REFUSAL="run $i of $RUNS FAILED (exit $_rc). A run that failed partway still ran everything before the failure, so whatever it totalled is a fragment of the suite and not a reading of it (L480). The output is at $_out."
     break
   fi
   # The suite's own line: the total, and the budget IT judged itself against.
-  _note="$(sed -n 's/^SUITE-NOTE \([0-9][0-9]*\)s of section time against a \([0-9][0-9]*\)s budget.*/\1 \2/p' "$_out" | head -1)"
+  _note="$(sed -n 's/^SUITE-NOTE \([0-9][0-9]*\)s of section time against a \([0-9][0-9]*\)s budget.*/\1 \2/p' "$_out")"; _note="${_note%%$'\n'*}"
   if [ -z "$_note" ]; then
     REFUSAL="run $i of $RUNS emitted no section time total, so it measured nothing. Nothing is not a total of zero, which would clear every budget there is (L90, L98). The output is at $_out."
     break
@@ -305,7 +311,7 @@ while [ "$i" -le "$RUNS" ]; do
   # counts every one of them, so the same tree measured at two shard counts gives two different
   # totals. A reading is therefore only comparable with another taken at the same count, and an
   # arm whose count moved partway through is not one arm (L220).
-  _shards="$(sed -n 's/.*(\([0-9][0-9]*\) shards in .*/\1/p' "$_out" | head -1)"
+  _shards="$(sed -n 's/.*(\([0-9][0-9]*\) shards in .*/\1/p' "$_out")"; _shards="${_shards%%$'\n'*}"
   if [ -n "$_shards" ]; then
     if [ -z "$SHARDS" ]; then
       SHARDS="$_shards"
@@ -346,9 +352,12 @@ fi
 
 # --- the verdict.
 _n="$(printf '%s' "$SECS" | wc -w | tr -d ' ')"
-_lo="$(printf '%s\n' $SECS | sort -n | head -1)"
-_hi="$(printf '%s\n' $SECS | sort -n | tail -1)"
-_mid="$(printf '%s\n' $SECS | sort -n | awk '{ v[NR] = $1 } END { print v[int((NR + 1) / 2)] }')"
+# Sorted ONCE, into a variable, and read from there. Three pipelines each ending in a consumer
+# that leaves early is three chances for pipefail to report a failure that never happened (L183).
+_sorted="$(printf '%s\n' $SECS | sort -n)"
+_lo="${_sorted%%$'\n'*}"
+_hi="${_sorted##*$'\n'}"
+_mid="$(printf '%s\n' "$_sorted" | awk '{ v[NR] = $1 } END { print v[int((NR + 1) / 2)] }')"
 _pct_used=$(( _mid * 100 / BUDGET ))
 say ""
 if [ "$_n" -eq 1 ]; then

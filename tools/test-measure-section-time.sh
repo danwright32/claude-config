@@ -392,6 +392,28 @@ o18="$(run_m MEASURE_RUNS=2 MEASURE_SUITE_CMD="bash $S_SILENT_OK" MEASURE_AMBIEN
 [ "$c18" -eq 0 ] && check "a run that names no shard count is still a reading" ok \
                  || check "a run that names no shard count is still a reading" "exit=$c18 out=$o18"
 
+# --- the busiest processes must be read at the PEAK of the reading, not once the run is over.
+#     Read afterwards it names whatever happened to be running a second later, which is a different
+#     question, and the answer sits in a field whose name claims it describes the reading.
+TOPSTUB="$TMPROOT/top-stub.sh"
+TOPLOG="$TMPROOT/top-stub.log"
+cat > "$TOPSTUB" <<EOF
+#!/usr/bin/env bash
+n=\$(wc -l < "$TOPLOG" 2>/dev/null || echo 0)
+n=\$(( n + 1 ))
+echo "call" >> "$TOPLOG"
+echo "topcall\${n}(99%)"
+EOF
+chmod +x "$TOPSTUB"
+# The peak arrives on the FIRST sample of the run, so a tool reading at the peak reports topcall1.
+# One reading later, and the stub has moved on.
+A_PEAK="$(mk_ambient peak 40 40 40 40 40 40 900 50 50 50 50 50 50 50 50 50 50 50 50 50)"
+o20="$(run_m MEASURE_RUNS=1 MEASURE_SUITE_CMD="bash $S_SLOW" MEASURE_AMBIENT_CMD="$A_PEAK" \
+       MEASURE_TOP_CMD="$TOPSTUB" bash "$M" 2>&1)"
+grep -q 'topcall1(' <<< "$o20" \
+  && check "the busiest processes are read at the reading's peak" ok \
+  || check "the busiest processes are read at the reading's peak" "out=$o20"
+
 # --- knobs that decide what runs are refused rather than guessed at.
 o10="$(run_m MEASURE_RUNS=zero MEASURE_SUITE_CMD="bash $S_OK" MEASURE_AMBIENT_CMD="$A_OK" bash "$M" 2>&1)"; c10=$?
 [ "$c10" -eq 2 ] && check "a run count that is not a number is refused" ok \
@@ -412,9 +434,11 @@ run_m MEASURE_RUNS=2 MEASURE_RECORD="$REC" MEASURE_SUITE_CMD="bash $S_OK" \
 [ "$(grep -c . "$REC" 2>/dev/null || echo 0)" -ge 2 ] \
   && check "one row per run, not one per invocation" ok \
   || check "one row per run, not one per invocation" "rows=$(grep -c . "$REC" 2>/dev/null || echo 0)"
-head -1 "$REC" 2>/dev/null | grep -q '	' \
-  && check "and the record is tab separated so it can be read back" ok \
-  || check "and the record is tab separated so it can be read back" "row=$(head -1 "$REC" 2>/dev/null)"
+_rec_row="$(head -1 "$REC" 2>/dev/null)"
+case "$_rec_row" in
+  *"$(printf '\t')"*) check "and the record is tab separated so it can be read back" ok ;;
+  *) check "and the record is tab separated so it can be read back" "row=$_rec_row" ;;
+esac
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
