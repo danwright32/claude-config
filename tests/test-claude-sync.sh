@@ -14444,12 +14444,29 @@ for _sr_arm in as-found quiet; do
   done
 done
 
-# Every reading was judged against the budget this suite actually sets, so a record carrying a
-# reading from another budget is comparing two different things (L220).
-_sr_budget=$(( SUITE_TIMEOUT * SUITE_WORK_BUDGET_PCT / 100 ))
-_sr_other="$(awk -F'\t' -v b="$_sr_budget" 'NR > 1 && $5 != "" && $5 + 0 != b + 0 { print $1; exit }' "$_sr_file" 2>/dev/null)"
-check "#520 every recorded reading was judged against the budget this suite sets" \
-  "[ -z \"\$_sr_other\" ] || { echo \"    a reading taken at \$_sr_other was judged against a different budget than \${_sr_budget}s\" >&2; false; }"
+# Readings are only comparable with each other while they were judged against ONE budget, so that
+# is what is checked here. NOT against the budget this suite happens to set right now: the ceiling
+# is smaller on CI than on a Mac, so a check written that way fails on every machine that
+# legitimately differs, which is what it did the first time it ran there (L376).
+_sr_budgets="$(awk -F'\t' 'NR > 1 && $5 != "" { print $5 }' "$_sr_file" 2>/dev/null | sort -u | grep -c .)"
+check "#520 every recorded reading was judged against one budget" "[ \"\${_sr_budgets:-0}\" -eq 1 ]"
+_sr_bud="$(awk -F'\t' 'NR > 1 && $5 != "" { print $5; exit }' "$_sr_file" 2>/dev/null)"
+
+# And the share of that budget the prose claims is recomputed from the readings, so the sentence
+# cannot say 38% of a budget the numbers beside it do not divide into that way.
+for _sr_arm in as-found quiet; do
+  _sr_med="$(_sr_stat "$_sr_arm" median)"
+  case "${_sr_med:-}${_sr_bud:-}" in
+    ''|*[!0-9]*) continue ;;
+  esac
+  [ "${_sr_bud:-0}" -gt 0 ] || continue
+  _sr_pct=$(( _sr_med * 100 / _sr_bud ))
+  case "$_sr_prose" in
+    *[!0-9]"${_sr_pct}"%*) _sr_hit=yes ;;
+    *) _sr_hit=no ;;
+  esac
+  check "#520 the prose quotes the $_sr_arm arm as ${_sr_pct}% of the budget" "[ '$_sr_hit' = yes ]"
+done
 
 section "== a comment that quotes a measured number says when it was measured (#140, #145) =="
 # Six comments and one CI step quoted how many sections this suite has, and every number was from
