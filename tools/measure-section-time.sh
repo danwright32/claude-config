@@ -363,16 +363,33 @@ while [ "$i" -le "$RUNS" ]; do
   fi
   rm -f "$_out"
   SECS="$SECS $_sec"
+  # How far ambient sat ABOVE this machine's floor while the run was in flight. Reported on its
+  # own rather than folded into the mean, because part of it is work this run PROVOKES in programs
+  # it does not own: the indexer reading the scratch the suite writes, a backup client picking up
+  # new files. Both arms therefore carry some of their own footprint in the very number meant to
+  # separate them, and only a figure named as a rise makes that visible (claude-config#521).
+  #
+  # A machine QUIETER during the run than at calibration is said to have fallen, never clamped to
+  # a rise of zero, which would read as a run that provoked nothing.
+  _arise=""
+  if [ "$_an" -gt 0 ]; then
+    if [ "$_amean" -ge "$FLOOR" ]; then
+      _arise="rose $(( _amean - FLOOR ))% above this machine's floor, some of which is work this run provokes elsewhere"
+    else
+      _arise="fell $(( FLOOR - _amean ))% below this machine's floor, so the machine was quieter during the run than when the floor was taken"
+    fi
+  fi
   if [ "$_an" -gt 0 ]; then
     say "  run $i: ${_sec}s of section time over ${_shards:-?} shard(s), ${_elapsed}s wall clock, ambient CPU mean ${_amean}% max ${_amax}% of one core over $_an sample(s)${_abad:+, $_abad unreadable}, load average up to ${_lmax}${_who:+ (busiest: $_who)}"
+    say "         ambient $_arise"
   else
     say "  run $i: ${_sec}s of section time over ${_shards:-?} shard(s), ${_elapsed}s wall clock, ambient CPU unknown: all $_abad sample(s) were unreadable, so this reading carries no account of the machine it was taken on"
   fi
   if [ -n "$RECORD" ]; then
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(hostname -s 2>/dev/null)" "$ARM" "$_sec" "$BUDGET" \
       "$_elapsed" "$( [ "$_an" -gt 0 ] && printf '%s' "$_amean" || printf 'unknown' )" \
-      "$( [ "$_an" -gt 0 ] && printf '%s' "$_amax" || printf 'unknown' )" "$FLOOR" "${_shards:-unknown}" "$_lmax" "${_who:-none}" >> "$RECORD" \
+      "$( [ "$_an" -gt 0 ] && printf '%s' "$_amax" || printf 'unknown' )" "$FLOOR" "${_shards:-unknown}" "$_lmax" "$( [ "$_an" -gt 0 ] && printf '%s' "$(( _amean - FLOOR ))" || printf 'unknown' )" "${_who:-none}" >> "$RECORD" \
       || say "  (warning: could not append to $RECORD, so this reading was printed and not recorded)"
   fi
   i=$(( i + 1 ))

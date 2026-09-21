@@ -423,6 +423,30 @@ o11="$(MEASURE_SUITE_SOURCE="$TMPROOT/not-there.sh" MEASURE_SLEEP_CMD="$SLEEPER"
 [ "$c11" -eq 2 ] && check "a missing suite source is refused, not defaulted" ok \
                  || check "a missing suite source is refused, not defaulted" "exit=$c11 out=$o11"
 
+# --- how far ambient rose ABOVE this machine's floor during the run is its own figure, because
+#     part of that rise is work the run provokes in programs it does not own: the indexer reading
+#     the scratch the suite writes, a backup client picking up new files (claude-config#521).
+#     Reported as a rise rather than folded into the ambient mean, so a reader can see that the
+#     two arms each carry some of their own footprint in the number meant to separate them.
+#
+#     Floor 40 from calibration, then 240 throughout the run, so the rise is 200.
+A_RISE="$(mk_ambient rise 40 40 40 40 40 40 240 240 240 240 240 240 240 240 240 240)"
+o21="$(run_m MEASURE_RUNS=1 MEASURE_SUITE_CMD="bash $S_SLOW" MEASURE_AMBIENT_CMD="$A_RISE" bash "$M" 2>&1)"
+grep -qE 'rose 200%|200% above' <<< "$o21" \
+  && check "the rise above the floor is reported as its own figure" ok \
+  || check "the rise above the floor is reported as its own figure" "out=$o21"
+grep -qi 'provoke' <<< "$o21" \
+  && check "and it says part of the rise is work this run causes elsewhere" ok \
+  || check "and it says part of the rise is work this run causes elsewhere" "out=$o21"
+
+# --- a machine QUIETER during the run than at calibration is reported honestly as a fall, never
+#     as a rise of zero, which would read as a run that provoked nothing (L90).
+A_FALL="$(mk_ambient fall 300 300 300 300 300 300 100 100 100 100 100 100 100 100 100 100)"
+o22="$(run_m MEASURE_RUNS=1 MEASURE_SUITE_CMD="bash $S_SLOW" MEASURE_AMBIENT_CMD="$A_FALL" bash "$M" 2>&1)"
+grep -qiE 'fell 200%|200% below' <<< "$o22" \
+  && check "a machine that got quieter is reported as a fall" ok \
+  || check "a machine that got quieter is reported as a fall" "out=$o22"
+
 # --- a run must be immune to its own source being edited underneath it (claude-config#519).
 #     Bash reads a script incrementally as it executes it, so an edit mid run changes what the
 #     rest of that run does, and the run can still finish and report a number belonging to neither
