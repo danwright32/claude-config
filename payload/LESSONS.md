@@ -5326,6 +5326,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   the previous feature that made the same mistake.)
   SHORT: Excluding somebody from a ranking must remove them from the COHORT, never only blank their row, or every other member's percentile moves.
 
+- **L1002. A rule that judges one item against a SET the same batch is still adding to answers
+  differently depending on arrival order, so derive it once over the whole batch before processing any
+  item.** The per item form is green on whichever order the test happens to use, and the defect appears
+  only when the deciding member arrives last, so the same input in a different order gives a different
+  answer and neither run looks wrong on its own.
+  (overture#4056: the scout refuses a ticketing production id that appears under more than one show
+  title, so a venue stamping one id across its season cannot fuse the season into one card. The refusal
+  was computed per incoming listing, over the stored rows plus that ONE listing, so a second listing in
+  the same sweep that would have revealed the stamp was invisible while the first was judged. Measured
+  2026-09-21 with one stored row and two incoming: poisoning listing second, the token joined two rows
+  it must not, two rows left; the same three shows the other way round correctly refused, three rows
+  left. The issue had been filed as a PERFORMANCE fix and states "Nothing is wrong with the answer, so
+  this is speed rather than correctness".)
+  SHORT: A rule judging an item against a set its own batch is still growing is order dependent, so derive it once over the whole batch first.
+
 ## Security and privacy
 
 - **L18. Enforce authorization at the database layer, not only in application code.**

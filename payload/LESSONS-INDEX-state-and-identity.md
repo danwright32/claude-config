@@ -74,3 +74,4 @@ which is NOT loaded into the session.
 - L661. A manual override the product offers must write every field the automated path writes for that state, because gates downstream read the richer record.
 - L692. A rule specific to ONE consumer must live in that consumer's own field, never in a zeroed shared quantity every other reader silently acts on.
 - L700. Excluding somebody from a ranking must remove them from the COHORT, never only blank their row, or every other member's percentile moves.
+- L1002. A rule judging an item against a set its own batch is still growing is order dependent, so derive it once over the whole batch first.
