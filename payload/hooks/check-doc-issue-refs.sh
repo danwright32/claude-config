@@ -19,6 +19,16 @@
 # somebody is looking at it, so that is when it is re-verified. A push touching no doc
 # prints nothing and costs nothing.
 #
+# EXCEPT a file that DECLARES itself a dated record, with `<!-- doc-issue-refs:
+# dated-record -->` in its first 20 lines, which is skipped entirely (#535). An append
+# only diary is the one shape the paragraph above is wrong about: its old entries are the
+# record of what was true that day, so the remedy this prints, rewrite the sentence, would
+# mean editing history. Measured 2026-09-21 in danwright32/downbeat, six pushes in one
+# session were each refused on the same six paragraphs the push had not touched, and the
+# override was used six times, which is how a gate stops being read (L36). Declared rather
+# than inferred, because a marker somebody writes is a decision and a rule guessing from
+# prose would exempt any doc that happened to word itself that way.
+#
 # WHAT COUNTS: the sentence, not the line, and only a sentence whose pending phrase is
 # ANCHORED to the reference ("#N is the issue for", "tracked in #N", "#N tracks", "#N
 # will", "once #N", "when #N", "#N lands", "#N is open", "#N is pending", "not yet ...

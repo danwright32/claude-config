@@ -167,7 +167,38 @@ def in_past_position(sent_lc, offset):
     return PAST_AFTER_REF.match(sent_lc, offset) is not None
 
 
+# A file that DECLARES itself a dated record, which is not scanned at all.
+#
+# The whole file is read on purpose, because a claim goes stale by the world moving
+# rather than by anybody editing it. That is right for a doc describing the CURRENT
+# state and wrong for an append only diary, where an old entry IS the record of what was
+# true that day: the remedy this gate prints, rewrite the sentence, would mean editing
+# history to say something nobody knew at the time.
+#
+# Measured 2026-09-21 in danwright32/downbeat: six pushes in one session, every one
+# refused, every time on the same six paragraphs of docs/PROJECT-LOG.md that the push had
+# not touched, written weeks earlier by other commits. The override was used six times,
+# which is how a gate stops being read (L36).
+#
+# DECLARED, not inferred. A marker somebody has to write is a decision, and a rule that
+# guessed from prose would silently exempt any doc that happened to word itself that way,
+# which is the exemption nobody chose (L250).
+#
+# Near the TOP only. A diary grows for years, and a marker further down would declare the
+# file historical from the middle while every reader above it believes the check ran.
+DATED_RECORD = "<!-- doc-issue-refs: dated-record -->"
+DATED_RECORD_WITHIN_LINES = 20
+
+
+def is_dated_record(text):
+    """Whether this file has opted out, by declaring itself near its top."""
+    head = text.split("\n")[:DATED_RECORD_WITHIN_LINES]
+    return any(DATED_RECORD in line for line in head)
+
+
 def scan(name, text, explain=False):
+    if is_dated_record(text):
+        return []
     rows = []
     lines = text.split("\n")
     for start, para in paragraphs(lines):

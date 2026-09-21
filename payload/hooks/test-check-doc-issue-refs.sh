@@ -54,6 +54,36 @@ booker itself." "2:1041"
 want_none "the brief's false positive: a past claim about the same issue" \
 "#1041 added the links to the booker."
 
+# --- a DATED RECORD opts out, because an old entry is not a live claim ------------------
+#
+# The whole file is read on purpose: a claim goes stale by the world moving, not by
+# anybody editing it. That is right for a doc describing the CURRENT state and wrong for
+# an append only diary, where the entry IS the record of what was true that day and the
+# remedy the gate prints, rewrite it, means editing history.
+#
+# Measured 2026-09-21 in danwright32/downbeat: six pushes in one session, every one
+# refused, every time on the same six paragraphs of docs/PROJECT-LOG.md that the push had
+# not touched, written weeks earlier by other commits. The override was used six times,
+# which is how a gate stops being read (L36).
+#
+# So a file DECLARES itself, rather than the scanner guessing from prose: an opt out
+# somebody has to write is a decision, and one inferred from a sentence would silently
+# exempt any doc that happened to word itself that way.
+want_none "a file marked as a dated record is not scanned at all" \
+"<!-- doc-issue-refs: dated-record -->
+#1041 is the issue for putting a privacy link on the booker."
+
+# The marker has to be near the TOP, or a diary that grows for years ends up declaring
+# itself in the middle and every reader above that line is misled about what was checked.
+want_row "the marker buried far down the file does not exempt it" \
+"$(printf 'filler\n%.0s' $(seq 1 30))<!-- doc-issue-refs: dated-record -->
+#1041 is the issue for putting a privacy link on the booker." "31:1041"
+
+# And the marker is exact: a near miss must not silently switch the check off.
+want_row "a misspelled marker exempts nothing" \
+"<!-- doc-issue-refs: dated record -->
+#1041 is the issue for putting a privacy link on the booker." "2:1041"
+
 want_none "a past tense verb after the reference, with a future word later in the sentence" \
 "#730 added a guard that will fail the build on the next hand rolled copy."
 
