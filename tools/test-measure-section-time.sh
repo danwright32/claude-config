@@ -65,6 +65,7 @@ mk_source(){         # $1 = name   $2 = SUITE_TIMEOUT default   $3 = SUITE_WORK_
 # than assuming it (L284).
 mk_ambient(){        # $1 = name, then the readings
   local p="$TMPROOT/$1-ambient.sh" log="$TMPROOT/$1-ambient.log" vals="$TMPROOT/$1-ambient.vals"
+  local mark="$TMPROOT/$1-ambient.mark"
   shift
   printf '%s\n' "$@" > "$vals"
   cat > "$p" <<EOF
@@ -72,6 +73,10 @@ mk_ambient(){        # $1 = name, then the readings
 n=\$(wc -l < "$log" 2>/dev/null || echo 0)
 n=\$(( n + 1 ))
 echo "call" >> "$log"
+# A marker once this has been called twenty times, so a stub suite can wait on the condition the
+# test actually needs (enough samples taken) instead of on a fixed time, which would be an
+# assertion about how busy the machine is (L290).
+[ "\$n" -ge 20 ] && : > "$mark"
 awk -v want="\$n" 'NR == want { print; found = 1 } END { if (!found) print last } { last = \$0 }' "$vals"
 EOF
   chmod +x "$p"; printf '%s' "$p"
@@ -260,15 +265,19 @@ grep -qiE 'unreadable|could not be read' <<< "$o14" \
 #     word "unreadable" in the report while the ambient figure is pulled toward nothing, so the
 #     reading looks like it was taken on a quiet machine. The stub suite below lives long enough
 #     for the loop to take many samples, and the stub reader answers nothing for most of them.
+A_DILUTE="$(mk_ambient dilute 40 40 40 40 40 40 400 "" 400 "" 400 "" 400 "")"
 S_SLOW="$TMPROOT/slow.sh"
 cat > "$S_SLOW" <<EOF
 #!/usr/bin/env bash
-sleep 0.4
+# Stays alive until the sampler has taken enough readings, which is the condition this test needs,
+# rather than for a fixed time, which would assert about the machine's load instead (L290). Bounded
+# by a count as well, because a loop bounded only by a condition never reached does not end (L704).
+_n=0
+while [ ! -e "$TMPROOT/dilute-ambient.mark" ] && [ "\$_n" -lt 500000 ]; do _n=\$(( _n + 1 )); done
 echo "SUITE-NOTE 900s of section time against a 2520s budget"
 exit 0
 EOF
 chmod +x "$S_SLOW"
-A_DILUTE="$(mk_ambient dilute 40 40 40 40 40 40 400 "" 400 "" 400 "" 400 "")"
 o15="$(run_m MEASURE_RUNS=1 MEASURE_SUITE_CMD="bash $S_SLOW" MEASURE_AMBIENT_CMD="$A_DILUTE" bash "$M" 2>&1)"
 grep -q 'mean 400%' <<< "$o15" \
   && check "unreadable samples do not dilute the ambient figure toward zero" ok \
