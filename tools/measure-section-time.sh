@@ -16,7 +16,8 @@
 # be quiet by ITS OWN standard, calibrated from the floor this machine actually sits at, because a
 # fixed bar refuses every measurement on a machine that always has something running (L364).
 #
-# Usage: measure-section-time.sh
+# Usage: measure-section-time.sh             (takes the readings)
+#        measure-section-time.sh --columns   (prints the record's header, the one list of its columns)
 #   MEASURE_RUNS             readings to take (default 3; 1 is allowed and is labelled as not a
 #                            measurement, because a single number has no spread to read)
 #   MEASURE_LOAD_PROCS       busy loops to start for the duration, for the loaded arm (default 0)
@@ -79,6 +80,27 @@ if [ "${1:-}" = "--self-path" ]; then
   exit 0
 fi
 
+# The record's columns, named ONCE (claude-config#524). The header a new record starts with, the
+# row each reading appends and the header an existing record is held to are all this list, and the
+# sync suite reads the record by these NAMES rather than by position. A row used to be one printf
+# with thirteen arguments in an order written out a second time, under a header nothing compared
+# to it, so adding a column meant the reader silently read a different quantity.
+RECORD_COLUMNS="taken_utc host arm section_seconds budget_seconds wall_seconds ambient_mean_pct ambient_max_pct floor_pct shards load_max ambient_rise_pct busiest"
+record_header(){ printf '%s\n' $RECORD_COLUMNS | paste -sd '\t' -; }
+if [ "${1:-}" = "--columns" ]; then
+  record_header
+  exit 0
+fi
+
+# Anything else on the command line is refused rather than ignored. This tool's whole job is a long
+# run of the real suite, so an argument it did not recognise used to START one, in place of what
+# was asked (claude-config#524).
+# --credible and --top are answered further down, once what they read is set up.
+if [ "$#" -gt 0 ] && [ "${1:-}" != "--credible" ] && [ "${1:-}" != "--top" ]; then
+  printf 'measure-section-time: "%s" is not an argument this takes (it takes --columns, --credible <rows>, --top, --self-path, or none). Refusing rather than starting a suite run nobody asked for.\n' "$1" >&2
+  exit 2
+fi
+
 RUNS="${MEASURE_RUNS:-3}"
 LOAD_PROCS="${MEASURE_LOAD_PROCS:-0}"
 WAIT_SECONDS="${MEASURE_WAIT_SECONDS:-0}"
@@ -127,6 +149,17 @@ for _k in RUNS LOAD_PROCS WAIT_SECONDS SAMPLE_SECONDS QUIET_MARGIN CAL_SAMPLES W
   case "$_v" in ''|*[!0-9]*) die2 "MEASURE_${_k}='$_v' is not a whole number, and it decides what runs. Refusing rather than guessing." ;; esac
 done
 [ "$RUNS" -gt 0 ] || die2 "MEASURE_RUNS=0 would take no readings at all and report that as a clean measurement. Refusing (L98)."
+# A record that already exists must carry exactly these columns, checked BEFORE a reading is
+# taken: a reading is a long suite run, and appending it under a different header would give its
+# numbers the wrong names with nothing to say so.
+if [ -n "$RECORD" ] && [ -s "$RECORD" ]; then
+  _rec_have="$(head -1 "$RECORD")"
+  if [ "$_rec_have" != "$(record_header)" ]; then
+    _rec_diff="$( { printf '%s\n' $RECORD_COLUMNS | sed 's/^/wants /'; printf '%s\n' "$_rec_have" | tr '\t' '\n' | sed 's/^/has /'; } \
+      | awk '{ c[$2] = c[$2] " " $1 } END { for (k in c) if (c[k] !~ /wants/ || c[k] !~ /has/) printf "%s%s", sep, k (c[k] ~ /wants/ ? " (missing from the record)" : " (not written by this tool)"); sep = ", " }')"
+    die2 "MEASURE_RECORD='$RECORD' does not carry the columns this tool writes${_rec_diff:+: $_rec_diff}${_rec_diff:- (same names, different order)}. Refusing before a reading is taken, since appending one would give its numbers the wrong names. Add the columns to the record's header and rows, or point MEASURE_RECORD at a new file."
+  fi
+fi
 [ -f "$SUITE_SOURCE" ] || die2 "MEASURE_SUITE_SOURCE='$SUITE_SOURCE' does not exist, so the budget cannot be derived from the suite's own constants. Refusing rather than falling back to a number written out here, which would go on judging against a superseded one (L41)."
 
 # The ambient reader. ps %CPU on macOS is a decaying average over roughly the last minute rather
@@ -386,10 +419,29 @@ while [ "$i" -le "$RUNS" ]; do
     say "  run $i: ${_sec}s of section time over ${_shards:-?} shard(s), ${_elapsed}s wall clock, ambient CPU unknown: all $_abad sample(s) were unreadable, so this reading carries no account of the machine it was taken on"
   fi
   if [ -n "$RECORD" ]; then
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(hostname -s 2>/dev/null)" "$ARM" "$_sec" "$BUDGET" \
-      "$_elapsed" "$( [ "$_an" -gt 0 ] && printf '%s' "$_amean" || printf 'unknown' )" \
-      "$( [ "$_an" -gt 0 ] && printf '%s' "$_amax" || printf 'unknown' )" "$FLOOR" "${_shards:-unknown}" "$_lmax" "$( [ "$_an" -gt 0 ] && printf '%s' "$(( _amean - FLOOR ))" || printf 'unknown' )" "${_who:-none}" >> "$RECORD" \
+    # Walked in the order RECORD_COLUMNS names, one value per name, so the row cannot be written
+    # in a different order from the header it sits under.
+    _row=""; _sep=""
+    for _col in $RECORD_COLUMNS; do
+      case "$_col" in
+        taken_utc)        _val="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" ;;
+        host)             _val="$(hostname -s 2>/dev/null)" ;;
+        arm)              _val="$ARM" ;;
+        section_seconds)  _val="$_sec" ;;
+        budget_seconds)   _val="$BUDGET" ;;
+        wall_seconds)     _val="$_elapsed" ;;
+        ambient_mean_pct) if [ "$_an" -gt 0 ]; then _val="$_amean"; else _val=unknown; fi ;;
+        ambient_max_pct)  if [ "$_an" -gt 0 ]; then _val="$_amax"; else _val=unknown; fi ;;
+        floor_pct)        _val="$FLOOR" ;;
+        shards)           _val="${_shards:-unknown}" ;;
+        load_max)         _val="$_lmax" ;;
+        ambient_rise_pct) if [ "$_an" -gt 0 ]; then _val="$(( _amean - FLOOR ))"; else _val=unknown; fi ;;
+        busiest)          _val="${_who:-none}" ;;
+        *) die2 "the record column '$_col' has no value written for it. RECORD_COLUMNS and this list must name the same columns." ;;
+      esac
+      _row="$_row$_sep$_val"; _sep="$(printf '\t')"
+    done
+    { [ -s "$RECORD" ] || record_header; printf '%s\n' "$_row"; } >> "$RECORD" \
       || say "  (warning: could not append to $RECORD, so this reading was printed and not recorded)"
   fi
   i=$(( i + 1 ))

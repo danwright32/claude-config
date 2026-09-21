@@ -516,6 +516,53 @@ case "$_rec_row" in
   *) check "and the record is tab separated so it can be read back" "row=$_rec_row" ;;
 esac
 
+# --- the record's columns are named ONCE, by the tool, and held to what it writes (#524). The sync
+#     suite reads this record, and it used to read the fourth and fifth fields by POSITION under a
+#     header nothing compared to the writer, so a column added or reordered here would have had it
+#     read a different quantity with every check still passing.
+# Every seam set, so a tool that did not know the flag would run the stub rather than the real
+# suite. That is exactly what happened the first time this was written (L284).
+_cols="$(run_m MEASURE_RUNS=1 MEASURE_SUITE_CMD="bash $S_OK" MEASURE_AMBIENT_CMD="$A_R" bash "$M" --columns 2>&1)"; _cols_rc=$?
+_cols_n="$(printf '%s' "$_cols" | awk -F'\t' '{ print NF }')"
+[ "$_cols_rc" -eq 0 ] && [ "${_cols_n:-0}" -ge 10 ] \
+  && check "the tool names its record's columns" ok \
+  || check "the tool names its record's columns" "rc=$_cols_rc cols=$_cols"
+[ "$(head -1 "$REC" 2>/dev/null)" = "$_cols" ] \
+  && check "a new record starts with that header" ok \
+  || check "a new record starts with that header" "first line=$(head -1 "$REC" 2>/dev/null)"
+_rec_widths="$(awk -F'\t' '{ print NF }' "$REC" 2>/dev/null | sort -u | tr '\n' ' ')"
+[ "$_rec_widths" = "$_cols_n " ] \
+  && check "and every row it writes is as wide as the header" ok \
+  || check "and every row it writes is as wide as the header" "widths=$_rec_widths header=$_cols_n"
+_rec_hdrs="$(grep -c '^taken_utc' "$REC" 2>/dev/null || true)"
+[ "${_rec_hdrs:-0}" -eq 1 ] \
+  && check "and a second invocation appends rows, not a second header" ok \
+  || check "and a second invocation appends rows, not a second header" "headers=$_rec_hdrs"
+
+# And an argument the tool does not know is refused, never ignored. Ignoring it ran a full real
+# suite run in place of a question that should have taken a millisecond.
+o_unk="$(run_m MEASURE_RUNS=1 MEASURE_SUITE_CMD="bash $S_OK" MEASURE_AMBIENT_CMD="$A_R" bash "$M" --no-such-flag 2>&1)"; c_unk=$?
+[ "$c_unk" -eq 2 ] && case "$o_unk" in *no-such-flag*) true ;; *) false ;; esac \
+  && check "an unknown argument is refused by name" ok \
+  || check "an unknown argument is refused by name" "rc=$c_unk out=${o_unk:0:200}"
+
+# A record whose header is not the tool's is refused BEFORE a reading is taken, since a reading is
+# half an hour of suite time and appending it under the wrong names corrupts the record silently.
+REC_OLD="$TMPROOT/readings-old.tsv"
+printf '%s\n' "$_cols" | awk -F'\t' -v OFS='\t' '{ NF = NF - 2; print }' > "$REC_OLD"
+_old_before="$(cat "$REC_OLD")"
+: > "$TMPROOT/old-suite.log"
+S_OLD="$(mk_suite old 900 2520 0)"
+o_old="$(run_m MEASURE_RUNS=1 MEASURE_RECORD="$REC_OLD" MEASURE_SUITE_CMD="bash $S_OLD" \
+      MEASURE_AMBIENT_CMD="$A_R" bash "$M" 2>&1)"; c_old=$?
+[ "$c_old" -eq 2 ] && [ "$(cat "$REC_OLD")" = "$_old_before" ] \
+  && check "a record under a different header is refused and left alone" ok \
+  || check "a record under a different header is refused and left alone" "rc=$c_old out=${o_old:0:200}"
+case "$o_old" in
+  *ambient_rise_pct*) check "and the refusal names the column that differs" ok ;;
+  *) check "and the refusal names the column that differs" "out=${o_old:0:200}" ;;
+esac
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

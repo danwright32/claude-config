@@ -14402,7 +14402,7 @@ section "== the budget's prose agrees with the readings it was measured from (#5
 _sr_file="$(dirname "$SCRIPT")/tests/section-time-readings.tsv"
 check "#520 the readings the budget's prose came from are recorded" "[ -s '$_sr_file' ]"
 # A record that cannot be read has measured nothing, and nothing must not read as agreement (L98).
-_sr_rows="$(awk -F'\t' 'NR > 1 && $3 != "" { n++ } END { print n + 0 }' "$_sr_file" 2>/dev/null)"
+_sr_rows="$(awk -F'\t' 'NR > 1 && NF > 1 { n++ } END { print n + 0 }' "$_sr_file" 2>/dev/null)"
 check "#520 and it holds readings rather than only a header" "[ \"\${_sr_rows:-0}\" -ge 3 ]"
 
 # The prose, read from the file this suite IS. Everything below is derived from these two, never
@@ -14411,18 +14411,50 @@ _sr_prose="$(awk '/^# MEASURED AGAINST THAT BUDGET/{p=1} p{print} p && /^SUITE_W
 check "#520 the prose that quotes those readings is where this expects it" \
   "[ -n \"\$_sr_prose\" ]"
 
-# Median and extremes per arm, by the same convention the tool that took them uses.
-_sr_stat(){   # $1 = arm  $2 = one of median, lo, hi
+# The record is read by column NAME, from its own header, never by position (#524). It used to read
+# the fourth and fifth fields, under a header nothing compared to the tool that writes it, so a
+# column added there would have had this quote a different quantity with every check passing. The
+# header is held to the tool's own list, and every row to the header's width, so a record that has
+# drifted from its writer is a refusal here rather than a short read.
+_sr_tool="$(dirname "$SCRIPT")/tools/measure-section-time.sh"
+_sr_cols="$(MEASURE_NO_SELF_COPY=1 bash "$_sr_tool" --columns 2>/dev/null)"
+check "#524 the tool that writes the record names its columns" "[ -n \"\$_sr_cols\" ]"
+check "#524 the record's header is exactly the columns that tool writes" \
+  "[ \"\$(head -1 '$_sr_file')\" = \"\$_sr_cols\" ]"
+_sr_widths="$(awk -F'\t' '{ print NF }' "$_sr_file" 2>/dev/null | sort -u | grep -c .)"
+check "#524 and every row is as wide as that header" "[ \"\${_sr_widths:-0}\" -eq 1 ]"
+
+# Median and extremes per arm, by the same convention the tool that took them uses. Every field is
+# found by name, and a name the header does not carry prints nothing, which every caller treats as
+# a missing figure rather than a zero (L98).
+_sr_stat(){   # $1 = arm  $2 = one of median, lo, hi  [$3 = record, default the committed one]
   awk -F'\t' -v arm="$1" -v want="$2" '
-    NR > 1 && $3 == arm { v[++n] = $4 + 0 }
+    NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; a = col["arm"]; s = col["section_seconds"]; if (!a || !s) exit; next }
+    $a == arm { v[++n] = $s + 0 }
     END {
       if (n == 0) { print ""; exit }
       for (i = 1; i < n; i++) for (j = i + 1; j <= n; j++) if (v[j] < v[i]) { t = v[i]; v[i] = v[j]; v[j] = t }
       if (want == "lo") print v[1]
       else if (want == "hi") print v[n]
       else print v[int((n + 1) / 2)]
-    }' "$_sr_file" 2>/dev/null
+    }' "${3:-$_sr_file}" 2>/dev/null
 }
+_sr_field(){   # $1 = column name  [$2 = record] -> that column's value on every row
+  awk -F'\t' -v want="$1" 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == want) c = i; if (!c) exit; next } { print $c }' "${2:-$_sr_file}" 2>/dev/null
+}
+# Proved on a copy with its columns REORDERED, where a positional read quotes a different column:
+# the same record read by name has to give the same figures.
+_SR_SWAP="$WORK/section-time-readings-reordered.tsv"
+awk -F'\t' -v OFS='\t' '{ t = $3; $3 = $4; $4 = t; t = $1; $1 = $5; $5 = t; print }' "$_sr_file" > "$_SR_SWAP"
+check "#524 a record with its columns reordered reads the same median by name" \
+  "[ -n \"\$(_sr_stat quiet median)\" ] && [ \"\$(_sr_stat quiet median '$_SR_SWAP')\" = \"\$(_sr_stat quiet median)\" ]"
+check "#524 and the same budget" \
+  "[ \"\$(_sr_field budget_seconds '$_SR_SWAP' | sort -u)\" = \"\$(_sr_field budget_seconds | sort -u)\" ]"
+# And a header missing a name it needs gives NO figure, never one read from the wrong column.
+_SR_NOARM="$WORK/section-time-readings-noarm.tsv"
+sed '1s/\tarm\t/\tsomething_else\t/' "$_sr_file" > "$_SR_NOARM"
+check "#524 a record without an arm column yields no figure at all" \
+  "[ -z \"\$(_sr_stat quiet median '$_SR_NOARM')\" ]"
 for _sr_arm in as-found quiet; do
   _sr_med="$(_sr_stat "$_sr_arm" median)"
   _sr_lo="$(_sr_stat "$_sr_arm" lo)"
@@ -14448,9 +14480,9 @@ done
 # is what is checked here. NOT against the budget this suite happens to set right now: the ceiling
 # is smaller on CI than on a Mac, so a check written that way fails on every machine that
 # legitimately differs, which is what it did the first time it ran there (L376).
-_sr_budgets="$(awk -F'\t' 'NR > 1 && $5 != "" { print $5 }' "$_sr_file" 2>/dev/null | sort -u | grep -c .)"
+_sr_budgets="$(_sr_field budget_seconds | grep . | sort -u | grep -c .)"
 check "#520 every recorded reading was judged against one budget" "[ \"\${_sr_budgets:-0}\" -eq 1 ]"
-_sr_bud="$(awk -F'\t' 'NR > 1 && $5 != "" { print $5; exit }' "$_sr_file" 2>/dev/null)"
+_sr_bud="$(_sr_field budget_seconds | awk 'NF { print; exit }')"
 
 # And the share of that budget the prose claims is recomputed from the readings, so the sentence
 # cannot say 38% of a budget the numbers beside it do not divide into that way.
