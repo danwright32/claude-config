@@ -103,7 +103,7 @@ run_one(){           # $1 = the suite path
       out="$(SECTION_ONLY="$sec" bash "$s" 2>&1)"; rc=$?
       ran="$ran$s ($sec)"$'\n'
       [ "$rc" -eq 0 ] || failed="$failed=== $s, section $sec ===
-$(printf '%s\n' "$out" | grep -E '^FAIL|^not ok' | head -10)
+$(printf '%s\n' "$out" | awk '/^FAIL|^not ok/ { if (n++ < 10) print }')
 "
     done <<SECTIONS
 $sections
@@ -113,7 +113,7 @@ SECTIONS
   out="$(bash "$s" 2>&1)"; rc=$?
   ran="$ran$s"$'\n'
   [ "$rc" -eq 0 ] || failed="$failed=== $s ===
-$(printf '%s\n' "$out" | grep -E '^FAIL|^not ok' | head -10)
+$(printf '%s\n' "$out" | awk '/^FAIL|^not ok/ { if (n++ < 10) print }')
 "
   return 0
 }

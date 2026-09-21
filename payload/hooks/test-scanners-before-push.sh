@@ -167,7 +167,10 @@ if [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
     && check "and the four minute suite is never selected whole" "it would run whole: $_sel" \
     || check "and the four minute suite is never selected whole" ok
 else
-  check "the real repo's selection could be read" "no repository at $REAL, so the selection is UNMEASURED rather than clean"
+  # The INSTALLED copy of these hooks sits in ~/.claude, where there is no repository and never
+  # will be, so there is no selection to read and that is not a fault. Said out loud rather than
+  # skipped in silence, because a suite that quietly checks less is how coverage disappears (L98).
+  echo "  (no repository at $REAL, so the selection against a real tree was not checked here; it is checked where this repo is)"
 fi
 
 echo "passed: $pass, failed: $fail"
