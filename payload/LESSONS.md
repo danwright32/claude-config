@@ -4445,6 +4445,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   the rule correctly, and the contradiction went unread for three months until a manager asked why
   a July sale counted in August.)
 
+- **L1006. A value persisted as an enum's RAW STRING is read back through an initializer that DROPS
+  what it no longer recognises, so renaming a case, or opening the store with an older build, deletes
+  that setting silently while the record still reads as correct in the UI. Renaming such a case is a
+  DATA MIGRATION and ships with one, in the same change.** The read is lossy by design, which is why
+  nothing reports it: a `compactMap` over raw values cannot tell a value that was never set from one
+  it has stopped understanding. Distinct from L113, where a missing key takes a DEFAULT and looks
+  deliberate: here the value is dropped from a collection and leaves no trace at all.
+  (downbeat#503 and downbeat#510, 2026-09-21: `ClientBehavior.skipCarnegieHallStaffNotification` was
+  renamed to `skipVenueStaffNotification` because it had come to govern every venue. `Client` stores
+  `specialBehaviorRawValues: [String]` and reads it with
+  `compactMap(ClientBehavior.init(rawValue:))`, so without the migration written alongside it the
+  suppression would have disappeared from the one client that had it, with the client's Settings row
+  still looking right. It was caught only because the push gate refused a change with no test for it,
+  and the test's control asserts the stored value resolves to NOTHING before the chain runs.)
+  SHORT: Renaming an enum case whose raw value is persisted silently deletes it on read, so the rename is a data migration and ships with one.
+
 ## State and identity
 
 - **L483. A merge that KEEPS an entry because one side lacks it must carry the scope that entry
@@ -5408,6 +5424,26 @@ for reference; L6 was reviewed and deliberately not adopted.
   left. The issue had been filed as a PERFORMANCE fix and states "Nothing is wrong with the answer, so
   this is speed rather than correctness".)
   SHORT: A rule judging an item against a set its own batch is still growing is order dependent, so derive it once over the whole batch first.
+
+- **L1003. A cache invalidated by ANY change to the whole collection it was derived from is discarded by
+  every write, so it never survives the one moment it exists for, which is the edit that just happened.
+  Scope the invalidation to the members the value actually depends on, and prove the cache still HITS
+  while a write is in flight.** (Overture#4110, 2026-09-21: the follow ups due badge memoises its count,
+  but its build runs under `withObservationTracking` over every prospect, so editing one card sets the
+  stale flag, and the key it compares is a fingerprint recomputed over the whole store on every access.
+  A quiet Mac, one genre change, 6.81s and 6.45s stalls with the main thread 100% busy across 4,382
+  samples, and the badge's own walk of every recipient's conversation state inside the same render pass.)
+  SHORT: A cache invalidated by any change to the whole collection never survives a write, so scope invalidation to the members the value depends on.
+
+- **L1005. A check asking whether a slot is TAKEN must compare IDENTITY as well as the slot, or the
+  subject's own record makes it conflict with itself, and a real clash becomes indistinguishable from
+  this is the same thing.** (Overture#4119, 2026-09-21: a queue card offered Dan a pitch for DCINY's
+  Spirit of Freedom at Carnegie Hall on Nov 16, scored it a long shot, and beside it said "You're
+  already shooting Spirit of Freedom on Nov 16", because the blocked night check matches on DATE and
+  the booking occupying that night was that same show. 9 of the 20 shoots in his export had a prospect
+  in the queue carrying the booked show's name. The sentence is correct for the case it was written
+  for, another show that night, and there was no third case for the show itself.)
+  SHORT: A conflict check keyed only on the slot makes the subject clash with itself, so compare identity too, or a real clash and the same record read alike.
 
 ## Security and privacy
 
@@ -7022,6 +7058,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   catch-all put them with Low tier agents both times. Roughly 20 to 30 sessions a day meet that
   bounce and it only harms the ones whose situation changed, which is why it read as working.)
   SHORT: A guard hiding a surface because the person ALREADY did that action must compare its marker against the CURRENT request, never only a time window.
+
+- **L1007. An action offered because of a STATE must name something the product's own rules
+  PERMIT in that state, checked against the rule rather than against the data**, because a word
+  derived correctly from a state can still name the one thing the design forbids, and the only
+  way to honour it later is to build the forbidden action.
+  (ovation#471: an invoice whose send could not be settled lands in a band whose row action word
+  is `Mark sent`, derived correctly from the state and counted correctly by the sidebar card,
+  while `SentStatus.swift` and ovation#45 both rule in as many words that Dan may never mark an
+  invoice sent by hand, because sent is only ever observed from Gmail. The one state that needs a
+  person is therefore the one whose only offered action cannot be built.)
+  SHORT: An action word derived from a STATE must name something the rules PERMIT in that state, or honouring it later means building the forbidden action.
 
 
 
@@ -9173,6 +9220,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   and every one of them checks the result holds claude-sync and payload/ before using it, so the
   convention was already right and was enforced by nothing.)
   SHORT: A file installed at another depth resolves a fixed upward path elsewhere, often the home directory, so find its tree by marker and bound any walk.
+
+- **L1004. A gate that is turned ON BY A POINTER, a hooks path, a registered directory, a symlink,
+  runs nothing at all when the pointer names something that is not there, because the host treats a
+  missing target as no work rather than as an error, so the wiring must be asserted by something
+  that gate does not run.** An installed gate and a gate pointed at nothing produce the identical
+  silence, and the installer is usually written to REFUSE rather than overwrite a pointer somebody
+  else set, so the documented repair cannot fix the state either. Distinct from L423, where the
+  installed copy is real and merely stale, and from L715, where the code is right and the process
+  holding it is old.
+  (downbeat#506, 2026-09-21: core.hooksPath in the primary checkout was the literal string
+  "somewhere/else". Git ran no hook, so every push skipped the unit suite, the style check and all
+  41 scripts/test-*.sh guards, for a week. Run by hand afterwards the gate failed immediately on a
+  real defect it should have caught. The same event left a test identity in the local config, so
+  every commit since was authored Test <test@example.com>, and pushed two fixture commits to main.)
+  SHORT: A gate enabled by a pointer runs nothing when the pointer names a missing target, so assert the wiring from something that gate does not run.
 
 ## Test speed
 

@@ -99,3 +99,4 @@ which is NOT loaded into the session.
 - L492. Print findings before enriching them: an enrichment per finding is costliest on the worst run and takes the whole report with it when it times out.
 - L494. A caveat or label on a many record summary must come from the population, never its worst member, which is atypical by selection.
 - L720. Copy explaining a derived number must name the field the code KEYS on, since a neighbouring date reads just as plausibly and passes every review.
+- L1006. Renaming an enum case whose raw value is persisted silently deletes it on read, so the rename is a data migration and ships with one.

@@ -99,3 +99,4 @@ which is NOT loaded into the session.
 - L500. A jump addressing a row by a key is dropped by any list whose rows carry a DIFFERENT identity, so prove it lands on every list the target can be on.
 - L717. A screen that refreshes only when an action SUCCEEDS contradicts its message on outcomes where the record may have changed, so decide per outcome.
 - L722. A guard hiding a surface because the person ALREADY did that action must compare its marker against the CURRENT request, never only a time window.
+- L1007. An action word derived from a STATE must name something the rules PERMIT in that state, or honouring it later means building the forbidden action.
