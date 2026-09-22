@@ -7,6 +7,7 @@ which is NOT loaded into the session.
 
 - L1001. A control that swaps back only the code while keeping the new tests cannot exonerate the change: the tests' own fault is in both arms.
 - L713. A determinism check that repeats a run back to back cannot see a dependence on the clock, so move the input or read the source instead.
+- L727. A whole module mock stubs the pure helpers beside the side effect too, so code degrades silently under green; mock only the one export.
 - L480. A command that failed partway still ran everything before the failure, so re-establish the cold state a timing depends on before measuring.
 - L467. A presence guard on a call that increments a counter is blind to a second one, so assert exactly once: an overcount reads as real activity.
 - L466. A count of events inside a measured window cannot apportion it, so record each occurrence's duration beside the count or no share can be claimed.

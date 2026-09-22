@@ -34,6 +34,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   idempotency key that secretly read the date)
   SHORT: A determinism check that repeats a run back to back cannot see a dependence on the clock, so move the input or read the source instead.
 
+- **L727. A whole module mock stubs every export the code under test imports from it, so a pure
+  helper that lives beside the mocked side effect returns nothing and the code degrades silently while
+  the test stays green.** Mock the one export with importOriginal, or keep pure helpers out of modules
+  whose side effect gets mocked. (bidspoke#1469, 2026-09-22: `changedFields`, the diff an env var audit
+  entry is built from, was added beside `writeAuditLog` in lib/audit.ts; the route tests called
+  `vi.mock('../../../lib/audit')` with no factory, so the diff returned undefined, the spread of it
+  added nothing, and every entry read as key only, which is the exact defect #1085 was fixing. The nine
+  new tests caught it only because they asserted the entry's contents; nineteen sibling route test files
+  still mock the module wholesale and would hide the same degradation in the next route that uses it)
+  SHORT: A whole module mock stubs the pure helpers beside the side effect too, so code degrades silently under green; mock only the one export.
+
 
 - **L480. A command that FAILED PARTWAY still ran everything before the point it failed, so any
   measurement taken afterwards inherits that work rather than starting from the state you think it
