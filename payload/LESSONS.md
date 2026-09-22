@@ -4461,6 +4461,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   and the test's control asserts the stored value resolves to NOTHING before the chain runs.)
   SHORT: Renaming an enum case whose raw value is persisted silently deletes it on read, so the rename is a data migration and ships with one.
 
+- **L723. A volume or rate monitor whose baseline is a trailing window of the same series is
+  blind to any change slower than that window, because the baseline slides down with the data and
+  each day looks normal against the days just before it.** Pair every such detector with a
+  comparison against a fixed distant reference, the same period four and eight weeks back, or the
+  slide is found only when somebody asks why the number looks low. Distinct from L539, where a
+  cumulative rate against a per period baseline clears too easily, and from L695, where a trailing
+  aggregate cannot clear at all: here the detector is healthy and correct on every single day while
+  the series it watches loses a quarter of itself. (bidspoke#1431, 2026-09-21: Engine Bidding
+  Workflow runs fell about 3 percent every week for eight weeks, 545,226 to 412,152 a week, and
+  Salesforce Leads from Engine fell 29 percent with them. The daily volume anomaly check and the
+  five minute cliff alert both compare the present against a recent trailing baseline, neither
+  fired once, and the decline was noticed when a teammate asked about it. Within the slide one
+  publisher, NerdWallet, had fallen 63 percent since the end of August, invisible in the total
+  because another publisher grew)
+  SHORT: A monitor baselined on a trailing window of its own series cannot see change slower than the window, so also compare against a fixed past reference.
+
 ## State and identity
 
 - **L483. A merge that KEEPS an entry because one side lacks it must carry the scope that entry
