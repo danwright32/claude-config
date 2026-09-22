@@ -2648,6 +2648,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   and it is what made the failure silent on both sides.)
   SHORT: A monitor built to catch a gate deciding wrongly must not use that gate's own predicate, or the predicate's blind spot is invisible to both.
 
+- **L724. When somebody repeats an action straight after reaching its SUCCESS screen, the first
+  question is why that screen failed them, not what happened next**, because a cause that fits the
+  second event will be found, will feel complete, and will stop the search while the first event
+  stays unexplained. The clicked element text in analytics answers it in one query, so pull it before
+  theorising.
+  (slate#2593, 2026-09-22: a lead booked a call, the confirmation page crashed because cal.com
+  returned no phone number and the page required one, they clicked Reload three times and Back home,
+  redid the five minute form ninety seconds later, and were then bounced by a 14 day block. I had the
+  missing phone field written down as a routing clue, had explained the alternating full and empty
+  confirmation URLs away as the sanitizer without checking that the sanitizer keeps uid, and had the
+  Reload clicks sitting in my first autocapture pull. The redirect fitted the NEXT event exactly, so I
+  stopped there. The vendor found the crash from the recording in minutes. Nobody who has just seen
+  a success screen redoes the form; that alone should have sent me to the screen.)
+  SHORT: Somebody redoing an action right after its SUCCESS screen means the screen failed them: ask that first, and pull the clicked text before theorising.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
