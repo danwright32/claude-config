@@ -9267,6 +9267,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   every commit since was authored Test <test@example.com>, and pushed two fixture commits to main.)
   SHORT: A gate enabled by a pointer runs nothing when the pointer names a missing target, so assert the wiring from something that gate does not run.
 
+- **L725. A dynamic route segment reaches the handler still percent encoded while a query parameter
+  arrives decoded, so decode a path segment once at the boundary and refuse a malformed one**, or an
+  @ or a space in a stored identifier silently becomes %40 and no later exact comparison matches it.
+  The two arrival paths look identical in code (`params.id` beside `searchParams.id`), nothing throws,
+  and the stored value is readable enough that a human reviewing the row does not notice the
+  encoding, so the mismatch shows up only when a second system sends the same identifier decoded
+  and every exact match, dedupe and ownership check answers "not found".
+  (slate#2599, 2026-09-22: a test booking made through `/booking/dwright%40trypennie.com` stored
+  `salesforce_id = dwright%40trypennie.com`. Regal's connected call journey then posted the cancel
+  with the decoded id, `bookingBelongsToPerson` compared strings exactly, and Slate answered 404
+  while the journey, the key and the payload were all correct. Real leads arrive through a query
+  parameter with an alphanumeric id, which is why nothing had shown it.)
+  SHORT: A dynamic route segment arrives percent encoded, a query param decoded, so decode a path segment once at the boundary or stored ids never match.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

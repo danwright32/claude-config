@@ -76,3 +76,4 @@ which is NOT loaded into the session.
 - L715. A long running process runs the code it parsed at START, so a guard shipped into its script is inert until it restarts, and nothing says so.
 - L493. A file installed at another depth resolves a fixed upward path elsewhere, often the home directory, so find its tree by marker and bound any walk.
 - L1004. A gate enabled by a pointer runs nothing when the pointer names a missing target, so assert the wiring from something that gate does not run.
+- L725. A dynamic route segment arrives percent encoded, a query param decoded, so decode a path segment once at the boundary or stored ids never match.
