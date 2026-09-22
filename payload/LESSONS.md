@@ -7101,6 +7101,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   person is therefore the one whose only offered action cannot be built.)
   SHORT: An action word derived from a STATE must name something the rules PERMIT in that state, or honouring it later means building the forbidden action.
 
+- **L1008. A control that RECORDS a value for the first time is normally gated on that value
+  being absent, so if every surface offering it is gated the same way the value becomes write
+  once and a wrong answer can never be corrected.** Before shipping such a prompt, name the
+  surface that DISPLAYS the recorded value and can change it, or the only remedy is editing the
+  store by hand. Distinct from L45, where records vanish from the filtered views that read them,
+  and from L152, where the action succeeded and nothing reports it: here the action succeeded and
+  took its own control away with it.
+  (ovation#482: a client's sales tax status is asked on the roster pass, whose list is
+  `clients.filter { $0.taxStatus == .neverRecorded }`, and on the invoice screen, drawn only while
+  the status is unrecorded for the same reason a question must not sit there after it is answered.
+  The Clients screen that would display a recorded status is designed and not built, so one
+  mistyped tap sets the tax treatment of every future invoice for that client permanently, and
+  `Invoice.tax` reads the status at render time by a recorded decision, so it reaches sent
+  invoices too.)
+  SHORT: A control that records a value is gated on its absence, so unless some surface shows and edits the recorded value, a wrong answer is permanent.
+
 
 
 ## External systems
