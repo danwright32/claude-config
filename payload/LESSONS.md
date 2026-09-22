@@ -7462,6 +7462,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   action field at all, so ANY multipart POST to ANY page route raises it with nothing stale.)
   SHORT: A framework's error message names the case its author imagined, not the condition it tests, so read the throw site before believing it.
 
+
+- **L726. An email's text part goes out quoted-printable or base64, never 7bit with a
+  paragraph to a line, because a sending service is free to rebuild the message and hard wrap
+  any line past its own width, and the reader then sees every sentence broken mid-line.** The
+  copy looks right in every test and every preview, since the damage is done after the send,
+  so judge it by the message that ARRIVED (the raw original), never by the string you built.
+  (slate#2625, 2026-09-22: a lead reminder sent through the Gmail API as multipart 7bit arrived
+  rebuilt as a single text/plain part with each paragraph hard wrapped at about 70 characters,
+  "...at Pennie is" / "today at 6:50pm EDT.", while `reminderBody` held one line per paragraph.
+  Encoding the text part quoted-printable was proven by one real send through the same path.
+  Overture and Ovation send through Gmail too.)
+  SHORT: Send an email's text part quoted-printable, never 7bit long lines: the sending service may hard wrap them, so judge by the raw message that arrived.
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and
