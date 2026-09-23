@@ -3200,6 +3200,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   paid would have written there.)
   SHORT: Whatever structurally stops the TESTS touching production must also stop the DEV SERVER, whose only symptom for pointing at it is that everything works.
 
+- **L1010. A schema version that a store has ALREADY BEEN WRITTEN BY is immutable: editing its
+  frozen shape changes that version's own fingerprint, so every store written under the old one
+  matches no declared version at all and the migration refuses to START rather than running
+  wrongly.** Add a NEW version with a stage from the old one instead, and hold each frozen version
+  to the checksum it actually wrote, because a column by column comparison can pass while the
+  fingerprint has moved. (ovation#502, 2026-09-23: a Debug build of main would not open its own
+  store, raising "Cannot use staged migration with an unknown model version". `OvationMigrationPlan`
+  declared V1 to V2 to V3 correctly and was not the problem; the frozen shapes had been EDITED on
+  2026-09-19 and 2026-09-21, days after both stores were written on 2026-09-12, so the store's
+  recorded version matched none of the three as they now stood and there was no stage to start
+  from. Dan's LIVE store was measured to carry the identical `NSStoreModelVersionChecksumKey`, so
+  the same build refuses it; only an installed copy predating the edits kept the app working.
+  ovation#408 had predicted the cause and worried about the QUIET half, a migration carrying the
+  wrong thing into a store that opens and looks fine, which is the worse outcome of the two. The
+  same trap is a numbered SQL migration edited after it has run anywhere.)
+  SHORT: A schema version a store was written by is immutable: editing its frozen shape orphans every such store, so add a new version and a stage instead.
+
 ## Honest failure
 
 - **L490. A guard that parses its input through an external interpreter (jq, python, awk) must

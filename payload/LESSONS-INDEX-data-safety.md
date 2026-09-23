@@ -47,3 +47,4 @@ which is NOT loaded into the session.
 - L474. Opening a live SQLite store read only still rewrites its shm file beside it, so a guard must read a copy of the store, wal and shm instead.
 - L698. A build that bakes env files into the artifact ships every local env file, so prove a throwaway deploy holds NO production credential by reading it.
 - L719. Whatever structurally stops the TESTS touching production must also stop the DEV SERVER, whose only symptom for pointing at it is that everything works.
+- L1010. A schema version a store was written by is immutable: editing its frozen shape orphans every such store, so add a new version and a stage instead.
