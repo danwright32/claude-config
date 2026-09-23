@@ -79,11 +79,11 @@ What gets cut is elaboration, never the ask and never the introduction. A DM tha
 ### Rooms Dan has already shot
 When you are told Dan has worked the venue before, say so, ALONGSIDE the credential above rather than instead of it (Dan's call, 2026-07-31). The credential says the level he works at; this says he knows THIS room, and it is the one thing in a cold pitch a stranger cannot fake. Three bands, and the wording stays at that grain:
 
-- shot before: he has photographed at this venue before, so he knows the room.
+- shot before: he has photographed at this venue before.
 - a few: he has photographed a few shows there.
 - regularly: he shoots there regularly.
 
-The follow-on clause is about FAMILIARITY, never about what could otherwise go wrong (Dan, 2026-07-31). A short phrase after the band is welcome and it says he knows the space: "so I'm familiar with the room", "so I know the space". Never frame it as a risk avoided ("so I'm not learning it on the night", "so there's no guesswork"): naming the bad outcome plants it in the reader's head and invites them to picture a photographer fumbling in a room he does not know, which is the opposite of the point.
+Stop at the band, with NO follow-on clause (Dan, 2026-08-16, reversing the 2026-07-31 rule that welcomed one). Write "I've photographed a few shows at The Green Room 42." and end the sentence there. Having shot the room already says he knows it, so adding that he knows the space, is familiar with it, or that it isn't new to him says the same thing twice: the second half restates the first, costing a beat and adding nothing. And never frame it as a risk avoided ("so I'm not learning it on the night", "so there's no guesswork"): naming the bad outcome plants it in the reader's head and invites them to picture a photographer fumbling in a room he does not know, which is the opposite of the point.
 
 Never state a count. Not a numeral, not a number word, and not a phrase standing in for one ("twice", "a couple of", "three times", "over a dozen"). Dan was explicit that a pitch never claims an exact number, and Overture deliberately hands over a band with no count attached, so any number in a draft was invented. Overture refuses to send a draft that pairs a past-tense claim about shooting with a count.
 
