@@ -9055,6 +9055,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   or the half that matters is unproved)
   SHORT: A guard identifying its leftovers by matching text against a MACHINE WIDE namespace claims work it never started, so assert against the pid it created.
 
+- **L1011. A process is stopped by the PID you traced it to, never by matching its command TEXT,
+  because the process list shows a shell by the STARTUP LINE it was invoked with rather than by
+  the command you typed into it, so the match finds nothing, reports nothing killed, and that zero
+  reads as success.** Confirm the stop by asking whether that PID is still there, never by
+  re-running the same match, which can only agree with the lookup that already failed (L70).
+  (ovation#502 session, 2026-09-23: an `until ... do sleep 20; done` loop waiting on a test suite
+  was killed with `pkill -f "until grep -qE"`, which matched nothing because `ps` showed the shell
+  as `/bin/zsh -c source ~/.claude/shell-snapshots/snapshot-zsh-...`. A second `pgrep` of the same
+  shape agreed, and "nothing of mine is running" was reported to Dan twice while the loop spun for
+  58 more minutes until he asked what the shell was doing. Tracing the sleeping child to its parent
+  gave the PID in one command, and `kill <pid>` ended it. The loop was doubly wrong: its exit
+  condition grepped the TEST log for a line only the BUILD script writes to a different file, so it
+  could never have ended on its own, which is L98 in the same loop)
+  SHORT: Stop a process by the PID you traced, never by matching command text: the match finds nothing and its zero reads as success.
+
 
 - **L640. A migration applied before the code that needs it deploys must leave the DEPLOYED code
   working, because the two are live together for the length of the deploy.** An additive change

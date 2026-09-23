@@ -59,6 +59,7 @@ which is NOT loaded into the session.
 - L435. A tool that writes commits of its own must pass its OWN identity on every git call: a machine may have none and git REFUSES rather than defaulting.
 - L441. A flock on a plain file descriptor is inherited by every process started while it is held, so open it close on exec and make the wait NAME its holder.
 - L444. A guard identifying its leftovers by matching text against a MACHINE WIDE namespace claims work it never started, so assert against the pid it created.
+- L1011. Stop a process by the PID you traced, never by matching command text: the match finds nothing and its zero reads as success.
 - L640. A migration applied before the code that needs it deploys must leave the DEPLOYED code working, because the two are live together during the deploy.
 - L642. In a SQUASH MERGE repo no merged branch is ever an ancestor of main, so every local way of asking whether a branch shipped reports it as UNMERGED.
 - L668. A tool locating a resource by assuming its invocation directory IS that resource is inert in every project whose checkout sits below that directory.
