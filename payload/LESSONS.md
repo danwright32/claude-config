@@ -7128,6 +7128,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   invoices too.)
   SHORT: A control that records a value is gated on its absence, so unless some surface shows and edits the recorded value, a wrong answer is permanent.
 
+- **L1009. When the only route to CREATING the first member of a collection sits inside a
+  control gated on that collection being non-empty, an empty collection is a state nothing
+  can leave, and it reads as the control simply being absent rather than as a dead end.**
+  Gate such a control on the create path being available rather than on the collection having
+  members. Distinct from L187, where a control gated on MORE THAN ONE member is merely absent
+  in the commonest case: here the absence is what removes the only way out of it.
+  (ovation#490: making a service type is offered at the bottom of the type list, that list is
+  inside the row `Add a line` puts on the invoice, and the word is drawn only when
+  `mayAddLine` is true, which requires a type to already exist. Seeding puts three in on a
+  fresh store so it is unreachable today, and PRD 5.30's retire control will make it
+  reachable, with the screen giving no reason because "nothing to add" and "no way to add"
+  draw identically.)
+  SHORT: A gate on a collection being non-empty must not hold the only way to create its first member, or empty is a state nothing can leave.
+
 
 
 ## External systems

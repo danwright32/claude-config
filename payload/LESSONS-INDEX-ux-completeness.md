@@ -101,3 +101,4 @@ which is NOT loaded into the session.
 - L722. A guard hiding a surface because the person ALREADY did that action must compare its marker against the CURRENT request, never only a time window.
 - L1007. An action word derived from a STATE must name something the rules PERMIT in that state, or honouring it later means building the forbidden action.
 - L1008. A control that records a value is gated on its absence, so unless some surface shows and edits the recorded value, a wrong answer is permanent.
+- L1009. A gate on a collection being non-empty must not hold the only way to create its first member, or empty is a state nothing can leave.
