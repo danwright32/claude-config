@@ -18043,6 +18043,130 @@ check "#473 two spellings of one section name keep both sets of lessons" \
 check "#473 and the union still holds each lesson exactly once" \
   "[ \"\$(sp_union '$SPH' | tr '\n' ' ')\" = '1 2 3 4 ' ] && [ -z \"\$(sp_union '$SPH' | uniq -d)\" ]"
 
+section "== the lessons core is rendered from a list, and the whole library loads when the list is missing or wrong (claude-config#564) =="
+# The core is a subset of the index lines, chosen by LESSONS-CORE.txt, which CLAUDE.md imports in
+# place of the whole library once the list is there. SHIPPED INERT: with no list nothing changes at
+# all, which is what lets the generator reach both Macs before any lesson leaves a session. Every
+# way the list can be wrong (empty, unreadable, naming a lesson that does not exist, or shrunk
+# sharply against the last one applied, which is what a truncated merge looks like) loads the WHOLE
+# library, records why, and says so (L211, L214). Each of those outcomes has a case below that
+# produces it (L151).
+LCH="$WORK/lcore-home"; LCR="$WORK/lcore-repo"; mkdir -p "$LCH" "$LCR"
+echo '{"hooks":{}}' > "$LCH/settings.json"
+printf '# rules\n' > "$LCH/CLAUDE.md"
+cat > "$LCH/LESSONS.md" <<'LCEOF'
+# Lessons
+
+## Proof over green
+
+- **L1. First proof lesson.** body
+- **L2. Second proof lesson.** body
+- **L3. Third proof lesson.** body
+
+## Data safety
+
+- **L4. First data lesson.** body
+- **L5. Second data lesson.** body
+LCEOF
+lc_push(){ CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1; }
+lc_imports(){ grep '^@LESSONS-' "$LCH/CLAUDE.md" 2>/dev/null | tr '\n' ' '; }
+lc_state(){ cat "$LCH/.lessons-core-state" 2>/dev/null; }
+lc_core_files(){ ls "$LCH"/LESSONS-CORE-*.md 2>/dev/null | wc -l | tr -d ' '; }
+
+# 1. INERT: no list, exactly today's behaviour.
+lc_push >/dev/null
+check "#564 with no list no core file is written" "[ \"\$(lc_core_files)\" = 0 ]"
+check "#564 and CLAUDE.md imports the whole library as before" \
+  "case \"\$(lc_imports)\" in *'@LESSONS-INDEX-proof-over-green.md'*'@LESSONS-INDEX-data-safety.md'*) true ;; *) false ;; esac"
+check "#564 and nothing core is imported" "case \"\$(lc_imports)\" in *LESSONS-CORE*) false ;; *) true ;; esac"
+check "#564 and the state says the core is not in use" "[ \"\$(lc_state)\" = inactive ]"
+
+# 2. ACTIVE: the list is set through the one editing path, which records the baseline.
+printf 'L1\nL2\nL4\nL5\n' > "$WORK/lcore-want.txt"
+out_lcset="$(CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-want.txt" 2>&1)"; rc_lcset=$?
+dbg "#564 core-set said: $out_lcset"
+check "#564 core-set writes the list" "[ \$rc_lcset -eq 0 ] && grep -qx L4 '$LCH/LESSONS-CORE.txt'"
+check "#564 and says the size the core will load" "case \"\$out_lcset\" in *chars*) true ;; *) false ;; esac"
+out_lc2="$(lc_push)"
+dbg "#564 the push with a list said: $out_lc2"
+check "#564 a list renders one core file per section it touches" \
+  "[ -f '$LCH/LESSONS-CORE-proof-over-green.md' ] && [ -f '$LCH/LESSONS-CORE-data-safety.md' ]"
+check "#564 carrying exactly the listed lessons" \
+  "grep -q '^- L1\.' '$LCH/LESSONS-CORE-proof-over-green.md' && ! grep -q '^- L3\.' '$LCH/LESSONS-CORE-proof-over-green.md'"
+check "#564 each core line byte identical to the library's" \
+  "[ -z \"\$(comm -23 <(grep -h '^- L' '$LCH'/LESSONS-CORE-*.md | sort) <(grep -h '^- L' '$LCH'/LESSONS-INDEX-*.md | sort))\" ]"
+check "#564 CLAUDE.md imports the core instead of the library" \
+  "case \"\$(lc_imports)\" in *LESSONS-INDEX*) false ;; *'@LESSONS-CORE-proof-over-green.md'*) true ;; *) false ;; esac"
+check "#564 the library files are still written, and current, beside it" \
+  "grep -q '^- L3\.' '$LCH/LESSONS-INDEX-proof-over-green.md'"
+check "#564 and the library and the list both still travel" \
+  "[ -f '$LCR/payload/LESSONS-INDEX-proof-over-green.md' ] && [ -f '$LCR/payload/LESSONS-CORE.txt' ]"
+check "#564 the state records the core in use and its size" "case \"\$(lc_state)\" in 'active 4'*) true ;; *) false ;; esac"
+
+# 3 to 6. EVERY WAY THE LIST CAN BE WRONG loads the whole library, records why, and says so.
+lc_fallback(){ # lc_fallback <description> <state words>
+  local out; out="$(lc_push)"
+  dbg "#564 $1: $out"
+  check "#564 $1: no core file is left" "[ \"\$(lc_core_files)\" = 0 ]"
+  check "#564 $1: the whole library is imported" "case \"\$(lc_imports)\" in *LESSONS-CORE*) false ;; *'@LESSONS-INDEX-data-safety.md'*) true ;; *) false ;; esac"
+  check "#564 $1: the state says why" "case \"\$(lc_state)\" in *'$2'*) true ;; *) false ;; esac"
+  check "#564 $1: and the push says it" "case \"\$out\" in *'whole library'*) true ;; *) false ;; esac"
+}
+printf '# nothing chosen yet\n' > "$LCH/LESSONS-CORE.txt"
+lc_fallback "an empty list" "fallback empty"
+printf 'L1\nL99\n' > "$LCH/LESSONS-CORE.txt"
+lc_fallback "a list naming a lesson that does not exist" "fallback unknown L99"
+printf 'L1\n' > "$LCH/LESSONS-CORE.txt"
+lc_fallback "a list shrunk sharply by hand" "fallback shrunk 1 of 4"
+if [ "$(id -u)" != 0 ]; then
+  printf 'L1\nL2\nL4\nL5\n' > "$LCH/LESSONS-CORE.txt"; chmod 000 "$LCH/LESSONS-CORE.txt"
+  lc_fallback "an unreadable list" "fallback unreadable"
+  chmod 644 "$LCH/LESSONS-CORE.txt"
+fi
+# And a shrink made through the editing path is a decision, not damage.
+printf 'L1\n' > "$WORK/lcore-small.txt"
+CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-small.txt" >/dev/null 2>&1
+lc_push >/dev/null
+check "#564 a shrink made through core-set renders the smaller core" \
+  "[ \"\$(lc_core_files)\" = 1 ] && case \"\$(lc_state)\" in 'active 1'*) true ;; *) false ;; esac"
+
+# 7. THE CAP IS ENFORCED WHERE THE LIST IS EDITED, never at the send (a send that refused would stop
+#    every other file travelling with it, L371).
+out_lccap="$(CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_CORE_CAP=10 bash "$SCRIPT" core-set "$WORK/lcore-want.txt" 2>&1)"; rc_lccap=$?
+check "#564 core-set refuses a list over the cap" "[ \$rc_lccap -ne 0 ] && case \"\$out_lccap\" in *cap*) true ;; *) false ;; esac"
+check "#564 and leaves the list it had" "[ \"\$(grep -c '^L' '$LCH/LESSONS-CORE.txt')\" = 1 ]"
+printf 'L1\nL77\n' > "$WORK/lcore-bad.txt"
+out_lcbad="$(CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-bad.txt" 2>&1)"; rc_lcbad=$?
+check "#564 core-set refuses a lesson that does not exist, naming it" "[ \$rc_lcbad -ne 0 ] && case \"\$out_lcbad\" in *L77*) true ;; *) false ;; esac"
+
+# 8. TWO MACS. The list travels, a removal travels, and a Mac that never had a list does not delete
+#    the other Mac's (L625, L381).
+LCB="$WORK/lcore-bare.git"; git init -q --bare -b main "$LCB"
+LCA="$WORK/lcore-A"; git clone -q "$LCB" "$LCA" 2>/dev/null
+LCHA="$WORK/lcore-homeA"; mkdir -p "$LCHA"
+echo '{"hooks":{}}' > "$LCHA/settings.json"; printf '# rules\n' > "$LCHA/CLAUDE.md"
+cp "$LCH/LESSONS.md" "$LCHA/LESSONS.md"
+CLAUDE_HOME="$LCHA" SYNC_REPO="$LCA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+LCBB="$WORK/lcore-B"; git clone -q "$LCB" "$LCBB" 2>/dev/null
+LCHB="$WORK/lcore-homeB"; mkdir -p "$LCHB"; echo '{"hooks":{}}' > "$LCHB/settings.json"
+CLAUDE_HOME="$LCHB" SYNC_REPO="$LCBB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#564 a Mac with no list receives the library and no core" \
+  "[ -f '$LCHB/LESSONS-INDEX-proof-over-green.md' ] && [ ! -f '$LCHB/LESSONS-CORE.txt' ]"
+CLAUDE_HOME="$LCHA" SYNC_REPO="$LCA" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-want.txt" >/dev/null 2>&1
+CLAUDE_HOME="$LCHA" SYNC_REPO="$LCA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+CLAUDE_HOME="$LCHB" SYNC_REPO="$LCBB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#564 the list travels to the other Mac" "[ \"\$(grep -c '^L' '$LCHB/LESSONS-CORE.txt' 2>/dev/null)\" = 4 ]"
+check "#564 and the other Mac renders the core from it" \
+  "[ -f '$LCHB/LESSONS-CORE-data-safety.md' ] && grep -q '@LESSONS-CORE-data-safety.md' '$LCHB/CLAUDE.md'"
+printf 'L1\nL2\nL4\n' > "$WORK/lcore-three.txt"
+CLAUDE_HOME="$LCHA" SYNC_REPO="$LCA" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-three.txt" >/dev/null 2>&1
+CLAUDE_HOME="$LCHA" SYNC_REPO="$LCA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+CLAUDE_HOME="$LCHB" SYNC_REPO="$LCBB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#564 a removal from the list travels too" \
+  "! grep -qx L5 '$LCHB/LESSONS-CORE.txt' && grep -qx L4 '$LCHB/LESSONS-CORE.txt'"
+check "#564 and the receiving Mac treats a reviewed shrink as a decision, not damage" \
+  "case \"\$(cat '$LCHB/.lessons-core-state' 2>/dev/null)\" in 'active 3'*) true ;; *) false ;; esac"
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

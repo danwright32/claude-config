@@ -144,7 +144,9 @@ fi
 # was invisible while every path here exited 0, because Claude Code discards a PreToolUse hook's
 # stderr on exit 0; the stand down below speaks on exit 1, which is where it surfaced. A bracket
 # expression means the same thing to awk and to grep -E with no backslash for either to read.
-RULE_TEXT_PATH_RE='(^|/)(LESSONS[.]md|LESSONS-INDEX[^/]*[.]md)$'
+# The lessons core files (claude-config#564) are the same index lines, a subset, so they are rule
+# text exactly as the library files are.
+RULE_TEXT_PATH_RE='(^|/)(LESSONS[.]md|LESSONS-INDEX[^/]*[.]md|LESSONS-CORE-[^/]*[.]md)$'
 
 # path<TAB>added-line, one per added line. A rule text file is dropped at its header, so none of
 # its lines reach the triggers below.

@@ -230,7 +230,7 @@ MIRROR_DIRS=(hooks agents commands audits)   # full mirror (no overlap with plug
 # they sync automatically. A hand-maintained mirror of another source of truth
 # drifts, and that drift is exactly how CLAUDE.md once arrived referencing a
 # LESSONS.md the sync had never been told about.
-TOP_FILES_SEED=(CLAUDE.md RTK.md LESSONS.md)
+TOP_FILES_SEED=(CLAUDE.md RTK.md LESSONS.md LESSONS-CORE.txt)
 
 # never copy nested VCS/OS cruft (some skills are git clones with their own .git),
 # nor the conflict copies preserve_local_conflicts leaves behind: those are local
@@ -1387,6 +1387,14 @@ top_files_in(){   # $1 = directory
       [ -n "$imp" ] && pending+=" $imp"
     done < <(imports_in_file "$1/$f")
   done
+  # The library files travel whether or not CLAUDE.md imports them (claude-config#564): with the
+  # lessons core in use they are no longer imports, and a set derived from imports alone would stop
+  # sending them, leaving the other Mac's library frozen at the day the core was switched on.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$seen" in *" $f "*) continue ;; esac
+    seen+="$f "
+  done < <(lesson_index_files_present "$1")
   printf '%s\n' $seen
   return 0
 }
@@ -1829,6 +1837,26 @@ lesson_publish_faults(){   # $1 = tree to inspect -> the sentence, or nothing
 LESSON_INDEX_PREFIX="LESSONS-INDEX"
 LESSON_INDEX_RETIRED_FILE="LESSONS-INDEX.md"
 
+# ---- THE LESSONS CORE (claude-config#564) ----
+# A subset of the index lines, chosen by LESSONS-CORE.txt, which CLAUDE.md imports IN PLACE of the
+# whole library once the list is there (Dan, 2026-09-24: "Small core, checkpoints"; the PR lessons
+# review of #560 reads every lesson, so the rest are still checked before any merge). The library
+# files go on being written and synced beside it, so `claude-sync lesson`, the reviews and a later
+# re-rank all still have every lesson.
+#
+# SHIPPED INERT: with no list nothing changes at all. A list that is missing, unreadable, empty,
+# names a lesson that does not exist, or holds fewer lessons than it should, loads the WHOLE library
+# instead, records why in LESSON_CORE_STATE and says so, because a short list read as the truth
+# would silently drop lessons from every session (L211, L214). "Fewer than it should" is judged
+# against the `# count N` the list declares when core-set wrote it, which travels with the list so
+# the other Mac can tell a decision from damage, or, for a list with no declaration, against the
+# last count applied here (a shrink below LESSON_CORE_SHRINK_PCT percent of it).
+LESSON_CORE_LIST="LESSONS-CORE.txt"
+LESSON_CORE_PREFIX="LESSONS-CORE"
+LESSON_CORE_STATE=".lessons-core-state"
+LESSON_CORE_APPLIED=".lessons-core-applied"
+LESSON_CORE_SHRINK_PCT=50
+
 # The file the index above is generated FROM. Named here so the merge recovery and the index
 # generator cannot drift into two spellings of one path (L41).
 LESSONS_FILE="LESSONS.md"
@@ -1849,6 +1877,7 @@ is_derived_rule_file(){   # $1 = path relative to the payload
   case "${1:-}" in
     "$LESSON_INDEX_RETIRED_FILE") return 0 ;;
     "$LESSON_INDEX_PREFIX"-*.md)  return 0 ;;
+    "$LESSON_CORE_PREFIX"-*.md)   return 0 ;;
   esac
   return 1
 }
@@ -1893,11 +1922,25 @@ lesson_index_imports_in(){   # $1 = tree
 # usual. The condition is written as the reason for holding it back rather than the broader "a
 # lessons fault holds CLAUDE.md too", which is what keeps that true (L615).
 lesson_imports_would_disagree(){
-  local want have
+  local want have lib imp
   [ -f "$CLAUDE_HOME/CLAUDE.md" ] || return 1
   want="$(lesson_index_imports_in "$CLAUDE_HOME" | sort)"
-  have="$(lesson_index_files_present "$PAYLOAD" | sort)"
-  if [ "$want" = "$have" ]; then return 1; fi
+  have="$( { lesson_index_files_present "$PAYLOAD"; lesson_core_files_present "$PAYLOAD"; } | sort)"
+  # Re-derived for the lessons core (claude-config#564): with a core in use the library files are
+  # present and deliberately NOT imported, so the two lists are no longer meant to be equal. What
+  # must hold is that every import has its file, and that without a core every library file is
+  # imported, which is the old rule exactly.
+  while IFS= read -r imp; do
+    [ -n "$imp" ] || continue
+    case "
+$have
+" in *"
+$imp
+"*) ;; *) return 0 ;; esac
+  done <<<"$want"
+  case "$want" in *"$LESSON_CORE_PREFIX"-*) return 1 ;; esac
+  lib="$(lesson_index_files_present "$PAYLOAD" | sort)"
+  [ "$want" = "$lib" ] && return 1
   return 0
 }
 
@@ -1911,6 +1954,7 @@ lesson_imports_would_disagree(){
 # sections would miss and copy.
 files_rendered_from_lessons(){   # -> one name per line, or nothing
   lesson_index_files_present "$CLAUDE_HOME"
+  lesson_core_files_present "$CLAUDE_HOME"
   if lesson_imports_would_disagree; then printf '%s\n' "CLAUDE.md"; fi
   return 0
 }
@@ -2293,9 +2337,9 @@ write_lesson_index_files(){   # $1 = tree holding LESSONS.md  -> prints the name
     fi
     rm -f "$out"
   done < <(awk -F'\t' '!seen[$1]++ { printf "%s\t%s\n", $1, $2 }' "$split")
-  rm -f "$split"
-  is_blank "$wanted" && return 1
+  is_blank "$wanted" && { rm -f "$split"; return 1; }
   if [ "$short" -eq 1 ]; then
+    rm -f "$split"
     echo "claude-sync: at least one section of $src rendered no index lines at all, so nothing was swept and the imports in $1/CLAUDE.md were left alone. What is on disk may now be behind the lessons file; the next run regenerates it." >&2
     printf '%s' "$wanted"
     return 1
@@ -2310,9 +2354,152 @@ $b
 "*) continue ;; esac
     rm -f "$1/$b" 2>/dev/null || true
   done < <(lesson_index_files_present "$1")
-  ensure_lesson_index_imports "$1" "$wanted"
+  local imports
+  imports="$(write_lesson_core_files "$1" "$split" "$wanted")"
+  rm -f "$split"
+  ensure_lesson_index_imports "$1" "${imports:-$wanted}"
   printf '%s' "$wanted"
   return 0
+}
+
+# Every derived core file PRESENT in a tree, one name per line, by the same shape predicate as the
+# library (claude-config#564), so the sweep, the staging and the send cannot disagree about it.
+lesson_core_files_present(){   # $1 = tree
+  local f b
+  for f in "$1/$LESSON_CORE_PREFIX"-*.md; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"
+    is_derived_rule_file "$b" || continue
+    printf '%s\n' "$b"
+  done
+  return 0
+}
+
+lesson_core_list_ids(){   # $1 = a list -> each Lnnn once, comments and blank lines ignored
+  awk '{ sub(/#.*/, ""); for (i = 1; i <= NF; i++) if ($i ~ /^L[0-9]+$/ && !seen[$i]++) print $i }' "$1"
+}
+
+lesson_core_declared(){   # $1 = a list -> the count core-set declared in it, or nothing
+  awk '/^# count [0-9]+[[:space:]]*$/ { print $3; exit }' "$1" 2>/dev/null
+}
+
+# What the list in a tree says, as ONE line: inactive, active N, or fallback and why. Every
+# fallback is its own words, so the reason reaches the reader intact (L11).
+lesson_core_state(){   # $1 = tree, $2 = the split rendering of its lessons file
+  local list="$1/$LESSON_CORE_LIST" ids n unknown declared applied
+  [ -e "$list" ] || { echo inactive; return 0; }
+  [ -r "$list" ] || { echo "fallback unreadable"; return 0; }
+  ids="$(lesson_core_list_ids "$list" 2>/dev/null)" || { echo "fallback unreadable"; return 0; }
+  n="$(printf '%s\n' "$ids" | grep -c '^L' || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  [ "$n" -gt 0 ] || { echo "fallback empty"; return 0; }
+  unknown="$(printf '%s\n' "$ids" | awk -F'\t' '
+    NR == FNR { if (match($3, /^- L[0-9]+\./)) have[substr($3, 3, RLENGTH - 3)] = 1; next }
+    NF && !($1 in have) { printf "%s ", $1 }' "$2" -)"
+  [ -z "$unknown" ] || { echo "fallback unknown ${unknown% }"; return 0; }
+  declared="$(lesson_core_declared "$list")"
+  if [ -n "$declared" ]; then
+    [ "$n" -lt "$declared" ] && { echo "fallback shrunk $n of $declared"; return 0; }
+    [ "$n" -gt "$declared" ] && { echo "fallback count $n, declared $declared"; return 0; }
+  else
+    applied="$(cat "$1/$LESSON_CORE_APPLIED" 2>/dev/null)"
+    case "$applied" in ''|*[!0-9]*) applied="" ;; esac
+    if [ -n "$applied" ] && [ $((n * 100)) -lt $((applied * LESSON_CORE_SHRINK_PCT)) ]; then
+      echo "fallback shrunk $n of $applied"; return 0
+    fi
+  fi
+  echo "active $n"
+}
+
+lesson_core_file_header(){   # $1 = the section title
+  printf '# Lessons core: %s (generated, do not edit)\n\n' "$1"
+  printf 'The lessons of this section chosen for every session, one SHORTENED line each; the rest are in\n'
+  printf 'the library (~/.claude/LESSONS-INDEX-*.md), and every PR lessons review reads them all. Read\n'
+  printf 'the whole entry before a rule decides anything: `~/claude-config-sync/claude-sync lesson L174`.\n\n'
+}
+
+# Renders the core from the list, or sweeps it when the list is absent or unusable, records the
+# state, and prints the file names CLAUDE.md should import: the core's when it is in use, else the
+# library's ($3). The state and the applied count are recorded only for the LIVE tree: they describe
+# this Mac, and written into the payload they would travel as if they were config.
+write_lesson_core_files(){   # $1 = tree, $2 = split rendering, $3 = library names -> names to import
+  local state ids out slug title name lines wanted="" b chars=0 live=0
+  [ "$1" = "$CLAUDE_HOME" ] && live=1
+  state="$(lesson_core_state "$1" "$2")"
+  case "$state" in
+    active*)
+      ids="$(lesson_core_list_ids "$1/$LESSON_CORE_LIST" 2>/dev/null)"
+      while IFS="$(printf '\t')" read -r slug title; do
+        [ -n "$slug" ] || continue
+        lines="$(printf '%s\n' "$ids" | awk -F'\t' -v s="$slug" '
+          NR == FNR { want["- " $1 "."] = 1; next }
+          $1 == s && match($3, /^- L[0-9]+\./) && (substr($3, 1, RLENGTH) in want) { print $3 }' - "$2")"
+        [ -n "$lines" ] || continue
+        name="$LESSON_CORE_PREFIX-$slug.md"
+        out="$(scratch_file)" || break
+        { lesson_core_file_header "$title"; printf '%s\n' "$lines"; } > "$out" 2>/dev/null
+        cmp -s "$out" "$1/$name" || cat "$out" > "$1/$name" 2>/dev/null || true
+        rm -f "$out"
+        chars=$((chars + $(printf '%s\n' "$lines" | wc -c)))
+        wanted+="$name
+"
+      done < <(awk -F'\t' '!seen[$1]++ { printf "%s\t%s\n", $1, $2 }' "$2")
+      state="$state $chars chars"
+      [ "$live" -eq 1 ] && printf '%s\n' "${state#active }" | awk '{ print $1 }' > "$1/$LESSON_CORE_APPLIED" 2>/dev/null
+      ;;
+  esac
+  # THE SWEEP: every core file this run did not write, which is all of them when there is no core.
+  while IFS= read -r b; do
+    [ -n "$b" ] || continue
+    case "
+$wanted" in *"
+$b
+"*) continue ;; esac
+    rm -f "$1/$b" 2>/dev/null || true
+  done < <(lesson_core_files_present "$1")
+  if [ "$live" -eq 1 ]; then
+    [ "$(cat "$1/$LESSON_CORE_STATE" 2>/dev/null)" = "$state" ] || printf '%s\n' "$state" > "$1/$LESSON_CORE_STATE" 2>/dev/null
+  fi
+  case "$state" in
+    fallback*)
+      echo "claude-sync: the lessons core list $1/$LESSON_CORE_LIST is not usable (${state#fallback }), so the whole library loads in every session instead of the core. Set it again with 'claude-sync core-set <file of lesson numbers>'." >&2 ;;
+  esac
+  if is_blank "$wanted"; then printf '%s' "$3"; else printf '%s' "$wanted"; fi
+}
+
+# THE ONE PLACE THE LIST IS EDITED, and so the one place its cap is enforced (claude-config#564):
+# never at the send, where a refusal would stop every other file travelling with it (L371). Checks
+# every number is a lesson, measures the core in the unit the always loaded limit counts, refuses
+# past SYNC_CORE_CAP (20000, Dan's figure from the plan) unless SYNC_CORE_OVER_CAP=1, which is his
+# decision to make, and declares the count in the list so the other Mac can tell this from damage.
+do_core_set(){   # $1 = a file of lesson numbers
+  local src="$CLAUDE_HOME/$LESSONS_FILE" ids n idx unknown chars cap tmp
+  [ -n "${1:-}" ] && [ -f "$1" ] || die "core-set needs a file of lesson numbers (Lnnn, one or more per line); '${1:-}' is not one. Nothing was written."
+  [ -f "$src" ] || die "core-set found no $src to check the numbers against. Nothing was written."
+  ids="$(lesson_core_list_ids "$1" | sed 's/^L//' | sort -n | sed 's/^/L/')"
+  n="$(printf '%s\n' "$ids" | grep -c '^L' || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  [ "$n" -gt 0 ] || die "core-set: $1 names no lesson. Nothing was written."
+  idx="$(scratch_file)" || die "core-set could not make a scratch file. Nothing was written."
+  lesson_entries_render "$src" index > "$idx" 2>/dev/null
+  unknown="$(printf '%s\n' "$ids" | awk 'NR == FNR { if (match($0, /^- L[0-9]+\./)) have[substr($0, 3, RLENGTH - 3)] = 1; next } NF && !($1 in have) { printf "%s ", $1 }' "$idx" -)"
+  if [ -n "$unknown" ]; then rm -f "$idx"; die "core-set: these are not lessons in $src: ${unknown% }. Nothing was written."; fi
+  chars="$(printf '%s\n' "$ids" | awk 'NR == FNR { want["- " $1 "."] = 1; next } match($0, /^- L[0-9]+\./) && (substr($0, 1, RLENGTH) in want) { c += length($0) + 1 } END { print c + 0 }' - "$idx")"
+  rm -f "$idx"
+  cap="${SYNC_CORE_CAP:-20000}"
+  case "$cap" in ''|*[!0-9]*) cap=20000 ;; esac
+  if [ "$chars" -gt "$cap" ] && [ "${SYNC_CORE_OVER_CAP:-}" != 1 ]; then
+    die "core-set: those $n lessons come to $chars chars, over the cap of $cap. Nothing was written. Going over is Dan's decision: SYNC_CORE_OVER_CAP=1 claude-sync core-set $1."
+  fi
+  tmp="$CLAUDE_HOME/$LESSON_CORE_LIST.tmp.$$"
+  {
+    printf '# The lessons core: the lessons every session loads (claude-config#564). Written by\n'
+    printf '# `claude-sync core-set`, which checks the cap; edit it that way, not by hand.\n'
+    printf '# count %s\n' "$n"
+    printf '%s\n' "$ids"
+  } > "$tmp" && mv -f "$tmp" "$CLAUDE_HOME/$LESSON_CORE_LIST" || { rm -f "$tmp"; die "core-set could not write $CLAUDE_HOME/$LESSON_CORE_LIST."; }
+  printf '%s\n' "$n" > "$CLAUDE_HOME/$LESSON_CORE_APPLIED" 2>/dev/null
+  echo "lessons core set: $n lessons, $chars chars (cap $cap). It loads from the next sync here, and travels to the other Mac with it."
 }
 
 # Writes the index beside the lessons file, and ONLY when it differs. CLAUDE.md and everything it
@@ -9274,6 +9461,7 @@ case "$cmd" in
   cite-pin) do_cite_pin ;;              # record what each cited lesson number names now
   cite-check) do_cite_check ;;          # read-only: has any cited number come to mean something else
   lesson) do_lesson "${2:-}" ;;         # read-only: one lesson in full, with its provenance
+  core-set) with_lock do_core_set "${2:-}" ;;   # the one way the lessons core list is edited (#564)
   check-skills) do_check_skills ;;      # read-only: is any skill provided by a plugin AND locally
   # Read only, LOCK FREE, and silent when there is nothing wrong: what a hook runs the moment a
   # lesson is written, so the session that wrote it is still there to fix it (claude-config#374).

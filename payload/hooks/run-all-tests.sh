@@ -676,7 +676,8 @@ if [ "$ran" -gt 0 ]; then
   _live_stores="${CLAUDE_HOME:-$HOME/.claude}/LESSONS.md
 ${CLAUDE_HOME:-$HOME/.claude}/LESSONS-INDEX.md
 ${CLAUDE_HOME:-$HOME/.claude}/CLAUDE.md
-$(for _lsx in "${CLAUDE_HOME:-$HOME/.claude}"/LESSONS-INDEX-*.md; do [ -f "$_lsx" ] && printf '%s\n' "$_lsx"; done)
+${CLAUDE_HOME:-$HOME/.claude}/LESSONS-CORE.txt
+$(for _lsx in "${CLAUDE_HOME:-$HOME/.claude}"/LESSONS-INDEX-*.md "${CLAUDE_HOME:-$HOME/.claude}"/LESSONS-CORE-*.md; do [ -f "$_lsx" ] && printf '%s\n' "$_lsx"; done)
 ${CLAUDE_HOME:-$HOME/.claude}/settings.json
 ${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}
 ${SYNC_ZSHRC:-$HOME/.zshrc}

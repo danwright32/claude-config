@@ -519,9 +519,15 @@ elif [ ! -f "$SYNC_TOOL" ] || [ ! -d "$REPO_ROOT/payload" ]; then
 else
   sync_rule_text_names="$(
     # shellcheck disable=SC1090
-    eval "$(sed -n '/^LESSONS_FILE=/p; /^LESSON_INDEX_[A-Za-z_]*=/p; /^is_derived_rule_file(){/,/^}/p' "$SYNC_TOOL")"
-    for n in "${LESSONS_FILE:-}" "${LESSON_INDEX_FILE:-}" "${LESSON_INDEX_RETIRED_FILE:-}" \
-             "${LESSON_INDEX_PREFIX:+${LESSON_INDEX_PREFIX}-data-safety.md}"; do
+    eval "$(sed -n '/^LESSONS_FILE=/p; /^LESSON_INDEX_[A-Za-z_]*=/p; /^LESSON_CORE_[A-Za-z_]*=/p; /^is_derived_rule_file(){/,/^}/p' "$SYNC_TOOL")"
+    # A candidate for EVERY lesson prefix the sync declares, derived rather than listed, so a new
+    # family of generated rule files (the lessons core, claude-config#564) is checked the day it
+    # lands rather than the day somebody remembers to add it here (L96).
+    prefixed=""
+    for v in $(compgen -v | grep -E '^LESSON_[A-Z_]*PREFIX$'); do
+      prefixed="$prefixed ${!v}-data-safety.md"
+    done
+    for n in "${LESSONS_FILE:-}" "${LESSON_INDEX_FILE:-}" "${LESSON_INDEX_RETIRED_FILE:-}" $prefixed; do
       [ -n "$n" ] || continue
       # Confirmed through the OWN predicate of the sync, never assumed from the name. The lessons
       # file itself is not derived from anything, so it is the one name taken straight.
