@@ -658,6 +658,36 @@ forget_verdicts
 rm -rf "$PAIR"
 unset GH_FIXTURE GH_CALL_LOG
 
+# --- #568: a slow gh never silences the quiz ---------------------------------------------------
+# The hook is registered with a 15 second timeout (a setting, not a measurement), and a hook the harness kills emits nothing,
+# which reads exactly like a decision not to quiz. So the label read has its own, shorter deadline:
+# past it the quiz FIRES, says the label could not be read in time, and the verdict store says why.
+# The pull request carries changelog/none, which WOULD silence the quiz if it were read in time, so
+# a fire here can only come from the deadline (L159). And the hook records that it started before
+# any network read, so even a kill leaves a trace (#354).
+forget_verdicts
+record '[{"name":"changelog/none"}]'
+SLOW="$FIXTURE/slowbin"; mkdir -p "$SLOW"
+cat > "$SLOW/gh" <<'SH'
+case "$*" in
+  *"auth status"*) : ;;
+  *"pr view"*) sleep 30; cat "$FAKE_PR_JSON" ;;
+esac
+SH
+chmod +x "$SLOW/gh"
+slow_payload="$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":"gh pr merge 42 --squash"},"cwd":sys.argv[1]}))' "$FIXTURE/repo")"
+t0=$SECONDS
+slow_out="$(printf '%s' "$slow_payload" | ( cd "$FIXTURE/repo" && env "PATH=$SLOW:$PATH" QUIZ_LABEL_DEADLINE_SECONDS=1 "$HOOK" ) 2>/dev/null)"
+took=$((SECONDS - t0))
+if holds "$slow_out" '"decision":"block"'; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a label read past its deadline still fires the quiz (got: ${slow_out:0:200})"; fi
+if [ "$took" -lt 10 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the hook answered inside the harness's 15 second timeout (took ${took}s)"; fi
+if holds "$slow_out" 'could not be read in time'; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the quiz says the label could not be read in time"; fi
+saw label-timeout 1 "a label read past its deadline"
+saw started 1 "a hook run that reached the label gate"
+# And the control: the same label read in time silences the quiz, so the fire above is the deadline.
+forget_verdicts
+run "the same changelog/none label read in time is quiet" skip "gh pr merge 42 --squash"
+
 rm -rf "$FIXTURE"
 
 echo
