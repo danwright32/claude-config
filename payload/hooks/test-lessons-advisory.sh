@@ -162,6 +162,9 @@ assert_contains "a real removal before a temp one on the same line still fires" 
 R=$(make_repo climb $'WORK="$(mktemp -d)"\nrm -rf "$WORK/../data"' scripts/climb.sh)
 out=$(run_hook "git push" "$R")
 assert_contains "a path climbing out of the temp directory still fires" 'destructive data operation' "$out"
+R=$(make_repo reassign $'WORK="$(mktemp -d)"\nWORK="$HOME/data"\nrm -rf "$WORK"' scripts/reassign.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "a temp variable reassigned to real data before the removal still fires" 'destructive data operation' "$out"
 R=$(make_repo tmpsql $'WORK="$(mktemp -d)"\nrm -rf "$WORK"\nDELETE FROM contacts;' migrations/004.sql)
 out=$(run_hook "git push" "$R")
 assert_contains "a temp cleanup beside real SQL still fires on the SQL" 'destructive data operation' "$out"
