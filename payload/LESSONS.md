@@ -7532,6 +7532,23 @@ for reference; L6 was reviewed and deliberately not adopted.
   Encoding the text part quoted-printable was proven by one real send through the same path.
   Overture and Ovation send through Gmail too.)
   SHORT: Send an email's text part quoted-printable, never 7bit long lines: the sending service may hard wrap them, so judge by the raw message that arrived.
+- **L728. When more than one code path calls the same external endpoint, diff the bodies they
+  build against what the receiver REQUIRES, because the path that passes its input through
+  unchanged lacks whatever a hand-built sibling adds, and the receiver reports the gap as
+  "sometimes" in its own logs where nobody looks.** A pass-through call is read as the safe
+  one (nothing to get wrong), and a generic "map the payload" facility cannot add a figure a
+  STEP computed, so the field the receiver needs most is exactly the one it cannot carry. The
+  hand-built caller beside it masks the fault: from the receiver's side the field is present on
+  some leads and absent on others, which reads as flakiness rather than as one caller never
+  sending it, and the only place the shortfall is recorded is the receiver's log.
+  (bidspoke#1518, 2026-09-23: the Main Flow's Bid Race posted the raw form payload to the
+  Tripoint proxy, 4,278 of 4,278 attempts in a week with no `unsecuredDebt` or
+  `maxUnsecuredDebt`, while the Engine Bidding and Lead Economy code nodes added both by hand.
+  Brian's proxy had warned "createLead missing unsecuredDebt/maxUnsecuredDebt" on every one for
+  months. Tripoint priced those leads without our figure while Bidspoke booked a multiplier on
+  the verified debt, and Tripoint raised it as a billing discrepancy of hundreds of thousands
+  of dollars.)
+  SHORT: Two callers of one external endpoint build different bodies, so diff them against what the receiver REQUIRES; the pass-through one lacks the field.
 
 ## Building with AI
 

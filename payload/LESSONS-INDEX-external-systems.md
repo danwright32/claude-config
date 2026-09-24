@@ -36,3 +36,4 @@ which is NOT loaded into the session.
 - L496. A lockfile inside a generated or gitignored directory pins nothing, since the only copy is on the machine that made it and CI resolves afresh.
 - L499. A framework's error message names the case its author imagined, not the condition it tests, so read the throw site before believing it.
 - L726. Send an email's text part quoted-printable, never 7bit long lines: the sending service may hard wrap them, so judge by the raw message that arrived.
+- L728. Two callers of one external endpoint build different bodies, so diff them against what the receiver REQUIRES; the pass-through one lacks the field.
