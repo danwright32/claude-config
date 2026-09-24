@@ -225,12 +225,50 @@ TRIG_FN=(
   ''
   ''
   ''
-  ''
+  'trig_destructive_data_op'
   ''
   ''
   ''
   'trig_workflow_job_without_timeout'
 )
+
+# A destructive data operation, less a file removing the temp directory IT created
+# (claude-config#578). On 2026-09-24 the plain regex fired on about eight pushes, every one a
+# test's `rm -rf "$WORK"` of its own mktemp directory, and every reply was that it did not apply,
+# which is how an advisory stops being read (L36). A removal counts as cleanup only when EVERY
+# target is a variable the same added lines assigned from mktemp, optionally with a path below it;
+# anything else on the line, and every other destructive pattern, fires exactly as before (L104).
+trig_destructive_data_op(){   # $1 = a file holding the added lines
+  # The pattern travels in the ENVIRONMENT: `awk -v` processes backslash escapes, so `fs\.rm\(`
+  # would arrive as the invalid `fs.rm(` (L434). ENVIRON is read verbatim.
+  TRIG_DESTRUCTIVE_RE="${TRIG_RE1[3]}" awk '
+    BEGIN { re = ENVIRON["TRIG_DESTRUCTIVE_RE"] }
+    { line[NR] = $0 }
+    match($0, /[A-Za-z_][A-Za-z0-9_]*=[[:space:]]*"?\$\([[:space:]]*mktemp/) {
+      v = substr($0, RSTART, RLENGTH); sub(/=.*/, "", v); tmp[v] = 1
+    }
+    END {
+      for (i = 1; i <= NR; i++) {
+        l = tolower(line[i])
+        if (l !~ tolower(re)) continue
+        if (line[i] !~ /rm[[:space:]]+-rf/ || line[i] ~ /(DROP|TRUNCATE|DELETE[[:space:]]+FROM|unlinkSync|fs\.rm\(|\.drop\()/) exit 0
+        rest = line[i]; sub(/.*rm[[:space:]]+-rf[[:space:]]*/, "", rest)
+        sub(/[\047;&|].*$/, "", rest)
+        n = split(rest, t, /[[:space:]]+/); own = 0; other = 0
+        for (k = 1; k <= n; k++) {
+          if (t[k] == "") continue
+          x = t[k]; gsub(/"/, "", x)
+          if (match(x, /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/)) {
+            v = substr(x, RSTART, RLENGTH); gsub(/[${}]/, "", v)
+            if ((v in tmp) && (x ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(\/.*)?$/)) { own++; continue }
+          }
+          other++
+        }
+        if (other > 0 || own == 0) exit 0
+      }
+      exit 1
+    }' "$1"
+}
 
 # A workflow job added with no `timeout-minutes` (L313). The platform default is six hours, and a
 # hang that runs to it is both invisible, because it reads as slowness, and expensive on a metered
