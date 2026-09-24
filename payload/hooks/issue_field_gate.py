@@ -30,6 +30,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 
 # The scanner is a sibling file, loaded by its explicit path rather than by name.
@@ -82,6 +83,42 @@ def has_category(args):
     closed vocabulary would go stale and start forcing bad fits.
     """
     return any(not LEVEL.match(n) for n in _labels(args))
+
+
+SESSION_MARK = "Claude-Session:"
+
+
+def session_line():
+    """The line naming this session, from the one shared maker, or None outside a session."""
+    try:
+        r = subprocess.run(["bash", os.path.join(_HERE, "lib", "claude-session-line.sh")],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = r.stdout.strip()
+    return line if r.returncode == 0 and line.startswith(SESSION_MARK) else None
+
+
+def has_session_line(args, command):
+    """The body names the session that filed it (claude-config#536).
+
+    Looked for in the whole command text as well as the parsed arguments, because a body written
+    as a heredoc inside a command substitution is only ever present as text, and in a --body-file
+    when one is named. A body file that cannot be read is not held against the create: this gate
+    fails open on what it cannot read.
+    """
+    if SESSION_MARK in command or any(SESSION_MARK in a for a in args):
+        return True
+    for path in scan.flag_values(args, "--body-file", "-F"):
+        if path == "-":
+            return True
+        try:
+            with open(os.path.expanduser(path), encoding="utf-8", errors="replace") as f:
+                if SESSION_MARK in f.read():
+                    return True
+        except OSError:
+            return True
+    return False
 
 
 MILESTONE_FIX = (
@@ -140,6 +177,19 @@ RULES = [
 ]
 
 
+def session_rule(line):
+    """The session line rule, which exists only inside a session: its fix names the exact line."""
+    return {
+        "name": "the session that filed it",
+        "check": lambda args, command: has_session_line(args, command),
+        "fix": ("SESSION. End the body with the line naming this session, the same line commits and pull "
+                "requests carry, so a session reading the issue list can tell which session filed what:\n"
+                "   " + line + "\n"
+                "   Put it on its own line, after a blank line, at the end of --body or the --body-file."),
+        "override": "SKIP_SESSION_LINE_CHECK=1",
+    }
+
+
 def evaluate(command):
     """Which rules fail, across every create in the command.
 
@@ -147,15 +197,19 @@ def evaluate(command):
     the message can say "1 issue" or "3 issues" correctly.
     """
     creates = scan.scan_creates(command)
+    rules = [dict(r, check=(lambda args, command, f=r["check"]: f(args))) for r in RULES]
+    line = session_line() if creates else None
+    if line:
+        rules.append(session_rule(line))
     offenders = 0
     failing = []
     for args, envs in creates:
-        missing = [r for r in RULES if r["override"] not in envs and not r["check"](args)]
+        missing = [r for r in rules if r["override"] not in envs and not r["check"](args, command)]
         if not missing:
             continue
         offenders += 1
         for r in missing:
-            if r not in failing:
+            if r["name"] not in [f["name"] for f in failing]:
                 failing.append(r)
     return offenders, failing
 
@@ -164,7 +218,8 @@ def build_reason(offenders, failing):
     names = ", ".join(r["name"] for r in failing)
     lines = [
         "This command would file %s missing %s. Every issue carries a milestone, a priority and at least "
-        "one category, so the backlog can be read by feature, by urgency and by area.\n"
+        "one category, so the backlog can be read by feature, by urgency and by area, and one filed from a "
+        "Claude session names that session.\n"
         % (scan.plural_issues(offenders), names),
         "Fix each one, then re-run the command:\n",
     ]

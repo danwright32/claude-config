@@ -213,6 +213,10 @@ while [[ "$i" -lt "$n" ]]; do
   if [[ -n "$dry" ]]; then
     echo "WOULD-CREATE-ISSUE repo=$repo milestone=$ms_ref priority=$lvl labels=$(printf '%s' "$(labels_for "$i")" | tr '\n' ',' | sed 's/,$//') title=$it"
   else
+    # The issue names the session that filed it, from the one shared line maker (claude-config#536).
+    # This script calls gh itself, so the gate that asks for the line never sees these creates.
+    sess_line="$(bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../hooks/lib" 2>/dev/null && pwd)/claude-session-line.sh" 2>/dev/null)" || sess_line=""
+    [[ -n "$sess_line" ]] && ib="$ib"$'\n\n'"$sess_line"
     iss_url="$(gh issue create --repo "$repo" --title "$it" --body "$ib" --milestone "$ms_ref" "${label_args[@]}" 2>&1)"
     if [[ $? -ne 0 ]]; then
       echo "ISSUE-FAILED title=$it: $iss_url" >&2

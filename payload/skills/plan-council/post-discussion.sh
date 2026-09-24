@@ -61,6 +61,10 @@ except Exception: print("")' 2>/dev/null)"
     ms_title="$(printf '%s\n' "$ms_out" | sed -n 's/^MILESTONE-TITLE //p' | awk 'NR <= 1')"
   fi
 
+  # The issue names the session that filed it, from the one shared line maker (claude-config#536).
+  sess_line="$(bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../hooks/lib" 2>/dev/null && pwd)/claude-session-line.sh" 2>/dev/null)" || sess_line=""
+  [ -n "$sess_line" ] && body="$body"$'\n\n'"$sess_line"
+
   if [ -n "$ms_title" ]; then
     url="$(gh issue create --repo "$repo" --title "$title" --body "$body" --milestone "$ms_title" 2>/dev/null)"
   else

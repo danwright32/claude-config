@@ -37,11 +37,14 @@ TMP_ERR="$TMP_DIR/stderr.txt"
 pass=0
 fail=0
 
+# The session a create comes from is read from the environment Claude Code gives the hook
+# (claude-config#536). Cleared by default, so the three field rules below are judged the same
+# inside a session and in CI, and set explicitly only where the session line is what is tested.
 run() {
   printf '%s' "$1" | python3 -c '
 import sys, json
 json.dump({"tool_name": "Bash", "tool_input": {"command": sys.stdin.read()}}, sys.stdout)
-' | bash "$HOOK" 2>/dev/null
+' | env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_BRIDGE_SESSION_ID ${SESSION_ENV:-} bash "$HOOK" 2>/dev/null
 }
 denies() {
   local out; out="$(run "$2")"
@@ -292,6 +295,54 @@ if [[ "$(printf '%s' "$hooks_registered" | tail -1)" == *"require-issue-fields.s
 else
   echo "SKIPPED (2 checks): there is no installed config at $HOME/.claude/settings.json, so which hooks are registered on this machine cannot be checked from here."
 fi
+
+# ---------------------------------------------------------------------------
+# The session that filed it (claude-config#536). Three sessions worked one repo on 2026-09-21 and
+# one sent a warning to the wrong session, because nothing on a filed issue says who filed it.
+# Commits and pull requests already carry a Claude-Session line; a create now has to as well, and
+# the refusal names the exact line, read from the environment Claude Code gives every hook.
+# ---------------------------------------------------------------------------
+ALL="$M $P $C"
+SESSION_ENV="CLAUDE_CODE_BRIDGE_SESSION_ID=session_01AbCdEf CLAUDE_CODE_SESSION_ID=11111111-2222-3333-4444-555555555555"
+denies "#536 a create with no session line is refused inside a session" "gh issue create --title t --body b $ALL"
+says "#536 and the refusal names the exact line, as a link" "Claude-Session: https://claude.ai/code/session_01AbCdEf" "gh issue create --title t --body b $ALL"
+allows "#536 a body carrying the session line passes" "gh issue create --title t --body \"b
+
+Claude-Session: https://claude.ai/code/session_01AbCdEf\" $ALL"
+allows "#536 the line in a heredoc body passes too" "gh issue create --title t $ALL --body \"\$(cat <<'EOF'
+b
+
+Claude-Session: https://claude.ai/code/session_01AbCdEf
+EOF
+)\""
+BODYF="$TMP_DIR/body.md"
+printf 'b\n\nClaude-Session: https://claude.ai/code/session_01AbCdEf\n' > "$BODYF"
+allows "#536 a body file carrying the line passes" "gh issue create --title t --body-file $BODYF $ALL"
+printf 'b\n' > "$BODYF"
+denies "#536 a body file without the line is refused" "gh issue create --title t --body-file $BODYF $ALL"
+allows "#536 the line has its own visible override" "SKIP_SESSION_LINE_CHECK=1 gh issue create --title t --body b $ALL"
+denies "#536 and that override waives nothing else" "SKIP_SESSION_LINE_CHECK=1 gh issue create --title t --body b $M $C"
+# A session with no claude.ai link is named by its local id, which is what Claude Code gives every
+# hook, measured 2026-09-23 on a headless run.
+SESSION_ENV="CLAUDE_CODE_SESSION_ID=11111111-2222-3333-4444-555555555555"
+says "#536 with no link the local session id is the line" "Claude-Session: local 11111111-2222-3333-4444-555555555555" "gh issue create --title t --body b $ALL"
+# A value that is not the shape of an id is not repeated into a filed issue.
+SESSION_ENV="CLAUDE_CODE_SESSION_ID=not-an-id"
+allows "#536 with no usable session identity the rule stands down rather than guess" "gh issue create --title t --body b $ALL"
+SESSION_ENV=""
+allows "#536 outside a session (CI, a plain shell) the rule does not apply" "gh issue create --title t --body b $ALL"
+
+# The shared line maker, which the milestone and discussion scripts use too, so one spelling of the
+# line exists (L41).
+LINE_LIB="$DIR/lib/claude-session-line.sh"
+got="$(env -u CLAUDE_CODE_SESSION_ID CLAUDE_CODE_BRIDGE_SESSION_ID=session_01AbCdEf bash "$LINE_LIB" 2>/dev/null)"
+[ "$got" = "Claude-Session: https://claude.ai/code/session_01AbCdEf" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: #536 the line maker prints the link line (got [$got])"; }
+env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_BRIDGE_SESSION_ID bash "$LINE_LIB" >/dev/null 2>&1 \
+  && { fail=$((fail + 1)); echo "FAIL: #536 the line maker exits non zero with no session"; } || pass=$((pass + 1))
+for script in "$DIR/../skills/milestone/create-milestone.sh" "$DIR/../skills/plan-council/post-discussion.sh"; do
+  if grep -q 'claude-session-line.sh' "$script"; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL: #536 $(basename "$script") files issues without the session line"; fi
+done
 
 echo
 echo "passed: $pass, failed: $fail"

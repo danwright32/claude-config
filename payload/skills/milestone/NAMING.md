@@ -318,6 +318,7 @@ removing a label strips it from every issue that carries it, so that is Dan's ca
 | An issue has a milestone | `~/.claude/hooks/require-issue-fields.sh` (PreToolUse) | `SKIP_MILESTONE_CHECK=1 <command>` |
 | An issue has a priority | the same gate | `SKIP_PRIORITY_CHECK=1 <command>` |
 | An issue has at least one category | the same gate | `SKIP_CATEGORY_CHECK=1 <command>` |
+| An issue filed from a Claude session ends with its `Claude-Session:` line (claude-config#536), the same line commits and pull requests carry, so concurrent sessions can tell who filed what. The refusal names the exact line; `hooks/lib/claude-session-line.sh` is the one place it is spelled, and `create-milestone.sh` and `post-discussion.sh` append it themselves | the same gate, only inside a session | `SKIP_SESSION_LINE_CHECK=1 <command>` |
 | A plan's issues carry both | `create-milestone.sh`, which the gates cannot see into | none, fix the plan JSON |
 | A new milestone title names a feature | `ensure-milestone.sh`, on the create path only | `ALLOW_ANY_MILESTONE_TITLE=1 <command>` |
 | A new milestone is for 2 or more issues | the same script, which refuses to create without `--for-issues <n>` and refuses a stated count of 1 | `ALLOW_SINGLE_ISSUE_MILESTONE=1 <command>` |

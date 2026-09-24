@@ -349,6 +349,16 @@ check "milestone previewed even with no issues" "WOULD-CREATE-MILESTONE repo=acm
 n0="$(printf '%s\n' "$out_noissues" | grep -c '^WOULD-CREATE-ISSUE')"
 check_eq "no issue lines when issues empty" "0" "$n0"
 
+# --- the filed issues name the session that filed them (claude-config#536) ---
+# This script calls gh itself, so the issue gate never sees its creates and cannot ask for the line.
+out="$(CLAUDE_CODE_BRIDGE_SESSION_ID=session_01XyZ run "$TMP/none.json" "acme/widgets" "$TMP/plan.json")"
+# Counted over the whole log: a body is several lines, so the line sits below its create's first.
+n_marked="$(grep -c 'Claude-Session: https://claude.ai/code/session_01XyZ' "$TMP/calls.log")"
+check_eq "every issue filed from a session carries its session line" "3" "$n_marked"
+out="$(env -u CLAUDE_CODE_BRIDGE_SESSION_ID -u CLAUDE_CODE_SESSION_ID PATH="$TMP/bin:$PATH" GH_CALLS="$TMP/calls.log" GH_FIXTURE="$TMP/none.json" bash -c ': > "$GH_CALLS"; bash "$0" "$@"' "$SCRIPT" "acme/widgets" "$TMP/plan.json" 2>&1)"
+n_marked="$(grep -c 'Claude-Session:' "$TMP/calls.log")"
+check_eq "and outside a session no line is invented" "0" "$n_marked"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
