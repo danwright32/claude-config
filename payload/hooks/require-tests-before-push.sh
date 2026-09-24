@@ -473,12 +473,20 @@ judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\nTEST FILES CHANGED IN THIS PUSH, 
 # Run the judge isolated: an empty working dir + only `local` setting sources so
 # it does NOT inherit the user's hooks, CLAUDE.md memory, skills, or MCP servers
 # (those otherwise hijack the result). Keychain auth still works (no --bare).
+#
+# Measured, not assumed (claude-config#540, Claude Code 2.1.281, 2026-09-23): the same call from an
+# empty directory took 14,802 input tokens with `--setting-sources local` and 56,808 without it, and
+# asked whether its context held the line "L1001." it answered ABSENT with the flag and quoted the
+# lesson without it. So the flag already keeps the global CLAUDE.md and the lessons index out, and
+# each launch below carries the marker the headless launch guard reads instead of a second switch.
 JTMP="$(mktemp -d)"
 if [ -n "$TIMEOUT_BIN" ]; then
+  # claude-mds-ok: --setting-sources local keeps the global config out, measured above (#540).
   envelope="$(printf '%s' "$judge_input" | ( cd "$JTMP" && "$TIMEOUT_BIN" "$JUDGE_TIMEOUT" \
     claude -p --model "$JUDGE_MODEL" --output-format json \
       --strict-mcp-config --setting-sources local --system-prompt "$RUBRIC" ) 2>/dev/null )"
 else
+  # claude-mds-ok: --setting-sources local keeps the global config out, measured above (#540).
   envelope="$(printf '%s' "$judge_input" | ( cd "$JTMP" && \
     claude -p --model "$JUDGE_MODEL" --output-format json \
       --strict-mcp-config --setting-sources local --system-prompt "$RUBRIC" ) 2>/dev/null )"

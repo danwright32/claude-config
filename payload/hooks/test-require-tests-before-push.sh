@@ -166,6 +166,7 @@ STUB_DIR="$(mktemp -d)"
 cat > "$STUB_DIR/claude" <<'STUB'
 #!/usr/bin/env bash
 cat >/dev/null
+[ -n "${STUB_CLAUDE_ARGS:-}" ] && printf '%s\n' "$@" > "$STUB_CLAUDE_ARGS"
 [ -n "${STUB_CLAUDE_OUT:-}" ] && printf '%s' "$STUB_CLAUDE_OUT"
 exit "${STUB_CLAUDE_EXIT:-0}"
 STUB
@@ -444,6 +445,29 @@ W="$(mk_repo)"; seed_source_only "$W"
 run_hook "$W" "git push"
 want_code 0 "a push level with its upstream does not re-judge the last pushed commit"
 want_silent "a push level with its upstream does not re-judge the last pushed commit"
+
+# --- the judge runs without the global config ------------------------------
+# `--setting-sources local` is what keeps the global CLAUDE.md and the lessons index out of the
+# judge: measured 14,802 input tokens with it against 56,808 without (claude-config#540). Nothing
+# else says so, so dropping the flag would quietly quadruple every judge call and hand it rules
+# meant for the session. Both launches are checked, since which one runs depends on whether a
+# timeout binary is on the PATH, and this suite's PATH normally has none.
+ARGS_FILE="$TMPROOT/judge-args"
+TIMEOUT_STUB_DIR="$TMPROOT/timeout-stub"; mkdir -p "$TIMEOUT_STUB_DIR"
+printf '#!/usr/bin/env bash\nshift\nexec "$@"\n' > "$TIMEOUT_STUB_DIR/timeout"; chmod +x "$TIMEOUT_STUB_DIR/timeout"
+for judge_path in "$PATH_STUB" "$TIMEOUT_STUB_DIR:$PATH_STUB"; do
+  case "$judge_path" in "$TIMEOUT_STUB_DIR"*) how="with a timeout binary" ;; *) how="without a timeout binary" ;; esac
+  rm -f "$ARGS_FILE"
+  W="$(mk_repo)"; seed_source_and_test "$W"
+  STUB_CLAUDE_ARGS="$ARGS_FILE" STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' \
+    run_hook "$W" "git push" "$judge_path"
+  if [ -f "$ARGS_FILE" ] && grep -qx -- '--setting-sources' "$ARGS_FILE" \
+     && [ "$(grep -A1 -x -- '--setting-sources' "$ARGS_FILE" | tail -1)" = "local" ]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1)); echo "FAIL: the judge $how is not launched with --setting-sources local (flags: $(grep -- '^--' "$ARGS_FILE" 2>/dev/null | tr '\n' ' ' || echo 'judge never ran'))"
+  fi
+done
 
 echo
 echo "passed: $pass, failed: $fail"
