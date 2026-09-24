@@ -414,6 +414,33 @@ touch -t 202601010000 "$AI_REVIEW_STATE_DIR/citations.tsv"
 printf '{"session_id":"n2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
 [ -s "$AI_REVIEW_STATE_DIR/citations.tsv" ] && ok || bad "the citation ledger survives the sweep"
 
+# ===========================================================================================
+# 7. A push to a branch with an OPEN pull request starts the review of the new head
+#    (claude-config#577), so a fix pushed after the PR opened is reviewed by merge time rather
+#    than started by the merge gate, which then waits about five minutes.
+# ===========================================================================================
+reset_state
+printf 'func pushed() {}\n' >> "$REPO/App/Sync.swift"; G commit -q -am "fix after review"
+G push -q 2>/dev/null
+PUSHED_SHA="$(G rev-parse HEAD)"
+printf '{"number":7,"state":"OPEN","headRefOid":"%s","baseRefName":"main"}\n' "$PUSHED_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_create "git push" 0)"
+check "a push to a branch with an open PR starts its review" "started" "$out"
+wait_final "$PUSHED_SHA" && ok || bad "the pushed head was reviewed"
+check_eq "and it is the pushed head that was reviewed" "$PUSHED_SHA" "$(meta "$(final_of "$PUSHED_SHA")" sha)"
+out="$(fire_create "git push" 0)"
+check "a second push of the same head starts nothing new" "already" "$out"
+reset_state
+out="$(fire_create "git push" 1)"
+check_eq "a failed push starts nothing" "0" "$(calls)"
+printf '{"number":7,"state":"MERGED","headRefOid":"%s","baseRefName":"main"}\n' "$PUSHED_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_create "git push" 0)"
+check_eq "a push to a branch whose PR is merged starts nothing" "0" "$(calls)"
+rm -f "$FAKE_LOG/pr-view.json"
+out="$(fire_create "git push" 0)"
+check_eq "a push to a branch with no PR starts nothing" "0" "$(calls)"
+check_eq "and says nothing, since most pushes have no PR yet" "" "$out"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
