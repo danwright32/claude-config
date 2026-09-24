@@ -6,17 +6,28 @@ returns at once, so the push waits for nothing. This process then asks `claude` 
 diff and writes the answer where ai-review-nudge.sh will find it on a later prompt.
 
     ai-review-run.py --state-dir D --key K --sha S --repo-label L --branch B --repo-dir R
-                     --model M --prompt-file P --diff-file F --deadline SECONDS --started EPOCH
+                     --model M --prompt-file P --lessons-dir D --diff-file F --deadline SECONDS
+                     --started EPOCH
 
-It runs EXACTLY `env -u CLAUDECODE claude -p <prompt> --model <model>` with the diff on stdin.
+It runs EXACTLY `env -u CLAUDECODE CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p <prompt> --model
+<model>` with the diff on stdin.
 The `env -u` is load bearing: a nested claude refuses to start while CLAUDECODE is set, and every
 hook inherits that variable from the session that fired it. Removing it here rather than in the
 shell keeps the whole command in one place the test can read back from the fake claude's recorded
 environment.
 
 The prompt is the text of ai-review-prompt.txt, verbatim, with one context line in front of it
-naming the framework read from package.json (or saying there was none). The file is the prompt
-the test compares against, so the hook never holds wording of its own (L41).
+naming the framework read from package.json (or saying there was none), and the lessons index in
+between. The file is the prompt the test compares against, so the hook never holds wording of its
+own (L41).
+
+THE LESSONS, on purpose, and nothing else of the global config (claude-config#539). The review used
+to inherit the whole global CLAUDE.md by accident, because a headless claude loads it unless told
+not to. It is now told not to, and every LESSONS-INDEX-*.md in --lessons-dir (the config root
+beside the hooks) is read HERE, at run time, into the prompt, so it is always the current index and
+never a copy that drifts (L41). A review that found no index files still runs, and its answer says
+so on its first line, because running on without them silently would read as a review that applied
+the lessons and found nothing to cite.
 
 WHAT IT WRITES, and the one rule about the order. The hook has already written
 <key>-<sha>.txt.pending carrying the start time. On any exit at all this process writes
@@ -32,6 +43,7 @@ The finished file's first lines are `name=value` metadata (repo, branch, sha, st
 status, model), then a blank line, then the review. The nudge reads only that shape.
 """
 import argparse
+import glob
 import json
 import os
 import signal
@@ -72,6 +84,19 @@ def framework_line(repo_dir):
     return "Context: this repository has no package.json, so treat it as a general code base and apply framework rules only where the code makes the framework obvious."
 
 
+def lessons_block(lessons_dir):
+    """(text for the prompt, note for the answer). The note is empty when the lessons were read."""
+    files = sorted(glob.glob(os.path.join(lessons_dir, "LESSONS-INDEX-*.md")))
+    if not files:
+        return "", (f"Note: this review ran without the lessons index: no LESSONS-INDEX-*.md in "
+                    f"{os.path.abspath(lessons_dir)}, so no recorded lesson could be cited.")
+    parts = []
+    for path in files:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            parts.append(f.read().strip())
+    return "===== LESSONS\n\n" + "\n\n".join(parts), ""
+
+
 def write_finished(state_dir, name, meta, body):
     final = os.path.join(state_dir, name + ".txt")
     tmp = final + ".tmp"
@@ -90,7 +115,7 @@ def write_finished(state_dir, name, meta, body):
 def main(argv):
     ap = argparse.ArgumentParser()
     for opt in ("--state-dir", "--key", "--sha", "--repo-label", "--branch", "--repo-dir",
-                "--model", "--prompt-file", "--diff-file"):
+                "--model", "--prompt-file", "--lessons-dir", "--diff-file"):
         ap.add_argument(opt, required=True)
     ap.add_argument("--deadline", type=int, required=True)
     ap.add_argument("--started", type=int, required=True)
@@ -109,13 +134,15 @@ def main(argv):
     }
 
     status, body = "error", ""
+    lessons_note = ""
     try:
         with open(a.prompt_file, encoding="utf-8") as f:
             prompt_text = f.read()
-        prompt = framework_line(a.repo_dir) + "\n\n" + prompt_text
+        lessons, lessons_note = lessons_block(a.lessons_dir)
+        prompt = framework_line(a.repo_dir) + "\n\n" + (lessons + "\n\n" if lessons else "") + prompt_text
 
-        # claude-mds-ok: keeps the whole global config for now, until #539 gives it the lessons on purpose.
-        cmd = ["env", "-u", "CLAUDECODE", "claude", "-p", prompt, "--model", a.model]
+        cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
+               "--model", a.model]
         with open(a.diff_file, "rb") as diff:
             # Its own process group, so the deadline can kill everything claude started and not
             # only the one pid subprocess knows about.
@@ -154,6 +181,8 @@ def main(argv):
         status = "error"
         body = f"The review runner failed before it could read an answer: {type(e).__name__}: {e}"
 
+    if lessons_note:
+        body = lessons_note + "\n\n" + body
     meta["finished"] = int(time.time())
     meta["status"] = status
     try:

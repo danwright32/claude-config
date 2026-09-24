@@ -9,13 +9,14 @@ Act as a senior developer doing a thorough code review of the git diff on standa
 7. Performance: unnecessary computation or re-renders, missing memoization where it clearly matters.
 8. Type safety: incorrect or overly loose types, unsafe casts.
 9. Error handling: missing error handling on the boundaries that need it, and a caught error that is swallowed so the failure reads as success.
+10. A repeat of a recorded lesson. Above these instructions, after a line reading "===== LESSONS", are the lessons learned from past mistakes in these projects, one line each, numbered like L41. Where the push repeats the mistake a lesson describes, report it like any other issue and cite the lesson by ending the what is wrong part with its number in brackets, for example (L41). Cite a lesson only where the diff actually repeats it.
 
 Ignore pure style and formatting nitpicks unless they cause a real bug.
 
 OUTPUT FORMAT, follow it exactly.
 CASE 1, you found at least one issue: output nothing but the list, one issue per line, each line in this shape:
-<path/to/file>:<line>: <what is wrong>. Should be: <what it should be>. [severity: critical|major|minor]
-The file reference is mandatory. Use the path and the new line number as they appear in the diff.
+<path/to/file>:<line>: <what is wrong> (L<number>). Should be: <what it should be>. [severity: critical|major|minor]
+The file reference is mandatory. Use the path and the new line number as they appear in the diff. The (L<number>) is the recorded lesson the issue repeats: check every issue against the lessons and include it whenever one describes the same mistake, and leave it out only when none does.
 CASE 2, no issues: output exactly this line and nothing else:
 No issues found.
 Never describe correct code, never summarize, never praise, no introductions or conclusions.

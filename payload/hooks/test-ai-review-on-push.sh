@@ -198,6 +198,26 @@ check "and about a class fix that missed a site" "class fix that missed one of i
 check "and keeps the no issues line" "No issues found." "$args_blob"
 stdin_blob="$(cat "$FAKE_LOG/stdin")"
 check "the diff of the push went to claude on stdin" "+    throw new CalendarError(e);" "$stdin_blob"
+
+# The review keeps the LESSONS on purpose and drops the rest of the global config (claude-config#539).
+# It used to inherit the whole CLAUDE.md by accident; now the config is switched off on the launch
+# and every lessons index file is read at run time into the prompt, never a copy of it (L41).
+grep -qx 'CLAUDE_CODE_DISABLE_CLAUDE_MDS=1' "$FAKE_LOG/env" \
+  && ok || bad "the review's claude runs with the global config switched off"
+python3 - "$FAKE_LOG/args" "$DIR/.." <<'EOF' && ok || bad "every lessons index file beside the hooks reached the prompt, verbatim"
+import glob, os, sys
+args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
+sent = args[args.index("-p") + 1]
+files = sorted(glob.glob(os.path.join(sys.argv[2], "LESSONS-INDEX-*.md")))
+if not files:
+    print("  no LESSONS-INDEX-*.md beside the hooks, so there was nothing to check against")
+    sys.exit(1)
+missing = [os.path.basename(f) for f in files if open(f, encoding="utf-8").read().strip() not in sent]
+if missing:
+    print("  missing from the prompt: " + ", ".join(missing))
+sys.exit(1 if missing else 0)
+EOF
+check "and the prompt asks for the lesson a repeat breaks, by number" "cite the lesson" "$args_blob"
 check "as a diff of the code file" "src/calendar.ts" "$stdin_blob"
 # The sibling the review exists to catch is NOT in the diff, so the changed file's full text must
 # follow it: the first real run answered "No issues found." on this exact fixture because it was
@@ -485,6 +505,24 @@ check "the control still starts a review for the same push with python3 present"
 # both the directory and the process behind (claude-config#465).
 wait_for_final "$SHA_NOPY" 20 && ok || bad "and that control review finishes"
 
+# ===========================================================================
+# 8. A review that could not find the lessons says so in its own answer (claude-config#539).
+# Running on without them silently would read as a review that applied them and found nothing.
+# ===========================================================================
+G checkout -q main; G checkout -q -b fix/no-lessons
+printf 'export const n = 1;\n' > "$REPO/src/nolessons.ts"
+G add src/nolessons.ts; G commit -q -m nolessons
+SHA_NOLESSONS="$(G rev-parse HEAD)"
+mkdir -p "$WORKDIR/no-lessons-here"
+AI_REVIEW_LESSONS_DIR="$WORKDIR/no-lessons-here" fire_push "git push -u origin fix/no-lessons" 0
+wait_for_final "$SHA_NOLESSONS" 20 && ok || bad "the review with no lessons still finishes"
+nolessons_final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_NOLESSONS".txt )
+nolessons_body="$(cat "${nolessons_final[0]:-/dev/null}" 2>/dev/null)"
+check "and its answer says it ran without the lessons" "ran without the lessons index: no LESSONS-INDEX-*.md in" "$nolessons_body"
+# Matched on the folder's own name, because TMPDIR ends in a slash on macOS and the runner prints
+# the path normalised.
+check "naming where it looked" "/no-lessons-here, so no recorded lesson" "$nolessons_body"
+check "while still carrying the review itself" "deleteEvent still throws" "$nolessons_body"
 
 echo
 echo "passed: $pass, failed: $fail"

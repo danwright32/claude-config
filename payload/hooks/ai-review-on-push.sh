@@ -69,6 +69,15 @@
 # 30 KB diff, which is 80 percent of the deadline. If unfinished reviews start appearing, raise the
 # deadline before anything else.
 #
+# THE LESSONS go in on purpose, and the rest of the global config stays out (claude-config#539): the
+# runner switches CLAUDE.md loading off and reads every LESSONS-INDEX-*.md beside the hooks into the
+# prompt (AI_REVIEW_LESSONS_DIR moves where it looks). Measured 2026-09-23 with sonnet on a 12 line
+# diff repeating lesson L215: 90,533 input tokens inheriting the whole config, 79,193 with only the
+# lessons, 6 s and 7 s, so the deadline above needs nothing. Three runs of the new prompt all cited a
+# fitting lesson (L215 twice, L10 once), which the old one never did; that took the lesson number in
+# the OUTPUT FORMAT's own example line, because an instruction the example contradicted was ignored
+# (L270). The prompt travels as one argument, about 112 KB of a 1 MB ARG_MAX.
+#
 # State: $HOME/.claude/state/ai-review/<repo key>-<head sha>.txt (.pending while it runs), where the
 # key is a hash of the origin URL; see lib/ai-review-common.sh. AI_REVIEW_STATE_DIR moves it.
 #
@@ -237,6 +246,7 @@ nohup python3 "$HOOK_DIR/lib/ai-review-run.py" \
   --state-dir "$AR_STATE_DIR" --key "$repo_key" --sha "$head_sha" \
   --repo-label "$repo_label" --branch "$branch" --repo-dir "$repo_dir" \
   --model "$model" --prompt-file "$HOOK_DIR/lib/ai-review-prompt.txt" \
+  --lessons-dir "${AI_REVIEW_LESSONS_DIR:-$HOOK_DIR/..}" \
   --diff-file "$diff_file" --deadline "$AR_DEADLINE" --started "$started" \
   </dev/null >/dev/null 2>&1 &
 disown "$!" 2>/dev/null || true
