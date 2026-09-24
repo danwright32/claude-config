@@ -91,11 +91,39 @@ want_notpush "$(printf 'git add -A\ngit commit -m "mentions git push in the mess
 want_notpush "$(printf 'echo one\necho two')" \
   "#97 several lines with no push in them are not a push"
 
-# A heredoc BODY line that begins with the words is deliberately accepted as a
-# push. It is the safe direction to be wrong in: the cost is a gate running when
-# it need not, against a gate not running when it must, which is what shipped.
-want_push "$(printf 'git commit -F - <<%sMSG%s\ngit push is what this message talks about\nMSG' "'" "'")" \
-  "#97 a body line that reads like a push is judged, not ignored"
+# A heredoc BODY line that begins with the words is NOT a push (claude-config#532). It used to be
+# accepted as one, on the reasoning that the splitter could not tell a body from a command and a
+# gate running needlessly is the safer error. It was not safe: an issue whose body quoted a push was
+# refused by a push gate, which then judged the wrong repository. The body is now read as the text
+# it is, and the push that FOLLOWS a heredoc is still seen (the #97 case above, and the apostrophe
+# case below, which is the one a plain quote tracker gets wrong).
+want_notpush "$(printf 'git commit -F - <<%sMSG%s\ngit push is what this message talks about\nMSG' "'" "'")" \
+  "#532 a heredoc body line that reads like a push is not a push"
+want_push "$(printf 'git commit -F - <<%sMSG%s\nit isn%st balanced\nMSG\ngit push' "'" "'" "'")" \
+  "#532 a push after a heredoc whose body has an apostrophe is still seen"
+want_push "$(printf 'git commit -F - <<-MSG\n\tindented body\n\tMSG\ngit push' )" \
+  "#532 a push after a tab stripped heredoc is still seen"
+# A heredoc that never closes is not skipped: skipping to the end would hide a push that follows,
+# and hiding a push is the direction that ships unjudged work.
+want_push "$(printf 'cat <<MSG\nno closing line here\ngit push')" \
+  "#532 an unclosed heredoc hides nothing after it"
+
+# A push written INSIDE a quoted argument is not a push: filing this very issue was refused because
+# its body quoted the reproduction (claude-config#532, L673).
+want_notpush 'gh issue create --title x --body "repro: cd ~/a && git push origin main"' \
+  "#532 a push quoted inside a double quoted argument is not a push"
+want_notpush "gh issue create --body 'first; git push; last'" \
+  "#532 a push quoted inside a single quoted argument is not a push"
+want_notpush 'echo "say \"hi\" && git push"' \
+  "#532 an escaped quote does not end the quoted argument early"
+want_push "git commit -m 'msg with && inside' && git push" \
+  "#532 a quoted separator does not hide the real push after it"
+want_push 'git commit -m "it'"'"'s done" && git push' \
+  "#532 an apostrophe inside double quotes does not open a quote"
+# A quote that never closes is not trusted to hide anything: the crude split runs instead, and the
+# gate fires on a push it cannot read cleanly, which is the direction #97 settled.
+want_push 'git add "app/copy.ts && git commit -qm copy && git push' \
+  "#532 an unclosed quote falls back to the split that sees the push"
 
 # ---------------------------------------------------------------------------
 # One definition, two modes (claude-config#102). Six hooks each had their own copy
@@ -298,6 +326,50 @@ want_repo "cd $T && git commit -q -F - <<'MSG'; it isn't balanced; MSG; git push
   "#439 a cd before a heredoc body with an apostrophe is still read"
 want_repo "git push" "$S" \
   "#439 with no cd at all the session directory is used"
+
+# A cd that IS named but cannot be read must refuse, never become the session directory
+# (claude-config#532). The tokenizer does not expand a tilde, so `cd ~/repo` came back as the
+# literal `~/repo`, failed the directory test, and the gate judged the SESSION's repository with
+# full confidence: it quoted another project's docs back at a push that carried none of them.
+# HOME is swapped and restored in THIS shell, not a subshell, which would discard the count.
+REAL_HOME="$HOME"; HOME="$RD"
+want_repo "cd ~/target && git push" "$T" \
+  "#532 a tilde path is expanded against HOME"
+HOME="$REAL_HOME"
+got="$(ps_cd_target "cd ~/target && git push")"
+[ "$got" = "$HOME/target" ] && check "#532 ps_cd_target expands a leading tilde" ok \
+  || check "#532 ps_cd_target expands a leading tilde" "got [$got]"
+me="$(id -un)"; my_home="$(python3 -c 'import pwd,os; print(pwd.getpwuid(os.getuid()).pw_dir)')"
+got="$(ps_cd_target "cd ~$me/nowhere && git push")"
+[ "$got" = "$my_home/nowhere" ] && check "#532 ps_cd_target expands a ~user tilde" ok \
+  || check "#532 ps_cd_target expands a ~user tilde" "got [$got]"
+got="$(ps_cd_target "cd a~b && git push")"
+[ "$got" = "a~b" ] && check "#532 a tilde that does not lead the path is left alone" ok \
+  || check "#532 a tilde that does not lead the path is left alone" "got [$got]"
+
+refuses() { # refuses <command> <description>
+  local got rc
+  got="$(ps_repo_dir "$1" "$S" 2>"$RD/refuse.err")"; rc=$?
+  if [ "$rc" -ne 0 ] && [ -z "$got" ] && grep -q 'could not' "$RD/refuse.err"; then check "$2" ok
+  else check "$2" "rc=$rc resolved to [$got], said [$(cat "$RD/refuse.err")]"; fi
+}
+refuses "cd $RD/no-such-dir && git push" \
+  "#532 a cd to a missing directory refuses rather than judging the session repo"
+refuses "cd \$SOMEWHERE && git push" \
+  "#532 a cd to an unexpanded variable refuses rather than judging the session repo"
+mkdir -p "$RD/plain-dir"
+refuses "cd $RD/plain-dir && git push" \
+  "#532 a cd to a directory that is not a repository refuses"
+refuses "git -C $RD/no-such-dir push" \
+  "#532 a git -C naming a missing directory refuses"
+# A RELATIVE cd is relative to the session directory, not to wherever the hook runs, so refusing
+# unreadable targets must not start refusing the ordinary relative form.
+got="$(ps_repo_dir "cd target && git push" "$RD" 2>/dev/null)"
+[ "$got" = "$RD/target" ] && check "#532 a relative cd resolves against the session directory" ok \
+  || check "#532 a relative cd resolves against the session directory" "got [$got]"
+got="$(ps_repo_dir "git -C target push" "$RD" 2>/dev/null)"
+[ "$got" = "$RD/target" ] && check "#532 a relative git -C resolves against the session directory" ok \
+  || check "#532 a relative git -C resolves against the session directory" "got [$got]"
 
 # Finding the repo is only half of it: the same subshell has to be seen as a push at all, or every
 # gate exits before it asks which repo. Its segment ends `git push)`, whose subcommand read as
