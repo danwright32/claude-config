@@ -312,6 +312,15 @@ def main(argv):
             pass  # the ledger is a record for later; losing one line must not lose the review
     try:
         write_finished(a.state_dir, name, meta, body)
+        if a.kind == "pr":
+            # The durable outcome ledger, written by the one bash function every finishing path
+            # shares (lib/ai-review-common.sh ar_pr_ledger, claude-config#562).
+            common = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai-review-common.sh")
+            subprocess.run(["bash", "-c", '. "$1" && ar_pr_ledger "$2" "$3"', "_", common,
+                            os.path.join(a.state_dir, name + ".txt"), a.repo_dir],
+                           env=dict(os.environ, AI_REVIEW_STATE_DIR=a.state_dir),
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30, check=False)
     finally:
         try:
             os.remove(a.diff_file)

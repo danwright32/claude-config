@@ -170,6 +170,16 @@ check "the reviewer is told this is a whole branch" "WHOLE BRANCH" "$(tr '\036' 
 check_not "the reviewer did not inherit CLAUDECODE" "CLAUDECODE=" "$(cat "$FAKE_LOG/env")"
 check "the cited lesson reached the durable ledger" "L215" "$(cat "$AI_REVIEW_STATE_DIR/citations.tsv" 2>/dev/null)"
 
+# The durable outcome ledger (claude-config#562): one line per finished pr review, never swept.
+LEDGER="$AI_REVIEW_STATE_DIR/pr-reviews.tsv"
+line="$(grep -F "$HEAD_SHA" "$LEDGER" 2>/dev/null)"
+check "the finished review is in the outcome ledger" "$HEAD_SHA" "$line"
+check "with its outcome" $'\tok\t' "$line"
+check "the file its finding named" "App/Sync.swift" "$line"
+check "the lesson it cited" "L215" "$line"
+check "and the Mac it ran on" "$AI_REVIEW_HOST" "$line"
+check "the opening is in its own ledger" "$HEAD_SHA" "$(cat "$AI_REVIEW_STATE_DIR/pr-opened.tsv" 2>/dev/null)"
+
 # A second creation for the same head starts nothing new.
 out="$(fire_create "gh pr create --fill" 0)"
 check "the same head is not reviewed twice" "already" "$out"
@@ -251,17 +261,25 @@ out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "an abandoned review refuses" "1" "$rc"
 check "saying the runner died" "never finished" "$out"
 [ -e "$(final_of "$HEAD_SHA").pending" ] && bad "the abandoned marker is cleared" || ok
+check "an abandoned review is in the outcome ledger" $'\tabandoned\t' "$(cat "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
 
-# 3h. could not run: no claude on PATH.
+# 3h. could not run: no claude on PATH. A PATH built from every tool but claude, so the case is
+#     produced on a machine that has one installed, which this suite used to report as UNMEASURED.
 reset_state
-NOCLAUDE="$WORKDIR/noclaude"; mkdir -p "$NOCLAUDE"; cp "$FAKEBIN/gh" "$NOCLAUDE/"
-out="$(PATH="$NOCLAUDE:$(printf '%s' "$PATH" | tr ':' '\n' | grep -v -x "$FAKEBIN" | tr '\n' ':')" \
-      bash -c 'command -v claude >/dev/null && { echo "a real claude is on PATH here"; exit 9; }; bash "$1" check --dir "$2" --sha "$3" 2>&1' _ "$LIB" "$REPO" "$HEAD_SHA")"; rc=$?
-if [ "$rc" -eq 9 ]; then echo "UNMEASURED: a real claude is installed on this machine's PATH, so the no-claude case cannot be produced here (L411)"; else
-  check_eq "no claude refuses" "1" "$rc"
-  check "naming what is missing" "could not run" "$out"
-  check "and which tool" "claude" "$out"
-fi
+NOCLAUDE="$WORKDIR/noclaude"; mkdir -p "$NOCLAUDE"
+for d in /bin /usr/bin /usr/local/bin /opt/homebrew/bin "$FAKEBIN"; do
+  [ -d "$d" ] || continue
+  for t in "$d"/*; do
+    b="$(basename "$t")"
+    [ "$b" = claude ] && continue
+    [ -e "$NOCLAUDE/$b" ] || ln -s "$t" "$NOCLAUDE/$b" 2>/dev/null
+  done
+done
+out="$(PATH="$NOCLAUDE" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"; rc=$?
+check_eq "no claude refuses" "1" "$rc"
+check "naming what is missing" "could not run" "$out"
+check "and which tool" "claude" "$out"
+check "a review that could not run is in the outcome ledger too" $'\tcould-not-run\t' "$(cat "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
 
 # 3i. could not run: no python3 (the runner's interpreter). A PATH built from every tool but python3.
 reset_state

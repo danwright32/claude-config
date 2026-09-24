@@ -361,6 +361,14 @@ reviews took 195 and 231 seconds against a 600 second deadline. Each review with
 line to `~/.claude/state/ai-review/citations.tsv` naming the lessons it cited, which the 14 day sweep
 leaves alone, for the monthly re-rank of the lessons core.
 
+Every opening and every finished review, whatever its outcome, is also recorded in
+`pr-opened.tsv` and `pr-reviews.tsv` beside it, which the sweep leaves alone too. They feed the
+measurement claude-config#562 gates the lessons core on: after two to three weeks, run
+`bash ~/.claude/hooks/lib/pr-review-report.sh` on each Mac. It prints pull requests opened, reviews
+by outcome, findings per review, how many reviews with findings were acted on (a later commit on the
+pull request changed a file a finding named), and this Mac's half of the gate, UNMEASURED under 5
+pull requests.
+
 ### What a push actually waits on
 
 Seventeen PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,

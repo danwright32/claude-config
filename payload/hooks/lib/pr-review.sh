@@ -125,7 +125,7 @@ record() {   # $1 = status, $2 = body, $3 = base or empty
     printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=%s\nkind=pr\nbase=%s\nfindings=\n\n' \
       "$repo_label" "$branch" "${full_sha:-$sha}" "$now" "$now" "$1" "${3:-}"
     printf '%s\n' "$2"
-  } > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final"
+  } > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final" && ar_pr_ledger "$final" "$top"
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
 }
 
