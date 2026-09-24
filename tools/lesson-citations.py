@@ -120,6 +120,9 @@ def main(argv):
         for n in seen:
             sessions[n] = sessions.get(n, 0) + 1
 
+    # Three states, never two: a ledger that exists but cannot be read must not print as present
+    # beside zero review citations, which would read as reviews citing nothing (L11).
+    ledger_state = "absent" if not os.path.exists(a.ledger) else "read"
     try:
         with open(a.ledger, encoding="utf-8") as fh:
             for line in fh:
@@ -137,11 +140,12 @@ def main(argv):
                         n = int(tok[1:])
                         reviews[n] = reviews.get(n, 0) + 1
     except OSError:
-        pass
+        if ledger_state == "read":
+            ledger_state = "unreadable"
 
     host = socket.gethostname().split(".")[0]
     ex = " ".join(f"{k}={v}" for k, v in excluded.items())
-    print(f"HOST {host} DAYS {a.days} READ {read} UNREAD {unread} EXCLUDED {ex} LEDGER {'yes' if os.path.exists(a.ledger) else 'absent'} DISMISSED {dismissed}")
+    print(f"HOST {host} DAYS {a.days} READ {read} UNREAD {unread} EXCLUDED {ex} LEDGER {ledger_state} DISMISSED {dismissed}")
     if read == 0:
         print("NOTHING READ: no transcript in the window could be read, so these counts measure nothing")
         return 1

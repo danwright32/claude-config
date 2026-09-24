@@ -88,6 +88,13 @@ check "the header says how many dismissals were set aside" "DISMISSED 4" "$out"
 check "a lesson cited only by reviews still appears" $'L11\t0\t0\t2' "$(row "$out" L11)"
 check "the header says what was read and what was excluded" "EXCLUDED" "$out"
 
+# A ledger that exists but cannot be read says so, never "yes" beside zero review citations (L11).
+mkdir -p "$WORK/ledger-dir"
+out="$(python3 "$TOOL" --projects "$P" --days 60 --exclude-session sessREC --ledger "$WORK/ledger-dir" 2>&1)"
+check "an unreadable ledger is named as unreadable" "LEDGER unreadable" "$out"
+out="$(python3 "$TOOL" --projects "$P" --days 60 --exclude-session sessREC --ledger "$WORK/absent.tsv" 2>&1)"
+check "an absent ledger is named as absent" "LEDGER absent" "$out"
+
 # Nothing readable is a refusal, never an empty table (L98).
 out="$(python3 "$TOOL" --projects "$WORK/nothing" --days 60 --ledger "$LEDGER" 2>&1)"; rc=$?
 check "no transcript read says so" "NOTHING READ" "$out"
