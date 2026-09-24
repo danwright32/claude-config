@@ -395,6 +395,20 @@ check_eq "findings the nudge delivered do not refuse the merge again" "0" "$rc"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"
 [ "${#out}" -lt 10000 ] && ok || bad "the gate's own message stays under the cap too"
 
+# 5b. The nudge's sentence fits the count: one finding is singular, and a clean review says it is
+#     clean rather than that the merge waits on findings it does not have (L21).
+reset_state
+FAKE_CLAUDE_OUT="No issues found." prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA"
+out="$(printf '{"session_id":"c1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
+check "a clean review says so" "found nothing" "$out"
+check_not "and does not say the merge waits on it" "merge waits" "$out"
+reset_state
+prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA"
+out="$(printf '{"session_id":"c2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
+check "one finding is singular" "with 1 finding " "$out"
+
 # 6. The ledger outlives the 14 day sweep: the nudge's sweep leaves it alone.
 touch -t 202601010000 "$AI_REVIEW_STATE_DIR/citations.tsv"
 printf '{"session_id":"n2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1

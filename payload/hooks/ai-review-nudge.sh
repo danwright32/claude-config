@@ -193,9 +193,16 @@ done
   printed=$((printed + ${#body} + 300))
   if [ "$m_kind" = "pr" ]; then
     case "$m_status" in
-      ok) printf 'Lessons review of the whole branch %s %s at %s, finished in %s with %s findings (the full review is in %s). The merge waits until these have been read: check each against the code before acting on it.\n' \
-            "${m_repo:-this repository}" "${m_branch:-?}" "$short" "$took" "${m_findings:-?}" "$f"
-          printf '%s\n' "$body" ;;
+      ok)
+        if [ "${m_findings:-}" = "0" ]; then
+          printf 'Lessons review of the whole branch %s %s at %s found nothing, in %s.\n' \
+            "${m_repo:-this repository}" "${m_branch:-?}" "$short" "$took"
+        else
+          noun="findings"; [ "${m_findings:-}" = "1" ] && noun="finding"
+          printf 'Lessons review of the whole branch %s %s at %s, finished in %s with %s %s (the full review is in %s). The merge waits until these have been read: check each against the code before acting on it.\n' \
+            "${m_repo:-this repository}" "${m_branch:-?}" "$short" "$took" "${m_findings:-?}" "$noun" "$f"
+          printf '%s\n' "$body"
+        fi ;;
       *) printf 'Lessons review of the whole branch %s %s at %s ended as %s, so the merge will be refused until it is run again:\n%s\n' \
             "${m_repo:-this repository}" "${m_branch:-?}" "$short" "${m_status:-no status}" "$body" ;;
     esac
