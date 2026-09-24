@@ -252,17 +252,23 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines
         l = tolower(line[i])
         if (l !~ tolower(re)) continue
         if (line[i] !~ /rm[[:space:]]+-rf/ || line[i] ~ /(DROP|TRUNCATE|DELETE[[:space:]]+FROM|unlinkSync|fs\.rm\(|\.drop\()/) exit 0
-        rest = line[i]; sub(/.*rm[[:space:]]+-rf[[:space:]]*/, "", rest)
-        sub(/[\047;&|].*$/, "", rest)
-        n = split(rest, t, /[[:space:]]+/); own = 0; other = 0
-        for (k = 1; k <= n; k++) {
-          if (t[k] == "") continue
-          x = t[k]; gsub(/"/, "", x)
-          if (match(x, /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/)) {
-            v = substr(x, RSTART, RLENGTH); gsub(/[${}]/, "", v)
-            if ((v in tmp) && (x ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(\/.*)?$/)) { own++; continue }
+        # EVERY rm on the line is judged, not only the last (the first version kept only the
+        # last, so `rm -rf "$REAL" && rm -rf "$WORK"` passed as cleanup), and a target climbing
+        # out with .. is not the temp directory (both found by the PR lessons review of #579).
+        own = 0; other = 0; scan = line[i]
+        while (match(scan, /rm[[:space:]]+-rf[[:space:]]*/)) {
+          scan = substr(scan, RSTART + RLENGTH)
+          seg = scan; sub(/[\047;&|].*$/, "", seg)
+          n = split(seg, t, /[[:space:]]+/)
+          for (k = 1; k <= n; k++) {
+            if (t[k] == "") continue
+            x = t[k]; gsub(/"/, "", x)
+            if (x !~ /\.\./ && match(x, /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/)) {
+              v = substr(x, RSTART, RLENGTH); gsub(/[${}]/, "", v)
+              if ((v in tmp) && (x ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(\/.*)?$/)) { own++; continue }
+            }
+            other++
           }
-          other++
         }
         if (other > 0 || own == 0) exit 0
       }

@@ -154,6 +154,14 @@ assert_contains "removing a path the file did not create still fires" 'destructi
 R=$(make_repo mixedrm $'WORK="$(mktemp -d)"\nrm -rf "$WORK" "$DATA_DIR"' scripts/mixed.sh)
 out=$(run_hook "git push" "$R")
 assert_contains "one real target beside a temp one still fires" 'destructive data operation' "$out"
+# Both holes the PR lessons review found in the first version: every rm on a line is judged, not
+# only the last, and a path climbing out of the temp directory is not cleanup of it.
+R=$(make_repo tworm $'WORK="$(mktemp -d)"\nrm -rf "$REAL_DATA" && rm -rf "$WORK"' scripts/two.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "a real removal before a temp one on the same line still fires" 'destructive data operation' "$out"
+R=$(make_repo climb $'WORK="$(mktemp -d)"\nrm -rf "$WORK/../data"' scripts/climb.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "a path climbing out of the temp directory still fires" 'destructive data operation' "$out"
 R=$(make_repo tmpsql $'WORK="$(mktemp -d)"\nrm -rf "$WORK"\nDELETE FROM contacts;' migrations/004.sql)
 out=$(run_hook "git push" "$R")
 assert_contains "a temp cleanup beside real SQL still fires on the SQL" 'destructive data operation' "$out"
