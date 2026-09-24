@@ -67,8 +67,8 @@ check "one they agree on is decided as before" "core-unreviewable" "$(dec "$WORK
 check "the summary counts the disputes" "1 disputed" "$out"
 check "the page lists the disputed lesson with both tags" "diff, then design" "$(cat "$WORK/out.html")"
 
-# Probation off (Dan, 2026-09-24): a young diff lesson is ranked like the rest.
-out="$(run --budget 440 --band 1 --probation-days 0)"
+# Probation off BY DEFAULT (Dan, 2026-09-24): with no flag, a young diff lesson is ranked like the rest.
+out="$(run --budget 440 --band 1)"
 check "with probation off no lesson is on probation" "0 on probation" "$out"
 l8="$(dec "$WORK/out.tsv" L8)"
 case "$l8" in core-ranked|undecided|library) pass=$((pass + 1)) ;; *) fail=$((fail + 1)); echo "FAIL: with probation off the young lesson is ranked (got '$l8')" ;; esac
