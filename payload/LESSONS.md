@@ -2674,6 +2674,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   a success screen redoes the form; that alone should have sent me to the screen.)
   SHORT: Somebody redoing an action right after its SUCCESS screen means the screen failed them: ask that first, and pull the clicked text before theorising.
 
+- **L730. A component test in jsdom cannot see the React server and client boundary, so a server
+  component that CALLS a function exported from a `use client` module passes every test and fails
+  only when the real route renders.** Guard the boundary with a scan (a file without `use client`
+  may render a client module's components but may not call its other exports) or by rendering the
+  real route, never by trusting the component suite. (slate#2690, 2026-09-24: the business hours
+  admin page, home of the public booking kill switch, answered "did not finish loading" on every
+  visit since #2358 merged on 2026-09-15, because `PublicBookingSwitch` had no `use client` and
+  called `holdsAView()` from `SaveForm`; its own vitest file rendered it in jsdom and passed.)
+  SHORT: jsdom cannot see the server/client boundary: a server component calling a use client module's function passes tests, so scan or render the route.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key

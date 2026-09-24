@@ -198,3 +198,4 @@ which is NOT loaded into the session.
 - L718. A view given its state as a prop is proved by tests that supply it, never by a caller doing so, so assert the production call site can reach each state.
 - L721. A monitor built to catch a gate deciding wrongly must not use that gate's own predicate, or the predicate's blind spot is invisible to both.
 - L724. Somebody redoing an action right after its SUCCESS screen means the screen failed them: ask that first, and pull the clicked text before theorising.
+- L730. jsdom cannot see the server/client boundary: a server component calling a use client module's function passes tests, so scan or render the route.
