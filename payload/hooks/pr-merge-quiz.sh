@@ -186,7 +186,7 @@ qv_set() {  # $1 = key, $2 = value (absolute), or $1 = key with $2 = + to increm
 # The counts, most frequent first, as one readable phrase. This IS the diagnosis: no-label
 # says the repo does not use the convention, no-answer says gh is not answering at all.
 qv_breakdown() {
-  awk '$1 !~ /^(fired_since_quiet|warned)$/ { print $2 + 0, $1 }' "$(qv_file)" 2>/dev/null \
+  awk '$1 !~ /^(fired_since_quiet|warned|started)$/ { print $2 + 0, $1 }' "$(qv_file)" 2>/dev/null \
     | sort -rn \
     | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }'
 }
@@ -327,14 +327,50 @@ quiz_is_owed() {
   return 0
 }
 
+# THE LABEL GATE HAS ITS OWN DEADLINE (claude-config#568). This hook is registered with a 15 second
+# timeout, the gate's read goes through mt_pr_view, which asks gh once per logged in account, and a
+# hook the harness kills emits NOTHING, which reads exactly like a decision not to quiz (L98). On
+# 2026-09-24 two merges in a Slate session got no quiz, both at the end of long turns with gh under
+# load, and replaying the hook ruled out every other cause. So:
+#   - `started` is counted BEFORE any network read, so a run that dies still leaves a trace (#354);
+#   - the gate runs in its own process group (L321) and is given QUIZ_LABEL_DEADLINE_SECONDS
+#     (default 8, a chosen number well inside the 15 the settings give the hook, not a measurement);
+#   - past that, the whole group is stopped, the verdict is label-timeout, and the quiz FIRES,
+#     saying the label could not be read in time. A slow gh costs a quiz that might have been
+#     silenced, never a merge that goes unquizzed without a word (L42).
 QUIZ_VERDICT=""
-if quiz_is_owed; then
-  qv_record "$QUIZ_VERDICT"
+qv_set started +
+label_deadline="${QUIZ_LABEL_DEADLINE_SECONDS:-8}"
+case "$label_deadline" in ''|*[!0-9]*) label_deadline=8 ;; esac
+label_timed_out=0
+gate_out="$(mktemp "${TMPDIR:-/tmp}/pr-merge-quiz.XXXXXX" 2>/dev/null)" || gate_out=""
+if [ -n "$gate_out" ]; then
+  set -m
+  ( quiz_is_owed; printf '%s %s\n' "$?" "$QUIZ_VERDICT" > "$gate_out" ) </dev/null >/dev/null 2>&1 &
+  gate_pid=$!
+  set +m
+  gate_t0=$SECONDS
+  while kill -0 "$gate_pid" 2>/dev/null && [ $((SECONDS - gate_t0)) -lt "$label_deadline" ]; do sleep 0.1; done
+  if kill -0 "$gate_pid" 2>/dev/null; then
+    kill -TERM -- "-$gate_pid" 2>/dev/null || kill -TERM "$gate_pid" 2>/dev/null
+    label_timed_out=1
+    gate_rc=0; QUIZ_VERDICT="label-timeout"
+  else
+    wait "$gate_pid" 2>/dev/null
+    read -r gate_rc QUIZ_VERDICT < "$gate_out" 2>/dev/null || { gate_rc=0; QUIZ_VERDICT="unreadable"; }
+  fi
+  rm -f "$gate_out"
 else
-  qv_record "$QUIZ_VERDICT"
-  exit 0
+  if quiz_is_owed; then gate_rc=0; else gate_rc=1; fi
 fi
+qv_record "$QUIZ_VERDICT"
+[ "$gate_rc" = "1" ] && exit 0
 notice="$(qv_notice)"
+if [ "$label_timed_out" = 1 ]; then
+  notice="$notice
+
+The changelog label on this pull request could not be read in time (gh took longer than ${label_deadline}s), so the quiz fired without it; judge the user facing gate yourself as usual."
+fi
 
 # Fire: hand Claude an instruction to run the comprehension quiz before moving on. The reason is a
 # single JSON string; newlines are \n. Kept free of dashes and emoji per the writing-style rule.
