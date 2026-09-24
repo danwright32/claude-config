@@ -66,7 +66,11 @@ mk "-Users-x-Slate/sessA/subagents" agent1 "$(text 'agent cites L9')"
 mk "-Users-x-Slate" sessREC "$(text 'while recording, L10 and L1')"
 
 LEDGER="$WORK/citations.tsv"
-printf '1790000000\tpr\tSlate\tabc\t2\tL1,L11\n1790000100\tpush\tSlate\tdef\t1\tL11\n' > "$LEDGER"
+# Dated from the clock, never a literal, so the rows stay inside the window as real time passes (L130).
+now_s="$(date +%s)"
+printf '%s\tpr\tSlate\tabc\t2\tL1,L11\n%s\tpush\tSlate\tdef\t1\tL11\n' "$((now_s - 86400))" "$((now_s - 3600))" > "$LEDGER"
+# And one row older than the window, which must not count.
+printf '%s\tpr\tSlate\told\t1\tL11\n' "$((now_s - 90 * 86400))" >> "$LEDGER"
 
 out="$(python3 "$TOOL" --projects "$P" --days 60 --exclude-session sessREC --ledger "$LEDGER" 2>&1)"; rc=$?
 check "the run succeeds" "END" "$out"

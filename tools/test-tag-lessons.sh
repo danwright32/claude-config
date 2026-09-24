@@ -38,6 +38,7 @@ case "${FAKE_MODE:-good}" in
   never) printf 'L1\tdiff\n' ;;
   bad) printf 'L1\tdiff\nL2\tmaybe\nL3\toperate\n' ;;
   twice) printf 'L1\tdiff\nL1\tdesign\nL2\tdesign\nL3\toperate\n' ;;
+  hang) sleep 5 ;;
 esac
 EOS
 chmod +x "$BIN/claude"
@@ -67,6 +68,13 @@ check "naming the bad answer" "maybe" "$out"
 out="$(FAKE_MODE=twice run)"; rc=$?
 check_rc "a lesson given two different tags is a refusal" 1 "$rc"
 check "naming it" "CONFLICT L1" "$out"
+
+# A reader that hangs past its deadline is the same refusal as one that answered nothing, never a
+# traceback (found by the PR lessons review of #575).
+out="$(FAKE_MODE=hang run --timeout 1)"; rc=$?
+check_rc "a reader past its deadline is a refusal" 1 "$rc"
+check "naming the lessons it never tagged" "UNTAGGED L1" "$out"
+check "and saying the reader timed out" "timed out" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"

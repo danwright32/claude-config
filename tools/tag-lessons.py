@@ -56,11 +56,24 @@ def lesson_lines(index_dir):
     return out
 
 
-def ask(model, batch):
+NOTES = []
+
+
+def ask(model, batch, timeout):
+    """The reader's answer, or "" when it could not give one. A reader past its deadline or one that
+    cannot start answers NOTHING, which the caller already turns into an UNTAGGED refusal, rather than
+    ending the tool in a traceback (found by the PR lessons review of #575)."""
     body = "\n".join(f"L{n}. {text}" for n, text in batch)
     cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p",
            PROMPT + body, "--model", model, "--settings", '{"disableAllHooks":true}']
-    done = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600)
+    try:
+        done = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        NOTES.append(f"NOTE the reader timed out after {timeout}s on a batch of {len(batch)} lessons")
+        return ""
+    except OSError as e:
+        NOTES.append(f"NOTE the reader could not start: {e}")
+        return ""
     return done.stdout
 
 
@@ -69,6 +82,7 @@ def main(argv):
     ap.add_argument("--index-dir", default="payload")
     ap.add_argument("--batch", type=int, default=120)
     ap.add_argument("--model", default="sonnet")
+    ap.add_argument("--timeout", type=int, default=600)
     a = ap.parse_args(argv)
 
     lessons = lesson_lines(a.index_dir)
@@ -96,10 +110,10 @@ def main(argv):
 
     for i in range(0, len(items), a.batch):
         chunk = items[i:i + a.batch]
-        absorb(ask(a.model, chunk), {n for n, _ in chunk})
+        absorb(ask(a.model, chunk, a.timeout), {n for n, _ in chunk})
     missing = [(n, t) for n, t in items if n not in tags]
     if missing:
-        absorb(ask(a.model, missing), {n for n, _ in missing})
+        absorb(ask(a.model, missing, a.timeout), {n for n, _ in missing})
     for n, _ in items:
         if n not in tags:
             problems.append(f"UNTAGGED L{n}")
@@ -107,6 +121,8 @@ def main(argv):
     for n, _ in items:
         if n in tags:
             print(f"L{n}\t{tags[n]}")
+    for note in NOTES:
+        print(note)
     if problems:
         for p in problems:
             print(p)
