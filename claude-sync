@@ -6095,7 +6095,9 @@ HSCOVEOF
     else
       printf ', and the hook suite passed here, all %s of its suites' "$ran"
     fi
-    [ -n "$suite_notes" ] && printf '. The suite noted: %s' "$suite_notes"
+    # One trailing full stop taken off, because the closing line adds its own and a note written as a
+    # sentence already ends in one (claude-config#557).
+    [ -n "$suite_notes" ] && printf '. The suite noted: %s' "${suite_notes%.}"
     return 0
   fi
   # The runner's own report goes to stderr, where the rest of this run's diagnostics are, so the

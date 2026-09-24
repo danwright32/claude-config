@@ -13198,6 +13198,11 @@ out_cvn="$(ht_cover 0 "$(printf 'ALL 12 SUITES PASSED\n          note: the rule 
 dbg "pull whose passing runner marked a note: $out_cvn"
 check "#546 a note from a passing suite is carried into the pull summary" \
   "line_has \"\$out_cvn\" 'Pulled shared config' 'hook suite passed here' 'rule files every session loads total 151000'"
+# A note that ends in a full stop, as a sentence does, must not leave the closing line ending in two
+# (claude-config#557): the closing line supplies its own.
+out_cvp="$(ht_cover 0 "$(printf 'ALL 12 SUITES PASSED\n          note: a note written as a sentence.')")"
+check "#557 a note ending in a full stop does not double it" \
+  "line_has \"\$out_cvp\" 'Pulled shared config' 'written as a sentence' && ! line_has \"\$out_cvp\" 'Pulled shared config' 'sentence\\.\\.'"
 check "#546 and a run with no note adds nothing about notes" \
   "! line_has \"\$out_cv1\" 'Pulled shared config' 'note'"
 
