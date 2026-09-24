@@ -112,6 +112,24 @@ out="$(run --dir "$TMP/notrepo" --repo acme/widgets "x")"; rc=$?
 check_eq "a directory outside git is refused" "2" "$rc"
 check "the refusal says why" "COULD NOT SEARCH" "$out"
 
+# 5b. A flag that needs a value, given last, is refused at once. `shift 2` with one argument left
+#     fails without shifting, so the parser used to loop for ever (found by the first real PR lessons
+#     review, 2026-09-24). Run in the background and waited on, bounded, so a regression fails here
+#     rather than hanging the suite.
+for flag in --dir --repo; do
+  PATH="$TMP/bin:$PATH" bash "$SCRIPT" "x" "$flag" >"$TMP/trail.out" 2>&1 &
+  pid=$!; t0=$SECONDS
+  while kill -0 "$pid" 2>/dev/null && [ $((SECONDS - t0)) -lt 5 ]; do sleep 0.1; done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    fail=$((fail + 1)); echo "FAIL: $flag given last hangs instead of being refused"
+  else
+    wait "$pid"; rc=$?
+    check_eq "$flag given last is refused as a usage error" "64" "$rc"
+    check "and says which flag lacks its value" "$flag needs a value" "$(cat "$TMP/trail.out")"
+  fi
+done
+
 # 6. Both skills run the search BEFORE they invoke grilling, and quote the date.
 for skill in "$LITE" "$COUNCIL"; do
   name="$(basename "$(dirname "$skill")")"
