@@ -70,3 +70,44 @@ def s(v):
 sys.stdout.write("\x1f".join([s(d.get("cwd")), s(d.get("session_id")), s(r.get("exit_code")), s(r.get("interrupted"))]))
 ' 2>/dev/null
 }
+
+# A finished review's text, capped (claude-config#560). A hook's output reaches the session through
+# additionalContext or a refusal reason, and anything past 10,000 characters is cut by the platform
+# with nothing said, so a review with two hundred findings would arrive as its first forty and read
+# as the whole of it (L351). Both readers, the nudge and the merge gate, print through this one
+# function: at most as many lines of the review as its second argument allows, each cut at the
+# length its third allows, then how many were left out and the file holding all of them.
+ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars per line
+  awk -v max="$2" -v w="$3" -v path="$1" '
+    found { n++; if (n <= max) { if (length($0) > w) $0 = substr($0, 1, w) "..."; print } ; next }
+    /^$/ { found = 1 }
+    END { if (n > max) printf "... and %d more line(s) not shown here; the full review is in %s\n", n - max, path }
+  ' "$1" 2>/dev/null
+}
+
+# Appends the full text at $3 of each file changed between $2 and $3 (added or modified, matching the
+# pathspecs after $5, or every file when none are given) to $1, smallest first, while $4 bytes of
+# budget last. Prints "<files in> <files out> <names left out>" for the caller's start line. Moved
+# here from ai-review-on-push.sh when the pull request review needed the same context (#560): two
+# copies of "which files fit" would drift (L613). Smallest first, because a change touching one
+# large generated file and five small real ones should still show the five, and a file that does
+# not fit is named rather than silently absent (L98).
+ar_append_full_files() {   # $1 = input file, $2 = base, $3 = head, $4 = byte budget, $5.. = pathspecs
+  local out="$1" base="$2" head="$3" budget="$4" line fsize f in=0 left=0 names="" short
+  shift 4
+  short="$(git rev-parse --short "$head" 2>/dev/null || printf '%s' "$head")"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    fsize="${line%% *}"; f="${line#* }"
+    case "$fsize" in ''|*[!0-9]*) continue ;; esac
+    if [ "$fsize" -le "$budget" ] \
+       && { printf '\n\n===== FULL FILE at %s: %s =====\n' "$short" "$f"; git show "$head:$f"; } >> "$out" 2>/dev/null; then
+      budget=$((budget - fsize)); in=$((in + 1))
+    else
+      left=$((left + 1)); names="$names $f"
+    fi
+  done < <(git diff --name-only --diff-filter=AM "$base" "$head" -- "$@" 2>/dev/null \
+           | while IFS= read -r f; do [ -n "$f" ] && printf '%s %s\n' "$(git cat-file -s "$head:$f" 2>/dev/null || echo x)" "$f"; done \
+           | sort -n)
+  printf '%s %s%s' "$in" "$left" "$names"
+}

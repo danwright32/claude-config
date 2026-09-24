@@ -338,6 +338,29 @@ deadline is 240 seconds and a real review measured 130 to 193 seconds with `sonn
 (`Dans-MacBook-Pro`), because Dan wants it there and not on the personal Mac; every other computer
 says in one line that it skipped. Set `AI_REVIEW_HOSTS='*'` to run it everywhere.
 
+### The lessons review before a merge
+
+Every pull request's whole branch, merge base to head and every file type, is read against the
+recorded lessons before it can merge, on both Macs (claude-config#560). `ai-review-on-pr.sh` starts
+the review in the background when `gh pr create` succeeds; `pr-review-gate.sh` refuses a merge until
+the review of that pull request's head has finished and its findings have reached the session,
+either on a later prompt through `ai-review-nudge.sh` or in the gate's own refusal, once. A head
+with no review gets one started by the gate. A repo whose own script merges inside it asks the same
+checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does.
+
+Every outcome is named and none reads as clean by accident: finished with findings, finished clean,
+still running (with elapsed time), did not finish, failed, came back empty, answered in some other
+shape (`unparsed`), abandoned, could not run (no claude, no python3, no base), too large, and an
+empty diff. All but the clean ones, the delivered ones and the empty diff refuse, naming
+`bash ~/.claude/hooks/lib/pr-review.sh restart --dir <repo> --sha <head>` and the one command
+override `SKIP_PR_REVIEW=1`, which is explained to Dan before it is used.
+
+Measured 2026-09-24: across the last 150 squash merges of claude-config, Overture, Ovation and
+PostRoll, 11 of 600 branches were over the 300 KB cap it shares with the push review. Two real
+reviews took 195 and 231 seconds against a 600 second deadline. Each review with findings adds a
+line to `~/.claude/state/ai-review/citations.tsv` naming the lessons it cited, which the 14 day sweep
+leaves alone, for the monthly re-rank of the lessons core.
+
 ### What a push actually waits on
 
 Seventeen PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,

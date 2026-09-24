@@ -41,6 +41,17 @@ command, and the whole process group is killed on expiry so a stuck child cannot
 
 The finished file's first lines are `name=value` metadata (repo, branch, sha, started, finished,
 status, model), then a blank line, then the review. The nudge reads only that shape.
+
+TWO KINDS, one reviewer (claude-config#560). `--kind push` (the default) is the advisory review of
+one push. `--kind pr` is the lessons review of a WHOLE branch that lib/pr-review.sh starts when a
+pull request is opened, and that the merge gate waits for. A pr review also records `kind`, `base`
+and `findings` (the count of finding lines, 0 for "No issues found.") in its metadata, and its
+`--scope-file` is sent in front of the shared prompt, so the one prompt file serves both (L41).
+
+THE CITATION LEDGER. Every finished review with findings appends one line to citations.tsv in the
+state directory: finish time, kind, repository, sha, findings, and the lesson numbers its findings
+cite. The review files themselves are swept after 14 days; the ledger is not, because the monthly
+re-rank of the lessons core (#563, #566) needs which lessons reviews actually cite, over months.
 """
 import argparse
 import glob
@@ -155,6 +166,25 @@ def mark_false_absences(text, paths):
     return "\n".join(out), marked
 
 
+FINDING = re.compile(r"^\S+:\d+: ")
+LESSON = re.compile(r"\(L([0-9]{1,4})\)")
+
+
+def count_findings(text):
+    """The number of lines in the review's own finding shape, `<path>:<line>: ...`."""
+    return sum(1 for line in text.splitlines() if FINDING.match(line))
+
+
+def append_ledger(state_dir, meta, text):
+    """One line per review with findings, never swept (see the module docstring)."""
+    lessons = sorted({int(m) for m in LESSON.findall(text)})
+    line = "\t".join(str(x) for x in (
+        meta.get("finished", ""), meta.get("kind", "push"), meta.get("repo", ""), meta.get("sha", ""),
+        meta.get("findings", ""), ",".join(f"L{n}" for n in lessons)))
+    with open(os.path.join(state_dir, "citations.tsv"), "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
 def write_finished(state_dir, name, meta, body):
     final = os.path.join(state_dir, name + ".txt")
     tmp = final + ".tmp"
@@ -176,10 +206,14 @@ def main(argv):
                 "--model", "--prompt-file", "--lessons-dir", "--diff-file"):
         ap.add_argument(opt, required=True)
     ap.add_argument("--deadline", type=int, required=True)
+    ap.add_argument("--kind", default="push", choices=("push", "pr"))
+    ap.add_argument("--base", default="")
+    ap.add_argument("--scope-file", default="")
+    ap.add_argument("--name", default="")
     ap.add_argument("--started", type=int, required=True)
     a = ap.parse_args(argv)
 
-    name = f"{a.key}-{a.sha}"
+    name = a.name or f"{a.key}-{a.sha}"
     meta = {
         "repo": a.repo_label,
         "branch": a.branch,
@@ -190,6 +224,10 @@ def main(argv):
         "model": a.model,
         "deadline": a.deadline,
     }
+    if a.kind == "pr":
+        meta["kind"] = "pr"
+        meta["base"] = a.base
+        meta["findings"] = ""
 
     status, body = "error", ""
     lessons_note = ""
@@ -197,10 +235,18 @@ def main(argv):
         with open(a.prompt_file, encoding="utf-8") as f:
             prompt_text = f.read()
         lessons, lessons_note = lessons_block(a.lessons_dir)
-        prompt = framework_line(a.repo_dir) + "\n\n" + (lessons + "\n\n" if lessons else "") + prompt_text
+        scope = ""
+        if a.scope_file:
+            with open(a.scope_file, encoding="utf-8") as f:
+                scope = f.read().strip() + "\n\n"
+        prompt = framework_line(a.repo_dir) + "\n\n" + (lessons + "\n\n" if lessons else "") + scope + prompt_text
 
+        # Hooks OFF (claude-config#560). Measured 2026-09-24, the first real whole branch reviews: the
+        # headless claude ran Dan's global hooks, the reviewer's own tool use tripped the end of turn
+        # issue review, and what came back was that review of the SESSION, not a review of the diff.
+        # --bare would skip hooks too but refuses subscription sign in, so the setting is passed.
         cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
-               "--model", a.model]
+               "--model", a.model, "--settings", '{"disableAllHooks":true}']
         with open(a.diff_file, "rb") as diff:
             # Its own process group, so the deadline can kill everything claude started and not
             # only the one pid subprocess knows about.
@@ -232,6 +278,13 @@ def main(argv):
             elif not text:
                 status = "empty"
                 body = "claude exited 0 and printed nothing, so there is no review to show."
+            elif text != "No issues found." and count_findings(text) == 0:
+                # Neither shape the prompt allows. Counting it as zero findings would read an answer
+                # that is not a review (the hook hijack above, a refusal, a question back) as a clean
+                # one (L98, L340), so it is its own outcome, kept verbatim as the evidence.
+                status = "unparsed"
+                body = ("The reviewer answered, but not in the review's format: no finding lines and not "
+                        "\"No issues found.\", so this is not a review. What it said:\n" + text)
             else:
                 status = "ok"
                 text, marked = mark_false_absences(text, changed_files(a.diff_file))
@@ -242,6 +295,8 @@ def main(argv):
                             f"Note: {marked} findings below claim a file this push changed was not changed; "
                             "the complete list of changed files says otherwise, and each is marked.\n\n") + text
                 body = text
+                if a.kind == "pr":
+                    meta["findings"] = count_findings(text)
     except Exception as e:  # noqa: BLE001  a crash here must still leave a finished file (L514)
         status = "error"
         body = f"The review runner failed before it could read an answer: {type(e).__name__}: {e}"
@@ -250,6 +305,11 @@ def main(argv):
         body = lessons_note + "\n\n" + body
     meta["finished"] = int(time.time())
     meta["status"] = status
+    if status == "ok":
+        try:
+            append_ledger(a.state_dir, meta, body)
+        except OSError:
+            pass  # the ledger is a record for later; losing one line must not lose the review
     try:
         write_finished(a.state_dir, name, meta, body)
     finally:

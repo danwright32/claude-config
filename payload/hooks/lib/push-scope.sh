@@ -298,6 +298,58 @@ ps__segment_is_push() {
   return 1
 }
 
+# Is this command a `gh pr create`, in COMMAND POSITION (claude-config#560)? Split where the shell
+# would, like ps_is_git_push, so one quoted in an argument or written in a heredoc body is not a
+# creation (L673). Leading environment assignments are skipped, including one whose value is a
+# command substitution holding spaces, `GH_TOKEN=$(gh auth token -u name) gh pr create`, which is
+# how a session scopes a call to one of Dan's accounts; `rtk` in front is the same command.
+ps_is_gh_pr_create() {   # $1 = command
+  local cmd="$1" seg segs
+  case "$cmd" in *create*) ;; *) return 1 ;; esac
+  if segs="$(ps__shell_segments "$cmd")"; then
+    while IFS= read -r -d $'\x1e' seg; do
+      ps__segment_is_pr_create "$seg" && return 0
+    done < <(printf '%s' "$segs")
+    return 1
+  fi
+  while IFS= read -r seg; do
+    ps__segment_is_pr_create "$seg" && return 0
+  done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+  return 1
+}
+
+ps__segment_is_pr_create() {   # $1 = one segment
+  local -a tok
+  read -r -a tok <<< "$1"
+  local i=0 n=${#tok[@]} t depth=0 opens closes
+  while [ "$i" -lt "$n" ]; do
+    t="${tok[$i]}"
+    # Inside an assignment's $( ... ): consume words until the parentheses balance.
+    if [ "$depth" -gt 0 ]; then
+      opens="${t//[^(]/}"; closes="${t//[^)]/}"
+      depth=$((depth + ${#opens} - ${#closes}))
+      i=$((i+1)); continue
+    fi
+    case "$t" in
+      \(*|\{*) t="${t#?}"; tok[$i]="$t"; [ -n "$t" ] || { i=$((i+1)); continue; } ;;
+    esac
+    case "$t" in
+      [A-Za-z_]*=*)
+        opens="${t//[^(]/}"; closes="${t//[^)]/}"
+        depth=$(( ${#opens} - ${#closes} )); [ "$depth" -lt 0 ] && depth=0
+        i=$((i+1)) ;;
+      *) break ;;
+    esac
+  done
+  [ "$i" -lt "$n" ] || return 1
+  t="${tok[$i]##*/}"
+  if [ "$t" = "rtk" ]; then i=$((i+1)); [ "$i" -lt "$n" ] || return 1; t="${tok[$i]##*/}"; fi
+  [ "$t" = "gh" ] || return 1
+  [ "${tok[$((i+1))]:-}" = "pr" ] || return 1
+  case "${tok[$((i+2))]:-}" in create|create\)*|create\}*) return 0 ;; esac
+  return 1
+}
+
 # Which repository is this push about? The hook payload's cwd is the SESSION's
 # directory, which is only the project when the session was started there. A
 # session rooted elsewhere reaches a project as `cd <repo> && git push` or

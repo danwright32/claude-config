@@ -234,20 +234,9 @@ rm -f "$list_file" "$diff_file.new"
 # show the five, and a file that does not fit is named rather than silently absent (L98).
 files_in=0; files_out=0; left_out=""
 if [ "${AI_REVIEW_FULL_FILES:-1}" != "0" ]; then
-  budget=$((max_bytes - size))
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    fsize="${line%% *}"; f="${line#* }"
-    case "$fsize" in ''|*[!0-9]*) continue ;; esac
-    if [ "$fsize" -le "$budget" ] \
-       && { printf '\n\n===== FULL FILE at %s: %s =====\n' "$short_head" "$f"; git show "$head_sha:$f"; } >> "$diff_file" 2>/dev/null; then
-      budget=$((budget - fsize)); files_in=$((files_in + 1))
-    else
-      files_out=$((files_out + 1)); left_out="$left_out $f"
-    fi
-  done < <(git diff --name-only --diff-filter=AM "$mb" "$head_sha" -- "${CODE_PATHS[@]}" 2>/dev/null \
-           | while IFS= read -r f; do [ -n "$f" ] && printf '%s %s\n' "$(git cat-file -s "$head_sha:$f" 2>/dev/null || echo x)" "$f"; done \
-           | sort -n)
+  fitted="$(ar_append_full_files "$diff_file" "$mb" "$head_sha" $((max_bytes - size)) "${CODE_PATHS[@]}")"
+  files_in="${fitted%% *}"; rest_fit="${fitted#* }"
+  files_out="${rest_fit%% *}"; left_out="${rest_fit#"$files_out"}"
 fi
 context_note="diff alone"
 if [ "$files_in" -gt 0 ] || [ "$files_out" -gt 0 ]; then
