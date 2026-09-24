@@ -160,6 +160,11 @@
             "command": "__CLAUDE_HOME__/hooks/ai-review-on-push.sh",
             "timeout": 15,
             "statusMessage": "Starting the advisory review of the pushed diff"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/lesson-entry-check.sh --after-bash",
+            "timeout": 30
           }
         ]
       },
