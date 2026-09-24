@@ -7161,6 +7161,17 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 
 
+- **L729. Safari, and every iPhone browser since all of them run on WebKit, ignores a button's own
+  `gap`: it lays the button's contents out in a hidden inner box that does not carry it, so an icon
+  or a loading cue spaced from its label that way sits flush against the words.** Put the spacing
+  on an inner span that holds the cue and the label, and look at any control a customer presses in
+  WebKit, not only in Chrome, where the same markup is correctly spaced and every review passes.
+  (Slate#2636, #2684, #2685: the third loading dot touched the "M" of "Moving your call…" on Dan's
+  iPhone while the gap BETWEEN the dots, on an ordinary span, was intact. WebKit's RenderButton
+  builds the inner box with createAnonymousBlockWithStyle and copies only flex-grow, a minimum size
+  and centring margins onto it.)
+  SHORT: Safari ignores a button's own gap, so space an icon or cue from its label on an inner span and check customer controls in WebKit.
+
 ## External systems
 
 - **L477. A browser error reporter captures every uncaught error on the page, including ones
