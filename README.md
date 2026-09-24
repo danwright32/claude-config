@@ -358,7 +358,8 @@ says in one line that it skipped. Set `AI_REVIEW_HOSTS='*'` to run it everywhere
 
 Every pull request's whole branch, merge base to head and every file type, is read against the
 recorded lessons before it can merge, on both Macs (claude-config#560). `ai-review-on-pr.sh` starts
-the review in the background when `gh pr create` succeeds; `pr-review-gate.sh` refuses a merge until
+the review in the background when `gh pr create` succeeds, and again for the new head when a push
+lands on a branch whose pull request is open; `pr-review-gate.sh` refuses a merge until
 the review of that pull request's head has finished and its findings have reached the session,
 either on a later prompt through `ai-review-nudge.sh` or in the gate's own refusal, once. A head
 with no review gets one started by the gate. A repo whose own script merges inside it asks the same
