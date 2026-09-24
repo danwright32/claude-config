@@ -11,6 +11,11 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/push-scope-notice.sh",
+            "timeout": 15
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-tests-before-push.sh",
             "timeout": 120,
             "statusMessage": "Checking pushed changes include tests"
