@@ -225,12 +225,56 @@ TRIG_FN=(
   ''
   ''
   ''
-  ''
+  'trig_destructive_data_op'
   ''
   ''
   ''
   'trig_workflow_job_without_timeout'
 )
+
+# A destructive data operation, less a file removing the temp directory IT created
+# (claude-config#578). On 2026-09-24 the plain regex fired on about eight pushes, every one a
+# test's `rm -rf "$WORK"` of its own mktemp directory, and every reply was that it did not apply,
+# which is how an advisory stops being read (L36). A removal counts as cleanup only when EVERY
+# target is a variable the same added lines assigned from mktemp, optionally with a path below it;
+# anything else on the line, and every other destructive pattern, fires exactly as before (L104).
+trig_destructive_data_op(){   # $1 = a file holding the added lines
+  # The pattern travels in the ENVIRONMENT: `awk -v` processes backslash escapes, so `fs\.rm\(`
+  # would arrive as the invalid `fs.rm(` (L434). ENVIRON is read verbatim.
+  TRIG_DESTRUCTIVE_RE="${TRIG_RE1[3]}" awk '
+    BEGIN { re = tolower(ENVIRON["TRIG_DESTRUCTIVE_RE"]); fire = 0 }
+    # Each line is judged AS IT IS READ, against the variables whose latest assignment so far is a
+    # mktemp: reassigned to anything else, a variable is no longer temp (found by the PR lessons
+    # review of #579). One pass, so a large pushed file costs one read.
+    {
+      if (match($0, /(^|[^A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*=/)) {
+        a = substr($0, RSTART, RLENGTH); sub(/^[^A-Za-z_]/, "", a); sub(/=$/, "", a)
+        rhs = substr($0, RSTART + RLENGTH)
+        if (rhs ~ /^[[:space:]]*"?\$\([[:space:]]*mktemp/) tmp[a] = 1; else delete tmp[a]
+      }
+      if (fire || tolower($0) !~ re) next
+      if ($0 !~ /rm[[:space:]]+-rf/ || $0 ~ /(DROP|TRUNCATE|DELETE[[:space:]]+FROM|unlinkSync|fs\.rm\(|\.drop\()/) { fire = 1; next }
+      # EVERY rm on the line is judged, not only the last, and a target climbing out with .. is
+      # not the temp directory (both found by the PR lessons review of #579).
+      own = 0; other = 0; scan = $0
+      while (match(scan, /rm[[:space:]]+-rf[[:space:]]*/)) {
+        scan = substr(scan, RSTART + RLENGTH)
+        seg = scan; sub(/[\047;&|].*$/, "", seg)
+        n = split(seg, t, /[[:space:]]+/)
+        for (k = 1; k <= n; k++) {
+          if (t[k] == "") continue
+          x = t[k]; gsub(/"/, "", x)
+          if (x !~ /\.\./ && match(x, /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/)) {
+            v = substr(x, RSTART, RLENGTH); gsub(/[${}]/, "", v)
+            if ((v in tmp) && (x ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(\/.*)?$/)) { own++; continue }
+          }
+          other++
+        }
+      }
+      if (other > 0 || own == 0) fire = 1
+    }
+    END { exit !fire }' "$1"
+}
 
 # A workflow job added with no `timeout-minutes` (L313). The platform default is six hours, and a
 # hang that runs to it is both invisible, because it reads as slowness, and expensive on a metered

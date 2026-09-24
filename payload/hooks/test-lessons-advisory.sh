@@ -142,6 +142,33 @@ R=$(make_repo destructive 'DELETE FROM contacts WHERE stale = true;' migrations/
 out=$(run_hook "git push" "$R")
 assert_contains "destructive SQL cites the data-safety lesson" 'L5' "$out"
 
+# --- 5b. A file removing the temp directory IT created is cleaning up, not destroying data
+# (claude-config#578: on 2026-09-24 this fired on about eight pushes, each a test's own mktemp
+# directory, and every reply was that it did not apply). A real rm -rf still fires (L104).
+R=$(make_repo tmpclean $'WORK="$(mktemp -d)"\ntrap \'rm -rf "$WORK"\' EXIT\nTMP=$(mktemp -d /tmp/x.XXXX)\nrm -rf "${TMP}/sub"' tests/test-thing.sh)
+out=$(run_hook "git push" "$R")
+assert_absent "removing the file's own mktemp directory is not a destructive data operation" 'destructive data operation' "$out"
+R=$(make_repo realrm $'rm -rf "$HOME/.claude/state"' scripts/cleanup.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "removing a path the file did not create still fires" 'destructive data operation' "$out"
+R=$(make_repo mixedrm $'WORK="$(mktemp -d)"\nrm -rf "$WORK" "$DATA_DIR"' scripts/mixed.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "one real target beside a temp one still fires" 'destructive data operation' "$out"
+# Both holes the PR lessons review found in the first version: every rm on a line is judged, not
+# only the last, and a path climbing out of the temp directory is not cleanup of it.
+R=$(make_repo tworm $'WORK="$(mktemp -d)"\nrm -rf "$REAL_DATA" && rm -rf "$WORK"' scripts/two.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "a real removal before a temp one on the same line still fires" 'destructive data operation' "$out"
+R=$(make_repo climb $'WORK="$(mktemp -d)"\nrm -rf "$WORK/../data"' scripts/climb.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "a path climbing out of the temp directory still fires" 'destructive data operation' "$out"
+R=$(make_repo reassign $'WORK="$(mktemp -d)"\nWORK="$HOME/data"\nrm -rf "$WORK"' scripts/reassign.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "a temp variable reassigned to real data before the removal still fires" 'destructive data operation' "$out"
+R=$(make_repo tmpsql $'WORK="$(mktemp -d)"\nrm -rf "$WORK"\nDELETE FROM contacts;' migrations/004.sql)
+out=$(run_hook "git push" "$R")
+assert_contains "a temp cleanup beside real SQL still fires on the SQL" 'destructive data operation' "$out"
+
 # --- 6. Silence where there is nothing to say --------------------------------
 R=$(make_repo docs 'Some prose about the feature.' docs/notes.md)
 out=$(run_hook "git push" "$R")
