@@ -5992,7 +5992,7 @@ stop_suite_tree(){   # $1 = pid of the suite
 }
 
 hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
-  local runner out pid started now limit rc=0 killed=0 ran='?' notrun='?' took='?' nrnames='?'
+  local runner out pid started now limit rc=0 killed=0 ran='?' notrun='?' took='?' nrnames='?' suite_notes=''
   [ "${SYNC_NO_HOOK_TESTS:-0}" = "1" ] && return 0
   # Normally this runs only when an apply actually wrote a hook, which is the right trigger for a
   # receive. It is also the ONLY writer of the record, so a Mac that FIXED a failure without a hook
@@ -6078,6 +6078,12 @@ HSCOVEOF
     nrnames='?'
     case "$notrun" in [1-9]*) nrnames="$(hook_suite_notrun_names "$out")" ;; 0) nrnames='' ;; esac
     record_hook_suite_result passed 0 "" "$ran" "$notrun" "$took" "$nrnames"
+    # What a PASSING suite marked as worth reading (claude-config#546). The runner prints each
+    # suite's SUITE-NOTE lines as "note:" even on a pass, and this closing sentence used to keep
+    # none of the report, so a warning meant for every receive (the size of the rule files every
+    # session loads) was written into a scratch file and thrown away (L325). Capped at three, the
+    # runner's own default, and joined so the closing line stays one line.
+    suite_notes="$(sed -n 's/^[[:space:]]*note: //p' "$out" 2>/dev/null | awk 'NR <= 3' | awk 'NR > 1 { printf " | " } { printf "%s", $0 }')"
     if [ "$ran" = '?' ]; then
       printf ', and the hook suite passed here, though its own report did not say how many of its suites ran, so how much of the suite that covers is unknown'
     elif [ "$notrun" -gt 0 ]; then
@@ -6089,6 +6095,7 @@ HSCOVEOF
     else
       printf ', and the hook suite passed here, all %s of its suites' "$ran"
     fi
+    [ -n "$suite_notes" ] && printf '. The suite noted: %s' "$suite_notes"
     return 0
   fi
   # The runner's own report goes to stderr, where the rest of this run's diagnostics are, so the

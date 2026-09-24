@@ -13190,6 +13190,17 @@ check "#185 a pass that covered the whole suite says so" \
 check "#185 and records the counts it reported" \
   "[ \"\$(ht_field ran)\" = '12' ] && [ \"\$(ht_field notrun)\" = '0' ]"
 
+# A NOTE a passing suite marks reaches the pull's own summary (claude-config#546). The runner prints
+# a suite's SUITE-NOTE lines even when it passes, but the pull kept one sentence of the report, so a
+# warning meant to be read at every receive, the size of the rule files every session loads, was
+# printed into a scratch file and thrown away (L325).
+out_cvn="$(ht_cover 0 "$(printf 'ALL 12 SUITES PASSED\n          note: the rule files every session loads total 151000 characters')")"
+dbg "pull whose passing runner marked a note: $out_cvn"
+check "#546 a note from a passing suite is carried into the pull summary" \
+  "line_has \"\$out_cvn\" 'Pulled shared config' 'hook suite passed here' 'rule files every session loads total 151000'"
+check "#546 and a run with no note adds nothing about notes" \
+  "! line_has \"\$out_cv1\" 'Pulled shared config' 'note'"
+
 out_cv2="$(ht_cover 0 'ALL 6 SUITES THAT COULD RUN PASSED, and 4 could not run here')"
 dbg "pull whose runner could not run some of itself: $out_cv2"
 check "#185 a pass with suites that could not run says how many" \
