@@ -208,8 +208,11 @@ if [ -n "$runner" ]; then
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
     | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" bash -c "$runner")
 else
+  # Without the global config: the harvest reads one transcript digest and never a rule, and
+  # loading the CLAUDE.md and all twelve lessons index files cost 64,868 input tokens a harvest
+  # against 29,663 without them, measured 2026-09-23 (claude-config#538).
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
-    | CLAUDE_DETACHED_RUN=1 with_deadline "$harvest_timeout" claude -p --model haiku)
+    | CLAUDE_DETACHED_RUN=1 CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 with_deadline "$harvest_timeout" claude -p --model haiku)
 fi
 status=$?
 
