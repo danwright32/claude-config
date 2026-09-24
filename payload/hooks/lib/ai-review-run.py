@@ -46,6 +46,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -95,6 +96,63 @@ def lessons_block(lessons_dir):
         with open(path, encoding="utf-8", errors="replace") as f:
             parts.append(f.read().strip())
     return "===== LESSONS\n\n" + "\n\n".join(parts), ""
+
+
+# A finding that says a file was NOT changed (claude-config#533). The phrasings are the ones such a
+# claim takes, anchored on the diff or the push so an ordinary "does not change the return type" is
+# not caught; the path must also be one the complete list names, so a true absence is left alone.
+ABSENCE = re.compile(
+    r"(no changes? to|contains no change|not (?:been )?(?:changed|modified|updated|touched)|"
+    r"(?:absent|missing) from (?:the|this) (?:diff|push)|not in (?:the|this) (?:diff|push)|"
+    r"(?:diff|push) (?:does not|doesn't) (?:change|modify|touch|include))",
+    re.IGNORECASE)
+
+
+def changed_files(diff_path):
+    """The paths the push changed, from the list the hook put at the top of the input, or None
+    when there is no list or it was truncated, since a partial list cannot prove a file changed
+    and must not be read as the whole truth."""
+    paths, in_block = [], False
+    try:
+        with open(diff_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("===== FILES THIS PUSH CHANGED"):
+                    in_block = True
+                    continue
+                if not in_block:
+                    return None
+                if line.startswith("===== END OF FILE LIST"):
+                    return paths
+                if line.startswith("TRUNCATED:"):
+                    return None
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) >= 2 and parts[1]:
+                    paths.append(parts[1])
+    except OSError:
+        return None
+    return None
+
+
+def mark_false_absences(text, paths):
+    """(text, count): each finding claiming a listed file was not changed gets a visible mark.
+    Marked rather than deleted, because deleting would destroy the evidence the reviewer ignored
+    the list, which is the thing to know about it (L340)."""
+    if not paths:
+        return text, 0
+    out, marked = [], 0
+    for line in text.splitlines():
+        hit = None
+        if ABSENCE.search(line):
+            for p in sorted(paths, key=len, reverse=True):
+                if p in line:
+                    hit = p
+                    break
+        if hit:
+            line += (f" [review harness: {hit} IS in this push, per the complete list of changed files, "
+                     "so this finding's premise is false]")
+            marked += 1
+        out.append(line)
+    return "\n".join(out), marked
 
 
 def write_finished(state_dir, name, meta, body):
@@ -176,6 +234,13 @@ def main(argv):
                 body = "claude exited 0 and printed nothing, so there is no review to show."
             else:
                 status = "ok"
+                text, marked = mark_false_absences(text, changed_files(a.diff_file))
+                if marked:
+                    text = (f"Note: {marked} finding below claims a file this push changed was not changed; "
+                            "the complete list of changed files says otherwise, and each is marked.\n\n"
+                            if marked == 1 else
+                            f"Note: {marked} findings below claim a file this push changed was not changed; "
+                            "the complete list of changed files says otherwise, and each is marked.\n\n") + text
                 body = text
     except Exception as e:  # noqa: BLE001  a crash here must still leave a finished file (L514)
         status = "error"

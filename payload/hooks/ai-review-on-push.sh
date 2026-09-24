@@ -39,6 +39,9 @@
 #   - SKIP_AI_REVIEW_CHECK=1 was put on the push command;
 #   - the diff is empty (no code files changed), or over the size cap.
 #
+# WHAT THE REVIEWER IS SHOWN FIRST: the complete list of files the push changed, each marked shown
+# or not shown (claude-config#533), so a file the code filter dropped cannot read as unchanged.
+#
 # WHAT THE REVIEWER IS SHOWN, and why it is more than the diff. The first real run of this hook
 # (2026-09-18, sonnet, a fixture where createEvent got a typed error and its twin deleteEvent did
 # not) answered "No issues found.", correctly, because a three line diff context never put
@@ -200,6 +203,31 @@ if [ "$size" -gt "$max_bytes" ]; then
   rm -f "$diff_file"
   say "skipped: the code diff $short_mb..$short_head is $((size / 1024)) KB, over the $((max_bytes / 1024)) KB cap (AI_REVIEW_MAX_BYTES) a review can use."
 fi
+
+# EVERY file the push changed, not only the code files the diff below carries, at the TOP of the
+# input (claude-config#533). The diff is filtered to code, and the reviewer used to be told it was
+# everything the push added, so a workflow file the filter dropped read as a file the push never
+# touched: on bidspoke 39cb11b the review reported, at critical severity, that deploy.yml had not
+# been changed when it had. Each path is marked shown or not shown, and the runner reads this same
+# block back to mark any finding that calls a listed file unchanged (lib/ai-review-run.py). Capped
+# so a huge rename cannot crowd out the diff; past the cap the block says it is TRUNCATED, and the
+# runner does not treat a truncated list as the whole truth.
+list_file="$diff_file.list"
+{
+  total_changed="$(git diff --name-only "$mb" "$head_sha" 2>/dev/null | awk 'END { print NR }')"
+  printf '===== FILES THIS PUSH CHANGED: the complete list, %s file(s), from %s..%s =====\n' "$total_changed" "$short_mb" "$short_head"
+  shown="$(git diff --name-only "$mb" "$head_sha" -- "${CODE_PATHS[@]}" 2>/dev/null)"
+  git diff --name-status "$mb" "$head_sha" 2>/dev/null | awk -F '\t' -v shown="$shown" '
+    BEGIN { n = split(shown, s, "\n"); for (i = 1; i <= n; i++) if (s[i] != "") in_diff[s[i]] = 1 }
+    NR > 500 { over++; next }
+    { path = $NF; printf "%s\t%s\t%s\n", $1, path, (path in in_diff) ? "(changed, shown below)" : "(changed, not shown: only code files are in the diff)" }
+    END { if (over) printf "TRUNCATED: %d more changed file(s) are not listed\n", over }'
+  printf '===== END OF FILE LIST =====\n\n'
+} > "$list_file" 2>/dev/null
+if [ -s "$list_file" ] && cat "$list_file" "$diff_file" > "$diff_file.new" 2>/dev/null; then
+  mv -f "$diff_file.new" "$diff_file"
+fi
+rm -f "$list_file" "$diff_file.new"
 
 # The full contents of each changed code file, smallest first, while the budget lasts. Smallest
 # first because a push that touches one large generated file and five small real ones should still
