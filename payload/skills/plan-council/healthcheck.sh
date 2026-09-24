@@ -84,23 +84,36 @@ for s in plan-council plan-lite; do
   fi
 done
 
-echo "== lessons audit (wired, and pointed at a real file) =="
-# An audit against a missing or empty lessons file would report "clean" forever.
-lessons="$D/LESSONS.md"
-if [ -s "$lessons" ]; then
-  # `grep -c` prints 0 AND fails when it counts nothing, so `|| echo 0` runs too and the value is
-  # two lines, which errors every numeric test on it (claude-config#172).
-  n_lessons=$(grep -c '^\s*-\s*\*\*L[0-9]' "$lessons" 2>/dev/null || true)
-  case "$n_lessons" in ''|*[!0-9]*) n_lessons=0 ;; esac
-  if [ "$n_lessons" -gt 0 ]; then ok "LESSONS.md present ($n_lessons lessons)"; else bad "LESSONS.md has no L-numbered lessons: an audit against it is vacuous"; fi
+echo "== lessons audit (wired, and pointed at real files) =="
+# The auditors read the LESSONS-INDEX files, never the full LESSONS.md, which is too large to
+# read whole (claude-config#561). An audit against no index files would report "clean" forever.
+n_files=0; n_lessons=0
+for f in "$D"/LESSONS-INDEX-*.md; do
+  [ -s "$f" ] || continue
+  n_files=$((n_files + 1))
+  # `grep -c` prints 0 AND fails when it counts nothing, so `|| echo 0` would print two lines
+  # and break the arithmetic (claude-config#172).
+  c=$(grep -c -E '^- L[0-9]+\.' "$f" 2>/dev/null || true)
+  case "$c" in ''|*[!0-9]*) c=0 ;; esac
+  n_lessons=$((n_lessons + c))
+done
+if [ "$n_files" -eq 0 ]; then
+  bad "no LESSONS-INDEX-*.md files in $D: the lessons audit would pass on everything"
+elif [ "$n_lessons" -eq 0 ]; then
+  bad "the $n_files LESSONS-INDEX files hold no L-numbered lessons: an audit against them is vacuous"
 else
-  bad "LESSONS.md missing or empty: the lessons audit would pass on everything"
+  ok "lessons index present ($n_files files, $n_lessons lessons)"
 fi
 wf="$D/skills/plan-council/panel.workflow.js"
-lref=$(grep -o "LESSONS_PATH = '[^']*'" "$wf" 2>/dev/null | sed "s/.*'\(.*\)'/\1/")
-if [ -n "$lref" ] && [ -f "$lref" ]; then ok "workflow LESSONS_PATH -> $lref"; else bad "panel.workflow.js LESSONS_PATH missing or broken: '${lref:-none}'"; fi
+# The workflow spells its paths with a leading ~, which a test of the quoted string never
+# expands, so expand it here or the check fails on a healthy install.
+expand(){ case "$1" in "~/"*) printf '%s/%s' "$HOME" "${1#\~/}" ;; *) printf '%s' "$1" ;; esac; }
+iglob=$(grep -o "LESSONS_INDEX_GLOB = '[^']*'" "$wf" 2>/dev/null | sed "s/.*'\(.*\)'/\1/")
+ifirst=""
+if [ -n "$iglob" ]; then for f in $(expand "$iglob"); do [ -f "$f" ] && { ifirst="$f"; break; }; done; fi
+if [ -n "$ifirst" ]; then ok "workflow LESSONS_INDEX_GLOB -> $iglob"; else bad "panel.workflow.js LESSONS_INDEX_GLOB missing or matches nothing: '${iglob:-none}'"; fi
 rref=$(grep -o "RULES_PATH = '[^']*'" "$wf" 2>/dev/null | sed "s/.*'\(.*\)'/\1/")
-if [ -n "$rref" ] && [ -f "$rref" ]; then ok "workflow RULES_PATH -> $rref"; else bad "panel.workflow.js RULES_PATH missing or broken: '${rref:-none}'"; fi
+if [ -n "$rref" ] && [ -f "$(expand "$rref")" ]; then ok "workflow RULES_PATH -> $rref"; else bad "panel.workflow.js RULES_PATH missing or broken: '${rref:-none}'"; fi
 if grep -q "title: 'Lessons audit'" "$wf" 2>/dev/null; then ok "workflow declares the Lessons audit phase"; else bad "panel.workflow.js, no 'Lessons audit' phase declared"; fi
 # The audit is only a gate if its violations drive the fix loop; a phase that merely
 # reports would leave a known-bad plan intact and still look present in the phase list.
@@ -111,7 +124,7 @@ if grep -q 'stillViolating()' "$wf" 2>/dev/null; then ok "lesson violations feed
 if grep -qE '^\s*return \{.*plan: finalPlan.*lessonsAudit' "$wf" 2>/dev/null; then ok "main path returns lessonsAudit"; else bad "panel.workflow.js: main return does not carry lessonsAudit"; fi
 if grep -qE "^\s*return \{ mode: 'revise'.*lessonsAudit" "$wf" 2>/dev/null; then ok "revise mode returns lessonsAudit"; else bad "panel.workflow.js: revise return does not carry lessonsAudit"; fi
 if grep -q 'lessonsAudit' "$D/skills/plan-council/SKILL.md" 2>/dev/null; then ok "plan-council reports lessonsAudit to the user"; else bad "plan-council SKILL.md, never reads lessonsAudit, so violations would be invisible"; fi
-if grep -q 'LESSONS.md' "$D/skills/plan-lite/SKILL.md" 2>/dev/null; then ok "plan-lite runs a lessons audit"; else bad "plan-lite SKILL.md, no lessons audit step"; fi
+if grep -q 'LESSONS-INDEX' "$D/skills/plan-lite/SKILL.md" 2>/dev/null; then ok "plan-lite runs a lessons audit against the index"; else bad "plan-lite SKILL.md, no lessons audit step against the LESSONS-INDEX files"; fi
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL GOOD"; else echo "PROBLEMS FOUND: see FAIL lines above"; fi
