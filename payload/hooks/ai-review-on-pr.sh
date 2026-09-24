@@ -52,6 +52,8 @@ for ((i = 0; i < ${#words[@]}; i++)); do
   esac
 done
 base="${base//[\"\']/}"
+top="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$repo_dir")"
+ar_pr_opened "$(basename "$top")" "$top" "$(git -C "$top" rev-parse HEAD 2>/dev/null)"
 args=(start --dir "$repo_dir")
 [ -n "$base" ] && args+=(--base-ref "origin/$base")
 say "$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"

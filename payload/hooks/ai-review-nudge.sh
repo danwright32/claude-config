@@ -172,6 +172,8 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
         printf 'The review was started and never finished: %s passed with no answer written, which means the background runner died. Nothing was read back. Push again to re-run it.\n' \
           "$(elapsed_text $((now - m_started)))"
       } > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final" 2>/dev/null
+      # A pull request review's outcome is counted in the durable ledger like every other (#562).
+      case "$base" in *-pr-*) ar_pr_ledger "$final" "" ;; esac
     fi
     rm -f "$p" 2>/dev/null
     finished=( "$AR_STATE_DIR"/*.txt )

@@ -111,3 +111,46 @@ ar_append_full_files() {   # $1 = input file, $2 = base, $3 = head, $4 = byte bu
            | sort -n)
   printf '%s %s%s' "$in" "$left" "$names"
 }
+
+# The durable record of every lessons review of a pull request's branch (claude-config#562). The
+# review files themselves are swept after 14 days, and the measurement #562 gates the lessons core on
+# runs for two to three weeks per Mac, so each finished pr review also appends ONE line here, which
+# nothing sweeps. Written from the finished file, by every path that finishes one (the runner, the
+# refusals lib/pr-review.sh records itself, the nudge's abandoned conversion), so no outcome has a
+# second spelling (L613). Bash rather than python so a review that could not run BECAUSE python3 is
+# missing is still counted.
+#
+# Tab separated: finished, host, repo, repo dir, sha, base, status, findings, seconds, files the
+# findings name (comma joined), lessons they cite (comma joined).
+AR_PR_LEDGER="$AR_STATE_DIR/pr-reviews.tsv"
+AR_PR_OPENED="$AR_STATE_DIR/pr-opened.tsv"
+
+ar_host() { local h; h="${AI_REVIEW_HOST:-$(hostname 2>/dev/null)}"; printf '%s' "${h%.local}"; }
+
+ar_pr_ledger() {   # $1 = a finished pr review file, $2 = the repository's directory
+  [ -f "$1" ] || return 1
+  mkdir -p "$AR_STATE_DIR" 2>/dev/null
+  awk -v host="$(ar_host)" -v dir="$2" -F '\t' '
+    BEGIN { FS = "\n" }
+    !body && /^$/ { body = 1; next }
+    !body { i = index($0, "="); if (i) m[substr($0, 1, i - 1)] = substr($0, i + 1); next }
+    body && match($0, /^[^ :]+:[0-9]+: /) {
+      f = substr($0, 1, RLENGTH); sub(/:[0-9]+: $/, "", f)
+      if (!(f in seen)) { seen[f] = 1; files = files (files == "" ? "" : ",") f }
+      rest = $0
+      while (match(rest, /\(L[0-9]+\)/)) {
+        l = substr(rest, RSTART + 1, RLENGTH - 2)
+        if (!(l in cited)) { cited[l] = 1; lessons = lessons (lessons == "" ? "" : ",") l }
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+    }
+    END {
+      secs = (m["finished"] ~ /^[0-9]+$/ && m["started"] ~ /^[0-9]+$/) ? m["finished"] - m["started"] : ""
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", m["finished"], host, m["repo"], dir, m["sha"], m["base"], m["status"], m["findings"], secs, files, lessons
+    }' "$1" >> "$AR_PR_LEDGER" 2>/dev/null
+}
+
+ar_pr_opened() {   # $1 = repository label, $2 = its directory, $3 = the head sha
+  mkdir -p "$AR_STATE_DIR" 2>/dev/null
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$(ar_host)" "$1" "$2" "$3" >> "$AR_PR_OPENED" 2>/dev/null
+}
