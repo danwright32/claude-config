@@ -67,6 +67,7 @@ printf '%s\x1e' "$@" > "$FAKE_LOG/args"
 env > "$FAKE_LOG/env"
 cat > "$FAKE_LOG/stdin"
 sleep "${FAKE_CLAUDE_SLEEP:-0}"
+if [ -n "${FAKE_CLAUDE_OUT:-}" ]; then printf '%s\n' "$FAKE_CLAUDE_OUT"; exit 0; fi
 printf 'src/calendar.ts:12: deleteEvent still throws the raw error while createEvent got the typed one. Should be: the same typed error in both. [severity: major]\n'
 EOS
 chmod +x "$FAKEBIN/claude"
@@ -523,6 +524,38 @@ check "and its answer says it ran without the lessons" "ran without the lessons 
 # the path normalised.
 check "naming where it looked" "/no-lessons-here, so no recorded lesson" "$nolessons_body"
 check "while still carrying the review itself" "deleteEvent still throws" "$nolessons_body"
+# ===========================================================================
+# 9. The reviewer is told which files the push changed, and a finding that says a changed file was
+# NOT changed is marked false (claude-config#533). On bidspoke 39cb11b the review said, at critical
+# severity, that the push held no change to .github/workflows/deploy.yml. It did: the review is sent
+# code files only, and its prompt called that diff everything the push added, so a filtered out
+# file read as an unchanged one.
+# ===========================================================================
+G checkout -q main; G checkout -q -b fix/workflow-wiring
+mkdir -p "$REPO/.github/workflows"
+printf 'export const wired = true;\n' > "$REPO/src/wiring.ts"
+printf 'on: push\njobs: {}\n' > "$REPO/.github/workflows/deploy.yml"
+G add src/wiring.ts .github/workflows/deploy.yml; G commit -q -m wiring
+SHA_WIRE="$(G rev-parse HEAD)"
+: > "$FAKE_LOG/stdin"
+FAKE_CLAUDE_OUT='src/wiring.ts:1: The tests expect deploy.yml to call the hash script, but the diff contains no change to `.github/workflows/deploy.yml` to add this wiring. Should be: update .github/workflows/deploy.yml in this push. [severity: critical]
+src/wiring.ts:1: wired is exported but never read. Should be: read it or remove it. [severity: minor]' \
+  fire_push "git push -u origin fix/workflow-wiring" 0
+wait_for_final "$SHA_WIRE" 20 && ok || bad "the workflow review finishes"
+wire_stdin="$(cat "$FAKE_LOG/stdin")"
+check "the reviewer is given the complete list of changed files" "===== FILES THIS PUSH CHANGED" "$wire_stdin"
+check "which names the workflow file it is not shown" ".github/workflows/deploy.yml	(changed, not shown" "$wire_stdin"
+check "and the code file it is shown" "src/wiring.ts	(changed, shown below)" "$wire_stdin"
+args_blob="$(tr '\036' '\n' < "$FAKE_LOG/args")"
+check_not "the prompt no longer calls the code diff everything the push added" "It is everything one push added" "$args_blob"
+check "the prompt says the file list is complete" "That list is complete" "$args_blob"
+wire_final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_WIRE".txt )
+wire_body="$(cat "${wire_final[0]:-/dev/null}" 2>/dev/null)"
+check "the finding that calls a changed file unchanged is marked false" "IS in this push" "$wire_body"
+check "and the mark names the file" "harness: .github/workflows/deploy.yml IS in this push" "$wire_body"
+minor_line="$(printf '%s\n' "$wire_body" | grep 'never read')"
+check_not "an ordinary finding beside it is not marked" "IS in this push" "$minor_line"
+check "and the answer says how many findings were marked" "1 finding below" "$wire_body"
 
 echo
 echo "passed: $pass, failed: $fail"
