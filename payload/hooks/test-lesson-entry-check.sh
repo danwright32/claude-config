@@ -175,6 +175,57 @@ cp "$HOME_FIX/LESSONS.md" "$WORK/elsewhere/LESSONS.md"
 out="$(run_hook Edit "$WORK/elsewhere/LESSONS.md")"
 silent "a LESSONS.md outside the config root is not this one" "$out"
 
+echo "lesson entry check: a lesson written by a SHELL command is checked too (claude-config#537)"
+
+# The hook used to be registered on Edit|Write|MultiEdit only, and read its target from the tool's
+# file_path, so a lesson appended with a heredoc or sed was never judged. In auto mode that is the
+# DEFAULT way files get written. On 2026-09-21 L1003 and L1005 were written that way, both missing
+# their bold marker, and held the whole lessons file back from the next send. The Bash mode keys on
+# the state reached, the file having changed since it was last checked, never on reading the
+# command text (L247), so a payload naming no file at all must still be judged.
+bash_payload() { python3 -c 'import json; print(json.dumps({"tool_name": "Bash", "tool_input": {"command": "cat >> LESSONS.md <<EOF"}}))'; }
+run_after_bash() { bash_payload | CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" --after-bash 2>&1; }
+rm -f "$HOME_FIX/state/lesson-entry-check.stamp"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- L2. appended by a shell command with the bold left off.\n' > "$HOME_FIX/LESSONS.md"
+out="$(run_after_bash)"
+says "a lesson file changed by a shell command is checked, and a fault refused" "$out" '"decision":"block"'
+says "and the refusal names the entry" "$out" "L2"
+says "and does not claim a tool wrote it, only that the file changed" "$out" "changed since it was last checked"
+out="$(run_after_bash)"
+silent "the same unchanged fault is reported once, not on every shell command after it" "$out"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- **L2. fixed now.** body\n' > "$HOME_FIX/LESSONS.md"
+out="$(run_after_bash)"
+silent "a shell command that leaves the file sound says nothing" "$out"
+printf -- '- L3. appended again, bare.\n' >> "$HOME_FIX/LESSONS.md"
+out="$(run_after_bash)"
+says "the next shell append that breaks it is refused again" "$out" "L3"
+
+# An edit made through the tools is checked where it is made, and a shell command straight after it
+# must not report the same change a second time.
+printf '# Lessons\n\n## Proof over green\n\n- L4. bare, written by Edit.\n' > "$HOME_FIX/LESSONS.md"
+out="$(run_hook Edit "$HOME_FIX/LESSONS.md")"
+says "control: the Edit of that fault is refused" "$out" '"decision":"block"'
+out="$(run_after_bash)"
+silent "and the shell command after it does not report it again" "$out"
+
+# A config root with no lessons file has nothing to check.
+EMPTY_HOME="$WORK/emptyhome"; mkdir -p "$EMPTY_HOME"
+out="$(bash_payload | CLAUDE_HOME="$EMPTY_HOME" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" --after-bash 2>&1)"
+silent "with no lessons file the Bash mode says nothing" "$out"
+
+# The Bash mode is only real if the platform calls it (L1004): the shipped settings must register
+# it on the Bash matcher of PostToolUse.
+python3 - "$REPO/payload/settings.hooks.json" <<'PY' && check "settings register the Bash mode on PostToolUse Bash" ok || check "settings register the Bash mode on PostToolUse Bash" "not registered"
+import json, sys
+d = json.load(open(sys.argv[1]))
+for group in d.get("hooks", {}).get("PostToolUse", []):
+    if group.get("matcher") == "Bash":
+        for h in group.get("hooks", []):
+            if h.get("command", "").endswith("hooks/lesson-entry-check.sh --after-bash"):
+                sys.exit(0)
+sys.exit(1)
+PY
+
 echo "lesson entry check: it never goes quiet on its own failure"
 
 # No clone of the tool to ask means nothing was checked, which is not the same as nothing being
