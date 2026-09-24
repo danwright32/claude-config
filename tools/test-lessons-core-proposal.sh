@@ -36,7 +36,8 @@ run(){ python3 "$TOOL" --index-dir "$IDX" --counts "$WORK/counts-a.txt" --ages "
   --expect-hosts mac-a,mac-b --out-tsv "$WORK/out.tsv" --out-html "$WORK/out.html" "$@" 2>&1; }
 
 # A budget with room for the mandatory four plus two ranked ones, with a band of one either side.
-out="$(run --budget 440 --band 1)"; rc=$?
+# Probation asked for explicitly: it is off by default since 2026-09-24, and still an outcome.
+out="$(run --budget 440 --band 1 --probation-days 30)"; rc=$?
 check_rc "the proposal is written" 0 "$rc"
 check "an operate lesson is core whatever its rank" "core-unreviewable" "$(dec "$WORK/out.tsv" L1)"
 check "a design lesson is core whatever its rank" "core-unreviewable" "$(dec "$WORK/out.tsv" L2)"
