@@ -115,8 +115,8 @@ check "the refusal says why" "COULD NOT SEARCH" "$out"
 # 6. Both skills run the search BEFORE they invoke grilling, and quote the date.
 for skill in "$LITE" "$COUNCIL"; do
   name="$(basename "$(dirname "$skill")")"
-  helper_line="$(grep -n 'find-prior-verdicts.sh' "$skill" | head -1 | cut -d: -f1)"
-  grill_line="$(grep -n 'invoke the `grilling` skill' "$skill" | head -1 | cut -d: -f1)"
+  helper_line="$(grep -n -m1 'find-prior-verdicts.sh' "$skill" | cut -d: -f1)"
+  grill_line="$(grep -n -m1 'invoke the `grilling` skill' "$skill" | cut -d: -f1)"
   if [[ -n "$helper_line" && -n "$grill_line" && "$helper_line" -lt "$grill_line" ]]; then
     pass=$((pass + 1))
   else

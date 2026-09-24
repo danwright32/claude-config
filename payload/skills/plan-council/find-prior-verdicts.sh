@@ -70,7 +70,9 @@ done < <(git -C "$top" ls-files -z -- '*.md' '*.MD')
 
 line_date() { # line_date <file> <line>: the date the line was committed, or "uncommitted"
   local sha
-  sha="$(git -C "$top" blame -L "$2,$2" --porcelain -- "$1" 2>/dev/null | head -1 | cut -d' ' -f1)"
+  # Read whole, then cut: a `| head -1` would close the pipe under pipefail (L183).
+  sha="$(git -C "$top" blame -L "$2,$2" --porcelain -- "$1" 2>/dev/null)"
+  sha="${sha%%$'\n'*}"; sha="${sha%% *}"
   case "$sha" in
     ''|0000000*) echo "uncommitted" ;;
     *) git -C "$top" show -s --format=%as "$sha" 2>/dev/null || echo "undated" ;;
@@ -112,7 +114,7 @@ for term in "${terms[@]}"; do
       found=$((found + 1))
     done <<<"$issues"
   else
-    echo "  COULD NOT SEARCH issues in $repo: $(printf '%s' "$issues" | head -1)"
+    echo "  COULD NOT SEARCH issues in $repo: ${issues%%$'\n'*}"
     could_not=1
   fi
 done
