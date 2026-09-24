@@ -57,8 +57,11 @@ LESSONS="$CLAUDE_HOME/LESSONS.md"
 STAMP="$CLAUDE_HOME/state/lesson-entry-check.stamp"
 
 # The file's identity as the stamp records it: size, mtime and inode, or nothing if it is absent.
+# GNU's form is tried FIRST: on Linux `stat -f` is not a format flag but "report on the filesystem",
+# which succeeds with free space figures that change between calls, so the stamp never matched and
+# every shell command re-reported the same fault (seen in CI). BSD stat refuses `-c` outright.
 lessons_stamp(){
-  stat -f '%z %m %i' "$LESSONS" 2>/dev/null || stat -c '%s %Y %i' "$LESSONS" 2>/dev/null
+  stat -c '%s %Y %i' "$LESSONS" 2>/dev/null || stat -f '%z %m %i' "$LESSONS" 2>/dev/null
 }
 # Written after a check, never before it, so a check that dies part way leaves the change pending.
 record_stamp(){
