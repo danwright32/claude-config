@@ -224,6 +224,32 @@ fi
 
 printf '  %-42s %8s bytes read at the start of every session, in every project\n' "TOTAL" "$total"
 
+# THE TOTAL, reported and never refused (claude-config#546). Claude Code shows its large-memory-files
+# banner for the SUM of the loaded instruction files as well as for any one of them: the larger of
+# 120,000 and the per file figure, which is 150,000 on a 1M window (read out of the 2.1.281 binary;
+# see the header). This set measured 144,957 on 2026-09-23 and the lessons index grows about 1,100
+# characters a day, so it crosses that within days and stays over it. A refusal was considered and
+# declined by Dan on 2026-09-23: the banner drops no rule, and this suite also runs inside every
+# pull, so a refusal here would stall the config syncing between the Macs for a warning. So it is a
+# SUITE-NOTE, which the runner prints for a passing suite and the pull carries into its summary,
+# stating the total, the room left or the amount over, and the days that growth rate leaves.
+# The project's own CLAUDE.md is loaded as well and counts toward the same sum, so the room shown
+# is an upper bound.
+TOTAL_WARN=150000
+TOTAL_WARN_SMALL_WINDOW=120000
+DAILY_GROWTH=1100
+total_note() {  # $1 = total bytes -> the one line note
+  local t="$1"
+  if [ "$t" -gt "$TOTAL_WARN" ]; then
+    printf 'the rule files every session loads total %s characters, %s past the %s at which Claude Code shows its size warning on a 1M window (%s on a 200k one). Nothing is dropped; each session carries the warning and the context it costs.' \
+      "$t" "$(( t - TOTAL_WARN ))" "$TOTAL_WARN" "$TOTAL_WARN_SMALL_WINDOW"
+  else
+    printf 'the rule files every session loads total %s characters, %s under the %s at which Claude Code shows its size warning on a 1M window, about %s days at %s a day (already past the %s of a 200k window).' \
+      "$t" "$(( TOTAL_WARN - t ))" "$TOTAL_WARN" "$(( (TOTAL_WARN - t) / DAILY_GROWTH ))" "$DAILY_GROWTH" "$TOTAL_WARN_SMALL_WINDOW"
+  fi
+}
+printf 'SUITE-NOTE %s\n' "$(total_note "$total")"
+
 echo "rule file budget: no single index entry is longer than the cap"
 
 # The per-lesson cost is what actually decides the total, because the number of lessons only
@@ -322,6 +348,9 @@ fi
 if [ 150830 -gt "$BUDGET" ]; then ok; else
   bad "the index size that actually produced the platform warning, 150830, sits inside the budget, so the budget cannot be what catches it"
 fi
+# The total note, both readings, so neither can quietly stop saying what it measured (L151).
+case "$(total_note 140000)" in *"10000 under the 150000"*"about 9 days"*) ok ;; *) bad "the total note under the warning does not give the room left and the days: $(total_note 140000)" ;; esac
+case "$(total_note 151000)" in *"1000 past the 150000"*"Nothing is dropped"*) ok ;; *) bad "the total note past the warning does not say how far past, or that nothing is dropped: $(total_note 151000)" ;; esac
 if [ "$ENTRY_CAP" -lt 550 ]; then ok; else
   bad "the entry cap is at or above the longest rule sentence in the file, so it cannot shorten anything"
 fi
