@@ -173,6 +173,22 @@ A hand edit to one is overwritten on the next run, and a file whose section has 
 removed is deleted, which is the point: a list kept by hand next to the thing it mirrors drifts, and
 the drift is silent.
 
+### The lessons core (built, not yet switched on)
+
+A subset of the index can load in place of the whole library (claude-config#564). The list is
+`LESSONS-CORE.txt`, set only with `./claude-sync core-set <file of lesson numbers>`, which checks
+every number is a lesson, measures the core in characters and refuses past 20,000 unless
+`SYNC_CORE_OVER_CAP=1` (that is Dan's decision), and writes a `# count N` line so the other Mac can
+tell a deliberate change from a damaged list. From it the sync renders `LESSONS-CORE-<section>.md`,
+the same lines as the library, and CLAUDE.md imports those instead; the library files are still
+written and still travel, so `claude-sync lesson` and every PR lessons review keep all of them.
+
+With no list nothing changes, which is how it ships. A list that is empty, unreadable, names a
+lesson that does not exist, or holds fewer lessons than it declares (or, undeclared, under half the
+last one applied) loads the whole library instead, records why in `~/.claude/.lessons-core-state`,
+and `lessons-core-notice.sh` says so once in each session. Switching it on is claude-config#566,
+after the measurement in #562.
+
 ## When a merge cannot be done
 
 The other Mac's version is applied and yours is kept beside it as `<file>.conflict-<host>`, with one
