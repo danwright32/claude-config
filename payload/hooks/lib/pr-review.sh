@@ -188,8 +188,8 @@ do_start() {
   note="diff plus the full text of $in of $((in + out)) changed files"
   local model="${AI_REVIEW_MODEL:-sonnet}" started
   started="$(date +%s)"
-  printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\n' \
-    "$repo_label" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" > "$pending" 2>/dev/null \
+  printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\ndir=%s\n' \
+    "$repo_label" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$top" > "$pending" 2>/dev/null \
     || { rm -f "$diff_file"; record could-not-run "Could not write $pending."; echo "The lessons review could not run: could not write its state."; return 0; }
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
   # Detached: no standard streams held, not waited for, not in this shell's job table.

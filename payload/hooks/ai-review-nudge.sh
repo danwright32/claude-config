@@ -130,7 +130,7 @@ elapsed_text() {   # $1 = seconds -> "1m 42s" or "42s"
 }
 
 read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m_status m_deadline m_kind m_findings
-  m_repo=""; m_branch=""; m_sha=""; m_started=""; m_finished=""; m_status=""; m_deadline=""; m_kind=""; m_findings=""
+  m_repo=""; m_branch=""; m_sha=""; m_started=""; m_finished=""; m_status=""; m_deadline=""; m_kind=""; m_findings=""; m_dir=""
   local line
   while IFS= read -r line; do
     [ -n "$line" ] || break
@@ -144,6 +144,7 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
       deadline=*) m_deadline="${line#deadline=}" ;;
       kind=*) m_kind="${line#kind=}" ;;
       findings=*) m_findings="${line#findings=}" ;;
+      dir=*) m_dir="${line#dir=}" ;;
     esac
   done < "$1"
 }
@@ -173,7 +174,7 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
           "$(elapsed_text $((now - m_started)))"
       } > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final" 2>/dev/null
       # A pull request review's outcome is counted in the durable ledger like every other (#562).
-      case "$base" in *-pr-*) ar_pr_ledger "$final" "" ;; esac
+      case "$base" in *-pr-*) ar_pr_ledger "$final" "$m_dir" ;; esac
     fi
     rm -f "$p" 2>/dev/null
     finished=( "$AR_STATE_DIR"/*.txt )

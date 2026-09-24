@@ -263,6 +263,20 @@ check "saying the runner died" "never finished" "$out"
 [ -e "$(final_of "$HEAD_SHA").pending" ] && bad "the abandoned marker is cleared" || ok
 check "an abandoned review is in the outcome ledger" $'\tabandoned\t' "$(cat "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
 
+# 3g2. The nudge's own abandoned conversion records the repository directory as well, from the
+#      pending marker, so both abandoned paths write the same ledger row (found by the review of #571).
+reset_state
+FAKE_CLAUDE_SLEEP=5 prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+check "the pending marker names the repository directory" "dir=$(git -C "$REPO" rev-parse --show-toplevel)" "$(cat "$(final_of "$HEAD_SHA").pending" 2>/dev/null)"
+python3 - "$(final_of "$HEAD_SHA").pending" <<'PYEOF'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+open(p, "w").write(re.sub(r"started=\d+", "started=1000", s))
+PYEOF
+printf '{"session_id":"n9","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
+check "the nudge's abandoned row carries the repository directory" $'\t'"$(git -C "$REPO" rev-parse --show-toplevel)"$'\t' "$(grep -F $'\tabandoned\t' "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
+
 # 3h. could not run: no claude on PATH. A PATH built from every tool but claude, so the case is
 #     produced on a machine that has one installed, which this suite used to report as UNMEASURED.
 reset_state
