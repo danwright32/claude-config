@@ -46,7 +46,8 @@ def kind_of(path):
         with open(path, "rb") as f:
             first = f.readline(200)
     except OSError:
-        return None
+        # Unknown is not "not a script": it could hold a launch, so the caller refuses it (L11).
+        return "unreadable"
     if first.startswith(b"#!") and (b"bash" in first or b"/sh" in first):
         return "shell"
     if first.startswith(b"#!") and b"python" in first:
@@ -105,6 +106,10 @@ def main(argv):
         kind = kind_of(path)
         if kind is None:
             continue
+        if kind == "unreadable":
+            print(f"headless-claude-config: could not read {path}, so whether it launches claude "
+                  "is unknown. Refusing rather than skipping it.", file=sys.stderr)
+            return 2
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
                 lines = f.read().splitlines()

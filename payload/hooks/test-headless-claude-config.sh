@@ -161,6 +161,16 @@ run
 check "a tree with no launches at all is refused, not passed" "$([ "$RC" -eq 3 ] && echo ok || echo "exit $RC")"
 says "and says it found none" "$OUT" "no headless"
 
+# A script that cannot be READ could hold a launch, so it is a refusal, never a silent skip (L11).
+# Extensionless, because such a file is only recognised by opening it to read its first line.
+fresh
+printf 'CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p < p.txt\n' > "$FIX/real.sh"
+printf '#!/usr/bin/env bash\nclaude -p < p.txt\n' > "$FIX/sealed"; chmod 000 "$FIX/sealed"
+run
+chmod 600 "$FIX/sealed"
+check "an unreadable script is refused, not skipped" "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC: $OUT")"
+says "and it is named" "$OUT" "sealed"
+
 echo "headless claude config: the real tree"
 
 OUT="$(python3 "$SCAN" "$REPO/payload" "$REPO/tools" "$REPO/claude-sync" 2>&1)"; RC=$?
