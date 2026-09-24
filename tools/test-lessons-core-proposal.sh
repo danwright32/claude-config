@@ -56,6 +56,22 @@ out="$(run --budget 100 --band 1)"
 check "a core over budget before any ranking is said plainly" "OVER BUDGET" "$out"
 check "and the page says so too" "OVER BUDGET" "$(cat "$WORK/out.html")"
 
+# A SECOND TAGGING PASS (Dan, 2026-09-24: audit the design and operate tags). Where the passes
+# disagree the lesson keeps loading (core, the safe side) and is listed as disputed with both tags,
+# for Dan to settle. L3 is diff in pass one and design in pass two; L2 is design in both.
+printf 'L1\toperate\nL2\tdesign\nL3\tdesign\nL4\tdiff\nL5\tdiff\nL6\tdiff\nL7\tdiff\nL8\tdiff\nEND\n' > "$WORK/tags2.txt"
+out="$(run --budget 440 --band 1 --second-tags "$WORK/tags2.txt")"
+check "a lesson the passes disagree on stays in the core" "core-disputed" "$(dec "$WORK/out.tsv" L3)"
+check "one they agree on is decided as before" "core-unreviewable" "$(dec "$WORK/out.tsv" L2)"
+check "the summary counts the disputes" "1 disputed" "$out"
+check "the page lists the disputed lesson with both tags" "diff, then design" "$(cat "$WORK/out.html")"
+
+# Probation off (Dan, 2026-09-24): a young diff lesson is ranked like the rest.
+out="$(run --budget 440 --band 1 --probation-days 0)"
+check "with probation off no lesson is on probation" "0 on probation" "$out"
+l8="$(dec "$WORK/out.tsv" L8)"
+case "$l8" in core-ranked|undecided|library) pass=$((pass + 1)) ;; *) fail=$((fail + 1)); echo "FAIL: with probation off the young lesson is ranked (got '$l8')" ;; esac
+
 # A lesson with no tag is refused, never defaulted, since the tag decides whether it loads.
 printf 'L1\toperate\nEND\n' > "$WORK/tags-short.txt"
 out="$(python3 "$TOOL" --index-dir "$IDX" --counts "$WORK/counts-a.txt" --ages "$WORK/ages.txt" --tags "$WORK/tags-short.txt" --out-tsv "$WORK/o.tsv" --out-html "$WORK/o.html" 2>&1)"; rc=$?

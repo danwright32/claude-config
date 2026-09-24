@@ -7,9 +7,11 @@
 
 Inputs are the outputs of tools/lesson-citations.py (one per Mac), tools/lesson-ages.py and
 tools/tag-lessons.py. Decisions, in order, each its own name:
+  core-disputed      two tagging passes disagree (--second-tags): kept loading, the safe side, and
+                     listed with both tags for Dan to settle;
   core-unreviewable  tagged design or operate: no PR review can see it, so it stays whatever its rank;
-  core-probation     younger than --probation-days (30, Dan to confirm): new lessons prove themselves
-                     in the core first;
+  core-probation     younger than --probation-days (0 by default: Dan dropped probation on
+                     2026-09-24, #563);
   core-ranked        a diff lesson ranked high enough to fit what the budget has left;
   undecided          a diff lesson within --band places of the cut, where the counts are noise (the
                      2026-09-24 ranking had 41 lessons in the noise band at ranks 130 to 170);
@@ -61,10 +63,14 @@ def main(argv):
     ap.add_argument("--counts", action="append", required=True)
     ap.add_argument("--ages", required=True)
     ap.add_argument("--tags", required=True)
+    ap.add_argument("--second-tags", default="")
     ap.add_argument("--index-dir", default="payload")
     ap.add_argument("--budget", type=int, default=20000)
     ap.add_argument("--band", type=int, default=20)
-    ap.add_argument("--probation-days", type=int, default=30)
+    # 0 by default since Dan's decision of 2026-09-24 (#563): probation held about a month of intake,
+    # 263 lessons and 39k chars on the first proposal, and grew with the pace of new lessons, while
+    # the PR lessons review already enforces a new lesson a diff can show.
+    ap.add_argument("--probation-days", type=int, default=0)
     ap.add_argument("--expect-hosts", default="Daniels-MacBook-Pro-2,Dans-MacBook-Pro")
     ap.add_argument("--out-tsv", required=True)
     ap.add_argument("--out-html", required=True)
@@ -75,6 +81,7 @@ def main(argv):
         print(f"NO LESSONS in {a.index_dir}")
         return 1
     tags = {n: v[0] for n, v in read_tsv(a.tags, 2).items()}
+    tags2 = {n: v[0] for n, v in read_tsv(a.second_tags, 2).items()} if a.second_tags else {}
     ages = {n: int(v[1]) for n, v in read_tsv(a.ages, 3).items()}
     cites, hosts, window = {}, [], 60
     for path in a.counts:
@@ -103,7 +110,10 @@ def main(argv):
         exposure = max(1, min(ages[n], window))
         rate = (s + r) * 30.0 / exposure
         rows[n] = {"tag": tags[n], "age": ages[n], "sessions": s, "reviews": r, "rate": rate}
-        if tags[n] in ("design", "operate"):
+        if tags2 and n in tags2 and tags2[n] != tags[n]:
+            rows[n]["tag"] = f"{tags[n]}, then {tags2[n]}"
+            rows[n]["decision"] = "core-disputed"
+        elif tags[n] in ("design", "operate"):
             rows[n]["decision"] = "core-unreviewable"
         elif ages[n] < a.probation_days:
             rows[n]["decision"] = "core-probation"
@@ -130,7 +140,7 @@ def main(argv):
 
     def total(*names):
         return sum(size[n] for n in rows if rows[n]["decision"] in names)
-    core_size = total("core-unreviewable", "core-probation", "core-ranked")
+    core_size = total("core-disputed", "core-unreviewable", "core-probation", "core-ranked")
     und_size = total("undecided")
     counts = {}
     for n in rows:
@@ -144,7 +154,8 @@ def main(argv):
             r = rows[n]
             f.write(f"L{n}\t{r['tag']}\t{r['age']}\t{r['sessions']}\t{r['reviews']}\t{r['rate']:.1f}\t{r['decision']}\t{size[n]}\n")
 
-    summary = (f"core size {core_size} chars ({counts.get('core-unreviewable', 0)} unreviewable, "
+    summary = (f"core size {core_size} chars ({counts.get('core-disputed', 0)} disputed, "
+               f"{counts.get('core-unreviewable', 0)} unreviewable, "
                f"{counts.get('core-probation', 0)} on probation, {counts.get('core-ranked', 0)} ranked), "
                f"undecided {counts.get('undecided', 0)} lessons ({und_size} chars), "
                f"library {counts.get('library', 0)} lessons; budget {a.budget}")
@@ -160,8 +171,9 @@ def main(argv):
 
 
 def write_html(path, rows, lines, sections, size, summary, over, mandatory, a, hosts, missing, window):
-    order = ["core-unreviewable", "core-probation", "core-ranked", "undecided", "library"]
+    order = ["core-disputed", "core-unreviewable", "core-probation", "core-ranked", "undecided", "library"]
     names = {
+        "core-disputed": "Settle these: the two tagging passes disagree, so they stay in the core until you do",
         "core-unreviewable": "Core: no PR review can see these",
         "core-probation": f"Core on probation: younger than {a.probation_days} days",
         "core-ranked": "Core by rank",
