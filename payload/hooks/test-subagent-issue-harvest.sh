@@ -418,6 +418,21 @@ grep -q '"status": *"error"' <<< "$got" \
   && check "a silent model is an error, not none" ok \
   || check "a silent model is an error, not none" "spool=$got"
 
+# The DEFAULT launch, the real `claude -p`, switches the global config off (claude-config#538).
+# Every harvest otherwise loads the whole global CLAUDE.md and all twelve lessons index files, which
+# it never reads: measured 64,868 input tokens with them against 29,663 without. Reached through a
+# `claude` on the PATH rather than the seam, because the seam replaces exactly the line under test.
+reset_spool
+CLAUDE_STUB_DIR="$TMPROOT/claude-stub"; mkdir -p "$CLAUDE_STUB_DIR"
+CLAUDE_ENV_SEEN="$TMPROOT/claude-env-seen"; rm -f "$CLAUDE_ENV_SEEN"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nprintf "%%s\\n" "${CLAUDE_CODE_DISABLE_CLAUDE_MDS:-unset}" > "%s"\necho NONE\n' "$CLAUDE_ENV_SEEN" > "$CLAUDE_STUB_DIR/claude"
+chmod +x "$CLAUDE_STUB_DIR/claude"
+( unset CLAUDE_ISSUE_HARVEST_CMD; payload "$REPO" | PATH="$CLAUDE_STUB_DIR:$PATH" bash "$HARVEST" >/dev/null 2>&1 )
+seen="$(cat "$CLAUDE_ENV_SEEN" 2>/dev/null || echo 'claude never ran')"
+[ "$seen" = "1" ] \
+  && check "the default harvest launch switches the global config off" ok \
+  || check "the default harvest launch switches the global config off" "CLAUDE_CODE_DISABLE_CLAUDE_MDS=$seen"
+
 # Recursion guard: the harvest runs a headless Claude, whose own subagents must
 # not harvest in turn.
 reset_spool

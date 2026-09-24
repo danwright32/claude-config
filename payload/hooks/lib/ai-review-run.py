@@ -114,6 +114,7 @@ def main(argv):
             prompt_text = f.read()
         prompt = framework_line(a.repo_dir) + "\n\n" + prompt_text
 
+        # claude-mds-ok: keeps the whole global config for now, until #539 gives it the lessons on purpose.
         cmd = ["env", "-u", "CLAUDECODE", "claude", "-p", prompt, "--model", a.model]
         with open(a.diff_file, "rb") as diff:
             # Its own process group, so the deadline can kill everything claude started and not
