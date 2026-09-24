@@ -140,11 +140,99 @@ ps_add_scope_unreadable() {   # $1 = command
 }
 
 ps_is_git_push() {
-  local cmd="$1" seg
+  local cmd="$1" seg segs
+  # Most commands never mention a push, and this runs before every Bash call, so they leave here
+  # without starting anything.
+  case "$cmd" in *push*) ;; *) return 1 ;; esac
+  # Split where the SHELL would, outside quotes and heredoc bodies (claude-config#532). The old
+  # split cut on every separator in the text, so a push quoted inside an argument (an issue body, a
+  # commit message) started a segment of its own and read as a push. Read whole before walking, so
+  # a split that fails part way is not half trusted: with no reader, or a reader that fails, the
+  # crude split below still runs, because missing a real push ships unjudged work (L42).
+  if segs="$(ps__shell_segments "$cmd")"; then
+    while IFS= read -r -d $'\x1e' seg; do
+      ps__segment_is_push "$seg" && return 0
+    done < <(printf '%s' "$segs")
+    return 1
+  fi
   while IFS= read -r seg; do
     ps__segment_is_push "$seg" && return 0
   done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
   return 1
+}
+
+# The command's segments, each ended by a record separator (0x1e, because a NUL cannot survive the
+# command substitution that captures them), split on && || ; | and newlines only where they are
+# outside quotes and outside a heredoc body. A heredoc body runs from the line after its `<<WORD`
+# to a line that is exactly WORD (after tabs, for `<<-`); a hook sees the command SEGMENTED, where
+# every newline became "; ", so "; " counts as a line break when looking for that closing line. A
+# heredoc whose closing line is never found is not skipped at all, so nothing after it is hidden,
+# and a quote that is never closed fails the whole split, so the caller falls back to the crude one.
+ps__shell_segments() {   # $1 = command
+  command -v python3 >/dev/null 2>&1 || return 1
+  PS_CMD="$1" python3 -c '
+import os, re, sys
+s = os.environ.get("PS_CMD", "")
+n = len(s)
+out, cur, pending = [], [], []
+i, quote = 0, None
+
+def cut():
+    out.append("".join(cur)); cur.clear()
+
+def line_break_at(j):
+    """Length of a line break at j (a newline, or the "; " a newline was flattened to), else 0."""
+    if s.startswith("\n", j): return 1
+    if s.startswith("; ", j): return 2
+    return 0
+
+while i < n:
+    c = s[i]
+    if quote == "\x27":
+        cur.append(c); i += 1
+        if c == "\x27": quote = None
+        continue
+    if quote == "\"":
+        if c == "\\" and i + 1 < n:
+            cur.append(s[i:i + 2]); i += 2; continue
+        cur.append(c); i += 1
+        if c == "\"": quote = None
+        continue
+    if c == "\\" and i + 1 < n:
+        cur.append(s[i:i + 2]); i += 2; continue
+    if c in "\x27\"":
+        quote = c; cur.append(c); i += 1; continue
+    if s.startswith("<<", i) and not s.startswith("<<<", i):
+        m = re.match(r"<<(-?)[ \t]*(?:\x27([^\x27]*)\x27|\"([^\"]*)\"|\\?([A-Za-z0-9_]+))", s[i:])
+        if m:
+            word = m.group(2) if m.group(2) is not None else m.group(3) if m.group(3) is not None else m.group(4)
+            pending.append((word, m.group(1) == "-"))
+            cur.append(m.group(0)); i += len(m.group(0)); continue
+    lb = line_break_at(i)
+    if lb and pending:
+        # The body starts on the next line. Find the closing line of each pending heredoc in turn.
+        j = i
+        for word, strip_tabs in pending:
+            tabs = "\t*" if strip_tabs else ""
+            m = re.compile(r"(?:\n|; )" + tabs + re.escape(word) + r"(?=\n|;|$)").search(s, j)
+            if not m:
+                j = None; break
+            j = m.end()
+        pending.clear()
+        if j is not None:
+            cut(); i = j; continue
+    if s.startswith("&&", i) or s.startswith("||", i):
+        cut(); i += 2; continue
+    if c in ";|\n":
+        cut(); i += 1; continue
+    cur.append(c); i += 1
+if quote is not None:
+    # A quote never closed means this reading of the command is not trustworthy, and the shell would
+    # not run it as written either. Say so, and let the caller use the split that fires the gate.
+    sys.exit(3)
+cut()
+sys.stdout.write("".join(seg + "\x1e" for seg in out))
+' 2>/dev/null
 }
 
 ps__segment_is_push() {
@@ -218,12 +306,25 @@ ps__segment_is_push() {
 # prefer a directory named IN the command and fall back to the cwd.
 #
 # Echoes the directory, or nothing when neither is a work tree.
+#
+# A directory the command NAMES but that cannot be used (missing, not a repository, a variable
+# this cannot expand) is REFUSED with exit 2 and a sentence on stderr, never replaced by the
+# session directory (claude-config#532). The fall through used to make `cd ~/repo` judge the
+# SESSION's repository with full confidence, because the tokenizer does not expand a tilde: a push
+# from one project was refused over another project's docs. "No directory was named" and "one was
+# named and could not be read" need different answers, and only the first is the session's
+# (L11, L75). A relative path is relative to the session directory, as the shell running the
+# command would read it.
 ps_repo_dir() {
-  local cmd="$1" cwd="${2:-}" cand=""
+  local cmd="$1" cwd="${2:-}" cand="" named=""
 
   # `git -C <path> … push`
   cand="$(printf '%s' "$cmd" | sed -nE 's@.*(^|[[:space:];&|])(rtk[[:space:]]+)?git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*@\3@p' | awk 'NR <= 1')"
-  if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi
+  if [ -n "$cand" ]; then
+    named="$(ps__named_path "$cand" "$cwd")"
+    if ps__is_worktree "$named"; then printf '%s' "$named"; return 0; fi
+    ps__refuse_named "git -C $cand" "$named" "$cwd"; return 2
+  fi
 
   # `cd <path> && … git push`, and the same cd inside a subshell, a brace group or a command
   # substitution: `(cd <path> && git push)`. The cd used to be found by a pattern wanting
@@ -231,10 +332,32 @@ ps_repo_dir() {
   # directory and a gate judged, and refused, a repository the command never touched
   # (claude-config#439, L11).
   cand="$(ps_cd_target "$cmd")"
-  if [ -n "$cand" ] && ps__is_worktree "$cand"; then printf '%s' "$cand"; return 0; fi
+  if [ -n "$cand" ]; then
+    named="$(ps__named_path "$cand" "$cwd")"
+    if ps__is_worktree "$named"; then printf '%s' "$named"; return 0; fi
+    ps__refuse_named "cd $cand" "$named" "$cwd"; return 2
+  fi
 
   if [ -n "$cwd" ] && ps__is_worktree "$cwd"; then printf '%s' "$cwd"; return 0; fi
   return 1
+}
+
+# A path as the command's own shell would read it: a leading ~ or ~user expanded, and a relative
+# path taken from the session directory rather than from wherever the hook happens to run.
+ps__named_path() {   # $1 = path as written  $2 = session directory
+  local p="$1" cwd="${2:-}"
+  case "$p" in
+    "~"|"~/"*) p="$HOME${p#\~}" ;;
+    "~"*) p="$(PS_P="$p" python3 -c 'import os; print(os.path.expanduser(os.environ["PS_P"]), end="")' 2>/dev/null || printf '%s' "$p")" ;;
+  esac
+  case "$p" in
+    /*) printf '%s' "$p" ;;
+    *) if [ -n "$cwd" ]; then printf '%s/%s' "${cwd%/}" "$p"; else printf '%s' "$p"; fi ;;
+  esac
+}
+
+ps__refuse_named() {   # $1 = what the command said  $2 = where that led  $3 = session directory
+  echo "push-scope: the command moves to a directory with \`$1\`, and this could not resolve that to a git work tree (it led to $2), so nothing was judged rather than judging ${3:-the session directory} in its place (claude-config#532)." >&2
 }
 
 ps__is_worktree() {
@@ -268,7 +391,10 @@ while True:
         break
     if want_arg:
         if tok not in OPENERS and tok not in (")", "}"):
-            print(tok, end="")
+            # A leading ~ or ~user is expanded as the shell would (claude-config#532): unexpanded,
+            # it is never a directory, and the caller used to fall back to the SESSION repository.
+            # Only the tilde: a variable is not something a hook should evaluate.
+            print(os.path.expanduser(tok) if tok.startswith("~") else tok, end="")
         break
     if at_start and tok == "cd":
         want_arg = True
