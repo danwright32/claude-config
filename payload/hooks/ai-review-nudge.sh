@@ -34,8 +34,19 @@
 # died without writing, is reported once as not finished and rewritten as a finished file saying
 # so, so it stops being pending and every session learns of it exactly once.
 #
-# Housekeeping, only on the full path: finished files older than 14 days are removed. They are
-# records of a push, not data anybody restores from.
+# CAPPED (claude-config#560). What this prints reaches the session as additionalContext, which the
+# platform cuts at 10,000 characters with nothing said, so a long review arrived as its first part
+# and read as the whole (L351). Each review prints at most NUDGE_LINES lines of NUDGE_CHARS through
+# ar_capped_body, which ends by naming how many were left out and the file holding them all, and
+# once NUDGE_BUDGET characters have been printed the rest wait, unshown, for the next prompt.
+#
+# The lessons review of a whole branch (lib/pr-review.sh, kind=pr) is shown here too, under its own
+# heading, and marked DELIVERED (<file>.delivered) once shown, which is what lets the merge gate
+# allow the merge without refusing once to deliver the findings itself.
+#
+# Housekeeping, only on the full path: finished files older than 14 days are removed, with their
+# delivery stamps. They are records of a push, not data anybody restores from. citations.tsv, the
+# ledger of which lessons reviews cite, is not a .txt and is never swept.
 #
 # Environment: AI_REVIEW_STATE_DIR and AI_REVIEW_DEADLINE_SECONDS, shared with the push hook through
 # lib/ai-review-common.sh.
@@ -106,6 +117,11 @@ was_shown() {    # $1 = file name
 }
 
 now="$(date +%s)"
+NUDGE_LINES=20
+NUDGE_CHARS=300
+NUDGE_BUDGET=8000
+printed=0
+held=0
 
 elapsed_text() {   # $1 = seconds -> "1m 42s" or "42s"
   local s="$1"
@@ -113,8 +129,8 @@ elapsed_text() {   # $1 = seconds -> "1m 42s" or "42s"
   if [ "$s" -ge 60 ]; then printf '%dm %02ds' "$((s / 60))" "$((s % 60))"; else printf '%ds' "$s"; fi
 }
 
-read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m_status m_deadline
-  m_repo=""; m_branch=""; m_sha=""; m_started=""; m_finished=""; m_status=""; m_deadline=""
+read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m_status m_deadline m_kind m_findings
+  m_repo=""; m_branch=""; m_sha=""; m_started=""; m_finished=""; m_status=""; m_deadline=""; m_kind=""; m_findings=""
   local line
   while IFS= read -r line; do
     [ -n "$line" ] || break
@@ -126,6 +142,8 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
       finished=*) m_finished="${line#finished=}" ;;
       status=*) m_status="${line#status=}" ;;
       deadline=*) m_deadline="${line#deadline=}" ;;
+      kind=*) m_kind="${line#kind=}" ;;
+      findings=*) m_findings="${line#findings=}" ;;
     esac
   done < "$1"
 }
@@ -164,10 +182,24 @@ done
   base="$(basename "$f")"
   case "$base" in "$key"-*) ;; *) continue ;; esac
   was_shown "$base" && continue
+  if [ "$printed" -ge "$NUDGE_BUDGET" ]; then held=$((held + 1)); continue; fi
   read_meta "$f"
   short="${m_sha:0:7}"
   took="$(elapsed_text $((${m_finished:-0} - ${m_started:-0})))"
-  body="$(awk 'found { print; next } /^$/ { found = 1 }' "$f")"
+  body="$(ar_capped_body "$f" "$NUDGE_LINES" "$NUDGE_CHARS")"
+  printed=$((printed + ${#body} + 300))
+  if [ "$m_kind" = "pr" ]; then
+    case "$m_status" in
+      ok) printf 'Lessons review of the whole branch %s %s at %s, finished in %s with %s findings (the full review is in %s). The merge waits until these have been read: check each against the code before acting on it.\n' \
+            "${m_repo:-this repository}" "${m_branch:-?}" "$short" "$took" "${m_findings:-?}" "$f"
+          printf '%s\n' "$body" ;;
+      *) printf 'Lessons review of the whole branch %s %s at %s ended as %s, so the merge will be refused until it is run again:\n%s\n' \
+            "${m_repo:-this repository}" "${m_branch:-?}" "$short" "${m_status:-no status}" "$body" ;;
+    esac
+    touch "$f.delivered" 2>/dev/null || true
+    mark_shown "$base"
+    continue
+  fi
   case "$m_status" in
     ok)
       printf 'AI review of %s, branch %s at %s (advisory, ran %s in the background after the push). Findings are one reviewer'"'"'s opinion: check each against the code before acting on it.\n' \
@@ -196,6 +228,7 @@ done
 done
 
 # Housekeeping and the fast path stamp: this session has now seen everything written so far.
-find "$AR_STATE_DIR" -maxdepth 1 -name '*.txt' -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+[ "$held" -gt 0 ] && printf '%s more finished review(s) are not shown, to stay under the hook output cap; they will be shown on the next prompt.\n' "$held"
+find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
 [ -n "$LIST" ] && { touch "$LIST" 2>/dev/null || true; }
 exit 0

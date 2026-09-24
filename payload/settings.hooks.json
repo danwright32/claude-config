@@ -81,6 +81,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/pr-review-gate.sh",
+            "timeout": 60,
+            "statusMessage": "Checking the lessons review of the branch before merging"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-changelog-tag.sh",
             "if": "Bash(gh pr merge*)",
             "timeout": 30,
@@ -159,6 +165,12 @@
             "command": "__CLAUDE_HOME__/hooks/pr-merge-quiz.sh",
             "timeout": 15,
             "statusMessage": "Checking for a merged PR to quiz on"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/ai-review-on-pr.sh",
+            "timeout": 30,
+            "statusMessage": "Starting the lessons review of the whole branch"
           },
           {
             "type": "command",
