@@ -22,10 +22,16 @@
 #                   checking a file's last line against what reached the session: once at
 #                   150,888 chars (overture#3640, 2026-09-07) and once at 150,830 here.
 #                   So the warning costs attention and context, and loses no rule.
-#   the LIMIT     is NOT a constant. The binary computes it as a fraction of the model's
-#                   context window with a floor under it, so a smaller-context model gets a
-#                   smaller limit than the 150,000 seen here. Anything recorded below is
-#                   therefore the value observed on THIS setup, not a platform guarantee.
+#   the LIMIT     is NOT a constant, and there are TWO of them. Read out of the 2.1.281
+#                   binary (claude-config#541): per file, the context window times 0.05
+#                   times a model factor of 3 or 4, floor 40,000; and a TOTAL, the larger of
+#                   120,000 and the per file figure, over the loaded files not already over
+#                   the per file one. The memory index counts toward neither. The 150,000
+#                   seen here is the per file figure for a 1M window; a 200,000 window gets
+#                   40,000 per file and a 120,000 total. This suite gates each file against
+#                   the per file figure only, and the TOTAL is gated by nothing: the loaded
+#                   set was 144,957 on 2026-09-23. Neither banner drops a rule: a nonce probe
+#                   that day loaded 250,000 and every code at the start, middle and end came.
 #   the 4 MiB     documented skip is left here as prose and gated by nothing. It is real as
 #                   far as anyone knows, but it is unmeasured, and the budget below makes it
 #                   unreachable. A guard that can never fire reads as protection while
@@ -83,8 +89,8 @@ fail=0
 ok() { pass=$((pass + 1)); }
 bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
 
-# The measured warning threshold, in characters, on this setup. See the header: it is not a
-# platform constant and it is not a cliff. Re-measure by growing a memory file past it and
+# The measured PER FILE warning threshold, in characters, on this setup (a 1M context window). See
+# the header: it is not a platform constant, it is not a cliff, and the banner has a total as well. Re-measure by growing a memory file past it and
 # reading the banner, never by reading the docs page.
 WARN_LIMIT=150000
 
@@ -99,7 +105,8 @@ WARN_LIMIT=150000
 # one: as high as the gap below still allows.
 #
 # The deadline that number was about is GONE since claude-config#473, because the index is now one
-# file per section of LESSONS.md and both limits are per file: the largest section measured 27,713
+# file per section of LESSONS.md and this budget and the per file banner are both per file (the
+# banner's separate total is in the header): the largest section measured 27,713
 # on 2026-09-19, a fifth of the budget, and the whole index would have to grow fivefold before the
 # biggest section reached it. The ceiling stays here because it is what stops any ONE file, index
 # or not, becoming the thing the banner reports.
