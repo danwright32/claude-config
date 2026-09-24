@@ -508,13 +508,27 @@ reason: a number in a file that is rewritten in the same run is not something to
 
 ### One index file per section rather than one file for all of them
 
-Adopted for #473. Both limits that govern a file loaded into every session are PER FILE: the 140,000
-byte budget in `hooks/test-rule-file-budget.sh` and the platform's own large-memory-files banner at
-150,000 characters. The single index measured 100,899 characters over 702 lessons on 2026-09-19 and
+Adopted for #473, on the belief that both limits governing a file loaded into every session are
+PER FILE: the 140,000 byte budget in `hooks/test-rule-file-budget.sh` and the platform's own
+large-memory-files banner at 150,000 characters. That was half right, corrected by #541 below the
+next paragraph. The single index measured 100,899 characters over 702 lessons on 2026-09-19 and
 was growing about 1,130 a day, so it was roughly a month from the budget. Rendering one file per
 section of `LESSONS.md` put the largest at 27,713, a fifth of the budget, and every file is still
 imported by `CLAUDE.md`, so every lesson still loads into every session. It saves no tokens, which
 is the point: the file size problem is separated from the token cost question, which is #474.
+
+**The banner also has a TOTAL, and neither figure is a constant** (#541, read out of the 2.1.281
+binary on 2026-09-23). The per file limit is the model's context window times 0.05 times a model
+factor of 3 or 4, with a floor of 40,000; the total is the larger of 120,000 and that per file limit,
+summed over the loaded instruction files that are not already over the per file limit on their own.
+The memory index and a few other named files count toward neither. The 150,000 seen here is the per
+file figure for a 1M window; a 200,000 window model gets the 40,000 floor and a 120,000 total. So
+splitting the index into sections got every file under the per file banner and did nothing for the
+total: `CLAUDE.md`, `RTK.md` and the twelve index files came to 144,957 characters on 2026-09-23,
+already over the 120,000 floor and within about 5,000 of the 1M window's 150,000. What the banner
+does NOT do is drop anything. A nonce probe on 2026-09-23 loaded 250,000 characters of instruction
+files and every code planted at the start, middle and end arrived, so crossing either figure costs a
+warning on screen and the context it takes, never a rule.
 
 Three things this had to get right. The set of files is a LIST that changes whenever a section is
 added, renamed or removed, so `CLAUDE.md` gets its import block generated from the same list rather
@@ -1058,9 +1072,20 @@ it is not. And the `InstructionsLoaded` hook is the only honest way to tell the 
 reply missing the token cannot distinguish a rule that never loaded from one that loaded and was
 disregarded.
 
-The lessons sections are therefore a candidate for this, with the caveat above about scope: a rule
+The lessons sections looked like a candidate for this, with the caveat above about scope: a rule
 keyed on `**/*.tsx` loads the UI lessons in every project, which is what is wanted, and a rule
 cannot be narrowed to one checkout.
+
+**Moving the lessons to path scoped rules was planned and REJECTED on 2026-09-23** (the plan-lite
+red team and lessons audit behind milestone 16, recorded by #541 so nobody rebuilds it). Three more
+facts decided it, measured on 2.1.281. A path scoped rule arms only on the Read tool: `cat` through
+Bash, Grep, and a Write of a new file never arm it, and Edit does only because it reads the file
+first. `InstructionsLoaded` carries no `agent_id`, so a hook cannot tell which agent a rule reached.
+And the saving was not there: coding sessions would still have loaded 81 to 94 percent of the
+lessons, while sessions driven through Bash or an MCP server, which open files without the Read
+tool, would have lost the lessons entirely. Interactive sessions therefore keep every lesson, and the saving is taken where nothing
+reads them: the headless runs hooks start, which switch the global config off or say why they keep
+it, enforced by `hooks/test-headless-claude-config.sh` (#538).
 
 ## Things known to be wrong and left that way
 

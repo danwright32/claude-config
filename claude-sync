@@ -1812,11 +1812,13 @@ lesson_publish_faults(){   # $1 = tree to inspect -> the sentence, or nothing
 #
 # ---- ONE FILE PER SECTION (claude-config#473) ----
 # It was ONE file, LESSONS-INDEX.md, and on 2026-09-19 that file was 100,899 characters over 702
-# lessons, growing about 1,130 a day. The budget in hooks/test-rule-file-budget.sh is 140,000 and
-# the platform's own large-memory-files banner is at 150,000, and BOTH are per file, so the
-# deadline was about a month away. The index is now rendered as one file per section of LESSONS.md,
+# lessons, growing about 1,130 a day. The budget in hooks/test-rule-file-budget.sh is 140,000 per
+# file and the platform's own large-memory-files banner is at 150,000 per file on a 1M window, so
+# the deadline was about a month away. The banner ALSO has a total over all loaded instruction files
+# (the larger of 120,000 and the per file figure, claude-config#541), which splitting does not
+# help; the full rule and what it does not do are in the header of test-rule-file-budget.sh. The index is now rendered as one file per section of LESSONS.md,
 # each imported by CLAUDE.md, so every lesson still loads into every session and no file is
-# anywhere near either limit. It saves no tokens, which is the point: it separates the file size
+# anywhere near either per file limit. It saves no tokens, which is the point: it separates the file size
 # problem from the token cost question, which is tracked on its own.
 #
 # The single file was RETIRED rather than kept beside the sections. Kept, it would have been a
