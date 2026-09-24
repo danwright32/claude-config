@@ -110,7 +110,9 @@ def main(argv):
         exposure = max(1, min(ages[n], window))
         rate = (s + r) * 30.0 / exposure
         rows[n] = {"tag": tags[n], "age": ages[n], "sessions": s, "reviews": r, "rate": rate}
-        if tags2 and n in tags2 and tags2[n] != tags[n]:
+        # A dispute only where the passes disagree about REVIEWABILITY: design against operate keeps
+        # the lesson loading either way, so there is nothing for Dan to settle.
+        if tags2 and n in tags2 and (tags2[n] == "diff") != (tags[n] == "diff"):
             rows[n]["tag"] = f"{tags[n]}, then {tags2[n]}"
             rows[n]["decision"] = "core-disputed"
         elif tags[n] in ("design", "operate"):

@@ -60,10 +60,13 @@ check "and the page says so too" "OVER BUDGET" "$(cat "$WORK/out.html")"
 # A SECOND TAGGING PASS (Dan, 2026-09-24: audit the design and operate tags). Where the passes
 # disagree the lesson keeps loading (core, the safe side) and is listed as disputed with both tags,
 # for Dan to settle. L3 is diff in pass one and design in pass two; L2 is design in both.
-printf 'L1\toperate\nL2\tdesign\nL3\tdesign\nL4\tdiff\nL5\tdiff\nL6\tdiff\nL7\tdiff\nL8\tdiff\nEND\n' > "$WORK/tags2.txt"
+# L1 is operate then design: both unreviewable, so the decision does not depend on which, and it is
+# NOT a dispute for Dan to settle.
+printf 'L1\tdesign\nL2\tdesign\nL3\tdesign\nL4\tdiff\nL5\tdiff\nL6\tdiff\nL7\tdiff\nL8\tdiff\nEND\n' > "$WORK/tags2.txt"
 out="$(run --budget 440 --band 1 --second-tags "$WORK/tags2.txt")"
 check "a lesson the passes disagree on stays in the core" "core-disputed" "$(dec "$WORK/out.tsv" L3)"
 check "one they agree on is decided as before" "core-unreviewable" "$(dec "$WORK/out.tsv" L2)"
+check "design against operate is not a dispute: both keep it loading" "core-unreviewable" "$(dec "$WORK/out.tsv" L1)"
 check "the summary counts the disputes" "1 disputed" "$out"
 check "the page lists the disputed lesson with both tags" "diff, then design" "$(cat "$WORK/out.html")"
 
