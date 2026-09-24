@@ -19,7 +19,11 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/push-scope-notice.sh"
+# The hooks block is settings.hooks.json in the repository and settings.json once installed, and this
+# suite runs in both places, so it reads whichever sits beside the hooks. Hard coding the repo's name
+# failed every pull, where the suite runs from the installed copy.
 SETTINGS="$DIR/../settings.hooks.json"
+[ -f "$SETTINGS" ] || SETTINGS="$DIR/../settings.json"
 
 pass=0
 fail=0
