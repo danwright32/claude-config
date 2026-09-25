@@ -9405,6 +9405,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   parameter with an alphanumeric id, which is why nothing had shown it.)
   SHORT: A dynamic route segment arrives percent encoded, a query param decoded, so decode a path segment once at the boundary or stored ids never match.
 
+- **L731. `git checkout <commit> -- <path>` rewrites the STAGING AREA as well as the file, so after
+  the file on disk is put back by any other means, the next commit or amend records the OLD
+  version.** Put a file back with `git checkout HEAD -- <path>` (or `git restore --staged
+  --worktree`), never by copying it over, and read the commit's own diff (`git show --stat HEAD`,
+  or the changed file at HEAD) before pushing, because a clean `git diff HEAD` compares the
+  working tree and cannot see what the index is about to commit. The global instructions
+  recommend exactly this command for setting a file aside instead of stashing, which is why the
+  restore half needs saying. (slate#2714, 2026-09-24: to prove a new test failed with an old
+  file, the file was set aside with `git checkout origin/main -- verdict-freshness.ts` and
+  restored by `cp`; `git diff --stat HEAD` printed nothing, the following `git commit --amend`
+  recorded the parked entry the change existed to remove, and only `git status` showing the file
+  modified after the commit revealed it.)
+  SHORT: git checkout <commit> -- <path> rewrites the staging area, so the next commit records the OLD version: put it back with git checkout HEAD.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

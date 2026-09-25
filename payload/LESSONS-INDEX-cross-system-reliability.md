@@ -78,3 +78,4 @@ which is NOT loaded into the session.
 - L493. A file installed at another depth resolves a fixed upward path elsewhere, often the home directory, so find its tree by marker and bound any walk.
 - L1004. A gate enabled by a pointer runs nothing when the pointer names a missing target, so assert the wiring from something that gate does not run.
 - L725. A dynamic route segment arrives percent encoded, a query param decoded, so decode a path segment once at the boundary or stored ids never match.
+- L731. git checkout <commit> -- <path> rewrites the staging area, so the next commit records the OLD version: put it back with git checkout HEAD.
