@@ -9430,6 +9430,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   modified after the commit revealed it.)
   SHORT: git checkout <commit> -- <path> rewrites the staging area, so the next commit records the OLD version: put it back with git checkout HEAD.
 
+- **L1012. A caller of a first come first served queue that joins, looks once and leaves when
+  anyone is ahead goes to the back on every retry, so under steady traffic it never gets a turn.
+  Anything that must eventually run has to hold its place and wait at the front, with a deadline
+  that fails by name.** Each refusal is individually correct (the free lock really is the earlier
+  waiter's), which is why the starvation reads as bad luck rather than a defect.
+  (ovation#542, 2026-09-25: regenerate-xcode-project.sh retried every 15 seconds for 3617 seconds
+  and never got a turn while Overture sessions kept queueing on the shared xcodebuild lock, which
+  blocked a fresh worktree's first push; two other sessions' agents hit it the same day.)
+  SHORT: A waiter that leaves a fair queue whenever anyone is ahead never gets a turn under traffic; hold the place and wait, with a named deadline.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
