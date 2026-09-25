@@ -103,3 +103,4 @@ which is NOT loaded into the session.
 - L1008. A control that records a value is gated on its absence, so unless some surface shows and edits the recorded value, a wrong answer is permanent.
 - L1009. A gate on a collection being non-empty must not hold the only way to create its first member, or empty is a state nothing can leave.
 - L729. Safari ignores a button's own gap, so space an icon or cue from its label on an inner span and check customer controls in WebKit.
+- L732. A browser reload restores unsaved form edits, so a settings form rendered with defaultChecked shows them as stored: turn restoration off.

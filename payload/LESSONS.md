@@ -7182,6 +7182,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   and centring margins onto it.)
   SHORT: Safari ignores a button's own gap, so space an icon or cue from its label on an inner span and check customer controls in WebKit.
 
+- **L732. A browser reload restores form controls the user changed, so a settings form rendered
+  from stored values with `defaultChecked` or `defaultValue` shows an UNSAVED edit as the stored
+  truth after a refresh.** Turn restoration off (`autoComplete="off"` on the form) or key the form
+  on the stored value so a reload remounts it from the server, and verify by ticking a box,
+  reloading without saving, and confirming it comes back as stored. A refresh is exactly what a
+  person does to check that a save took, so this defect answers that check with a false yes.
+  (slate#2718, 2026-09-25: Dan ticked the Regal calls alarm on /admin/alerts, refreshed, saw it
+  still ticked and reported it armed, while the stored value was null and no settings save had
+  been recorded since 2026-09-17; two other alarm boxes showed ticked against stored false.)
+  SHORT: A browser reload restores unsaved form edits, so a settings form rendered with defaultChecked shows them as stored: turn restoration off.
+
 ## External systems
 
 - **L477. A browser error reporter captures every uncaught error on the page, including ones
