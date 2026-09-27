@@ -80,3 +80,4 @@ which is NOT loaded into the session.
 - L725. A dynamic route segment arrives percent encoded, a query param decoded, so decode a path segment once at the boundary or stored ids never match.
 - L731. git checkout <commit> -- <path> rewrites the staging area, so the next commit records the OLD version: put it back with git checkout HEAD.
 - L1012. A waiter that leaves a fair queue whenever anyone is ahead never gets a turn under traffic; hold the place and wait, with a named deadline.
+- L733. Write a cron weekday field as names (MON-FRI), never numbers: platforms disagree on which number is Sunday.

@@ -9440,6 +9440,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   blocked a fresh worktree's first push; two other sessions' agents hit it the same day.)
   SHORT: A waiter that leaves a fair queue whenever anyone is ahead never gets a turn under traffic; hold the place and wait, with a named deadline.
 
+- **L733. Write a cron's weekday field as names (MON-FRI), never numbers, because cron systems
+  disagree on which number is Sunday, so a numeric range means different days on different
+  platforms and nothing fails when it is the wrong ones.** Standard cron and GitHub Actions count
+  0 as Sunday; Cloudflare Workers counts 1 as Sunday, so `1-5` there is Sunday to Thursday. A job
+  whose own code also gates on the weekday no-ops the extra day correctly and simply never runs on
+  the missing one, which looks like a quiet day rather than a fault.
+  (slate#2814, 2026-09-27: the morning time off nudge was scheduled `0 13 * * 1-5` on Cloudflare,
+  never ran on a Friday, and was only noticed when a 76 hour staleness bound paged on a Sunday.)
+  SHORT: Write a cron weekday field as names (MON-FRI), never numbers: platforms disagree on which number is Sunday.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
