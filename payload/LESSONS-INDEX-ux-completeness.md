@@ -104,3 +104,4 @@ which is NOT loaded into the session.
 - L1009. A gate on a collection being non-empty must not hold the only way to create its first member, or empty is a state nothing can leave.
 - L729. Safari ignores a button's own gap, so space an icon or cue from its label on an inner span and check customer controls in WebKit.
 - L732. A browser reload restores unsaved form edits, so a settings form rendered with defaultChecked shows them as stored: turn restoration off.
+- L734. Give every screen, especially a result, its own address that restores it on a fresh load, or refresh, copy link and Back all break.

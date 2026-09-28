@@ -7206,6 +7206,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   been recorded since 2026-09-17; two other alarm boxes showed ticked against stored false.)
   SHORT: A browser reload restores unsaved form edits, so a settings form rendered with defaultChecked shows them as stored: turn restoration off.
 
+- **L734. Every screen a person can land on, and especially a result, gets its own address that
+  restores that screen when loaded fresh.** A page that swaps its content without changing the
+  address loses the result on refresh, hands over the wrong page when the address bar is copied,
+  and turns Back into leaving the app. Verify by reloading and by pasting the address into a new
+  tab on every screen that shows work somebody would want to keep or send.
+  SHORT: Give every screen, especially a result, its own address that restores it on a fresh load, or refresh, copy link and Back all break.
+  (sonar#85, 2026-09-28: the questions, the running test and a finished result all sat at the site
+  root; only a result opened from a shared link had its own address.)
+
 ## External systems
 
 - **L477. A browser error reporter captures every uncaught error on the page, including ones
