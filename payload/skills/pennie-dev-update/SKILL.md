@@ -28,6 +28,12 @@ can silently skip a period.
 Audience: 7 sales team leads plus Kris Hennen. They open PET daily. They do not read code and
 do not care how anything is built.
 
+**Sonar is agent facing, not manager facing** (Dan, 2026-09-28). Its changes still go in this
+same manager post, under their own SONAR section, written as what agents will now see or do
+("Agents now get...") so a manager can pass it on. For Sonar, "visible" means an AGENT would
+notice it: read `changelog/visible` there that way, and in the issue check (section 9) judge
+Sonar issues by whether an agent would bump into them.
+
 ---
 
 ## 1. Repos
@@ -407,7 +413,8 @@ Runs every time unless `--no-issues`. **Its output never goes in the post.**
 
 ### What counts
 
-A **defect or rough edge a manager would notice**. Two categories:
+A **defect or rough edge a manager would notice** (for Sonar, an agent; see the audience note
+at the top). Two categories:
 
 - **Defects**: something currently wrong they could bump into. Wrong or missing data, a
   control that does nothing, a misleading message, a page that contradicts itself.
