@@ -293,26 +293,26 @@ covered 53 manager-visible PRs in 70 bullets.
 ```
 Update for August 31 to September 15
 
-Some of these you may have noticed and some you will not, because they are backend-only.
+Some of these you may have noticed and some you will not, because they are backend only.
 
 GOALS
-- The automatic unit goal is now two tiers: 15 units for months 1 to 3, 22 units from month 4 on. The old 20 and 25 tiers are gone.
-- Volume goals follow, so a rep on 22 units carries a $1.1M volume goal.
-- April through August have been re-scaled to the new tiers, so goal attainment on those history pages has changed.
+The automatic unit goal is now two tiers: 15 units for months 1 to 3, 22 units from month 4 on. The old 20 and 25 tiers are gone.
+Volume goals follow, so a rep on 22 units carries a $1.1M volume goal.
+April through August have been re-scaled to the new tiers, so goal attainment on those history pages has changed.
 
 POWER RANKINGS
-- Units, Volume and Conversion now show beside each rep's score, replacing the Focus column.
-- A rep too new for a conversion rate shows "New" instead of 0%.
-- On All Teams, the profile bars no longer sit empty for two seconds and then pop into place.
+Units, Volume and Conversion now show beside each rep's score, replacing the Focus column.
+A rep too new for a conversion rate shows "New" instead of 0%.
+On All Teams, the profile bars no longer sit empty for two seconds and then pop into place.
 
 COMMISSION AND FIRST PAY
-- New Rolled column: how many of each rep's deals had their first payment moved to a later month. Click it for the clients and the date each moved to.
-- A deal with no deposit and no estimated first pay date is no longer counted as rolled. This moved 16 deals in June and 8 in July, all on Achieve.
-- The August servicer split was briefly showing zero on both sides while the total was right. Fixed.
+New Rolled column: how many of each rep's deals had their first payment moved to a later month. Click it for the clients and the date each moved to.
+A deal with no deposit and no estimated first pay date is no longer counted as rolled. This moved 16 deals in June and 8 in July, all on Achieve.
+The August servicer split was briefly showing zero on both sides while the total was right. Fixed.
 
 BEHIND THE SCENES (technical, skip unless curious)
-- Data checks: weekly checks for a rep who worked a month but recorded nothing, and for the Beyond and Achieve volume split
-- Build and deploy: the daily build is triggered from a Cloudflare Worker with the GitHub crons as backstop
+Data checks: weekly checks for a rep who worked a month but recorded nothing, and for the Beyond and Achieve volume split
+Build and deploy: the daily build is triggered from a Cloudflare Worker with the GitHub crons as backstop
 ```
 
 Note the shape of the visible bullets above: a PR whose Changelog block carried four
@@ -323,10 +323,12 @@ connective prose dropped. That is the target for the FIRST draft, not a rewrite.
 - **No title line.** Open with the period line.
 - Period label from the actual window: "Update for the week of September 8" for roughly a
   week, "Update for September" for roughly a month, otherwise a date range.
-- One short line noting some items are backend-only.
+- One short line noting some items are backend only.
 - Headings are **bare uppercase**, no bold markers, first item on the very next line, blank
   line between sections.
-- Items are `- ` prefixed. **Never `•`.** No bold anywhere in the body.
+- **Items carry no prefix at all: no `- `, no `•`** (Dan, 2026-09-28: "can you take out
+  the dashes"). Each item is its own line directly under its heading. No bold anywhere in
+  the body.
 - Under about **five** manager-visible items: drop headings entirely, print one flat list, then
   the behind-the-scenes section.
 
@@ -359,8 +361,9 @@ headings back to state.
   the rewrite that landed had 70 bullets, most under 25 words. Keep the detail, split it.
 
 **Writing rules** (from `~/.claude/CLAUDE.md`, non-negotiable)
-- No em dashes, no en dashes, no dashes as sentence connectors. The `- ` bullet prefix is a
-  list marker, not punctuation, and is correct.
+- No em dashes, no en dashes, no dashes as sentence connectors, and no dash as a list
+  marker either. Avoid hyphenated words in the post too ("backend only", not "backend-only"),
+  except where the word is the literal name of something on screen, such as the Top-out column.
 - No emoji.
 - Plain language for a product manager. Describe technical things by what they affect.
 
@@ -371,8 +374,8 @@ Update for the week of September 8
 
 Nothing changed on screen this week. Behind the scenes:
 
-- Retry handling on the Achieve fetch
-- Faster test runs
+Retry handling on the Achieve fetch
+Faster test runs
 ```
 
 ---
