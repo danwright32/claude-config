@@ -11,7 +11,8 @@
     {
       "name": "Sonar",
       "repo": "Try-Pennie/sonar",
-      "path": "~/Documents/Sonar"
+      "path": "~/Documents/Sonar",
+      "changelogFrom": "2026-09-28"
     }
   ],
   "_addingSlate": "Uncomment the entry below when you want Slate appearing in these updates, which is weeks after launch, not at launch. Fill in its checkout path. Every repo here is treated identically.",
