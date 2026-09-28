@@ -3227,6 +3227,19 @@ for reference; L6 was reviewed and deliberately not adopted.
   same trap is a numbered SQL migration edited after it has run anywhere.)
   SHORT: A schema version a store was written by is immutable: editing its frozen shape orphans every such store, so add a new version and a stage instead.
 
+- **L1013. A check that judges stored artifacts (backups, exports, saved files) must judge each
+  one by the rules in force when it was WRITTEN: adding a new requirement to the current rules
+  silently fails every older artifact, and a restore gated on that check then refuses good data.**
+  Record a rules version in each artifact from the first write, compare later additions against
+  it, and keep a committed copy of an artifact from every past rules revision under test, so a
+  change that breaks old artifacts fails in review rather than in a restore. (ovation#610,
+  2026-09-28: PR #573 added launch-backups.jsonl to the backup plan, and the verifier checked
+  every archive against the CURRENT plan, so all four archives written before it failed with
+  memberMissing although every file matched its manifest and none had been touched; the rail foot
+  showed "Old backup broken" one archive per launch, and restore, which runs the same verify,
+  would have refused all four. Nothing in #573's suite held an old manifest.)
+  SHORT: Judge a stored artifact by the rules it was written under: a new requirement fails every older one, and a restore gated on it refuses good data.
+
 ## Honest failure
 
 - **L490. A guard that parses its input through an external interpreter (jq, python, awk) must

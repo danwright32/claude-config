@@ -48,3 +48,4 @@ which is NOT loaded into the session.
 - L698. A build that bakes env files into the artifact ships every local env file, so prove a throwaway deploy holds NO production credential by reading it.
 - L719. Whatever structurally stops the TESTS touching production must also stop the DEV SERVER, whose only symptom for pointing at it is that everything works.
 - L1010. A schema version a store was written by is immutable: editing its frozen shape orphans every such store, so add a new version and a stage instead.
+- L1013. Judge a stored artifact by the rules it was written under: a new requirement fails every older one, and a restore gated on it refuses good data.
