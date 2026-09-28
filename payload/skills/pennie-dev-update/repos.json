@@ -7,6 +7,11 @@
       "deployRecord": "build_history",
       "deployRecordFrom": "2026-07-29",
       "changelogFrom": "2026-08-31"
+    },
+    {
+      "name": "Sonar",
+      "repo": "Try-Pennie/sonar",
+      "path": "~/Documents/Sonar"
     }
   ],
   "_addingSlate": "Uncomment the entry below when you want Slate appearing in these updates, which is weeks after launch, not at launch. Fill in its checkout path. Every repo here is treated identically.",
