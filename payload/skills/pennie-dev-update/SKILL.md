@@ -315,6 +315,23 @@ Data checks: weekly checks for a rep who worked a month but recorded nothing, an
 Build and deploy: the daily build is triggered from a Cloudflare Worker with the GitHub crons as backstop
 ```
 
+**What Dan changed before posting on 2026-09-28** (the first post with two products). Apply
+these on the first draft:
+- Opener: `Updates for September 15 to 28 :thread:`, with the detail going in the thread. It had
+  no "backend only" line. A launch gets a second opener line, "Including the launch of a new
+  tool, Sonar!".
+- A product being LAUNCHED goes first, above PET. Its section explains what it is, when to
+  open it, what it checks and how to share a result. Dan added where it is bookmarked and
+  that agents should start with it.
+- He cut: the count of corrected history rows, "closed months keep their rankings", the Sonar
+  voice playback line, "nothing to install", "please pass the link on", and the whole COPYING
+  TO SLACK section (Copy Week So Far, the image cards, tied ranks). He did not say why, so
+  do not assume copy button changes are never wanted. Keep a draft lean, though: one fact a
+  manager acts on beats three that restate it.
+- He folded "a team's score is the average of its reps' scores" into the line introducing
+  the chart, and corrected "the managers who hired them" to the managers whose team the reps
+  are on. Managers do not hire, so never write that they do.
+
 Note the shape of the visible bullets above: a PR whose Changelog block carried four
 facts (the two-tier goal) became four bullets, one per fact, with the detail kept and the
 connective prose dropped. That is the target for the FIRST draft, not a rewrite.
