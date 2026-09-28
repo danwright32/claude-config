@@ -1,6 +1,6 @@
 ---
 name: pennie-dev-update
-description: Draft the recurring dev update Dan posts to Pennie's sales managers, covering what shipped in the internal tools they use (PET, and Slate when it is live) since the last update. Also runs a user-facing issue check that promotes manager-visible issues in the backlog. Use when Dan asks for a dev update, a changelog for managers, or invokes /pennie-dev-update.
+description: Draft the recurring dev update Dan posts to Pennie's sales managers, covering what shipped since the last update in every internal tool listed in the skill's repos.json. Also runs a user-facing issue check that promotes manager-visible issues in the backlog. Use when Dan asks for a dev update, a changelog for managers, or invokes /pennie-dev-update.
 trigger: /pennie-dev-update
 ---
 
