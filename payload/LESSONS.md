@@ -9472,6 +9472,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   never ran on a Friday, and was only noticed when a 76 hour staleness bound paged on a Sunday.)
   SHORT: Write a cron weekday field as names (MON-FRI), never numbers: platforms disagree on which number is Sunday.
 
+- **L735. Anything built only for a transition (a parallel run, a dual write, a comparison against
+  the system being replaced) must be retired by one stored setting from the day it ships, never by
+  code edits, because the day it retires is the day nobody wants to change code, and until then it
+  pages about or overwrites the state that replaced it.** Each transition lane is correct on its
+  own while both systems run, which is why none of them carries an off switch: the retirement is
+  imagined as a cleanup PR, and a cleanup PR is exactly what gets skipped on cutover day.
+  (slate#2875, 2026-09-29: a widening audit found the cal.com parity sweep, router replay, time off
+  dual write and hours import each retirable only by code; turning cal.com off would page daily,
+  re-fire the workflows, and let the morning import revert admin set hours to stale cal.com ones.)
+  SHORT: A lane built only for a transition must be retired by one stored setting, never code edits, or cutover pages and overwrites.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
