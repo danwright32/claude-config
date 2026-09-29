@@ -7575,17 +7575,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A framework's error message names the case its author imagined, not the condition it tests, so read the throw site before believing it.
 
 
-- **L726. An email's text part goes out quoted-printable or base64, never 7bit with a
-  paragraph to a line, because a sending service is free to rebuild the message and hard wrap
-  any line past its own width, and the reader then sees every sentence broken mid-line.** The
-  copy looks right in every test and every preview, since the damage is done after the send,
-  so judge it by the message that ARRIVED (the raw original), never by the string you built.
-  (slate#2625, 2026-09-22: a lead reminder sent through the Gmail API as multipart 7bit arrived
-  rebuilt as a single text/plain part with each paragraph hard wrapped at about 70 characters,
-  "...at Pennie is" / "today at 6:50pm EDT.", while `reminderBody` held one line per paragraph.
-  Encoding the text part quoted-printable was proven by one real send through the same path.
-  Overture and Ovation send through Gmail too.)
-  SHORT: Send an email's text part quoted-printable, never 7bit long lines: the sending service may hard wrap them, so judge by the raw message that arrived.
+- **L726. A message sent through the Gmail API is re-encoded by Gmail, which drops
+  quoted-printable and hard wraps a plain text body at about 72 characters, so send an HTML
+  alternative beside the text part for paragraphs that flow, and judge any formatting claim only
+  from a delivered message's raw source.** The copy looks right in every test and every preview,
+  and even the MIME you hand the API can be correct, since the damage is done after the send; a
+  check of the string you built, or of the MIME you encoded, proves nothing about what arrives.
+  (slate#2625, 2026-09-22: a lead reminder sent as multipart 7bit arrived rebuilt as a single
+  text/plain part hard wrapped at about 70 characters; quoted-printable was adopted as the fix.
+  slate#2895, 2026-09-29: a pilot reminder sent WITH quoted-printable arrived rebuilt the same
+  way, single text/plain, no transfer encoding, "...at Pennie is" / "today at 5:10pm EDT.", read
+  from "Show original", so the #2625 fix never held. Overture and Ovation send through Gmail too.)
+  SHORT: Gmail's send API drops quoted-printable and hard wraps plain text at ~72; send an HTML part, and judge only the delivered raw.
 - **L728. When more than one code path calls the same external endpoint, diff the bodies they
   build against what the receiver REQUIRES, because the path that passes its input through
   unchanged lacks whatever a hand-built sibling adds, and the receiver reports the gap as
