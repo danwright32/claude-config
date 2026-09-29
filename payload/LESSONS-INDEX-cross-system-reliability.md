@@ -82,3 +82,4 @@ which is NOT loaded into the session.
 - L1012. A waiter that leaves a fair queue whenever anyone is ahead never gets a turn under traffic; hold the place and wait, with a named deadline.
 - L733. Write a cron weekday field as names (MON-FRI), never numbers: platforms disagree on which number is Sunday.
 - L735. A lane built only for a transition must be retired by one stored setting, never code edits, or cutover pages and overwrites.
+- L736. Decide a row is due on the clock that stamped it: a server clock slightly behind the database's leaves just-written work waiting for the next sweep.

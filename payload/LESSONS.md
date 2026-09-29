@@ -9494,6 +9494,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   re-fire the workflows, and let the morning import revert admin set hours to stale cal.com ones.)
   SHORT: A lane built only for a transition must be retired by one stored setting, never code edits, or cutover pages and overwrites.
 
+- **L736. When a row's due time is stamped by the DATABASE clock, decide whether it is due on
+  that same clock, never on the application server's, because a server clock running even
+  slightly behind makes a row written a moment ago look not yet due, and the work silently waits
+  for the next sweep.** A lane that writes a message and then delivers "what is due now" in the
+  same run is the common shape: the write takes next_attempt_at from Postgres now(), the claim
+  compares it against a time the Worker read, and the two clocks are assumed to agree. Reading the
+  application clock AFTER the write narrows the gap but only moves the assumption. Let the
+  database answer the due question with its own now(), or deliver at the later of the two times.
+  (paperboi#442, 2026-09-29: the 9:00 reminders, the Monday sweep and the stalled press
+  announcements each read the clock before writing, found nothing due, and waited up to 15
+  minutes for the retry sweep; the fix read the clock after the write, and #455 records the drift
+  that still remains.)
+  SHORT: Decide a row is due on the clock that stamped it: a server clock slightly behind the database's leaves just-written work waiting for the next sweep.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
