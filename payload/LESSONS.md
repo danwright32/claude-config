@@ -7603,6 +7603,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   the verified debt, and Tripoint raised it as a billing discrepancy of hundreds of thousands
   of dollars.)
   SHORT: Two callers of one external endpoint build different bodies, so diff them against what the receiver REQUIRES; the pass-through one lacks the field.
+- **L1014. A platform list API filtered on two fields at once can answer from an incomplete
+  index while each filter alone is correct, so a monitor must request the broader list and apply
+  the narrower predicate itself, or a healthy item reads as missing at random.** The combined
+  query returns a well formed, plausible answer (an older record, a smaller total), so nothing
+  looks like an error, and repeating it minutes later gives the right answer, which reads as the
+  monitor having been flaky rather than the query. (nursedex#1113, 2026-09-29: the job watchdog
+  asked GitHub for `runs?event=schedule&status=success&per_page=1` and once got
+  `total_count=24` with the newest from 2026-08-26, then `total_count=55` with the newest from
+  2026-09-28; `event=schedule` alone and `status=success` alone were right on every call. It
+  alerted that Migration Drift had not succeeded in two days when it had succeeded daily.)
+  SHORT: A list API filtered on two fields at once can answer from a stale index; request the broader list and apply the narrower predicate yourself.
 
 ## Building with AI
 
