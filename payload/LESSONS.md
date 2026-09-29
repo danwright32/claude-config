@@ -4543,6 +4543,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   because another publisher grew)
   SHORT: A monitor baselined on a trailing window of its own series cannot see change slower than the window, so also compare against a fixed past reference.
 
+- **L737. A time limit sized for work the MACHINE does must start only after any step that waits on
+  a PERSON (a permission popup, a sign in, a confirmation), and that step gets its own longer limit
+  and its own reason, or a person slow to click reads as a broken system and the result cannot say
+  which it was.**
+  (sonar#119: the headset check gave itself 20 seconds from the start, and the first thing inside
+  those 20 seconds was Chrome's microphone popup. An agent who missed the popup got "took longer
+  than 20 seconds" and a Re-run verdict on a PC whose network was perfect, and the stored run could
+  not tell an unanswered popup from Chrome hanging while it opened the mic. Related to L254, where a
+  window sized for the work also spans a queue wait the control does not govern; here the wait is on
+  a person)
+  SHORT: A time limit sized for machine work starts after any step waiting on a person, which gets its own limit and reason.
+
 ## State and identity
 
 - **L483. A merge that KEEPS an entry because one side lacks it must carry the scope that entry
