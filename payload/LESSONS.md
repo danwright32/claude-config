@@ -4442,6 +4442,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   `line 57: NOT_RUN[@]: unbound variable`. The same pattern ships in shell across ovation,
   overture and downbeat.)
   SHORT: Under set -u macOS bash 3.2 errors on expanding an EMPTY array, so length check first, or a healthy run dies with no verdict.
+- **L1015. A shell loop that reads through `< <(command)` once per item leaks a process on
+  macOS bash 3.2 and kills the shell part way through a large list, so read per item
+  through a command substitution instead, and test the loop at the real item count.** A
+  fixture of a handful of items passes while the real run dies, and when the loop sits
+  inside a check that fails closed, the death reads as the check refusing rather than as
+  the shell crashing, because the caller only sees a non zero status.
+  (overture#4389, 2026-09-30: the real-arm tree scan read each file's first line with
+  `IFS= read -r first < <(head -c 64 "$f")`; bash 3.2 exited with status 133 part way
+  through the repository's 2,339 files, the scan reported UNMEASURED on every merge gate
+  run, and its own fixture of five files had passed. `first="$(head -c 64 "$f")"` fixed it,
+  proved by a 3,000 file case that failed before the change.)
+  SHORT: A per item `read < <(cmd)` loop kills macOS bash 3.2 part way through a big list; use a command substitution and test at the real count.
 
 - **L488. A shell script that sources a library with `.` and does not run `set -e`
   CARRIES ON when that file is missing, because the dot command only writes to stderr and

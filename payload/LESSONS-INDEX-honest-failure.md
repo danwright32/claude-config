@@ -95,6 +95,7 @@ which is NOT loaded into the session.
 - L703. Copy shipped with one phase of a staged feature must describe only what that phase does, or it is false to every reader until the last phase lands.
 - L707. A cooldown keyed COARSER than the subject its message names lets one subject's incident silence the others, behind a first page that looks correct.
 - L486. Under set -u macOS bash 3.2 errors on expanding an EMPTY array, so length check first, or a healthy run dies with no verdict.
+- L1015. A per item `read < <(cmd)` loop kills macOS bash 3.2 part way through a big list; use a command substitution and test at the real count.
 - L488. A script SOURCING a library without set -e carries on when the file is MISSING, so guard the source site to refuse, or it summarises and exits 0.
 - L492. Print findings before enriching them: an enrichment per finding is costliest on the worst run and takes the whole report with it when it times out.
 - L494. A caveat or label on a many record summary must come from the population, never its worst member, which is atypical by selection.
