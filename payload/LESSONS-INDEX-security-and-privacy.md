@@ -31,6 +31,7 @@ which is NOT loaded into the session.
 - L669. Lengthening an expiry, TTL or retention window silently removes the ceiling it was placing on every OTHER staleness that window happened to bound
 - L697. A robots Disallow and a noindex header cancel out: a disallowed page is never fetched, so allow the crawl and serve noindex to keep it out of search.
 - L702. A SQL allow list returning NULL for an unlisted kind makes `if not (x = any(allowed))` skip and permit everything, so give the CASE an else that raises.
+- L738. Check untrusted input against a plain object with an own property test or a Map: a bracket lookup finds inherited `constructor`, which is truthy.
 - L482. A privacy guard scoped to personal identity exempts everything else the dataset discloses, so define what makes it sensitive before scoping the guard.
 - L484. Before a privacy sweep swaps a real name for an invented one, check whether code matches on or writes it; if so, exempt it instead.
 - L489. A guard walking the WORKING TREE cannot see history, so a deleted secret stays readable while it reports clean: scan every reachable object.

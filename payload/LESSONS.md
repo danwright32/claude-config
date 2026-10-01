@@ -5870,6 +5870,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   surface sent a way for that kind yet, so the hole was opened by the migration that added the
   kind and would have been found by the first screen built on it.)
   SHORT: A SQL allow list returning NULL for an unlisted kind makes `if not (x = any(allowed))` skip and permit everything, so give the CASE an else that raises.
+- **L738. Look up untrusted input (an API key, a header, a name from a request) in a plain
+  object only with an own property check, or use a Map, because a bracket lookup also finds
+  inherited members like `constructor` and `toString`, which are truthy, so a check written as
+  "the map has this key" admits names nobody stored.** (bidspoke#1702: both partner entry points
+  parsed the API key secret with JSON.parse and authenticated with `keyMap[apiKey]`, so the
+  header `X-API-Key: constructor`, and likewise `toString`, `__proto__`, `hasOwnProperty` and
+  `valueOf`, passed authentication and could run live partner workflows without a key. Proved
+  locally with the same lookup; found by a research agent reading the middleware, not by any
+  test, because every test used either a real key or an ordinary wrong one.)
+  SHORT: Check untrusted input against a plain object with an own property test or a Map: a bracket lookup finds inherited `constructor`, which is truthy.
 - **L482. A privacy guard is built around one notion of what is sensitive, almost always a
   person's identity, so everything ELSE the same dataset discloses (which customers you have,
   what you are working on, and when) is exempt by construction while the guard stays green.
