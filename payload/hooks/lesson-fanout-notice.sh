@@ -12,12 +12,13 @@
 # failed part way is asked again after the cooldown rather than lost (L368).
 #
 # First run on a Mac, with no ledger yet, records every lesson already present as a baseline and
-# says nothing: the request is about lessons from now on, not the 700 written before it.
+# says nothing: the request is about lessons from now on, not the ones written before it.
 #
 # Guards:
 #   CLAUDE_DETACHED_RUN set    a headless run has nobody to act on it. Silent.
 #   LESSON_FANOUT_OFF=1        the documented override. Silent.
-#   Cooldown, 600s per Mac     one request per stretch of work, not one per tool call.
+#   Cooldown per Mac           one request per stretch of work, not one per tool call; its length
+#                              is a window this hook sets, not measured.
 # Fails QUIET: anything it cannot read exits 0 with no output.
 #
 # Seams: CLAUDE_HOME, LESSON_FANOUT_NOW (the clock).

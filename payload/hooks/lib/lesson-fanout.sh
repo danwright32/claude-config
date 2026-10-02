@@ -127,7 +127,7 @@ fan_out(){   # $1 = Lnnn
     echo "REFUSED $num: could not find its id and rule sentence in what claude-sync printed."
     return 1
   fi
-  short="$(printf '%s\n' "$entry" | sed -n 's/^[[:space:]]*SHORT:[[:space:]]*//p' | head -1)"
+  short="$(awk 'sub(/^[[:space:]]*SHORT:[[:space:]]*/, "") { print; exit }' <<<"$entry")"
   title="Lesson $num sweep: ${short:-$rule}"
   # Any digest repo the entry cites as name#N is where the lesson came from.
   source_names="$(printf '%s\n' "$entry" | grep -oE '[A-Za-z0-9_.-]+#[0-9]+' | sed 's/#.*//' | tr '[:upper:]' '[:lower:]' | sort -u)"
@@ -145,7 +145,7 @@ BODY
 
   while IFS=' ' read -r r tok; do
     [ -n "$r" ] || continue
-    if printf '%s\n' "$source_names" | grep -qixF "${r#*/}"; then
+    if grep -qixF "${r#*/}" <<<"$source_names"; then
       echo "SKIPPED $num $r: the lesson came from here"; continue
     fi
     if [ "$tok" = "-" ]; then
