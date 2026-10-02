@@ -9543,6 +9543,22 @@ for reference; L6 was reviewed and deliberately not adopted.
   that still remains.)
   SHORT: Decide a row is due on the clock that stamped it: a server clock slightly behind the database's leaves just-written work waiting for the next sweep.
 
+- **L739. A query on a partitioned table whose range is computed at run time (CURRENT_DATE,
+  now(), a function of either) cannot be pruned when it is planned, so it opens and locks EVERY
+  partition for its whole run, and any TRUNCATE or DROP of an old partition that starts on the
+  same tick waits behind it and gives up.** The query only reads recent days, so nothing about it
+  looks like it touches the old ones, and each job is correct on its own: the collision exists only
+  between two schedules that happen to share a minute. Pass the bounds as literals (compute them
+  first, then run the query with constants) so the planner prunes, and measure the locks a query
+  actually takes rather than assuming from the rows it reads. A retry on the purge side only
+  works if its window outlasts the longest such reader, which nobody measures.
+  (bidspoke#1720, 2026-10-02: refresh_field_presence_daily and refresh_workflow_stats_daily
+  started at 03:30 with the partition purge, ran about 22s each while holding 430 relation locks,
+  and the purge's roughly 12s retry window gave up on workflow_executions_2026_09_23 two nights
+  running; with literal bounds the same refresh took 30 locks. #1204 had seen the same collision
+  on 2026-09-07 and added retries only.)
+  SHORT: A partitioned query bounded by CURRENT_DATE or now() locks every partition and blocks a purge of old ones; pass literal bounds.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
