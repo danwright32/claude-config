@@ -188,6 +188,11 @@
             "command": "__CLAUDE_HOME__/hooks/sync-main-to-dev.sh",
             "timeout": 30,
             "statusMessage": "Checking whether dev needs main merged in"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/lesson-fanout-notice.sh",
+            "timeout": 10
           }
         ]
       },
@@ -201,6 +206,11 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/deferral-edit-check.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/lesson-fanout-notice.sh",
             "timeout": 10
           }
         ]
