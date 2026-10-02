@@ -189,10 +189,10 @@ On Daniels-MacBook-Pro-2:
 - `~/claude-config-sync`: the clone the scheduled sync actually runs from
 
 On Dans-MacBook-Pro:
-- `~/Documents/Bidspoke`: Next.js 14 + Cloudflare Workers + Supabase
+- `~/Documents/Documents - Dan’s MacBook Pro/Bidspoke`: Next.js 14 + Cloudflare Workers + Supabase. Moved here from `~/Documents/Bidspoke` on 2026-10-02 when the Documents folder was reorganised (the new parent is the folder iCloud Desktop & Documents creates), so quote the path: it has spaces and a curly apostrophe.
 - `~/eavesly-web-app`: Vite + React + TypeScript + shadcn/ui + Supabase
 - `~/trypennie`: Next.js 15 + Prismic CMS + Google Maps
-- `~/Documents/Manager Goal Tracking`: data analysis workspace (Python + Google Sheets)
+- `~/Documents/Documents - Dan’s MacBook Pro/Manager Goal Tracking`: data analysis workspace (Python + Google Sheets), moved with Bidspoke on 2026-10-02
 
 The four above are where they were recorded before this section was split by machine, and their
 absence from Daniels-MacBook-Pro-2 is the only evidence for putting them here. Nothing has
