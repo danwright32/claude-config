@@ -1,0 +1,6 @@
+# Repos where every merge to main is followed by merging main INTO dev, read by sync-main-to-dev.sh.
+# One owner/name per line, matched case insensitively. Each entry carries who asked and when.
+#
+# trypennie: Denys, 2026-10-01, #C07CKBQE3G9 thread on Slate PR #520. dev is staging and holds work
+# not ready for main, so the direction is only ever main into dev, never dev into main.
+Halo-lab-Trypennie/trypennie
