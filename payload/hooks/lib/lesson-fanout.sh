@@ -73,24 +73,19 @@ done
 # ---- repo list ----
 repos=""
 for list in $DIGEST_LISTS; do
-  got=""
+  # An unreadable list refuses the run now, because a run over half the repos reads like a run over
+  # all of them. A readable but empty one is allowed here and judged with the other list below.
+  got="" found=0
   while IFS=' ' read -r login tok; do
     [ -n "$tok" ] || continue
-    got="$(GH_TOKEN="$tok" gh api -H "Accept: application/vnd.github.raw" \
-      "repos/$DIGEST_REPO/contents/$list" 2>/dev/null | jq -r '.repos[] | "\(.owner)/\(.name)"' 2>/dev/null)" && [ -n "$got" ] && break
-    got=""
+    raw="$(GH_TOKEN="$tok" gh api -H "Accept: application/vnd.github.raw" "repos/$DIGEST_REPO/contents/$list" 2>/dev/null)" || continue
+    printf '%s' "$raw" | jq -e '.repos | type == "array"' >/dev/null 2>&1 || continue
+    got="$(printf '%s' "$raw" | jq -r '.repos[] | "\(.owner)/\(.name)"')" found=1
+    break
   done <<<"$tokens"
-  # An empty list is read as a refusal only once BOTH are known empty, below; an unreadable one
-  # refuses now, because a run over half the repos reads like a run over all of them.
-  if [ -z "$got" ]; then
-    if ! printf '%s' "$tokens" | while IFS=' ' read -r login tok; do
-        [ -n "$tok" ] || continue
-        GH_TOKEN="$tok" gh api -H "Accept: application/vnd.github.raw" "repos/$DIGEST_REPO/contents/$list" 2>/dev/null \
-          | jq -e '.repos | type == "array"' >/dev/null 2>&1 && exit 0
-      done; then
-      echo "REFUSED: could not read $list from $DIGEST_REPO with any signed in account, so nothing was filed." >&2
-      exit 1
-    fi
+  if [ "$found" -eq 0 ]; then
+    echo "REFUSED: could not read $list from $DIGEST_REPO with any signed in account, so nothing was filed." >&2
+    exit 1
   fi
   repos="$repos$got"$'\n'
 done
@@ -161,7 +156,7 @@ BODY
       echo "FAILED $num $r: could not read its existing issues, so nothing was filed blind: $existing"; ok=1; continue
     fi
     hit="$(printf '%s' "$existing" | jq -r --arg t "Lesson $num sweep" --arg m "lesson-id: $id" \
-      '[.[] | select((.title | startswith($t + ":")) or ((.body // "") | contains($m)))][0].number // empty' 2>/dev/null)"
+      '[.[] | select((.title | startswith($t)) or ((.body // "") | contains($m)))][0].number // empty' 2>/dev/null)"
     if [ -n "$hit" ]; then
       echo "EXISTS $num $r#$hit"; continue
     fi
