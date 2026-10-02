@@ -9484,6 +9484,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   parameter with an alphanumeric id, which is why nothing had shown it.)
   SHORT: A dynamic route segment arrives percent encoded, a query param decoded, so decode a path segment once at the boundary or stored ids never match.
 
+- **L740. Turn a file URL into a filesystem path with `fileURLToPath`, never `URL.pathname`**:
+  `pathname` stays percent encoded, so every path a script builds from `new URL("..",
+  import.meta.url).pathname` breaks with ENOENT the day the checkout sits in a folder whose name
+  has a space or an apostrophe, while a build or gate running in a plain temporary path still
+  passes and reads as proof nothing is wrong. Nothing throws at the derivation; the failure lands
+  on the first file read, far from its cause, and only on the machine whose path needs encoding.
+  (slate#3041, 2026-10-02: the Slate checkout moved to `~/Documents/Documents - Dan’s MacBook
+  Pro/Slate`; about 25 scripts derived the repo root from `.pathname`, about 19 node suites failed
+  locally with ENOENT, and the pre-push gate, which builds in a temporary worktree under
+  /var/folders, kept passing.)
+  SHORT: Turn a file URL into a path with fileURLToPath, never URL.pathname, which stays percent encoded and breaks in a folder with a space.
+
 - **L731. `git checkout <commit> -- <path>` rewrites the STAGING AREA as well as the file, so after
   the file on disk is put back by any other means, the next commit or amend records the OLD
   version.** Put a file back with `git checkout HEAD -- <path>` (or `git restore --staged

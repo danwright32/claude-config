@@ -78,6 +78,7 @@ which is NOT loaded into the session.
 - L493. A file installed at another depth resolves a fixed upward path elsewhere, often the home directory, so find its tree by marker and bound any walk.
 - L1004. A gate enabled by a pointer runs nothing when the pointer names a missing target, so assert the wiring from something that gate does not run.
 - L725. A dynamic route segment arrives percent encoded, a query param decoded, so decode a path segment once at the boundary or stored ids never match.
+- L740. Turn a file URL into a path with fileURLToPath, never URL.pathname, which stays percent encoded and breaks in a folder with a space.
 - L731. git checkout <commit> -- <path> rewrites the staging area, so the next commit records the OLD version: put it back with git checkout HEAD.
 - L1012. A waiter that leaves a fair queue whenever anyone is ahead never gets a turn under traffic; hold the place and wait, with a named deadline.
 - L733. Write a cron weekday field as names (MON-FRI), never numbers: platforms disagree on which number is Sunday.
