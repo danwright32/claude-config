@@ -6664,8 +6664,10 @@ section "== a CI verdict names the repository it came from (#418) =="
 _cir_re='(gh|"\$gh")[[:space:]]+(run[[:space:]]+list|pr[[:space:]]+checks|api)'
 # What counts as naming it: an explicit --repo, the slug the verdict lookup builds its API path
 # from, or the clone directory to run it in, which is the only thing that can be said about a
-# remote no slug can be derived from (L11: a message may claim only what its check measured).
-_cir_named='--repo|repos/\$slug|\$SYNC_REPO'
+# remote no slug can be derived from (L11: a message may claim only what its check measured). A
+# literal repos/<owner>/<name> path counts too, since `gh api` has no --repo and that path is how
+# it names one; a {owner}/{repo} placeholder or a variable does not match the character class.
+_cir_named='--repo|repos/\$slug|\$SYNC_REPO|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
 _cir_lines(){   # $1 = a copy of the tool to read
   # Comments stripped and continuation lines joined, exactly as every other source scan here does
   # it, so a query split over two lines is judged as the one line it really is.
@@ -6693,6 +6695,17 @@ check "#418 the plant really took the repository off a query" "! cmp -s '$SCRIPT
 check "#418 and left the same queries to judge, only without it" \
   "[ \"\$(_cir_lines '$_CIRP' | grep -c . || true)\" -eq '$_cir_all' ]"
 check "#418 a CI query naming no repository is caught" "[ -n \"\$(_cir_bad '$_CIRP')\" ]"
+# `gh api` takes no --repo, so a call reading another repository names it the only way it can, in
+# an explicit repos/<owner>/<name> path, and that has to count. The gh placeholder form does not:
+# {owner}/{repo} is filled in from whatever checkout the call happens to run in, the defect itself.
+_CIRX="$WORK/ci-repo-explicit-path.sh"
+printf '%s\n' "gh api -H 'Accept: application/vnd.github.raw' repos/some-owner/some.repo/contents/repos.json" > "$_CIRX"
+check "#418 a gh api call naming owner and repository in its path is not flagged" \
+  "[ \"\$(_cir_lines '$_CIRX' | grep -c . || true)\" -eq 1 ] && [ -z \"\$(_cir_bad '$_CIRX')\" ]"
+_CIRH="$WORK/ci-repo-placeholder-path.sh"
+printf '%s\n' 'gh api repos/{owner}/{repo}/actions/runs' 'gh api repos/$other/actions/runs' > "$_CIRH"
+check "#418 a gh api path that leaves the repository to the checkout is still caught" \
+  "[ \"\$(_cir_bad '$_CIRH' | grep -c . || true)\" -eq 2 ]"
 
 # The hooks this tool ships are read by the same scan, because the next hand rolled copy of that
 # sentence is as likely to be written in one of them, and the component and the guard that stops
