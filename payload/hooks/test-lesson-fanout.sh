@@ -145,7 +145,7 @@ reset_world() {
 JSON
   cat >"$FAKE/digest/repos.json" <<'JSON'
 {"repos":[{"owner":"Try-Pennie","name":"bidspoke","label":"bidspoke"},
-          {"owner":"Try-Pennie","name":"slate","label":"slate"}]}
+          {"owner":"Try-Pennie","name":"slate","label":"SL"}]}
 JSON
   cat >"$FAKE/digest/repos-weekly.json" <<'JSON'
 {"repos":[{"owner":"danwright32","name":"overture","label":"overture"}]}
@@ -158,6 +158,11 @@ id: abc1234567 (this survives a renumber; L900 may not)
   partition, so pass literal bounds.** More explanation of the rule.
   (bidspoke#1720, 2026-10-02: SECRET-EVIDENCE refresh_field_presence_daily held 430 locks.)
   SHORT: A clock bounded partitioned query locks every partition; pass literal bounds.
+TXT
+  cat >"$FAKE/lessons/L902.txt" <<'TXT'
+id: aaa0000002 (this survives a renumber; L902 may not)
+- **L902. Rule learned where the repo goes by its digest label.** Why.
+  (sl#44, 2026-10-02: evidence.)
 TXT
   cat >"$FAKE/lessons/L901.txt" <<'TXT'
 id: def7654321 (this survives a renumber; L901 may not)
@@ -284,6 +289,14 @@ echo '{"hosts":{}}' >"$FAKE/auth.json"
 run L900
 check_eq "noauth: exits nonzero" "1" "$rc"
 check "noauth: says so" "no GitHub account is signed in" "$out"
+
+# ---- 13b. a lesson citing a repo by its digest LABEL skips that repo too ----
+reset_world bylabel
+run L902
+check_eq "bylabel: exits 0" "0" "$rc"
+check_not "bylabel: no issue in the repo cited by its label" "Try-Pennie/slate" "$(cat "$FAKE/created")"
+check "bylabel: says it skipped it" "SKIPPED L902 Try-Pennie/slate" "$out"
+check "bylabel: still files elsewhere" "danwright32/overture" "$(cat "$FAKE/created")"
 
 # ---- 14. bad usage ----
 reset_world usage

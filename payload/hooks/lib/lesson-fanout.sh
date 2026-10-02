@@ -80,7 +80,7 @@ for list in $DIGEST_LISTS; do
     [ -n "$tok" ] || continue
     raw="$(GH_TOKEN="$tok" gh api -H "Accept: application/vnd.github.raw" "repos/$DIGEST_REPO/contents/$list" 2>/dev/null)" || continue
     printf '%s' "$raw" | jq -e '.repos | type == "array"' >/dev/null 2>&1 || continue
-    got="$(printf '%s' "$raw" | jq -r '.repos[] | "\(.owner)/\(.name)"')" found=1
+    got="$(printf '%s' "$raw" | jq -r '.repos[] | "\(.owner)/\(.name) \(.label // "")"')" found=1
     break
   done <<<"$tokens"
   if [ "$found" -eq 0 ]; then
@@ -106,11 +106,14 @@ token_for(){   # $1 = owner/name -> the token of the first account that can push
   done <<<"$tokens"
   return 1
 }
+# Each line is "owner/name token label": the label is the digest's short name, which a lesson's
+# provenance may cite instead of the repo's own (PET#12 for project-enrollment-tracker).
 repo_tokens=""
-for r in $repos; do
+while IFS=' ' read -r r label; do
+  [ -n "$r" ] || continue
   t="$(token_for "$r")" || t="-"
-  repo_tokens="$repo_tokens$r $t"$'\n'
-done
+  repo_tokens="$repo_tokens$r $t $label"$'\n'
+done <<<"$repos"
 
 # ---- one lesson ----
 overall=0
@@ -129,7 +132,8 @@ fan_out(){   # $1 = Lnnn
   fi
   short="$(awk 'sub(/^[[:space:]]*SHORT:[[:space:]]*/, "") { print; exit }' <<<"$entry")"
   title="Lesson $num sweep: ${short:-$rule}"
-  # Any digest repo the entry cites as name#N is where the lesson came from.
+  # Any digest repo the entry cites as name#N, by repo name or by digest label, is where the lesson
+  # came from.
   source_names="$(printf '%s\n' "$entry" | grep -oE '[A-Za-z0-9_.-]+#[0-9]+' | sed 's/#.*//' | tr '[:upper:]' '[:lower:]' | sort -u)"
 
   body_file="$(mktemp)"
@@ -143,9 +147,9 @@ What to do: look for code in this project that matches the situation the rule de
 <!-- lesson-id: $id -->
 BODY
 
-  while IFS=' ' read -r r tok; do
+  while IFS=' ' read -r r tok label; do
     [ -n "$r" ] || continue
-    if grep -qixF "${r#*/}" <<<"$source_names"; then
+    if grep -qixF -e "${r#*/}" ${label:+-e "$label"} <<<"$source_names"; then
       echo "SKIPPED $num $r: the lesson came from here"; continue
     fi
     if [ "$tok" = "-" ]; then
