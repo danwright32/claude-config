@@ -5944,6 +5944,16 @@ for reference; L6 was reviewed and deliberately not adopted.
   curl loop would have exhausted a month of Sentry quota.)
   SHORT: An error path an unauthenticated caller can reach is volume they control, so decide who may trigger an error before deciding what it costs.
 
+- **L741. A scrubber that finds personal data by its shape cannot see an encoded copy of it, and
+  a URL's query string percent-encodes the @ and the brackets. So strip query strings and
+  fragments from any URL before it is logged or alerted, rather than trusting a pattern scrub to
+  catch what is inside.** Distinct from L653, where the redaction never looked at the field: here
+  it looked and could not recognise what it saw.
+  (Try-Pennie/slate#3046, 2026-10-02: a harmless ResizeObserver warning on /book carried the page
+  address as its source file, the scrub matched neither `%40gmail.com` nor `%28201%29`, and a
+  lead's name, email and phone reached Slack.)
+  SHORT: A shape-matching scrub cannot see percent-encoded data, so strip query strings and fragments from URLs before logging or alerting them.
+
 ## UX completeness
 
 - **L485. A container's minimum size is measured from the TALLEST state its content can
