@@ -154,6 +154,19 @@ else
   FAIL=$((FAIL+1)); echo "FAIL: the instruction quotes a different cap than the $realcap the budget suite enforces, so a lesson written to it is refused by the send"
 fi
 
+# WHERE IT APPLIES. Every new lesson becomes a sweep issue in every digest repo, so Dan is told at
+# the picker which of those projects Claude judges it likely to bite, read from the live digest
+# lists rather than a list written here (L41). Information only: the fan out still files everywhere.
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'gh issue create -t x -b y')" "$T")
+case "$out" in *'repo-digest'*'repos.json'*'repos-weekly.json'*) _has_lists=1 ;; *) _has_lists=0 ;; esac
+case "$out" in *'Likely applies to'*) _has_applies=1 ;; *) _has_applies=0 ;; esac
+if [ "$_has_lists" = 1 ] && [ "$_has_applies" = 1 ]; then
+  PASS=$((PASS+1)); echo "PASS: instruction asks for the projects the lesson likely applies to, from the digest lists"
+else
+  FAIL=$((FAIL+1)); echo "FAIL: instruction does not ask which digest projects the lesson likely applies to (lists=$_has_lists applies=$_has_applies)"
+fi
+
 echo "----"
 echo "passed $PASS, failed $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"

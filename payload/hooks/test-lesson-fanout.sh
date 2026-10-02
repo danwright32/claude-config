@@ -179,7 +179,7 @@ check_not "happy: never files in the repo the lesson came from" "Try-Pennie/bids
 check "happy: says it skipped the source repo" "Try-Pennie/bidspoke" "$out"
 check "happy: title names the lesson and uses the short form" \
   "Lesson L900 sweep: A clock bounded partitioned query locks every partition; pass literal bounds." "$created"
-check "happy: priority and category labels" "priority-p3,lesson-sweep" "$created"
+check "happy: priority and category labels" "priority-p2,lesson-sweep" "$created"
 check "happy: catch-all milestone" "--milestone Ungrouped" "$created"
 calls="$(cat "$FAKE/calls")"
 check "happy: slate is written as the account that can push to it" "tok-work issue create --repo Try-Pennie/slate" "$calls"

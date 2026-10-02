@@ -46,7 +46,7 @@ LEDGER="$CLAUDE_HOME/state/lesson-fanout.done"
 DIGEST_REPO="dwright-pennie/repo-digest"
 DIGEST_LISTS="repos.json repos-weekly.json"
 LABEL="lesson-sweep"
-PRIORITY="priority-p3"
+PRIORITY="priority-p2"
 MILESTONE="Ungrouped"
 
 usage(){ echo "Usage: lesson-fanout.sh L739 [L740 ...]" >&2; exit 2; }
