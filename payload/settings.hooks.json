@@ -182,6 +182,12 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/lesson-entry-check.sh --after-bash",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/sync-main-to-dev.sh",
+            "timeout": 30,
+            "statusMessage": "Checking whether dev needs main merged in"
           }
         ]
       },
