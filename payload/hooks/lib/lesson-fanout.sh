@@ -156,7 +156,7 @@ BODY
       echo "FAILED $num $r: could not read its existing issues, so nothing was filed blind: $existing"; ok=1; continue
     fi
     hit="$(printf '%s' "$existing" | jq -r --arg t "Lesson $num sweep" --arg m "lesson-id: $id" \
-      '[.[] | select((.title | startswith($t)) or ((.body // "") | contains($m)))][0].number // empty' 2>/dev/null)"
+      '[.[] | select((.title | startswith($t + ":")) or ((.body // "") | contains($m)))][0].number // empty' 2>/dev/null)"
     if [ -n "$hit" ]; then
       echo "EXISTS $num $r#$hit"; continue
     fi
