@@ -9559,6 +9559,21 @@ for reference; L6 was reviewed and deliberately not adopted.
   on 2026-09-07 and added retries only.)
   SHORT: A partitioned query bounded by CURRENT_DATE or now() locks every partition and blocks a purge of old ones; pass literal bounds.
 
+- **L1016. A process started with & from a non-interactive shell has SIGINT ignored, every process it
+  starts inherits that, and bash cannot reset a signal ignored on entry, so a test that interrupts
+  its subject must first check the signal can arrive, and a long job launched that way must
+  restore INT through an exec wrapper, or the interrupt case hangs instead of failing.** The
+  detached launch looks like the safe way to outlive a session or a background time limit, and it
+  changes nothing visible: every other test passes, and the one that sends SIGINT simply waits for
+  a signal that is discarded, until a hang guard kills it and the whole run goes red with no named
+  cause. Restore the disposition before exec (`perl -e '$SIG{INT}="DEFAULT"; exec @ARGV' cmd`), and
+  give any test that depends on delivering a signal a precondition that reports UNMEASURED when it
+  cannot be delivered (L411).
+  (overture#4441, 2026-10-02: three merge verifications launched as `nohup verify-and-merge-batch.sh &`
+  failed on scripts/mutate-batch.test.sh's "an interrupted batch exits 130", which hung 10 minutes
+  each time, while the same fixture passed alone and in every harness launched merge.)
+  SHORT: A job started with & from a script ignores SIGINT and passes that on, so a test that interrupts its subject hangs unless it checks first.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

@@ -84,3 +84,4 @@ which is NOT loaded into the session.
 - L735. A lane built only for a transition must be retired by one stored setting, never code edits, or cutover pages and overwrites.
 - L736. Decide a row is due on the clock that stamped it: a server clock slightly behind the database's leaves just-written work waiting for the next sweep.
 - L739. A partitioned query bounded by CURRENT_DATE or now() locks every partition and blocks a purge of old ones; pass literal bounds.
+- L1016. A job started with & from a script ignores SIGINT and passes that on, so a test that interrupts its subject hangs unless it checks first.
