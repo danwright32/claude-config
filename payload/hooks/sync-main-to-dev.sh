@@ -95,13 +95,13 @@ code="$(printf '%s' "$resp" | awk 'toupper($1) ~ /^HTTP\// { print $2; exit }')"
 
 case "$code" in
   201)
-    sha="$(printf '%s' "$resp" | sed -n 's/.*"sha":"\([0-9a-f]\{7\}\).*/\1/p' | head -1)"
+    sha="$(sed -n '/"sha":"[0-9a-f]\{7\}/{s/.*"sha":"\([0-9a-f]\{7\}\).*/\1/p;q;}' <<<"$resp")"
     say "merged main into dev in $slug after PR #$num (commit ${sha:-unknown}), so staging matches production. Mention it in one line." ;;
   204)
     say "dev in $slug already contains main after PR #$num, nothing to merge." ;;
   409)
     say "CONFLICT merging main into dev in $slug after PR #$num. Nothing was changed on dev. Tell Dan now: someone has to resolve it by hand, because it means choosing between dev's unready work and what just shipped." ;;
   *)
-    first="$(printf '%s' "$resp" | awk 'NF' | head -1 | cut -c1-200)"
+    first="$(awk 'NF { print substr($0, 1, 200); exit }' <<<"$resp")"
     say "FAILED to merge main into dev in $slug after PR #$num (GitHub answered ${code:-nothing}: $first). Dev is behind main. Tell Dan, then retry: $by_hand" ;;
 esac
