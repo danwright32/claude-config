@@ -34,6 +34,7 @@ is anywhere except in front of you.
 - When given a multi-part request, read and acknowledge the FULL request before starting work. Do not launch parallel agents or begin executing until the complete scope is understood. Always outline a numbered plan and wait for approval before starting, even when the steps are small.
 - Whenever you ask what to do next, or offer a choice between options, present it as an AskUserQuestion clickable picker, not as a prose list. The user wants to answer by selecting.
 - Ask AskUserQuestion questions ONE at a time (one question per call). Multi-question calls have lost answers mid-selection.
+- Give every time of day to Dan in US Eastern time, never UTC (his words, 2026-10-03: "all times in et please, utc isn't useful to me"). Tools and logs report UTC, so convert before writing it, and label it ET.
 
 ## Driving Dan's Machine (keyboard, mouse, screen)
 
