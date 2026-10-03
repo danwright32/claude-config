@@ -18250,6 +18250,17 @@ check "#628 and reports what it heard" "line_has \"\$out_628a\" 'second-mod' 'no
 printf 'edit\n' >> "$MD628H/CLAUDE.md"
 CLAUDE_HOME="$MD628H" SYNC_REPO="$MD628R" SYNC_CLAUDE_BIN="$MD628C" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
 check "#628 a send with no change to the mods does not ask again" "[ \"\$(wc -l < '$MD628N' | tr -d ' ')\" = '$_628a' ]"
+# An unreadable settings.json on a SEND says so on stderr and posts no desktop notification: the
+# watcher sends on every edit, so a notification there fires on every save (L36). Its advice is a
+# fix and a send, never a pull. The apply keeps its notification and its pull advice.
+MD628NL="$WORK/mods628-notified"; : > "$MD628NL"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$MD628NL" > "$WORK/mods628-notifier"; chmod +x "$WORK/mods628-notifier"
+cp "$MD628H/settings.json" "$WORK/mods628-settings.good"; printf '{ not json\n' > "$MD628H/settings.json"
+out_628u="$(CLAUDE_HOME="$MD628H" SYNC_REPO="$MD628R" SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$WORK/mods628-notifier" SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send 2>&1 < /dev/null || true)"
+check "#628 a send with unreadable settings says it could not name the mods" "line_has \"\$out_628u\" 'could not read settings.json' 'mods'"
+check "#628 and tells you to send, not to pull" "! line_has \"\$out_628u\" 'could not read settings.json' 'pull again'"
+check "#628 and posts no desktop notification about it" "! grep -q 'mods could not' '$MD628NL'"
+cp "$WORK/mods628-settings.good" "$MD628H/settings.json"
 
 # The receiving Mac. Its settings.json already holds an env entry of its own and a plugin folder
 # somebody named by hand: the sync owns only the entries under its mods folder (L509, L692).

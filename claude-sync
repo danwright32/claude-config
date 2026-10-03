@@ -3766,8 +3766,14 @@ write_mod_plugin_dirs(){   # $1 = keep-leftovers on a send, which never sweeps (
     echo '{}' > "$settings"
   fi
   if ! cur="$(jq -r '.env.CLAUDE_CODE_PLUGIN_DIRS // ""' "$settings" 2>/dev/null)"; then
-    echo "claude-sync: could not read settings.json to name the mods in it, so Claude Code has not been told about any mod that just arrived. Check it with 'jq . $settings', fix it, then pull again." >&2
-    [ -t 2 ] || notify "mods could not be named in settings.json"
+    # On a send, stderr only: the watcher sends on every edit, so a notification there would fire on
+    # every save while the file stays broken (L36). The apply keeps it, and its advice is a pull.
+    if [ -n "$sweep" ]; then
+      echo "claude-sync: could not read settings.json to name the mods in it, so Claude Code has not been told about any mod that just arrived. Check it with 'jq . $settings', fix it, then pull again." >&2
+      [ -t 2 ] || notify "mods could not be named in settings.json"
+    else
+      echo "claude-sync: could not read settings.json to name the mods in it, so Claude Code has not been told about the mods on this Mac. Check it with 'jq . $settings' and fix it; the next send names them." >&2
+    fi
     return 0
   fi
   # A mod removed on the other Mac leaves its folder here holding only what Claude Code generated
@@ -3798,7 +3804,7 @@ write_mod_plugin_dirs(){   # $1 = keep-leftovers on a send, which never sweeps (
   fi || {
     rm -f "$tmp"
     echo "claude-sync: could not write the mods into settings.json, so it was left exactly as it was and Claude Code has not been told about any mod that just arrived. Check it with 'jq . $settings'." >&2
-    [ -t 2 ] || notify "mods could not be written into settings.json"
+    [ -z "$sweep" ] || [ -t 2 ] || notify "mods could not be written into settings.json"
     return 0
   }
   # settings.json is a WatchPath: rewrite it only when the result differs (the same rule as the
