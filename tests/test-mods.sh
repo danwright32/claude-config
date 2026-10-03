@@ -77,6 +77,12 @@ M4="$TMPROOT/m4"; mkmod "$M4" typed; mkdir -p "$M4/typed/.claude-plugin/types"; 
 runit "$M4"
 ! grep -q "plugin test" "$LOG" && check "test files under generated types are ignored" ok \
   || check "test files under generated types are ignored" "$(cat "$LOG")"
+# The same fixture, with a test file of the mod's own beside it: now it IS run, so the silence above
+# was the filter and not a fixture that could never trigger a run (L159).
+printf 'x\n' > "$M4/typed/hooks/own.test.ts"
+runit "$M4"
+grep -q "plugin test $M4/typed" "$LOG" && check "while the mod's own test file in the same folder is run" ok \
+  || check "while the mod's own test file in the same folder is run" "$(cat "$LOG")"
 
 # 5. A folder with no manifest is not a mod and is not counted.
 M5="$TMPROOT/m5"; mkdir -p "$M5/notes"; printf 'x\n' > "$M5/notes/readme"; : > "$M5/.gitkeep"

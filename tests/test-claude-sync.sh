@@ -18286,7 +18286,7 @@ check "#606 a folder with no plugin manifest is not named" \
 rm -rf "$MDHB/mods/not-a-mod"
 
 # The load check speaks for a mod Claude Code does NOT list, by name (L11, L98) ...
-out_606n="$(MDB_LISTED= CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+out_606n="$(MDB_LISTED=other-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
 check "#606 a mod Claude Code does not list is named" "line_has \"\$out_606n\" 'alpha-mod' 'does not list'"
 # ... and for one that fails validation ...
 out_606v="$(MDB_LISTED=alpha-mod MDB_INVALID=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
@@ -18303,17 +18303,26 @@ check "#606 and no mod is accused of being unlisted" "! line_has \"\$out_606f\" 
 # says it could not check. The stub execs a long sleep so the bound is what ends it, and the run is
 # timed against that sleep rather than a fixed number (L224).
 MDHANG="$WORK/mods-hanging-claude"
-printf '#!/bin/bash\ncase "$1 $2" in "plugin list") exec sleep 60 ;; *) echo ok ;; esac\n' > "$MDHANG"; chmod +x "$MDHANG"
+_mhang=60
+printf '#!/bin/bash\ncase "$1 $2" in "plugin list") exec sleep %s ;; *) echo ok ;; esac\n' "$_mhang" > "$MDHANG"; chmod +x "$MDHANG"
 _mh0=$SECONDS
 out_606h="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANG" SYNC_CLAUDE_CHECK_TIMEOUT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
 _mh=$(( SECONDS - _mh0 ))
-check "#606 a hanging claude does not hold the pull for its whole hang" "[ '$_mh' -lt 30 ]"
+check "#606 a hanging claude does not hold the pull for its whole hang" "[ '$_mh' -lt \$(( _mhang / 2 )) ]"
 check "#606 and the pull says the check did not answer in time" "line_has \"\$out_606h\" 'could not check' 'within'"
 # The same bound holds the per mod validation, which is the other question asked.
 MDHANGV="$WORK/mods-hanging-validate"
 printf '#!/bin/bash\ncase "$1 $2" in "plugin list") echo "[{\\"id\\":\\"alpha-mod@inline\\",\\"enabled\\":true}]" ;; "plugin validate") exec sleep 60 ;; esac\n' > "$MDHANGV"; chmod +x "$MDHANGV"
 out_606hv="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANGV" SYNC_CLAUDE_CHECK_TIMEOUT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
 check "#606 a hanging validation is stopped and named for its mod" "line_has \"\$out_606hv\" 'alpha-mod' 'within'"
+# The match is on the `<name>@inline` id measured on 2.1.288. A list with no inline plugin at all is
+# either every mod failing to load or a renamed format, and nothing here can tell which: one line
+# naming the mods and both causes, never one accusation per mod (L36).
+MDSUFFIX="$WORK/mods-other-suffix-claude"
+printf '#!/bin/bash\ncase "$1 $2" in "plugin list") echo "[{\\"id\\":\\"alpha-mod@local\\",\\"enabled\\":true}]" ;; *) echo ok ;; esac\n' > "$MDSUFFIX"; chmod +x "$MDSUFFIX"
+out_606sx="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDSUFFIX" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 a list naming no inline plugin names every mod and both explanations" "line_has \"\$out_606sx\" 'alpha-mod' 'not loading' 'differently'"
+check "#606 and no mod is accused" "! line_has \"\$out_606sx\" 'alpha-mod' 'does not list'"
 # A bound nobody can read is refused, not run as no bound at all (L50).
 out_606tb="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_CHECK_TIMEOUT=soon SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; _606tb_rc=$?
 out_606sd="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_SCRATCH_DU_TIMEOUT=soon SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; _606sd_rc=$?

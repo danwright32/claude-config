@@ -3837,6 +3837,19 @@ check_mods_loaded(){
     echo "claude-sync: could not check the mods on this Mac, because 'claude plugin list --json' did not answer in a form this can read. They were copied and named in settings.json, but nothing has confirmed Claude Code will load them." >&2
     return 0
   fi
+  # Folder plugins are listed as <name>@inline (measured on 2.1.288). A list holding NONE has two
+  # explanations this cannot tell apart: the mods are not loading, or Claude Code now names folder
+  # plugins some other way. Said once, naming both and every mod, rather than one accusation per
+  # mod (L36) or a "could not check" that would hide the very failure this exists to catch (L11).
+  if ! grep -q '@inline$' <<< "$listed"; then
+    local all="" dd
+    while IFS= read -r dd; do [ -n "$dd" ] && all="$all${all:+, }$(mod_name "$dd")"; done <<ALL
+$dirs
+ALL
+    echo "claude-sync: Claude Code lists none of the mods here ($all) as loaded plugins. Either they are not loading on this Mac, or Claude Code now names folder plugins differently from the <name>@inline this reads; 'claude plugin list' shows which." >&2
+    [ -t 2 ] || notify "no mod is listed as loaded on this Mac"
+    return 0
+  fi
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     name="$(mod_name "$d")"
