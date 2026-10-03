@@ -3757,8 +3757,9 @@ mod_name(){   # $1 = a mod folder -> the name its manifest gives, or the folder'
   local n; n="$(jq -r '.name // empty' "$1/.claude-plugin/plugin.json" 2>/dev/null || true)"
   [ -n "$n" ] && printf '%s' "$n" || basename "$1"
 }
-write_mod_plugin_dirs(){
-  local settings="$CLAUDE_HOME/settings.json" cur kept ours joined tmp
+write_mod_plugin_dirs(){   # $1 = keep-leftovers on a send, which never sweeps (claude-config#628)
+  local settings="$CLAUDE_HOME/settings.json" cur kept ours joined tmp sweep=1
+  [ "${1:-}" = keep-leftovers ] && sweep=""
   MODS_SETTINGS_CHANGED=""
   if [ ! -f "$settings" ]; then
     [ -n "$(mod_dirs_here)" ] || return 0
@@ -3772,8 +3773,10 @@ write_mod_plugin_dirs(){
   # A mod removed on the other Mac leaves its folder here holding only what Claude Code generated
   # into it (.claude-plugin/types/ is excluded from the mirror, so --delete cannot take it). With no
   # manifest and nothing else in it, the folder is that leftover and nothing else, so it goes.
+  # Only on an apply, which is the one thing that can leave it: a send fires on every edit, and
+  # sweeping there would race a mod folder somebody has just made and not yet filled (L5).
   local left
-  for left in "$CLAUDE_HOME/mods"/*/; do
+  [ -n "$sweep" ] && for left in "$CLAUDE_HOME/mods"/*/; do
     [ -d "$left" ] && [ ! -f "$left.claude-plugin/plugin.json" ] || continue
     [ -z "$(find "$left" -type f -not -path "$left.claude-plugin/types/*" 2>/dev/null)" ] && rm -rf "${left%/}"
   done
@@ -7417,6 +7420,13 @@ do_send(){
   # 2026-09-07, a full pass over the 6294 line LESSONS.md costs about 0.15s, against a send that
   # already checksums the whole config tree.
   write_lesson_index "$CLAUDE_HOME"
+  # The mods this Mac holds are named in its own settings.json here too, for the same reason and
+  # before the same gates (claude-config#628): it is a local derivation of the local mods folder,
+  # and before this a mod written on this Mac loaded here only after this Mac's next apply. The load
+  # check asks claude, bounded by SYNC_CLAUDE_CHECK_TIMEOUT, and the watcher sends on every edit, so it is asked only when
+  # the names just written changed.
+  write_mod_plugin_dirs keep-leftovers
+  [ -z "$MODS_SETTINGS_CHANGED" ] || check_mods_loaded
   # #262: the automatic send is what takes a deliberate commit's message and cancels its CI run,
   # so it is the one a hold stops. An explicit `claude-sync send` is unaffected.
   if [ "${SYNC_IN_WATCH:-0}" = "1" ] && hold_left="$(hold_remaining)"; then

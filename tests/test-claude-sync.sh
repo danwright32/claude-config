@@ -18212,6 +18212,45 @@ check "#606 a mod is published into the payload" "[ -f '$MDA/payload/mods/alpha-
 check "#606 with its own tsconfig, which is source and travels" "[ -f '$MDA/payload/mods/alpha-mod/tsconfig.json' ]"
 check "#606 but the engine's generated types do not" "[ ! -e '$MDA/payload/mods/alpha-mod/.claude-plugin/types' ]"
 
+# The Mac that SENT a mod names it in its own settings.json at once, without waiting for its next
+# pull (claude-config#628). Every mod is built and tried on the Mac it is written on first, and
+# before this it loaded there only after that Mac's next apply.
+check "#628 the sending Mac's own settings name the mod it just sent" \
+  "jq -e --arg p '$MDHA/mods/alpha-mod' '.env.CLAUDE_CODE_PLUGIN_DIRS | split(\":\") | index(\$p) != null' '$MDHA/settings.json' >/dev/null"
+# A send stopped by a gate (here the watcher hold) still names it: naming is a purely local
+# derivation of this Mac's own mods folder, like the lessons index, and whether a send is allowed to
+# PUBLISH says nothing about whether this Mac should load what it holds (claude-config#320).
+MD628H="$WORK/mods628-home"; mkdir -p "$MD628H"; echo '{"hooks":{}}' > "$MD628H/settings.json"; printf '# rules\n' > "$MD628H/CLAUDE.md"
+mkmod "$MD628H/mods" held-mod
+MD628B="$WORK/mods628-bare.git"; git init -q --bare -b main "$MD628B"
+# Its own shared repo: a send from here mirrors this home up, which would remove the #606 mods below.
+MD628R="$WORK/mods628-repo"; git clone -q "$MD628B" "$MD628R" 2>/dev/null
+printf '%s %s\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" > "$WORK/mods628-hold"
+SYNC_IN_WATCH=1 SYNC_HOLD_FILE="$WORK/mods628-hold" CLAUDE_HOME="$MD628H" SYNC_REPO="$MD628R" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#628 a send held back by a gate still names the mod on its own Mac" \
+  "jq -e --arg p '$MD628H/mods/held-mod' '.env.CLAUDE_CODE_PLUGIN_DIRS | split(\":\") | index(\$p) != null' '$MD628H/settings.json' >/dev/null"
+check "#628 while the hold still keeps it out of the shared repo" "[ ! -e '$MD628R/payload/mods/held-mod' ]"
+rm -f "$WORK/mods628-hold"
+# A folder somebody is in the middle of creating, with nothing in it yet, is NOT swept by a send.
+# The sweep exists for what a removal on the other Mac leaves behind, which only an apply can
+# produce; the send fires on every edit, so sweeping there would race a mod being written (L5).
+mkdir -p "$MD628H/mods/just-made/.claude-plugin"
+CLAUDE_HOME="$MD628H" SYNC_REPO="$MD628R" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#628 a send leaves a mod folder that is still being created" "[ -d '$MD628H/mods/just-made/.claude-plugin' ]"
+rm -rf "$MD628H/mods/just-made"
+# The load check asks claude, bounded by SYNC_CLAUDE_CHECK_TIMEOUT, and the watcher sends on every edit, so a send asks
+# only when the names it wrote CHANGED: a new or removed mod. A stub counts the questions (L466).
+MD628C="$WORK/mods628-counting-claude"; MD628N="$WORK/mods628-asked"; : > "$MD628N"
+printf '#!/bin/bash\necho asked >> "%s"\ncase "$1 $2" in "plugin list") echo "[]" ;; *) echo ok ;; esac\n' "$MD628N" > "$MD628C"; chmod +x "$MD628C"
+mkmod "$MD628H/mods" second-mod
+out_628a="$(CLAUDE_HOME="$MD628H" SYNC_REPO="$MD628R" SYNC_CLAUDE_BIN="$MD628C" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send 2>&1 || true)"
+_628a="$(wc -l < "$MD628N" | tr -d ' ')"
+check "#628 a send that names a new mod asks claude whether it loads" "[ '$_628a' -gt 0 ]"
+check "#628 and reports what it heard" "line_has \"\$out_628a\" 'second-mod' 'not loading'"
+printf 'edit\n' >> "$MD628H/CLAUDE.md"
+CLAUDE_HOME="$MD628H" SYNC_REPO="$MD628R" SYNC_CLAUDE_BIN="$MD628C" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#628 a send with no change to the mods does not ask again" "[ \"\$(wc -l < '$MD628N' | tr -d ' ')\" = '$_628a' ]"
+
 # The receiving Mac. Its settings.json already holds an env entry of its own and a plugin folder
 # somebody named by hand: the sync owns only the entries under its mods folder (L509, L692).
 # A Mac with NO mods and no plugin dirs entry must not have settings.json rewritten at all. jq

@@ -972,11 +972,15 @@ Mac (#48), every mod loads on both Macs (#606).
 
 Claude Code finds them through `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of each Mac's own
 `settings.json`. That block does not travel, so every apply rewrites the value from the mod folders
-actually present (a folder without a manifest is not named). Only entries under `~/.claude/mods/`
+actually present (a folder without a manifest is not named), and so does every send, so a mod
+written on this Mac is named here at once rather than after this Mac's next pull (#628). A send does
+this even when a gate (a hold, being behind) stops it publishing, and it never removes a mod folder:
+only an apply clears the empty folder a removal on the other Mac leaves behind. Only entries under `~/.claude/mods/`
 are the sync's; any other folder named there by hand is kept. With none left, the key is removed.
 The change reaches **new** sessions only: a running session keeps the plugins it loaded.
 
-After each apply, `claude plugin list --json` and `claude plugin validate` are asked about every mod,
+After each apply, and after a send that changed which mods are named, `claude plugin list --json`
+and `claude plugin validate` are asked about every mod,
 and the pull names any mod Claude Code does not list as enabled, or that validation refuses, with
 the reason. When there is no `claude` command to ask (the scheduled job's short PATH falls back to
 `~/.local/bin/claude`), the pull says the mods could not be checked rather than that they are fine.
