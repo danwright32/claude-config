@@ -981,6 +981,13 @@ and the pull names any mod Claude Code does not list as enabled, or that validat
 the reason. When there is no `claude` command to ask (the scheduled job's short PATH falls back to
 `~/.local/bin/claude`), the pull says the mods could not be checked rather than that they are fine.
 This measures that each mod is configured and valid; it cannot see inside a running session.
+Each `claude` question is stopped after `SYNC_CLAUDE_CHECK_TIMEOUT` seconds (30 by default; each
+each answered in under half a second when measured), because the check runs under the sync lock and a hung
+`claude` would otherwise hold every sync behind it.
+
+Deleting a mod deletes it on the other Mac. Deleting the whole `~/.claude/mods` folder does not: a
+Mac with no mods folder cannot be told apart from one that never had mods yet, and reading that as a
+deletion would wipe the other Mac's mods the first time a fresh Mac sends. Delete the mods inside it.
 
 Two things are deliberately not carried:
 

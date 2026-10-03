@@ -18298,6 +18298,27 @@ printf '#!/bin/bash\ncase "$1 $2" in "plugin list") exit 1 ;; *) echo ok ;; esac
 out_606f="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAIL" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
 check "#606 a failing plugin list is reported as could not check" "line_has \"\$out_606f\" 'could not check' 'mods'"
 check "#606 and no mod is accused of being unlisted" "! line_has \"\$out_606f\" 'alpha-mod' 'does not list'"
+# ... and a claude that HANGS (a login prompt, a self update) must not hold the sync with it: the
+# check runs under the sync lock on the watcher's and the timer's path. Bounded, it ends on time and
+# says it could not check. The stub execs a long sleep so the bound is what ends it, and the run is
+# timed against that sleep rather than a fixed number (L224).
+MDHANG="$WORK/mods-hanging-claude"
+printf '#!/bin/bash\ncase "$1 $2" in "plugin list") exec sleep 60 ;; *) echo ok ;; esac\n' > "$MDHANG"; chmod +x "$MDHANG"
+_mh0=$SECONDS
+out_606h="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANG" SYNC_CLAUDE_CHECK_TIMEOUT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+_mh=$(( SECONDS - _mh0 ))
+check "#606 a hanging claude does not hold the pull for its whole hang" "[ '$_mh' -lt 30 ]"
+check "#606 and the pull says the check did not answer in time" "line_has \"\$out_606h\" 'could not check' 'within'"
+# The same bound holds the per mod validation, which is the other question asked.
+MDHANGV="$WORK/mods-hanging-validate"
+printf '#!/bin/bash\ncase "$1 $2" in "plugin list") echo "[{\\"id\\":\\"alpha-mod@inline\\",\\"enabled\\":true}]" ;; "plugin validate") exec sleep 60 ;; esac\n' > "$MDHANGV"; chmod +x "$MDHANGV"
+out_606hv="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANGV" SYNC_CLAUDE_CHECK_TIMEOUT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 a hanging validation is stopped and named for its mod" "line_has \"\$out_606hv\" 'alpha-mod' 'within'"
+# A bound nobody can read is refused, not run as no bound at all (L50).
+out_606tb="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_CHECK_TIMEOUT=soon SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; _606tb_rc=$?
+out_606sd="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_SCRATCH_DU_TIMEOUT=soon SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; _606sd_rc=$?
+check "#606 the older scratch timeout refusal now exits with its own status too" "[ '$_606sd_rc' -eq 2 ] && ! line_has \"\$out_606sd\" 'command not found' 'cleanup'"
+check "#606 an unreadable check timeout is refused" "[ '$_606tb_rc' -eq 2 ] && line_has \"\$out_606tb\" 'SYNC_CLAUDE_CHECK_TIMEOUT' 'Refusing'"
 # ... and when the check cannot run at all, it says so rather than reporting a pass (L490, L215).
 out_606x="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
 check "#606 with no claude to ask, the pull says the mods could not be checked" \
