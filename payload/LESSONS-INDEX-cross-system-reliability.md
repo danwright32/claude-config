@@ -86,3 +86,4 @@ which is NOT loaded into the session.
 - L736. Decide a row is due on the clock that stamped it: a server clock slightly behind the database's leaves just-written work waiting for the next sweep.
 - L739. A partitioned query bounded by CURRENT_DATE or now() locks every partition and blocks a purge of old ones; pass literal bounds.
 - L1016. A job started with & from a script ignores SIGINT and passes that on, so a test that interrupts its subject hangs unless it checks first.
+- L1017. Work moved off main posts its notifications off main too; make every observer of what it writes main queue delivered or thread safe.

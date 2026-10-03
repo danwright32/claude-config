@@ -9616,6 +9616,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   each time, while the same fixture passed alone and in every harness launched merge.)
   SHORT: A job started with & from a script ignores SIGINT and passes that on, so a test that interrupts its subject hangs unless it checks first.
 
+- **L1017. Moving work off the main thread moves every notification it triggers synchronously, a
+  settings write or a NotificationCenter post, onto that thread too, so before moving it, find every
+  observer of what the work writes and make each one main queue delivered or thread safe.** The move
+  looks local: the work itself is correct off main and its own tests pass, while an observer written
+  years earlier for a world where only the main thread posted now runs on the background thread, and in
+  Swift a main actor observer reached there traps. Fix it at the observer, which is the one place that
+  is safe for every writer, rather than at each writer. (overture#4464, 2026-10-02: #4458 moved the
+  freeze report onto a background actor to stop a window freeze; its UserDefaults write posted
+  didChangeNotification on that actor into AppDelegate's main actor selector, and the installed app
+  crashed on every launch until the observer was delivered on the main queue.)
+  SHORT: Work moved off main posts its notifications off main too; make every observer of what it writes main queue delivered or thread safe.
+
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
