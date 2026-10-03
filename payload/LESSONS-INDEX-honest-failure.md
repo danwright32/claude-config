@@ -103,3 +103,4 @@ which is NOT loaded into the session.
 - L1006. Renaming an enum case whose raw value is persisted silently deletes it on read, so the rename is a data migration and ships with one.
 - L723. A monitor baselined on a trailing window of its own series cannot see change slower than the window, so also compare against a fixed past reference.
 - L737. A time limit sized for machine work starts after any step waiting on a person, which gets its own limit and reason.
+- L743. Before a timeout is read as a failure, compute the work's duration at the slowest passing input and keep it well inside the limit.

@@ -4575,6 +4575,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   a person)
   SHORT: A time limit sized for machine work starts after any step waiting on a person, which gets its own limit and reason.
 
+- **L743. Before a time limit running out is read as a failure of the thing being measured, compute
+  how long the work takes on an input that PASSES, at the slowest it can still pass, and keep that
+  well inside the limit**, or the timeout fails exactly the borderline cases it was meant to judge,
+  and does so with the confidence of a measurement.
+  (sonar#136, from sonar#135: a speed test run out of its 60 seconds was made to read as an unstable
+  connection, and only afterwards was the plan's duration worked out at Regal's minimum speed: about
+  114 seconds, because the kit cuts its large transfers short only on connections slower than the
+  minimum. A real agent's timeout on a connection that may have been fine had just been turned into a
+  failing verdict. The fix derives the worst case from the plan and the floor and holds it under 75
+  percent of the limit in a test. Related to L737, where the limit also spans a wait on a person)
+  SHORT: Before a timeout is read as a failure, compute the work's duration at the slowest passing input and keep it well inside the limit.
+
 ## State and identity
 
 - **L483. A merge that KEEPS an entry because one side lacks it must carry the scope that entry
