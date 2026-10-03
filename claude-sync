@@ -3526,9 +3526,11 @@ $protected
 PROT
     mkdir -p "$PAYLOAD/$d"
     rsync -ac --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
-    # git cannot record an empty directory, so a tree this Mac emptied (its last mod deleted) would
+    # git cannot record an empty directory, so a tree this Mac emptied (its last file deleted) would
     # vanish from the payload, and the other Mac, finding no such tree, would skip it and keep every
-    # file it had: the removal never arrives (claude-config#606). A placeholder keeps "empty" a
+    # file it had: the removal never arrives. Found with mods (claude-config#606), and true of every
+    # mirrored tree, which is why it is written for all of them; the placeholder is then mirrored
+    # into ~/.claude/<tree>/ like any other file, and is harmless there. A placeholder keeps "empty" a
     # state the payload can hold. Written only on the send side, where the empty tree is real.
     [ -n "$(ls -A "$PAYLOAD/$d" 2>/dev/null)" ] || : > "$PAYLOAD/$d/.gitkeep"
   done
@@ -3734,7 +3736,10 @@ mod_name(){   # $1 = a mod folder -> the name its manifest gives, or the folder'
 write_mod_plugin_dirs(){
   local settings="$CLAUDE_HOME/settings.json" cur kept ours joined tmp
   MODS_SETTINGS_CHANGED=""
-  [ -f "$settings" ] || echo '{}' > "$settings"
+  if [ ! -f "$settings" ]; then
+    [ -n "$(mod_dirs_here)" ] || return 0
+    echo '{}' > "$settings"
+  fi
   if ! cur="$(jq -r '.env.CLAUDE_CODE_PLUGIN_DIRS // ""' "$settings" 2>/dev/null)"; then
     echo "claude-sync: could not read settings.json to name the mods in it, so Claude Code has not been told about any mod that just arrived. Check it with 'jq . $settings', fix it, then pull again." >&2
     [ -t 2 ] || notify "mods could not be named in settings.json"
@@ -3754,6 +3759,10 @@ write_mod_plugin_dirs(){
   kept="$(printf '%s' "$cur" | tr ':' '\n' | awk -v home="$HOME" -v pre="$CLAUDE_HOME/mods/" '
     NF { p = $0; if (substr(p, 1, 2) == "~/") p = home substr(p, 2); if (index(p, pre) != 1) print $0 }')"
   joined="$(printf '%s\n%s\n' "$kept" "$ours" | awk 'NF && !seen[$0]++' | paste -sd: - )"
+  # Decided on the VALUE, never on the file's bytes: jq reformats whatever it writes, so a byte
+  # comparison rewrote every Mac's settings.json once for formatting alone, on a Mac with no mods at
+  # all, and reported it as mods named.
+  [ "$joined" = "$cur" ] && return 0
   tmp="$(scratch_file)"
   if [ -z "$joined" ]; then
     jq 'del(.env.CLAUDE_CODE_PLUGIN_DIRS) | if .env == {} then del(.env) else . end' "$settings" > "$tmp" 2>/dev/null
@@ -3792,10 +3801,17 @@ check_mods_loaded(){
   fi
   # Asked the way a new session would read it: from settings.json, so a value this process inherited
   # from the session that started it cannot answer in its place.
+  local rc=0
   if [ "$CLAUDE_HOME" = "$HOME/.claude" ]; then
-    out="$(env -u CLAUDE_CODE_PLUGIN_DIRS "$bin" plugin list --json 2>/dev/null)"
+    out="$(env -u CLAUDE_CODE_PLUGIN_DIRS "$bin" plugin list --json 2>/dev/null)" || rc=$?
   else
-    out="$(env -u CLAUDE_CODE_PLUGIN_DIRS CLAUDE_CONFIG_DIR="$CLAUDE_HOME" "$bin" plugin list --json 2>/dev/null)"
+    out="$(env -u CLAUDE_CODE_PLUGIN_DIRS CLAUDE_CONFIG_DIR="$CLAUDE_HOME" "$bin" plugin list --json 2>/dev/null)" || rc=$?
+  fi
+  # A failed or silent answer is a check that could not run, never a list with no mods in it: read
+  # as empty, it accused every mod of being unlisted (L215).
+  if [ "$rc" -ne 0 ] || is_blank "$out"; then
+    echo "claude-sync: could not check the mods on this Mac, because 'claude plugin list --json' failed (exit $rc) or said nothing. They were copied and named in settings.json, but nothing has confirmed Claude Code will load them." >&2
+    return 0
   fi
   if ! listed="$(printf '%s' "$out" | jq -r '.[] | select(.enabled == true) | .id' 2>/dev/null)"; then
     echo "claude-sync: could not check the mods on this Mac, because 'claude plugin list --json' did not answer in a form this can read. They were copied and named in settings.json, but nothing has confirmed Claude Code will load them." >&2

@@ -18214,6 +18214,15 @@ check "#606 but the engine's generated types do not" "[ ! -e '$MDA/payload/mods/
 
 # The receiving Mac. Its settings.json already holds an env entry of its own and a plugin folder
 # somebody named by hand: the sync owns only the entries under its mods folder (L509, L692).
+# A Mac with NO mods and no plugin dirs entry must not have settings.json rewritten at all. jq
+# reformats on every pass, so writing the file whenever the BYTES differ rewrote every Mac's
+# settings.json once for formatting alone and reported it as mods named.
+MDNB="$WORK/mods-none-repo"; git init -q "$MDNB"; mkdir -p "$MDNB/payload"
+MDNH="$WORK/mods-none-home"; mkdir -p "$MDNH"
+printf '{"hooks":   {},\n  "model":"opus"}\n' > "$MDNH/settings.json"; _mdn0="$(cksum < "$MDNH/settings.json")"
+out_606none="$(CLAUDE_HOME="$MDNH" SYNC_REPO="$MDNB" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 a Mac with no mods keeps its settings.json byte for byte" "[ \"\$(cksum < '$MDNH/settings.json')\" = \"\$_mdn0\" ]"
+check "#606 and the pull does not claim it named any mods" "! line_has \"\$out_606none\" 'mods named' 'settings.json'"
 MDBB="$WORK/mods-B"; git clone -q "$MDB" "$MDBB" 2>/dev/null
 MDHB="$WORK/mods-homeB"; mkdir -p "$MDHB"
 printf '{"hooks":{},"env":{"KEEP_ME":"1","CLAUDE_CODE_PLUGIN_DIRS":"/somewhere/else/hand-mod"}}\n' > "$MDHB/settings.json"
@@ -18259,6 +18268,15 @@ MDB_LISTED=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDF
 check "#606 a pull with nothing new leaves settings.json untouched" \
   "[ \"\$(cksum < '$MDHB/settings.json')\" = \"\$_m0\" ] && [ -z \"\$(find '$MDHB/settings.json' -newer '$MDHB/CLAUDE.md' 2>/dev/null)\" ]"
 
+# A mod somebody is partway through writing here (a module, no manifest yet) is not a removed mod's
+# leftover: only a folder holding Claude Code's generated types and nothing else is. (An EMPTY new
+# folder is removed by the mirror itself, as in every synced tree; it holds no work.)
+mkdir -p "$MDHB/mods/being-written/hooks" "$MDHB/mods/being-written/.claude-plugin/types"
+printf 'export const register = () => {}\n' > "$MDHB/mods/being-written/hooks/register.ts"
+printf 'x\n' > "$MDHB/mods/being-written/.claude-plugin/types/x.d.ts"
+MDB_LISTED=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 a mod being written here, with no manifest yet, is left alone" "[ -f '$MDHB/mods/being-written/hooks/register.ts' ]"
+rm -rf "$MDHB/mods/being-written"
 # A folder in mods that is not a plugin (no manifest) is not named: the engine would refuse it on
 # every session start.
 mkdir -p "$MDHB/mods/not-a-mod"; printf 'notes\n' > "$MDHB/mods/not-a-mod/readme.txt"
@@ -18269,10 +18287,17 @@ rm -rf "$MDHB/mods/not-a-mod"
 
 # The load check speaks for a mod Claude Code does NOT list, by name (L11, L98) ...
 out_606n="$(MDB_LISTED= CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
-check "#606 a mod Claude Code does not list is named" "line_has \"\$out_606n\" 'alpha-mod' 'not'"
+check "#606 a mod Claude Code does not list is named" "line_has \"\$out_606n\" 'alpha-mod' 'does not list'"
 # ... and for one that fails validation ...
 out_606v="$(MDB_LISTED=alpha-mod MDB_INVALID=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
 check "#606 a mod that fails validation is named with the reason" "line_has \"\$out_606v\" 'alpha-mod' 'refused'"
+# ... and when `claude plugin list` itself fails and prints nothing, that is a check that could not
+# run, not a list in which no mod appears: reading its silence as an empty list accuses every mod.
+MDFAIL="$WORK/mods-failing-claude"
+printf '#!/bin/bash\ncase "$1 $2" in "plugin list") exit 1 ;; *) echo ok ;; esac\n' > "$MDFAIL"; chmod +x "$MDFAIL"
+out_606f="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAIL" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 a failing plugin list is reported as could not check" "line_has \"\$out_606f\" 'could not check' 'mods'"
+check "#606 and no mod is accused of being unlisted" "! line_has \"\$out_606f\" 'alpha-mod' 'does not list'"
 # ... and when the check cannot run at all, it says so rather than reporting a pass (L490, L215).
 out_606x="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
 check "#606 with no claude to ask, the pull says the mods could not be checked" \
