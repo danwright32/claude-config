@@ -44,6 +44,12 @@
 # heading, and marked DELIVERED (<file>.delivered) once shown, which is what lets the merge gate
 # allow the merge without refusing once to deliver the findings itself.
 #
+# Nothing in either loop below may start a process per FILE: the state directory holds every
+# repository's reviews for 14 days (1,975 files on 2026-10-03), and one `basename` per file took the
+# hook to 15 to 17 s on a heavily loaded machine, past its 5 s timeout, so its output was discarded on
+# every prompt. Names are cut with parameter expansion; test-ai-review-on-push.sh section 6b counts
+# the processes started with and without 300 unrelated files and requires the two to be equal.
+#
 # Housekeeping, only on the full path: finished files older than 14 days are removed, with their
 # delivery stamps. They are records of a push, not data anybody restores from. citations.tsv, the
 # ledger of which lessons reviews cite, is not a .txt and is never swept.
@@ -104,16 +110,21 @@ if [ -z "$LIST" ]; then
 fi
 
 mkdir -p "$SHOWN_DIR" 2>/dev/null || true
-shown=$'\n'
-[ -n "$LIST" ] && [ -f "$LIST" ] && shown=$'\n'"$(cat "$LIST" 2>/dev/null)"$'\n'
 
 mark_shown() {   # $1 = file name
   [ -n "$LIST" ] || return 0
   printf '%s\n' "$1" >> "$LIST" 2>/dev/null || true
-  shown="${shown}$1"$'\n'
 }
-was_shown() {    # $1 = file name
-  case "$shown" in *$'\n'"$1"$'\n'*) return 0 ;; *) return 1 ;; esac
+
+# This repository's finished reviews that this session has not been shown, in glob order, worked
+# out by ONE awk over every name at once. Testing each file against the session's list in bash was
+# a pattern match over the whole list per file, which with 916 reviews and a 468 line list took
+# 2.9 s at load 200 (measured 2026-10-03), most of the hook's 5 s timeout.
+unshown_reviews() {
+  [ "${#finished[@]}" -gt 0 ] || return 0
+  printf '%s\n' "${finished[@]##*/}" | awk -v prefix="$key-" -v list="$LIST" '
+    BEGIN { if (list != "") while ((getline l < list) > 0) seen[l] = 1 }
+    index($0, prefix) == 1 && !($0 in seen)'
 }
 
 now="$(date +%s)"
@@ -158,7 +169,7 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
 # every prompt that had nothing pending, which is every ordinary prompt (found by the suite, not by
 # reading).
 [ "${#pending[@]}" -gt 0 ] && for p in "${pending[@]}"; do
-  base="$(basename "$p")"
+  base="${p##*/}"
   case "$base" in "$key"-*) ;; *) continue ;; esac
   read_meta "$p"
   case "$m_started" in ''|*[!0-9]*) continue ;; esac
@@ -181,10 +192,11 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
   fi
 done
 
-[ "${#finished[@]}" -gt 0 ] && for f in "${finished[@]}"; do
-  base="$(basename "$f")"
-  case "$base" in "$key"-*) ;; *) continue ;; esac
-  was_shown "$base" && continue
+todo="$(unshown_reviews)"
+IFS=$'\n'
+for base in $todo; do
+  IFS=$' \t\n'
+  f="$AR_STATE_DIR/$base"
   if [ "$printed" -ge "$NUDGE_BUDGET" ]; then held=$((held + 1)); continue; fi
   read_meta "$f"
   short="${m_sha:0:7}"
@@ -236,6 +248,7 @@ done
   esac
   mark_shown "$base"
 done
+IFS=$' \t\n'
 
 # Housekeeping and the fast path stamp: this session has now seen everything written so far.
 [ "$held" -gt 0 ] && printf '%s more finished review(s) are not shown, to stay under the hook output cap; they will be shown on the next prompt.\n' "$held"
