@@ -982,7 +982,7 @@ the reason. When there is no `claude` command to ask (the scheduled job's short 
 `~/.local/bin/claude`), the pull says the mods could not be checked rather than that they are fine.
 This measures that each mod is configured and valid; it cannot see inside a running session.
 Each `claude` question is stopped after `SYNC_CLAUDE_CHECK_TIMEOUT` seconds (30 by default; each
-each answered in under half a second when measured), because the check runs under the sync lock and a hung
+answered in under half a second when measured), because the check runs under the sync lock and a hung
 `claude` would otherwise hold every sync behind it.
 
 Deleting a mod deletes it on the other Mac. Deleting the whole `~/.claude/mods` folder does not: a
