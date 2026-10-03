@@ -1,0 +1,17 @@
+# One fixture set for the Writing Style character rule (claude-config#609): the push hook's diff
+# reading and the style-check mod's --plain reading must agree on every line. Each line is a
+# verdict, a tab, and the text with every non-ASCII character written as a \u escape, so this
+# file holds none of the characters it tests.
+flag	Loading \u2014 please wait
+flag	from 9\u20135
+flag	Deploy succeeded \U0001F389
+flag	a star \u2b50 here
+flag	a heart \u2764\ufe0f
+flag	arrow \u2b05 back
+flag	flag \U0001F1FA\U0001F1F8
+flag	sun \u2600 out
+clean	self-aware and well-known
+clean	a minus sign \u2212 is not a dash
+clean	written as an escape: \\u2014
+clean	plain ascii text, nothing else
+clean	accents are fine: caf\u00e9 na\u00efve

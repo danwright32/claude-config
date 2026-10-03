@@ -1,0 +1,8 @@
+{
+  "name": "keystroke-guard",
+  "version": "0.1.0",
+  "description": "Refuses synthetic keystrokes and clicks unless the declared app is frontmost and alone, after a heads up.",
+  "author": {
+    "name": "Dan Wright"
+  }
+}

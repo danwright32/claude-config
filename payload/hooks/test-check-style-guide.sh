@@ -26,18 +26,14 @@ case "${WORKDIR%/}" in
 esac
 trap 'rm -rf "$WORKDIR"' EXIT
 
-# Pull the python3 -c '...' detector body out of the hook into its own file
-# (the lines strictly between the opening `findings=...python3 -c '` line and
-# the closing `' 2>/dev/null)"` line).
-awk '
-  /^findings="\$\(printf/ { flag=1; next }
-  flag && /2>\/dev\/null\)"$/ { flag=0; next }
-  flag { print }
-' "$HOOK" > "$WORKDIR/.style-detector.tmp.py"
-[ -s "$WORKDIR/.style-detector.tmp.py" ] || { echo "FAIL: could not extract detector block"; exit 1; }
+# The detector is ONE shared script, lib/style-scan.py, which this hook and the style-check mod
+# both run (claude-config#609). It is driven directly here, so the suite tests the rule itself and
+# not a re-implementation of it (L52). It used to be lifted out of the hook with awk.
+SCANNER="$DIR/lib/style-scan.py"
+[ -f "$SCANNER" ] || { echo "FAIL: lib/style-scan.py is missing, so there is no detector to test"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
 
 detect() {
-  printf '%s' "$1" | python3 "$WORKDIR/.style-detector.tmp.py"
+  printf '%s' "$1" | python3 "$SCANNER"
 }
 
 pass=0
@@ -82,6 +78,60 @@ want_flag "em dash in a brand-new untracked file" "--- NEW FILE: app/new.ts ---
 want_clean "plain new file with no violations" "--- NEW FILE: app/new.ts ---
 +export const x = 1;"
 
+
+# --- one rule, shared with the style-check mod (claude-config#609) ---
+# The hook must carry no copy of the rule: a second copy is the thing that drifts (L370, L613).
+if grep -q 'dash_re\|emoji_re\|U0001F300' "$HOOK"; then
+  fail=$((fail+1)); echo "FAIL: check-style-guide.sh still holds its own copy of the character rule"
+else pass=$((pass+1)); fi
+if grep -q 'lib/style-scan.py' "$HOOK"; then pass=$((pass+1));
+else fail=$((fail+1)); echo "FAIL: check-style-guide.sh does not run lib/style-scan.py"; fi
+
+# --plain reads text as written (no diff markers), names each offending line by number, and exits
+# 1 on a finding, 0 when clean: the mod refuses on the exit code and quotes the lines.
+uesc() { python3 -c 'import sys,codecs; sys.stdout.write(codecs.decode(sys.argv[1], "unicode_escape"))' "$1"; }
+plain() {  # $1 text, then any extra flags -> PLAIN_OUT, PLAIN_CODE
+  local t="$1"; shift
+  PLAIN_OUT="$(printf '%s' "$t" | python3 "$SCANNER" --plain "$@")"; PLAIN_CODE=$?
+}
+want_plain() {  # $1 expected code, $2 description
+  if [ "$PLAIN_CODE" = "$1" ]; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: $2: expected exit $1, got $PLAIN_CODE ($PLAIN_OUT)"; fi
+}
+plain "$(printf 'fine\nalso %s fine\n' "$(uesc 'x\u2014y')")"
+want_plain 1 "--plain flags a dash on line 2"
+case "$PLAIN_OUT" in *"line 2:"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: --plain names the line: got $PLAIN_OUT" ;; esac
+plain "$(printf '+++ b/x\n-%s\n' "$(uesc '\u2014')")"
+want_plain 1 "--plain reads every line, even one that looks like a removed diff line"
+plain "nothing here, self-aware and well-known"
+want_plain 0 "--plain is clean on hyphens"
+[ -z "$PLAIN_OUT" ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: a clean --plain run prints nothing"; }
+plain "$(uesc 'a \u2014 b')" --path "/repo/CLAUDE.md"
+want_plain 0 "--plain honours the same excluded paths as the push (CLAUDE.md)"
+plain "$(uesc 'a \u2014 b')" --path "/repo/package-lock.json"
+want_plain 0 "--plain honours the same excluded paths as the push (a lock file)"
+plain "$(uesc 'a \u2014 b')" --path "/repo/src/a.ts"
+want_plain 1 "--plain still judges an ordinary path"
+plain "x" --bogus
+want_plain 2 "an unknown flag is refused with its own exit code, never read as clean (L11)"
+
+# One fixture set, two readings: the push's diff reading and the mod's --plain reading must give the
+# same verdict on every case (the issue's done-when). Escapes keep this file free of the characters.
+FIXTURES="$DIR/lib/style-fixtures.txt"
+nfix=0
+while IFS=$'\t' read -r want text; do
+  case "$want" in flag|clean) ;; *) continue ;; esac
+  nfix=$((nfix+1))
+  body="$(uesc "$text")"
+  d="$(detect "$(printf '+++ b/f.ts\n+%s\n' "$body")")"
+  plain "$body"
+  if [ -n "$d" ]; then dv=flag; else dv=clean; fi
+  if [ "$PLAIN_CODE" = 1 ]; then pv=flag; elif [ "$PLAIN_CODE" = 0 ]; then pv=clean; else pv="exit$PLAIN_CODE"; fi
+  if [ "$dv" = "$want" ] && [ "$pv" = "$want" ]; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: fixture '$text': want $want, push reading $dv, mod reading $pv"; fi
+done < "$FIXTURES"
+# The count is asserted, so an unreadable or emptied fixture file cannot pass as agreement (L98).
+if [ "$nfix" -ge 10 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: only $nfix fixtures were read from $FIXTURES"; fi
 
 # --- end to end: the hook must find the repo even when the session is elsewhere -
 # The payload's cwd is the SESSION's directory, not the project's. A session
