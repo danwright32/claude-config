@@ -2609,6 +2609,10 @@ export SYNC_HOLD_FILE="$WORK/hold-guard"
 # here, exactly as the notifier and the launch agents are; the five sections that are ABOUT the
 # gate set their own stub (L2, and the same rule as claude-config#301).
 export SYNC_GH="$WORK/no-such-gh-here"
+# The claude binary, which the mods load check asks (claude-config#606). Pointed at nothing for the
+# whole suite, as gh is: the one section ABOUT the check sets its own stub, and nothing else may
+# start a real Claude Code (L2, L291).
+export SYNC_CLAUDE_BIN="$WORK/no-such-claude-here"
 # The launch agents, which is where other_sync_clones finds sibling clones (claude-config#301).
 # Left at its default this suite read the operator's REAL agents, found the real scheduled clone,
 # and read that clone's real .hook-tests and its real position against the remote. On 2026-09-03
@@ -18179,6 +18183,232 @@ check "#564 a removal from the list travels too" \
   "! grep -qx L5 '$LCHB/LESSONS-CORE.txt' && grep -qx L4 '$LCHB/LESSONS-CORE.txt'"
 check "#564 and the receiving Mac treats a reviewed shrink as a decision, not damage" \
   "case \"\$(cat '$LCHB/.lessons-core-state' 2>/dev/null)\" in 'active 3'*) true ;; *) false ;; esac"
+
+section "== mods travel to the other Mac and are wired into settings.json (#606) =="
+# A mod is a Claude Code plugin folder (.claude-plugin/plugin.json plus a hooks module). Claude Code
+# loads one from a folder named in CLAUDE_CODE_PLUGIN_DIRS, read from the env block of
+# ~/.claude/settings.json, and that block is NOT carried by the sync (only the hooks block is), so
+# each Mac has to have the list written for it, derived from the mods that actually arrived (L41).
+# Measured 2026-10-03 on 2.1.288 before building: a probe mod named that way ran its session.start
+# hook in a real session with no prompt, and the engine wrote .claude-plugin/types/ into the folder
+# on every load, which is per Mac output and must never travel.
+MDB="$WORK/mods-bare.git"; git init -q --bare -b main "$MDB"
+MDA="$WORK/mods-A"; git clone -q "$MDB" "$MDA" 2>/dev/null
+MDHA="$WORK/mods-homeA"
+mkmod(){   # $1 = a mods directory  $2 = the mod's folder and name
+  mkdir -p "$1/$2/.claude-plugin" "$1/$2/hooks"
+  printf '{ "name": "%s", "version": "0.1.0", "description": "a test mod" }\n' "$2" > "$1/$2/.claude-plugin/plugin.json"
+  printf '{ "modules": ["./register.ts"] }\n' > "$1/$2/hooks/hooks.json"
+  printf 'export const register = () => {}\n' > "$1/$2/hooks/register.ts"
+  printf '{ "extends": "./.claude-plugin/types/tsconfig.json" }\n' > "$1/$2/tsconfig.json"
+}
+mkdir -p "$MDHA/mods"; echo '{"hooks":{}}' > "$MDHA/settings.json"; printf '# rules\n' > "$MDHA/CLAUDE.md"
+mkmod "$MDHA/mods" alpha-mod
+# What the engine writes into the folder on THIS Mac when it loads the mod.
+mkdir -p "$MDHA/mods/alpha-mod/.claude-plugin/types/claude-code"
+printf 'declare module "claude-code" {}\n' > "$MDHA/mods/alpha-mod/.claude-plugin/types/claude-code/index.d.ts"
+CLAUDE_HOME="$MDHA" SYNC_REPO="$MDA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#606 a mod is published into the payload" "[ -f '$MDA/payload/mods/alpha-mod/.claude-plugin/plugin.json' ]"
+check "#606 with its own tsconfig, which is source and travels" "[ -f '$MDA/payload/mods/alpha-mod/tsconfig.json' ]"
+check "#606 but the engine's generated types do not" "[ ! -e '$MDA/payload/mods/alpha-mod/.claude-plugin/types' ]"
+
+# The receiving Mac. Its settings.json already holds an env entry of its own and a plugin folder
+# somebody named by hand: the sync owns only the entries under its mods folder (L509, L692).
+# A Mac with NO mods and no plugin dirs entry must not have settings.json rewritten at all. jq
+# reformats on every pass, so writing the file whenever the BYTES differ rewrote every Mac's
+# settings.json once for formatting alone and reported it as mods named.
+MDNB="$WORK/mods-none-repo"; git init -q "$MDNB"; mkdir -p "$MDNB/payload"
+MDNH="$WORK/mods-none-home"; mkdir -p "$MDNH"
+printf '{"hooks":   {},\n  "model":"opus"}\n' > "$MDNH/settings.json"; _mdn0="$(cksum < "$MDNH/settings.json")"
+out_606none="$(CLAUDE_HOME="$MDNH" SYNC_REPO="$MDNB" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 a Mac with no mods keeps its settings.json byte for byte" "[ \"\$(cksum < '$MDNH/settings.json')\" = \"\$_mdn0\" ]"
+check "#606 and the pull does not claim it named any mods" "! line_has \"\$out_606none\" 'mods named' 'settings.json'"
+MDBB="$WORK/mods-B"; git clone -q "$MDB" "$MDBB" 2>/dev/null
+MDHB="$WORK/mods-homeB"; mkdir -p "$MDHB"
+printf '{"hooks":{},"env":{"KEEP_ME":"1","CLAUDE_CODE_PLUGIN_DIRS":"/somewhere/else/hand-mod"}}\n' > "$MDHB/settings.json"
+# A stub claude that lists whatever names MDB_LISTED holds as loaded inline plugins, and validates
+# everything. The real binary is never run by this suite (L2): the prelude points the seam at nothing.
+MDFAKE="$WORK/mods-fake-claude"
+cat > "$MDFAKE" <<'FAKE'
+#!/bin/bash
+case "$1 $2" in
+  "plugin list") printf '['; sep=''; for n in ${MDB_LISTED:-}; do printf '%s{"id":"%s@inline","enabled":true}' "$sep" "$n"; sep=','; done; printf ']\n' ;;
+  "plugin validate") [ -n "${MDB_INVALID:-}" ] && case "$3" in *"$MDB_INVALID"*) echo "hooks: refused"; exit 1 ;; esac; echo ok ;;
+  *) exit 2 ;;
+esac
+FAKE
+chmod +x "$MDFAKE"
+out_606="$(MDB_LISTED=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#606 first pull: $out_606"
+check "#606 the mod reaches the other Mac" "[ -f '$MDHB/mods/alpha-mod/hooks/register.ts' ]"
+check "#606 the receiving Mac's settings name it in CLAUDE_CODE_PLUGIN_DIRS" \
+  "jq -e --arg p '$MDHB/mods/alpha-mod' '.env.CLAUDE_CODE_PLUGIN_DIRS | split(\":\") | index(\$p) != null' '$MDHB/settings.json' >/dev/null"
+check "#606 a plugin folder named by hand is kept" \
+  "jq -e '.env.CLAUDE_CODE_PLUGIN_DIRS | split(\":\") | index(\"/somewhere/else/hand-mod\") != null' '$MDHB/settings.json' >/dev/null"
+check "#606 another env entry is untouched" "[ \"\$(jq -r '.env.KEEP_ME' '$MDHB/settings.json')\" = 1 ]"
+check "#606 the hooks block is still there" "jq -e '.hooks' '$MDHB/settings.json' >/dev/null"
+check "#606 the pull says the mod is configured, and only for new sessions" \
+  "line_has \"\$out_606\" 'alpha-mod' 'new session'"
+
+# The receiving Mac's OWN generated types survive a pull: the exclusion has to hold on the receiving
+# side, or --delete removes them on every sync and the engine rewrites them on every load.
+mkdir -p "$MDHB/mods/alpha-mod/.claude-plugin/types"; printf 'x\n' > "$MDHB/mods/alpha-mod/.claude-plugin/types/kept.d.ts"
+MDB_LISTED=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 this Mac's generated types survive a pull" "[ -f '$MDHB/mods/alpha-mod/.claude-plugin/types/kept.d.ts' ]"
+# That alone is answered by the sync's protection for unsent local work as much as by the exclusion
+# (seen 2026-10-03: it stayed green with the exclusion removed), so the exclusion is measured where
+# only it can answer: this Mac's generated types must not be SENT either (L63).
+CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#606 and are never sent from the receiving Mac" "[ ! -e '$MDBB/payload/mods/alpha-mod/.claude-plugin/types' ]"
+check "#606 while the mod itself is still in that payload" "[ -f '$MDBB/payload/mods/alpha-mod/.claude-plugin/plugin.json' ]"
+
+# Idempotent: a pull with nothing new must not rewrite settings.json, which is a WatchPath (#2855's rule).
+_m0="$(cksum < "$MDHB/settings.json")"; touch -t 202001010000 "$MDHB/settings.json"
+MDB_LISTED=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 a pull with nothing new leaves settings.json untouched" \
+  "[ \"\$(cksum < '$MDHB/settings.json')\" = \"\$_m0\" ] && [ -z \"\$(find '$MDHB/settings.json' -newer '$MDHB/CLAUDE.md' 2>/dev/null)\" ]"
+
+# A mod somebody is partway through writing here (a module, no manifest yet) is not a removed mod's
+# leftover: only a folder holding Claude Code's generated types and nothing else is. (An EMPTY new
+# folder is removed by the mirror itself, as in every synced tree; it holds no work.)
+mkdir -p "$MDHB/mods/being-written/hooks" "$MDHB/mods/being-written/.claude-plugin/types"
+printf 'export const register = () => {}\n' > "$MDHB/mods/being-written/hooks/register.ts"
+printf 'x\n' > "$MDHB/mods/being-written/.claude-plugin/types/x.d.ts"
+MDB_LISTED=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 a mod being written here, with no manifest yet, is left alone" "[ -f '$MDHB/mods/being-written/hooks/register.ts' ]"
+rm -rf "$MDHB/mods/being-written"
+# A folder in mods that is not a plugin (no manifest) is not named: the engine would refuse it on
+# every session start.
+mkdir -p "$MDHB/mods/not-a-mod"; printf 'notes\n' > "$MDHB/mods/not-a-mod/readme.txt"
+MDB_LISTED=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 a folder with no plugin manifest is not named" \
+  "! grep -q not-a-mod <<< \"\$(jq -r '.env.CLAUDE_CODE_PLUGIN_DIRS' '$MDHB/settings.json')\""
+rm -rf "$MDHB/mods/not-a-mod"
+
+# The load check speaks for a mod Claude Code does NOT list, by name (L11, L98) ...
+out_606n="$(MDB_LISTED=other-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 a mod Claude Code does not list is named" "line_has \"\$out_606n\" 'alpha-mod' 'does not list'"
+# ... and for one that fails validation ...
+out_606v="$(MDB_LISTED=alpha-mod MDB_INVALID=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 a mod that fails validation is named with the reason" "line_has \"\$out_606v\" 'alpha-mod' 'refused'"
+# ... and when `claude plugin list` itself fails and prints nothing, that is a check that could not
+# run, not a list in which no mod appears: reading its silence as an empty list accuses every mod.
+MDFAIL="$WORK/mods-failing-claude"
+printf '#!/bin/bash\ncase "$1 $2" in "plugin list") exit 1 ;; *) echo ok ;; esac\n' > "$MDFAIL"; chmod +x "$MDFAIL"
+out_606f="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAIL" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 a failing plugin list is reported as could not check" "line_has \"\$out_606f\" 'could not check' 'mods'"
+check "#606 and no mod is accused of being unlisted" "! line_has \"\$out_606f\" 'alpha-mod' 'does not list'"
+# ... and a claude that HANGS (a login prompt, a self update) must not hold the sync with it: the
+# check runs under the sync lock on the watcher's and the timer's path. Bounded, it ends on time and
+# says it could not check. The stub execs a long sleep so the bound is what ends it, and the run is
+# timed against that sleep rather than a fixed number (L224).
+MDHANG="$WORK/mods-hanging-claude"
+_mhang=60
+printf '#!/bin/bash\ncase "$1 $2" in "plugin list") exec sleep %s ;; *) echo ok ;; esac\n' "$_mhang" > "$MDHANG"; chmod +x "$MDHANG"
+_mh0=$SECONDS
+out_606h="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANG" SYNC_CLAUDE_CHECK_TIMEOUT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+_mh=$(( SECONDS - _mh0 ))
+check "#606 a hanging claude does not hold the pull for its whole hang" "[ '$_mh' -lt \$(( _mhang / 2 )) ]"
+check "#606 and the pull says the check did not answer in time" "line_has \"\$out_606h\" 'could not check' 'within'"
+# The same bound holds the per mod validation, which is the other question asked.
+MDHANGV="$WORK/mods-hanging-validate"
+printf '#!/bin/bash\ncase "$1 $2" in "plugin list") echo "[{\\"id\\":\\"alpha-mod@inline\\",\\"enabled\\":true}]" ;; "plugin validate") exec sleep 60 ;; esac\n' > "$MDHANGV"; chmod +x "$MDHANGV"
+out_606hv="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANGV" SYNC_CLAUDE_CHECK_TIMEOUT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 a hanging validation is stopped and named for its mod" "line_has \"\$out_606hv\" 'alpha-mod' 'within'"
+# The match is on the `<name>@inline` id measured on 2.1.288. A list with no inline plugin at all is
+# either every mod failing to load or a renamed format, and nothing here can tell which: one line
+# naming the mods and both causes, never one accusation per mod (L36).
+MDSUFFIX="$WORK/mods-other-suffix-claude"
+printf '#!/bin/bash\ncase "$1 $2" in "plugin list") echo "[{\\"id\\":\\"alpha-mod@local\\",\\"enabled\\":true}]" ;; *) echo ok ;; esac\n' > "$MDSUFFIX"; chmod +x "$MDSUFFIX"
+out_606sx="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDSUFFIX" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 a list naming no inline plugin names every mod and both explanations" "line_has \"\$out_606sx\" 'alpha-mod' 'not loading' 'differently'"
+check "#606 and no mod is accused" "! line_has \"\$out_606sx\" 'alpha-mod' 'does not list'"
+# A bound nobody can read is refused, not run as no bound at all (L50).
+out_606tb="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_CHECK_TIMEOUT=soon SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; _606tb_rc=$?
+out_606sd="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_SCRATCH_DU_TIMEOUT=soon SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"; _606sd_rc=$?
+check "#606 the older scratch timeout refusal now exits with its own status too" "[ '$_606sd_rc' -eq 2 ] && ! line_has \"\$out_606sd\" 'command not found' 'cleanup'"
+check "#606 an unreadable check timeout is refused" "[ '$_606tb_rc' -eq 2 ] && line_has \"\$out_606tb\" 'SYNC_CLAUDE_CHECK_TIMEOUT' 'Refusing'"
+# ... and when the check cannot run at all, it says so rather than reporting a pass (L490, L215).
+out_606x="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+check "#606 with no claude to ask, the pull says the mods could not be checked" \
+  "line_has \"\$out_606x\" 'could not' 'mods'"
+check "#606 and does not claim they are configured" "! line_has \"\$out_606x\" 'alpha-mod' 'configured'"
+# Control in the same fixture: the healthy run does not print the failure wording (L159).
+check "#606 a healthy pull names no mod as missing or refused" \
+  "! line_has \"\$out_606\" 'alpha-mod' 'does not list' && ! line_has \"\$out_606\" 'could not check' 'mods'"
+
+# Removing the mod on the first Mac removes it here, folder and settings entry, and leaves the
+# hand-named folder; with none left of ours, the hand one is all that remains.
+rm -rf "$MDHA/mods/alpha-mod"
+CLAUDE_HOME="$MDHA" SYNC_REPO="$MDA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED= CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 a mod removed on one Mac leaves the other" "[ ! -e '$MDHB/mods/alpha-mod/hooks' ]"
+check "#606 including the folder its generated types were holding open" "[ ! -e '$MDHB/mods/alpha-mod' ]"
+check "#606 and its settings entry goes with it, the hand one kept" \
+  "[ \"\$(jq -r '.env.CLAUDE_CODE_PLUGIN_DIRS' '$MDHB/settings.json')\" = /somewhere/else/hand-mod ]"
+# And with no hand entry either, the key is removed rather than left as an empty string.
+printf '{"hooks":{},"env":{"CLAUDE_CODE_PLUGIN_DIRS":"%s"}}\n' "$MDHB/mods/alpha-mod" > "$MDHB/settings.json"
+MDB_LISTED= CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 with nothing left to name, the key is removed" "! jq -e '.env.CLAUDE_CODE_PLUGIN_DIRS' '$MDHB/settings.json' >/dev/null"
+
+# A Mac whose folders merely EXIST EMPTY (a fresh Mac, or a folder Claude Code made) has deleted
+# nothing, so its send must not publish an empty tree for the other Mac to mirror down to. Only a
+# Mac that last APPLIED mods and now has none deleted them. Found by review on 2026-10-03: the
+# placeholder written for every empty tree would have wiped the other Mac's hooks (L5, L625).
+mkmod "$MDHA/mods" beta-mod
+CLAUDE_HOME="$MDHA" SYNC_REPO="$MDA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED=beta-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+mkdir -p "$MDHB/hooks"; printf 'echo kept\n' > "$MDHB/hooks/b-only.sh"
+MDCC="$WORK/mods-C"; git clone -q "$MDB" "$MDCC" 2>/dev/null
+MDHC="$WORK/mods-homeC"; mkdir -p "$MDHC/mods" "$MDHC/hooks"; echo '{"hooks":{}}' > "$MDHC/settings.json"; printf '# rules\n' > "$MDHC/CLAUDE.md"
+CLAUDE_HOME="$MDHC" SYNC_REPO="$MDCC" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#606 a fresh Mac's empty hooks folder publishes no placeholder" "[ ! -e '$MDCC/payload/hooks/.gitkeep' ]"
+check "#606 nor does its empty mods folder" "[ ! -e '$MDCC/payload/mods/.gitkeep' ]"
+MDB_LISTED=beta-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 and the other Mac keeps its mod after that send" "[ -f '$MDHB/mods/beta-mod/.claude-plugin/plugin.json' ]"
+check "#606 and keeps its own hooks" "[ -f '$MDHB/hooks/b-only.sh' ]"
+
+# The same question in a history where no placeholder was ever written, so nothing but the "last
+# had mods" record can stop a fresh Mac publishing one. Above, the sync's guard against a
+# deleted file reappearing removed it anyway and hid whether the condition worked (seen 2026-10-03).
+MD2B="$WORK/mods2-bare.git"; git init -q --bare -b main "$MD2B"
+MD2A="$WORK/mods2-A"; git clone -q "$MD2B" "$MD2A" 2>/dev/null
+MD2HA="$WORK/mods2-homeA"; mkdir -p "$MD2HA/mods"; echo '{"hooks":{}}' > "$MD2HA/settings.json"; printf '# rules\n' > "$MD2HA/CLAUDE.md"
+mkmod "$MD2HA/mods" gamma-mod
+CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MD2BB="$WORK/mods2-B"; git clone -q "$MD2B" "$MD2BB" 2>/dev/null
+MD2HB="$WORK/mods2-homeB"; mkdir -p "$MD2HB"; echo '{"hooks":{}}' > "$MD2HB/settings.json"
+MDB_LISTED=gamma-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+
+# And a deletion arrives EVERY time, not only the first. Deleting every mod, adding one, then
+# deleting every mod again republished a placeholder byte for byte identical to one the history had
+# deleted, and the guard against a deleted file reappearing removed it: the second deletion never
+# arrived. Fixed by the emptying Mac keeping the placeholder in its own mods folder too.
+rm -rf "$MD2HA/mods/gamma-mod"
+CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED= CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 the first emptying reaches the other Mac" "[ ! -e '$MD2HB/mods/gamma-mod' ]"
+mkmod "$MD2HA/mods" delta-mod
+CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED=delta-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 a mod added after an emptying reaches the other Mac" "[ -f '$MD2HB/mods/delta-mod/.claude-plugin/plugin.json' ]"
+rm -rf "$MD2HA/mods/delta-mod"
+CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED= CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 and emptying the mods a second time reaches it too" "[ ! -e '$MD2HB/mods/delta-mod' ]"
+
+# LAST, and with a mod of its own: a fresh Mac's send empties the shared copy of any tree its own
+# folder holds empty (the sync's existing behaviour, for every tree), after which the other Mac's
+# copies read as unsent local work. Run earlier, that would have answered the checks above.
+mkmod "$MD2HA/mods" eps-mod
+CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED=eps-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+MD2CC="$WORK/mods2-C"; git clone -q "$MD2B" "$MD2CC" 2>/dev/null
+MD2HC="$WORK/mods2-homeC"; mkdir -p "$MD2HC/mods"; echo '{"hooks":{}}' > "$MD2HC/settings.json"; printf '# rules\n' > "$MD2HC/CLAUDE.md"
+CLAUDE_HOME="$MD2HC" SYNC_REPO="$MD2CC" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#606 a Mac that never had mods publishes no mods placeholder" "[ ! -e '$MD2CC/payload/mods/.gitkeep' ]"
+MDB_LISTED=eps-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 so the other Mac keeps its mod" "[ -f '$MD2HB/mods/eps-mod/.claude-plugin/plugin.json' ]"
 
 suite_profile
 echo ""

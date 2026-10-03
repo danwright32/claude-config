@@ -487,6 +487,44 @@ without it. In a real session on 2026-08-17, a directory whose project settings 
 is off at user scope listed that plugin's skills, and a control directory without those settings did
 not.
 
+### Mods load on both Macs, the one exception to the above (#606)
+
+The argument above is about third party plugins whose usefulness depends on which projects a Mac
+holds. Mods are Dan's own cross project guards (a collision guard, a secret scrubber, a keystroke
+guard), and one Mac without a guard is a hole in it, so on 2026-10-03 he chose to load every mod on
+both Macs. They live in their own mirrored tree, `mods`, never under `~/.claude/plugins`, so #48's
+per Mac list is untouched.
+
+What was measured before building, on 2.1.288: a probe mod named in `CLAUDE_CODE_PLUGIN_DIRS` ran its
+`session.start` hook in a real session with no prompt, both from the process environment and from a
+`settings.json` env block in a throwaway config directory; the engine wrote `.claude-plugin/types/`
+into the folder on every load and a top level `tsconfig.json` only where none existed;
+`claude plugin validate` and `claude plugin test` exit 1 on a refusal and a failing test.
+
+Rejected along the way:
+
+- **Carrying the env block.** The value names absolute folders on one Mac, and the right value is a
+  fact about which mod folders are present HERE, so it is derived on each apply instead (L41).
+- **A heartbeat mod proving every session ran the mods.** A mod cannot learn its own folder or the
+  home directory, so it would have to guess where to write. The pull's check claims only what it
+  measures (listed and valid), and the real run was proven once per Mac by hand. The biggest lever
+  not pulled, named so a later pass need not rediscover it (L308).
+- **Type checking each mod with tsc in the gate.** The types it needs are generated per Mac at load
+  time and are absent in CI, so the gate relies on `claude plugin validate`, which reads the module
+  the way the engine will.
+- **Treating an absent `payload/mods` as an empty one.** git cannot record an empty folder, so a
+  Mac whose last mod was deleted publishes a `.gitkeep`; without it the other Mac found no tree,
+  skipped it, and kept every mod.
+- **Publishing that placeholder for any empty tree.** The first version did, and review caught that
+  an empty folder is not evidence of a deletion: a fresh Mac's `hooks`, or a folder Claude Code made,
+  is empty too, and the other Mac would have mirrored its tree down to nothing. It is written only
+  for `mods`, and only when this Mac held mods at its last send or apply (`.mods-seen`), which covers
+  a Mac that wrote its mods and only ever sent them as well as one that received them.
+- **Leaving the placeholder in the payload alone.** The emptying Mac keeps it in its own mods folder
+  too. Otherwise adding a mod deletes it from the history, and the next emptying republishes one byte
+  for byte identical to a deleted file, which the guard against resurrected deletions removes: the
+  second emptying never arrived (seen failing in the suite with that line removed).
+
 ### Trimming LESSONS.md rather than splitting it
 
 Rejected for #63. The obvious way to spend fewer tokens on 180 lessons is to write them shorter, and
@@ -672,6 +710,7 @@ that is added both fail until this table is updated.
 | 0.1 seconds | `SYNC_POLL_INTERVAL=0.1` | How finely claude-sync notices that the hook suite runner it started has ended, and that a held sync lock has been released | Beside a hook suite measured between 220 and 441 seconds, the difference between this and the two seconds it replaces is invisible, and the granularity was never load bearing. It is the whole cost in the test suite, where real pulls run against a stub runner that returns in milliseconds: measured 2026-08-30, a pull noticed such a runner 306ms after it finished against 4,203ms at a four second poll. No deadline moves with it, both being measured against the clock, which had to be made true of the lock's own ceiling in the same change because that one was counting turns of its loop, proved by #205 | 2026-08-30 |
 | 1 nested run | `SUITE_MAX_DEPTH=1` | The suite's own depth allowance | Every place the suite spawns itself is one level down and nothing in it legitimately needs a run nested two deep, proved by #34 | 2026-08-17 |
 | 20 minutes | `SUITE_WALL_DEFAULT=1200` in hooks/lib/suite-deadline.sh, the limit every suite arms with, overridden for one run by `SUITE_WALL_TIMEOUT` | Any suite, started directly or by the runner, is stopped as hung, and everything it started is killed | One number for all of them, derived from the slowest suite that takes it. Measured 2026-09-18 on this Mac: test-run-all-tests.sh, the slowest of those, took 89 seconds alone at load 6 and 70 to 76 seconds with three copies at once at load 25. Re-read 2026-09-19 from the runner's own timings store (~/.cache/claude-config/suite-timings), where the slowest suite armed with this default is test-run-all-tests.sh at 90 seconds and the next is test-subagent-issue-harvest.sh at 62, so every other suite has more headroom still. The worst slowdown on record is 5.6x, the sync suite's 348 seconds idle against 1943 at load 160 to 188 on 2026-08-22, which would put the slowest of these near 500 seconds, so the limit is 13x its idle time and 2.4x that worst case. Before this only one suite had a bound at all, and 152 copies of that one were found at zero CPU the day it was measured, the oldest seven hours old. tests/test-claude-sync.sh is the one suite that does NOT take this default: it legitimately runs for 1943 seconds under load, so it arms at its own `SUITE_TIMEOUT` plus 60 seconds, which is 30 of its watchdog's 2 second polls, so the watchdog that can name the section it stopped in is always the one that speaks at the ceiling, proved by #444 | 2026-09-19 |
+| 30 seconds | `SYNC_CLAUDE_CHECK_TIMEOUT=30` | One `claude plugin list` or `claude plugin validate` asked about the mods is stopped, and the pull says the mods could not be checked | Measured 2026-10-03 on this Mac, three runs each: `plugin list --json` took 0.37 to 0.40 seconds and `plugin validate` 0.31 to 0.44, so this is about 70x the slowest. The check runs under the sync lock on the watcher's and the timer's path, so the cost of waiting too long is every sync behind a hung claude (a login prompt, a self update), while a slow first launch still fits inside it, proved by #606 | 2026-10-03 |
 | 30 seconds | `SYNC_SCRATCH_DU_TIMEOUT=30` | A `du` sizing abandoned scratch is stopped and the size is reported as not known | Measured 2026-09-18 on this Mac: one `du` over 792 flat scratch items holding 950 MB in 12,124 entries took 0.2 seconds, so this is 150x that, and the 1,139 items and 1.4 GB the pile left would be under a second at the same rate. A `du` still going at 30 seconds is reading a tree something is writing, and the four found that day had run 23 to 51 minutes, proved by #444 | 2026-09-18 |
 | 1 hour | `SYNC_SUITE_MAX_AGE=3600` | `status` and the per prompt notice report a suite process of this repo as left running, and name it for `kill -9` | Equal to `SUITE_TIMEOUT`, the ceiling of the slowest suite there is, which is the longest any suite is allowed to run at all. The slowest real run on record is that suite's 1943 seconds at load 160 to 188 on 2026-08-22, so a healthy run never reaches it. The pile of 2026-09-18 had 354 processes past 40 minutes and one at seven hours, proved by #444 | 2026-09-18 |
 | 8 runs | `SYNC_SUITE_MAX_ROOTS=8` | `status` and the per prompt notice report this repo's suites as a pile when more than this many were started independently | The runner's own ceiling on what one whole run has in flight, `HOOK_TESTS_BUDGET`, which is the cores capped at 8. A whole run of the runner is ONE independent start, since everything under it is nested. Measured 2026-09-18: three suites started directly at once read as three, so this leaves room for a few agents each running a suite or two, proved by #444 | 2026-09-18 |

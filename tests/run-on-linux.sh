@@ -55,7 +55,7 @@ esac
 #
 # command:package. bash and perl ship in the base image and are named anyway, so the list can be
 # compared against the workflow's without an exception nobody can see.
-TOOL_PACKAGES="bash:bash git:git rsync:rsync jq:jq perl:perl pgrep:procps"
+TOOL_PACKAGES="bash:bash git:git rsync:rsync jq:jq perl:perl pgrep:procps python3:python3"
 
 packages="$(printf '%s\n' $TOOL_PACKAGES | awk -F: '{print $2}' | sort -u | tr '\n' ' ')"
 target="${1:-}"

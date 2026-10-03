@@ -222,7 +222,11 @@ fi
 # directory was not synced, so on the other Mac those pointers named files that do not exist and a
 # lesson's evidence could not be read there at all. It is nine markdown files and half a megabyte,
 # which is cheaper than a rule whose reasoning is unreachable on the machine reading it.
-MIRROR_DIRS=(hooks agents commands audits)   # full mirror (no overlap with plugins)
+# `mods` is here since claude-config#606: Claude Code mods, each a plugin folder Dan wrote, which
+# load on BOTH Macs by decision (a guard missing on one Mac is a hole). This is the one exception to
+# #48, which keeps third party plugins per Mac; those live under ~/.claude/plugins and are never
+# mirrored. Each Mac's settings.json is told about the mods it holds by write_mod_plugin_dirs.
+MIRROR_DIRS=(hooks agents commands audits mods)   # full mirror (no overlap with plugins)
 # Floor for the top-level rule files, not the whole list. The real list is derived
 # from CLAUDE.md's own @imports by top_files_in(); this seed only guarantees that
 # an existing setup keeps syncing these three even if CLAUDE.md temporarily stops
@@ -241,7 +245,14 @@ TOP_FILES_SEED=(CLAUDE.md RTK.md LESSONS.md LESSONS-CORE.txt)
 # exactly what makes that timestamp lie. A travelling cache can shadow an edited
 # hook. Regenerating one locally costs nothing.
 COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.conflict-* \
-  --exclude=__pycache__ --exclude=__pycache__/ --exclude=*.pyc)
+  --exclude=__pycache__ --exclude=__pycache__/ --exclude=*.pyc \
+  --exclude=.claude-plugin/types/)
+# .claude-plugin/types/ is written by Claude Code itself into every plugin folder it loads, on every
+# load, describing THAT Mac's build and connected MCP tools (measured 2026-10-03, claude-config#606).
+# It is per Mac output, not config: carried, the two Macs would overwrite each other's on every
+# sync. Excluded here, for every mirrored tree, so it holds on the receiving side too and --delete
+# never removes the receiving Mac's own copy. A mod's top level tsconfig.json is NOT excluded: the
+# engine only writes one where none exists and leaves an existing one alone, so it is source.
 
 # desktop alert (no-op if disabled or the notifier isn't installed)
 notify(){
@@ -3311,6 +3322,20 @@ merge_hook_blocks(){   # $1 primary  $2 secondary  $3 base  -> the merged hooks 
 # The hooks block of the commit this Mac LAST APPLIED, which is the base both directions compare
 # against. Without it there is no way to tell "the other Mac removed this" from "this Mac has not
 # seen it yet", so an empty base means keep, in both directions.
+# MODS_SEEN_FILE: the mod folders this Mac held at the end of its last send or apply, per Mac and
+# gitignored. Whether this Mac HAD mods is what makes an empty mods folder a deletion: a Mac that
+# wrote mods and only ever sent them has them recorded here as much as one that received them, and a
+# fresh Mac, or one whose mods folder Claude Code just made, has no record at all (claude-config#606).
+MODS_SEEN_FILE="$SYNC_REPO/.mods-seen"
+mods_were_here(){ [ -s "$MODS_SEEN_FILE" ]; }
+record_mods_seen(){
+  local d names=""
+  for d in "$CLAUDE_HOME/mods"/*/; do
+    [ -f "$d.claude-plugin/plugin.json" ] && names="$names$(basename "$d")
+"
+  done
+  printf '%s' "$names" > "$MODS_SEEN_FILE" 2>/dev/null || true
+}
 last_applied_hook_block(){   # -> the hooks object of the last applied payload, or {}
   local last basefrag
   have_git || { printf '{}'; return 0; }
@@ -3515,6 +3540,20 @@ $protected
 PROT
     mkdir -p "$PAYLOAD/$d"
     rsync -ac --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
+    # git cannot record an empty directory, so when this Mac deletes its last mod the tree vanishes
+    # from the payload, and the other Mac, finding no such tree, skips it and keeps every mod: the
+    # removal never arrives (claude-config#606). A placeholder keeps "emptied" a state the payload
+    # can hold. But an empty folder is not evidence of a deletion: a fresh Mac's, or one Claude Code
+    # made, is empty too, and a placeholder for it would have the other Mac mirror its tree down to
+    # nothing (found by review). So it is written only for mods, and only when this Mac HAD mods at
+    # its last send or apply (MODS_SEEN_FILE): they were here, so their absence now is a deletion.
+    if [ "$d" = mods ] && [ -z "$(ls -A "$PAYLOAD/$d" 2>/dev/null)" ] && mods_were_here; then
+      # Kept in this Mac's own mods folder too, so the next send carries it rather than deleting it:
+      # a placeholder the history deleted and then saw again byte for byte is removed as a
+      # resurrected deletion, and the next emptying would not arrive.
+      : > "$PAYLOAD/$d/.gitkeep"; : > "$CLAUDE_HOME/$d/.gitkeep"
+    fi
+    [ "$d" = mods ] && record_mods_seen
   done
   # hooks block of settings.json, with this Mac's home path tokenized, MERGED against what the
   # payload already holds rather than replacing it (claude-config#300). See merge_hook_blocks.
@@ -3695,8 +3734,172 @@ APPLIED_LOG=""
 # Removed however the run ends, including the early exit die() takes, so a pull
 # never leaves a scratch file behind. Safe across the self-update hand-off: at
 # that point the apply has not run yet, so there is nothing to clean.
-cleanup_applied_log(){ if [ -n "$APPLIED_LOG" ]; then rm -f "$APPLIED_LOG"; fi; cleanup_expanded; cleanup_scratch_note; return 0; }
+# cleanup_scratch_note is defined much further down, so a refusal made while the script is still
+# being read (an unreadable SYNC_*_TIMEOUT) exited 127, "command not found", instead of its own
+# status 2 (found 2026-10-03, claude-config#606). Asked for only once it exists.
+cleanup_applied_log(){ if [ -n "$APPLIED_LOG" ]; then rm -f "$APPLIED_LOG"; fi; cleanup_expanded; if declare -F cleanup_scratch_note >/dev/null; then cleanup_scratch_note; fi; return 0; }
 trap cleanup_applied_log EXIT
+# ---- mods: tell this Mac's Claude Code about the mods it holds (claude-config#606) ----
+# Claude Code loads a plugin folder named in CLAUDE_CODE_PLUGIN_DIRS, read from the env block of
+# settings.json. That block does not travel (only the hooks block does), and the list must match
+# the folders actually here, so it is DERIVED from them on every apply rather than carried or kept
+# by hand (L41). The sync owns only the entries under its own mods folder: anything else in the
+# value was put there by somebody else and is kept as it is (L509).
+MODS_SETTINGS_CHANGED=""
+mod_dirs_here(){   # -> one absolute path per folder under mods/ holding a plugin manifest, sorted
+  local d
+  for d in "$CLAUDE_HOME/mods"/*/; do
+    [ -f "$d.claude-plugin/plugin.json" ] || continue
+    printf '%s\n' "${d%/}"
+  done
+}
+mod_name(){   # $1 = a mod folder -> the name its manifest gives, or the folder's own name
+  local n; n="$(jq -r '.name // empty' "$1/.claude-plugin/plugin.json" 2>/dev/null || true)"
+  [ -n "$n" ] && printf '%s' "$n" || basename "$1"
+}
+write_mod_plugin_dirs(){
+  local settings="$CLAUDE_HOME/settings.json" cur kept ours joined tmp
+  MODS_SETTINGS_CHANGED=""
+  if [ ! -f "$settings" ]; then
+    [ -n "$(mod_dirs_here)" ] || return 0
+    echo '{}' > "$settings"
+  fi
+  if ! cur="$(jq -r '.env.CLAUDE_CODE_PLUGIN_DIRS // ""' "$settings" 2>/dev/null)"; then
+    echo "claude-sync: could not read settings.json to name the mods in it, so Claude Code has not been told about any mod that just arrived. Check it with 'jq . $settings', fix it, then pull again." >&2
+    [ -t 2 ] || notify "mods could not be named in settings.json"
+    return 0
+  fi
+  # A mod removed on the other Mac leaves its folder here holding only what Claude Code generated
+  # into it (.claude-plugin/types/ is excluded from the mirror, so --delete cannot take it). With no
+  # manifest and nothing else in it, the folder is that leftover and nothing else, so it goes.
+  local left
+  for left in "$CLAUDE_HOME/mods"/*/; do
+    [ -d "$left" ] && [ ! -f "$left.claude-plugin/plugin.json" ] || continue
+    [ -z "$(find "$left" -type f -not -path "$left.claude-plugin/types/*" 2>/dev/null)" ] && rm -rf "${left%/}"
+  done
+  ours="$(mod_dirs_here)"
+  # Entries outside this sync's mods folder are kept; a leading ~ is read as the home directory so a
+  # hand written ~/.claude/mods/x is recognised as ours rather than kept beside the absolute one.
+  kept="$(printf '%s' "$cur" | tr ':' '\n' | awk -v home="$HOME" -v pre="$CLAUDE_HOME/mods/" '
+    NF { p = $0; if (substr(p, 1, 2) == "~/") p = home substr(p, 2); if (index(p, pre) != 1) print $0 }')"
+  joined="$(printf '%s\n%s\n' "$kept" "$ours" | awk 'NF && !seen[$0]++' | paste -sd: - )"
+  # Decided on the VALUE, never on the file's bytes: jq reformats whatever it writes, so a byte
+  # comparison rewrote every Mac's settings.json once for formatting alone, on a Mac with no mods at
+  # all, and reported it as mods named.
+  [ "$joined" = "$cur" ] && return 0
+  tmp="$(scratch_file)"
+  if [ -z "$joined" ]; then
+    jq 'del(.env.CLAUDE_CODE_PLUGIN_DIRS) | if .env == {} then del(.env) else . end' "$settings" > "$tmp" 2>/dev/null
+  else
+    jq --arg v "$joined" '.env.CLAUDE_CODE_PLUGIN_DIRS = $v' "$settings" > "$tmp" 2>/dev/null
+  fi || {
+    rm -f "$tmp"
+    echo "claude-sync: could not write the mods into settings.json, so it was left exactly as it was and Claude Code has not been told about any mod that just arrived. Check it with 'jq . $settings'." >&2
+    [ -t 2 ] || notify "mods could not be written into settings.json"
+    return 0
+  }
+  # settings.json is a WatchPath: rewrite it only when the result differs (the same rule as the
+  # hooks block above), or every sync re-triggers the next.
+  if cmp -s "$tmp" "$settings"; then rm -f "$tmp"; return 0; fi
+  keep_prior_copy "$settings"
+  mv "$tmp" "$settings"
+  record_applied updated "settings.json (mods named for Claude Code)"
+  MODS_SETTINGS_CHANGED=1
+}
+# What Claude Code says about the mods, asked of the claude command itself, never inferred from the
+# files having arrived (L3). It measures that each mod is LISTED as an enabled plugin and passes
+# validation: it cannot see a running session, so its wording claims no more than that (L11).
+# run_bounded <seconds> <command...>: the command, ended by an alarm after <seconds>. The same alarm
+# the scratch sizing uses (set in a forked child immediately before it becomes the command, so it
+# holds however the caller is stopped); macOS has no `timeout`. Exits 124 when the alarm ended it.
+run_bounded(){
+  perl -e '
+    my $t = shift @ARGV;
+    my $pid = fork();
+    exit 127 unless defined $pid;
+    if ($pid == 0) { alarm $t; exec @ARGV or exit 127; }
+    waitpid($pid, 0);
+    exit 124 if ($? & 127) == 14;
+    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' "$@"
+}
+check_mods_loaded(){
+  local dirs bin listed d name out bad="" names=""
+  dirs="$(mod_dirs_here)"
+  is_blank "$dirs" && return 0
+  bin="${SYNC_CLAUDE_BIN:-}"
+  if [ -z "$bin" ]; then
+    bin="$(command -v claude 2>/dev/null || true)"
+    # The scheduled job runs with launchd's short PATH, where claude is usually not on it.
+    [ -n "$bin" ] || { [ -x "$HOME/.local/bin/claude" ] && bin="$HOME/.local/bin/claude"; }
+  fi
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    echo "claude-sync: could not check the mods on this Mac, because no claude command was found to ask (looked for ${bin:-claude on PATH}). They were copied and named in settings.json, but nothing has confirmed Claude Code will load them." >&2
+    return 0
+  fi
+  # Asked the way a new session would read it: from settings.json, so a value this process inherited
+  # from the session that started it cannot answer in its place.
+  local rc=0
+  if [ "$CLAUDE_HOME" = "$HOME/.claude" ]; then
+    out="$(run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u CLAUDE_CODE_PLUGIN_DIRS "$bin" plugin list --json 2>/dev/null)" || rc=$?
+  else
+    out="$(run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u CLAUDE_CODE_PLUGIN_DIRS CLAUDE_CONFIG_DIR="$CLAUDE_HOME" "$bin" plugin list --json 2>/dev/null)" || rc=$?
+  fi
+  # A failed or silent answer is a check that could not run, never a list with no mods in it: read
+  # as empty, it accused every mod of being unlisted (L215).
+  if [ "$rc" -eq 124 ]; then
+    echo "claude-sync: could not check the mods on this Mac, because 'claude plugin list --json' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped. They were copied and named in settings.json, but nothing has confirmed Claude Code will load them." >&2
+    return 0
+  fi
+  if [ "$rc" -ne 0 ] || is_blank "$out"; then
+    echo "claude-sync: could not check the mods on this Mac, because 'claude plugin list --json' failed (exit $rc) or said nothing. They were copied and named in settings.json, but nothing has confirmed Claude Code will load them." >&2
+    return 0
+  fi
+  if ! listed="$(printf '%s' "$out" | jq -r '.[] | select(.enabled == true) | .id' 2>/dev/null)"; then
+    echo "claude-sync: could not check the mods on this Mac, because 'claude plugin list --json' did not answer in a form this can read. They were copied and named in settings.json, but nothing has confirmed Claude Code will load them." >&2
+    return 0
+  fi
+  # Folder plugins are listed as <name>@inline (measured on 2.1.288). A list holding NONE has two
+  # explanations this cannot tell apart: the mods are not loading, or Claude Code now names folder
+  # plugins some other way. Said once, naming both and every mod, rather than one accusation per
+  # mod (L36) or a "could not check" that would hide the very failure this exists to catch (L11).
+  if ! grep -q '@inline$' <<< "$listed"; then
+    local all="" dd
+    while IFS= read -r dd; do [ -n "$dd" ] && all="$all${all:+, }$(mod_name "$dd")"; done <<ALL
+$dirs
+ALL
+    echo "claude-sync: Claude Code lists none of the mods here ($all) as loaded plugins. Either they are not loading on this Mac, or Claude Code now names folder plugins differently from the <name>@inline this reads; 'claude plugin list' shows which." >&2
+    [ -t 2 ] || notify "no mod is listed as loaded on this Mac"
+    return 0
+  fi
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    name="$(mod_name "$d")"
+    if ! grep -qxF "$name@inline" <<< "$listed"; then
+      bad=1
+      echo "claude-sync: mod $name is in $CLAUDE_HOME/mods but Claude Code does not list it as an enabled plugin here, so it will not run. Check its .claude-plugin/plugin.json." >&2
+      continue
+    fi
+    rc=0; out="$(run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" "$bin" plugin validate "$d" 2>&1)" || rc=$?
+    if [ "$rc" -eq 124 ]; then
+      bad=1
+      echo "claude-sync: could not check mod $name: 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped." >&2
+      continue
+    fi
+    if [ "$rc" -ne 0 ]; then
+      bad=1
+      echo "claude-sync: mod $name was refused by 'claude plugin validate', so it will not run as written: $(printf '%s\n' "$out" | grep -E '[Ff]ail|[Ee]rror|refused|bad' | sed -n '1,3p' | paste -sd';' -)" >&2
+      continue
+    fi
+    names="$names${names:+, }$name"
+  done <<MODS
+$dirs
+MODS
+  [ -n "$bad" ] && { [ -t 2 ] || notify "a mod is not loading on this Mac"; }
+  if [ -n "$MODS_SETTINGS_CHANGED" ] && [ -n "$names" ]; then
+    echo "claude-sync: mods configured on this Mac: $names. They take effect in a new session; a session already running keeps what it loaded."
+  fi
+}
+
 record_applied(){   # $1 = added|updated|removed   $2 = path relative to ~/.claude
   if [ -n "$APPLIED_LOG" ]; then printf '%s\t%s\n' "$1" "$2" >> "$APPLIED_LOG"; fi
   return 0
@@ -3966,6 +4169,10 @@ $f
       fi
     fi
   fi
+  # After the mods folder has been mirrored and the hooks block merged (claude-config#606).
+  write_mod_plugin_dirs
+  check_mods_loaded
+  record_mods_seen
   # Before the imports are checked, and after the rule files have landed: on a Mac pulling for the
   # first time CLAUDE.md arrives importing an index that does not exist here yet, and after a merge
   # or a renumber the index that does exist is one edit behind (#63).
@@ -8539,6 +8746,16 @@ esac
 # was cut short is reported as unmeasured rather than as the part that was read (L11). 0 turns the
 # bound off; anything that is not a whole number is refused (L50). The number is derived in
 # DESIGN.md's measured numbers table.
+# How long one `claude` question may take. The check runs under the sync lock, on the watcher's and
+# the timer's path, so a claude that hangs (a login prompt, a self update) would hold every sync
+# behind it. Measured 2026-10-03: each answered in under half a second; DESIGN.md's measured numbers.
+SYNC_CLAUDE_CHECK_TIMEOUT="${SYNC_CLAUDE_CHECK_TIMEOUT:-30}"
+case "$SYNC_CLAUDE_CHECK_TIMEOUT" in
+  ''|*[!0-9]*|0)
+    echo "claude-sync: SYNC_CLAUDE_CHECK_TIMEOUT='$SYNC_CLAUDE_CHECK_TIMEOUT' is not a positive whole number of seconds. Refusing to run rather than asking claude about the mods with no bound nobody can read." >&2
+    exit 2 ;;
+esac
+
 SYNC_SCRATCH_DU_TIMEOUT="${SYNC_SCRATCH_DU_TIMEOUT:-30}"
 case "$SYNC_SCRATCH_DU_TIMEOUT" in
   ''|*[!0-9]*)

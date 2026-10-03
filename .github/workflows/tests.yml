@@ -131,6 +131,10 @@ jobs:
           rsync --version | head -1
           jq --version
           perl --version | sed -n '2p'
+          # The send checks the hooks block with hooks/lib/hook-registration.py (#413), so the suite
+          # needs python3 too. Named here because this step is the list run-on-linux.sh builds its
+          # container from: unnamed, the container had none and failed four checks CI passed.
+          python3 --version
           echo "pgrep: $(command -v pgrep || echo MISSING)"
           echo "TMPDIR: ${TMPDIR:-<unset, /tmp will be used>}"
           # How many cores this runner actually has (claude-config#210). The HOOK_TESTS_BUDGET
