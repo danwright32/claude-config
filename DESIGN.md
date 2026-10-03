@@ -504,7 +504,10 @@ into the folder on every load and a top level `tsconfig.json` only where none ex
 Rejected along the way:
 
 - **Carrying the env block.** The value names absolute folders on one Mac, and the right value is a
-  fact about which mod folders are present HERE, so it is derived on each apply instead (L41).
+  fact about which mod folders are present HERE, so it is derived on each apply instead (L41), and on
+  each send too (#628): deriving it only on apply meant a mod loaded on the Mac it was written on
+  only after that Mac's next pull. The send asks claude about the mods only when the names changed,
+  since the watcher sends on every edit and each question waits up to SYNC_CLAUDE_CHECK_TIMEOUT.
 - **A heartbeat mod proving every session ran the mods.** A mod cannot learn its own folder or the
   home directory, so it would have to guess where to write. The pull's check claims only what it
   measures (listed and valid), and the real run was proven once per Mac by hand. The biggest lever
