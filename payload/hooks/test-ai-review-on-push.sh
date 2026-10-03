@@ -449,6 +449,39 @@ print("nudge cost with nothing to show over 20 runs: median %.1f ms, max %.1f ms
 EOF
 [ $? -eq 0 ] && ok || bad "the nudge stayed silent across 20 quiet prompts"
 
+# 6b. The nudge's process count does not grow with the number of review files on disk. The state
+# directory holds every repository's reviews for 14 days (1,975 files measured 2026-10-03), and the
+# full path ran `basename` once per file: on a machine at load 200 each launch cost about 7 ms and
+# the hook took 15 to 17 s against its 5 s timeout, so its output was discarded on every prompt.
+# Counted rather than timed (L224): every external command the hook could start is shimmed to log
+# its name, and the count with 300 unrelated review files must equal the count with none (L63).
+# ===========================================================================
+SHIMBIN="$WORKDIR/shimbin"; mkdir -p "$SHIMBIN"
+export SHIM_LOG="$WORKDIR/shim.log"
+REAL_PATH="$PATH"
+for c in basename dirname cat date mkdir touch find git cksum cut jq python3 awk rm mv sed grep wc head tail tr sort uniq stat ls; do
+  real="$(command -v "$c" 2>/dev/null)" || continue
+  printf '#!/bin/sh\nprintf "%%s\\n" %s >> "$SHIM_LOG"\nexec %s "$@"\n' "$c" "$real" > "$SHIMBIN/$c"
+  chmod +x "$SHIMBIN/$c"
+done
+launches(){ # launches -> number of shimmed commands one full path nudge started
+  # The fast path is skipped by dating this session's record before the last write, not by sleeping.
+  : > "$SHIM_LOG"; touch -t 202001010000 "$AI_REVIEW_STATE_DIR/shown/n1.list"; touch "$AI_REVIEW_STATE_DIR/.updated"
+  PATH="$SHIMBIN:$REAL_PATH" nudge n1
+  grep -c . "$SHIM_LOG" 2>/dev/null || echo 0
+}
+nudge n1   # settle
+base_launches="$(launches)"
+check_eq "a settled full path nudge prints nothing" "" "$OUT"
+[ "$base_launches" -gt 0 ] && ok || bad "the shims saw the nudge start something (a zero means the shims are not on its PATH)"
+i=0; while [ "$i" -lt 300 ]; do
+  printf 'repo=unrelated\nbranch=b\nsha=%040d\nstarted=1\nfinished=2\nstatus=ok\n\nx\n' "$i" > "$AI_REVIEW_STATE_DIR/999-$(printf '%040d' "$i").txt"
+  i=$((i + 1))
+done
+many_launches="$(launches)"
+check_eq "300 more review files start no more processes (was $base_launches with none)" "$base_launches" "$many_launches"
+rm -f "$AI_REVIEW_STATE_DIR"/999-*.txt
+
 # ===========================================================================
 # 7. A push of THREE commits is reviewed from the upstream's previous tip, not one commit short
 # (claude-config#441). After a push the upstream is HEAD, so the plain push answer lands on HEAD~1;
