@@ -101,16 +101,16 @@ else
   mb="$(ps_merge_base "$base")"
 fi
 
-EXCLUDES=(':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.snap'
-  ':(exclude)*.min.js' ':(exclude)*.min.css' ':(exclude)*.svg'
-  ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*.jpeg' ':(exclude)*.gif'
-  ':(exclude)*.pdf' ':(exclude)CLAUDE.md' ':(exclude).claude/hooks/check-style-guide.sh')
+# What a push never scans is part of the rule, so it is read from the scanner rather than kept as a
+# second list here (claude-config#609): the mod honours the same paths.
+SCANNER="$HOOK_DIR/lib/style-scan.py"
+EXCLUDES=()
+while IFS= read -r pat; do
+  [ -n "$pat" ] && EXCLUDES+=(":(exclude)$pat")
+done < <(python3 "$SCANNER" --excludes 2>/dev/null)
 
 skip_ext() {  # $1 = a path ; true when it is one of the excluded kinds
-  case "$1" in
-    *.lock|*-lock.json|*.snap|*.min.js|*.min.css|*.svg|*.png|*.jpg|*.jpeg|*.gif|*.pdf|CLAUDE.md) return 0 ;;
-    *) return 1 ;;
-  esac
+  python3 "$SCANNER" --excluded "$1" 2>/dev/null
 }
 
 # A whole file, in the shape the detector reads, for a file git has never seen.
@@ -167,45 +167,12 @@ fi
 
 [ -n "$committed_diff$pending_diff" ] || exit 0
 
-# The detector, as a function over one body of diff text, so the two readings below
-# cannot drift into two copies of it. Kept unindented and in this exact shape because
-# test-check-style-guide.sh lifts the python out of this file and drives it directly,
-# which is what stops the suite testing a re-implementation of the rule (L52).
+# The detector is lib/style-scan.py, the ONE definition of the Writing Style character rule, which
+# the style-check mod runs too, so a write refused there and a push refused here are refused by the
+# same code (claude-config#609, L370). test-check-style-guide.sh drives that script directly, and
+# also asserts this file keeps no copy of the rule.
 scan() {  # $1 = diff text ; prints one line per finding
-findings="$(printf '%s' "$1" | python3 -c '
-import sys, re
-
-emoji_re = re.compile(
-    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF"
-    "⤴⤵⬅-⬇⬛⬜⭐⭕️]"
-)
-dash_re = re.compile("[—–]")
-
-current_file = "(unknown file)"
-out = []
-for line in sys.stdin:
-    line = line.rstrip("\n")
-    if line.startswith("+++ "):
-        f = line[4:]
-        if f.startswith("b/"):
-            f = f[2:]
-        current_file = f
-        continue
-    if line.startswith("--- NEW FILE: ") and line.endswith(" ---"):
-        current_file = line[len("--- NEW FILE: "):-4]
-        continue
-    if not line.startswith("+") or line.startswith("+++"):
-        continue
-    content = line[1:]
-    if dash_re.search(content) or emoji_re.search(content):
-        out.append(f"{current_file}: {content.strip()[:160]}")
-
-for o in out[:25]:
-    print(o)
-if len(out) > 25:
-    print(f"... and {len(out) - 25} more")
-' 2>/dev/null)"
-printf '%s' "$findings"
+  printf '%s' "$1" | python3 "$SCANNER" 2>/dev/null
 }
 
 committed_findings="$(scan "$committed_diff")"

@@ -1,0 +1,8 @@
+{
+  "name": "style-check",
+  "version": "0.1.0",
+  "description": "Refuses writes, commit messages, PR and issue bodies and Slack messages carrying an em dash, en dash or emoji, using the push hook own scanner.",
+  "author": {
+    "name": "Dan Wright"
+  }
+}
