@@ -18351,6 +18351,64 @@ printf '{"hooks":{},"env":{"CLAUDE_CODE_PLUGIN_DIRS":"%s"}}\n' "$MDHB/mods/alpha
 MDB_LISTED= CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#606 with nothing left to name, the key is removed" "! jq -e '.env.CLAUDE_CODE_PLUGIN_DIRS' '$MDHB/settings.json' >/dev/null"
 
+# A Mac whose folders merely EXIST EMPTY (a fresh Mac, or a folder Claude Code made) has deleted
+# nothing, so its send must not publish an empty tree for the other Mac to mirror down to. Only a
+# Mac that last APPLIED mods and now has none deleted them. Found by review on 2026-10-03: the
+# placeholder written for every empty tree would have wiped the other Mac's hooks (L5, L625).
+mkmod "$MDHA/mods" beta-mod
+CLAUDE_HOME="$MDHA" SYNC_REPO="$MDA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED=beta-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+mkdir -p "$MDHB/hooks"; printf 'echo kept\n' > "$MDHB/hooks/b-only.sh"
+MDCC="$WORK/mods-C"; git clone -q "$MDB" "$MDCC" 2>/dev/null
+MDHC="$WORK/mods-homeC"; mkdir -p "$MDHC/mods" "$MDHC/hooks"; echo '{"hooks":{}}' > "$MDHC/settings.json"; printf '# rules\n' > "$MDHC/CLAUDE.md"
+CLAUDE_HOME="$MDHC" SYNC_REPO="$MDCC" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#606 a fresh Mac's empty hooks folder publishes no placeholder" "[ ! -e '$MDCC/payload/hooks/.gitkeep' ]"
+check "#606 nor does its empty mods folder" "[ ! -e '$MDCC/payload/mods/.gitkeep' ] || [ -e '$MDCC/payload/mods/beta-mod' ]"
+MDB_LISTED=beta-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 and the other Mac keeps its mod after that send" "[ -f '$MDHB/mods/beta-mod/.claude-plugin/plugin.json' ]"
+
+# The same question in a history where no placeholder was ever written, so nothing but the "last
+# had mods" record can stop a fresh Mac publishing one. Above, the sync's guard against a
+# deleted file reappearing removed it anyway and hid whether the condition worked (seen 2026-10-03).
+MD2B="$WORK/mods2-bare.git"; git init -q --bare -b main "$MD2B"
+MD2A="$WORK/mods2-A"; git clone -q "$MD2B" "$MD2A" 2>/dev/null
+MD2HA="$WORK/mods2-homeA"; mkdir -p "$MD2HA/mods"; echo '{"hooks":{}}' > "$MD2HA/settings.json"; printf '# rules\n' > "$MD2HA/CLAUDE.md"
+mkmod "$MD2HA/mods" gamma-mod
+CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MD2BB="$WORK/mods2-B"; git clone -q "$MD2B" "$MD2BB" 2>/dev/null
+MD2HB="$WORK/mods2-homeB"; mkdir -p "$MD2HB"; echo '{"hooks":{}}' > "$MD2HB/settings.json"
+MDB_LISTED=gamma-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+
+# And a deletion arrives EVERY time, not only the first. Deleting every mod, adding one, then
+# deleting every mod again republished a placeholder byte for byte identical to one the history had
+# deleted, and the guard against a deleted file reappearing removed it: the second deletion never
+# arrived. Fixed by the emptying Mac keeping the placeholder in its own mods folder too.
+rm -rf "$MD2HA/mods/gamma-mod"
+CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED= CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 the first emptying reaches the other Mac" "[ ! -e '$MD2HB/mods/gamma-mod' ]"
+mkmod "$MD2HA/mods" delta-mod
+CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED=delta-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 a mod added after an emptying reaches the other Mac" "[ -f '$MD2HB/mods/delta-mod/.claude-plugin/plugin.json' ]"
+rm -rf "$MD2HA/mods/delta-mod"
+CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED= CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 and emptying the mods a second time reaches it too" "[ ! -e '$MD2HB/mods/delta-mod' ]"
+
+# LAST, and with a mod of its own: a fresh Mac's send empties the shared copy of any tree its own
+# folder holds empty (the sync's existing behaviour, for every tree), after which the other Mac's
+# copies read as unsent local work. Run earlier, that would have answered the checks above.
+mkmod "$MD2HA/mods" eps-mod
+CLAUDE_HOME="$MD2HA" SYNC_REPO="$MD2A" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+MDB_LISTED=eps-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+MD2CC="$WORK/mods2-C"; git clone -q "$MD2B" "$MD2CC" 2>/dev/null
+MD2HC="$WORK/mods2-homeC"; mkdir -p "$MD2HC/mods"; echo '{"hooks":{}}' > "$MD2HC/settings.json"; printf '# rules\n' > "$MD2HC/CLAUDE.md"
+CLAUDE_HOME="$MD2HC" SYNC_REPO="$MD2CC" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#606 a Mac that never had mods publishes no mods placeholder" "[ ! -e '$MD2CC/payload/mods/.gitkeep' ]"
+MDB_LISTED=eps-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#606 so the other Mac keeps its mod" "[ -f '$MD2HB/mods/eps-mod/.claude-plugin/plugin.json' ]"
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

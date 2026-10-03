@@ -3322,6 +3322,20 @@ merge_hook_blocks(){   # $1 primary  $2 secondary  $3 base  -> the merged hooks 
 # The hooks block of the commit this Mac LAST APPLIED, which is the base both directions compare
 # against. Without it there is no way to tell "the other Mac removed this" from "this Mac has not
 # seen it yet", so an empty base means keep, in both directions.
+# MODS_SEEN_FILE: the mod folders this Mac held at the end of its last send or apply, per Mac and
+# gitignored. Whether this Mac HAD mods is what makes an empty mods folder a deletion: a Mac that
+# wrote mods and only ever sent them has them recorded here as much as one that received them, and a
+# fresh Mac, or one whose mods folder Claude Code just made, has no record at all (claude-config#606).
+MODS_SEEN_FILE="$SYNC_REPO/.mods-seen"
+mods_were_here(){ [ -s "$MODS_SEEN_FILE" ]; }
+record_mods_seen(){
+  local d names=""
+  for d in "$CLAUDE_HOME/mods"/*/; do
+    [ -f "$d.claude-plugin/plugin.json" ] && names="$names$(basename "$d")
+"
+  done
+  printf '%s' "$names" > "$MODS_SEEN_FILE" 2>/dev/null || true
+}
 last_applied_hook_block(){   # -> the hooks object of the last applied payload, or {}
   local last basefrag
   have_git || { printf '{}'; return 0; }
@@ -3526,13 +3540,20 @@ $protected
 PROT
     mkdir -p "$PAYLOAD/$d"
     rsync -ac --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
-    # git cannot record an empty directory, so a tree this Mac emptied (its last file deleted) would
-    # vanish from the payload, and the other Mac, finding no such tree, would skip it and keep every
-    # file it had: the removal never arrives. Found with mods (claude-config#606), and true of every
-    # mirrored tree, which is why it is written for all of them; the placeholder is then mirrored
-    # into ~/.claude/<tree>/ like any other file, and is harmless there. A placeholder keeps "empty" a
-    # state the payload can hold. Written only on the send side, where the empty tree is real.
-    [ -n "$(ls -A "$PAYLOAD/$d" 2>/dev/null)" ] || : > "$PAYLOAD/$d/.gitkeep"
+    # git cannot record an empty directory, so when this Mac deletes its last mod the tree vanishes
+    # from the payload, and the other Mac, finding no such tree, skips it and keeps every mod: the
+    # removal never arrives (claude-config#606). A placeholder keeps "emptied" a state the payload
+    # can hold. But an empty folder is not evidence of a deletion: a fresh Mac's, or one Claude Code
+    # made, is empty too, and a placeholder for it would have the other Mac mirror its tree down to
+    # nothing (found by review). So it is written only for mods, and only when this Mac HAD mods at
+    # its last send or apply (MODS_SEEN_FILE): they were here, so their absence now is a deletion.
+    if [ "$d" = mods ] && [ -z "$(ls -A "$PAYLOAD/$d" 2>/dev/null)" ] && mods_were_here; then
+      # Kept in this Mac's own mods folder too, so the next send carries it rather than deleting it:
+      # a placeholder the history deleted and then saw again byte for byte is removed as a
+      # resurrected deletion, and the next emptying would not arrive.
+      : > "$PAYLOAD/$d/.gitkeep"; : > "$CLAUDE_HOME/$d/.gitkeep"
+    fi
+    [ "$d" = mods ] && record_mods_seen
   done
   # hooks block of settings.json, with this Mac's home path tokenized, MERGED against what the
   # payload already holds rather than replacing it (claude-config#300). See merge_hook_blocks.
@@ -4151,6 +4172,7 @@ $f
   # After the mods folder has been mirrored and the hooks block merged (claude-config#606).
   write_mod_plugin_dirs
   check_mods_loaded
+  record_mods_seen
   # Before the imports are checked, and after the rule files have landed: on a Mac pulling for the
   # first time CLAUDE.md arrives importing an index that does not exist here yet, and after a merge
   # or a renumber the index that does exist is one edit behind (#63).

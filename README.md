@@ -1002,7 +1002,7 @@ every mod and runs its own `*.test.ts` with `claude plugin test`. Where no `clau
 
 ## Local state (per Mac, never synced)
 
-Thirteen things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
+Fourteen things hold state outside `payload/` and belong to the Mac that wrote them. All are gitignored,
 so a fresh clone starts without them. (`lesson-bands/` and `lesson-citations.tsv` also sit outside
 `payload/` and are the two exceptions: both are tracked and shared on purpose. A band nobody else
 can see cannot stop anybody else claiming a number, and a record of what a citation was written
@@ -1012,6 +1012,7 @@ defined answer for being absent or untrustworthy.
 | File | Written by | Read by | Missing or stale |
 | --- | --- | --- | --- |
 | `.last-applied` | every apply, and a `push` or `send` whose payload is fully applied here afterwards | the guard that blocks sending while behind, and the staging that holds back what the repo has changed | absent means nothing is protected yet, so sending is allowed. A `push` records it only when nothing was kept back, because this Mac may hold commits it has not applied and claiming otherwise would let the next send revert the other Mac (#511, #514) |
+| `.mods-seen` | every send and apply (#606) | the send, deciding whether an empty `mods` folder is a deletion | absent or empty means this Mac has never held a mod, so an empty mods folder publishes nothing and cannot wipe the other Mac's mods; a stale list only means the next empty folder is read as a deletion, which is what it is if the mods were here |
 | `.last-success` | a successful pull, fetch or push | the outage clock | absent, unparseable, or dated in the FUTURE all mean "no record", which alerts rather than staying quiet |
 | `.last-sent` | a push that went through | `claude-sync status` | absent means nothing has ever gone up from this clone, which is said in those words rather than shown as a date; a value that will not parse is reported as unreadable, never as never |
 | `.last-received` | an apply that wrote at least one file | `claude-sync status` | same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block, since that is regenerated from whatever payload is present, including one this Mac just staged itself |

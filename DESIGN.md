@@ -515,6 +515,15 @@ Rejected along the way:
 - **Treating an absent `payload/mods` as an empty one.** git cannot record an empty folder, so a
   Mac whose last mod was deleted publishes a `.gitkeep`; without it the other Mac found no tree,
   skipped it, and kept every mod.
+- **Publishing that placeholder for any empty tree.** The first version did, and review caught that
+  an empty folder is not evidence of a deletion: a fresh Mac's `hooks`, or a folder Claude Code made,
+  is empty too, and the other Mac would have mirrored its tree down to nothing. It is written only
+  for `mods`, and only when this Mac held mods at its last send or apply (`.mods-seen`), which covers
+  a Mac that wrote its mods and only ever sent them as well as one that received them.
+- **Leaving the placeholder in the payload alone.** The emptying Mac keeps it in its own mods folder
+  too. Otherwise adding a mod deletes it from the history, and the next emptying republishes one byte
+  for byte identical to a deleted file, which the guard against resurrected deletions removes: the
+  second emptying never arrived (seen failing in the suite with that line removed).
 
 ### Trimming LESSONS.md rather than splitting it
 
