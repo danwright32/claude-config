@@ -487,6 +487,35 @@ without it. In a real session on 2026-08-17, a directory whose project settings 
 is off at user scope listed that plugin's skills, and a control directory without those settings did
 not.
 
+### Mods load on both Macs, the one exception to the above (#606)
+
+The argument above is about third party plugins whose usefulness depends on which projects a Mac
+holds. Mods are Dan's own cross project guards (a collision guard, a secret scrubber, a keystroke
+guard), and one Mac without a guard is a hole in it, so on 2026-10-03 he chose to load every mod on
+both Macs. They live in their own mirrored tree, `mods`, never under `~/.claude/plugins`, so #48's
+per Mac list is untouched.
+
+What was measured before building, on 2.1.288: a probe mod named in `CLAUDE_CODE_PLUGIN_DIRS` ran its
+`session.start` hook in a real session with no prompt, both from the process environment and from a
+`settings.json` env block in a throwaway config directory; the engine wrote `.claude-plugin/types/`
+into the folder on every load and a top level `tsconfig.json` only where none existed;
+`claude plugin validate` and `claude plugin test` exit 1 on a refusal and a failing test.
+
+Rejected along the way:
+
+- **Carrying the env block.** The value names absolute folders on one Mac, and the right value is a
+  fact about which mod folders are present HERE, so it is derived on each apply instead (L41).
+- **A heartbeat mod proving every session ran the mods.** A mod cannot learn its own folder or the
+  home directory, so it would have to guess where to write. The pull's check claims only what it
+  measures (listed and valid), and the real run was proven once per Mac by hand. The biggest lever
+  not pulled, named so a later pass need not rediscover it (L308).
+- **Type checking each mod with tsc in the gate.** The types it needs are generated per Mac at load
+  time and are absent in CI, so the gate relies on `claude plugin validate`, which reads the module
+  the way the engine will.
+- **Treating an absent `payload/mods` as an empty one.** git cannot record an empty folder, so a
+  Mac whose last mod was deleted publishes a `.gitkeep`; without it the other Mac found no tree,
+  skipped it, and kept every mod.
+
 ### Trimming LESSONS.md rather than splitting it
 
 Rejected for #63. The obvious way to spend fewer tokens on 180 lessons is to write them shorter, and

@@ -13,6 +13,7 @@ back.
 - `payload/skills/` — custom + installed skills (plugin-managed skills excluded, see below)
 - `payload/agents/` — the `plan-*` agents
 - `payload/commands/` — slash commands
+- `payload/mods/`: Claude Code mods, each a plugin folder, loaded on **both** Macs (see Mods below)
 - `payload/settings.hooks.json`: **only** the `hooks` block of `settings.json`
 - `payload/CLAUDE.md` and `payload/RTK.md` — your global rules files, synced verbatim (standing cross-project instructions travel here)
 
@@ -961,6 +962,36 @@ may not act on a guess, and it is not a `claude-sync` command because it is abou
 rather than the synced config. Which branch counts as main is one rule both read, in
 `tools/lib/default-branch.sh`, and how GitHub's record of a branch's pull requests is read is one
 reading both use, in `tools/lib/pull-requests.sh`.
+
+## Mods
+
+A mod is a Claude Code plugin folder (`.claude-plugin/plugin.json` plus a hooks module) kept in
+`~/.claude/mods/<name>/`. The `mods` tree is mirrored like `hooks`, so a mod added, changed or
+deleted on one Mac reaches the other on its next pull. Unlike third party plugins, which stay per
+Mac (#48), every mod loads on both Macs (#606).
+
+Claude Code finds them through `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of each Mac's own
+`settings.json`. That block does not travel, so every apply rewrites the value from the mod folders
+actually present (a folder without a manifest is not named). Only entries under `~/.claude/mods/`
+are the sync's; any other folder named there by hand is kept. With none left, the key is removed.
+The change reaches **new** sessions only: a running session keeps the plugins it loaded.
+
+After each apply, `claude plugin list --json` and `claude plugin validate` are asked about every mod,
+and the pull names any mod Claude Code does not list as enabled, or that validation refuses, with
+the reason. When there is no `claude` command to ask (the scheduled job's short PATH falls back to
+`~/.local/bin/claude`), the pull says the mods could not be checked rather than that they are fine.
+This measures that each mod is configured and valid; it cannot see inside a running session.
+
+Two things are deliberately not carried:
+
+- `.claude-plugin/types/`, which Claude Code writes into every plugin folder on every load,
+  describing that Mac's build and MCP tools. It is excluded on both sides of the mirror.
+- Nothing else. A mod's own `tsconfig.json` IS carried: the engine writes one only where none
+  exists and leaves an existing one alone (measured on 2.1.288).
+
+Before a push, `tests/test-mods.sh` runs `tools/check-mods.sh` over `payload/mods`, which validates
+every mod and runs its own `*.test.ts` with `claude plugin test`. Where no `claude` command exists
+(CI's Linux runner) it reports UNMEASURED rather than a pass.
 
 ## Local state (per Mac, never synced)
 

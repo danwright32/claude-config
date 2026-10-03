@@ -16,7 +16,8 @@ Check which one a change is meant for before editing. They are one directory apa
 
 - `payload/` is the config: the global `CLAUDE.md`, the `LESSONS-INDEX-*.md` files that load into
   every session, the full `LESSONS.md` that deliberately does not, plus `hooks/`, `skills/`,
-  `commands/`, `agents/`, and `settings.hooks.json`, which is named `settings.json` once installed.
+  `commands/`, `agents/`, `mods/` (Claude Code mods, loaded on both Macs, see README "Mods"), and
+  `settings.hooks.json`, which is named `settings.json` once installed.
 - `claude-sync` is the whole sync tool, one bash script at the repository root.
 - `README.md` is the operator's manual and `DESIGN.md` the design record. Both are long, both are
   current, and the section covering whatever is being changed is worth reading first.
