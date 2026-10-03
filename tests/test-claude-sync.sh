@@ -18363,9 +18363,10 @@ MDCC="$WORK/mods-C"; git clone -q "$MDB" "$MDCC" 2>/dev/null
 MDHC="$WORK/mods-homeC"; mkdir -p "$MDHC/mods" "$MDHC/hooks"; echo '{"hooks":{}}' > "$MDHC/settings.json"; printf '# rules\n' > "$MDHC/CLAUDE.md"
 CLAUDE_HOME="$MDHC" SYNC_REPO="$MDCC" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
 check "#606 a fresh Mac's empty hooks folder publishes no placeholder" "[ ! -e '$MDCC/payload/hooks/.gitkeep' ]"
-check "#606 nor does its empty mods folder" "[ ! -e '$MDCC/payload/mods/.gitkeep' ] || [ -e '$MDCC/payload/mods/beta-mod' ]"
+check "#606 nor does its empty mods folder" "[ ! -e '$MDCC/payload/mods/.gitkeep' ]"
 MDB_LISTED=beta-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#606 and the other Mac keeps its mod after that send" "[ -f '$MDHB/mods/beta-mod/.claude-plugin/plugin.json' ]"
+check "#606 and keeps its own hooks" "[ -f '$MDHB/hooks/b-only.sh' ]"
 
 # The same question in a history where no placeholder was ever written, so nothing but the "last
 # had mods" record can stop a fresh Mac publishing one. Above, the sync's guard against a
