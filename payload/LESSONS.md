@@ -1807,7 +1807,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   over 943 files and was the only file in the tree that tripped it)
   The entry points include the one PRODUCTION runs, which is usually not the one anybody types, so
   enumerate them from the deploy job's own command rather than from the script a person runs
-  locally. (slate, 2026-10-03 readiness sweep, #3075: `check-bundle-env.ts`, which refuses a build
+  locally. (slate, 2026-10-03 readiness sweep, #3078: `check-bundle-env.ts`, which refuses a build
   that would bake `.env.local` secrets into the shipped Worker, ran inside `pnpm cf:build`. The CI
   deploy job, the verified deploy script and the manual deploy steps all run `pnpm cf:deploy`,
   which calls the OpenNext build directly and never reaches it, while the guard's own header and
