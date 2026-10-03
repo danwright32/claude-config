@@ -18280,7 +18280,7 @@ check "#606 with no claude to ask, the pull says the mods could not be checked" 
 check "#606 and does not claim they are configured" "! line_has \"\$out_606x\" 'alpha-mod' 'configured'"
 # Control in the same fixture: the healthy run does not print the failure wording (L159).
 check "#606 a healthy pull names no mod as missing or refused" \
-  "! line_has \"\$out_606\" 'alpha-mod' 'not listed' && ! line_has \"\$out_606\" 'could not'"
+  "! line_has \"\$out_606\" 'alpha-mod' 'does not list' && ! line_has \"\$out_606\" 'could not check' 'mods'"
 
 # Removing the mod on the first Mac removes it here, folder and settings entry, and leaves the
 # hand-named folder; with none left of ours, the hand one is all that remains.
