@@ -3811,7 +3811,7 @@ check_mods_loaded(){
     fi
     if ! out="$("$bin" plugin validate "$d" 2>&1)"; then
       bad=1
-      echo "claude-sync: mod $name was refused by 'claude plugin validate', so it will not run as written: $(printf '%s\n' "$out" | grep -E '✘|❯|[Ee]rror|refused' | sed -n '1,3p' | paste -sd';' -)" >&2
+      echo "claude-sync: mod $name was refused by 'claude plugin validate', so it will not run as written: $(printf '%s\n' "$out" | grep -E '[Ff]ail|[Ee]rror|refused|bad' | sed -n '1,3p' | paste -sd';' -)" >&2
       continue
     fi
     names="$names${names:+, }$name"

@@ -40,7 +40,7 @@ if [ -z "$bin" ] || [ ! -x "$bin" ]; then
 fi
 
 # The engine's verdict lines: the item marks and the failure summary, a few at most.
-reason(){ printf '%s\n' "$1" | grep -E '✘|❯|[0-9]+ fail|[Ee]rror' | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -; }
+reason(){ printf '%s\n' "$1" | grep -E '[Ff]ail|[Ee]rror|refused|bad' | sed -n '1,3p' | sed 's/^ *//' | paste -sd';' -; }
 
 failed=0
 for d in "${mods[@]}"; do

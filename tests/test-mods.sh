@@ -36,7 +36,7 @@ cat > "$FAKE" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$STUB_LOG"
 case "$1 $2" in
-  "plugin validate") case "$3" in *broken*) printf '  ❯ hooks: bad event\n\n✘ Validation failed\n'; exit 1 ;; esac; echo '✔ Validation passed' ;;
+  "plugin validate") case "$3" in *broken*) printf '  hooks: bad event\n\nValidation failed\n'; exit 1 ;; esac; echo 'Validation passed' ;;
   "plugin test") case "$3" in *redtest*) printf ' 0 pass\n 1 fail\n'; exit 1 ;; esac; printf ' 1 pass\n 0 fail\n' ;;
   *) exit 2 ;;
 esac
