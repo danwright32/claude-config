@@ -38,3 +38,4 @@ which is NOT loaded into the session.
 - L726. Gmail's send API drops quoted-printable and hard wraps plain text at ~72; send an HTML part, and judge only the delivered raw.
 - L728. Two callers of one external endpoint build different bodies, so diff them against what the receiver REQUIRES; the pass-through one lacks the field.
 - L1014. A list API filtered on two fields at once can answer from a stale index; request the broader list and apply the narrower predicate yourself.
+- L742. On a rejected token reply, refresh the token and retry that call once; evicting and failing loses every in-flight request.

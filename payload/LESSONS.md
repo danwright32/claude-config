@@ -7668,6 +7668,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   alerted that Migration Drift had not succeeded in two days when it had succeeded daily.)
   SHORT: A list API filtered on two fields at once can answer from a stale index; request the broader list and apply the narrower predicate yourself.
 
+- **L742. A call authenticated by a cached token must, on a rejected token reply, refresh the
+  token and retry that same call once before failing, because evicting the cache and failing
+  permanently loses every request in flight when the token dies while the next one quietly
+  succeeds, so the outage reads as self healed.** Evicting alone repairs the system and not the
+  work, and the window is short enough that nobody connects the lost records to it. Retry
+  exactly once: a second rejection means the credentials really are bad. (bidspoke#1741,
+  2026-10-03: Salesforce rejected the cached session with 401 INVALID_SESSION_ID for 16
+  seconds; the node evicted the token and classed the error permanent, so four lead writes
+  across three workflows were lost, including a must not lose outcome write, and the next
+  lead succeeded on a fresh token.)
+  SHORT: On a rejected token reply, refresh the token and retry that call once; evicting and failing loses every in-flight request.
+
 ## Building with AI
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and
