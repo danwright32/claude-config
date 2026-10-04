@@ -28,6 +28,7 @@ const partRefusal = (p: ModKitBandPart): string | undefined => {
   if (indent !== undefined && !(typeof indent === 'number' && Number.isInteger(indent) && indent >= 0)) return `a part's indent must be a whole number of columns, not ${JSON.stringify(indent)}`
   // Refused rather than drawn bracketed: a picker whose options lost their plain style reads as another mod's buttons.
   const plain = (p as { plain?: unknown }).plain
+  if (plain !== undefined && !('button' in p)) return 'only a button can be plain; a text run draws as it is'
   if (plain !== undefined && plain !== true) return `a button's plain must be true or left out, not ${JSON.stringify(plain)}`
   return undefined
 }

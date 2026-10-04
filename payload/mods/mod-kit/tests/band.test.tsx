@@ -150,6 +150,13 @@ test("a button marked plain is drawn in Claude Code's plain style, and one not m
   }
 })
 
+// Lessons review of #678: plain is a button's style, so a text run carrying it is refused by name
+// rather than quietly ignored.
+test('plain on a text run is refused, naming the text run', withPublisher, async ($, on) => {
+  engineBand(on)
+  expect(await show($, { mod: 'publisher', id: 'q', slot: 'steps', lines: [[{ text: 'note', plain: true }]] })).toMatch(/refused: .*only a button can be plain/)
+})
+
 test('plain set to anything but true is refused at publish, never drawn as a bracketed button', withPublisher, async ($, on) => {
   engineBand(on)
   expect(await show($, { mod: 'publisher', id: 'q', slot: 'steps', lines: [[{ button: 'opt1', label: '7 days', plain: 'yes' }]] })).toMatch(/refused: .*plain must be true/)
