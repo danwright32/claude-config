@@ -1,14 +1,13 @@
-import { read } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { StepsCard } from '../types/index.d.ts'
 import { cardFrom, cardLines, carriedNote, finish, nextStep, sent } from './card.ts'
-import type { CardPart, StepsVerdict } from './card.ts'
+import type { StepsVerdict } from './card.ts'
 
 // The manual steps card (#614), settled with Dan on 2026-10-03 (spec) and 2026-10-04 (design
 // rounds, docs/mods-design.md "Manual steps"). Claude hands steps over through the `steps` tool,
 // which refuses a step with no link or exact location and one Claude has not checked against the
 // current state. The card is a side pane when the terminal is wide enough for a pane opened unasked
-// (144 columns), else the steps row of the band, through mod-kit. Done sends "step N done"; Claude
+// (144 columns), else the steps row of the band, both drawn by mod-kit (the pane since #690). Done sends "step N done"; Claude
 // checks it took where it can and answers through `steps_done`. Unfinished steps are kept per
 // project in $.store and held at the next session start there until Claude has re-checked them.
 
@@ -73,6 +72,41 @@ const publishBand = async ($: EngineInterface, card: StepsCard): Promise<string 
   }
 }
 
+/** Shows the card in the side pane, drawn by mod-kit as the band draws it (#690); the reason when mod-kit refused it. */
+const publishPane = async ($: EngineInterface, card: StepsCard): Promise<string | undefined> => {
+  try {
+    await $.modkit.pane({ mod: MOD, id: PANE, frame: { kind: 'left-rule', color: AMBER }, lines: cardLines(card) as never })
+    return undefined
+  } catch (err) {
+    $.ui.log(`manual-steps: the steps card could not be shown in the pane: ${message(err)}`, { to: 'debug' })
+    return message(err)
+  }
+}
+
+const clearPane = async ($: EngineInterface) => {
+  try {
+    await $.modkit.clearPane({ mod: MOD, id: PANE })
+  } catch (err) {
+    $.ui.log(`manual-steps: the steps card could not be taken out of the pane: ${message(err)}`, { to: 'debug' })
+  }
+}
+
+// The side pane with the card in it, published before the pane opens so it never opens empty. True
+// once placed. One Claude Code did not place is closed rather than left waiting, so it can never
+// appear later beside the same card in the band, and one mod-kit refused to draw is not opened.
+const openPane = async ($: EngineInterface, card: StepsCard): Promise<boolean> => {
+  if (await publishPane($, card)) return false
+  const opened = await $.ui.open({ id: PANE, title: PANE_TITLE }).catch(() => ({ isPlaced: false as const, reason: 'no pane' }))
+  if (opened.isPlaced) {
+    await $.state.set(placeRef, 'pane')
+    await clearBand($)
+    return true
+  }
+  await $.ui.close({ id: PANE }).catch(() => undefined)
+  await clearPane($)
+  return false
+}
+
 const clearBand = async ($: EngineInterface) => {
   try {
     await $.modkit.clearBandRow({ mod: MOD, id: 'steps' })
@@ -82,16 +116,9 @@ const clearBand = async ($: EngineInterface) => {
 }
 
 // A new card: the side pane when a pane opened unasked fits (Claude Code places one from 144
-// columns), else the band. A pane that does not fit is closed rather than left waiting, so it can
-// never appear later beside the same card in the band.
+// columns), else the band.
 const placeNew = async ($: EngineInterface, card: StepsCard): Promise<string | undefined> => {
-  const opened = await $.ui.open({ id: PANE, title: PANE_TITLE }).catch(() => ({ isPlaced: false as const, reason: 'no pane' }))
-  if (opened.isPlaced) {
-    await $.state.set(placeRef, 'pane')
-    await clearBand($)
-    return undefined
-  }
-  await $.ui.close({ id: PANE }).catch(() => undefined)
+  if (await openPane($, card)) return undefined
   await $.state.set(placeRef, 'band')
   return publishBand($, card)
 }
@@ -102,14 +129,16 @@ const hide = async ($: EngineInterface) => {
   await $.state.set(placeRef, null)
   await clearBand($)
   if (place === 'pane') await $.ui.close({ id: PANE }).catch(() => undefined)
+  await clearPane($)
 }
 
-// After the card changed: the pane redraws itself from $.state; the band is published again.
+// After the card changed: published again wherever it is shown.
 const refresh = async ($: EngineInterface) => {
   const card = (await $.state.get(cardRef)).value ?? null
   if (!card || nextStep(card) === undefined) return hide($)
-  if ((await $.state.get(placeRef)).value !== 'band') return
-  const failed = await publishBand($, card)
+  const place = (await $.state.get(placeRef)).value ?? null
+  if (place === null) return
+  const failed = place === 'pane' ? await publishPane($, card) : await publishBand($, card)
   if (failed) $.ui.toast(`The steps card could not be updated: ${failed}.`)
 }
 
@@ -283,13 +312,7 @@ export const register: Register = on => {
     const card = (await $.state.get(cardRef)).value ?? null
     if (!card || nextStep(card) === undefined) return { text: 'No manual steps are pinned for this project.' }
     // Asked, so the pane is placed at any width.
-    const opened = await $.ui.open({ id: PANE, title: PANE_TITLE }).catch(() => ({ isPlaced: false as const, reason: 'no pane' }))
-    if (opened.isPlaced) {
-      await $.state.set(placeRef, 'pane')
-      await clearBand($)
-      return { text: 'The steps card is open.' }
-    }
-    await $.ui.close({ id: PANE }).catch(() => undefined)
+    if (await openPane($, card)) return { text: 'The steps card is open.' }
     await $.state.set(placeRef, 'band')
     const failed = await publishBand($, card)
     return { text: failed ? `The steps card could not be shown: ${failed}.` : 'The steps card is in the band above the prompt.' }
@@ -299,6 +322,7 @@ export const register: Register = on => {
   on('ui.close', { id: PANE }, async ($, e, next) => {
     const r = await next(e)
     if (e.origin.kind !== 'person') return r
+    await clearPane($)
     const card = (await $.state.get(cardRef)).value ?? null
     if (card && !card.isCarried && nextStep(card) !== undefined) {
       await $.state.set(placeRef, 'band')
@@ -306,48 +330,5 @@ export const register: Register = on => {
       if (failed) $.ui.toast(`The steps card could not be moved to the band: ${failed}.`)
     } else await $.state.set(placeRef, null)
     return r
-  })
-
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const card = (await read($, cardRef)) ?? null
-    if (!card) return <Text dimColor>No manual steps are pinned for this project.</Text>
-    const lines = cardLines(card)
-    const part = (p: CardPart, i: number) => {
-      const drawn =
-        'button' in p ? (
-          <Button key={p.button} label={p.label} onPress={press => (p.button === 'done' ? pressDone($) : pressCopy($, press.surface))} />
-        ) : (
-          <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim} strikethrough={p.strikethrough} wrap="truncate-end">
-            {p.text}
-          </Text>
-        )
-      return 'indent' in p && p.indent ? (
-        <Box key={`indent:${i}`} paddingLeft={p.indent}>
-          {drawn}
-        </Box>
-      ) : (
-        drawn
-      )
-    }
-    // The amber rule down the card's left edge, one mark per line, as mod-kit draws it in the band.
-    return (
-      <Box flexDirection="row">
-        <Box key="rule" flexDirection="column">
-          {lines.map((_, n) => (
-            <Text key={String(n)} color={AMBER}>
-              {'│'}
-            </Text>
-          ))}
-        </Box>
-        <Box flexDirection="column" paddingLeft={1} flexGrow={1}>
-          {lines.map((l, n) => (
-            <Box key={String(n)} flexDirection="row">
-              {l.map(part)}
-            </Box>
-          ))}
-        </Box>
-      </Box>
-    )
   })
 }

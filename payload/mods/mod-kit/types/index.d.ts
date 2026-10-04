@@ -27,7 +27,16 @@ export type ModKitCard = {
   lines: ModKitRun[][]
 }
 
-/** Called from another mod, each method answers asynchronously: await it. */
+/**
+ * Called from another mod, each method answers asynchronously: await it.
+ *
+ * mod-kit also tries every mod's refused `$.session.send` once more, through its session.send hook
+ * rather than a method here, so the message still arrives as the sending mod's (#688). A mod sends
+ * once and reports `reason` when `isDelivered` is false: that is the second refusal, its reason
+ * trimmed and without a full stop of its own. A send that throws is not tried again, since it may
+ * have landed, and is answered as not delivered with the error's message. Claude's own SendMessage
+ * is left as it is. No mod keeps its own retry (tools/check-mod-shared-parts.sh).
+ */
 export type ModKit = {
   /** Records that a guard blocked this call, so its result row is drawn as the grey card (one use of `card`). */
   blocked: (input: ModKitBlocked) => Promise<void>
@@ -58,7 +67,25 @@ export type ModKit = {
   bandRow: (row: ModKitBandRow) => Promise<void>
   /** Takes this mod's row with that id out of the band. Clearing a row that is not there is fine. */
   clearBandRow: (input: { mod: string; id: string }) => Promise<void>
+  /**
+   * Draws a side pane the mod opened with `$.ui.open({ id })` as a card, with the band's own row
+   * drawing, so a card reads the same in the pane and in the band (#690). The mod still opens and
+   * closes the pane itself; publishing again replaces what it shows. No mod but mod-kit draws a
+   * pane (tools/check-mod-shared-parts.sh). A Button is keyed `<mod>:<button>` and its press
+   * reaches the publisher through `on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`,
+   * as in the band. Rejects a pane with no mod or id, lines or a frame of the wrong shape, and a pane
+   * id another mod already draws (Claude Code keys a pane by its id alone).
+   */
+  pane: (pane: ModKitPane) => Promise<void>
+  /** Stops drawing this mod's pane with that id; a pane still open is then drawn by Claude Code. Clearing one not drawn is fine. */
+  clearPane: (input: { mod: string; id: string }) => Promise<void>
 }
+
+/**
+ * What a side pane shows: a band row's lines and frame, with no slot, since a pane holds one card.
+ * `id` is the pane's id as the mod opened it with `$.ui.open`.
+ */
+export type ModKitPane = { mod: string; id: string; lines: ModKitBandLine[]; frame?: ModKitBandFrame }
 
 export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined }
 
@@ -105,6 +132,6 @@ declare module 'claude-code' {
   }
   interface PluginState {
     /** The band's rows, in the order they were first published; kept in $.state so a reload keeps them. */
-    'mod-kit': { band: ModKitBandRow[] }
+    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[] }
   }
 }

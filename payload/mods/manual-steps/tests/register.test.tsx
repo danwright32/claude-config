@@ -3,17 +3,20 @@ import type { On, Register } from 'claude-code'
 import type { StepsCard } from '../types/index.d.ts'
 
 // mod-kit, standing in: a mod cannot import another mod's files, and the kit loads this stand in as
-// a module of its own, so it keeps the rows in its own $.state and draws them in the band, text and
-// buttons keyed as the real one keys them, so a test reads and presses what Dan would. It refuses
-// every row while KIT_REFUSE is set. mod-kit's own tests prove the real drawing.
+// a module of its own, so it keeps the rows and the pane in its own $.state and draws them in the
+// band and the pane, text and buttons keyed as the real one keys them, so a test reads and presses
+// what Dan would. It refuses every row and pane while KIT_REFUSE is set. mod-kit's own tests prove
+// the real drawing, the same in both (#690).
 type Row = { mod: string; id: string; slot: string; frame?: { kind: string; color?: string }; lines: Record<string, unknown>[][] }
 const modKit: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
     const bandRef = { plugin: 'mod-kit', key: 'band' } as const
+    const paneRef = { plugin: 'mod-kit', key: 'panes' } as const
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const held = async () => ((await built.state.get(bandRef as never)) as { value?: Row[] }).value ?? []
+      const heldPanes = async () => ((await built.state.get(paneRef as never)) as { value?: Row[] }).value ?? []
       const modkit = {
         bandRow: async (row: Row) => {
           const refuse = await built.env.get('KIT_REFUSE')
@@ -23,13 +26,45 @@ const modKit: { name: string; register: Register } = {
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
           await built.state.set(bandRef as never, (await held()).filter(r => !(r.mod === mod && r.id === id)) as never)
         },
+        pane: async (pane: Row) => {
+          const refuse = (await built.env.get("KIT_REFUSE")) || (await built.env.get("KIT_REFUSE_PANE"))
+          if (refuse) throw new Error(refuse)
+          await built.state.set(paneRef as never, [...(await heldPanes()).filter(r => !(r.mod === pane.mod && r.id === pane.id)), pane] as never)
+        },
+        clearPane: async ({ mod, id }: { mod: string; id: string }) => {
+          await built.state.set(paneRef as never, (await heldPanes()).filter(r => !(r.mod === mod && r.id === id)) as never)
+        },
       }
       return { ...built, modkit } as never
     })
-    // How a test reads the rows it holds: a Bash call of "band", answered here with them as JSON.
+    // How a test reads the rows and panes it holds: a Bash call of "band" or "panes", answered here as JSON.
     on('tool.call', { tool: 'Bash' }, async ($, e) => {
-      if ((e as { command?: string }).command !== 'band') return { deny: 'not the band' }
+      const command = (e as { command?: string }).command
+      if (command === 'panes') return { deny: JSON.stringify(((await $.state.get(paneRef as never)) as { value?: Row[] }).value ?? []) }
+      if (command !== 'band') return { deny: 'not the band' }
       return { deny: JSON.stringify(((await $.state.get(bandRef as never)) as { value?: Row[] }).value ?? []) }
+    })
+    on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+      const pane = (((await $.state.get(paneRef as never)) as { value?: Row[] }).value ?? []).find(r => r.id === e.requestId)
+      if (!pane) return next(e)
+      const { Box, Button, Text } = $.ui.resolve(e)
+      return (
+        <Box flexDirection="column">
+          {pane.lines.map((l, n) => (
+            <Box key={String(n)} flexDirection="row">
+              {l.map((p, i) =>
+                p.button ? (
+                  <Button key={`${pane.mod}:${p.button as string}`} label={p.label as string} onPress={() => undefined} />
+                ) : (
+                  <Text key={String(i)} bold={p.bold as boolean | undefined}>
+                    {p.text as string}
+                  </Text>
+                ),
+              )}
+            </Box>
+          ))}
+        </Box>
+      )
     })
     on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
       const shown = ((await $.state.get(bandRef as never)) as { value?: Row[] }).value ?? []
@@ -168,6 +203,11 @@ const band = async ($: Engine) => {
   const rows = JSON.parse(out.deny ?? out.text ?? '[]') as Row[]
   return rows.find(r => r.mod === 'manual-steps' && r.id === 'steps')
 }
+// The card's pane as the stand in mod-kit holds it now.
+const paneShown = async ($: Engine) => {
+  const out = (await $.tool.call({ tool: 'Bash', tool_use_id: 'p1', command: 'panes' } as never)) as { deny?: string; text?: string }
+  return (JSON.parse(out.deny ?? out.text ?? '[]') as Row[]).find(r => r.mod === 'manual-steps' && r.id === 'steps')
+}
 const bandText = async ($: Engine) => ((await band($))?.lines ?? []).map(l => l.map(p => (p.text as string) ?? `[${p.button as string}]`).join(''))
 const stored = (mem: Record<string, unknown>) => mem[`card:${ROOT}`] as StepsCard | undefined
 const bandProps = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} }
@@ -215,18 +255,34 @@ test('when the terminal is wide the card is the side pane, and the band stays cl
   await hand($, [step()])
   expect(w.closed).toEqual([])
   expect(await band($)).toBeUndefined()
-  const ui = await $.ui.mount({ plugin: 'manual-steps', surface: 'terminal', component: 'Pane', requestId: 'steps', props: { bodyColumns: 50 } } as never)
+  // Drawn by mod-kit with the band's own drawing, the amber left rule included (#690).
+  expect(await paneShown($)).toMatchObject({ frame: { kind: 'left-rule', color: 'warning' } })
+  const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'Pane', requestId: 'steps', props: { bodyColumns: 50 } } as never)
   expect(await ui.find({ type: 'Text', text: 'Cloudflare WAF' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: '1. Turn on the WAF rule' }))?.props).toMatchObject({ bold: true })
-  expect((await ui.find({ type: 'Button', key: 'done' }))?.props.label).toBe('Done')
-  const rule = await ui.find({ type: 'Box', key: 'rule' })
-  const marks = (rule?.children ?? []) as { props: { color?: string } }[]
-  expect(marks.length).toBe(3)
-  expect(marks.every(m => m.props.color === 'warning')).toBe(true)
+  expect((await ui.find({ type: 'Button', key: 'manual-steps:done' }))?.props.label).toBe('Done')
+  expect((await paneShown($))?.lines.length).toBe(3)
   // Done pressed in the pane does what Done in the band does.
-  await ui.press({ key: 'done' })
+  await ui.press({ key: 'manual-steps:done' })
   expect(w.prompts).toEqual(['step 1 done'])
   await ui.unmount()
+  // The pane shows the change: the step waits on Claude, its Done gone.
+  const after = ((await paneShown($))?.lines ?? []).map(l => l.map(p => (p.text as string) ?? `[${p.button as string}]`).join(''))
+  expect(after[1]).toBe('1. Turn on the WAF rule  sent')
+  // Claude's verdict ends the card, and the pane with it.
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
+  expect(await paneShown($)).toBeUndefined()
+  expect(w.closed).toEqual(['steps'])
+})
+
+// A pane mod-kit will not draw is never opened empty: the card goes to the band instead.
+test('when mod-kit refuses the pane, the card is the steps row of the band and no pane opens', withKit, async ($, on) => {
+  const w = world(on, { wide: true }, {}, { KIT_REFUSE_PANE: 'the pane is held by another mod' })
+  await start($)
+  expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
+  expect(w.opened).toEqual([])
+  expect(await paneShown($)).toBeUndefined()
+  expect(await bandText($)).toEqual(['Cloudflare WAF', '1. Turn on the WAF rule  [done]', 'https://dash.cloudflare.com/waf'])
 })
 
 test('steps found already done are marked so, and a card that is all done is not pinned', withKit, async ($, on) => {

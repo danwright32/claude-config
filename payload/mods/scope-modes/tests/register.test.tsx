@@ -3,7 +3,7 @@ import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
-// mod-kit's band, card and command readers, the status bar's setModes, and the session registry's
+// mod-kit's band, card, command readers and send retry, the status bar's setModes, and the session registry's
 // list. One plugin named mod-kit, so a band button it draws is pressed as mod-kit's. Each call it
 // is handed comes back to the world as a transcript line the world reads (BAND, CLEAR, CARD,
 // MODES); the registry asks the world for the sessions with a process.run.
@@ -19,6 +19,22 @@ const deps: { name: string; register: Register } = {
         .map(part => [...part.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)].map(m => m[0].replace(/"([^"]*)"|'([^']*)'/g, '$1$2')))
         .map(w => w.filter(x => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(x) || false))
         .filter(w => w.length > 0)
+    // mod-kit's retry of a mod's refused send (its hooks/send.ts), standing in: once more when
+    // refused, never after a throw, the reason tidied. mod-kit's own tests prove the real one.
+    on('session.send', async ($, e, next) => {
+      let why = ''
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const sent = await next(e)
+          if (sent.isDelivered) return sent
+          why = sent.reason
+        } catch (err) {
+          why = String((err as Error)?.message ?? err)
+          break
+        }
+      }
+      return { isDelivered: false, reason: why.trim().replace(/\.$/, '') || 'no reason given' }
+    })
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const rows = async () => (((await built.state.get({ plugin: 'mod-kit', key: 'band' })) as { value?: Row[] }).value ?? [])

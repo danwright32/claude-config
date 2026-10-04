@@ -13,6 +13,11 @@
 #   git       listing git's global options to find a subcommand use $.modkit.git({ words })
 #   band      drawing the band above the prompt (AbovePrompt)   use $.modkit.bandRow({ ... })
 #             Claude Code gives the band ONE drawing, so two mods hooking it fight over it (#610).
+#   pane      drawing a mod's card in a side pane (Pane)        use $.modkit.pane({ mod, id, lines, frame }),
+#             the band's row drawing in a pane, so the two cannot drift (#690)
+#   send      trying a refused message to another session again a plain $.session.send: mod-kit's
+#             (a loop that stops once delivered, or the        session.send hook tries every mod's refused
+#             || 'no reason given' fallback)                    send once more and tidies the reason (#688)
 #
 # Only each mod's hooks/ is read: its tests may stand in for mod-kit, since a mod cannot import
 # another mod's files.
@@ -34,6 +39,8 @@ PARTS=(
   "card|component: *['\"]ToolResult['\"]|\$.modkit.card({ toolUseId, title, lines }) (a guard's refusal: \$.modkit.blocked({ ... }))"
   "git|'--work-tree'|\$.modkit.git({ words })"
   "band|component: *['\"]AbovePrompt['\"]|\$.modkit.bandRow({ ... })"
+  "pane|component: *['\"]Pane['\"]|\$.modkit.pane({ mod, id, lines, frame })"
+  "send|\|\| *['\"]no reason given['\"]|\.isDelivered\) *return|a plain \$.session.send (mod-kit tries every mod's refused send once more)"
 )
 
 n=0
