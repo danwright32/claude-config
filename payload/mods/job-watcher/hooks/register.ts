@@ -80,22 +80,9 @@ const publishSafely = async ($: EngineInterface) => {
   }
 }
 
-// Who holds a job's output file open: the shell running the job, while it runs. lsof exits 1 and
-// prints nothing at all when nobody does; any other failure says nothing either way.
-type Holder = { pid: number } | 'nobody' | 'unknown'
-const holderOf = async ($: EngineInterface, outputPath: string): Promise<Holder> => {
-  try {
-    const r = await $.process.run(['lsof', '-t', outputPath], { timeoutMs: 10_000 })
-    if (r.exitCode === 1 && !r.stdout.trim() && !r.stderr.trim()) return 'nobody'
-    if (r.exitCode !== 0) return 'unknown'
-    const pid = r.stdout.split('\n').map(s => Number(s.trim())).find(n => Number.isInteger(n) && n > 0)
-    return pid === undefined ? 'unknown' : { pid }
-  } catch {
-    return 'unknown'
-  }
-}
-
 // Every process group holding a job's output file open: the job's own, and any reader (a tail -f).
+// The one classifier of who holds the file: lsof exits 1 and prints nothing at all when nobody does,
+// and any other failure says nothing either way.
 const groupsHolding = async ($: EngineInterface, outputPath: string): Promise<number[] | 'nobody' | 'unknown'> => {
   let r
   try {
@@ -196,19 +183,19 @@ const lookAll = async ($: EngineInterface) => {
 // that whether it has ended is unknown, never left silent (lessons review of #634).
 const ended = async ($: EngineInterface, job: Job, w: Watch): Promise<boolean> => {
   if (job.pgid !== null) return hasEnded($, job.pgid)
-  const h = await holderOf($, job.outputPath)
-  if (h === 'nobody') return true
-  if (typeof h === 'object') {
-    const pgid = await traceGroup($, job.outputPath)
+  const groups = await groupsHolding($, job.outputPath)
+  if (groups === 'nobody') return true
+  // One group alone holding the file is the job's; two or more (a reader beside it) cannot be told
+  // apart, so the job stays untraced rather than take a guess.
+  if (Array.isArray(groups) && groups.length === 1 && groups[0] !== undefined) {
     // Only the group is written, onto the record as it is now: a keep that landed while this look
     // waited is kept (L443).
     const current = jobs.get(job.id)
-    if (pgid !== null && current) {
-      jobs.set(job.id, { ...current, pgid })
+    if (current) {
+      jobs.set(job.id, { ...current, pgid: groups[0] })
       await publishSafely($)
-      return false
     }
-    if (pgid !== null) return false
+    return false
   }
   if (!w.toldUntraced) {
     w.toldUntraced = true
@@ -274,6 +261,8 @@ const unkeptReminder = (): string | undefined => {
   return `Still running and not kept: background ${unkept.length === 1 ? 'job' : 'jobs'} ${named}. Stop ${unkept.length === 1 ? 'it' : 'each'} with TaskStop, or keep it with ${KEEP_CALL} and a reason, before you finish.`
 }
 
+// A kept job is protected only while its session is open (Dan, 2026-10-04): once that session has
+// closed, a kept leftover is judged like any other, and its quiet flag no longer exempts it.
 // Leftover jobs (Dan, 2026-10-04). At session start, each job a closed session recorded that is still
 // alive is judged with no question to Dan: Haiku first, Sonnet when Haiku gives no usable verdict,
 // and left running (judged again next session start) when neither can. A job is stopped by the
@@ -329,9 +318,6 @@ const judgeOne = async ($: EngineInterface, job: Leftover, now: number): Promise
   // A job its session never traced to a group is reported, never stopped: whatever holds its file
   // now could be anything, a reader's tail -f included (lessons review of #634, L1011).
   if (job.pgid === null) return { kind: 'unjudged', name: short, session: job.session }
-  // A job its session kept on purpose is never stopped as a leftover, on silence or anything else,
-  // as the live watcher never stops one; it is named as kept (lessons review of #634).
-  if (job.kept) return (await hasEnded($, job.pgid)) ? undefined : { kind: 'left', name: typeof job.kept.name === 'string' && job.kept.name.trim() ? job.kept.name.trim().slice(0, 60) : short, session: job.session }
   const group = job.pgid
   if (groups === 'unknown') return (await hasEnded($, group)) ? undefined : { kind: 'unjudged', name: short, session: job.session }
   // Its own group no longer holds the file: the job has ended, whatever else reads the file.

@@ -82,6 +82,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     tools: [] as unknown[],
     /** Each stat of an output file: one per job per look. */
     stats: 0,
+    /** Each lsof of an output file. */
+    lsofs: 0,
   }
   let started = 0
   const byPath = (p: string | undefined) => list.findIndex((_, i) => outOf(`job${i + 1}`) === p)
@@ -90,6 +92,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   on('process.run', async ($, e) => {
     const [cmd, ...args] = e.argv
     if (cmd === 'stat') w.stats += 1
+    if (cmd === 'lsof') w.lsofs += 1
     const late = list.find(j => j.slow?.cmd === cmd && (list.length === 1 || args.includes(outOf(`job${list.indexOf(j) + 1}`))))
     if (late?.slow && o.clock) await o.clock.sleep(late.slow.ms)
     if (cmd === '__sessions') {
@@ -954,7 +957,9 @@ test('a kept poll loop repeating an error is reported, never stopped', withDeps,
 
 const keptRec = (name: string, quiet: boolean) => ({ kept: { name, reason: 'Dan is using it', quiet, at: 0 } })
 
-test('a leftover kept quiet by design and silent is never stopped, and is named as kept', withDeps, async ($, on) => {
+// Dan, 2026-10-04: a kept job is protected only while its session is open. Once that session has
+// closed, a kept leftover is judged like any other, its quiet flag no longer exempting it.
+test('a leftover kept quiet by design whose session closed is judged like any other, silence included', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 60 * MIN })
   const w = world(on, { tail: 'listening on 3000\n', size: 18, mtime: 0 }, {
     sessions: { closed: [closedRec('old', [leftover(1, 'npm run dev', keptRec('dev server', true))])] },
@@ -962,11 +967,12 @@ test('a leftover kept quiet by design and silent is never stopped, and is named 
   })
   await start($)
   await judged(clock)
-  expect(w.kills).toEqual([])
-  expect(w.logs).toEqual(['Left 1 leftover job from a closed session running (dev server).'])
+  expect(w.asked.map(a => a.model)).toEqual([HAIKU])
+  expect(w.kills).toEqual([['-TERM', '-501']])
+  expect(w.logs).toEqual(['Stopped 1 leftover job from a closed session (dev server).'])
 })
 
-test('a kept leftover repeating an error is never stopped either', withDeps, async ($, on) => {
+test('a kept leftover repeating an error whose session closed is stopped on a stop verdict', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 60 * MIN })
   const w = world(on, { tail: REFUSED, size: 9000 }, {
     sessions: { closed: [closedRec('old', [leftover(1, CURL, keptRec('health poll', false))])] },
@@ -974,6 +980,19 @@ test('a kept leftover repeating an error is never stopped either', withDeps, asy
   })
   await start($)
   await judged(clock)
-  expect(w.kills).toEqual([])
-  expect(w.logs).toEqual(['Left 1 leftover job from a closed session running (health poll).'])
+  expect(w.kills).toEqual([['-TERM', '-501']])
+  expect(w.logs).toEqual(['Stopped 1 leftover job from a closed session (curl loop).'])
+})
+
+test('a look at an untraced job asks lsof once, through the one classifier', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'building\n', size: 9, holder: 'error' }
+  const w = world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  job.holder = 'held'
+  const before = w.lsofs
+  await clock.advance(MIN + 1)
+  expect(w.lsofs - before).toBe(1)
+  expect((w.extra[w.extra.length - 1] as { pgid: unknown }[])[0]?.pgid).toBe(501)
 })
