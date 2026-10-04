@@ -19,6 +19,26 @@ describe('a task list, whichever tool keeps it', () => {
     expect(after.done).toBe(before.done)
     expect(after.lastStepAt).toBe(10 * MIN)
   })
+  test('dropping an earlier finished to-do does not make a later finished one read as newly finished', () => {
+    const before = fromTodos(
+      empty(0),
+      [
+        { content: 'Read', status: 'completed', activeForm: 'Reading' },
+        { content: 'Build', status: 'completed', activeForm: 'Building' },
+        { content: 'Ship', status: 'in_progress', activeForm: 'Shipping' },
+      ],
+      0,
+    )
+    const after = fromTodos(
+      before,
+      [
+        { content: 'Build', status: 'completed', activeForm: 'Building' },
+        { content: 'Ship', status: 'in_progress', activeForm: 'Shipping' },
+      ],
+      10 * MIN,
+    )
+    expect(after.lastStepAt).toBe(0)
+  })
   test('dropping a finished step, with nothing newly finished, is not a step finished', () => {
     let p = taskCreated(empty(0), { id: '1', subject: 'Read' }, 0)
     p = taskCreated(p, { id: '2', subject: 'Build' }, 0)

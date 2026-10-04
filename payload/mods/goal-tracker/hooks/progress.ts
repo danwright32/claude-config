@@ -41,13 +41,21 @@ const summed = (p: Progress, steps: Step[], now: number): Progress => {
   }
 }
 
-// The to-do list is written whole each time.
-export const fromTodos = (p: Progress, todos: { content: string; status: StepStatus; activeForm: string }[], now: number): Progress =>
-  summed(
+// The to-do list is written whole each time and carries no ids, so a step is known by its text,
+// which survives a rewrite that drops or reorders others; a position does not (lessons review of
+// #634). A text written twice is told apart by which copy it is. The task tools keep their own ids.
+export const fromTodos = (p: Progress, todos: { content: string; status: StepStatus; activeForm: string }[], now: number): Progress => {
+  const seen = new Map<string, number>()
+  return summed(
     p,
-    todos.map((t, i) => ({ id: String(i), subject: t.content, activeForm: t.activeForm, status: t.status })),
+    todos.map(t => {
+      const n = (seen.get(t.content) ?? 0) + 1
+      seen.set(t.content, n)
+      return { id: n === 1 ? `todo:${t.content}` : `todo:${t.content}#${n}`, subject: t.content, activeForm: t.activeForm, status: t.status }
+    }),
     now,
   )
+}
 
 // The task tools build it one task at a time.
 export const taskCreated = (p: Progress, t: { id: string; subject: string; activeForm?: string }, now: number): Progress =>
