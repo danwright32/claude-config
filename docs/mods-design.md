@@ -48,9 +48,14 @@ and settles its own surfaces in rounds of its own before it is built.
 | The note to the session that was working first | Claude Code's standard incoming message from that session (collision round 1, over a grey card), plus a toast: "Another session wanted app.ts; it was moved to a worktree." |
 | A record that cannot be read | Stop, naming the file and how to clear it (picker) |
 | A judgment that cannot be had | Stop, as specced (picker) |
+| The note cannot be delivered (2026-10-04, picker) | Tried once more; if that fails too, the card gets a dim line under the safe way, "The other session could not be told: <reason>.", which Claude also reads. The block stands either way. |
 
 A session silent for five minutes counts as closed; its latest request is read from its transcript,
-never copied into the registry.
+never copied into the registry. The transcript is found where it is read (2026-10-04, picker): in
+Claude Code's folder for the session's starting directory, else by its session id, and only if that
+file exists. The start hook that was meant to hand over its path never reaches a mod. The judge is
+told which of three things was missing: no transcript found, one that could not be read, or no
+request in it.
 
 ## Not design decisions
 
