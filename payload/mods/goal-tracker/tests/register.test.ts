@@ -501,3 +501,15 @@ test('a goal Claude proposes and that is set is recorded', withDeps, async ($, o
   await $.tool.call({ tool: 'ProposeGoal', condition: 'the export writes a CSV', ask_user: false } as never)
   expect(last(w)?.goal).toBe('the export writes a CSV')
 })
+
+// Lessons review of f0a8ff9: a permission mark whose call is never matched as it returns is cleared
+// by Dan's next message at the latest, never left waiting for ever.
+test("a permission mark left over is cleared by Dan's next message", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'WebFetch', tool_input: { url: 'https://example.com' } } as never)
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
+  await prompt($, 'carry on')
+  expect(last(w)?.waiting).toBeUndefined()
+})

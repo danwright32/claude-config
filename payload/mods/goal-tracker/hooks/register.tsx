@@ -135,7 +135,12 @@ const paneOnPrompt = async ($: EngineInterface, e: { text: string; origin: { kin
   const isPerson = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
   if (isOpen && isPerson && !e.text.trim().startsWith('/')) {
     stopFollowing()
-    await $.ui.close({ id: PANE })
+    // A close that fails never holds up Dan's message (L73); it is said in the debug log.
+    try {
+      await $.ui.close({ id: PANE })
+    } catch (err) {
+      $.ui.log(`goal-tracker: could not close the goals pane: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    }
   }
 }
 
@@ -165,7 +170,9 @@ export const register: Register = on => {
   // Everything the module keeps belongs to one session: a later start in the same process begins
   // again rather than reading the last one's (lessons review of #634).
   on('session.start', async ($, e, next) => {
-    progress = empty(await $.clock.now())
+    // A clock that cannot be read leaves progress to begin on the first tool call that can read it,
+    // and never stops the pane and /goals being set up.
+    progress = await $.clock.now().then(empty, () => undefined)
     lastTried = Number.NEGATIVE_INFINITY
     streak = 0
     notice = undefined
@@ -265,6 +272,14 @@ export const register: Register = on => {
     const result = await next(e)
     const isPerson = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
     const text = e.text.trim()
+    // Dan sending a message is never a session waiting on his permission: a mark whose call could
+    // not be matched as it returned is cleared here at the latest (lessons review of f0a8ff9).
+    if (isPerson && progress?.waiting?.kind === 'permission') {
+      const { waiting: _stale, ...rest } = progress
+      progress = rest
+      permissionCall = undefined
+      await publish($, await nowOr($))
+    }
     if (isPerson && progress && progress.request === undefined && text && !text.startsWith('/')) {
       progress = { ...progress, request: firstWords(text) }
       await publish($, await nowOr($))

@@ -31,7 +31,7 @@ const withDeps = { plugins: [deps] }
 const MIN = 60_000
 
 type Listing = { open: unknown[]; closed: unknown[]; unreadable: string[]; selfId: string } | 'throws'
-const world = (on: On, listing: { now: Listing }, openReason?: string) => {
+const world = (on: On, listing: { now: Listing }, openReason?: string, closeThrows?: boolean) => {
   const w = { opened: [] as unknown[], closed: [] as string[], commands: [] as string[], invalidated: 0 }
   on('process.run', ($, e) => {
     if (e.argv[0] !== '__sessions') return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -49,6 +49,7 @@ const world = (on: On, listing: { now: Listing }, openReason?: string) => {
   })
   on('ui.close', ($, e) => {
     w.closed.push(e.id)
+    if (closeThrows) throw new Error("the pane could not be closed")
     return { value: undefined } as never
   })
   on('ui.invalidate', () => {
@@ -225,4 +226,26 @@ test('a pane that waits for a wider window says so', withDeps, async ($, on) => 
   await start($)
   const r = (await goals($)) as { text?: string }
   expect(r.text).toBe('The goals pane is open but not shown: the terminal is 90 columns, under 110.')
+})
+
+// Lessons review of f0a8ff9: closing the pane never holds up Dan's message, and a clock that cannot
+// be read at session start never stops /goals being set up.
+test("a pane that cannot be closed never holds up Dan's message", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { now: FIVE(0) }, undefined, true)
+  await start($)
+  await goals($)
+  const r = (await $.prompt.submit({ text: 'thanks', origin: { kind: 'composer' }, wait: false } as never)) as { text?: string }
+  expect(r.text).toBe('thanks')
+  expect(w.closed).toEqual(['goals'])
+})
+
+test('a clock that cannot be read at session start still sets up /goals', withDeps, async ($, on) => {
+  on('clock.now', () => {
+    throw new Error('clock gone')
+  })
+  on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+  const w = world(on, { now: FIVE(0) })
+  await start($)
+  expect(w.commands).toContain('goals')
 })
