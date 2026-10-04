@@ -34,9 +34,26 @@ const withNotice = <R extends { context?: string[] }>(result: R): R => {
   return { ...result, context: [...(result.context ?? []), said] }
 }
 
+// Failed, decided with Dan (2026-10-04, after the review of #634): three tool calls in a row failed
+// or refused, nothing succeeding between; the next success clears it.
+const FAIL_STREAK = 3
+let streak = 0
+const failureOf = (r: { deny?: unknown; isError?: boolean; text?: unknown }): string | undefined =>
+  r.deny ? String(r.deny) : r.isError ? String(r.text ?? 'it failed') : undefined
+const counted = (p: Progress, why: string | undefined): Progress => {
+  if (why === undefined) {
+    streak = 0
+    const { failed: _cleared, ...rest } = p
+    return rest
+  }
+  streak += 1
+  return streak >= FAIL_STREAK ? { ...p, failed: why } : p
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     progress = empty(await $.clock.now())
+    streak = 0
     return next(e)
   })
 
@@ -44,43 +61,53 @@ export const register: Register = on => {
     const now = await $.clock.now()
     progress ??= empty(now)
     const input = e as unknown as Record<string, unknown>
+    // A subagent keeps its own list, which is not the session's goal; its work still counts as
+    // the session being active, and its failures are its own (lessons review of #634).
+    const fromSubagent = Boolean((e as { agentId?: string }).agentId)
 
-    if (e.tool === 'AskUserQuestion') {
+    if (e.tool === 'AskUserQuestion' && !fromSubagent) {
       const qs = (input.questions as { question?: string }[] | undefined) ?? []
       progress = { ...progress, waiting: { question: qs[0]?.question ?? 'a question', since: now }, lastActivityAt: now }
       await publish($, now)
+      // A question that throws or is refused counts toward failed, as any call does.
+      let why: string | undefined = 'the question did not complete'
       try {
-        return await next(e)
+        const result = await next(e)
+        why = failureOf(result)
+        return withNotice(result)
+      } catch (err) {
+        why = err instanceof Error ? err.message : String(err)
+        throw err
       } finally {
         const after = await $.clock.now()
         const { waiting: _cleared, ...rest } = progress
-        progress = { ...rest, lastActivityAt: after }
+        progress = { ...counted(rest, why), lastActivityAt: after }
         await publish($, after)
       }
     }
 
     const result = await next(e)
-    if (result.deny || result.isError) return result
     const before = progress
+    const why = failureOf(result)
 
-    // A subagent keeps its own list, which is not the session's goal; its work still counts as
-    // the session being active (lessons review of #634).
-    const fromSubagent = Boolean((e as { agentId?: string }).agentId)
-    if (fromSubagent) {
-      progress = { ...progress, lastActivityAt: now }
-    } else if (e.tool === 'TodoWrite') {
-      progress = fromTodos(progress, (input.todos as { content: string; status: StepStatus; activeForm: string }[]) ?? [], now)
-    } else if (e.tool === 'TaskCreate') {
-      const task = (result.result as { task?: { id?: string; subject?: string } } | undefined)?.task
-      if (task?.id) progress = taskCreated(progress, { id: task.id, subject: task.subject ?? String(input.subject ?? ''), activeForm: input.activeForm as string | undefined }, now)
-    } else if (e.tool === 'TaskUpdate') {
-      progress = taskUpdated(progress, input as { taskId: string; status?: StepStatus | 'deleted'; subject?: string; activeForm?: string }, now)
+    if (fromSubagent || why !== undefined) {
+      progress = { ...(fromSubagent ? progress : counted(progress, why)), lastActivityAt: now }
     } else {
-      progress = { ...progress, lastActivityAt: now }
+      progress = counted(progress, undefined)
+      if (e.tool === 'TodoWrite') {
+        progress = fromTodos(progress, (input.todos as { content: string; status: StepStatus; activeForm: string }[]) ?? [], now)
+      } else if (e.tool === 'TaskCreate') {
+        const task = (result.result as { task?: { id?: string; subject?: string } } | undefined)?.task
+        if (task?.id) progress = taskCreated(progress, { id: task.id, subject: task.subject ?? String(input.subject ?? ''), activeForm: input.activeForm as string | undefined }, now)
+      } else if (e.tool === 'TaskUpdate') {
+        progress = taskUpdated(progress, input as { taskId: string; status?: StepStatus | 'deleted'; subject?: string; activeForm?: string }, now)
+      } else {
+        progress = { ...progress, lastActivityAt: now }
+      }
     }
 
-    // A change to the list is written at once; plain activity at most every thirty seconds.
-    if (progress.steps !== before.steps || now - lastWritten >= ACTIVITY_WRITE_MS) await publish($, now)
+    // A change to the list or to failed is written at once; plain activity at most every thirty seconds.
+    if (progress.steps !== before.steps || progress.failed !== before.failed || now - lastWritten >= ACTIVITY_WRITE_MS) await publish($, now)
     return withNotice(result)
   })
 }

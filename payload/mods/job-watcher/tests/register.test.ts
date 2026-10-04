@@ -207,3 +207,14 @@ test('an output file that shrank (truncated or rotated) counts as new output', w
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(contextOf(next)).toBe('')
 })
+
+test('a waiting loop repeating a line that is not an error is reported, never stopped', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: Array.from({ length: 30 }, () => 'waiting for deploy').join('\n') + '\n', size: 600 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'until gh run view 9 --exit-status; do echo waiting for deploy; sleep 3; done', run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(w.reached.filter(r => r.tool === 'TaskStop')).toEqual([])
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain('keeps repeating "waiting for deploy"')
+})

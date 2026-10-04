@@ -11,6 +11,12 @@ export const startedJob = (resultText: string): { id: string; outputPath: string
   return m ? { id: m[1] as string, outputPath: m[2] as string } : undefined
 }
 
+// A line that reports a failure. A waiting loop is stopped by itself only when the line it keeps
+// repeating is one of these (decided with Dan, 2026-10-04): a loop repeating "waiting" may just be
+// patient, and is only reported.
+const ERROR_LINE = /\b(error|errors|fail(s|ed|ure)?|fatal|exception|traceback|refused|denied|not found|no matches|no such|cannot|can't|couldn't|unable|unreachable|invalid|timed out)\b|^[a-z]+: \(\d+\)/i
+export const isErrorLine = (line: string): boolean => ERROR_LINE.test(line)
+
 // A loop that waits for something by trying again after a sleep: the 2026-09-22 loop was one.
 export const isPollLoop = (command: string): boolean => /\b(until|while)\b[\s\S]*\bdo\b[\s\S]*\bsleep\b/.test(command)
 

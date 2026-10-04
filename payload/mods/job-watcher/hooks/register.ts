@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { assess, isPollLoop, startedJob } from './jobs.ts'
+import { assess, isErrorLine, isPollLoop, startedJob } from './jobs.ts'
 
 // Background job watcher (claude-config#611). This holds the parts settled by the spec alone:
 // every background job is recorded with its process group, traced through the output file it
@@ -115,8 +115,8 @@ const look = async ($: EngineInterface) => {
       w.told = false
     }
     const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth }, now)
-    if (a.state === 'repeating' && isPollLoop(job.command)) {
-      // A poll loop that has never once succeeded is stopped by itself (the spec).
+    if (a.state === 'repeating' && isPollLoop(job.command) && isErrorLine(a.line)) {
+      // A poll loop that only ever repeated an error never succeeded, and is stopped by itself.
       const why = await stop($, job.id)
       if (why === undefined) {
         await forget($, job.id)

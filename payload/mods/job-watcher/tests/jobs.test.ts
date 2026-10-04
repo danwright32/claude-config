@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { assess, isPollLoop, startedJob } from '../hooks/jobs.ts'
+import { assess, isErrorLine, isPollLoop, startedJob } from '../hooks/jobs.ts'
 
 const MIN = 60_000
 
@@ -47,5 +47,23 @@ describe('is it stuck', () => {
   })
   test('blank lines do not count as a repeating error', () => {
     expect(assess({ tail: lines(40, ''), size: 40, lastGrowth: 5 * MIN }, 5 * MIN).state).toBe('running')
+  })
+})
+
+// Decided with Dan (2026-10-04, after the review of #634): a waiting loop is stopped by itself only
+// when the line it repeats reads as an error.
+describe('an error line', () => {
+  test('lines that report a failure read as errors', () => {
+    for (const line of [
+      'zsh: no matches found: http://x?y',
+      'curl: (7) Failed to connect to localhost port 3000 after 0 ms: Couldn\'t connect to server',
+      'Error: connect ECONNREFUSED 127.0.0.1:5432',
+      'fatal: not a git repository',
+      'Permission denied',
+      'ls: x: No such file or directory',
+    ]) expect(isErrorLine(line)).toBe(true)
+  })
+  test('a patient waiting line does not', () => {
+    for (const line of ['waiting for deploy', 'checks still pending', 'Waiting for server to start...', '.', 'retrying in 3s']) expect(isErrorLine(line)).toBe(false)
   })
 })

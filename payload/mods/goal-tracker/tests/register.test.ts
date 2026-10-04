@@ -27,9 +27,9 @@ const deps: { name: string; register: Register } = {
 const withDeps = { plugins: [deps] }
 const MIN = 60_000
 
-type Rec = { done: number; total: number; current: string | null; lastActivityAt: number; waiting?: { question: string } }
+type Rec = { done: number; total: number; current: string | null; lastActivityAt: number; waiting?: { question: string }; failed?: string }
 
-const world = (on: On, opts: { duringAsk?: (w: { progress: Rec[] }) => void; registryFails?: boolean; askThrows?: boolean } = {}) => {
+const world = (on: On, opts: { duringAsk?: (w: { progress: Rec[] }) => void; registryFails?: boolean; askThrows?: boolean; askRefused?: boolean } = {}) => {
   const w = { progress: [] as Rec[] }
   on('process.run', ($, e) => ({
     value: opts.registryFails && e.argv[0] === '__extra'
@@ -44,6 +44,8 @@ const world = (on: On, opts: { duringAsk?: (w: { progress: Rec[] }) => void; reg
   on('tool.call', ($, e) => {
     if (e.tool === 'AskUserQuestion') opts.duringAsk?.(w)
     if (e.tool === 'AskUserQuestion' && opts.askThrows) throw new Error('the question could not be shown')
+    if (e.tool === 'AskUserQuestion' && opts.askRefused) return { deny: 'the question was refused' } as never
+    if (e.tool === 'Bash' && String((e as unknown as { command?: string }).command).startsWith('fail')) return { result: 'exit 1', text: 'Exit code 1', isError: true } as never
     if (e.tool === 'TaskCreate') {
       const subject = (e as unknown as { subject: string }).subject
       return { result: { task: { id: String(w.progress.length + 1), subject } }, text: 'created' } as never
@@ -139,4 +141,41 @@ test('a question that throws still clears waiting', withDeps, async ($, on) => {
   await start($)
   await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which colour?', header: 'Colour', options: [], multiSelect: false }] } as never).catch(() => undefined)
   expect(last(w)?.waiting).toBeUndefined()
+})
+
+// Decided with Dan (2026-10-04, after the review of #634): failed means three tool calls in a row
+// failed or were refused, with nothing succeeding between; the next success clears it.
+const bash = (command: string) => ({ tool: 'Bash', command }) as never
+
+test('three failed calls in a row mark the session failed, naming the last failure', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.tool.call(bash('fail 1'))
+  await $.tool.call(bash('fail 2'))
+  expect(last(w)?.failed).toBeUndefined()
+  await $.tool.call(bash('fail 3'))
+  expect(last(w)?.failed).toBe('Exit code 1')
+})
+
+test('a success clears failed, and a success between failures restarts the count', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  for (const c of ['fail 1', 'fail 2', 'fail 3']) await $.tool.call(bash(c))
+  await $.tool.call(bash('ls'))
+  expect(last(w)?.failed).toBeUndefined()
+  for (const c of ['fail 4', 'fail 5', 'ls', 'fail 6']) await $.tool.call(bash(c))
+  expect(last(w)?.failed).toBeUndefined()
+})
+
+test('a refused question counts toward failed, and still clears waiting', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { askRefused: true })
+  await start($)
+  await $.tool.call(bash('fail 1'))
+  await $.tool.call(bash('fail 2'))
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which colour?', header: 'Colour', options: [], multiSelect: false }] } as never)
+  expect(last(w)?.waiting).toBeUndefined()
+  expect(last(w)?.failed).toBe('the question was refused')
 })
