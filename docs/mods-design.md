@@ -335,7 +335,7 @@ ones marked open are the builder's choice, waiting on Dan.
   that text is what the row shows after a reload (mod-kit keeps cards in memory). When mod-kit
   refuses the card, the card is still made, the row shows the text, and Claude is told why.
 - Open: the title for a project with no recorded deploy step ("Merged, no deploy step
-  recorded:"), its colour (grey for now), the violet drawn as the terminal's magenta, the toast's words (the
+  recorded:"), its colour (drawn grey until Dan settles it), the violet drawn as the terminal's magenta, the toast's words (the
   card's title), and the Copy and Mark sent buttons having no shortcut keys.
 
 ## Ask before saving (#618), built 2026-10-04
