@@ -144,6 +144,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       const text = startedText(`job${started}`)
       return { result: text, text } as never
     }
+    if (e.tool === 'Bash' && input.command === 'false') return { result: 'exit 1', text: 'Exit code 1', isError: true } as never
     const j = list[Number(String(input.task_id ?? '').replace('job', '')) - 1]
     if (e.tool === 'TaskStop' && j?.stop === 'refused') return { deny: `no task ${String(input.task_id)} is running` } as never
     if (e.tool === 'TaskStop' && j?.stop === 'throws') throw new Error('stop failed')
@@ -154,6 +155,10 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
 
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) => $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
 const contextOf = (r: unknown) => ((r as { context?: string[] }).context ?? []).join('\n')
+// The reminder about running jobs nobody kept (Dan, 2026-10-04) rides on every result while one
+// runs; the other notices are what the older tests are about, so they read them without it.
+const REMINDER = 'Still running and not kept:'
+const noticesOf = (r: unknown) => ((r as { context?: string[] }).context ?? []).filter(c => !c.startsWith(REMINDER)).join('\n')
 
 test('a background job is recorded with its process group, traced through its output file', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
@@ -200,7 +205,7 @@ test('a healthy job says nothing', withDeps, async ($, on) => {
   job.size = 16
   await clock.advance(MIN + 1)
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(contextOf(next)).toBe('')
+  expect(noticesOf(next)).toBe('')
   void w
 })
 
@@ -217,7 +222,7 @@ test('an output file that cannot be read is reported as unreadable, never as a s
   expect(contextOf(next)).not.toMatch(/no new output/)
   await clock.advance(5 * MIN)
   const later = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(contextOf(later)).toBe('')
+  expect(noticesOf(later)).toBe('')
 })
 
 // Lessons review of #634, the code-only findings.
@@ -234,7 +239,7 @@ test('a job that has finished leaves the record and is never reported silent', w
   await clock.advance(11 * MIN)
   expect(w.extra[w.extra.length - 1]).toEqual([])
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(contextOf(next)).toBe('')
+  expect(noticesOf(next)).toBe('')
 })
 
 test('a stop Claude Code refuses keeps the job, and Claude is told the stop failed', withDeps, async ($, on) => {
@@ -286,7 +291,7 @@ test('an output file that shrank (truncated or rotated) counts as new output', w
   await clock.advance(5 * MIN)
   await clock.advance(5 * MIN)
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(contextOf(next)).toBe('')
+  expect(noticesOf(next)).toBe('')
 })
 
 test('a waiting loop repeating a line that is not an error is reported, never stopped', withDeps, async ($, on) => {
@@ -319,7 +324,7 @@ test('a new session start in the same process forgets the last one jobs and keep
   await start($)
   await clock.advance(11 * MIN)
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(contextOf(next)).toBe('')
+  expect(noticesOf(next)).toBe('')
   // One look a minute, not two: each look reads the output file once.
   void w
 })
@@ -335,7 +340,7 @@ test('a job whose process group could not be traced is seen to end when nothing 
   await clock.advance(MIN + 1)
   expect(w.extra[w.extra.length - 1]).toEqual([])
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(contextOf(next)).toBe('')
+  expect(noticesOf(next)).toBe('')
 })
 
 test('a job that still cannot be traced is said to Claude once as ended state unknown', withDeps, async ($, on) => {
@@ -446,7 +451,7 @@ test('a job kept as quiet by design is never reported silent', withDeps, async (
   await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'serves the preview', quiet: true }))
   await clock.advance(30 * MIN)
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(contextOf(next)).toBe('')
+  expect(noticesOf(next)).toBe('')
 })
 
 test('a job kept without quiet is still reported silent', withDeps, async ($, on) => {
@@ -659,4 +664,66 @@ test('a leftover whose output file cannot be read is described to the judge as u
   const prompt = w.asked[0]?.prompt ?? ''
   expect(prompt).toContain('could not be read')
   expect(prompt).not.toContain('still writing')
+})
+
+// Turn end (Dan, 2026-10-04): never refused. While a running job is not kept, every tool result
+// Claude reads reminds it to stop or keep that job, by name; Dan sees nothing.
+test('a running job nobody kept is named on every tool result Claude reads', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  for (const command of ['git status', 'ls']) {
+    const r = await $.tool.call({ tool: 'Bash', command } as never)
+    expect(contextOf(r)).toContain(`${REMINDER} background job job1 (npm run dev)`)
+    expect(contextOf(r)).toContain('TaskStop')
+    expect(contextOf(r)).toContain('keep_job')
+  }
+})
+
+test('the reminder rides on a failed tool result too', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  const r = await $.tool.call({ tool: 'Bash', command: 'false' } as never)
+  expect(contextOf(r)).toContain(REMINDER)
+})
+
+test('a kept job is no longer named, and the reminder stops once every running job is kept', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, [{ tail: '', size: 0 }, { tail: '', size: 0 }])
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm run watch', run_in_background: true } as never)
+  await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'Dan is using it' }))
+  const one = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(one)).toContain('job2 (npm run watch)')
+  expect(contextOf(one)).not.toContain('job1')
+  await $.tool.call(keep({ task_id: 'job2', name: 'watcher', reason: 'the build needs it' }))
+  const none = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(none)).not.toContain(REMINDER)
+})
+
+test('the reminder stops once the job has ended', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'done\n', size: 5 }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  job.gone = true
+  await clock.advance(MIN + 1)
+  const r = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(r)).not.toContain(REMINDER)
+})
+
+test('the turn end is never refused, kept job or not', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 })
+  on('classic.Stop', () => ({}) as never)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  const r = (await $.classic.Stop({ stop_hook_active: false } as never)) as { block?: string; additionalContext?: string[] }
+  expect(r.block).toBeUndefined()
+  expect(r.additionalContext ?? []).toEqual([])
 })

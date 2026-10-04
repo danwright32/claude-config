@@ -6,8 +6,9 @@ import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, st
 // the session registry where the status bar counts it; each minute every job is looked at; a poll
 // loop that has only ever repeated an error is stopped by itself; and Claude is told, mid turn, about
 // any job gone stuck. Claude keeps a job on purpose, with a reason, through the keep_job tool, and a
-// kept job is published for the status bar's amber band. Leftover jobs from closed sessions are
-// judged at session start without asking Dan (see leftovers below).
+// kept job is published for the status bar's amber band. A running job nobody kept is named on every
+// tool result until it is stopped or kept; the turn end itself is never refused. Leftover jobs from
+// closed sessions are judged at session start without asking Dan (see leftovers below).
 
 // kept: Claude kept the job on purpose, with a reason (Dan, 2026-10-04). The status bar (#610) shows
 // a kept job in amber in the band above the prompt as "<name> kept <run time>", the run time from
@@ -23,7 +24,7 @@ const KEEP_SPEC = {
   name: KEEP_TOOL,
   description:
     'Keep a background job running on purpose, with the reason it must stay up (a dev server Dan is using, a watcher a later step needs). ' +
-    'A job that is not kept must be stopped with TaskStop before the turn ends. A kept job shows on the status bar with its run time. ' +
+    'A job that is not kept should be stopped with TaskStop before you finish; until it is, every tool result names it. A kept job shows on the status bar with its run time. ' +
     'Set quiet when the job is expected to print nothing for long stretches, so it is not reported for going silent.',
   inputSchema: {
     type: 'object',
@@ -223,6 +224,16 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
   }
 }
 
+// Turn end (Dan, 2026-10-04): never refused, since any refusal Claude Code draws in the transcript.
+// Instead, while a running job is not kept, every tool result Claude reads names it and says to
+// stop or keep it. Nothing is shown to Dan, and it stops once every running job is kept or ended.
+const unkeptReminder = (): string | undefined => {
+  const unkept = [...jobs.values()].filter(j => !j.kept)
+  if (!unkept.length) return undefined
+  const named = unkept.map(j => `${j.id} (${j.command})`).join(', ')
+  return `Still running and not kept: background ${unkept.length === 1 ? 'job' : 'jobs'} ${named}. Stop ${unkept.length === 1 ? 'it' : 'each'} with TaskStop, or keep it with ${KEEP_CALL} and a reason, before you finish.`
+}
+
 // Leftover jobs (Dan, 2026-10-04). At session start, each job a closed session recorded that is still
 // alive is judged with no question to Dan: Haiku first, Sonnet when Haiku gives no usable verdict,
 // and left running (judged again next session start) when neither can. A job is stopped by the
@@ -372,6 +383,8 @@ export const register: Register = on => {
     jobs.set(id, { ...job, kept })
     await publishSafely($)
     const said = notices.splice(0)
+    const reminder = unkeptReminder()
+    if (reminder) said.push(reminder)
     const quietly = kept.quiet ? ' It is quiet by design, so it will not be reported for printing nothing.' : ''
     return { result: `Kept ${id} (${name}): ${reason}. It shows on the status bar as kept, with its run time.${quietly}`, ...(said.length ? { context: said } : {}) }
   })
@@ -393,11 +406,12 @@ export const register: Register = on => {
         await publishSafely($)
       }
     }
-    // What Claude should know about its jobs rides on the next tool result it reads.
-    if (notices.length && result.deny === undefined && !result.isError) {
-      const said = notices.splice(0)
-      return { ...result, context: [...(result.context ?? []), ...said] }
-    }
-    return result
+    // What Claude should know about its jobs rides on the next tool result it reads; the reminder
+    // about unkept jobs rides on every one, a failed result included. A refusal carries none.
+    if (result.deny !== undefined) return result
+    const said = result.isError ? [] : notices.splice(0)
+    const reminder = unkeptReminder()
+    if (reminder) said.push(reminder)
+    return said.length ? { ...result, context: [...(result.context ?? []), ...said] } : result
   })
 }
