@@ -42,7 +42,7 @@ Check the project's CLAUDE.md and memory for a deploy step that does not happen 
 
 ## 4. Present the picker and continue
 
-Present the 3 candidates with AskUserQuestion (label = issue number + short title, description = one plain-language line on what it is and why it is next). On selection, start immediately: read the issue, plan if non-trivial, then implement test-first per the global rules.
+Present the 3 candidates with AskUserQuestion (label = issue number + short title, description = one plain-language line on what it is and why it is next), passing `metadata: { source: "next-issue" }` so the picker manners mod knows it is a next issue offer. If that call is refused because Dan turned next issue pickers off for the session, give the same 3 as a plain numbered list instead. On selection, start immediately: read the issue, plan if non-trivial, then implement test-first per the global rules.
 
 ## 5. Loop
 

@@ -433,6 +433,32 @@ ones marked open are the builder's choice, waiting on Dan.
   answer ("Saved to <file>", "Kept until this session ends; nothing is written", "Nothing is
   saved"), a grey rule on both sides of the rule's text, and wrapping it at 76 columns because the
   band cuts a line at its edge.
+## Picker manners (#615), built 2026-10-04
+
+The look is the rounds' (a question in the band, above). The build time check the spec asks for
+passed in the test kit: a `tool.call` hook on AskUserQuestion can answer from a band press while the
+prompt stays free, provided it waits through a `$` call of its own (`$.pickers.wait`), whose time the
+engine does not count against the hook's 10 second budget. Awaiting a plain promise instead was
+measured to overrun the budget, after which the engine's own picker answers. What the build had to
+settle beyond the rounds, taken from the spec or the rounds' renderings rather than chosen afresh,
+and open to Dan changing:
+
+- Each option is "1. " then Claude Code's own button, `[ 7 days ]`, with the digit as its hotkey: the
+  rounds drew "1. 7 days" plain, and mod-kit's band draws buttons bracketed.
+- One question per call (CLAUDE.md) is enforced: a call with more is refused, by name, to Claude.
+- Typed text withdraws the question, and Claude reads: "Dan did not pick an answer: he is sending a
+  message instead, which follows. Answer his message first. If this question is still unanswered
+  after that, ask it again once; never more than once." The mod counts talk pasts per question text
+  and refuses a third asking.
+- Numbered prose maps onto the open question only when the whole message is numbered from 1, with
+  no more answers than open questions; anything else is a message. Its echo is one dim transcript
+  line per question.
+- A multi select question marks a chosen option with a dim "chosen" after it, and Submit with
+  nothing chosen says "Nothing is chosen yet." in a toast.
+- Next issue offers are known by `metadata.source: "next-issue"`, which the `/next-issue` skill now
+  passes. Turning them off says so once in a dim line: "Next issue pickers are off for this
+  session; /pickers on brings them back."
+- An interrupted turn withdraws the question from the band.
 
 ## Not design decisions
 
