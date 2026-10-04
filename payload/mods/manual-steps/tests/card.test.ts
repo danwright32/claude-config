@@ -1,0 +1,125 @@
+import { describe, expect, test } from 'claude-code/testing'
+import { cardFrom, cardLines, finish, nextStep, sent } from '../hooks/card.ts'
+import type { StepsCard } from '../types/index.d.ts'
+
+const step = (over: Record<string, unknown> = {}) => ({ title: 'Turn on the WAF rule', url: 'https://dash.cloudflare.com/waf', checked: 'not-done', ...over })
+const made = (input: unknown): StepsCard => {
+  const r = cardFrom(input)
+  if ('refusal' in r) throw new Error(r.refusal)
+  return r.card
+}
+
+describe('cardFrom', () => {
+  test('refuses a step with no link and no exact location, naming the step', () => {
+    const r = cardFrom({ heading: 'Cloudflare', steps: [step(), step({ title: 'Save it', url: undefined })] })
+    expect('refusal' in r && r.refusal).toMatch(/^Step 2 \(Save it\) has no link or exact location/)
+  })
+  test('takes an exact location in place of a link', () => {
+    const c = made({ heading: 'Salesforce', steps: [step({ url: undefined, location: 'Salesforce desktop app, Setup, Object Manager' })] })
+    expect(c.steps[0]?.location).toBe('Salesforce desktop app, Setup, Object Manager')
+  })
+  test('refuses a link that is not a web address', () => {
+    const r = cardFrom({ heading: 'x', steps: [step({ url: 'dash.cloudflare.com' })] })
+    expect('refusal' in r && r.refusal).toMatch(/Step 1 .*link .*https/)
+  })
+  test('refuses a step that does not say whether it was checked against the current state', () => {
+    const r = cardFrom({ heading: 'x', steps: [step({ checked: undefined })] })
+    expect('refusal' in r && r.refusal).toMatch(/Step 1 .*checked.*already-done, not-done or cannot-check/)
+  })
+  test('refuses no heading, no steps, and a step with no title', () => {
+    expect('refusal' in cardFrom({ steps: [step()] })).toBe(true)
+    expect('refusal' in cardFrom({ heading: 'x', steps: [] })).toBe(true)
+    expect('refusal' in cardFrom({ heading: 'x', steps: [step({ title: ' ' })] })).toBe(true)
+    expect('refusal' in cardFrom(null)).toBe(true)
+  })
+  test('a step found already done arrives finished, as already done', () => {
+    const c = made({ heading: 'x', steps: [step({ checked: 'already-done' }), step({ title: 'Second' })] })
+    expect(c.steps.map(s => s.finished)).toEqual(['already', undefined])
+    expect(nextStep(c)).toBe(1)
+  })
+})
+
+describe('finish', () => {
+  test('marks a step checked or done per you, and refuses a step out of range or already finished', () => {
+    const c = made({ heading: 'x', steps: [step(), step({ title: 'Second' })] })
+    const a = finish(c, 1, 'checked')
+    if ('refusal' in a) throw new Error(a.refusal)
+    expect(a.card.steps[0]?.finished).toBe('checked')
+    const b = finish(a.card, 2, 'per-you')
+    if ('refusal' in b) throw new Error(b.refusal)
+    expect(b.card.steps[1]?.finished).toBe('per-you')
+    expect(nextStep(b.card)).toBeUndefined()
+    expect('refusal' in finish(c, 3, 'checked')).toBe(true)
+    expect('refusal' in finish(a.card, 1, 'per-you')).toBe(true)
+    expect('refusal' in finish(c, 1, 'maybe' as never)).toBe(true)
+  })
+  test('not done reopens a step whose Done was sent', () => {
+    const c = sent(made({ heading: 'x', steps: [step()] }), 0, true)
+    expect(c.steps[0]?.isSent).toBe(true)
+    const r = finish(c, 1, 'not-done')
+    if ('refusal' in r) throw new Error(r.refusal)
+    expect(r.card.steps[0]).toMatchObject({ isSent: false })
+    expect(r.card.steps[0]?.finished).toBeUndefined()
+  })
+})
+
+describe('cardLines', () => {
+  type P = { text?: string; button?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
+  const lines = (c: StepsCard) => cardLines(c) as P[][]
+  const textOf = (l: P[]) => l.map(p => p.text ?? `[${p.button}]`).join('')
+
+  test('an amber heading, only the next step open, later steps by title alone', () => {
+    const c = made({
+      heading: 'Cloudflare WAF',
+      steps: [
+        step({ checked: 'already-done', title: 'Create the API token' }),
+        step({ title: 'Turn on the rule', clicks: 'Security, WAF, Custom rules, Deploy', value: 'ip.src eq 1.2.3.4' }),
+        step({ title: 'Purge the cache' }),
+      ],
+    })
+    const l = lines(c)
+    expect(l[0]).toEqual([{ text: 'Cloudflare WAF', color: 'warning' }])
+    expect(l.map(textOf)).toEqual([
+      'Cloudflare WAF',
+      '1. Create the API token  already done',
+      '2. Turn on the rule  [done]',
+      'https://dash.cloudflare.com/waf',
+      'Security, WAF, Custom rules, Deploy',
+      'ip.src eq 1.2.3.4  [copy]',
+      '3. Purge the cache',
+    ])
+    // The step to do is bold in the terminal's own text colour; its details sit under its title.
+    expect(l[2]?.[0]).toMatchObject({ bold: true })
+    expect(l[2]?.[0]?.color).toBeUndefined()
+    expect(l.slice(3, 6).every(x => x[0]?.indent === 3)).toBe(true)
+    // A later step is plain: not bold, not dim.
+    expect(l[6]).toEqual([{ text: '3. Purge the cache' }])
+  })
+
+  test('a finished step is dimmed and struck through, then how it finished: already done and per you grey, checked green', () => {
+    let c = made({ heading: 'x', steps: [step({ checked: 'already-done', title: 'A' }), step({ title: 'B' }), step({ title: 'C' })] })
+    const r1 = finish(c, 2, 'checked')
+    if ('refusal' in r1) throw new Error(r1.refusal)
+    const r2 = finish(r1.card, 3, 'per-you')
+    if ('refusal' in r2) throw new Error(r2.refusal)
+    c = r2.card
+    const l = lines(c)
+    for (const n of [1, 2, 3]) expect(l[n]?.[0]).toMatchObject({ dim: true, strikethrough: true })
+    expect(l[1]?.[1]).toEqual({ text: '  already done', dim: true })
+    expect(l[2]?.[1]).toEqual({ text: '  checked', color: 'success' })
+    expect(l[3]?.[1]).toEqual({ text: '  done, per you', dim: true })
+  })
+
+  test('an exact location stands where the link would, and a sent Done reads as sent', () => {
+    const c = sent(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login' })] }), 0, true)
+    const l = lines(c)
+    expect(l.map(textOf)).toEqual(['x', '1. Turn on the WAF rule  sent', 'Keychain Access, login'])
+  })
+
+  test('a value of several lines shows on one line, and the indent follows the number width', () => {
+    const steps = Array.from({ length: 10 }, (_, i) => step({ checked: i < 9 ? 'already-done' : 'not-done', title: `S${i + 1}`, value: i === 9 ? 'a\nb' : undefined }))
+    const l = lines(made({ heading: 'x', steps }))
+    const value = l.find(x => x.some(p => p.button === 'copy'))
+    expect(value?.[0]).toMatchObject({ text: 'a b', indent: 4 })
+  })
+})
