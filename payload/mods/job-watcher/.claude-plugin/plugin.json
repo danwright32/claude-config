@@ -1,7 +1,8 @@
 {
   "name": "job-watcher",
   "version": "0.1.0",
-  "description": "Keeps track of background jobs, notices when one is stuck, and does not let a turn end with one forgotten.",
+  "description": "Keeps track of background jobs, notices when one is stuck, and reminds Claude of any it has neither stopped nor kept.",
   "author": { "name": "Dan Wright" },
-  "dependencies": ["mod-kit", "session-registry"]
+  "dependencies": ["mod-kit", "session-registry"],
+  "types": "./types/index.d.ts"
 }

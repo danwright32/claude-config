@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, startedJob } from '../hooks/jobs.ts'
+import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, shortCommand, shortLine, startedJob } from '../hooks/jobs.ts'
 
 const MIN = 60_000
 
@@ -150,5 +150,20 @@ describe('the line Dan sees after leftovers are judged', () => {
   })
   test('nothing judged and nothing unreadable is no line at all', () => {
     expect(leftoverLine([], [])).toBeUndefined()
+  })
+})
+
+describe('a job named in a notice', () => {
+  test('a short command is kept whole, on one line', () => {
+    expect(shortCommand('  npm run\n dev  ')).toBe('npm run dev')
+  })
+  test('a long command is cut to forty characters, ending in dots', () => {
+    const cut = shortCommand(`until curl -sf http://x/${'a'.repeat(200)}; do sleep 3; done`)
+    expect(cut.length).toBe(40)
+    expect(cut.endsWith('...')).toBe(true)
+    expect(cut.startsWith('until curl -sf')).toBe(true)
+  })
+  test('a long repeated line is cut to one hundred and twenty characters', () => {
+    expect(shortLine(`error: ${'b'.repeat(500)}`).length).toBe(120)
   })
 })

@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
+import { shortCommand } from '../hooks/jobs.ts'
 
 // A stand-in for the session registry: what the watcher records there comes back as a transcript
 // line the world collects (an inline plugin cannot reach this file's variables), and the sessions
@@ -25,6 +26,14 @@ const deps: { name: string; register: Register } = {
             built.ui.log(`EXTRA ${key} ${JSON.stringify(value)}`)
           },
         },
+      }
+    })
+    // The status bar's read of the job list, as another mod makes it: the noun called in place.
+    on('tool.call', { tool: '__jobs' }, async $ => {
+      try {
+        return { result: JSON.stringify(await $.jobs.list()) } as never
+      } catch (err) {
+        return { deny: err instanceof Error ? err.message : String(err) } as never
       }
     })
   },
@@ -696,6 +705,25 @@ test('a running job nobody kept is named on every tool result Claude reads', wit
   }
 })
 
+// Lessons review of #634: the reminder and every notice ride on every tool result, so a job is named
+// by its command cut to one short line, never the whole command.
+const LONG = `until curl -sf "http://localhost:3000/health?probe=${'x'.repeat(400)}"; do sleep 3; done`
+test('a long command is cut short in the reminder and in the notices', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LONG, run_in_background: true } as never)
+  await clock.advance(11 * MIN)
+  const r = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  const said = (r as { context?: string[] }).context ?? []
+  expect(said.some(c => c.startsWith(REMINDER))).toBe(true)
+  expect(noticesOf(r)).toMatch(/no new output/)
+  for (const c of said) {
+    expect(c).not.toContain('x'.repeat(41))
+    expect(c).toContain('until curl')
+  }
+})
+
 test('the reminder rides on a failed tool result too', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
   world(on, { tail: '', size: 0 })
@@ -1010,4 +1038,45 @@ test('a poll loop kept while the look that would stop it is under way is not sto
   job.slow = undefined
   await clock.advance(10_000)
   expect(w.reached.filter(r => r.tool === 'TaskStop')).toEqual([])
+})
+
+// The job list the status bar (#610) reads, the one source for its running and kept jobs: a short
+// name, how long it has run, whether Claude kept it, and whether the watcher measured it as stuck.
+type Listed = { label: string; runMs: number; kept: boolean; stuck: boolean }[]
+const jobsOf = async ($: { tool: { call: (e: never) => Promise<unknown> } }): Promise<Listed> => {
+  const r = (await $.tool.call({ tool: '__jobs' } as never)) as { result?: string; deny?: string }
+  if (r.deny !== undefined) throw new Error(r.deny)
+  return JSON.parse(String(r.result))
+}
+
+test('the job list names each running job with its run time, kept and stuck', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, [{ tail: 'listening on 3000\n', size: 18 }, { tail: 'watching\n', size: 9 }])
+  await start($)
+  expect(await jobsOf($)).toEqual([])
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(2 * MIN)
+  await $.tool.call({ tool: 'Bash', command: LONG, run_in_background: true } as never)
+  await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'Dan is using it', quiet: true }))
+  await clock.advance(9 * MIN)
+  expect(await jobsOf($)).toEqual([
+    { label: 'dev server', runMs: 11 * MIN, kept: true, stuck: false },
+    { label: shortCommand(LONG), runMs: 9 * MIN, kept: false, stuck: false },
+  ])
+  await clock.advance(3 * MIN)
+  const later = await jobsOf($)
+  expect(later[1]).toEqual({ label: shortCommand(LONG), runMs: 12 * MIN, kept: false, stuck: true })
+  expect(later[0]?.stuck).toBe(false)
+})
+
+test('a job that ends leaves the job list', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'building\n', size: 9 }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  expect((await jobsOf($)).length).toBe(1)
+  job.gone = true
+  await clock.advance(MIN + 1)
+  expect(await jobsOf($)).toEqual([])
 })

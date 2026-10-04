@@ -311,3 +311,36 @@ test('a failure is recorded as one short line, never the whole tool output', wit
   expect(failed).not.toContain('\n')
   expect(failed).not.toContain('secret')
 })
+
+// Lessons review of #634: a step's status is the caller's input, never trusted. One outside pending,
+// in_progress, completed (and deleted, for a task) is not stored, since it would break the done
+// count, and Claude is told on that result.
+const contextText = (r: unknown) => ((r as { context?: string[] }).context ?? []).join('\n')
+test('a task update with a status the tracker does not know is not stored, and Claude is told', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.tool.call({ tool: 'TaskCreate', subject: 'Read', description: 'x', activeForm: 'Reading' } as never)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' } as never)
+  const r = await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'finished' } as never)
+  expect(last(w)).toMatchObject({ done: 1, total: 1 })
+  expect(contextText(r)).toContain('"finished"')
+  const again = await $.tool.call(bash('ls'))
+  expect(contextText(again)).not.toContain('"finished"')
+})
+
+test('a to-do list carrying a status the tracker does not know is not stored, and Claude is told', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Read', status: 'completed', activeForm: 'Reading' }] } as never)
+  const r = await $.tool.call({
+    tool: 'TodoWrite',
+    todos: [
+      { content: 'Read', status: 'done', activeForm: 'Reading' },
+      { content: 'Build', status: 'pending', activeForm: 'Building' },
+    ],
+  } as never)
+  expect(last(w)).toMatchObject({ done: 1, total: 1 })
+  expect(contextText(r)).toContain('"done"')
+})

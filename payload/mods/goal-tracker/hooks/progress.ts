@@ -3,6 +3,10 @@
 // progress rule): working, stalled, failed, done, or waiting on him.
 
 export type StepStatus = 'pending' | 'in_progress' | 'completed'
+const STEP_STATUSES: readonly string[] = ['pending', 'in_progress', 'completed'] satisfies StepStatus[]
+// A status comes from the tool call's input, never trusted: one outside these would break the done
+// count (lessons review of #634).
+export const isStepStatus = (x: unknown): x is StepStatus => typeof x === 'string' && STEP_STATUSES.includes(x)
 export type Step = { id: string; subject: string; activeForm?: string; status: StepStatus }
 export type Progress = {
   steps: Step[]

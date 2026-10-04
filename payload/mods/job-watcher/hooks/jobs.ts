@@ -88,6 +88,17 @@ export const parseVerdict = (text: string): Verdict | undefined => {
   return undefined
 }
 
+// A job's command as one short line: what names it in every notice Claude reads, a leftover Dan's
+// line could not name from a verdict, and the status bar's label for a job nobody kept. The whole
+// command never rides on a tool result (lessons review of #634).
+// A repeated output line is cut the same way, longer, since it is the evidence a notice names.
+const cut = (text: string, max: number): string => {
+  const line = text.trim().replace(/\s+/g, ' ')
+  return line.length > max ? `${line.slice(0, max - 3)}...` : line
+}
+export const shortCommand = (command: string): string => cut(command, 40)
+export const shortLine = (line: string): string => cut(line, 120)
+
 // How long a job has run, as the status bar writes it: "14m", "2h 14m".
 export const runFor = (ms: number): string => {
   const mins = Math.max(0, Math.floor(ms / 60_000))

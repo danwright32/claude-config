@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, startedJob, type Outcome, type Verdict } from './jobs.ts'
+import type { Jobs, JobsEntry } from '../types/index.d.ts'
+import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, shortCommand, shortLine, startedJob, type Outcome, type Verdict } from './jobs.ts'
 
 // Background job watcher (claude-config#611). Every background job is recorded with its process
 // group, traced through the output file it writes (never by matching its command text, L1011), into
@@ -15,7 +16,7 @@ import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, st
 // startedAt. quiet: kept as quiet by design, so it is never reported for going silent.
 type Kept = { name: string; reason: string; quiet: boolean; at: number }
 type Job = { id: string; command: string; outputPath: string; pgid: number | null; startedAt: number; kept?: Kept }
-type Watch = { lastSize: number; lastGrowth: number; told: boolean; toldUnreadable: boolean; toldUntraced: boolean; toldLookFailed: boolean }
+type Watch = { lastSize: number; lastGrowth: number; stuck: boolean; told: boolean; toldUnreadable: boolean; toldUntraced: boolean; toldLookFailed: boolean }
 
 const TICK_MS = 60_000
 const KEEP_TOOL = 'keep_job'
@@ -50,7 +51,7 @@ let tick: { cancel: () => void } | undefined
 const watchOf = (job: Job): Watch => {
   let w = watch.get(job.id)
   if (!w) {
-    w = { lastSize: NaN, lastGrowth: job.startedAt, told: false, toldUnreadable: false, toldUntraced: false, toldLookFailed: false }
+    w = { lastSize: NaN, lastGrowth: job.startedAt, stuck: false, told: false, toldUnreadable: false, toldUntraced: false, toldLookFailed: false }
     watch.set(job.id, w)
   }
   return w
@@ -172,7 +173,7 @@ const lookAll = async ($: EngineInterface) => {
     } catch (err) {
       if (!w.toldLookFailed) {
         w.toldLookFailed = true
-        notices.push(`The background job watcher could not check its jobs: background job ${job.id} (${job.command}): ${err instanceof Error ? err.message : String(err)}. It may be stuck without a word from the watcher.`)
+        notices.push(`The background job watcher could not check its jobs: background job ${job.id} (${shortCommand(job.command)}): ${err instanceof Error ? err.message : String(err)}. It may be stuck without a word from the watcher.`)
       }
     }
   }
@@ -199,7 +200,7 @@ const ended = async ($: EngineInterface, job: Job, w: Watch): Promise<boolean> =
   }
   if (!w.toldUntraced) {
     w.toldUntraced = true
-    notices.push(`Background job ${job.id} (${job.command}) could not be traced to its process, so whether it has ended is unknown. Stop it with TaskStop if it is no longer needed.`)
+    notices.push(`Background job ${job.id} (${shortCommand(job.command)}) could not be traced to its process, so whether it has ended is unknown. Stop it with TaskStop if it is no longer needed.`)
   }
   return false
 }
@@ -220,7 +221,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
   if (!Number.isFinite(size) || tail === undefined) {
     if (!w.toldUnreadable) {
       w.toldUnreadable = true
-      notices.push(`Background job ${job.id} (${job.command}): could not read its output file ${job.outputPath}, so whether it is stuck is unknown.`)
+      notices.push(`Background job ${job.id} (${shortCommand(job.command)}): could not read its output file ${job.outputPath}, so whether it is stuck is unknown.`)
     }
     return
   }
@@ -231,7 +232,10 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
     w.lastGrowth = now
     w.told = false
   }
-  const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth, quietByDesign: job.kept?.quiet === true }, now)
+  // Read again for quiet: a keep that landed while this look waited is honoured (L443).
+  const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth, quietByDesign: (jobs.get(job.id) ?? job).kept?.quiet === true }, now)
+  // What the status bar's job list reads as stuck: the watcher's own measure, as it was at the last look.
+  w.stuck = a.state !== 'running'
   // A job Claude kept on purpose is only ever reported, never stopped by the watcher (lessons review).
   if (a.state === 'repeating' && !job.kept && isPollLoop(job.command) && isErrorLine(a.line)) {
     // A poll loop that only ever repeated an error never succeeded, and is stopped by itself. Read
@@ -240,16 +244,16 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
     const why = await stop($, job.id)
     if (why === undefined) {
       // Said before the registry write, so a write that fails cannot lose it (lessons review of #634).
-      notices.push(`Background job ${job.id} (${job.command}) was stopped: it is a poll loop that only ever repeated "${a.line}", so it never succeeded.`)
+      notices.push(`Background job ${job.id} (${shortCommand(job.command)}) was stopped: it is a poll loop that only ever repeated "${shortLine(a.line)}", so it never succeeded.`)
       await forget($, job.id)
     } else if (!w.told) {
       w.told = true
-      notices.push(`Background job ${job.id} (${job.command}) is a poll loop that only ever repeated "${a.line}", but it could not be stopped: ${why}. Stop it with TaskStop.`)
+      notices.push(`Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${shortLine(a.line)}", but it could not be stopped: ${why}. Stop it with TaskStop.`)
     }
   } else if (a.state !== 'running' && !w.told) {
     w.told = true
-    const what = a.state === 'repeating' ? `keeps repeating "${a.line}"` : `has had no new output for ${Math.round(a.forMs / 60_000)} minutes`
-    notices.push(`Background job ${job.id} (${job.command}) ${what}. Stop it with TaskStop, or keep it if that is expected.`)
+    const what = a.state === 'repeating' ? `keeps repeating "${shortLine(a.line)}"` : `has had no new output for ${Math.round(a.forMs / 60_000)} minutes`
+    notices.push(`Background job ${job.id} (${shortCommand(job.command)}) ${what}. Stop it with TaskStop, or keep it if that is expected.`)
   }
 }
 
@@ -259,7 +263,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
 const unkeptReminder = (): string | undefined => {
   const unkept = [...jobs.values()].filter(j => !j.kept)
   if (!unkept.length) return undefined
-  const named = unkept.map(j => `${j.id} (${j.command})`).join(', ')
+  const named = unkept.map(j => `${j.id} (${shortCommand(j.command)})`).join(', ')
   return `Still running and not kept: background ${unkept.length === 1 ? 'job' : 'jobs'} ${named}. Stop ${unkept.length === 1 ? 'it' : 'each'} with TaskStop, or keep it with ${KEEP_CALL} and a reason, before you finish.`
 }
 
@@ -314,7 +318,7 @@ const promptFor = (job: Job, runMs: number, tail: string, state: string) =>
 
 // One leftover, judged and acted on; undefined when it has ended or is not the job it was.
 const judgeOne = async ($: EngineInterface, job: Leftover, now: number): Promise<Outcome | undefined> => {
-  const short = job.command.length > 40 ? `${job.command.slice(0, 37)}...` : job.command
+  const short = shortCommand(job.command)
   const groups = await groupsHolding($, job.outputPath)
   if (groups === 'nobody') return undefined
   // A job its session never traced to a group is reported, never stopped: whatever holds its file
@@ -385,7 +389,7 @@ const judgeLeftovers = async ($: EngineInterface) => {
       const o = await judgeOne($, job, now)
       if (o) outcomes.push(o)
     } catch {
-      outcomes.push({ kind: 'unjudged', name: job.command.length > 40 ? `${job.command.slice(0, 37)}...` : job.command, session: job.session })
+      outcomes.push({ kind: 'unjudged', name: shortCommand(job.command), session: job.session })
     }
   }
   // Why a stop failed goes to the debug log; Dan's line names the job only.
@@ -395,6 +399,22 @@ const judgeLeftovers = async ($: EngineInterface) => {
 }
 
 export const register: Register = on => {
+  // The job list the status bar (#610) reads: the one source for its running and kept jobs (spec item
+  // 4). A clock that cannot be read refuses the list rather than answer without run times.
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    const list: Jobs['list'] = async (): Promise<JobsEntry[]> => {
+      const now = await built.clock.now()
+      return [...jobs.values()].map(j => ({
+        label: j.kept ? j.kept.name : shortCommand(j.command),
+        runMs: Math.max(0, now - j.startedAt),
+        kept: Boolean(j.kept),
+        stuck: watch.get(j.id)?.stuck === true,
+      }))
+    }
+    return { ...built, jobs: { list } }
+  })
+
   on('session.start', async ($, e, next) => {
     jobs.clear()
     watch.clear()
@@ -457,7 +477,7 @@ export const register: Register = on => {
           })
           await publishSafely($)
         } catch (err) {
-          notices.push(`The background job watcher could not record background job ${started.id} (${String(input.command ?? '')}): ${err instanceof Error ? err.message : String(err)}. It is not watched, so stop it with TaskStop when it is no longer needed.`)
+          notices.push(`The background job watcher could not record background job ${started.id} (${shortCommand(String(input.command ?? ''))}): ${err instanceof Error ? err.message : String(err)}. It is not watched, so stop it with TaskStop when it is no longer needed.`)
         }
       }
     }

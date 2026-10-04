@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { empty, fromTodos, taskCreated, taskUpdated, type Progress, type StepStatus } from './progress.ts'
+import { empty, fromTodos, isStepStatus, taskCreated, taskUpdated, type Progress, type StepStatus } from './progress.ts'
 
 // Goal tracker (claude-config#612). This holds the part settled by the spec alone: each session's
 // task list, its last activity and whether it waits on Dan go into the shared session registry,
@@ -30,7 +30,9 @@ const publish = async ($: EngineInterface, now: number) => {
     }
   }
 }
-const withNotice = <R extends { context?: readonly string[] }>(result: R): R => {
+const unknownStatus = (status: unknown) =>
+  `The goal tracker did not record that step change: status ${JSON.stringify(status)} is not one of pending, in_progress, completed or deleted, so the session's progress is as it was.`
+const withNotice =<R extends { context?: readonly string[] }>(result: R): R => {
   if (!notice) return result
   const said = notice
   notice = undefined
@@ -131,7 +133,13 @@ export const register: Register = on => {
     } else {
       progress = counted(progress, undefined)
       if (e.tool === 'TodoWrite') {
-        progress = fromTodos(progress, (input.todos as { content: string; status: StepStatus; activeForm: string }[]) ?? [], now)
+        const todos = Array.isArray(input.todos) ? (input.todos as { content: string; status: unknown; activeForm: string }[]) : []
+        const odd = todos.find(t => !isStepStatus(t?.status))
+        // A list carrying a status the tracker cannot count is not stored at all, and Claude is told.
+        if (odd) {
+          notice = unknownStatus(odd.status)
+          progress = { ...progress, lastActivityAt: now }
+        } else progress = fromTodos(progress, todos as { content: string; status: StepStatus; activeForm: string }[], now)
       } else if (e.tool === 'TaskCreate') {
         const task = (result.result as { task?: { id?: string; subject?: string } } | undefined)?.task
         // A result with no task id cannot be followed, but the call is still activity.
@@ -139,7 +147,12 @@ export const register: Register = on => {
           ? taskCreated(progress, { id: task.id, subject: task.subject ?? String(input.subject ?? ''), activeForm: input.activeForm as string | undefined }, now)
           : { ...progress, lastActivityAt: now }
       } else if (e.tool === 'TaskUpdate') {
-        progress = taskUpdated(progress, input as { taskId: string; status?: StepStatus | 'deleted'; subject?: string; activeForm?: string }, now)
+        const status = input.status
+        // An update carrying a status the tracker cannot count is not stored at all, and Claude is told.
+        if (status !== undefined && status !== 'deleted' && !isStepStatus(status)) {
+          notice = unknownStatus(status)
+          progress = { ...progress, lastActivityAt: now }
+        } else progress = taskUpdated(progress, input as { taskId: string; status?: StepStatus | 'deleted'; subject?: string; activeForm?: string }, now)
       } else {
         progress = { ...progress, lastActivityAt: now }
       }
