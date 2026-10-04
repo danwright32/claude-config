@@ -361,3 +361,45 @@ test('two timers due at once (a reload while the first still runs) make one Haik
   expect(w.prompts.length).toBe(1)
   expect(w.renames.length).toBe(1)
 })
+
+// Lessons review of #657: work started off a hook (the ten minute timer, a turn's end) must not lose
+// a failure to an unhandled rejection, and bookkeeping around Dan's own /rename must never break it.
+const failingState = (on: On) => {
+  const s = { failing: false }
+  on('state.set', async ($, e, next) => (s.failing ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  return s
+}
+
+test('a state write that fails at the ten minute mark is said in one line, not lost', async ($, on) => {
+  const s = failingState(on)
+  const w = world(on)
+  await start($)
+  s.failing = true
+  await w.clock.advance(10 * MIN)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(0)
+  expect(w.logs.length).toBe(1)
+  expect(w.logs[0]).toContain("couldn't name this session")
+  expect(w.logs[0]).toContain('state store unavailable')
+})
+
+test('a state write that fails after a turn ends is said in one line, not lost', async ($, on) => {
+  const s = failingState(on)
+  const w = world(on)
+  await start($)
+  await w.clock.advance(10 * MIN)
+  s.failing = true
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.logs.every(l => !l.includes('will try once more'))).toBe(true)
+})
+
+test("Dan's own /rename still answers when the bookkeeping write around it fails", async ($, on) => {
+  const s = failingState(on)
+  const w = world(on)
+  await start($)
+  s.failing = true
+  const r = (await $.command.run({ command: 'rename', args: 'Mine', origin: { kind: 'user' } } as never)) as { text?: string }
+  expect(r.text).toBe('Session renamed to: Mine')
+  void w
+})

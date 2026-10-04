@@ -61,9 +61,18 @@ const fail = async ($: EngineInterface, why: string) => {
     const failures = cur.failures + 1
     return { ...cur, failures, claim: null, outcome: failures >= 2 ? 'gave-up' : 'waiting' }
   })
-  if (rec?.outcome === 'gave-up') $.ui.log(`${WHO} couldn't name this session: ${why}. It won't try again, so /rename names it.`)
-  else $.ui.log(`${WHO} couldn't name this session: ${why}. It will try once more when the session is next idle.`)
+  // Only a recorded failure books the retry, so with no record (a /clear gave the session a new id)
+  // the line promises none.
+  if (rec?.outcome === 'waiting') $.ui.log(`${WHO} couldn't name this session: ${why}. It will try once more when the session is next idle.`)
+  else $.ui.log(`${WHO} couldn't name this session: ${why}. It won't try again, so /rename names it.`)
 }
+
+// Work started off a hook (the ten minute timer, a turn's end) has nobody awaiting it, so a throw
+// there would vanish as an unhandled rejection: no line, no retry booked. Said instead, once.
+const inBackground = ($: EngineInterface, work: () => Promise<unknown>) =>
+  work().catch(err => {
+    $.ui.log(`${WHO} couldn't name this session: ${errText(err)}. It won't try again, so /rename names it.`)
+  })
 
 const haikuWhy = (r: { reason?: string; status?: number }) => {
   if (r.reason === 'aborted') return `Haiku did not answer within ${HAIKU_MS / 1000} seconds`
@@ -147,7 +156,7 @@ export const register: Register = on => {
     if (rec?.isInteractive === true && rec.outcome === 'waiting') {
       const left = Math.max(0, rec.startedAt + WAIT_MS - now)
       $.clock.after(left, () => {
-        void update($, cur => (cur && !cur.isDue ? { ...cur, isDue: true } : undefined)).then(() => attempt($))
+        void inBackground($, () => update($, cur => (cur && !cur.isDue ? { ...cur, isDue: true } : undefined)).then(() => attempt($)))
       })
     }
     return result
@@ -199,7 +208,12 @@ export const register: Register = on => {
     } finally {
       const origin = e.origin as { kind: string; name?: string } | undefined
       if (!(origin?.kind === 'plugin' && origin.name === MOD)) {
-        await update($, cur => (cur ? { ...cur, isRenamedByHand: true, pendingTitle: null, outcome: cur.outcome === 'waiting' ? 'left' : cur.outcome } : undefined))
+        // Bookkeeping only: a failed write must never change what Dan's own /rename answers.
+        try {
+          await update($, cur => (cur ? { ...cur, isRenamedByHand: true, pendingTitle: null, outcome: cur.outcome === 'waiting' ? 'left' : cur.outcome } : undefined))
+        } catch (err) {
+          $.ui.log(`${MOD}: could not record Dan's /rename (${errText(err)})`, { to: 'debug' })
+        }
       }
     }
   })
@@ -209,7 +223,7 @@ export const register: Register = on => {
   // inside a hook the turn is waiting on. A subagent's turn is not the session's.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (!e.agentId) $.clock.after(0, () => void attempt($))
+    if (!e.agentId) $.clock.after(0, () => void inBackground($, () => attempt($)))
     return result
   })
 }
