@@ -224,6 +224,26 @@ No round: each follows from the spec, the settled placement above and the guards
   session with the mod starts the week. A press log that cannot be read is named in a dim line and
   the week stays open, so the next session tries again.
 
+### Auto session name (#635), behaviour decided while building (2026-10-04)
+
+The spec on the issue was agreed with Dan; these are the details it left open, decided in the build
+and open to his correction.
+
+- The failure lines, one per failed attempt, in the guards' note style: "Auto session name couldn't
+  name this session: Haiku's reply was empty. It will try once more when the session is next idle."
+  and, on the second failure, "... It won't try again, so /rename names it." The reasons said apart:
+  an empty reply, one too long to be a name, an error from Haiku (with its status), no answer within
+  30 seconds, the call refused by the engine, the conversation unreadable.
+- A reply is kept up to 8 words or 60 characters though 3 to 6 are asked for, so a reply a word
+  over does not cost a failure line and a second call.
+- The idle point is the end of a main turn (a subagent's turn is not one). From the 10 minute mark
+  on, each one may name the session: the first exchange when nothing was asked by then, and the one
+  retry after a failure. A session idle at the time of a failure retries after Dan's next message.
+- The fallback route checks before it sets: when `/rename` refuses or answers with nothing
+  recognisable, Dan's next message carries the name as `sessionTitle` only if that message shows
+  the session still has no name. A different name on it, or a `/rename` of Dan's first, wins.
+- After a `/clear` (a new session id with no fresh start event) the new conversation is not named.
+
 ### The band, shared by every mod
 
 Claude Code gives the band above the prompt one drawing, so the mods that use it compose one tree.

@@ -1,0 +1,7 @@
+{
+  "name": "auto-session-name",
+  "version": "0.1.0",
+  "description": "Names an unnamed interactive session once, ten minutes in or after its first exchange, with one Haiku call. Never overwrites a name already set.",
+  "author": { "name": "Dan Wright" },
+  "types": "./types/index.d.ts"
+}
