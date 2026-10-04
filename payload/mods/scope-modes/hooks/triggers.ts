@@ -10,10 +10,11 @@ const APOS = "['’]"
 const PHRASES: { re: RegExp; trigger: Trigger }[] = [
   { re: /\bpause after (?:this|the|that) (?:issue|one|pr)\b/i, trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: /\bwind (?:it )?down (?:now|after (?:this|the|that))\b/i, trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
-  { re: new RegExp(`\\b(?:let${APOS}?s|time to|please|start) wind(?:ing)? (?:it )?down\\b`, 'i'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
+  // Ends the sentence or names when, so "let's wind down the Redis instance" stays prose.
+  { re: new RegExp(`\\b(?:let${APOS}?s|time to|please|start) wind(?:ing)? (?:it )?down(?=\\s*(?:[.!,;]|$|now\\b|for (?:today|tonight|the (?:day|night))\\b|after\\b))`, 'i'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: /^\s*(?:ok,? )?wind (?:it )?down[.!]?\s*$/i, trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: /\bno coding yet\b/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
-  { re: /\b(?:stay|keep it|keep things|be|work) read[ -]only\b/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
+  { re: /\b(?:stay|keep it|keep things) read[ -]only\b/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
   { re: /\bread[ -]only (?:for now|mode|until)\b/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
   { re: new RegExp(`\\bjust file,? (?:it,? )?don${APOS}?t build\\b`, 'i'), trigger: { kind: 'scope', scope: 'NO BUILD' } },
   { re: new RegExp(`\\bdon${APOS}?t start (?:git|coding|building) yet\\b`, 'i'), trigger: { kind: 'scope', scope: 'NO BUILD' } },

@@ -15,6 +15,7 @@ describe('triggersIn', () => {
     ["don't start git yet", [{ kind: 'scope', scope: 'NO BUILD' }]],
     ['wind down after this one', [{ kind: 'scope', scope: 'WINDING DOWN' }]],
     ["let's wind down", [{ kind: 'scope', scope: 'WINDING DOWN' }]],
+    ["let's wind down for today", [{ kind: 'scope', scope: 'WINDING DOWN' }]],
     ['wind down', [{ kind: 'scope', scope: 'WINDING DOWN' }]],
     ['keep it read only', [{ kind: 'scope', scope: 'NO BUILD' }]],
     ['read only mode please', [{ kind: 'scope', scope: 'NO BUILD' }]],
@@ -34,7 +35,9 @@ describe('triggersIn', () => {
       // Decided with Dan (2026-10-04, picker): only phrasings aimed at Claude switch a mode, never
       // the words used in passing.
       'make this column read only', 'use a read-only Supabase connection', 'the project is winding down',
-      'the wind down the hall', 'is the read only query safe?'])
+      'the wind down the hall', 'is the read only query safe?',
+      'this column should be read only', 'the file will be read only by the loader',
+      'please wind down the staging cluster', "let's wind down the Redis instance"])
       expect(triggersIn(t)).toEqual([])
   })
   test('one mode named twice in a message comes back once', () => {
