@@ -409,7 +409,6 @@ test("Dan's own /rename still answers when the bookkeeping write around it fails
   s.failing = true
   const r = (await $.command.run({ command: 'rename', args: 'Mine', origin: { kind: 'user' } } as never)) as { text?: string }
   expect(r.text).toBe('Session renamed to: Mine')
-  void w
 })
 
 // Lessons review of #657: only a /rename that took counts as Dan naming the session himself.
@@ -417,10 +416,9 @@ test("a /rename of Dan's that is refused leaves the session to be named", async 
   const w = world(on, { rename: 'refused' })
   await start($)
   await $.command.run({ command: 'rename', args: 'x', origin: { kind: 'user' } } as never).catch(() => undefined)
-  const w2 = w
-  await w2.clock.advance(10 * MIN)
-  await w2.clock.settle()
-  expect(w2.prompts.length).toBe(1)
+  await w.clock.advance(10 * MIN)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(1)
 })
 
 test("a /rename of Dan's that throws leaves the session to be named", async ($, on) => {
@@ -430,4 +428,21 @@ test("a /rename of Dan's that throws leaves the session to be named", async ($, 
   await w.clock.advance(10 * MIN)
   await w.clock.settle()
   expect(w.prompts.length).toBe(1)
+})
+
+// Lessons review of #657: an attempt whose claim went stale and was taken over must not record its
+// failure over the attempt that took over.
+test('a failure from an attempt that lost its claim changes nothing for the one that took over', async ($, on) => {
+  let release = () => {}
+  const held = new Promise<void>(r => { release = r })
+  const w = world(on, { replies: ['', 'Taken over name'], holdHaiku: held })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  await w.clock.advance(3 * MIN + 1)
+  await turnEnds($)
+  await w.clock.settle()
+  release()
+  await w.clock.settle()
+  expect(w.logs).toEqual([])
+  expect(w.renames.map(r => r.args)).toEqual(['Taken over name'])
 })

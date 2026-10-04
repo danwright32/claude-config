@@ -55,12 +55,17 @@ const fresh = (sessionId: string, now: number, isInteractive: boolean | null, kn
 })
 
 // A failed attempt: one dim line saying why, then either one retry at the next idle point or none.
-const fail = async ($: EngineInterface, why: string) => {
+const fail = async ($: EngineInterface, why: string, mine: (cur: Rec | null) => boolean) => {
+  let owned = false
   const rec = await update($, cur => {
-    if (!cur) return undefined
+    // Only the attempt still holding the claim records a failure: one whose claim went stale and
+    // was taken over leaves the record to the attempt that took it.
+    owned = mine(cur)
+    if (!cur || !owned) return undefined
     const failures = cur.failures + 1
     return { ...cur, failures, claim: null, outcome: failures >= 2 ? 'gave-up' : 'waiting' }
   })
+  if (!owned) return
   // Only a recorded failure books the retry, so with no record (a /clear gave the session a new id)
   // the line promises none.
   if (rec?.outcome === 'waiting') $.ui.log(`${WHO} couldn't name this session: ${why}. It will try once more when the session is next idle.`)
@@ -106,7 +111,7 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   try {
     messages = await $.session.messages()
   } catch (err) {
-    return fail($, `the conversation could not be read (${errText(err)})`)
+    return fail($, `the conversation could not be read (${errText(err)})`, mine)
   }
   // Nothing asked and answered yet: the first exchange's end tries again, and this is no failure.
   if (!hasExchange(messages)) {
@@ -117,13 +122,13 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   let reply: string
   try {
     const r = await $.model.complete({ model: 'haiku', prompt: namePrompt(messages), maxTokens: 60, effort: 'low', timeoutMs: HAIKU_MS })
-    if (!r.isAnswered) return fail($, haikuWhy(r as { reason?: string; status?: number }))
+    if (!r.isAnswered) return fail($, haikuWhy(r as { reason?: string; status?: number }), mine)
     reply = r.text
   } catch (err) {
-    return fail($, `the call to Haiku was refused (${errText(err)})`)
+    return fail($, `the call to Haiku was refused (${errText(err)})`, mine)
   }
   const cleaned = cleanName(reply)
-  if ('refused' in cleaned) return fail($, cleaned.refused === 'empty' ? "Haiku's reply was empty" : "Haiku's reply was too long to be a name")
+  if ('refused' in cleaned) return fail($, cleaned.refused === 'empty' ? "Haiku's reply was empty" : "Haiku's reply was too long to be a name", mine)
   const name = cleaned.name
 
   // Checked again at naming time: a rename Dan made while Haiku was answering wins.
