@@ -1,7 +1,7 @@
 import { read } from 'claude-code'
 import type { Register } from 'claude-code'
-import type { ModKit, ModKitBandPart, ModKitBandRow, ModKitBlocked } from '../types/index.d.ts'
-import { compose, drop, put, refusal } from './band.ts'
+import type { ModKit, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBlocked } from '../types/index.d.ts'
+import { compose, drop, isDivider, put, refusal } from './band.ts'
 import { commands, git } from './commands.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
@@ -76,27 +76,67 @@ const registerBand: Register = on => {
     const rows = compose((await read($, band)) ?? [])
     if (e.props.hasSurvey || rows.length === 0) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
-    const part = (row: ModKitBandRow, p: ModKitBandPart, i: number) =>
-      'button' in p ? (
-        // The press reaches the publisher through its ui.press hook on this key; nothing to do here.
-        <Button key={`${row.mod}:${p.button}`} label={p.label} hotkey={p.hotkey} onPress={() => undefined} />
+    const part = (row: ModKitBandRow, p: ModKitBandPart, i: number) => {
+      const drawn =
+        'button' in p ? (
+          // The press reaches the publisher through its ui.press hook on this key; nothing to do here.
+          <Button key={`${row.mod}:${p.button}`} label={p.label} hotkey={p.hotkey} onPress={() => undefined} />
+        ) : (
+          <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim} strikethrough={p.strikethrough} wrap="truncate-end">
+            {p.text}
+          </Text>
+        )
+      return p.indent ? (
+        <Box key={`indent:${i}`} paddingLeft={p.indent}>
+          {drawn}
+        </Box>
       ) : (
-        <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim} strikethrough={p.strikethrough} wrap="truncate-end">
-          {p.text}
-        </Text>
+        drawn
       )
-    return (
-      <Box flexDirection="column">
-        {rows.map(row => (
-          <Box key={`${row.mod}/${row.id}`} flexDirection="column">
-            {row.lines.map((line, n) => (
-              <Box key={String(n)} flexDirection="row">
-                {line.map((p, i) => part(row, p, i))}
-              </Box>
-            ))}
+    }
+    // A divider is as wide as the band and cut at the edge of whatever frame it sits in.
+    const line = (row: ModKitBandRow, l: ModKitBandLine, n: number) =>
+      isDivider(l) ? (
+        <Text key={String(n)} color="gray" wrap="truncate-end">
+          {'\u2500'.repeat(Math.max(1, e.props.bodyColumns))}
+        </Text>
+      ) : (
+        <Box key={String(n)} flexDirection="row">
+          {l.map((p, i) => part(row, p, i))}
+        </Box>
+      )
+    const drawRow = (row: ModKitBandRow) => {
+      const key = `${row.mod}/${row.id}`
+      const lines = row.lines.map((l, n) => line(row, l, n))
+      const color = row.frame?.color ?? 'gray'
+      if (row.frame?.kind === 'box')
+        return (
+          <Box key={key} flexDirection="column" borderStyle="round" borderColor={color} paddingX={1}>
+            {lines}
           </Box>
-        ))}
-      </Box>
-    )
+        )
+      if (row.frame?.kind === 'left-rule')
+        // One rule mark per line, since every line is one terminal line (text is cut, never wrapped).
+        return (
+          <Box key={key} flexDirection="row">
+            <Box key={`${key}:rule`} flexDirection="column">
+              {row.lines.map((_, n) => (
+                <Text key={String(n)} color={color}>
+                  {'\u2502'}
+                </Text>
+              ))}
+            </Box>
+            <Box flexDirection="column" paddingLeft={1} flexGrow={1}>
+              {lines}
+            </Box>
+          </Box>
+        )
+      return (
+        <Box key={key} flexDirection="column">
+          {lines}
+        </Box>
+      )
+    }
+    return <Box flexDirection="column">{rows.map(drawRow)}</Box>
   })
 }

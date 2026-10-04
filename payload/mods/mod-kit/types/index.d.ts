@@ -41,19 +41,35 @@ export type ModKitGit = { sub: string | undefined; args: string[]; dir: string |
 /**
  * Where a band row sits, drawn top to bottom in this order (docs/mods-design.md, "The band, shared
  * by every mod"): the status rows first (the amber needs-a-look line, then the Compact row), then
- * what waits on Dan nearest the prompt (the steps card, then a message to send). An open question
- * takes the band alone, and everything else comes back once it is cleared.
+ * what waits on Dan nearest the prompt (the handoff card at session start, the held while away card,
+ * the steps card, then a message to send). An open question takes the band alone, and everything
+ * else comes back once it is cleared.
  */
-export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'steps' | 'message' | 'question'
+export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'handoff' | 'held' | 'steps' | 'message' | 'question'
 
-/** A run of text in a band line, in the terminal's own colours: `color` is a theme key ('warning' is amber) or a raw colour. */
-export type ModKitBandText = { text: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean }
+/**
+ * A run of text in a band line, in the terminal's own colours: `color` is a theme key ('warning' is
+ * amber) or a raw colour. `indent` is how many blank columns are drawn before it (after any
+ * part before it on the line, so on a line's first part it is where the line starts), so a description can sit under
+ * the option it describes.
+ */
+export type ModKitBandText = { text: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
 /** Claude Code's own Button, `[ label ]`; `button` is its id within the publishing mod. */
-export type ModKitBandButton = { button: string; label: string; hotkey?: string }
+export type ModKitBandButton = { button: string; label: string; hotkey?: string; indent?: number }
 export type ModKitBandPart = ModKitBandText | ModKitBandButton
+/** A thin grey line across the band, between the lines of a card. */
+export type ModKitBandDivider = { divider: true }
+/** One terminal line: its parts, or a divider in place of them. */
+export type ModKitBandLine = ModKitBandPart[] | ModKitBandDivider
+
+/**
+ * What a row is drawn inside: `box` a rounded border all round, `left-rule` a vertical rule down its
+ * left edge only. `color` is a theme key or a raw colour; left out, the terminal's grey.
+ */
+export type ModKitBandFrame = { kind: 'box' | 'left-rule'; color?: string }
 
 /** One mod's row: plain data, since only plain data crosses between mods. Each line is drawn as one terminal line. */
-export type ModKitBandRow = { mod: string; id: string; slot: ModKitBandSlot; lines: ModKitBandPart[][] }
+export type ModKitBandRow = { mod: string; id: string; slot: ModKitBandSlot; lines: ModKitBandLine[]; frame?: ModKitBandFrame }
 
 declare module 'claude-code' {
   interface EngineInterface {
