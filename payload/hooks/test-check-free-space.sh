@@ -338,7 +338,7 @@ check "each command sits alone in its own code block" \
 check "and the change time it read is stated, as an age" \
   "$(grep -q '30 minute(s) ago' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
 check "and the folder is named only after the free space sentence, so the nudge still reads its figure" \
-  "$(head -1 <<< "$sym_low" | grep -q '^claude-sync: only 7 GB free on /fixture' && echo ok || echo "first line: $(head -1 <<< "$sym_low")")"
+  "$(grep -q '^claude-sync: only 7 GB free on /fixture' <<< "${sym_low%%$'\n'*}" && echo ok || echo "first line: ${sym_low%%$'\n'*}")"
 
 # Falling fast, above the floor, is the other verdict that names it.
 S_SYMF="$TMPROOT/state-sym-fast"; mkdir -p "$S_SYMF"
