@@ -4,6 +4,29 @@ import { empty, fromTodos, stateOf, taskCreated, taskUpdated } from '../hooks/pr
 const MIN = 60_000
 
 describe('a task list, whichever tool keeps it', () => {
+  // Lessons review of #634: a step finishing is read from the steps themselves, never from the count,
+  // which a finished step dropped in the same write holds still.
+  test('a step that finishes while a finished one is dropped still counts as a step finished', () => {
+    const before = fromTodos(
+      empty(0),
+      [
+        { content: 'Read', status: 'completed', activeForm: 'Reading' },
+        { content: 'Build', status: 'in_progress', activeForm: 'Building' },
+      ],
+      0,
+    )
+    const after = fromTodos(before, [{ content: 'Build', status: 'completed', activeForm: 'Building' }], 10 * MIN)
+    expect(after.done).toBe(before.done)
+    expect(after.lastStepAt).toBe(10 * MIN)
+  })
+  test('dropping a finished step, with nothing newly finished, is not a step finished', () => {
+    let p = taskCreated(empty(0), { id: '1', subject: 'Read' }, 0)
+    p = taskCreated(p, { id: '2', subject: 'Build' }, 0)
+    p = taskUpdated(p, { taskId: '1', status: 'completed' }, MIN)
+    p = taskUpdated(p, { taskId: '1', status: 'deleted' }, 2 * MIN)
+    p = taskUpdated(p, { taskId: '2', subject: 'Build it' }, 3 * MIN)
+    expect(p.lastStepAt).toBe(MIN)
+  })
   test('the to-do list is read whole: steps, done, and the step under way', () => {
     const p = fromTodos(
       empty(0),

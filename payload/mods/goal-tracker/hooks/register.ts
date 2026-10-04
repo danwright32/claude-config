@@ -8,8 +8,8 @@ import { empty, fromTodos, taskCreated, taskUpdated, type Progress, type StepSta
 
 const ACTIVITY_WRITE_MS = 30_000
 let progress: Progress | undefined
-// Never written yet: the first activity of a session is written at once.
-let lastWritten = Number.NEGATIVE_INFINITY
+// When a write was last tried. Never yet: the first activity of a session is written at once.
+let lastTried = Number.NEGATIVE_INFINITY
 
 // A registry write that fails never breaks the tool call it rides on; Claude is told once, on
 // the next result it reads, until a write lands again.
@@ -17,9 +17,10 @@ let toldUnwritten = false
 let notice: string | undefined
 const publish = async ($: EngineInterface, now: number) => {
   if (!progress) return
+  // The throttle counts attempts, so a failing registry is not retried on every tool call.
+  lastTried = now
   try {
     await $.sessions.setExtra({ key: 'progress', value: progress })
-    lastWritten = now
     toldUnwritten = false
   } catch (err) {
     if (!toldUnwritten) {
@@ -56,7 +57,7 @@ export const register: Register = on => {
   // again rather than reading the last one's (lessons review of #634).
   on('session.start', async ($, e, next) => {
     progress = empty(await $.clock.now())
-    lastWritten = Number.NEGATIVE_INFINITY
+    lastTried = Number.NEGATIVE_INFINITY
     streak = 0
     notice = undefined
     toldUnwritten = false
@@ -124,7 +125,7 @@ export const register: Register = on => {
     }
 
     // A change to the list or to failed is written at once; plain activity at most every thirty seconds.
-    if (progress.steps !== before.steps || progress.failed !== before.failed || now - lastWritten >= ACTIVITY_WRITE_MS) await publish($, now)
+    if (progress.steps !== before.steps || progress.failed !== before.failed || now - lastTried >= ACTIVITY_WRITE_MS) await publish($, now)
     return withNotice(result)
   })
 }

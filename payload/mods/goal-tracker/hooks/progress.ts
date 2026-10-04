@@ -34,7 +34,9 @@ const summed = (p: Progress, steps: Step[], now: number): Progress => {
     done,
     total: steps.length,
     current: under ? (under.activeForm ?? under.subject) : null,
-    lastStepAt: done > p.done ? now : p.lastStepAt,
+    // A step finished when it is completed now and was not before, by its id and subject: a count
+    // is held still by a finished step dropped in the same write (lessons review of #634).
+    lastStepAt: steps.some(s => s.status === 'completed' && !p.steps.some(b => b.status === 'completed' && b.id === s.id && b.subject === s.subject)) ? now : p.lastStepAt,
     lastActivityAt: now,
   }
 }

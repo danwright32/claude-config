@@ -33,11 +33,12 @@ type Rec = { done: number; total: number; current: string | null; lastActivityAt
 // TaskCreate answers with no task id.
 type WorldOpts = { duringAsk?: (w: { progress: Rec[] }) => void; registryFails?: boolean; failExtraFrom?: number; askThrows?: boolean; askRefused?: boolean; taskWithoutId?: boolean }
 const world = (on: On, opts: WorldOpts = {}) => {
-  const w = { progress: [] as Rec[] }
+  const w = { progress: [] as Rec[], attempts: 0 }
   let writes = 0
   on('process.run', ($, e) => {
     const isWrite = e.argv[0] === '__extra'
     if (isWrite) writes += 1
+    if (isWrite) w.attempts += 1
     const fails = isWrite && (opts.registryFails || (opts.failExtraFrom !== undefined && writes >= opts.failExtraFrom))
     return {
       value: fails
@@ -263,4 +264,20 @@ test('a registry that still cannot be written is said again after a new session 
   await start($)
   const r = (await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'completed', activeForm: 'Building' }] } as never)) as { context?: string[] }
   expect((r.context ?? []).join('\n')).toContain("The goal tracker could not record this session's progress")
+})
+
+test('while the registry fails, plain activity still tries a write at most every thirty seconds', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { registryFails: true })
+  await start($)
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'in_progress', activeForm: 'Building' }] } as never)
+  const first = w.attempts
+  for (let i = 0; i < 3; i++) {
+    await clock.advance(5_000)
+    await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  }
+  expect(w.attempts).toBe(first)
+  await clock.advance(20_000)
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(w.attempts).toBe(first + 1)
 })
