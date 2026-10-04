@@ -32,8 +32,6 @@ declare module 'claude-code' {
       heldSeq: number
       /** What winding down finishes; null outside a repository; unreadable when the read failed, read again at the next check. */
       target: ScopeModesTarget | null | { unreadable: string }
-      /** How Claude confirmed the deploy live while winding down; null until it has. */
-      live: string | null
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
     }

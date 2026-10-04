@@ -4,5 +4,5 @@
   "description": "No build, winding down, and away or home: per session modes that change what Claude may do and how it delivers, shown in the band above the prompt.",
   "author": { "name": "Dan Wright" },
   "types": "./types/index.d.ts",
-  "dependencies": ["mod-kit", "status-bar", "session-registry"]
+  "dependencies": ["mod-kit", "status-bar", "session-registry", "is-it-live"]
 }

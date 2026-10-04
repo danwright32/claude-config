@@ -47,7 +47,7 @@ const merged: Reading = {
   branchHere: false,
   branchOnGitHub: false,
   worktreeOnBranch: false,
-  live: 'claude-sync status shows the release applied on both Macs',
+  deploy: { state: 'live' },
   dirty: false,
 }
 
@@ -57,13 +57,31 @@ describe('outstanding: finished means merged, live, cleaned and closed', () => {
   })
   test('each step not yet done is named', () => {
     expect(outstanding({ ...merged, pr: { number: 12, state: 'OPEN', issues: [{ number: 616, state: 'OPEN' }] } })).toEqual(['PR #12 is not merged yet'])
-    expect(outstanding({ ...merged, live: null })).toEqual(['the deploy has not been confirmed live'])
     expect(outstanding({ ...merged, branchHere: true, branchOnGitHub: true, worktreeOnBranch: true })).toEqual([
       'the branch scope-modes-616 still exists here',
       'the branch scope-modes-616 still exists on GitHub',
       'a worktree is still on scope-modes-616',
     ])
     expect(outstanding({ ...merged, pr: { number: 12, state: 'MERGED', issues: [{ number: 616, state: 'OPEN' }] } })).toEqual(['issue #616 is still open'])
+  })
+  test("the deploy is judged by is it live's card (#687): only Live or no deploy step recorded finish it", () => {
+    expect(outstanding({ ...merged, deploy: { state: 'no-deploy' } })).toEqual([])
+    expect(outstanding({ ...merged, deploy: { state: 'deploying' } })).toEqual(['the deploy is still running (is it live says Merged, deploying)'])
+    expect(outstanding({ ...merged, deploy: { state: 'unconfirmed' } })).toEqual(['is it live could not confirm the deploy live: find out why, and make the card again once it is'])
+  })
+  test('a merged PR with no card yet is not finished, and says what to do', () => {
+    expect(outstanding({ ...merged, deploy: null })).toEqual(['PR #12 has no is it live card yet: check the deploy and make the card (mcp__is-it-live__card)'])
+  })
+  test('an absent is it live is unmeasured, never live, and a failed read is said apart from it (L11)', () => {
+    expect(outstanding({ ...merged, deploy: { unmeasured: 'the is it live mod is not loaded' } })).toEqual(['the deploy is unmeasured: the is it live mod is not loaded'])
+    expect(outstanding({ ...merged, deploy: { unreadable: 'is-it-live: boom' } })).toEqual(['the deploy verdict could not be read (is-it-live: boom)'])
+  })
+  test('a card state wind down does not know is never read as finished (L42)', () => {
+    expect(outstanding({ ...merged, deploy: { state: 'rolled-back' as never } })).toEqual(['is it live answered a state wind down does not know (rolled-back)'])
+    expect(outstanding({ ...merged, deploy: { state: 'constructor' as never } })).toEqual(['is it live answered a state wind down does not know (constructor)'])
+  })
+  test('the deploy is not judged before the merge: an open PR names only the merge', () => {
+    expect(outstanding({ ...merged, pr: { number: 12, state: 'OPEN', issues: [] }, deploy: null })).toEqual(['PR #12 is not merged yet'])
   })
   test('no PR yet on a working branch', () => {
     expect(outstanding({ ...merged, pr: null })).toEqual(['there is no PR for scope-modes-616 yet'])
@@ -72,8 +90,8 @@ describe('outstanding: finished means merged, live, cleaned and closed', () => {
     expect(outstanding({ ...merged, pr: { number: 12, state: 'CLOSED', issues: [] } })).toEqual(['PR #12 was closed without merging; ask Dan what to do'])
   })
   test('on the default branch with no PR and nothing uncommitted, there is nothing to finish', () => {
-    expect(outstanding({ ...merged, branch: 'main', isDefault: true, pr: null, live: null })).toEqual([])
-    expect(outstanding({ ...merged, branch: 'main', isDefault: true, pr: null, live: null, dirty: true })).toEqual(['there are uncommitted changes'])
+    expect(outstanding({ ...merged, branch: 'main', isDefault: true, pr: null, deploy: null })).toEqual([])
+    expect(outstanding({ ...merged, branch: 'main', isDefault: true, pr: null, deploy: null, dirty: true })).toEqual(['there are uncommitted changes'])
   })
   test('a reading that failed is never read as done (L215)', () => {
     expect(outstanding({ ...merged, pr: { unreadable: 'gh: HTTP 502' } })).toEqual(['the PR could not be read (gh: HTTP 502)'])

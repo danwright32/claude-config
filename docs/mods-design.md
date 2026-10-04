@@ -294,9 +294,11 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   its `switch_to_build` tool, so only Dan's press lifts no build: the dialog reads "Claude wants to
   <change>. Switch to build?" with Yes and No.
 - Winding down finds what to finish from the branch the session is on when it turns on: its PR, the
-  issues the PR closes, and the branch and worktree. The deploy cannot be measured by the mod, so
-  Claude records it live with the `winddown_live` tool, saying how it checked (to be replaced by the
-  is it live mod, #617). On the default branch with no PR and nothing uncommitted there is nothing to
+  issues the PR closes, and the branch and worktree. The deploy is the is it live mod's verdict for
+  that PR (#687), read through `$.isItLive.verdict` in the repository GitHub's own link for the PR
+  names, never Claude's word: only Live or "no deploy step recorded" finishes it; deploying, could
+  not confirm live, no card yet, and a verdict that cannot be read each keep the turn end refused
+  and say which, and with is it live not loaded the deploy is unmeasured, never live. On the default branch with no PR and nothing uncommitted there is nothing to
   finish; outside a repository too. A check that cannot read GitHub never counts as finished. It is
   checked at each turn end and each minute, and the toast reads "Wind down finished: safe to close
   this session."
@@ -407,6 +409,11 @@ ones marked open are the builder's choice, waiting on Dan.
   clicks. The model reads the same lines as the tool's text result, built from the one list, and
   that text is what the row shows after a reload (mod-kit keeps cards in memory). When mod-kit
   refuses the card, the card is still made, the row shows the text, and Claude is told why.
+- **Other mods read the verdict** through `$.isItLive.verdict({ repo, pr })` (#687): the newest
+  card's state for that PR and when it was made, or null when no card has been made. It is kept in
+  session state, whose reference names this mod, rather than read from the store, whose owner a
+  read from another mod's hook does not name; so a card made in another session is no verdict
+  here, and winding down asks for the card again rather than guess. A malformed repo or PR throws.
 - Open: the title for a project with no recorded deploy step ("Merged, no deploy step
   recorded:"), its colour (drawn grey until Dan settles it), the violet drawn as the terminal's magenta, the toast's words (the
   card's title), and the Copy and Mark sent buttons having no shortcut keys.
