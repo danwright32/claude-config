@@ -57,6 +57,34 @@ file exists. The start hook that was meant to hand over its path never reaches a
 told which of three things was missing: no transcript found, one that could not be read, or no
 request in it.
 
+## Status bar (#610), settled 2026-10-04
+
+| Surface | Decision |
+| --- | --- |
+| Layout | One long line under the prompt; Dan revisits it once he has lived with it, under #610 (status round 1) |
+| Facts always shown | Project, 5 hour limit, weekly limit, cache time left, model and effort, account and org (status round 2) |
+| Facts shown only when they need a look | Unpushed commits, PR and checks (failing or running), a running background job, context above 70% (status round 2) |
+| Hidden | Branch, uncommitted files, commits behind main (status round 2) |
+| Account | Whatever the login file names now, re-read each refresh; no "login changed elsewhere" marker. Dan changes the login in one window expecting it to apply to all of them (picker). |
+| Colour | Everything grey; the needs-a-look items in amber (colour round, switcher) |
+| Where it is drawn | The always-shown facts stay on the classic status line script below the prompt, fed by the mod. The amber items are drawn by the mod in the band above the prompt, only while something needs a look (picker, after the probe below). |
+| The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). |
+| Order of the amber line | Most urgent first: a failing or running PR, a running job, unpushed commits, so a narrow window cuts off what can wait longest (design round) |
+| Compact button | Claude Code's default button, `[ Compact ]` in bold white, pressed by clicking or ctrl+x tab then Enter (design round, styles copied from a live probe) |
+
+Why the split: a live probe on 2026-10-04 showed a mod's `$.ui.status` line is drawn by Claude Code
+as a warning notice, amber with a warning sign and the mod's name in front, and terminal colour
+codes come out as broken characters. A mod cannot own a grey line with amber items through it; the
+classic status line command passes colour through, and the band above the prompt draws colour.
+
+## Job watcher and goal tracker (#611, #612), behaviour settled 2026-10-04
+
+- A waiting loop is stopped by the watcher only when the line it keeps repeating reads as an error.
+  A loop repeating "waiting" is reported to Claude and never stopped (picker).
+- A session shows as failed after three tool calls in a row fail or are refused, a refused question
+  included, naming the last failure; the next success clears it. A subagent's calls and to-do list
+  are not the session's (picker).
+
 ## Not design decisions
 
 The rounds were HTML pages standing in for a terminal. The browser window, the font and the exact
