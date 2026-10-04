@@ -45,7 +45,12 @@ export const register: Register = on => {
     if (result.deny || result.isError) return result
     const before = progress
 
-    if (e.tool === 'TodoWrite') {
+    // A subagent keeps its own list, which is not the session's goal; its work still counts as
+    // the session being active (lessons review of #634).
+    const fromSubagent = Boolean((e as { agentId?: string }).agentId)
+    if (fromSubagent) {
+      progress = { ...progress, lastActivityAt: now }
+    } else if (e.tool === 'TodoWrite') {
       progress = fromTodos(progress, (input.todos as { content: string; status: StepStatus; activeForm: string }[]) ?? [], now)
     } else if (e.tool === 'TaskCreate') {
       const task = (result.result as { task?: { id?: string; subject?: string } } | undefined)?.task

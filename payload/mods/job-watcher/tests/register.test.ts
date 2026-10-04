@@ -13,7 +13,12 @@ const deps: { name: string; register: Register } = {
         sessions: {
           list: async () => ({ open: [], closed: [], unreadable: [], selfId: 'me' }),
           noteEdit: async () => undefined,
-          setExtra: async ({ key, value }: { key: string; value: unknown }) => built.ui.log(`EXTRA ${key} ${JSON.stringify(value)}`),
+          setExtra: async ({ key, value }: { key: string; value: unknown }) => {
+            // The world can refuse a write, so a failing registry can be staged.
+            const gate = await built.process.run(['__extra', key, JSON.stringify(value)])
+            if (gate.exitCode !== 0) throw new Error(gate.stderr)
+            built.ui.log(`EXTRA ${key} ${JSON.stringify(value)}`)
+          },
         },
       }
     })
@@ -27,13 +32,23 @@ const STARTED = `Command running in background with ID: job1. Output is being wr
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
 // The Mac beneath the watcher: one background job writing to OUT, whose output the test sets.
-const world = (on: On, job: { tail: string; size: number; unreadable?: boolean }) => {
+// gone: the job's process group has no processes left. stop: how Claude Code answers a TaskStop.
+// failExtraOf: a registry write of this value throws.
+type Job = { tail: string; size: number; unreadable?: boolean; gone?: boolean; stop?: 'ok' | 'refused' | 'throws'; failExtraOf?: string }
+const world = (on: On, job: Job) => {
   const w = { reached: [] as { tool: string; input: Record<string, unknown> }[], extra: [] as unknown[], contexts: [] as string[] }
   on('process.run', ($, e) => {
     const [cmd, ...args] = e.argv
+    if (cmd === '__extra') {
+      return job.failExtraOf !== undefined && args[1] === job.failExtraOf
+        ? { value: { exitCode: 1, stdout: '', stderr: 'registry write failed', isStdoutTruncated: false, isStderrTruncated: false } }
+        : ok('')
+    }
     if (cmd === 'lsof') return ok('501\n')
     if (cmd === 'ps' && args.includes('pgid=')) return ok('501\n')
-    if (cmd === 'ps' && args.includes('-g')) return ok('501\n')
+    if (cmd === 'ps' && args.includes('-g')) {
+      return job.gone ? { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } : ok('501\n')
+    }
     if ((cmd === 'stat' || cmd === 'tail') && job.unreadable) {
       return { value: { exitCode: 1, stdout: '', stderr: `${cmd}: ${OUT}: Permission denied`, isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -51,6 +66,8 @@ const world = (on: On, job: { tail: string; size: number; unreadable?: boolean }
     const input = e as unknown as Record<string, unknown>
     w.reached.push({ tool: e.tool, input })
     if (e.tool === 'Bash' && input.run_in_background) return { result: STARTED, text: STARTED } as never
+    if (e.tool === 'TaskStop' && job.stop === 'refused') return { deny: 'no task job1 is running' } as never
+    if (e.tool === 'TaskStop' && job.stop === 'throws') throw new Error('stop failed')
     return { result: 'ran', text: 'ran' } as never
   })
   return w
@@ -122,4 +139,71 @@ test('an output file that cannot be read is reported as unreadable, never as a s
   await clock.advance(5 * MIN)
   const later = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(contextOf(later)).toBe('')
+})
+
+// Lessons review of #634, the code-only findings.
+const LOOP = 'until curl -sf http://x?y; do sleep 3; done'
+const REPEATING = Array.from({ length: 30 }, () => 'zsh: no matches found: http://x?y').join('\n') + '\n'
+
+test('a job that has finished leaves the record and is never reported silent', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'done\n', size: 5 }
+  const w = world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  job.gone = true
+  await clock.advance(11 * MIN)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toBe('')
+})
+
+test('a stop Claude Code refuses keeps the job, and Claude is told the stop failed', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: REPEATING, size: 9000, stop: 'refused' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect((w.extra[w.extra.length - 1] as unknown[]).length).toBe(1)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain('could not be stopped')
+  expect(contextOf(next)).toContain('no task job1 is running')
+  expect(contextOf(next)).not.toContain('was stopped')
+})
+
+test('a stop that throws keeps the job and is said the same way', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: REPEATING, size: 9000, stop: 'throws' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect((w.extra[w.extra.length - 1] as unknown[]).length).toBe(1)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain('could not be stopped')
+})
+
+test('a look that fails part way is said to Claude, not lost', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'done\n', size: 5, failExtraOf: '[]' }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  job.gone = true
+  await clock.advance(MIN + 1)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain('The background job watcher could not check its jobs')
+})
+
+test('an output file that shrank (truncated or rotated) counts as new output', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'line\n', size: 100 }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  job.size = 10
+  await clock.advance(5 * MIN)
+  await clock.advance(5 * MIN)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toBe('')
 })

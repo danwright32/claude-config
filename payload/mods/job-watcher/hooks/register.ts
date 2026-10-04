@@ -37,9 +37,61 @@ const traceGroup = async ($: EngineInterface, outputPath: string): Promise<numbe
   return Number.isInteger(pgid) && pgid > 0 ? pgid : null
 }
 
+// Whether the job's process group has ended: macOS ps exits 1 and prints nothing at all for a group
+// with no processes left (measured 2026-10-04). Anything else, an error or no traced group, is
+// unknown, never ended, so a job is only ever dropped on that evidence.
+const hasEnded = async ($: EngineInterface, pgid: number | null): Promise<boolean> => {
+  if (pgid === null) return false
+  try {
+    const r = await $.process.run(['ps', '-g', String(pgid), '-o', 'pid='], { timeoutMs: 10_000 })
+    return r.exitCode === 1 && !r.stdout.trim() && !r.stderr.trim()
+  } catch {
+    return false
+  }
+}
+
+// Claude Code's own stop for that task id: the traced handle, never a match on its text (L1011).
+// Why it did not stop, or undefined when it did; a refusal and a throw are both said (L12).
+const stop = async ($: EngineInterface, id: string): Promise<string | undefined> => {
+  try {
+    const r = await $.tool.call({ tool: 'TaskStop', task_id: id } as never)
+    if (r.deny) return String(r.deny)
+    if (r.isError) return String(r.text ?? 'it reported an error')
+    return undefined
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+const forget = async ($: EngineInterface, id: string) => {
+  jobs.delete(id)
+  watch.delete(id)
+  await publish($)
+}
+
+// One look at every job. A look that fails part way is said to Claude once, never lost in the
+// timer (lessons review of #634).
+let toldLookFailed = false
+const lookSafely = async ($: EngineInterface) => {
+  try {
+    await look($)
+    toldLookFailed = false
+  } catch (err) {
+    if (!toldLookFailed) {
+      toldLookFailed = true
+      notices.push(`The background job watcher could not check its jobs: ${err instanceof Error ? err.message : String(err)}. Jobs may be stuck without a word from it.`)
+    }
+  }
+}
+
 const look = async ($: EngineInterface) => {
   const now = await $.clock.now()
   for (const job of [...jobs.values()]) {
+    // A job that finished is Claude Code's to report; the watcher just stops watching it.
+    if (await hasEnded($, job.pgid)) {
+      await forget($, job.id)
+      continue
+    }
     const statOut = await run($, ['stat', '-f', '%z', job.outputPath])
     const size = statOut === undefined ? NaN : Number(statOut.trim())
     const tail = await run($, ['tail', '-c', '4096', job.outputPath])
@@ -56,20 +108,23 @@ const look = async ($: EngineInterface) => {
       continue
     }
     w.toldUnreadable = false
-    if (size > w.lastSize) {
+    // Any change counts, a shrink too: a truncated or rotated file is still the job writing.
+    if (size !== w.lastSize) {
       w.lastSize = size
       w.lastGrowth = now
       w.told = false
     }
     const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth }, now)
     if (a.state === 'repeating' && isPollLoop(job.command)) {
-      // A poll loop that has never once succeeded is stopped by itself (the spec), through Claude
-      // Code's own stop for that task id: the traced handle, never a match on its text (L1011).
-      await $.tool.call({ tool: 'TaskStop', task_id: job.id })
-      jobs.delete(job.id)
-      watch.delete(job.id)
-      await publish($)
-      notices.push(`Background job ${job.id} (${job.command}) was stopped: it is a poll loop that only ever repeated "${a.line}", so it never succeeded.`)
+      // A poll loop that has never once succeeded is stopped by itself (the spec).
+      const why = await stop($, job.id)
+      if (why === undefined) {
+        await forget($, job.id)
+        notices.push(`Background job ${job.id} (${job.command}) was stopped: it is a poll loop that only ever repeated "${a.line}", so it never succeeded.`)
+      } else if (!w.told) {
+        w.told = true
+        notices.push(`Background job ${job.id} (${job.command}) is a poll loop that only ever repeated "${a.line}", but it could not be stopped: ${why}. Stop it with TaskStop.`)
+      }
     } else if (a.state !== 'running' && !w.told) {
       w.told = true
       const what = a.state === 'repeating' ? `keeps repeating "${a.line}"` : `has had no new output for ${Math.round(a.forMs / 60_000)} minutes`
@@ -82,7 +137,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     if (!ticking) {
       ticking = true
-      $.clock.every(TICK_MS, () => look($))
+      $.clock.every(TICK_MS, () => lookSafely($))
     }
     return next(e)
   })

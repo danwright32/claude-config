@@ -92,3 +92,20 @@ test('a question to Dan marks the session waiting while it is open, and clears a
   expect(during?.waiting?.question).toBe('Which colour?')
   expect(last(w)?.waiting).toBeUndefined()
 })
+
+// Lessons review of #634: a subagent keeps its own to-do list, which is not the session's goal.
+test("a subagent's to-do list leaves the session's progress alone", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'in_progress', activeForm: 'Building' }] } as never)
+  await $.tool.call({
+    tool: 'TodoWrite',
+    agentId: 'sub1',
+    todos: [
+      { content: 'Search', status: 'completed', activeForm: 'Searching' },
+      { content: 'Report', status: 'completed', activeForm: 'Reporting' },
+    ],
+  } as never)
+  expect(last(w)).toMatchObject({ done: 0, total: 1, current: 'Building' })
+})
