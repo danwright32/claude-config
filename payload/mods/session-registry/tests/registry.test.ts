@@ -23,8 +23,10 @@ const consumer: { name: string; register: Register } = {
 const withConsumer = { plugins: [consumer] }
 
 // This Mac beneath the registry: a filesystem in memory, git, the session's id, the clock.
-const world = (on: On, opts: { files?: Record<string, string>; id?: () => string } = {}) => {
+const world = (on: On, opts: { files?: Record<string, string>; id?: () => string; mtimes?: Record<string, number> } = {}) => {
   const files: Record<string, string> = { ...(opts.files ?? {}) }
+  const logs: string[] = []
+  const removed: string[] = []
   const writes: string[] = []
   const finds: string[] = []
   mock.env(on, { HOME: '/Users/x' })
@@ -56,6 +58,13 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
     const [a, b] = rest.filter(x => !x.startsWith('-'))
     const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     if (cmd === 'mkdir') return ok()
+    if (cmd === 'rm') {
+      for (const f of rest.filter(x => !x.startsWith('-'))) {
+        removed.push(f)
+        delete files[f]
+      }
+      return ok()
+    }
     if (cmd === 'mv' && a && b) {
       files[b] = files[a] as string
       delete files[a]
@@ -73,7 +82,10 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
-  on('ui.log', () => ({ value: undefined }))
+  on('ui.log', ($, e) => {
+    logs.push(e.text)
+    return { value: undefined }
+  })
   const own = (id = 's1') => JSON.parse(files[`${DIR}/${id}.json`] ?? 'null')
   return { files, writes, finds, clock, own, hold, release: () => gate.release() }
 }
@@ -250,4 +262,48 @@ test('a session id that is not an id is never put into a path or a search', with
   expect(r?.transcriptPath).toBeNull()
   // Only this session's own record (s1) was searched for.
   expect(w.finds).toEqual(['s1.jsonl'])
+})
+
+// Decided with Dan (2026-10-04, #633): a closed session's record is kept 7 days, then deleted at
+// session start; a damaged record older than that is deleted too, with one grey line naming it.
+const DAY = 24 * 60 * MIN
+const NOW = 100 * MIN
+const recOf = (id: string, over: Record<string, unknown>) =>
+  JSON.stringify({ v: 1, sessionId: id, cwd: '/repo', repoRoot: '/repo', startedAt: NOW - 9 * DAY, lastSeen: NOW, closedAt: null, transcriptPath: null, edits: [], extra: {}, ...over })
+
+test('a record closed more than 7 days ago is deleted at session start, a newer one is kept', withConsumer, async ($, on) => {
+  const w = world(on, {
+    files: {
+      [`${DIR}/old.json`]: recOf('old', { closedAt: NOW - 8 * DAY, lastSeen: NOW - 8 * DAY }),
+      [`${DIR}/recent.json`]: recOf('recent', { closedAt: NOW - 6 * DAY, lastSeen: NOW - 6 * DAY }),
+    },
+  })
+  await start($)
+  expect(w.removed).toEqual([`${DIR}/old.json`])
+  expect(`${DIR}/recent.json` in w.files).toBe(true)
+  expect(w.logs.filter(l => l.includes('old.json'))).toEqual([])
+})
+
+test('a crashed session, never closed and silent more than 7 days, is deleted too', withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/crashed.json`]: recOf('crashed', { lastSeen: NOW - 8 * DAY }) } })
+  await start($)
+  expect(w.removed).toEqual([`${DIR}/crashed.json`])
+})
+
+test('a damaged record older than 7 days is deleted and named in one line; a newer one is left to block', withConsumer, async ($, on) => {
+  const w = world(on, {
+    files: { [`${DIR}/broken-old.json`]: '{not json', [`${DIR}/broken-new.json`]: '{not json' },
+    mtimes: { [`${DIR}/broken-old.json`]: NOW - 8 * DAY, [`${DIR}/broken-new.json`]: NOW - DAY },
+  })
+  await start($)
+  expect(w.removed).toEqual([`${DIR}/broken-old.json`])
+  expect(w.logs.filter(l => l.includes('broken-old.json')).length).toBe(1)
+  const list = JSON.parse(await call($, 'list')) as { unreadable: string[] }
+  expect(list.unreadable).toEqual(['broken-new.json'])
+})
+
+test('an open session is never deleted however long ago it started', withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/live.json`]: recOf('live', { startedAt: NOW - 30 * DAY, lastSeen: NOW - MIN }) } })
+  await start($)
+  expect(w.removed).toEqual([])
 })
