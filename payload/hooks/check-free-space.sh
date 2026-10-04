@@ -239,7 +239,7 @@ symbol_cache_note(){
     else age_words="$((age / 60)) minute(s) ago"; fi
   fi
   echo ""
-  echo "Nothing measured it, but one suspect is worth checking because it has filled this disk before: $REAL_SYMBOL_CACHE, macOS's symbol cache, which reached 194 GB on Daniels-MacBook-Pro-2 on 2026-10-04. macOS adds to it whenever a crash report is written or a process is sampled, and each new build of an app that crashes or is sampled can add another copy. It is a cache macOS rebuilds when it needs it (coresymbolicationd(8)), so clearing it should cost only the time to rebuild it. Only an administrator can read its size, so this check cannot say how big it is now, or whether it is the cause."
+  echo "Nothing measured it, but one suspect is worth checking because it has filled a disk before: $REAL_SYMBOL_CACHE, macOS's symbol cache, which reached 194 GB on Daniels-MacBook-Pro-2 on 2026-10-04. macOS adds to it whenever a crash report is written or a process is sampled, and each new build of an app that crashes or is sampled can add another copy. It is a cache macOS rebuilds when it needs it (coresymbolicationd(8)), so clearing it should cost only the time to rebuild it. Only an administrator can read its size, so this check cannot say how big it is now, or whether it is the cause."
   if [ -n "$age_words" ]; then
     echo "A file was last added to it or removed from it $age_words. That says it has been in use, not how much it holds."
   fi
