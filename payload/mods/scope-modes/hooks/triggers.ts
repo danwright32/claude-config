@@ -5,7 +5,8 @@ export type Trigger = { kind: 'scope'; scope: 'NO BUILD' | 'WINDING DOWN' } | { 
 // Dan's own phrases for each mode, from the specs (#616, #621) and the chats they were mined from.
 // Apostrophes may be straight or curly; read-only may be one word or two. Only phrasings aimed at
 // Claude count, never the words in passing ("make this column read only", "the project is winding
-// down"): decided with Dan, 2026-10-04, after a review found the bare words fired on ordinary prose.
+// down"): decided with Dan in a picker on 2026-10-04, recorded in PR #686, after a review found the
+// bare words fired on ordinary prose. A question asks rather than instructs, so it never counts.
 const APOS = "['’]"
 const PHRASES: { re: RegExp; trigger: Trigger }[] = [
   { re: /\bpause after (?:this|the|that) (?:issue|one|pr)\b/i, trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
@@ -16,7 +17,7 @@ const PHRASES: { re: RegExp; trigger: Trigger }[] = [
   { re: /\bno coding yet\b/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
   // A read only instruction is a sentence of its own ("Stay read only.", "Stay read only until I
   // say."), so "the database is in read only mode" or "keep it read only in the form" is prose.
-  { re: /(?:^|[.!?]\s+)(?:ok,?\s+|please\s+)?(?:(?:stay|keep it|keep things)\s+read[ -]only(?:\s+(?:for now|until\b[^.!?]*))?|read[ -]only\s+(?:for now|mode|until\b[^.!?]*)),?(?:\s+please)?\s*(?:[.!?]|$)/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
+  { re: /(?:^|[.!?]\s+)(?:ok,?\s+|please\s+)?(?:(?:stay|keep it|keep things)\s+read[ -]only(?:\s+(?:for now|until\b[^.!?]*))?|read[ -]only\s+(?:for now|mode|until\b[^.!?]*)),?(?:\s+please)?\s*(?:[.!]|$)/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
   { re: new RegExp(`\\bjust file,? (?:it,? )?don${APOS}?t build\\b`, 'i'), trigger: { kind: 'scope', scope: 'NO BUILD' } },
   { re: new RegExp(`\\bdon${APOS}?t start (?:git|coding|building) yet\\b`, 'i'), trigger: { kind: 'scope', scope: 'NO BUILD' } },
   { re: /\bgo ahead and build\b/i, trigger: { kind: 'build' } },
