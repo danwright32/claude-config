@@ -547,6 +547,22 @@ test('a prompt whose input matches no running call waits for every call of its t
   expect(last(w)?.waiting).toBeUndefined()
 })
 
+// The calls running are not the session's to forget: a session start while one runs still lets a
+// prompt raised inside it be matched to it, and come off when it returns (the class of #694 item 4).
+test('a session start while a call runs still matches a prompt raised inside that call', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const call = $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
+  for (let i = 0; i < 50 && !w.answer; i++) await Promise.resolve()
+  await start($)
+  await raise($ as never, { command: 'npm test' })
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
 // A call that rejects (an interrupt while the prompt is open does) has ended, so its prompt has too.
 test('a permission whose call rejects once answered still clears waiting', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })

@@ -252,7 +252,8 @@ export const register: Register = on => {
     project = undefined
     question = undefined
     permission = undefined
-    running.clear()
+    // The calls running are left alone: they are calls in flight, not this session's record, and each
+    // takes itself off as it ends, so a prompt raised inside one is still matched to it.
     await paneStart($)
     return next(e)
   })
