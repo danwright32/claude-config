@@ -165,6 +165,35 @@ Each in a rendered design round unless marked picker.
 | Away and home (#621) | A message from the phone while home | One line at the end of Claude's reply: "You're on your phone. Reply away to switch every session." The band does not exist on the phone, so the spec's one button cannot be drawn there (picker) |
 | Auto session name (#635) | Its failure line | One dim grey line, the guards' note style (no round: covered by the spec and that pattern) |
 
+### Simpler behaviour (#619), decided in the build, 2026-10-04
+
+No round: each follows from the spec, the settled placement above and the guards' note style.
+
+- **When it shows.** An answer over 250 words, or one of 80 words or more where at least 6% of the
+  words are technical terms (identifiers, file paths, flags, issue numbers, each line of a code
+  block). Measured on this Mac over 595 replies that ended a turn: the median is 75 words and one
+  in five is over 250; of the replies between 80 and 250 words, nine in ten are under 6.2%
+  technical, so 6% picks out the densest tenth (a first guess of 15% fired on none). Together the
+  button shows on about one reply in four. Under 80 words an answer is already near the 2 to 3
+  sentences the button asks for. These are starting values: the presses and the weekly count say
+  whether to move them.
+- **Which reply.** Only the latest main answer: a newer answer that does not earn it, or an
+  interrupted turn, takes it away. A subagent's turn is not a reply to Dan and changes nothing.
+- **Gone once Dan types.** The first edit of the prompt box, or a message he sends from the phone.
+  A background task's notice arriving does not count as Dan typing.
+- **The press.** The button goes at once; the request is sent as Dan's own words (`asUser`), naming
+  the session's folder as the project to take the example from. If the request is refused or
+  cannot be sent, the button comes back and a toast says why. Pressing is counted either way,
+  since the need was real.
+- **Count, don't auto change.** Each press is one store entry with its time and the kind of answer:
+  design answer, plan, diagnosis, status report or explanation, read from the answer's own words.
+  The store is per Mac, so each Mac counts its own presses.
+- **The weekly line.** At the first interactive session start seven days or more after the last
+  one, one dim grey transcript line, the guards' note style: "Simpler was pressed 3 times in the
+  last 7 days: after 2 design answers and 1 plan." It says so when there were none. The first
+  session with the mod starts the week. A press log that cannot be read is named in a dim line and
+  the week stays open, so the next session tries again.
+
 ### The band, shared by every mod
 
 Claude Code gives the band above the prompt one drawing, so the mods that use it compose one tree.
