@@ -248,11 +248,6 @@
           },
           {
             "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/session-namer.sh",
-            "timeout": 5
-          },
-          {
-            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/tdd-nudge.sh",
             "timeout": 5
           },

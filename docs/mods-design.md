@@ -243,6 +243,10 @@ and open to his correction.
   recognisable, Dan's next message carries the name as `sessionTitle` only if that message shows
   the session still has no name. A different name on it, or a `/rename` of Dan's first, wins.
 - After a `/clear` (a new session id with no fresh start event) the new conversation is not named.
+- The `session-namer.sh` hook, which titled every session `<project>-<MMDD>` on the first prompt,
+  is retired in the same change (Dan, picker, 2026-10-04, over keeping both and over keeping only
+  the hook). While it ran, every session had a name long before the 10 minute mark, so this mod
+  correctly never named anything. A session is now unnamed for its first 10 minutes.
 
 ### The band, shared by every mod
 
