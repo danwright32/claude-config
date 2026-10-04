@@ -6,90 +6,14 @@ export type Refusal = { reason: string; safeWay?: string }
 
 const MARKER = /\bTARGET_APP=(?:"([^"]+)"|'([^']+)'|(\S+))/
 
-// Commands are judged in COMMAND POSITION only (L673). Matching the words anywhere refused a
-// heredoc that merely wrote a file mentioning an osascript keystroke, on 2026-10-03, while this
-// guard's own author was building the design rounds.
-//
-// A heredoc body is text, not commands, so it is dropped before anything else is read: left in, an
-// apostrophe in it would open a quote that swallows the commands after it.
-const dropHeredocs = (cmd: string): string => {
-  const lines = cmd.split('\n')
-  const out: string[] = []
-  let end: string | undefined
-  let body: string[] = []
-  for (const line of lines) {
-    if (end !== undefined) {
-      if (line.trim() === end) {
-        end = undefined
-        body = []
-      } else body.push(line)
-      continue
-    }
-    out.push(line)
-    // Exactly two <, so a here-string (<<<) is not taken for a heredoc (lessons review).
-    const m = /(?<!<)<<(?!<)-?\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/.exec(line)
-    if (m) end = m[1] ?? m[2] ?? m[3]
-  }
-  // A heredoc that never ends is not text the guard may skip: its lines are judged after all.
-  return [...out, ...body].join('\n')
-}
-
-// Simple commands, split on separators outside quotes, each as its words with quotes removed. A
-// quoted AppleScript spanning several lines stays one word, so a keystroke inside it is seen.
-const simpleCommands = (cmd: string): string[][] => {
-  const cmds: string[][] = []
-  let words: string[] = []
-  let word = ''
-  let inWord = false
-  let quote: '"' | "'" | undefined
-  const endWord = () => {
-    if (inWord) words.push(word)
-    word = ''
-    inWord = false
-  }
-  const endCmd = () => {
-    endWord()
-    if (words.length) cmds.push(words)
-    words = []
-  }
-  for (let i = 0; i < cmd.length; i++) {
-    const c = cmd[i] as string
-    if (quote) {
-      if (c === quote) quote = undefined
-      else if (c === '\\' && quote === '"' && i + 1 < cmd.length) word += cmd[++i]
-      else word += c
-      continue
-    }
-    if (c === '"' || c === "'") {
-      quote = c
-      inWord = true
-    } else if (c === '\\' && i + 1 < cmd.length) {
-      word += cmd[++i]
-      inWord = true
-    } else if (c === ';' || c === '|' || c === '&' || c === '\n') endCmd()
-    else if (c === ' ' || c === '\t') endWord()
-    else {
-      word += c
-      inWord = true
-    }
-  }
-  endCmd()
-  return cmds
-}
-
-const PREFIXES = new Set(['sudo', 'env', 'exec', 'time', 'nohup', 'command'])
-const SHELLS = new Set(['sh', 'bash', 'zsh'])
-
+// Commands are judged in COMMAND POSITION only (L673): the first version matched the words anywhere
+// and refused a heredoc that merely wrote a file mentioning an osascript keystroke, on 2026-10-03.
+// The command itself is read by mod-kit's one shared reader ($.modkit.commands): heredoc bodies
+// dropped, sudo and env looked past, bash -c read as what it runs. This judges what it hands back.
 const kindOf = (words: string[]): 'input' | 'focus' | 'none' => {
-  let i = 0
-  while (i < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? '') || PREFIXES.has(words[i] ?? ''))) i++
-  const [head, ...args] = words.slice(i)
+  const [head, ...args] = words
   if (head === undefined) return 'none'
   const name = head.split('/').pop() ?? head
-  if (SHELLS.has(name)) {
-    const c = args.indexOf('-c')
-    return c >= 0 && args[c + 1] !== undefined ? classify(args[c + 1] as string).kind : 'none'
-  }
   if (name === 'osascript') {
     // Only a script written out with -e is read; a script file runs unchecked (Dan, 2026-10-03).
     const script = args.filter((_, j) => args[j - 1] === '-e').join('\n')
@@ -117,13 +41,15 @@ const focusApp = (cmd: string): string | undefined => {
   return proc?.[1]
 }
 
-export const classify = (cmd: string): Classified => {
-  const kinds = simpleCommands(dropHeredocs(cmd)).map(kindOf)
+// cmds is what the shared reader made of the command; raw is the command as written, which still
+// carries the TARGET_APP marker and the app a focus stealer names.
+export const classify = (cmds: string[][], raw: string): Classified => {
+  const kinds = cmds.map(kindOf)
   const kind = kinds.includes('input') ? 'input' : kinds.includes('focus') ? 'focus' : 'none'
   if (kind === 'none') return { kind }
-  const m = MARKER.exec(cmd)
+  const m = MARKER.exec(raw)
   const target = m ? (m[1] ?? m[2] ?? m[3]) : undefined
-  return { kind, target, app: target ? appNameOf(target) : kind === 'focus' ? focusApp(cmd) : undefined }
+  return { kind, target, app: target ? appNameOf(target) : kind === 'focus' ? focusApp(raw) : undefined }
 }
 
 // The verdict for synthetic input. Its sides come from different lookups: the target's pid from its

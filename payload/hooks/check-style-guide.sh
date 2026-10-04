@@ -120,14 +120,9 @@ while IFS= read -r pat; do
   [ -n "$pat" ] && EXCLUDES+=(":(exclude)$pat")
 done <<< "$excl"
 
-skip_ext() {  # $1 = a path ; true when it is one of the excluded kinds
-  python3 "$SCANNER" --excluded "$1" 2>/dev/null
-}
-
 # A whole file, in the shape the detector reads, for a file git has never seen.
-new_file_block() {  # $1 = path
+new_file_block() {  # $1 = path, one the scanner has already said is not excluded
   [ -f "$1" ] || return 0
-  skip_ext "$1" && return 0
   printf '\n--- NEW FILE: %s ---\n' "$1"
   sed 's/^/+/' "$1" 2>/dev/null | head -c 20000
 }
@@ -171,6 +166,14 @@ if [ "$commit_in_chain" -eq 1 ]; then
       pending_diff="${pending_diff}
 $(git -C "$top" diff HEAD -- "$f" "${EXCLUDES[@]}" 2>/dev/null || git -C "$top" diff -- "$f" "${EXCLUDES[@]}" 2>/dev/null)"
     else
+      # Asked here, outside the subshell below, so a scanner that cannot answer stops the push:
+      # 0 excluded, 1 not, anything else a scanner that failed (lessons review of #609).
+      (cd "$top" && python3 "$SCANNER" --excluded "$f"); ex=$?
+      case "$ex" in
+        0) continue ;;
+        1) ;;
+        *) scanner_refusal "the style scanner $SCANNER failed while judging whether $f is a path a push never scans" ;;
+      esac
       pending_diff="${pending_diff}$(cd "$top" && new_file_block "$f")"
     fi
   done < <(printf '%s\n' "$pending_list" | tail -n +2)

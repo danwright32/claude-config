@@ -13,66 +13,74 @@ import {
 const GH = 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'
 const KNOWN = 'kN0wn-S3cr3t-v4lue-zz'
 
+// blockedCommand judges what mod-kit's shared reader made of a command: each simple command as its
+// words, quotes removed, sudo and env looked past, bash -c read as what it runs. How a command is
+// READ is tested once, in mod-kit (L613); these are the guard's own decisions on what it reads.
+const words = (s: string) => [s.split(' ')]
+
 describe('blocked commands', () => {
-  const blocked: [string, string][] = [
-    ['cat .env', 'cat .env'],
-    ['cat a project .env.local by path', 'cat apps/web/.env.local'],
-    ['head of .env', 'head -5 .env'],
-    ['echo a token variable', 'echo $GITHUB_TOKEN'],
-    ['echo a braced key variable', 'echo "${OPENAI_API_KEY}"'],
-    ['printf a secret', 'printf "%s" "$DB_PASSWORD"'],
-    ['bare printenv', 'printenv'],
-    ['printenv a secret by name', 'printenv SLACK_TOKEN'],
-    ['bare env', 'env'],
-    ['gh auth token printed', 'gh auth token'],
-    ['gh auth token echoed through a substitution', 'echo $(gh auth token)'],
-    ['a secret command after a harmless one', 'ls && cat .env'],
-    ['grep over a .env file (lessons review)', 'grep . .env'],
-    ['awk over a .env file', "awk '{print}' .env.local"],
-    ['cat of .env inside bash -c', 'bash -c "cat .env"'],
-    ['sudo cat of .env (lessons review)', 'sudo cat .env'],
-    ['env cat of .env', 'env cat .env'],
-    ['command cat of .env', 'command cat .env'],
-    ['exec printenv', 'exec printenv'],
-    ['an assignment before echo of a secret', 'X=1 echo $GITHUB_TOKEN'],
+  const blocked: [string, string[][], string][] = [
+    ['cat .env', words('cat .env'), 'cat .env'],
+    ['cat a project .env.local by path', words('cat apps/web/.env.local'), ''],
+    ['head of .env', words('head -5 .env'), ''],
+    ['cat of .env at a full path', words('/bin/cat .env'), ''],
+    ['echo a token variable', words('echo $GITHUB_TOKEN'), ''],
+    ['echo a braced key variable', [['echo', '${OPENAI_API_KEY}']], ''],
+    ['printf a secret', [['printf', '%s', '$DB_PASSWORD']], ''],
+    ['bare printenv', [['printenv']], ''],
+    ['printenv a secret by name', words('printenv SLACK_TOKEN'), ''],
+    ['bare env', [['env']], ''],
+    ['gh auth token printed', words('gh auth token'), 'gh auth token'],
+    ['gh auth token echoed through a substitution', [['echo', '$(gh', 'auth', 'token)']], 'echo $(gh auth token)'],
+    ['a secret command after a harmless one', [['ls'], ['cat', '.env']], ''],
+    ['grep over a .env file (lessons review)', words('grep . .env'), ''],
+    ['awk over a .env file', [['awk', '{print}', '.env.local']], ''],
+    ['jq over a .env file', words('jq . .env'), ''],
+    ['grep with -e over a .env file', words('grep -e TOKEN .env'), ''],
   ]
-  for (const [name, cmd] of blocked) {
+  for (const [name, cmds, raw] of blocked) {
     test(`refuses ${name}`, () => {
-      expect(blockedCommand(cmd)).toBeDefined()
+      expect(blockedCommand(cmds, raw)).toBeDefined()
     })
   }
 
-  const allowed: [string, string][] = [
-    ['a presence check', '[ -n "$GITHUB_TOKEN" ] && echo set'],
-    ['the length of a secret', 'echo ${#GITHUB_TOKEN}'],
-    ['printenv of an ordinary variable', 'printenv PATH'],
-    ['env running a command', 'env FOO=1 make build'],
-    ['gh auth token captured into a variable', 'GH_TOKEN=$(gh auth token -u danwright32) gh pr list'],
-    ['gh auth status', 'gh auth status'],
-    ['cat of an example env file', 'cat .env.example'],
-    ['echo of an ordinary variable', 'echo $HOME'],
-    ['echo of a name that only contains KEY', 'echo $KEYBOARD_LAYOUT'],
-    ['printenv of a name that only contains TOKEN', 'printenv TOKENIZER_DIR'],
-    ['cat of an unrelated file', 'cat README.md'],
+  const allowed: [string, string[][], string][] = [
+    ['a presence check', [['[', '-n', '$GITHUB_TOKEN', ']'], ['echo', 'set']], ''],
+    ['the length of a secret', words('echo ${#GITHUB_TOKEN}'), ''],
+    ['printenv of an ordinary variable', words('printenv PATH'), ''],
+    ['an env that runs a command, as the reader hands it over', words('make build'), 'env FOO=1 make build'],
+    ['gh auth token captured into a variable', words('gh pr list'), 'GH_TOKEN=$(gh auth token -u danwright32) gh pr list'],
+    ['gh auth status', words('gh auth status'), 'gh auth status'],
+    ['cat of an example env file', words('cat .env.example'), ''],
+    ['echo of an ordinary variable', words('echo $HOME'), ''],
+    ['echo of a name that only contains KEY', words('echo $KEYBOARD_LAYOUT'), ''],
+    ['printenv of a name that only contains TOKEN', words('printenv TOKENIZER_DIR'), ''],
+    ['cat of an unrelated file', words('cat README.md'), ''],
+    // The first plain argument of a filter tool is its program or pattern, not a file: a jq filter
+    // reading .env.X out of settings.json was refused live on 2026-10-03.
+    ['a jq filter that starts with .env.', [['jq', '-r', '.env.CLAUDE_CODE_PLUGIN_DIRS', '/Users/x/.claude/settings.json']], ''],
+    ['a grep for the text .env', words('grep -n .env notes.txt'), ''],
+    ['an awk program naming .env', [['awk', '/.env/ {print}', 'notes.txt']], ''],
   ]
-  for (const [name, cmd] of allowed) {
+  for (const [name, cmds, raw] of allowed) {
     test(`allows ${name}`, () => {
-      expect(blockedCommand(cmd)).toBeUndefined()
+      expect(blockedCommand(cmds, raw)).toBeUndefined()
     })
   }
 })
 
 describe('wording agreed with Dan (docs/mods-design.md)', () => {
   test('the refusal names what it would print and the safe way', () => {
-    expect(blockedCommand('echo $GITHUB_TOKEN')).toBe('GITHUB_TOKEN')
+    expect(blockedCommand(words('echo $GITHUB_TOKEN'), '')).toBe('GITHUB_TOKEN')
     expect(commandRefusal('GITHUB_TOKEN')).toBe(
       'Blocked: this would print GITHUB_TOKEN. Check it without printing: test -n, its length, or gh auth status.',
     )
   })
   test('a .env file is named as its secrets', () => {
-    expect(blockedCommand('cat .env')).toBe('the secrets in .env')
+    expect(blockedCommand(words('cat .env'), '')).toBe('the secrets in .env')
   })
 })
+
 
 describe('scrubbing', () => {
   test('a known value inside a longer output is redacted', () => {

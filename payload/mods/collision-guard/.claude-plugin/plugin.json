@@ -1,0 +1,7 @@
+{
+  "name": "collision-guard",
+  "version": "0.1.0",
+  "description": "Stops two Claude Code sessions in one checkout from editing the same file or switching branches under each other.",
+  "author": { "name": "Dan Wright" },
+  "dependencies": ["mod-kit", "session-registry"]
+}

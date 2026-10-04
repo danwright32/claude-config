@@ -18326,6 +18326,13 @@ printf 'export const register = () => {}\n' > "$MDHB/mods/being-written/hooks/re
 printf 'x\n' > "$MDHB/mods/being-written/.claude-plugin/types/x.d.ts"
 MDB_LISTED=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#606 a mod being written here, with no manifest yet, is left alone" "[ -f '$MDHB/mods/being-written/hooks/register.ts' ]"
+# A mod folder made here a moment ago and still EMPTY looks exactly like the leftover a removal on
+# the other Mac leaves, so the sweep must take only folders this Mac last held as mods (its
+# .mods-seen), never one it has not had yet (claude-config#629).
+mkdir -p "$MDHB/mods/just-started/.claude-plugin"
+MDB_LISTED=alpha-mod CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#629 a pull leaves an empty mod folder this Mac has never held as a mod" "[ -d '$MDHB/mods/just-started/.claude-plugin' ]"
+rm -rf "$MDHB/mods/just-started"
 rm -rf "$MDHB/mods/being-written"
 # A folder in mods that is not a plugin (no manifest) is not named: the engine would refuse it on
 # every session start.

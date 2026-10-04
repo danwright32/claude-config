@@ -3,51 +3,51 @@ import { appNameOf, classify, judge } from '../hooks/keys.ts'
 
 const OVERTURE = '/Applications/Overture.app/Contents/MacOS/Overture'
 const KEY = 'key' + 'stroke'
+const SYS = 'tell application "System Events" to '
 
+// classify judges what mod-kit's shared reader made of a command ($.modkit.commands): each simple
+// command as its words. How a command is READ (quotes, heredocs, here-strings, sudo, bash -c) is
+// tested once, in mod-kit's own tests, and not again here (L613).
 describe('classify', () => {
-  const input: [string, string][] = [
-    ['an osascript keystroke', `TARGET_APP=${OVERTURE} osascript -e 'tell application "System Events" to ${KEY} "n" using command down'`],
-    ['an osascript key code', `osascript -e 'tell application "System Events" to key code 36'`],
-    ['an osascript click', `osascript -e 'tell application "System Events" to click button 1 of window 1 of process "X"'`],
-    ['an osascript keystroke whose script spans lines', `osascript -e 'tell application "System Events"\n  ${KEY} "n" using command down\nend tell'`],
-    ['an osascript keystroke after another command', `cd /tmp && osascript -e 'tell application "System Events" to ${KEY} "n"'`],
-    ['a keystroke after a here-string (lessons review)', `cat <<< x\nosascript -e 'tell application "System Events" to ${KEY} "n"'`],
-    ['a keystroke after an unterminated heredoc', `cat <<EOF\nhello\nosascript -e 'tell application "System Events" to ${KEY} "n"'`],
-    ['an osascript keystroke inside bash -c',`bash -c "osascript -e 'tell application \\"System Events\\" to ${KEY} \\"n\\"'"`],
-    ['cliclick', 'cliclick c:100,200'],
-    ['peekaboo type', 'peekaboo type "hello"'],
-    ['peekaboo hotkey', 'peekaboo hotkey --keys cmd,n'],
-    ['peekaboo click', 'peekaboo click --on B1'],
+  const input: [string, string[][]][] = [
+    ['an osascript keystroke', [['osascript', '-e', `${SYS}${KEY} "n" using command down`]]],
+    ['an osascript key code', [['osascript', '-e', `${SYS}key code 36`]]],
+    ['an osascript click', [['osascript', '-e', `${SYS}click button 1 of window 1 of process "X"`]]],
+    ['an osascript keystroke after another command', [['cd', '/tmp'], ['osascript', '-e', `${SYS}${KEY} "n"`]]],
+    ['an osascript keystroke at a full path', [['/usr/bin/osascript', '-e', `${SYS}${KEY} "n"`]]],
+    ['cliclick', [['cliclick', 'c:100,200']]],
+    ['peekaboo type', [['peekaboo', 'type', 'hello']]],
+    ['peekaboo hotkey', [['peekaboo', 'hotkey', '--keys', 'cmd,n']]],
+    ['peekaboo click', [['peekaboo', 'click', '--on', 'B1']]],
   ]
-  for (const [name, cmd] of input) test(`${name} is synthetic input`, () => expect(classify(cmd).kind).toBe('input'))
+  for (const [name, cmds] of input) test(`${name} is synthetic input`, () => expect(classify(cmds, '').kind).toBe('input'))
 
-  const focus: [string, string][] = [
-    ['open -a', 'open -a "Google Chrome" report.html'],
-    ['an activate', `osascript -e 'tell application "Overture" to activate'`],
-    ['set frontmost', `osascript -e 'tell application "System Events" to set frontmost of process "Overture" to true'`],
+  const focus: [string, string[][]][] = [
+    ['open -a', [['open', '-a', 'Google Chrome', 'report.html']]],
+    ['an activate', [['osascript', '-e', 'tell application "Overture" to activate']]],
+    ['set frontmost', [['osascript', '-e', `${SYS}set frontmost of process "Overture" to true`]]],
   ]
-  for (const [name, cmd] of focus) test(`${name} steals focus`, () => expect(classify(cmd).kind).toBe('focus'))
+  for (const [name, cmds] of focus) test(`${name} steals focus`, () => expect(classify(cmds, '').kind).toBe('focus'))
 
-  const neither: [string, string][] = [
-    ['an ordinary command', 'git status'],
-    ['a Python venv activate', 'source .venv/bin/activate && pytest'],
-    ['a conda activate', 'conda activate base'],
-    ['a search that mentions set frontmost', 'grep -n "set frontmost" notes.txt'],
-    ['a bare open of a file', 'open -R ~/x.txt'],
-    // The command that blocked this mod's own author on 2026-10-03: a file being WRITTEN whose
-    // text mentions an osascript keystroke. Nothing is typed anywhere (L673).
-    ['a heredoc that only writes the words', `cat > builder.js <<'EOF'\n  var s = "osascript -e 'tell application \\"System Events\\" to ${KEY} \\"n\\"'"\nEOF`],
-    ['an echo of the words', `echo "osascript ${KEY}" > notes.txt`],
+  const neither: [string, string[][]][] = [
+    ['an ordinary command', [['git', 'status']]],
+    ['a Python venv activate', [['source', '.venv/bin/activate'], ['pytest']]],
+    ['a conda activate', [['conda', 'activate', 'base']]],
+    ['a search that mentions set frontmost', [['grep', '-n', 'set frontmost', 'notes.txt']]],
+    ['a bare open of a file', [['open', '-R', '~/x.txt']]],
+    ['an echo of the words', [['echo', `osascript ${KEY}`]]],
+    ['an AppleScript file, which runs unchecked (Dan, 2026-10-03)', [['osascript', 'some-script.scpt']]],
   ]
-  for (const [name, cmd] of neither) test(`${name} is neither`, () => expect(classify(cmd).kind).toBe('none'))
+  for (const [name, cmds] of neither) test(`${name} is neither`, () => expect(classify(cmds, '').kind).toBe('none'))
 
-  test('the declared target is read from the marker', () => {
-    expect(classify(`TARGET_APP=${OVERTURE} cliclick c:1,1`).target).toBe(OVERTURE)
-    expect(classify(`TARGET_APP="${OVERTURE}" cliclick c:1,1`).target).toBe(OVERTURE)
+  test('the declared target is read from the marker in the command as written', () => {
+    expect(classify([['cliclick', 'c:1,1']], `TARGET_APP=${OVERTURE} cliclick c:1,1`).target).toBe(OVERTURE)
+    expect(classify([['cliclick', 'c:1,1']], `TARGET_APP="${OVERTURE}" cliclick c:1,1`).target).toBe(OVERTURE)
   })
   test('the app a focus stealer names is read', () => {
-    expect(classify('open -a "Google Chrome" r.html').app).toBe('Google Chrome')
-    expect(classify(`osascript -e 'tell application "Overture" to activate'`).app).toBe('Overture')
+    expect(classify([['open', '-a', 'Google Chrome', 'r.html']], 'open -a "Google Chrome" r.html').app).toBe('Google Chrome')
+    const tell = `osascript -e 'tell application "Overture" to activate'`
+    expect(classify([['osascript', '-e', 'tell application "Overture" to activate']], tell).app).toBe('Overture')
   })
   test('the app name comes from the bundle in the path', () => expect(appNameOf(OVERTURE)).toBe('Overture'))
 })

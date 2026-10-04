@@ -3,13 +3,32 @@ import type { On, Register } from 'claude-code'
 
 // A stand-in for mod-kit, which draws the grey card. An inline plugin runs in an environment of
 // its own and cannot reach this file's variables, so it reports each card as a transcript line
-// the world below collects (measured 2026-10-03).
+// the world below collects (measured 2026-10-03). Its command reader is a small stand-in for the
+// real one (a mod cannot import another mod's files), enough for the commands below; the real
+// reader is tested in mod-kit.
 const kit: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
+    const read = (cmd: string): string[][] =>
+      cmd
+        .split(/&&|;|\n/)
+        .map(part => {
+          const words: string[] = []
+          // A word may mix bare and quoted parts (X="a b" is one word), as the shell's are.
+          for (const m of part.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)) words.push(m[0].replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
+          while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? '')) words.shift()
+          return words
+        })
+        .filter(w => w.length > 0)
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
-      return { ...built, modkit: { blocked: (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)) } }
+      return {
+        ...built,
+        modkit: {
+          blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
+          commands: async ({ command }: { command: string }) => read(command),
+        },
+      }
     })
   },
 }

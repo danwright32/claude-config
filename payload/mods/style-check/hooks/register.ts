@@ -9,29 +9,29 @@ const SLACK = new Set([
   'mcp__claude_ai_Slack__slack_send_message_draft',
   'mcp__claude_ai_Slack__slack_schedule_message',
 ])
-// commit as git's subcommand, after any global options (-C <dir>, -c <k=v>, --flags), never a git
-// command that merely mentions the word (git log --grep=commit).
-const COMMIT = /\bgit(?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+commit\b/
-const GH_BODY = /\bgh\s+(?:issue|pr)\s+(?:create|edit|comment)\b/
-const BODY_FILE = /(?:--body-file|--file|-F)[ =](?:"([^"]+)"|'([^']+)'|(\S+))/g
-
-// Whether position i of a shell command falls inside a quoted string.
-const insideQuotes = (cmd: string, i: number): boolean => {
-  let q: string | undefined
-  for (let k = 0; k < i; k++) {
-    const c = cmd[k]
-    if (q) {
-      if (c === q) q = undefined
-      else if (c === '\\' && q === '"') k++
-    } else if (c === '"' || c === "'") q = c
-    else if (c === '\\') k++
+// Which commands carry a message is read from mod-kit's one shared reader ($.modkit.commands),
+// never a pattern over the raw text (L613, L673): a git command whose subcommand is commit, after
+// any global options (git -C <dir> commit), and gh issue or pr create, edit or comment.
+const ghCarriesMessage = (words: string[]): boolean =>
+  (words[0] ?? '').split('/').pop() === 'gh' && (words[1] === 'issue' || words[1] === 'pr') && ['create', 'edit', 'comment'].includes(words[2] ?? '')
+// The files a message is read from: the word after -F, --file or --body-file, or joined with =.
+const messageFiles = (words: string[]): string[] => {
+  const out: string[] = []
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i] as string
+    const joined = /^(?:--body-file|--file)=(.+)$/.exec(w)
+    if (joined) out.push(joined[1] as string)
+    else if ((w === '-F' || w === '--file' || w === '--body-file') && words[i + 1] !== undefined) out.push(words[i + 1] as string)
   }
-  return q !== undefined
+  return out.filter(f => f !== '-')
 }
 
 type Verdict = { kind: 'clean' } | { kind: 'hit'; lines: string } | { kind: 'unchecked'; why: string }
 
 const scan = async ($: EngineInterface, text: string, path?: string): Promise<Verdict> => {
+  // Every character the rule forbids lies outside ASCII, so plain ASCII is clean without starting a
+  // process for it: most writes and replies (lessons review). The rule itself stays the scanner's.
+  if (/^[\x00-\x7f]*$/.test(text)) return { kind: 'clean' }
   const home = await $.env.get('HOME')
   if (!home) return { kind: 'unchecked', why: 'HOME is not set, so the scanner could not be found' }
   const argv = ['python3', `${home}/.claude/hooks/lib/style-scan.py`, '--plain', ...(path ? ['--path', path] : [])]
@@ -70,15 +70,15 @@ const outgoing = async ($: EngineInterface, tool: string, e: Record<string, unkn
       return { text: String(e.new_source ?? ''), path: String(e.notebook_path ?? '') }
     case 'Bash': {
       const cmd = String(e.command ?? '')
-      if (!COMMIT.test(cmd) && !GH_BODY.test(cmd)) return undefined
-      // The message as written in the command, plus any file it is read from.
+      const msgs: string[][] = []
+      for (const words of await $.modkit.commands({ command: cmd })) {
+        if (ghCarriesMessage(words) || (await $.modkit.git({ words }))?.sub === 'commit') msgs.push(words)
+      }
+      if (msgs.length === 0) return undefined
+      // The message as written in the command, plus any file it is read from. Quotes are already
+      // gone, so a -F inside a quoted message is words, never a flag (lessons review).
       const parts = [cmd]
-      // Only a flag outside quoted text names a file: a -F inside a quoted message is words
-      // (lessons review). The file's own path may be quoted, so only the flag's position is judged.
-      for (const m of cmd.matchAll(BODY_FILE)) {
-        if (insideQuotes(cmd, m.index ?? 0)) continue
-        const f = m[1] ?? m[2] ?? m[3]
-        if (!f || f === '-') continue
+      for (const f of msgs.flatMap(messageFiles)) {
         try {
           parts.push(await $.fs.read(f))
         } catch {
@@ -106,6 +106,7 @@ const lineWords = (scannerOut: string): string => {
 let sessionHits = 0
 let sessionUnchecked = 0
 let noteSaid = false
+let countChain: Promise<unknown> = Promise.resolve()
 const UNCHECKED_NOTE = "Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will."
 // Dan's note, once a session however many checks fail; each cause goes to the debug log.
 const unchecked = ($: EngineInterface, why: string) => {
@@ -135,7 +136,7 @@ export const register: Register = on => {
     const v = await scan($, out.text, out.path || undefined)
     if (v.kind === 'hit') {
       const where = lineWords(v.lines)
-      $.modkit.blocked({ toolUseId: String((e as { tool_use_id?: string }).tool_use_id ?? ''), guard: GUARD, reason: `This text has a dash or emoji${where}.`, safeWay: FIX })
+      await $.modkit.blocked({ toolUseId: String((e as { tool_use_id?: string }).tool_use_id ?? ''), guard: GUARD, reason: `This text has a dash or emoji${where}.`, safeWay: FIX })
       await $.ui.toast('Blocked a dash or emoji.')
       return { deny: `Blocked: this text has a dash or emoji${where}. ${FIX}` }
     }
@@ -157,7 +158,12 @@ export const register: Register = on => {
       if (v.kind === 'hit') {
         // Counted silently, read with /style-count (Dan, 2026-10-03).
         sessionHits += 1
-        await $.store.set('chatHits', (((await $.store.get('chatHits')) as number | undefined) ?? 0) + 1)
+        // One queue for the stored total, so two replies counted at once both land (L690).
+        const counted = countChain.then(async () => {
+          await $.store.set('chatHits', (((await $.store.get('chatHits')) as number | undefined) ?? 0) + 1)
+        })
+        countChain = counted.catch(() => undefined)
+        await counted
       } else if (v.kind === 'unchecked') {
         // Kept apart from the count (lessons review).
         sessionUnchecked += 1

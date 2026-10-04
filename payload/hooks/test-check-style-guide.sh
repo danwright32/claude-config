@@ -474,6 +474,14 @@ printf 'import sys\nsys.exit(3 if "--excludes" in sys.argv else 0)\n' > "$NOSCAN
 run_style_hook_at "$NOSCAN" "$W" "git push"
 want_style_code 2 "a scanner that cannot list its excluded paths refuses the push"
 case "$STYLE_MSG" in *excluded*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: that refusal names the excluded paths: $STYLE_MSG" ;; esac
+# Asking whether one new file is excluded can crash too (exit 2): that is a scanner that could not
+# answer, refused by name, never read as "not excluded" and scanned with nothing said (lessons review).
+printf 'import sys\nsys.exit(2 if "--excluded" in sys.argv else 0)\n' > "$NOSCAN/lib/style-scan.py"
+W2="$(mk_style_repo "$CLEAN")"
+printf 'export const y = 1;\n' > "$W2/app/new.ts"
+run_style_hook_at "$NOSCAN" "$W2" "git add app/new.ts && git commit -m new && git push"
+want_style_code 2 "a scanner that crashes judging an excluded path refuses the push"
+case "$STYLE_MSG" in *style-scan.py*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: that refusal names the scanner: $STYLE_MSG" ;; esac
 
 
 echo

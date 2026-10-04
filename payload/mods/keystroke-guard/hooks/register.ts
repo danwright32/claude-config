@@ -80,13 +80,13 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: 
 
 export const register: Register = on => {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const c = classify(e.command)
+    const c = classify(await $.modkit.commands({ command: e.command }), e.command)
     if (c.kind === 'none') return next(e)
     const typing = c.kind === 'input'
     const app = c.app ?? 'an app'
 
     const refuse = async (r: Refusal) => {
-      $.modkit.blocked({ toolUseId: String(e.tool_use_id ?? ''), guard: GUARD, reason: r.reason, safeWay: r.safeWay })
+      await $.modkit.blocked({ toolUseId: String(e.tool_use_id ?? ''), guard: GUARD, reason: r.reason, safeWay: r.safeWay })
       await $.ui.toast(typing ? `Blocked typing into ${app}.` : `Blocked bringing ${app} to the front.`)
       return { deny: refusalText(r) }
     }

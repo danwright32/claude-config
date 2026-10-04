@@ -119,6 +119,42 @@ else
   fi
 fi
 
+# 9. What every mod shares lives once, in mod-kit: the shell command reader and the blocked card
+#    (L613: the component plus the scan that fails on the next hand rolled copy). Three guards each
+#    read commands their own way before batch 2 of the mods milestone.
+SHARED="$ROOT/tools/check-mod-shared-parts.sh"
+M9="$TMPROOT/m9"
+mkmodsrc(){   # $1 = mods dir  $2 = mod name  $3 = the hooks module's source
+  mkdir -p "$1/$2/.claude-plugin" "$1/$2/hooks"
+  printf '{ "name": "%s", "version": "0.1.0", "description": "t" }\n' "$2" > "$1/$2/.claude-plugin/plugin.json"
+  printf '%s\n' "$3" > "$1/$2/hooks/register.ts"
+}
+mkmodsrc "$M9" clean-mod "export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
+mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h)"
+out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "mod-kit itself may hold the shared parts, and a clean mod passes" ok \
+  || check "mod-kit itself may hold the shared parts, and a clean mod passes" "exit=$code out=$out"
+case "$out" in *"2 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+mkmodsrc "$M9" own-reader "const words = command.split(/&&|\|\||;/).map(s => s.trim())"
+mkmodsrc "$M9" own-quotes "for (const c of cmd) { if (c === '\"' || c === \"'\") quote = c }"
+mkmodsrc "$M9" own-heredoc "const m = /(?<!<)<<(?!<)-?\s*(\w+)/.exec(line)"
+mkmodsrc "$M9" own-card "on('ui.render', { component: 'ToolResult' }, (\$, e, next) => next(e))"
+mkmodsrc "$M9" own-git "const GLOBAL = new Set(['-C', '-c', '--git-dir', '--work-tree'])"
+out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod with its own copy of a shared part fails the run" ok \
+  || check "a mod with its own copy of a shared part fails the run" "exit=$code out=$out"
+for m in own-reader own-quotes own-heredoc own-card own-git; do
+  case "$out" in *"$m"*) check "and names $m" ok ;; *) check "and names $m" "$out" ;; esac
+done
+out="$(bash "$SHARED" "$TMPROOT/not-there" 2>&1)"; code=$?
+[ "$code" -eq 2 ] && check "a missing mods folder is refused by the shared parts check too" ok \
+  || check "a missing mods folder is refused by the shared parts check too" "exit=$code out=$out"
+if [ -d "$ROOT/payload/mods" ]; then
+  out="$(bash "$SHARED" "$ROOT/payload/mods" 2>&1)"; code=$?
+  [ "$code" -eq 0 ] && check "no mod in payload/mods keeps its own copy of a shared part" ok \
+    || check "no mod in payload/mods keeps its own copy of a shared part" "exit=$code out=$out"
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

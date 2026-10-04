@@ -1,5 +1,6 @@
 import type { Register } from 'claude-code'
 import type { ModKit, ModKitBlocked } from '../types/index.d.ts'
+import { commands, git } from './commands.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
 // place so no guard keeps its own copy (L613). Today: the grey card for a blocked action, settled
@@ -16,12 +17,14 @@ export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
     const modkit: ModKit = {
-      blocked: input => {
+      blocked: async input => {
         if (!input.toolUseId) return
         blocked.set(input.toolUseId, input)
         // Bounded, so a long session cannot grow it without end; the oldest rows are long gone.
         if (blocked.size > MAX) blocked.delete(blocked.keys().next().value as string)
       },
+      commands: async ({ command }) => commands(command),
+      git: async ({ words }) => git(words),
     }
     return { ...built, modkit }
   })
