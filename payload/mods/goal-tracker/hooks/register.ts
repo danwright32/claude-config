@@ -28,7 +28,7 @@ const publish = async ($: EngineInterface, now: number) => {
     }
   }
 }
-const withNotice = <R extends { context?: string[] }>(result: R): R => {
+const withNotice = <R extends { context?: readonly string[] }>(result: R): R => {
   if (!notice) return result
   const said = notice
   notice = undefined

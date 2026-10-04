@@ -56,12 +56,13 @@ export const taskUpdated = (
   u: { taskId: string; status?: StepStatus | 'deleted'; subject?: string; activeForm?: string },
   now: number,
 ): Progress => {
-  if (u.status === 'deleted') return summed(p, p.steps.filter(s => s.id !== u.taskId), now)
+  const status = u.status
+  if (status === 'deleted') return summed(p, p.steps.filter(s => s.id !== u.taskId), now)
   return summed(
     p,
     p.steps.map(s =>
       s.id === u.taskId
-        ? { ...s, status: u.status ?? s.status, subject: u.subject ?? s.subject, activeForm: u.activeForm ?? s.activeForm }
+        ? { ...s, status: status ?? s.status, subject: u.subject ?? s.subject, activeForm: u.activeForm ?? s.activeForm }
         : s,
     ),
     now,
