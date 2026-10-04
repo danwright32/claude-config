@@ -63,6 +63,17 @@ test('a note starting with + is an add-on', () => {
   expect(isAddOnNote('  + and open it in bbedit')).toBe(true)
 })
 
+test('a + note carrying a markdown bullet list is still an add-on (lessons review)', () => {
+  expect(isAddOnNote('+ also add these links:\n- the commission page\n- the invoice')).toBe(true)
+  expect(isAddOnNote('+ include\n  - indented bullet')).toBe(true)
+})
+
+test('a diff of additions only, or one with a hunk header, is still not an add-on', () => {
+  expect(isAddOnNote('+const a = 1\n+const b = 2')).toBe(false)
+  expect(isAddOnNote('+ fix this\n@@ -1,2 +1,2 @@')).toBe(false)
+  expect(isAddOnNote('+ a\n-removed line')).toBe(false)
+})
+
 test('a + with nothing after it, a ++ or a pasted diff is not an add-on', () => {
   expect(isAddOnNote('+')).toBe(false)
   expect(isAddOnNote('+   ')).toBe(false)

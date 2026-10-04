@@ -3,11 +3,12 @@
 // wires them to events.
 
 // A note starting with +: a + then words. Not a lone +, not ++, not +1, and not a pasted diff,
-// whose later lines also start with + or - (or a hunk header).
+// whose later lines also start with +, with a - straight onto the text, or with a hunk header. A
+// markdown bullet ("- item", a dash then a space) is a list in the note, not a removed line.
 export const isAddOnNote = (text: string): boolean => {
   const t = text.trimStart()
   if (!/^\+(?!\+)\s*[A-Za-z]/.test(t)) return false
-  return !/\n\s*[-+@]/.test(t)
+  return !/\n\s*(?:\+|@@|-(?!\s))/.test(t)
 }
 
 // After an interrupt, a short reply that adds scope rather than changing direction. Read
