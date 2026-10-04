@@ -18496,7 +18496,9 @@ check "#638 the other Mac starts on release one" "grep -q release-one '$S38HB/mo
 # A pull request merges on the shared repo, from a checkout that is not a sync clone.
 S38D="$WORK/s638-dev"; git clone -q "$S38B" "$S38D" 2>/dev/null
 sed -i.bak 's/release-one/release-two/' "$S38D/payload/mods/guard/hooks/register.ts"; rm -f "$S38D/payload/mods/guard/hooks/register.ts.bak"
-_638merge="$(git -C "$S38D" commit -q -am 'merge a pull request' 2>&1 && git -C "$S38D" push -q origin main 2>&1)" || _638merge="FAILED: $_638merge"
+# Its own identity on the commit, as every hand commit in this suite carries: the CI runner has none,
+# and there git refused the commit ("Author identity unknown"), so no merge ever reached the repo.
+_638merge="$(git -C "$S38D" -c user.name=t -c user.email=t@e commit -q -am 'merge a pull request' 2>&1 && git -C "$S38D" push -q origin main 2>&1)" || _638merge="FAILED: $_638merge"
 # Every check below depends on this merge having landed, so a merge that did not land is said here,
 # with git's own words, rather than read later as the tool failing to apply it (L177).
 _638tip="$(git -C "$S38B" show main:payload/mods/guard/hooks/register.ts 2>/dev/null || true)"
@@ -18547,6 +18549,56 @@ printf 'export const register = () => {} // release-one\n' > "$S38HB/mods/guard/
 SYNC_IN_WATCH=1 CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1
 _638main="$(git -C "$S38B" show main:payload/mods/guard/hooks/register.ts 2>/dev/null || true)"
 check "#638 an earlier version put back by an edit here is still published" "case \"\$_638main\" in *release-one*) true ;; *) false ;; esac"
+
+# CLOCK SKEW between the Macs (review of c9a97de). The other Mac's clock runs two days ahead, so its
+# commit carries a time later than anything written here. An edit made here afterwards, putting the
+# release before back, is still an edit: staleness is judged on this Mac's own clock alone (L5).
+CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+git -C "$S38D" pull -q origin main 2>/dev/null
+sed -i.bak 's|// .*|// release-three|' "$S38D/payload/mods/guard/hooks/register.ts"; rm -f "$S38D/payload/mods/guard/hooks/register.ts.bak"
+_638ahead="$(( $(date +%s) + 172800 )) +0000"
+GIT_COMMITTER_DATE="$_638ahead" GIT_AUTHOR_DATE="$_638ahead" git -C "$S38D" -c user.name=t -c user.email=t@e commit -q -am 'merge from a Mac whose clock is ahead' 2>/dev/null
+git -C "$S38D" push -q origin main 2>/dev/null
+CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#638 skew fixture: release three arrived" "grep -q release-three '$S38HB/mods/guard/hooks/register.ts'"
+printf 'export const register = () => {} // release-one\n' > "$S38HB/mods/guard/hooks/register.ts"
+out_638w="$(CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
+check "#638 an edit back made here survives a pull when the other Mac's clock is ahead" "grep -q release-one '$S38HB/mods/guard/hooks/register.ts'"
+check "#638 and is named as a local edit" "line_has \"\$out_638w\" 'would have reverted' 'mods/guard/hooks/register.ts'"
+
+# A STALE TOP LEVEL RULE FILE is held back too (review of c9a97de): the top level copy reads the same
+# list the folder mirrors do, so the message holding it back is true of it.
+printf '# rules\n' > "$S38HA/CLAUDE.md"
+git -C "$S38D" pull -q origin main 2>/dev/null
+printf '# rules from the merge\n' > "$S38D/payload/CLAUDE.md"
+git -C "$S38D" -c user.name=t -c user.email=t@e commit -q -am 'merge a rules change' 2>/dev/null
+git -C "$S38D" push -q origin main 2>/dev/null
+CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#638 top level fixture: the rules change arrived" "grep -q 'from the merge' '$S38HB/CLAUDE.md'"
+printf '# rules\n' > "$S38HB/CLAUDE.md"; touch -t 202001010000 "$S38HB/CLAUDE.md"
+out_638t="$(SYNC_IN_WATCH=1 CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+_638main="$(git -C "$S38B" show main:payload/CLAUDE.md 2>/dev/null || true)"
+check "#638 a stale top level rule file is not published" "case \"\$_638main\" in *'from the merge'*) true ;; *) false ;; esac"
+check "#638 and the send names it as held back" "line_has \"\$out_638t\" 'NOT publishing' 'CLAUDE.md' 'earlier'"
+
+# A SKILL THAT CANNOT LOAD HERE is not named with the pull remedy (review of c9a97de): a pull leaves
+# such an entry alone, so "run claude-sync pull" would be advice that cannot work (L11).
+mkskill "$S38HA/skills/s638/SKILL.md" 'a skill for the #638 checks'
+printf 'helper one\n' > "$S38HA/skills/s638/helper.sh"
+git -C "$S38D" pull -q origin main 2>/dev/null
+mkdir -p "$S38D/payload/skills/s638"; cp "$S38HA/skills/s638/SKILL.md" "$S38D/payload/skills/s638/SKILL.md"
+printf 'helper one\n' > "$S38D/payload/skills/s638/helper.sh"
+git -C "$S38D" add payload/skills && git -C "$S38D" -c user.name=t -c user.email=t@e commit -q -m 'add a skill' 2>/dev/null
+printf 'helper two\n' > "$S38D/payload/skills/s638/helper.sh"
+git -C "$S38D" -c user.name=t -c user.email=t@e commit -q -am 'change the skill' 2>/dev/null
+git -C "$S38D" push -q origin main 2>/dev/null
+CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#638 skill fixture: the skill arrived" "grep -q 'helper two' '$S38HB/skills/s638/helper.sh'"
+printf 'helper one\n' > "$S38HB/skills/s638/helper.sh"; touch -t 202001010000 "$S38HB/skills/s638/helper.sh"
+rm -f "$S38HB/skills/s638/SKILL.md"
+out_638u="$(SYNC_IN_WATCH=1 CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+check "#638 a stale file in a skill that cannot load is not offered the pull remedy" \
+  "! line_has \"\$out_638u\" 'earlier version' 'skills/s638'"
 
 suite_profile
 echo ""

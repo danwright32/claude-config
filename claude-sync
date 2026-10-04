@@ -4428,7 +4428,7 @@ unapplied_paths(){
 # merge on main. How the marker got past the files was not reproduced (replaying that history, hold
 # and all, applied correctly), so this does not lean on the marker at all: it asks the history. A copy
 # whose stored form is a blob the repo once held for this path, is not what it holds now, and has not
-# been written since the repo replaced it, carries no work that exists nowhere else. It is stale,
+# been written since the newer version arrived here, carries no work that exists nowhere else. It is stale,
 # whatever the marker says.
 #
 # Where it can still be wrong: an older version copied in with its old mtime kept (cp -p, a restore
@@ -4459,15 +4459,17 @@ local_copy_is_past_release(){   # $1 = path relative to the payload
   printf '%s\n' "$seen" | awk -v h="$h" '$3 == h || $4 == h { found = 1 } END { exit found ? 0 : 1 }' || return 1
   # AND UNTOUCHED SINCE THE CHANGE THAT REPLACED IT. Content alone cannot tell a stale copy from a
   # deliberate edit back to an older version (a flag flipped back, a revert made here), and the
-  # suite's own fixtures do exactly that. A stale copy is one nobody has written since the repo moved
-  # past it, so its mtime is older than the last commit to touch the path; an edit made here is
-  # newer. An mtime or commit time that cannot be read answers no, which keeps today's behaviour.
-  local lt ct
+  # suite's own fixtures do exactly that. A stale copy is one nobody has written since the newer
+  # version ARRIVED HERE, so it is older than the payload's copy, which git wrote into this clone when
+  # that version came down; an edit made here is newer. Both times are read off THIS Mac's clock,
+  # never a commit time another Mac stamped, so clock skew between the Macs cannot turn an edit into
+  # a stale copy (L5). Anything unreadable, and a tie, answer no: a local edit is the safe reading.
+  local lt pt
   lt="$(file_mtime "$f")"
-  ct="$(git -C "$SYNC_REPO" log -1 --format=%ct -- "payload/$1" 2>/dev/null || true)"
-  case "$lt$ct" in ''|*[!0-9]*) return 1 ;; esac
-  [ -n "$lt" ] && [ -n "$ct" ] || return 1
-  [ "$lt" -lt "$ct" ]
+  pt="$(file_mtime "$PAYLOAD/$1")"
+  case "$lt" in ''|*[!0-9]*) return 1 ;; esac
+  case "$pt" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$lt" -lt "$pt" ]
 }
 
 # The paths under the mirrored trees and the top level rule files where this Mac's copy differs from
@@ -4479,6 +4481,17 @@ past_release_paths(){
     [ -d "$CLAUDE_HOME/$d" ] || continue
     local ex=()
     [ "$d" = skills ] && { local s; for s in $(skill_excludes); do ex+=("$s"); done; }
+    # Nor a skills entry that cannot load here: a pull leaves it alone (protect_unloadable_local_skills)
+    # and a send refuses it whole, so naming it with "run claude-sync pull" would offer a remedy that
+    # cannot work (L11). Its own line about that is the send's.
+    if [ "$d" = skills ]; then
+      local _ue _ur
+      while IFS="$(printf '\t')" read -r _ue _ur; do
+        [ -n "${_ue:-}" ] && ex+=(--exclude="/$_ue")
+      done <<UNLOADABLE
+$(unloadable_skill_entries "$CLAUDE_HOME/skills")
+UNLOADABLE
+    fi
     while IFS= read -r line; do
       change="${line%%[[:space:]]*}"
       path="${line#"$change"}"
