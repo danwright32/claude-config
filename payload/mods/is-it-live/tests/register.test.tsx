@@ -299,3 +299,57 @@ test('/live keeps an unsent message across a new card for the same change, and l
   const out = await live($)
   expect(out).toBe(['- Live: Filter bookings by venue (#412)', '', 'Not sent yet:', '- Message for Kris (#412): It is live now.'].join('\n'))
 })
+
+// ---- The verdict other mods read (#687): wind down finishes only on what the card says. ----
+
+// Another mod, standing in for scope-modes: it reads $.isItLive.verdict from a hook of its own.
+type Verdict = { state: string; at: number } | null
+const reader: { name: string; register: Register } = {
+  name: 'reader',
+  register: on => {
+    on('command.run', { command: 'verdict' }, async ($, e) => {
+      const [repo, pr] = String(e.args).split(' ')
+      try {
+        const v = await ($ as unknown as { isItLive: { verdict: (q: { repo: string; pr: number }) => Promise<Verdict> } }).isItLive.verdict({ repo: String(repo), pr: Number(pr) })
+        return { text: JSON.stringify(v) }
+      } catch (err) {
+        return { text: `threw: ${String((err as Error).message)}` }
+      }
+    })
+  },
+}
+const withReader = { plugins: [modKit, reader] }
+const verdict = async ($: unknown, args: string) =>
+  String(((await ($ as { command: { run: (x: never) => Promise<unknown> } }).command.run({ command: 'verdict', args, origin: { kind: 'human' }, presentation: {} } as never)) as { text?: string }).text)
+
+test("another mod reads the verdict for a PR: each card's state, the newest card winning", withReader, async ($, on) => {
+  world(on)
+  await card($, { ...CARD, deploy: 'deploying', checked: undefined })
+  expect(JSON.parse(await verdict($, `${REPO} 412`))).toEqual({ state: 'deploying', at: T0 })
+  await card($, { ...CARD, deploy: 'failed', checked: 'The deploy check timed out.' })
+  expect(JSON.parse(await verdict($, `${REPO} 412`)).state).toBe('unconfirmed')
+  await card($, { ...CARD, deploy: 'none', checked: undefined })
+  expect(JSON.parse(await verdict($, `${REPO} 412`)).state).toBe('no-deploy')
+  await card($, CARD)
+  expect(JSON.parse(await verdict($, `${REPO} 412`)).state).toBe('live')
+})
+
+test('a PR with no card, in this repository or another, has no verdict rather than a guess', withReader, async ($, on) => {
+  world(on)
+  expect(await verdict($, `${REPO} 412`)).toBe('null')
+  await card($, CARD)
+  expect(await verdict($, `${REPO} 413`)).toBe('null')
+  expect(await verdict($, 'danwright32/other 412')).toBe('null')
+})
+
+test('a card GitHub refused (not merged) leaves no verdict', withReader, async ($, on) => {
+  world(on, { pr: { exitCode: 0, stdout: JSON.stringify({ state: 'OPEN', title: 't', url: 'u' }) } })
+  await card($, CARD)
+  expect(await verdict($, `${REPO} 412`)).toBe('null')
+})
+
+test('a malformed question is refused loudly, never answered as no card', withReader, async ($, on) => {
+  world(on)
+  expect(await verdict($, 'not-a-repo 412')).toMatch(/^threw: .*owner\/name/)
+  expect(await verdict($, `${REPO} zero`)).toMatch(/^threw: .*pull request number/)
+})

@@ -1,7 +1,7 @@
 import type { Cmd } from './nobuild.ts'
 
-// Winding down (#616). Finished means the PR merged, the project's deploy step run and verified live,
-// the worktree and branch cleaned, and the issue closed. Until then the turn end is refused. Fixing
+// Winding down (#616). Finished means the PR merged, the is it live mod's card for it saying Live
+// or no deploy step recorded (#687), the worktree and branch cleaned, and the issue closed. Until then the turn end is refused. Fixing
 // what blocks this issue's merge or deploy is allowed; starting new work is denied.
 
 export type Refusal = { what: string }
@@ -17,9 +17,26 @@ export type Reading = {
   branchHere: boolean | Unreadable
   branchOnGitHub: boolean | Unreadable
   worktreeOnBranch: boolean | Unreadable
-  /** How Claude confirmed the deploy live (or that the project has no deploy step); null until it has. */
-  live: string | null
+  /**
+   * The deploy as the is it live mod's newest card for this PR says (#687): its state; null when no
+   * card has been made yet; unmeasured when the mod is not loaded. Never Claude's own report.
+   */
+  deploy: { state: DeployState } | null | Unmeasured | Unreadable
   dirty: boolean | Unreadable
+}
+
+/** A card's state, as is it live keeps it (its contract's IsItLiveCard['state']). */
+export type DeployState = 'live' | 'deploying' | 'unconfirmed' | 'no-deploy'
+type Unmeasured = { unmeasured: string }
+const isUnmeasured = (v: unknown): v is Unmeasured => !!v && typeof v === 'object' && 'unmeasured' in v
+
+// What each card state leaves to do. A Record over the type, so a state added without a decision
+// fails to type check (L113). Only Live and no deploy step recorded finish winding down.
+const DEPLOY_LEFT: Record<DeployState, string | undefined> = {
+  live: undefined,
+  'no-deploy': undefined,
+  deploying: 'the deploy is still running (is it live says Merged, deploying)',
+  unconfirmed: 'is it live could not confirm the deploy live: find out why, and make the card again once it is',
 }
 
 /** What is still to do before winding down is finished, in the order it is done; empty when finished. */
@@ -38,7 +55,15 @@ export const outstanding = (r: Reading): string[] => {
   }
   if (r.pr.state === 'OPEN') return [`PR #${r.pr.number} is not merged yet`]
   if (r.pr.state === 'CLOSED') return [`PR #${r.pr.number} was closed without merging; ask Dan what to do`]
-  if (!r.live) out.push('the deploy has not been confirmed live')
+  const d = r.deploy
+  if (d === null) out.push(`PR #${r.pr.number} has no is it live card yet: check the deploy and make the card (mcp__is-it-live__card)`)
+  else if (isUnmeasured(d)) out.push(`the deploy is unmeasured: ${d.unmeasured}`)
+  else if (isUnreadable(d)) unread('the deploy verdict', d)
+  else {
+    // A state outside the four is a contract the mods disagree on: never read as finished (L42).
+    const left = Object.prototype.hasOwnProperty.call(DEPLOY_LEFT, d.state) ? DEPLOY_LEFT[d.state] : `is it live answered a state wind down does not know (${String(d.state)})`
+    if (left) out.push(left)
+  }
   const checks: [string, boolean | Unreadable, string][] = [
     [`whether ${r.branch} is gone here`, r.branchHere, `the branch ${r.branch} still exists here`],
     [`whether ${r.branch} is gone from GitHub`, r.branchOnGitHub, `the branch ${r.branch} still exists on GitHub`],

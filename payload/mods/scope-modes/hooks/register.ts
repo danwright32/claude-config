@@ -3,7 +3,7 @@ import type { ScopeModes, ScopeModesHeld, ScopeModesPlace, ScopeModesScope, Scop
 import { heldCard, needsTheMac } from './away.ts'
 import { noBuildRefusal, type Cmd } from './nobuild.ts'
 import { isDans, triggersIn, type Trigger } from './triggers.ts'
-import { issuesOfBranch, newWork, outstanding, type Reading } from './winddown.ts'
+import { issuesOfBranch, newWork, outstanding, type DeployState, type Reading } from './winddown.ts'
 
 // Scope modes (#616) and away and home (#621), one mod because they share one state: the status
 // bar holds ONE list of modes for the band's amber line (no build or winding down, and away, can be
@@ -28,7 +28,6 @@ const placeRef = { plugin: 'scope-modes', key: 'place' } as const
 const heldRef = { plugin: 'scope-modes', key: 'held' } as const
 const heldSeqRef = { plugin: 'scope-modes', key: 'heldSeq' } as const
 const targetRef = { plugin: 'scope-modes', key: 'target' } as const
-const liveRef = { plugin: 'scope-modes', key: 'live' } as const
 const justHomeRef = { plugin: 'scope-modes', key: 'justHome' } as const
 
 // Where the last prompt came from, so the turn it started knows whether Dan wrote it on his phone.
@@ -114,19 +113,40 @@ const readTarget = async ($: EngineInterface): Promise<TargetRead> => {
   return { root: repo.root, branch, isDefault, issues: issuesOfBranch(branch), pr: null }
 }
 
-type PrJson = { number?: number; state?: string; closingIssuesReferences?: { number?: number }[] }
+type PrJson = { number?: number; state?: string; url?: string; closingIssuesReferences?: { number?: number }[] }
+
+type IsItLiveNoun = { verdict: (q: { repo: string; pr: number }) => Promise<{ state: DeployState } | null> }
+
+// The deploy as is it live's card for this PR says (#687), never Claude's word. The repository is
+// the one GitHub's own link for the PR names. An absent mod is unmeasured, never live; a read that
+// throws (a withheld noun, a state that cannot be read) is said as unreadable.
+const readDeploy = async ($: EngineInterface, pr: { number: number; url?: string }): Promise<Reading['deploy']> => {
+  const repo = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+/.exec(pr.url ?? '')?.[1]
+  if (!repo) return { unreadable: `GitHub gave no link for PR #${pr.number}` }
+  try {
+    const v = await ($ as unknown as { isItLive: IsItLiveNoun }).isItLive.verdict({ repo, pr: pr.number })
+    return v ? { state: v.state } : null
+  } catch (err) {
+    // A noun of $ may only be spelled at its call site (the engine refuses `in $` or reading
+    // $.isItLive as a value), so absence is told by the call: a missing noun is a TypeError from
+    // reading .verdict off undefined, while whatever the noun itself throws reaches here wrapped as
+    // the engine's HooksError (measured in the tests). Either way it is never live.
+    if (err instanceof TypeError) return { unmeasured: 'the is it live mod is not loaded' }
+    return { unreadable: msg(err) }
+  }
+}
 
 const readWind = async ($: EngineInterface, t: ScopeModesTarget): Promise<Reading> => {
-  const live = (await $.state.get(liveRef)).value ?? null
-  const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, live, dirty: false }
+  const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: false }
+  let prUrl: string | undefined
   const gh = async (args: string[]) => {
     const out = await $.process.run(['gh', ...args], { timeoutMs: RUN_MS, cwd: t.root }).catch(err => ({ exitCode: -1, stdout: '', stderr: msg(err) }))
     return out
   }
   if (t.branch) {
     const found = t.pr
-      ? await gh(['pr', 'view', String(t.pr), '--json', 'number,state,closingIssuesReferences'])
-      : await gh(['pr', 'list', '--head', t.branch, '--state', 'all', '--limit', '1', '--json', 'number,state,closingIssuesReferences'])
+      ? await gh(['pr', 'view', String(t.pr), '--json', 'number,state,url,closingIssuesReferences'])
+      : await gh(['pr', 'list', '--head', t.branch, '--state', 'all', '--limit', '1', '--json', 'number,state,url,closingIssuesReferences'])
     if (found.exitCode !== 0) return { ...r, pr: { unreadable: found.stderr.trim() || `gh exited ${found.exitCode}` } }
     let pr: PrJson | undefined
     try {
@@ -147,10 +167,12 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget): Promise<Readin
         issues.push({ number: ref.number, state: s === 'CLOSED' ? 'CLOSED' : 'OPEN' })
       }
       r.pr = { number: pr.number, state, issues }
+      prUrl = typeof pr.url === 'string' ? pr.url : undefined
     }
   }
-  // Cleanup is read only once the PR is merged, so an open PR costs one gh call a check.
+  // The deploy and the cleanup are read only once the PR is merged, so an open PR costs one gh call a check.
   if (r.pr && !('unreadable' in r.pr) && r.pr.state === 'MERGED') {
+    r.deploy = await readDeploy($, { number: r.pr.number, url: prUrl })
     const here = await run($, ['git', '-C', t.root, 'branch', '--list', t.branch])
     r.branchHere = here.exitCode === 0 ? here.stdout.trim() !== '' : { unreadable: here.stderr.trim() }
     // ls-remote --exit-code answers 2 when no such branch, and anything else nonzero is a failed read.
@@ -196,14 +218,12 @@ const check = ($: EngineInterface): Promise<string[] | null> => {
 const finish = async ($: EngineInterface) => {
   await $.state.set(scopeRef, null)
   await $.state.set(targetRef, null)
-  await $.state.set(liveRef, null)
   await showModes($)
   $.ui.toast('Wind down finished: safe to close this session.')
 }
 
 const setScope = async ($: EngineInterface, scope: ScopeModesScope | null) => {
   await $.state.set(scopeRef, scope)
-  await $.state.set(liveRef, null)
   await $.state.set(targetRef, scope === 'WINDING DOWN' ? await readTarget($) : null)
   await showModes($)
 }
@@ -263,7 +283,7 @@ const placeSentence = (place: ScopeModesPlace, t: Told) => {
 const SCOPE_NOTE: Record<ScopeModesScope, string> = {
   'NO BUILD': 'No build is on: read, research, run tests and checks, write scratchpad notes and do GitHub issue, milestone and label work. No edits outside the scratchpad, commits, branches, PRs, deploys or data changes.',
   'WINDING DOWN':
-    "Winding down is on: finish this issue (PR merged, deploy verified live, worktree and branch cleaned, issue closed) and start nothing new. Fix only what blocks this issue's merge or deploy; file anything else. Once the deploy is verified live, or the project has no deploy step, call mcp__scope-modes__winddown_live saying how you checked.",
+    "Winding down is on: finish this issue (PR merged, deploy live, worktree and branch cleaned, issue closed) and start nothing new. Fix only what blocks this issue's merge or deploy; file anything else. After the merge, check the deploy and make the is it live card (mcp__is-it-live__card): winding down finishes only once that card says Live or no deploy step recorded.",
 }
 const AWAY_NOTE =
   'Dan is away from the Mac. Deliver results as a private claude.ai page he can read on his phone (the Artifact tool). Open nothing on the Mac and take no focus: anything that needs him at the Mac is held for when he is back.'
@@ -302,11 +322,6 @@ export const register: Register = on => {
       description:
         'While no build is on, ask Dan whether to switch to build. Name the change you would make. Only his yes turns no build off; call it once after a no build refusal, never again for the same change after a no.',
       inputSchema: { type: 'object', properties: { change: { type: 'string', description: 'What you would change, as a short phrase ("edit app.ts to fix the date parse")' } }, required: ['change'] },
-    })
-    await $.tool.register({
-      name: 'winddown_live',
-      description: "While winding down, record that this issue's deploy is verified live (or that the project has no deploy step), saying how you checked.",
-      inputSchema: { type: 'object', properties: { how: { type: 'string', description: 'How the deploy was verified live, or why there is none' } }, required: ['how'] },
     })
     if (!ticking) {
       ticking = true
@@ -422,13 +437,6 @@ export const register: Register = on => {
       const text = `Dan said no: no build stays on.${answer !== 'No' ? ` He wrote: ${answer}` : ''}`
       return { result: text, text }
     }
-    if (tool === 'mcp__scope-modes__winddown_live') {
-      if ((await scopeOf($)) !== 'WINDING DOWN') return { result: 'Winding down is not on.', text: 'Winding down is not on.' }
-      const how = String(input.how ?? '').trim()
-      if (!how) return { result: 'Say how the deploy was verified live.', text: 'Say how the deploy was verified live.' }
-      await $.state.set(liveRef, how)
-      return { result: 'Recorded: the deploy is live.', text: 'Recorded: the deploy is live.' }
-    }
 
     const scope = await scopeOf($)
     const away = (await placeOf($)) === 'away'
@@ -504,7 +512,6 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     await $.state.set(scopeRef, null)
     await $.state.set(targetRef, null)
-    await $.state.set(liveRef, null)
     await $.state.set(placeRef, 'home')
     await $.state.set(justHomeRef, false)
     await $.state.set(heldRef, [] as ScopeModesHeld[])

@@ -84,7 +84,28 @@ const deps: { name: string; register: Register } = {
     })
   },
 }
-const withDeps = { plugins: [deps] }
+// is it live's verdict, standing in as its own plugin so a test can leave it out: asked of the
+// world as a process.run (__verdict).
+const isItLive: { name: string; register: Register } = {
+  name: 'is-it-live',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return {
+        ...built,
+        isItLive: {
+          verdict: async ({ repo, pr }: { repo: string; pr: number }) => {
+            const r = await built.process.run(['__verdict', repo, String(pr)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return JSON.parse(r.stdout)
+          },
+        },
+      } as never
+    })
+  },
+}
+const withDeps = { plugins: [deps, isItLive] }
+const withoutIsItLive = { plugins: [deps] }
 
 const MIN = 60_000
 const T0 = 1_000_000
@@ -93,8 +114,10 @@ const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 
 type Session = { sessionId: string }
-type Gh = { pr: { number: number; state: string; closingIssuesReferences: { number: number }[] } | null; issues: Record<number, string>; fails?: string }
+type Gh = { pr: { number: number; state: string; url?: string; closingIssuesReferences: { number: number }[] } | null; issues: Record<number, string>; fails?: string }
 type Opts = {
+  /** is it live's verdict for the PR asked about: a card's state, no card, or a read that throws. */
+  verdict?: { state: string; at: number } | null | { throws: string }
   open?: Session[]
   unreadable?: string[]
   sends?: (true | { refused: string })[]
@@ -123,6 +146,7 @@ const world = (on: On, o: Opts = {}) => {
     prompts: [] as string[],
     runs: [] as string[][],
     asked: [] as string[],
+    tools: [] as string[],
   }
   const clock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/Users/x' })
@@ -133,6 +157,10 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === '__sessions') {
       if (o.unreadable?.includes('*')) return fail(1, 'the sessions folder could not be read')
       return ok(JSON.stringify({ open: [{ sessionId: 's1' }, ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 's1' }))
+    }
+    if (cmd === '__verdict') {
+      const v = o.verdict ?? null
+      return v && 'throws' in v ? fail(1, v.throws) : ok(JSON.stringify(v))
     }
     if (cmd === 'git' && a.includes('--show-current') && o.branch === '__fails') return fail(128, 'fatal: not a git repository')
     if (cmd === 'git' && a.includes('--show-current')) return ok(`${o.branch ?? 'scope-modes-616'}\n`)
@@ -157,7 +185,10 @@ const world = (on: On, o: Opts = {}) => {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('command.register', () => ({ value: undefined }) as never)
-  on('tool.register', () => ({ value: undefined }) as never)
+  on('tool.register', ($, e) => {
+    w.tools.push(String((e as { name?: string }).name))
+    return { value: undefined } as never
+  })
   let sends = 0
   on('session.send', ($, e) => {
     w.sent.push({ to: e.to, text: e.text })
@@ -302,7 +333,7 @@ test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts 
   expect(lastModes(w)).toEqual([])
 })
 
-const merged = (state = 'MERGED') => ({ pr: { number: 12, state, closingIssuesReferences: [{ number: 616 }] }, issues: { 616: state === 'MERGED' ? 'CLOSED' : 'OPEN' } })
+const merged = (state = 'MERGED') => ({ pr: { number: 12, state, url: 'https://github.com/o/r/pull/12', closingIssuesReferences: [{ number: 616 }] }, issues: { 616: state === 'MERGED' ? 'CLOSED' : 'OPEN' } })
 
 test('winding down refuses the turn end until merged, live and cleaned, then ends itself with a safe to close toast (injected clock)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { gh: merged('OPEN') })
@@ -314,10 +345,12 @@ test('winding down refuses the turn end until merged, live and cleaned, then end
 
   w.o.gh = merged()
   const second = await stop($ as never)
-  expect(second.block).toMatch(/the deploy has not been confirmed live; the branch scope-modes-616 still exists here; the branch scope-modes-616 still exists on GitHub/)
+  expect(second.block).toMatch(
+    /PR #12 has no is it live card yet: check the deploy and make the card \(mcp__is-it-live__card\); the branch scope-modes-616 still exists here; the branch scope-modes-616 still exists on GitHub/,
+  )
 
-  const live = await call($ as never, { tool: 'mcp__scope-modes__winddown_live', how: 'opened the live page and saw the new footer', tool_use_id: 'l1' } as never)
-  expect(live).toMatch(/Recorded/)
+  // The card says Live: is it live's verdict, never Claude's word, is what counts (#687).
+  w.o.verdict = { state: 'live', at: T0 }
   w.o.branchHere = false
   w.o.branchOnGitHub = false
   // Nothing finishes it between checks but the clock: the next minute's check does.
@@ -326,6 +359,56 @@ test('winding down refuses the turn end until merged, live and cleaned, then end
   expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
   expect(lastModes(w)).toEqual([])
   expect((await stop($ as never)).block).toBeUndefined()
+  // The verdict asked for is this PR's, in the repository GitHub's own link for it names.
+  expect(w.runs.filter(r => r[0] === '__verdict')[0]).toEqual(['__verdict', 'o/r', '12'])
+})
+
+const cleaned = { gh: merged(), branchHere: false, branchOnGitHub: false }
+
+test("deploying, or could not confirm live, keeps the turn end refused with that reason; no deploy step recorded finishes it", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, verdict: { state: 'deploying', at: T0 } })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the deploy is still running \(is it live says Merged, deploying\)\./)
+  w.o.verdict = { state: 'unconfirmed', at: T0 }
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: is it live could not confirm the deploy live: find out why, and make the card again once it is\./)
+  await clock.advance(5 * MIN)
+  expect(w.toasts).toEqual([])
+  w.o.verdict = { state: 'no-deploy', at: T0 }
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+})
+
+test('without the is it live mod the deploy is unmeasured, never live: the turn end stays refused', withoutIsItLive, async ($, on) => {
+  const { w, clock } = world(on, cleaned)
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the deploy is unmeasured: the is it live mod is not loaded\./)
+  await clock.advance(5 * MIN)
+  expect(w.toasts).toEqual([])
+  expect(lastModes(w)).toEqual(['WINDING DOWN'])
+})
+
+test('a verdict that cannot be read, or a PR GitHub gave no link for, is said and never counts as live', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, verdict: { throws: 'the session state could not be read' } })
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/the deploy verdict could not be read \(the session state could not be read\)/)
+  w.o.verdict = { state: 'live', at: T0 }
+  w.o.gh = { ...merged(), pr: { number: 12, state: 'MERGED', closingIssuesReferences: [{ number: 616 }] } }
+  expect((await stop($ as never)).block).toMatch(/the deploy verdict could not be read \(GitHub gave no link for PR #12\)/)
+  expect(w.toasts).toEqual([])
+})
+
+test("Claude's own report is retired: no winddown_live tool, and calling it records nothing", withDeps, async ($, on) => {
+  const { w, clock } = world(on, cleaned)
+  await start($ as never, clock)
+  expect(w.tools).toContain('switch_to_build')
+  expect(w.tools).not.toContain('winddown_live')
+  await command($ as never, 'winddown')
+  await call($ as never, { tool: 'mcp__scope-modes__winddown_live', how: 'I checked, trust me', tool_use_id: 'l1' } as never)
+  expect((await stop($ as never)).block).toMatch(/PR #12 has no is it live card yet/)
+  expect(w.toasts).toEqual([])
 })
 
 test('a finish check that cannot read GitHub never counts as finished', withDeps, async ($, on) => {
@@ -502,7 +585,7 @@ const holder: { name: string; register: Register } = {
   },
 }
 
-test('another mod holds its own item while away, and is told nothing was held at home', { plugins: [deps, holder] }, async ($, on) => {
+test('another mod holds its own item while away, and is told nothing was held at home', { plugins: [deps, isItLive, holder] }, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
   const holdIt = () => call($ as never, { tool: 'HoldIt', tool_use_id: 'h' } as never)

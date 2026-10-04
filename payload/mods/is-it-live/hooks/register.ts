@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import type { IsItLiveCard } from '../types/index.d.ts'
+import type { IsItLive, IsItLiveCard } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, liveList, messageRow, reasonToRefuse, stateOf, titleOf } from './card.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
@@ -15,6 +15,13 @@ import { type CardInput, MOD, buttonId, cardOf, cardText, liveList, messageRow, 
 const TOOL = `mcp__${MOD}__card`
 const KEEP = 50
 const storeKey = (repo: string) => `cards:${repo}`
+
+// The verdicts other mods read (#687), in $.state: a state ref names its plugin, while $.store is
+// "this plugin's own" with no plugin named, so which store a read made from scope-modes' hook
+// reaches is not stated anywhere (and a test's mocked store cannot tell). A card made in another
+// session is therefore no verdict here, and wind down asks for the card again rather than guess.
+const verdictsRef = { plugin: 'is-it-live', key: 'verdicts' } as const
+const verdictKey = (repo: string, pr: number) => `${repo}#${pr}`
 
 const run = async ($: EngineInterface, argv: string[]) => {
   try {
@@ -71,6 +78,21 @@ const SCHEMA = {
 }
 
 export const register: Register = on => {
+  // Wind down (scope-modes, #687) finishes only on what the card says, never on Claude's report.
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    const isItLive: IsItLive = {
+      verdict: async ({ repo, pr }) => {
+        if (typeof repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error(`is-it-live: repo must be owner/name, not ${JSON.stringify(repo)}`)
+        if (!Number.isInteger(pr) || pr <= 0) throw new Error(`is-it-live: pr must be the pull request number, not ${JSON.stringify(pr)}`)
+        const all = (await built.state.get(verdictsRef)).value ?? {}
+        const key = verdictKey(repo, pr)
+        return Object.prototype.hasOwnProperty.call(all, key) ? (all[key] ?? null) : null
+      },
+    }
+    return { ...built, isItLive }
+  })
+
   on('session.start', async ($, e, next) => {
     await $.tool.register({ name: 'card', description: DESCRIPTION, inputSchema: SCHEMA })
     await $.command.register({ name: 'live', description: "This project's recent change cards, and the messages not yet sent." })
@@ -128,6 +150,8 @@ export const register: Register = on => {
       if (before?.sentAt !== undefined && before.message === message) kept.sentAt = before.sentAt
     }
     await $.store.set(storeKey(input.repo), [kept, ...had.filter(c => c.pr !== input.pr)].slice(0, KEEP))
+    const verdicts = (await $.state.get(verdictsRef)).value ?? {}
+    await $.state.set(verdictsRef, { ...verdicts, [verdictKey(input.repo, input.pr)]: { state, at: now } })
     // Taken out of the band when the new card carries no message for it.
     if (!kept.message) await $.modkit.clearBandRow({ mod: MOD, id: buttonId(input.repo, input.pr) }).catch(() => undefined)
     const unpinned = await pin($, kept)
