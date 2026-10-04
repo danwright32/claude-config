@@ -1,0 +1,18 @@
+{
+  "round": "Shape of the account room card",
+  "question": "Shape of the account room card?",
+  "options": [
+    {
+      "label": "Boxed",
+      "description": "The three lines inside a rounded box, so they read as one thing to deal with. 5 lines with the border."
+    },
+    {
+      "label": "Ruled",
+      "description": "A rule down the left edge groups the lines without closing them in. 3 lines."
+    },
+    {
+      "label": "Bare",
+      "description": "No edge at all, so the amber lead alone says where the card starts. 3 lines."
+    }
+  ]
+}

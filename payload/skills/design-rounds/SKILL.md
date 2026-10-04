@@ -124,6 +124,51 @@ one. It has to be an iframe rather than a scaled div, because a media query insi
 scaled div answers to the outer window and reports the wrong width, which is precisely the
 variable a round about width is testing.
 
+## Rounds about a Claude Code mod: the shared terminal
+
+Every mod round on 2026-10-04 drew the same fake terminal by hand (title bar, transcript,
+the band above the prompt, the prompt box, the grey status line), each with its own copy
+of the helpers and stylesheet. Copies drift, and two rounds whose terminals differ have a
+second variable nobody chose. So the terminal ships with the tool, dark only because Dan
+never uses a light terminal. Ask for it in the spec and draw only what varies:
+
+```json
+{ "builder": "builder.js", "screen": "terminal", "variants": [ ... ] }
+```
+
+```js
+function buildScreen(variant) {
+  var T = Terminal;
+  return T.screen({
+    title: "claude-config",
+    transcript: [T.user("keep going on the batch"), "Merging #653 once its checks pass."],
+    band: [T.card(variant.card, [
+      [T.amber("Work has more room"), "  ", T.button("Switch"), " ", T.button("Dismiss")],
+      [T.dim("Use in claude.ai is not counted.")]
+    ])],
+    status: ["claude-config", "5h 64%", "week 91%"]
+  });
+}
+```
+
+| Call | Draws |
+| --- | --- |
+| `T.screen({...})` | The window. Options: `title`, `transcript`, `band`, `prompt` (typed text, or `false` for none), `footer`, `status` (segments joined by a grey dot, or `false`), `width` (820), `height` (330, a minimum, so a tall band grows the window rather than being cut off), `fontSize` (13) |
+| A row | Text, a list of pieces, or anything below. `transcript`, `band` and a card each take a list of rows |
+| `T.amber` `T.grey` `T.red` `T.violet` `T.bold` `T.dim` `T.white` | A run of text in that style; `T.run(text, "amber", "bold")` combines them |
+| `T.button("Switch")` | `[ Switch ]`, bold white; `{disabled: true}` greys it |
+| `T.user("words")` | A line of what the person typed, with its `>` |
+| `T.card("box" or "rule" or "none", rows, {edge: "amber"})` | Rows boxed, ruled down the left edge, or grouped plain |
+| `T.divider("violet")` | A rule across the band |
+| `T.line(pieces, "dim")` | One line, optionally styled as a whole |
+
+A misspelt style, card, edge or option throws, and the page's own strip quotes it. The
+library owns one name, `Terminal`, and classes prefixed `term-`, so a builder's own `el`
+and `.line` cannot collide with it; a round whose variable IS part of the terminal's look
+overrides a `term-` rule in its own stylesheet, which comes after. The tool refuses a
+screen it does not ship, a builder declaring `Terminal` itself, and a builder using
+`Terminal` from a spec that did not ask for it. `example-terminal/` is a working round.
+
 ## The deliverable
 
 The settled design is ONE self contained file committed in the repo: no build step, no
@@ -148,7 +193,8 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
 3. Stacking the options down one page instead of swapping them under one frame.
 4. Opening with colour.
 5. Rewriting the switcher by hand each round, which is how the working keyboard
-   shortcuts were lost between one round and the next.
+   shortcuts were lost between one round and the next. The same goes for the terminal in
+   a mod round: ask for `"screen": "terminal"` rather than drawing another copy.
 6. Committing the chooser as though it were the design.
 7. Building the switcher and then asking for the pick in prose, which turns a one
    keystroke comparison back into a message he has to write.

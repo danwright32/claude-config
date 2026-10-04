@@ -1,0 +1,13 @@
+{
+  "title": "Demo, the account room band",
+  "round": "Shape of the account room card",
+  "asks": "When this account nears its limit, the band names the account with more room. Only the card's shape changes between options.",
+  "measurement": "Same words, colours and buttons in all three. Dark terminal, laptop width.",
+  "builder": "builder.js",
+  "screen": "terminal",
+  "variants": [
+    {"key": "1", "name": "Boxed", "why": "The three lines inside a rounded box, so they read as one thing to deal with.", "measured": "5 lines with the border.", "card": "box"},
+    {"key": "2", "name": "Ruled", "why": "A rule down the left edge groups the lines without closing them in.", "measured": "3 lines.", "card": "rule"},
+    {"key": "3", "name": "Bare", "why": "No edge at all, so the amber lead alone says where the card starts.", "measured": "3 lines.", "card": "none"}
+  ]
+}

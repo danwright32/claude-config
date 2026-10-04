@@ -21,6 +21,7 @@ The spec, with paths resolved against the spec file's own directory:
       "measurement": "72 checks, worst 4.83",     what was measured (optional)
       "builder":     "builder.js",                defines buildScreen(variant)
       "styles":      "screen.css",                optional, inlined
+      "screen":      "terminal",                  optional, a shared screen from screens/
       "variants": [
         {"key": "1", "name": "Espresso",
          "why": "what this option is testing",
@@ -32,6 +33,12 @@ buildScreen(variant) receives the whole variant object and returns one element:
 the entire screen, chrome included. Every option goes through that one function
 with one field changed between them, which is what makes "everything else held
 byte identical" structural rather than a promise.
+
+A "screen" puts one of the shared screens that ship beside this script, in screens/,
+on the page ahead of the round's own builder and stylesheet. "terminal" is the dark
+Claude Code terminal (title bar, transcript, the band above the prompt, the prompt
+and the status line), so a round about a mod draws only the part being judged. Its
+API is described at the top of screens/terminal.js.
 
 Beside the page it writes <out>.picker.json, the options for the picker the round
 closes with: one per tab, in the same order, labelled as the tab is and described
@@ -46,6 +53,10 @@ import re
 import sys
 
 KEY = re.compile(r"^[0-9a-z]$")
+
+SCREENS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screens")
+
+TOP_LEVEL = re.compile(r"^(?:var|let|const|function|class)\s+([A-Za-z_$][\w$]*)", re.M)
 
 
 def fail(message):
@@ -345,6 +356,91 @@ def chrome_ids(page):
 CHROME_IDS = chrome_ids(PAGE)
 
 
+def top_level_names(source):
+    """The names a script declares at column 0, which is where a top level declaration sits
+    in every builder and screen this tool has met. A text match, not a parse."""
+    return sorted(set(TOP_LEVEL.findall(source)))
+
+
+def code_only(source):
+    """The script with its comments and its quoted strings blanked out. Approximate (a
+    regular expression literal holding a quote can fool it), which is enough to tell a
+    reference to a name from a sentence that happens to contain it."""
+    pattern = re.compile(r"""//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`""",
+                         re.S)
+    return pattern.sub(" ", source)
+
+
+def available_screens():
+    """The shared screens that ship beside this script: a name with both a .js and a .css
+    in screens/. Read from the directory rather than listed, so a screen added there is
+    offered, and named in the refusal below, without anybody editing a second list (L41)."""
+    if not os.path.isdir(SCREENS_DIR):
+        return []
+    names = set()
+    for entry in os.listdir(SCREENS_DIR):
+        stem, ext = os.path.splitext(entry)
+        if ext == ".js" and os.path.isfile(os.path.join(SCREENS_DIR, stem + ".css")):
+            names.add(stem)
+    return sorted(names)
+
+
+def screen_global(name, source):
+    """The ONE name a shared screen puts at the page's top level. A screen declaring more,
+    or none, is a fault in the screen rather than in the round, so it is refused as such."""
+    names = top_level_names(source)
+    if len(names) != 1:
+        fail("the shared screen %s declares %s at the top level, and a screen must declare "
+             "exactly one name so a builder's own top level names cannot replace its parts"
+             % (name, ", ".join(names) if names else "nothing"))
+    return names[0]
+
+
+def load_screen(spec, builder, builder_name):
+    """The shared screen's script and stylesheet, or two empty strings for a round with none.
+
+    Three refusals, each one a page that would otherwise throw at load, where the switcher
+    can say only that the builder threw: a screen that does not exist, a builder declaring
+    the screen's own name (which replaces it for the whole page), and a builder calling a
+    screen its spec never asked for."""
+    asked = spec.get("screen")
+    if asked is not None and not isinstance(asked, str):
+        fail('"screen" names one shared screen, as text, and this spec gives %s'
+             % json.dumps(asked))
+    asked = (asked or "").strip()
+    screens = available_screens()
+    # First, so a misspelt screen is reported as that rather than as a builder using a screen
+    # its spec never asked for, which would send somebody to add a field they already wrote.
+    if asked and asked not in screens:
+        fail('the spec asks for the screen "%s", and the screens that ship with this tool are: %s'
+             % (asked, ", ".join(screens) if screens else "none"))
+
+    code = code_only(builder)
+    for name in screens:
+        if name == asked:
+            continue
+        other = screen_global(name, read_file(os.path.join(SCREENS_DIR, name + ".js"), "screen script"))
+        # Any mention in the CODE, not only Terminal.screen: every round so far wrote
+        # var T = Terminal. Strings and comments are left out, so copy reading "Terminal.app"
+        # is not mistaken for a call.
+        if re.search(r"(?<![\w$])%s(?![\w$])" % re.escape(other), code):
+            fail('the builder %s calls %s, which is the %s screen, and the spec does not ask for '
+                 'it. Add "screen": "%s" to the spec so it is on the page.'
+                 % (builder_name, other, name, name))
+
+    if not asked:
+        return "", ""
+    script = read_file(os.path.join(SCREENS_DIR, asked + ".js"), "screen script")
+    styles = read_file(os.path.join(SCREENS_DIR, asked + ".css"), "screen stylesheet")
+    owned = screen_global(asked, script)
+    if owned in top_level_names(builder):
+        fail("the builder %s declares %s at its top level, which is the name the %s screen "
+             "ships under, so it would replace the screen for the whole page. Call it by "
+             "another name. This is a text match on declarations at the start of a line."
+             % (builder_name, owned, asked))
+    return script, styles
+
+
 def escape_text(value):
     return (str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
@@ -421,10 +517,19 @@ def main(argv):
              "caught here and will simply find nothing when the page opens."
              % (builder_name, ", ".join(reached), reached[0]))
 
+    screen_script, screen_styles = load_screen(spec, builder, builder_name)
+
     styles = ""
     styles_name = str(spec.get("styles", "")).strip()
     if styles_name:
         styles = read_file(os.path.join(base, styles_name), "styles")
+
+    # The shared screen goes FIRST in both blocks: its script so the builder can call it the
+    # moment the builder runs, its stylesheet so the round's own rules win wherever a round
+    # is varying part of the screen's look.
+    if screen_script:
+        builder = screen_script + "\n" + builder
+        styles = screen_styles + "\n" + styles
 
     asks = str(spec.get("asks", "")).strip()
     measurement = str(spec.get("measurement", "")).strip()
