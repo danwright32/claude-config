@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { latestRequest, othersEditing, othersInRepo, parseVerdict, watchedGit } from '../hooks/collide.ts'
+import { latestRequest, othersEditing, othersInRepo, parseVerdict, shellWrites, watchedGit } from '../hooks/collide.ts'
 
 const rec = (id: string, over: Partial<{ repoRoot: string | null; edits: string[] }> = {}) => ({
   v: 1 as const,
@@ -95,5 +95,63 @@ describe("the other session's latest request, from its transcript", () => {
   })
   test('nothing typed reads as nothing', () => {
     expect(latestRequest('')).toBeUndefined()
+  })
+})
+
+// #654: the files a shell command writes, read from the words mod-kit's command reader gives. A
+// test cannot import another mod, so each case is written as the words the reader returns for it,
+// which mod-kit's own tests pin (tests/commands.test.ts, "an output redirect is its own word").
+describe('the files a shell command writes', () => {
+  const writes = (cmds: string[][], cwd = '/repo') => shellWrites(cmds, cwd, '/Users/dan')
+  const paths = (cmds: string[][], cwd = '/repo') => writes(cmds, cwd).map(w => w.path)
+
+  test("the live check's printf append (#639): printf 'one more line\\n' >> notes.txt", () => {
+    expect(paths([['printf', 'one more line\\n', '>>', 'notes.txt']])).toEqual(['/repo/notes.txt'])
+  })
+  test('every output redirect, and never a descriptor or /dev/null', () => {
+    expect(paths([['echo', 'a', '>', 'a.txt'], ['make', '2>', 'err.log'], ['ls', '&>', 'all.log'], ['ls', '&>>', 'more.log'], ['echo', '>|', 'c.txt']])).toEqual([
+      '/repo/a.txt',
+      '/repo/err.log',
+      '/repo/all.log',
+      '/repo/more.log',
+      '/repo/c.txt',
+    ])
+    expect(paths([['make', '2>&1', '>', '/dev/null']])).toEqual([])
+  })
+  test('tee, in place sed and perl, and touch', () => {
+    expect(paths([['printf', 'x'], ['tee', '-a', 'log.txt', '/abs/two.txt']])).toEqual(['/repo/log.txt', '/abs/two.txt'])
+    expect(paths([['sed', '-i', '', 's/a/b/', 'src/a.ts', 'src/b.ts']])).toEqual(['/repo/src/a.ts', '/repo/src/b.ts'])
+    expect(paths([['sed', '-i.bak', '-e', 's/a/b/', '-e', 's/c/d/', 'x.txt']])).toEqual(['/repo/x.txt'])
+    expect(paths([['sed', '--in-place', 's/a/b/', 'z.txt']])).toEqual(['/repo/z.txt'])
+    expect(paths([['perl', '-pi', '-e', 's/a/b/', 'y.txt']])).toEqual(['/repo/y.txt'])
+    expect(paths([['perl', '-i.bak', '-pe', 's/a/b/', 'w.txt']])).toEqual(['/repo/w.txt'])
+    expect(paths([['touch', '-t', '202601010000', 'new.md', 'other.md']])).toEqual(['/repo/new.md', '/repo/other.md'])
+  })
+  test('cp writes its destination, mv its destination and its sources', () => {
+    expect(writes([['cp', 'a.txt', 'b.txt']])).toEqual([{ path: '/repo/b.txt', sources: ['/repo/a.txt'] }])
+    expect(paths([['cp', 'a.txt', 'b.txt', 'dir/']])).toEqual(['/repo/dir/a.txt', '/repo/dir/b.txt'])
+    expect(paths([['cp', '-t', 'dest', 'a.txt']])).toEqual(['/repo/dest/a.txt'])
+    expect(paths([['mv', 'old.txt', 'new/']])).toEqual(['/repo/new/old.txt', '/repo/old.txt'])
+  })
+  test('a cd earlier in the command moves where a relative path lands, and ~ is home', () => {
+    expect(paths([['cd', 'sub'], ['echo', 'x', '>>', '../up.txt'], ['echo', 'y', '>', 'here.txt']])).toEqual(['/repo/up.txt', '/repo/sub/here.txt'])
+    expect(paths([['echo', 'x', '>', '~/notes.txt']])).toEqual(['/Users/dan/notes.txt'])
+    // cd - goes back to a folder nothing here knows, so a relative path after it is not named.
+    expect(paths([['cd', '-'], ['echo', 'x', '>', 'rel.txt'], ['echo', 'y', '>', '/abs/a.txt']])).toEqual(['/abs/a.txt'])
+  })
+  test('one file written twice is named once', () => {
+    expect(paths([['echo', 'a', '>', 'n.txt'], ['echo', 'b', '>>', 'n.txt']])).toEqual(['/repo/n.txt'])
+  })
+  test('a read only command writes nothing', () => {
+    expect(paths([['cat', 'notes.txt'], ['grep', 'x'], ['sed', '-n', '1,5p', 'notes.txt'], ['ls', '-la'], ['git', 'diff'], ['perl', '-ne', 'print', 'notes.txt'], ['wc', '<', 'notes.txt']])).toEqual([])
+    // The i in -Ilib is part of the include folder, not -i.
+    expect(paths([['perl', '-Ilib', 'script.pl', 'x.txt']])).toEqual([])
+  })
+  // Decided (docs/mods-design.md, #654): what the reader cannot name is not guessed at.
+  test('a path it cannot name, and a script, write nothing it can see', () => {
+    expect(paths([['echo', 'x', '>', '$OUT'], ['echo', 'y', '>', '*.txt'], ['cd', '$DIR'], ['echo', 'z', '>', 'rel.txt']])).toEqual([])
+    expect(paths([['python3', '-c', "open('notes.txt','a').write('x')"], ['bash', './update.sh']])).toEqual([])
+    // A redirect with nothing after it names no file.
+    expect(paths([['echo', 'x', '>']])).toEqual([])
   })
 })

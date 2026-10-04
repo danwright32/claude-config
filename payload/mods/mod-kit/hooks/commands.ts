@@ -57,6 +57,23 @@ const split = (cmd: string): string[][] => {
     if (c === '"' || c === "'") {
       quote = c
       inWord = true
+    } else if (c === '>' || (c === '&' && cmd[i + 1] === '>')) {
+      // An output redirect is its own word however it is spaced (#654): 2>&1, &>, >>, >| each one
+      // word, a file descriptor number written before it included, so its & joins no two commands.
+      let op = ''
+      if (c === '>' && inWord && /^\d+$/.test(word)) {
+        op = word
+        word = ''
+        inWord = false
+      } else endWord()
+      if (c === '&') op += cmd[i++]
+      op += '>'
+      if (cmd[i + 1] === '>' || cmd[i + 1] === '|') op += cmd[++i]
+      if (!op.startsWith('&') && cmd[i + 1] === '&') {
+        op += cmd[++i]
+        while (/[0-9-]/.test(cmd[i + 1] ?? '')) op += cmd[++i]
+      }
+      words.push(op)
     } else if (c === '\\' && i + 1 < cmd.length) {
       word += cmd[++i]
       inWord = true

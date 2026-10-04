@@ -11,7 +11,7 @@ export type SessionsRecord = {
   closedAt: number | null
   /** Where its transcript is, so its latest request is read from there rather than copied. */
   transcriptPath: string | null
-  /** Files this session has edited, newest last. */
+  /** Files this session has edited, newest last: by the edit tools, or named by a shell command (#654). */
   edits: string[]
   /** What other mods keep about the session (background jobs, task progress), by key. */
   extra: Record<string, unknown>

@@ -304,3 +304,81 @@ test('a transcript with no request in it is told to the judge as such', withDeps
   await $.tool.call(edit('/repo/src/InvoiceTable.tsx'))
   expect(w.prompts[0]?.prompt).toContain('Its latest request: (none in its transcript)')
 })
+
+// #654: in the live check of #639 a session appended to a file with printf, its record kept no
+// edits, and a second session editing that file would not have been judged.
+test("the live check's printf append is noted as this session's edit, unjudged with nobody else on it", withDeps, async ($, on) => {
+  const w = world(on)
+  await $.tool.call(bash(`printf 'one more line\\n' >> notes.txt`))
+  expect(w.reached).toContain('Bash')
+  expect(w.prompts.length).toBe(0)
+  expect(w.edits).toEqual(['/repo/notes.txt'])
+})
+
+test('a shell write to a file another open session edited is judged like an edit, and a Stop blocks it', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: '{"verdict":"Stop","reason":"They are rewriting the notes."}' })
+  const r = await $.tool.call(bash('echo done >> notes.txt', 'sh1'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.prompts[0]?.prompt).toContain('/repo/notes.txt')
+  expect(w.prompts[0]?.prompt).toContain('echo done >> notes.txt')
+  expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are rewriting the notes. Leave it to the other session, or ask Dan.')
+  expect(w.cards[0]?.toolUseId).toBe('sh1')
+  expect(w.sent[0]?.text).toBe('Another session wanted to edit notes.txt while you are working on it, so it was stopped. Nothing here was touched.')
+  // Blocked, so it wrote nothing and is not noted.
+  expect(w.edits).toEqual([])
+})
+
+test('a shell write judged Proceed goes through with the toast and is noted', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })] })
+  await $.tool.call(bash('sed -i "" s/a/b/ notes.txt'))
+  expect(w.reached).toContain('Bash')
+  expect(w.toasts).toContain('Checked with the other session: safe to edit notes.txt.')
+  expect(w.edits).toEqual(['/repo/notes.txt'])
+})
+
+test('a read only command on a file another session edited is neither judged nor noted', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })] })
+  await $.tool.call(bash('cat notes.txt'))
+  expect(w.reached).toContain('Bash')
+  expect(w.prompts.length).toBe(0)
+  expect(w.edits).toEqual([])
+})
+
+// Decided (docs/mods-design.md, #654): a write the command reader cannot see is not guessed at.
+test('a script that writes the file is not seen, so it is neither judged nor noted', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })] })
+  await $.tool.call(bash(`python3 -c "open('notes.txt','a').write('x')"`))
+  expect(w.reached).toContain('Bash')
+  expect(w.prompts.length).toBe(0)
+  expect(w.edits).toEqual([])
+})
+
+test('a cp into a folder writes the file of the same name inside it', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/docs/notes.txt'] })] })
+  on('fs.stat', ($, e) => ({ value: { kind: (e as unknown as { path: string }).path === '/repo/docs' ? 'dir' : 'other', size: 0, mtimeMs: 0, isLink: false } }) as never)
+  await $.tool.call(bash('cp /tmp/notes.txt docs'))
+  expect(w.prompts[0]?.prompt).toContain('/repo/docs/notes.txt')
+  expect(w.edits).toEqual(['/repo/docs/notes.txt'])
+})
+
+test('a cp onto a path that cannot be looked at is taken as that file', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })] })
+  await $.tool.call(bash('cp /tmp/x.txt notes.txt'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.edits).toEqual(['/repo/notes.txt'])
+})
+
+test('a shell write with a record that cannot be read is stopped, as an edit is', withDeps, async ($, on) => {
+  const w = world(on, { unreadable: ['abc.json'] })
+  const r = await $.tool.call(bash('echo x > notes.txt'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toContain("Couldn't read another session's record (abc.json)")
+  expect(w.edits).toEqual([])
+})
+
+test('a shell write the judge cannot answer is stopped (L42)', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: 'no-answer' })
+  const r = await $.tool.call(bash('echo x > notes.txt'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe("Blocked: Couldn't check with the other session's work, so this was stopped. Try again, or ask Dan.")
+})
