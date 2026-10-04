@@ -153,7 +153,9 @@ const attempt = async ($: EngineInterface): Promise<void> => {
     outcome = 'refused'
     detail = errText(err)
   }
-  await update($, cur => (cur ? { ...cur, outcome: 'named', claim: null, pendingTitle: outcome === 'set' ? null : name } : undefined))
+  // Only while this attempt still holds the claim: /rename waits for the session to go idle, and a
+  // newer attempt may have taken over in the meantime.
+  await update($, cur => (cur && mine(cur) ? { ...cur, outcome: 'named', claim: null, pendingTitle: outcome === 'set' ? null : name } : undefined))
   $.ui.log(`${MOD}: /rename answered ${outcome} (${detail}); ${outcome === 'set' ? 'named' : 'will set sessionTitle on the next message'}`, { to: 'debug' })
 }
 

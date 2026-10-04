@@ -8,7 +8,7 @@ const T0 = 1_000 * MIN
 type Msg = { role: 'user' | 'assistant'; text: string; toolUses: never[] }
 type Reply = string | { failed: 'api-error' | 'empty-reply' | 'aborted' } | 'throws'
 type Rename = 'set' | 'refused' | 'refused-for-mod' | 'unknown' | 'throws'
-type Opts = { replies?: Reply[]; rename?: Rename; messages?: Msg[]; messagesThrow?: boolean; holdHaiku?: Promise<void> }
+type Opts = { replies?: Reply[]; rename?: Rename; messages?: Msg[]; messagesThrow?: boolean; holdHaiku?: Promise<void>; holdRename?: Promise<void> }
 
 const exchange = (): Msg[] => [
   { role: 'user', text: 'Build the auto session name mod from issue 635', toolUses: [] },
@@ -41,8 +41,9 @@ const world = (on: On, o: Opts = {}) => {
     if (typeof r === 'string') return { value: { isAnswered: true, text: r, usage: {} } } as never
     return { value: { isAnswered: false, reason: r.failed, status: r.failed === 'api-error' ? 529 : undefined, error: 'overloaded', usage: {} } } as never
   })
-  on('command.run', { command: 'rename' }, ($, e) => {
+  on('command.run', { command: 'rename' }, async ($, e) => {
     w.renames.push({ args: e.args, origin: e.origin })
+    if (o.holdRename && (e.origin as { kind?: string } | undefined)?.kind === 'plugin') await o.holdRename
     const fromMod = (e.origin as { kind?: string } | undefined)?.kind === 'plugin'
     const how = o.rename === 'refused-for-mod' ? (fromMod ? 'refused' : 'set') : (o.rename ?? 'set')
     // A hook that throws is skipped, so nothing answers and $.command.run rejects.
@@ -445,4 +446,29 @@ test('a failure from an attempt that lost its claim changes nothing for the one 
   await w.clock.settle()
   expect(w.logs).toEqual([])
   expect(w.renames.map(r => r.args)).toEqual(['Taken over name'])
+})
+
+// Lessons review of #657: the final write after /rename answers also belongs only to the attempt
+// still holding the claim, since /rename waits for the session to go idle and can outlast it.
+test('an attempt whose claim was taken over during /rename does not overwrite the record', async ($, on) => {
+  const writes: { outcome?: string }[] = []
+  on('state.set', async ($, e, next) => {
+    const r = await next(e)
+    // A hook sees the result in its envelope; only a write that landed counts.
+    if ((r as { value?: { isSet?: boolean } }).value?.isSet) writes.push(e.value as { outcome?: string })
+    return r
+  })
+  let release = () => {}
+  const held = new Promise<void>(r => { release = r })
+  const w = world(on, { holdRename: held, replies: ['Name A', 'Name B'] })
+  await start($)
+  await w.clock.advance(10 * MIN)
+  // The first claim goes stale while its /rename waits, and the next idle point takes over.
+  await w.clock.advance(3 * MIN + 1)
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.renames.map(r => r.args)).toEqual(['Name A', 'Name B'])
+  release()
+  await w.clock.settle()
+  expect(writes.filter(v => v.outcome === 'named').length).toBe(1)
 })
