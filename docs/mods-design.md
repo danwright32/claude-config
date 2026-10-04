@@ -9,7 +9,10 @@ and settles its own surfaces in rounds of its own before it is built.
 1. **Colour only for something Dan has to act on.** A notice Claude handles by itself is neutral
    grey. Settled 2026-10-03 in the guard rounds: asked to colour the blocked card, Dan asked
    whether a block needs anything from him, and on hearing it is a notice Claude works around, he
-   chose grey and made it the rule for every mod.
+   chose grey and made it the rule for every mod. What waits on Dan takes amber: the lead line of a
+   question, a handoff, a steps card or the held while away card (colour round, 2026-10-04, after
+   Dan asked that the steps card not be grey "since it needs my action"). One amber line per
+   surface: heading and next step both amber was too much (steps amber round).
 2. **Plain wording.** A refusal says what was blocked and the safe way, in one or two short
    sentences: "Blocked: this would print GITHUB_TOKEN. Check it without printing: test -n, its
    length, or gh auth status." Settled 2026-10-03, then applied to every refusal and toast of the
@@ -111,6 +114,40 @@ A closed session's record is kept 7 days after it closed, a crashed one 7 days a
 seen, then deleted at session start, never on a read. A damaged record older than 7 days by its
 file's age is deleted too, named in one dim grey line; a newer damaged record still stops guarded
 actions, since it may belong to a live session (pickers).
+
+## The remaining mods' surfaces (#613 to #621), settled 2026-10-04
+
+Each in a rendered design round unless marked picker.
+
+| Mod | Surface | Decision |
+| --- | --- | --- |
+| Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line) |
+| Ask before saving (#618) | The question | The rule's exact text and the file it would go to sit between the question and the three answers, set off by a grey rule (over above the question, and in the chat) |
+| Scope modes (#616), away and home (#621) | NO BUILD, WINDING DOWN, AWAY | Lead the status line, in amber. Dan's own choice over the footer's mode labels and a band row; a deliberate exception to standing rule 1 like the running items, since a mode changes what Claude will do |
+| Handoff (#613) | The band at session start | One line: "Handoff saved 3h ago: Continue milestone 18 design rounds", then Use and Dismiss (over the whole handoff, and the first line plus what it names) |
+| Handoff (#613) | Something it names that changed | Its own amber line under the handoff, one per change: "changed since: #615 closed" (over a list on the same line, and a count) |
+| Manual steps (#614) | Where | As the issue says: a side pane, the band when the terminal is narrow. A pane opened unasked needs 144 columns, so at laptop width it is the band (no round: settled in the spec) |
+| Manual steps (#614) | One step | Only the next step is open: its title and Done, its link, its clicks, any value with Copy. Later steps show their title alone until they are next (over every step open, and two lines per step) |
+| Manual steps (#614) | A finished step | Keeps its line, dimmed and struck through, then how it finished: "already done" grey, "checked" green, "done, per you" grey (over a word alone, and folding them into one count) |
+| Manual steps (#614) | Colour | An amber heading and an amber rule down the card's left edge; the step to do is bold white. The steps card only; the question and handoff keep just an amber lead line (Dan asked for heading and rule together; picker on scope) |
+| Is it live (#617) | The card | Boxed, the blocked card's shape (over a left rule and plain text). No lead-in sentence from Claude: it would repeat the card |
+| Is it live (#617) | Its state | Leads the title: "Live:" green, "Merged, deploying:" grey, "Could not confirm live:" amber (over the right end of the title and a line of its own) |
+| Is it live (#617) | The message for whoever asked | Pinned in the band until Mark sent, with Copy; the card stays in the chat. Its heading, "Message for Kris", is violet: not amber beside the steps card, and not blue, which reads as a link (Dan changed his first pick, a box under the card; two colour rounds) |
+| Simpler (#619) | The button | At the top of the long answer it is about, under Dan's question, drawn into Claude's reply (Dan asked for it there over the band rows). It is clicked: a button in the transcript takes no one-key shortcut, and a very long answer scrolls it off the top |
+| Add-on notes (#620) | The resume line | One dim grey line: "+ add-on: Adding a direct link to the commission and carrying on." It names the addition only (picker on the words, round on the shape) |
+| Away and home (#621) | Coming home | A boxed card in the band, amber heading "Held while you were away", one row per held thing with its own button and a thin line between rows; nothing opens until pressed (Dan asked for the box with divided rows) |
+| Away and home (#621) | A message from the phone while home | One line at the end of Claude's reply: "You're on your phone. Reply away to switch every session." The band does not exist on the phone, so the spec's one button cannot be drawn there (picker) |
+| Auto session name (#635) | Its failure line | One dim grey line, the guards' note style (no round: covered by the spec and that pattern) |
+
+### The band, shared by every mod
+
+Claude Code gives the band above the prompt one drawing, so the mods that use it compose one tree.
+When several want it at once, the status rows come first (the amber needs-a-look line, then the
+Compact row), and what waits on Dan sits under them, nearest the prompt where he will act: the
+steps card, then a message to send (Dan chose status on top over waiting first and one at a
+time). An open question takes the band alone, and everything else comes back the moment it is
+answered, so a number key can only mean the answer (design round, over the question at the
+bottom of everything).
 
 ## Not design decisions
 
