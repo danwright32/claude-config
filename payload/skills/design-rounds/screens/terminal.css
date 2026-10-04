@@ -1,0 +1,42 @@
+/* The Claude Code terminal, dark only (claude-config#651). Dan does not use a light
+   terminal, so there is no light variant and no colour scheme query: a second look would
+   be kept in step for nobody, and a query would draw it on a Mac set to light.
+
+   Every class carries the term- prefix, so a round's own classes (they were .t, .line and
+   .dim in every hand written round) cannot collide with these. A round whose variable IS
+   part of the terminal's look overrides a rule here in its own stylesheet, which comes
+   after this one on the page. */
+.term-window { box-sizing: border-box; background: #1b1b1d; color: #e6e6e6;
+  border: 1px solid #333; border-radius: 8px; overflow: hidden; line-height: 1.6;
+  font-family: Menlo, ui-monospace, SFMono-Regular, monospace; color-scheme: dark; }
+/* Grey dots, not the red, amber and green of a real title bar: amber and red mean
+   something in the band, and decoration must not compete with them. */
+.term-titlebar { display: flex; align-items: center; gap: 7px; height: 28px;
+  padding: 0 12px; background: #2a2a2d; }
+.term-dot { width: 11px; height: 11px; border-radius: 50%; background: #4a4a4e; }
+.term-title { margin-left: 8px; color: #aaaaaa; font: 12px -apple-system, BlinkMacSystemFont, sans-serif; }
+.term-body { box-sizing: border-box; display: flex; flex-direction: column; padding: 10px 14px 8px; }
+.term-spacer { flex: 1; }
+.term-line { white-space: pre-wrap; }
+.term-band { margin: 2px 0 6px; }
+.term-prompt { border: 1px solid #555555; border-radius: 4px; padding: 4px 8px; white-space: pre-wrap; }
+.term-caret { background: #8a8a8a; }
+.term-footer { font-size: .92em; color: #9a9a9a; }
+.term-status { padding-top: 4px; white-space: pre-wrap; font-size: .92em; color: #9a9a9a; }
+.term-amber { color: #e5a83b; }
+.term-grey { color: #9a9a9a; }
+.term-dim { color: #7a7a7a; }
+.term-red { color: #f07167; }
+.term-violet { color: #a99cf0; }
+.term-white { color: #ffffff; }
+.term-bold { font-weight: 700; }
+.term-button { color: #ffffff; font-weight: 700; }
+.term-button-off { color: #666666; font-weight: 400; }
+.term-card { margin: 2px 0 4px; }
+.term-card-box { border: 1px solid; border-radius: 6px; padding: 2px 8px; }
+.term-card-rule { border-left: 2px solid; padding: 0 0 0 10px; }
+.term-divider { height: 0; border-top: 1px solid; margin: 4px 0; }
+.term-edge-grey { border-color: #777777; }
+.term-edge-amber { border-color: #e5a83b; }
+.term-edge-violet { border-color: #a99cf0; }
+.term-edge-red { border-color: #f07167; }

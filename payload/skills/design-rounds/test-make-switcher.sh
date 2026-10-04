@@ -886,6 +886,280 @@ else
   echo "UNMEASURED: no headless Chrome, so how often the builder is called was not counted"
 fi
 
+# --- the shared terminal screen (claude-config#651) ---
+#
+# Every Claude Code mod round on 2026-10-04 drew the same fake terminal by hand: title bar,
+# transcript, the band above the prompt, the prompt box and the grey status line, each round
+# with its own copy of el(), span(), line() and a stylesheet of the same twenty rules. Copies
+# drift, so two rounds judged one after the other could disagree about what the terminal
+# looks like, which is a second variable nobody chose. The terminal now ships with this tool
+# and a spec asks for it by name, so a round's builder states only what varies.
+
+TERM_JS="$DIR/screens/terminal.js"
+TERM_CSS="$DIR/screens/terminal.css"
+
+cat > "$TMP/term-builder.js" <<'TB'
+function buildScreen(variant) {
+  var T = Terminal;
+  return T.screen({
+    title: "claude-config, weekly limit at 91%",
+    transcript: [T.user("keep going on the batch"), "Merging #653 once its checks pass."],
+    band: [
+      [T.amber("PR #657 checks running")],
+      T.card(variant.card, [
+        [T.amber("Work has more room"), "  ", T.button("Switch"), " ", T.button("Dismiss")],
+        ["5h 12%, resets 6:40 PM"],
+        [T.dim("Use in claude.ai is not counted.")]
+      ]),
+      T.divider(),
+      [T.red("redrun"), " ", T.violet("violetrun"), " ", T.grey("greyrun"), " ", T.run("heavyrun", "amber", "bold")]
+    ],
+    prompt: "typed words",
+    status: ["claude-config", T.amber("NO BUILD"), "opus 5.5 high"]
+  });
+}
+TB
+TERM_TWO='[{"key":"1","name":"Boxed","why":"The card drawn as a rounded box.","card":"box"},
+           {"key":"2","name":"Ruled","why":"The card drawn with a rule down its left edge.","card":"rule"}]'
+spec "$TMP/term.json" "$TERM_TWO" '{"builder":"term-builder.js","screen":"terminal"}'
+python3 - "$TMP/term.json" <<'NOSTYLES'
+import json, sys
+s = json.load(open(sys.argv[1])); s.pop("styles", None); json.dump(s, open(sys.argv[1], "w"))
+NOSTYLES
+out="$(run "$TMP/term.json" "$TMP/term.html")"; rc=$?
+check_eq "a spec naming the terminal screen builds" "0" "$rc"
+term_page="$(cat "$TMP/term.html" 2>/dev/null)"
+
+# The screen's own files are the source, and they really are there: a check that the page
+# carries "Terminal" passes on the builder's own call to it, so the LIBRARY's text is what
+# is looked for, read out of the shipped file.
+check_eq "the terminal script ships beside the tool" "1" "$([ -s "$TERM_JS" ] && echo 1 || echo 0)"
+check_eq "the terminal stylesheet ships beside the tool" "1" "$([ -s "$TERM_CSS" ] && echo 1 || echo 0)"
+lib_line="$(grep -m1 '^var ' "$TERM_JS" 2>/dev/null)"
+css_line="$(grep -m1 '^\.term-' "$TERM_CSS" 2>/dev/null)"
+check_eq "the terminal script has a declaration to look for" "1" "$([ -n "$lib_line" ] && echo 1 || echo 0)"
+check "the page carries the terminal script" "${lib_line:-NO-LIB-LINE}" "$term_page"
+check "the page carries the terminal stylesheet" "${css_line:-NO-CSS-LINE}" "$term_page"
+
+# Ahead of the round's own code, so the builder can call it at load and the round's own
+# stylesheet can override a rule when the terminal's look IS the round's variable.
+order="$(python3 - "$TMP/term.html" "${lib_line:-NO-LIB-LINE}" <<'ORDERPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+# The builder's own text, not "function buildScreen": the library's header carries a worked
+# example that says that too, which would find the library and call it the builder.
+lib = page.find(sys.argv[2]); own = page.find("T.card(variant.card")
+print("before" if 0 <= lib < own else "lib=%d builder=%d" % (lib, own))
+ORDERPY
+)"
+check_eq "the terminal script comes before the round's builder" "before" "$order"
+
+# A round that does not ask for it gets none of it, so a plain round's page is unchanged.
+check_not "a round that names no screen carries no terminal" "${lib_line:-NO-LIB-LINE}" "$(cat "$TMP/out.html")"
+
+# --- the terminal's own namespace ---
+#
+# Every hand written round declared function el, span and line at the top level. If the
+# library declared those too, a builder's own el would silently replace it, both being
+# function declarations in one page, and the terminal would draw whatever that el returns.
+# So the library owns ONE top level name, read out of the file, and every class it styles
+# carries one prefix.
+
+term_globals="$(python3 - "$DIR" <<'TGPY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ms", sys.argv[1] + "/make-switcher.py")
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+src = open(sys.argv[1] + "/screens/terminal.js", encoding="utf-8").read()
+print(",".join(mod.top_level_names(src)))
+TGPY
+)"
+check_eq "the terminal script declares exactly one top level name" "Terminal" "$term_globals"
+bare_term="$(python3 - "$TERM_CSS" <<'TCPY'
+import re, sys
+try:
+    css = open(sys.argv[1], encoding="utf-8").read()
+except OSError:
+    print("NO-CSS"); raise SystemExit
+# Comments are not rules, and this file's header names the hand written rounds' classes.
+css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+names =sorted(set(re.findall(r"\.([A-Za-z][\w-]*)", css)))
+if not names:
+    print("NO-CLASSES")
+print(" ".join(n for n in names if not n.startswith("term-")))
+TCPY
+)"
+check_eq "every class the terminal styles carries the term- prefix" "" "$bare_term"
+
+# Dark only. Dan does not use a light terminal, so a light variant would be a second look
+# to keep in step for nobody, and a media query would draw it on a machine set to light.
+check_not "the terminal has no light variant" "prefers-color-scheme" "$(cat "$TERM_CSS" 2>/dev/null)"
+
+# --- refusals, each with the case that produces it (L151) ---
+
+# A screen the tool does not ship is refused by name, listing the ones it does, and nothing
+# is written: a page whose builder calls a library that is not on it throws at load.
+spec "$TMP/noscreen.json" "$TERM_TWO" '{"builder":"term-builder.js","screen":"teletype"}'
+out="$(run "$TMP/noscreen.json" "$TMP/noscreen.html")"; rc=$?
+check_eq "a screen the tool does not ship exits 2" "2" "$rc"
+check "the refusal names the screen asked for" "teletype" "$out"
+check "the refusal lists the screens that exist" "terminal" "$out"
+check_eq "nothing is written for an unknown screen" "0" "$([ -e "$TMP/noscreen.html" ] && echo 1 || echo 0)"
+
+# A builder that declares the terminal's own name would replace it for the whole page.
+printf 'var Terminal = {};\nfunction buildScreen(variant) { return document.createElement("div"); }\n' > "$TMP/shadow-builder.js"
+spec "$TMP/shadow.json" "$TERM_TWO" '{"builder":"shadow-builder.js","screen":"terminal"}'
+out="$(run "$TMP/shadow.json" "$TMP/shadow.html")"; rc=$?
+check_eq "a builder declaring the terminal's own name exits 2" "2" "$rc"
+check "that refusal names the clashing name" "Terminal" "$out"
+check "that refusal names the builder" "shadow-builder.js" "$out"
+check_eq "nothing is written for a clashing builder" "0" "$([ -e "$TMP/shadow.html" ] && echo 1 || echo 0)"
+
+# A builder calling the terminal from a spec that never asked for it would throw at load,
+# where the strip can say only that the builder threw. Said here instead, naming the field.
+spec "$TMP/unasked.json" "$TERM_TWO" '{"builder":"term-builder.js"}'
+out="$(run "$TMP/unasked.json" "$TMP/unasked.html")"; rc=$?
+check_eq "a builder calling the terminal without asking for it exits 2" "2" "$rc"
+check "that refusal names the field to add" '"screen": "terminal"' "$out"
+check_eq "nothing is written when the screen was not asked for" "0" "$([ -e "$TMP/unasked.html" ] && echo 1 || echo 0)"
+
+# Its own control: copy that merely SAYS the word is not a call, so a round about a mod
+# that mentions Terminal.app in a string or a comment still builds without the screen.
+printf '// opens Terminal.app\nfunction buildScreen(variant) { var d = document.createElement("div"); d.textContent = "Open Terminal." + variant.name; return d; }\n' > "$TMP/says-builder.js"
+spec "$TMP/says.json" "$TERM_TWO" '{"builder":"says-builder.js"}'
+run "$TMP/says.json" "$TMP/says.html" >/dev/null; check_eq "a builder that only mentions the word in copy still builds" "0" "$?"
+
+# The control for all three: an ordinary builder with no screen still builds (L159). The
+# fine spec from above is reused deliberately as the no screen case, on its own output path.
+run "$TMP/fine.json" "$TMP/fine-again.html" >/dev/null; check_eq "a round with no screen still builds" "0" "$?"
+
+# --- what the terminal actually draws, measured in a browser ---
+
+if [[ -x "$CHROME" ]]; then
+  term_report() { # term_report <page> <key-to-press-or-none> -> one fact per line
+    python3 - "$1" "$2" <<'TRPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+key = sys.argv[2]
+harness = """
+<script>
+(function () {
+  var KEY = %s;
+  if (KEY) document.dispatchEvent(new KeyboardEvent("keydown", {key: KEY, bubbles: true, cancelable: true}));
+  var stage = document.querySelector(".dr-stage");
+  var lines = [];
+  function find(text) {
+    var all = stage.querySelectorAll("*");
+    for (var i = all.length - 1; i >= 0; i--) if (all[i].textContent === text) return all[i];
+    return null;
+  }
+  function colour(text) { var e = find(text); return e ? getComputedStyle(e).color : "missing"; }
+  function weight(text) { var e = find(text); return e ? getComputedStyle(e).fontWeight : "missing"; }
+  function top(e) { return e ? Math.round(e.getBoundingClientRect().top) : -1; }
+  var win = stage.querySelector(".term-window");
+  lines.push("window " + (win ? "yes" : "no"));
+  if (win) {
+    var bg = getComputedStyle(win).backgroundColor.match(/\\d+/g).map(Number);
+    lines.push("background-dark " + (bg[0] + bg[1] + bg[2] < 120 ? "yes" : "no " + bg.join(",")));
+    lines.push("width " + Math.round(win.getBoundingClientRect().width));
+  }
+  lines.push("title " + (stage.textContent.indexOf("claude-config, weekly limit at 91%%") >= 0 ? "yes" : "no"));
+  lines.push("user " + (stage.textContent.indexOf("> keep going on the batch") >= 0 ? "yes" : "no"));
+  lines.push("amber " + colour("PR #657 checks running"));
+  lines.push("red " + colour("redrun"));
+  lines.push("violet " + colour("violetrun"));
+  lines.push("grey " + colour("greyrun"));
+  lines.push("dim " + colour("Use in claude.ai is not counted."));
+  lines.push("plain " + colour("5h 12%%, resets 6:40 PM"));
+  lines.push("heavy " + colour("heavyrun") + " " + weight("heavyrun"));
+  lines.push("button " + (find("[ Switch ]") ? "yes " + weight("[ Switch ]") : "no"));
+  var card = stage.querySelector(".term-card");
+  if (card) {
+    var cs = getComputedStyle(card);
+    lines.push("card top=" + cs.borderTopWidth + " left=" + cs.borderLeftWidth);
+  } else lines.push("card missing");
+  var div = stage.querySelector(".term-divider");
+  lines.push("divider " + (div ? getComputedStyle(div).borderTopWidth : "missing"));
+  var band = stage.querySelector(".term-band"), prompt = stage.querySelector(".term-prompt"),
+      status = stage.querySelector(".term-status"), said = find("Merging #653 once its checks pass.");
+  lines.push("prompt " + (prompt ? prompt.textContent : "missing"));
+  lines.push("status " + (status ? status.textContent : "missing"));
+  lines.push("order " + (top(said) < top(band) && top(band) < top(prompt) && top(prompt) < top(status)
+    ? "transcript,band,prompt,status" : [top(said), top(band), top(prompt), top(status)].join(",")));
+  var strip = document.querySelector(".dr-sameness");
+  lines.push("strip " + (strip ? strip.textContent : "none"));
+  var out = document.createElement("pre"); out.id = "TR"; out.textContent = lines.join("\\n");
+  document.body.append(out);
+})();
+</script>
+""" % ('"%s"' % key if key != "none" else "null")
+open(sys.argv[1] + ".tr.html", "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
+TRPY
+    "$CHROME" --headless --disable-gpu --no-sandbox --window-size=1440,900 --virtual-time-budget=2000 \
+      --dump-dom "file://$1.tr.html" 2>/dev/null \
+      | python3 -c 'import sys,re,html; m=re.search(r"<pre id=\"TR\">(.*?)</pre>", sys.stdin.read(), re.S); print(html.unescape(m.group(1)) if m else "NO-REPORT")'
+  }
+  fact() { echo "$1" | awk -v k="$2" '$1 == k { $1 = ""; sub(/^ /, ""); print }'; }
+
+  r="$(term_report "$TMP/term.html" none)"
+  check_eq "the terminal draws a window" "yes" "$(fact "$r" window)"
+  check_eq "the window is dark" "yes" "$(fact "$r" background-dark)"
+  check_eq "the window has its default laptop width" "820" "$(fact "$r" width)"
+  check_eq "the title bar carries the title" "yes" "$(fact "$r" title)"
+  check_eq "a user line is drawn with its prompt mark" "yes" "$(fact "$r" user)"
+  check_eq "an amber run is amber" "rgb(229, 168, 59)" "$(fact "$r" amber)"
+  check_eq "a red run is red" "rgb(240, 113, 103)" "$(fact "$r" red)"
+  check_eq "a violet run is violet" "rgb(169, 156, 240)" "$(fact "$r" violet)"
+  check_eq "a grey run is grey" "rgb(154, 154, 154)" "$(fact "$r" grey)"
+  check_eq "a dim run is dimmer than grey" "rgb(122, 122, 122)" "$(fact "$r" dim)"
+  check_eq "plain text is the terminal's own colour" "rgb(230, 230, 230)" "$(fact "$r" plain)"
+  check_eq "styles combine on one run" "rgb(229, 168, 59) 700" "$(fact "$r" heavy)"
+  check_eq "a button is drawn in brackets and bold" "yes 700" "$(fact "$r" button)"
+  check_eq "a boxed card has a border all round" "top=1px left=1px" "$(fact "$r" card)"
+  check_eq "a divider is a rule" "1px" "$(fact "$r" divider)"
+  check_eq "the prompt carries what is typed" "> typed words" "$(fact "$r" prompt)"
+  check_eq "the status line joins its segments with a grey dot" "claude-config · NO BUILD · opus 5.5 high" "$(fact "$r" status)"
+  check_eq "transcript, band, prompt and status stack in that order" "transcript,band,prompt,status" "$(fact "$r" order)"
+  check_eq "two options differing in one field are not reported as the same" "none" "$(fact "$r" strip)"
+
+  r2="$(term_report "$TMP/term.html" 2)"
+  check_eq "a ruled card has only its left edge" "top=0px left=2px" "$(fact "$r2" card)"
+
+  # A typo in the builder is loud, not a quietly missing colour: an unknown style, card kind
+  # or option throws, and the page's own strip quotes it (L11, fail loud).
+  for pair in 'T.run("x", "amberr")|amberr' 'T.card("boxed", [])|boxed' 'T.screen({trascript: []})|trascript'; do
+    bad="${pair%|*}"; named="${pair##*|}"
+    printf 'function buildScreen(variant) { var T = Terminal; %s; return T.screen({}); }\n' "$bad" > "$TMP/typo-builder.js"
+    spec "$TMP/typo.json" "$TERM_TWO" '{"builder":"typo-builder.js","screen":"terminal"}'
+    python3 "$SCRIPT" "$TMP/typo.json" "$TMP/typo.html" >/dev/null 2>&1 || fail=$((fail + 1))
+    typo_strip="$(fact "$(term_report "$TMP/typo.html" none)" strip)"
+    check "a builder typo is reported on the page: $bad" "could not be checked" "$typo_strip"
+    check "and the report names the typo: $bad" "$named" "$typo_strip"
+  done
+else
+  unmeasured=$((unmeasured + 1))
+  echo "UNMEASURED: no headless Chrome, so what the terminal draws was not measured"
+fi
+
+# --- the committed terminal example is what the tool produces today ---
+
+TEX="$DIR/example-terminal"
+python3 "$SCRIPT" "$TEX/spec.json" "$TMP/term-example-now.html" >/dev/null 2>&1
+check_eq "the terminal example ships a committed page" "1" "$([ -s "$TEX/switcher.html" ] && echo 1 || echo 0)"
+check_eq "regenerating the terminal example produces a page" "1" "$([ -s "$TMP/term-example-now.html" ] && echo 1 || echo 0)"
+check_eq "the committed terminal example matches what the tool produces now" \
+  "$(shasum "$TEX/switcher.html" 2>/dev/null | cut -d' ' -f1)x" \
+  "$(shasum "$TMP/term-example-now.html" 2>/dev/null | cut -d' ' -f1)x"
+check_eq "the committed terminal example's picker matches too" \
+  "$(shasum "$TEX/switcher.picker.json" 2>/dev/null | cut -d' ' -f1)x" \
+  "$(shasum "$TMP/term-example-now.picker.json" 2>/dev/null | cut -d' ' -f1)x"
+check "the terminal example really asks for the terminal" '"screen": "terminal"' "$(cat "$TEX/spec.json" 2>/dev/null)"
+if [[ -x "$CHROME" && -s "$TEX/switcher.html" ]]; then
+  ex_dom="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+    --dump-dom "file://$TEX/switcher.html" 2>/dev/null)"
+  check "the terminal example draws a terminal" 'class="term-window' "$ex_dom"
+  check_not "the terminal example's options differ and nothing threw" 'class="dr-sameness"' "$ex_dom"
+fi
+
 echo
 echo "passed: $pass, failed: $fail"
 [[ "$unmeasured" -gt 0 ]] && echo "UNMEASURED-SECTIONS $unmeasured"

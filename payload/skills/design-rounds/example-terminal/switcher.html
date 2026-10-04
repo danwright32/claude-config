@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Demo, the account room band</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; background: #F4F1ED; color: #1B1613; min-height: 100vh;
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  /* The frame is the window, so a short screen leaves no dead ground under it: the
+     stage takes whatever height is left over. */
+  .dr-sameness { margin: 0 0 16px; padding: 10px 12px; border-radius: 6px;
+         background: #FDECEA; color: #6B1A12; border: 1px solid #E4A9A1; font-weight: 600; }
+  .dr-frame { max-width: 1180px; margin: 0 auto; padding: 28px 24px 24px;
+           box-sizing: border-box; min-height: 100vh;
+           display: flex; flex-direction: column; }
+  .dr-eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+             color: #6E6259; margin: 0 0 6px; }
+  .dr-round { font-size: 26px; line-height: 1.2; margin: 0 0 10px; font-weight: 600; }
+  .dr-asks { margin: 0 0 6px; max-width: 62ch; color: #3D342E; }
+  .dr-measurement { margin: 0 0 20px; max-width: 62ch; color: #6E6259; font-size: 13px; }
+  .dr-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+  .dr-tab { display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+         background: #FFFDFB; border: 1px solid #DAD1C8; border-radius: 7px;
+         padding: 7px 12px; font: inherit; font-size: 13px; color: #1B1613; }
+  .dr-tab:hover { border-color: #B9AC9F; }
+  .dr-tab[aria-pressed="true"] { background: #1B1613; border-color: #1B1613; color: #FBFAF8; }
+  .dr-tab .dr-badge { display: inline-grid; place-items: center; width: 17px; height: 17px;
+                border-radius: 4px; background: #EDE7E1; color: #584D45; font-size: 11px;
+                font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .dr-tab[aria-pressed="true"] .dr-badge { background: #453B34; color: #F6F3F0; }
+  .dr-readout { border-left: 2px solid #D9D0C7; padding: 2px 0 2px 14px; margin: 0 0 20px;
+             max-width: 68ch; }
+  .dr-readout h2 { font-size: 15px; margin: 0 0 5px; font-weight: 600; }
+  .dr-readout p { margin: 0 0 6px; color: #3D342E; }
+  .dr-readout .dr-measured { color: #6E6259; font-size: 13px; margin: 0; }
+  /* The stage is a canvas, not leftover background: it fills the rest of the window and
+     says so, so the space around a small screen reads as room rather than as a void. */
+  .dr-stage { flex: 1; display: flex; background: #E9E4DE;
+           border: 1px solid #DDD5CD; border-radius: 10px; padding: 24px;
+           box-sizing: border-box; overflow: auto; }
+  /* Centred on the canvas, settled with Dan on 2026-09-07 against pinning it to the top:
+     centred holds its position while options of different heights are switched between,
+     which is the whole activity. Auto margins do the centring because, unlike
+     align-items, they never cut off the top of a screen taller than the window. */
+  /* `flex: none` because a flex item SHRINKS by default: a screen declaring a width
+     wider than the stage was silently squeezed to the stage's width, which is half of
+     how three options declaring 1100, 1440 and 1720 all rendered at the same size on
+     2026-09-08. The stage scrolls instead, so a declared width is the width drawn. */
+  .dr-stage > * { margin: auto; flex: none; }
+  .dr-hint { margin: 22px 0 0; color: #7C7168; font-size: 12px; flex: none; }
+</style>
+<style>
+/* The Claude Code terminal, dark only (claude-config#651). Dan does not use a light
+   terminal, so there is no light variant and no colour scheme query: a second look would
+   be kept in step for nobody, and a query would draw it on a Mac set to light.
+
+   Every class carries the term- prefix, so a round's own classes (they were .t, .line and
+   .dim in every hand written round) cannot collide with these. A round whose variable IS
+   part of the terminal's look overrides a rule here in its own stylesheet, which comes
+   after this one on the page. */
+.term-window { box-sizing: border-box; background: #1b1b1d; color: #e6e6e6;
+  border: 1px solid #333; border-radius: 8px; overflow: hidden; line-height: 1.6;
+  font-family: Menlo, ui-monospace, SFMono-Regular, monospace; color-scheme: dark; }
+/* Grey dots, not the red, amber and green of a real title bar: amber and red mean
+   something in the band, and decoration must not compete with them. */
+.term-titlebar { display: flex; align-items: center; gap: 7px; height: 28px;
+  padding: 0 12px; background: #2a2a2d; }
+.term-dot { width: 11px; height: 11px; border-radius: 50%; background: #4a4a4e; }
+.term-title { margin-left: 8px; color: #aaaaaa; font: 12px -apple-system, BlinkMacSystemFont, sans-serif; }
+.term-body { box-sizing: border-box; display: flex; flex-direction: column; padding: 10px 14px 8px; }
+.term-spacer { flex: 1; }
+.term-line { white-space: pre-wrap; }
+.term-band { margin: 2px 0 6px; }
+.term-prompt { border: 1px solid #555555; border-radius: 4px; padding: 4px 8px; white-space: pre-wrap; }
+.term-caret { background: #8a8a8a; }
+.term-footer { font-size: .92em; color: #9a9a9a; }
+.term-status { padding-top: 4px; white-space: pre-wrap; font-size: .92em; color: #9a9a9a; }
+.term-amber { color: #e5a83b; }
+.term-grey { color: #9a9a9a; }
+.term-dim { color: #7a7a7a; }
+.term-red { color: #f07167; }
+.term-violet { color: #a99cf0; }
+.term-white { color: #ffffff; }
+.term-bold { font-weight: 700; }
+.term-button { color: #ffffff; font-weight: 700; }
+.term-button-off { color: #666666; font-weight: 400; }
+.term-card { margin: 2px 0 4px; }
+.term-card-box { border: 1px solid; border-radius: 6px; padding: 2px 8px; }
+.term-card-rule { border-left: 2px solid; padding: 0 0 0 10px; }
+.term-divider { height: 0; border-top: 1px solid; margin: 4px 0; }
+.term-edge-grey { border-color: #777777; }
+.term-edge-amber { border-color: #e5a83b; }
+.term-edge-violet { border-color: #a99cf0; }
+.term-edge-red { border-color: #f07167; }
+
+
+</style>
+</head>
+<body>
+<div class="dr-frame">
+  <p class="dr-eyebrow">Demo, the account room band</p>
+  <h1 class="dr-round">Shape of the account room card</h1>
+  <p class="dr-asks">When this account nears its limit, the band names the account with more room. Only the card's shape changes between options.</p>
+  <p class="dr-measurement">Same words, colours and buttons in all three. Dark terminal, laptop width.</p>
+  <div class="dr-tabs" id="dr-tabs"></div>
+  <div class="dr-readout" id="dr-readout"></div>
+  <div class="dr-stage" id="dr-stage"></div>
+  <p class="dr-hint">Left and right arrows step through the options. The key on each tab jumps
+  straight to it, unless the design on the stage wants that key for itself.</p>
+</div>
+<script>
+/* The Claude Code terminal, dark, for design rounds about mods (claude-config#651).
+
+   A spec asks for it with "screen": "terminal", and make-switcher.py puts this file and
+   terminal.css on the page ahead of the round's own builder. The builder then states only
+   what varies:
+
+     function buildScreen(variant) {
+       var T = Terminal;
+       return T.screen({
+         title: "claude-config",
+         transcript: [T.user("keep going"), "Merging #653 once its checks pass."],
+         band: [[T.amber("Work has more room"), "  ", T.button("Switch")]],
+         status: ["claude-config", "5h 64%", "week 91%"]
+       });
+     }
+
+   Everything lives under the one name Terminal. Every hand written round declared its own
+   el, span and line at the top level, and a library declaring those too would be silently
+   replaced by the builder's, so nothing here reaches the page's top level but that name.
+
+   Anything misspelt THROWS, naming what it did not recognise: a style, a card kind, an
+   option. The switcher reports a throwing builder on the page, quoting the message, so a
+   typo is a sentence on screen rather than a colour that quietly is not there. */
+var Terminal = (function () {
+  "use strict";
+
+  var STYLES = ["amber", "grey", "red", "violet", "bold", "dim", "white"];
+  var CARDS = ["box", "rule", "none"];
+  var EDGES = ["grey", "amber", "violet", "red"];
+  var OPTIONS = ["title", "width", "height", "fontSize", "transcript", "band",
+                 "prompt", "footer", "status"];
+
+  function refuse(message) { throw new Error("Terminal: " + message); }
+
+  function has(list, value) { return list.indexOf(value) >= 0; }
+
+  function node(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function styleClasses(styles, what) {
+    return styles.map(function (s) {
+      if (!has(STYLES, s)) {
+        refuse('unknown style "' + s + '" on ' + what + ". The styles are " + STYLES.join(", ") + ".");
+      }
+      return "term-" + s;
+    }).join(" ");
+  }
+
+  /* One piece of a line: plain text, or something one of the helpers below made. */
+  function piece(p) {
+    if (typeof p === "string" || typeof p === "number") return document.createTextNode(String(p));
+    if (p && p.nodeType === 1) return p;
+    refuse("a line can hold text or what a Terminal helper returns, and was given " + JSON.stringify(p) + ".");
+  }
+
+  /* run("text", "amber", "bold"): text in one or more styles. */
+  function run(text) {
+    var styles = Array.prototype.slice.call(arguments, 1);
+    return node("span", styleClasses(styles, '"' + text + '"'), String(text));
+  }
+
+  function shorthand(style) { return function (text) { return run(text, style); }; }
+
+  /* line(parts, "dim"): a line of pieces, optionally styled as a whole. */
+  function line(parts) {
+    var styles = Array.prototype.slice.call(arguments, 1);
+    var d = node("div", "term-line" + (styles.length ? " " + styleClasses(styles, "a line") : ""));
+    (Array.isArray(parts) ? parts : [parts]).forEach(function (p) { d.append(piece(p)); });
+    return d;
+  }
+
+  /* What a transcript, band or card row may be: a string, an array of pieces, or an element. */
+  function row(r) {
+    if (typeof r === "string") return line([r]);
+    if (Array.isArray(r)) return line(r);
+    if (r && r.nodeType === 1) return r;
+    refuse("a row is text, a list of pieces or what a Terminal helper returns, and was given " + JSON.stringify(r) + ".");
+  }
+
+  function rows(list, what) {
+    if (list === undefined || list === null) return [];
+    if (!Array.isArray(list)) refuse(what + " is a list of rows.");
+    return list.map(row);
+  }
+
+  /* button("Switch"): drawn [ Switch ], as Claude Code draws one. {disabled: true} greys it. */
+  function button(label, opts) {
+    var off = opts && opts.disabled;
+    return node("span", off ? "term-button term-button-off" : "term-button", "[ " + label + " ]");
+  }
+
+  /* user("words"): what the person typed, as the transcript shows it. */
+  function user(text) { return line([run("> ", "grey"), String(text)]); }
+
+  /* card("box" | "rule" | "none", rows, {edge: "amber"}): a group of rows, boxed, ruled down
+     its left edge, or neither, so a round about the card's shape names it in one field. */
+  function card(kind, list, opts) {
+    if (!has(CARDS, kind)) refuse('unknown card "' + kind + '". The cards are ' + CARDS.join(", ") + ".");
+    var edge = (opts && opts.edge) || "grey";
+    if (!has(EDGES, edge)) refuse('unknown card edge "' + edge + '". The edges are ' + EDGES.join(", ") + ".");
+    var c = node("div", "term-card term-card-" + kind + " term-edge-" + edge);
+    rows(list, "a card").forEach(function (r) { c.append(r); });
+    return c;
+  }
+
+  /* divider("violet"): a rule across the band, as a dialog's top edge is drawn. */
+  function divider(edge) {
+    edge = edge || "grey";
+    if (!has(EDGES, edge)) refuse('unknown divider edge "' + edge + '". The edges are ' + EDGES.join(", ") + ".");
+    return node("div", "term-divider term-edge-" + edge);
+  }
+
+  function size(value, fallback, what) {
+    if (value === undefined) return fallback;
+    if (typeof value !== "number" || !(value > 0)) refuse(what + " is a number of pixels, and was given " + JSON.stringify(value) + ".");
+    return value;
+  }
+
+  /* screen({...}): the whole window. The transcript sits at the top; the band, the prompt,
+     the footer and the status line sit at the foot, as they do in Claude Code, with the
+     space between them taken up. The body has a MINIMUM height, never a fixed one, so a
+     band taller than expected grows the window rather than being cut off. */
+  function screen(opts) {
+    opts = opts || {};
+    Object.keys(opts).forEach(function (k) {
+      if (!has(OPTIONS, k)) refuse('unknown option "' + k + '". The options are ' + OPTIONS.join(", ") + ".");
+    });
+    var win = node("div", "term-window");
+    win.style.width = size(opts.width, 820, "width") + "px";
+    win.style.fontSize = size(opts.fontSize, 13, "fontSize") + "px";
+
+    var bar = node("div", "term-titlebar");
+    bar.append(node("span", "term-dot"), node("span", "term-dot"), node("span", "term-dot"),
+               node("span", "term-title", opts.title === undefined ? "claude-config" : String(opts.title)));
+    win.append(bar);
+
+    var body = node("div", "term-body");
+    body.style.minHeight = size(opts.height, 330, "height") + "px";
+    rows(opts.transcript, "transcript").forEach(function (r) { body.append(r); });
+    body.append(node("div", "term-spacer"));
+
+    var band = rows(opts.band, "band");
+    if (band.length) {
+      var b = node("div", "term-band");
+      band.forEach(function (r) { b.append(r); });
+      body.append(b);
+    }
+
+    if (opts.prompt !== false) {
+      var p = node("div", "term-prompt");
+      p.append(run("> ", "grey"), document.createTextNode(opts.prompt === undefined ? "" : String(opts.prompt)),
+               node("span", "term-caret", " "));
+      body.append(p);
+    }
+
+    if (opts.footer !== undefined) {
+      var f = row(opts.footer);
+      f.classList.add("term-footer");
+      body.append(f);
+    }
+
+    var status = opts.status === undefined ? ["claude-config", "5h 64%", "week 91%", "opus 5.5 high"] : opts.status;
+    if (status !== false) {
+      if (!Array.isArray(status)) refuse("status is a list of segments, or false for none.");
+      var s = node("div", "term-status");
+      status.forEach(function (segment, i) {
+        if (i) s.append(run(" · ", "dim"));
+        s.append(piece(segment));
+      });
+      body.append(s);
+    }
+
+    win.append(body);
+    return win;
+  }
+
+  return {
+    screen: screen,
+    line: line,
+    run: run,
+    amber: shorthand("amber"),
+    grey: shorthand("grey"),
+    red: shorthand("red"),
+    violet: shorthand("violet"),
+    bold: shorthand("bold"),
+    dim: shorthand("dim"),
+    white: shorthand("white"),
+    button: button,
+    user: user,
+    card: card,
+    divider: divider,
+    STYLES: STYLES.slice(),
+    CARDS: CARDS.slice(),
+    EDGES: EDGES.slice()
+  };
+})();
+
+// A mod round on the shared terminal: the builder states the band, and only the card's
+// shape comes from the option. Title bar, transcript, prompt and status line are the
+// terminal's own.
+function buildScreen(variant) {
+  var T = Terminal;
+  return T.screen({
+    title: "claude-config, weekly limit at 91%",
+    transcript: [T.user("keep going on the batch"), "Merging #653 once its checks pass."],
+    band: [
+      [T.amber("PR #657 checks running  |  2 unpushed commits")],
+      T.card(variant.card, [
+        [T.amber("Work has more room"), "  ", T.button("Switch"), " ", T.button("Dismiss")],
+        ["5h 12%, resets 6:40 PM · week 30%, resets Thu 9 AM · as of 2h ago"],
+        [T.dim("Use in claude.ai, the desktop app or the phone is not counted.")]
+      ])
+    ],
+    status: ["claude-config", "5h 64%", "week 91%", "opus 5.5 high"]
+  });
+}
+
+</script>
+<script>
+/* Everything this page needs is INSIDE this scope, and nothing it declares reaches the
+   page's top level.
+
+   The builder is a second top level script in this same page, so a global here is a
+   global the project can collide with. It did: on 2026-09-10 a project declaring var
+   stage and var tabs and its own function el took over this page's tab strip and stage,
+   show() threw on tabs.children at every press, and the stage kept whatever was already
+   on it. Every option then drew the identical screen, which is exactly what a round whose
+   options do not differ looks like, so nothing refused and the round read as a real
+   finding about the design (claude-config#355).
+
+   Same remedy as the chrome's CSS namespace, for the same reason: a project must not be
+   able to reach this by accident. buildScreen is still read from the top level, because
+   that is the one name this page and the builder agree on by contract. */
+(function () {
+  "use strict";
+
+  var VARIANTS = [
+  {
+    "key": "1",
+    "name": "Boxed",
+    "why": "The three lines inside a rounded box, so they read as one thing to deal with.",
+    "measured": "5 lines with the border.",
+    "card": "box"
+  },
+  {
+    "key": "2",
+    "name": "Ruled",
+    "why": "A rule down the left edge groups the lines without closing them in.",
+    "measured": "3 lines.",
+    "card": "rule"
+  },
+  {
+    "key": "3",
+    "name": "Bare",
+    "why": "No edge at all, so the amber lead alone says where the card starts.",
+    "measured": "3 lines.",
+    "card": "none"
+  }
+];
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  var frame = document.querySelector(".dr-frame");
+  var tabs = document.getElementById("dr-tabs");
+  var readout = document.getElementById("dr-readout");
+  var stage = document.getElementById("dr-stage");
+  var current = 0;
+  var built = [];
+
+  function show(index) {
+    current = (index + VARIANTS.length) % VARIANTS.length;
+    var variant = VARIANTS[current];
+    Array.prototype.forEach.call(tabs.children, function (button, position) {
+      button.setAttribute("aria-pressed", String(position === current));
+    });
+    var lines = [el("h2", null, variant.name), el("p", null, variant.why)];
+    if (variant.measured) lines.push(el("p", "dr-measured", variant.measured));
+    readout.replaceChildren.apply(readout, lines);
+    /* The picture drawn at load, not a fresh one. See drawAll below: the builder is asked
+       for each option exactly once, and the same element is moved onto the stage every
+       time that option is chosen. The fallback covers the one case where drawAll could not
+       finish, so a page whose builder threw is still usable rather than blank. */
+    stage.replaceChildren(built[current] || buildScreen(variant));
+  }
+
+  /* Draw every option once, keep the pictures, and say whether any two are the same.
+
+     ONE call per option for the life of the page, which is fewer than this page used to
+     make: show() rebuilt on every press, so walking back and forth redrew each option
+     again and again. That matters for a builder that does anything besides return an
+     element, such as touching the page itself or starting a fetch, because the extra work
+     would happen far away from anything that would explain it (claude-config#357). The
+     contract is that buildScreen is a function of its argument; this makes the cost of
+     breaking it a fixed one rather than one that grows with how long somebody looks.
+
+     What it gives up, and it is worth stating: a builder that reads the window size draws
+     once and no longer refreshes on the next press. A design round is a comparison at one
+     size, and the pictures staying identical between presses is the property being
+     compared, so that is the right way round.
+
+     The sameness answer falls out of the same pass. Two options rendering the same markup
+     are either a collision between this page and the builder or a round whose options do
+     not differ, and both are worth saying out loud rather than handing somebody a page
+     that looks finished.
+
+     A builder that THROWS is a third answer with its own sentence, because a check that
+     could not run must never read as a check that passed. */
+  function drawAll() {
+    var seen = {};
+    var clashes = [];
+    for (var i = 0; i < VARIANTS.length; i++) {
+      var node;
+      try {
+        node = buildScreen(VARIANTS[i]);
+      } catch (err) {
+        return { ran: false, why: String(err && err.message ? err.message : err) };
+      }
+      built[i] = node;
+      var probe = document.createElement("div");
+      probe.appendChild(node);
+      var mark = probe.innerHTML;
+      if (Object.prototype.hasOwnProperty.call(seen, mark)) {
+        clashes.push(VARIANTS[seen[mark]].name + " and " + VARIANTS[i].name);
+      } else {
+        seen[mark] = i;
+      }
+    }
+    return { ran: true, clashes: clashes };
+  }
+
+  function warn(text) {
+    var strip = el("p", "dr-sameness", text);
+    frame.insertBefore(strip, frame.firstChild);
+  }
+
+  var verdict = drawAll();
+  if (!verdict.ran) {
+    warn("Whether these options draw the same picture could not be checked, because the "
+         + "builder threw when it was asked to draw one on its own: " + verdict.why
+         + ". Read the options against each other yourself before reading anything into "
+         + "this round.");
+  } else if (verdict.clashes.length) {
+    warn(verdict.clashes.join(", ") + " draw the same picture. That is what a round whose "
+         + "options do not differ looks like, and it is also what it looks like when the "
+         + "builder and this page collide over a name. Check the builder actually reads "
+         + "its argument before reading anything into this round.");
+  }
+
+  VARIANTS.forEach(function (variant, index) {
+    var button = el("button", "dr-tab");
+    button.type = "button";
+    button.setAttribute("aria-pressed", "false");
+    button.append(el("span", "dr-badge", variant.key), el("span", null, variant.name));
+    button.addEventListener("click", function () { show(index); });
+    tabs.append(button);
+  });
+
+  /* The listener has to stay on the document: nothing on this page is focusable, so
+     scoping it to the frame would stop the arrow keys working at all. What it does
+     instead is YIELD, because the document is the last surface this page shares with the
+     project and the project's screen is the thing being judged (claude-config#356, L452).
+
+     Two ways to lose the key, and both are the project winning on purpose:
+
+       the project CLAIMED it. Its own listener is registered first, because its script
+         runs first, so it sees the key first. If it called preventDefault, that key is
+         spoken for and this page must not also act on it.
+
+       the key was typed INTO the design. A design carrying a text field would otherwise
+         have every "1" and "2" jump tabs while somebody types in it, which is the key
+         being stolen rather than shared (L596). */
+  document.addEventListener("keydown", function (event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.defaultPrevented) return;
+    var target = event.target;
+    if (target && (target.isContentEditable
+        || /^(INPUT|TEXTAREA|SELECT|OPTION)$/.test(target.tagName || ""))) return;
+    if (event.key === "ArrowRight") { show(current + 1); event.preventDefault(); return; }
+    if (event.key === "ArrowLeft") { show(current - 1); event.preventDefault(); return; }
+    for (var i = 0; i < VARIANTS.length; i++) {
+      if (VARIANTS[i].key === event.key.toLowerCase()) { show(i); event.preventDefault(); return; }
+    }
+  });
+
+  show(0);
+})();
+</script>
+</body>
+</html>
