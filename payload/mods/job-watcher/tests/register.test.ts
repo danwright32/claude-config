@@ -862,6 +862,23 @@ test('a look still running when the next minute comes is not overlapped by a sec
   expect(w.stats).toBe(1)
 })
 
+// #694 item 4: a session start does not end a look already running, so it never lets a second
+// begin beside it; once that look ends, the new session's looks go on.
+test('a session start while an earlier look still runs never lets a second look overlap it', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, [{ tail: 'building\n', size: 9, slow: { cmd: 'stat', ms: 150_000 } }, { tail: 'serving\n', size: 8 }], { clock })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(w.stats).toBe(1)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(MIN)
+  expect(w.stats).toBe(1)
+  await clock.advance(3 * MIN)
+  expect(w.stats).toBeGreaterThan(1)
+})
+
 test('a clock that throws while a job starts never fails the Bash call that started it, and Claude is told', withDeps, async ($, on) => {
   let broken = false
   on('clock.now', () => {
