@@ -78,6 +78,11 @@ describe('a verdict on a leftover job', () => {
   test('anything else is no verdict, never a guess', () => {
     for (const text of ['', 'stop it', '{"stop": "yes", "name": "x"}', '{"stop": true}', '{"stop": true, "name": "  "}', '{not json}']) expect(parseVerdict(text)).toBeUndefined()
   })
+  test('the first verdict is found when the reply holds a second object or a stray brace', () => {
+    expect(parseVerdict('{"stop": true, "name": "curl loop"} and also {"note": 1}')).toEqual({ stop: true, name: 'curl loop' })
+    expect(parseVerdict('{"stop": false, "name": "dev server"}\n} trailing')).toEqual({ stop: false, name: 'dev server' })
+    expect(parseVerdict('Thinking {about it}. {"stop": true, "name": "loop {x}"}')).toEqual({ stop: true, name: 'loop {x}' })
+  })
   test('a long name is cut to fit one line', () => {
     expect((parseVerdict(`{"stop": true, "name": "${'x'.repeat(200)}"}`)?.name ?? '').length).toBeLessThanOrEqual(60)
   })

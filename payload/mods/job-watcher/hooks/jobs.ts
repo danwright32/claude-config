@@ -47,19 +47,41 @@ export const assess = (s: Sample, now: number): Assessment => {
 export type Verdict = { stop: boolean; name: string }
 const NAME_MAX = 60
 
-// A model's verdict: a JSON object with a boolean stop and a name, anywhere in the reply. Anything
-// else is no verdict, so the next model is asked rather than a guess made from prose.
-export const parseVerdict = (text: string): Verdict | undefined => {
-  const m = /\{[\s\S]*\}/.exec(text)
-  if (!m) return undefined
-  try {
-    const v = JSON.parse(m[0]) as { stop?: unknown; name?: unknown }
-    const name = typeof v.name === 'string' ? v.name.trim().replace(/\s+/g, ' ') : ''
-    if (typeof v.stop !== 'boolean' || !name) return undefined
-    return { stop: v.stop, name: name.length > NAME_MAX ? `${name.slice(0, NAME_MAX - 3)}...` : name }
-  } catch {
-    return undefined
+// Each balanced {...} span of a reply, in order, braces inside JSON strings not counted.
+const objectsIn = function* (text: string): Generator<string> {
+  for (let start = text.indexOf('{'); start !== -1; start = text.indexOf('{', start + 1)) {
+    let depth = 0
+    let inString = false
+    for (let i = start; i < text.length; i++) {
+      const c = text[i]
+      if (inString) {
+        if (c === '\\') i++
+        else if (c === '"') inString = false
+      } else if (c === '"') inString = true
+      else if (c === '{') depth++
+      else if (c === '}' && --depth === 0) {
+        yield text.slice(start, i + 1)
+        break
+      }
+    }
   }
+}
+
+// A model's verdict: the first JSON object in the reply with a boolean stop and a name. Anything
+// else is no verdict, so the next model is asked rather than a guess made from prose. A second
+// object or a stray brace after it never hides it (lessons review of #634).
+export const parseVerdict = (text: string): Verdict | undefined => {
+  for (const candidate of objectsIn(text)) {
+    try {
+      const v = JSON.parse(candidate) as { stop?: unknown; name?: unknown }
+      const name = typeof v.name === 'string' ? v.name.trim().replace(/\s+/g, ' ') : ''
+      if (typeof v.stop !== 'boolean' || !name) continue
+      return { stop: v.stop, name: name.length > NAME_MAX ? `${name.slice(0, NAME_MAX - 3)}...` : name }
+    } catch {
+      // Not JSON: the next candidate is tried.
+    }
+  }
+  return undefined
 }
 
 // How long a job has run, as the status bar writes it: "14m", "2h 14m".
