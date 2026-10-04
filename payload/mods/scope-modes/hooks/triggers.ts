@@ -14,8 +14,9 @@ const PHRASES: { re: RegExp; trigger: Trigger }[] = [
   { re: new RegExp(`\\b(?:let${APOS}?s|time to|please|start) wind(?:ing)? (?:it )?down(?=\\s*(?:[.!,;]|$|now\\b|for (?:today|tonight|the (?:day|night))\\b|after\\b))`, 'i'), trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: /^\s*(?:ok,? )?wind (?:it )?down[.!]?\s*$/i, trigger: { kind: 'scope', scope: 'WINDING DOWN' } },
   { re: /\bno coding yet\b/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
-  { re: /\b(?:stay|keep it|keep things) read[ -]only\b/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
-  { re: /\bread[ -]only (?:for now|mode|until)\b/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
+  // A read only instruction is a sentence of its own ("Stay read only.", "Stay read only until I
+  // say."), so "the database is in read only mode" or "keep it read only in the form" is prose.
+  { re: /(?:^|[.!?]\s+)(?:ok,?\s+|please\s+)?(?:stay|keep it|keep things|read[ -]only (?:for now|mode|until\b[^.!?]*))(?:\s+read[ -]only)?(?:\s+(?:for now|until\b[^.!?]*))?,?(?:\s+please)?\s*(?:[.!?]|$)/i, trigger: { kind: 'scope', scope: 'NO BUILD' } },
   { re: new RegExp(`\\bjust file,? (?:it,? )?don${APOS}?t build\\b`, 'i'), trigger: { kind: 'scope', scope: 'NO BUILD' } },
   { re: new RegExp(`\\bdon${APOS}?t start (?:git|coding|building) yet\\b`, 'i'), trigger: { kind: 'scope', scope: 'NO BUILD' } },
   { re: /\bgo ahead and build\b/i, trigger: { kind: 'build' } },

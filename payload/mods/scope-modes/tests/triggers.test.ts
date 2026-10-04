@@ -19,6 +19,7 @@ describe('triggersIn', () => {
     ['wind down', [{ kind: 'scope', scope: 'WINDING DOWN' }]],
     ['keep it read only', [{ kind: 'scope', scope: 'NO BUILD' }]],
     ['read only mode please', [{ kind: 'scope', scope: 'NO BUILD' }]],
+    ['Looks good. Stay read only until I say.', [{ kind: 'scope', scope: 'NO BUILD' }]],
     ['go ahead and build', [{ kind: 'build' }]],
     ['Looks right. Go ahead and build it.', [{ kind: 'build' }]],
     ["I'm stepping away for an hour", [{ kind: 'place', place: 'away' }]],
@@ -37,7 +38,9 @@ describe('triggersIn', () => {
       'make this column read only', 'use a read-only Supabase connection', 'the project is winding down',
       'the wind down the hall', 'is the read only query safe?',
       'this column should be read only', 'the file will be read only by the loader',
-      'please wind down the staging cluster', "let's wind down the Redis instance"])
+      'please wind down the staging cluster', "let's wind down the Redis instance",
+      'the database is in read only mode', 'make this column read only for now',
+      'keep it read only in the form', 'keep things read only for admins'])
       expect(triggersIn(t)).toEqual([])
   })
   test('one mode named twice in a message comes back once', () => {
