@@ -61,12 +61,12 @@ request in it.
 
 | Surface | Decision |
 | --- | --- |
-| Layout | One long line under the prompt; Dan revisits it once he has lived with it, under #610 (status round 1) |
+| Layout | The always-shown facts are one long line under the prompt (status round 1; Dan revisits it once he has lived with it, under #610). The amber items are not on it: they sit in the band above the prompt, as the rows below say. |
 | Facts always shown | Project, 5 hour limit, weekly limit, cache time left, model and effort, account and org (status round 2) |
 | Facts shown only when they need a look | Unpushed commits, PR and checks (failing or running), a running background job, context above 70% (status round 2) |
 | Hidden | Branch, uncommitted files, commits behind main (status round 2) |
 | Account | Whatever the login file names now, re-read each refresh; no "login changed elsewhere" marker. Dan changes the login in one window expecting it to apply to all of them (picker). |
-| Colour | Everything grey; the needs-a-look items in amber (colour round, switcher). A deliberate exception to standing rule 1: a running PR and a running job are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round). |
+| Colour | The status line is all grey; the needs-a-look items in the band are amber; the Compact button is Claude Code's own bold white (colour round, design rounds). A deliberate exception to standing rule 1: a running PR, a running job and a job kept on purpose are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round, kept job round). |
 | Where it is drawn | The always-shown facts stay on the classic status line script below the prompt, fed by the mod. The amber items are drawn by the mod in the band above the prompt, only while something needs a look (picker, after the probe below). |
 | The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). |
 | Order of the amber line | Most urgent first: a failing or running PR, a running job, unpushed commits, so a narrow window cuts off what can wait longest (design round) |
