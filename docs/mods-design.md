@@ -65,6 +65,30 @@ file exists. The start hook that was meant to hand over its path never reaches a
 told which of three things was missing: no transcript found, one that could not be read, or no
 request in it.
 
+### Files changed by shell command (#654), decided 2026-10-04
+
+A Bash command that writes a file is judged and recorded the same way an Edit is: the same cards,
+toasts and messages, with no surface of its own. The files come from mod-kit's command reader
+(`$.modkit.commands`), which now gives an output redirect (`>`, `>>`, `>|`, `2>`, `&>`, `2>&1`) as
+its own word however it is spaced; the collision guard reads which files the words name
+(`hooks/collide.ts`, `shellWrites`): redirect targets, `tee`'s files, `sed -i` and `perl -i`'s
+files, `touch`'s files, and the destination of `cp` and `mv` (a file inside it when it is a
+folder), plus `mv`'s sources, which it takes away. Paths are made absolute against the session's
+folder, following a `cd` earlier in the same command. A file another open session edited is judged
+before the command runs; once it has run, every file it named is added to this session's edits,
+also when the command failed, since it may have written before it failed. Only a refusal leaves the
+record alone.
+
+What the words do not name is not guessed at, and is neither judged nor recorded: a script
+(`bash ./update.sh`, `python3 -c`, `node -e`, `make`), a path built from a variable, a glob or a
+command substitution, and a relative path after a `cd` to a folder that cannot be named (`cd $DIR`,
+`cd -`). Stopping every such command would refuse ordinary work (every test run) and cost a judgment
+each time, and comparing file times after each command cannot say which session wrote a file, so it
+would record the other session's change as this one's. The gap is the same one an Edit made
+outside Claude Code always had. A quoted lone `>` is read as a redirect (the reader removes quotes
+before anything reads its words), so `grep '>' notes.txt` names notes.txt; the cost is a judgment
+that comes back Proceed.
+
 ## Status bar (#610), settled 2026-10-04
 
 | Surface | Decision |

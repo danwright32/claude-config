@@ -37,6 +37,23 @@ describe('commands', () => {
   test('reads a command run through a shell -c as the commands it runs', () => {
     expect(commands(`bash -c "cat .env && git checkout main"`)).toEqual([['cat', '.env'], ['git', 'checkout', 'main']])
   })
+  // #654: the collision guard reads which files a command writes, so an output redirect is its own
+  // word however it is spaced, and the & of a 2>&1 or a &> joins no two commands.
+  test('an output redirect is its own word, spaced or not', () => {
+    expect(commands(`printf 'x\\n' >> notes.txt`)).toEqual([['printf', 'x\\n', '>>', 'notes.txt']])
+    expect(commands('printf x>>notes.txt')).toEqual([['printf', 'x', '>>', 'notes.txt']])
+    expect(commands('echo a>|f')).toEqual([['echo', 'a', '>|', 'f']])
+    expect(commands('echo hi 2>err')).toEqual([['echo', 'hi', '2>', 'err']])
+  })
+  test('the & of a redirect joins no two commands', () => {
+    expect(commands('make 2>&1 | tee log')).toEqual([['make', '2>&1'], ['tee', 'log']])
+    expect(commands('ls &> out')).toEqual([['ls', '&>', 'out']])
+    expect(commands('ls &>>out')).toEqual([['ls', '&>>', 'out']])
+    expect(commands('sleep 1 & echo done')).toEqual([['sleep', '1'], ['echo', 'done']])
+  })
+  test('a > inside quotes is text', () => {
+    expect(commands(`echo "a>b" 'c>>d'`)).toEqual([['echo', 'a>b', 'c>>d']])
+  })
   test('nothing in, nothing out', () => {
     expect(commands('   ')).toEqual([])
   })

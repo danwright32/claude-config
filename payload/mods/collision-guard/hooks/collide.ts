@@ -90,3 +90,192 @@ export const latestRequest = (tail: string): string | undefined => {
   }
   return undefined
 }
+
+// The files a shell command writes (#654), read from the words mod-kit's command reader gives
+// ($.modkit.commands), so this keeps no reader of its own (L613). Each is a path made absolute
+// against the folder the command runs in, following any cd earlier in the same command. A cp or mv
+// onto one existing name may land inside it if it is a folder, which only the disk can say, so that
+// write carries its sources and the hook looks.
+//
+// Decided for #654 (docs/mods-design.md): what the words do not name is not guessed at. A script, a
+// python -c, a make, or a path built from a variable, a glob or a command substitution writes
+// files this cannot see, and those are neither judged nor noted.
+export type ShellWrite = { path: string; sources?: string[] }
+
+const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?|>&)$/
+const UNNAMEABLE = /[$`*?[\]{}]/
+
+// A word as an absolute path, or undefined when it cannot be named: built from a variable or a
+// pattern, a ~user, relative to a folder that is not known, or a device such as /dev/null.
+export const absolutePath = (word: string, dir: string | undefined, home: string | undefined): string | undefined => {
+  if (!word || UNNAMEABLE.test(word)) return undefined
+  let p = word
+  if (p === '~' || p.startsWith('~/')) {
+    if (!home) return undefined
+    p = home + p.slice(1)
+  } else if (p.startsWith('~')) return undefined
+  if (!p.startsWith('/')) {
+    if (!dir) return undefined
+    p = `${dir}/${p}`
+  }
+  const parts: string[] = []
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') parts.pop()
+    else parts.push(seg)
+  }
+  const out = '/' + parts.join('/')
+  return out === '/dev' || out.startsWith('/dev/') ? undefined : out
+}
+
+const baseOf = (p: string) => p.split('/').filter(Boolean).pop() ?? p
+
+// The operands of a command after its options, taking a value from the next word for the options
+// named in `valued`. After -- everything is an operand.
+const operands = (args: string[], valued: Set<string>): { ops: string[]; opts: Map<string, string | true> } => {
+  const ops: string[] = []
+  const opts = new Map<string, string | true>()
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '--') {
+      ops.push(...args.slice(i + 1))
+      break
+    }
+    if (a.startsWith('-') && a !== '-') {
+      if (valued.has(a)) opts.set(a, args[++i] ?? '')
+      else opts.set(a, true)
+    } else ops.push(a)
+  }
+  return { ops, opts }
+}
+
+// sed's files when it edits them in place: -i, -i<suffix>, --in-place[=suffix], with BSD's -i ''
+// or -i .bak taking the next word as the suffix. The script is the first operand unless -e or -f
+// gave it.
+const sedInPlace = (args: string[]): string[] => {
+  let inPlace = false
+  let scripted = false
+  const ops: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '-e' || a === '-f' || a === '--expression' || a === '--file') {
+      scripted = true
+      i++
+    } else if (a.startsWith('--expression=') || a.startsWith('--file=')) scripted = true
+    else if (a === '-i') {
+      inPlace = true
+      const next = args[i + 1]
+      if (next !== undefined && (next === '' || next.startsWith('.'))) i++
+    } else if (a === '--in-place' || a.startsWith('--in-place=') || /^-[a-zA-Z]*i/.test(a)) inPlace = true
+    else if (a.startsWith('-') && a !== '-') continue
+    else ops.push(a)
+  }
+  if (!inPlace) return []
+  return scripted ? ops : ops.slice(1)
+}
+
+// perl's files when -i edits them in place. In a cluster such as -pi.bak or -pie, what follows the
+// i is its suffix; an e or E takes the rest of the cluster, or the next word, as the script.
+const perlInPlace = (args: string[]): string[] => {
+  let inPlace = false
+  let scripted = false
+  const ops: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '--') {
+      ops.push(...args.slice(i + 1))
+      break
+    }
+    if (!a.startsWith('-') || a === '-') {
+      ops.push(a)
+      continue
+    }
+    const letters = a.slice(1)
+    for (let j = 0; j < letters.length; j++) {
+      const l = letters[j] as string
+      if (l === 'i') {
+        inPlace = true
+        break
+      }
+      if (l === 'e' || l === 'E') {
+        scripted = true
+        if (j === letters.length - 1) i++
+        break
+      }
+      // The rest of the cluster is this letter's value (-Ilib, -MPOSIX), never more letters, so
+      // the i in -Ilib is not -i.
+      if ('IMmxCdD0l'.includes(l)) break
+    }
+  }
+  if (!inPlace) return []
+  return scripted ? ops : ops.slice(1)
+}
+
+export const shellWrites = (cmds: string[][], cwd: string, home: string | undefined): ShellWrite[] => {
+  const out: ShellWrite[] = []
+  const seen = new Set<string>()
+  const add = (path: string | undefined, sources?: string[]) => {
+    if (!path || seen.has(path)) return
+    seen.add(path)
+    out.push(sources ? { path, sources } : { path })
+  }
+  let dir: string | undefined = cwd
+  for (const words of cmds) {
+    // Redirects first, and taken out of the words, so what is left is the command and its operands.
+    const args: string[] = []
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i] as string
+      if (WRITE_REDIRECT.test(w)) {
+        const target = words[++i]
+        if (target !== undefined) add(absolutePath(target, dir, home))
+      } else if (/^\d*>&[0-9-]+$/.test(w)) continue
+      else if (/^\d*<$/.test(w)) i++
+      else args.push(w)
+    }
+    const name = baseOf(args[0] ?? '')
+    const rest = args.slice(1)
+    const abs = (w: string) => absolutePath(w, dir, home)
+    switch (name) {
+      case 'cd': {
+        // cd - goes back to a folder this cannot know, so relative paths after it are not named.
+        const target = rest.find(a => !a.startsWith('-') || a === '-') ?? '~'
+        dir = target === '-' ? undefined : absolutePath(target, dir, home)
+        break
+      }
+      case 'tee':
+        for (const f of operands(rest, new Set()).ops) add(abs(f))
+        break
+      case 'touch':
+        for (const f of operands(rest, new Set(['-t', '-r', '-d'])).ops) add(abs(f))
+        break
+      case 'sed':
+        for (const f of sedInPlace(rest)) add(abs(f))
+        break
+      case 'perl':
+        for (const f of perlInPlace(rest)) add(abs(f))
+        break
+      case 'cp':
+      case 'mv': {
+        const { ops, opts } = operands(rest, new Set(['-t', '--target-directory', '-S', '--suffix']))
+        const named = ops.map(o => ({ word: o, path: abs(o) }))
+        const intoOpt = opts.get('-t') ?? opts.get('--target-directory') ?? [...opts.keys()].find(k => k.startsWith('--target-directory='))?.slice('--target-directory='.length)
+        let sources = named
+        let into: string | undefined
+        let dest: { word: string; path: string | undefined } | undefined
+        if (typeof intoOpt === 'string') into = abs(intoOpt)
+        else {
+          dest = named[named.length - 1]
+          sources = named.slice(0, -1)
+          if (!dest || sources.length === 0) break
+          if (sources.length > 1 || dest.word.endsWith('/')) into = dest.path
+        }
+        const srcPaths = sources.map(s => s.path).filter((p): p is string => !!p)
+        if (into) for (const s of srcPaths) add(`${into}/${baseOf(s)}`)
+        else if (dest?.path) add(dest.path, srcPaths.length ? srcPaths : undefined)
+        if (name === 'mv') for (const s of srcPaths) add(s)
+        break
+      }
+    }
+  }
+  return out
+}

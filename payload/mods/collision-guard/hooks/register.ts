@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { latestRequest, othersEditing, othersInRepo, parseVerdict, watchedGit, type Rec, type Verdict } from './collide.ts'
+import { latestRequest, othersEditing, othersInRepo, parseVerdict, shellWrites, watchedGit, type Rec, type Verdict } from './collide.ts'
 
 // Collision guard (claude-config#605): two sessions in one checkout must not edit the same file or
 // move the tree under each other. Who is open comes from the shared session registry; the verdict
@@ -129,7 +129,22 @@ const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
   return refuse($, toolUseId, reason, SAFE[v.verdict], note)
 }
 
-const unreadableRefusal = ($: EngineInterface, toolUseId: string, names: string[]) =>
+// The files a Bash call writes, as far as its words name them (collide.ts, shellWrites). A cp or mv
+// onto one existing folder lands inside it; a path the disk cannot answer for is taken as the file
+// itself, the reading that still judges a clash on that name.
+const writtenFiles = async ($: EngineInterface, cmds: string[][]): Promise<string[]> => {
+  const cwd = await $.session.cwd()
+  const home = await $.env.get('HOME').catch(() => undefined)
+  const out: string[] = []
+  for (const w of shellWrites(cmds, cwd, home)) {
+    let isDir = false
+    if (w.sources) isDir = (await $.fs.stat(w.path).catch(() => undefined))?.kind === 'dir'
+    for (const p of isDir && w.sources ? w.sources.map(s => `${w.path}/${base(s)}`) : [w.path]) if (!out.includes(p)) out.push(p)
+  }
+  return out
+}
+
+const unreadableRefusal =($: EngineInterface, toolUseId: string, names: string[]) =>
   refuse($, toolUseId, `Couldn't read another session's record (${names.join(', ')}), so this was stopped.`, 'Delete the damaged file in ~/.claude/state/sessions, or ask Dan.')
 
 export const register: Register = on => {
@@ -154,7 +169,9 @@ export const register: Register = on => {
     }
 
     if (e.tool === 'Bash') {
-      for (const words of await $.modkit.commands({ command: String(input.command ?? '') })) {
+      const command = String(input.command ?? '')
+      const cmds = await $.modkit.commands({ command })
+      for (const words of cmds) {
         const g = await $.modkit.git({ words })
         const action = g ? watchedGit(g) : undefined
         if (!g || !action) continue
@@ -167,6 +184,33 @@ export const register: Register = on => {
         const blocked = await decide($, toolUseId, { action, shortName: action, messageWhat: action, where: 'checkout', root, others })
         if (blocked) return blocked
       }
+
+      // The files the command writes (#654), judged against the other sessions' edits the same way
+      // an Edit is, and noted as this session's own once it has run.
+      const written = await writtenFiles($, cmds)
+      if (written.length) {
+        const list = await $.sessions.list()
+        if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
+        for (const path of written) {
+          const others = othersEditing(list.open, list.selfId, path)
+          if (!others.length) continue
+          const root = others[0]?.repoRoot ?? null
+          const blocked = await decide($, toolUseId, {
+            action: `write ${path} with the shell command: ${command}`,
+            shortName: base(path),
+            messageWhat: relTo(path, root),
+            where: 'file',
+            root,
+            others,
+          })
+          if (blocked) return blocked
+        }
+      }
+      const result = await next(e)
+      // A command that failed may still have written before it failed (printf >> f; false), so only
+      // a refusal leaves the record alone.
+      if (!result.deny) for (const path of written) await $.sessions.noteEdit({ path })
+      return result
     }
     return next(e)
   })
