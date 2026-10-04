@@ -38,6 +38,7 @@ type Rec = { done: number; total: number; current: string | null; lastActivityAt
 // failExtraFrom: registry writes fail from this one on (1 is the first). taskWithoutId: a
 // TaskCreate answers with no task id.
 // notifyFails: terminal-notifier exits 1. permissionDenied: the permission prompt is answered no.
+// permissionThrows: the call the prompt belongs to throws once it is answered.
 type WorldOpts = {
   duringAsk?: (w: { progress: Rec[] }) => void
   registryFails?: boolean
@@ -47,9 +48,10 @@ type WorldOpts = {
   taskWithoutId?: boolean
   notifyFails?: boolean
   permissionDenied?: boolean
+  permissionThrows?: boolean
 }
 const world = (on: On, opts: WorldOpts = {}) => {
-  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined }
+  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined }
   let writes = 0
   on('process.run', ($, e) => {
     if (e.argv[0] === 'terminal-notifier') {
@@ -88,7 +90,10 @@ const world = (on: On, opts: WorldOpts = {}) => {
       await new Promise<void>(r => (w.answer = r))
       w.duringPermission = w.progress[w.progress.length - 1]
       if (opts.permissionDenied) return { deny: 'The user did not allow this.' } as never
+      if (opts.permissionThrows) throw new Error('the test suite could not be started')
     }
+    // A Bash call running beside it, with no description either, until the test lets it finish.
+    if (e.tool === 'Bash' && (e as unknown as { command?: string }).command === 'npm run lint') await new Promise<void>(r => (w.lint = r))
     if (e.tool === 'ProposeGoal') return { result: { condition: (e as unknown as { condition: string }).condition, askUser: false }, text: 'set' } as never
     if (e.tool === 'TaskCreate' && opts.taskWithoutId) return { result: { task: {} }, text: 'created' } as never
     if (e.tool === 'TaskCreate') {
@@ -437,6 +442,102 @@ test('another call returning while a permission is open leaves the session waiti
   await $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'Bash', tool_input: { command: 'npm test', description: 'Run the test suite' } } as never)
   await $.tool.call(bash('ls'))
   expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// #694 item 1: the prompt belongs to the call it was raised inside, held by that call's id, never
+// matched by tool and "what for" text, which for any Bash call with no description is just "a Bash
+// command". prompted starts the call Claude Code stops to ask about and raises its prompt (with
+// promptInput, as the prompt names it) while the call waits; the call comes back wrapped, since it
+// only settles once the test answers.
+const raise = ($: Raiser, input: Record<string, unknown>) =>
+  $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'Bash', tool_input: input } as never)
+const prompted = async ($: Raiser, w: { answer: (() => void) | undefined }, input: Record<string, unknown>, promptInput = input) => {
+  const call = $.tool.call({ tool: 'Bash', ...input } as never)
+  for (let i = 0; i < 50 && !w.answer; i++) await Promise.resolve()
+  await raise($, promptInput)
+  return { call }
+}
+const running = async ($: Raiser, w: { lint: (() => void) | undefined }) => {
+  const call = $.tool.call(bash('npm run lint'))
+  for (let i = 0; i < 50 && !w.lint; i++) await Promise.resolve()
+  return { call }
+}
+
+test('a parallel Bash call with no description returning while a permission is open leaves the session waiting', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const lint = await running($ as never, w)
+  const { call } = await prompted($ as never, w, { command: 'npm test' })
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission', question: 'a Bash command' })
+  w.lint?.()
+  await lint.call
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission', question: 'a Bash command' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+test("the prompt's own call returning clears it while another Bash call with no description runs on", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const lint = await running($ as never, w)
+  const { call } = await prompted($ as never, w, { command: 'npm test' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+  w.lint?.()
+  await lint.call
+})
+
+// A hook beneath the tracker may rewrite a call, so a prompt can name an input no running call has:
+// it then belongs to one of the calls of its tool running when it was raised, and stays until each
+// has returned, never cleared early by the first.
+test('a prompt whose input matches no running call waits for every call of its tool that was running', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  const lint = await running($ as never, w)
+  const { call } = await prompted($ as never, w, { command: 'npm test' }, { command: 'npm test --ci' })
+  w.lint?.()
+  await lint.call
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
+  w.answer?.()
+  await call
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// A call that rejects (an interrupt while the prompt is open does) has ended, so its prompt has too.
+test('a permission whose call rejects once answered still clears waiting', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { permissionThrows: true })
+  await start($)
+  const { call } = await prompted($ as never, w, { command: 'npm test' })
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission' })
+  w.answer?.()
+  const outcome = await call.then(
+    () => 'settled',
+    () => 'rejected',
+  )
+  expect(outcome).toBe('rejected')
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+// #694 item 2: a question settling clears only its own mark; a permission still open stands.
+test('a question asked and answered while a permission is open leaves the permission mark', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  let during: Rec | undefined
+  const w = world(on, { duringAsk: x => (during = x.progress[x.progress.length - 1]) })
+  await start($)
+  const { call } = await prompted($ as never, w, { command: 'npm test', description: 'Run the test suite' })
+  await clock.advance(1_000)
+  await $.tool.call(ask('Which colour?'))
+  expect(during?.waiting).toMatchObject({ kind: 'question', question: 'Which colour?' })
+  expect(last(w)?.waiting).toMatchObject({ kind: 'permission', question: 'Run the test suite' })
   w.answer?.()
   await call
   expect(last(w)?.waiting).toBeUndefined()

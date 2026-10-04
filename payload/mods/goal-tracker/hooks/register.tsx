@@ -48,9 +48,6 @@ const withNotice = <R extends { context?: readonly string[] }>(result: R): R => 
 // nothing being asked. One that cannot be sent is said once a session, in one dim line (the guards'
 // note style), its reason also in the debug log; it never holds up or breaks what it rides on.
 let startCwd = ''
-// The call the open permission prompt belongs to, named as the prompt names it, so another call
-// returning meanwhile (a parallel call, a subagent's) leaves the session waiting (lessons review).
-let permissionCall: { tool: string; what: string } | undefined
 let project: string | undefined
 let toldNoNotify = false
 // This session's project, from its own registry record (the one place its repository is worked out).
@@ -90,6 +87,50 @@ const notifySoon = ($: EngineInterface, title: () => Promise<string>, message: s
 }
 // A clock that cannot be read stamps a goal or a request with the last activity's time instead.
 const nowOr = ($: EngineInterface): Promise<number> => $.clock.now().catch(() => progress?.lastActivityAt ?? 0)
+
+// What the session waits on Dan for, each kept apart so that one ending never erases the other
+// (#694): the open question, and the open permission prompt with the calls it may belong to. The
+// pane shows the latest of the two.
+type Waiting = NonNullable<Progress['waiting']>
+let question: { mark: Waiting } | undefined
+let permission: { calls: Set<string>; mark: Waiting } | undefined
+const waitingNow = (): Waiting | undefined =>
+  question && permission ? (permission.mark.since > question.mark.since ? permission.mark : question.mark) : (question?.mark ?? permission?.mark)
+const withWaiting = (p: Progress): Progress => {
+  const w = waitingNow()
+  if (w === p.waiting) return p
+  const { waiting: _was, ...rest } = p
+  return w ? { ...rest, waiting: w } : rest
+}
+
+// The calls running now, by id, with their arguments. A permission prompt names its call only by tool
+// and input, never by id, so it is matched to one of these; matching on the tool and the prompt's
+// "what for" text let any other Bash call with no description, which reads "a Bash command" too,
+// clear it early (#694).
+const running = new Map<string, { tool: string; args: Record<string, unknown> }>()
+let unnamed = 0
+const argsOf = ({ tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args }: Record<string, unknown>) => args
+const sameArgs = (args: Record<string, unknown>, asked: unknown): boolean => {
+  if (!asked || typeof asked !== 'object') return false
+  const named = asked as Record<string, unknown>
+  const shared = Object.keys(named).filter(k => k in args)
+  return shared.length > 0 && shared.every(k => JSON.stringify(args[k]) === JSON.stringify(named[k]))
+}
+// The running call of the prompt's tool whose arguments it names; else (a hook beneath rewrote the
+// call) every running call of its tool, and the prompt stands until each of them has returned.
+const callsFor = (tool: string, asked: unknown): string[] => {
+  const ofTool = [...running].filter(([, c]) => c.tool === tool)
+  const named = ofTool.filter(([, c]) => sameArgs(c.args, asked))
+  return (named.length ? named : ofTool).map(([id]) => id)
+}
+// A prompt raised inside a call has been answered, either way, once that call has returned or
+// rejected. True when that took the permission mark off.
+const callEnded = (id: string): boolean => {
+  running.delete(id)
+  if (!permission?.calls.delete(id) || permission.calls.size) return false
+  permission = undefined
+  return true
+}
 
 // The /goals pane (claude-config#612, docs/mods-design.md "Goals pane", settled 2026-10-04): every
 // open session on this Mac, in any project, two lines each. Project and goal on top; beneath, the
@@ -184,7 +225,9 @@ export const register: Register = on => {
     toldNoNotify = false
     startCwd = e.cwd
     project = undefined
-    permissionCall = undefined
+    question = undefined
+    permission = undefined
+    running.clear()
     await paneStart($)
     return next(e)
   })
@@ -277,11 +320,11 @@ export const register: Register = on => {
     const text = e.text.trim()
     // Dan sending a message is never a session waiting on his permission: a mark whose call could
     // not be matched as it returned is cleared here at the latest (lessons review of f0a8ff9).
-    if (isPerson && progress?.waiting?.kind === 'permission') {
-      const { waiting: _stale, ...rest } = progress
-      progress = rest
-      permissionCall = undefined
-      await publish($, await nowOr($))
+    if (isPerson && permission) {
+      permission = undefined
+      const before = progress
+      if (progress) progress = withWaiting(progress)
+      if (progress !== before) await publish($, await nowOr($))
     }
     if (isPerson && progress && progress.request === undefined && text && !text.startsWith('/')) {
       progress = { ...progress, request: firstWords(text) }
@@ -294,10 +337,10 @@ export const register: Register = on => {
   // pane until the call it belongs to returns, and notified.
   on('classic.PermissionRequest', async ($, e, next) => {
     const what = permissionFor(e.tool_name, e.tool_input)
-    permissionCall = { tool: e.tool_name, what }
+    const now = await nowOr($)
+    permission = { calls: new Set(callsFor(e.tool_name, e.tool_input)), mark: { question: what, since: now, kind: 'permission' } }
     if (progress) {
-      const now = await nowOr($)
-      progress = { ...progress, waiting: { question: what, since: now, kind: 'permission' } }
+      progress = withWaiting(progress)
       await publish($, now)
     }
     notifySoon($, async () => `${await projectName($)} needs a permission`, what, 'Glass')
@@ -306,11 +349,15 @@ export const register: Register = on => {
 
   // "What's next?" only while nothing is being asked: an open question or permission sent its own.
   on('classic.Notification', async ($, e, next) => {
-    if (e.notification_type === 'idle_prompt' && !progress?.waiting) notifySoon($, async () => 'Claude Code', "What's next?")
+    if (e.notification_type === 'idle_prompt' && !waitingNow()) notifySoon($, async () => 'Claude Code', "What's next?")
     return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
+    const input = e as unknown as Record<string, unknown>
+    // Recorded before anything else, so a permission prompt raised inside it is matched to it (#694).
+    const id = typeof input.tool_use_id === 'string' ? input.tool_use_id : `call-${++unnamed}`
+    running.set(id, { tool: e.tool, args: argsOf(input) })
     // A clock that cannot be read leaves this call untracked, never broken; Claude is told once,
     // until the clock reads again (lessons review of c4ae14f).
     let now: number
@@ -322,20 +369,28 @@ export const register: Register = on => {
         toldNoClock = true
         notices.push(`The goal tracker could not read the clock (${err instanceof Error ? err.message : String(err)}), so this session's progress is not being recorded.`)
       }
-      return withNotice(await next(e))
+      try {
+        return withNotice(await next(e))
+      } finally {
+        // An answered prompt's mark still comes off, written with no new time.
+        if (callEnded(id) && progress) {
+          progress = withWaiting(progress)
+          await publish($, lastTried)
+        }
+      }
     }
-    progress ??= empty(now)
-    const input = e as unknown as Record<string, unknown>
+    progress ??= withWaiting(empty(now))
     // A subagent keeps its own list, which is not the session's goal; its work still counts as
     // the session being active, and its failures are its own (lessons review of #634).
     const fromSubagent = Boolean((e as { agentId?: string }).agentId)
 
     if (e.tool === 'AskUserQuestion' && !fromSubagent) {
       const qs = (input.questions as { question?: string }[] | undefined) ?? []
-      const question = qs[0]?.question ?? 'a question'
-      progress = { ...progress, waiting: { question, since: now, kind: 'question' }, lastActivityAt: now }
+      const text = qs[0]?.question ?? 'a question'
+      question = { mark: { question: text, since: now, kind: 'question' } }
+      progress = { ...withWaiting(progress), lastActivityAt: now }
       await publish($, now)
-      notifySoon($, async () => `${await projectName($)} is waiting on you`, question)
+      notifySoon($, async () => `${await projectName($)} is waiting on you`, text)
       // A question that throws or is refused counts toward failed, as any call does. What follows
       // the question can never throw over its result or error, and a notice its write raises rides
       // on this result (lessons review of #634).
@@ -346,8 +401,10 @@ export const register: Register = on => {
         } catch {
           // The time the question was asked stands in for a clock that cannot be read.
         }
-        const { waiting: _cleared, ...rest } = progress ?? empty(now)
-        progress = { ...counted(rest, why), lastActivityAt: after }
+        // Only the question's own mark comes off: a permission prompt still open stands (#694).
+        question = undefined
+        callEnded(id)
+        progress = { ...counted(withWaiting(progress ?? empty(now)), why), lastActivityAt: after }
         await publish($, after)
       }
       let result
@@ -361,15 +418,19 @@ export const register: Register = on => {
       return withNotice(result)
     }
 
-    const result = await next(e)
-    const waitingBefore = progress.waiting
-    // A permission asked inside this call has been answered, either way, once it returns.
-    const thisCall = (({ tool: _t, tool_use_id: _id, agentId: _a, ...rest }) => rest)(input as Record<string, unknown> & { tool?: unknown; tool_use_id?: unknown; agentId?: unknown })
-    if (progress.waiting?.kind === 'permission' && permissionCall?.tool === e.tool && permissionCall.what === permissionFor(e.tool, thisCall)) {
-      permissionCall = undefined
-      const { waiting: _answered, ...rest } = progress
-      progress = rest
+    let result
+    try {
+      result = await next(e)
+    } catch (err) {
+      // A call that rejects (an interrupt does) has ended too, so a prompt raised inside it is over.
+      if (callEnded(id) && progress) {
+        progress = withWaiting(progress)
+        await publish($, now)
+      }
+      throw err
     }
+    const waitingBefore = progress.waiting
+    if (callEnded(id)) progress = withWaiting(progress)
     const before = progress
     const why = failureOf(result)
 
