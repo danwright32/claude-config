@@ -45,6 +45,13 @@ reason(){ printf '%s\n' "$1" | grep -E '[Ff]ail|[Ee]rror|refused|bad' | sed -n '
 failed=0
 for d in "${mods[@]}"; do
   name="$(basename "$d")"
+  # Every mod ships its own tsconfig.json (Dan, 2026-10-04, after #638). Without one, Claude Code
+  # generates it in the installed copy, and the sync sends that up to main as a local edit.
+  if [ ! -f "$d/tsconfig.json" ]; then
+    echo "check-mods: $name has no tsconfig.json; every mod ships its own, or the copy Claude Code generates is sent up as a local edit"
+    failed=1
+    continue
+  fi
   if ! out="$("$bin" plugin validate "$d" 2>&1)"; then
     echo "check-mods: $name refused by claude plugin validate: $(reason "$out")"
     failed=1

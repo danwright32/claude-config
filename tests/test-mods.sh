@@ -28,6 +28,7 @@ mkmod(){   # $1 = mods dir  $2 = name
   printf '{ "name": "%s", "version": "0.1.0", "description": "x" }\n' "$2" > "$1/$2/.claude-plugin/plugin.json"
   printf '{ "modules": ["./register.ts"] }\n' > "$1/$2/hooks/hooks.json"
   printf 'export const register = () => {}\n' > "$1/$2/hooks/register.ts"
+  printf '{ "extends": "./.claude-plugin/types/tsconfig.json" }\n' > "$1/$2/tsconfig.json"
 }
 # The stub: validate refuses any mod whose folder name contains "broken"; test fails any mod whose
 # folder name contains "redtest"; every call is logged so a case can assert what was asked.
@@ -71,6 +72,16 @@ printf '%s\n' "$out" | grep 'redtest-mod' | grep -q '1 fail' \
   && check "naming the mod and the test result" ok || check "naming the mod and the test result" "$out"
 ! grep -q "plugin test $M3/untested" "$LOG" && check "a mod with no tests is not run through the test runner" ok \
   || check "a mod with no tests is not run through the test runner" "$(cat "$LOG")"
+
+# 3b. Every mod ships its own tsconfig.json (Dan, 2026-10-04, after #638): one without it gets the
+#     copy Claude Code generates, which the sync then sends up as a local edit.
+M3B="$TMPROOT/m3b"; mkmod "$M3B" bare-mod; rm "$M3B/bare-mod/tsconfig.json"; mkmod "$M3B" dressed
+runit "$M3B"
+[ "$code" -eq 1 ] && check "a mod with no tsconfig.json fails the run" ok || check "a mod with no tsconfig.json fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep 'bare-mod' | grep -q 'tsconfig.json' \
+  && check "naming the mod and the missing file" ok || check "naming the mod and the missing file" "$out"
+grep -q "plugin validate $M3B/dressed" "$LOG" && check "and the other mod was still checked" ok \
+  || check "and the other mod was still checked" "$(cat "$LOG")"
 
 # 4. Generated types are never mistaken for the mod's own tests.
 M4="$TMPROOT/m4"; mkmod "$M4" typed; mkdir -p "$M4/typed/.claude-plugin/types"; printf 'x\n' > "$M4/typed/.claude-plugin/types/x.test.ts"

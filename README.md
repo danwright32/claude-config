@@ -1009,7 +1009,9 @@ Two things are deliberately not carried:
 - `.claude-plugin/types/`, which Claude Code writes into every plugin folder on every load,
   describing that Mac's build and MCP tools. It is excluded on both sides of the mirror.
 - Nothing else. A mod's own `tsconfig.json` IS carried: the engine writes one only where none
-  exists and leaves an existing one alone (measured on 2.1.288).
+  exists and leaves an existing one alone (measured on 2.1.288). So every mod ships its own:
+  `tools/check-mods.sh` fails a mod without one, because the copy the engine would generate is
+  otherwise sent up to main as a local edit (two arrived that way on 2026-10-04, #638).
 
 Before a push, `tests/test-mods.sh` runs `tools/check-mods.sh` over `payload/mods`, which validates
 every mod and runs its own `*.test.ts` with `claude plugin test`. Where no `claude` command exists
