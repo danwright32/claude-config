@@ -40,3 +40,63 @@ export const assess = (s: Sample, now: number): Assessment => {
   if (!s.quietByDesign && now - s.lastGrowth > SILENT_MS) return { state: 'silent', forMs: now - s.lastGrowth }
   return { state: 'running' }
 }
+
+// Leftover jobs from closed sessions (Dan, 2026-10-04): a model judges each, and Dan sees one dim
+// line naming what was stopped and what was left.
+
+export type Verdict = { stop: boolean; name: string }
+const NAME_MAX = 60
+
+// A model's verdict: a JSON object with a boolean stop and a name, anywhere in the reply. Anything
+// else is no verdict, so the next model is asked rather than a guess made from prose.
+export const parseVerdict = (text: string): Verdict | undefined => {
+  const m = /\{[\s\S]*\}/.exec(text)
+  if (!m) return undefined
+  try {
+    const v = JSON.parse(m[0]) as { stop?: unknown; name?: unknown }
+    const name = typeof v.name === 'string' ? v.name.trim().replace(/\s+/g, ' ') : ''
+    if (typeof v.stop !== 'boolean' || !name) return undefined
+    return { stop: v.stop, name: name.length > NAME_MAX ? `${name.slice(0, NAME_MAX - 3)}...` : name }
+  } catch {
+    return undefined
+  }
+}
+
+// How long a job has run, as the status bar writes it: "14m", "2h 14m".
+export const runFor = (ms: number): string => {
+  const mins = Math.max(0, Math.floor(ms / 60_000))
+  return mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h ${mins % 60}m`
+}
+
+export type Outcome = { kind: 'stopped' | 'left' | 'unjudged' | 'stopFailed'; name: string; why?: string; session: string }
+
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many)
+
+// The one line Dan sees, or undefined when there is nothing to say. Each kind of outcome has words
+// of its own (L11): a job left on a verdict, a job left because nothing could judge it, and a stop
+// that failed are three different things.
+export const leftoverLine = (outcomes: Outcome[], unreadable: string[]): string | undefined => {
+  const sessions = new Set(outcomes.map(o => o.session)).size
+  const parts: string[] = []
+  const lead = (n: number) => `${n} leftover ${plural(n, 'job', 'jobs')} from ${plural(sessions, 'a closed session', 'closed sessions')}`
+  const add = (kind: Outcome['kind'], first: (n: number, names: string) => string, later: (n: number, names: string) => string) => {
+    const of = outcomes.filter(o => o.kind === kind)
+    if (!of.length) return
+    const names = of.map(o => (o.why ? `${o.name}: ${o.why}` : o.name)).join(kind === 'stopFailed' ? '; ' : ', ')
+    parts.push(parts.length ? later(of.length, names) : first(of.length, names))
+  }
+  add('stopped', (n, x) => `Stopped ${lead(n)} (${x})`, (n, x) => `stopped ${n} (${x})`)
+  add('left', (n, x) => `Left ${lead(n)} running (${x})`, (n, x) => `left ${n} running (${x})`)
+  add(
+    'unjudged',
+    (n, x) => `Could not judge ${lead(n)} and left ${plural(n, 'it', 'them')} running to be judged next session (${x})`,
+    (n, x) => `could not judge ${n} and left ${plural(n, 'it', 'them')} running to be judged next session (${x})`,
+  )
+  add('stopFailed', (n, x) => `Could not stop ${lead(n)} (${x})`, (n, x) => `could not stop ${n} (${x})`)
+  if (unreadable.length) {
+    const n = unreadable.length
+    const said = `ould not read ${n} session ${plural(n, 'record', 'records')} (${unreadable.join(', ')}), so any leftover jobs in ${plural(n, 'it', 'them')} were not checked`
+    parts.push(parts.length ? `c${said}` : `C${said}`)
+  }
+  return parts.length ? `${parts.join('; ')}.` : undefined
+}

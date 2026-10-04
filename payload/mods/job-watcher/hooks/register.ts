@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { assess, isErrorLine, isPollLoop, startedJob } from './jobs.ts'
+import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, startedJob, type Outcome, type Verdict } from './jobs.ts'
 
 // Background job watcher (claude-config#611). Every background job is recorded with its process
 // group, traced through the output file it writes (never by matching its command text, L1011), into
@@ -18,7 +18,7 @@ type Watch = { lastSize: number; lastGrowth: number; told: boolean; toldUnreadab
 
 const TICK_MS = 60_000
 const KEEP_TOOL = 'keep_job'
-const KEEP_CALL = `mcp__job-watcher__${KEEP_TOOL}`
+const KEEP_CALL = 'mcp__job-watcher__keep_job'
 const KEEP_SPEC = {
   name: KEEP_TOOL,
   description:
@@ -223,6 +223,110 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
   }
 }
 
+// Leftover jobs (Dan, 2026-10-04). At session start, each job a closed session recorded that is still
+// alive is judged with no question to Dan: Haiku first, Sonnet when Haiku gives no usable verdict,
+// and left running (judged again next session start) when neither can. A job is stopped by the
+// process group traced through its output file, never by its command text (L1011), and only while
+// that file is still held by the group the session recorded. Dan sees one dim line afterwards.
+const JUDGES = ['claude-haiku-4-5-20251001', 'claude-sonnet-5-5']
+const JUDGE_MS = 30_000
+const STOP_SETTLE_MS = 2_000
+
+type Leftover = Job & { session: string }
+const isJob = (x: unknown): x is Job => {
+  const j = x as Partial<Job> | null
+  return !!j && typeof j.id === 'string' && typeof j.command === 'string' && typeof j.outputPath === 'string' && typeof j.startedAt === 'number' && (j.pgid === null || typeof j.pgid === 'number')
+}
+
+const judge = async ($: EngineInterface, prompt: string): Promise<Verdict | undefined> => {
+  for (const model of JUDGES) {
+    try {
+      const r = await $.model.complete({ model, prompt, maxTokens: 200, timeoutMs: JUDGE_MS })
+      const v = r.isAnswered ? parseVerdict(r.text) : undefined
+      if (v) return v
+    } catch {
+      // A call the engine refused to send is no verdict; the next model is asked.
+    }
+  }
+  return undefined
+}
+
+const promptFor = (job: Job, runMs: number, tail: string, state: string) =>
+  [
+    'A background job started by a Claude Code session is still running, but that session has closed, so nobody is watching it.',
+    'Decide whether to stop it. Stop it when it is a loop that keeps failing, has no use without its session, or is plainly stuck.',
+    'Keep it when it may still be serving something a person uses, like a dev server, or when you cannot tell.',
+    `The command: ${job.command}`,
+    `It has run for ${runFor(runMs)}.`,
+    `Its output: ${state}.`,
+    `The end of its output:\n${tail.slice(-2000) || '(empty)'}`,
+    'Answer with JSON only: {"stop": true | false, "name": "<a few words naming the job, like \"dev server\" or \"curl loop repeating connection refused\">", "reason": "<one short sentence>"}.',
+  ].join('\n')
+
+// One leftover, judged and acted on; undefined when it has ended or is not the job it was.
+const judgeOne = async ($: EngineInterface, job: Leftover, now: number): Promise<Outcome | undefined> => {
+  const short = job.command.length > 40 ? `${job.command.slice(0, 37)}...` : job.command
+  const h = await holderOf($, job.outputPath)
+  if (h === 'nobody') return undefined
+  if (h === 'unknown') {
+    if (job.pgid !== null && (await hasEnded($, job.pgid))) return undefined
+    return { kind: 'unjudged', name: short, session: job.session }
+  }
+  const group = await traceGroup($, job.outputPath)
+  // Held by some other group than the one recorded: not this job any more, so never touched.
+  if (group === null || (job.pgid !== null && group !== job.pgid)) return undefined
+  const stat = (await run($, ['stat', '-f', '%z %m', job.outputPath]))?.trim().split(/\s+/).map(Number)
+  const tail = (await run($, ['tail', '-c', '4096', job.outputPath])) ?? ''
+  const mtimeMs = stat && Number.isFinite(stat[1]) ? (stat[1] as number) * 1000 : now
+  const a = assess({ tail, size: stat?.[0] ?? 0, lastGrowth: mtimeMs }, now)
+  const state = a.state === 'repeating' ? `it keeps repeating the same line, "${a.line}"` : a.state === 'silent' ? `no new output for ${Math.round(a.forMs / 60_000)} minutes` : 'still writing'
+  const v = await judge($, promptFor(job, now - job.startedAt, tail, state))
+  if (!v) return { kind: 'unjudged', name: short, session: job.session }
+  if (!v.stop) return { kind: 'left', name: v.name, session: job.session }
+  // Checked again just before the stop: the model's answer took time, and a group can end and its
+  // number be reused meanwhile.
+  if ((await traceGroup($, job.outputPath)) !== group) return undefined
+  let killed
+  try {
+    killed = await $.process.run(['/bin/kill', '-TERM', `-${group}`], { timeoutMs: 10_000 })
+  } catch (err) {
+    return { kind: 'stopFailed', name: v.name, why: err instanceof Error ? err.message : String(err), session: job.session }
+  }
+  if (killed.exitCode !== 0) return { kind: 'stopFailed', name: v.name, why: killed.stderr.trim() || `kill exited ${killed.exitCode}`, session: job.session }
+  await $.clock.sleep(STOP_SETTLE_MS)
+  if (!(await hasEnded($, group))) return { kind: 'stopFailed', name: v.name, why: 'it was still running after the stop signal', session: job.session }
+  return { kind: 'stopped', name: v.name, session: job.session }
+}
+
+const judgeLeftovers = async ($: EngineInterface) => {
+  let list
+  try {
+    list = await $.sessions.list()
+  } catch (err) {
+    $.ui.log(`Background job watcher could not read the session registry (${err instanceof Error ? err.message : String(err)}), so leftover jobs from closed sessions were not checked.`)
+    return
+  }
+  const now = await $.clock.now()
+  const leftovers: Leftover[] = list.closed
+    .filter(r => r.sessionId !== list.selfId)
+    .flatMap(r => {
+      const recorded = (r.extra as { jobs?: unknown }).jobs
+      return Array.isArray(recorded) ? recorded.filter(isJob).map(j => ({ ...j, session: r.sessionId })) : []
+    })
+  const outcomes: Outcome[] = []
+  // Each leftover in its own failure boundary (L73): one that throws is left running and said.
+  for (const job of leftovers) {
+    try {
+      const o = await judgeOne($, job, now)
+      if (o) outcomes.push(o)
+    } catch {
+      outcomes.push({ kind: 'unjudged', name: job.command.length > 40 ? `${job.command.slice(0, 37)}...` : job.command, session: job.session })
+    }
+  }
+  const line = leftoverLine(outcomes, list.unreadable)
+  if (line) $.ui.log(line)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     jobs.clear()
@@ -232,6 +336,10 @@ export const register: Register = on => {
     tick?.cancel()
     tick = $.clock.every(TICK_MS, () => lookSafely($))
     await $.tool.register(KEEP_SPEC)
+    // Judged off the start's own path, so model calls never hold up the session.
+    $.clock.after(0, () => {
+      judgeLeftovers($).catch(err => $.ui.log(`Background job watcher could not check leftover jobs from closed sessions: ${err instanceof Error ? err.message : String(err)}.`))
+    })
     return next(e)
   })
 
@@ -274,7 +382,7 @@ export const register: Register = on => {
       }
     }
     // What Claude should know about its jobs rides on the next tool result it reads.
-    if (notices.length && !result.deny && !result.isError) {
+    if (notices.length && result.deny === undefined && !result.isError) {
       const said = notices.splice(0)
       return { ...result, context: [...(result.context ?? []), ...said] }
     }

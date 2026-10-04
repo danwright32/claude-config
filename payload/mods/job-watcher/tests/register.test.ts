@@ -56,11 +56,11 @@ type Job = {
   failExtraOf?: string
 }
 // The rest of the world: failExtra makes every registry write fail; sessions is what the registry
-// lists; verdicts answers each model in turn ('none' for no usable answer, 'throws' to reject).
+// lists; verdict answers each model call ('none' for no answer, 'throws' to reject the call).
 type World = {
   failExtra?: boolean
   sessions?: { open?: unknown[]; closed?: unknown[]; unreadable?: string[] } | 'throws'
-  verdicts?: Record<string, string | 'none' | 'throws'>
+  verdict?: (model: string, prompt: string) => string | 'none' | 'throws'
 }
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   const list = Array.isArray(jobOrJobs) ? jobOrJobs : [jobOrJobs]
@@ -116,8 +116,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   on('model.complete', ($, e) => {
     const req = e as unknown as { model: string; prompt: string }
     w.asked.push({ model: req.model, prompt: req.prompt })
-    const v = o.verdicts?.[req.model]
-    if (v === undefined || v === 'none') return { value: { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: {} } } as never
+    const v = o.verdict?.(req.model, req.prompt) ?? 'none'
+    if (v === 'none') return { value: { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: {} } } as never
     if (v === 'throws') throw new Error('the model is blocked')
     return { value: { isAnswered: true, text: v, usage: {} } } as never
   })
@@ -480,4 +480,170 @@ test('a keep whose registry write fails still keeps the job, and Claude is told 
   expect(r.deny).toBeUndefined()
   expect(String(r.result)).toContain('Kept job1')
   expect(contextOf(r)).toContain('could not record')
+})
+
+// Leftover jobs at session start (Dan, 2026-10-04): jobs still alive whose session has closed are
+// judged by Haiku, then Sonnet when Haiku gives no usable verdict, with no question to Dan; neither
+// able, the job is left running. Stopped by the traced process group, never by command text
+// (L1011). Dan sees one dim line afterwards.
+const HAIKU = 'claude-haiku-4-5-20251001'
+const SONNET = 'claude-sonnet-5-5'
+const CURL = 'until curl -sf http://localhost:3000/health; do sleep 3; done'
+const REFUSED = Array.from({ length: 30 }, () => 'curl: (7) Failed to connect to localhost port 3000: Connection refused').join('\n') + '\n'
+const closedRec = (id: string, jobs: unknown[]) => ({ v: 1, sessionId: id, cwd: '/repo', repoRoot: '/repo', startedAt: 0, lastSeen: 0, closedAt: 1000, transcriptPath: null, edits: [], extra: { jobs } })
+const leftover = (i: number, command: string, over: Record<string, unknown> = {}) => ({ id: `old${i}`, command, outputPath: outOf(`job${i}`), pgid: 500 + i, startedAt: 0, ...over })
+const STOP = (name: string) => JSON.stringify({ stop: true, name, reason: 'it never succeeded' })
+const KEEP_IT = (name: string) => JSON.stringify({ stop: false, name, reason: 'it is serving' })
+const judged = async (clock: { advance: (ms: number) => Promise<void> }) => clock.advance(10_000)
+
+const about = (prompt: string, command: string) => prompt.includes(command)
+
+test('a leftover poll loop is stopped by its process group and a dev server left, in one dim line, with no question', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 3 * 60 * MIN })
+  const w = world(on, [{ tail: REFUSED, size: 9000, mtime: 3 * 60 * 60 }, { tail: 'listening on 3000\n', size: 18, mtime: 0 }], {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL), leftover(2, 'npm run dev')])] },
+    verdict: (model, prompt) => (about(prompt, CURL) ? STOP('curl loop repeating connection refused') : KEEP_IT('dev server')),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.kills).toEqual([['-TERM', '-501']])
+  expect(w.asked.map(a => a.model)).toEqual([HAIKU, HAIKU])
+  expect(w.reached.filter(r => r.tool === 'AskUserQuestion')).toEqual([])
+  expect(w.logs).toEqual(['Stopped 1 leftover job from a closed session (curl loop repeating connection refused); left 1 running (dev server).'])
+})
+
+test('the judge is told the command, the run time, the output tail and that it repeats', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 134 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, mtime: 134 * 60 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  const prompt = w.asked[0]?.prompt ?? ''
+  expect(prompt).toContain(CURL)
+  expect(prompt).toContain('2h 14m')
+  expect(prompt).toContain('Connection refused')
+  expect(prompt).toMatch(/repeat/)
+})
+
+test('a silent leftover is described to the judge as silent', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18, mtime: 0 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, 'npm run dev')])] },
+    verdict: () => KEEP_IT('dev server'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked[0]?.prompt ?? '').toMatch(/no new output for 60 minutes/)
+})
+
+test('when Haiku gives no usable verdict, Sonnet decides', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: model => (model === HAIKU ? 'I think you should probably stop it.' : STOP('curl loop')),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked.map(a => a.model)).toEqual([HAIKU, SONNET])
+  expect(w.kills).toEqual([['-TERM', '-501']])
+  expect(w.logs).toEqual(['Stopped 1 leftover job from a closed session (curl loop).'])
+})
+
+test('when Haiku fails with an error, Sonnet decides', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: model => (model === HAIKU ? 'none' : KEEP_IT('curl loop')),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked.map(a => a.model)).toEqual([HAIKU, SONNET])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual(['Left 1 leftover job from a closed session running (curl loop).'])
+})
+
+test('when neither model can judge, the job is left running and the line says so', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: model => (model === HAIKU ? 'none' : 'throws'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked.map(a => a.model)).toEqual([HAIKU, SONNET])
+  expect(w.kills).toEqual([])
+  // The command names it, cut to keep the line to one line.
+  expect(w.logs).toEqual(['Could not judge 1 leftover job from a closed session and left it running to be judged next session (until curl -sf http://localhost:3000/...).'])
+})
+
+test('a stop that fails is said, and the job is not counted as stopped', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, kill: 'fails' }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.logs).toEqual(['Could not stop 1 leftover job from a closed session (curl loop: kill: Operation not permitted).'])
+})
+
+test('a group still running after the stop is said as not stopped', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, kill: 'survives' }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.logs).toEqual(['Could not stop 1 leftover job from a closed session (curl loop: it was still running after the stop signal).'])
+})
+
+test('jobs of open sessions and of this session are never judged', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const open = { ...closedRec('busy', [leftover(1, CURL)]), closedAt: null }
+  const mine = closedRec('me', [leftover(2, CURL)])
+  const w = world(on, [{ tail: REFUSED, size: 9000 }, { tail: REFUSED, size: 9000 }], {
+    sessions: { open: [open], closed: [mine] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
+test('a leftover that has already ended is not judged and not mentioned', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, holder: 'none', gone: true }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
+test('an output file now held by a different process group is never stopped (L1011)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000, pgid: 777 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => STOP('curl loop'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.kills).toEqual([])
+  expect(w.asked).toEqual([])
+})
+
+test('a registry that cannot be listed is said in one dim line, never taken as no leftovers', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: '', size: 0 }, { sessions: 'throws' })
+  await start($)
+  await judged(clock)
+  expect(w.logs.length).toBe(1)
+  expect(w.logs[0]).toContain('leftover jobs from closed sessions were not checked')
 })

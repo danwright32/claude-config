@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { assess, isErrorLine, isPollLoop, startedJob } from '../hooks/jobs.ts'
+import { assess, isErrorLine, isPollLoop, leftoverLine, parseVerdict, runFor, startedJob } from '../hooks/jobs.ts'
 
 const MIN = 60_000
 
@@ -65,5 +65,73 @@ describe('an error line', () => {
   })
   test('a patient waiting line does not', () => {
     for (const line of ['waiting for deploy', 'checks still pending', 'Waiting for server to start...', '.', 'retrying in 3s']) expect(isErrorLine(line)).toBe(false)
+  })
+})
+
+// Leftover jobs from closed sessions (Dan, 2026-10-04): a model's verdict on each, and the one dim
+// line Dan sees afterwards.
+describe('a verdict on a leftover job', () => {
+  test('JSON with stop and a name is a verdict, wherever it sits in the reply', () => {
+    expect(parseVerdict('{"stop": true, "name": "curl loop repeating connection refused"}')).toEqual({ stop: true, name: 'curl loop repeating connection refused' })
+    expect(parseVerdict('Here you go:\n{"stop": false, "name": "dev server", "reason": "still serving"}\n')).toEqual({ stop: false, name: 'dev server' })
+  })
+  test('anything else is no verdict, never a guess', () => {
+    for (const text of ['', 'stop it', '{"stop": "yes", "name": "x"}', '{"stop": true}', '{"stop": true, "name": "  "}', '{not json}']) expect(parseVerdict(text)).toBeUndefined()
+  })
+  test('a long name is cut to fit one line', () => {
+    expect((parseVerdict(`{"stop": true, "name": "${'x'.repeat(200)}"}`)?.name ?? '').length).toBeLessThanOrEqual(60)
+  })
+})
+
+describe('how long a job has run', () => {
+  test('minutes under an hour, hours and minutes after', () => {
+    expect(runFor(30_000)).toBe('0m')
+    expect(runFor(14 * MIN)).toBe('14m')
+    expect(runFor(134 * MIN)).toBe('2h 14m')
+  })
+})
+
+describe('the line Dan sees after leftovers are judged', () => {
+  test('stopped and left, the settled example word for word', () => {
+    expect(
+      leftoverLine(
+        [
+          { kind: 'stopped', name: 'curl loop repeating connection refused', session: 'a' },
+          { kind: 'left', name: 'dev server', session: 'a' },
+        ],
+        [],
+      ),
+    ).toBe('Stopped 1 leftover job from a closed session (curl loop repeating connection refused); left 1 running (dev server).')
+  })
+  test('a job that could not be judged, or stopped, says so in its own words', () => {
+    expect(
+      leftoverLine(
+        [
+          { kind: 'unjudged', name: 'npm run dev', session: 'a' },
+          { kind: 'stopFailed', name: 'curl loop', why: 'kill: Operation not permitted', session: 'b' },
+        ],
+        [],
+      ),
+    ).toBe('Could not judge 1 leftover job from closed sessions and left it running to be judged next session (npm run dev); could not stop 1 (curl loop: kill: Operation not permitted).')
+  })
+  test('several of a kind are counted and named together', () => {
+    expect(
+      leftoverLine(
+        [
+          { kind: 'left', name: 'dev server', session: 'a' },
+          { kind: 'left', name: 'test watcher', session: 'a' },
+        ],
+        [],
+      ),
+    ).toBe('Left 2 leftover jobs from a closed session running (dev server, test watcher).')
+  })
+  test('session records that could not be read are said, so their jobs are not taken as none', () => {
+    expect(leftoverLine([], ['abc.json'])).toBe('Could not read 1 session record (abc.json), so any leftover jobs in it were not checked.')
+    expect(leftoverLine([{ kind: 'stopped', name: 'curl loop', session: 'a' }], ['abc.json', 'def.json'])).toBe(
+      'Stopped 1 leftover job from a closed session (curl loop); could not read 2 session records (abc.json, def.json), so any leftover jobs in them were not checked.',
+    )
+  })
+  test('nothing judged and nothing unreadable is no line at all', () => {
+    expect(leftoverLine([], [])).toBeUndefined()
   })
 })
