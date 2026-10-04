@@ -40,7 +40,8 @@ describe('triggersIn', () => {
       'this column should be read only', 'the file will be read only by the loader',
       'please wind down the staging cluster', "let's wind down the Redis instance",
       'the database is in read only mode', 'make this column read only for now',
-      'keep it read only in the form', 'keep things read only for admins'])
+      'keep it read only in the form', 'keep things read only for admins',
+      'Keep it.', 'Keep it?', 'Ok, stay.', 'Great. Keep things!'])
       expect(triggersIn(t)).toEqual([])
   })
   test('one mode named twice in a message comes back once', () => {
