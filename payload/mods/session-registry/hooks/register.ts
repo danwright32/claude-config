@@ -86,16 +86,16 @@ const CACHE_MAX = 200
 // What a session id looks like; anything else read from disk never goes into a path or a search.
 const SESSION_ID = /^[A-Za-z0-9-]+$/
 
-// Clears out what has expired, once per session start so no edit pays for it (#633). A closed
-// record goes 7 days after it closed; a crashed one, never closed, 7 days after it was last seen;
-// a damaged one 7 days after its file last changed, named in one grey line. A damaged record any
-// newer stays, since it may belong to a live session, and still stops guarded actions.
 // What a readable record is, one rule for every reader (the list and the cleanup), so a record is
 // damaged or readable the same way everywhere (lessons review of #644). Every time it holds must be
 // a number, or an age computed from it is NaN and slips past every check (L50).
 const isRecord = (r: SessionsRecord): boolean =>
   r.v === 1 && typeof r.sessionId === 'string' && typeof r.lastSeen === 'number' && (r.closedAt === null || typeof r.closedAt === 'number')
 
+// Clears out what has expired, once per session start so no edit pays for it (#633). A closed
+// record goes 7 days after it closed; a crashed one, never closed, 7 days after it was last seen;
+// a damaged one 7 days after its file last changed, named in one grey line. A damaged record any
+// newer stays, since it may belong to a live session, and still stops guarded actions.
 const prune = async ($: EngineInterface, h: string, now: number) => {
   const dir = dirOf(h)
   let entries: { name: string; kind: string }[]
@@ -126,7 +126,7 @@ const prune = async ($: EngineInterface, h: string, now: number) => {
     const rm = await $.process.run(['rm', '-f', path]).catch(() => undefined)
     if (rm?.exitCode === 0 && isDamaged) damaged.push(ent.name)
   }
-  if (damaged.length) $.ui.log(`Session registry deleted ${damaged.length === 1 ? 'a damaged record' : `${damaged.length} damaged records`} older than 7 days: ${damaged.join(', ')}.`)
+  if (damaged.length) $.ui.log(`Session registry deleted ${damaged.length === 1 ? 'a damaged record' : `${damaged.length} damaged records`} older than ${KEEP_MS / (24 * 60 * 60_000)} days: ${damaged.join(', ')}.`)
 }
 
 export const register: Register = on => {

@@ -17,3 +17,10 @@ test('setting a key again refreshes it rather than counting twice', () => {
   remember(m, 'c', 4, 2)
   expect([...m.entries()]).toEqual([['a', 3], ['c', 4]])
 })
+
+test('a limit below one keeps nothing and still returns', () => {
+  const m = new Map<string, number>()
+  remember(m, 'a', 1, 0)
+  remember(m, 'b', 2, -1)
+  expect(m.size).toBe(0)
+})

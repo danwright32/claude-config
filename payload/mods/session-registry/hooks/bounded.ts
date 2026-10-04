@@ -3,5 +3,6 @@
 export const remember = <K, V>(m: Map<K, V>, key: K, value: V, max: number): void => {
   m.delete(key)
   m.set(key, value)
-  while (m.size > max) m.delete(m.keys().next().value as K)
+  // A limit below one keeps nothing; never loop on an empty map.
+  while (m.size > Math.max(0, max)) m.delete(m.keys().next().value as K)
 }
