@@ -7,7 +7,7 @@ const T0 = 1_000 * MIN
 
 type Msg = { role: 'user' | 'assistant'; text: string; toolUses: never[] }
 type Reply = string | { failed: 'api-error' | 'empty-reply' | 'aborted' } | 'throws'
-type Rename = 'set' | 'refused' | 'unknown' | 'throws'
+type Rename = 'set' | 'refused' | 'refused-for-mod' | 'unknown' | 'throws'
 type Opts = { replies?: Reply[]; rename?: Rename; messages?: Msg[]; messagesThrow?: boolean; holdHaiku?: Promise<void> }
 
 const exchange = (): Msg[] => [
@@ -43,7 +43,8 @@ const world = (on: On, o: Opts = {}) => {
   })
   on('command.run', { command: 'rename' }, ($, e) => {
     w.renames.push({ args: e.args, origin: e.origin })
-    const how = o.rename ?? 'set'
+    const fromMod = (e.origin as { kind?: string } | undefined)?.kind === 'plugin'
+    const how = o.rename === 'refused-for-mod' ? (fromMod ? 'refused' : 'set') : (o.rename ?? 'set')
     // A hook that throws is skipped, so nothing answers and $.command.run rejects.
     if (how === 'throws') throw new Error('rename is not available to plugins')
     if (how === 'refused') return { text: 'Cannot rename: This session is a teammate. Teammate names are set by the team leader.' }
@@ -292,7 +293,7 @@ test('when /rename says nothing, the next message checks the name took before se
 })
 
 test('a fallback name waiting for the next message gives way to a rename Dan makes first', async ($, on) => {
-  const w = world(on, { rename: 'refused' })
+  const w = world(on, { rename: 'refused-for-mod' })
   await start($)
   await w.clock.advance(10 * MIN)
   await $.command.run({ command: 'rename', args: 'Mine' } as never)
@@ -402,4 +403,24 @@ test("Dan's own /rename still answers when the bookkeeping write around it fails
   const r = (await $.command.run({ command: 'rename', args: 'Mine', origin: { kind: 'user' } } as never)) as { text?: string }
   expect(r.text).toBe('Session renamed to: Mine')
   void w
+})
+
+// Lessons review of #657: only a /rename that took counts as Dan naming the session himself.
+test("a /rename of Dan's that is refused leaves the session to be named", async ($, on) => {
+  const w = world(on, { rename: 'refused' })
+  await start($)
+  await $.command.run({ command: 'rename', args: 'x', origin: { kind: 'user' } } as never).catch(() => undefined)
+  const w2 = w
+  await w2.clock.advance(10 * MIN)
+  await w2.clock.settle()
+  expect(w2.prompts.length).toBe(1)
+})
+
+test("a /rename of Dan's that throws leaves the session to be named", async ($, on) => {
+  const w = world(on, { rename: 'throws' })
+  await start($)
+  await $.command.run({ command: 'rename', args: 'x', origin: { kind: 'user' } } as never).catch(() => undefined)
+  await w.clock.advance(10 * MIN)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(1)
 })

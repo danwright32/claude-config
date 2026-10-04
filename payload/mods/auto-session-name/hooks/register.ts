@@ -126,7 +126,8 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   const still = await update($, cur => {
     if (!cur || !mine(cur)) return undefined
     if (cur.isRenamedByHand || cur.knownTitle) return { ...cur, outcome: 'left', claim: null }
-    return cur
+    // Unchanged: no write, so a busy record cannot fail a check that changes nothing.
+    return undefined
   })
   if (!still || still.outcome !== 'waiting' || !mine(still)) return
 
@@ -203,11 +204,16 @@ export const register: Register = on => {
   // $.command.run never reaches this hook (the engine skips the calling one); the origin check is
   // there in case that ever changes.
   on('command.run', { command: 'rename' }, async ($, e, next) => {
+    // Only a rename that took is Dan naming the session: one refused (an empty name, a teammate
+    // session) or one that threw leaves it to this mod.
+    let took = false
     try {
-      return await next(e)
+      const result = await next(e)
+      took = renameOutcome((result as { text?: string }).text) !== 'refused'
+      return result
     } finally {
       const origin = e.origin as { kind: string; name?: string } | undefined
-      if (!(origin?.kind === 'plugin' && origin.name === MOD)) {
+      if (took && !(origin?.kind === 'plugin' && origin.name === MOD)) {
         // Bookkeeping only: a failed write must never change what Dan's own /rename answers.
         try {
           await update($, cur => (cur ? { ...cur, isRenamedByHand: true, pendingTitle: null, outcome: cur.outcome === 'waiting' ? 'left' : cur.outcome } : undefined))
