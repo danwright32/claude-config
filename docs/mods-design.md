@@ -14,7 +14,10 @@ and settles its own surfaces in rounds of its own before it is built.
    Dan asked that the steps card not be grey "since it needs my action"). One amber line per
    surface: heading and next step both amber was too much (steps amber round), and the handoff's
    changed since lines are grey under its amber lead (handoff colour round, 2026-10-04). The one
-   exception is the steps card's amber left edge beside its amber heading, which Dan asked for.
+   exception to one amber line per surface is the steps card's amber left edge beside its amber
+   heading, which Dan asked for. The exceptions to colour only for action are separate, each
+   recorded where it applies: the running PR, running job and kept job, the scope mode label, and
+   the goals pane's state colours.
 2. **Plain wording.** A refusal says what was blocked and the safe way, in one or two short
    sentences: "Blocked: this would print GITHUB_TOKEN. Check it without printing: test -n, its
    length, or gh auth status." Settled 2026-10-03, then applied to every refusal and toast of the
@@ -71,11 +74,32 @@ request in it.
 | Facts shown only when they need a look | Unpushed commits, PR and checks (failing or running), a running background job, context above 70% (status round 2) |
 | Hidden | Branch, uncommitted files, commits behind main (status round 2) |
 | Account | Whatever the login file names now, re-read each refresh; no "login changed elsewhere" marker. Dan changes the login in one window expecting it to apply to all of them (picker). |
-| Colour | The status line is all grey; the needs-a-look items in the band are amber; the Compact button is Claude Code's own bold white (colour round, design rounds). A deliberate exception to standing rule 1: a running PR, a running job and a job kept on purpose are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round, kept job round). |
+| Colour | The status line is all grey; the needs-a-look items in the band are amber; the Compact button is Claude Code's own bold white (colour round, design rounds). A deliberate exception to standing rule 1: a running PR, a running job, a job kept on purpose and a scope mode label are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round, kept job round) and a mode changes what Claude will do; the scope mode label shows even when nothing else is in the band (scope mode round). |
 | Where it is drawn | The always-shown facts stay on the classic status line script below the prompt, fed by the mod. The amber items are drawn by the mod in the band above the prompt, only while something needs a look or a scope mode is on (picker, after the probe below; scope mode round). |
 | The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). |
 | Order of the amber line | A scope mode (NO BUILD, WINDING DOWN, AWAY) leads it in bold, since it changes what Claude will do (scope mode round). Then most urgent first: a failing or running PR, a running job, unpushed commits, so a narrow window cuts off what can wait longest (design round) |
 | Compact button | Claude Code's default button, `[ Compact ]` in bold white, pressed by clicking or ctrl+x tab then Enter (design round, styles copied from a live probe) |
+
+Built (#610), with what the rounds left to the build, each taken from the rounds' renderings or
+the spec rather than chosen afresh, and open to Dan changing:
+
+- The status line reads `claude-config | 5h 68% (1h 52m) | week 91% (4d 14h) | cache 41m |
+  Opus 5.5 (high) | Dan, Personal`, as every round drew it: the account is the login's display name
+  (its email when it has none) and the organisation. It is drawn by `statusline.sh` in the mod's
+  folder, which the `statusLine` setting names; that setting lives in each Mac's own settings and
+  does not travel, so it is set once per Mac. A fact that cannot be read says so ("cache unknown"
+  when the mod has written nothing for the session, "account unknown" when the login file cannot be
+  read), never a blank.
+- The amber line's items read as drawn in the rounds: "PR #636 checks failing", "1 job running",
+  "dev server kept 2h 14m", "2 unpushed commits", divided by a dim `|` as the status line is.
+- A PR whose refresh failed keeps what was last read with its age: "PR #649 checks running, as of
+  12m ago" (the spec's "stale with its age"). One that last read as passing stays hidden.
+- The Compact row reads "ctx 74%" in amber, then `[ Compact ]`, whether it showed for context or
+  for the cache. A compaction that does not run says why in a toast: "Compact did not run: ...".
+- The toast 5 minutes before the cache goes cold reads "The prompt cache goes cold in 5 minutes."
+- A repository with no remote shows no unpushed commits, since there is nothing to push to.
+- A scope mode is set by another mod with `$.statusbar.setMode({ mode })`, one of `NO BUILD`,
+  `WINDING DOWN` and `AWAY`, or `null` to clear it.
 
 Why the split: a live probe on 2026-10-04 showed a mod's `$.ui.status` line is drawn by Claude Code
 as a warning notice, amber with a warning sign and the mod's name in front, and terminal colour
@@ -150,6 +174,22 @@ steps card, then a message to send (Dan chose status on top over waiting first a
 time). An open question takes the band alone, and everything else comes back the moment it is
 answered, so a number key can only mean the answer (design round, over the question at the
 bottom of everything).
+
+How it is built (#610): mod-kit holds the band's one hook, and `tools/check-mod-shared-parts.sh`
+fails any other mod that hooks `AbovePrompt`. A mod publishes a row with
+`$.modkit.bandRow({ mod, id, slot, lines })` and takes it away with
+`$.modkit.clearBandRow({ mod, id })`. The slots, drawn top to bottom, are `needs-a-look`,
+`compact`, `steps` and `message`; a `question` row takes the band alone until it is cleared. Rows in
+one slot keep the order they were first published in, and a row published again under its id is
+replaced where it stands. A row is plain data, since only plain data crosses between mods: each
+line a list of text runs (`text`, `color`, `bold`, `dim`, `strikethrough`; `color: 'warning'` is
+the amber) and buttons (`button`, `label`, `hotkey`). A button is Claude Code's own, drawn with the
+key `<mod>:<button>`, and its press reaches the publisher through
+`on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`, since a closure cannot
+cross from one mod to another. The rows live in mod-kit's `$.state`, so a reload keeps them, and
+they yield to a survey. Later mods that need more than lines of runs (the steps card's amber rule
+down its left edge, the boxed held while away card) add that shape to mod-kit rather than drawing
+the band themselves.
 
 ## Not design decisions
 
