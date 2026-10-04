@@ -231,8 +231,15 @@ const perlInPlace = (args: string[]): string[] => {
 export const shellWrites = (cmds: string[][], cwd: string, home: string | undefined): ShellWrite[] => {
   const out: ShellWrite[] = []
   const seen = new Set<string>()
+  // A path named twice is kept once, and a later removal of it keeps its flags, so `echo > d; rm
+  // -r d` is still judged as taking the folder away (lessons review of #691).
   const add = (path: string | undefined, sources?: string[], extra?: Pick<ShellWrite, 'removes' | 'tree'>) => {
-    if (!path || seen.has(path)) return
+    if (!path) return
+    if (seen.has(path)) {
+      const had = out.find(w => w.path === path)
+      if (had && extra) Object.assign(had, extra)
+      return
+    }
     seen.add(path)
     out.push({ path, ...(sources ? { sources } : {}), ...extra })
   }
@@ -298,7 +305,8 @@ export const shellWrites = (cmds: string[][], cwd: string, home: string | undefi
         const srcPaths = sources.map(s => s.path).filter((p): p is string => !!p)
         if (into) for (const s of srcPaths) add(`${into}/${baseOf(s)}`)
         else if (dest?.path) add(dest.path, srcPaths.length ? srcPaths : undefined)
-        if (name === 'mv') for (const s of srcPaths) add(s)
+        // mv takes each source away whole: a folder with everything under it, as rm -r does.
+        if (name === 'mv') for (const s of srcPaths) add(s, undefined, { removes: true, tree: true })
         break
       }
     }

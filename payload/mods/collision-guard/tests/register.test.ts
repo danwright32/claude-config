@@ -429,6 +429,14 @@ test('an rm -r of a folder holding a file another session edited is judged on th
   expect(w.edits).toEqual(['/repo/src'])
 })
 
+test('an mv of a folder holding a file another session edited is judged on that file', withDeps, async ($, on) => {
+  const w = world(on, { open: [rec('them', { edits: ['/repo/src/a.ts'] })], judge: '{"verdict":"Stop","reason":"They are editing it."}' })
+  const r = await $.tool.call(bash('mv src /tmp/old-src'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/src/a.ts (inside /repo/src) with the shell command: mv src /tmp/old-src')
+  expect(refusal(r)).toContain('Another session is working on a.ts.')
+})
+
 test('an rm -r of a folder the judge cannot answer for is stopped (L42)', withDeps, async ($, on) => {
   const w = world(on, { open: [rec('them', { edits: ['/repo/src/a.ts'] })], judge: 'no-answer' })
   const r = await $.tool.call(bash('rm -r src/'))

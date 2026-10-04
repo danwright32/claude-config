@@ -169,6 +169,16 @@ describe('the files a shell command writes', () => {
     }
     expect(writes([['cd', 'sub'], ['rm', '-rf', '..']])).toEqual([{ path: '/repo', removes: true, tree: true }])
   })
+  test('a path written and then removed keeps the removal (lessons review of #691)', () => {
+    expect(writes([['echo', 'x', '>', 'd'], ['rm', '-r', 'd']])).toEqual([{ path: '/repo/d', removes: true, tree: true }])
+    expect(writes([['rm', 'f'], ['rm', '-r', 'f']])).toEqual([{ path: '/repo/f', removes: true, tree: true }])
+  })
+  test('mv takes its sources away whole, a folder with everything under it (lessons review of #691)', () => {
+    expect(writes([['mv', 'src', '/elsewhere/']])).toEqual([
+      { path: '/elsewhere/src' },
+      { path: '/repo/src', removes: true, tree: true },
+    ])
+  })
   test('an rm of a glob or a variable is not guessed at (#654)', () => {
     expect(paths([['rm', '*.txt'], ['rm', '-rf', '$DIR']])).toEqual([])
   })
