@@ -13,6 +13,13 @@ describe('triggersIn', () => {
     ["just file, don't build", [{ kind: 'scope', scope: 'NO BUILD' }]],
     ['just file don’t build', [{ kind: 'scope', scope: 'NO BUILD' }]],
     ["don't start git yet", [{ kind: 'scope', scope: 'NO BUILD' }]],
+    ['wind down after this one', [{ kind: 'scope', scope: 'WINDING DOWN' }]],
+    ["let's wind down", [{ kind: 'scope', scope: 'WINDING DOWN' }]],
+    ["let's wind down for today", [{ kind: 'scope', scope: 'WINDING DOWN' }]],
+    ['wind down', [{ kind: 'scope', scope: 'WINDING DOWN' }]],
+    ['keep it read only', [{ kind: 'scope', scope: 'NO BUILD' }]],
+    ['read only mode please', [{ kind: 'scope', scope: 'NO BUILD' }]],
+    ['Looks good. Stay read only until I say.', [{ kind: 'scope', scope: 'NO BUILD' }]],
     ['go ahead and build', [{ kind: 'build' }]],
     ['Looks right. Go ahead and build it.', [{ kind: 'build' }]],
     ["I'm stepping away for an hour", [{ kind: 'place', place: 'away' }]],
@@ -25,8 +32,20 @@ describe('triggersIn', () => {
   for (const [text, want] of cases) test(JSON.stringify(text), () => expect(triggersIn(text)).toEqual(want))
 
   test('ordinary sentences that share a word turn nothing on', () => {
-    for (const t of ['build the invoice page', 'the away team won', 'is this file read by anything?', 'take it home', 'pause the video'])
+    for (const t of ['build the invoice page', 'the away team won', 'is this file read by anything?', 'take it home', 'pause the video',
+      // Decided with Dan (2026-10-04, picker): only phrasings aimed at Claude switch a mode, never
+      // the words used in passing.
+      'make this column read only', 'use a read-only Supabase connection', 'the project is winding down',
+      'the wind down the hall', 'is the read only query safe?',
+      'this column should be read only', 'the file will be read only by the loader',
+      'please wind down the staging cluster', "let's wind down the Redis instance",
+      'the database is in read only mode', 'make this column read only for now',
+      'keep it read only in the form', 'keep things read only for admins',
+      'Keep it.', 'Keep it?', 'Ok, stay.', 'Great. Keep things!', 'Read only mode?', 'Read only for now?'])
       expect(triggersIn(t)).toEqual([])
+  })
+  test('one mode named twice in a message comes back once', () => {
+    expect(triggersIn("let's wind down now")).toEqual([{ kind: 'scope', scope: 'WINDING DOWN' }])
   })
   test('two in one message come back in the order they were written', () => {
     expect(triggersIn("I'm stepping away, pause after this issue")).toEqual([
