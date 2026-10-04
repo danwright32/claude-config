@@ -65,7 +65,7 @@ const issue = (state: string, updated: string, extra: object = {}) => ({ exitCod
 
 // This Mac beneath the handoff: files in memory, mv and mkdir acting on them, gh answering per
 // path as each test sets it, the clock, the session's repository, and Claude Code's own band.
-const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: string; submit?: () => void } = {}) => {
+const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: string; submit?: () => void; mvFailsTo?: string; noHome?: boolean } = {}) => {
   const files: Record<string, string> = { ...init.files }
   const gh: Gh = { ...init.gh }
   const toasts: string[] = []
@@ -73,7 +73,7 @@ const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: s
   const submitted: { text: string; asUser?: boolean }[] = []
   const commands: string[] = []
   const tools: string[] = []
-  mock.env(on, { HOME: '/Users/x' })
+  mock.env(on, init.noHome ? {} : { HOME: '/Users/x' })
   const clock = mock.clock(on, { now: T0 })
   on('fs.write', ($, e) => {
     files[e.path] = e.text
@@ -91,6 +91,7 @@ const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: s
     if (cmd === 'mv') {
       const [a, b] = rest.filter(x => !x.startsWith('-')) as [string, string]
       if (!(a in files)) return r(1, '', `mv: ${a}: No such file or directory`)
+      if (b === init.mvFailsTo) return r(1, '', `mv: rename ${a} to ${b}: Permission denied`)
       files[b] = files[a] as string
       delete files[a]
       return r(0)
@@ -333,3 +334,32 @@ for (const button of ['use', 'dismiss'] as const) {
     await ui.unmount()
   })
 }
+
+test('a save that cannot be moved into place is refused with the reason, not reported as saved', withKit, async ($, on) => {
+  const w = world(on, { gh: { ...M18, 'repos/{owner}/{repo}/issues/615': issue('open', 'a') }, mvFailsTo: CURRENT })
+  await start($, w.clock)
+  await $.command.run({ command: 'handoff', args: '' } as never)
+  const r = (await $.tool.call({ tool: 'mcp__handoff__save', title: 'T', prompt: PROMPT } as never)) as { deny?: string; text?: string; result?: string }
+  expect(r.result).toBeUndefined()
+  expect(r.deny ?? r.text).toBe(`The handoff could not be saved: mv: rename ${DIR}/.current.json.tmp to ${CURRENT}: Permission denied`)
+  expect(CURRENT in w.files).toBe(false)
+})
+
+test('/handoff whose prompt cannot be submitted says so in a toast', withKit, async ($, on) => {
+  const w = world(on, {
+    submit: () => {
+      throw new Error('the session is closing')
+    },
+  })
+  await start($, w.clock)
+  await $.command.run({ command: 'handoff', args: '' } as never)
+  await w.clock.settle()
+  expect(w.toasts).toHaveLength(1)
+  expect(w.toasts[0]).toMatch(/^\/handoff could not ask for the handoff: \S/)
+})
+
+test('a handoff that cannot be offered at all says why in one dim line', withKit, async ($, on) => {
+  const w = world(on, { files: { [CURRENT]: saved() }, noHome: true })
+  await start($, w.clock)
+  expect(w.logs).toEqual(['The saved handoff could not be offered: HOME is not set.'])
+})
