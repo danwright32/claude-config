@@ -5,7 +5,7 @@ import type {} from '../types/index.d.ts'
 // mod-kit, standing in: a mod cannot import another mod's files. It keeps the rows published and
 // draws each line as a keyed Box of its parts; a question row takes the band alone, as mod-kit's
 // own composer does (proved in mod-kit's tests).
-type Part = { text?: string; color?: string; bold?: boolean; dim?: boolean; indent?: number; button?: string; label?: string; hotkey?: string }
+type Part = { text?: string; color?: string; bold?: boolean; dim?: boolean; indent?: number; button?: string; label?: string; hotkey?: string; plain?: boolean }
 type Row = { mod: string; id: string; slot: string; lines: Part[][] }
 const modKit: { name: string; register: Register } = {
   name: 'mod-kit',
@@ -41,7 +41,7 @@ const modKit: { name: string; register: Register } = {
               <Box key={`line:${r.id}:${n}`} flexDirection="row">
                 {l.map((p, i) =>
                   p.button ? (
-                    <Button key={`${r.mod}:${p.button}`} label={p.label as string} hotkey={p.hotkey} onPress={() => undefined} />
+                    <Button key={`${r.mod}:${p.button}`} label={p.label as string} hotkey={p.hotkey} plain={p.plain} onPress={() => undefined} />
                   ) : (
                     <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim}>
                       {`${' '.repeat(p.indent ?? 0)}${p.text}`}
@@ -106,7 +106,8 @@ const world = (on: On) => {
 const band = { plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} } } as never
 type El = { type: string; key?: string; props: Record<string, unknown>; children: (El | string)[] }
 type Ui = { findAll: (q: { type: string }) => Promise<El[]>; find: (q: object) => Promise<El | undefined>; press: (t: object) => Promise<unknown>; unmount: () => Promise<void> }
-const textOf = (el: El | string): string => (typeof el === 'string' ? el : el.type === 'Button' ? `[${String(el.props.label)}]` : (el.children ?? []).map(textOf).join(''))
+const textOf = (el: El | string): string =>
+  typeof el === 'string' ? el : el.type === 'Button' ? (el.props.plain ? `${el.props.hotkey ? `${String(el.props.hotkey)}: ` : ''}${String(el.props.label)}` : `[${String(el.props.label)}]`) : (el.children ?? []).map(textOf).join('')
 const lines = async (ui: Ui) => {
   const rows = (await ui.findAll({ type: 'Box' })).filter(b => String(b.key ?? b.props.key ?? '').startsWith('line:'))
   return rows.length ? rows.map(textOf) : (await ui.findAll({ type: 'Text' })).map(textOf)
@@ -132,17 +133,17 @@ test('a question is drawn in the band, never as a modal, and a press there answe
   const ui = (await $.ui.mount(band)) as unknown as Ui
   expect(await lines(ui)).toEqual([
     "[Retention] How long should the registry keep a closed session's record?",
-    '1. [1 day]',
+    '1: 1 day',
     '   Smallest folder, but a Friday session is gone by Monday.',
-    '2. [7 days]',
+    '2: 7 days',
     '   Covers a long weekend and a week away.',
-    '3. [30 days]',
+    '3: 30 days',
     '   Keeps a month of history for the goals pane.',
-    '4. [Until I clear it]',
+    '4: Until I clear it',
     '   Nothing is deleted on its own.',
   ])
   expect((await ui.find({ type: 'Text', text: QUESTION.question }))?.props).toMatchObject({ color: 'warning', bold: true })
-  expect((await ui.find({ type: 'Button', key: 'picker-manners:opt2' }))?.props).toMatchObject({ hotkey: '2' })
+  expect((await ui.find({ type: 'Button', key: 'picker-manners:opt2' }))?.props).toMatchObject({ hotkey: '2', plain: true })
   await ui.press({ key: 'picker-manners:opt2' })
   const r = await call
   expect(r.result?.answers).toEqual({ [QUESTION.question]: '7 days' })
@@ -223,7 +224,7 @@ test('a multi select question toggles its options and answers with Submit', with
   await ui.press({ key: 'picker-manners:opt1' })
   await ui.press({ key: 'picker-manners:opt3' })
   await ui.press({ key: 'picker-manners:opt2' })
-  expect((await lines(ui)).filter(l => l.endsWith(' chosen'))).toEqual(['1. [1 day] chosen', '2. [7 days] chosen'])
+  expect((await lines(ui)).filter(l => l.endsWith(' chosen'))).toEqual(['1: 1 day chosen', '2: 7 days chosen'])
   await ui.press({ key: 'picker-manners:submit' })
   expect((await call).result?.answers).toEqual({ [QUESTION.question]: '1 day, 7 days' })
   await ui.unmount()

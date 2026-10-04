@@ -443,8 +443,8 @@ measured to overrun the budget, after which the engine's own picker answers. Wha
 settle beyond the rounds, taken from the spec or the rounds' renderings rather than chosen afresh,
 and open to Dan changing:
 
-- Each option is "1. " then Claude Code's own button, `[ 7 days ]`, with the digit as its hotkey: the
-  rounds drew "1. 7 days" plain, and mod-kit's band draws buttons bracketed.
+- Each option is Claude Code's own button in its plain style, "1: 7 days", the digit its hotkey in the
+  accent colour (mod-kit's `plain`, #667): the nearest the terminal draws to the rounds' "1. 7 days".
 - One question per call (CLAUDE.md) is enforced: a call with more is refused, by name, to Claude.
 - Typed text withdraws the question, and Claude reads: "Dan did not pick an answer: he is sending a
   message instead, which follows. Answer his message first. If this question is still unanswered

@@ -13,12 +13,12 @@ const RETENTION: Question = {
 }
 
 describe('bandLines', () => {
-  test('the grey chip and the amber question on one line, then each option on its own line with its description indented under it', () => {
+  test('the grey chip and the amber question on one line, then each option on its own line in the plain button style (1: 7 days) with its description indented under it', () => {
     expect(bandLines(RETENTION, [])).toEqual([
       [{ text: '[Retention] ', dim: true }, { text: RETENTION.question, color: 'warning', bold: true }],
-      [{ text: '1. ' }, { button: 'opt1', label: '7 days', hotkey: '1' }],
+      [{ button: 'opt1', label: '7 days', hotkey: '1', plain: true }],
       [{ text: 'Covers a long weekend and a week away.', dim: true, indent: 3 }],
-      [{ text: '2. ' }, { button: 'opt2', label: '30 days', hotkey: '2' }],
+      [{ button: 'opt2', label: '30 days', hotkey: '2', plain: true }],
       [{ text: 'Keeps a month of history for the goals pane.', dim: true, indent: 3 }],
     ])
   })
@@ -29,8 +29,8 @@ describe('bandLines', () => {
   test('a multi select question marks what is chosen and ends with Submit', () => {
     const q: Question = { ...RETENTION, multiSelect: true }
     const lines = bandLines(q, ['30 days'])
-    expect(lines[1]).toEqual([{ text: '1. ' }, { button: 'opt1', label: '7 days', hotkey: '1' }])
-    expect(lines[3]).toEqual([{ text: '2. ' }, { button: 'opt2', label: '30 days', hotkey: '2' }, { text: ' chosen', dim: true }])
+    expect(lines[1]).toEqual([{ button: 'opt1', label: '7 days', hotkey: '1', plain: true }])
+    expect(lines[3]).toEqual([{ button: 'opt2', label: '30 days', hotkey: '2', plain: true }, { text: ' chosen', dim: true }])
     expect(lines[lines.length - 1]).toEqual([{ button: 'submit', label: 'Submit' }])
   })
 })

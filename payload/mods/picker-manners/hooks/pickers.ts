@@ -10,18 +10,18 @@ export type Question = {
 }
 
 /** A band row's parts, as mod-kit's contract spells them. */
-export type Part = { text: string; color?: string; bold?: boolean; dim?: boolean; indent?: number } | { button: string; label: string; hotkey?: string }
+export type Part = { text: string; color?: string; bold?: boolean; dim?: boolean; indent?: number } | { button: string; label: string; hotkey?: string; plain?: true }
 
 /**
  * The question in the band (design rounds, 2026-10-04): the chip in grey and the question in amber,
- * as it waits on Dan, on one line; then each option on its own line, numbered, its description
- * indented on the line under it. A multi select question marks what is chosen and ends with Submit.
+ * as it waits on Dan, on one line; then each option on its own line in Claude Code's plain button
+ * style, "1: 7 days" (the rounds drew "1. 7 days"), its description indented on the line under it. A multi select question marks what is chosen and ends with Submit.
  */
 export const bandLines = (q: Question, chosen: readonly string[]): Part[][] => {
   const lines: Part[][] = [[{ text: `[${q.header}] `, dim: true }, { text: q.question, color: 'warning', bold: true }]]
   q.options.forEach((o, i) => {
     const n = String(i + 1)
-    const line: Part[] = [{ text: `${n}. ` }, { button: `opt${n}`, label: o.label, hotkey: n }]
+    const line: Part[] = [{ button: `opt${n}`, label: o.label, hotkey: n, plain: true }]
     if (q.multiSelect && chosen.includes(o.label)) line.push({ text: ' chosen', dim: true })
     lines.push(line)
     if (o.description) lines.push([{ text: o.description, dim: true, indent: 3 }])
