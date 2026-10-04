@@ -31,8 +31,12 @@ export const watchedGit = (g: { sub: string | undefined; args: string[] }): stri
 export const othersEditing = <R extends Rec>(open: R[], selfId: string | null, path: string): R[] =>
   open.filter(r => r.sessionId !== selfId && r.edits.includes(path))
 
+// A session whose repository could not be read when it started is matched by its folder, so a
+// failed lookup there cannot hide it from a branch switch here (the empty answer is not "elsewhere").
 export const othersInRepo = <R extends Rec>(open: R[], selfId: string | null, root: string | null): R[] =>
-  root === null ? [] : open.filter(r => r.sessionId !== selfId && r.repoRoot === root)
+  root === null
+    ? []
+    : open.filter(r => r.sessionId !== selfId && (r.repoRoot === root || (r.repoRoot === null && (r.cwd === root || r.cwd.startsWith(root + '/')))))
 
 // The judge answers JSON; anything that is not exactly one of the three verdicts with a reason is
 // no verdict, and the guard stops (L42, the spec).

@@ -49,6 +49,10 @@ describe('who else is there', () => {
   test('a subagent of this same session is this session, so never a collision', () => {
     expect(othersEditing([rec('me', { edits: ['/repo/a.ts'] })], 'me', '/repo/a.ts')).toEqual([])
   })
+  test('a session whose repository could not be read still counts when its folder is inside the checkout (lessons check)', () => {
+    const unknown = [rec('me'), { ...rec('lost', { repoRoot: null }), cwd: '/repo/app' }, { ...rec('away', { repoRoot: null }), cwd: '/repository-else' }]
+    expect(othersInRepo(unknown, 'me', '/repo').map(r => r.sessionId)).toEqual(['lost'])
+  })
   test('other open sessions in the same checkout', () => {
     expect(othersInRepo(open, 'me', '/repo').map(r => r.sessionId)).toEqual(['them'])
     expect(othersInRepo(open, 'me', null)).toEqual([])
