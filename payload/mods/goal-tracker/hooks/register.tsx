@@ -3,7 +3,7 @@ import { firstWords, permissionFor, projectOf, rowsOf, type StateWord } from './
 import { empty, fromTodos, isStepStatus, taskCreated, taskUpdated, type Progress, type StepStatus } from './progress.ts'
 
 // Goal tracker (claude-config#612). Each session's task list, its goal text, its last activity and
-// whether it waits on Dan go into the shared session registry, where the /goals pane (pane.tsx)
+// whether it waits on Dan go into the shared session registry, where the /goals pane (below)
 // reads every open session's. A session waiting on Dan, for a question or a permission, sends one
 // macOS notification naming the project, and an idle prompt with nothing being asked sends "What's
 // next?": these replace the two settings hooks that notified before (Dan, 2026-10-04, pickers).
@@ -122,7 +122,7 @@ const open = async ($: EngineInterface): Promise<string | undefined> => {
   return r.isPlaced ? undefined : `The goals pane is open but not shown: ${r.reason}.`
 }
 
-// The module's one session.start and prompt.submit hooks are register.ts's, which call these.
+// The module has one session.start and one prompt.submit hook (in register below), which call these.
 const paneStart = async ($: EngineInterface) => {
   stopFollowing()
   await $.command.register({ name: 'goals', description: "Every open session's goal and progress" })

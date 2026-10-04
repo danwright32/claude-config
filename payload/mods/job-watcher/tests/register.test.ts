@@ -823,6 +823,20 @@ test('the judge is handed the command and output fenced as data it must not take
   expect(prompt.split('<job-command>').length).toBe(2)
 })
 
+// Lessons review of 2dbb479: a command of many kilobytes is cut in the judge's prompt as the output
+// tail is, so one long command cannot swell every leftover's model call.
+test('the judge is handed a long command cut short, as the output is', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const huge = `${CURL} ${'#'.repeat(10_000)}`
+  const w = world(on, { tail: REFUSED, size: 9000 }, { sessions: { closed: [closedRec('old', [leftover(1, huge)])] }, verdict: () => KEEP_IT('curl loop') })
+  await start($)
+  await judged(clock)
+  const prompt = w.asked[0]?.prompt ?? ''
+  const command = prompt.slice(prompt.indexOf('<job-command>'), prompt.indexOf('</job-command>'))
+  expect(command).toContain('until curl')
+  expect(command.length).toBeLessThanOrEqual(2100)
+})
+
 test('a keep that lands while an untraced job is being traced keeps both the keep and the group', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const job: Job = { tail: 'building\n', size: 9, holder: 'error' }
