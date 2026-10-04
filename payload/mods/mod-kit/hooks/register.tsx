@@ -38,6 +38,7 @@ export const register: Register = on => {
         <Text bold>Blocked by {b.guard}</Text>
         <Text>{b.reason}</Text>
         {b.safeWay ? <Text dimColor>{b.safeWay}</Text> : null}
+        {b.note ? <Text dimColor>{b.note}</Text> : null}
       </Box>
     )
   })
