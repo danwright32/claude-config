@@ -43,16 +43,11 @@ type Clash = {
 const judge = async ($: EngineInterface, c: Clash): Promise<Verdict | undefined> => {
   const lines: string[] = []
   for (const o of c.others) {
-    // Three different absences, said apart so the judge knows how much it is missing (L11).
-    let request: string
-    if (!o.transcriptPath) request = '(its transcript could not be found)'
-    else {
-      const tail = await run($, ['tail', '-c', '262144', o.transcriptPath])
-      request = tail === undefined ? '(its transcript could not be read)' : (latestRequest(tail) ?? '(none in its transcript)')
-    }
+    const tail = o.transcriptPath ? await run($, ['tail', '-c', '262144', o.transcriptPath]) : undefined
+    const request = tail === undefined ? undefined : latestRequest(tail)
     lines.push(
       `Other session ${o.sessionId}, working in ${o.cwd}.`,
-      `Its latest request: ${request}`,
+      `Its latest request: ${request ?? '(could not be read)'}`,
       `Files it has edited, newest last: ${o.edits.slice(-20).join(', ') || '(none)'}`,
     )
   }
@@ -77,28 +72,9 @@ const judge = async ($: EngineInterface, c: Clash): Promise<Verdict | undefined>
   }
 }
 
-const refuse = async ($: EngineInterface, toolUseId: string, reason: string, safeWay: string, note?: string) => {
-  await $.modkit.blocked({ toolUseId, guard: GUARD, reason, safeWay, ...(note ? { note } : {}) })
-  return { deny: `Blocked: ${reason} ${safeWay}${note ? ` ${note}` : ''}` }
-}
-
-// One send, tried again once when it is refused (decided with Dan after the live check of #605 on
-// 2026-10-04, where auto mode's classifier refused it). A throw is not retried: it can come after
-// the message landed, and a second copy would tell the other session twice (lessons review of
-// #636). Answers why it did not land, or undefined when it did.
-const tell = async ($: EngineInterface, sessionId: string, text: string): Promise<string | undefined> => {
-  let why = ''
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const sent = await $.session.send({ to: { sessionId }, text })
-      if (sent.isDelivered) return undefined
-      why = sent.reason
-    } catch (err) {
-      why = err instanceof Error ? err.message : String(err)
-      break
-    }
-  }
-  return why.trim().replace(/\.$/, '') || 'no reason given'
+const refuse = async ($: EngineInterface, toolUseId: string, reason: string, safeWay: string) => {
+  await $.modkit.blocked({ toolUseId, guard: GUARD, reason, safeWay })
+  return { deny: `Blocked: ${reason} ${safeWay}` }
 }
 
 // Checked, judged and acted on. undefined means go ahead.
@@ -114,19 +90,15 @@ const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
     c.where === 'file'
       ? `Another session wanted to edit ${c.messageWhat} while you are working on it, so ${outcome}. Nothing here was touched.`
       : `Another session wanted to run ${c.messageWhat} in this checkout while you are working in it, so ${outcome}. Nothing here was touched.`
-  // The block stands whether or not the other session hears of it; one that cannot is said so.
-  const unheard: string[] = []
   for (const o of c.others) {
-    const why = await tell($, o.sessionId, message)
-    if (why) unheard.push(why)
+    try {
+      await $.session.send({ to: { sessionId: o.sessionId }, text: message })
+    } catch {
+      // A session that ended since the list was read cannot be told; the block stands regardless.
+    }
   }
-  const note = !unheard.length
-    ? undefined
-    : c.others.length === 1
-      ? `The other session could not be told: ${unheard[0]}.`
-      : `${unheard.length} of the other sessions could not be told: ${unheard.join('; ')}.`
   const reason = c.where === 'file' ? `Another session is working on ${c.shortName}. ${v.reason}` : `Another session is working in this checkout. ${v.reason}`
-  return refuse($, toolUseId, reason, SAFE[v.verdict], note)
+  return refuse($, toolUseId, reason, SAFE[v.verdict])
 }
 
 const unreadableRefusal = ($: EngineInterface, toolUseId: string, names: string[]) =>

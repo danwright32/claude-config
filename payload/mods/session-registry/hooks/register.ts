@@ -20,11 +20,6 @@ let chain: Promise<unknown> = Promise.resolve()
 let beating = false
 
 const dirOf = (h: string) => `${h}/.claude/state/sessions`
-const projectsOf = (h: string) => `${h}/.claude/projects`
-// Claude Code files a session's transcript under its starting folder, every character but a
-// letter, a digit or a dash turned into a dash (measured against all 1451 transcripts on this Mac,
-// 2026-10-04: the one miss was a session that changed folder, found by its id instead).
-const folderOf = (cwd: string) => cwd.replace(/[^A-Za-z0-9-]/g, '-')
 
 // The one writer of this session's record, made inside engine.create (the engine allows the built
 // $ to be used there, not passed out) and used by every hook. Every write goes through one queue, so
@@ -73,14 +68,6 @@ const beat = async ($: EngineInterface) => {
   })
 }
 
-const found = new Map<string, string>()
-// When a session's transcript was last searched for and not found: searched again after a minute,
-// not on every read, since every guarded edit reads the list (lessons review of #636).
-const missed = new Map<string, number>()
-const SEARCH_AGAIN_MS = 60_000
-// What a session id looks like; anything else read from disk never goes into a path or a search.
-const SESSION_ID = /^[A-Za-z0-9-]+$/
-
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -91,33 +78,6 @@ export const register: Register = on => {
       await built.fs.write(tmp, JSON.stringify(rec))
       const mv = await built.process.run(['mv', '-f', tmp, `${dir}/${rec.sessionId}.json`])
       if (mv.exitCode !== 0) built.ui.log(`session-registry: could not save this session's record: ${mv.stderr.trim()}`, { to: 'debug' })
-    }
-    // Where a session's transcript is, only if that file is really there: in the folder for the
-    // directory it started in, else wherever a file named by its id is. Never a guessed path, so a
-    // reader can say the transcript was not found rather than fail to read one that never existed.
-    const transcriptOf = async (h: string, r: SessionsRecord, now: number): Promise<string | null> => {
-      if (!SESSION_ID.test(r.sessionId)) return null
-      for (const p of [found.get(r.sessionId), r.transcriptPath, `${projectsOf(h)}/${folderOf(r.cwd)}/${r.sessionId}.jsonl`]) {
-        if (p && (await built.fs.exists(p).catch(() => false))) {
-          found.set(r.sessionId, p)
-          return p
-        }
-      }
-      const last = missed.get(r.sessionId)
-      if (last !== undefined && now - last < SEARCH_AGAIN_MS) return null
-      try {
-        const f = await built.process.run(['find', projectsOf(h), '-maxdepth', '2', '-name', `${r.sessionId}.jsonl`], { timeoutMs: 5_000 })
-        const p = f.exitCode === 0 ? f.stdout.split('\n').map(l => l.trim()).find(Boolean) : undefined
-        if (p) {
-          found.set(r.sessionId, p)
-          missed.delete(r.sessionId)
-          return p
-        }
-      } catch {
-        // Not found is the answer: the reader says so by name.
-      }
-      missed.set(r.sessionId, now)
-      return null
     }
     const sessions: Sessions = {
       list: async (): Promise<SessionsList> => {
@@ -137,17 +97,14 @@ export const register: Register = on => {
         }
         for (const ent of entries) {
           if (ent.kind !== 'file' || !ent.name.endsWith('.json') || ent.name.startsWith('.')) continue
-          let r: SessionsRecord
           try {
-            r = JSON.parse(await built.fs.read(`${dirOf(h)}/${ent.name}`)) as SessionsRecord
+            const r = JSON.parse(await built.fs.read(`${dirOf(h)}/${ent.name}`)) as SessionsRecord
             if (r.v !== 1 || typeof r.sessionId !== 'string' || typeof r.lastSeen !== 'number') throw new Error('shape')
+            const isOpen = r.closedAt === null && now - r.lastSeen <= DEAD_MS
+            ;(isOpen ? out.open : out.closed).push(r)
           } catch {
             out.unreadable.push(ent.name)
-            continue
           }
-          const isOpen = r.closedAt === null && now - r.lastSeen <= DEAD_MS
-          if (isOpen) r.transcriptPath = await transcriptOf(h, r, now)
-          ;(isOpen ? out.open : out.closed).push(r)
         }
         return out
       },
@@ -175,6 +132,17 @@ export const register: Register = on => {
       }
     } else {
       $.ui.log("Session registry couldn't find the home folder, so other mods can't see this session.")
+    }
+    return next(e)
+  })
+
+  // The transcript's path, from the settings hook input every session start carries.
+  on('classic.SessionStart', async ($, e, next) => {
+    const path = (e as { transcript_path?: string }).transcript_path
+    if (path) {
+      await save(r => {
+        r.transcriptPath = path
+      })
     }
     return next(e)
   })

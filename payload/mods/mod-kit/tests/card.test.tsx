@@ -40,35 +40,6 @@ test('a blocked call is drawn as the grey card on every surface', { plugins: [gu
   }
 })
 
-// A note under the safe way: something the guard could not do, such as tell the other session.
-const noting: { name: string; register: Register } = {
-  name: 'noting-guard',
-  register: on => {
-    on('tool.call', { tool: 'Bash' }, async ($, e) => {
-      await $.modkit.blocked({
-        toolUseId: String(e.tool_use_id),
-        guard: 'Collision guard',
-        reason: 'Another session is working on app.ts.',
-        safeWay: 'Move this work to its own worktree and redo it there.',
-        note: 'The other session could not be told: Classifier unavailable.',
-      })
-      return { deny: 'Blocked.' }
-    })
-  },
-}
-
-test('a note is drawn on the card under the safe way', { plugins: [noting] }, async ($, on) => {
-  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
-  on('ui.render', ($, e) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text>engine row</Text>
-  })
-  await $.tool.call({ tool: 'Bash', command: 'x', tool_use_id: 'n1' } as never)
-  const ui = await $.ui.mount({ ...row('n1'), surface: 'terminal' } as never)
-  expect(await ui.find({ text: 'The other session could not be told: Classifier unavailable.' })).toBeDefined()
-  await ui.unmount()
-})
-
 test('a call no guard blocked is left to Claude Code', { plugins: [guard] }, async ($, on) => {
   // Claude Code's own row, beneath the kit: what is drawn when no guard blocked the call.
   on('ui.render', ($, e) => {

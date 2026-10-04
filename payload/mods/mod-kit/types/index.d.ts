@@ -7,8 +7,6 @@ export type ModKitBlocked = {
   reason: string
   /** The safe way instead, drawn dim; optional. */
   safeWay?: string
-  /** Something the guard could not do, drawn dim under the safe way; optional. */
-  note?: string
 }
 
 /** Called from another mod, each method answers asynchronously: await it. */
