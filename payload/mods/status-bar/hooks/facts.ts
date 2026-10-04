@@ -56,10 +56,11 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 /**
  * The amber needs-a-look line, most urgent first so a narrow window cuts off what can wait longest:
- * the scope mode in bold, then a failing or running PR, running jobs, kept jobs, unpushed commits.
- * Empty when nothing needs a look and no mode is on, so the band does not show.
+ * the scope modes in bold (no build or winding down, and away, can be on at once, each its own
+ * bold item divided like the rest), then a failing or running PR, running jobs, kept jobs, unpushed
+ * commits. Empty when nothing needs a look and no mode is on, so the band does not show.
  */
-export const lookParts = (f: { mode: StatusBarMode | null; pr: PrReading | null; jobs: readonly Job[]; unpushed: number; now: number }): LookPart[] => {
+export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | null; jobs: readonly Job[]; unpushed: number; now: number }): LookPart[] => {
   const items: string[] = []
   if (f.pr && (f.pr.checks === 'failing' || f.pr.checks === 'running')) {
     const age = f.pr.isStale ? `, as of ${span(f.now - f.pr.readAt)} ago` : ''
@@ -70,7 +71,10 @@ export const lookParts = (f: { mode: StatusBarMode | null; pr: PrReading | null;
   for (const j of f.jobs.filter(j => j.kept)) items.push(`${j.label} kept ${span(j.runMs)}`)
   if (f.unpushed > 0) items.push(plural(f.unpushed, 'unpushed commit', 'unpushed commits'))
   const parts: LookPart[] = []
-  if (f.mode) parts.push({ text: f.mode, color: AMBER, bold: true })
+  for (const m of f.modes) {
+    if (parts.length) parts.push({ text: ' | ', dim: true })
+    parts.push({ text: m, color: AMBER, bold: true })
+  }
   for (const t of items) {
     if (parts.length) parts.push({ text: ' | ', dim: true })
     parts.push({ text: t, color: AMBER })

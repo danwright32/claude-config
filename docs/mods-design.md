@@ -122,8 +122,10 @@ the spec rather than chosen afresh, and open to Dan changing:
   for the cache. A compaction that does not run says why in a toast: "Compact did not run: ...".
 - The toast 5 minutes before the cache goes cold reads "The prompt cache goes cold in 5 minutes."
 - A repository with no remote shows no unpushed commits, since there is nothing to push to.
-- A scope mode is set by another mod with `$.statusbar.setMode({ mode })`, one of `NO BUILD`,
-  `WINDING DOWN` and `AWAY`, or `null` to clear it.
+- A scope mode is set by another mod with `$.statusbar.setModes({ modes })`, the modes that are
+  on at once (no build or winding down, and away), or an empty list to clear them; `setMode({ mode })`
+  sets one. Two at once read `NO BUILD | AWAY`, each bold, divided like the other items (#616, #621
+  build; open to Dan changing, see below).
 
 Why the split: a live probe on 2026-10-04 showed a mod's `$.ui.status` line is drawn by Claude Code
 as a warning notice, amber with a warning sign and the mod's name in front, and terminal colour
@@ -271,6 +273,39 @@ and open to his correction.
   is retired in the same change (Dan, picker, 2026-10-04, over keeping both and over keeping only
   the hook). While it ran, every session had a name long before the 10 minute mark, so this mod
   correctly never named anything. A session is now unnamed for its first 10 minutes.
+
+### Scope modes and away and home (#616, #621), built
+
+One mod, `scope-modes`, because the two share their state: the status bar holds one list of modes
+for the amber line, both are switched by Dan's own words read off the same prompt, and both judge
+the same Bash calls. What the specs and the rounds settled is as above. What they did not settle was
+taken from the spec's words or the existing patterns, and each is open to Dan changing it:
+
+- Only Dan's own prompts switch a mode (his Enter, or his phone through Remote Control); a peer
+  session's message, a plugin or a notification never does, so nothing else can lift no build.
+- One scope mode at a time: turning on no build while winding down replaces it, and the other way.
+  Away is separate and can be on with either; both show, the scope mode first.
+- The words: `/nobuild` answers "No build is on.", `/winddown` "Winding down is on.", `/build` "No
+  build is off." (or "Winding down is off.", or "No scope mode was on."); `/away` and `/home` answer
+  "Away is on in this session and 2 others." and name any session that could not be told.
+- A no build refusal is the grey blocked card titled "Blocked by No build", with "Claude asks you:
+  Switch to build?" as its safe way; a winding down refusal is titled "Winding down"; a held action
+  "Away". "Switch to build?" is asked by the mod in Claude Code's question dialog when Claude calls
+  its `switch_to_build` tool, so only Dan's press lifts no build: the dialog reads "Claude wants to
+  <change>. Switch to build?" with Yes and No.
+- Winding down finds what to finish from the branch the session is on when it turns on: its PR, the
+  issues the PR closes, and the branch and worktree. The deploy cannot be measured by the mod, so
+  Claude records it live with the `winddown_live` tool, saying how it checked (to be replaced by the
+  is it live mod, #617). On the default branch with no PR and nothing uncommitted there is nothing to
+  finish; outside a repository too. A check that cannot read GitHub never counts as finished. It is
+  checked at each turn end and each minute, and the toast reads "Wind down finished: safe to close
+  this session."
+- Held while away: opening anything (`open`, BBEdit), AppleScript that types, clicks or brings an app
+  forward, cliclick and Peekaboo. A row reads as what it would do ("Open report.html in Google
+  Chrome", "Type into Overture"), its button "Open" or "Do it". Pressing one takes the row away and
+  asks Claude to do that one thing, so it still passes every guard (the keystroke guard's heads up
+  included). The same thing held twice is one row. A /clear ends the session and every mode with it.
+- The phone line ends every reply to a phone message while home, not only the first.
 
 ### The band, shared by every mod
 

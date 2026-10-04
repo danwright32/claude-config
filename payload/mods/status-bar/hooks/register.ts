@@ -23,7 +23,7 @@ const MODES: readonly StatusBarMode[] = ['NO BUILD', 'WINDING DOWN', 'AWAY']
 const SESSION_ID = /^[A-Za-z0-9-]+$/
 const MOD = 'status-bar'
 
-const modeRef = { plugin: 'status-bar', key: 'mode' } as const
+const modesRef = { plugin: 'status-bar', key: 'modes' } as const
 const cacheRef = { plugin: 'status-bar', key: 'cacheExpiresAt' } as const
 
 /** The job watcher's noun (#611) as its contract will be; it may not be loaded at all. */
@@ -133,7 +133,7 @@ const readJobs = async ($: EngineInterface) => {
 // passed out), so a mode set by another mod through $.statusbar redraws the band as a hook does.
 type BandIo = {
   now: () => Promise<number>
-  mode: () => Promise<StatusBarMode | null>
+  modes: () => Promise<StatusBarMode[]>
   cache: () => Promise<number | null>
   show: (row: { mod: string; id: string; slot: 'needs-a-look' | 'compact'; lines: unknown[][] }) => Promise<void>
   clear: (id: string) => Promise<void>
@@ -148,7 +148,7 @@ const publish = () =>
     if (!io) return
     const now = await io.now()
     const cache = await io.cache()
-    const look = lookParts({ mode: await io.mode(), pr, jobs, unpushed, now })
+    const look = lookParts({ modes: await io.modes(), pr, jobs, unpushed, now })
     const due = compactDue({ contextPercent: context, cacheExpiresAt: cache, now })
     const compact = due
       ? [...(context === undefined ? [] : [{ text: `ctx ${Math.round(context)}% `, color: 'warning' }]), { button: 'compact', label: 'Compact' }]
@@ -213,18 +213,22 @@ export const register: Register = on => {
     const built = await next(e)
     io = {
       now: () => built.clock.now(),
-      mode: async () => (await built.state.get(modeRef)).value ?? null,
+      modes: async () => (await built.state.get(modesRef)).value ?? [],
       cache: async () => (await built.state.get(cacheRef)).value ?? null,
       show: row => built.modkit.bandRow(row as never),
       clear: id => built.modkit.clearBandRow({ mod: MOD, id }),
       log: text => built.ui.log(text, { to: 'debug' }),
     }
+    const setModes: StatusBar['setModes'] = async ({ modes }) => {
+      if (!Array.isArray(modes)) throw new Error('modes must be a list of scope modes')
+      for (const m of modes) if (!MODES.includes(m)) throw new Error(`"${String(m)}" is not a scope mode; the modes are ${MODES.join(', ')}`)
+      if (new Set(modes).size !== modes.length) throw new Error(`a scope mode is named twice in ${modes.join(', ')}`)
+      await built.state.set(modesRef, [...modes])
+      await publish()
+    }
     const statusbar: StatusBar = {
-      setMode: async ({ mode }) => {
-        if (mode !== null && !MODES.includes(mode)) throw new Error(`"${String(mode)}" is not a scope mode; the modes are ${MODES.join(', ')}`)
-        await built.state.set(modeRef, mode)
-        await publish()
-      },
+      setModes,
+      setMode: ({ mode }) => setModes({ modes: mode === null ? [] : [mode] }),
     }
     return { ...built, statusbar }
   })

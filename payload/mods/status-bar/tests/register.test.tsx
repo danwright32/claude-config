@@ -294,7 +294,8 @@ const modes: { name: string; register: Register } = {
     on('tool.call', { tool: 'Bash' }, async ($, e) => {
       const arg = String((e as { command?: string }).command)
       try {
-        await $.statusbar.setMode({ mode: (arg === 'off' ? null : arg) as never })
+        if (arg.includes('+')) await $.statusbar.setModes({ modes: arg.split('+') as never })
+        else await $.statusbar.setMode({ mode: (arg === 'off' ? null : arg) as never })
       } catch (err) {
         return { deny: `refused: ${String((err as Error).message ?? err)}` }
       }
@@ -318,6 +319,19 @@ test('a scope mode leads the amber line in bold, shows alone, and clears', { plu
   expect(await call($, 'off')).toBe('done')
   expect(await shown(ui as never)).toBe('2 unpushed commits')
   expect(await call($, 'LUNCH')).toMatch(/refused: .*"LUNCH"/)
+  await ui.unmount()
+})
+
+test('two modes at once both lead the line, in the order given; a bad or repeated one is refused', { plugins: [modKit, modes] }, async ($, on) => {
+  const { clock } = world(on)
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  await start($, clock)
+  expect(await call($, 'WINDING DOWN+AWAY')).toBe('done')
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('WINDING DOWN | AWAY')
+  expect(await call($, 'AWAY+LUNCH')).toMatch(/refused: .*"LUNCH"/)
+  expect(await call($, 'AWAY+AWAY')).toMatch(/refused: .*twice/)
+  expect(await shown(ui as never)).toBe('WINDING DOWN | AWAY')
   await ui.unmount()
 })
 
