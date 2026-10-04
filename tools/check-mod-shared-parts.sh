@@ -8,7 +8,8 @@
 #   reader    splitting a command on shell separators          use $.modkit.commands({ command })
 #   quotes    tracking quote characters one by one              use $.modkit.commands({ command })
 #   heredoc   reading a heredoc's opening                       use $.modkit.commands({ command })
-#   card      drawing a tool result row (the blocked card)      use $.modkit.blocked({ ... })
+#   card      drawing a tool result row (the boxed card)        use $.modkit.card({ toolUseId, title, lines }),
+#             or $.modkit.blocked({ ... }) for a guard's refusal, which is one use of it (#663)
 #   git       listing git's global options to find a subcommand use $.modkit.git({ words })
 #   band      drawing the band above the prompt (AbovePrompt)   use $.modkit.bandRow({ ... })
 #             Claude Code gives the band ONE drawing, so two mods hooking it fight over it (#610).
@@ -30,7 +31,7 @@ PARTS=(
   "reader|split\(/[^/]*&&|\$.modkit.commands({ command })"
   "quotes|=== '\"' \|\| [a-z]+ === \"'\"|\$.modkit.commands({ command })"
   "heredoc|<<\(\?!<\)|\$.modkit.commands({ command })"
-  "card|component: *'ToolResult'|\$.modkit.blocked({ ... })"
+  "card|component: *['\"]ToolResult['\"]|\$.modkit.card({ toolUseId, title, lines }) (a guard's refusal: \$.modkit.blocked({ ... }))"
   "git|'--work-tree'|\$.modkit.git({ words })"
   "band|component: *['\"]AbovePrompt['\"]|\$.modkit.bandRow({ ... })"
 )

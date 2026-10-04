@@ -29,7 +29,7 @@ and settles its own surfaces in rounds of its own before it is built.
 
 | Surface | Decision | Round |
 | --- | --- | --- |
-| A blocked action in the transcript | A grey boxed card: title "Blocked by <guard>", the reason, then the safe way in dim text. Drawn once, by `mod-kit`, for every guard. | 1 (shape: card over plain error row and two named lines), 3 (colour: grey) |
+| A blocked action in the transcript | A grey boxed card: title "Blocked by <guard>", the reason, then the safe way in dim text. Drawn once, by `mod-kit`, for every guard, as one use of the boxed card any mod's own tool result is drawn as (`$.modkit.card`, #663). | 1 (shape: card over plain error row and two named lines), 3 (colour: grey) |
 | The keystroke guard's heads up | The standard question dialog with the chip "Taking over" (12 characters at most; settled in a picker after round 2): "I'm about to type into Overture. Ready?" or "I'm about to bring Google Chrome to the front. Ready?", options Go ahead and Not now | 2 (dialog over a band above the prompt and a card in the transcript) |
 | `/style-count` | One line: "Replies with a dash or emoji: 2 this session, 7 in total." When some replies could not be checked it adds "1 reply this session could not be checked." (picker, after the lessons review) | 4 |
 | A guard's note (a source it could not read, a check that could not run) | One dim transcript line, the guard named inside the sentence | 5 |
@@ -326,7 +326,9 @@ is cleared. Rows in
 one slot keep the order they were first published in, and a row published again under its id is
 replaced where it stands. A row is plain data, since only plain data crosses between mods: each
 line a list of text runs (`text`, `color`, `bold`, `dim`, `strikethrough`; `color: 'warning'` is
-the amber) and buttons (`button`, `label`, `hotkey`). A button is Claude Code's own, drawn with the
+the amber) and buttons (`button`, `label`, `hotkey`, and `plain: true` for Claude Code's plain style, a
+survey's row: the hotkey in the accent colour, a colon, the label, `1: 7 days`, or the label alone
+with no hotkey, #667). A button is Claude Code's own, drawn with the
 key `<mod>:<button>`, and its press reaches the publisher through
 `on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`, since a closure cannot
 cross from one mod to another. The rows live in mod-kit's `$.state`, so a reload keeps them, and
@@ -361,10 +363,14 @@ ones marked open are the builder's choice, waiting on Dan.
 - **Cards are kept per repository** in the mod's store, the newest 50, so `/live` lists them in
   any later session, newest first, then every message not yet marked sent; `/live` also pins
   each unsent message in the band again, so Copy and Mark sent are at hand.
-- **The card is the tool's plain text result** until mod-kit draws a boxed card for any result
-  (#663): only mod-kit draws a result row.
+- **The card is mod-kit's boxed card** (`$.modkit.card`, #663), since only mod-kit draws a result
+  row: the state word leads the bold title in its colour (green `success`, grey, amber `warning`),
+  then why live could not be confirmed, what changed, "See it:" and the link, and the numbered
+  clicks. The model reads the same lines as the tool's text result, built from the one list, and
+  that text is what the row shows after a reload (mod-kit keeps cards in memory). When mod-kit
+  refuses the card, the card is still made, the row shows the text, and Claude is told why.
 - Open: the title for a project with no recorded deploy step ("Merged, no deploy step
-  recorded:"), its colour, the violet drawn as the terminal's magenta, the toast's words (the
+  recorded:"), its colour (drawn grey until Dan settles it), the violet drawn as the terminal's magenta, the toast's words (the
   card's title), and the Copy and Mark sent buttons having no shortcut keys.
 
 ## Ask before saving (#618), built 2026-10-04

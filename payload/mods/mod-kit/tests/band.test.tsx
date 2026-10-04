@@ -134,6 +134,35 @@ test("a button in a row is Claude Code's own, and its press reaches the publishe
   await ui.unmount()
 })
 
+// #667: a band button may ask for Claude Code's plain style (the hotkey in the accent colour, a
+// colon, the label; the label alone with no hotkey), so an option reads "1: 7 days", not "[ 7 days ]".
+test("a button marked plain is drawn in Claude Code's plain style, and one not marked keeps its brackets", withPublisher, async ($, on) => {
+  engineBand(on)
+  await show($, { mod: 'publisher', id: 'q', slot: 'question', lines: [[{ button: 'opt1', label: '7 days', hotkey: '1', plain: true }], [{ button: 'go', label: 'Submit' }]] })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount(band(surface))
+    const plain = await ui.find({ type: 'Button', key: 'publisher:opt1' })
+    expect(plain?.props.plain).toBe(true)
+    expect(plain?.props.hotkey).toBe('1')
+    expect(plain?.props.label).toBe('7 days')
+    expect((await ui.find({ type: 'Button', key: 'publisher:go' }))?.props.plain).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+// Lessons review of #678: plain is a button's style, so a text run carrying it is refused by name
+// rather than quietly ignored.
+test('plain on a text run is refused, naming the text run', withPublisher, async ($, on) => {
+  engineBand(on)
+  expect(await show($, { mod: 'publisher', id: 'q', slot: 'steps', lines: [[{ text: 'note', plain: true }]] })).toMatch(/refused: .*only a button can be plain/)
+})
+
+test('plain set to anything but true is refused at publish, never drawn as a bracketed button', withPublisher, async ($, on) => {
+  engineBand(on)
+  expect(await show($, { mod: 'publisher', id: 'q', slot: 'steps', lines: [[{ button: 'opt1', label: '7 days', plain: 'yes' }]] })).toMatch(/refused: .*plain must be true/)
+  expect(await show($, { mod: 'publisher', id: 'q', slot: 'steps', lines: [[{ button: 'opt1', label: '7 days', plain: false }]] })).toMatch(/refused: .*plain must be true/)
+})
+
 test('a row in no settled slot, or naming no mod or id, is refused by name', withPublisher, async ($, on) => {
   engineBand(on)
   expect(await show($, { mod: 'publisher', id: 'x', slot: 'top', lines: [] })).toMatch(/refused: .*slot "top"/)

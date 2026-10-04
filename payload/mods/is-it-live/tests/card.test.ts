@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { buttonId, cardText, liveList, messageRow, reasonToRefuse, stateOf, titleOf } from '../hooks/card.ts'
+import { buttonId, cardOf, cardText, liveList, messageRow, reasonToRefuse, stateOf, titleOf } from '../hooks/card.ts'
 
 // Is it live (claude-config#617): the card's state, words and the message row, settled with Dan on
 // 2026-10-04 (docs/mods-design.md, Is it live).
@@ -66,6 +66,29 @@ test('the card as text: title, what changed, how to see it, and why live could n
   )
   const failed = cardText({ ...base, deploy: 'failed', checked: 'The deploy job failed at the build step.', state: 'unconfirmed', title: 'x', url: 'u' })
   expect(failed.split('\n')[1]).toBe('The deploy job failed at the build step.')
+})
+
+test('the boxed card: the state word leads the title in its colour, then what changed and how to see it', () => {
+  const live = cardOf({ ...base, state: 'live', title: 'Filter bookings by venue', url: 'u' })
+  expect(live.title).toEqual([{ text: 'Live:', color: 'success', bold: true }, { text: ' Filter bookings by venue' }])
+  expect(live.lines).toEqual([
+    [{ text: 'The bookings list now filters by venue. Old bookings keep their venue.' }],
+    [{ text: 'See it: ' }, { text: 'https://slate.example.com/bookings' }],
+    [{ text: '1. Open Bookings' }],
+    [{ text: '2. Pick a venue in the filter' }],
+  ])
+  // Grey for a deploy still running, amber for live that could not be confirmed (design round).
+  expect(cardOf({ ...base, deploy: 'deploying', state: 'deploying', title: 'x', url: 'u' }).title[0]).toEqual({ text: 'Merged, deploying:', color: 'gray', bold: true })
+  const failed = cardOf({ ...base, deploy: 'failed', checked: 'The deploy job failed at the build step.', state: 'unconfirmed', title: 'x', url: 'u' })
+  expect(failed.title[0]).toEqual({ text: 'Could not confirm live:', color: 'warning', bold: true })
+  expect(failed.lines[0]).toEqual([{ text: 'The deploy job failed at the build step.' }])
+  expect(cardOf({ ...base, deploy: 'none', state: 'no-deploy', title: 'x', url: 'u' }).title[0].text).toBe('Merged, no deploy step recorded:')
+})
+
+test('the text the model reads says what the boxed card says, line for line', () => {
+  const c = { ...base, deploy: 'failed' as const, checked: 'Timed out.', state: 'unconfirmed' as const, title: 'Filter bookings by venue', url: 'u' }
+  const boxed = cardOf(c)
+  expect(cardText(c)).toBe([boxed.title, ...boxed.lines].map(l => l.map(r => r.text).join('')).join('\n'))
 })
 
 test('the message row: a violet heading naming who asked, the message, then Copy and Mark sent', () => {

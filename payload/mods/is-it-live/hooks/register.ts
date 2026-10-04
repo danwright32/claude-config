@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLiveCard } from '../types/index.d.ts'
-import { type CardInput, MOD, buttonId, cardText, liveList, messageRow, reasonToRefuse, stateOf, titleOf } from './card.ts'
+import { type CardInput, MOD, buttonId, cardOf, cardText, liveList, messageRow, reasonToRefuse, stateOf, titleOf } from './card.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
 // calls this mod's card tool with what it found; the mod confirms the merge with GitHub itself (L161:
@@ -8,9 +8,9 @@ import { type CardInput, MOD, buttonId, cardText, liveList, messageRow, reasonTo
 // so /live can list it in any later session, toasts it, and pins a message for whoever asked in the
 // band until Dan presses Mark sent. Spec agreed with Dan 2026-10-03, looks settled 2026-10-04.
 //
-// The card is drawn as the tool's own result row, as text, until mod-kit draws a boxed card for any
-// result (#663): the boxed card the design asks for is the blocked card's shape, which mod-kit alone
-// draws, and a second copy here is what tools/check-mod-shared-parts.sh exists to stop (L613).
+// The card's result row is mod-kit's boxed card ($.modkit.card, #663), the blocked card's shape:
+// only mod-kit draws a result row (tools/check-mod-shared-parts.sh, L613). The same lines go to the
+// model as the tool's text result, which is also what the row shows after a reload.
 
 const TOOL = `mcp__${MOD}__card`
 const KEEP = 50
@@ -78,7 +78,7 @@ export const register: Register = on => {
   })
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
-    const { tool: _t, tool_use_id: _i, agentId: _a, consent: _c, ...raw } = e as unknown as Record<string, unknown>
+    const { tool: _t, tool_use_id: toolUseId, agentId: _a, consent: _c, ...raw } = e as unknown as Record<string, unknown>
     const input = raw as unknown as CardInput
     const why = reasonToRefuse(input)
     if (why) return { deny: `No card: ${why}` }
@@ -133,9 +133,15 @@ export const register: Register = on => {
     const unpinned = await pin($, kept)
     if (unpinned) notes.push(`The message for ${kept.requester?.name} could not be pinned in the band (${unpinned}); /live lists it.`)
 
+    const shown = { ...input, state, title, url: kept.url }
+    try {
+      await $.modkit.card({ toolUseId: String(toolUseId ?? ''), ...cardOf(shown) })
+    } catch (err) {
+      notes.push(`The card could not be drawn boxed (${String((err as Error)?.message ?? err)}), so it shows as text.`)
+    }
     $.ui.toast(titleOf(state, title))
     return {
-      result: cardText({ ...input, state, title, url: kept.url }),
+      result: cardText(shown),
       context: [...notes, 'The card is shown in the chat as it stands: add no sentence that repeats it.'],
     }
   })

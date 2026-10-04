@@ -94,3 +94,85 @@ test('the command reader is shared as $.modkit.commands', { plugins: [reader] },
   const r = (await $.tool.call({ tool: 'Bash', command: 'sudo cat .env && git status' } as never)) as { deny?: string; text?: string }
   expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([['cat', '.env'], ['git', 'status']])
 })
+
+// Any mod's own tool result drawn as the boxed card (#663), from plain data: a title whose runs can
+// carry colour (a state word leading it), then body lines. The blocked card is one use of it.
+// A plugin in a test runs in its own environment, so the card is spelled inside the hook.
+const carder: { name: string; register: Register } = {
+  name: 'carder',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      const command = String((e as { command?: string }).command)
+      try {
+        const live = {
+          toolUseId: String(e.tool_use_id),
+          title: [{ text: 'Live:', color: 'success', bold: true }, { text: ' Filter bookings by venue' }],
+          lines: [[{ text: 'The bookings list now filters by venue.' }], [{ text: 'See it: ' }, { text: 'https://slate.example.com', color: 'suggestion' }], [{ text: 'a dim line', dim: true }]],
+        }
+        await $.modkit.card(command === 'card' ? live : JSON.parse(command))
+      } catch (err) {
+        return { deny: `refused: ${String((err as Error).message ?? err)}` }
+      }
+      return { deny: 'carded' }
+    })
+  },
+}
+
+const resultRow = (id: string) => ({
+  plugin: 'mod-kit',
+  component: 'ToolResult' as const,
+  props: { tool_use_id: id, tool: 'mcp__carder__card', output: 'card text', isErrored: false },
+})
+
+test("a mod's own tool result is drawn as the boxed card, its title's runs keeping their colour, on every surface", { plugins: [carder] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine row</Text>
+  })
+  const made = (await $.tool.call({ tool: 'Bash', command: 'card', tool_use_id: 'k1' } as never)) as { deny?: string; text?: string }
+  expect(made.deny ?? made.text).toBe('carded')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...resultRow('k1'), surface } as never)
+    expect(await ui.find({ text: 'engine row' })).toBeUndefined()
+    const box = await ui.find({ type: 'Box' })
+    expect(box?.props.borderStyle).toBe('round')
+    expect(box?.props.borderColor).toBe('gray')
+    // A run is a leaf Text nested in its line's Text, so a line wraps as one piece of text.
+    const texts = await ui.findAll({ type: 'Text' })
+    const leaf = (text: string) => texts.find(t => t.text === text && t.children.every(c => typeof c === 'string'))
+    const lineOf = (text: string) => texts.find(t => t.text === text && t.children.some(c => typeof c !== 'string'))
+    expect(leaf('Live:')?.props.color).toBe('success')
+    expect(leaf('Live:')?.props.bold).toBe(true)
+    // The whole title is one line of bold text, the state word leading it.
+    expect(lineOf('Live: Filter bookings by venue')?.props.bold).toBe(true)
+    expect(leaf(' Filter bookings by venue')?.props.color).toBeUndefined()
+    expect(leaf('The bookings list now filters by venue.')).toBeDefined()
+    expect(lineOf('See it: https://slate.example.com')).toBeDefined()
+    expect(leaf('https://slate.example.com')?.props.color).toBe('suggestion')
+    expect(leaf('a dim line')?.props.dimColor).toBe(true)
+    await ui.unmount()
+  }
+})
+
+test('a card with no tool use id, no title or malformed lines is refused by name, and the row is left to Claude Code', { plugins: [carder] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine row</Text>
+  })
+  const send = async (card: unknown, id: string) => {
+    const r = (await $.tool.call({ tool: 'Bash', command: JSON.stringify(card), tool_use_id: id } as never)) as { deny?: string; text?: string }
+    return String(r.deny ?? r.text ?? '')
+  }
+  expect(await send({ toolUseId: '', title: [{ text: 'x' }], lines: [] }, 'r1')).toMatch(/refused: .*tool use id/)
+  expect(await send({ toolUseId: 'r2', title: [], lines: [] }, 'r2')).toMatch(/refused: .*title/)
+  expect(await send({ toolUseId: 'r3', title: [{ text: 'x' }], lines: ['a string'] }, 'r3')).toMatch(/refused: .*line 1/)
+  expect(await send({ toolUseId: 'r4', title: [{ text: 'x', color: 3 }], lines: [] }, 'r4')).toMatch(/refused: .*colour/)
+  expect(await send({ toolUseId: 'r5', title: [{ text: 'x' }], lines: [[{ text: 7 }]] }, 'r5')).toMatch(/refused: .*text/)
+  for (const id of ['r2', 'r3', 'r4', 'r5']) {
+    const ui = await $.ui.mount({ ...resultRow(id), surface: 'terminal' } as never)
+    expect(await ui.find({ text: 'engine row' })).toBeDefined()
+    await ui.unmount()
+  }
+})

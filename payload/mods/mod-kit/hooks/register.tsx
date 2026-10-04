@@ -1,19 +1,26 @@
 import { read } from 'claude-code'
 import type { Register } from 'claude-code'
-import type { ModKit, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBlocked } from '../types/index.d.ts'
+import type { ModKit, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitCard, ModKitRun } from '../types/index.d.ts'
 import { compose, drop, isDivider, put, refusal } from './band.ts'
+import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git } from './commands.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
-// place so no guard keeps its own copy (L613). Today: the grey card for a blocked action, settled
-// with Dan in design rounds 1 and 3 on 2026-10-03. Grey, because a block is a notice Claude works
-// around by itself and colour is kept for what Dan has to act on.
+// place so no guard keeps its own copy (L613). Among it: the boxed card a tool result row is drawn
+// as, the shape settled with Dan for a blocked action in design rounds 1 and 3 on 2026-10-03, and
+// opened to any mod's own tool result in #663. Its border is grey, because colour is kept for what
+// Dan has to act on; a run in the title may carry a colour, such as a leading state word.
 //
-// A blocked call is recorded by its tool_use_id when the guard refuses it, and its result row is
+// A card is recorded by its tool_use_id when the mod's tool.call hook runs, and its result row is
 // drawn as the card. Kept in memory: after a reload an earlier row is drawn as Claude Code's own
-// error row again, which still carries the whole refusal.
-const blocked = new Map<string, ModKitBlocked>()
+// row again, which still carries the whole text the model read.
+const cards = new Map<string, ModKitCard>()
 const MAX = 500
+const keep = (card: ModKitCard) => {
+  cards.set(card.toolUseId, card)
+  // Bounded, so a long session cannot grow it without end; the oldest rows are long gone.
+  if (cards.size > MAX) cards.delete(cards.keys().next().value as string)
+}
 
 // The band's rows, in $.state so a reload of this module keeps them (a module variable would not).
 const band = { plugin: 'mod-kit', key: 'band' } as const
@@ -35,10 +42,14 @@ export const register: Register = (on, options) => {
     }
     const modkit: ModKit = {
       blocked: async input => {
+        // A guard's refusal stands without its card, so a call with no id is drawn as Claude Code's error row.
         if (!input.toolUseId) return
-        blocked.set(input.toolUseId, input)
-        // Bounded, so a long session cannot grow it without end; the oldest rows are long gone.
-        if (blocked.size > MAX) blocked.delete(blocked.keys().next().value as string)
+        keep(blockedCard(input))
+      },
+      card: async input => {
+        const why = cardRefusal(input)
+        if (why) throw new Error(why)
+        keep(input)
       },
       commands: async ({ command }) => commands(command),
       git: async ({ words }) => git(words),
@@ -55,15 +66,22 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'ToolResult' }, ($, e, next) => {
-    const b = blocked.get(e.props.tool_use_id)
-    if (!b) return next(e)
+    const card = cards.get(e.props.tool_use_id)
+    if (!card) return next(e)
     const { Box, Text } = $.ui.resolve(e)
+    // Each run its own Text nested in the line's, so a line wraps as one piece of text.
+    const runs = (rs: ModKitRun[]) =>
+      rs.map((r, i) => (
+        <Text key={String(i)} color={r.color} bold={r.bold} dimColor={r.dim}>
+          {r.text}
+        </Text>
+      ))
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
-        <Text bold>Blocked by {b.guard}</Text>
-        <Text>{b.reason}</Text>
-        {b.safeWay ? <Text dimColor>{b.safeWay}</Text> : null}
-        {b.note ? <Text dimColor>{b.note}</Text> : null}
+        <Text bold>{runs(card.title)}</Text>
+        {card.lines.map((l, n) => (
+          <Text key={String(n)}>{runs(l)}</Text>
+        ))}
       </Box>
     )
   })
@@ -80,7 +98,7 @@ const registerBand: Register = on => {
       const drawn =
         'button' in p ? (
           // The press reaches the publisher through its ui.press hook on this key; nothing to do here.
-          <Button key={`${row.mod}:${p.button}`} label={p.label} hotkey={p.hotkey} onPress={() => undefined} />
+          <Button key={`${row.mod}:${p.button}`} label={p.label} hotkey={p.hotkey} plain={p.plain} onPress={() => undefined} />
         ) : (
           <Text key={String(i)} color={p.color} bold={p.bold} dimColor={p.dim} strikethrough={p.strikethrough} wrap="truncate-end">
             {p.text}
