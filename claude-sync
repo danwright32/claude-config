@@ -3524,6 +3524,16 @@ SWPROT
     # the alert that teaches people to dismiss alerts (L36). The suite already holds that line, in
     # the #25 control asserting an ordinary sync fires nothing, which this broke when it notified.
   fi
+  # AND A COPY THE REPO HAS SINCE REPLACED (claude-config#638). The hold back above trusts the applied
+  # marker, and on 2026-10-04 the marker named a merge these files never received, so the watcher
+  # mirrored the release before it straight over main. Held back the same way, by the same exclusion,
+  # and said in its own words, because the cause and the remedy are not the ones above (L11).
+  local _sw_stale; _sw_stale="$(past_release_paths)"
+  if [ -n "$_sw_stale" ]; then
+    protected="${protected:+$protected
+}$_sw_stale"
+    echo "claude-sync: NOT publishing $(comma_list "$_sw_stale") because this Mac's copy is an earlier version the shared repo has since replaced, so sending it would undo that change there. Nothing here was altered. Run 'claude-sync pull' to bring the current version onto this Mac." >&2
+  fi
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
     local ex=() p
@@ -3731,6 +3741,7 @@ scan_secrets(){
 # written, then reported "Already up to date" on the pull that finally wrote it.
 # Record every real create/update/delete instead, and report from that.
 APPLIED_LOG=""
+APPLY_KEPT=""
 # Removed however the run ends, including the early exit die() takes, so a pull
 # never leaves a scratch file behind. Safe across the self-update hand-off: at
 # that point the apply has not run yet, so there is nothing to clean.
@@ -4010,6 +4021,10 @@ apply_payload_to_local(){
   # overwrite the merge, and the next send publishes it to the other Mac.
   local ahead; ahead="$(locally_ahead_paths)"
   local keep; keep="$ahead${MERGED_RULE_FILES:-}"
+  # For the closing summary (claude-config#638): an apply that wrote nothing because it left files
+  # alone did not find "nothing on this Mac needed changing", and saying so beside the line naming
+  # them is two claims that cannot both be true (L11).
+  APPLY_KEPT="$ahead"
   # Explicit template, not a bare mktemp: BSD mktemp ignores TMPDIR unless the
   # template says so, which left the tests unable to see this file at all.
   APPLIED_LOG="$(mktemp "$(scratch_home_ready)/claude-sync-applied.XXXXXX")"
@@ -4405,6 +4420,99 @@ unapplied_paths(){
   return 0
 }
 
+# IS THIS MAC'S COPY A VERSION THE SHARED REPO HAS SINCE REPLACED? (claude-config#638)
+#
+# On 2026-10-04 the applied marker named the merge of PR #636 while seven mod files here were still
+# byte for byte the release before it. Every check below trusts the marker, so the next pull called
+# those files local edits it "left alone", and the watcher's next send published them, reverting the
+# merge on main. How the marker got past the files was not reproduced (replaying that history, hold
+# and all, applied correctly), so this does not lean on the marker at all: it asks the history. A copy
+# whose stored form is a blob the repo once held for this path, is not what it holds now, and has not
+# been written since the newer version arrived here, carries no work that exists nowhere else. It is stale,
+# whatever the marker says.
+#
+# Where it can still be wrong: an older version copied in with its old mtime kept (cp -p, a restore
+# from a backup) reads as stale, so a pull replaces it and a send will not carry it. That direction
+# loses nothing (the old version is in the history) and cannot revert the shared repo, which the
+# other direction did (L5).
+#
+# Stored form: a tokenized tree holds the placeholder where this Mac holds its home path (#87).
+local_copy_is_past_release(){   # $1 = path relative to the payload
+  local f="$CLAUDE_HOME/$1" h now
+  have_git || return 1
+  [ -f "$f" ] || return 1
+  # REPLACED, not deleted: a copy of something the repo has since DELETED is answered by
+  # refuse_resurrected_deletions (#331), in its own words and with its own remedy.
+  [ -f "$PAYLOAD/$1" ] || return 1
+  if tokenized_path "$1"; then
+    h="$(tok < "$f" | git -C "$SYNC_REPO" hash-object --stdin 2>/dev/null)" || return 1
+  else
+    h="$(git -C "$SYNC_REPO" hash-object -- "$f" 2>/dev/null)" || return 1
+  fi
+  [ -n "$h" ] || return 1
+  now="$(git -C "$SYNC_REPO" rev-parse -q --verify "HEAD:payload/$1" 2>/dev/null || true)"
+  [ "$h" != "$now" ] || return 1
+  # Every blob this path has had, on both sides of every change to it. Read whole, then matched, so
+  # a consumer that stops early cannot turn the producer's SIGPIPE into a false answer (L183).
+  local seen
+  seen="$(git -C "$SYNC_REPO" log --format= --raw --no-abbrev -- "payload/$1" 2>/dev/null || true)"
+  printf '%s\n' "$seen" | awk -v h="$h" '$3 == h || $4 == h { found = 1 } END { exit found ? 0 : 1 }' || return 1
+  # AND UNTOUCHED SINCE THE CHANGE THAT REPLACED IT. Content alone cannot tell a stale copy from a
+  # deliberate edit back to an older version (a flag flipped back, a revert made here), and the
+  # suite's own fixtures do exactly that. A stale copy is one nobody has written since the newer
+  # version ARRIVED HERE, so it is older than the payload's copy, which git wrote into this clone when
+  # that version came down; an edit made here is newer. Both times are read off THIS Mac's clock,
+  # never a commit time another Mac stamped, so clock skew between the Macs cannot turn an edit into
+  # a stale copy (L5). Anything unreadable, and a tie, answer no: a local edit is the safe reading.
+  local lt pt
+  lt="$(file_mtime "$f")"
+  pt="$(file_mtime "$PAYLOAD/$1")"
+  case "$lt" in ''|*[!0-9]*) return 1 ;; esac
+  case "$pt" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$lt" -lt "$pt" ]
+}
+
+# The paths under the mirrored trees and the top level rule files where this Mac's copy differs from
+# the payload and is a version the repo has since replaced. One per line, relative to the payload.
+past_release_paths(){
+  local d line change path tf
+  have_git || return 0
+  for d in "${MIRROR_DIRS[@]}" skills; do
+    [ -d "$CLAUDE_HOME/$d" ] || continue
+    local ex=()
+    [ "$d" = skills ] && { local s; for s in $(skill_excludes); do ex+=("$s"); done; }
+    # Nor a skills entry that cannot load here: a pull leaves it alone (protect_unloadable_local_skills)
+    # and a send refuses it whole, so naming it with "run claude-sync pull" would offer a remedy that
+    # cannot work (L11). Its own line about that is the send's.
+    if [ "$d" = skills ]; then
+      local _ue _ur
+      while IFS="$(printf '\t')" read -r _ue _ur; do
+        [ -n "${_ue:-}" ] && ex+=(--exclude="/$_ue")
+      done <<UNLOADABLE
+$(unloadable_skill_entries "$CLAUDE_HOME/skills")
+UNLOADABLE
+    fi
+    while IFS= read -r line; do
+      change="${line%%[[:space:]]*}"
+      path="${line#"$change"}"
+      path="${path#"${path%%[![:space:]]*}"}"
+      [ -n "$path" ] || continue
+      case "$path" in */|.|./) continue ;; esac
+      case "$change" in '>'*|'c'*) ;; *) continue ;; esac
+      local_copy_is_past_release "$d/$path" && printf '%s\n' "$d/$path"
+    # Against the payload as STORED: a tokenized file then differs by construction, and the
+    # predicate answers no for it because its stored form is exactly what the repo holds now.
+    done < <(rsync -ainc "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null || true)
+  done
+  for tf in $(top_files_in "$CLAUDE_HOME"); do
+    [ -f "$CLAUDE_HOME/$tf" ] || continue
+    is_derived_rule_file "$tf" && continue
+    [ -f "$PAYLOAD/$tf" ] && cmp -s "$PAYLOAD/$tf" "$CLAUDE_HOME/$tf" && continue
+    local_copy_is_past_release "$tf" && printf '%s\n' "$tf"
+  done
+  return 0
+}
+
 # Paths where THIS Mac's copy differs from the payload while the repo has NOT
 # touched them since our last apply: a local edit that was never sent, because
 # the watcher was down or the edit is seconds old. Applying the payload over
@@ -4437,6 +4545,9 @@ $(unapplied_paths)
       case "$unapplied" in *"
 $d/$path
 "*) continue ;; esac
+      # A version the repo has since replaced is stale, not ahead, so the apply replaces it
+      # (claude-config#638).
+      local_copy_is_past_release "$d/$path" && continue
       printf '%s\n' "$d/$path"
       # From the expanded view, the same source the apply itself copies from. Against the raw
       # payload every tokenized file differs by construction, so all of them read as locally
@@ -4470,6 +4581,7 @@ $d/$path
     case "$unapplied" in *"
 $tf
 "*) continue ;; esac
+    local_copy_is_past_release "$tf" && continue
     printf '%s\n' "$tf"
   done
   return 0
@@ -6140,7 +6252,12 @@ summarize_applied(){   # $1 pre-pull commit  $2 post-pull commit (for the first-
   if [ -n "$APPLIED_LOG" ] && [ -s "$APPLIED_LOG" ]; then list="$(sort -u "$APPLIED_LOG")"; fi
   n="$(printf '%s' "$list" | grep -c . || true)"
   if [ "$n" -eq 0 ]; then
-    echo "Already up to date: nothing on this Mac needed changing."
+    local kept; kept="$(printf '%s\n' "${APPLY_KEPT:-}" | grep -c . || true)"
+    if [ "${kept:-0}" -gt 0 ]; then
+      echo "Nothing new was written, but $kept file(s) here differ from the shared copy and were left as they are (named above), so this Mac does not yet match it."
+    else
+      echo "Already up to date: nothing on this Mac needed changing."
+    fi
     return 0
   fi
   # A first pull writes the whole config; naming every file is noise, not proof.
