@@ -1,0 +1,7 @@
+{
+  "name": "goal-tracker",
+  "version": "0.1.0",
+  "description": "Tracks each session's task list and whether it is working, stalled, failed, done or waiting on Dan.",
+  "author": { "name": "Dan Wright" },
+  "dependencies": ["session-registry"]
+}
