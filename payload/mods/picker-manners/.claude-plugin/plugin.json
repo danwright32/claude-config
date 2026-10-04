@@ -1,0 +1,8 @@
+{
+  "name": "picker-manners",
+  "version": "0.1.0",
+  "description": "Draws every AskUserQuestion as a question in the band above the prompt, keeps typed text a message, re-asks a talked past question once, and keeps next issue offers quiet when Dan asks.",
+  "author": { "name": "Dan Wright" },
+  "types": "./types/index.d.ts",
+  "dependencies": ["mod-kit"]
+}
