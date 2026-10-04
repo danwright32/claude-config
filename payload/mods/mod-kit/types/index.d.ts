@@ -11,10 +11,34 @@ export type ModKitBlocked = {
   note?: string
 }
 
+/** A run of text on a card, in the terminal's own colours: `color` is a theme key ('success' green, 'warning' amber) or a raw colour. */
+export type ModKitRun = { text: string; color?: string; bold?: boolean; dim?: boolean }
+
+/**
+ * A tool result drawn as the boxed card (#663), the blocked card's shape: a rounded grey border,
+ * the title in bold, then each line. Plain data, since only plain data crosses between mods.
+ */
+export type ModKitCard = {
+  /** The tool_use_id of the result row it is drawn for, from the tool.call input. */
+  toolUseId: string
+  /** One or more runs, drawn as one bold line, so a leading state word can carry its colour ("Live:" green). */
+  title: ModKitRun[]
+  /** The lines under the title, each one or more runs; a long line wraps. */
+  lines: ModKitRun[][]
+}
+
 /** Called from another mod, each method answers asynchronously: await it. */
 export type ModKit = {
-  /** Records that a guard blocked this call, so its result row is drawn as the grey card. */
+  /** Records that a guard blocked this call, so its result row is drawn as the grey card (one use of `card`). */
   blocked: (input: ModKitBlocked) => Promise<void>
+  /**
+   * Draws this tool call's result row as the boxed card, in place of the tool's own text result,
+   * which the model still reads. Only mod-kit draws a result row (tools/check-mod-shared-parts.sh),
+   * so a mod's own tool shows its card through this. Rejects a card with no tool use id, no title,
+   * or a line or run that is not plain data of the right shape. Kept in memory: after a reload an
+   * earlier row is drawn as the tool's text result again.
+   */
+  card: (input: ModKitCard) => Promise<void>
   /**
    * The simple commands a Bash call would run, each as its words with quotes removed: heredoc
    * bodies dropped, assignments and sudo/env/exec and the like looked past, a shell's -c read as
@@ -54,8 +78,12 @@ export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'handoff' | 'held' | '
  * the option it describes.
  */
 export type ModKitBandText = { text: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
-/** Claude Code's own Button, `[ label ]`; `button` is its id within the publishing mod. */
-export type ModKitBandButton = { button: string; label: string; hotkey?: string; indent?: number }
+/**
+ * Claude Code's own Button, `[ label ]`; `button` is its id within the publishing mod. `plain: true`
+ * draws it in Claude Code's plain style, a survey's row: the hotkey in the accent colour, a colon,
+ * the label (`1: 7 days`), or the label alone when it has no hotkey (#667).
+ */
+export type ModKitBandButton = { button: string; label: string; hotkey?: string; plain?: true; indent?: number }
 export type ModKitBandPart = ModKitBandText | ModKitBandButton
 /** A thin grey line across the band, between the lines of a card. */
 export type ModKitBandDivider = { divider: true }

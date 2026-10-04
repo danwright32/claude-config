@@ -43,6 +43,11 @@ const LEAD: Record<State, string> = {
 }
 export const titleOf = (s: State, title: string): string => `${LEAD[s]}: ${title}`
 
+// The lead's colour: green when live, amber when live could not be confirmed (it waits on Dan to
+// look), grey while it deploys. The no deploy step colour is the builder's, grey, not yet settled.
+// A Record over the type, so a state added without a colour fails to type check.
+const LEAD_COLOR: Record<State, string> = { live: 'success', deploying: 'gray', unconfirmed: 'warning', 'no-deploy': 'gray' }
+
 const has = (o: Record<string, unknown>, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 const sentences = (s: string) => s.split(/(?<=[.!?])\s+/).filter(x => x.trim()).length
 // Dan's voice has no dashes: an em or en dash, a hyphen standing alone between words, or two hyphens.
@@ -73,15 +78,28 @@ export const reasonToRefuse = (i: CardInput): string | undefined => {
   return undefined
 }
 
-/** The card as text: what the model reads, and the transcript row until mod-kit can draw the card. */
-export const cardText = (c: CardInput & { state: State; title: string; url: string }): string =>
-  [
-    titleOf(c.state, c.title),
-    ...(c.state === 'unconfirmed' && c.checked ? [c.checked.trim()] : []),
-    c.changed.trim(),
-    `See it: ${c.see.link}`,
-    ...c.see.clicks.map((k, n) => `${n + 1}. ${k.trim()}`),
-  ].join('\n')
+type Run = { text: string; color?: string; bold?: boolean }
+type Shown = CardInput & { state: State; title: string; url: string }
+
+/**
+ * The card as mod-kit's boxed card draws it (#663): the state leading the title in its colour, then
+ * why live could not be confirmed, what changed, the link and the clicks. Plain data for $.modkit.card.
+ */
+export const cardOf = (c: Shown): { title: Run[]; lines: Run[][] } => ({
+  title: [{ text: `${LEAD[c.state]}:`, color: LEAD_COLOR[c.state], bold: true }, { text: ` ${c.title}` }],
+  lines: [
+    ...(c.state === 'unconfirmed' && c.checked ? [[{ text: c.checked.trim() }]] : []),
+    [{ text: c.changed.trim() }],
+    [{ text: 'See it: ' }, { text: c.see.link }],
+    ...c.see.clicks.map((k, n) => [{ text: `${n + 1}. ${k.trim()}` }]),
+  ],
+})
+
+/** The card as text, from the same lines: what the model reads, and the row after a reload. */
+export const cardText = (c: Shown): string => {
+  const { title, lines } = cardOf(c)
+  return [title, ...lines].map(l => l.map(r => r.text).join('')).join('\n')
+}
 
 /** A key a band button id can hold. */
 export const buttonId = (repo: string, pr: number): string => `${repo.replace(/[^A-Za-z0-9]+/g, '-')}-${pr}`

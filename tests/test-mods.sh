@@ -170,12 +170,16 @@ mkmodsrc "$M9" own-card "on('ui.render', { component: 'ToolResult' }, (\$, e, ne
 mkmodsrc "$M9" own-git "const GLOBAL = new Set(['-C', '-c', '--git-dir', '--work-tree'])"
 mkmodsrc "$M9" own-band "on('ui.render', { component: 'AbovePrompt' }, (\$, e, next) => next(e))"
 mkmodsrc "$M9" own-band-dq "on(\"ui.render\", { component: \"AbovePrompt\" }, h)"
+mkmodsrc "$M9" own-card-dq "on(\"ui.render\", { component: \"ToolResult\" }, h)"
 out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a mod with its own copy of a shared part fails the run" ok \
   || check "a mod with its own copy of a shared part fails the run" "exit=$code out=$out"
-for m in own-reader own-quotes own-heredoc own-card own-git own-band own-band-dq; do
+for m in own-reader own-quotes own-heredoc own-card own-card-dq own-git own-band own-band-dq; do
   case "$out" in *"$m"*) check "and names $m" ok ;; *) check "and names $m" "$out" ;; esac
 done
+# A mod drawing its own result row is pointed at the card any tool result can use (#663).
+printf '%s\n' "$out" | grep 'own-card ' | grep -q 'modkit.card(' \
+  && check "and points a mod's own result row at modkit.card" ok || check "and points a mod's own result row at modkit.card" "$out"
 out="$(bash "$SHARED" "$TMPROOT/not-there" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a missing mods folder is refused by the shared parts check too" ok \
   || check "a missing mods folder is refused by the shared parts check too" "exit=$code out=$out"

@@ -15,6 +15,7 @@ const modKit: { name: string; register: Register } = {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const ref = { plugin: 'mod-kit', key: 'band' } as never
+      const cardsRef = { plugin: 'mod-kit', key: 'cards' } as never
       const rows = async () => (((await built.state.get(ref)) as { value?: Row[] }).value ?? [])
       const modkit = {
         bandRow: async (row: Row) => {
@@ -23,8 +24,36 @@ const modKit: { name: string; register: Register } = {
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
           await built.state.set(ref, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
         },
+        // The boxed card for a tool result, kept where the test can read it; a call whose id is
+        // refuse-me is refused, as the real kit refuses a malformed card.
+        card: async (c: { toolUseId: string }) => {
+          if (c.toolUseId === 'refuse-me') throw new Error('a card needs a title of one or more runs')
+          const held = ((await built.state.get(cardsRef)) as { value?: unknown[] }).value ?? []
+          await built.state.set(cardsRef, [...held, c] as never)
+        },
       }
       return { ...built, modkit } as never
+    })
+    // A result row with a card is drawn as its title's runs, then its lines' runs, as plain Texts.
+    on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+      type C = { toolUseId: string; title: { text: string; color?: string; bold?: boolean }[]; lines: { text: string }[][] }
+      const held = ((await $.state.get({ plugin: 'mod-kit', key: 'cards' } as never)) as { value?: C[] }).value ?? []
+      const c = held.find(x => x.toolUseId === e.props.tool_use_id)
+      if (!c) return next(e)
+      const { Box, Text } = $.ui.resolve(e)
+      return (
+        <Box flexDirection="column">
+          {[c.title, ...c.lines].map((l, n) => (
+            <Box key={String(n)} flexDirection="row">
+              {l.map((r, i) => (
+                <Text key={String(i)} color={(r as { color?: string }).color} bold={(r as { bold?: boolean }).bold}>
+                  {r.text}
+                </Text>
+              ))}
+            </Box>
+          ))}
+        </Box>
+      )
     })
     on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
       const rows = ((await $.state.get({ plugin: 'mod-kit', key: 'band' } as never)) as { value?: Row[] }).value ?? []
@@ -142,6 +171,50 @@ test('verified live: the card leads with Live, confirms the merge with GitHub, a
   expect(w.runs[0]).toEqual(['gh', 'pr', 'view', '412', '--repo', REPO, '--json', 'state,title,url'])
   expect(w.toasts).toEqual(['Live: Filter bookings by venue'])
   expect(await shown($)).toEqual(['engine band'])
+})
+
+// What the card's result row shows: each leaf Text's words and colour, top to bottom.
+const row = async ($: unknown, id: string) => {
+  const ui = (await ($ as { ui: { mount: (x: never) => Promise<unknown> } }).ui.mount({
+    plugin: 'mod-kit',
+    surface: 'terminal',
+    component: 'ToolResult',
+    props: { tool_use_id: id, tool: 'mcp__is-it-live__card', output: 'text', isErrored: false },
+  } as never)) as { findAll: (q: { type: string }) => Promise<{ text: string; props: { color?: string; bold?: boolean }; children: unknown[] }[]> } & Mounted
+  const t = (await ui.findAll({ type: 'Text' })).filter(x => x.children.every(c => typeof c === 'string')).map(x => ({ text: x.text, color: x.props.color, bold: x.props.bold }))
+  await ui.unmount()
+  return t
+}
+
+test("the card's result row is mod-kit's boxed card, its state word in colour, for this call", withKit, async ($, on) => {
+  world(on)
+  await card($, CARD)
+  await card($, { ...CARD, deploy: 'failed', checked: 'The deploy check timed out.', tool_use_id: 'c2' })
+  const live = await row($, 'c1')
+  expect(live.slice(0, 3)).toEqual([
+    { text: 'Live:', color: 'success', bold: true },
+    { text: ' Filter bookings by venue', color: undefined, bold: undefined },
+    { text: 'The bookings list now filters by venue. Old bookings keep their venue.', color: undefined, bold: undefined },
+  ])
+  const failed = await row($, 'c2')
+  expect(failed[0]).toEqual({ text: 'Could not confirm live:', color: 'warning', bold: true })
+  expect(failed[2]?.text).toBe('The deploy check timed out.')
+})
+
+test('a card mod-kit refuses to box is still made, shown as its text, and Claude is told why', withKit, async ($, on) => {
+  const w = world(on)
+  const r = await card($, { ...CARD, tool_use_id: 'refuse-me' })
+  expect(r.deny).toBeUndefined()
+  expect(textOf(r).split('\n')[0]).toBe('Live: Filter bookings by venue')
+  expect((r.context ?? []).join(' ')).toContain('could not be drawn boxed (a card needs a title of one or more runs)')
+  expect(w.toasts).toEqual(['Live: Filter bookings by venue'])
+  expect(await row($, 'refuse-me')).toEqual([{ text: 'engine band', color: undefined, bold: undefined }])
+})
+
+test('no boxed card when no card is made', withKit, async ($, on) => {
+  world(on, { pr: { exitCode: 0, stdout: JSON.stringify({ state: 'OPEN', title: 't', url: 'u' }) } })
+  await card($, CARD)
+  expect(await row($, 'c1')).toEqual([{ text: 'engine band', color: undefined, bold: undefined }])
 })
 
 test('merged but still deploying reads "Merged, deploying", never live', withKit, async ($, on) => {
