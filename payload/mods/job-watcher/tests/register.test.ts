@@ -387,3 +387,97 @@ test('a job whose look throws does not stop the look at the jobs after it', with
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(contextOf(next)).toContain('job2 (npm run dev) has had no new output')
 })
+
+// Keeping a job (Dan, 2026-10-04): Claude keeps a job with a reason, from inside a turn, through
+// the watcher's own tool. A kept job is published for the status bar's amber band, can be marked
+// quiet by design, and passing an hour raises no toast.
+const KEEP = 'mcp__job-watcher__keep_job'
+const keep = (input: Record<string, unknown>) => ({ tool: KEEP, ...input }) as never
+type Rec = { id: string; kept?: { name: string; reason: string; quiet: boolean; at: number } }
+const lastRecs = (w: { extra: unknown[] }) => w.extra[w.extra.length - 1] as Rec[]
+
+test('the keep tool is registered at session start', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 })
+  await start($)
+  expect(w.tools.map(t => (t as { name: string }).name)).toEqual(['keep_job'])
+})
+
+test('a job kept with a reason is published as kept, with the name the band shows', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(5 * MIN)
+  const r = (await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'Dan is clicking through the site' }))) as { result?: unknown; deny?: string }
+  expect(r.deny).toBeUndefined()
+  expect(String(r.result)).toContain('Kept job1')
+  expect(lastRecs(w)[0]?.kept).toEqual({ name: 'dev server', reason: 'Dan is clicking through the site', quiet: false, at: 5 * MIN })
+})
+
+test('keeping a job that is not running is refused, naming the jobs that are', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  const r = (await $.tool.call(keep({ task_id: 'job9', name: 'x', reason: 'y' }))) as { deny?: string; text?: string }
+  expect(r.deny ?? r.text).toContain('job9')
+  expect(r.deny ?? r.text).toContain('job1')
+})
+
+test('keeping a job without a reason or a name is refused', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  const noReason = (await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: '  ' }))) as { deny?: string; text?: string }
+  expect(noReason.deny ?? noReason.text).toMatch(/reason/)
+  const noName = (await $.tool.call(keep({ task_id: 'job1', reason: 'needed' }))) as { deny?: string; text?: string }
+  expect(noName.deny ?? noName.text).toMatch(/name/)
+  expect(lastRecs(w)[0]?.kept).toBeUndefined()
+})
+
+test('a job kept as quiet by design is never reported silent', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'serves the preview', quiet: true }))
+  await clock.advance(30 * MIN)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toBe('')
+})
+
+test('a job kept without quiet is still reported silent', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'serves the preview' }))
+  await clock.advance(11 * MIN)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toMatch(/no new output/)
+})
+
+test('a kept job passing an hour raises no toast', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'serves the preview', quiet: true }))
+  await clock.advance(61 * MIN)
+  expect(w.toasts).toEqual([])
+})
+
+test('a keep whose registry write fails still keeps the job, and Claude is told the band cannot show it', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const job: Job = { tail: '', size: 0 }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  job.failExtraOf = JSON.stringify([{ id: 'job1', command: 'npm run dev', outputPath: OUT, pgid: 501, startedAt: 0, kept: { name: 'dev server', reason: 'needed', quiet: false, at: 0 } }])
+  const r = (await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'needed' }))) as { result?: unknown; deny?: string; context?: string[] }
+  expect(r.deny).toBeUndefined()
+  expect(String(r.result)).toContain('Kept job1')
+  expect(contextOf(r)).toContain('could not record')
+})

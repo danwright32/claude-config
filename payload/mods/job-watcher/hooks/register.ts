@@ -1,18 +1,41 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { assess, isErrorLine, isPollLoop, startedJob } from './jobs.ts'
 
-// Background job watcher (claude-config#611). This holds the parts settled by the spec alone:
-// every background job is recorded with its process group, traced through the output file it
-// writes (never by matching its command text, L1011), into the session registry where the status
-// bar will count it; each minute every job is looked at; a poll loop that has only ever repeated
-// an error is stopped by itself; and Claude is told, mid turn, about any job gone stuck. What Dan
-// sees (the turn end refusal, a kept job on the status bar, the leftover question at the start of
-// a session) waits on the design rounds with him.
+// Background job watcher (claude-config#611). Every background job is recorded with its process
+// group, traced through the output file it writes (never by matching its command text, L1011), into
+// the session registry where the status bar counts it; each minute every job is looked at; a poll
+// loop that has only ever repeated an error is stopped by itself; and Claude is told, mid turn, about
+// any job gone stuck. Claude keeps a job on purpose, with a reason, through the keep_job tool, and a
+// kept job is published for the status bar's amber band. Leftover jobs from closed sessions are
+// judged at session start without asking Dan (see leftovers below).
 
-type Job = { id: string; command: string; outputPath: string; pgid: number | null; startedAt: number }
+// kept: Claude kept the job on purpose, with a reason (Dan, 2026-10-04). The status bar (#610) shows
+// a kept job in amber in the band above the prompt as "<name> kept <run time>", the run time from
+// startedAt. quiet: kept as quiet by design, so it is never reported for going silent.
+type Kept = { name: string; reason: string; quiet: boolean; at: number }
+type Job = { id: string; command: string; outputPath: string; pgid: number | null; startedAt: number; kept?: Kept }
 type Watch = { lastSize: number; lastGrowth: number; told: boolean; toldUnreadable: boolean; toldUntraced: boolean; toldLookFailed: boolean }
 
 const TICK_MS = 60_000
+const KEEP_TOOL = 'keep_job'
+const KEEP_CALL = `mcp__job-watcher__${KEEP_TOOL}`
+const KEEP_SPEC = {
+  name: KEEP_TOOL,
+  description:
+    'Keep a background job running on purpose, with the reason it must stay up (a dev server Dan is using, a watcher a later step needs). ' +
+    'A job that is not kept must be stopped with TaskStop before the turn ends. A kept job shows on the status bar with its run time. ' +
+    'Set quiet when the job is expected to print nothing for long stretches, so it is not reported for going silent.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      task_id: { type: 'string', description: 'The background job id the Bash call reported.' },
+      name: { type: 'string', description: 'A few words naming the job as Dan reads it on the status bar, like "dev server".' },
+      reason: { type: 'string', description: 'Why it must keep running.' },
+      quiet: { type: 'boolean', description: 'True when it is quiet by design and should not be reported for printing nothing.' },
+    },
+    required: ['task_id', 'name', 'reason'],
+  },
+}
 // Everything below belongs to one session, cleared at each session start (lessons review of #634).
 const jobs = new Map<string, Job>()
 const watch = new Map<string, Watch>()
@@ -181,7 +204,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
     w.lastGrowth = now
     w.told = false
   }
-  const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth }, now)
+  const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth, quietByDesign: job.kept?.quiet === true }, now)
   if (a.state === 'repeating' && isPollLoop(job.command) && isErrorLine(a.line)) {
     // A poll loop that only ever repeated an error never succeeded, and is stopped by itself.
     const why = await stop($, job.id)
@@ -208,10 +231,33 @@ export const register: Register = on => {
     toldUnpublished = false
     tick?.cancel()
     tick = $.clock.every(TICK_MS, () => lookSafely($))
+    await $.tool.register(KEEP_SPEC)
     return next(e)
   })
 
+  // Claude keeps a job from inside a turn. A refusal names what is wrong and the jobs it could mean.
+  on('tool.call', { tool: KEEP_CALL }, async ($, e) => {
+    const input = e as unknown as Record<string, unknown>
+    const id = String(input.task_id ?? '').trim()
+    const name = String(input.name ?? '').trim()
+    const reason = String(input.reason ?? '').trim()
+    const job = jobs.get(id)
+    if (!job) {
+      const running = [...jobs.keys()]
+      return { deny: `No running background job ${id || '(no task_id given)'} is known to the watcher. ${running.length ? `Running: ${running.join(', ')}.` : 'None is running.'}` }
+    }
+    if (!name) return { deny: `Give the job a name: a few words Dan reads on the status bar, like "dev server".` }
+    if (!reason) return { deny: `Give a reason why ${id} must keep running.` }
+    const kept: Kept = { name, reason, quiet: input.quiet === true, at: await $.clock.now() }
+    jobs.set(id, { ...job, kept })
+    await publishSafely($)
+    const said = notices.splice(0)
+    const quietly = kept.quiet ? ' It is quiet by design, so it will not be reported for printing nothing.' : ''
+    return { result: `Kept ${id} (${name}): ${reason}. It shows on the status bar as kept, with its run time.${quietly}`, ...(said.length ? { context: said } : {}) }
+  })
+
   on('tool.call', async ($, e, next) => {
+    if (e.tool === KEEP_CALL) return next(e)
     const input = e as unknown as Record<string, unknown>
     const result = await next(e)
     if (e.tool === 'Bash' && input.run_in_background && !result.deny && !result.isError) {
