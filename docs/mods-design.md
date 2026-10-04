@@ -12,7 +12,9 @@ and settles its own surfaces in rounds of its own before it is built.
    chose grey and made it the rule for every mod. What waits on Dan takes amber: the lead line of a
    question, a handoff, a steps card or the held while away card (colour round, 2026-10-04, after
    Dan asked that the steps card not be grey "since it needs my action"). One amber line per
-   surface: heading and next step both amber was too much (steps amber round).
+   surface: heading and next step both amber was too much (steps amber round), and the handoff's
+   changed since lines are grey under its amber lead (handoff colour round, 2026-10-04). The one
+   exception is the steps card's amber left edge beside its amber heading, which Dan asked for.
 2. **Plain wording.** A refusal says what was blocked and the safe way, in one or two short
    sentences: "Blocked: this would print GITHUB_TOKEN. Check it without printing: test -n, its
    length, or gh auth status." Settled 2026-10-03, then applied to every refusal and toast of the
@@ -70,9 +72,9 @@ request in it.
 | Hidden | Branch, uncommitted files, commits behind main (status round 2) |
 | Account | Whatever the login file names now, re-read each refresh; no "login changed elsewhere" marker. Dan changes the login in one window expecting it to apply to all of them (picker). |
 | Colour | The status line is all grey; the needs-a-look items in the band are amber; the Compact button is Claude Code's own bold white (colour round, design rounds). A deliberate exception to standing rule 1: a running PR, a running job and a job kept on purpose are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round, kept job round). |
-| Where it is drawn | The always-shown facts stay on the classic status line script below the prompt, fed by the mod. The amber items are drawn by the mod in the band above the prompt, only while something needs a look (picker, after the probe below). |
+| Where it is drawn | The always-shown facts stay on the classic status line script below the prompt, fed by the mod. The amber items are drawn by the mod in the band above the prompt, only while something needs a look or a scope mode is on (picker, after the probe below; scope mode round). |
 | The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). |
-| Order of the amber line | Most urgent first: a failing or running PR, a running job, unpushed commits, so a narrow window cuts off what can wait longest (design round) |
+| Order of the amber line | A scope mode (NO BUILD, WINDING DOWN, AWAY) leads it in bold, since it changes what Claude will do (scope mode round). Then most urgent first: a failing or running PR, a running job, unpushed commits, so a narrow window cuts off what can wait longest (design round) |
 | Compact button | Claude Code's default button, `[ Compact ]` in bold white, pressed by clicking or ctrl+x tab then Enter (design round, styles copied from a live probe) |
 
 Why the split: a live probe on 2026-10-04 showed a mod's `$.ui.status` line is drawn by Claude Code
@@ -123,16 +125,16 @@ Each in a rendered design round unless marked picker.
 | --- | --- | --- |
 | Picker manners (#615) | A question in the band | The chip and the question on one line, then each option on its own line with its description indented on the line under it (over two columns and a flowing line) |
 | Ask before saving (#618) | The question | The rule's exact text and the file it would go to sit between the question and the three answers, set off by a grey rule (over above the question, and in the chat) |
-| Scope modes (#616), away and home (#621) | NO BUILD, WINDING DOWN, AWAY | Lead the status line, in amber. Dan's own choice over the footer's mode labels and a band row; a deliberate exception to standing rule 1 like the running items, since a mode changes what Claude will do |
+| Scope modes (#616), away and home (#621) | NO BUILD, WINDING DOWN, AWAY | Leads the amber line in the band above the prompt, in bold, so the status line stays all grey; the band shows for as long as the mode is on, even with nothing else in it. Amber is a deliberate exception to standing rule 1 like the running items, since a mode changes what Claude will do (scope mode round, 2026-10-04, over leading the status line in amber, which an earlier round had picked over the footer's mode labels) |
 | Handoff (#613) | The band at session start | One line: "Handoff saved 3h ago: Continue milestone 18 design rounds", then Use and Dismiss (over the whole handoff, and the first line plus what it names) |
-| Handoff (#613) | Something it names that changed | Its own amber line under the handoff, one per change: "changed since: #615 closed" (over a list on the same line, and a count) |
+| Handoff (#613) | Something it names that changed | Its own line under the handoff, one per change: "changed since: #615 closed" (over a list on the same line, and a count), in grey under the amber lead line (handoff colour round, over amber, which made three amber lines) |
 | Manual steps (#614) | Where | As the issue says: a side pane, the band when the terminal is narrow. A pane opened unasked needs 144 columns, so at laptop width it is the band (no round: settled in the spec) |
 | Manual steps (#614) | One step | Only the next step is open: its title and Done, its link, its clicks, any value with Copy. Later steps show their title alone until they are next (over every step open, and two lines per step) |
 | Manual steps (#614) | A finished step | Keeps its line, dimmed and struck through, then how it finished: "already done" grey, "checked" green, "done, per you" grey (over a word alone, and folding them into one count) |
 | Manual steps (#614) | Colour | An amber heading and an amber rule down the card's left edge; the step to do is bold white. The steps card only; the question and handoff keep just an amber lead line (Dan asked for heading and rule together; picker on scope) |
 | Is it live (#617) | The card | Boxed, the blocked card's shape (over a left rule and plain text). No lead-in sentence from Claude: it would repeat the card |
 | Is it live (#617) | Its state | Leads the title: "Live:" green, "Merged, deploying:" grey, "Could not confirm live:" amber (over the right end of the title and a line of its own) |
-| Is it live (#617) | The message for whoever asked | Pinned in the band until Mark sent, with Copy; the card stays in the chat. Its heading, "Message for Kris", is violet: not amber beside the steps card, and not blue, which reads as a link (Dan changed his first pick, a box under the card; two colour rounds) |
+| Is it live (#617) | The message for whoever asked | Pinned in the band until Dan presses Mark sent, with Copy; the card stays in the chat. Its heading, "Message for Kris", is violet: not amber beside the steps card, and not blue, which reads as a link (Dan changed his first pick, a box under the card; two colour rounds) |
 | Simpler (#619) | The button | At the top of the long answer it is about, under Dan's question, drawn into Claude's reply (Dan asked for it there over the band rows). It is clicked: a button in the transcript takes no one-key shortcut, and a very long answer scrolls it off the top |
 | Add-on notes (#620) | The resume line | One dim grey line: "+ add-on: Adding a direct link to the commission and carrying on." It names the addition only (picker on the words, round on the shape) |
 | Away and home (#621) | Coming home | A boxed card in the band, amber heading "Held while you were away", one row per held thing with its own button and a thin line between rows; nothing opens until pressed (Dan asked for the box with divided rows) |
