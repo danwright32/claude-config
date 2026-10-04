@@ -138,8 +138,18 @@ classic status line command passes colour through, and the band above the prompt
   A loop repeating "waiting" is reported to Claude and never stopped (picker).
 - A job kept on purpose, with a reason, still shows in amber in the band like any running job,
   named with its run time ("dev server kept 2h 14m"): kept does not mean out of sight (design round).
-- Turn end with a running job that was not kept: the turn is refused until Claude stops or keeps
-  it, and Dan sees nothing of the refusal itself, only what Claude does next (picker).
+- Turn end with a running job that was not kept: never refused, because a mod cannot refuse a turn
+  end without Claude Code drawing it ("Stop hook error" or "Stop hook feedback", read from the
+  2.1.289 binary). Instead every tool result Claude reads names the unkept job and says to stop it
+  or keep it; Dan sees nothing (picker, replacing the earlier "refused, Dan sees nothing").
+- A kept job is protected only while its session is open: once that session has closed, a kept
+  leftover is judged like any other (Haiku, then Sonnet, then the stuck gate), its quiet flag no
+  longer exempting it. The live watcher never stops a kept job (picker). So a lessons review finding
+  asking that a closed session's kept and quiet flags carry into the leftover judgment was not
+  acted on: it would reverse this decision.
+- A stop verdict on a leftover is acted on only when the watcher measured it as stuck (repeating
+  one line, or silent past ten minutes), so text in the job's own output can never cause a kill
+  (picker).
 - No toast when a kept job passes an hour: the band already shows its run time (picker).
 - Leftover jobs at session start: no question to Dan, who cannot judge a job from a closed session.
   Haiku decides each one from its command, run time and output; Sonnet tries if Haiku cannot; if
@@ -158,7 +168,18 @@ classic status line command passes colour through, and the band above the prompt
 | Row | Two lines per session: project and goal on top; state, steps, elapsed time and one detail (the question, the failure, how long quiet, or the step under way) as a dim sentence beneath (design round) |
 | Order | Waiting on you, failed, stalled, working, done (design round) |
 | State colour | On the state word only: waiting on you and stalled amber, failed red, working blue, done green. A deliberate exception to standing rule 1, so every state reads at a glance; red stays for something genuinely wrong (design round) |
-| Notification | One per waiting moment, naming the project: "<project> is waiting on you" with the question, or "<project> needs a permission" with what for. It replaces the PermissionRequest "Permission needed" hook and the idle "What's next?" hook while a question is open, in the same change (pickers) |
+| Notification | One per waiting moment, naming the project: "<project> is waiting on you" with the question, or "<project> needs a permission" with what for. The mod sends all three, the idle "What's next?" only while nothing is being asked, and both notifying settings hooks are removed; if mods are ever off there are no notifications (pickers) |
+| Goal text | The /goal condition when one is set, otherwise the session's first request cut to a few words. No model call (picker) |
+
+Not settled with Dan, built in #634 as the plainest reading and open for a round: the pane's
+cadence (it reads the registry every five seconds while open); "nothing being asked" read as no
+open question and no open permission; the permission's "what for" (the call's own description,
+else "a Bash command", never the command itself, which can carry a secret, or the tool and its file); six words for "a few words"; a goal cut to 80
+characters; a session with no task list showing no step count; within one state, oldest session
+first; a session that records no progress left out; the blue as the theme's `suggestion` colour;
+the permission notification keeping the Glass sound the settings hook had; and the words for a
+registry that cannot be read, a pane with no rows, a pane waiting for a wider window, and a
+notification that cannot be sent (one dim line a session, the guards' note style).
 
 ## Add-on notes (#620), behaviour decided while building, 2026-10-04
 

@@ -216,28 +216,6 @@
         ]
       }
     ],
-    "Notification": [
-      {
-        "matcher": "idle_prompt",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "terminal-notifier -title 'Claude Code' -message \"What's next?\""
-          }
-        ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "terminal-notifier -title 'Claude Code' -message 'Permission needed' -sound Glass"
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "hooks": [
