@@ -181,6 +181,29 @@ the permission notification keeping the Glass sound the settings hook had; and t
 registry that cannot be read, a pane with no rows, a pane waiting for a wider window, and a
 notification that cannot be sent (one dim line a session, the guards' note style).
 
+Built in #694 from the last lessons reviews of #634, not put to Dan, each the plainest reading:
+
+- A permission prompt names its call only by tool and input, never by id. It is matched to the
+  running call whose arguments it names and held by that call's id, and comes off when that call
+  returns or rejects; matching on the tool and the "what for" text let any other Bash call with no
+  description ("a Bash command" too) clear it early. When a hook beneath rewrote the call and
+  nothing matches, it stands until every call of its tool that was running has returned. Dan's next
+  message still clears it at the latest.
+- A question and a permission prompt open at once are kept apart: the pane shows the one asked
+  latest, and each ending takes off only its own mark.
+- Picker manners answers every AskUserQuestion in its own `tool.call` hook without calling `next`.
+  Hooks on one event nest by tier (an organisation's prepended plugins, everything a person
+  installs, the appended ones, the built in ones) and within a tier in load order, outermost first,
+  and the plugin API gives a person's mod no way to say where it sits. So the goal tracker also
+  watches picker manners' writes of the question it holds open (`picker-manners.open`), which every
+  plugin's `state.set` hook sees wherever it sits, and marks and notifies from those; where it sees
+  the call too (sitting above picker manners), the call's id keeps that to one mark and one
+  notification. The tests load picker manners both above and beneath the goal tracker; which order a
+  live session loads them in was not measured. Two differences between the orders remain: beneath
+  picker manners, the goal tracker never sees the call, so a question picker manners refuses is not
+  counted toward failed; above it, a question picker manners refuses is marked and notified for the
+  moment before the refusal, as before #694.
+
 ## Add-on notes (#620), behaviour decided while building, 2026-10-04
 
 Not yet put to Dan in a round; each is the conservative reading of the spec, and the reason is given.
