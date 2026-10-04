@@ -647,3 +647,16 @@ test('a registry that cannot be listed is said in one dim line, never taken as n
   expect(w.logs.length).toBe(1)
   expect(w.logs[0]).toContain('leftover jobs from closed sessions were not checked')
 })
+
+test('a leftover whose output file cannot be read is described to the judge as unreadable, never as still writing', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: '', size: 0, unreadable: true }, {
+    sessions: { closed: [closedRec('old', [leftover(1, 'npm run dev')])] },
+    verdict: () => KEEP_IT('dev server'),
+  })
+  await start($)
+  await judged(clock)
+  const prompt = w.asked[0]?.prompt ?? ''
+  expect(prompt).toContain('could not be read')
+  expect(prompt).not.toContain('still writing')
+})

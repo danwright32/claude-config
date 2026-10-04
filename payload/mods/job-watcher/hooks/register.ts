@@ -276,11 +276,19 @@ const judgeOne = async ($: EngineInterface, job: Leftover, now: number): Promise
   // Held by some other group than the one recorded: not this job any more, so never touched.
   if (group === null || (job.pgid !== null && group !== job.pgid)) return undefined
   const stat = (await run($, ['stat', '-f', '%z %m', job.outputPath]))?.trim().split(/\s+/).map(Number)
-  const tail = (await run($, ['tail', '-c', '4096', job.outputPath])) ?? ''
-  const mtimeMs = stat && Number.isFinite(stat[1]) ? (stat[1] as number) * 1000 : now
-  const a = assess({ tail, size: stat?.[0] ?? 0, lastGrowth: mtimeMs }, now)
-  const state = a.state === 'repeating' ? `it keeps repeating the same line, "${a.line}"` : a.state === 'silent' ? `no new output for ${Math.round(a.forMs / 60_000)} minutes` : 'still writing'
-  const v = await judge($, promptFor(job, now - job.startedAt, tail, state))
+  const tail = await run($, ['tail', '-c', '4096', job.outputPath])
+  const size = stat?.[0]
+  const mtime = stat?.[1]
+  // An output file that cannot be read is said as such to the judge, never passed off as a job
+  // still writing (L11).
+  let state: string
+  if (tail === undefined || size === undefined || mtime === undefined || !Number.isFinite(size) || !Number.isFinite(mtime)) {
+    state = 'its output file could not be read, so whether it is stuck is unknown'
+  } else {
+    const a = assess({ tail, size, lastGrowth: mtime * 1000 }, now)
+    state = a.state === 'repeating' ? `it keeps repeating the same line, "${a.line}"` : a.state === 'silent' ? `no new output for ${Math.round(a.forMs / 60_000)} minutes` : 'still writing'
+  }
+  const v = await judge($, promptFor(job, now - job.startedAt, tail ?? '(could not be read)', state))
   if (!v) return { kind: 'unjudged', name: short, session: job.session }
   if (!v.stop) return { kind: 'left', name: v.name, session: job.session }
   // Checked again just before the stop: the model's answer took time, and a group can end and its
