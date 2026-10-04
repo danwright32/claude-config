@@ -234,7 +234,9 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number) => {
   const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth, quietByDesign: job.kept?.quiet === true }, now)
   // A job Claude kept on purpose is only ever reported, never stopped by the watcher (lessons review).
   if (a.state === 'repeating' && !job.kept && isPollLoop(job.command) && isErrorLine(a.line)) {
-    // A poll loop that only ever repeated an error never succeeded, and is stopped by itself.
+    // A poll loop that only ever repeated an error never succeeded, and is stopped by itself. Read
+    // again just before the stop: a keep that landed while this look waited is honoured (L443).
+    if (jobs.get(job.id)?.kept) return
     const why = await stop($, job.id)
     if (why === undefined) {
       // Said before the registry write, so a write that fails cannot lose it (lessons review of #634).

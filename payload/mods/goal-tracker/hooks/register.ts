@@ -15,6 +15,7 @@ let lastTried = Number.NEGATIVE_INFINITY
 // the next result it reads, until a write lands again.
 let toldUnwritten = false
 let notice: string | undefined
+let toldNoClock = false
 const publish = async ($: EngineInterface, now: number) => {
   if (!progress) return
   // The throttle counts attempts, so a failing registry is not retried on every tool call.
@@ -40,8 +41,15 @@ const withNotice = <R extends { context?: readonly string[] }>(result: R): R => 
 // or refused, nothing succeeding between; the next success clears it.
 const FAIL_STREAK = 3
 let streak = 0
+// The failure is recorded as its first line, cut to a short length: the registry is shared with
+// every session on this Mac, so a tool's whole output never goes into it (L657, lessons review).
+const FAILED_MAX = 200
+const oneLine = (text: string): string => {
+  const first = text.split('\n').map(l => l.trim()).find(Boolean) ?? 'it failed'
+  return first.length > FAILED_MAX ? `${first.slice(0, FAILED_MAX - 3)}...` : first
+}
 const failureOf = (r: { deny?: unknown; isError?: boolean; text?: unknown }): string | undefined =>
-  r.deny ? String(r.deny) : r.isError ? String(r.text ?? 'it failed') : undefined
+  r.deny ? oneLine(String(r.deny)) : r.isError ? oneLine(String(r.text ?? 'it failed')) : undefined
 const counted = (p: Progress, why: string | undefined): Progress => {
   if (why === undefined) {
     streak = 0
@@ -61,11 +69,24 @@ export const register: Register = on => {
     streak = 0
     notice = undefined
     toldUnwritten = false
+    toldNoClock = false
     return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
-    const now = await $.clock.now()
+    // A clock that cannot be read leaves this call untracked, never broken; Claude is told once,
+    // until the clock reads again (lessons review of c4ae14f).
+    let now: number
+    try {
+      now = await $.clock.now()
+      toldNoClock = false
+    } catch (err) {
+      if (!toldNoClock) {
+        toldNoClock = true
+        notice = `The goal tracker could not read the clock (${err instanceof Error ? err.message : String(err)}), so this session's progress is not being recorded.`
+      }
+      return withNotice(await next(e))
+    }
     progress ??= empty(now)
     const input = e as unknown as Record<string, unknown>
     // A subagent keeps its own list, which is not the session's goal; its work still counts as

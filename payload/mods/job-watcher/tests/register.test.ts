@@ -996,3 +996,18 @@ test('a look at an untraced job asks lsof once, through the one classifier', wit
   expect(w.lsofs - before).toBe(1)
   expect((w.extra[w.extra.length - 1] as { pgid: unknown }[])[0]?.pgid).toBe(501)
 })
+
+// Lessons review of c4ae14f: a keep that lands while a look is under way is honoured before a stop.
+test('a poll loop kept while the look that would stop it is under way is not stopped', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: REPEATING, size: 9000 }
+  const w = world(on, job, { clock })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  job.slow = { cmd: 'tail', ms: 5_000 }
+  await clock.advance(MIN + 1)
+  await $.tool.call(keep({ task_id: 'job1', name: 'health poll', reason: 'waiting for the server Dan is starting' }))
+  job.slow = undefined
+  await clock.advance(10_000)
+  expect(w.reached.filter(r => r.tool === 'TaskStop')).toEqual([])
+})

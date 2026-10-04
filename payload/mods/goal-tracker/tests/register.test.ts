@@ -55,6 +55,7 @@ const world = (on: On, opts: WorldOpts = {}) => {
     if (e.tool === 'AskUserQuestion') opts.duringAsk?.(w)
     if (e.tool === 'AskUserQuestion' && opts.askThrows) throw new Error('the question could not be shown')
     if (e.tool === 'AskUserQuestion' && opts.askRefused) return { deny: 'the question was refused' } as never
+    if (e.tool === 'Bash' && String((e as unknown as { command?: string }).command).startsWith('bigfail')) return { result: 'exit 1', text: 'Exit code 1\n' + 'x'.repeat(5000) + '\nsecret=abc', isError: true } as never
     if (e.tool === 'Bash' && String((e as unknown as { command?: string }).command).startsWith('fail')) return { result: 'exit 1', text: 'Exit code 1', isError: true } as never
     if (e.tool === 'TaskCreate' && opts.taskWithoutId) return { result: { task: {} }, text: 'created' } as never
     if (e.tool === 'TaskCreate') {
@@ -280,4 +281,33 @@ test('while the registry fails, plain activity still tries a write at most every
   await clock.advance(20_000)
   await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
   expect(w.attempts).toBe(first + 1)
+})
+
+// Lessons review of c4ae14f.
+test('a clock that cannot be read never breaks a tool call, and Claude is told once', withDeps, async ($, on) => {
+  let broken = false
+  on('clock.now', () => {
+    if (broken) throw new Error('clock broke')
+    return { value: 0 } as never
+  })
+  world(on)
+  await start($)
+  broken = true
+  const r = (await $.tool.call({ tool: 'Bash', command: 'ls' } as never)) as { text?: string; context?: string[] }
+  expect(r.text).toBe('ran')
+  expect((r.context ?? []).join('\n')).toContain('The goal tracker could not read the clock')
+  const again = (await $.tool.call({ tool: 'Bash', command: 'ls' } as never)) as { context?: string[] }
+  expect((again.context ?? []).join('\n')).not.toContain('could not read the clock')
+})
+
+test('a failure is recorded as one short line, never the whole tool output', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  for (let i = 0; i < 3; i++) await $.tool.call(bash('bigfail'))
+  const failed = last(w)?.failed ?? ''
+  expect(failed.startsWith('Exit code 1')).toBe(true)
+  expect(failed.length).toBeLessThanOrEqual(200)
+  expect(failed).not.toContain('\n')
+  expect(failed).not.toContain('secret')
 })
