@@ -68,10 +68,14 @@ const fail = async ($: EngineInterface, why: string) => {
 }
 
 // Work started off a hook (the ten minute timer, a turn's end) has nobody awaiting it, so a throw
-// there would vanish as an unhandled rejection: no line, no retry booked. Said instead, once.
+// there would vanish as an unhandled rejection. The record is left waiting, so the next idle point
+// does try again, and the line says so; a store that stays broken is said once, not every turn.
+let toldBackground = false
 const inBackground = ($: EngineInterface, work: () => Promise<unknown>) =>
   work().catch(err => {
-    $.ui.log(`${WHO} couldn't name this session: ${errText(err)}. It won't try again, so /rename names it.`)
+    if (toldBackground) return
+    toldBackground = true
+    $.ui.log(`${WHO} couldn't name this session: ${errText(err)}. It will try again when the session is next idle.`)
   })
 
 const haikuWhy = (r: { reason?: string; status?: number }) => {
@@ -150,6 +154,7 @@ const attempt = async ($: EngineInterface): Promise<void> => {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    toldBackground = false
     const result = await next(e)
     const [id, now] = await Promise.all([$.session.id(), $.clock.now()])
     const rec = await update($, cur => (cur ? { ...cur, isInteractive: e.isInteractive } : fresh(id, now, e.isInteractive)))

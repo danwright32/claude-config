@@ -382,17 +382,24 @@ test('a state write that fails at the ten minute mark is said in one line, not l
   expect(w.logs.length).toBe(1)
   expect(w.logs[0]).toContain("couldn't name this session")
   expect(w.logs[0]).toContain('state store unavailable')
+  expect(w.logs[0]).toContain('try again when the session is next idle')
 })
 
 test('a state write that fails after a turn ends is said in one line, not lost', async ($, on) => {
   const s = failingState(on)
-  const w = world(on)
+  const w = world(on, { messages: [] })
   await start($)
   await w.clock.advance(10 * MIN)
   s.failing = true
   await turnEnds($)
   await w.clock.settle()
-  expect(w.logs.every(l => !l.includes('will try once more'))).toBe(true)
+  expect(w.logs.length).toBe(1)
+  expect(w.logs[0]).toContain('state store unavailable')
+  expect(w.logs[0]).toContain('try again when the session is next idle')
+  // A store that stays broken is said once, not on every turn.
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.logs.length).toBe(1)
 })
 
 test("Dan's own /rename still answers when the bookkeeping write around it fails", async ($, on) => {
