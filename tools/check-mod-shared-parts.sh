@@ -10,6 +10,8 @@
 #   heredoc   reading a heredoc's opening                       use $.modkit.commands({ command })
 #   card      drawing a tool result row (the blocked card)      use $.modkit.blocked({ ... })
 #   git       listing git's global options to find a subcommand use $.modkit.git({ words })
+#   band      drawing the band above the prompt (AbovePrompt)   use $.modkit.bandRow({ ... })
+#             Claude Code gives the band ONE drawing, so two mods hooking it fight over it (#610).
 #
 # Only each mod's hooks/ is read: its tests may stand in for mod-kit, since a mod cannot import
 # another mod's files.
@@ -30,6 +32,7 @@ PARTS=(
   "heredoc|<<\(\?!<\)|\$.modkit.commands({ command })"
   "card|component: *'ToolResult'|\$.modkit.blocked({ ... })"
   "git|'--work-tree'|\$.modkit.git({ words })"
+  "band|component: *['\"]AbovePrompt['\"]|\$.modkit.bandRow({ ... })"
 )
 
 n=0

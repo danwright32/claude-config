@@ -1,7 +1,7 @@
 {
   "name": "mod-kit",
   "version": "0.1.0",
-  "description": "What every mod draws the same way: the grey card for an action a guard blocked.",
+  "description": "What every mod shares: the grey card for an action a guard blocked, the shell and git command readers, and the band above the prompt, composed once for every mod.",
   "author": { "name": "Dan Wright" },
   "types": "./types/index.d.ts"
 }

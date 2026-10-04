@@ -1,0 +1,8 @@
+{
+  "name": "status-bar",
+  "version": "0.1.0",
+  "description": "Feeds the grey status line under the prompt, and draws the amber needs-a-look line and the Compact row in the band above it.",
+  "author": { "name": "Dan Wright" },
+  "types": "./types/index.d.ts",
+  "dependencies": ["mod-kit"]
+}

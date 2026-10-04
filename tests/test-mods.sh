@@ -136,7 +136,8 @@ else
   fi
 fi
 
-# 9. What every mod shares lives once, in mod-kit: the shell command reader and the blocked card
+# 9. What every mod shares lives once, in mod-kit: the shell command reader, the blocked card and
+#    the band above the prompt, which Claude Code gives one drawing (#610)
 #    (L613: the component plus the scan that fails on the next hand rolled copy). Three guards each
 #    read commands their own way before batch 2 of the mods milestone.
 SHARED="$ROOT/tools/check-mod-shared-parts.sh"
@@ -147,7 +148,7 @@ mkmodsrc(){   # $1 = mods dir  $2 = mod name  $3 = the hooks module's source
   printf '%s\n' "$3" > "$1/$2/hooks/register.ts"
 }
 mkmodsrc "$M9" clean-mod "export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
-mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h)"
+mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h); on('ui.render', { component: 'AbovePrompt' }, band)"
 out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "mod-kit itself may hold the shared parts, and a clean mod passes" ok \
   || check "mod-kit itself may hold the shared parts, and a clean mod passes" "exit=$code out=$out"
@@ -157,10 +158,12 @@ mkmodsrc "$M9" own-quotes "for (const c of cmd) { if (c === '\"' || c === \"'\")
 mkmodsrc "$M9" own-heredoc "const m = /(?<!<)<<(?!<)-?\s*(\w+)/.exec(line)"
 mkmodsrc "$M9" own-card "on('ui.render', { component: 'ToolResult' }, (\$, e, next) => next(e))"
 mkmodsrc "$M9" own-git "const GLOBAL = new Set(['-C', '-c', '--git-dir', '--work-tree'])"
+mkmodsrc "$M9" own-band "on('ui.render', { component: 'AbovePrompt' }, (\$, e, next) => next(e))"
+mkmodsrc "$M9" own-band-dq "on(\"ui.render\", { component: \"AbovePrompt\" }, h)"
 out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a mod with its own copy of a shared part fails the run" ok \
   || check "a mod with its own copy of a shared part fails the run" "exit=$code out=$out"
-for m in own-reader own-quotes own-heredoc own-card own-git; do
+for m in own-reader own-quotes own-heredoc own-card own-git own-band own-band-dq; do
   case "$out" in *"$m"*) check "and names $m" ok ;; *) check "and names $m" "$out" ;; esac
 done
 out="$(bash "$SHARED" "$TMPROOT/not-there" 2>&1)"; code=$?
