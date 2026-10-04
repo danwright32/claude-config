@@ -461,6 +461,7 @@ ones marked open are the builder's choice, waiting on Dan.
   answer ("Saved to <file>", "Kept until this session ends; nothing is written", "Nothing is
   saved"), a grey rule on both sides of the rule's text, and wrapping it at 76 columns because the
   band cuts a line at its edge.
+
 ## Picker manners (#615), built 2026-10-04
 
 The look is the rounds' (a question in the band, above). The build time check the spec asks for
@@ -487,6 +488,32 @@ and open to Dan changing:
   passes. Turning them off says so once in a dim line: "Next issue pickers are off for this
   session; /pickers on brings them back."
 - An interrupted turn withdraws the question from the band.
+
+## Handoff (#613), built 2026-10-04
+
+The look is the rounds' (the band at session start, and its changed since lines, above). What the
+build had to settle beyond them, each taken from the spec or the rounds' renderings rather than
+chosen afresh, and open to Dan changing:
+
+- `/handoff [notes]` asks Claude, in a prompt the mod submits, to write the opening prompt and save
+  it through the mod's `save` tool with a title of a few words and the whole prompt. The tool
+  refuses unless `/handoff` ran in that session ("A handoff is written only when Dan runs
+  /handoff."), so the decision that Claude never writes one on its own is enforced, not asked for.
+  After saving, Claude shows the saved prompt and Dan asks for any change, which is saved again the
+  same way (the spec's "shown back for Dan to edit or approve").
+- What a handoff names is read from its own text: every `#N` and every `milestone N`. Their state is
+  read from GitHub when it is saved and again at each session start; a line is "changed since:
+  #615 closed", "PR #634 merged", "milestone 18 closed" or "#612 updated" (anything else about it
+  changed). One GitHub cannot be asked about gets its own grey line, "#615 could not be checked:
+  <gh's reason>", rather than passing as unchanged.
+- The band appears only once those reads have answered, so it never shows a handoff as current
+  before it is checked. Its age is as of that moment.
+- The title is the line's own words, in the terminal's normal colour; Use and Dismiss are Claude
+  Code's own buttons, on the line under the changes, as the rounds drew them.
+- Use submits the prompt as Dan's own words. A Use that cannot send puts the handoff back and says
+  why in a toast. Use or Dismiss on a handoff another session already took, or one replaced since
+  the band was drawn, acts on nothing and says so; a replacement is shown instead.
+- Kept per Mac: a handoff written on one Mac is offered on that Mac only.
 
 ## Not design decisions
 
