@@ -30,7 +30,7 @@ const modKit: { name: string; register: Register } = {
         commands: async ({ command }: { command: string }) => READER[command] ?? [command.split(' ')],
         bandRow: async (row: Row) => {
           // A test makes the band refuse a row through the environment, the one thing it can set here.
-          if ((await built.env.get('BAND_REFUSES')) === '1') throw new Error('a band row needs a mod and an id')
+          if ((await built.env.get('BAND_REFUSES')) === '1' || JSON.stringify(row).includes('REFUSE-ME')) throw new Error('a band row needs a mod and an id')
           await built.state.set(ref, [...(await rows()).filter(r => !(r.mod === row.mod && r.id === row.id)), row] as never)
         },
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
@@ -302,4 +302,16 @@ test('a save the mod cannot judge is refused, never let through: a failing hook 
   const r = await call($, { tool: 'Write', file_path: '/anywhere/CLAUDE.md', content: '- rule\n' })
   expect(w.ran).toEqual([])
   expect(r.deny).toContain('could not check')
+})
+
+test('a save whose question could not be shown is never answered later by a press meant for another', withKit, async ($, on) => {
+  const w = world(on)
+  const refused = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- REFUSE-ME\n' })
+  expect(refused.deny).toContain('could not be shown')
+  await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- second\n' })
+  await answer($, 'for-good')
+  expect(w.ran.map(r => r.input.file_path)).toEqual(['AGENTS.md'])
+  const ui = await mount($)
+  expect(await shown(ui)).toEqual(['engine band'])
+  await ui.unmount()
 })
