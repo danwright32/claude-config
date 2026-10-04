@@ -13,7 +13,12 @@ const deps: { name: string; register: Register } = {
         sessions: {
           list: async () => ({ open: [], closed: [], unreadable: [], selfId: 'me' }),
           noteEdit: async () => undefined,
-          setExtra: async ({ key, value }: { key: string; value: unknown }) => built.ui.log(`EXTRA ${key} ${JSON.stringify(value)}`),
+          setExtra: async ({ key, value }: { key: string; value: unknown }) => {
+            // The world can refuse a write, so a failing registry can be staged.
+            const gate = await built.process.run(['__extra', key])
+            if (gate.exitCode !== 0) throw new Error(gate.stderr)
+            built.ui.log(`EXTRA ${key} ${JSON.stringify(value)}`)
+          },
         },
       }
     })
@@ -24,8 +29,13 @@ const MIN = 60_000
 
 type Rec = { done: number; total: number; current: string | null; lastActivityAt: number; waiting?: { question: string } }
 
-const world = (on: On, opts: { duringAsk?: (w: { progress: Rec[] }) => void } = {}) => {
+const world = (on: On, opts: { duringAsk?: (w: { progress: Rec[] }) => void; registryFails?: boolean; askThrows?: boolean } = {}) => {
   const w = { progress: [] as Rec[] }
+  on('process.run', ($, e) => ({
+    value: opts.registryFails && e.argv[0] === '__extra'
+      ? { exitCode: 1, stdout: '', stderr: 'registry write failed', isStdoutTruncated: false, isStderrTruncated: false }
+      : { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
   on('ui.log', ($, e) => {
     if (e.text.startsWith('EXTRA progress ')) w.progress.push(JSON.parse(e.text.slice('EXTRA progress '.length)))
     return { value: undefined }
@@ -33,6 +43,7 @@ const world = (on: On, opts: { duringAsk?: (w: { progress: Rec[] }) => void } = 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('tool.call', ($, e) => {
     if (e.tool === 'AskUserQuestion') opts.duringAsk?.(w)
+    if (e.tool === 'AskUserQuestion' && opts.askThrows) throw new Error('the question could not be shown')
     if (e.tool === 'TaskCreate') {
       const subject = (e as unknown as { subject: string }).subject
       return { result: { task: { id: String(w.progress.length + 1), subject } }, text: 'created' } as never
@@ -108,4 +119,24 @@ test("a subagent's to-do list leaves the session's progress alone", withDeps, as
     ],
   } as never)
   expect(last(w)).toMatchObject({ done: 0, total: 1, current: 'Building' })
+})
+
+test('a registry that cannot be written never breaks the tool call, and Claude is told once', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { registryFails: true })
+  await start($)
+  const r = (await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'in_progress', activeForm: 'Building' }] } as never)) as { text?: string; context?: string[] }
+  expect(r.text).toBe('ran')
+  expect((r.context ?? []).join('\n')).toContain("The goal tracker could not record this session's progress")
+  const again = (await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'completed', activeForm: 'Building' }] } as never)) as { context?: string[] }
+  expect(again.context ?? []).toEqual([])
+  expect(w.progress).toEqual([])
+})
+
+test('a question that throws still clears waiting', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { askThrows: true })
+  await start($)
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which colour?', header: 'Colour', options: [], multiSelect: false }] } as never).catch(() => undefined)
+  expect(last(w)?.waiting).toBeUndefined()
 })

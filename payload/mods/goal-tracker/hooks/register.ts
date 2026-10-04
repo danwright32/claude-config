@@ -10,10 +10,28 @@ const ACTIVITY_WRITE_MS = 30_000
 let progress: Progress | undefined
 let lastWritten = 0
 
+// A registry write that fails never breaks the tool call it rides on; Claude is told once, on
+// the next result it reads, until a write lands again.
+let toldUnwritten = false
+let notice: string | undefined
 const publish = async ($: EngineInterface, now: number) => {
   if (!progress) return
-  lastWritten = now
-  await $.sessions.setExtra({ key: 'progress', value: progress })
+  try {
+    await $.sessions.setExtra({ key: 'progress', value: progress })
+    lastWritten = now
+    toldUnwritten = false
+  } catch (err) {
+    if (!toldUnwritten) {
+      toldUnwritten = true
+      notice = `The goal tracker could not record this session's progress: ${err instanceof Error ? err.message : String(err)}. Other sessions and the goals pane will not see it.`
+    }
+  }
+}
+const withNotice = <R extends { context?: string[] }>(result: R): R => {
+  if (!notice) return result
+  const said = notice
+  notice = undefined
+  return { ...result, context: [...(result.context ?? []), said] }
 }
 
 export const register: Register = on => {
@@ -63,6 +81,6 @@ export const register: Register = on => {
 
     // A change to the list is written at once; plain activity at most every thirty seconds.
     if (progress.steps !== before.steps || now - lastWritten >= ACTIVITY_WRITE_MS) await publish($, now)
-    return result
+    return withNotice(result)
   })
 }
