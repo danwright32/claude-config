@@ -32,6 +32,9 @@ type Jobs = { list: () => Promise<Job[]> }
 let home: string | undefined
 let startCwd = ''
 let ticking = false
+let interactive = false
+// One reading at a time: a slow gh must not let the next tick start a second one beside it.
+let reading = false
 let pr: PrReading | null = null
 let unpushed = 0
 let jobs: Job[] = []
@@ -180,6 +183,16 @@ const warnCache = async ($: EngineInterface) => {
 }
 
 const tick = async ($: EngineInterface) => {
+  if (reading) return
+  reading = true
+  try {
+    await read($)
+  } finally {
+    reading = false
+  }
+}
+
+const read = async ($: EngineInterface) => {
   const root = await $.session.root().catch(() => startCwd)
   unpushed = await readUnpushed($, root)
   await readPr($, root)
@@ -217,6 +230,10 @@ export const register: Register = on => {
   })
 
   on('session.start', async ($, e, next) => {
+    // A session with no screen (claude -p, a hook's detached run) shows no status line or band, so
+    // it reads no git or GitHub and writes no file.
+    if (!e.isInteractive) return next(e)
+    interactive = true
     startCwd = e.cwd
     home = await $.env.get('HOME')
     if (home) {
@@ -235,7 +252,7 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined) {
+    if (interactive && e.agentId === undefined) {
       await $.state.set(cacheRef, (await $.clock.now()) + CACHE_MS)
       await writeFacts($)
       await publish()

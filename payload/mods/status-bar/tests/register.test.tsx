@@ -272,6 +272,14 @@ test('5 minutes before the cache goes cold: one toast and the Compact row, gone 
   await ui.unmount()
 })
 
+test('a session with no screen (claude -p) reads nothing and writes nothing: nobody sees a status line there', withKit, async ($, on) => {
+  const { clock, runs, files } = world(on, { unpushed: '2\n' })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: false } as never)
+  await clock.advance(5 * MIN)
+  expect(runs.filter(r => r[0] === 'git' || r[0] === 'gh')).toEqual([])
+  expect(Object.keys(files)).toEqual([])
+})
+
 test('a clean end deletes the session file, so no stale cache is read for it', withKit, async ($, on) => {
   const { files, clock } = world(on)
   await start($, clock)
