@@ -2,7 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 
 // A stand-in for the session registry: what the watcher records there comes back as a transcript
-// line the world collects (an inline plugin cannot reach this file's variables).
+// line the world collects (an inline plugin cannot reach this file's variables), and the sessions
+// it lists are the world's.
 const deps: { name: string; register: Register } = {
   name: 'deps',
   register: on => {
@@ -11,7 +12,11 @@ const deps: { name: string; register: Register } = {
       return {
         ...built,
         sessions: {
-          list: async () => ({ open: [], closed: [], unreadable: [], selfId: 'me' }),
+          list: async () => {
+            const r = await built.process.run(['__sessions'])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return JSON.parse(r.stdout)
+          },
           noteEdit: async () => undefined,
           setExtra: async ({ key, value }: { key: string; value: unknown }) => {
             // The world can refuse a write, so a failing registry can be staged.
@@ -27,47 +32,120 @@ const deps: { name: string; register: Register } = {
 const withDeps = { plugins: [deps] }
 
 const MIN = 60_000
-const OUT = '/tmp/tasks/job1.output'
-const STARTED = `Command running in background with ID: job1. Output is being written to: ${OUT}. You will be notified when it completes.`
-const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+const outOf = (id: string) => `/tmp/tasks/${id}.output`
+const OUT = outOf('job1')
+const startedText = (id: string) => `Command running in background with ID: ${id}. Output is being written to: ${outOf(id)}. You will be notified when it completes.`
+const res = (exitCode: number, stdout: string, stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
+const ok = (stdout: string) => res(0, stdout)
 
-// The Mac beneath the watcher: one background job writing to OUT, whose output the test sets.
-// gone: the job's process group has no processes left. stop: how Claude Code answers a TaskStop.
-// failExtraOf: a registry write of this value throws.
-type Job = { tail: string; size: number; unreadable?: boolean; gone?: boolean; stop?: 'ok' | 'refused' | 'throws'; failExtraOf?: string }
-const world = (on: On, job: Job) => {
-  const w = { reached: [] as { tool: string; input: Record<string, unknown> }[], extra: [] as unknown[], contexts: [] as string[] }
+// One background job on the Mac beneath the watcher, writing to its own output file; the test sets
+// its output. gone: its process group has no processes left. stop: how Claude Code answers a
+// TaskStop. holder: who holds its output file open (held, the job; none, nobody; error, lsof
+// fails). killed: what kill does to its group (ok ends it, survives leaves it running, fails).
+type Job = {
+  tail: string
+  size: number
+  mtime?: number
+  unreadable?: boolean
+  gone?: boolean
+  stop?: 'ok' | 'refused' | 'throws'
+  holder?: 'held' | 'none' | 'error'
+  kill?: 'ok' | 'survives' | 'fails'
+  /** Its process group; 501, 502, ... by its place when not given. */
+  pgid?: number
+  failExtraOf?: string
+}
+// The rest of the world: failExtra makes every registry write fail; sessions is what the registry
+// lists; verdicts answers each model in turn ('none' for no usable answer, 'throws' to reject).
+type World = {
+  failExtra?: boolean
+  sessions?: { open?: unknown[]; closed?: unknown[]; unreadable?: string[] } | 'throws'
+  verdicts?: Record<string, string | 'none' | 'throws'>
+}
+const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
+  const list = Array.isArray(jobOrJobs) ? jobOrJobs : [jobOrJobs]
+  const w = {
+    reached: [] as { tool: string; input: Record<string, unknown> }[],
+    extra: [] as unknown[],
+    logs: [] as string[],
+    toasts: [] as string[],
+    kills: [] as string[][],
+    asked: [] as { model: string; prompt: string }[],
+    tools: [] as unknown[],
+  }
+  let started = 0
+  const byPath = (p: string | undefined) => list.findIndex((_, i) => outOf(`job${i + 1}`) === p)
+  const groupOf = (i: number) => list[i]?.pgid ?? 501 + i
+  const byGroup = (g: number) => list.findIndex((_, i) => groupOf(i) === g)
   on('process.run', ($, e) => {
     const [cmd, ...args] = e.argv
+    if (cmd === '__sessions') {
+      if (o.sessions === 'throws') return res(1, '', 'the sessions folder could not be read')
+      return ok(JSON.stringify({ open: o.sessions?.open ?? [], closed: o.sessions?.closed ?? [], unreadable: o.sessions?.unreadable ?? [], selfId: 'me' }))
+    }
     if (cmd === '__extra') {
-      return job.failExtraOf !== undefined && args[1] === job.failExtraOf
-        ? { value: { exitCode: 1, stdout: '', stderr: 'registry write failed', isStdoutTruncated: false, isStderrTruncated: false } }
-        : ok('')
+      const failing = o.failExtra || list.some(j => j.failExtraOf !== undefined && args[1] === j.failExtraOf)
+      return failing ? res(1, '', 'registry write failed') : ok('')
     }
-    if (cmd === 'lsof') return ok('501\n')
-    if (cmd === 'ps' && args.includes('pgid=')) return ok('501\n')
+    if (cmd === 'lsof') {
+      const i = byPath(args[args.length - 1])
+      const j = list[i]
+      if (!j || j.holder === 'none' || j.gone) return res(1, '')
+      if (j.holder === 'error') return res(1, '', 'lsof: status error on file: Operation not permitted')
+      return ok(`${groupOf(i)}\n`)
+    }
+    if (cmd === 'ps' && args.includes('pgid=')) return ok(`${args[args.length - 1]}\n`)
     if (cmd === 'ps' && args.includes('-g')) {
-      return job.gone ? { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } : ok('501\n')
+      const j = list[byGroup(Number(args[args.indexOf('-g') + 1]))]
+      return !j || j.gone ? res(1, '') : ok('501\n')
     }
-    if ((cmd === 'stat' || cmd === 'tail') && job.unreadable) {
-      return { value: { exitCode: 1, stdout: '', stderr: `${cmd}: ${OUT}: Permission denied`, isStdoutTruncated: false, isStderrTruncated: false } }
+    if (cmd === '/bin/kill') {
+      w.kills.push(args)
+      const i = byGroup(-Number(args[args.length - 1]))
+      const j = list[i]
+      if (!j || j.kill === 'fails') return res(1, '', 'kill: Operation not permitted')
+      if (j.kill !== 'survives') j.gone = true
+      return ok('')
     }
-    if (cmd === 'stat') return ok(`${job.size}\n`)
-    if (cmd === 'tail') return ok(job.tail)
-    return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }
+    const j = list[byPath(args[args.length - 1])]
+    if ((cmd === 'stat' || cmd === 'tail') && (!j || j.unreadable)) return res(1, '', `${cmd}: Permission denied`)
+    if (cmd === 'stat' && j) return ok(args.includes('%z %m') ? `${j.size} ${j.mtime ?? 0}\n` : `${j.size}\n`)
+    if (cmd === 'tail' && j) return ok(j.tail)
+    return res(1, '', 'unexpected')
+  })
+  on('model.complete', ($, e) => {
+    const req = e as unknown as { model: string; prompt: string }
+    w.asked.push({ model: req.model, prompt: req.prompt })
+    const v = o.verdicts?.[req.model]
+    if (v === undefined || v === 'none') return { value: { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: {} } } as never
+    if (v === 'throws') throw new Error('the model is blocked')
+    return { value: { isAnswered: true, text: v, usage: {} } } as never
+  })
+  on('tool.register', ($, e) => {
+    w.tools.push(e)
+    return { value: undefined } as never
   })
   on('ui.log', ($, e) => {
     if (e.text.startsWith('EXTRA jobs ')) w.extra.push(JSON.parse(e.text.slice('EXTRA jobs '.length)))
+    else w.logs.push(e.text)
     return { value: undefined }
   })
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', ($, e) => {
+    w.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('tool.call', ($, e) => {
     const input = e as unknown as Record<string, unknown>
     w.reached.push({ tool: e.tool, input })
-    if (e.tool === 'Bash' && input.run_in_background) return { result: STARTED, text: STARTED } as never
-    if (e.tool === 'TaskStop' && job.stop === 'refused') return { deny: 'no task job1 is running' } as never
-    if (e.tool === 'TaskStop' && job.stop === 'throws') throw new Error('stop failed')
+    if (e.tool === 'Bash' && input.run_in_background) {
+      started += 1
+      const text = startedText(`job${started}`)
+      return { result: text, text } as never
+    }
+    const j = list[Number(String(input.task_id ?? '').replace('job', '')) - 1]
+    if (e.tool === 'TaskStop' && j?.stop === 'refused') return { deny: `no task ${String(input.task_id)} is running` } as never
+    if (e.tool === 'TaskStop' && j?.stop === 'throws') throw new Error('stop failed')
     return { result: 'ran', text: 'ran' } as never
   })
   return w
@@ -182,6 +260,8 @@ test('a stop that throws keeps the job and is said the same way', withDeps, asyn
   expect(contextOf(next)).toContain('could not be stopped')
 })
 
+// The registry write that forgets an ended job fails: said to Claude as a record that could not be
+// written, never lost in the timer.
 test('a look that fails part way is said to Claude, not lost', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const job: Job = { tail: 'done\n', size: 5, failExtraOf: '[]' }
@@ -191,7 +271,7 @@ test('a look that fails part way is said to Claude, not lost', withDeps, async (
   job.gone = true
   await clock.advance(MIN + 1)
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(contextOf(next)).toContain('The background job watcher could not check its jobs')
+  expect(contextOf(next)).toContain("The background job watcher could not record this session's jobs: registry write failed")
 })
 
 test('an output file that shrank (truncated or rotated) counts as new output', withDeps, async ($, on) => {
@@ -217,4 +297,93 @@ test('a waiting loop repeating a line that is not an error is reported, never st
   expect(w.reached.filter(r => r.tool === 'TaskStop')).toEqual([])
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(contextOf(next)).toContain('keeps repeating "waiting for deploy"')
+})
+
+// Lessons review of #634, the second round of code-only findings.
+test('a stopped poll loop is said even when the registry write after it fails', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: REPEATING, size: 9000, failExtraOf: '[]' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain('was stopped')
+})
+
+test('a new session start in the same process forgets the last one jobs and keeps one timer', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await start($)
+  await clock.advance(11 * MIN)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toBe('')
+  // One look a minute, not two: each look reads the output file once.
+  void w
+})
+
+test('a job whose process group could not be traced is seen to end when nothing holds its output file', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'done\n', size: 5, holder: 'error' }
+  const w = world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  expect((w.extra[w.extra.length - 1] as { pgid: unknown }[])[0]?.pgid).toBe(null)
+  job.holder = 'none'
+  await clock.advance(MIN + 1)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toBe('')
+})
+
+test('a job that still cannot be traced is said to Claude once as ended state unknown', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: 'building\n', size: 9, holder: 'error' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain('whether it has ended is unknown')
+  await clock.advance(MIN)
+  const later = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(later)).not.toContain('whether it has ended is unknown')
+})
+
+test('a job that could not be traced at first is traced on a later look', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'building\n', size: 9, holder: 'error' }
+  const w = world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  job.holder = 'held'
+  await clock.advance(MIN + 1)
+  expect((w.extra[w.extra.length - 1] as { pgid: unknown }[])[0]?.pgid).toBe(501)
+})
+
+test('a registry that cannot be written never breaks the Bash call that started a job, and Claude is told', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { failExtra: true })
+  await start($)
+  const r = (await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)) as { text?: string; context?: string[] }
+  expect(r.text).toContain('background with ID: job1')
+  expect(contextOf(r)).toContain('could not record')
+})
+
+test('a job whose look throws does not stop the look at the jobs after it', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const first: Job = { tail: 'done\n', size: 5 }
+  const second: Job = { tail: 'listening on 3000\n', size: 18 }
+  world(on, [first, second], {})
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(10 * MIN)
+  // On the look that finds the second job silent, the first has ended and the registry write that
+  // forgets it fails.
+  first.gone = true
+  first.failExtraOf = JSON.stringify([{ id: 'job2', command: 'npm run dev', outputPath: outOf('job2'), pgid: 502, startedAt: 0 }])
+  await clock.advance(MIN + 1)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).toContain('job2 (npm run dev) has had no new output')
 })
