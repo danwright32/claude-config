@@ -42,7 +42,14 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
       .filter(p => p.startsWith(e.path + '/') && !p.slice(e.path.length + 1).includes('/'))
       .map(p => ({ name: p.slice(e.path.length + 1), kind: 'file' as const })),
   }) as never)
-  on('process.run', ($, e) => {
+  // A gate the test can close to hold every move into place, so a save can be caught part way.
+  const gate = { held: false, release: () => undefined as void, wait: Promise.resolve() }
+  const hold = () => {
+    gate.held = true
+    gate.wait = new Promise<void>(r => (gate.release = () => { gate.held = false; r() }))
+  }
+  on('process.run', async ($, e) => {
+    if (e.argv[0] === 'mv' && gate.held) await gate.wait
     const [cmd, ...rest] = e.argv
     const [a, b] = rest.filter(x => !x.startsWith('-'))
     const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -61,7 +68,7 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   on('ui.log', () => ({ value: undefined }))
   const own = (id = 's1') => JSON.parse(files[`${DIR}/${id}.json`] ?? 'null')
-  return { files, writes, clock, own }
+  return { files, writes, clock, own, hold, release: () => gate.release() }
 }
 
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) =>
@@ -166,6 +173,25 @@ test('after a /clear the process carries on under its new id, with a record of i
   expect(w.own('s1').closedAt).toBe(100 * MIN)
   expect(w.own('s2').closedAt).toBe(null)
   expect(w.own('s2').sessionId).toBe('s2')
+})
+
+test('after a /clear, an edit queued before the switch lands on the old record, never the new (lessons review)', withConsumer, async ($, on) => {
+  let id = 's1'
+  const w = world(on, { id: () => id })
+  await start($)
+  // Hold one save part way, queue an edit behind it, then let the session id change and the beat
+  // run before anything is released: the edit was made under s1 and must stay there.
+  w.hold()
+  const first = call($, 'edit /repo/first.ts')
+  const second = call($, 'edit /repo/second.ts')
+  id = 's2'
+  // The beat runs, and finds its id changed, while the first save is still held.
+  await w.clock.advance(MIN + 1)
+  w.release()
+  await Promise.all([first, second])
+  await w.clock.advance(1)
+  expect(w.own('s1').edits).toEqual(['/repo/first.ts', '/repo/second.ts'])
+  expect(w.own('s2').edits).toEqual([])
 })
 
 test('the transcript path is taken from the session start hook input', withConsumer, async ($, on) => {
