@@ -11,7 +11,13 @@ const deps: { name: string; register: Register } = {
       return {
         ...built,
         sessions: {
-          list: async () => ({ open: [], closed: [], unreadable: [], selfId: 'me' }),
+          // This session's own record names its project, as the registry's does.
+          list: async () => ({
+            open: [{ v: 1, sessionId: 'me', cwd: '/Users/dan/Apps/Ovation/src', repoRoot: '/Users/dan/Apps/Ovation', startedAt: 0, lastSeen: 0, closedAt: null, transcriptPath: null, edits: [], extra: {} }],
+            closed: [],
+            unreadable: [],
+            selfId: 'me',
+          }),
           noteEdit: async () => undefined,
           setExtra: async ({ key, value }: { key: string; value: unknown }) => {
             // The world can refuse a write, so a failing registry can be staged.
@@ -27,15 +33,29 @@ const deps: { name: string; register: Register } = {
 const withDeps = { plugins: [deps] }
 const MIN = 60_000
 
-type Rec = { done: number; total: number; current: string | null; lastActivityAt: number; waiting?: { question: string }; failed?: string }
+type Rec = { done: number; total: number; current: string | null; lastActivityAt: number; waiting?: { question: string; kind?: string }; failed?: string; goal?: string; request?: string }
 
 // failExtraFrom: registry writes fail from this one on (1 is the first). taskWithoutId: a
 // TaskCreate answers with no task id.
-type WorldOpts = { duringAsk?: (w: { progress: Rec[] }) => void; registryFails?: boolean; failExtraFrom?: number; askThrows?: boolean; askRefused?: boolean; taskWithoutId?: boolean }
+// notifyFails: terminal-notifier exits 1. permissionDenied: the permission prompt is answered no.
+type WorldOpts = {
+  duringAsk?: (w: { progress: Rec[] }) => void
+  registryFails?: boolean
+  failExtraFrom?: number
+  askThrows?: boolean
+  askRefused?: boolean
+  taskWithoutId?: boolean
+  notifyFails?: boolean
+  permissionDenied?: boolean
+}
 const world = (on: On, opts: WorldOpts = {}) => {
-  const w = { progress: [] as Rec[], attempts: 0 }
+  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined }
   let writes = 0
   on('process.run', ($, e) => {
+    if (e.argv[0] === 'terminal-notifier') {
+      w.notified.push(e.argv.slice(1))
+      if (opts.notifyFails) return { value: { exitCode: 1, stdout: '', stderr: 'terminal-notifier: no permission to notify', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const isWrite = e.argv[0] === '__extra'
     if (isWrite) writes += 1
     if (isWrite) w.attempts += 1
@@ -48,15 +68,28 @@ const world = (on: On, opts: WorldOpts = {}) => {
   })
   on('ui.log', ($, e) => {
     if (e.text.startsWith('EXTRA progress ')) w.progress.push(JSON.parse(e.text.slice('EXTRA progress '.length)))
+    else if (e.to !== 'debug') w.logs.push(e.text)
     return { value: undefined }
   })
+  on('classic.PermissionRequest', () => ({}) as never)
+  on('classic.Notification', () => ({}) as never)
+  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  on('command.run', () => ({ text: '' }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('tool.call', ($, e) => {
+  on('tool.call', async ($, e) => {
     if (e.tool === 'AskUserQuestion') opts.duringAsk?.(w)
     if (e.tool === 'AskUserQuestion' && opts.askThrows) throw new Error('the question could not be shown')
     if (e.tool === 'AskUserQuestion' && opts.askRefused) return { deny: 'the question was refused' } as never
     if (e.tool === 'Bash' && String((e as unknown as { command?: string }).command).startsWith('bigfail')) return { result: 'exit 1', text: 'Exit code 1\n' + 'x'.repeat(5000) + '\nsecret=abc', isError: true } as never
     if (e.tool === 'Bash' && String((e as unknown as { command?: string }).command).startsWith('fail')) return { result: 'exit 1', text: 'Exit code 1', isError: true } as never
+    // A call Claude Code asks Dan to allow first: the permission prompt is raised inside the call.
+    // The test raises the prompt while the call waits on this gate, as Claude Code does.
+    if (e.tool === 'Bash' && (e as unknown as { command?: string }).command === 'npm test') {
+      await new Promise<void>(r => (w.answer = r))
+      w.duringPermission = w.progress[w.progress.length - 1]
+      if (opts.permissionDenied) return { deny: 'The user did not allow this.' } as never
+    }
+    if (e.tool === 'ProposeGoal') return { result: { condition: (e as unknown as { condition: string }).condition, askUser: false }, text: 'set' } as never
     if (e.tool === 'TaskCreate' && opts.taskWithoutId) return { result: { task: {} }, text: 'created' } as never
     if (e.tool === 'TaskCreate') {
       const subject = (e as unknown as { subject: string }).subject
@@ -343,4 +376,112 @@ test('a to-do list carrying a status the tracker does not know is not stored, an
   } as never)
   expect(last(w)).toMatchObject({ done: 1, total: 1 })
   expect(contextText(r)).toContain('"done"')
+})
+
+// Notifications (Dan, 2026-10-04, pickers): one per waiting moment, naming the project. They replace
+// the two settings hooks that notified before, so the mod sends all three.
+const ask = (question: string) => ({ tool: 'AskUserQuestion', questions: [{ question, header: 'Format', options: [], multiSelect: false }] }) as never
+const idle = ($: { classic: { Notification: (e: never) => Promise<unknown> } }) =>
+  $.classic.Notification({ hook_event_name: 'Notification', session_id: 'me', transcript_path: '/t', cwd: '/repo', message: 'Claude is waiting for your input', notification_type: 'idle_prompt' } as never)
+
+test('a question to Dan sends one notification naming the project, with the question', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.tool.call(ask('Which date format for the CSV?'))
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', 'Which date format for the CSV?']])
+})
+
+// A Bash call that Claude Code stops to ask Dan about: the prompt is raised while the call waits.
+type Raiser = { tool: { call: (e: never) => Promise<unknown> }; classic: { PermissionRequest: (e: never) => Promise<unknown> } }
+const withPermission = async ($: Raiser, w: { answer: (() => void) | undefined }) => {
+  const call = $.tool.call(bash('npm test'))
+  for (let i = 0; i < 50 && !w.answer; i++) await Promise.resolve()
+  await $.classic.PermissionRequest({ hook_event_name: 'PermissionRequest', session_id: 'me', transcript_path: '/t', cwd: '/repo', tool_name: 'Bash', tool_input: { command: 'npm test', description: 'Run the test suite' } } as never)
+  w.answer?.()
+  return call
+}
+
+test('a permission prompt marks the session waiting on Dan, notifies with what it is for, and clears once answered', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await withPermission($, w)
+  expect(w.duringPermission?.waiting).toMatchObject({ question: 'Run the test suite', kind: 'permission' })
+  expect(w.notified).toEqual([['-title', 'Ovation needs a permission', '-message', 'Run the test suite', '-sound', 'Glass']])
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+test('a permission Dan refuses still clears waiting', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { permissionDenied: true })
+  await start($)
+  await withPermission($, w)
+  expect(w.duringPermission?.waiting).toMatchObject({ kind: 'permission' })
+  expect(last(w)?.waiting).toBeUndefined()
+})
+
+test("an idle prompt with nothing being asked says What's next?", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await idle($)
+  expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
+})
+
+test("an idle prompt while a question is open sends nothing more: the question's notification stands", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  let during: Promise<unknown> | undefined
+  const w = world(on, { duringAsk: () => (during = idle($)) })
+  await start($)
+  await $.tool.call(ask('Ship it?'))
+  await during
+  expect(w.notified.map(n => n[1])).toEqual(['Ovation is waiting on you'])
+})
+
+test('a notification that cannot be sent is said once in a dim line, and never breaks the question', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { notifyFails: true })
+  await start($)
+  const r = (await $.tool.call(ask('One?'))) as { deny?: unknown; result?: unknown }
+  await $.tool.call(ask('Two?'))
+  expect(r.deny).toBeUndefined()
+  expect(w.notified.length).toBe(2)
+  const said = w.logs.filter(l => l.includes('could not send a notification'))
+  expect(said.length).toBe(1)
+  expect(said[0]).toContain('no permission to notify')
+})
+
+// The goal text (Dan, 2026-10-04, picker): the /goal condition when one is set, otherwise the
+// session's first request cut to a few words. No model call.
+const prompt = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, text: string) => $.prompt.submit({ text, origin: { kind: 'composer' }, wait: false } as never)
+const goalCommand = ($: { command: { run: (e: never) => Promise<unknown> } }, args: string) =>
+  $.command.run({ command: 'goal', args, origin: { kind: 'composer' }, presentation: { mode: 'main', columns: 120 } } as never)
+
+test('the first request is recorded cut to a few words, and later ones do not replace it', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await prompt($, '/goals')
+  await prompt($, 'Please look at why the Gmail send keeps failing on large attachments')
+  await prompt($, 'and also the drafts')
+  expect(last(w)?.request).toBe('Please look at why the Gmail...')
+})
+
+test('a /goal condition is recorded, and /goal clear removes it', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await goalCommand($, 'all tests in test/auth pass')
+  expect(last(w)?.goal).toBe('all tests in test/auth pass')
+  await goalCommand($, 'clear')
+  expect(last(w)?.goal).toBeUndefined()
+})
+
+test('a goal Claude proposes and that is set is recorded', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await $.tool.call({ tool: 'ProposeGoal', condition: 'the export writes a CSV', ask_user: false } as never)
+  expect(last(w)?.goal).toBe('the export writes a CSV')
 })

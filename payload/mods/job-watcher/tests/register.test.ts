@@ -29,7 +29,7 @@ const deps: { name: string; register: Register } = {
       }
     })
     // The status bar's read of the job list, as another mod makes it: the noun called in place.
-    on('tool.call', { tool: '__jobs' }, async $ => {
+    on('tool.call', { tool: '__jobs' as never }, async $ => {
       try {
         return { result: JSON.stringify(await $.jobs.list()) } as never
       } catch (err) {

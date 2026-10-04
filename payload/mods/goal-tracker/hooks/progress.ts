@@ -19,9 +19,16 @@ export type Progress = {
   lastStepAt: number
   /** When anything last happened: a step, or any tool call. */
   lastActivityAt: number
-  /** Set while the session waits on a question to Dan. */
-  waiting?: { question: string; since: number }
+  /**
+   * Set while the session waits on Dan: a question (its text), or a permission prompt (what the
+   * permission is for, in `question`).
+   */
+  waiting?: { question: string; since: number; kind?: 'question' | 'permission' }
   failed?: string
+  /** The /goal condition, while one is set (Dan, 2026-10-04: the pane's goal text). */
+  goal?: string
+  /** The session's first request, cut to a few words: the goal text when no /goal is set. */
+  request?: string
 }
 export type State = 'working' | 'stalled' | 'failed' | 'done' | 'waiting'
 

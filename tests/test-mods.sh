@@ -189,6 +189,28 @@ if [ -d "$ROOT/payload/mods" ]; then
     || check "no mod in payload/mods keeps its own copy of a shared part" "exit=$code out=$out"
 fi
 
+# 10. The goal tracker sends the permission, question and "What's next?" notifications itself (Dan,
+#     2026-10-04, #612), so no settings hook may send one too: Dan would get every one twice. Read
+#     from the hooks block the payload installs, never a copy of it.
+HOOKS_JSON="$ROOT/payload/settings.hooks.json"
+dupes="$(python3 - "$HOOKS_JSON" <<'PY' 2>&1
+import json, sys
+d = json.load(open(sys.argv[1]))
+hooks = d.get("hooks", d)
+found = []
+for event in ("PermissionRequest", "Notification"):
+    for group in hooks.get(event) or []:
+        for h in group.get("hooks") or []:
+            if "terminal-notifier" in str(h.get("command", "")):
+                found.append(f"{event} ({group.get('matcher', '')!r})")
+print(" ".join(found))
+PY
+)"; code=$?
+[ "$code" -eq 0 ] && [ -z "$dupes" ] && check "no settings hook sends a notification the goal tracker sends" ok \
+  || check "no settings hook sends a notification the goal tracker sends" "exit=$code found=$dupes"
+grep -q 'terminal-notifier' "$ROOT/payload/mods/goal-tracker/hooks/register.tsx" \
+  && check "and the goal tracker is what sends them" ok || check "and the goal tracker is what sends them" "no terminal-notifier call in goal-tracker"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
