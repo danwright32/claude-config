@@ -18467,6 +18467,83 @@ check "#606 a Mac that never had mods publishes no mods placeholder" "[ ! -e '$M
 MDB_LISTED=eps-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#606 so the other Mac keeps its mod" "[ -f '$MD2HB/mods/eps-mod/.claude-plugin/plugin.json' ]"
 
+section "== a file left at an earlier release is stale, never a local edit (#638) =="
+# 2026-10-04: after PR #636 merged, this Mac's applied marker named the merge while seven mod files
+# under ~/.claude were still byte for byte the previous release. The next pull called them local
+# edits it "left alone" and the watcher's next send published them, which reverted the merge on
+# main. Replaying that exact history with a hold active applied the merge correctly, so the hold
+# was not the trigger, and how the marker came to move past the files was not reproduced. So the
+# state is set up here by hand, and what is tested is the half that did the damage: a copy equal to
+# a version the shared repo has since REPLACED carries no work, so a pull must replace it and a send
+# must never publish it (L5, L11).
+mkmod638(){   # $1 = a mods directory  $2 = the release marker written into the module
+  mkdir -p "$1/guard/.claude-plugin" "$1/guard/hooks"
+  printf '{ "name": "guard", "version": "0.1.0", "description": "a test mod" }\n' > "$1/guard/.claude-plugin/plugin.json"
+  printf '{ "modules": ["./register.ts"] }\n' > "$1/guard/hooks/hooks.json"
+  printf 'export const register = () => {} // %s\n' "$2" > "$1/guard/hooks/register.ts"
+  printf '{ "extends": "./.claude-plugin/types/tsconfig.json" }\n' > "$1/guard/tsconfig.json"
+}
+S38B="$WORK/s638-bare.git"; git init -q --bare -b main "$S38B"
+S38A="$WORK/s638-A"; git clone -q "$S38B" "$S38A" 2>/dev/null
+S38HA="$WORK/s638-homeA"; mkdir -p "$S38HA/mods"; echo '{"hooks":{}}' > "$S38HA/settings.json"; printf '# rules\n' > "$S38HA/CLAUDE.md"
+mkmod638 "$S38HA/mods" release-one
+echo 'other-v1' > "$S38HA/mods/guard/hooks/other.ts"
+CLAUDE_HOME="$S38HA" SYNC_REPO="$S38A" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1
+S38C="$WORK/s638-B"; git clone -q "$S38B" "$S38C" 2>/dev/null
+S38HB="$WORK/s638-homeB"; mkdir -p "$S38HB"; echo '{"hooks":{}}' > "$S38HB/settings.json"
+CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#638 the other Mac starts on release one" "grep -q release-one '$S38HB/mods/guard/hooks/register.ts'"
+# A pull request merges on the shared repo, from a checkout that is not a sync clone.
+S38D="$WORK/s638-dev"; git clone -q "$S38B" "$S38D" 2>/dev/null
+sed -i.bak 's/release-one/release-two/' "$S38D/payload/mods/guard/hooks/register.ts"; rm -f "$S38D/payload/mods/guard/hooks/register.ts.bak"
+git -C "$S38D" commit -q -am 'merge a pull request' && git -C "$S38D" push -q origin main 2>/dev/null
+# The control the issue asked for, and the one that ruled the hold out: a held watcher across that
+# merge does not stop a pull applying it.
+printf '%s %s %s %s\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" host 'a hold across a merge' > "$WORK/s638-hold"
+out_638h="$(SYNC_HOLD_FILE="$WORK/s638-hold" CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
+check "#638 a pull with a hold in force applies the merge" "grep -q release-two '$S38HB/mods/guard/hooks/register.ts'"
+check "#638 and names what it wrote" "line_has \"\$out_638h\" 'updated' 'mods/guard/hooks/register.ts'"
+rm -f "$WORK/s638-hold"
+# THE STATE OF 2026-10-04: the marker names the merge, the file is still release one, and nobody has
+# written it since before the merge (its mtime is older than the merge commit, set rather than
+# waited for, L290).
+stale638(){
+  printf 'export const register = () => {} // release-one\n' > "$S38HB/mods/guard/hooks/register.ts"
+  touch -t 202001010000 "$S38HB/mods/guard/hooks/register.ts"
+}
+stale638
+check "#638 fixture: the marker names the merge" "[ \"\$(cat '$S38C/.last-applied')\" = \"\$(git -C '$S38C' rev-parse HEAD)\" ]"
+# The pull that called it a local edit.
+out_638p="$(CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
+check "#638 a pull replaces a file left at the earlier release" "grep -q release-two '$S38HB/mods/guard/hooks/register.ts'"
+check "#638 and does not call it a local edit" "! line_has \"\$out_638p\" 'would have reverted' 'mods/guard/hooks/register.ts'"
+check "#638 and names it as updated rather than saying up to date" \
+  "line_has \"\$out_638p\" 'updated' 'mods/guard/hooks/register.ts' && ! grep -q 'Already up to date' <<< \"\$out_638p\""
+# The send that reverted main: the watcher's, with no hold, from the same state.
+stale638
+out_638s="$(SYNC_IN_WATCH=1 CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1)"
+check "#638 a send does not publish a file left at the earlier release" "grep -q release-two '$S38C/payload/mods/guard/hooks/register.ts'"
+_638main="$(git -C "$S38B" show main:payload/mods/guard/hooks/register.ts 2>/dev/null || true)"
+check "#638 nor push it over the shared repo" "case \"\$_638main\" in *release-two*) true ;; *) false ;; esac"
+check "#638 and the send says why it held it back" "line_has \"\$out_638s\" 'NOT publishing' 'mods/guard/hooks/register.ts' 'earlier'"
+# Control in the same fixture (L159): a GENUINE local edit, which no release ever held, is still
+# kept, and the pull that keeps it does not say nothing here needed changing while it skipped it.
+printf 'export const register = () => {} // edited here\n' > "$S38HB/mods/guard/hooks/register.ts"
+out_638k="$(CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
+check "#638 a genuine local edit is still kept" "grep -q 'edited here' '$S38HB/mods/guard/hooks/register.ts'"
+check "#638 and still named as one" "line_has \"\$out_638k\" 'would have reverted' 'mods/guard/hooks/register.ts'"
+check "#638 and the pull does not say nothing needed changing while it left a file alone" \
+  "! grep -q 'nothing on this Mac needed changing' <<< \"\$out_638k\" && line_has \"\$out_638k\" 'left' 'differ'"
+SYNC_IN_WATCH=1 CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1
+_638main="$(git -C "$S38B" show main:payload/mods/guard/hooks/register.ts 2>/dev/null || true)"
+check "#638 and the next send still publishes it" "case \"\$_638main\" in *'edited here'*) true ;; *) false ;; esac"
+# And an edit made HERE that puts an earlier release back (a revert, a flag flipped back) is work,
+# not a stale copy: the same bytes as release one, written after the repo moved past it.
+printf 'export const register = () => {} // release-one\n' > "$S38HB/mods/guard/hooks/register.ts"
+SYNC_IN_WATCH=1 CLAUDE_HOME="$S38HB" SYNC_REPO="$S38C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1
+_638main="$(git -C "$S38B" show main:payload/mods/guard/hooks/register.ts 2>/dev/null || true)"
+check "#638 an earlier version put back by an edit here is still published" "case \"\$_638main\" in *release-one*) true ;; *) false ;; esac"
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

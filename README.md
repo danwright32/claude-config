@@ -508,6 +508,18 @@ way to the other Mac.
 Measured against the real config on 2026-08-17, this refuses exactly four entries (two directories
 holding no `SKILL.md` and two loose markdown files) and every one of the 43 real skills passes.
 
+## A copy left at an earlier release is stale, not a local edit
+
+A file on this Mac that is byte for byte a version the shared repo once held for that path, no
+longer holds, and has not been written since the commit that replaced it, carries no work of this
+Mac's. A pull replaces it with the current version and a send never publishes it; the send says it
+held the file back and that a pull fixes it. This does not depend on the applied marker: on
+2026-10-04 the marker named the merge of PR #636 while seven mod files were still the release before,
+the pull called them local edits, and the next send mirrored them over main (claude-config#638). An
+older version put back by editing the file here is newer than that commit, so it is still a local
+edit and sends as one. A pull that writes nothing because it left files alone says so, rather than
+"Already up to date".
+
 ## Which plugins load (per Mac, and it does not sync)
 
 Plugins are enabled per project rather than everywhere. A plugin that is off at user scope is turned
