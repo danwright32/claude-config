@@ -264,15 +264,15 @@ test('a send refused twice is said on the card and in the refusal Claude reads',
   )
 })
 
-test('a send that throws twice is said the same way, with the error the engine passed on', withDeps, async ($, on) => {
-  const w = world(on, clash({ sends: ['throws', 'throws'] }))
+test('a send that throws is not tried again, since it may have landed, and is said with the error', withDeps, async ($, on) => {
+  const w = world(on, clash({ sends: ['throws', true] }))
   await $.tool.call(edit('/repo/src/InvoiceTable.tsx', 'wt4'))
-  expect(w.sent.length).toBe(2)
+  expect(w.sent.length).toBe(1)
   // The engine turns a throwing hook into its own error, so that is the text that arrives here.
   expect(w.cards[0]?.note).toBe('The other session could not be told: no implementation for session.send.')
 })
 
-test('the judge is told which: no transcript found, a transcript that could not be read, or no request in it', withDeps, async ($, on) => {
+test('a session whose transcript was not found is told to the judge as such', withDeps, async ($, on) => {
   const w = world(on, clash({ open: [rec('them', { edits: ['/repo/src/InvoiceTable.tsx'], transcriptPath: null })] }))
   await $.tool.call(edit('/repo/src/InvoiceTable.tsx'))
   expect(w.prompts[0]?.prompt).toContain('Its latest request: (its transcript could not be found)')

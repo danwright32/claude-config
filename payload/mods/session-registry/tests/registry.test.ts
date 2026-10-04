@@ -26,6 +26,7 @@ const withConsumer = { plugins: [consumer] }
 const world = (on: On, opts: { files?: Record<string, string>; id?: () => string } = {}) => {
   const files: Record<string, string> = { ...(opts.files ?? {}) }
   const writes: string[] = []
+  const finds: string[] = []
   mock.env(on, { HOME: '/Users/x' })
   const clock = mock.clock(on, { now: 100 * MIN })
   on('fs.write', ($, e) => {
@@ -62,6 +63,7 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
     }
     if (cmd === 'git') return ok('/repo\n')
     if (cmd === 'find' && a) {
+      finds.push(rest[rest.indexOf('-name') + 1] as string)
       const name = rest[rest.indexOf('-name') + 1] as string
       return ok(Object.keys(files).filter(p => p.startsWith(a + '/') && p.endsWith('/' + name)).map(p => p + '\n').join(''))
     }
@@ -73,7 +75,7 @@ const world = (on: On, opts: { files?: Record<string, string>; id?: () => string
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   on('ui.log', () => ({ value: undefined }))
   const own = (id = 's1') => JSON.parse(files[`${DIR}/${id}.json`] ?? 'null')
-  return { files, writes, clock, own, hold, release: () => gate.release() }
+  return { files, writes, finds, clock, own, hold, release: () => gate.release() }
 }
 
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) =>
@@ -227,4 +229,25 @@ test('a transcript that is nowhere is handed on as none, never as a guessed path
   const r = await openOf($, 's2')
   expect(r).toBeDefined()
   expect(r?.transcriptPath).toBeNull()
+})
+
+test('a transcript that is nowhere is searched for once a minute, not on every read', withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app') } })
+  await start($)
+  const ofS2 = () => w.finds.filter(f => f === 's2.jsonl').length
+  await openOf($, 's2')
+  await openOf($, 's2')
+  expect(ofS2()).toBe(1)
+  await w.clock.advance(MIN + 1)
+  await openOf($, 's2')
+  expect(ofS2()).toBe(2)
+})
+
+test('a session id that is not an id is never put into a path or a search', withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('../*', '/Users/x/app') } })
+  await start($)
+  const r = (JSON.parse(await call($, 'list')) as { open: { sessionId: string; transcriptPath: string | null }[] }).open.find(x => x.sessionId === '../*')
+  expect(r?.transcriptPath).toBeNull()
+  // Only this session's own record (s1) was searched for.
+  expect(w.finds).toEqual(['s1.jsonl'])
 })

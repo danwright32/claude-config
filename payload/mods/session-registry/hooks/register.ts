@@ -74,6 +74,12 @@ const beat = async ($: EngineInterface) => {
 }
 
 const found = new Map<string, string>()
+// When a session's transcript was last searched for and not found: searched again after a minute,
+// not on every read, since every guarded edit reads the list (lessons review of #636).
+const missed = new Map<string, number>()
+const SEARCH_AGAIN_MS = 60_000
+// What a session id looks like; anything else read from disk never goes into a path or a search.
+const SESSION_ID = /^[A-Za-z0-9-]+$/
 
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
@@ -89,23 +95,28 @@ export const register: Register = on => {
     // Where a session's transcript is, only if that file is really there: in the folder for the
     // directory it started in, else wherever a file named by its id is. Never a guessed path, so a
     // reader can say the transcript was not found rather than fail to read one that never existed.
-    const transcriptOf = async (h: string, r: SessionsRecord): Promise<string | null> => {
+    const transcriptOf = async (h: string, r: SessionsRecord, now: number): Promise<string | null> => {
+      if (!SESSION_ID.test(r.sessionId)) return null
       for (const p of [found.get(r.sessionId), r.transcriptPath, `${projectsOf(h)}/${folderOf(r.cwd)}/${r.sessionId}.jsonl`]) {
         if (p && (await built.fs.exists(p).catch(() => false))) {
           found.set(r.sessionId, p)
           return p
         }
       }
+      const last = missed.get(r.sessionId)
+      if (last !== undefined && now - last < SEARCH_AGAIN_MS) return null
       try {
         const f = await built.process.run(['find', projectsOf(h), '-maxdepth', '2', '-name', `${r.sessionId}.jsonl`], { timeoutMs: 5_000 })
         const p = f.exitCode === 0 ? f.stdout.split('\n').map(l => l.trim()).find(Boolean) : undefined
         if (p) {
           found.set(r.sessionId, p)
+          missed.delete(r.sessionId)
           return p
         }
       } catch {
         // Not found is the answer: the reader says so by name.
       }
+      missed.set(r.sessionId, now)
       return null
     }
     const sessions: Sessions = {
@@ -135,7 +146,7 @@ export const register: Register = on => {
             continue
           }
           const isOpen = r.closedAt === null && now - r.lastSeen <= DEAD_MS
-          if (isOpen) r.transcriptPath = await transcriptOf(h, r)
+          if (isOpen) r.transcriptPath = await transcriptOf(h, r, now)
           ;(isOpen ? out.open : out.closed).push(r)
         }
         return out

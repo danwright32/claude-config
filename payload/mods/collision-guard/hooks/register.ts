@@ -82,8 +82,10 @@ const refuse = async ($: EngineInterface, toolUseId: string, reason: string, saf
   return { deny: `Blocked: ${reason} ${safeWay}${note ? ` ${note}` : ''}` }
 }
 
-// One send, tried twice (decided with Dan after the live check of #605 on 2026-10-04, where auto
-// mode's classifier refused it): why it did not land, or undefined when it did.
+// One send, tried again once when it is refused (decided with Dan after the live check of #605 on
+// 2026-10-04, where auto mode's classifier refused it). A throw is not retried: it can come after
+// the message landed, and a second copy would tell the other session twice (lessons review of
+// #636). Answers why it did not land, or undefined when it did.
 const tell = async ($: EngineInterface, sessionId: string, text: string): Promise<string | undefined> => {
   let why = ''
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -93,6 +95,7 @@ const tell = async ($: EngineInterface, sessionId: string, text: string): Promis
       why = sent.reason
     } catch (err) {
       why = err instanceof Error ? err.message : String(err)
+      break
     }
   }
   return why.trim().replace(/\.$/, '') || 'no reason given'
