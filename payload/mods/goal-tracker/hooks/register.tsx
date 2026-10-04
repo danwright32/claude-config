@@ -92,7 +92,7 @@ const nowOr = ($: EngineInterface): Promise<number> => $.clock.now().catch(() =>
 // (#694): the open question, and the open permission prompt with the calls it may belong to. The
 // pane shows the latest of the two.
 type Waiting = NonNullable<Progress['waiting']>
-let question: { mark: Waiting } | undefined
+let question: { id: string; mark: Waiting } | undefined
 let permission: { calls: Set<string>; mark: Waiting } | undefined
 const waitingNow = (): Waiting | undefined =>
   question && permission ? (permission.mark.since > question.mark.since ? permission.mark : question.mark) : (question?.mark ?? permission?.mark)
@@ -130,6 +130,31 @@ const callEnded = (id: string): boolean => {
   if (!permission?.calls.delete(id) || permission.calls.size) return false
   permission = undefined
   return true
+}
+
+// Picker manners (#615) answers every AskUserQuestion in its own tool.call hook and never calls next.
+// Hooks on one event nest by tier, then by load order, outermost first, so wherever picker manners
+// sits above this mod, this mod's tool.call hook never sees the question (#694). The question is
+// also seen where picker manners cannot pre-empt it: its own writes of the question it holds open
+// (`picker-manners.open` in its contract), which reach every plugin's state.set hook wherever each
+// sits, the question as it opens and null as it ends. Where both see one question (this mod above),
+// the call's id, which picker manners keys the open question by, makes it one mark and one
+// notification.
+const PICKER_OPEN = { plugin: 'picker-manners', key: 'open' } as const
+// Another plugin's value is read, never trusted: the question's id and its text, or nothing.
+const openQuestionOf = (value: unknown): { id: string; text: string } | undefined => {
+  const o = value as { id?: unknown; question?: { question?: unknown } } | null
+  return o && typeof o === 'object' && typeof o.id === 'string' && typeof o.question?.question === 'string' ? { id: o.id, text: o.question.question } : undefined
+}
+// A question in front of Dan: marked for the pane and notified, once per question.
+const questionOpened = async ($: EngineInterface, id: string, text: string, now: number) => {
+  if (question?.id === id) return
+  question = { id, mark: { question: text, since: now, kind: 'question' } }
+  if (progress) {
+    progress = { ...withWaiting(progress), lastActivityAt: now }
+    await publish($, now)
+  }
+  notifySoon($, async () => `${await projectName($)} is waiting on you`, text)
 }
 
 // The /goals pane (claude-config#612, docs/mods-design.md "Goals pane", settled 2026-10-04): every
@@ -347,6 +372,23 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // The question picker manners holds open, seen whatever order the two mods run in (above). A write
+  // that was refused or did not land, or a value that cannot be read, changes nothing.
+  on('state.set', PICKER_OPEN, async ($, e, next) => {
+    const r = await next(e)
+    if ((r as { value?: { isSet?: boolean } }).value?.isSet !== true) return r
+    const shown = openQuestionOf(e.value)
+    if (shown) await questionOpened($, shown.id, shown.text, await nowOr($))
+    else if (e.value === null && question) {
+      question = undefined
+      if (progress) {
+        progress = withWaiting(progress)
+        await publish($, await nowOr($))
+      }
+    }
+    return r
+  })
+
   // "What's next?" only while nothing is being asked: an open question or permission sent its own.
   on('classic.Notification', async ($, e, next) => {
     if (e.notification_type === 'idle_prompt' && !waitingNow()) notifySoon($, async () => 'Claude Code', "What's next?")
@@ -386,11 +428,7 @@ export const register: Register = on => {
 
     if (e.tool === 'AskUserQuestion' && !fromSubagent) {
       const qs = (input.questions as { question?: string }[] | undefined) ?? []
-      const text = qs[0]?.question ?? 'a question'
-      question = { mark: { question: text, since: now, kind: 'question' } }
-      progress = { ...withWaiting(progress), lastActivityAt: now }
-      await publish($, now)
-      notifySoon($, async () => `${await projectName($)} is waiting on you`, text)
+      await questionOpened($, id, qs[0]?.question ?? 'a question', now)
       // A question that throws or is refused counts toward failed, as any call does. What follows
       // the question can never throw over its result or error, and a notice its write raises rides
       // on this result (lessons review of #634).
