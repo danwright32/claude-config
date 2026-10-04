@@ -228,8 +228,8 @@ prompt, as Dan chose; the handoff card appears only at session start. A row may 
 a vertical rule down its left edge only (the steps card's amber rule), each in `color`, a theme key
 or raw colour, the terminal's grey when left out. A line may be `{ divider: true }` in place of its
 parts: a thin grey line the width of the band, cut at the edge of the frame it sits in, between the
-lines of a card. A part may carry `indent`, the columns it starts in, so a description sits under
-its option. A frame kind mod-kit does not draw, a malformed divider or an indent that is not a
+lines of a card. A part may carry `indent`, the blank columns drawn before it (on a line's
+first part, where the line starts), so a description sits under its option. A frame kind mod-kit does not draw, a malformed divider or an indent that is not a
 whole number of columns is refused when the row is published, never drawn as something else.
 
 ## Not design decisions

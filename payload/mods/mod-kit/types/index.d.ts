@@ -49,7 +49,8 @@ export type ModKitBandSlot = 'needs-a-look' | 'compact' | 'handoff' | 'held' | '
 
 /**
  * A run of text in a band line, in the terminal's own colours: `color` is a theme key ('warning' is
- * amber) or a raw colour. `indent` is how many columns in it starts, so a description can sit under
+ * amber) or a raw colour. `indent` is how many blank columns are drawn before it (after any
+ * part before it on the line, so on a line's first part it is where the line starts), so a description can sit under
  * the option it describes.
  */
 export type ModKitBandText = { text: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
