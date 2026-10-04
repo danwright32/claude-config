@@ -74,29 +74,25 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? one : many)
 
 // The one line Dan sees, or undefined when there is nothing to say. Each kind of outcome has words
 // of its own (L11): a job left on a verdict, a job left because nothing could judge it, and a stop
-// that failed are three different things.
+// that failed are three different things. The settled line is "Stopped 1 leftover job from a
+// closed session (...); left 1 running (...)"; the other three are the bare fact (Dan, 2026-10-04).
 export const leftoverLine = (outcomes: Outcome[], unreadable: string[]): string | undefined => {
   const sessions = new Set(outcomes.map(o => o.session)).size
   const parts: string[] = []
   const lead = (n: number) => `${n} leftover ${plural(n, 'job', 'jobs')} from ${plural(sessions, 'a closed session', 'closed sessions')}`
+  const jobs = (n: number) => `${n} leftover ${plural(n, 'job', 'jobs')}`
   const add = (kind: Outcome['kind'], first: (n: number, names: string) => string, later: (n: number, names: string) => string) => {
     const of = outcomes.filter(o => o.kind === kind)
     if (!of.length) return
-    const names = of.map(o => (o.why ? `${o.name}: ${o.why}` : o.name)).join(kind === 'stopFailed' ? '; ' : ', ')
+    const names = of.map(o => o.name).join(', ')
     parts.push(parts.length ? later(of.length, names) : first(of.length, names))
   }
   add('stopped', (n, x) => `Stopped ${lead(n)} (${x})`, (n, x) => `stopped ${n} (${x})`)
   add('left', (n, x) => `Left ${lead(n)} running (${x})`, (n, x) => `left ${n} running (${x})`)
-  add(
-    'unjudged',
-    (n, x) => `Could not judge ${lead(n)} and left ${plural(n, 'it', 'them')} running to be judged next session (${x})`,
-    (n, x) => `could not judge ${n} and left ${plural(n, 'it', 'them')} running to be judged next session (${x})`,
-  )
-  add('stopFailed', (n, x) => `Could not stop ${lead(n)} (${x})`, (n, x) => `could not stop ${n} (${x})`)
-  if (unreadable.length) {
-    const n = unreadable.length
-    const said = `ould not read ${n} session ${plural(n, 'record', 'records')} (${unreadable.join(', ')}), so any leftover jobs in ${plural(n, 'it', 'them')} were not checked`
-    parts.push(parts.length ? `c${said}` : `C${said}`)
-  }
+  const notJudged = (n: number, x: string) => `${jobs(n)} not judged, left running (${x})`
+  add('unjudged', notJudged, notJudged)
+  const notStopped = (n: number, x: string) => `${jobs(n)} could not be stopped (${x})`
+  add('stopFailed', notStopped, notStopped)
+  if (unreadable.length) parts.push(`${parts.length ? 's' : 'S'}ession records unreadable; leftover jobs not checked`)
   return parts.length ? `${parts.join('; ')}.` : undefined
 }

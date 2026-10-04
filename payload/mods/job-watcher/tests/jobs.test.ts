@@ -103,6 +103,7 @@ describe('the line Dan sees after leftovers are judged', () => {
       ),
     ).toBe('Stopped 1 leftover job from a closed session (curl loop repeating connection refused); left 1 running (dev server).')
   })
+  // Shortened to the bare fact by Dan (2026-10-04, picker), the job named in brackets.
   test('a job that could not be judged, or stopped, says so in its own words', () => {
     expect(
       leftoverLine(
@@ -112,7 +113,11 @@ describe('the line Dan sees after leftovers are judged', () => {
         ],
         [],
       ),
-    ).toBe('Could not judge 1 leftover job from closed sessions and left it running to be judged next session (npm run dev); could not stop 1 (curl loop: kill: Operation not permitted).')
+    ).toBe('1 leftover job not judged, left running (npm run dev); 1 leftover job could not be stopped (curl loop).')
+  })
+  test('the shortened lines alone, word for word', () => {
+    expect(leftoverLine([{ kind: 'unjudged', name: 'dev server', session: 'a' }], [])).toBe('1 leftover job not judged, left running (dev server).')
+    expect(leftoverLine([{ kind: 'stopFailed', name: 'curl loop', why: 'kill: Operation not permitted', session: 'a' }], [])).toBe('1 leftover job could not be stopped (curl loop).')
   })
   test('several of a kind are counted and named together', () => {
     expect(
@@ -126,9 +131,9 @@ describe('the line Dan sees after leftovers are judged', () => {
     ).toBe('Left 2 leftover jobs from a closed session running (dev server, test watcher).')
   })
   test('session records that could not be read are said, so their jobs are not taken as none', () => {
-    expect(leftoverLine([], ['abc.json'])).toBe('Could not read 1 session record (abc.json), so any leftover jobs in it were not checked.')
+    expect(leftoverLine([], ['abc.json'])).toBe('Session records unreadable; leftover jobs not checked.')
     expect(leftoverLine([{ kind: 'stopped', name: 'curl loop', session: 'a' }], ['abc.json', 'def.json'])).toBe(
-      'Stopped 1 leftover job from a closed session (curl loop); could not read 2 session records (abc.json, def.json), so any leftover jobs in them were not checked.',
+      'Stopped 1 leftover job from a closed session (curl loop); session records unreadable; leftover jobs not checked.',
     )
   })
   test('nothing judged and nothing unreadable is no line at all', () => {

@@ -126,8 +126,9 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     return { value: undefined } as never
   })
   on('ui.log', ($, e) => {
+    // Only what reaches the transcript is what Dan sees; the debug log is not.
     if (e.text.startsWith('EXTRA jobs ')) w.extra.push(JSON.parse(e.text.slice('EXTRA jobs '.length)))
-    else w.logs.push(e.text)
+    else if (e.to !== 'debug') w.logs.push(e.text)
     return { value: undefined }
   })
   on('ui.toast', ($, e) => {
@@ -575,7 +576,7 @@ test('when neither model can judge, the job is left running and the line says so
   expect(w.asked.map(a => a.model)).toEqual([HAIKU, SONNET])
   expect(w.kills).toEqual([])
   // The command names it, cut to keep the line to one line.
-  expect(w.logs).toEqual(['Could not judge 1 leftover job from a closed session and left it running to be judged next session (until curl -sf http://localhost:3000/...).'])
+  expect(w.logs).toEqual(['1 leftover job not judged, left running (until curl -sf http://localhost:3000/...).'])
 })
 
 test('a stop that fails is said, and the job is not counted as stopped', withDeps, async ($, on) => {
@@ -586,7 +587,7 @@ test('a stop that fails is said, and the job is not counted as stopped', withDep
   })
   await start($)
   await judged(clock)
-  expect(w.logs).toEqual(['Could not stop 1 leftover job from a closed session (curl loop: kill: Operation not permitted).'])
+  expect(w.logs).toEqual(['1 leftover job could not be stopped (curl loop).'])
 })
 
 test('a group still running after the stop is said as not stopped', withDeps, async ($, on) => {
@@ -597,7 +598,7 @@ test('a group still running after the stop is said as not stopped', withDeps, as
   })
   await start($)
   await judged(clock)
-  expect(w.logs).toEqual(['Could not stop 1 leftover job from a closed session (curl loop: it was still running after the stop signal).'])
+  expect(w.logs).toEqual(['1 leftover job could not be stopped (curl loop).'])
 })
 
 test('jobs of open sessions and of this session are never judged', withDeps, async ($, on) => {
@@ -644,8 +645,7 @@ test('a registry that cannot be listed is said in one dim line, never taken as n
   const w = world(on, { tail: '', size: 0 }, { sessions: 'throws' })
   await start($)
   await judged(clock)
-  expect(w.logs.length).toBe(1)
-  expect(w.logs[0]).toContain('leftover jobs from closed sessions were not checked')
+  expect(w.logs).toEqual(['Session records unreadable; leftover jobs not checked.'])
 })
 
 test('a leftover whose output file cannot be read is described to the judge as unreadable, never as still writing', withDeps, async ($, on) => {

@@ -311,7 +311,9 @@ const judgeLeftovers = async ($: EngineInterface) => {
   try {
     list = await $.sessions.list()
   } catch (err) {
-    $.ui.log(`Background job watcher could not read the session registry (${err instanceof Error ? err.message : String(err)}), so leftover jobs from closed sessions were not checked.`)
+    // The registry's own reason goes to the debug log; Dan's line is the bare fact.
+    $.ui.log(`job-watcher: could not list the session registry: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    $.ui.log(leftoverLine([], ['the session registry']) ?? '')
     return
   }
   const now = await $.clock.now()
@@ -331,6 +333,8 @@ const judgeLeftovers = async ($: EngineInterface) => {
       outcomes.push({ kind: 'unjudged', name: job.command.length > 40 ? `${job.command.slice(0, 37)}...` : job.command, session: job.session })
     }
   }
+  // Why a stop failed goes to the debug log; Dan's line names the job only.
+  for (const o of outcomes) if (o.kind === 'stopFailed') $.ui.log(`job-watcher: could not stop leftover job ${o.name}: ${o.why ?? 'unknown'}`, { to: 'debug' })
   const line = leftoverLine(outcomes, list.unreadable)
   if (line) $.ui.log(line)
 }
