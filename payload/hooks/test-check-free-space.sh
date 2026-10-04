@@ -443,6 +443,11 @@ check "and it holds the triage sequence rather than a heading and a promise" \
   "$(grep -q 'df -h' "$SKILL" 2>/dev/null && grep -q 'du -x' "$SKILL" 2>/dev/null && echo ok || echo "no measured sequence in $SKILL")"
 check "and it names the macOS symbol cache with the command that sizes it" \
   "$(grep -qF 'sudo du -sh /System/Library/Caches/com.apple.coresymbolicationd' "$SKILL" 2>/dev/null && echo ok || echo "no symbol cache step in $SKILL")"
+# The one deleting command must be the same in both places, so the skill cannot drift from what
+# the warning hands Dan (L41). Read from the warning's own output rather than typed again here.
+sym_clear="$(grep -F 'sudo find ' <<< "$sym_low")"
+check "and its clearing command is the very one the warning prints" \
+  "$([ -n "$sym_clear" ] && grep -qxF "$sym_clear" "$SKILL" 2>/dev/null && echo ok || echo "warning prints '$sym_clear', not found as a line in $SKILL")"
 
 echo ""
 echo "passed: $pass, failed: $fail"
