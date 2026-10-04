@@ -144,7 +144,7 @@ Not yet put to Dan in a round; each is the conservative reading of the spec, and
   at the next break, and the toast "Noted, applying after this step." once the note has entered.
   A note Claude Code refuses gets no toast. A `+` note while idle with no interrupt before it is
   passed through as typed: the spec defines `+` for a running turn only.
-- **Not a `+` note**: a lone `+`, `++`, `+1`, or a pasted diff (a later line starting with `+`, a
+- **Not a `+` note** (a `+` then words, or a number after a space, as in "+ 2 more links"): a lone `+`, `++`, `+1`, or a pasted diff (a later line starting with `+`, a
   hunk header `@@`, or a `-` straight onto the text). A `- ` markdown bullet, a dash then a space,
   is a list in the note and keeps it an add-on (lessons review).
 - **An interrupt** is a main loop turn that ended because Dan stopped it. A subagent stopped, or a
@@ -153,7 +153,9 @@ Not yet put to Dan in a round; each is the conservative reading of the spec, and
 - **An amendment after an interrupt** opens with a word Dan uses to add scope (also, and, include,
   including, plus, keep going, carry on, continue, go on, or a `+`, optionally after oh or ok), is
   at most 40 words, and carries no word that turns it around (instead, stop, never mind, scrap,
-  cancel, forget it, rather than, not that, wrong, undo, revert, start over, hold off, wait).
+  cancel, forget it, rather than, not that, wrong, undo, revert, start over, hold off, wait), and
+  is not a question: one ending in `?` asks something new and is never told to resume (lessons
+  review).
   "Sorry" counts only when followed by carrying on or adding: "sorry, I meant the staging database"
   is a correction. Read this narrowly on purpose: a miss is an ordinary message, read as without the
   mod, while a redirect taken for an add-on would carry on with work Dan just stopped.

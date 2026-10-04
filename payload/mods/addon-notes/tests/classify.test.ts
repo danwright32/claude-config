@@ -92,3 +92,17 @@ test('the resume line is the first line of a reply when it has the agreed shape'
   expect(resumeLine('Here is the plan.\n+ add-on: x')).toBeUndefined()
   expect(resumeLine('+ add-on:')).toBeUndefined()
 })
+
+// Lessons review of #653: a question after an interrupt asks something new, so it is never told to
+// resume the stopped work, and a + note may start with a number once there is a space after the +.
+test('a question after an interrupt is not an amendment, whatever word it opens with', () => {
+  expect(isAmendment('and what does this function do?')).toBe(false)
+  expect(isAmendment('also, why is that red?')).toBe(false)
+  expect(isAmendment('also include the footer')).toBe(true)
+})
+
+test('a + note may open with a number after a space, but +1 is still a reaction', () => {
+  expect(isAddOnNote('+ 2 more links please')).toBe(true)
+  expect(isAddOnNote('+1')).toBe(false)
+  expect(isAddOnNote('+12')).toBe(false)
+})

@@ -7,7 +7,9 @@
 // markdown bullet ("- item", a dash then a space) is a list in the note, not a removed line.
 export const isAddOnNote = (text: string): boolean => {
   const t = text.trimStart()
-  if (!/^\+(?!\+)\s*[A-Za-z]/.test(t)) return false
+  // Words after the +, or a number once a space separates them, so "+ 2 more links" counts and
+  // the reaction "+1" does not.
+  if (!/^\+(?!\+)(?:\s*[A-Za-z]|\s+\d)/.test(t)) return false
   return !/\n\s*(?:\+|@@|-(?!\s))/.test(t)
 }
 
@@ -45,6 +47,8 @@ export const isAmendment = (text: string): boolean => {
   if (!t || t === '+') return false
   if (t.split(/\s+/).length > MAX_WORDS) return false
   if (!LEADS.test(t)) return false
+  // A question asks something new ("and what does this do?"), so it is never told to resume.
+  if (t.endsWith('?')) return false
   return !TURNS_AROUND.test(t)
 }
 
