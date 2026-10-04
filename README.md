@@ -1033,7 +1033,7 @@ Two things are deliberately not carried:
   otherwise sent up to main as a local edit (two arrived that way on 2026-10-04, #638).
 
 Before a push, `tests/test-mods.sh` runs `tools/check-mods.sh` over `payload/mods`, which validates
-every mod and runs its own `*.test.ts` with `claude plugin test`. Where no `claude` command exists
+every mod and runs its own `*.test.ts` and `*.test.tsx` with `claude plugin test`. Where no `claude` command exists
 (CI's Linux runner) it reports UNMEASURED rather than a pass.
 
 ## Local state (per Mac, never synced)

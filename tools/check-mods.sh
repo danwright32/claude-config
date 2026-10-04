@@ -1,9 +1,10 @@
 #!/bin/bash
 # check-mods.sh <mods dir>: hold every mod in a folder to what Claude Code itself accepts
 # (claude-config#606). A mod is a folder holding .claude-plugin/plugin.json. Each one is run through
-# `claude plugin validate`, and through `claude plugin test` when it carries any *.test.ts of its
-# own. Both commands' exit codes were measured on 2.1.288 before this relied on them (2026-10-03):
-# validate exits 1 on a bad event name and on a missing module, test exits 1 on a failing test.
+# `claude plugin validate`, and through `claude plugin test` when it carries any *.test.ts or
+# *.test.tsx of its own. Both commands' exit codes were measured on 2.1.288 before this relied on
+# them (2026-10-03): validate exits 1 on a bad event name and on a missing module, test exits 1 on
+# a failing test.
 #
 # Exit codes, each distinct so a caller can never read one as another (L11, L53):
 #   0  every mod passed (the count is printed, so zero mods is visibly zero, L98)
@@ -64,7 +65,8 @@ for d in "${mods[@]}"; do
     continue
   fi
   # Its own tests only: what the engine generates under .claude-plugin/types/ is not the mod's.
-  if [ -n "$(find "$d" -name '*.test.ts' -not -path "$d/.claude-plugin/types/*" 2>/dev/null)" ]; then
+  # Both .test.ts and .test.tsx (UI tests that mount a component, #655).
+  if [ -n "$(find "$d" \( -name '*.test.ts' -o -name '*.test.tsx' \) -not -path "$d/.claude-plugin/types/*" 2>/dev/null)" ]; then
     if ! out="$("$bin" plugin test "$d" 2>&1)"; then
       echo "check-mods: $name failed claude plugin test: $(reason "$out")"
       failed=1
