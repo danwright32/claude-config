@@ -13,8 +13,10 @@
 #   git       listing git's global options to find a subcommand use $.modkit.git({ words })
 #   band      drawing the band above the prompt (AbovePrompt)   use $.modkit.bandRow({ ... })
 #             Claude Code gives the band ONE drawing, so two mods hooking it fight over it (#610).
-#   pane      drawing a mod's card in a side pane (Pane)        use $.modkit.pane({ mod, id, lines, frame }),
-#             the band's row drawing in a pane, so the two cannot drift (#690)
+#   pane      drawing a card's parts (a run's strikethrough      use $.modkit.pane({ mod, id, lines, frame }),
+#             from its data) or its left rule mark, as the      the band's row drawing in a pane, so the two
+#             band does, in a mod's own pane                    cannot drift (#690). A pane drawn its own way,
+#                                                               not as a card (the goals pane), is not a copy.
 #   send      trying a refused message to another session again a plain $.session.send: mod-kit's
 #             (a loop that stops once delivered, or the        session.send hook tries every mod's refused
 #             || 'no reason given' fallback)                    send once more and tidies the reason (#688)
@@ -39,7 +41,7 @@ PARTS=(
   "card|component: *['\"]ToolResult['\"]|\$.modkit.card({ toolUseId, title, lines }) (a guard's refusal: \$.modkit.blocked({ ... }))"
   "git|'--work-tree'|\$.modkit.git({ words })"
   "band|component: *['\"]AbovePrompt['\"]|\$.modkit.bandRow({ ... })"
-  "pane|component: *['\"]Pane['\"]|\$.modkit.pane({ mod, id, lines, frame })"
+  "pane|strikethrough=\{[^}]*\.strikethrough\}|'\\\\u2502'|'│'|\$.modkit.pane({ mod, id, lines, frame }) (the band: \$.modkit.bandRow)"
   "send|\|\| *['\"]no reason given['\"]|\.isDelivered\) *return|a plain \$.session.send (mod-kit tries every mod's refused send once more)"
 )
 

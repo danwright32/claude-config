@@ -71,7 +71,8 @@ export type ModKit = {
    * Draws a side pane the mod opened with `$.ui.open({ id })` as a card, with the band's own row
    * drawing, so a card reads the same in the pane and in the band (#690). The mod still opens and
    * closes the pane itself; publishing again replaces what it shows. No mod but mod-kit draws a
-   * pane (tools/check-mod-shared-parts.sh). A Button is keyed `<mod>:<button>` and its press
+   * card in a pane (tools/check-mod-shared-parts.sh); a pane drawn its own way, such as the goals
+   * pane's live list, is the mod's. A Button is keyed `<mod>:<button>` and its press
    * reaches the publisher through `on('ui.press', { plugin: 'mod-kit', element: '<mod>:<button>' }, ...)`,
    * as in the band. Rejects a pane with no mod or id, lines or a frame of the wrong shape, and a pane
    * id another mod already draws (Claude Code keys a pane by its id alone).

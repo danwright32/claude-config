@@ -147,8 +147,8 @@ else
 fi
 
 # 9. What every mod shares lives once, in mod-kit: the shell command reader, the blocked card,
-#    the band above the prompt, which Claude Code gives one drawing (#610), the pane a mod's card
-#    is drawn in (#690), and the retry of a refused message to another session (#688)
+#    the band above the prompt, which Claude Code gives one drawing (#610), the drawing of a card
+#    in a side pane (#690), and the retry of a refused message to another session (#688)
 #    (L613: the component plus the scan that fails on the next hand rolled copy). Three guards each
 #    read commands their own way before batch 2 of the mods milestone.
 SHARED="$ROOT/tools/check-mod-shared-parts.sh"
@@ -159,13 +159,15 @@ mkmodsrc(){   # $1 = mods dir  $2 = mod name  $3 = the hooks module's source
   printf '%s\n' "$3" > "$1/$2/hooks/register.ts"
 }
 mkmodsrc "$M9" clean-mod "export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
-mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h); on('ui.render', { component: 'AbovePrompt' }, band); on('ui.render', { component: 'Pane' }, pane); if (sent.isDelivered) return sent; return why || 'no reason given'"
+mkmodsrc "$M9" mod-kit "const parts = cmd.split(/&&|;/); if (c === '\"' || c === \"'\") q = c; on('ui.render', { component: 'ToolResult' }, h); on('ui.render', { component: 'AbovePrompt' }, band); <Text strikethrough={p.strikethrough}>{'\\u2502'}</Text>; if (sent.isDelivered) return sent; return why || 'no reason given'"
 # A mod that sends once and reports a refusal is what every sender looks like after #688, so it passes.
+# A pane drawn its own way (the goals pane: a live list read at each draw, not a card) is not a copy.
+mkmodsrc "$M9" clean-live-pane "on('ui.render', { component: 'Pane', requestId: 'goals' }, (\$, e) => <Text dimColor>{row.sentence}</Text>)"
 mkmodsrc "$M9" clean-sender "const sent = await \$.session.send({ to: { sessionId }, text }); if (!sent.isDelivered) failed.push(sent.reason)"
 out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "mod-kit itself may hold the shared parts, and a clean mod passes" ok \
   || check "mod-kit itself may hold the shared parts, and a clean mod passes" "exit=$code out=$out"
-case "$out" in *"3 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+case "$out" in *"4 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
 mkmodsrc "$M9" own-reader "const words = command.split(/&&|\|\||;/).map(s => s.trim())"
 mkmodsrc "$M9" own-quotes "for (const c of cmd) { if (c === '\"' || c === \"'\") quote = c }"
 mkmodsrc "$M9" own-heredoc "const m = /(?<!<)<<(?!<)-?\s*(\w+)/.exec(line)"
@@ -174,19 +176,21 @@ mkmodsrc "$M9" own-git "const GLOBAL = new Set(['-C', '-c', '--git-dir', '--work
 mkmodsrc "$M9" own-band "on('ui.render', { component: 'AbovePrompt' }, (\$, e, next) => next(e))"
 mkmodsrc "$M9" own-band-dq "on(\"ui.render\", { component: \"AbovePrompt\" }, h)"
 mkmodsrc "$M9" own-card-dq "on(\"ui.render\", { component: \"ToolResult\" }, h)"
-mkmodsrc "$M9" own-pane "on('ui.render', { component: 'Pane', requestId: 'steps' }, (\$, e) => draw(e))"
-mkmodsrc "$M9" own-pane-dq "on(\"ui.render\", { component: \"Pane\" }, h)"
+mkmodsrc "$M9" own-pane "<Text key={String(i)} color={p.color} dimColor={p.dim} strikethrough={p.strikethrough}>{p.text}</Text>"
+mkmodsrc "$M9" own-rule "<Text key={String(n)} color={AMBER}>{'\\u2502'}</Text>"
+mkmodsrc "$M9" own-rule-literal "<Text color={AMBER}>{'│'}</Text>"
 mkmodsrc "$M9" own-retry "for (let attempt = 0; attempt < 2; attempt++) { const sent = await \$.session.send(m); if (sent.isDelivered) return undefined }"
 mkmodsrc "$M9" own-reason "return why.trim().replace(/\\.\$/, '') || 'no reason given'"
 out="$(bash "$SHARED" "$M9" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a mod with its own copy of a shared part fails the run" ok \
   || check "a mod with its own copy of a shared part fails the run" "exit=$code out=$out"
-for m in own-reader own-quotes own-heredoc own-card own-card-dq own-git own-band own-band-dq own-pane own-pane-dq own-retry own-reason; do
+for m in own-reader own-quotes own-heredoc own-card own-card-dq own-git own-band own-band-dq own-pane own-rule own-rule-literal own-retry own-reason; do
   case "$out" in *"$m"*) check "and names $m" ok ;; *) check "and names $m" "$out" ;; esac
 done
 # A mod drawing its own result row is pointed at the card any tool result can use (#663).
 printf '%s\n' "$out" | grep 'own-card ' | grep -q 'modkit.card(' \
   && check "and points a mod's own result row at modkit.card" ok || check "and points a mod's own result row at modkit.card" "$out"
+case "$out" in *clean-live-pane*) check "a pane drawn its own way, not as a card, is not taken for a copy" "$out" ;; *) check "a pane drawn its own way, not as a card, is not taken for a copy" ok ;; esac
 case "$out" in *clean-sender*) check "a mod sending once and reporting the refusal is not taken for a copy" "$out" ;; *) check "a mod sending once and reporting the refusal is not taken for a copy" ok ;; esac
 printf '%s\n' "$out" | grep 'own-pane ' | grep -q 'modkit.pane(' \
   && check "and points a mod's own pane at modkit.pane" ok || check "and points a mod's own pane at modkit.pane" "$out"

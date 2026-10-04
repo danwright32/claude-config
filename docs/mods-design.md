@@ -417,7 +417,9 @@ function that draws a band row, so the steps card cannot read differently in the
 as cards gain shapes, and a button in it reaches the publisher by the same `ui.press` key.
 `$.modkit.clearPane({ mod, id })` stops it, after which Claude Code draws a still open pane itself.
 Claude Code keys a pane by its id alone, so a pane id another mod already draws is refused rather
-than taken over. `tools/check-mod-shared-parts.sh` fails any other mod that hooks `Pane`.
+than taken over. `tools/check-mod-shared-parts.sh` fails any other mod that draws a card's parts
+or its left rule itself. A pane drawn its own way rather than as a card, such as the goals pane's
+live list read at each draw (#612), stays the mod's.
 
 ### A message to another session, shared by every mod
 
