@@ -146,8 +146,10 @@ export const register: Register = on => {
   // The session that was working first: the message reached its conversation (the standard incoming
   // message, collision round 1), and Dan gets a toast.
   on('session.receive', async ($, e, next) => {
-    const origin = e.origin as { kind?: string; plugin?: string }
-    if (origin.plugin === 'collision-guard' && e.text.startsWith('Another session wanted')) {
+    // The send side is stamped { kind: 'plugin', name }; a receiving session may carry the plugin as
+    // `plugin`. Either names this guard (lessons review of #632; the live check settles which).
+    const origin = e.origin as { kind?: string; plugin?: string; name?: string }
+    if ((origin.plugin === 'collision-guard' || origin.name === 'collision-guard') && e.text.startsWith('Another session wanted')) {
       const outcome = /moved to its own worktree/.test(e.text) ? 'it was moved to a worktree' : 'it was stopped'
       const file = /wanted to edit (\S+) while/.exec(e.text)?.[1]
       const action = /wanted to run (.+?) in this checkout/.exec(e.text)?.[1]

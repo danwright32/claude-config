@@ -103,6 +103,16 @@ test('it beats every minute while the session runs', withConsumer, async ($, on)
   expect(w.own().lastSeen).toBe(101 * MIN)
 })
 
+test('a second start does not double the beat (lessons review)', withConsumer, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await start($)
+  const before = w.writes.length
+  await w.clock.advance(MIN + 1)
+  // One beat in the minute is one write; a doubled timer would write twice.
+  expect(w.writes.length - before).toBe(1)
+})
+
 test('a clean end marks it closed', withConsumer, async ($, on) => {
   const w = world(on)
   await start($)

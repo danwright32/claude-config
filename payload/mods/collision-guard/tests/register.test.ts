@@ -213,6 +213,16 @@ test('an ordinary git command is not judged', withDeps, async ($, on) => {
   expect(w.prompts.length).toBe(0)
 })
 
+test('the toast also fires when the guard is named as the sender the way the send side stamps it (lessons review)', withDeps, async ($, on) => {
+  const w = world(on)
+  on('session.receive', ($, e) => ({ text: e.text }) as never)
+  await $.session.receive({
+    origin: { kind: 'plugin', name: 'collision-guard' },
+    text: 'Another session wanted to run git checkout main in this checkout while you are working in it, so it was stopped. Nothing here was touched.',
+  } as never)
+  expect(w.toasts).toContain('Another session wanted git checkout main; it was stopped.')
+})
+
 test('the session that was working first gets a toast when it hears from the guard', withDeps, async ($, on) => {
   const w = world(on)
   on('session.receive', ($, e) => ({ text: e.text }) as never)

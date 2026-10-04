@@ -16,6 +16,8 @@ const MAX_EDITS = 500
 let home: string | undefined
 let rec: SessionsRecord | undefined
 let chain: Promise<unknown> = Promise.resolve()
+// One beat per module load, however many times session.start fires on it (a /clear, a resume).
+let beating = false
 
 const dirOf = (h: string) => `${h}/.claude/state/sessions`
 
@@ -53,8 +55,12 @@ const beat = async ($: EngineInterface) => {
   const id = await $.session.id()
   const now = await $.clock.now()
   if (id !== rec.sessionId) {
-    rec = await fresh($, id, rec.cwd)
-    await save(() => undefined)
+    // The new record replaces the old inside the queue, so a save still waiting there cannot write
+    // the old record after it (lessons review of #632).
+    const next = await fresh($, id, rec.cwd)
+    await save(() => {
+      rec = next
+    })
     return
   }
   await save(r => {
@@ -120,7 +126,10 @@ export const register: Register = on => {
       await $.process.run(['mkdir', '-p', dirOf(home)])
       rec = await fresh($, await $.session.id(), e.cwd)
       await save(() => undefined)
-      $.clock.every(BEAT_MS, () => beat($))
+      if (!beating) {
+        beating = true
+        $.clock.every(BEAT_MS, () => beat($))
+      }
     } else {
       $.ui.log("Session registry couldn't find the home folder, so other mods can't see this session.")
     }

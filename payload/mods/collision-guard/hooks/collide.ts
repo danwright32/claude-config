@@ -9,13 +9,24 @@ export const watchedGit = (g: { sub: string | undefined; args: string[] }): stri
   const { sub, args } = g
   const label = `git ${[sub, ...args].join(' ')}`
   switch (sub) {
-    case 'checkout':
-      // Putting one file back (checkout <ref> -- <path>) touches only that file.
-      return args.includes('--') ? undefined : label
+    case 'checkout': {
+      // Putting files back (checkout <ref> -- <path>) touches only those, unless what follows -- is
+      // the whole tree or a folder: checkout -- . discards every change (lessons review of #632).
+      const dd = args.indexOf('--')
+      if (dd < 0) return label
+      const paths = args.slice(dd + 1)
+      return paths.length === 0 || paths.some(p => p === '.' || p === ':/' || p.endsWith('/')) ? label : undefined
+    }
     case 'switch':
       return label
-    case 'branch':
-      return args.includes('-D') || (args.includes('--delete') && args.includes('--force')) ? label : undefined
+    case 'branch': {
+      // A forced delete in any spelling: -D, -d with -f or --force, combined (-df, -fd) or apart.
+      const flags = args.filter(a => a.startsWith('-'))
+      const short = flags.filter(a => /^-[A-Za-z]+$/.test(a)).join('')
+      const deletes = short.includes('d') || flags.includes('--delete')
+      const forces = short.includes('f') || flags.includes('--force')
+      return short.includes('D') || (deletes && forces) ? label : undefined
+    }
     case 'reset':
       return args.includes('--hard') ? label : undefined
     case 'stash':

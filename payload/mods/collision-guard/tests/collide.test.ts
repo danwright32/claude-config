@@ -26,6 +26,12 @@ describe('which git commands are checkout wide (the spec list)', () => {
     ['add -A', { sub: 'add', args: ['-A'] }, 'git add -A'],
     ['add .', { sub: 'add', args: ['.'] }, 'git add .'],
     ['add --all', { sub: 'add', args: ['--all'] }, 'git add --all'],
+    // Discards every change in the checkout, though it carries -- (lessons review of #632).
+    ['checkout -- .', { sub: 'checkout', args: ['--', '.'] }, 'git checkout -- .'],
+    ['checkout HEAD -- a folder', { sub: 'checkout', args: ['HEAD', '--', 'src/'] }, 'git checkout HEAD -- src/'],
+    ['branch -df', { sub: 'branch', args: ['-df', 'feat'] }, 'git branch -df feat'],
+    ['branch -d -f', { sub: 'branch', args: ['-d', '-f', 'feat'] }, 'git branch -d -f feat'],
+    ['branch --delete -f', { sub: 'branch', args: ['--delete', '-f', 'feat'] }, 'git branch --delete -f feat'],
   ]
   for (const [name, g, label] of watched) test(`${name} is watched`, () => expect(watchedGit(g)).toBe(label))
 
