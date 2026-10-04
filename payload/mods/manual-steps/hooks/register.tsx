@@ -143,6 +143,27 @@ const pressCopy = async ($: EngineInterface, surface: string | undefined) => {
   }
 }
 
+/** The scope modes mod's noun (#621) as its contract has it; it may not be loaded at all. */
+type ScopeModes = { hold: (input: { label: string; prompt: string }) => Promise<{ isHeld: boolean }> }
+
+// Whether the card was held because Dan is away. The engine needs the noun called in place, so its
+// absence (the scope modes mod not loaded, which is home) arrives as a TypeError, as the status
+// bar reads the job watcher's. One that is loaded and fails to answer is said, and the card is
+// shown, since a card shown while away costs less than steps nobody sees.
+const holdWhileAway = async ($: EngineInterface, card: StepsCard): Promise<boolean> => {
+  try {
+    const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.hold({
+      label: card.heading,
+      prompt: `Pin the manual steps for "${card.heading}" again with the manual-steps steps tool: check each against the current state first.`,
+    })
+    return r?.isHeld === true
+  } catch (err) {
+    const isAbsent = err instanceof TypeError && /undefined|not a function|null/.test(message(err))
+    if (!isAbsent) $.ui.log(`Manual steps could not ask whether Dan is away, so the card is shown: ${message(err)}`)
+    return false
+  }
+}
+
 const left = (card: StepsCard) => {
   const n = nextStep(card)
   return n === undefined ? 'every step is finished' : `step ${n + 1} of ${card.steps.length} is next`
@@ -219,6 +240,15 @@ export const register: Register = on => {
       await hide($)
       const n = card.steps.length
       return { result: `${n === 1 ? 'The one step was' : `All ${n} steps were`} already done, so nothing was pinned.` }
+    }
+    // While Dan is away (#621) the steps are held for the held card he sees on coming home, not
+    // shown on the Mac; kept in the store all the same. Pressing the held row asks Claude to check
+    // them again and pin them.
+    const held = await holdWhileAway($, card)
+    if (held) {
+      await change($, () => ({ card: { ...card, isCarried: true }, out: undefined }))
+      await hide($)
+      return { result: `Dan is away, so "${card.heading}" was held for when he is home rather than shown.` }
     }
     await change($, () => ({ card, out: undefined }))
     const failed = await placeNew($, card)

@@ -338,8 +338,12 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   the mod's store on this Mac. At the next session start there they are held, not shown, and the
   conversation's first message tells Claude to re-check them and pin the ones left; until then
   Done cannot be recorded on them, and `/steps` shows them as they were kept.
-- **Not yet.** Holding steps while away (spec item 6) waits on the away and home mod (#621).
-  The pane title is "Manual steps" (open: its words).
+- **Away.** While Dan is away (#621) a new card is not shown on the Mac: it goes to the held card
+  through `$.scopeModes.hold`, its row labelled with the card's heading, and pressing that row asks
+  Claude to check the steps again and pin them. It is still kept for the next session. With the
+  scope modes mod not loaded it is home; one that cannot answer is named in a dim line and the
+  card is shown, since a card shown while away costs less than steps nobody sees.
+- The pane title is "Manual steps" (open: its words).
 
 ### The band, shared by every mod
 

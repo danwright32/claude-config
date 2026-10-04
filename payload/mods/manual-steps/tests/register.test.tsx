@@ -57,6 +57,29 @@ const modKit: { name: string; register: Register } = {
 }
 const withKit = { plugins: [modKit] }
 
+// The scope modes mod (#621), standing in: Dan is away while AWAY is set, and a hold is reported
+// as a toast the test reads, as the real one keeps it for the held card.
+const scopeModes: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const away = async () => (await built.env.get('AWAY')) === '1'
+      const modes = {
+        isAway: away,
+        hold: async ({ label, prompt }: { label: string; prompt: string }) => {
+          if ((await built.env.get('AWAY')) === 'broken') throw new Error('the held list could not be read')
+          if (!(await away())) return { isHeld: false }
+          built.ui.toast(`held: ${label} | ${prompt}`)
+          return { isHeld: true }
+        },
+      }
+      return { ...built, scopeModes: modes } as never
+    })
+  },
+}
+const withAway = { plugins: [modKit, scopeModes] }
+
 const TOOL = 'mcp__manual-steps__steps'
 const VERDICT = 'mcp__manual-steps__steps_done'
 const ROOT = '/repo'
@@ -358,6 +381,34 @@ test('a handover is kept per project for the next session, and /steps shows it a
 // Dan closing the pane by hand (the card then moves to the band) is not covered here: the test
 // kit's engine carries no ui.close to raise with a person's origin (2.1.289), so only a live
 // session shows it.
+
+test('while Dan is away the steps are held for the held card, not shown on the Mac, and kept', withAway, async ($, on) => {
+  const w = world(on, { wide: true }, {}, { AWAY: '1' })
+  await start($)
+  const out = await hand($, [step(), step({ title: 'Purge the cache' })])
+  expect(out).toMatch(/Dan is away/)
+  expect(w.opened).toEqual([])
+  expect(await band($)).toBeUndefined()
+  expect(w.toasts).toHaveLength(1)
+  expect(w.toasts[0]).toMatch(/^held: Cloudflare WAF \| .*check each against the current state/)
+  // Kept for the next session too, in case Dan comes home in another one.
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule', 'Purge the cache'])
+})
+
+test('at home, with the scope modes mod loaded, the card shows as usual', withAway, async ($, on) => {
+  const w = world(on, { wide: false })
+  await start($)
+  expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
+  expect(w.toasts).toEqual([])
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+})
+
+test('when the scope modes mod cannot answer, the card is shown rather than lost', withAway, async ($, on) => {
+  world(on, { wide: false }, {}, { AWAY: 'broken' })
+  await start($)
+  expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+})
 
 test('/steps with nothing pinned says so', withKit, async ($, on) => {
   world(on)
